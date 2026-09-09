@@ -12183,6 +12183,14 @@ symbol = "asset ordinal 9"
 observed = "docs/wiki/Modules.md:73 states that ordinal 9 is reserved for withdraw and is not defined on the Asset module, docs/wiki/Assets.md:48 lists ordinal 9 as reserved with no public payload, and docs/wiki/PublicRpc.md:151 lists the admitted native Asset ordinals without 9. src/modules/asset/lx_asset_registry.c:11-16 advertises LX_ASSET_WITHDRAW and lines 322, 380-385 and 419-420 decode, validate and execute it, and cmd/layerxd/lxp_daemon_process.c:570-588 admits it natively; only the hosted submission path at platform/hosted/core/src/main.rs:714 refuses it. The module description is therefore wrong about the module table and the native admission list, while the hosted-admission statement is accurate. These documents are outside the paths of the change that resolved 6.11.2602 through 6.11.2604, so they are unchanged here."
 assumption = "Modules.md should describe ordinal 9 as advertised and dispatched by the module with a 108-byte payload, admitted natively and refused only by the hosted submission path, and Assets.md should carry the withdraw payload shape. The correction belongs to the documentation owner."
 severity = "suspect"
+[observation.3.7.53]
+task = "3.7"
+file = "src/modules/asset/lx_asset_registry.c cmd/layerxd/lxp_daemon_process.c cmd/layerx-genesis/lxp_genesis_build_cli.c cmd/layerx-genesis/lxp_genesis_builder.c"
+symbol = "lx_asset_committed_records collect_assets parse_request"
+observed = "Daemon reconstruction requires committed Asset records and refuses account assets without metadata. Bootstrap records use the manifest asset-id key; native updates use asset: plus asset-id. Custody bootstrap supply is read from committed custody-issued metadata when present. Issuer, salt, cap and pause come from decoded records. LXGB request version 2 appends explicit Asset records and a canonical named fee schedule; version 1 remains parseable but cannot create missing authoritative metadata. Genesis version-2 artifact round trip passes in test-genesis."
+assumption = "Existing external bootstrap request generators must provide the new metadata and schedule. The actual daemon restart matrix for funded native register/open/mint/burn/grants remains unqualified."
+severity = "note"
+
 [observation.6.11.pay2_rpc_contract]
 
 [observation.6.11.129]
