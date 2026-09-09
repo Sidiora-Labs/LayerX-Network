@@ -5196,6 +5196,7 @@ file = "Makefile tests/test_guarantor_duties.c tests/test_da_retrieval.c tests/t
 symbol = "test-wave-12 test-guarantor test-da-retrieval test-da-unavailable"
 observed = "make test-wave-12 exits 2: test_guarantor_duties and test_da_retrieval fail to link Programs runtime symbols including layerx_programs_consume_program_spend_authorization and layerx_programs_interface_validate; test-da-unavailable exits 1 without an assertion diagnostic. Raw output is qual-logs/nat1/wave12.log. make -j16, make test-guarantor-bond, make test and make beta-ledger-check each exit 0. The finalisation refusal output is cleared before argument and guarantor-set validation; the existing guarantor bond assertion predicates are unchanged."
 assumption = "The broader aggregate is not qualified. Its Programs runtime link wiring and DA unavailability failure require separate task-scoped diagnosis; no assertion or return code was weakened to bypass them."
+severity = "blocker"
 
 [observation.6.1.39]
 task = "6.1"
