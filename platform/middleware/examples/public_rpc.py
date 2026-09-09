@@ -124,6 +124,10 @@ def main():
         if verified is None:
             print(json.dumps({"state": "pending", "activity_id": activity}))
             return 2
+        if offer["scheme"] != "exact" and (
+            verified.receipt.module_id != 1 or verified.receipt.operation != 6
+        ):
+            raise ValueError("grant-receive-receipt-required")
         digest = hashlib.sha256(
             b"LXP/v1/merkle-leaf\0" + verified.canonical_bytes
         ).hexdigest()
