@@ -7937,3 +7937,11 @@ symbol = "receipt_latency_and_public_proofs_use_real_committed_refusals await_re
 observed = "LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-core --test boundary receipt_latency_and_public_proofs_use_real_committed_refusals -- --nocapture exits 0. Twenty real core HTTPS submissions return signed committed refusal receipts, with submit-to-receipt p50 1020718 microseconds and p99 1872177 microseconds. Every sample also retrieves verified activity and receipt inclusion proofs and checks the authenticated identity sequence snapshot. Evidence: qual-logs/pay4/receipt-latency.log."
 assumption = "This measures the existing 200 ms receipt-poll path and committed refusals, not successful payments, gateway RPC latency, instant notification delivery, or finalised commitment. The supplied native manifest identifies source c63b80eee91589422a9ecc6891c57b4dfa9a73aa rather than the source named in the shared binary announcement."
 severity = "note"
+
+[observation.6.2.906]
+task = "6.2"
+file = "platform/hosted/core/src/main.rs platform/hosted/core/src/program_accounts.rs platform/hosted/core/tests/boundary.rs"
+symbol = "submission_registry program_accounts::validate malformed_program_transfer_and_account_are_refused_before_native_admission"
+observed = "Programs ordinals 5 and 6 have native decoder contracts in src/modules/programs/transfer.c and accounts.c. Core now admits them and validates exact payload lengths, transfer count 1 through 256 with 112-byte legs, LXPA1 account magic, nonzero identifiers and seed length at most 128. Decoder truncation, trailing-byte, zero-identifier, invalid-magic and bounds tests pass. The real-daemon malformed-payload test passes with unchanged chain head. Evidence: qual-logs/pay4/programs-unit.log and programs-native.log."
+assumption = "This supersedes the missing Programs decoder-contract dependency. Native state authorization remains in the native validators. Successful funded Programs transfer/account execution through gateway RPC is not established. The retained DID selector assertion conflict remains separate from this admission change."
+severity = "note"

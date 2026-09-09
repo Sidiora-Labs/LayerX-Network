@@ -2609,3 +2609,32 @@ fn receipt_latency_and_public_proofs_use_real_committed_refusals() {
     elapsed.sort_unstable();
     println!("submit_to_receipt_us samples={} p50={} p99={} outcome=committed_refusal transport=core_https receipt_wait=200ms_poll", elapsed.len(), elapsed[9], elapsed[19]);
 }
+
+#[test]
+fn malformed_program_transfer_and_account_are_refused_before_native_admission() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let sequence = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
+    let before = chain_head(&cluster.lni_socket);
+    for ordinal in [5, 6] {
+        let canonical = signed_program_activity(
+            &cluster.treasury_seed,
+            &cluster.treasury_did,
+            sequence,
+            ordinal,
+            &[1; 32],
+        );
+        assert_refusal(
+            &boundary.core.request(
+                "POST",
+                "/v1/activities",
+                &[("Content-Type", "application/octet-stream")],
+                &canonical,
+            ),
+            400,
+            "invalid_program_account_operation",
+        );
+    }
+    assert_eq!(chain_head(&cluster.lni_socket), before);
+}

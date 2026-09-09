@@ -1,3 +1,4 @@
+mod program_accounts;
 mod program_lifecycle;
 mod public_reads;
 
@@ -650,7 +651,7 @@ fn signer_key(authority: &[u8]) -> Option<[u8; 32]> {
 fn submission_registry() -> Result<ModuleRegistry, String> {
     let send = ActivityType::new(ModuleId::Asset, layerx_platform_core::SEND_ACTIVITY)
         .map_err(|error| format!("send activity: {error:?}"))?;
-    let operations = [1, 2, 3, 7]
+    let operations = [1, 2, 3, 5, 6, 7]
         .map(|ordinal| ActivityType::new(ModuleId::Programs, ordinal))
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
@@ -683,6 +684,9 @@ fn submit_activity(
         if activity.activity_type().ordinal() == 3 {
             NativeProgramCall::decode(activity.payload())
                 .map_err(|_| refusal(400, "invalid_program_call", None))?;
+        } else if matches!(activity.activity_type().ordinal(), 5 | 6) {
+            program_accounts::validate(activity.activity_type().ordinal(), activity.payload())
+                .map_err(|()| refusal(400, "invalid_program_account_operation", None))?;
         } else {
             program_lifecycle::validate(canonical, &registry, activity.activity_type().ordinal())
                 .map_err(|_| refusal(400, "invalid_program_lifecycle", None))?;
