@@ -5189,3 +5189,11 @@ symbol = "fixture"
 observed = "After rebasing the named-field Human peer parser onto main, cargo fmt --check --manifest-path agent/Cargo.toml -p layerx-agentd and cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-agentd --all-targets -- -D warnings exit 0. cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd exits 101 at budget_create: the real-node harness requires uid 0 but executes as uid 1000; subsequent fixture users report a poisoned lock. The three availability tests pass. Evidence: qual-logs/fmt.log, qual-logs/clippy.log, qual-logs/test.log and qual-logs/gates.tsv. make beta-ledger-check exits 0 (qual-logs/ledger.log)."
 assumption = "Full package qualification requires a root execution environment and qualified native binaries; /root/lx-lanes/native-bin is absent on this host. No harness assertions were changed. Cluster and image gates were not run."
 severity = "blocker"
+
+[observation.3.2.6]
+task = "3.2"
+file = "Makefile tests/test_guarantor_duties.c tests/test_da_retrieval.c tests/test_da_unavailable.c tools/lxp_da_withhold.sh"
+symbol = "test-wave-12 test-guarantor test-da-retrieval test-da-unavailable"
+observed = "make test-wave-12 exits 2: test_guarantor_duties and test_da_retrieval fail to link Programs runtime symbols including layerx_programs_consume_program_spend_authorization and layerx_programs_interface_validate; test-da-unavailable exits 1 without an assertion diagnostic. Raw output is qual-logs/nat1/wave12.log. make -j16, make test-guarantor-bond, make test and make beta-ledger-check each exit 0. The finalisation refusal output is cleared before argument and guarantor-set validation; the existing guarantor bond assertion predicates are unchanged."
+assumption = "The broader aggregate is not qualified. Its Programs runtime link wiring and DA unavailability failure require separate task-scoped diagnosis; no assertion or return code was weakened to bypass them."
+severity = "blocker"

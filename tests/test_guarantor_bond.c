@@ -6,7 +6,16 @@
 #include <openssl/ec.h>
 #include <openssl/obj_mac.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
+
+#define FAIL_IF(condition) do { \
+    if (condition) { \
+        (void)fprintf(stderr, "%s:%d: failed check: %s\n", \
+                      __FILE__, __LINE__, #condition); \
+        return 1; \
+    } \
+} while (0)
 
 static int key_pair(uint8_t value, uint8_t private_key[32],
                     uint8_t public_key[33])
@@ -41,6 +50,13 @@ static int refused(const lxp_finalisation_state *initial,
     bool finalisable = true;
     lxp_result status = lxp_checkpoint_finalisable(
         &state, certificate, set, requirements, arena, &finalisable);
+    if (status == LXP_OK || finalisable ||
+        memcmp(&state, initial, sizeof(state)) != 0)
+        (void)fprintf(stderr,
+                      "%s:%d: failed assertion: status != LXP_OK && "
+                      "!finalisable && memcmp(&state, initial, sizeof(state)) == 0 "
+                      "(status=%d, finalisable=%d)\n",
+                      __FILE__, __LINE__, (int)status, (int)finalisable);
     return status != LXP_OK && !finalisable &&
            memcmp(&state, initial, sizeof(state)) == 0 ? 0 : 1;
 }
@@ -63,9 +79,8 @@ int main(void)
     lxp_finalisation_requirements requirements;
     bool finalisable = false;
     size_t i;
-    if (lxp_arena_init(&arena, arena_storage, sizeof(arena_storage)) != LXP_OK ||
-        lxp_guarantor_set_init(&set) != LXP_OK)
-        return 1;
+    FAIL_IF(lxp_arena_init(&arena, arena_storage, sizeof(arena_storage)) != LXP_OK ||
+        lxp_guarantor_set_init(&set) != LXP_OK);
     (void)memset(&checkpoint, 0, sizeof(checkpoint));
     checkpoint.header.protocol_version = 1U;
     checkpoint.header.network_id = 5U;
@@ -84,28 +99,25 @@ int main(void)
         signers[i].network_id = 5U;
         signers[i].paxeer_chain_id = 31337U;
         signers[i].paxeer_settlement_contract[0] = 0xa1U;
-        if (key_pair((uint8_t)(i + 1U), signers[i].paxeer_private_key,
+        FAIL_IF(key_pair((uint8_t)(i + 1U), signers[i].paxeer_private_key,
                      signers[i].paxeer_public_key) != 0 ||
             lxp_guarantor_attest(&signers[i], &checkpoint, true, true,
                                  1000U + i, &arena,
-                                 &attestations[i]) != LXP_OK)
-            return 1;
+                                 &attestations[i]) != LXP_OK);
         (void)memset(&bond, 0, sizeof(bond));
         (void)memcpy(bond.guarantor_id, signers[i].guarantor_id, 32U);
         (void)memcpy(bond.public_key, signers[i].paxeer_public_key, 33U);
         bond.bond_amount = (lxp_u128){0U, 100U};
         bond.joined_epoch = 1U;
         bond.active = true;
-        if (lxp_guarantor_set_apply(&set, i + 1U, true, &bond) != LXP_OK)
-            return 1;
+        FAIL_IF(lxp_guarantor_set_apply(&set, i + 1U, true, &bond) != LXP_OK);
     }
-    if (set.version != 3U ||
+    FAIL_IF(set.version != 3U ||
         lxp_guarantor_set_apply(&set, 4U, false, &bond) != LXP_ERR_AUTH_SCOPE ||
         set.version != 3U ||
         lxp_guarantor_cert_assemble(&checkpoint, attestations, 3U, 2U,
-                                    &certificate) != LXP_OK)
-        return 1;
-    if (key_pair(9U, rotated_private_key, rotated_public_key) != 0 ||
+                                    &certificate) != LXP_OK);
+    FAIL_IF(key_pair(9U, rotated_private_key, rotated_public_key) != 0 ||
         lxp_guarantor_set_rotate_signer(
             &set, 4U, true, signers[0].guarantor_id,
             rotated_public_key, 8U) != LXP_OK ||
@@ -113,30 +125,25 @@ int main(void)
         set.records[0].signer_authorization_count != 2U ||
         set.records[0].signer_authorizations[0].active_until_epoch != 8U ||
         set.records[0].signer_authorizations[1].active_from_epoch != 8U ||
-        memcmp(set.records[0].public_key, rotated_public_key, 33U) != 0)
-        return 1;
+        memcmp(set.records[0].public_key, rotated_public_key, 33U) != 0);
     bond = set.records[0];
     (void)memcpy(bond.public_key, signers[0].paxeer_public_key, 33U);
-    if (lxp_guarantor_set_apply(&set, 5U, true, &bond) !=
-            LXP_ERR_NON_CANONICAL || set.version != 4U)
-        return 1;
+    FAIL_IF(lxp_guarantor_set_apply(&set, 5U, true, &bond) !=
+            LXP_ERR_NON_CANONICAL || set.version != 4U);
     changed_set = set;
     changed_set.count = (size_t)LXP_MAX_GUARANTOR_ATTESTATIONS + 1U;
-    if (lxp_guarantor_set_validate(&changed_set) != LXP_ERR_NON_CANONICAL)
-        return 1;
+    FAIL_IF(lxp_guarantor_set_validate(&changed_set) != LXP_ERR_NON_CANONICAL);
     changed_set = set;
     changed_set.records[0].signer_authorizations[0].active_until_epoch = 1U;
-    if (lxp_guarantor_set_validate(&changed_set) != LXP_ERR_NON_CANONICAL)
-        return 1;
+    FAIL_IF(lxp_guarantor_set_validate(&changed_set) != LXP_ERR_NON_CANONICAL);
     (void)memset(&bond, 0, sizeof(bond));
     bond.guarantor_id[0] = 9U;
     (void)memcpy(bond.public_key, signers[1].paxeer_public_key, 33U);
     bond.bond_amount = (lxp_u128){0U, 100U};
     bond.joined_epoch = 1U;
     bond.active = true;
-    if (lxp_guarantor_set_apply(&set, 5U, true, &bond) !=
-            LXP_ERR_NON_CANONICAL || set.version != 4U)
-        return 1;
+    FAIL_IF(lxp_guarantor_set_apply(&set, 5U, true, &bond) !=
+            LXP_ERR_NON_CANONICAL || set.version != 4U);
     (void)memset(&initial, 0, sizeof(initial));
     initial.settlement_anchor[0] = 0x11U;
     requirements.checkpoint_epoch = 7U;
@@ -148,7 +155,7 @@ int main(void)
     requirements.availability_challenges_answered = true;
     requirements.equivocation_detected = false;
     finalized = initial;
-    if (lxp_checkpoint_finalisable(&finalized, &certificate, &set,
+    FAIL_IF(lxp_checkpoint_finalisable(&finalized, &certificate, &set,
                                    &requirements, &arena, &finalisable) !=
             LXP_OK || !finalisable || !finalized.checkpoint_finalized ||
         !finalized.withdrawal_settlement_enabled ||
@@ -156,55 +163,48 @@ int main(void)
         !finalized.dispute_settlement_enabled ||
         finalized.finalized_batch_number != 9U ||
         memcmp(finalized.settlement_anchor,
-               checkpoint.header.resulting_state_root, 32U) != 0)
-        return 1;
+               checkpoint.header.resulting_state_root, 32U) != 0);
 
     requirements.checkpoint_epoch = 8U;
-    if (refused(&initial, &certificate, &set, &requirements, &arena) != 0)
-        return 1;
+    FAIL_IF(refused(&initial, &certificate, &set, &requirements, &arena) != 0);
     requirements.checkpoint_epoch = 7U;
     requirements.challenge_window_end_ms = 1300U;
-    if (refused(&initial, &certificate, &set, &requirements, &arena) != 0)
-        return 1;
+    FAIL_IF(refused(&initial, &certificate, &set, &requirements, &arena) != 0);
     requirements.challenge_window_end_ms = 1100U;
     requirements.availability_challenges_answered = false;
-    if (refused(&initial, &certificate, &set, &requirements, &arena) != 0)
-        return 1;
+    FAIL_IF(refused(&initial, &certificate, &set, &requirements, &arena) != 0);
     requirements.availability_challenges_answered = true;
     requirements.equivocation_detected = true;
-    if (refused(&initial, &certificate, &set, &requirements, &arena) != 0)
-        return 1;
+    FAIL_IF(refused(&initial, &certificate, &set, &requirements, &arena) != 0);
     requirements.equivocation_detected = false;
     requirements.checkpoint_deadline_ms = 1000U;
-    if (refused(&initial, &certificate, &set, &requirements, &arena) != 0)
-        return 1;
+    FAIL_IF(refused(&initial, &certificate, &set, &requirements, &arena) != 0);
     requirements.checkpoint_deadline_ms = 1050U;
 
     changed_set = set;
     changed_set.records[0].bond_amount = (lxp_u128){0U, 1U};
     changed_set.records[1].bond_amount = (lxp_u128){0U, 1U};
-    if (refused(&initial, &certificate, &changed_set, &requirements,
-                &arena) != 0) return 1;
+    FAIL_IF(refused(&initial, &certificate, &changed_set, &requirements,
+                &arena) != 0);
     changed_set = set;
     changed_set.records[0].jailed = true;
     changed_set.records[1].jailed = true;
-    if (refused(&initial, &certificate, &changed_set, &requirements,
-                &arena) != 0) return 1;
+    FAIL_IF(refused(&initial, &certificate, &changed_set, &requirements,
+                &arena) != 0);
     changed_set = set;
     changed_set.records[0].unresolved_slashing = true;
     changed_set.records[1].unresolved_slashing = true;
-    if (refused(&initial, &certificate, &changed_set, &requirements,
-                &arena) != 0) return 1;
+    FAIL_IF(refused(&initial, &certificate, &changed_set, &requirements,
+                &arena) != 0);
     changed_set = set;
     changed_set.records[0].removed_epoch = 7U;
     changed_set.records[1].removed_epoch = 7U;
-    if (refused(&initial, &certificate, &changed_set, &requirements,
-                &arena) != 0) return 1;
+    FAIL_IF(refused(&initial, &certificate, &changed_set, &requirements,
+                &arena) != 0);
 
     checkpoint.header.previous_state_root[0] = 0x44U;
     certificate.checkpoint = checkpoint;
-    if (refused(&initial, &certificate, &set, &requirements, &arena) != 0)
-        return 1;
+    FAIL_IF(refused(&initial, &certificate, &set, &requirements, &arena) != 0);
     certificate.checkpoint.header.previous_state_root[0] = 0x11U;
     certificate.attestations[0].availability_class_mask = 0x0fU;
     certificate.attestations[1].availability_class_mask = 0x0fU;
