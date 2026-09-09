@@ -564,4 +564,4 @@ After node readiness, `layerx-module-registry read-node` requests an authenticat
 LNI preparation snapshot through the node socket as UID 4021. Bring-up compares
 its module ids and ordinals with the published ConfigMap and refuses disagreement.
 Assets are not compared: preparation snapshots carry no asset metadata.
-The node image must install `/usr/local/bin/layerx-module-registry` for this gate.
+The node image installs `/usr/local/bin/layerx-module-registry` for this gate.
