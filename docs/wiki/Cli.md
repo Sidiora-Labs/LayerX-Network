@@ -3,17 +3,23 @@
 The developer CLI binary is `layerx` (`platform/cli/Cargo.toml:11-13`;
 `platform/cli/src/main.rs:29-30`). The crate is `layerx-platform-cli`. The
 stable graph anchor is `layerx-cli-v1`
-(`platform/cli/src/main.rs:487-491`). Global `--json` emits one JSON object
-instead of human presentation (`platform/cli/src/main.rs:32-37`). Success
+(`platform/cli/src/main.rs:503-507`). Global `--json` emits one JSON object
+instead of human presentation (`platform/cli/src/main.rs:34-39`). Global
+`--rpc` is a public gateway JSON-RPC URL that must end in `/rpc`; global
+`--gateway-credential` is a stored gateway alias
+(`platform/cli/src/main.rs:40-47`). Both apply only to `wallet` and `token`
+(`platform/cli/src/main.rs:509-519`). Success
 envelopes are `{ok, kind, message, data}`; failures are `{ok: false, error:
 {code, detail}}` (`platform/cli/src/output.rs:18-59`). Typed machine codes
 are taken only from a leading `snake_case` token before `": "`; other
 errors use `command_failed` (`platform/cli/src/output.rs:62-75`).
 
 This page covers that binary: commands, credential storage, how it reaches an
-endpoint, typed refusals, receipt verification, and the test suite. It does
-not document SDK clients; those live under `platform/docs/content/`. It does
-not document portable receipt JSON; see
+endpoint, typed refusals, receipt verification, and the test suite. Wallet
+and token operator steps are also in
+[the CLI wallet quickstart](../../platform/cli/README.md#wallet-quickstart).
+It does not document SDK clients; those live under `platform/docs/content/`.
+It does not document portable receipt JSON; see
 [Portable receipt verifier](PortableVerifier.md).
 
 ---
@@ -25,7 +31,21 @@ that the binary implements are listed; unimplemented flags are omitted.
 
 | Command | Purpose | Required inputs |
 | --- | --- | --- |
-| `layerx new <name>` | Scaffold a deterministic Rust program project (`platform/cli/src/main.rs:44-45, 83-88`; `platform/cli/src/scaffold.rs:9-38`) | `name` (lowercase Cargo package name, 1–64, digits/`-`, not starting with `-`; `platform/cli/src/scaffold.rs:52-62`). `--directory` default `.` |
+| `layerx wallet create <name>` | Generate a key and, on the emulator only, register its identity and main account (`platform/cli/src/wallet.rs:16-21, 222-256`) | `name`. `--did` optional. Non-emulator exits `wallet_registration_unavailable` and does not generate a key |
+| `layerx wallet import <name>` | Import a 32-byte hexadecimal Ed25519 seed from stdin without registration (`platform/cli/src/wallet.rs:22-27, 266-273`) | `name`; seed on stdin. `--did` optional |
+| `layerx wallet list` | List local wallet public metadata (`platform/cli/src/wallet.rs:29, 265`) | none |
+| `layerx wallet balance` | Read accounts of the selected DID (`platform/cli/src/wallet.rs:30-36, 277-305`) | `--did` and `--asset` optional. Native asset id `01` plus 62 zero hex digits maps to `agent:<DID>:main` |
+| `layerx wallet send` | Validate a transfer; refuses before signing (`platform/cli/src/wallet.rs:37-38, 457-477`) | `--to`, `--asset`, `--amount`. `--key` optional. `--wait` default `executed` (`executed`/`batched`/`finalised`). Exits `identity_sequence_unavailable`; does not sign or submit |
+| `layerx wallet history` | Report that DID activity history is unpublished (`platform/cli/src/wallet.rs:39-43, 340-343`) | `--did` optional. Always exits `wallet_history_unavailable` |
+| `layerx wallet receipt <activity_id>` | Verify an executed receipt against the configured sequencer key (`platform/cli/src/wallet.rs:44-45, 306-339`) | `activity_id` (64 hex). Reports `executed` only; does not assert batch inclusion or finality |
+| `layerx wallet open-account` | Validate an asset-account open; refuses before signing (`platform/cli/src/wallet.rs:46-52, 347-355`) | `--asset`. `--key` optional. Exits `identity_sequence_unavailable` |
+| `layerx token create` | Validate a native token registration; refuses before signing (`platform/cli/src/wallet.rs:78-92, 376-398`) | `--symbol`, `--name`, `--decimals`, `--salt`. `--supply-cap` default `0`. `--key` optional. Exits `identity_sequence_unavailable` |
+| `layerx token mint` | Validate a mint payload; refuses before signing (`platform/cli/src/wallet.rs:93-103, 399-416`) | `--asset`, `--to`, `--amount`. `--key` optional. Exits `identity_sequence_unavailable` |
+| `layerx token burn` | Validate a burn payload; refuses before signing (`platform/cli/src/wallet.rs:104-112, 417-429`) | `--asset`, `--amount`. `--key` optional. Exits `identity_sequence_unavailable` |
+| `layerx token transfer` | Validate a token transfer; refuses before signing (`platform/cli/src/wallet.rs:113-114, 373-375`) | same as `wallet send` |
+| `layerx token info <asset>` | Read token metadata through public RPC (`platform/cli/src/wallet.rs:115-116, 366-369`) | `asset` (64 hex). Without `--rpc`, or when the method is unpublished, exits `rpc_method_unavailable` |
+| `layerx token list` | List registered tokens through public RPC (`platform/cli/src/wallet.rs:117-118, 370-372`) | none. Same unpublished-method refusal as `token info` |
+| `layerx new <name>` | Scaffold a deterministic Rust program project (`platform/cli/src/main.rs:60-61, 99-104`; `platform/cli/src/scaffold.rs:9-38`) | `name` (lowercase Cargo package name, 1–64, digits/`-`, not starting with `-`; `platform/cli/src/scaffold.rs:52-62`). `--directory` default `.` |
 | `layerx workspace` | With no subcommand, open the visual workspace on a TTY (`platform/cli/src/workspace.rs:738-740, 750-752`) | TTY required for interactive mode; `--json` or a non-TTY stdin refuses |
 | `layerx workspace modules` | List every module the workspace CLI controls (`platform/cli/src/workspace.rs:21-23, 741`) | none |
 | `layerx workspace doctor` | Inspect tools and module readiness without changing anything (`platform/cli/src/workspace.rs:24-25, 742`) | `--module` repeatable/comma-separated; `--all`; `--environment` |
@@ -209,8 +229,11 @@ Default config when the file is absent: environment `emulator`, endpoint
 ## Emulator, hosted gateway, and node
 
 The CLI talks HTTP to the active environment endpoint
-(`platform/cli/src/main.rs:1344-1347`; `platform/cli/src/http.rs:22-47`).
-There is no CLI command that opens a `layerxd` node RPC.
+(`platform/cli/src/main.rs:1381-1385`; `platform/cli/src/http.rs:24-50`).
+`layerx --rpc <url> wallet|token …` additionally POSTs JSON-RPC 2.0 to the
+gateway `/rpc` surface (`platform/cli/src/rpc.rs:23-26, 31-106`). That is
+the public gateway contract, not a `layerxd` node admin socket. Other
+commands do not open a node RPC.
 
 | Target | How the CLI reaches it |
 | --- | --- |
@@ -250,6 +273,10 @@ the detail string is `code: …` (`platform/cli/src/output.rs:62-75`;
 | `sequencer_trust_anchor_mismatch` | supplied anchor disagrees with advertised sequencer identity (`platform/cli/src/emulator.rs:117, 878-884`) |
 | `sequencer_seed_exists` / `sequencer_trust_anchor_exists` | `emulator provision` without `--force` when those files exist (`platform/cli/src/emulator.rs:100-101, 126-135, 246-252`) |
 | `MCP and A2A installation require a configured hosted testnet or production gateway…` (`command_failed`) | install against emulator (`platform/cli/src/install/mod.rs:573-577`; `platform/cli/tests/install.rs:35-52`) |
+| `wallet_registration_unavailable` | `wallet create` on a non-emulator environment; no key is generated (`platform/cli/src/wallet.rs:230-232`) |
+| `wallet_history_unavailable` | `wallet history`; no DID activity-history method or REST route is published (`platform/cli/src/wallet.rs:340-343`) |
+| `identity_sequence_unavailable` | `wallet send`, `wallet open-account`, and token writes; the gateway has no `identity.next_sequence` read. No activity is signed or submitted (`platform/cli/src/wallet.rs:447-455, 476`) |
+| `rpc_method_unavailable` | `token info` / `token list` without `--rpc`, or an RPC method absent from the published contract (`platform/cli/src/wallet.rs:433-445`; `platform/cli/src/rpc.rs:100-104`) |
 
 ---
 
@@ -298,6 +325,9 @@ for the command suite lives in `platform/cli/tests/common/mod.rs`.
 | `platform/cli/tests/emulator.rs` | Live emulator: environment bind, account prefund, payment quote/commit, identity mismatches (`platform/cli/tests/emulator.rs:1-6`) |
 | `platform/cli/tests/install.rs` | Install refusals; this file **removes** `LAYERX_CREDENTIAL_STORE` (`platform/cli/tests/install.rs:22`) so it does not use the mock |
 | `platform/cli/tests/workspace.rs` | Workspace module inventory against `LAYERX_REPO_ROOT` |
+| `platform/cli/tests/wallet_commands.rs` | Emulator wallet create/list/balance, send refusal `identity_sequence_unavailable`, import without leaking the seed, unpublished `token list` (`platform/cli/tests/wallet_commands.rs:6-96`) |
+| `platform/cli/tests/wallet_encoding.rs` | CLI-local native asset register/open/revoke/mint/burn bytes against `wallet-assets-v1.json` (`platform/cli/tests/wallet_encoding.rs:29-77`) |
+| `platform/cli/tests/wallet_send.rs` | CLI-local Send payload and authorization-message bytes versus compiled `lxp_send.c` (`platform/cli/tests/wallet_send.rs:29-66`) |
 | `platform/cli/tests/clean-bootstrap.sh` | Published `install.md` bootstrap sequence in a clean `HOME` against a real binary (`platform/cli/tests/clean-bootstrap.sh:53-115`) |
 | `make platform-test-agent-install` | `install-journey.sh` against a hosted gateway (`platform/Makefile.inc:190-201`). Scheduled/dispatch CI installs `dbus-x11` and `gnome-keyring` and runs that journey under `dbus-run-session` / `gnome-keyring-daemon` (`.github/workflows/platform.yml:1458-1510`) |
 
