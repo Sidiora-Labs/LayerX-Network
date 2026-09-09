@@ -1,3 +1,8 @@
+//! LXT-20 guest request encodings.
+//!
+//! These codecs are program calldata, not Asset-module activity payloads and
+//! not Programs module ordinals. Selectors are `b'L', b'X', 20, method`.
+
 use crate::{AccountId, Amount, Bytes, Field, Principal, ProgramError, Reason};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

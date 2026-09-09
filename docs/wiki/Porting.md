@@ -3,7 +3,7 @@
 The `programs/` workspace members `porting/solana`, `porting/evm`, and
 `porting/cosmwasm` (plus each crate's `guest`) are the LayerX Network program porting
 kits (`programs/Cargo.toml:11-16`, `programs/README.md:51`,
-`programs/README.md:210-217`). Package names are `layerx-porting-solana`,
+`programs/README.md:213-220`). Package names are `layerx-porting-solana`,
 `layerx-porting-evm`, and `layerx-porting-cosmwasm`; lib names are
 `programs_porting_solana`, `programs_porting_evm`, and
 `programs_porting_cosmwasm`
@@ -410,5 +410,16 @@ do not assert a `PortRefusal`
 | Refusal test in crate | `Err(PortRefusal::UnboundedRentSweep)` (`programs/porting/solana/src/monetary.rs:349-353`) | `Err(PortRefusal::UnboundedBalanceSweep)` (`programs/porting/evm/src/monetary.rs:329-333`) | `Err(PortRefusal::SupplyMutation)` (`programs/porting/cosmwasm/src/monetary.rs:346-351`) |
 | ABI v2 reference guest | `programs/porting/solana/reference-v2/src/lib.rs:1-9` | `programs/porting/evm/reference-v2/src/lib.rs:1-15` | `programs/porting/cosmwasm/reference-v2/src/lib.rs:1-9` |
 | Make lint artifact | `layerx_anchor_context_reference.wasm` (`Makefile:3093`, `Makefile:3096`) | `layerx_evm_context_reference.wasm` (`Makefile:3092`, `Makefile:3095`) | `layerx_cosmwasm_context_reference.wasm` (`Makefile:3094`, `Makefile:3097`) |
+
+## LXT-20 and native assets
+
+`MIGRATION.md` in each porting crate maps ERC-20, SPL and CW20 flows onto the
+LXT-20 request codecs in `programs/sdk/rust/src/lxt20.rs`. Those codecs are
+guest calldata, not a deployed token program. Native issued asset IDs are
+`asset_id32 = SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`;
+Paxeer-custody assets keep their existing ids. Per-asset account names are
+`agent:<DID>:asset:<lowercase hex64 asset_id>` under the existing
+`LX:ACCOUNT:v1` rule. Asset ordinal 9 is reserved for WITHDRAW and is not
+defined by these guides.
 
 [Home](Home.md)

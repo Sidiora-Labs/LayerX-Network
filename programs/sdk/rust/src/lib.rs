@@ -22,8 +22,9 @@
 //! The bindings that actually cross into the host exist only for `wasm32`,
 //! which is the single compiled target for programs. Building this crate for
 //! any other target compiles the pure vocabulary - amounts, identifiers,
-//! bounds, capability encoding and receipt decoding - and nothing that would
-//! pretend to reach a runtime that is not there.
+//! bounds, capability encoding, receipt decoding, LXT-20 request codecs and
+//! program-account payment preparation - and nothing that would pretend to
+//! reach a runtime that is not there.
 
 #![no_std]
 
@@ -65,17 +66,16 @@ pub use abi::{
     HostFunction, ABI_MANIFEST, ABI_MODULE, ABI_VERSION, CALL_ENTRY_EXPORT, CALL_RESERVE_EXPORT,
     CANDIDATE_ABI_MANIFEST, CANDIDATE_ABI_MODULE, CANDIDATE_HOST_FUNCTIONS,
     CANDIDATE_REFUSAL_SENTINEL, ENTRYPOINT, HOST_FUNCTIONS, MAX_CALL_INPUT_BYTES,
-    MAX_CALL_RESPONSE_BYTES, MAX_CAPABILITIES, MAX_CAPABILITY_ENCODING_BYTES,
-    MAX_CAPABILITY_ENCODING_GRANT_BYTES, MAX_CAPABILITY_ENCODING_HEADER_BYTES,
-    MAX_CANONICAL_CAPABILITY_SET_BYTES,
-    MAX_EVENT_DATA_BYTES, MAX_EVENTS_PER_ACTIVITY, MAX_EVENT_TOPIC_BYTES,
-    MAX_REFUSAL_REASON_BYTES, MAX_STORAGE_KEY_BYTES,
-    MAX_STORAGE_VALUE_BYTES, MAX_PROGRAM_ACCOUNT_SEED_BYTES, MEMORY_EXPORT, RECEIPT_ENCODING_BYTES,
+    MAX_CALL_RESPONSE_BYTES, MAX_CANONICAL_CAPABILITY_SET_BYTES, MAX_CAPABILITIES,
+    MAX_CAPABILITY_ENCODING_BYTES, MAX_CAPABILITY_ENCODING_GRANT_BYTES,
+    MAX_CAPABILITY_ENCODING_HEADER_BYTES, MAX_EVENTS_PER_ACTIVITY, MAX_EVENT_DATA_BYTES,
+    MAX_EVENT_TOPIC_BYTES, MAX_PROGRAM_ACCOUNT_SEED_BYTES, MAX_REFUSAL_REASON_BYTES,
+    MAX_STORAGE_KEY_BYTES, MAX_STORAGE_VALUE_BYTES, MEMORY_EXPORT, RECEIPT_ENCODING_BYTES,
 };
+pub use access::{AccessEntry, AccessMode, AccessRecipe, AccessScope, ActivityAccess, KeyAccess};
 pub use amount::{Amount, ProtocolInteger};
 #[cfg(not(target_arch = "wasm32"))]
 pub use bindgen::{BindgenError, BindingGenerator, GeneratedBindings};
-pub use access::{AccessEntry, AccessMode, AccessRecipe, AccessScope, ActivityAccess, KeyAccess};
 pub use buffer::Bytes;
 pub use call::{CallInput, CallResponse, CallResult, GrantedCapabilities};
 pub use capability::{Capability, CapabilitySet};
@@ -87,9 +87,10 @@ pub use error::{
     ValueError, REFUSAL_CLASS_MANIFEST, STATUS_BOUNDS, STATUS_BUFFER_TOO_SMALL,
     STATUS_CAPABILITY_BYTES, STATUS_CAPABILITY_LIMIT, STATUS_DATA_TOO_LARGE, STATUS_DENIED,
     STATUS_DUPLICATE_CAPABILITY, STATUS_EMPTY_KEY, STATUS_EMPTY_TOPIC, STATUS_EVIDENCE,
-    STATUS_INPUT_TOO_LARGE, STATUS_INVALID, STATUS_KEY_TOO_LARGE, STATUS_METER, STATUS_VERIFY_FAILED,
+    STATUS_INPUT_TOO_LARGE, STATUS_INVALID, STATUS_KEY_TOO_LARGE, STATUS_METER,
     STATUS_NULL_ARGUMENT, STATUS_OVERFLOW, STATUS_RECEIPT_ENCODING, STATUS_RESERVED_IDENTIFIER,
-    STATUS_TOPIC_TOO_LARGE, STATUS_UNDERFLOW, STATUS_VALUE_TOO_LARGE, STATUS_ZERO_AMOUNT,
+    STATUS_TOPIC_TOO_LARGE, STATUS_UNDERFLOW, STATUS_VALUE_TOO_LARGE, STATUS_VERIFY_FAILED,
+    STATUS_ZERO_AMOUNT,
 };
 pub use event::{EventData, EventTopic};
 pub use ids::{AccountId, AssetId, ProgramId, ReceiptDigest};
@@ -109,4 +110,11 @@ pub const fn programs_escrow_reference() -> &'static str {
 #[must_use]
 pub const fn programs_vault_reference() -> &'static str {
     "programs/sdk/rust/examples/vault"
+}
+
+/// Returns the repository path of the program-funded merchant-split guest
+/// shipped with this SDK.
+#[must_use]
+pub const fn programs_payments_merchant_reference() -> &'static str {
+    "programs/sdk/rust/examples/payments-merchant"
 }

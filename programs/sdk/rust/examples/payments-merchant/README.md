@@ -31,5 +31,6 @@ Build with `cargo build --manifest-path programs/sdk/rust/examples/payments-merc
 
 The current native Programs source still equates the signer principal with the
 source and sequence account ID. Integration with DID-derived per-asset accounts
-requires the account-owner/identity sequence change recorded in `NEEDS.md` and
-the qualification ledger. Do not substitute a DID for a derived account ID.
+requires the account-owner/identity sequence change recorded in
+`spec/layerx-beta/qualification.kvx`. Do not substitute a DID for a derived
+account ID.

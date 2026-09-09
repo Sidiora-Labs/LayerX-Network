@@ -449,6 +449,27 @@ Sources:
 
 ---
 
+## LXT-20 request encodings
+
+`programs/sdk/rust/src/lxt20.rs` encodes seven guest request variants
+(`transfer`, `approve`, `transfer_from`, `balance_of`, `allowance`,
+`total_supply`, `metadata`). These bytes are program calldata, not Programs
+module activity types (`0x0009xxxx`) and not Asset module ordinals. Native
+asset registration, account opening, mint and burn remain separate signed
+asset activities. Asset ordinal 9 is reserved for WITHDRAW and is not defined
+by LXT-20. Committed vectors live in
+`programs/sdk/rust/vectors/lxt20-requests.txt`. Porting maps are in
+`programs/porting/evm/MIGRATION.md`, `programs/porting/solana/MIGRATION.md`
+and `programs/porting/cosmwasm/MIGRATION.md`.
+
+Sources:
+
+- `programs/sdk/rust/src/lxt20.rs`
+- `programs/sdk/rust/src/payments.rs`
+- `programs/sdk/rust/examples/payments-merchant/README.md`
+
+---
+
 ## Spec notes and disagreements
 
 `spec/layerx-beta/spec.kvx` has `[req.1]`–`[req.14]` only. There is no beta

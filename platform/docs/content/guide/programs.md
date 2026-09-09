@@ -28,6 +28,9 @@ The Rust SDK examples are complete custody patterns:
 - `programs/sdk/rust/examples/vault` credits each caller in principal-scoped
   storage while maintaining the pooled total in shared storage. A withdrawal
   debits both ledgers and the real derived account in one atomic execution.
+- `programs/sdk/rust/examples/payments-merchant` stages one principal-funded
+  deposit and two program-account payouts under explicit grants. Its source is
+  not evidence of a native settlement round trip.
 
 A program cannot derive another program's authority, stage a derived-account
 debit from a callee frame, write balances, mint or burn value, perform an

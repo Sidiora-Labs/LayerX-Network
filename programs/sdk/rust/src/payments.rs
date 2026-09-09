@@ -1,3 +1,5 @@
+//! Program-account registration, funding and spend-grant preparation.
+
 use sha2::{Digest, Sha256};
 
 use crate::{
