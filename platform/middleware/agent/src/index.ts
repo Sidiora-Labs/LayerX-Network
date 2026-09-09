@@ -1,3 +1,4 @@
+import { paymentCommitment, verifyPaymentReceipt, type GrantDrawExecution, type SellerSettlementOutcome } from "@sidiora/layerx-seller-middleware";
 import { verifyPaymentCommitment, type PaymentCommitment, type PaymentCommitmentResolver } from "@sidiora/layerx-seller-middleware";
 import {
   PlatformSdkError,
@@ -807,4 +808,38 @@ export async function verifyAgentPayment(evidence: AgentReceiptEvidence, request
   if (request.commitment !== undefined) await verifyPaymentCommitment(verification,
     evidence.authorizedBatch.sequencerPublicKey, request.commitment.network, request.commitment.level, commitments);
   return verification;
+}
+
+export class AgentGrantMiddleware implements GrantDrawExecution {
+  public constructor(private readonly config: {
+    readonly tenant: string;
+    readonly budgets: AgentBudgetLedger;
+    readonly draws: GrantDrawExecution;
+    readonly commitments?: PaymentCommitmentResolver;
+  }) {
+    if (!config.tenant || config.tenant.length > 512 || config.tenant.includes("\0")) throw new AgentMiddlewareError("invalid-request");
+  }
+
+  public async execute(request: Parameters<GrantDrawExecution["execute"]>[0]): Promise<SellerSettlementOutcome> {
+    const requirements = request.requirements;
+    if (requirements.scheme !== "metered" && requirements.scheme !== "subscription") throw new AgentMiddlewareError("invalid-request");
+    const commitment = paymentCommitment(requirements.extra);
+    if (commitment !== "executed" && this.config.commitments === undefined) throw new AgentMiddlewareError("invalid-request");
+    const amount = protocolAmount(requirements.amount).toString();
+    if (!/^[0-9a-f]{64}$/u.test(request.requestDigest) || !/^[0-9a-f]{64}$/u.test(request.idempotencyKey)) throw new AgentMiddlewareError("invalid-request");
+    const facts = { amount, asset: requirements.asset, requestDigest: request.requestDigest };
+    const result = await this.config.budgets.reserve({ tenant: this.config.tenant, idempotencyKey: request.idempotencyKey, ...facts });
+    if (result.kind === "exhausted") return { kind: "refused", reason: "budget_refused" };
+    if (result.kind === "conflict") throw new AgentMiddlewareError("budget-conflict");
+    const reservation = validateBudgetReservation(result.reservation, facts);
+    if (reservation.state === "held") return { kind: "pending" };
+    if (reservation.state === "released") return { kind: "refused", reason: "budget_released" };
+    const outcome = await this.config.draws.execute(request);
+    if (outcome.kind !== "settled") return outcome;
+    const verification = await verifyPaymentReceipt(outcome, requirements, this.config.commitments);
+    const receiptDigest = toHex(verification.receiptDigest);
+    const committed = validateBudgetReservation(await this.config.budgets.commit({ reservationId: reservation.reservationId, ...facts, receiptDigest }), facts, reservation.reservationId);
+    if (committed.state !== "committed" || committed.receiptDigest !== receiptDigest) throw new AgentMiddlewareError("budget-conflict");
+    return outcome;
+  }
 }
