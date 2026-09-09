@@ -484,6 +484,8 @@ static lxp_result collect_assets(lxp_daemon_process *process)
 {
     size_t account_index;
     process->asset_count = 0U;
+    (void)memset(process->assets, 0, sizeof(process->assets));
+    (void)memset(process->send_assets, 0, sizeof(process->send_assets));
     for (account_index = 0U; account_index < process->accounts.count;
          ++account_index) {
         lx_account *account = &process->accounts.accounts[account_index];
@@ -504,6 +506,46 @@ static lxp_result collect_assets(lxp_daemon_process *process)
         (void)memcpy(process->send_assets[process->asset_count].asset_id,
                      account->asset_id, 32U);
         ++process->asset_count;
+    }
+    for (size_t index = 0U; index < process->kernel.module_kv_count; ++index) {
+        const lxp_module_kv_entry *entry = &process->kernel.module_kv[index];
+        lx_asset_record record;
+        size_t asset_index;
+        lxp_result status;
+        if (entry->module_id != LXP_MODULE_ASSET || entry->key_length != 38U ||
+            memcmp(entry->key, "asset:", 6U) != 0) continue;
+        status = lx_asset_record_decode(entry->value, entry->value_length, &record);
+        if (status != LXP_OK) return status;
+        if (memcmp(entry->key + 6U, record.asset_id, 32U) != 0)
+            return LXP_ERR_ASSET_MISMATCH;
+        for (asset_index = 0U; asset_index < process->asset_count; ++asset_index)
+            if (memcmp(process->assets[asset_index].asset_id, record.asset_id, 32U) == 0) break;
+        if (asset_index == process->asset_count) return LXP_ERR_ASSET_MISMATCH;
+        {
+            lxp_u128 circulating = {0U, 0U};
+            lxp_u128 issued;
+            lxp_u128 initial = lxp_u128_is_zero(record.supply_cap) ?
+                (lxp_u128){UINT64_MAX, UINT64_MAX} : record.supply_cap;
+            size_t issuance_count = 0U;
+            for (size_t i = 0U; i < process->accounts.count; ++i) {
+                const lx_account *account = &process->accounts.accounts[i];
+                if (!account->has_asset || memcmp(account->asset_id, record.asset_id, 32U) != 0) continue;
+                if (account->kind == LX_ACCOUNT_MODULE_VALUE && account->name_length == 79U &&
+                    memcmp(account->name, "asset:", 6U) == 0) {
+                    if (lx_account_validate_canonical(account) != LXP_OK ||
+                        lxp_u128_sub(initial, account->balance, &issued) != LXP_OK ||
+                        lxp_u128_cmp(issued, record.total_units) != 0)
+                        return LXP_FATAL_SUPPLY_MISMATCH;
+                    ++issuance_count;
+                } else if (lxp_u128_add(circulating, account->balance, &circulating) != LXP_OK)
+                    return LXP_FATAL_SUPPLY_MISMATCH;
+            }
+            if (issuance_count != 1U || lxp_u128_cmp(circulating, record.total_units) != 0)
+                return LXP_FATAL_SUPPLY_MISMATCH;
+        }
+        process->send_assets[asset_index] = record;
+        status = lx_asset_transfer_state(&record, &process->assets[asset_index]);
+        if (status != LXP_OK) return status;
     }
     return process->asset_count == 0U ? LXP_ERR_ASSET_MISMATCH : LXP_OK;
 }
