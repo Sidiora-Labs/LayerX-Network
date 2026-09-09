@@ -25,3 +25,10 @@ live seal but only renders manifests, as in fresh mode.
 `down` still deletes the cluster (or owner namespaces), including the Human
 state PVC, and removes local material. Retention supports repeated `up` against
 a live cluster; it is not recovery after `down` or a backup protocol.
+
+The owner agent consumes `LAYERX_AGENT_HUMAN_PEERS` from
+`layerx-human-agent-config`. Its encoding is comma-separated
+`uid=<u32>;tenant=<tenant>;principal=<principal>` entries. The component binding
+uses UID 4020 and the same tenant and DID as the authority principal policy.
+The material assembler still requires the positional encoding and must be
+updated before this configuration can be provisioned successfully.
