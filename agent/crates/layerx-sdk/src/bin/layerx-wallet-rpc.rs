@@ -133,7 +133,12 @@ fn execute(v: &Value) -> Result<Value, BridgeError> {
         },
     };
     match text(v, "action")? {
-        "accounts" => return rpc.get_balances(text(v, "did")?).map_err(BridgeError::Rpc),
+        "accounts" => {
+            return rpc
+                .get_balances(text(v, "did")?)
+                .map(layerx_sdk::rpc::BalancesSnapshot::into_value)
+                .map_err(BridgeError::Rpc)
+        }
         "balance" => {
             return rpc
                 .wallet(fixed(c, "native_asset")?)

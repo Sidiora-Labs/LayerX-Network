@@ -44,6 +44,31 @@ impl Commitment {
     }
 }
 
+macro_rules! read_result {
+    ($($name:ident),+ $(,)?) => {$(
+        #[derive(Clone, Debug, PartialEq)]
+        pub struct $name(serde_json::Map<String, Value>);
+        impl $name {
+            #[must_use]
+            pub const fn unverified_fields(&self) -> &serde_json::Map<String, Value> { &self.0 }
+            #[must_use]
+            pub fn into_value(self) -> Value { Value::Object(self.0) }
+        }
+        impl TryFrom<Value> for $name {
+            type Error = RpcError;
+            fn try_from(value: Value) -> Result<Self, Self::Error> {
+                match value { Value::Object(fields) => Ok(Self(fields)), _ => Err(RpcError::InvalidResponse) }
+            }
+        }
+    )+};
+}
+read_result!(
+    AssetSnapshot,
+    AssetListSnapshot,
+    BalancesSnapshot,
+    FeeEstimate
+);
+
 pub struct RpcClient {
     agent: ureq::Agent,
     endpoint: url::Url,
@@ -70,7 +95,7 @@ pub struct RpcWallet<'a> {
 impl RpcWallet<'_> {
     /// # Errors
     /// Preserves unavailable enumeration and other RPC errors.
-    pub fn accounts(&self, did: &str) -> Result<Value, RpcError> {
+    pub fn accounts(&self, did: &str) -> Result<BalancesSnapshot, RpcError> {
         self.rpc.get_balances(did)
     }
 
@@ -138,9 +163,16 @@ impl RpcClient {
 
     read_methods! {
         get_account => "lx_getAccount", get_balance => "lx_getBalance",
-        get_balances => "lx_getBalances", get_sequence => "lx_getSequence",
+        get_sequence => "lx_getSequence",
         get_receipt => "lx_getReceipt", get_activity_status => "lx_getActivityStatus",
         get_batch_header => "lx_getBatchHeader", get_checkpoint => "lx_getCheckpoint",
+    }
+
+    /// # Errors
+    /// Rejects malformed DID selectors and preserves upstream enumeration unavailability.
+    pub fn get_balances(&self, did: &str) -> Result<BalancesSnapshot, RpcError> {
+        layerx_types::ids::Did::new(did.as_bytes()).map_err(|_| RpcError::InvalidRequest)?;
+        self.call("lx_getBalances", &json!([did]))?.try_into()
     }
 
     /// Opens an authenticated public subscription. Notifications are unverified hints.
@@ -162,23 +194,25 @@ impl RpcClient {
 
     /// # Errors
     /// Preserves native asset-listing refusals; returned read data is unverified.
-    pub fn list_assets(&self) -> Result<Value, RpcError> {
-        self.call("lx_listAssets", &json!([]))
+    pub fn list_assets(&self) -> Result<AssetListSnapshot, RpcError> {
+        self.call("lx_listAssets", &json!([]))?.try_into()
     }
 
     /// # Errors
     /// Preserves native asset metadata refusals; returned read data is unverified.
-    pub fn get_asset(&self, asset: [u8; 32]) -> Result<Value, RpcError> {
-        self.call("lx_getAsset", &json!([encode_hex(&asset)]))
+    pub fn get_asset(&self, asset: [u8; 32]) -> Result<AssetSnapshot, RpcError> {
+        self.call("lx_getAsset", &json!([encode_hex(&asset)]))?
+            .try_into()
     }
 
     /// # Errors
     /// Refuses empty or oversized activities and preserves native fee-estimation errors.
-    pub fn estimate_fee(&self, canonical: &[u8]) -> Result<Value, RpcError> {
+    pub fn estimate_fee(&self, canonical: &[u8]) -> Result<FeeEstimate, RpcError> {
         if canonical.is_empty() || canonical.len() > 524_288 {
             return Err(RpcError::InvalidRequest);
         }
-        self.call("lx_estimateFee", &json!([encode_hex(canonical)]))
+        self.call("lx_estimateFee", &json!([encode_hex(canonical)]))?
+            .try_into()
     }
 
     /// # Errors
@@ -363,5 +397,28 @@ mod tests {
             rpc.estimate_fee(&vec![0; 524_289]),
             Err(RpcError::InvalidRequest)
         ));
+    }
+}
+
+#[cfg(test)]
+mod read_result_tests {
+    use super::*;
+    #[test]
+    fn openrpc_object_contract_is_preserved_without_inventing_metadata() {
+        for value in [
+            Value::Null,
+            json!([]),
+            json!(true),
+            json!(12),
+            json!("accepted"),
+        ] {
+            assert!(AssetSnapshot::try_from(value.clone()).is_err());
+            assert!(AssetListSnapshot::try_from(value.clone()).is_err());
+            assert!(BalancesSnapshot::try_from(value.clone()).is_err());
+            assert!(FeeEstimate::try_from(value).is_err());
+        }
+        let fields = json!({"unrecognised_native_field":"340282366920938463463374607431768211455"});
+        let snapshot = AssetSnapshot::try_from(fields.clone()).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(snapshot.into_value(), fields);
     }
 }

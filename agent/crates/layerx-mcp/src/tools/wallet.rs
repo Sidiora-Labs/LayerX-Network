@@ -130,7 +130,10 @@ pub fn accounts(
             "wallet.accounts",
             did.as_bytes().to_vec(),
             |_| {
-                let result = wallet.accounts(did).map_err(WalletToolError::Rpc);
+                let result = wallet
+                    .accounts(did)
+                    .map(layerx_sdk::rpc::BalancesSnapshot::into_value)
+                    .map_err(WalletToolError::Rpc);
                 let outcome = if result.is_ok() {
                     InvocationOutcome::Completed
                 } else {

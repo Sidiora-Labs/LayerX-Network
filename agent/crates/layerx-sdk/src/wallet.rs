@@ -11,7 +11,7 @@ use layerx_wire::activity::{decode_signed, encode_signed_envelope};
 use layerx_wire::hash::activity_id;
 use serde_json::Value;
 
-use crate::rpc::{Commitment, RpcClient, RpcError};
+use crate::rpc::{BalancesSnapshot, Commitment, RpcClient, RpcError};
 use crate::rpc_verification::{ReceiptPolicy, VerifiedRpcReceipt};
 
 pub struct PaymentOptions {
@@ -60,7 +60,7 @@ impl Wallet<'_> {
     }
     /// # Errors
     /// Preserves unavailable enumeration and RPC errors.
-    pub fn accounts(&self, did: &str) -> Result<Value, RpcError> {
+    pub fn accounts(&self, did: &str) -> Result<BalancesSnapshot, RpcError> {
         self.rpc.get_balances(did)
     }
     /// # Errors
