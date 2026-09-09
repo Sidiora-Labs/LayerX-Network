@@ -1,3 +1,15 @@
+# Public JSON-RPC
+
+`POST /rpc` is JSON-RPC 2.0. `GET /rpc/schema` serves
+[`openrpc.json`](openrpc.json). `GET /rpc/ws` is the authenticated
+WebSocket upgrade for `lx_subscribe`. Method names, parameter order,
+commitment levels (`executed`, `batched`, `finalised`), and error
+codes are defined in that document. Reads forward to the public core
+URL (`LAYERX_GATEWAY_PUBLIC_CORE_URL`). Native DID enumeration, asset
+listing/detail, and fee estimation remain unavailable on this source
+and return explicit JSON-RPC unavailability, never fabricated results.
+See [Hosted gateway](../../../docs/wiki/HostedGateway.md).
+
 # Canonical module registry
 
 `LAYERX_GATEWAY_MODULE_REGISTRY_FILE` names a JSON file shared with the human

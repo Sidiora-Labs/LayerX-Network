@@ -41,6 +41,32 @@ pub(super) fn account(config: &Config, id: &str) -> Response {
 }
 
 pub(super) fn route(config: &Config, request: &Request) -> Option<Response> {
+    if request.path == "/v1/assets" || request.path.starts_with("/v1/assets/") {
+        return Some(if request.method != "GET" {
+            refusal(405, "method_not_allowed", None)
+        } else if request.query.is_some() || !request.body.is_empty() {
+            refusal(400, "invalid_request", None)
+        } else if request.path != "/v1/assets"
+            && request
+                .path
+                .strip_prefix("/v1/assets/")
+                .and_then(|id| fixed_hex::<32>("asset_id", id).ok())
+                .is_none_or(|id| id == [0; 32])
+        {
+            refusal(400, "invalid_asset_id", None)
+        } else {
+            refusal(503, "asset_evidence_unavailable", Some(30))
+        });
+    }
+    if request.path == "/v1/fees/estimate" {
+        return Some(if request.method != "POST" {
+            refusal(405, "method_not_allowed", None)
+        } else if request.query.is_some() || !valid_fee_request(&request.body) {
+            refusal(400, "invalid_fee_request", None)
+        } else {
+            refusal(503, "fee_evidence_unavailable", Some(30))
+        });
+    }
     if request.path == "/v1/node-info" {
         return Some(if request.method != "GET" {
             refusal(405, "method_not_allowed", None)
@@ -292,5 +318,38 @@ fn receipt_event(config: &Config, request: &Request, sequence: &str) -> Response
         }
         Ok(None) => super::json_response(202, &serde_json::json!({"result":{"state":"pending"}})),
         Err(_) => refusal(503, "receipt_events_unavailable", Some(5)),
+    }
+}
+
+fn valid_fee_request(body: &[u8]) -> bool {
+    let Ok(serde_json::Value::Object(value)) = serde_json::from_slice(body) else {
+        return false;
+    };
+    value.len() == 1
+        && value
+            .get("canonical_hex")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|hex| {
+                !hex.is_empty()
+                    && hex.len() <= 1024 * 1024
+                    && hex.len().is_multiple_of(2)
+                    && hex.bytes().all(|b| b.is_ascii_hexdigit())
+            })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fee_request_requires_bounded_canonical_bytes() {
+        assert!(super::valid_fee_request(br#"{"canonical_hex":"abcd"}"#));
+        for body in [
+            br"{}".as_slice(),
+            br#"{"canonical_hex":""}"#,
+            br#"{"canonical_hex":"abc"}"#,
+            br#"{"canonical_hex":"zz"}"#,
+            br#"{"canonical_hex":"ab","extra":1}"#,
+        ] {
+            assert!(!super::valid_fee_request(body));
+        }
     }
 }

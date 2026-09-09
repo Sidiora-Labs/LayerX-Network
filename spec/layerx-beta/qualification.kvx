@@ -8113,3 +8113,35 @@ symbol = "authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receip
 observed = "Final source core/gateway cargo fmt checks, all-target Clippy with -D warnings, full serial core/gateway cargo test including real daemon boundary tests and doctests, standalone local harness formatting and all-target Clippy, four-reader receipt commit/deadline qualification, real WebSocket receipt/account wake and beta-ledger-check all exit 0. Logs: qual-logs/pay4/g-fmt-qualified.log, g-local-fmt-qualified.log, g-clippy-qualified.log, g-local-clippy-qualified-final.log, g-tests-qualified.log, g-concurrent-focused-final.log, g-ws-final.log and g-ledger-qualified.log. The native build exits 0 with existing strict C warnings; g-native-concurrent-build.log and g-native-bundle-final.json retain producer provenance."
 assumption = "Platform Cargo commands use the untracked alternate lockfile described in observation 6.2.920. Qualification covers the owned receipt/transport implementation and disposable harness, not the 250 ms threshold, positive finalised certificates, deployment, production certification or other unresolved public-read/native interfaces. No task status was changed."
 severity = "note"
+
+[observation.6.2.923]
+task = "6.2"
+file = "platform/hosted/tests/topology-check.sh platform/hosted/internal/deployment.yaml platform/hosted/webhooks/deployment.yaml platform/hosted/gateway/deployment.yaml"
+symbol = "egress_admits"
+observed = "Separating dashboard and webhook ConfigMaps and admitting only the required source pods and destination ports reduces topology failures from twenty to four. Both parser runs exit 1: qual-logs/pay4/h/topology.log and topology-builtin.log. Journeys and approvals reference undeclared layerx-human.layerx-testnet.svc:9443. Payments and programs DNS egress selects kube-system kube-dns pods, but egress_admits only recognizes a namespaceSelector without podSelector. The existing DNS restriction and checker remain unchanged."
+assumption = "A real Human service manifest and a source-grounded DNS checker repair are required; adding placeholder workloads or widening DNS access to silence the checker is not acceptable."
+severity = "blocker"
+
+[observation.6.2.924]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs agent/schema/lni/v1.kvx agent/crates/layerx-client/src/client.rs"
+symbol = "route"
+observed = "DID accounts, asset list/detail and fee routes preserve explicit HTTP 503 refusals mapped to JSON-RPC -32001. The supplied shared encodings and NEEDS define HTTP selectors but no new native request tags, payload version, bounded enumeration cursor, response layout or authenticated completeness contract. The client exposes no corresponding enumeration, asset registry or fee methods."
+assumption = "Native request and response contracts are required before real adapters can be implemented. Native Asset admission remains restricted; ordinal 9 stays reserved. No fabricated empty lists, metadata or fees are returned."
+severity = "blocker"
+
+[observation.6.2.925]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "send complete_commitment local_gateway_rpc assert_funded_commitments"
+observed = "HTTP 202 maps to a typed submission error. Unmet batched or finalised commitment maps to -32001 with pending state and requested_commitment instead of executed success. Existing local harness assertions at finalised replay require result.state=pending and result.commitment=executed, contradicting the no-ack and no-downgrade contract. Those assertions are retained unchanged."
+assumption = "The conflicting assertions need explicit reconciliation authority; they must not be skipped or weakened. Positive finalised certificate and delayed or incorrect evidence runtime coverage remains required."
+severity = "blocker"
+
+[observation.6.2.926]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/core/src/public_reads.rs platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "pending_commitment selector valid_fee_request local_gateway_successful_send_latency"
+observed = "Core and gateway formatting, strict all-target Clippy and full package tests pass using tracked platform/Cargo.lock, including thirteen real core boundary tests. Final gateway package tests and strict Clippy also pass after wrapping arbitrary upstream JSON inside typed 202 error data. Logs: qual-logs/pay4/h/fmt-final.log, clippy-final-source.log, tests.log and gateway-final.log. The real RPC harness exits 101 at the preserved finalised-success assertion after executed and batched assertions pass; local-rpc.log contains the typed -32001 response with requested_commitment=finalised. The funded harness completes twenty successful production-disclosure-signed SENDs with p50 1937166 us and p99 3271887 us; batched replay succeeds in 402157 us before the preserved finalised result assertion fails. Funded aggregate exit is 101, log funded.log."
+assumption = "The funded runtime measurement precedes the final malformed-202-body wrapping repair. It does not qualify the aggregate gate or the 250 ms latency threshold. Native producer is the retained local receipt-wait bundle and was not rebuilt in this continuation. Missing native reads, positive finality and retained assertion conflicts remain blockers."
+severity = "blocker"

@@ -15,6 +15,19 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         Some(Value::Array(args)) => args,
         _ => return Err(-32602),
     };
+    if method == "lx_getSequence" {
+        if let [Value::String(did), Value::String(kind)] = args.as_slice() {
+            if kind != "identity"
+                || layerx_types::ids::Did::new(did.as_bytes()).is_err()
+                || did
+                    .bytes()
+                    .any(|b| !b.is_ascii_alphanumeric() && !b"-._:".contains(&b))
+            {
+                return Err(-32602);
+            }
+            return Ok(format!("/v1/dids/{did}/sequence"));
+        }
+    }
     if method == "lx_getProof" {
         if let [Value::String(kind), Value::String(activity), Value::String(account)] =
             args.as_slice()
@@ -187,6 +200,24 @@ enum Commitment {
     Finalised,
 }
 
+impl Commitment {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Executed => "executed",
+            Self::Batched => "batched",
+            Self::Finalised => "finalised",
+        }
+    }
+}
+
+fn pending_commitment(id: &Value, commitment: Commitment, evidence: &Value) -> Value {
+    let mut refusal = error(id, -32001, "Requested commitment unavailable");
+    refusal["error"]["data"] = json!({
+        "state": "pending", "requested_commitment": commitment.name(), "evidence": evidence
+    });
+    refusal
+}
+
 fn send_params(params: Option<&Value>) -> Result<(Vec<u8>, Commitment), i32> {
     let Some(Value::Array(args)) = params else {
         return Err(-32602);
@@ -210,7 +241,7 @@ fn send_params(params: Option<&Value>) -> Result<(Vec<u8>, Commitment), i32> {
 fn upstream_result(id: &Value, answer: &OutgoingResponse) -> Result<Value, Value> {
     let body: Value = serde_json::from_slice(&answer.body)
         .map_err(|_| error(id, -32603, "Invalid upstream response"))?;
-    if matches!(answer.status, 200 | 202) && body.get("result").is_some() {
+    if answer.status == 200 && body.get("result").is_some() {
         return Ok(body["result"].clone());
     }
     let code = match answer.status {
@@ -277,12 +308,17 @@ fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&
     );
     let mut result = match upstream_result(id, &answer) {
         Ok(result) => result,
-        Err(error) => return error,
+        Err(mut error) => {
+            if answer.status == 202 {
+                let upstream = error["error"]["data"].take();
+                error["error"]["data"] = json!({
+                    "requested_commitment": commitment.name(), "state": "pending",
+                    "upstream": upstream
+                });
+            }
+            return error;
+        }
     };
-    if answer.status == 202 {
-        result["state"] = json!("pending");
-        return json!({"jsonrpc":"2.0", "id":id, "result":result});
-    }
     if result
         .get("receipt")
         .and_then(Value::as_str)
@@ -292,8 +328,8 @@ fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&
     }
     if commitment == Commitment::Executed {
         result["commitment"] = json!("executed");
-    } else {
-        complete_commitment(config, &mut result, commitment);
+    } else if !complete_commitment(config, &mut result, commitment) {
+        return pending_commitment(id, commitment, &result);
     }
     json!({"jsonrpc":"2.0", "id":id, "result":result})
 }
@@ -307,14 +343,13 @@ pub(super) fn read_result(config: &Config, path: &str) -> Option<Value> {
     document.get("result").cloned()
 }
 
-fn complete_commitment(config: &Config, result: &mut Value, commitment: Commitment) {
+fn complete_commitment(config: &Config, result: &mut Value, commitment: Commitment) -> bool {
     let Some(activity) = result
         .get("activity_id")
         .and_then(Value::as_str)
         .map(str::to_owned)
     else {
-        result["state"] = json!("pending");
-        return;
+        return false;
     };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
@@ -326,7 +361,7 @@ fn complete_commitment(config: &Config, result: &mut Value, commitment: Commitme
             if commitment == Commitment::Batched {
                 result["commitment"] = json!("batched");
                 result["batch_evidence"] = proof;
-                return;
+                return true;
             }
             if let Some(node) = read_result(config, "/v1/node-info") {
                 if let Some(checkpoint) = node
@@ -347,16 +382,14 @@ fn complete_commitment(config: &Config, result: &mut Value, commitment: Commitme
                             result["commitment"] = json!("finalised");
                             result["batch_evidence"] = proof;
                             result["checkpoint_evidence"] = evidence;
-                            return;
+                            return true;
                         }
                     }
                 }
             }
         }
         if std::time::Instant::now() >= deadline {
-            result["state"] = json!("pending");
-            result["commitment"] = json!("executed");
-            return;
+            return false;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -413,6 +446,67 @@ pub(super) fn route(config: &Config, request: &IncomingRequest) -> OutgoingRespo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_is_an_error_without_commitment_downgrade() {
+        let answer = json_response(
+            202,
+            &json!({"result":{"activity_id":"ab","state":"pending"}}),
+        );
+        let refusal = upstream_result(&json!(1), &answer)
+            .err()
+            .unwrap_or_else(|| panic!("pending accepted"));
+        assert_eq!(refusal["error"]["code"], -32001);
+        assert!(refusal.get("result").is_none());
+        for commitment in [
+            Commitment::Executed,
+            Commitment::Batched,
+            Commitment::Finalised,
+        ] {
+            let refusal = pending_commitment(&json!(1), commitment, &json!({"receipt":"ab"}));
+            assert_eq!(
+                refusal["error"]["data"]["requested_commitment"],
+                commitment.name()
+            );
+            assert_eq!(refusal["error"]["data"]["state"], "pending");
+            assert!(refusal.get("result").is_none());
+            assert!(refusal["error"]["data"].get("commitment").is_none());
+        }
+    }
+
+    #[test]
+    fn identity_sequence_selector_and_canonical_bound_are_exact() {
+        assert_eq!(
+            selector(
+                "lx_getSequence",
+                Some(&json!(["did:layerx:alice", "identity"]))
+            ),
+            Ok("/v1/dids/did:layerx:alice/sequence".into())
+        );
+        for args in [
+            json!(["../", "identity"]),
+            json!(["did:layerx:alice", "account"]),
+        ] {
+            assert_eq!(selector("lx_getSequence", Some(&args)), Err(-32602));
+        }
+        assert_eq!(
+            fee_params(Some(&json!(["ab".repeat(512 * 1024)])))
+                .unwrap_or_else(|error| panic!("{error:?}"))
+                .len(),
+            512 * 1024
+        );
+        assert_eq!(
+            send_params(Some(&json!(["ab".repeat(512 * 1024), "executed"])))
+                .unwrap_or_else(|error| panic!("{error:?}"))
+                .0
+                .len(),
+            512 * 1024
+        );
+        assert_eq!(
+            send_params(Some(&json!(["ab".repeat(512 * 1024 + 1), "executed"]))),
+            Err(-32602)
+        );
+    }
 
     #[test]
     fn remaining_read_selectors_and_unavailability_are_explicit() {
