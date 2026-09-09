@@ -12184,6 +12184,8 @@ observed = "docs/wiki/Modules.md:73 states that ordinal 9 is reserved for withdr
 assumption = "Modules.md should describe ordinal 9 as advertised and dispatched by the module with a 108-byte payload, admitted natively and refused only by the hosted submission path, and Assets.md should carry the withdraw payload shape. The correction belongs to the documentation owner."
 severity = "suspect"
 [observation.6.11.pay2_rpc_contract]
+
+[observation.6.11.129]
 task = "6.11"
 file = "agent/crates/layerx-sdk/src/lib.rs agent/sdk/typescript/src/agent-http.ts platform/ src/"
 symbol = "lx_getAccount lx_getBalances lx_sendActivity lx_getActivityStatus lx_getReceipt"
@@ -12196,4 +12198,12 @@ file = "agent/crates/layerx-types/src/account.rs agent/crates/layerx-wire/src/ha
 symbol = "AccountId::parse account_id_for_protocol semantics create production_route"
 observed = "Per-asset account names are absent from the closed account namespace and protocol-3 hash validator. The disclosure signer supports Asset SEND and RECEIVE but refuses new asset ordinals as UnsupportedActivity. Hosted CLI account creation submits only email and display_name to the Human account endpoint; it does not register the local signing DID and main account. The gateway route set lacks the specified lx_* RPC surface and typed wallet query/commitment contracts. Source excerpts are retained in qual-logs/pay3/integration-blockers.log."
 assumption = "Wallet registration, per-asset sending, token mutation and commitment verification require the owning account, disclosure and gateway interfaces. CLI-local payload fixtures do not establish signing, execution, receipt verification or public testnet compatibility. No signer bypass, acknowledgement success, account namespace widening or invented RPC evidence schema is introduced."
+severity = "blocker"
+
+[observation.6.11.130]
+task = "6.11"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs agent/crates/layerx-agentd/tests/budget_create.rs agent/crates/layerx-mcp/src/server.rs agent/crates/layerx-mcp/src/tools/write.rs"
+symbol = "fixture tool_operation execute_payment wait"
+observed = "cargo test --manifest-path agent/Cargo.toml -p layerx-mcp -p layerx-agentd exits 101 because build/bin/layerxd is absent; subsequent budget cases encounter the poisoned fixture lock. The advertised /root/lx-lanes/native-bin/layerxd and layerx-genesis-build binaries are also absent. Logs: qual-logs/pay2/mcp-test.log. Separate cargo test -p layerx-mcp exits 0; focused agentd tenant_resolve, tenant_leakage, tenant_store, tenant_isolation and session tests exit 0. Logs: qual-logs/pay2/mcp-test-isolated.log and qual-logs/pay2/agentd-scope-tests.log. Formatting checks and all-target Clippy with -D warnings pass for crypto, MCP and agentd. The existing TypeScript build and tests pass."
+assumption = "The named payment tools have explicit scopes, canonical daemon operation mappings and ordinary receipt-stage refusal checks. Wallet backend execution and executed/batched/finalised wait evidence remain dependent on the public RPC contract. Full agentd qualification requires real native binaries. No cluster or image gates ran."
 severity = "blocker"
