@@ -198,7 +198,10 @@ static lxp_result withdrawal_context(lxp_module_ctx *ctx,
     transfer->context.assets = runtime->transfer_assets;
     transfer->context.asset_count = runtime->transfer_asset_count;
     transfer->context.sequence_account = source;
-    transfer->context.actor_sequence = activity->account_sequence;
+    status = lxp_kernel_withdraw_execution_sequence(
+        ctx, authority, source->id, activity->account_sequence,
+        &transfer->context.actor_sequence);
+    if (status != LXP_OK) return status;
     transfer->context.batch_timestamp = lxp_ctx_batch_timestamp_ms(ctx);
     transfer->context.expires_at = activity->timestamp_bound.not_after;
     transfer->context.debit_authority_kind = LXP_AUTH_OWNER;
