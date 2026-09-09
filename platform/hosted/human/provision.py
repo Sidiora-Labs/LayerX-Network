@@ -488,7 +488,7 @@ def assemble(work_dir, registry_path, asset, journal_path):
                 'delay_seconds': owner['recovery_delay_seconds']}
     files = {
         'components.json': {'AGENT_ACTOR': owner['did'], 'AGENT_AUTHORITY': registration['authority'],
-            'AGENT_OWNER_ACCOUNT': registration['owner_account'],
+            'AGENT_OWNER_ACCOUNT': 'agent:' + registration['identity']['did'] + ':main',
             'AGENT_RECOVERY_ROOT': base64.urlsafe_b64encode(bytes(recovery['root'])).decode().rstrip('='),
             'AGENT_RECOVERY_THRESHOLD': recovery['threshold']},
         'authority.json': dict(binding, **{'core-clock-horizon': policy['core-clock-horizon']}),
@@ -594,6 +594,7 @@ def main():
     mode.add_argument('--validate-evidence-inputs', action='store_true')
     mode.add_argument('--materialize-journal', action='store_true')
     mode.add_argument('--validate-owner-registration', action='store_true')
+    mode.add_argument('--produce-owner-registration', action='store_true')
     mode.add_argument('--catalog', action='store_true')
     mode.add_argument('--assemble', action='store_true')
     mode.add_argument('--movement-source', action='store_true')
@@ -615,7 +616,10 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--work-dir', type=Path, required=True)
     args = parser.parse_args()
-    if args.materialize_journal:
+    if args.produce_owner_registration:
+        from owner_native import produce
+        produce(args.work_dir)
+    elif args.materialize_journal:
         materialize_journal(args.work_dir, args.journal)
     elif args.validate_evidence_inputs:
         require(args.registry is not None, args.work_dir, 'module registry path')
@@ -650,6 +654,8 @@ def main():
 
 
 if __name__ == '__main__':
+    import sys
+    sys.modules['provision'] = sys.modules[__name__]
     try:
         main()
     except Refused as error:
