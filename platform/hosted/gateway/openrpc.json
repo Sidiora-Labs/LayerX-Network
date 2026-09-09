@@ -229,6 +229,58 @@
           "message": "Read unavailable"
         }
       ]
+    },
+    {
+      "name": "lx_getSequence",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "did",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "snapshot",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Next sequence from the authenticated atomic node preparation snapshot; not a Merkle proof."
+    },
+    {
+      "name": "lx_getProof",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "kind",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "activity",
+              "receipt"
+            ]
+          }
+        },
+        {
+          "name": "activity_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        }
+      ],
+      "result": {
+        "name": "proof",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Verified inclusion proof with canonical value and signed batch header. Account proof export is not available."
     }
   ]
 }

@@ -15,6 +15,18 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         Some(Value::Array(args)) => args,
         _ => return Err(-32602),
     };
+    if method == "lx_getProof" {
+        let [Value::String(kind), Value::String(id)] = args.as_slice() else {
+            return Err(-32602);
+        };
+        if !matches!(kind.as_str(), "activity" | "receipt")
+            || parse_hex32(id).is_err()
+            || id == &"00".repeat(32)
+        {
+            return Err(-32602);
+        }
+        return Ok(format!("/v1/proofs/{kind}/{id}"));
+    }
     if method == "lx_getNodeInfo" {
         return if args.is_empty() {
             Ok("/v1/node-info".into())
@@ -24,7 +36,7 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
     }
     let prefix = match method {
         "lx_getAccount" | "lx_getBalance" => "/v1/accounts/",
-        "lx_getBalances" => "/v1/dids/",
+        "lx_getBalances" | "lx_getSequence" => "/v1/dids/",
         "lx_getReceipt" | "lx_getActivityStatus" => "/v1/receipts/",
         "lx_getBatchHeader" => "/v1/batches/",
         "lx_getCheckpoint" => "/v1/checkpoints/",
@@ -42,7 +54,7 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         {
             return Err(-32602);
         }
-    } else if method == "lx_getBalances" {
+    } else if matches!(method, "lx_getBalances" | "lx_getSequence") {
         if layerx_types::ids::Did::new(id.as_bytes()).is_err()
             || id
                 .bytes()
@@ -56,6 +68,7 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
     let suffix = match method {
         "lx_getBalance" => "/balance",
         "lx_getBalances" => "/accounts",
+        "lx_getSequence" => "/sequence",
         _ => "",
     };
     Ok(format!("{prefix}{id}{suffix}"))
@@ -229,6 +242,26 @@ mod tests {
             selector("lx_getBalances", Some(&json!(["did:layerx:alice"]))),
             Ok("/v1/dids/did:layerx:alice/accounts".into())
         );
+        assert_eq!(
+            selector("lx_getSequence", Some(&json!(["did:layerx:alice"]))),
+            Ok("/v1/dids/did:layerx:alice/sequence".into())
+        );
+        for kind in ["activity", "receipt"] {
+            assert_eq!(
+                selector("lx_getProof", Some(&json!([kind, id]))),
+                Ok(format!("/v1/proofs/{kind}/{id}"))
+            );
+        }
+        for args in [
+            json!([]),
+            json!(["receipt"]),
+            json!(["unknown", id]),
+            json!(["receipt", "00".repeat(32)]),
+            json!(["receipt", "../state"]),
+            json!(["receipt", id, id]),
+        ] {
+            assert_eq!(selector("lx_getProof", Some(&args)), Err(-32602));
+        }
         assert_eq!(selector("unknown", None), Err(-32601));
     }
 }
