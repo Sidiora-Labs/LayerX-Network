@@ -5472,3 +5472,11 @@ symbol = "ERR_BALANCE_BYPASS"
 observed = "make test-asset-transfer exits 2 after build/tests/test_asset_transfer runs successfully. The subsequent sole-writer check reports balance writers in both src/ledger/lxp_apply.c and src/protocol/lxp_module_ctx.c. Neither file nor the check was modified by this lane. Exact output is qual-logs/set1/asset-transfer.log."
 assumption = "The existing sole-writer assertion and module-context balance writes conflict outside the owned paths. Neither side was weakened or repaired. The asset-transfer target as a whole is not a pass even though its native test binary succeeds."
 severity = "blocker"
+
+[observation.6.1.61]
+task = "6.1"
+file = "tests/daemon/guarantor-integration.py"
+symbol = "client_identity"
+observed = "With /root mode 0711, PATH selecting qual-logs/set1/bin and qual-logs/set1/venv/bin, CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 make test-daemon-guarantor GUARANTOR_PYTHON=/root/lx/set1/qual-logs/set1/venv/bin/python exits 0. The distinct UID 4021 client connects; all nine batches replay with all three account witnesses and module witnesses verified, two mutually authenticated producers attest, one registers, and feedback and certificate verification succeed. Exact output and exit are qual-logs/set1/e-fixture-guarantor.log and e-fixture-guarantor.exit; permissions are in e-fixture-permissions.log."
+assumption = "This resolves the traversal failure in observation 6.1.59. It qualifies the existing real replay fixture, not the incomplete version-2 consumer publication rollout."
+severity = "note"
