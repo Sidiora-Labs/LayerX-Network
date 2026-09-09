@@ -12281,3 +12281,11 @@ symbol = "SigningRequest sign_disclosed Wallet::send"
 observed = "Revision 98733556 supplies transport disclosure version 3 and independently disclosed identity and source sequences. The public signer still accepts only a request whose digest matches a complete activity Disclosure. It exports no separate native Send debit-authorization signing entry point. The shared Payment enum has no Send variant; Wallet::send takes an already authorized canonical payload. Source inventory: qual-logs/pay3/pay3d-signer-api.log and pay3d-signer-exports.log."
 assumption = "Send and token transfer cannot construct the inner authorization through the required shared signer. Supply a public disclosed native debit-authorization API and shared Send encoder. The CLI-local Send encoder remains a differential fixture; raw private-key signing is not a substitute for the missing boundary."
 severity = "blocker"
+
+[observation.6.11.141]
+task = "6.11"
+file = "platform/cli/src/rpc.rs agent/crates/layerx-sdk/src/rpc.rs platform/hosted/gateway/openrpc.json"
+symbol = "positional_requests_match_published_contract RpcClient::call"
+observed = "Token info and list now issue lx_getAsset and lx_listAssets instead of rejecting them before transport. The retained positional_requests_match_published_contract test asserts that lx_getAsset with a valid identifier must fail local request construction. The focused contract test exits 101 at that unchanged assertion. Evidence: qual-logs/pay3/pay3d-item3-contract.log. The SDK has no typed asset metadata or enumeration methods; these two reads use the CLI RPC transport."
+assumption = "The requested token-info route and the inherited negative contract assertion conflict. The assertion remains intact. The gateway and SDK owners must publish the extended asset-read contract, and authority is required to replace the obsolete negative expectation with positive coverage. Other wallet command and native differential tests pass; this does not qualify public RPC execution."
+severity = "blocker"

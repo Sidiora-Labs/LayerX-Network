@@ -55,6 +55,8 @@ pub enum WalletCommand {
         asset: String,
         #[arg(long)]
         key: Option<String>,
+        #[command(flatten)]
+        write: WriteOptions,
     },
 }
 
@@ -79,6 +81,18 @@ pub struct TransferArgs {
     wait: Commitment,
 }
 
+#[derive(Args)]
+pub struct WriteOptions {
+    #[arg(long)]
+    receipt_policy: std::path::PathBuf,
+    #[arg(long)]
+    fee_limit: String,
+    #[arg(long, value_enum, default_value = "executed")]
+    wait: Commitment,
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=300))]
+    timeout_seconds: u64,
+}
+
 #[derive(Subcommand)]
 pub enum TokenCommand {
     /// Register a natively issued token.
@@ -95,6 +109,8 @@ pub enum TokenCommand {
         salt: String,
         #[arg(long)]
         key: Option<String>,
+        #[command(flatten)]
+        write: WriteOptions,
     },
     /// Mint units to an existing asset account.
     Mint {
@@ -106,6 +122,8 @@ pub enum TokenCommand {
         amount: String,
         #[arg(long)]
         key: Option<String>,
+        #[command(flatten)]
+        write: WriteOptions,
     },
     /// Burn units from the selected wallet's asset account.
     Burn {
@@ -115,6 +133,8 @@ pub enum TokenCommand {
         amount: String,
         #[arg(long)]
         key: Option<String>,
+        #[command(flatten)]
+        write: WriteOptions,
     },
     /// Transfer token units.
     Transfer(TransferArgs),
@@ -293,6 +313,11 @@ pub fn run_wallet(
                         .ok_or("accounts missing")?;
                     accounts.retain(|a| a["id"] == account);
                     balances
+                } else if rpc.is_some() {
+                    sdk_rpc(&config, rpc, gateway)?
+                        .wallet(native_asset())
+                        .balance(&did, asset)
+                        .map_err(rpc_error)?
                 } else {
                     transport.read(
                         "lx_getBalance",
@@ -300,6 +325,10 @@ pub fn run_wallet(
                         &format!("/v1/accounts/{account}/balance"),
                     )?
                 }
+            } else if rpc.is_some() {
+                sdk_rpc(&config, rpc, gateway)?
+                    .get_balances(&did)
+                    .map_err(rpc_error)?
             } else {
                 transport.balances(&did)?
             };
@@ -328,15 +357,16 @@ pub fn run_wallet(
         WalletCommand::Send(args) => {
             transfer(&config, &Transport::new(&config, rpc, gateway)?, &args)
         }
-        WalletCommand::OpenAccount { asset, key } => {
-            let metadata = metadata(&config, key.as_deref())?;
-            payment_preflight(
-                &Payment::OpenAccount {
-                    asset: fixed_hex("asset", &asset)?,
-                },
-                metadata,
-            )
-        }
+        WalletCommand::OpenAccount { asset, key, write } => execute_payment(
+            &config,
+            rpc,
+            gateway,
+            key.as_deref(),
+            &write,
+            &Payment::OpenAccount {
+                asset: fixed_hex("asset", &asset)?,
+            },
+        ),
     }
 }
 
@@ -422,6 +452,7 @@ pub fn run_token(
             supply_cap,
             salt,
             key,
+            write,
         } => {
             let owner = metadata(&config, key.as_deref())?;
             let salt = fixed_hex("salt", &salt)?;
@@ -436,37 +467,50 @@ pub fn run_token(
                 issuer_kind: 1,
                 custody_ref: Vec::new(),
             });
-            payment_preflight(&payment, owner)
+            execute_payment(&config, rpc, gateway, key.as_deref(), &write, &payment)
         }
         TokenCommand::Mint {
             asset,
             to,
             amount,
             key,
+            write,
         } => {
-            let owner = metadata(&config, key.as_deref())?;
             let asset = fixed_hex("asset", &asset)?;
             let to = destination(&to, &asset)?;
-            payment_preflight(
+            execute_payment(
+                &config,
+                rpc,
+                gateway,
+                key.as_deref(),
+                &write,
                 &Payment::Mint {
                     asset,
                     to,
                     amount: units(&amount, true)?,
                 },
-                owner,
             )
         }
-        TokenCommand::Burn { asset, amount, key } => {
+        TokenCommand::Burn {
+            asset,
+            amount,
+            key,
+            write,
+        } => {
             let owner = metadata(&config, key.as_deref())?;
             let asset = fixed_hex("asset", &asset)?;
             let from = fixed_hex("source account", &account(&owner.did, &asset)?)?;
-            payment_preflight(
+            execute_payment(
+                &config,
+                rpc,
+                gateway,
+                key.as_deref(),
+                &write,
                 &Payment::Burn {
                     asset,
                     from,
                     amount: units(&amount, true)?,
                 },
-                owner,
             )
         }
     }
@@ -480,20 +524,113 @@ fn unavailable_asset_read(
     params: &Value,
 ) -> Result<CommandOutput, String> {
     if let Some(rpc) = Transport::new(config, rpc, gateway)?.rpc {
-        let value = rpc.call(method, params)?;
+        let value = rpc
+            .call(method, params)
+            .map_err(|e| format!("rpc_method_unavailable: {e}"))?;
         return Ok(CommandOutput::new("token.read", "Read token data", value));
     }
     Err(format!("rpc_method_unavailable: {method} and its REST equivalent are absent from the published gateway contract"))
 }
 
-fn payment_preflight(payment: &Payment, owner: &KeyMetadata) -> Result<CommandOutput, String> {
-    let bytes = payment
-        .encode(owner.did.as_bytes())
-        .map_err(|e| format!("invalid payment: {e}"))?;
+fn execute_payment(
+    config: &Configuration,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+    key: Option<&str>,
+    write: &WriteOptions,
+    payment: &Payment,
+) -> Result<CommandOutput, String> {
+    use layerx_crypto::signer::{LocalSigner, Signer as _};
+    use layerx_sdk::wallet::{PaymentOptions, Wallet};
+    use std::io::Write as _;
+    let owner = metadata(config, key)?;
+    let policy = read_policy(Some(&write.receipt_policy), config)?;
+    let fee_limit = units(&write.fee_limit, false)?;
+    let client = sdk_rpc(config, rpc, gateway)?;
+    let key_name = key
+        .or(config.default_key.as_deref())
+        .ok_or("select a wallet key")?;
+    let seed = crate::credential::key_seed(key_name)?;
+    let signer = LocalSigner::new(*seed);
+    drop(seed);
+    if signer.public_key() != fixed_hex::<32>("wallet public key", &owner.public_key)? {
+        return Err("wallet signer does not match the selected public key".into());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?;
+    let not_before = u64::try_from(now.as_millis()).map_err(|e| e.to_string())?;
+    let not_after = not_before
+        .checked_add(300_000)
+        .ok_or("wallet validity overflow")?;
+    let mut idempotency_key = [0; 32];
+    getrandom::fill(&mut idempotency_key).map_err(|_| "wallet randomness unavailable")?;
+    let options = PaymentOptions {
+        actor: owner.did.clone(),
+        idempotency_key,
+        fee_limit,
+        not_before,
+        not_after,
+        commitment: sdk_commitment(write.wait),
+        wait_timeout: std::time::Duration::from_secs(write.timeout_seconds),
+    };
+    let wallet = Wallet {
+        rpc: &client,
+        signer: &signer,
+        policy: &policy,
+        native_asset: native_asset(),
+    };
     let (module, ordinal) = payment.activity_type();
-    Payment::decode(module, ordinal, &bytes, owner.did.as_bytes())
-        .map_err(|e| format!("invalid canonical payment: {e}"))?;
-    Err(format!("identity_sequence_unavailable: the gateway contract has no identity.next_sequence read for {}; validated asset ordinal {ordinal}, but no activity was signed or submitted", owner.did))
+    let payload = payment
+        .encode(owner.did.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let prepared = wallet
+        .prepare_payload(module, ordinal, &payload, &options)
+        .map_err(rpc_error)?;
+    let disclosure = prepared.disclosure();
+    let confirmation = json!({
+        "protocol_version":policy.protocol_version,"network_id":policy.network_id,
+        "actor":String::from_utf8_lossy(&disclosure.actor),
+        "activity_type":disclosure.activity_type.value(),"authority":hex_encode(&disclosure.authority),
+        "envelope_sequence":disclosure.envelope_sequence().to_string(),
+        "source_account_sequence":disclosure.payload_sequence().map_err(|e| e.to_string())?.map(|n| n.to_string()),
+        "asset":hex_encode(&disclosure.asset),"fee_limit":disclosure.fee_limit.to_string(),
+        "not_before_ms":disclosure.expiry.not_before.to_string(),"not_after_ms":disclosure.expiry.not_after.to_string(),
+        "payload_expires_at":disclosure.expiry.payload_expires_at.to_string(),
+        "idempotency_key":hex_encode(&disclosure.idempotency_key),
+        "payment":format!("{:?}", disclosure.payment),
+        "counterparties":disclosure.counterparties.iter().map(|p| json!({"role":format!("{:?}",p.role),"account":hex_encode(&p.account)})).collect::<Vec<_>>(),
+        "amounts":disclosure.amounts.iter().map(|a| json!({"role":format!("{:?}",a.role),"value":a.value.to_string()})).collect::<Vec<_>>(),
+        "canonical_unsigned":hex_encode(prepared.canonical_bytes()),"requested_commitment":options.commitment.as_str(),
+    });
+    let mut stderr = std::io::stderr().lock();
+    writeln!(
+        stderr,
+        "{}",
+        serde_json::to_string_pretty(&confirmation).map_err(|e| e.to_string())?
+    )
+    .map_err(|e| e.to_string())?;
+    stderr.flush().map_err(|e| e.to_string())?;
+    drop(stderr);
+    verified_output(&complete(wallet.execute(prepared, &options)).map_err(rpc_error)?)
+}
+
+struct ThreadWake(std::thread::Thread);
+impl std::task::Wake for ThreadWake {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.unpark();
+    }
+}
+fn complete<F: std::future::Future>(future: F) -> F::Output {
+    let waker = std::sync::Arc::new(ThreadWake(std::thread::current())).into();
+    let mut context = std::task::Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(value) => return value,
+            std::task::Poll::Pending => std::thread::park(),
+        }
+    }
 }
 
 fn transfer(
@@ -508,6 +645,9 @@ fn transfer(
     let source = account(&owner.did, &asset)?;
     if hex_encode(&destination) == source {
         return Err("source and destination accounts must differ".into());
+    }
+    if !transport.emulator {
+        return Err("send_signing_unavailable: the shared signer exposes no disclosed native Send debit-authorization signing API; no activity signed or submitted".into());
     }
     let source_sequence = transport.source_sequence(&source)?;
     let commitment = match args.wait {

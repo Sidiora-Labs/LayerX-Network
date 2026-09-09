@@ -33,8 +33,9 @@ pub fn request(method: &str, params: &Value) -> Result<Value, String> {
         .as_array()
         .ok_or("RPC parameters must be positional")?;
     match method {
-        "lx_getNodeInfo" if args.is_empty() => {}
-        "lx_getAccount"
+        "lx_getNodeInfo" | "lx_listAssets" if args.is_empty() => {}
+        "lx_getAsset"
+        | "lx_getAccount"
         | "lx_getBalance"
         | "lx_getSequence"
         | "lx_getReceipt"
@@ -124,9 +125,7 @@ pub fn decode_response(method: &str, response: &Value) -> Result<Value, String> 
             .get("message")
             .and_then(Value::as_str)
             .ok_or("malformed RPC error message")?;
-        return Err(format!(
-            "rpc_method_unavailable: {method} returned {code}: {message}"
-        ));
+        return Err(json!({"code":code,"message":message,"data":error.get("data")}).to_string());
     }
     response
         .get("result")
