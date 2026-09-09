@@ -77,15 +77,18 @@ lxp_result lxp_kernel_bind_ledger_admission(
         if (activity_type == LX_ASSET_WITHDRAW &&
             !lxp_protocol_version_uses_occupancy(ctx->protocol_version))
             return LXP_ERR_VERSION_UNSUPPORTED;
-        status = lxp_ctx_account_find(ctx, authority->principal, &account);
-        if (status != LXP_OK && status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE)
-            return status;
         ctx->ledger_admission.activity_type = activity_type;
         (void)memcpy(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U);
         (void)memcpy(ctx->ledger_admission.account_id, authority->principal, 32U);
-        ctx->ledger_admission.account_present = account != NULL;
-        ctx->ledger_admission.next_sequence = account == NULL ? 0U :
-                                                        account->next_sequence;
+        if (activity_type == LX_ASSET_ACCOUNT_OPEN) {
+            status = lxp_ctx_account_find(ctx, authority->principal, &account);
+            if (status != LXP_OK &&
+                status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE)
+                return status;
+            ctx->ledger_admission.account_present = account != NULL;
+            ctx->ledger_admission.next_sequence = account == NULL ? 0U :
+                                                            account->next_sequence;
+        }
         ctx->ledger_admission.bound = true;
         return LXP_OK;
     }

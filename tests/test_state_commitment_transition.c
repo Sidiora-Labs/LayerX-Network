@@ -912,7 +912,9 @@ static int pay1_prepared_account(unsigned mode)
     REQUIRE(lxp_module_ctx_bind_effects(ctx, &effects) == LXP_OK);
     REQUIRE(lxp_kernel_bind_ledger_admission(ctx, &f->authority, LX_ASSET_MINT) == LXP_OK);
     REQUIRE(lxp_module_ctx_import_prepared(ctx, prepared, token, &effects) == LXP_ERR_CONTEXT_MISMATCH);
-    ctx->ledger_admission.activity_type = f->activity.activity_type;
+    (void)memset(&ctx->ledger_admission, 0, sizeof(ctx->ledger_admission));
+    REQUIRE(lxp_kernel_bind_ledger_admission(
+                ctx, &f->authority, f->activity.activity_type) == LXP_OK);
     token[0] ^= 1U;
     REQUIRE(lxp_module_ctx_import_prepared(ctx, prepared, token, &effects) == LXP_ERR_CONTEXT_MISMATCH);
     token[0] ^= 1U;
