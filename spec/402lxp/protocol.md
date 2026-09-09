@@ -124,3 +124,18 @@ Compose the Node executor with `GrantPaymentAuthority` and the normal seller rec
 An attempt is persisted before submission. After an uncertain result, retrying the request performs `lx_getReceipt` for the same activity ID rather than creating another debit. Missing evidence stays pending. A crash before the first network write can therefore leave a registered request pending; reconcile that exact activity before taking further action. Never replace its key to bypass uncertainty.
 
 Buyers use `grantHeader`/`grant_header` to preserve the selected offer and signed receive bytes, then `captureGrantSettlement`/`capture_grant_settlement` with the expected enclosing activity ID. The HTTP helpers verify settlement before returning paid content. Grant payments do not enter the quote-and-transfer path.
+
+### Python agent and example configuration
+
+Python `x402_agent.AgentGrantMiddleware` wraps `PreparedGrantDraws` for the seller's
+`draw` argument. Configure `PaymentBudget` with a SQLite path, tenant, asset, and
+explicit integer allowance. Reservations bind the request digest and amount; unknown
+submissions retain the reservation. Only a receipt satisfying the offer commitment
+can commit it. Replays reuse the reservation and a receipt cannot settle another
+reservation. Configuration changes to a persisted allowance are refused.
+
+Both public examples read `LAYERX_RPC_URL`, `LAYERX_FAUCET_URL`, and `LAYERX_DID`;
+arguments can override these values. Authentication uses `LAYERX_RPC_TOKEN` and
+`LAYERX_FAUCET_TOKEN`. The examples refuse port 18545. Signed activity files can pay
+exact, metered, or subscription offers at executed commitment; the buyer and seller
+middleware also support batched and finalised commitments through configured evidence.
