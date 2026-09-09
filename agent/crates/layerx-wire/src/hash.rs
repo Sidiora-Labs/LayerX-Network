@@ -198,6 +198,13 @@ pub fn account_id_for_protocol(account: &AccountId, protocol: u16) -> Result<[u8
             });
             let valid_tail = if let Some(agent) = account.canonical().strip_prefix("agent:") {
                 agent.ends_with(":main")
+                    || agent.rsplit_once(":asset:").is_some_and(|(did, asset)| {
+                        !did.is_empty()
+                            && asset.len() == 64
+                            && asset
+                                .bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    })
                     || [":budget:", ":escrow:", ":stream:", ":margin:"]
                         .iter()
                         .any(|marker| {
@@ -637,4 +644,28 @@ pub(crate) fn sha256(input: &[u8]) -> Result<[u8; 32], WireError> {
         digest[offset..offset + 4].copy_from_slice(&word.to_be_bytes());
     }
     Ok(digest)
+}
+
+#[cfg(test)]
+mod account_asset_tests {
+    use super::*;
+
+    #[test]
+    fn asset_account_uses_existing_protocol_three_domain() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let name = format!("agent:did:layerx:alice:asset:{}", "ab".repeat(32));
+        let account = AccountId::parse(&name).map_err(|e| format!("{e:?}"))?;
+        let mut preimage = b"LX:ACCOUNT:v1".to_vec();
+        preimage.extend_from_slice(&u32::try_from(name.len())?.to_be_bytes());
+        preimage.extend_from_slice(name.as_bytes());
+        assert_eq!(account_id_for_protocol(&account, 3), sha256(&preimage));
+        assert_eq!(account_id_for_protocol(&account, 1), account_id(&account));
+        assert!(account_id_for_protocol(&account, 4).is_err());
+        for did in ["did:layerx:Alice", "did::alice", "did:alice/other"] {
+            let account = AccountId::parse(&format!("agent:{did}:asset:{}", "ab".repeat(32)))
+                .map_err(|e| format!("{e:?}"))?;
+            assert!(account_id_for_protocol(&account, 3).is_err());
+        }
+        Ok(())
+    }
 }
