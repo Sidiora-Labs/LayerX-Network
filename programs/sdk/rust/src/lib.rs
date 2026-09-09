@@ -47,6 +47,7 @@ pub mod crypto;
 pub mod error;
 pub mod event;
 pub mod ids;
+pub mod payments;
 pub mod receipt;
 pub mod storage;
 pub mod transfer;
