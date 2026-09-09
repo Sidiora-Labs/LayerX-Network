@@ -12,7 +12,7 @@ use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::preparation::{preparation_state, PreparationStateContext};
 use layerx_client::lni::schema::Version;
 use layerx_client::lni::simulate::{
-    SimulationEvidence, simulation_boundary_id, simulation_evidence_digest,
+    simulation_boundary_id, simulation_evidence_digest, SimulationEvidence,
 };
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_platform_core::{
@@ -1907,11 +1907,9 @@ fn assert_public_reads(boundary: &Boundary, cluster: &Cluster) {
         value["result"]["sequencer_public_key"],
         serde_json::json!(hex_encode(&cluster.sequencer_key))
     );
-    assert!(
-        value["trace"]
-            .as_str()
-            .is_some_and(|trace| trace.starts_with("core-"))
-    );
+    assert!(value["trace"]
+        .as_str()
+        .is_some_and(|trace| trace.starts_with("core-")));
 
     let state = core.get("/v1/state");
     assert_eq!(state.status, 200, "{}", state.body);
@@ -2696,11 +2694,9 @@ fn receipt_latency_and_public_proofs_use_real_committed_refusals() {
                 document["result"]["signed_header"]["public_key"],
                 hex_encode(&cluster.sequencer_key)
             );
-            assert!(
-                document["result"]["proof"]["leaf_count"]
-                    .as_u64()
-                    .is_some_and(|count| count > 0)
-            );
+            assert!(document["result"]["proof"]["leaf_count"]
+                .as_u64()
+                .is_some_and(|count| count > 0));
         }
     }
     elapsed.sort_unstable();
@@ -2845,7 +2841,7 @@ fn authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receipts() {
 }
 
 fn admit_receipt_wait_send(cluster: &Cluster, canonical: &[u8], activity_id: [u8; 32]) {
-    use layerx_client::submit::{Submission, SubmissionContext, submit_signed};
+    use layerx_client::submit::{submit_signed, Submission, SubmissionContext};
     let gate = ConnectionGate::new(1);
     let mut transport = must(
         Uds::connect(&cluster.lni_socket, &gate, lni_limits()),
@@ -3015,11 +3011,9 @@ fn receipt_events_require_auth_and_bind_global_sequence() {
     let event = get("/internal/v1/receipt-events/1");
     assert_eq!(event.status, 200, "{}", event.body);
     assert_eq!(json(&event)["result"]["global_sequence"], 1);
-    assert!(
-        json(&event)["result"]["receipt"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(json(&event)["result"]["receipt"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
 }
 
 #[test]
