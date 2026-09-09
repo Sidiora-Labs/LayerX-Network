@@ -1826,6 +1826,17 @@ beta_cluster_up() {
         (umask 077; mkdir -p "$WORK_DIR/human-evidence-input")
         python3 "$REPO_ROOT/platform/hosted/human/provision.py" --prepare-owner-request \
             --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
+        python3 "$REPO_ROOT/platform/hosted/human/guardians.py" \
+            --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR" \
+            --identity "$NODE_GUARANTOR_ID" --identity "$NODE_SECOND_GUARANTOR_ID" \
+            --identity "$NODE_SEQUENCER_ID"
+        local guardian
+        for guardian in guarantor-1 guarantor-2 sequencer; do
+            apply_secret "$TESTNET_NAMESPACE" "layerx-human-guardian-$guardian" \
+                --from-file=seed="$SECRETS_DIR/human-guardians/$guardian.seed"
+        done
+        apply_configmap "$TESTNET_NAMESPACE" layerx-human-guardian-bindings \
+            --from-file=bindings.json="$WORK_DIR/human-evidence-input/recovery-guardian-bindings.json"
         human_evidence_provision
         human_policy_publish
     fi
