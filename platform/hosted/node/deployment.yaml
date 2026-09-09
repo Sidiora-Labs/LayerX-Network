@@ -135,6 +135,7 @@ spec:
             - {name: LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE, value: /run/layerx/tokens/replica-token}
             - {name: LAYERX_CORE_ADMIN_TOKEN_FILE, value: /run/layerx/backend-admin/token}
             - {name: LAYERX_CORE_TREASURY_KEY_FILE, value: /run/layerx/keys/treasury.key}
+            - {name: LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE, value: /run/layerx/gateway-component/token}
             - {name: LAYERX_CORE_STATE_DIR, value: /var/lib/layerx/core}
           ports: [{name: core-tls, containerPort: 9443}, {name: core-admin-tls, containerPort: 9444}]
           readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: core-tls}, periodSeconds: 5}
@@ -146,6 +147,7 @@ spec:
             - {name: keys, mountPath: /run/layerx/keys, readOnly: true}
             - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
             - {name: backend-admin, mountPath: /run/layerx/backend-admin, readOnly: true}
+            - {name: gateway-component, mountPath: /run/layerx/gateway-component, readOnly: true}
             - {name: core-tls, mountPath: /run/layerx/core-tls, readOnly: true}
             - {name: core-admin-tls, mountPath: /run/layerx/core-admin-tls, readOnly: true}
             - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
