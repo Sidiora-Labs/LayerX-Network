@@ -2224,7 +2224,7 @@ impl PublishedDepositProof {
             if published.sender != registered.sender
                 || published.topics.len() != 3
                 || published.data.len() != 64
-                || published.data[32..] != e::word(1)?
+                || !matches!(e::word_number(&published.data[32..])?, 1 | 2)
                 || !published.input.starts_with(&e::DEPOSIT_SELECTOR)
             {
                 return Err(e::invalid());
@@ -2249,7 +2249,10 @@ impl PublishedDepositProof {
             }
             let tails = [e::dynamic(canonical)?, e::dynamic(signature)?, ordering];
             if e::abi(&[], &tails)? != args
-                || e::digest(&e::abi(&[e::word(1)?], &tails)?) != published.data[..32]
+                || e::digest(&e::abi(
+                    &[e::word(e::word_number(&published.data[32..])?)?],
+                    &tails,
+                )?) != published.data[..32]
             {
                 return Err(e::invalid());
             }

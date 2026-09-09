@@ -45,6 +45,7 @@ mod paxeer_real {
             })
             .unwrap_or_else(|error| panic!("withdrawal boundary: {error:?}"));
             let proof = CheckpointProof {
+                native: None,
                 checkpoint_hash,
                 state_root: leaf,
                 epoch: header.epoch,

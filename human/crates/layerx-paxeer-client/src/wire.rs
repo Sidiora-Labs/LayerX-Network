@@ -230,7 +230,10 @@ pub fn encode_checkpoint_proof_for_protocol(
     )
     .map_err(NativeWireError::Checkpoint)?;
     let mut out = Vec::new();
-    out.extend_from_slice(&[VERSION, CHECKPOINT_TAG]);
+    out.extend_from_slice(&[
+        if value.native.is_some() { 2 } else { VERSION },
+        CHECKPOINT_TAG,
+    ]);
     out.extend_from_slice(&value.checkpoint_hash);
     out.extend_from_slice(&value.state_root);
     out.extend_from_slice(&value.epoch.to_be_bytes());
@@ -252,6 +255,18 @@ pub fn encode_checkpoint_proof_for_protocol(
     );
     for value in &value.attestations {
         encode_attestation(&mut out, value);
+    }
+    if let Some(native) = &value.native {
+        if native.inclusion_checkpoint != value.checkpoint_hash
+            || value.leaf_index != 0
+            || !value.siblings.is_empty()
+        {
+            return Err(NativeWireError::Encoding);
+        }
+        native
+            .decoded(value.state_root)
+            .map_err(|_| NativeWireError::Encoding)?;
+        out.extend_from_slice(&encode_native_evidence(native, maximum_bytes)?);
     }
     bounded(out, maximum_bytes)
 }
@@ -281,7 +296,10 @@ pub fn decode_checkpoint_proof_for_protocol(
     maximum_bytes: usize,
     protocol_version: u16,
 ) -> Result<CheckpointProof, NativeWireError> {
-    if bytes.len() > maximum_bytes || bytes.len() < 96 || bytes[..2] != [VERSION, CHECKPOINT_TAG] {
+    if bytes.len() > maximum_bytes
+        || bytes.len() < 96
+        || !matches!(bytes[..2], [1 | 2, CHECKPOINT_TAG])
+    {
         return Err(NativeWireError::Encoding);
     }
     let mut r = Reader::new(&bytes[2..]);
@@ -306,15 +324,23 @@ pub fn decode_checkpoint_proof_for_protocol(
     let required = attestation_count
         .checked_mul(ATTESTATION_BYTES)
         .ok_or(NativeWireError::Limit)?;
-    if r.remaining() != required {
+    if r.remaining() < required || (bytes[0] == 1 && r.remaining() != required) {
         return Err(NativeWireError::Encoding);
     }
     let mut attestations = Vec::with_capacity(attestation_count);
     for _ in 0..attestation_count {
         attestations.push(decode_attestation(&mut r)?);
     }
+    let native = if bytes[0] == 2 {
+        Some(decode_native_evidence(
+            r.take(r.remaining())?,
+            maximum_bytes,
+        )?)
+    } else {
+        None
+    };
     r.finish()?;
-    CheckpointProof::validated_for_protocol(
+    let mut proof = CheckpointProof::validated_for_protocol(
         protocol_version,
         checkpoint_hash,
         state_root,
@@ -325,7 +351,80 @@ pub fn decode_checkpoint_proof_for_protocol(
         siblings,
         attestations,
     )
-    .map_err(NativeWireError::Checkpoint)
+    .map_err(NativeWireError::Checkpoint)?;
+    if let Some(value) = &native {
+        if value.inclusion_checkpoint != checkpoint_hash
+            || leaf_index != 0
+            || !proof.siblings.is_empty()
+        {
+            return Err(NativeWireError::Encoding);
+        }
+        value
+            .decoded(state_root)
+            .map_err(|_| NativeWireError::Encoding)?;
+    }
+    proof.native = native;
+    Ok(proof)
+}
+
+/// # Errors
+/// Refuses malformed native proofs and evidence exceeding the declared bound.
+pub fn encode_native_evidence(
+    value: &crate::state_proof::NativeEvidence,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, NativeWireError> {
+    let witness = crate::state_proof::StateWitness::decode(&value.witness)
+        .map_err(|_| NativeWireError::Encoding)?;
+    value
+        .decoded(witness.root().map_err(|_| NativeWireError::Encoding)?)
+        .map_err(|_| NativeWireError::Encoding)?;
+    let mut out = value.request_anchor.to_vec();
+    out.extend_from_slice(&value.inclusion_checkpoint);
+    out.extend_from_slice(&value.network_id.to_be_bytes());
+    out.extend_from_slice(
+        &u32::try_from(value.witness.len())
+            .map_err(|_| NativeWireError::Limit)?
+            .to_be_bytes(),
+    );
+    out.extend_from_slice(&value.witness);
+    out.extend_from_slice(
+        &u16::try_from(value.recipient_signature.len())
+            .map_err(|_| NativeWireError::Limit)?
+            .to_be_bytes(),
+    );
+    out.extend_from_slice(&value.recipient_signature);
+    bounded(out, maximum_bytes)
+}
+
+/// # Errors
+/// Refuses malformed, noncanonical or oversized native evidence.
+pub fn decode_native_evidence(
+    bytes: &[u8],
+    maximum_bytes: usize,
+) -> Result<crate::state_proof::NativeEvidence, NativeWireError> {
+    if bytes.len() > maximum_bytes {
+        return Err(NativeWireError::Limit);
+    }
+    let mut r = Reader::new(bytes);
+    let request_anchor = r.array()?;
+    let inclusion_checkpoint = r.array()?;
+    let network_id = r.u32()?;
+    let witness_length = usize::try_from(r.u32()?).map_err(|_| NativeWireError::Limit)?;
+    let witness = r.take(witness_length)?.to_vec();
+    let signature_length = usize::from(r.u16()?);
+    let recipient_signature = r.take(signature_length)?.to_vec();
+    r.finish()?;
+    let value = crate::state_proof::NativeEvidence {
+        request_anchor,
+        inclusion_checkpoint,
+        network_id,
+        witness,
+        recipient_signature,
+    };
+    if encode_native_evidence(&value, maximum_bytes)? != bytes {
+        return Err(NativeWireError::Encoding);
+    }
+    Ok(value)
 }
 
 fn encode_attestation(out: &mut Vec<u8>, v: &WithdrawalAttestation) {
