@@ -11,7 +11,7 @@ def provision(directory, output):
     assert struct.unpack_from(">HH", history, len(domain)) == (1, 0)
     entry = history[len(domain) + 4:]
     version, network, epoch = struct.unpack_from(">HIQ", entry)
-    assert version == 2 and network > 0 and epoch == 1
+    assert version == 3 and network > 0 and epoch == 1
     sequencer_id, public_key = entry[14:46].hex(), entry[46:78].hex()
     first, last, revoked, revoked_at = struct.unpack_from(">QQBQ", entry, 78)
     assert 0 < first <= last and revoked == 0 and revoked_at == 0
