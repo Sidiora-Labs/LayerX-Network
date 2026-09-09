@@ -62,6 +62,24 @@ pub(super) fn route(config: &Config, request: &Request) -> Option<Response> {
                 evidence(config, parts[2], id)
             });
         }
+        ["", "v1", "proofs", kind, id] => {
+            return Some(if request.method != "GET" {
+                refusal(405, "method_not_allowed", None)
+            } else if request.query.is_some() {
+                refusal(400, "invalid_request", None)
+            } else {
+                proof(config, kind, id)
+            });
+        }
+        ["", "v1", "dids", did, "sequence"] => {
+            return Some(if request.method != "GET" {
+                refusal(405, "method_not_allowed", None)
+            } else if request.query.is_some() {
+                refusal(400, "invalid_request", None)
+            } else {
+                sequence(config, did)
+            });
+        }
         ["", "v1", "dids", did, "accounts"] => {
             return Some(if request.method != "GET" {
                 refusal(405, "method_not_allowed", None)
@@ -139,4 +157,66 @@ fn evidence(config: &Config, kind: &str, id: &str) -> Response {
         })),
         Err(_) => refusal(503, "checkpoint_evidence_unavailable", Some(5)),
     }
+}
+
+fn sequence(config: &Config, did: &str) -> Response {
+    let Ok(actor) = layerx_types::ids::Did::new(did.as_bytes()) else {
+        return refusal(400, "invalid_did", None);
+    };
+    let Ok(mut client) = connect_client(config) else {
+        return refusal(503, "node_unavailable", Some(5));
+    };
+    match client.preparation_state(&actor, 1) {
+        Ok(snapshot) => success(&serde_json::json!({
+            "did": did, "next_sequence": snapshot.account_sequence.to_string(),
+            "observed_head_sequence": snapshot.observed_head_sequence.to_string(),
+            "state_root": hex_encode(&snapshot.observed_state_root),
+            "verification": "authenticated_node_snapshot"
+        })),
+        Err(_) => refusal(503, "sequence_unavailable", Some(5)),
+    }
+}
+
+fn proof(config: &Config, kind: &str, id: &str) -> Response {
+    use layerx_client::evidence::{ProofBundleSelector, VerifiedProofBundle};
+    let Ok(identifier) = fixed_hex::<32>("activity_id", id) else {
+        return refusal(400, "invalid_proof_selector", None);
+    };
+    if identifier == [0; 32] {
+        return refusal(400, "invalid_proof_selector", None);
+    }
+    let selector = match kind {
+        "activity" => ProofBundleSelector::Activity(identifier),
+        "receipt" => ProofBundleSelector::Receipt(identifier),
+        _ => return refusal(400, "invalid_proof_selector", None),
+    };
+    let Ok(registry) = super::submission_registry() else {
+        return refusal(503, "registry_unavailable", Some(5));
+    };
+    let Ok(mut client) = connect_client(config) else {
+        return refusal(503, "node_unavailable", Some(5));
+    };
+    let Ok(bundle) = client.proof_bundle(selector, 1, &registry) else {
+        return refusal(503, "proof_evidence_unavailable", Some(5));
+    };
+    let (VerifiedProofBundle::Activity {
+        proof: inclusion, ..
+    }
+    | VerifiedProofBundle::Receipt {
+        proof: inclusion, ..
+    }) = &bundle
+    else {
+        return refusal(502, "invalid_proof_evidence", None);
+    };
+    let header = bundle.signed_header();
+    success(&serde_json::json!({
+        "kind": kind, "activity_id": id, "canonical_value": hex_encode(bundle.canonical_bytes()),
+        "proof": {"leaf_index": inclusion.leaf_index(), "leaf_count": inclusion.leaf_count(),
+            "siblings": inclusion.siblings().iter().map(|v| hex_encode(v)).collect::<Vec<_>>()},
+        "signed_header": {"canonical_header": hex_encode(&header.canonical_bytes),
+            "signature": hex_encode(&header.signature), "sequencer_id": hex_encode(&header.sequencer_id),
+            "public_key": hex_encode(&header.public_key),
+            "first_batch_number": header.first_batch_number.to_string(),
+            "last_batch_number": header.last_batch_number.to_string()}
+    }))
 }

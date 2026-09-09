@@ -2495,3 +2495,103 @@ fn public_read_selectors_use_real_node_and_refuse_missing_evidence() {
         "checkpoint_evidence_unavailable",
     );
 }
+
+#[test]
+fn proof_and_sequence_reads_refuse_invalid_or_absent_real_node_evidence() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let core = &boundary.core;
+    for kind in ["activity", "receipt"] {
+        assert_refusal(
+            &core.get(&format!("/v1/proofs/{kind}/invalid")),
+            400,
+            "invalid_proof_selector",
+        );
+        assert_refusal(
+            &core.get(&format!("/v1/proofs/{kind}/{}", "63".repeat(32))),
+            503,
+            "proof_evidence_unavailable",
+        );
+    }
+    assert_refusal(
+        &core.get(&format!("/v1/proofs/unknown/{}", "63".repeat(32))),
+        400,
+        "invalid_proof_selector",
+    );
+    assert_refusal(&core.get("/v1/dids/invalid/sequence"), 400, "invalid_did");
+}
+
+#[test]
+fn receipt_latency_and_public_proofs_use_real_committed_refusals() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let mut elapsed = Vec::new();
+    for _ in 0..20 {
+        let sequence = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
+        let snapshot = boundary
+            .core
+            .get(&format!("/v1/dids/{}/sequence", cluster.treasury_did));
+        assert_eq!(snapshot.status, 200, "{}", snapshot.body);
+        assert_eq!(
+            json(&snapshot)["result"]["next_sequence"],
+            sequence.to_string()
+        );
+        let signed = must(
+            build_send(
+                &cluster.treasury_seed,
+                &SendRequest {
+                    network_id: NETWORK_ID,
+                    source_did: cluster.treasury_did.clone(),
+                    destination_did: recipient().0,
+                    asset: cluster.asset,
+                    amount: 1,
+                    account_sequence: sequence,
+                    idempotency_key: random32(),
+                    not_before_ms: now_ms() - 1_000,
+                    expires_at_ms: now_ms() + 60_000,
+                    fee_limit: 0,
+                },
+            ),
+            "latency SEND",
+        );
+        let started = Instant::now();
+        let answer = boundary.core.request(
+            "POST",
+            "/v1/activities",
+            &[("Content-Type", "application/octet-stream")],
+            &signed.canonical,
+        );
+        let duration = started.elapsed().as_micros();
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let result = json(&answer);
+        assert_eq!(result["result"]["state"], "refused");
+        assert_eq!(
+            result["result"]["activity_id"],
+            hex_encode(&signed.activity_id)
+        );
+        elapsed.push(duration);
+        for kind in ["activity", "receipt"] {
+            let proof = boundary.core.get(&format!(
+                "/v1/proofs/{kind}/{}",
+                hex_encode(&signed.activity_id)
+            ));
+            assert_eq!(proof.status, 200, "{}", proof.body);
+            let document = json(&proof);
+            assert_eq!(
+                document["result"]["activity_id"],
+                hex_encode(&signed.activity_id)
+            );
+            assert_eq!(
+                document["result"]["signed_header"]["public_key"],
+                hex_encode(&cluster.sequencer_key)
+            );
+            assert!(document["result"]["proof"]["leaf_count"]
+                .as_u64()
+                .is_some_and(|count| count > 0));
+        }
+    }
+    elapsed.sort_unstable();
+    println!("submit_to_receipt_us samples={} p50={} p99={} outcome=committed_refusal transport=core_https receipt_wait=200ms_poll", elapsed.len(), elapsed[9], elapsed[19]);
+}

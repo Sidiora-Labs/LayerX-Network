@@ -5252,3 +5252,27 @@ symbol = "public_read_selectors_use_real_node_and_refuse_missing_evidence invali
 observed = "cargo fmt --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --check, cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --all-targets -- -D warnings, and LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --no-fail-fast all exit 0. The real daemon boundary suite passes seven tests, including public node information and missing account, batch and checkpoint evidence refusals. The existing state-head relay success assertion passes. Exact output is retained in qual-logs/pay4/current-fmt-check.log, current-clippy.log and current-test.log, with matching exit files."
 assumption = "The native bundle manifest identifies source c63b80eee91589422a9ecc6891c57b4dfa9a73aa. These package gates qualify the implemented read subset; they do not establish complete DID enumeration, expanded activity admission, public JSON-RPC submission, WebSocket subscriptions or submit-to-receipt latency."
 severity = "note"
+
+[observation.6.2.903]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs platform/hosted/core/tests/boundary.rs platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/openrpc.json"
+symbol = "sequence proof proof_and_sequence_reads_refuse_invalid_or_absent_real_node_evidence"
+observed = "Identity sequence reads use the authenticated atomic preparation snapshot. Activity and receipt proof reads invoke Client::proof_bundle and return the verified inclusion path and signed header. The new negative test expects invalid_did HTTP 400 for the string invalid, but Did::new accepts that identifier and the daemon lookup returns sequence_unavailable HTTP 503. The package test command exits 101 with that assertion conflict; implementation and assertion remain intact. Evidence: qual-logs/pay4/reads-test.log."
+assumption = "Reconcile the public DID selector grammar with the canonical Did type before qualifying this negative test. Full account proof export additionally requires the client verified bundle to retain the complete NP1 proof bytes; the current Account and MaintainedAccount variants retain verified state without the full exportable proof path."
+severity = "blocker"
+
+[observation.6.2.904]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_protocol.c include/layerx/lxp_daemon.h cmd/layerxd/lxp_daemon_lni.c agent/schema/lni/v1.kvx src/modules/asset/lx_asset_registry.c"
+symbol = "published_receipt_log send_receipt module_decode module_execute"
+observed = "Commit publication assigns published_receipt_log and published_checkpoint_id in lxp_daemon_process.c under receipt_mutex. The owned LNI receipt reader only copies the published log and has no producer notification. Native Asset module_decode refuses ordinals above 8, strictly decodes SEND only, and module_execute emits an event for non-SEND values. LNI account tags define point reads without DID or asset enumeration; no fee-estimation selector is defined."
+assumption = "Instant receipt and subscription delivery requires a bounded authenticated producer notification contract and notification at the actual commit publication site, outside the owned LNI reader. Expanded public admission requires real strict native operation decoders and execution instead of admitting opaque event-only payloads. Account enumeration, asset reads and fee estimates require authoritative native read contracts."
+severity = "blocker"
+
+[observation.6.2.905]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs platform/hosted/core/src/main.rs"
+symbol = "receipt_latency_and_public_proofs_use_real_committed_refusals await_receipt"
+observed = "LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-core --test boundary receipt_latency_and_public_proofs_use_real_committed_refusals -- --nocapture exits 0. Twenty real core HTTPS submissions return signed committed refusal receipts, with submit-to-receipt p50 1020718 microseconds and p99 1872177 microseconds. Every sample also retrieves verified activity and receipt inclusion proofs and checks the authenticated identity sequence snapshot. Evidence: qual-logs/pay4/receipt-latency.log."
+assumption = "This measures the existing 200 ms receipt-poll path and committed refusals, not successful payments, gateway RPC latency, instant notification delivery, or finalised commitment. The supplied native manifest identifies source c63b80eee91589422a9ecc6891c57b4dfa9a73aa rather than the source named in the shared binary announcement."
+severity = "note"
