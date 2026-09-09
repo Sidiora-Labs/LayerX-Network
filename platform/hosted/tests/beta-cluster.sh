@@ -1114,17 +1114,25 @@ identity_request() {
 }
 
 identity_provision() {
-    local dir="$WORK_DIR/identity" status
+    local dir="$WORK_DIR/identity" status tenant="${LAYERX_BETA_HUMAN_TENANT:-beta}"
+    local provision="$REPO_ROOT/platform/hosted/human/provision.py"
+    umask 077
     mkdir -p "$dir"
     chmod 0700 "$dir"
-    jq -n --arg sub "$TEST_SOURCE_DID" --arg key "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")" \
-        '{sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/source-principal.json"
+    jq -n --arg tenant "$tenant" --arg sub "$TEST_SOURCE_DID" --arg key "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")" \
+        '{tenant: $tenant, sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/source-principal.json"
     status=$(identity_request POST /v1/principals "$dir/source-principal.json" "$dir/source-principal.response.json")
     [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke source principal with status $status: $(cat "$dir/source-principal.response.json")"
-    jq -n --arg sub "$TEST_DESTINATION_DID" --arg key "$(cat "$SECRETS_DIR/test-destination-signer.pub.hex")" \
-        '{sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/destination-principal.json"
+    jq -n --arg tenant "$tenant" --arg sub "$TEST_DESTINATION_DID" --arg key "$(cat "$SECRETS_DIR/test-destination-signer.pub.hex")" \
+        '{tenant: $tenant, sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/destination-principal.json"
     status=$(identity_request POST /v1/principals "$dir/destination-principal.json" "$dir/destination-principal.response.json")
     [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke destination principal with status $status: $(cat "$dir/destination-principal.response.json")"
+    python3 "$provision" --preserve-binding --work-dir "$WORK_DIR" \
+        --request "$dir/source-principal.json" --response "$dir/source-principal.response.json" \
+        --output "$dir/source-binding.json"
+    python3 "$provision" --preserve-binding --work-dir "$WORK_DIR" \
+        --request "$dir/destination-principal.json" --response "$dir/destination-principal.response.json" \
+        --output "$dir/destination-binding.json"
     if [ "$TEST_AUTH_SOURCE" = identity-provisioning ]; then
         jq -n --arg sub "$TEST_SOURCE_DID" '{sub: $sub}' > "$dir/source-session.json"
         (umask 077; : > "$dir/source-session.response.json")
