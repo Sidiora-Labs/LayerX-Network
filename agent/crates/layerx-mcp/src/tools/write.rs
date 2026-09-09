@@ -86,6 +86,7 @@ pub enum WriteToolError {
     ReceiptMismatch,
 }
 
+/// Named payment write tools that reuse the ordinary submit path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PaymentTool {
     Send,
