@@ -409,6 +409,7 @@ fn config(builder_cgroup_root: &Path) -> Result<Config, String> {
     Ok(Config {
         listen: env::var("LAYERX_REGISTRY_LISTEN").unwrap_or_else(|_| DEFAULT_LISTEN.to_owned()),
         journal: parse_path("LAYERX_REGISTRY_JOURNAL", root.join("journal")),
+        deployment_lni_socket: std::env::var_os("LAYERX_REGISTRY_LNI_SOCKET").map(PathBuf::from),
         mirror: parse_path("LAYERX_REGISTRY_SOURCE_MIRROR", root.join("sources")),
         verified: parse_path("LAYERX_REGISTRY_VERIFIED", root.join("verified")),
         workspace: parse_path("LAYERX_REGISTRY_BUILD_ROOT", root.join("builds")),

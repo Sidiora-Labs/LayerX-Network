@@ -1,7 +1,6 @@
 //! The registry routes the developer CLI calls.
 //!
-//! Deployment ingestion stays unavailable until the authenticated node exposes
-//! canonical activity, signed-batch receipt and Programs-state proof material.
+//! Deployment ingestion verifies native activity, receipt and Programs-state proofs.
 //! Reading checks the derived local projection and current
 //! independently verified protocol state. Verifying source rebuilds mirrored source in
 //! the pinned toolchain environment and compares the rebuilt artifact with the
@@ -66,6 +65,7 @@ struct Completed {
 pub struct Registrar {
     registry: Registry,
     journal: FileDeploymentJournal,
+    deployment_lni_socket: Option<std::path::PathBuf>,
     program_state: FileProgramStateJournal,
     node_state: NodeProgramStateSource,
     mirror: SourceMirror,
@@ -119,6 +119,7 @@ impl Registrar {
         let mut registrar = Self {
             registry: Registry::new(),
             journal: FileDeploymentJournal::open(config.journal.clone())?,
+            deployment_lni_socket: config.deployment_lni_socket.clone(),
             program_state: FileProgramStateJournal::open(config.journal.join("program-state"))?,
             node_state: NodeProgramStateSource::connect(
                 &config.node_endpoint,
@@ -245,7 +246,7 @@ impl Registrar {
                 status: 200,
                 body: json!({"status": "ready", "service": "program-registry"}).to_string(),
             },
-            ("POST", "/__registry/deployments") => deployment_ingress_unavailable(&request.body),
+            ("POST", "/__registry/deployments") => self.ingest_deployment(&request.body, deadline),
             ("POST", "/__registry/head") => self.ingest_head(now),
             ("POST", "/__registry/sources") => self.ingest_source(&request.body, deadline),
             (
@@ -702,6 +703,68 @@ impl Registrar {
         );
     }
 
+    fn ingest_deployment(&mut self, body: &[u8], deadline: Instant) -> Response {
+        let loaded = match self.journal.load() {
+            Ok(loaded) => loaded,
+            Err(error) => return refusal(503, "journal_unavailable", &error),
+        };
+        if let Some(unit) = loaded
+            .units
+            .iter()
+            .find(|unit| unit.proof().activity == body)
+        {
+            let evidence = match self.node_state.verify_stored_deployment(unit.proof()) {
+                Ok(evidence) => evidence,
+                Err(error) => return refusal(422, "deployment_proof_refused", &error),
+            };
+            if let Err(error) = self.journal.export_pair(&evidence) {
+                return refusal(503, "journal_export_unavailable", &error);
+            }
+            return deployment_response(&evidence);
+        }
+        let Some(socket) = &self.deployment_lni_socket else {
+            return deployment_ingress_unavailable(body);
+        };
+        let proof = match crate::deployment::deploy(socket, body, deadline) {
+            Ok(proof) => proof,
+            Err(error) => return refusal(503, "deployment_proof_unavailable", &error),
+        };
+        let Some(now) = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+        else {
+            return refusal(
+                503,
+                "clock_unavailable",
+                "deployment verification requires a valid clock",
+            );
+        };
+        let evidence = match self.node_state.verify_deployment(&proof, now) {
+            Ok(evidence) => evidence,
+            Err(error) => return refusal(422, "deployment_proof_refused", &error),
+        };
+        if let Err(error) = self.node_state.receipt_head(evidence.receipt_digest()) {
+            return refusal(503, "receipt_authority_unavailable", &error);
+        }
+        let mut candidate = self.registry.clone();
+        if let Err(error) = candidate.record_verified_deployment(&evidence) {
+            return refusal(422, "deployment_projection_refused", &error.to_string());
+        }
+        if let Err(error) = self.journal.append(&evidence) {
+            return refusal(503, "journal_unavailable", &error);
+        }
+        self.registry = candidate;
+        if let Some(interface) = evidence.interface() {
+            self.interfaces
+                .insert((evidence.program(), evidence.version()), interface.clone());
+        }
+        if let Err(error) = self.journal.export_pair(&evidence) {
+            return refusal(503, "journal_export_unavailable", &error);
+        }
+        deployment_response(&evidence)
+    }
+
     fn rebuild(&mut self) -> Result<(), String> {
         let mut registry = Registry::new();
         let mut interfaces = BTreeMap::new();
@@ -709,6 +772,7 @@ impl Registrar {
         for unit in &loaded.units {
             let evidence = self.node_state.verify_stored_deployment(unit.proof())?;
             self.journal.audit_projection(&evidence)?;
+            self.journal.export_pair(&evidence)?;
             if let Some(interface) = evidence.interface() {
                 interfaces.insert((evidence.program(), evidence.version()), interface.clone());
             }
@@ -1067,6 +1131,18 @@ fn request_digest(program: ProgramId, uri: &str, source_digest: &[u8; 32]) -> [u
         .concat(),
     )
     .into()
+}
+
+fn deployment_response(evidence: &layerx_programs::VerifiedDeploymentEvidence) -> Response {
+    Response {
+        status: 200,
+        body: json!({
+            "activity_id": hex::encode(&evidence.activity_id()),
+            "receipt_digest": hex::encode(&evidence.receipt_digest()),
+            "state": "deployed",
+        })
+        .to_string(),
+    }
 }
 
 #[cfg(test)]
