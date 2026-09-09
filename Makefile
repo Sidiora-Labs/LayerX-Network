@@ -3069,6 +3069,12 @@ $(BUILD_DIR)/tests/programs_winddown: tests/programs/test_winddown.c \
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
+$(BUILD_DIR)/tests/programs_payer_balance: tests/programs/test_payer_balance.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
 programs-core-test: $(BUILD_DIR)/tests/programs_registration \
 		$(BUILD_DIR)/tests/programs_lifecycle \
 		$(BUILD_DIR)/tests/programs_monetary_law \
@@ -3077,7 +3083,8 @@ programs-core-test: $(BUILD_DIR)/tests/programs_registration \
 		$(BUILD_DIR)/tests/programs_metering_schedule \
 		$(BUILD_DIR)/tests/programs_fee_governance \
 		$(BUILD_DIR)/tests/programs_accounts \
-		$(BUILD_DIR)/tests/programs_winddown
+		$(BUILD_DIR)/tests/programs_winddown \
+		$(BUILD_DIR)/tests/programs_payer_balance
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_registration
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_lifecycle
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_monetary_law
@@ -3087,6 +3094,7 @@ programs-core-test: $(BUILD_DIR)/tests/programs_registration \
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_fee_governance
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_accounts
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_winddown
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_payer_balance
 
 programs-protocol-regression: test-kernel test-module-ctx test-dispatch \
 		test-receipts test-state-root test-snapshot test-replay-golden-local
