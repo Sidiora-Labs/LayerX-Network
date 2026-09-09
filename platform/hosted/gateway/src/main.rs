@@ -1,6 +1,7 @@
 mod native_call;
 mod program_lifecycle;
 mod public_reads;
+mod rpc;
 
 use layerx_crypto::ed25519;
 use layerx_platform_gateway::http::{
@@ -554,7 +555,7 @@ fn config() -> Result<Config, String> {
             &env::var("LAYERX_GATEWAY_COMPONENT_URL")
                 .map_err(|_| "gateway component URL is required")?,
         )?,
-        public_core: env::var("LAYERX_GATEWAY_PUBLIC_CORE_URL").ok().map(|url| Endpoint::parse(&url)).transpose()?,
+        public_core: public_reads::configured_endpoint()?,
         component_token: read_secret("LAYERX_GATEWAY_COMPONENT_TOKEN_FILE")?,
         authority: Endpoint::parse(
             &env::var("LAYERX_GATEWAY_AUTHORITY_URL")
@@ -2361,14 +2362,8 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
             result
         };
     }
-    match public_reads::target(&request.path) {
-        Ok(Some(path)) => return if request.method == "GET" {
-            public_reads::read(config, path)
-        } else {
-            response(405, "method_not_allowed", None)
-        },
-        Err(()) => return response(400, "invalid_read_selector", None),
-        Ok(None) => {}
+    if let Some(result) = public_reads::route(config, request) {
+        return result;
     }
     if request.method == "GET" && request.path == "/internal/v1/principal" {
         return authenticate_key(config, request).map_or_else(

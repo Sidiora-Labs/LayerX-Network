@@ -5236,3 +5236,19 @@ symbol = "public_reads route account"
 observed = "Concurrent writes replaced the public read modules and added incompatible call sites during qualification. The gateway main module contains duplicate public_reads declarations and both bool-returning target/route and Result-returning target/read call patterns. Formatting commands exited 0 before this collision; clippy was interrupted and no test or runtime result qualifies the combined source. Partial compiler output is retained in qual-logs/pay4/clippy.log."
 assumption = "The combined source requires exclusive write ownership and reconciliation before qualification. No public RPC, complete DID account listing, receipt latency, or expanded activity admission gate is established by this partial work."
 severity = "blocker"
+
+[observation.6.2.901]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs platform/hosted/gateway/src/rpc.rs agent/schema/lni/v1.kvx include/layerx/lxp_daemon.h cmd/layerxd/lxp_daemon_protocol.c"
+symbol = "public_reads await_receipt submission_registry"
+observed = "The public read declarations and route call sites are reconciled. Account reads retain canonical proof verification. The read dispatcher routes account, balance, DID accounts, receipt, activity status, batch header, checkpoint and node information reads; DID enumeration remains explicitly unavailable because tag 7 defines only point selectors. The current receipt lookup has no bounded wait selector, and commit publication does not notify a waiter in the owned LNI reader. Core retains its existing receipt poll and activity allowlist."
+assumption = "Complete public payment RPC requires coordinated native read selectors, commit publication notifications and strict expanded activity decoders. WebSocket subscriptions, activity-ID-derived outer deduplication, commitment evidence waits, proof RPC, asset RPC, identity sequence and fee estimation remain incomplete. No latency or complete payment RPC qualification is established."
+severity = "blocker"
+
+[observation.6.2.902]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs platform/hosted/core/tests/boundary.rs platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/openrpc.json"
+symbol = "public_read_selectors_use_real_node_and_refuse_missing_evidence invalid_envelopes_have_json_rpc_errors_and_null_ids selectors_bind_each_public_read"
+observed = "cargo fmt --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --check, cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --all-targets -- -D warnings, and LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --no-fail-fast all exit 0. The real daemon boundary suite passes seven tests, including public node information and missing account, batch and checkpoint evidence refusals. The existing state-head relay success assertion passes. Exact output is retained in qual-logs/pay4/current-fmt-check.log, current-clippy.log and current-test.log, with matching exit files."
+assumption = "The native bundle manifest identifies source c63b80eee91589422a9ecc6891c57b4dfa9a73aa. These package gates qualify the implemented read subset; they do not establish complete DID enumeration, expanded activity admission, public JSON-RPC submission, WebSocket subscriptions or submit-to-receipt latency."
+severity = "note"

@@ -1911,8 +1911,10 @@ fn boundary_tls_environment(env: &mut BTreeMap<&str, String>, certificates: &Cer
 
 fn cluster_artifacts() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     let repository = repository_root();
-    let layerxd_source = repository.join("build/bin/layerxd");
-    let builder = repository.join("build/bin/layerx-genesis-build");
+    let native_bin = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
+        .map_or_else(|| repository.join("build/bin"), PathBuf::from);
+    let layerxd_source = native_bin.join("layerxd");
+    let builder = native_bin.join("layerx-genesis-build");
     assert!(
         layerxd_source.is_file(),
         "{} is not built",
@@ -2444,5 +2446,52 @@ fn establish_receipt_head(boundary: &Boundary, cluster: &Cluster) {
             .get(&format!("/v1/receipts/{}", hex_encode(&signed.activity_id)))
             .status,
         200
+    );
+}
+
+#[test]
+fn public_read_selectors_use_real_node_and_refuse_missing_evidence() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let core = &boundary.core;
+    let node = core.get("/v1/node-info");
+    assert_eq!(node.status, 200, "{}", node.body);
+    assert_eq!(json(&node)["result"]["network_id"], NETWORK_ID);
+    assert_eq!(
+        json(&node)["result"]["authorised_sequencer_key"],
+        hex_encode(&cluster.sequencer_key)
+    );
+    assert_refusal(
+        &core.get("/v1/accounts/invalid/balance"),
+        400,
+        "invalid_account_id",
+    );
+    assert_refusal(&core.get("/v1/batches/0"), 400, "invalid_batch");
+    assert_refusal(
+        &core.get("/v1/checkpoints/invalid"),
+        400,
+        "invalid_checkpoint",
+    );
+    assert_refusal(
+        &core.get("/v1/dids/did:layerx:alice/accounts"),
+        503,
+        "did_account_listing_unavailable",
+    );
+    let missing = hex_encode(&[99; 32]);
+    assert_refusal(
+        &core.get(&format!("/v1/accounts/{missing}/balance")),
+        503,
+        "account_evidence_unavailable",
+    );
+    assert_refusal(
+        &core.get("/v1/batches/18446744073709551615"),
+        503,
+        "batch_evidence_unavailable",
+    );
+    assert_refusal(
+        &core.get(&format!("/v1/checkpoints/{missing}")),
+        503,
+        "checkpoint_evidence_unavailable",
     );
 }

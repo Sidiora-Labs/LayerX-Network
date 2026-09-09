@@ -1157,9 +1157,10 @@ fn unavailable_capability(path: &str) -> bool {
 }
 
 fn core_route(config: &Config, request: &Request) -> Response {
-    if let Some(response) = public_reads::route(config, request) {
-        return response;
-    }
+    public_reads::route(config, request).unwrap_or_else(|| protocol_route(config, request))
+}
+
+fn protocol_route(config: &Config, request: &Request) -> Response {
     let method = request.method.as_str();
     let path = request.path.as_str();
     if let Some(key) = path.strip_prefix("/v1/programs/receipts/by-idempotency/") {
@@ -1183,11 +1184,6 @@ fn core_route(config: &Config, request: &Request) -> Response {
     }
     if request.query.is_some() {
         return refusal(400, "invalid_request", None);
-    }
-    if method == "GET" {
-        if let Some(rest) = path.strip_prefix("/v1/accounts/") {
-            return public_reads::account(config, rest.strip_suffix("/balance").unwrap_or(rest));
-        }
     }
     match (method, path) {
         ("GET", "/livez") => json_response(200, &serde_json::json!({ "live": true })),
