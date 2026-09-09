@@ -19,10 +19,11 @@ fn every_method_matches_runtime_canonical_calldata_and_refuses_mutations() {
         Request::TotalSupply,
         Request::Metadata,
     ];
-    for (request, fixture) in requests
-        .into_iter()
-        .zip(include_str!("../../../sdk/rust/vectors/lxt20-requests.txt").lines())
-    {
+    let fixtures: Vec<_> = include_str!("../../../sdk/rust/vectors/lxt20-requests.txt")
+        .lines()
+        .collect();
+    assert_eq!(fixtures.len(), requests.len());
+    for (request, fixture) in requests.into_iter().zip(fixtures) {
         let encoded = request.encode().unwrap_or_else(|e| panic!("{e}"));
         let hex = hex::encode(encoded.as_slice());
         assert_eq!(hex, fixture);
@@ -34,6 +35,20 @@ fn every_method_matches_runtime_canonical_calldata_and_refuses_mutations() {
         let mut trailing = encoded.as_slice().to_vec();
         trailing.push(0);
         assert!(Request::decode(&trailing).is_err());
+        if encoded.len() >= 42 {
+            let mut reserved = encoded.as_slice().to_vec();
+            reserved[10..42].fill(0);
+            assert!(Request::decode(&reserved).is_err());
+        }
+        if matches!(
+            request,
+            Request::Transfer { .. } | Request::TransferFrom { .. }
+        ) {
+            let mut zero = encoded.as_slice().to_vec();
+            let end = zero.len();
+            zero[end - 16..].fill(0);
+            assert!(Request::decode(&zero).is_err());
+        }
         for offset in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] {
             let mut wrong = encoded.as_slice().to_vec();
             wrong[offset] = 0xff;
