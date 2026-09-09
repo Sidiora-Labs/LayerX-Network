@@ -72,9 +72,18 @@ export async function runServiceScenarios(suite) {
     }),
   };
 
+  const configFile = join(workDir, "example.json");
+  await writeFile(configFile, JSON.stringify({ version: 1, application: "paid-api", environments: { emulator: {
+    port, resourceFile, fulfillmentDirectory: join(workDir, "fulfillments"),
+    resourceUrl: environment.LAYERX_RESOURCE_URL, scheme: "exact", network: "layerx:testnet",
+    priceEnvironment: "LAYERX_PRICE", assetEnvironment: "LAYERX_ASSET", payToEnvironment: "LAYERX_PAY_TO",
+    authorizedBatchEnvironment: "LAYERX_AUTHORIZED_BATCH_JSON",
+  } } }));
+  environment.LAYERX_EXAMPLE_CONFIG = configFile;
+  environment.LAYERX_AUTHORIZED_BATCH_JSON = JSON.stringify(batchJson(receipt.authorizedBatch));
   let child;
   try {
-    child = spawn(process.execPath, [EXAMPLE_ENTRY], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
+    child = spawn(process.execPath, [EXAMPLE_ENTRY, "--environment", "emulator"], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
     await waitForListening(child, 15_000);
     const base = `http://127.0.0.1:${port}/paid`;
     const buyer = new BuyerMiddleware({
@@ -193,7 +202,7 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
   });
   const catalog = join(workDir, "catalog.json");
   await writeFile(catalog, JSON.stringify([{
-    sku: "conformance-item",
+    sku: "metered-report",
     title: "Conformance item",
     unitAmount: amount.toString(),
     asset: toHex(asset),
@@ -213,15 +222,26 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
     LAYERX_SETTLEMENT_TOKEN: "merchant-conformance-token",
     LAYERX_PUBLIC_URL: `http://127.0.0.1:${port}`,
   };
+  const configFile = join(workDir, "example.json");
+  await writeFile(configFile, JSON.stringify({ version: 1, application: "merchant-shop", environments: { emulator: {
+    port, publicUrl: environment.LAYERX_PUBLIC_URL, settlementUrl: environment.LAYERX_SETTLEMENT_URL,
+    receiptAuthorityUrl: settlement.url, stateDirectory: workDir, scheme: "exact", network: "layerx:testnet",
+    tokenEnvironment: "LAYERX_SETTLEMENT_TOKEN", priceEnvironment: "LAYERX_PRICE",
+    assetEnvironment: "LAYERX_ASSET", payToEnvironment: "LAYERX_PAY_TO",
+    webhookKeysEnvironment: "LAYERX_WEBHOOK_KEYS",
+  } } }));
+  Object.assign(environment, { LAYERX_EXAMPLE_CONFIG: configFile, LAYERX_PRICE: amount.toString(),
+    LAYERX_ASSET: toHex(asset), LAYERX_PAY_TO: toHex(payTo),
+    LAYERX_WEBHOOK_KEYS: JSON.stringify({ conformance: toHex(receipt.authorizedBatch.sequencerPublicKey) }) });
   let child;
   try {
-    child = spawn(process.execPath, [MERCHANT_ENTRY], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
+    child = spawn(process.execPath, [MERCHANT_ENTRY, "--environment", "emulator"], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
     await waitForListening(child, 15_000);
     const checkout = `http://127.0.0.1:${port}/checkout`;
     const requestBody = {
       principal: "acct:merchant-conformance",
       checkout_key: "checkout-conformance",
-      lines: [{ sku: "conformance-item", quantity: 1 }],
+      lines: [{ sku: "metered-report", quantity: 1 }],
     };
     const buyer = new BuyerMiddleware({
       client: new ProductionClient(new LayerXPaymentHttpTransport({
