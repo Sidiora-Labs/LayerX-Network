@@ -615,6 +615,7 @@ def main():
     mode.add_argument('--materialize-journal', action='store_true')
     mode.add_argument('--validate-owner-registration', action='store_true')
     mode.add_argument('--produce-owner-registration', action='store_true')
+    mode.add_argument('--prepare-owner-admission', action='store_true')
     mode.add_argument('--catalog', action='store_true')
     mode.add_argument('--assemble', action='store_true')
     mode.add_argument('--movement-source', action='store_true')
@@ -639,6 +640,10 @@ def main():
     if args.prepare_owner_request:
         require(args.secrets_dir is not None, args.work_dir, 'secrets directory')
         owner_request(args.work_dir, args.secrets_dir)
+    elif args.prepare_owner_admission:
+        require(args.secrets_dir is not None, args.work_dir, 'secrets directory')
+        from owner_native import prepare_admission
+        prepare_admission(args.work_dir, args.secrets_dir)
     elif args.produce_owner_registration:
         from owner_native import produce
         produce(args.work_dir)
