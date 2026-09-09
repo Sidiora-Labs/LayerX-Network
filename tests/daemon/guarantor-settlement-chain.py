@@ -140,6 +140,9 @@ def main():
                     process.kill()
                     process.wait(timeout=10)
 
+    subprocess.run([sys.executable, str(ROOT / 'tests/daemon/withdraw-custody.py')], cwd=ROOT,
+        env=os.environ | {'LAYERX_TEST_SETTLEMENT_PUBLICATION': '1'}, check=True)
+
 
 if __name__ == '__main__':
     signal.signal(signal.SIGTERM, reference.terminate)

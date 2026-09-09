@@ -126,6 +126,23 @@ int main(int argc, char **argv)
             free(wire);
             free(proof);
         }
+        if (getenv("LAYERX_TEST_PUBLICATION_EXPORT_DIR") != NULL) {
+            char path[4096];
+            lxp_byte_span encoded;
+            FILE *output;
+            int written = snprintf(path, sizeof(path), "%s/%lu.json",
+                getenv("LAYERX_TEST_PUBLICATION_EXPORT_DIR"), batch);
+            assert(written > 0 && (size_t)written < sizeof(path));
+            assert(lxp_batch_header_encode(&body.header, &arena, &encoded) == LXP_OK);
+            output = fopen(path, "wx");
+            assert(output != NULL);
+            fputs("{\"canonical_header\":\"0x", output);
+            for (size_t i = 0U; i < encoded.length; ++i) fprintf(output, "%02x", encoded.bytes[i]);
+            fputs("\",\"native_facts\":", output);
+            assert(gp_runtime_settlement_facts(runtime, output) == LXP_OK);
+            fputs("}\n", output);
+            assert(fclose(output) == 0);
+        }
         fprintf(stdout,
                 "guarantor runtime independently replayed batch=%lu activities=%zu receipts=%zu\n",
                 batch, activity_count, replay.receipt_count);
