@@ -7488,3 +7488,27 @@ symbol = "lxp_receipt lxp_ledger_receipt_input"
 observed = "The existing canonical ledger receipt fields have balances but no total_units before and after. The receipt schema and protocol codecs are outside the permitted asset dispatch paths and identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
 assumption = "Define and implement a versioned supply receipt binding across native encoding, decoding, signing and replay before qualifying native mint and burn."
 severity = "blocker"
+
+[observation.3.7.27]
+task = "3.7"
+file = "src/protocol/lxp_module_ctx.c include/layerx/lxp_module.h src/ledger/lx_account_registry.c"
+symbol = "lxp_ctx_bind_ledger_receipt commit_account lxp_ctx_account_stage_module_value"
+observed = "The approved issuance account model preserves per-asset conservation and binds supply through existing receipt endpoint balances, resolving the model and schema questions in observations 3.7.24 and 3.7.26. The module context still restricts ledger receipt operation to Send and routes staged owner-account commit only for Bridge. Its module-value staging derives module:<module>:value:<id>, rather than the specified issuance account name. The implementation-boundary files are unchanged from 2e5ee777; evidence: qual-logs/pay1/continuation-base-comparison.log."
+assumption = "Asset register, account_open, receive, mint and burn require scoped module-context staging, commit/import/export and receipt-operation integration while preserving generic registration, conserved transfer, balance, authorization and receipt checks. These paths are outside the granted daemon and asset-dispatch ownership. The typed activities remain refused until execution is implemented; registry reconstruction and full new-ordinal execution qualification remain incomplete."
+severity = "blocker"
+
+[observation.3.7.28]
+task = "3.7"
+file = "src/protocol/lxp_fee.c src/protocol/lxp_fee_policy.c include/layerx/lxp_fee.h cmd/layerx-genesis/lxp_genesis_builder.c"
+symbol = "lxp_fee_compute materialize_snapshot"
+observed = "The current fee representation multiplies per_activity_type_unit by the complete activity type and already computes fees for the additional ordinal numbers; lxp_fee_policy.c contains no per-ordinal price table. Genesis materialization registers lx_asset_module_iface, including its expanded type table. The fee implementation and parameter header are unchanged from 2e5ee777; evidence: qual-logs/pay1/continuation-base-comparison.log."
+assumption = "A separately configured per-ordinal price schedule requires a canonical parameter representation and ownership of the fee calculator and parameter codec paths. Account enumeration, persisted registry reconstruction and complete new-ordinal replay remain unimplemented; existing genesis and account-read regression gates do not qualify those absent behaviors."
+severity = "blocker"
+
+[observation.3.7.29]
+task = "3.7"
+file = "include/layerx/lx_asset.h src/modules/asset/lx_asset_decode.c src/modules/asset/lx_asset_registry.c src/ledger/lxp_receive.c cmd/layerxd/lxp_daemon_process.c tests/modules/test_asset_payloads.h"
+symbol = "module_decode asset_activity_supported"
+observed = "make -j16; make test-asset-registry test-asset-balance test-asset-transfer test-asset-deposit test-asset-withdraw test-asset-reserve test-ledger-accounts test-ledger-send test-ledger-receive test-ledger-receipt test-state-commitment-transition test-genesis test-daemon-lni-admission test-daemon-lni-account; sh tools/lxp_check_sole_writer.sh; make test; make beta-ledger-check; and git diff --check each exit 0. Logs: qual-logs/pay1/pay1b-build.log, pay1b-focused.log, pay1b-sole-writer.log, pay1b-test.log, pay1b-beta-ledger-check.log and pay1b-diff-check.log, each with an adjacent exit file. The initial focused run exited 2 at test-asset-transfer because simultaneous decoded payload storage exhausted the existing arena; allocating the additional typed payload separately repaired the regression without changing that test or its arena bound. Initial output remains in pay1b-focused-attempt1.log."
+assumption = "These gates qualify the canonical decoders and existing regression paths, not missing registry, issuance, receive/grant execution or account enumeration. Daemon admission and replay now share the explicit Asset allowlist and constrain Asset owner scopes to the submitted ordinal; successful execution and persisted registry replay remain unqualified. Codify gates were not run because cg is unavailable. Cluster and image gates were not run because this host has no cluster or image tooling. No inherited executed failure is asserted."
+severity = "blocker"
