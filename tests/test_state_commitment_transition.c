@@ -899,7 +899,10 @@ static int pay1_issuance(uint8_t final_root[32])
         canonical[1] = 1U;
         REQUIRE(lx_asset_record_decode(canonical, canonical_length, &decoded) != LXP_OK);
         canonical[1] = 2U;
+        REQUIRE(lx_asset_record_decode(canonical, canonical_length, &decoded) != LXP_OK);
+        canonical[1] = 3U;
         REQUIRE(lx_asset_record_decode(canonical, canonical_length, &decoded) == LXP_OK);
+        REQUIRE(memcmp(decoded.salt, registration + 34U, 32U) == 0);
         REQUIRE(memcmp(decoded.name, "Token", 5U) == 0 && decoded.name_length == 5U);
     }
     REQUIRE(memcmp(record.issuer_did32, f->authority.actor, 32U) == 0);
