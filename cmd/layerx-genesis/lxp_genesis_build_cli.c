@@ -4,6 +4,7 @@
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lx_asset.h"
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_protocol.h"
 
 #include <fcntl.h>
@@ -112,7 +113,7 @@ static lxp_result parse_request(
     if (status == LXP_OK && memcmp(magic, "LXGB", 4U) != 0)
         status = LXP_ERR_INVALID_TAG;
     if (status == LXP_OK) status = reader_u8(&reader, &version);
-    if (status == LXP_OK && version != 1U)
+    if (status == LXP_OK && version != 1U && version != 2U)
         status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK)
         status = reader_u16(&reader, &draft->protocol_version);
@@ -187,6 +188,45 @@ static lxp_result parse_request(
     if (status == LXP_OK)
         status = reader_u64(
             &reader, &fees->maximum_fee_units_per_occupancy_byte_batch);
+    if (status == LXP_OK && version == 2U) {
+        uint16_t records;
+        status = reader_u16(&reader, &records);
+        if (status == LXP_OK && (records == 0U || records > LX_ASSET_REGISTRY_CAPACITY))
+            status = LXP_ERR_LENGTH_LIMIT;
+        for (size_t i = 0U; status == LXP_OK && i < records; ++i) {
+            uint16_t record_length;
+            lx_asset_record record;
+            lxp_genesis_module_value *value = &draft->module_values[draft->module_value_count];
+            status = reader_u16(&reader, &record_length);
+            if (status == LXP_OK && record_length > sizeof(value->value)) status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK) status = reader_copy(&reader, value->value, record_length);
+            if (status == LXP_OK) status = lx_asset_record_decode(value->value, record_length, &record);
+            if (status == LXP_OK && (!lxp_u128_is_zero(record.total_units) || record.issuer_kind == 1U))
+                status = LXP_ERR_NON_CANONICAL;
+            if (status == LXP_OK) {
+                value->module_id = LXP_MODULE_ASSET;
+                value->value_length = record_length;
+                (void)memcpy(value->key, record.asset_id, 32U);
+                ++draft->module_value_count;
+            }
+        }
+        if (status == LXP_OK) {
+            uint16_t schedule_length;
+            lxp_fee_params schedule;
+            lxp_genesis_module_value *value = &draft->module_values[draft->module_value_count];
+            status = reader_u16(&reader, &schedule_length);
+            if (status == LXP_OK && schedule_length > sizeof(value->value)) status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK) status = reader_copy(&reader, value->value, schedule_length);
+            if (status == LXP_OK) status = lxp_fee_params_decode(value->value, schedule_length, &schedule);
+            if (status == LXP_OK && schedule.version != 2U) status = LXP_ERR_VERSION_UNSUPPORTED;
+            if (status == LXP_OK) {
+                value->module_id = LXP_MODULE_GOVERNANCE;
+                value->value_length = schedule_length;
+                (void)memcpy(value->key, "fee.schedule", 12U);
+                ++draft->module_value_count;
+            }
+        }
+    }
     if (status == LXP_OK && reader.offset != reader.length)
         status = LXP_ERR_TRAILING_BYTES;
     if (status == LXP_OK)
