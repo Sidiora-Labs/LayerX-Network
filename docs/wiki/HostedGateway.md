@@ -8,7 +8,8 @@ LayerX Network (`platform/hosted/gateway/src/lib.rs:1`;
 platform string is `tls-receipt-verifying-multi-instance-hosted-gateway`
 (`platform/hosted/gateway/src/lib.rs:885-887`).
 
-It is the only hosted surface serving `/v1` routes to humans and SDKs.
+It is the only hosted surface serving `/v1` routes and public JSON-RPC
+`/rpc` to humans and SDKs.
 No in-cluster human service exists
 (`platform/hosted/tests/beta-cluster.sh:1130`). Qualification binds
 that URL as `LAYERX_QUALIFICATION_HUMAN_URL` / the SDK and CLI
@@ -86,7 +87,7 @@ Bearer as the upstream `Authorization` value.
 
 | Credential | Accepted from | Used as | Never |
 | --- | --- | --- | --- |
-| `LayerX-Key {id}:{secret}` | Production `/v1` routes and `GET /internal/v1/principal` (`platform/hosted/gateway/src/main.rs:1142-1153`; `platform/hosted/gateway/src/main.rs:1706-1718`; `platform/hosted/gateway/src/main.rs:1748`) | Local digest check against Redis (`platform/hosted/gateway/src/lib.rs:45-75`) | Sent to component, authority, identity, or registry. `Client::request` always prefixes its argument with `Bearer ` (`platform/hosted/gateway/src/http.rs:90-104`) |
+| `LayerX-Key {id}:{secret}` | Production `/v1` routes, `POST /rpc` `lx_sendActivity`, `GET /rpc/ws`, and `GET /internal/v1/principal` (`platform/hosted/gateway/src/main.rs:1142-1153`; `platform/hosted/gateway/src/rpc.rs:232-238`; `platform/hosted/gateway/src/ws.rs:274-277`; `platform/hosted/gateway/src/main.rs:1706-1718`; `platform/hosted/gateway/src/main.rs:1748`) | Local digest check against Redis (`platform/hosted/gateway/src/lib.rs:45-75`) | Sent to component, authority, identity, or registry. `Client::request` always prefixes its argument with `Bearer ` (`platform/hosted/gateway/src/http.rs:90-104`) |
 | `Bearer` session | `/v1/keys` only (`platform/hosted/gateway/src/main.rs:952-961`; `platform/hosted/gateway/src/main.rs:1081-1088`) | JSON body `{"token": …}` to identity `POST /v1/sessions/introspect` (`platform/hosted/gateway/src/main.rs:962-973`) | Upstream `Authorization`. That header carries `LAYERX_GATEWAY_IDENTITY_TOKEN_FILE` |
 | Component token | File `LAYERX_GATEWAY_COMPONENT_TOKEN_FILE` (`platform/hosted/gateway/src/main.rs:542`) | `Authorization: Bearer` to the agent-boundary URL | Presented by humans |
 | Authority token | File `LAYERX_GATEWAY_AUTHORITY_TOKEN_FILE` (`platform/hosted/gateway/src/main.rs:547`) | `Authorization: Bearer` to the receipt-authority URL | Presented by humans |
@@ -140,12 +141,12 @@ Issued keys carry a sorted, non-empty list of at most six scopes
 
 | Scope | Routes |
 | --- | --- |
-| `activity:write` | `POST /v1/activities` |
-| `program:call` | `POST /v1/programs/call`, `/deploy`, `/upgrade`, `/wind-down` |
+| `activity:write` | `POST /v1/activities`; `lx_sendActivity` on `POST /rpc` (`platform/hosted/gateway/src/rpc.rs:236-257`) |
+| `program:call` | `POST /v1/programs/call`, `/deploy`, `/upgrade`, `/wind-down`; the same scopes apply when `lx_sendActivity` selects those routes |
 | `program:simulate` | `POST /v1/programs/simulate` |
 | `program:read` | `GET /v1/programs/registry/{id}`, `/interface`, `/activities/{id}`, `/receipts/by-idempotency/{key}` |
-| `receipt:read` | `GET /v1/receipts/{id}` |
-| `state:read` | `GET /v1/state` |
+| `receipt:read` | `GET /v1/receipts/{id}`; `lx_subscribe` topic `receipts` (`platform/hosted/gateway/src/ws.rs:168-175`) |
+| `state:read` | `GET /v1/state`; `lx_subscribe` topics `checkpoints` and `account` |
 
 `permits` is exact string match on the comma-joined record
 (`platform/hosted/gateway/src/main.rs:1052-1068`). Missing scope is
@@ -168,11 +169,20 @@ allows any ASCII hex digit, including `A-F`
 `platform/hosted/gateway/src/lib.rs:874`). Those two identifier
 alphabets differ.
 
-Unauthenticated and key-management routes are dispatched before
-`production_route` (`platform/hosted/gateway/src/main.rs:1693-1739`).
+Public JSON-RPC and a small unauthenticated HTTP read subset are
+dispatched before `production_route`
+(`platform/hosted/gateway/src/main.rs:2372-2374`;
+`platform/hosted/gateway/src/public_reads.rs:85-97`).
+Key-management routes remain before `production_route`
+(`platform/hosted/gateway/src/main.rs:2375-2384`).
 
 | Method and path | Inputs | Upstream |
 | --- | --- | --- |
+| `POST /rpc` | JSON-RPC 2.0 body; reads are unauthenticated; `lx_sendActivity` requires `LayerX-Key` | Public core HTTPS for reads; existing authenticated activity path for send (`platform/hosted/gateway/src/rpc.rs:365-410`; `platform/hosted/gateway/openrpc.json`) |
+| `GET /rpc/schema` | none | Serves `openrpc.json` (`platform/hosted/gateway/src/rpc.rs:366-375`) |
+| `GET /rpc/ws` | WebSocket upgrade, `Authorization: LayerX-Key`, no `Origin` | Authenticated `lx_subscribe` (`platform/hosted/gateway/src/ws.rs:247-314`) |
+| `GET /v1/accounts/{id}/balance` | 64-hex account id; no key | Public core account read (`platform/hosted/gateway/src/public_reads.rs:28-30`) |
+| `GET /v1/dids/{did}/accounts` | DID path segment; no key | Public core DID listing, which is currently unavailable (`platform/hosted/gateway/src/public_reads.rs:32-40`) |
 | `GET /livez` | none | none. Body `status=live`, `service=layerx-gateway`, `package_semver` (`platform/hosted/gateway/src/main.rs:1721-1729`) |
 | `GET /readyz` | none | Redis `PING`; component, authority `GET /readyz`; registry `GET /healthz` (`platform/hosted/gateway/src/main.rs:1640-1691`; `platform/hosted/gateway/src/main.rs:2779-2811`) |
 | `GET /v1/status` | none | same Redis/component/authority probes, no registry (`platform/hosted/gateway/src/main.rs:2814-2841`) |
@@ -182,7 +192,7 @@ Unauthenticated and key-management routes are dispatched before
 | `POST /v1/keys/{id}/rotate` | Bearer session, `Idempotency-Key` | identity introspect; Redis `rotate_key` (`platform/hosted/gateway/src/main.rs:1128-1137`; `platform/hosted/gateway/src/main.rs:2385-2454`) |
 | `GET /internal/v1/principal` | `LayerX-Key` | Redis key lookup. Body `principal_digest` only (`platform/hosted/gateway/src/main.rs:1706-1718`) |
 | `POST /v1/activities` | `LayerX-Key`, `Idempotency-Key`, `application/json` `{activity}` or `application/octet-stream` signed bytes (`platform/hosted/gateway/src/main.rs:3068-3117`) | agent-boundary `POST /v1/activities` as `application/octet-stream` with the component token and protocol idempotency key (`platform/hosted/gateway/src/main.rs:3193-3206`). Then authority `GET /v1/authorized-batches/by-activity/{id}` (`platform/hosted/gateway/src/main.rs:1156-1186`) |
-| `GET /v1/state` | `LayerX-Key` and `state:read` | none. Always `503 principal_state_proof_unavailable` before quota (`platform/hosted/gateway/src/main.rs:1572-1573`; `platform/hosted/gateway/src/main.rs:1611`) |
+| `GET /v1/state` | none on the public-read path | Public core `GET /v1/state` when `LAYERX_GATEWAY_PUBLIC_CORE_URL` is set (`platform/hosted/gateway/src/public_reads.rs:23-25`). The earlier authenticated `503 principal_state_proof_unavailable` path is not reached for this exact path. |
 | `GET /v1/receipts/{id}` | `LayerX-Key`, `receipt:read` | Redis `activity_owner`; agent-boundary `GET /v1/receipts/{id}`; authority by-activity (`platform/hosted/gateway/src/main.rs:2457-2513`) |
 | `POST /v1/programs/call` | `LayerX-Key`, `program:call`, `Idempotency-Key` hex32, JSON or octet-stream Programs CALL (`platform/hosted/gateway/src/main.rs:303-390`; `platform/hosted/gateway/src/main.rs:1766-1771`) | registry `GET /v1/programs/registry/{program}`; agent-boundary `POST /v1/programs/call`; authority by-activity |
 | `POST /v1/programs/simulate` | same call body, `program:simulate` | registry head; agent-boundary `POST /v1/programs/simulate` (`platform/hosted/gateway/src/main.rs:1250-1329`) |
@@ -194,21 +204,27 @@ Unauthenticated and key-management routes are dispatched before
 | `GET /v1/programs/activities/{id}` | JSON selector `activity_id` plus `sequencer-signed` (`platform/hosted/gateway/src/main.rs:886-901`) | Redis owner and operation; pending calls agent-boundary `GET /v1/programs/activities/{id}` (`platform/hosted/gateway/src/main.rs:2638-2688`; `platform/hosted/gateway/src/main.rs:3568-3572`) |
 | `GET /v1/programs/receipts/by-idempotency/{key}` | JSON selector `idempotency_key`, `expected_activity_id`, `sequencer-signed` (`platform/hosted/gateway/src/main.rs:864-883`) | Redis operation; pending lifecycle uses agent-boundary `GET /v1/programs/receipts/by-idempotency/{key}` (`platform/hosted/gateway/src/main.rs:1460-1467`; `platform/hosted/gateway/src/main.rs:2584-2635`) |
 
-The component URL in the hosted manifest is the agent boundary, not
-the core Service (`platform/hosted/gateway/deployment.yaml:78`):
+The public-core URL in the hosted manifest is the pending-core Service
+(`platform/hosted/gateway/deployment.yaml:78`):
+
+`https://layerx-pending-core.layerx-testnet.svc.cluster.local:9443`
+
+The component URL remains the agent boundary, not that core Service
+(`platform/hosted/gateway/deployment.yaml:79`):
 
 `https://layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443`
 
 Authority is
 `https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443`
-(`platform/hosted/gateway/deployment.yaml:80`). Identity is
+(`platform/hosted/gateway/deployment.yaml:81`). Identity is
 `https://layerx-identity.layerx-testnet.svc.cluster.local:9443`
-(`platform/hosted/gateway/deployment.yaml:82`). Registry is
+(`platform/hosted/gateway/deployment.yaml:83`). Registry is
 `https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420`
-(`platform/hosted/gateway/deployment.yaml:84`). Readiness labels the
+(`platform/hosted/gateway/deployment.yaml:85`). Readiness labels the
 component probe `core_agent_boundary`
-(`platform/hosted/gateway/src/main.rs:2805`). The gateway has no core
-URL of its own.
+(`platform/hosted/gateway/src/main.rs:2805`). Public JSON-RPC reads use
+`LAYERX_GATEWAY_PUBLIC_CORE_URL`; activity submission still uses the
+component URL.
 
 Program GET/simulate/error responses are wrapped in the agent envelope
 unless the request is a successful `POST` call or lifecycle mutation
@@ -232,8 +248,9 @@ Unknown `production_route` values are `404 not_found`
 | `LAYERX_GATEWAY_OUTBOUND_CA_DER` | Trust bundle for HTTPS and Redis |
 | `LAYERX_GATEWAY_CLIENT_IDENTITY_PKCS12` | Outbound client identity |
 | `LAYERX_GATEWAY_CLIENT_IDENTITY_PASSWORD_FILE` | PKCS#12 password |
+| `LAYERX_GATEWAY_PUBLIC_CORE_URL` | Optional public-core HTTPS origin for JSON-RPC reads and receipt-event waits (`platform/hosted/gateway/src/public_reads.rs:78-83`; `platform/hosted/gateway/deployment.yaml:78`) |
 | `LAYERX_GATEWAY_COMPONENT_URL` | Agent-boundary HTTPS origin |
-| `LAYERX_GATEWAY_COMPONENT_TOKEN_FILE` | Bearer to the agent boundary |
+| `LAYERX_GATEWAY_COMPONENT_TOKEN_FILE` | Bearer to the agent boundary and, when configured, to core receipt-event waits |
 | `LAYERX_GATEWAY_AUTHORITY_URL` | Receipt-authority HTTPS origin |
 | `LAYERX_GATEWAY_AUTHORITY_TOKEN_FILE` | Bearer to authority |
 | `LAYERX_GATEWAY_IDENTITY_URL` | Identity HTTPS origin |
@@ -526,7 +543,10 @@ cannot complete `/livez`
 `platform/hosted/gateway/tests/local/README.md:8-9`). The offline
 verifier requires protocol 3, module 9 version 4, operation 0, success,
 absent call outcome (`platform/hosted/gateway/tests/local/verifier.rs:24-34`;
-`platform/hosted/gateway/tests/local/README.md:40-41`).
+`platform/hosted/gateway/tests/local/README.md:40-41`). The same crate
+also covers `POST /rpc` and authenticated `GET /rpc/ws`. See
+[the local harness README](../../platform/hosted/gateway/tests/local/README.md)
+and [`openrpc.json`](../../platform/hosted/gateway/openrpc.json).
 
 `tests/load.js` issues a key with a Bearer session and submits the
 signed corpus to `POST /v1/activities`, requiring status 200 and a

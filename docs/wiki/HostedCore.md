@@ -36,7 +36,8 @@ The hosted testnet treats core as dependency `Core` and the admin listener as `C
 | `LAYERX_CORE_SUPERVISOR_SOCKET` | Unix socket for admin reset (`platform/hosted/core/src/main.rs:289`) |
 | `LAYERX_CORE_STATE_DIR` | Creates `journal/` mode `0o700` (`platform/hosted/core/src/main.rs:259-264`) |
 | `LAYERX_CORE_FEE_LIMIT` | SEND fee limit; default `1000` (`platform/hosted/core/src/main.rs:291`) |
-| `LAYERX_CORE_RECEIPT_DEADLINE_MS` | Receipt poll deadline; default `15000` (`platform/hosted/core/src/main.rs:292-295`) |
+| `LAYERX_CORE_RECEIPT_DEADLINE_MS` | Bounded receipt-wait deadline; default `15000` (`platform/hosted/core/src/main.rs:297-300`) |
+| `LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE` | Optional bearer for `GET /internal/v1/receipt-events/{sequence}`; must match the gateway component token (`platform/hosted/core/src/main.rs:284-286`; `platform/hosted/core/src/public_reads.rs:253-265`) |
 
 Secret files are read, trailing CR/LF stripped, and refused when empty or longer than 4096 bytes (`platform/hosted/core/src/main.rs:139-149`). Node and replica URLs must be plaintext `http://` on `127.0.0.1` or `localhost` with a port and no path (`platform/hosted/core/src/main.rs:212-232`).
 
@@ -44,7 +45,7 @@ Secret files are read, trailing CR/LF stripped, and refused when empty or longer
 
 ## Public routes
 
-Served on the core plane (`platform/hosted/core/src/main.rs:1158-1256`). Query strings are refused with `400 invalid_request` except on relay targets (`platform/hosted/core/src/main.rs:1180-1182`, `platform/hosted/core/src/main.rs:1173-1178`).
+Served on the core plane (`platform/hosted/core/src/main.rs:1189-1291`). Query strings are refused with `400 invalid_request` except on relay targets (`platform/hosted/core/src/main.rs:1215-1216`, `platform/hosted/core/src/main.rs:1170-1178`). Gateway JSON-RPC methods that consume these reads are documented on [Hosted gateway](HostedGateway.md).
 
 | Method | Path | Input | Success |
 | --- | --- | --- | --- |
@@ -58,7 +59,16 @@ Served on the core plane (`platform/hosted/core/src/main.rs:1158-1256`). Query s
 | `POST` | `/v1/programs/wind-down` | same as deploy | Programs ordinal `7` (`platform/hosted/core/src/program_lifecycle.rs:11`, `platform/hosted/core/src/main.rs:1194-1222`) |
 | `POST` | `/v1/programs/simulate` | octet-stream or JSON `{"activity":"<hex>"}` | simulation document; `committed` is `false` (`platform/hosted/core/src/main.rs:829-848`, `platform/hosted/core/src/main.rs:1228`, `platform/hosted/core/src/main.rs:804-826`) |
 | `GET` | `/v1/state` | none | wrapped relay of `/v1/protocol/account-state/head` (`platform/hosted/core/src/main.rs:1229-1238`) |
-| `GET` | `/v1/receipts/<hex>` | 32-byte lowercase hex activity id | `{"activity_id","receipt"}` (`platform/hosted/core/src/main.rs:895-915`, `platform/hosted/core/src/main.rs:1239-1240`) |
+| `GET` | `/v1/receipts/<hex>` | 32-byte lowercase hex activity id | `{"activity_id","receipt"}` (`platform/hosted/core/src/main.rs:926-929`, `platform/hosted/core/src/main.rs:1274-1275`) |
+| `GET` | `/v1/accounts/<hex>` or `/v1/accounts/<hex>/balance` | 32-byte hex account id | Verified account object including `next_sequence` (`platform/hosted/core/src/public_reads.rs:6-41`) |
+| `GET` | `/v1/node-info` | none | Handshake node information (`platform/hosted/core/src/public_reads.rs:117-131`) |
+| `GET` | `/v1/batches/<n>` | nonzero decimal batch number | Signed batch header (`platform/hosted/core/src/public_reads.rs:133-155`) |
+| `GET` | `/v1/checkpoints/<hex>` | nonzero 32-byte hex checkpoint id | Checkpoint evidence (`platform/hosted/core/src/public_reads.rs:156-172`) |
+| `GET` | `/v1/dids/<did>/sequence` | DID | Authenticated identity preparation snapshot (`platform/hosted/core/src/public_reads.rs:175-190`) |
+| `GET` | `/v1/dids/<did>/accounts` | DID | `503 did_account_listing_unavailable` (`platform/hosted/core/src/public_reads.rs:95-104`) |
+| `GET` | `/v1/proofs/<kind>/<id>` | `kind` `activity` or `receipt`; 32-byte hex id | Verified inclusion proof (`platform/hosted/core/src/public_reads.rs:193-251`) |
+| `GET` | `/v1/proofs/account/<activity>/<account>` | two 32-byte hex ids | Exact verified native proof bytes (`platform/hosted/core/src/public_reads.rs:77-84`) |
+| `GET` | `/internal/v1/receipt-events/<sequence>` | Bearer matching `LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE`; nonzero decimal sequence | Signed receipt or `202` pending (`platform/hosted/core/src/public_reads.rs:253-295`) |
 | `GET` | `/v1/programs/receipts/by-idempotency/<key>` | 64 lowercase hex chars | node lookup then sequencer-signature check (`platform/hosted/core/src/main.rs:918-971`, `platform/hosted/core/src/main.rs:1161-1168`) |
 | `GET` | `/v1/protocol/account-state/head` | optional query | node HTTP relay (`platform/hosted/core/src/main.rs:1139-1147`, `platform/hosted/core/src/main.rs:1092-1120`) |
 | `GET` | `/v1/programs/account-state/changes` | optional query | node HTTP relay (`platform/hosted/core/src/main.rs:1142-1143`) |
@@ -66,9 +76,9 @@ Served on the core plane (`platform/hosted/core/src/main.rs:1158-1256`). Query s
 | `GET` | `/v1/programs/<id>/account-state` | `id` 64 hex chars | node HTTP relay (`platform/hosted/core/src/main.rs:1144-1145`) |
 | `GET` | `/v1/batches/<id>/receipt-authority` | `id` 64 hex chars; query allowed | node HTTP relay (`platform/hosted/core/src/main.rs:1145`) |
 
-`POST` activity bodies that are empty or longer than `1_048_576` bytes are `400 invalid_argument` (`platform/hosted/core/src/main.rs:873-875`). Simulate uses bound `LNI_FRAME_BYTES` `1_212_416` (`platform/hosted/core/src/main.rs:46`, `platform/hosted/core/src/main.rs:843-845`). Wrong method on the named public paths is `405 method_not_allowed`; anything else is `404 not_found` (`platform/hosted/core/src/main.rs:1242-1255`). Deploy/upgrade/wind-down without `application/octet-stream` is `415 activity_content_type_required` (`platform/hosted/core/src/main.rs:1195-1200`, `platform/hosted/core/src/main.rs:854-858`).
+`POST` activity bodies that are empty or longer than `1_048_576` bytes are `400 invalid_argument` (`platform/hosted/core/src/main.rs:904-906`). Simulate uses bound `LNI_FRAME_BYTES` `1_212_416` (`platform/hosted/core/src/main.rs:48`, `platform/hosted/core/src/main.rs:843-845`). Wrong method on the named protocol paths is `405 method_not_allowed`; anything else is `404 not_found` (`platform/hosted/core/src/main.rs:1277-1290`). Deploy/upgrade/wind-down without `application/octet-stream` is `415 activity_content_type_required` (`platform/hosted/core/src/main.rs:1230-1234`, `platform/hosted/core/src/main.rs:886-890`).
 
-`unavailable_capability` lists `/v1/programs/receipts/by-idempotency/` as a 503 path (`platform/hosted/core/src/main.rs:1150-1156`, `platform/hosted/core/src/main.rs:1170-1171`). `core_route` matches that prefix first and serves `GET` (`platform/hosted/core/src/main.rs:1161-1168`). Those two facts stand together.
+`unavailable_capability` lists `/v1/programs/receipts/by-idempotency/` as a 503 path (`platform/hosted/core/src/main.rs:1150-1156`, `platform/hosted/core/src/main.rs:1170-1171`). `core_route` tries `public_reads::route` first, then the protocol routes (`platform/hosted/core/src/main.rs:1189-1190`). Exact path `/v1/accounts` without an id remains the 503 capability refusal below. `core_route` still matches the idempotency-receipt prefix and serves `GET` (`platform/hosted/core/src/main.rs:1196-1203`). Those two facts stand together.
 
 ---
 
@@ -91,24 +101,24 @@ Missing bearer is `401 unauthorized` (`platform/hosted/core/src/main.rs:1655-165
 
 The client connects to `LAYERX_CORE_LNI_SOCKET` with interface `Version::V1_4`, protocol `STATE_COMMITMENT_PROTOCOL_VERSION`, and the configured network id (`platform/hosted/core/src/main.rs:482-502`). Frame limit is `1_212_416` bytes, deadline 5s, reconnect attempts 1 (`platform/hosted/core/src/main.rs:472-479`, `platform/hosted/core/src/main.rs:494-499`). Connection failure is `503 node_unavailable` with `retry_after_seconds` 5 (`platform/hosted/core/src/main.rs:692-695`).
 
-`submit_activity` decodes the signed envelope against a registry of Asset SEND (ordinal 5) and Programs ordinals 1, 2, 3, 7 (`platform/hosted/core/src/main.rs:649-662`, `platform/hosted/core/src/main.rs:664-672`, `platform/hosted/core/src/lib.rs:19-20`). Decode failure is `400 invalid_activity`. A program route that does not match module, ordinal, and protocol 3 is `400 program_route_mismatch` (`platform/hosted/core/src/main.rs:673-679`). Ordinal 3 must decode as `NativeProgramCall` (`400 invalid_program_call`); other program ordinals run `program_lifecycle::validate` (`400 invalid_program_lifecycle`) (`platform/hosted/core/src/main.rs:681-688`, `platform/hosted/core/src/program_lifecycle.rs:45-66`). Authority must be a 32-byte key or 33-byte key with prefix `1` (`platform/hosted/core/src/main.rs:641-646`, `platform/hosted/core/src/main.rs:690-691`).
+`submit_activity` decodes the signed envelope against a registry of Asset SEND (ordinal 5) and Programs ordinals 1, 2, 3, 5, 6, 7 (`platform/hosted/core/src/main.rs:677-690`, `platform/hosted/core/src/lib.rs:19-20`). Decode failure is `400 invalid_activity`. A program route that does not match module, ordinal, and protocol 3 is `400 program_route_mismatch` (`platform/hosted/core/src/main.rs:701-708`). Ordinal 3 must decode as `NativeProgramCall` (`400 invalid_program_call`); ordinals 5 and 6 run `program_accounts::validate` (`400 invalid_program_account_operation`); other program ordinals run `program_lifecycle::validate` (`400 invalid_program_lifecycle`) (`platform/hosted/core/src/main.rs:709-719`, `platform/hosted/core/src/program_accounts.rs:1-26`, `platform/hosted/core/src/program_lifecycle.rs:45-66`). Authority must be a 32-byte key or 33-byte key with prefix `1` (`platform/hosted/core/src/main.rs:669-675`, `platform/hosted/core/src/main.rs:721-723`).
 
-Submit is `client.submit_signed` (`platform/hosted/core/src/main.rs:696-709`):
+Submit is `client.submit_signed` (`platform/hosted/core/src/main.rs:727-740`):
 
 | `SubmitError` | HTTP |
 | --- | --- |
-| `CoreRefusal` | `422 submission_refused` (`platform/hosted/core/src/main.rs:699-704`) |
-| `UnavailableCapability` | `503 capability_unavailable` retry 30 (`platform/hosted/core/src/main.rs:706`) |
-| `Disconnected` | `503 node_unavailable` retry 5 (`platform/hosted/core/src/main.rs:707`) |
-| any other | `400 invalid_activity` (`platform/hosted/core/src/main.rs:708`) |
+| `CoreRefusal` | `422 submission_refused` (`platform/hosted/core/src/main.rs:730-736`) |
+| `UnavailableCapability` | `503 capability_unavailable` retry 30 (`platform/hosted/core/src/main.rs:737`) |
+| `Disconnected` | `503 node_unavailable` retry 5 (`platform/hosted/core/src/main.rs:738`) |
+| any other | `400 invalid_activity` (`platform/hosted/core/src/main.rs:739`) |
 
-The activity id comes from `Submission::Acknowledged` or `Submission::Unknown` (`platform/hosted/core/src/main.rs:711-714`). The boundary then polls receipt lookup until `LAYERX_CORE_RECEIPT_DEADLINE_MS`. A verified receipt is `200` with `state` `completed` or `refused`. Timeout is `202` with `state` `pending`. Lookup error is `503 receipt_unavailable` retry 5 (`platform/hosted/core/src/main.rs:715-738`). Program ordinals 1, 2, and 7 return `terminal_payload` and `call_graph` as empty strings (`platform/hosted/core/src/main.rs:717-722`).
+The activity id comes from `Submission::Acknowledged` or `Submission::Unknown` (`platform/hosted/core/src/main.rs:742-745`). The boundary then waits on LNI receipt lookup, appending `wait_ms:u32be` bounded at 3000 ms per attempt, until `LAYERX_CORE_RECEIPT_DEADLINE_MS`. A verified receipt is `200` with `state` `completed` or `refused`. Timeout is `202` with `state` `pending`. Lookup error is `503 receipt_unavailable` retry 5 (`platform/hosted/core/src/main.rs:622-654`, `platform/hosted/core/src/main.rs:746-770`). Program ordinals 1, 2, and 7 return `terminal_payload` and `call_graph` as empty strings (`platform/hosted/core/src/main.rs:748-753`).
 
 ---
 
 ## Receipt fact lookup
 
-Raw LNI uses message tag `5` for the request, `6` for the response, `25` for error (`platform/hosted/core/src/main.rs:50-52`, `platform/hosted/core/src/main.rs:514-560`). Missing `Capability::ReceiptLookup` is an error string that becomes `503 node_unavailable` on the HTTP receipt route (`platform/hosted/core/src/main.rs:520-521`, `platform/hosted/core/src/main.rs:911-913`). Selector is byte `1` plus the 32-byte activity id (`platform/hosted/core/src/main.rs:523-525`). Empty payload is "not found"; HTTP maps that to `404 not_found` (`platform/hosted/core/src/main.rs:557-558`, `platform/hosted/core/src/main.rs:910`). Uppercase hex in the path is `400 invalid_argument` (`platform/hosted/core/src/main.rs:896-901`).
+Raw LNI uses message tag `5` for the request, `6` for the response, `25` for error (`platform/hosted/core/src/main.rs:51-53`, `platform/hosted/core/src/main.rs:532-580`). Missing `Capability::ReceiptLookup` is an error string that becomes `503 node_unavailable` on the HTTP receipt route (`platform/hosted/core/src/main.rs:539-540`). Selector is byte `1` plus the 32-byte activity id, optionally followed by `wait_ms:u32be` when the wait is nonzero (`platform/hosted/core/src/main.rs:526-544`). Global-sequence waits used by receipt events are byte `3` plus `u64be` sequence plus the same optional wait suffix (`platform/hosted/core/src/public_reads.rs:282-284`). Empty payload is "not found"; HTTP maps that to `404 not_found` on the activity receipt route (`platform/hosted/core/src/main.rs:576-577`). The daemon accepts the wait suffix only when the selector length is 37 or 13 and refuses `wait_ms` above 30000 (`cmd/layerxd/lxp_daemon_lni.c:2072-2078`). See [LNI v1](../../agent/schema/lni/README.md).
 
 `receipt_facts` decodes a protocol receipt. Module 9 operation 0 uses `program_lifecycle::verify_receipt`; every other receipt uses `verify_outcome` (`platform/hosted/core/src/main.rs:563-600`, `platform/hosted/core/src/program_lifecycle.rs:69-94`). The HTTP receipt route returns hex of the raw lookup bytes without that verification (`platform/hosted/core/src/main.rs:906-909`).
 
@@ -150,7 +160,7 @@ Activity-id mismatch, sequencer-signature failure, or missing protocol receipt i
 
 Relay GETs the node with `Authorization: Bearer` from `LAYERX_CORE_NODE_BEARER_TOKEN_FILE` (`platform/hosted/core/src/main.rs:1080-1089`). HTTP `200`, `404`, and `503` JSON bodies are returned as-is; any other node status or non-JSON body is `503 node_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1098-1119`). `/v1/state` wraps a `200` body in the `{ok,result,trace}` envelope (`platform/hosted/core/src/main.rs:1123-1132`).
 
-These paths are not relayed. They return `503 capability_unavailable` with `retry_after_seconds` 3600 (`platform/hosted/core/src/main.rs:1150-1156`, `platform/hosted/core/src/main.rs:1170-1171`):
+These paths are not relayed. They return `503 capability_unavailable` with `retry_after_seconds` 3600 (`platform/hosted/core/src/main.rs:1181-1187`, `platform/hosted/core/src/main.rs:1205-1206`). Exact `/v1/accounts` (no account id) is in this set; `GET /v1/accounts/{id}` is the public account read above.
 
 | Path |
 | --- |

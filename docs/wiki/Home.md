@@ -68,7 +68,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Programs workspace gates](ProgramsWorkspace.md)
 - [Porting](Porting.md)
 - [Beta cluster](BetaCluster.md)
-- [Hosted gateway](HostedGateway.md)
+- [Hosted gateway](HostedGateway.md) (includes public JSON-RPC `POST /rpc` and `GET /rpc/ws`)
 - [Hosted webhooks](HostedWebhooks.md)
 - [Hosted registry](HostedRegistry.md)
 - [Hosted internal](HostedInternal.md)
