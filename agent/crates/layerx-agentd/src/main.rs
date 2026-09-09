@@ -32,6 +32,7 @@ use layerx_programs::{
 };
 
 mod human_owner_mode;
+mod human_peer_config;
 
 const HEADER_LIMIT: usize = 16 * 1024;
 
@@ -89,24 +90,8 @@ fn parse_hex<const N: usize>(name: &str) -> Result<[u8; N], String> {
 }
 
 fn human_peers() -> Result<BTreeMap<u32, (String, String)>, String> {
-    let mut peers = BTreeMap::new();
-    for entry in required("LAYERX_AGENT_HUMAN_PEERS")?.split(',') {
-        let fields = entry.splitn(3, ':').collect::<Vec<_>>();
-        if fields.len() != 3 || fields[1].is_empty() || fields[2].is_empty() {
-            return Err("human peer map is invalid".to_owned());
-        }
-        let uid = fields[0].parse().map_err(|_| "human peer uid is invalid")?;
-        if peers
-            .insert(uid, (fields[1].to_owned(), fields[2].to_owned()))
-            .is_some()
-        {
-            return Err("human peer uid is duplicated".to_owned());
-        }
-    }
-    if peers.is_empty() {
-        return Err("human peer map is empty".to_owned());
-    }
-    Ok(peers)
+    human_peer_config::parse(&required("LAYERX_AGENT_HUMAN_PEERS")?)
+        .map_err(|error| error.to_string())
 }
 
 fn verified_limit() -> Result<LimitConfig, String> {
