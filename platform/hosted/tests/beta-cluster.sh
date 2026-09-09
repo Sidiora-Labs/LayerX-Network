@@ -1560,6 +1560,8 @@ env_write() {
         printf 'export LAYERX_PAXEER_DEPLOYMENT_RECORD=%s\n' "$WORK_DIR/paxeer/deployment.json"
         printf 'export KUBECONFIG=%s\n' "$KUBECONFIG_FILE"
     } >> "$ENV_FILE"
+    [ -s "$WORK_DIR/human-owner.env" ] || fail "human-owner.env missing after native owner production"
+    cat "$WORK_DIR/human-owner.env" >> "$ENV_FILE"
     qualification_url LAYERX_QUALIFICATION_NODE_URL LAYERX_BETA_QUALIFICATION_NODE_URL "$NODE_URL" \
         "beta_driver.py --node-url: the core boundary Service layerx-pending-core (node readiness, state and receipts)"
     qualification_url LAYERX_QUALIFICATION_AGENT_URL LAYERX_BETA_QUALIFICATION_AGENT_URL "" \

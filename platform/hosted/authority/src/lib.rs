@@ -402,12 +402,112 @@ pub fn authorized_batch_by_activity(
     })
 }
 
+fn verify_native_owner_receipt(
+    bytes: &[u8],
+    authorised: &AuthorizedBatch,
+) -> Result<(), EvidenceRefusal> {
+    let refused = |check| EvidenceRefusal::Receipt(check);
+    let receipt =
+        layerx_proof::receipt::verify_sequencer_signature(bytes, authorised.sequencer_public_key())
+            .map_err(|failure| refused(failure.check))?;
+    let protocol = receipt.protocol().ok_or(EvidenceRefusal::ReceiptShape)?;
+    if protocol.protocol_version() != 3
+        || protocol.module_version() != 1
+        || !matches!(protocol.module_id(), 7 | 8)
+        || protocol.operation() != 0
+        || protocol.program_outcome().is_some()
+    {
+        return Err(refused(ReceiptCheck::Module));
+    }
+    if protocol.batch_id() != authorised.batch_id() {
+        return Err(refused(ReceiptCheck::BatchId));
+    }
+    if protocol.previous_state_root() != authorised.previous_state_root() {
+        return Err(refused(ReceiptCheck::PreviousStateRoot));
+    }
+    if protocol.resulting_state_root() != authorised.resulting_state_root() {
+        return Err(refused(ReceiptCheck::ResultingStateRoot));
+    }
+    if protocol.result_code() != 0 {
+        if !protocol.effects().is_empty() {
+            return Err(refused(ReceiptCheck::ReceiptShape));
+        }
+        return Ok(());
+    }
+    if protocol.module_id() == 7 {
+        let states: Vec<_> = protocol
+            .effects()
+            .iter()
+            .filter(|effect| effect.module_id() == 7 && effect.event_type() == 0x7110)
+            .collect();
+        if states.len() != 1
+            || states[0].monetary()
+            || states[0].body().len() != 223
+            || &states[0].body()[..5] != b"LXGI1"
+            || states[0].body()[215..223] != protocol.global_sequence().to_be_bytes()
+            || protocol
+                .effects()
+                .iter()
+                .any(layerx_wire::receipt::Effect::monetary)
+        {
+            return Err(refused(ReceiptCheck::ReceiptShape));
+        }
+    } else {
+        let effects = protocol.effects();
+        if effects.len() != 3
+            || effects.iter().any(|effect| effect.module_id() != 8)
+            || !effects[0].monetary()
+            || effects[0].kind() != 2
+            || effects[0].transfer_set_root() == [0; 32]
+            || effects[1].monetary()
+            || effects[1].event_type() != 1
+            || effects[1].body().len() != 208
+            || effects[2].monetary()
+            || effects[2].event_type() != 2
+            || effects[2].body().len() != 112
+        {
+            return Err(refused(ReceiptCheck::ReceiptShape));
+        }
+        let credit = effects[1].body();
+        let balances = effects[2].body();
+        let number = |bytes: &[u8]| -> Result<u128, EvidenceRefusal> {
+            Ok(u128::from_be_bytes(
+                bytes
+                    .try_into()
+                    .map_err(|_| refused(ReceiptCheck::ReceiptShape))?,
+            ))
+        };
+        let amount = number(&credit[96..112])?;
+        if amount == 0
+            || number(&credit[176..192])?.checked_add(amount) != Some(number(&credit[192..208])?)
+            || balances[32..48] != balances[48..64]
+            || number(&balances[64..80])?.checked_add(amount) != Some(number(&balances[80..96])?)
+        {
+            return Err(refused(ReceiptCheck::CreditBalance));
+        }
+        let sequence = |bytes: &[u8]| -> Result<u64, EvidenceRefusal> {
+            Ok(u64::from_be_bytes(
+                bytes
+                    .try_into()
+                    .map_err(|_| refused(ReceiptCheck::ReceiptShape))?,
+            ))
+        };
+        if sequence(&balances[96..104])?.checked_add(1) != Some(sequence(&balances[104..112])?) {
+            return Err(EvidenceRefusal::SequenceRange);
+        }
+    }
+    Ok(())
+}
+
 fn verify_authorized_receipt(
     receipt_bytes: &[u8],
     authorised: &AuthorizedBatch,
 ) -> Result<(), EvidenceRefusal> {
     let receipt = decode(receipt_bytes).map_err(|_| EvidenceRefusal::ReceiptDecode)?;
     let protocol = receipt.protocol().ok_or(EvidenceRefusal::ReceiptShape)?;
+    if matches!(protocol.module_id(), 7 | 8) && protocol.operation() == 0 {
+        return verify_native_owner_receipt(receipt_bytes, authorised);
+    }
     if protocol.module_id() == 9 && protocol.operation() == 0 {
         if protocol.program_outcome().is_some() {
             return Err(EvidenceRefusal::Receipt(ReceiptCheck::ReceiptShape));
@@ -435,6 +535,20 @@ fn verify_maintained_receipt(
     };
     let receipt = decode(receipt_bytes).map_err(|_| EvidenceRefusal::ReceiptDecode)?;
     let protocol = receipt.protocol().ok_or(EvidenceRefusal::ReceiptShape)?;
+    if matches!(protocol.module_id(), 7 | 8) && protocol.operation() == 0 {
+        let batch = layerx_proof::receipt::authorized_maintained_activity_batch(
+            receipt_bytes,
+            authorised,
+            evidence,
+        )
+        .map_err(|failure| match failure {
+            MaintainedOutcomeFailure::Inclusion(error) => EvidenceRefusal::Inclusion(error),
+            MaintainedOutcomeFailure::MaintenanceEncoding => EvidenceRefusal::EvidenceEncoding,
+            MaintainedOutcomeFailure::SequenceRange => EvidenceRefusal::SequenceRange,
+            MaintainedOutcomeFailure::Receipt(check) => EvidenceRefusal::Receipt(check),
+        })?;
+        return verify_native_owner_receipt(receipt_bytes, &batch);
+    }
     let verified = if protocol.module_id() == 9 && protocol.operation() == 0 {
         if protocol.program_outcome().is_some() {
             return Err(EvidenceRefusal::Receipt(ReceiptCheck::ReceiptShape));
