@@ -53,6 +53,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../../.." && pwd)
+source "$REPO_ROOT/platform/hosted/human/provision.sh"
 WORK_DIR="$REPO_ROOT/build/beta-cluster"
 TOOLS_DIR="$REPO_ROOT/build/bin"
 CA_DIR="$WORK_DIR/ca"
@@ -1277,17 +1278,25 @@ identity_request() {
 }
 
 identity_provision() {
-    local dir="$WORK_DIR/identity" status
+    local dir="$WORK_DIR/identity" status tenant="${LAYERX_BETA_HUMAN_TENANT:-beta}"
+    local provision="$REPO_ROOT/platform/hosted/human/provision.py"
+    umask 077
     mkdir -p "$dir"
     chmod 0700 "$dir"
-    jq -n --arg sub "$TEST_SOURCE_DID" --arg key "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")" \
-        '{sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/source-principal.json"
+    jq -n --arg tenant "$tenant" --arg sub "$TEST_SOURCE_DID" --arg key "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")" \
+        '{tenant: $tenant, sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/source-principal.json"
     status=$(identity_request POST /v1/principals "$dir/source-principal.json" "$dir/source-principal.response.json")
     [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke source principal with status $status: $(cat "$dir/source-principal.response.json")"
-    jq -n --arg sub "$TEST_DESTINATION_DID" --arg key "$(cat "$SECRETS_DIR/test-destination-signer.pub.hex")" \
-        '{sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/destination-principal.json"
+    jq -n --arg tenant "$tenant" --arg sub "$TEST_DESTINATION_DID" --arg key "$(cat "$SECRETS_DIR/test-destination-signer.pub.hex")" \
+        '{tenant: $tenant, sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/destination-principal.json"
     status=$(identity_request POST /v1/principals "$dir/destination-principal.json" "$dir/destination-principal.response.json")
     [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke destination principal with status $status: $(cat "$dir/destination-principal.response.json")"
+    python3 "$provision" --preserve-binding --work-dir "$WORK_DIR" \
+        --request "$dir/source-principal.json" --response "$dir/source-principal.response.json" \
+        --output "$dir/source-binding.json"
+    python3 "$provision" --preserve-binding --work-dir "$WORK_DIR" \
+        --request "$dir/destination-principal.json" --response "$dir/destination-principal.response.json" \
+        --output "$dir/destination-binding.json"
     if [ "$TEST_AUTH_SOURCE" = identity-provisioning ]; then
         jq -n --arg sub "$TEST_SOURCE_DID" '{sub: $sub}' > "$dir/source-session.json"
         (umask 077; : > "$dir/source-session.response.json")
@@ -1664,9 +1673,7 @@ beta_cluster_up() {
     else
         paxeer_contracts_deploy
         settlement_publish
-        human_policy_publish
     fi
-    kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-identity 300
     port_forward identity "$TESTNET_NAMESPACE" layerx-identity "$IDENTITY_PORT" 9443
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then identity_provision; fi
@@ -1677,9 +1684,12 @@ beta_cluster_up() {
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-gateway 600
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then
         internal_principals_provision
+        human_evidence_provision
+        human_policy_publish
     else
         retained_principals_apply
     fi
+    kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
     internal_apply
     port_forward human "$TESTNET_NAMESPACE" layerx-human 19453 9443
     port_forward developer "$DEVELOPER_NAMESPACE" layerx-webhooks 19450 443

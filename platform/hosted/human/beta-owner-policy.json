@@ -1,0 +1,20 @@
+{
+  "core-clock-horizon": 60,
+  "maximum_age_seconds": 60,
+  "maximum_age_sequences": 100,
+  "limit": {
+    "scope": "agent",
+    "scope_id_source": "owner_account",
+    "id": "ef060d2533e9bcc511e5583aa2802ee44baa120fc7de7b03a55bce6b02cf8b71",
+    "name": "beta-owner",
+    "ceiling": 1000
+  },
+  "activities_source": "owner-registration",
+  "budgets": [],
+  "movement": {
+    "PAXEER_CONFIRMATIONS": 12,
+    "CHECKPOINT_INTERVAL_SECONDS": 60,
+    "PAXEER_BLOCK_SECONDS": 2,
+    "REMINDER_INTERVAL_SECONDS": 300
+  }
+}

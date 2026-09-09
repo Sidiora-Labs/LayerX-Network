@@ -492,3 +492,124 @@ fn missing_committed_snapshot_does_not_reinitialize_an_established_directory() -
     assert!(!root.join("state.json").exists());
     Ok(())
 }
+
+fn provision_cli(root: &Path, policy_file: &Path, input: &[u8]) -> Result<std::process::Output> {
+    let mut child = OwnedChild(
+        std::process::Command::new(env!("CARGO_BIN_EXE_layerx-human-identity-provider"))
+            .arg("provision-owner")
+            .env("LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT", root)
+            .env(
+                "LAYERX_HUMAN_IDENTITY_PROVIDER_RECOVERY_POLICY_FILE",
+                policy_file,
+            )
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?,
+    );
+    child
+        .0
+        .stdin
+        .take()
+        .ok_or("stdin missing")?
+        .write_all(input)?;
+    let mut stdout = Vec::new();
+    child
+        .0
+        .stdout
+        .take()
+        .ok_or("stdout missing")?
+        .read_to_end(&mut stdout)?;
+    let mut stderr = Vec::new();
+    child
+        .0
+        .stderr
+        .take()
+        .ok_or("stderr missing")?
+        .read_to_end(&mut stderr)?;
+    Ok(std::process::Output {
+        status: child.0.wait()?,
+        stdout,
+        stderr,
+    })
+}
+
+#[test]
+fn provision_owner_cli_matches_wire_and_refuses_unsafe_inputs() -> Result {
+    let directory = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()?;
+    let root = directory.path().join("state");
+    let policy_file = directory.path().join("policy.json");
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&policy_file)?
+        .write_all(&serde_json::to_vec(&policy())?)?;
+    let input = br#"{"email":"owner@example.com","display_name":"Owner","idempotency_key":"owner-bootstrap","now":123}"#;
+    let first = provision_cli(&root, &policy_file, input)?;
+    assert!(first.status.success());
+    let owner: serde_json::Value = serde_json::from_slice(&first.stdout)?;
+    assert_eq!(owner.as_object().ok_or("object missing")?.len(), 5);
+    assert_eq!(
+        provision_cli(&root, &policy_file, input)?.stdout,
+        first.stdout
+    );
+    let socket = directory.path().join("identity.sock");
+    let running = Running::start(&socket, &root, rustix::process::geteuid().as_raw())?;
+    let fields = call(
+        &socket,
+        1,
+        &[
+            b"owner@example.com",
+            b"Owner",
+            b"owner-bootstrap",
+            &123_u64.to_be_bytes(),
+        ],
+    )?;
+    assert_eq!(owner["principal"], std::str::from_utf8(&fields[0])?);
+    assert_eq!(owner["did"], std::str::from_utf8(&fields[1])?);
+    assert_eq!(owner["recovery_root"], serde_json::to_value(&fields[2])?);
+    assert_eq!(
+        owner["recovery_threshold"],
+        u16::from_be_bytes(fields[3].as_slice().try_into()?)
+    );
+    assert_eq!(
+        owner["recovery_delay_seconds"],
+        u64::from_be_bytes(fields[4].as_slice().try_into()?)
+    );
+    let locked = provision_cli(&root, &policy_file, input)?;
+    assert!(!locked.status.success());
+    assert!(locked.stdout.is_empty());
+    running.stop()?;
+    let original = fs::read(root.join("state.json"))?;
+    for bad in [
+        b"{}".to_vec(),
+        [input.as_slice(), b" trailing"].concat(),
+        vec![b' '; 16_385],
+        String::from_utf8(input.to_vec())?
+            .replace("Owner", "Different")
+            .into_bytes(),
+        String::from_utf8(input.to_vec())?
+            .replace("123", "-1")
+            .into_bytes(),
+        String::from_utf8(input.to_vec())?
+            .replace("123}", "123,\"extra\":true}")
+            .into_bytes(),
+    ] {
+        let refused = provision_cli(&root, &policy_file, &bad)?;
+        assert!(!refused.status.success());
+        assert!(refused.stdout.is_empty());
+        assert_eq!(fs::read(root.join("state.json"))?, original);
+    }
+    fs::set_permissions(&policy_file, fs::Permissions::from_mode(0o640))?;
+    assert!(!provision_cli(&root, &policy_file, input)?.status.success());
+    fs::set_permissions(&policy_file, fs::Permissions::from_mode(0o600))?;
+    fs::hard_link(&policy_file, directory.path().join("policy-link"))?;
+    assert!(!provision_cli(&root, &policy_file, input)?.status.success());
+    fs::remove_file(directory.path().join("policy-link"))?;
+    fs::remove_file(&policy_file)?;
+    assert!(!provision_cli(&root, &policy_file, input)?.status.success());
+    Ok(())
+}

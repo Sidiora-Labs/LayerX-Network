@@ -5908,3 +5908,87 @@ file = "platform/hosted/human/material.py platform/hosted/human/README.md"
 symbol = "HUMAN_PEERS"
 observed = "The material generator requires exactly one ordered uid=4020;tenant=<tenant>;principal=<principal> binding, validates tenant syntax and DID syntax and byte bounds, and preserves authority equality, principal policy uniqueness and existing material refusals. Python unittest discovery passes all four hosted Human tests. The real-file subprocess peer harness passes acceptance, malformed input refusal and policy binding refusal groups. Shell syntax, topology, retained-material refusal and ledger checks pass; evidence is under qual-logs/hm6f. Positional peer strings remain only in preserved Rust rejection tests, not hosted producers or documentation. This resolves the assembler incompatibility recorded in observation.6.8.84."
 assumption = "The untracked subprocess harness qualifies material parsing and file packaging only, not downstream journal semantics or complete Human policy validity. Image execution, full render and live cluster gates remain unrun because Docker, kubectl, kind and a live cluster are unavailable. Missing Human evidence producers and live readiness remain outside this repair."
+file = "human/crates/layerx-human-identity-provider/src/state.rs human/crates/layerx-human-security-provider/src/state.rs platform/hosted/tests/beta-cluster.sh platform/hosted/authority/README.md platform/hosted/registry/src/routes.rs"
+symbol = "account_fields provision RecoveryReceipt::verify ingest_recovery_receipt secrets_generate internal_principals_provision deployment_proof_unavailable"
+observed = "LXIP operation 1 returns only principal, DID, recovery root, threshold and delay; it produces no protocol owner account, authority reference, capabilities or receipt-backed identity and key policies. Recovery ingest verifies canonical receipt encoding and signed historical inclusion but contains no operator Ed25519 key-set commitment derivation to reuse. human_secrets_generate executes before contracts and identity/gateway provisioning; human_policy_publish also precedes identity provisioning. Gateway key responses and identity session responses are deleted. Registry ingress refuses deployment_proof_unavailable and produces no admission/deployment journal. The authority executable has no configuration-validation mode."
+assumption = "Complete Human evidence provisioning requires real owner-account and authority registration outputs, receipt-backed principal policies, a canonical recovery commitment verifier, preserved non-secret tenant/principal bindings, corrected bootstrap ordering and real registry journal pairs. CLI-only provider changes and a single call before human_secrets_generate cannot establish these missing facts. No commitment algorithm, authority identifier, receipt or journal is fabricated. Retained-network consumed limits and checkpoint-authority Secret publication require upstream evidence; cluster and image gates are unavailable on the build host."
+
+[observation.6.8.83]
+task = "6.8"
+severity = "blocker"
+file = "human/crates/layerx-human-identity-provider/tests/client.rs human/crates/layerx-human-service/src/server/identity_dispatch.rs"
+symbol = "RemoteIdentityProvider resolve_email device_for_assertion"
+observed = "The locked all-targets Clippy and locked test commands for the identity and security provider packages exit 101 because the unchanged identity-provider client integration test calls resolve_email and device_for_assertion, which are absent from RemoteIdentityProvider. Compiler E0599 points to client.rs lines 100, 105, 107, 120 and 128. Logs are qual-logs/hm9/clippy.log and qual-logs/hm9/test.log. The locked provider binary build and format check pass; python3 platform/hosted/human/test_material.py and make beta-ledger-check exit zero."
+assumption = "The incompatible client test and service interface require reconciliation outside new provisioning CLI scope. Neither side is weakened or modified. Focused CLI qualification does not replace the failed aggregate gates or prove a complete Human evidence set."
+
+[observation.6.8.84]
+task = "6.8"
+severity = "note"
+file = "human/crates/layerx-human-identity-provider/tests/client.rs human/crates/layerx-human-service/src/server/identity_dispatch.rs"
+symbol = "RemoteIdentityProvider::call DirectoryRead"
+observed = "The client integration test now uses the current authenticated LXIP transport for directory operations 2 and 3, with every original assertion retained. The shared transport is crate-visible so the source-included integration test exercises the actual implementation. Locked all-targets Clippy and locked tests for layerx-human-identity-provider, layerx-human-security-provider and layerx-human-service pass; formatting check and the locked provider binary build pass. Logs: qual-logs/hm9/hm9c-clippy.log, hm9c-test.log, hm9c-fmt-check.log and hm9c-build.log. This resolves the E0599 qualification failure recorded in observation 6.8.83."
+assumption = "Passing these package gates qualifies the client-interface reconciliation and existing provision-owner path only; it does not prove cluster execution or a complete Human evidence set."
+
+[observation.6.8.85]
+task = "6.8"
+severity = "blocker"
+file = "human/crates/layerx-human-service/src/agents/create.rs platform/hosted/gateway/src/main.rs platform/hosted/identity/src/main.rs platform/hosted/tests/beta-cluster.sh"
+symbol = "PurposePresetCatalog::validate issue_key create_principal internal_principals_provision"
+observed = "PurposePresetCatalog::validate rejects preset.counterparties.is_empty(), while the required beta catalog has no counterparties. The gateway issue_key response contains id, secret, authorization_scheme, signer_public_key, scopes and quotas but no tenant or principal. The identity create_principal response contains sub, allowed_signer_public_keys, account and audiences but no tenant. Preserving these responses cannot by itself produce the required authoritative tenant/principal pair. No counterparty identifier, tenant mapping, state proof or journal pair was invented. The parser assertion and producer interfaces remain unchanged."
+assumption = "The catalog contract and consumer must be reconciled without weakening existing checks, and a real scoped tenant binding must be supplied before full evidence provisioning can qualify. The registry journal and layerx-guarantor-checkpoint-authority Secret remain external inputs. Cluster, image and Kubernetes Job execution gates cannot run on this host."
+
+[observation.6.8.86]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/human/provision.py platform/hosted/human/test_provision.py platform/hosted/human/README.md"
+symbol = "owner_registration protected_json identity"
+observed = "The owner-registration input contract is implemented at human-evidence-input/owner-registration.json with protected-file checks, duplicate-field refusal, complete nested identity schema validation and optional activity and LXIP DID binding checks. It preserves the producer authority text; the current AuthorityRef constructor specifies only nonempty text, not a separate canonical encoding. Python compilation and four input refusal tests pass, including a real provision-owner binary invocation, durable replay and refusal to treat LXIP output as protocol registration. Logs: qual-logs/hm9/hm9c-pycompile.log and hm9c-provision-test.log. Existing material tests pass in qual-logs/hm9/hm9c-material-test.log."
+assumption = "The authority has no standalone configuration-validation command; this parser mirrors the documented schema and enforces lowercase H32 text and control-character refusal. It does not verify protocol receipts or claim a generated evidence set. Positive registration integration awaits the real producer input. Recovery values must come unchanged from LXIP provision-owner; no operator recovery-key commitment derivation is required."
+
+[observation.6.8.87]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/identity/src/main.rs platform/hosted/node/bootstrap.sh platform/hosted/paxeer/deploy-contracts.sh"
+symbol = "identity_provision PrincipalRequest TREASURY_ACCOUNT write_record"
+observed = "PrincipalRequest uses deny_unknown_fields and accepts sub, allowed_signer_public_keys, account and audiences, but no tenant. identity_provision sends no tenant, so preserving request and response cannot establish the required binding. bootstrap.sh writes treasury.json account as agent:did:layerx:<public-key>:main with mode 0644; the catalog requires H32 bytes and no protected exported H32 treasury or faucet account output is produced by beta-cluster.sh. The deployment record contains contract addresses, genesis, input and guarantors but no custody_reference field. These inputs are refused rather than converted or invented."
+assumption = "Tenant provenance, protected protocol account exports and the custody-reference producer must be reconciled before complete Human evidence generation. The account-state head route is implemented in the agent/core boundary, not the receipt-authority service; consumed-limit initialization requires the real authenticated head and its verified first-batch semantics. Owner registration, established initial recovery policy and Programs journal remain required upstream inputs."
+
+[observation.6.8.88]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/human/provision.py platform/hosted/human/provision.sh platform/hosted/human/provision-owner-job.yaml platform/hosted/human/test_provision.py"
+symbol = "purpose_catalog preserve_binding owner_result human_owner_provision"
+observed = "Protected catalog generation, tenant request/response binding validation and a standalone owner-provisioning Job driver are implemented. The Job uses the runtime identity PVC subPath and state-root environment, refuses enabled Human containers, disables retries and validates the single-line LXIP result against its established recovery policy. Eight Python tests pass, including real provider result validation and replay, recovery mismatch refusal, protected-file refusals and runtime/Job mount comparison. Format check, locked provider build, locked all-targets Clippy and locked tests including layerx-human-service, Python compilation, material tests, shell syntax and beta-ledger-check pass. Exact commands and exit codes are in qual-logs/hm9/hm9d-gates.json; logs are qual-logs/hm9/hm9d-*.log."
+assumption = "This is partial local qualification. No Kubernetes Job, image, cluster or generated-catalog Rust loadability gate ran. The Job is not wired into bring-up, no complete evidence assembler or atomic full-set publisher is implemented, and no full Human evidence set was produced. The producer conflicts in observation 6.8.87 remain unresolved; existing consumer assertions are unchanged."
+
+[observation.6.8.89]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/human/provision.py platform/hosted/human/material.py platform/hosted/paxeer/deploy-contracts.sh contracts/custody/LayerXVault.sol human/crates/layerx-paxeer-client/src/deposit.rs"
+symbol = "movement_source registerDepositRoot DepositRootRegistration"
+observed = "The movement configuration consumer reads LAYERX_HUMAN_MOVEMENT_PROVIDER_CUSTODY_REFERENCE, but its cluster file is written only by material.py from the evidence set being assembled. deployment.json has no custody_reference producer. LayerXVault.registerDepositRoot decodes a supplied 32-byte reference from canonicalRegistration and rejects zero; the client registration encoder commits the supplied value. Neither location derives the reference from deployment addresses. Provisioning consumes the protected movement field or a produced deployment field and otherwise refuses by exact path. No second derivation was introduced."
+assumption = "A producer must supply the custody reference used by the signed deposit registration, or identify an existing canonical derivation before deployment finalization can emit it. An address hash would invent a binding."
+
+[observation.6.8.90]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh interop/deploy/gateway/module-registry.example.json agent/crates/layerx-agentd/src/main.rs platform/hosted/human/provision.py"
+symbol = "secrets_generate human_peers assemble"
+observed = "The cluster copies module-registry.example.json directly into its published registry. That source has modules but no schema_version or assets, so the required version-2 asset-bound catalog input is absent. The default identity principal is did:layerx:beta:<suffix>. human_peers splits each entry with splitn(3, ':'); encoding 4020:<DID>:<tenant> therefore changes both parsed principal and tenant. The assembler refuses colon-containing principal bindings rather than publishing a mismatched authorization map. Existing runtime parsing and registry source remain unchanged."
+assumption = "The registry producer must publish the actual v2 asset metadata. The peer-map consumer needs an unambiguous representation for the returned DID principal while preserving the original tenant binding. These changes are outside evidence provisioning ownership."
+
+[observation.6.8.91]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/human/provision.py platform/hosted/human/provision.sh platform/hosted/human/provision-owner-job.yaml"
+symbol = "qualify_generated_set human_evidence_provision"
+observed = "Generated-set material integration was invoked and refused at /root/lx/hm9/build/beta-cluster/human-evidence/components.json because no complete producer-backed set exists on this host. The registration and initial recovery policy paths, registry journal pairs, guarantor Secret and authenticated first-batch head remain required. The existing material tests passing does not qualify the generated full set. Log: qual-logs/hm9/hm9e-generated-material-gate.log."
+assumption = "Positive full-set material integration, successful fresh-head acceptance, Kubernetes Job execution and cluster qualification require the real external producers and an execution environment with the cluster tools. No source branch was fetched or merged and no cluster or chain operation ran."
+
+[observation.6.8.92]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/identity/src/main.rs platform/hosted/identity/tests/service.rs platform/hosted/human/provision.py platform/hosted/human/provision.sh human/crates/layerx-human-identity-provider/src/provision_head.rs"
+symbol = "create_principal provision_account human_evidence_provision assemble"
+observed = "Identity creation requires and echoes a bounded tenant and preserves the checked request/response binding. Real identity service tests and all-targets Clippy pass. Treasury and sequencer account provisioning calls the existing protocol account derivation. The evidence assembler stages the complete protected file set and journal before publication. The Job uses the runtime identity PVC and validates receipt inclusion under the first-batch sequencer pin. The retained real native second-batch receipt is independently verified and refused for fresh limits. The generated catalog loads through PurposePresetCatalog's public re-export. Locked provider build, all-targets Clippy and tests including layerx-human-service pass, as do twelve provisioning tests, four existing material tests, formatting, shell syntax and beta-ledger-check. Exact commands, exit codes and logs are recorded in qual-logs/hm9/hm9e-gates.json."
+assumption = "Local source qualification does not resolve observations 6.8.89 through 6.8.91. No complete generated evidence set, positive first-batch live acceptance, Kubernetes Job, image or cluster qualification is claimed."
