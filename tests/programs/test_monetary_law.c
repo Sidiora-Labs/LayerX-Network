@@ -195,7 +195,7 @@ int main(void)
     lxp_arena execution_arena;
     lxp_kernel_execution execution;
     lxp_fee_params fee_parameters = {1U, {0U, 1U}, {0U, 0U}, {0U, 0U},
-                                     {0U, 0U}, {0U, 0U}, 10000U};
+                                     {0U, 0U}, {0U, 0U}, 10000U, 0U, {{0U, 0U}}};
     lxp_activity activity;
     lxp_receipt receipt;
     uint8_t zero_root[32] = {0};
