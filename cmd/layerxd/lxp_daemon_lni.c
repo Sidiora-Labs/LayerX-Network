@@ -541,6 +541,9 @@ static lxp_result admission_journal_recover(
                                  &send) != LXP_OK)
                 status = LXP_ERR_LOG_CORRUPT;
         }
+        if (status == LXP_OK && decoded.activity_type == LX_ASSET_WITHDRAW &&
+            decoded.payload.length != 108U)
+            status = LXP_ERR_LOG_CORRUPT;
         if (status != LXP_OK) {
             lxp_secure_zero(activity, length);
             free(activity);
@@ -1823,6 +1826,19 @@ static lxp_result program_admission_decode(
             status = LXP_ERR_CONTEXT_MISMATCH;
         return status;
     }
+    if (activity->activity_type == LX_ASSET_WITHDRAW) {
+        if (owner->kernel == NULL || owner->scratch == NULL)
+            return LXP_ERR_MODULE_DISABLED;
+        mark = lxp_arena_mark(owner->scratch);
+        status = lxp_module_ctx_init(&ctx, owner->kernel, LXP_MODULE_ASSET, 0U,
+                                     owner->kernel->epoch, 0U, 0U, owner->scratch, false);
+        if (status == LXP_OK)
+            status = lx_asset_module_iface()->decode(&ctx,
+                lxp_activity_type_ordinal(activity->activity_type),
+                activity->payload.bytes, activity->payload.length, &decoded);
+        reset_status = lxp_arena_reset(owner->scratch, mark);
+        return reset_status == LXP_OK ? status : reset_status;
+    }
     if (activity->activity_type != LX_PROGRAMS_CALL &&
         activity->activity_type != LX_PROGRAMS_DEPLOY &&
         activity->activity_type != LX_PROGRAMS_UPGRADE) return LXP_OK;
@@ -1948,7 +1964,8 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                              activity_id, sizeof(activity_id), deadline);
     }
     if (activity.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
-        activity.activity_type == LX_ASSET_SEND) {
+        (activity.activity_type == LX_ASSET_SEND ||
+         activity.activity_type == LX_ASSET_WITHDRAW)) {
         uint8_t principal_id[32];
         lxp_u128 fee_balance;
         if (server->owner->kernel == NULL ||
