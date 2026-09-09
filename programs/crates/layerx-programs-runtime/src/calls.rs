@@ -472,9 +472,9 @@ pub trait ProgramResolver: fmt::Debug {
         _program: ProgramId,
         _entrypoint: &str,
         _input: &[u8],
-        _capabilities: &crate::CapabilitySet,
-    ) -> Result<(), AbiError> {
-        Ok(())
+        capabilities: &crate::CapabilitySet,
+    ) -> Result<crate::CapabilitySet, AbiError> {
+        Ok(capabilities.clone())
     }
 
     /// Returns the validated module deployed under a program identifier.
@@ -973,7 +973,8 @@ fn execute_nested(
             abi.emitted_event_count(),
         )
     };
-    resolver.authorize_interface_call(callee, CALL_ENTRY_EXPORT, input, &capabilities)?;
+    let capabilities =
+        resolver.authorize_interface_call(callee, CALL_ENTRY_EXPORT, input, &capabilities)?;
     state
         .composition_mut()
         .ok_or(CompositionRefusal::NotComposable)?

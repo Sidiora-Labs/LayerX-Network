@@ -427,13 +427,15 @@ impl ProgramResolver for CachedProgramResolver {
         entrypoint: &str,
         input: &[u8],
         capabilities: &CapabilitySet,
-    ) -> Result<(), AbiError> {
+    ) -> Result<CapabilitySet, AbiError> {
         if let Some(encoding) = self.interfaces.get(&program) {
             let grants = CapabilitySet::decode_v2_canonical(&capabilities.canonical_encoding())?;
-            crate::ffi_interface::authorize_call(encoding, program, entrypoint, input, &grants)
-                .map_err(|_| AbiError::InvalidCapability)?;
+            let constrained =
+                crate::ffi_interface::authorize_call(encoding, program, entrypoint, input, &grants)
+                    .map_err(|_| AbiError::InvalidCapability)?;
+            return CapabilitySet::new(constrained);
         }
-        Ok(())
+        Ok(capabilities.clone())
     }
 
     fn program_module(&self, program: ProgramId) -> Option<&crate::ValidatedModule> {
@@ -2694,7 +2696,7 @@ pub extern "C" fn layerx_programs_call_begin(
         }
         .map_err(|_| NON_CANONICAL)?;
         let capabilities = CapabilitySet::new(grants).map_err(|_| NON_CANONICAL)?;
-        catalog
+        let capabilities = catalog
             .authorize_interface_call(program, &entrypoint, &calldata, &capabilities)
             .map_err(|_| NON_CANONICAL)?;
         if sandbox && capabilities.has_program_spend() {

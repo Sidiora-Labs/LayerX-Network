@@ -474,7 +474,7 @@ pub(crate) fn authorize_call(
     entrypoint: &str,
     calldata: &[u8],
     grants: &[crate::Capability],
-) -> Result<(), i32> {
+) -> Result<Vec<crate::Capability>, i32> {
     let interface = decode(encoding)?;
     if !interface.entries.iter().any(|entry| {
         entry
@@ -482,27 +482,32 @@ pub(crate) fn authorize_call(
             .iter()
             .any(|cap| cap.first() == Some(&10))
     }) {
-        return Ok(());
+        return Ok(grants.to_vec());
     }
     let entry = interface
         .entries
         .iter()
         .find(|entry| entry.name == entrypoint && calldata.get(..4) == Some(&entry.discriminator))
         .ok_or(NON_CANONICAL)?;
+    let mut descriptors = Vec::new();
     for cap in &entry.capabilities {
         if cap.first() == Some(&10) {
             let mut cursor = 1;
-            crate::dynamic_spend::CallerAuthorizedSpend {
+            descriptors.push(crate::dynamic_spend::CallerAuthorizedSpend {
                 asset: take::<32>(cap, &mut cursor)?,
                 maximum_amount: u128::from_be_bytes(take::<16>(cap, &mut cursor)?),
                 recipient_offset: u32::from_be_bytes(take::<4>(cap, &mut cursor)?),
                 amount_offset: u32::from_be_bytes(take::<4>(cap, &mut cursor)?),
-            }
-            .authorize(program, calldata, grants)
-            .map_err(|_| NON_CANONICAL)?;
+            });
         }
     }
-    Ok(())
+    crate::dynamic_spend::CallerAuthorizedSpend::constrain_grants(
+        program,
+        calldata,
+        &descriptors,
+        grants,
+    )
+    .map_err(|_| NON_CANONICAL)
 }
 
 pub(crate) fn validate_binding(encoding: &[u8], hash: [u8; 32], abi: u16) -> Result<(), i32> {

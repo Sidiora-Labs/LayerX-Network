@@ -47,6 +47,49 @@ impl CallerAuthorizedSpend {
         }
     }
 
+    /// # Errors
+    /// Refuses any descriptor not authorized by the caller, then narrows this
+    /// program's spend grants to the described assets, recipients and ceilings.
+    pub fn constrain_grants(
+        program: ProgramId,
+        calldata: &[u8],
+        descriptors: &[Self],
+        grants: &[Capability],
+    ) -> Result<Vec<Capability>, AbiError> {
+        for descriptor in descriptors {
+            descriptor.authorize(program, calldata, grants)?;
+        }
+        let mut constrained = Vec::new();
+        for grant in grants {
+            let mut grant = grant.clone();
+            if let Capability::ProgramSpend {
+                owner_program,
+                asset,
+                to,
+                maximum_amount,
+                ..
+            } = &mut grant
+            {
+                if *owner_program == program {
+                    let mut ceiling = 0;
+                    for descriptor in descriptors {
+                        if descriptor.asset == *asset
+                            && Self::field::<32>(calldata, descriptor.recipient_offset)? == *to
+                        {
+                            ceiling = ceiling.max(descriptor.maximum_amount);
+                        }
+                    }
+                    if ceiling == 0 {
+                        continue;
+                    }
+                    *maximum_amount = (*maximum_amount).min(ceiling);
+                }
+            }
+            constrained.push(grant);
+        }
+        Ok(constrained)
+    }
+
     fn field<const N: usize>(calldata: &[u8], offset: u32) -> Result<[u8; N], AbiError> {
         let offset = usize::try_from(offset).map_err(|_| AbiError::InvalidCapability)?;
         let end = offset.checked_add(N).ok_or(AbiError::InvalidCapability)?;
