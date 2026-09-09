@@ -89,3 +89,28 @@ Natively issued asset IDs are `SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt3
 Use JSON-RPC 2.0 at gateway `POST /rpc`. The read methods are `lx_getAccount`, `lx_getBalance`, `lx_getBalances`, `lx_getSequence`, `lx_estimateFee`, `lx_getReceipt`, `lx_getActivityStatus`, `lx_getBatchHeader`, `lx_getCheckpoint`, `lx_getProof`, `lx_listAssets`, `lx_getAsset` and `lx_getNodeInfo`. Submit canonical signed activity hexadecimal with `lx_sendActivity(canonical_hex, commitment)`.
 
 WebSocket subscriptions use `GET /rpc/ws` and `lx_subscribe` for `receipts`, `checkpoints` or `account`. Treat notifications as triggers to obtain and verify evidence. JSON-RPC errors remain errors even when transported with HTTP 200. A submit acknowledgement is never reported as payment success. Faucet funding is a separate operation and must itself be confirmed before assuming that funds are spendable.
+
+### RPC result fields
+
+`lx_getReceipt(activity_id)` and `lx_getActivityStatus(activity_id)` return `activity_id` and `receipt`, where `receipt` is canonical receipt hexadecimal. Status lookup uses the receipt lookup contract. A missing receipt is an RPC error, not successful execution.
+
+`lx_sendActivity` returns `activity_id`, `receipt` when available, and the established `commitment`. A result with `state: "pending"` remains pending even if it contains an executed receipt. Verify the expected activity ID and payer as well as asset, amount and recipient. Do not release a resource on an admission acknowledgement.
+
+For batched results, `batch_evidence` contains `kind: "receipt"`, `activity_id`, `canonical_value`, `proof` (`leaf_index`, `leaf_count`, `siblings`), and `signed_header` (`canonical_header`, `signature`, `sequencer_id`, `public_key`, `first_batch_number`, `last_batch_number`). Match the canonical value to the receipt before checking inclusion. Sequencer authorization and network identity come from configured trust inputs.
+
+For finalised results, `checkpoint_evidence` contains `checkpoint_id`, `checkpoint`, `context`, and `canonical_header`. These are canonical evidence bytes. Their presence alone does not establish finality; a checkpoint verifier must validate them against configured guarantor authority and the exact batch header.
+
+### Running the public examples
+
+Build the TypeScript SDK and seller middleware, then run:
+
+```sh
+node platform/middleware/examples/public-rpc.mjs --help
+PYTHONPATH=agent/sdk/python python3 platform/middleware/examples/public_rpc.py --help
+```
+
+Supply the gateway `/rpc` URL and your DID explicitly. Optional faucet claims require the faucet `/v1/faucet/claims` URL, public key and a stable claim key. Authentication uses `LAYERX_RPC_TOKEN` and `LAYERX_FAUCET_TOKEN`. Do not change a claim key after an uncertain result.
+
+To submit an exact payment, provide a signed canonical activity hex file, a Base64 `PAYMENT-REQUIRED` header file, the payer account ID and a trusted authority JSON file. The authority file contains hexadecimal `batchId`, `asset`, `previousStateRoot`, `resultingStateRoot` and `sequencerPublicKey`. Obtain these from your configured network authority. The examples select executed commitment, verify the signed receipt and print the `lxp:` settlement reference. They report pending with exit code 2. Python payment verification additionally requires the `cryptography` package.
+
+A faucet HTTP success does not independently prove a spendable balance. Read and verify the funded account before preparing a payment activity. Prepare activities with current identity sequences; retain the same signed bytes for uncertain-result recovery.
