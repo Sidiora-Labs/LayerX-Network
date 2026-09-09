@@ -269,3 +269,18 @@ fn send_discloses_independent_identity_and_source_sequences() {
     let other = support::canonical_send_sequences(25, 20);
     assert!(ready(sign_disclosed(&signer, &other, &disclosure, &registry)).is_err());
 }
+
+#[test]
+fn divergent_sequences_do_not_bypass_inner_signature_verification() {
+    let registry = support::registry();
+    let bytes = support::canonical_send_sequences(25, 19);
+    let activity = layerx_wire::activity::decode_unsigned(&bytes, &registry)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let original = activity.payload();
+    for offset in [116, original.len() - 102, original.len() - 1] {
+        let mut payload = original.to_vec();
+        payload[offset] ^= 1;
+        let forged = support::canonical_send_with_payload(&payload, activity.authority(), 19);
+        assert!(bind(&forged, &registry).is_err());
+    }
+}

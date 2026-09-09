@@ -4,9 +4,9 @@
 //! `SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`, where
 //! `issuer_did_id32` is the existing `lxp_did_id_derive` identity
 //! (`SHA-256("LXP/v1/did-id\0" || u16be(len) || did)`). Asset ordinal 9
-//! (WITHDRAW) is refused. Receive and grant-issue bytes match the
-//! native payer-grant concatenation (346 bytes); authority capabilities
-//! retain their separate codec. See [`crate::disclosure`].
+//! (WITHDRAW) is refused. Receive uses the native 733-byte, ten-field
+//! encoding; grant issue uses the 346-byte payer-grant concatenation.
+//! Authority capabilities retain their separate codec. See [`crate::disclosure`].
 
 use layerx_types::payload::ModuleId;
 use layerx_wire::{decode::Decoder, encode::Encoder};

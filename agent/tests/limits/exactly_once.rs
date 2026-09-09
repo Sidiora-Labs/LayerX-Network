@@ -950,7 +950,7 @@ fn send_payload() -> Result<Vec<u8>, SuiteFailure> {
     encoder
         .u16(PROTOCOL_VERSION)
         .map_err(|error| failure(format!("payload version: {error:?}"), &[]))?;
-    Ok(encoder.finish())
+    Ok(agentd_support::send_authorization::sign(encoder.finish()))
 }
 #[path = "../../crates/layerx-agentd/tests/support/mod.rs"]
 mod agentd_support;

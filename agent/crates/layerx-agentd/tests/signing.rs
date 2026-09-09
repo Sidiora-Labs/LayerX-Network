@@ -1,3 +1,6 @@
+#[path = "support/send_authorization.rs"]
+mod send_authorization;
+
 use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
@@ -108,7 +111,7 @@ fn send_payload() -> Vec<u8> {
     encoder
         .u16(layerx_wire::limits::PROTOCOL_VERSION)
         .unwrap_or_else(|error| panic!("version: {error:?}"));
-    encoder.finish()
+    send_authorization::sign(encoder.finish())
 }
 
 fn issued(seed: [u8; 32], permitted: ActivityType, expires_at: u64) -> IssuedSessionKey {

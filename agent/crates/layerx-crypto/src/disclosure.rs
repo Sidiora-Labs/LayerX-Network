@@ -244,8 +244,8 @@ fn decode_send(payload: &[u8], activity: &Activity) -> Result<SendSemantics, Dis
         return Err(DisclosureError::MalformedPayload);
     }
     let controller: [u8; 32] = fixed(&mut decoder)?;
-    let _public_key: [u8; 32] = fixed(&mut decoder)?;
-    let _signature: [u8; 64] = fixed(&mut decoder)?;
+    let public_key: [u8; 32] = fixed(&mut decoder)?;
+    let signature: [u8; 64] = fixed(&mut decoder)?;
     let signed_context_hash: [u8; 32] = fixed(&mut decoder)?;
     let network_id = decoder.u32()?;
     let protocol_version = decoder.u16()?;
@@ -259,6 +259,17 @@ fn decode_send(payload: &[u8], activity: &Activity) -> Result<SendSemantics, Dis
     {
         return Err(DisclosureError::MalformedPayload);
     }
+    let authorization_offset = payload
+        .len()
+        .checked_sub(167)
+        .ok_or(DisclosureError::MalformedPayload)?;
+    let mut h = Sha256::new();
+    h.update(hash::Domain::SignaturePreimage.tag());
+    h.update(&payload[..2]);
+    h.update(&payload[4..authorization_offset + 33]);
+    h.update(&payload[authorization_offset + 129..]);
+    crate::ed25519::verify_digest(&public_key, &signature, &h.finalize().into())
+        .map_err(|_| DisclosureError::MalformedPayload)?;
     Ok(SendSemantics {
         from,
         to,

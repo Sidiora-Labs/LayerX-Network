@@ -108,9 +108,17 @@ pub fn canonical_send(amount: u128) -> Vec<u8> {
 
 pub fn canonical_send_sequences(amount: u128, envelope_sequence: u64) -> Vec<u8> {
     let (payload, authority) = send_payload(amount);
+    canonical_send_with_payload(&payload, &authority, envelope_sequence)
+}
+
+pub fn canonical_send_with_payload(
+    payload: &[u8],
+    authority: &[u8],
+    envelope_sequence: u64,
+) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(Domain::PayloadHash.tag());
-    hasher.update(&payload);
+    hasher.update(payload);
     let payload_hash: [u8; 32] = hasher.finalize().into();
 
     let mut activity = Encoder::new(4096);
@@ -127,7 +135,7 @@ pub fn canonical_send_sequences(amount: u128, envelope_sequence: u64) -> Vec<u8>
     assert!(activity.tag(4, 12).is_ok());
     assert!(activity.bytes(b"did:layerx:alice", 255).is_ok());
     assert!(activity.tag(5, 12).is_ok());
-    assert!(activity.bytes(&authority, 524_288).is_ok());
+    assert!(activity.bytes(authority, 524_288).is_ok());
     assert!(activity.tag(6, 12).is_ok());
     assert!(activity.u64(envelope_sequence).is_ok());
     assert!(activity.tag(7, 12).is_ok());
@@ -140,7 +148,7 @@ pub fn canonical_send_sequences(amount: u128, envelope_sequence: u64) -> Vec<u8>
     assert!(activity.tag(10, 12).is_ok());
     assert!(activity.bytes(&payload_hash, 32).is_ok());
     assert!(activity.tag(11, 12).is_ok());
-    assert!(activity.bytes(&payload, 524_288).is_ok());
+    assert!(activity.bytes(payload, 524_288).is_ok());
     activity.finish()
 }
 
