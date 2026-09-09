@@ -1728,6 +1728,7 @@ fn admin_route(config: &Config, request: &Request) -> Response {
 }
 
 fn handle_connection(config: &Arc<Config>, plane: Plane, tcp: TcpStream) -> Result<(), String> {
+    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
     tcp.set_read_timeout(Some(IO_TIMEOUT))
         .map_err(|error| error.to_string())?;
     tcp.set_write_timeout(Some(IO_TIMEOUT))
