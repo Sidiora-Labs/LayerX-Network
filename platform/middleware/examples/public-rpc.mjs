@@ -47,6 +47,7 @@ if (values.help) {
       process.stdout.write(JSON.stringify({ state: "pending", activity_id: activityId }) + "\n");
       process.exitCode = 2;
     } else {
+      if (offer.scheme !== "exact" && (payment.verification.receipt.moduleId !== 1 || payment.verification.receipt.operation !== 6)) throw new Error("grant-receive-receipt-required");
       const digest = createHash("sha256").update("LXP/v1/merkle-leaf\0").update(payment.canonicalReceipt).digest("hex");
       process.stdout.write(JSON.stringify({ transaction: `lxp:${digest}`, commitment: "executed" }) + "\n");
     }
