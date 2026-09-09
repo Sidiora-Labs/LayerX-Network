@@ -78,13 +78,13 @@ Default host ports are testnet `19443`, gateway `19444`, faucet `19445`
 `AGENT_URL=https://localhost:19447`,
 `PAXEER_URL=https://localhost:19449`,
 `PAXEER_OBSERVER_URL=https://localhost:19452`,
-`IDENTITY_URL=https://localhost:19451`
+`IDENTITY_URL=https://localhost:19451`,
+`HUMAN_URL=https://localhost:19453`
 (`platform/hosted/tests/beta-cluster.sh:1258-1266`). Port-forwards are
 Paxeer-boundary `19449`, Paxeer-observer-boundary `19452`, identity
 `19451`, testnet, gateway, faucet, developer `19450`, pending-core
 `19446`, and agent-boundary `19447`
-(`platform/hosted/tests/beta-cluster.sh:1268-1283`). There is no
-Human-service port-forward and no agentd port-forward.
+(`platform/hosted/tests/beta-cluster.sh:1268-1283`). Human is forwarded on `19453` to port `9443`. There is no agentd port-forward.
 
 The kind cluster name defaults to `layerx-beta`
 (`platform/hosted/tests/beta-cluster.sh:11, 73`). Paxeer EVM chain id is
@@ -127,28 +127,17 @@ separate export step. Source it:
 | `KUBECONFIG` | cluster kubeconfig |
 | `WEBHOOKS_URL` | developer port-forward |
 | `LAYERX_QUALIFICATION_NODE_URL` | `$NODE_URL` (`https://localhost:19446`, pending-core) unless `LAYERX_BETA_QUALIFICATION_NODE_URL` is set. Role: qualification node (`tools/qualification/release_runner.py:24`; `tools/qualification/beta_driver.py:41`). |
-| `LAYERX_QUALIFICATION_AGENT_URL` | `LAYERX_BETA_QUALIFICATION_AGENT_URL` when that agentd override is set; otherwise `$AGENT_URL` (`https://localhost:19447`, agent-boundary). Role: qualification agentd (`tools/qualification/release_runner.py:25`; `tools/qualification/beta_driver.py:42`). Bring-up does not start agentd. No agentd origin is present unless the override is set. |
-| `LAYERX_QUALIFICATION_HUMAN_URL` | `LAYERX_BETA_QUALIFICATION_HUMAN_URL` when set; otherwise `$GATEWAY_URL`. Role: qualification Human service (`tools/qualification/release_runner.py:26`; `tools/qualification/beta_driver.py:43`), not the gateway. Bring-up does not port-forward a Human service. |
+| `LAYERX_AGENT_BOUNDARY_URL` | `$AGENT_URL` (`https://localhost:19447`, agent boundary). |
+| `LAYERX_QUALIFICATION_AGENT_URL` | `LAYERX_BETA_QUALIFICATION_AGENT_URL` when supplied for a real deployed agentd; otherwise explicitly unset. Bring-up does not start agentd. |
+| `LAYERX_QUALIFICATION_HUMAN_URL` | `LAYERX_BETA_QUALIFICATION_HUMAN_URL` when set; otherwise `$HUMAN_URL` (`https://localhost:19453`, Human HTTPS API). |
 | `LAYERX_QUALIFICATION_PAXEER_URL` | `$PAXEER_URL` unless `LAYERX_BETA_QUALIFICATION_PAXEER_URL` is set. Role: qualification Paxeer testnet (`tools/qualification/release_runner.py:27`; `tools/qualification/beta_driver.py:44`). |
 
-(`platform/hosted/tests/beta-cluster.sh:1099-1141, 554, 1261-1266`).
-`LAYERX_TEST_AMOUNT` defaults to `1`
-(`platform/hosted/tests/beta-cluster.sh:554`). `qualification_url` always
-emits those four `export` lines, using the override when it is non-empty
-and the third argument otherwise (`platform/hosted/tests/beta-cluster.sh:1099-1107`).
-`env_write` has no dedicated agent-boundary `export`; the agent-boundary
-origin is the `$AGENT_URL` value currently assigned to
-`LAYERX_QUALIFICATION_AGENT_URL`
-(`platform/hosted/tests/beta-cluster.sh:1110-1142, 1263, 1283`).
-Qualification's agentd variable is `LAYERX_QUALIFICATION_AGENT_URL`
-(`tools/qualification/release_runner.py:25`). Those two surfaces are not
-the same. Qualification's Human variable is
-`LAYERX_QUALIFICATION_HUMAN_URL`
-(`tools/qualification/release_runner.py:26`). `env_write` fills it from
-`$GATEWAY_URL` unless overridden, and the `qualification_url` comment
-names the gateway as the only hosted `/v1` human surface
-(`platform/hosted/tests/beta-cluster.sh:1138-1139`). Those two surfaces
-are not the same.
+`env_write` in `platform/hosted/tests/beta-cluster.sh` exports the node,
+Human and Paxeer qualification origins, using their non-empty overrides
+when provided. It exports the agent boundary separately and unsets the
+agentd qualification variable unless a real agentd override is supplied.
+The missing agentd endpoint is recorded in the bring-up missing-input list.
+`LAYERX_TEST_AMOUNT` defaults to `1`.
 
 HTTP against those origins uses the cluster CA. Hosted smoke passes
 `--cacert "$LAYERX_TEST_CA_FILE"` (`platform/hosted/testnet/tests/hosted-smoke.sh:7,
