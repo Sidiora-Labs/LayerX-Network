@@ -9,6 +9,34 @@ import unittest
 import provision
 
 
+def generated_catalog(directory, binary):
+    import yaml
+    root = Path(directory).resolve()
+    repo = Path(__file__).resolve().parents[3]
+    registry = json.loads((repo / 'interop/deploy/gateway/module-registry.example.json').read_text())
+    node = list(yaml.safe_load_all((repo / 'platform/hosted/node/deployment.yaml').read_text()))
+    config = next(d for d in node if d['kind'] == 'ConfigMap' and 'asset-id' in d.get('data', {}))
+    asset = config['data']['asset-id']
+    registry['schema_version'] = 2
+    registry['assets'] = [{'asset': asset}]
+    provision.write_json(root / 'registry.json', registry)
+    for name in ('treasury', 'sequencer'):
+        key = root / (name + '.key')
+        subprocess.run(['openssl', 'genpkey', '-algorithm', 'ED25519', '-out', str(key)],
+                       check=True, capture_output=True)
+        key.chmod(0o600)
+        public = subprocess.run(['openssl', 'pkey', '-in', str(key), '-pubout', '-outform', 'DER'],
+                                check=True, capture_output=True).stdout[-32:].hex()
+        result = subprocess.run([str(binary), 'provision-account'],
+                                input=json.dumps({'did': 'did:layerx:' + public}),
+                                text=True, capture_output=True, check=True)
+        provision.write_json(root / (name + '.json'), json.loads(result.stdout))
+    result = provision.purpose_catalog(Path(provision.__file__).with_name('beta-purpose-catalog.json'),
+                                      root / 'registry.json', root / 'treasury.json', root / 'sequencer.json', asset)
+    provision.write_json(root / 'purpose-catalog.json', result)
+    return result
+
+
 class RegistrationInputTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -145,6 +173,42 @@ class RegistrationInputTests(unittest.TestCase):
             self.assertEqual(runtime_mount[key], job_mount[key])
         self.assertEqual(job['spec']['backoffLimit'], 0)
         self.assertFalse(job['spec']['template']['spec']['automountServiceAccountToken'])
+
+    def test_generated_catalog_uses_real_keys_and_production_registry_modules(self):
+        binary = Path(__file__).resolve().parents[3] / 'human/target/debug/layerx-human-identity-provider'
+        catalog = generated_catalog(self.root, binary)
+        self.assertEqual(len(catalog['presets'][0]['counterparties']), 2)
+        self.assertNotEqual(*catalog['presets'][0]['counterparties'])
+        self.assertEqual(provision.protected_json(self.root / 'purpose-catalog.json'), catalog)
+        registry = self.root / 'registry.json'
+        value = provision.protected_json(registry)
+        del value['schema_version']
+        registry.unlink()
+        provision.write_json(registry, value)
+        with self.assertRaises(provision.Refused):
+            provision.purpose_catalog(Path(provision.__file__).with_name('beta-purpose-catalog.json'),
+                                      registry, self.root / 'treasury.json', self.root / 'sequencer.json',
+                                      value['assets'][0]['asset'])
+
+    def test_journal_and_complete_assembly_fail_closed_without_upstream(self):
+        with self.assertRaises(provision.Refused):
+            provision.journal_records(None)
+        with self.assertRaises(provision.Refused):
+            provision.journal_records(self.root)
+        with self.assertRaises(provision.Refused) as caught:
+            provision.assemble(self.root, self.root / 'registry.json', '', None)
+        self.assertIn('human-owner-result.json', str(caught.exception))
+        self.assertFalse((self.root / 'human-evidence').exists())
+        self.assertFalse(list(self.root.glob('.human-evidence-*')))
+
+    def test_custody_source_missing_field_is_not_derived_from_address(self):
+        paxeer = self.root / 'paxeer'
+        paxeer.mkdir()
+        provision.write_json(paxeer / 'deployment.json', {'addresses': {}})
+        with self.assertRaises(provision.Refused) as caught:
+            provision.movement_source(self.root, self.root / 'secrets')
+        self.assertIn('deployment.json: invalid custody_reference missing', str(caught.exception))
+        self.assertFalse((self.input / 'movement-source.json').exists())
 
     def run_cli(self):
         return subprocess.run(['python3', str(Path(provision.__file__).resolve()),

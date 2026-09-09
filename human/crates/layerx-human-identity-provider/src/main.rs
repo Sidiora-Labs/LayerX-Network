@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod provision_head;
+
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -80,13 +82,22 @@ fn run() -> io::Result<()> {
     if args.next().is_some()
         || !matches!(
             command.as_deref(),
-            None | Some("serve" | "bind-device" | "provision-owner" | "provision-account")
+            None | Some(
+                "serve"
+                    | "bind-device"
+                    | "provision-owner"
+                    | "provision-account"
+                    | "validate-account-head"
+            )
         )
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "expected serve, bind-device, provision-owner or provision-account",
         ));
+    }
+    if command.as_deref() == Some("validate-account-head") {
+        return provision_head::run();
     }
     if command.as_deref() == Some("provision-account") {
         return provision_account();

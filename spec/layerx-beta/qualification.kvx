@@ -7253,3 +7253,35 @@ file = "platform/hosted/human/provision.py platform/hosted/human/provision.sh pl
 symbol = "purpose_catalog preserve_binding owner_result human_owner_provision"
 observed = "Protected catalog generation, tenant request/response binding validation and a standalone owner-provisioning Job driver are implemented. The Job uses the runtime identity PVC subPath and state-root environment, refuses enabled Human containers, disables retries and validates the single-line LXIP result against its established recovery policy. Eight Python tests pass, including real provider result validation and replay, recovery mismatch refusal, protected-file refusals and runtime/Job mount comparison. Format check, locked provider build, locked all-targets Clippy and locked tests including layerx-human-service, Python compilation, material tests, shell syntax and beta-ledger-check pass. Exact commands and exit codes are in qual-logs/hm9/hm9d-gates.json; logs are qual-logs/hm9/hm9d-*.log."
 assumption = "This is partial local qualification. No Kubernetes Job, image, cluster or generated-catalog Rust loadability gate ran. The Job is not wired into bring-up, no complete evidence assembler or atomic full-set publisher is implemented, and no full Human evidence set was produced. The producer conflicts in observation 6.8.87 remain unresolved; existing consumer assertions are unchanged."
+
+[observation.6.8.89]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/human/provision.py platform/hosted/human/material.py platform/hosted/paxeer/deploy-contracts.sh contracts/custody/LayerXVault.sol human/crates/layerx-paxeer-client/src/deposit.rs"
+symbol = "movement_source registerDepositRoot DepositRootRegistration"
+observed = "The movement configuration consumer reads LAYERX_HUMAN_MOVEMENT_PROVIDER_CUSTODY_REFERENCE, but its cluster file is written only by material.py from the evidence set being assembled. deployment.json has no custody_reference producer. LayerXVault.registerDepositRoot decodes a supplied 32-byte reference from canonicalRegistration and rejects zero; the client registration encoder commits the supplied value. Neither location derives the reference from deployment addresses. Provisioning consumes the protected movement field or a produced deployment field and otherwise refuses by exact path. No second derivation was introduced."
+assumption = "A producer must supply the custody reference used by the signed deposit registration, or identify an existing canonical derivation before deployment finalization can emit it. An address hash would invent a binding."
+
+[observation.6.8.90]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh interop/deploy/gateway/module-registry.example.json agent/crates/layerx-agentd/src/main.rs platform/hosted/human/provision.py"
+symbol = "secrets_generate human_peers assemble"
+observed = "The cluster copies module-registry.example.json directly into its published registry. That source has modules but no schema_version or assets, so the required version-2 asset-bound catalog input is absent. The default identity principal is did:layerx:beta:<suffix>. human_peers splits each entry with splitn(3, ':'); encoding 4020:<DID>:<tenant> therefore changes both parsed principal and tenant. The assembler refuses colon-containing principal bindings rather than publishing a mismatched authorization map. Existing runtime parsing and registry source remain unchanged."
+assumption = "The registry producer must publish the actual v2 asset metadata. The peer-map consumer needs an unambiguous representation for the returned DID principal while preserving the original tenant binding. These changes are outside evidence provisioning ownership."
+
+[observation.6.8.91]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/human/provision.py platform/hosted/human/provision.sh platform/hosted/human/provision-owner-job.yaml"
+symbol = "qualify_generated_set human_evidence_provision"
+observed = "Generated-set material integration was invoked and refused at /root/lx/hm9/build/beta-cluster/human-evidence/components.json because no complete producer-backed set exists on this host. The registration and initial recovery policy paths, registry journal pairs, guarantor Secret and authenticated first-batch head remain required. The existing material tests passing does not qualify the generated full set. Log: qual-logs/hm9/hm9e-generated-material-gate.log."
+assumption = "Positive full-set material integration, successful fresh-head acceptance, Kubernetes Job execution and cluster qualification require the real external producers and an execution environment with the cluster tools. No source branch was fetched or merged and no cluster or chain operation ran."
+
+[observation.6.8.92]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/identity/src/main.rs platform/hosted/identity/tests/service.rs platform/hosted/human/provision.py platform/hosted/human/provision.sh human/crates/layerx-human-identity-provider/src/provision_head.rs"
+symbol = "create_principal provision_account human_evidence_provision assemble"
+observed = "Identity creation requires and echoes a bounded tenant and preserves the checked request/response binding. Real identity service tests and all-targets Clippy pass. Treasury and sequencer account provisioning calls the existing protocol account derivation. The evidence assembler stages the complete protected file set and journal before publication. The Job uses the runtime identity PVC and validates receipt inclusion under the first-batch sequencer pin. The retained real native second-batch receipt is independently verified and refused for fresh limits. The generated catalog loads through PurposePresetCatalog's public re-export. Locked provider build, all-targets Clippy and tests including layerx-human-service pass, as do twelve provisioning tests, four existing material tests, formatting, shell syntax and beta-ledger-check. Exact commands, exit codes and logs are recorded in qual-logs/hm9/hm9e-gates.json."
+assumption = "Local source qualification does not resolve observations 6.8.89 through 6.8.91. No complete generated evidence set, positive first-batch live acceptance, Kubernetes Job, image or cluster qualification is claimed."
