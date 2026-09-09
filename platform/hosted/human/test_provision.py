@@ -207,6 +207,12 @@ class RegistrationInputTests(unittest.TestCase):
         self.assertIn(source, script)
         self.assertNotIn('$pod:/var/lib/layerx-registry-journal/.', script)
 
+    def test_peer_binding_uses_named_fields_and_preserves_did_colons(self):
+        path = self.input / 'source-binding.json'
+        binding = {'tenant': 'beta_owner', 'principal': 'did:layerx:owner'}
+        self.assertEqual(provision.peer_binding(binding, path),
+                         'uid=4020;tenant=beta_owner;principal=did:layerx:owner')
+
     def test_custody_source_missing_field_is_not_derived_from_address(self):
         paxeer = self.root / 'paxeer'
         paxeer.mkdir()

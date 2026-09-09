@@ -1656,6 +1656,8 @@ env_write() {
         printf 'export LAYERX_PAXEER_DEPLOYMENT_RECORD=%s\n' "$WORK_DIR/paxeer/deployment.json"
         printf 'export KUBECONFIG=%s\n' "$KUBECONFIG_FILE"
     } >> "$ENV_FILE"
+    [ -s "$WORK_DIR/human-owner.env" ] || fail "human-owner.env missing after native owner production"
+    cat "$WORK_DIR/human-owner.env" >> "$ENV_FILE"
     qualification_url LAYERX_QUALIFICATION_NODE_URL LAYERX_BETA_QUALIFICATION_NODE_URL "$NODE_URL" \
         "beta_driver.py --node-url: the core boundary Service layerx-pending-core (node readiness, state and receipts)"
     qualification_url LAYERX_QUALIFICATION_AGENT_URL LAYERX_BETA_QUALIFICATION_AGENT_URL "" \
@@ -1792,6 +1794,21 @@ beta_cluster_up() {
     else
         builder_release_publish
     fi
+    kube apply -f "$MANIFESTS_DIR/paxeer.yaml" > /dev/null
+    PAXEER_URL="https://localhost:19449"
+    PAXEER_OBSERVER_URL="https://localhost:19452"
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=paxeer 600
+    port_forward paxeer-boundary "$TESTNET_NAMESPACE" paxeer-boundary 19449 9443
+    port_forward paxeer-observer-boundary "$TESTNET_NAMESPACE" paxeer-observer-boundary 19452 9443
+    paxeer_origins_write
+    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then
+        [ -z "$CUSTODY_PROFILE" ] || fail 'fresh owner custody must be generated against this disposable cluster before genesis'
+        human_custody_step bootstrap
+        CUSTODY_PROFILE="$WORK_DIR/human-evidence-input/custody.profile"
+        cp "$CUSTODY_PROFILE" "$SECRETS_DIR/custody.profile"
+        apply_configmap "$TESTNET_NAMESPACE" layerx-node-custody-profile --from-file=profile="$CUSTODY_PROFILE"
+        manifests_render
+    fi
     trusted_boundary_apply
     TESTNET_URL="https://localhost:$TESTNET_PORT"
     GATEWAY_URL="https://localhost:$GATEWAY_PORT"
@@ -1803,10 +1820,6 @@ beta_cluster_up() {
     PAXEER_OBSERVER_URL="https://localhost:19452"
     IDENTITY_URL="https://localhost:$IDENTITY_PORT"
     HUMAN_URL="https://localhost:19453"
-    wait_for_pod_ready "$TESTNET_NAMESPACE" app=paxeer 600
-    port_forward paxeer-boundary "$TESTNET_NAMESPACE" paxeer-boundary 19449 9443
-    port_forward paxeer-observer-boundary "$TESTNET_NAMESPACE" paxeer-observer-boundary 19452 9443
-    paxeer_origins_write
     wait_for_node_genesis
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
         apply_configmap "$TESTNET_NAMESPACE" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
@@ -1823,6 +1836,20 @@ beta_cluster_up() {
         wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-program-registry 600
         registry_deployment_produce
         human_journal_deploy
+        (umask 077; mkdir -p "$WORK_DIR/human-evidence-input")
+        python3 "$REPO_ROOT/platform/hosted/human/provision.py" --prepare-owner-request \
+            --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
+        python3 "$REPO_ROOT/platform/hosted/human/guardians.py" \
+            --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR" \
+            --identity "$NODE_GUARANTOR_ID" --identity "$NODE_SECOND_GUARANTOR_ID" \
+            --identity "$NODE_SEQUENCER_ID"
+        local guardian
+        for guardian in guarantor-1 guarantor-2 sequencer; do
+            apply_secret "$TESTNET_NAMESPACE" "layerx-human-guardian-$guardian" \
+                --from-file=seed="$SECRETS_DIR/human-guardians/$guardian.seed"
+        done
+        apply_configmap "$TESTNET_NAMESPACE" layerx-human-guardian-bindings \
+            --from-file=bindings.json="$WORK_DIR/human-evidence-input/recovery-guardian-bindings.json"
         human_evidence_provision
         human_policy_publish
     fi

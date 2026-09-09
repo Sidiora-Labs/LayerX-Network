@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import stat
 import unicodedata
+import time
 
 
 class Refused(ValueError):
@@ -236,6 +237,24 @@ def recovery_policy(value, path):
     require(any(value['root']), path, 'nonzero root')
     uint(value['threshold'], 16, path, 'threshold', 1)
     uint(value['delay_seconds'], 64, path, 'delay_seconds', 1)
+
+
+def owner_request(work_dir, secrets_dir):
+    path = Path(secrets_dir) / 'owner-email'
+    raw = protected_bytes(path, 320)
+    try:
+        email = raw.decode('utf-8').removesuffix('\n')
+    except UnicodeDecodeError as error:
+        raise Refused(f'{path}: invalid owner email encoding') from error
+    require(bool(email) and email == email.strip() and email.count('@') == 1
+            and not any(c.isspace() or unicodedata.category(c) == 'Cc' for c in email),
+            path, 'owner email')
+    output = Path(work_dir) / 'human-evidence-input/owner-request.json'
+    try:
+        write_json(output, {'email': email, 'display_name': 'Beta owner',
+                            'idempotency_key': os.urandom(32).hex(), 'now': int(time.time())})
+    except OSError as error:
+        raise Refused(f'{output}: owner request publication refused; reconcile existing output') from error
 
 
 def job_input(work_dir):
@@ -468,8 +487,7 @@ def assemble(work_dir, registry_path, asset, journal_path):
     require(type(binding['tenant']) is str and re.fullmatch(r'[a-z0-9_.-]{1,128}', binding['tenant']) is not None,
             binding_path, 'tenant')
     text(binding['principal'], binding_path, 'principal')
-    require(not any(c in binding['principal'] for c in ':,'), binding_path,
-            'principal cannot be represented by the current HUMAN_PEERS delimiter parser')
+    peers = peer_binding(binding, binding_path)
     policy = owner_policy()
     catalog = purpose_catalog(Path(__file__).with_name('beta-purpose-catalog.json'), registry_path,
                               inputs / 'treasury.json', inputs / 'sequencer.json', asset)
@@ -488,11 +506,11 @@ def assemble(work_dir, registry_path, asset, journal_path):
                 'delay_seconds': owner['recovery_delay_seconds']}
     files = {
         'components.json': {'AGENT_ACTOR': owner['did'], 'AGENT_AUTHORITY': registration['authority'],
-            'AGENT_OWNER_ACCOUNT': registration['owner_account'],
+            'AGENT_OWNER_ACCOUNT': 'agent:' + registration['identity']['did'] + ':main',
             'AGENT_RECOVERY_ROOT': base64.urlsafe_b64encode(bytes(recovery['root'])).decode().rstrip('='),
             'AGENT_RECOVERY_THRESHOLD': recovery['threshold']},
         'authority.json': dict(binding, **{'core-clock-horizon': policy['core-clock-horizon']}),
-        'agent.json': {'HUMAN_PEERS': f"4020:{binding['principal']}:{binding['tenant']}",
+        'agent.json': {'HUMAN_PEERS': peers,
             'HUMAN_LIMIT_SCOPE': policy['limit']['scope'], 'HUMAN_LIMIT_SCOPE_ID': registration['owner_account'],
             'HUMAN_LIMIT_ID': policy['limit']['id'], 'HUMAN_LIMIT_NAME': policy['limit']['name'],
             'HUMAN_LIMIT_CEILING': policy['limit']['ceiling'], 'HUMAN_LIMIT_CONSUMED': head['consumed']},
@@ -591,9 +609,12 @@ def qualify_generated_set(work_dir, registry_path, secrets_dir, network, chain):
 def main():
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--prepare-owner-request', action='store_true')
     mode.add_argument('--validate-evidence-inputs', action='store_true')
     mode.add_argument('--materialize-journal', action='store_true')
     mode.add_argument('--validate-owner-registration', action='store_true')
+    mode.add_argument('--produce-owner-registration', action='store_true')
+    mode.add_argument('--prepare-owner-admission', action='store_true')
     mode.add_argument('--catalog', action='store_true')
     mode.add_argument('--assemble', action='store_true')
     mode.add_argument('--movement-source', action='store_true')
@@ -615,7 +636,17 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--work-dir', type=Path, required=True)
     args = parser.parse_args()
-    if args.materialize_journal:
+    if args.prepare_owner_request:
+        require(args.secrets_dir is not None, args.work_dir, 'secrets directory')
+        owner_request(args.work_dir, args.secrets_dir)
+    elif args.prepare_owner_admission:
+        require(args.secrets_dir is not None, args.work_dir, 'secrets directory')
+        from owner_native import prepare_admission
+        prepare_admission(args.work_dir, args.secrets_dir)
+    elif args.produce_owner_registration:
+        from owner_native import produce
+        produce(args.work_dir)
+    elif args.materialize_journal:
         materialize_journal(args.work_dir, args.journal)
     elif args.validate_evidence_inputs:
         require(args.registry is not None, args.work_dir, 'module registry path')
@@ -650,6 +681,8 @@ def main():
 
 
 if __name__ == '__main__':
+    import sys
+    sys.modules['provision'] = sys.modules[__name__]
     try:
         main()
     except Refused as error:

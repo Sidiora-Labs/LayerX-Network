@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_daemon.h"
 
 #include "layerx/lxp_activity.h"
@@ -49,6 +50,7 @@ typedef struct lxp_daemon_process {
     size_t asset_count;
     lx_programs_transfer_runtime programs;
     lxp_identity_store identities;
+    uint8_t admitted_identity_digest[32];
     lxp_fee_params fees;
     lxp_log feed_log;
     lxp_log canonical_log;
@@ -96,6 +98,10 @@ typedef struct lxp_daemon_process {
 } lxp_daemon_process;
 
 static lxp_result resume_batch_number(lxp_daemon_process *process);
+static lxp_result initialized_genesis_marker_identity(
+    lxp_daemon_process *process, bool create, bool *present,
+    const uint8_t identity_digest[32]);
+
 static lxp_result availability_prune(lxp_daemon_process *process, uint64_t head)
 {
     uint64_t low = head >= process->availability_retain_batches ?
@@ -340,15 +346,11 @@ static lxp_result decode_hex(const char *text, uint8_t *output,
     return LXP_OK;
 }
 
-static lxp_result load_identities(const char *path,
-                                  lxp_identity_store *identities)
+static lxp_result read_identities(FILE *file, lxp_identity_store *identities)
 {
-    FILE *file;
     char line[4096];
     lxp_result status = LXP_OK;
-    if (path == NULL || identities == NULL) return LXP_ERR_NON_CANONICAL;
-    file = fopen(path, "rb");
-    if (file == NULL) return LXP_ERR_IO;
+    if (file == NULL || identities == NULL) return LXP_ERR_NON_CANONICAL;
     (void)memset(identities, 0, sizeof(*identities));
     while (status == LXP_OK && fgets(line, sizeof(line), file) != NULL) {
         char *key_separator = strchr(line, ':');
@@ -389,7 +391,76 @@ static lxp_result load_identities(const char *path,
     if (status == LXP_OK && ferror(file)) status = LXP_ERR_IO;
     if (status == LXP_OK && identities->count == 0U)
         status = LXP_ERR_UNKNOWN_DID;
+    return status;
+}
+
+static lxp_result load_identities(const char *path, lxp_identity_store *identities)
+{
+    if (path == NULL || identities == NULL) return LXP_ERR_NON_CANONICAL;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) return LXP_ERR_IO;
+    lxp_result status = read_identities(file, identities);
     if (fclose(file) != 0 && status == LXP_OK) status = LXP_ERR_IO;
+    return status;
+}
+
+static lxp_result admit_provisioned_identities(lxp_daemon_process *process)
+{
+    lxp_result status = LXP_OK;
+    if (pthread_mutex_lock(&process->owner.mutex) != 0) return LXP_ERR_IO;
+    if (process->protocol_version != 3U || process->state.next_sequence != 1U)
+        goto finish;
+    const char *path = required_environment("LAYERX_NODE_IDENTITIES");
+    int fd = path == NULL ? -1 : open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    struct stat info;
+    if (fd < 0) { status = LXP_ERR_IO; goto finish; }
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) ||
+        info.st_uid != geteuid() || (info.st_mode & 0777U) != 0600U ||
+        info.st_nlink != 1 || info.st_size <= 0 || info.st_size > 1048576) {
+        (void)close(fd);
+        status = LXP_ERR_NON_CANONICAL;
+        goto finish;
+    }
+    FILE *file = fdopen(fd, "rb");
+    if (file == NULL) { (void)close(fd); status = LXP_ERR_IO; goto finish; }
+    lxp_identity_store *next = malloc(sizeof(*next));
+    status = next == NULL ? LXP_ERR_IO : read_identities(file, next);
+    uint8_t digest[32];
+    uint8_t *bytes = NULL;
+    if (status == LXP_OK && next->count != process->identities.count) {
+        bytes = malloc((size_t)info.st_size);
+        if (bytes == NULL || fseek(file, 0, SEEK_SET) != 0 ||
+            fread(bytes, 1U, (size_t)info.st_size, file) != (size_t)info.st_size)
+            status = LXP_ERR_IO;
+        if (status == LXP_OK)
+            status = lxp_hash_sha256(bytes, (size_t)info.st_size, digest);
+        free(bytes);
+    }
+    if (fclose(file) != 0 && status == LXP_OK) status = LXP_ERR_IO;
+    if (status == LXP_OK && next->count < process->identities.count)
+        status = LXP_ERR_AUTH_SCOPE;
+    for (size_t i = 0U; status == LXP_OK && i < process->identities.count; ++i)
+        if (memcmp(&next->identities[i], &process->identities.identities[i],
+                   sizeof(lxp_identity)) != 0) status = LXP_ERR_AUTH_SCOPE;
+    for (size_t i = process->identities.count; status == LXP_OK && i < next->count; ++i)
+        if (next->identities[i].next_sequence != 0U ||
+            !lxp_ed25519_pubkey_is_canonical(next->identities[i].primary_key))
+            status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK && next->count != process->identities.count) {
+        bool present = false;
+        status = initialized_genesis_marker_identity(process, false, &present,
+                                                      process->admitted_identity_digest);
+        if (status == LXP_OK && !present) status = LXP_ERR_ROOT_MISMATCH;
+        if (status == LXP_OK)
+            status = initialized_genesis_marker_identity(process, true, &present, digest);
+        if (status == LXP_OK) {
+            (void)memcpy(process->admitted_identity_digest, digest, sizeof(digest));
+            process->identities = *next;
+        }
+    }
+    free(next);
+finish:
+    if (pthread_mutex_unlock(&process->owner.mutex) != 0) status = LXP_ERR_IO;
     return status;
 }
 
@@ -897,6 +968,7 @@ static lxp_result replay_execute_activity(
         return LXP_ERR_SEQUENCE_GAP;
     if ((expected->module_id != LXP_MODULE_PROGRAMS &&
          expected->module_id != LXP_MODULE_ASSET &&
+         expected->module_id != LXP_MODULE_GOVERNANCE &&
          !(process->custody_credit_enabled && expected->module_id == LXP_MODULE_BRIDGE)) ||
         expected->module_version == 0U ||
         expected->parameter_version != process->parameter_version ||
@@ -916,6 +988,7 @@ static lxp_result replay_execute_activity(
         lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS &&
         activity->activity_type != LX_ASSET_SEND &&
         activity->activity_type != LX_ASSET_WITHDRAW &&
+        !lxp_governance_activity(activity->activity_type) &&
         !(process->custody_credit_enabled && activity->activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK &&
@@ -929,6 +1002,7 @@ static lxp_result replay_execute_activity(
         status = lxp_identity_resolve(&process->identities,
                                       activity->actor_did.bytes,
                                       activity->actor_did.length, &identity);
+    if (status == LXP_OK) status = lxp_governance_identity_refresh(&process->kernel, identity);
     if (status == LXP_OK &&
         (activity->authority.length != 32U ||
          !lxp_identity_key_valid(identity, activity->authority.bytes,
@@ -944,7 +1018,8 @@ static lxp_result replay_execute_activity(
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity->activity_type);
     scope.activity_ordinal_min = (activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ?
         lxp_activity_type_ordinal(activity->activity_type) : 1U;
-    scope.activity_ordinal_max = activity->activity_type == LXP_BRIDGE_CREDIT ? 1U :
+    scope.activity_ordinal_max = (activity->activity_type == LXP_BRIDGE_CREDIT ||
+        lxp_governance_activity(activity->activity_type)) ? 1U :
         ((activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ?
         lxp_activity_type_ordinal(activity->activity_type) : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -2087,6 +2162,7 @@ static lxp_result apply_canonical_activity(
         lxp_activity_module_id(activity.activity_type) != LXP_MODULE_PROGRAMS &&
         activity.activity_type != LX_ASSET_SEND &&
         activity.activity_type != LX_ASSET_WITHDRAW &&
+        !lxp_governance_activity(activity.activity_type) &&
         !(process->custody_credit_enabled && activity.activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK) status = current_time_ms(&timestamp);
@@ -2094,6 +2170,7 @@ static lxp_result apply_canonical_activity(
         status = lxp_identity_resolve(&process->identities,
                                       activity.actor_did.bytes,
                                       activity.actor_did.length, &identity);
+    if (status == LXP_OK) status = lxp_governance_identity_refresh(&process->kernel, identity);
     if (status == LXP_OK &&
         (activity.authority.length != 32U ||
          !lxp_identity_key_valid(identity, activity.authority.bytes,
@@ -2110,7 +2187,8 @@ static lxp_result apply_canonical_activity(
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity.activity_type);
     scope.activity_ordinal_min = (activity.activity_type == LX_ASSET_SEND || activity.activity_type == LX_ASSET_WITHDRAW) ?
         lxp_activity_type_ordinal(activity.activity_type) : 1U;
-    scope.activity_ordinal_max = activity.activity_type == LXP_BRIDGE_CREDIT ? 1U :
+    scope.activity_ordinal_max = (activity.activity_type == LXP_BRIDGE_CREDIT ||
+        lxp_governance_activity(activity.activity_type)) ? 1U :
         ((activity.activity_type == LX_ASSET_SEND || activity.activity_type == LX_ASSET_WITHDRAW) ?
         lxp_activity_type_ordinal(activity.activity_type) : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -2140,7 +2218,8 @@ static lxp_result apply_canonical_activity(
     execution.maximum_timestamp_window = UINT64_C(300000);
     execution.epoch = process->kernel.epoch;
     execution.global_sequence = global_sequence;
-    execution.recorded_module_version = activity.activity_type == LXP_BRIDGE_CREDIT ?
+    execution.recorded_module_version = (activity.activity_type == LXP_BRIDGE_CREDIT ||
+        lxp_governance_activity(activity.activity_type)) ?
         1U : ((activity.activity_type == LX_ASSET_SEND || activity.activity_type == LX_ASSET_WITHDRAW) ?
         lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
     execution.recorded_fee_schedule_version = 0U;
@@ -2428,6 +2507,7 @@ static lxp_result apply_canonical_batch(
             status = lxp_identity_resolve(
                 &process->identities, activities[i].actor_did.bytes,
                 activities[i].actor_did.length, &identity);
+        if (status == LXP_OK) status = lxp_governance_identity_refresh(&process->kernel, identity);
         if (status == LXP_OK &&
             (activities[i].authority.length != 32U ||
              !lxp_identity_key_valid(identity,
@@ -2441,13 +2521,15 @@ static lxp_result apply_canonical_batch(
             lxp_activity_module_id(activities[i].activity_type) != LXP_MODULE_PROGRAMS &&
             activities[i].activity_type != LX_ASSET_SEND &&
             activities[i].activity_type != LX_ASSET_WITHDRAW &&
+            !lxp_governance_activity(activities[i].activity_type) &&
             !(process->custody_credit_enabled && activities[i].activity_type == LXP_BRIDGE_CREDIT))
             status = LXP_ERR_UNKNOWN_ACTIVITY;
         if (status == LXP_OK)
             scopes[i].module_mask = UINT64_C(1) << lxp_activity_module_id(activities[i].activity_type);
         scopes[i].activity_ordinal_min = (activities[i].activity_type == LX_ASSET_SEND || activities[i].activity_type == LX_ASSET_WITHDRAW) ?
             lxp_activity_type_ordinal(activities[i].activity_type) : 1U;
-        scopes[i].activity_ordinal_max = activities[i].activity_type == LXP_BRIDGE_CREDIT ? 1U :
+        scopes[i].activity_ordinal_max = (activities[i].activity_type == LXP_BRIDGE_CREDIT ||
+            lxp_governance_activity(activities[i].activity_type)) ? 1U :
             ((activities[i].activity_type == LX_ASSET_SEND || activities[i].activity_type == LX_ASSET_WITHDRAW) ?
             lxp_activity_type_ordinal(activities[i].activity_type) : 10U);
         scopes[i].maximum_per_activity =
@@ -2475,7 +2557,8 @@ static lxp_result apply_canonical_batch(
         executions[i].maximum_timestamp_window = UINT64_C(300000);
         executions[i].epoch = process->kernel.epoch;
         executions[i].global_sequence = sequence;
-        executions[i].recorded_module_version = activities[i].activity_type == LXP_BRIDGE_CREDIT ?
+        executions[i].recorded_module_version = (activities[i].activity_type == LXP_BRIDGE_CREDIT ||
+            lxp_governance_activity(activities[i].activity_type)) ?
             1U : ((activities[i].activity_type == LX_ASSET_SEND || activities[i].activity_type == LX_ASSET_WITHDRAW) ?
             lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
         executions[i].parameter_version = process->parameter_version;
@@ -3465,8 +3548,9 @@ static lxp_result load_genesis_registration(
     return status;
 }
 
-static lxp_result initialized_genesis_marker(
-    lxp_daemon_process *process, bool create, bool *present)
+static lxp_result initialized_genesis_marker_identity(
+    lxp_daemon_process *process, bool create, bool *present,
+    const uint8_t identity_digest[32])
 {
     static const uint8_t domain[] = "LXP/initialized-genesis/v1";
     static const char *const inputs[] = {
@@ -3515,10 +3599,16 @@ static lxp_result initialized_genesis_marker(
         uint8_t *bytes = NULL;
         size_t count = 0U;
         const char *path = required_environment(inputs[index]);
-        status = lxp_daemon_artifact_read(path, NODE_SNAPSHOT_ARENA_BYTES,
-                                          0U, &bytes, &count);
-        if (status == LXP_OK)
-            status = lxp_hash_sha256(bytes, count, record + offset);
+        if (index == 3U && identity_digest != NULL) {
+            (void)memcpy(record + offset, identity_digest, 32U);
+        } else {
+            status = lxp_daemon_artifact_read(path, NODE_SNAPSHOT_ARENA_BYTES,
+                                              0U, &bytes, &count);
+            if (status == LXP_OK)
+                status = lxp_hash_sha256(bytes, count, record + offset);
+            if (status == LXP_OK && index == 3U)
+                (void)memcpy(process->admitted_identity_digest, record + offset, 32U);
+        }
         free(bytes);
         offset += 32U;
     }
@@ -3590,6 +3680,12 @@ static lxp_result initialized_genesis_marker(
     }
     if (status == LXP_OK) *present = true;
     return status;
+}
+
+static lxp_result initialized_genesis_marker(
+    lxp_daemon_process *process, bool create, bool *present)
+{
+    return initialized_genesis_marker_identity(process, create, present, NULL);
 }
 
 static lxp_result verify_bootstrap_genesis(
@@ -3800,6 +3896,9 @@ static lxp_result open_process(lxp_daemon_process *process,
         process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_kernel_register_module(
             &process->kernel, lx_asset_module_iface());
+    if (status == LXP_OK &&
+        process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_kernel_register_module(&process->kernel, lxp_governance_module_iface());
     if (status == LXP_OK && process->custody_credit_enabled)
         status = lxp_kernel_register_module(&process->kernel, lxp_bridge_module_iface());
     if (status == LXP_OK)
@@ -4157,7 +4256,8 @@ lxp_result lxp_daemon_serve(const char *configuration_path)
     }
     while (status == LXP_OK && !stop_requested) {
         struct timespec interval = {0, 100000000L};
-        status = lxp_daemon_lni_status(&process->lni);
+        status = admit_provisioned_identities(process);
+        if (status == LXP_OK) status = lxp_daemon_lni_status(&process->lni);
         if (status == LXP_OK && nanosleep(&interval, NULL) != 0 &&
             errno != EINTR)
             status = LXP_ERR_IO;

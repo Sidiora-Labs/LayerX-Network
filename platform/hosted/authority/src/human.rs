@@ -129,6 +129,7 @@ struct Verified {
     header_signature: [u8; 64],
     timestamp_ms: u64,
     last_sequence: u64,
+    checkpoint: Option<layerx_client::evidence::VerifiedCheckpoint>,
 }
 
 pub(super) struct Human {
@@ -435,6 +436,7 @@ fn verify(
     Ok(Verified {
         record,
         facts,
+        checkpoint: None,
         receipt_digest: locator.receipt_digest,
         timestamp_ms: header.timestamp_ms(),
         last_sequence: header.last_sequence(),
@@ -545,7 +547,12 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
         }
         return Ok(by_activity(config, activity));
     }
-    let evidence = human.evidence(config)?;
+    let mut evidence = human.evidence(config)?;
+    if matches!(name, "identity" | "key-policy" | "capability-scope") {
+        for item in &mut evidence {
+            item.checkpoint = super::checkpoint_header(config, item.facts.batch_number).ok();
+        }
+    }
     match name {
         "core-clock" => clock(&evidence, human.horizon),
         "balance-context" => balance_context(p, &human.registry_path, &evidence, config),
@@ -818,11 +825,344 @@ fn policy_route(
     {
         return Err(unavailable("policy_evidence_stale"));
     }
+    let checkpoint = if matches!(name, "identity" | "key-policy" | "capability-scope") {
+        let checkpoint = native_checkpoint(item)?;
+        Some(checkpoint)
+    } else {
+        None
+    };
+    if name == "key-policy" {
+        return native_key_policy(
+            params["recovery"] == "true",
+            identity,
+            item,
+            evidence,
+            p,
+            checkpoint,
+        );
+    }
+    if name == "capability-scope" {
+        return native_capability_scope(identity, params, item, evidence, head);
+    }
+    if name == "identity" {
+        let state = native_identity_state(item, &identity.did)?;
+        let revision = native_u64(&state, 69)?;
+        if identity.frozen
+            || identity.revocation_sequence != revision
+            || identity.authorities.len() != 1
+            || identity.authorities[0].kind != "primary_key"
+            || identity.authorities[0].id != hex::encode(&state[37..69])
+        {
+            return Err(unavailable("identity_state_proof_unavailable"));
+        }
+        native_complete_suffix(item, evidence)?;
+        for later in evidence
+            .iter()
+            .filter(|e| e.facts.global_sequence > item.facts.global_sequence)
+        {
+            if native_identity_state(later, &identity.did).is_ok() {
+                return Err(unavailable("identity_state_proof_unavailable"));
+            }
+        }
+        return Ok(json(
+            200,
+            &value!({
+                "authorities": identity.authorities,
+                "canonical_core_bytes": hex::encode(&state),
+                "head_sequence": head, "revocation_sequence": revision,
+                "frozen": false, "verification_level": "checkpoint_finalised"
+            }),
+        ));
+    }
     Err(unavailable(match name {
         "identity" => "identity_state_proof_unavailable",
         "capability-scope" => "capability_state_proof_unavailable",
         _ => "key_policy_checkpoint_evidence_unavailable",
     }))
+}
+
+fn native_capability_scope(
+    identity: &Identity,
+    params: &BTreeMap<String, String>,
+    item: &Verified,
+    evidence: &[Verified],
+    head: u64,
+) -> Result<Response, Response> {
+    let refused = || unavailable("capability_state_proof_unavailable");
+    let scope = identity
+        .capabilities
+        .iter()
+        .find(|scope| {
+            scope.authority == params["authority"]
+                && scope.action_key == params["action_key"]
+                && scope.capability_id == params["capability_id"]
+        })
+        .ok_or_else(refused)?;
+    let state = native_identity_state(item, &identity.did)?;
+    let bytes = hex::decode(&item.record.receipt_hex).map_err(|_| refused())?;
+    let receipt = decode(&bytes).map_err(|_| refused())?;
+    let protocol = receipt.protocol().ok_or_else(refused)?;
+    let summaries: Vec<_> = protocol
+        .effects()
+        .iter()
+        .filter(|effect| effect.module_id() == 7 && effect.event_type() == 0x7145)
+        .collect();
+    if summaries.len() != 1 || summaries[0].monetary() || summaries[0].kind() != 3 {
+        return Err(refused());
+    }
+    let summary = summaries[0].body();
+    if summary.len() != 209
+        || &summary[..5] != b"LXGS2"
+        || hex::encode(&summary[5..37]) != scope.capability_id
+        || summary[37..69] != state[5..37]
+        || hex::encode(&summary[69..101]) != scope.authority
+        || summary[69..101] != state[37..69]
+        || hex::encode(&summary[101..133]) != scope.action_key
+        || summary[101..133] == [0; 32]
+        || native_u64(summary, 165)? != scope.expiry_sequence
+        || scope.expiry_sequence <= head
+        || native_u64(summary, 173)? != 2
+        || native_u64(summary, 201)? != native_u64(&state, 69)?
+        || identity.revocation_sequence != native_u64(&state, 69)?
+        || identity.frozen
+        || !scope.counterparties.is_empty()
+        || !scope.assets.is_empty()
+        || scope.amount_ceiling != "0"
+        || !scope.enforceable_dimensions.is_empty()
+    {
+        return Err(refused());
+    }
+    let minimum = u16::from_be_bytes([summary[181], summary[182]]);
+    let maximum = u16::from_be_bytes([summary[183], summary[184]]);
+    if minimum == 0
+        || minimum > maximum
+        || scope.activity_types != (minimum..=maximum).collect::<Vec<_>>()
+    {
+        return Err(refused());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| refused())?
+        .as_millis();
+    if now < u128::from(native_u64(summary, 185)?) || now >= u128::from(native_u64(summary, 193)?) {
+        return Err(refused());
+    }
+    native_complete_suffix(item, evidence)?;
+    for later in evidence
+        .iter()
+        .filter(|later| later.facts.global_sequence > item.facts.global_sequence)
+    {
+        if let Ok(later_state) = native_identity_state(later, &identity.did) {
+            if later_state[37..77] != state[37..77] || later_state[111..183] != state[111..183] {
+                return Err(refused());
+            }
+        }
+    }
+    let checkpoint = native_checkpoint(item)?;
+    Ok(json(
+        200,
+        &value!({
+            "activity_types": scope.activity_types, "native_module_mask": 2,
+            "counterparties": [], "assets": [], "amount_ceiling": "0",
+            "expiry_sequence": scope.expiry_sequence, "action_key": scope.action_key,
+            "capability_id": scope.capability_id, "authority": scope.authority,
+            "enforceable_dimensions": [], "observed_sequence": head, "verification": 4,
+            "evidence_digest": hex::encode(&item.receipt_digest),
+            "canonical_core_bytes": hex::encode(summary),
+            "checkpoint_digest": hex::encode(&checkpoint.report().evidence().checkpoint_id().ok_or_else(refused)?)
+        }),
+    ))
+}
+
+fn native_checkpoint(
+    item: &Verified,
+) -> Result<&layerx_client::evidence::VerifiedCheckpoint, Response> {
+    let checkpoint = item
+        .checkpoint
+        .as_ref()
+        .ok_or_else(|| unavailable("key_policy_checkpoint_evidence_unavailable"))?;
+    if checkpoint.canonical_header() != item.header {
+        return Err(unavailable("key_policy_checkpoint_evidence_unavailable"));
+    }
+    Ok(checkpoint)
+}
+
+fn native_key_policy(
+    recovery: bool,
+    identity: &Identity,
+    item: &Verified,
+    evidence: &[Verified],
+    p: &PrincipalPolicy,
+    checkpoint: Option<&layerx_client::evidence::VerifiedCheckpoint>,
+) -> Result<Response, Response> {
+    let head = evidence
+        .iter()
+        .map(|e| e.last_sequence)
+        .max()
+        .ok_or_else(|| unavailable("head_unavailable"))?;
+    let policy = if recovery {
+        &identity.recovery
+    } else {
+        &identity.rotation
+    };
+    let state = native_identity_state(item, &identity.did)?;
+    let (revision_offset, delay_offset, maximum_offset) = if recovery {
+        (175, 183, 191)
+    } else {
+        (167, 199, 207)
+    };
+    let revision = native_u64(&state, revision_offset)?;
+    let delay = native_u64(&state, delay_offset)?;
+    let maximum = native_u64(&state, maximum_offset)?;
+    let (delay, maximum) = if recovery {
+        (delay, maximum)
+    } else {
+        (delay.div_ceil(1000), maximum / 1000)
+    };
+    if revision == 0
+        || delay == 0
+        || maximum < delay
+        || policy.policy_revision != revision
+        || policy.required_delay_seconds != delay
+        || policy.maximum_delay_seconds != maximum
+        || policy.effective_sequence != item.facts.global_sequence
+    {
+        return Err(unavailable("key_policy_checkpoint_evidence_unavailable"));
+    }
+    native_complete_suffix(item, evidence)?;
+    for later in evidence
+        .iter()
+        .filter(|e| e.facts.global_sequence > item.facts.global_sequence)
+    {
+        if let Ok(later_state) = native_identity_state(later, &identity.did) {
+            if later_state[revision_offset..revision_offset + 8]
+                != state[revision_offset..revision_offset + 8]
+                || later_state[37..77] != state[37..77]
+            {
+                return Err(unavailable("key_policy_checkpoint_evidence_unavailable"));
+            }
+        }
+    }
+    Ok(json(
+        200,
+        &value!({
+            "policy_revision": revision,
+            "required_delay_seconds": delay,
+            "maximum_delay_seconds": maximum,
+            "effective_sequence": policy.effective_sequence,
+            "observed_head_sequence": head,
+            "verification": 4,
+            "evidence_digest": hex::encode(&item.receipt_digest),
+            "checkpoint_digest": hex::encode(&checkpoint
+                .and_then(|c| c.report().evidence().checkpoint_id())
+                .ok_or_else(|| unavailable("key_policy_checkpoint_evidence_unavailable"))?),
+            "age_sequences": head - item.facts.global_sequence,
+            "maximum_age_sequences": p.maximum_age_sequences
+        }),
+    ))
+}
+
+fn native_u64(state: &[u8], offset: usize) -> Result<u64, Response> {
+    let bytes = state
+        .get(offset..offset + 8)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| unavailable("identity_state_proof_unavailable"))?;
+    Ok(u64::from_be_bytes(bytes))
+}
+
+fn native_identity_state(item: &Verified, did: &str) -> Result<Vec<u8>, Response> {
+    let refused = || unavailable("identity_state_proof_unavailable");
+    if did.is_empty() || did.len() > 255 {
+        return Err(refused());
+    }
+    let mut preimage = b"LXP/v1/did-id\0".to_vec();
+    preimage.extend_from_slice(
+        &u16::try_from(did.len())
+            .map_err(|_| refused())?
+            .to_be_bytes(),
+    );
+    preimage.extend_from_slice(did.as_bytes());
+    let did_id = digest(&preimage);
+    let bytes = hex::decode(&item.record.receipt_hex).map_err(|_| refused())?;
+    let receipt = decode(&bytes).map_err(|_| refused())?;
+    let receipt = receipt.protocol().ok_or_else(refused)?;
+    if receipt.protocol_version() != 3
+        || receipt.module_id() != 7
+        || receipt.module_version() != 1
+        || receipt.result_code() != 0
+    {
+        return Err(refused());
+    }
+    let mut states = receipt
+        .effects()
+        .iter()
+        .filter(|e| e.module_id() == 7 && e.event_type() == 0x7110);
+    let effect = states.next().ok_or_else(refused)?;
+    let state = effect.body();
+    if states.next().is_some()
+        || effect.monetary()
+        || state.len() != 223
+        || &state[..5] != b"LXGI1"
+        || state[5..37] != did_id
+        || native_u64(state, 215)? != item.facts.global_sequence
+        || native_u64(state, 69)? == 0
+    {
+        return Err(refused());
+    }
+    Ok(state.to_vec())
+}
+
+fn native_complete_suffix(start: &Verified, evidence: &[Verified]) -> Result<(), Response> {
+    let refused = || unavailable("identity_state_proof_unavailable");
+    let mut batches = BTreeMap::new();
+    for item in evidence
+        .iter()
+        .filter(|e| e.facts.batch_number >= start.facts.batch_number)
+    {
+        batches
+            .entry(item.facts.batch_number)
+            .or_insert_with(Vec::new)
+            .push(item);
+    }
+    let mut next_batch = start.facts.batch_number;
+    let mut previous_root = None;
+    for (number, items) in batches {
+        if number != next_batch {
+            return Err(refused());
+        }
+        next_batch = number.checked_add(1).ok_or_else(refused)?;
+        let first = items.first().ok_or_else(refused)?;
+        let header = decode_batch_header(&first.header).map_err(|_| refused())?;
+        if previous_root.is_some_and(|root| root != header.previous_state_root()) {
+            return Err(refused());
+        }
+        previous_root = Some(header.resulting_state_root());
+        let begin = header.first_sequence().max(start.facts.global_sequence);
+        let last = header.last_sequence();
+        let maintenance = first
+            .record
+            .replica_document
+            .get("batch_evidence")
+            .and_then(|e| e.get("batch_identity"))
+            .and_then(|e| e.get("kind"))
+            .and_then(Value::as_str)
+            == Some("occupancy_maintenance_v2");
+        let end = if maintenance {
+            last.checked_sub(1).ok_or_else(refused)?
+        } else {
+            last
+        };
+        let held: BTreeSet<_> = items.iter().map(|e| e.facts.global_sequence).collect();
+        if end < begin
+            || end - begin + 1 != held.range(begin..=end).count() as u64
+            || items
+                .iter()
+                .any(|e| e.header != first.header || e.header_signature != first.header_signature)
+        {
+            return Err(refused());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

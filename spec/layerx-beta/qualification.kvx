@@ -7213,3 +7213,243 @@ file = "platform/hosted/tests/beta-cluster.sh platform/hosted/tests/sequencer-pi
 symbol = "encode_trust_history provision"
 observed = "Cluster trust-history production now emits protocol 3 and pin provisioning requires exactly protocol 3. Real OpenSSL sequencer identities pass through the sourced shell encoder and production pin consumer with exact output assertions. Versions 0, 1, 2, 4 and 65535 refuse without publishing pin files; domain, entry count, truncation, trailing bytes, network, epoch, first/last batch, revocation and public-key mutations preserve refusal. Seventeen trust tests and eighteen Human tests pass in qual-logs/reg2/reg2e-trust-python.log. Registry locked tests, strict all-targets Clippy, formatting and shell syntax pass in reg2e-trust-registry.log, reg2e-trust-clippy.log, reg2e-trust-fmt.log and reg2e-trust-shell.log. beta-ledger-check passes in reg2e-trust-ledger.log."
 assumption = "The cluster generator and pin consumer require one protocol version; legacy verification support in the registry remains unchanged. Real cluster/image/ingress/PVC qualification is still unavailable on this host, and local source/native qualification does not establish hosted deployment success."
+
+[observation.3.7.24]
+task = "3.7"
+file = "platform/hosted/authority/src/human.rs"
+symbol = "policy_route"
+observed = "Identity, capability-scope and key-policy routes unconditionally return unavailable after receipt matching and freshness checks. Positive owner identity verification requires committed policy state verification in this file, outside the owner-registration owned paths. Native module registration is in cmd/layerxd/lxp_daemon_process.c and currently omits Governance. platform/hosted/human/provision.py and its claimed existing validate-owner-registration mode are absent in this checkout."
+assumption = "Real owner provisioning requires coordinated daemon registration and authenticated committed-state policy verification; unrelated authentic receipts cannot substitute for recovery state."
+severity = "blocker"
+
+[observation.3.7.25]
+task = "3.7"
+file = "agent/crates/layerx-agentd/src/human_runtime.rs"
+symbol = "ProductionHumanOperations::prepare"
+observed = "The preparation path previously passed textual authority bytes into native Authority::owner and attempted UTF-8 serialization of native authority bytes in the response. Both directions require canonical conversion. The hosted authority hex decoder accepts either case, so the report's lowercase-only claim is stricter than the current hosted parser; lowercase remains the canonical emitted form."
+assumption = "Authority encoding does not itself prove DID admission, account ownership or recovery registration."
+severity = "note"
+
+[observation.3.7.26]
+task = "3.7"
+file = "agent/crates/layerx-agentd/src/export.rs"
+symbol = "build"
+observed = "cargo fmt --manifest-path agent/Cargo.toml -p layerx-agentd --check exits 1 on existing formatting differences in src/export.rs, src/policy/eval.rs, tests/budget_unknown.rs and tests/operator.rs. The changed human_runtime.rs passes the direct rustfmt check."
+assumption = "Unrelated formatting is preserved; crate-wide formatting remains unqualified until those differences are addressed."
+severity = "blocker"
+
+[observation.3.7.27]
+task = "3.7"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "real authority fixture"
+observed = "cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd exits 101 in budget_create: real_authority.rs:326 requires UID 0 to run layerxd under a distinct uid, but the process UID is 1000. Subsequent fixture users report a poisoned lock. The root assertion is unchanged."
+assumption = "Real-node integration qualification requires the harness execution privileges and native binaries; passing authority parser unit tests does not qualify that integration."
+severity = "blocker"
+
+[observation.3.7.28]
+task = "3.7"
+file = "cmd/layerx-genesis/lxp_genesis_builder.c"
+symbol = "bootstrap_kernel"
+observed = "The executable Governance module changes the daemon module registry. Fresh snapshots from the unchanged genesis builder still register only Programs, Asset and optional Bridge. The real disposable daemon exits with LXP_ERR_SNAPSHOT_MISMATCH (-902), before opening LNI, under sudo -n env CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 bash tests/daemon/program-admission.sh build --governance. Evidence: qual-logs/own1/own1b-governance-daemon.log and /tmp/lxp-program-admission-Hk1Xuw/sequencer.log. src/state/lxp_snapshot.c preserves its exact module-count and registration comparisons. The genesis builder path requires a coordinated Governance registration before real registration, recovery, rotation, session, revocation and restart qualification can pass."
+assumption = "Native compilation and existing state-helper tests do not qualify the new Governance handlers or establish a runnable owner-registration deployment."
+severity = "blocker"
+
+[observation.3.7.29]
+task = "3.7"
+file = "platform/hosted/human/owner_native.py"
+symbol = "produce"
+observed = "The owner-registration producer submits signed custody credit and Governance activities through the existing layerxctl real-client CLI, verifies native receipt signatures and requests authorized batch verification from the HTTPS receipt authority. It consumes custody-produced owner and rotation keys, a pre-bootstrap owner DID binding, a real signed custody credit and LXIP owner output; it does not create the custody key, vault deposit or attestation itself. python3 -m pytest platform/hosted/human -q under qual-logs/own1/venv passes 21 tests after building the real identity-provider binary. The native signature parser is checked against the retained real-program-deploy receipt and tamper cases. The complete producer flow has not run: the node snapshot registry is mismatched, no cluster is available, and deployment/custody inputs are absent. Evidence: qual-logs/own1/own1b-pytest-final.log and qual-logs/own1/own1b-producer-tests.log."
+assumption = "Structural registration validation and receipt-parser tests do not establish funded owner registration or positive checkpoint-finalised Human policy verification."
+severity = "blocker"
+
+[observation.3.7.30]
+task = "3.7"
+file = "platform/hosted/authority/src/human.rs"
+symbol = "policy_route"
+observed = "Native Governance identity snapshots can produce a batch_included response only after the existing signed-batch verification, exact DID/authority/revocation matching and complete retained execution suffix checks. Capability-scope and key-policy retain their refusal paths because authenticated checkpoint evidence and trust are not wired through the receipt authority configuration. cargo fmt --manifest-path platform/Cargo.toml -p layerx-platform-authority --check and cargo clippy --manifest-path platform/Cargo.toml --locked -p layerx-platform-authority --all-targets -- -D warnings exit 0. cargo test --manifest-path platform/Cargo.toml --locked -p layerx-platform-authority exits 101 at real_node: both tests require UID 0 and the invocation runs with UID 1000; earlier test executables pass. Evidence: qual-logs/own1/own1b-fmt-authority.log, qual-logs/own1/own1b-clippy-authority.log and qual-logs/own1/own1b-test-authority.log. No positive Governance receipt verifier integration test or checkpoint-finalised owner path has passed."
+assumption = "Authorized batch inclusion must not be relabelled checkpoint_finalised to satisfy Human key-policy or session requirements."
+severity = "blocker"
+
+[observation.3.7.31]
+task = "3.7"
+file = "cmd/layerx-genesis/lxp_genesis_builder.c"
+symbol = "materialize_snapshot"
+observed = "The registration site described in observation.3.7.28 is materialize_snapshot, not bootstrap_kernel. Its module list must match the protocol-3 daemon registry. Repeating the authority real_node test executable as root with the fresh native binaries removes the UID failure: the replica-only test passes and the sequencer test fails during startup. Evidence: qual-logs/own1/own1b-authority-real-node-root.log."
+assumption = "Changing execution privileges does not resolve the genesis and daemon module-registry mismatch."
+severity = "blocker"
+
+[observation.3.7.32]
+task = "3.7"
+severity = "note"
+file = "cmd/layerx-genesis/lxp_genesis_builder.c src/protocol/lxp_genesis.c tests/test_genesis_manifest.c"
+symbol = "materialize_snapshot lxp_genesis_materialize"
+observed = "Fresh protocol-3 genesis now requires Programs, Asset, Governance and optional Bridge in daemon registration order, preserving exact module-count and ABI checks. Genesis, identity, grants, rotation, revocation and module-context targets pass. The real-daemon Governance registration, recovery registration and invalid-threshold refusal test passes. Logs: qual-logs/own1/own1c-native-registry.log and qual-logs/own1/own1c-governance-final.log."
+assumption = "This closes the demonstrated Governance genesis mismatch. It does not establish full owner production, restart recovery or checkpoint-finalised Human integration."
+
+[observation.3.7.33]
+task = "3.7"
+severity = "blocker"
+file = "platform/hosted/node/bootstrap.sh platform/hosted/human/owner_native.py platform/hosted/human/provision.sh human/crates/layerx-human-identity-provider/src/state.rs"
+symbol = "GUARANTOR_KEY_FILE human_owner_provision _produce"
+observed = "The merged bootstrap generates secp256k1 guarantor identity keys with 33-byte compressed public keys; it supplies no per-guarantor Ed25519 keys. The Human recovery guardian commitment accepts unique 32-byte Ed25519 public keys. LXIP generates a new did:layerx:act_ identifier only when provisioning, while native production requires that exact DID and owner key already admitted by node startup. Supplying a different key algorithm or substituting a derived key DID cannot satisfy these bindings."
+assumption = "Recovery guardian custody requires an explicit Ed25519 identity binding for each existing guarantor, and native owner admission must bind the actual LXIP DID before first owner activity. Guardian registration as cluster-operated non-independent identities and end-to-end custody-key provisioning remain incomplete."
+
+[observation.3.7.34]
+task = "3.7"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/paxeer/deploy-contracts.sh tests/bridge/custody_credit.py platform/hosted/human/owner_native.py"
+symbol = "paxeer_contracts_deploy custody_registration_publish _produce"
+observed = "The merged cluster script contains settlement deployment, genesis bond deposits and custody genesis registration, but no owner vault deposit or custody_credit.py attest invocation. The owner producer still consumes a protected 427-byte custody-credit.bin. No deposit was executed and no custody credit was produced. Owner request creation now reads only the protected operator owner-email file, and LXIP provisioning precedes registration validation. Hosted Human pytest passes 25 tests and shell syntax checks pass; logs: qual-logs/own1/own1c-human-pytest-final.log and qual-logs/own1/own1c-shell.log."
+assumption = "Complete owner-native.json, recovery-policy.json, recovery-guardians.json and actual in-cluster custody deposit/attestation wiring remain required. No cluster or image gates ran; the build server lacks Docker, Kubernetes and a live cluster."
+
+[observation.3.7.35]
+task = "3.7"
+severity = "blocker"
+file = "platform/hosted/authority/src/human.rs platform/hosted/authority/src/main.rs src/modules/governance/lxp_governance.c agent/crates/layerx-agentd/src/human_runtime.rs"
+symbol = "checkpoint_header native_key_policy policy_route session"
+observed = "Identity and rotation/recovery policy responses now require tag-14 checkpoint evidence from the authenticated node, independently verified by the real client and byte-matched to the receipt batch header. Authority format, all-targets Clippy with warnings denied and locked crate tests pass including both real-node tests; logs: qual-logs/own1/own1c-authority-fmt.log, own1c-authority-clippy-qualified.log and own1c-authority-test.log in the same directory. Positive Human checkpoint responses are not exercised by those existing tests. Capability verification remains refused: native session grants encode not_before/not_after timestamps while the hosted capability contract requires an expiry_sequence and action-key binding without a demonstrated protocol mapping."
+assumption = "No timestamp-to-sequence conversion or assertion-only capability evidence is accepted. Positive checkpoint Human integration, capability mapping, real-client authority adapter coverage and complete Governance lifecycle/restart negative coverage remain required."
+
+[observation.3.7.36]
+task = "3.7"
+severity = "note"
+file = "platform/hosted/human/guardians.py platform/hosted/tests/beta-cluster.sh"
+symbol = "generate"
+observed = "Beta recovery guardians are three dedicated random Ed25519 keys with threshold two, bound individually to the two genesis guarantor identities and the sequencer. They are cluster-operated and non-independent, never derived from secp256k1 custody keys. The public binding manifest is published as layerx-human-guardian-bindings; separate protected guardian Secrets hold the private seeds."
+assumption = "Independent guardian operation is a production onboarding property. Cluster Secret publication requires live cluster qualification."
+
+[observation.3.7.37]
+task = "3.7"
+severity = "note"
+file = "cmd/layerxd/lxp_daemon_process.c platform/hosted/human/owner_native.py"
+symbol = "admit_provisioned_identities prepare_admission"
+observed = "LXIP provision-owner returns the exact DID and recovery fields but no signing key. Post-LXIP preparation generates protected owner and pending Ed25519 seeds and the exact public admission row. At genesis, protocol-3 native admission reads only an owner-controlled regular single-link 0600 identity file, preserves every existing identity byte-for-byte and permits only canonical zero-sequence additions. Admission closes once execution starts; signature, active-key, sequence, replay and checkpoint checks remain intact."
+assumption = "Cluster orchestration must append the produced public row atomically before the first native execution and retain it across restart. Live wiring and complete owner production still require qualification."
+
+[observation.3.7.38]
+task = "3.7"
+severity = "note"
+file = "platform/hosted/human/owner_custody.py platform/hosted/human/provision.sh platform/hosted/tests/beta-cluster.sh"
+symbol = "bootstrap deposit human_custody_step"
+observed = "Fresh cluster ordering now starts disposable Paxeer before native genesis, deploys real wrapped-native custody contracts and generates the immutable custody profile through the existing bridge verifier. After exact LXIP owner/key production, the owner deposit invokes real collateral wrapping, vault approval and deposit, then custody_credit.py attest with two verified disposable RPC origins. Protected host endpoints remain refused. Durable start markers prevent blind resubmission after unknown outcomes."
+assumption = "Paxd cluster execution and image gates require the live cluster and remain unrun on the build server."
+
+[observation.3.7.39]
+task = "3.7"
+severity = "note"
+file = "platform/hosted/human/native_manifest.py platform/hosted/human/provision.sh platform/hosted/human/owner_native.py"
+symbol = "configure human_native_provision _produce"
+observed = "Native producer configuration, protected Secret mounts, exact LXIP admission propagation, custody credit input and producer invocation are wired before owner-registration validation. The producer uses the real authenticated LNI peer uid, retains all signed activities and receipts, retrieves authenticated replica evidence and publishes records to the authority-owned state volume. Human owner environment exports derive only from produced registration and recovery files."
+assumption = "Live StatefulSet rollout, mounted producer execution and Human evidence Job qualification require the cluster."
+
+[observation.3.7.40]
+task = "3.7"
+severity = "note"
+file = "src/modules/governance/lxp_governance.c platform/hosted/authority/src/human.rs"
+symbol = "session native_capability_scope"
+observed = "Governance session payload version one commits expiry_sequence and action_key in module state and an LXGS2 receipt effect; old payload shape is refused. Hosted capability evidence checks those commitments, owner identity and revocation state, complete receipt suffix and authenticated node checkpoint evidence. Unsupported module scope and uncommitted monetary bounds remain refused."
+assumption = "Positive evidence describes the committed grant; empty monetary scope does not meet the separate Human capability installation contract."
+
+[observation.3.7.41]
+task = "3.7"
+severity = "blocker"
+file = "cmd/layerx-guarantor/runtime.c"
+symbol = "gp_runtime_open gp_runtime_authority"
+observed = "Real native owner checkpoint qualification reaches two bonded guarantor producers using deployed GuarantorBond and CheckpointRegistry, but both refuse startup with configuration result -902. The independent runtime registers Programs, Asset and optional Bridge while the genesis registry also contains Governance; its replay admission excludes Governance activities. Raw evidence is qual-logs/own1/own1d-session-real-checkpoint-domain.log."
+assumption = "Governance registry, admission and identity refresh must be implemented in the guarantor replay runtime before positive Human checkpoint policy qualification can pass. Snapshot and replay equality checks remain intact."
+
+[observation.3.7.42]
+task = "3.7"
+severity = "note"
+file = "agent/crates/layerx-agentd/src/human_runtime.rs tests/daemon/governance_lifecycle.py tests/daemon/owner-production.py"
+symbol = "real_owner_authority_prepares_over_temp_socket lifecycle"
+observed = "Authority decoding is exercised through the real client and ProductionCorePreparationBoundary over a distinct-uid temporary native socket. Native Governance qualification covers signed rotation key, time, sequence, DID and encoding refusals, unauthorized signers, pending-policy integrity, revoke reason, sequence, missing-grant and duplicate refusals, stale grants, and replay-preserved refusals after daemon restart."
+assumption = "Positive hosted checkpoint and full cluster qualification remain dependent on the separate guarantor replay runtime repair."
+
+[observation.3.7.43]
+task = "3.7"
+severity = "blocker"
+file = "agent/crates/layerx-agentd/src/export.rs agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-agentd/tests/budget_unknown.rs agent/crates/layerx-agentd/tests/operator.rs"
+symbol = "cargo fmt"
+observed = "The whole agentd package formatting gate reports pre-existing formatting differences in untouched export, policy evaluation and test files. The owner-authority source is formatted without changing those unrelated files. Raw output is qual-logs/own1/own1d-agentd-fmt.log."
+assumption = "The aggregate formatting gate remains failed until the owning work reconciles these existing formatting differences; no formatting assertion was removed."
+
+[observation.3.7.44]
+task = "3.7"
+severity = "blocker"
+file = "tests/test_daemon_lni_admission.c cmd/layerxd/lxp_daemon_lni.c"
+symbol = "test_crash_recovery"
+observed = "The aggregate native admission test fails at phase_status == 0 in test_crash_recovery, before its restart phase. The same unchanged test also fails in an isolated rerun. Raw outputs are qual-logs/own1/own1d-native-tests.log and qual-logs/own1/own1d-lni-admission-isolated.log. The real owner daemon pipeline and restart test pass separately."
+assumption = "The aggregate admission gate remains failed; its fixture or admission-boundary conflict requires separate diagnosis without weakening either check."
+
+[observation.3.7.45]
+task = "3.7"
+severity = "blocker"
+file = "agent/crates/layerx-agentd/tests/availability.rs agent/crates/layerx-agentd/src/read/availability.rs agent/crates/layerx-client/src/availability.rs agent/crates/layerx-proof/src/availability.rs"
+symbol = "complete_five_class_retrieval_streams_and_emits_offline_replay_frames corruption_withholding_and_repeated_provider_failure_are_durable_evidence"
+observed = "The unchanged aggregate availability tests fail with complete provider reported partial at line 247 and ChunkOrder versus the required MissingClass at line 311. The owner-authority real-client test passes in the same aggregate execution. Raw evidence is qual-logs/own1/own1d-agentd-tests-final.log and qual-logs/own1/own1d-agentd-tests-all.log."
+assumption = "The availability fixture and verifier contract require separate diagnosis; neither assertion nor verification ordering is changed by owner-registration work."
+
+[observation.3.7.46]
+task = "3.7"
+severity = "blocker"
+file = "cmd/layerx-guarantor/runtime.c tests/daemon/owner_checkpoint.py cmd/layerx-guarantor/settlement.py"
+symbol = "gp_runtime_open replay_execute_activity gp_runtime_authority checkpoint"
+observed = "Governance ABI 1 is registered in protocol-3 genesis order and replay admits exactly ordinals 1, 2, 3, 5 and 6 with committed identity refresh. Both bonded guarantor configurations independently replay all ten real owner and Governance batches with receipt and state-root equality checks. Both producers subsequently attest batch one, but settlement RPC rejects eth_estimateGas and checkpoint registration returns -213. Positive hosted checkpoint queries remain unreached. make -j16 and the genesis, identity, grants, rotation, revocation and module-context targets pass. Raw logs: qual-logs/own1/own1e-make.log, own1e-native-owner.log, own1e-replay-build.log and own1e-checkpoint-replay-final.log."
+assumption = "The complete checkpoint command exits 1; successful independent replay is not successful settlement or hosted finality. The broader native command also exits 2 at test-guarantor-bond, a test that does not link the changed runtime; raw log: qual-logs/own1/own1e-native-focused.log. No assertion or contract check was weakened."
+
+[observation.3.7.47]
+task = "3.7"
+severity = "note"
+file = "cmd/layerxd/lxp_daemon_lni.c tests/test_daemon_lni_admission.c"
+symbol = "send_submit lxp_daemon_lni_simulate test_crash_recovery"
+observed = "The full unchanged native admission suite passes at 21c96f47, the parent of the first owner checkpoint fb313efc, in scratch worktree /home/ubuntu/lx/own1-base. Unconditional Governance identity refresh introduced at the LNI boundary refused the protocol-2 crash fixture because that path has no Governance kernel. Refresh now applies only to protocol 3, matching Governance module registration; protocol-3 missing or malformed state still refuses. The fixture is unchanged. The repaired full admission and account targets, native build, real simulation gate, and real protocol-3 owner Governance lifecycle/restart gate all exit 0. Logs: qual-logs/own1/own1e-base-admission.log, own1e-fixed-admission.log, own1e-fixed-make.log, own1e-simulate.log and own1e-fixed-lifecycle.log."
+assumption = "This supersedes the unresolved crash-recovery classification in observation 3.7.44. Genesis registration remains intact; no fixture, identity, signature, sequence or replay assertion was changed."
+
+[observation.3.7.48]
+task = "3.7"
+severity = "note"
+file = "agent/crates/layerx-agentd/src/human_runtime.rs"
+symbol = "rustfmt"
+observed = "rustfmt --edition 2021 --config skip_children=true --check agent/crates/layerx-agentd/src/human_runtime.rs exits 0; raw log: qual-logs/own1/own1e-touched-fmt.log. The four unrelated files listed in observation 3.7.43 have no diff against pre-owner base 21c96f47 and remain unchanged. Formatting is restricted to touched files."
+assumption = "The earlier whole-package formatting failure remains recorded; a focused file check does not claim the whole-package gate passed."
+
+[observation.3.7.49]
+task = "3.7"
+severity = "blocker"
+file = "agent/crates/layerx-agentd/tests/availability.rs agent/crates/layerx-client/src/availability.rs"
+symbol = "decode_records complete_five_class_retrieval_streams_and_emits_offline_replay_frames corruption_withholding_and_repeated_provider_failure_are_durable_evidence"
+observed = "The identical cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd --test availability command passes both tests at pre-owner base 21c96f47 (exit 0), fails both at merged-branch commit d1aea653 (exit 101), and fails identically on the current lane (exit 101). The merged commit changes canonical record decoding to require the record count and ordered tagged classes. Both failures are complete provider reported partial and ChunkOrder versus MissingClass. The test file is unchanged from base. Raw logs: qual-logs/own1/own1e-base-availability.log, own1e-merged-availability.log and own1e-current-availability.log."
+assumption = "This is inherited from the merged availability branch, not introduced by owner-registration implementation. Keep both decoder and assertions intact; the availability owner must reconcile the canonical fixture contract. Scratch comparisons use separate local targets and no fetch, merge or rebase."
+
+[observation.3.7.50]
+task = "3.7"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/human/provision.sh platform/hosted/human/native_manifest.py"
+symbol = "beta_cluster_up human_evidence_provision human_native_provision"
+observed = "Local real owner production and Governance lifecycle/restart pass; both bonded configurations replay all ten owner batches. Live image builds, Secret mounts, disposable in-cluster paxd execution, StatefulSet rollout, owner provisioning Job, authenticated finality and journey readiness have not run on this build server. The actual owner Job is layerx-human-provision-owner; subsequent evidence assembly executes in human_evidence_provision."
+assumption = "Cluster qualification follows fold-in using operator-controlled owner-email, real registry admission/deployment journals and a produced movement custody reference. Preserve unknown-outcome markers, exact LXIP admission ordering, dedicated threshold-two guardians and all receipt/checkpoint checks. Independent replay does not resolve the recorded settlement RPC refusal."
+
+[observation.3.7.51]
+task = "3.7"
+severity = "blocker"
+file = "tests/test_guarantor_bond.c src/paxeer/lxp_finalisation.c"
+symbol = "refused lxp_checkpoint_finalisable"
+observed = "At pre-owner base 21c96f47 and current 7af7be05, test-guarantor-bond exits 2 from make and its binary exits 1. Diagnostic copies preserve every assertion and print the return path: successful finalisation returns 0 at implementation line 195, then checkpoint_epoch 8 versus certificate epoch 7 returns LXP_ERR_NON_CANONICAL (-3) at line 127 before clearing the output flag at line 130. refused initializes finalisable=true and requires false; main consequently returns 1 at test line 164. Both source files are identical to base. Logs: qual-logs/own1/own1f-base-bond.log, own1f-bond-base.log, own1f-bond-current.log."
+assumption = "Inherited output-flag contract conflict; implementation and assertions remain unchanged. The broader test-guarantor/test-guarantor-cert/test-guarantor-bond command exits 2 on both checkouts, but the base aggregate also has unresolved Programs linkage and is not a successful aggregate comparison. Raw logs: qual-logs/own1/own1f-base-native.log and own1f-current-native.log."
+
+[observation.3.7.52]
+task = "3.7"
+severity = "note"
+file = "tests/bridge/owner-custody.py cmd/layerx-guarantor/settlement.py contracts/CheckpointRegistry.sol"
+symbol = "register _validateHeader"
+observed = "Both real producers attest batch 1; eth_call of the identical registration calldata and eth_estimateGas return code 3, data 0xbabb01dd, decoded as InvalidHeader(). Header timestamp 1788951381618 milliseconds exceeds disposable block timestamp 172809 seconds times 1000 plus the unchanged 60000 millisecond future-drift bound. Protocol 3, network 77, epoch 1, batch 1, sequences 1..2, initial finalized fields zero, nonzero roots and previous-state-root equality all satisfy the remaining header preconditions. Membership, threshold and signature validation already pass in register. The disposable harness now advances its own chain 31337 to wall time after real timelock setup, mines and asserts the observed timestamp."
+assumption = "This repairs task-scoped disposable clock setup without changing contract bounds, native timestamps, attestations or assertions. The full producer and owner harness do not exist at base 21c96f47. A focused real-contract comparison runs first at that scratch base and then current source: both reject future timestamps through eth_call and estimation, accept identical calldata after clock alignment and register a real bonded certificate. Both comparison commands exit 0; logs and reproducible probe: qual-logs/own1/own1f-base-settlement.log, own1f-current-settlement.log, own1f-settlement-compare.py. Original live revert evidence: own1f-checkpoint-preconditions.log. Temporary RPC instrumentation is not part of the implementation. Final-source real custody/Governance lifecycle/restart exits 0 (own1f-final-lifecycle.log), Python provider suite passes 27 tests (own1f-python.log), and the final checkpoint command exits 1 after batch 1 registers and batch 2 refuses (own1f-final-checkpoint.log)."
+
+[observation.3.7.53]
+task = "3.7"
+severity = "blocker"
+file = "contracts/CheckpointRegistry.sol cmd/layerxd/lxp_daemon_process.c cmd/layerx-guarantor/settlement.py tests/daemon/owner_checkpoint.py"
+symbol = "_validateHeader registerCheckpoint checkpoint"
+observed = "After clock alignment the real owner flow registers batch 1 and both producers attest batch 2. eth_call of the exact batch-2 registration calldata and eth_estimateGas return InvalidHeader(), code 3/data 0xbabb01dd. Batch 2 has epoch 1 while finalisedEpoch is 1; contract line 341 rejects header.epoch <= finalisedEpoch. Batch 2 and firstSequence 3 follow finalisedBatchNumber 1 and finalisedLastSequence 2; lastSequence is 4, timestamp increases and is within the wall-clock bound, and previousStateRoot equals latestFinalisedStateRoot. Both base and current separately deployed contracts also reject a real signed contiguous same-epoch successor. Contract source is unchanged from 21c96f47. Raw live preconditions: qual-logs/own1/own1f-clock-fixed-diagnostic.log."
+assumption = "The settlement contract precondition conflicts with native multiple-batches-per-epoch behavior: seal uses kernel.epoch and retained replay rejects decreasing epochs, not equal epochs. The settlement implementation must reconcile epoch progression while preserving exact next-batch, next-sequence, timestamp, root, bond and certificate checks. No contract or signed-header change is made here. Full owner checkpoint qualification remains blocked at batch 2; hosted positive finality queries remain unreached."
