@@ -569,6 +569,15 @@ function parseRequirements(value: unknown): PaymentRequirements {
     "invalid-payment-required",
   );
   const scheme = asIdentifier(object["scheme"], 32, "invalid-payment-required");
+  if (!["exact", "metered", "subscription"].includes(scheme)) throw new MiddlewareError("unsupported-payment");
+  const extra = object["extra"];
+  paymentCommitment(extra);
+  if (scheme !== "exact") {
+    const terms = asObject(asObject(extra, "invalid-payment-required")["layerx"], "invalid-payment-required");
+    if (typeof terms["purposeHash"] !== "string" || !/^[0-9a-f]{64}$/u.test(terms["purposeHash"]) || /^0+$/u.test(terms["purposeHash"])) throw new MiddlewareError("invalid-payment-required");
+    const window = terms["windowSeconds"];
+    if (scheme === "subscription" ? typeof window !== "string" || !/^[1-9][0-9]{0,19}$/u.test(window) || BigInt(window) > 0xffff_ffff_ffff_ffffn : window !== undefined) throw new MiddlewareError("invalid-payment-required");
+  }
   const maxTimeoutSeconds = object["maxTimeoutSeconds"];
   if (!Number.isSafeInteger(maxTimeoutSeconds) || (maxTimeoutSeconds as number) <= 0 || (maxTimeoutSeconds as number) > 0xffff_ffff) {
     throw new MiddlewareError("invalid-payment-required");
@@ -903,3 +912,4 @@ async function merkleLeafDigest(canonicalReceipt: Uint8Array): Promise<Uint8Arra
 }
 
 export * from "./rpc.js";
+export * from "./grant.js";
