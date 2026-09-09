@@ -5866,3 +5866,43 @@ symbol = "connect_raw_with_deadline await_receipt local_gateway_committed_paymen
 observed = "Final core/gateway builds and strict all-target Clippy pass; local harness strict Clippy passes after clearing the colliding archived-harness build script. Native layerxd, genesis builder and layerxctl build, and real LNI account and durable admission tests pass. Final core tests run with no-fail-fast: five unit tests and the SEND encoding test pass, with eleven boundary tests passing and three retained failures. Gateway package tests pass. The final real committed payment read gate passes. Final funded execution completes twenty SENDs with gateway p50/p99 1848834/3799299 us, then the unchanged finalised-success assertion fails. SEND-only native preparation, commit/WAL, publication and total batch p50 values are 50133, 337453, 266738 and 875700 us. Evidence: qual-logs/pay4/i/native-build.log, native-tests.log, clippy-deadline.log, build-deadline.log, local-clippy-current.log, core-qualified-tests.log, gateway-final-tests.log, reads-deadline.log, funded-final.log, and final-timing-summary.json."
 assumption = "The 250 ms target, aggregate runtime tests, bootstrap reset, idle future-sequence subscriptions, per-asset proof decoding, native canonical execution-byte metering, and four hosted topology checks remain unqualified. No task status or deployed runtime changed."
 severity = "blocker"
+
+[observation.6.7.4028]
+task = "6.7"
+file = "agent/sdk/python/layerx_sdk/x402_receive.py agent/sdk/typescript/src/x402/receive.ts agent/sdk/typescript/src/x402/terms.ts agent/sdk/python/layerx_sdk/x402.py platform/middleware/seller/src/index.ts platform/integrations/fastapi/layerx_fastapi/protocol.py"
+symbol = "encode_register encodeRegister grant_payment_terms paymentPayer verifyPaymentReceipt"
+observed = "PAY6d binds offer/grant payer and purpose through challenge parse, grant-draw validation and receipt verification in the Python SDK, TypeScript SDK, seller middleware and FastAPI/Express/Next declared configs. Kind-1 register encoders match signer fixture agent/crates/layerx-crypto/tests/fixtures/payments/1-1.hex. Public package entries export receive/register/supply codecs and commitment helpers; pay6 tests import @sidiora/layerx-sdk, @sidiora/layerx-seller-middleware and @sidiora/layerx-agent-middleware rather than private dist paths. npm run build for SDK, seller, buyer, agent, merchant and conformance exits 0. npm test --workspace @sidiora/layerx-sdk exits 0. npm run test:payments --workspace @sidiora/layerx-middleware-conformance exits 0 (20/20, including pay6/asset.test.mjs). PYTHONPATH=agent/sdk/python python3 -m unittest discover -s agent/sdk/python/tests exits 0 (34). PYTHONPATH=agent/sdk/python:platform/integrations/fastapi python3 -m unittest discover -s platform/middleware/conformance/pay6 -p 'test_*.py' exits 0 (41). make beta-ledger-check exits 0. Evidence: qual-logs/pay6d/sdk-build.log, seller-build.log, buyer-build.log, agent-build.log, merchant-build.log, conformance-build.log, sdk-test.log, payments-ts.log, sdk-python.log, payments-py.log, py-import.log and beta-ledger.log."
+assumption = "Offline fixture and installed-package import gates do not prove hosted lx_sendActivity execution. Cryptographic checkpoint fixtures remain caller-configured trust roots, not payment-header signatures."
+severity = "note"
+
+[observation.6.7.4029]
+task = "6.7"
+file = "platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/tests/local/funding.rs platform/hosted/tests/beta-cluster.sh platform/middleware/examples/public-rpc.mjs"
+symbol = "lx_sendActivity local_gateway_rpc local_gateway_committed_payment_reads"
+observed = "End-to-end metered draw and subscription renewal through hosted POST /rpc lx_sendActivity (executed then batched) remain unrun. build/bin is absent. platform/hosted/tests contains beta-cluster and topology scripts only; funded gateway fixtures live under platform/hosted/gateway/tests/local/. Observation 6.7.4026 commands stay pending. An acknowledgement is still not treated as success in the gateway RPC and payment verifiers."
+assumption = "A funded isolated gateway with registered assets, open payer and recipient accounts, issued grants and receiver-signed activities is required before claiming native draw or renewal execution. Do not substitute fixture receipts for that run."
+severity = "blocker"
+
+[observation.6.7.4030]
+task = "6.7"
+file = "cursor/qa-pay-402lxp"
+symbol = "git fetch origin cursor/qa-pay-402lxp"
+observed = "git fetch origin cursor/qa-pay-402lxp completed once. origin/cursor/qa-pay-402lxp tip d69c4db4 predates lane/pay-public-rpc native mint/burn, issuer_kind, public JSON-RPC and event-driven receipt waits. A cherry-pick or merge would delete those surfaces (git diff --stat HEAD origin/cursor/qa-pay-402lxp reports 169 files, net deletion). No hunks were applied."
+assumption = "QA follow-ups that remain valid were implemented on the current lane instead of replaying the older branch. Replacing persisted custody_kind with issuer_kind, redefining ordinal 9, treating an ack as success, or loosening payer/purpose/finality checks stay rejected."
+severity = "note"
+
+[observation.6.7.4031]
+task = "6.7"
+file = "Cargo.toml Makefile src/modules/asset/lx_asset_registry.c"
+symbol = "cargo fmt cargo clippy make test"
+observed = "This PAY6d session did not edit Rust or C after the permitted merge of origin/lane/pay-public-rpc. cargo fmt --check --all from the repository root exits 1 because there is no root Cargo.toml (qual-logs/pay6d/cargo-fmt.log). Native make and make test were not run; build/bin is absent. Existing native ordinal 10/11, reserved ordinal 9, and issuer_kind versus persisted custody_kind behaviour remain the merged public-rpc sources."
+assumption = "Rust and C format, clippy and native test gates belong to the crates and Makefile targets that own those sources. Absence of a root Cargo.toml is not a reason to skip per-crate gates when those crates change."
+severity = "note"
+
+[observation.6.7.4032]
+task = "6.7"
+file = "platform/middleware/conformance/src/receipts.ts platform/middleware/conformance/service.mjs platform/examples/paid-api/index.mjs platform/middleware/conformance/src/scenarios.ts"
+symbol = "offerFixture runServiceScenarios verifyPaymentReceipt"
+observed = "Exact conformance offers and paid-api/merchant example challenges now carry extra.layerx.payer bound to the signed receipt from account. Full middleware conformance was not re-run in this session. The inherited 25/29 failures recorded in observation.6.7.4025 (merchant webhook invalid-webhook, kind versus state, digest mismatch) remain intact and were not weakened."
+assumption = "Re-run npm run conformance --workspace platform/middleware/conformance after an exclusive worktree if a current 25/29 or changed count is required. Seller verification now fails any exact offer that omits a 64-hex nonzero extra.layerx.payer."
+severity = "blocker"
