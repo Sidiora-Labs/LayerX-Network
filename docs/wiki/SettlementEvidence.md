@@ -79,15 +79,28 @@ account registry; layer A then proves the `account-tree` binding, and layer B
 proves the preserved module wrapper under the composite root. All other leaves
 omit that segment. The shared C vectors include three real account balances.
 
-Version-2 payout publication remains incomplete. The account record authenticates
-an Ed25519 authority but contains no EVM recipient or signed recipient binding.
+Version-2 payout publication remains incomplete. Recipient authorization signs
+`"LX:SETTLE:RECIPIENT:v1" || 0x00 || network_id:u32be || account_id32 ||
+asset32 || evm_recipient20 || request_anchor32` with the committed account
+Ed25519 authority. `ExitEvidence::verify_native_balance` passes the native
+account inclusion and this signature through `verify_balance_proof`; it refuses
+an absent authority, altered signed field, invalid signature or mismatched
+account, asset, balance or composite root. The caller supplies the expected
+network and anchor. This method does not replace registry, certificate or exit
+eligibility checks. The publication and claim APIs still use their version-1
+path. Solidity checkpoint registration uses secp256k1; this checkout has no
+Solidity Ed25519 verifier to connect to the recipient binding.
 The real withdrawal request is now committed in asset KV, but its checkpoint ID
 is part of the nullifier. That request anchor must be distinguished from the
 later checkpoint proving inclusion: embedding the inclusion checkpoint's own
-hash in its committed state would be circular. The registered asset activity
-interface also needs a signed withdrawal dispatch before replay can create
-these records. The direct module request test proves KV inclusion; it does not
-prove signed activity replay or payout authorization.
+hash in its committed state would be circular. The asset interface now advertises WITHDRAW at ordinal 9. Its signed activity
+payload is `asset32 || amount:u128be || evm_recipient20 || request_anchor32 ||
+fee_limit:u64be`. The owner authority and fee limit are bound to the activity,
+and the handler calls `lx_asset_withdraw_request`; the activity ID supplies the
+withdrawal ID and the EVM recipient is left-padded to the existing 32-byte
+record field. Real signed module-dispatch tests prove committed KV inclusion
+and refusal behavior. The daemon still rejects the new operation in admission
+and replay; its allowlists are outside the current lane scope.
 
 The required rollout sequence remains: independently replay the checkpoint; decode committed settlement facts and build their proofs and deposit leaf ordering; register the checkpoint; publish the withdrawal and balance witness vectors; register the signed deposit root; fetch through `PublishedDepositProof::fetch_published`, `CheckpointProof::fetch_published` and `ExitEvidence::fetch_published`; then apply the existing custody, debit, certificate, nullifier and eligibility checks. The claim consumers and publication contracts still use version 1 until this entire sequence can carry real facts. A coordinated rollout must change both `EVIDENCE_VERSION` constants and the deployment finalization expectation to 2. The account vectors prove balances but do not authorize EVM payouts.
 
