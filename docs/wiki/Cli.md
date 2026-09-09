@@ -19,7 +19,7 @@ not document portable receipt JSON; see
 Wallet, faucet, send, token, program, and 402 steps:
 [Payments developer path](PaymentsQuickstart.md). There is no
 `layerx token` or `layerx wallet` command on `main`, and
-`lane/pay-wallet-cli` is not a remote branch.
+`lane/pay-wallet-cli` provides both on the testnet branch (draft PR #208).
 
 ---
 

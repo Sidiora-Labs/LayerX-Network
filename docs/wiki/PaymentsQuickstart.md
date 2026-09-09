@@ -1,8 +1,8 @@
 # Payments developer path
 
-This path creates a local Ed25519 key, claims testnet funds, submits one
-payment, registers a natively issued token, deploys a program, and pays a
-402 endpoint. Commands and HTTP routes that already exist on `main` are
+This page covers local Ed25519 keys, faucet claims, payment submission,
+native tokens, program deployment, and HTTP 402 payments, including
+source limitations that prevent an end-to-end wallet write. Commands and HTTP routes that already exist on `main` are
 cited here. Surfaces that exist only on unmerged payment lanes are marked
 **on the testnet branch** and are not live on `main`.
 
@@ -11,8 +11,17 @@ Related pages: [CLI](Cli.md), [Assets](Assets.md),
 [Hosted faucet](HostedFaucet.md), [Programs](Programs.md),
 [x402 transport](X402Transport.md), [Testnet cluster quickstart](Quickstart.md).
 
-There is no `lane/pay-wallet-cli` branch. Wallet creation on this path is
-`layerx key create` (`platform/cli/src/main.rs`).
+Wallet and token commands are **on the testnet branch** `lane/pay-wallet-cli`
+(draft PR #208; `platform/cli/src/wallet.rs`). It provides `wallet create`,
+`import`, `list`, `balance`, `history`, `receipt`, `send`, `open-account`,
+and `token create`, `mint`, `burn`, `transfer`, `info`, `list`.
+Local emulator creation registers the DID and opens its main account.
+Public registration and DID history remain unavailable. Token writes use
+the SDK prepare/disclose/execute path and require authenticated identity
+sequence reads plus native operation support. Send and token transfer
+refuse before signing because debit-authorization signing is unavailable.
+Token metadata reads forward to RPC and preserve upstream unavailability. The commands' presence does not establish a live payment.
+The `main` key-only command below is `layerx key create`.
 
 ---
 
@@ -114,12 +123,11 @@ Native token issuance is **on the testnet branch**. `main` decodes Asset
 ordinals 1–8 and executes SEND; it does not define mint/burn activity
 types (`include/layerx/lx_asset.h`).
 
-On `lane/pay-native`, `lane/pay-signer-sdk`, and `lane/pay-402lxp` the
-wire is:
+The shared register/open/mint wire is:
 
 1. **Register** (Asset ordinal 1). Native `asset_id32` is
    `SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`. Payload:
-   `version:u16=1 || asset_id32 || salt32 || symbol || name || decimals || supply_cap || issuer_kind || custody_ref`.
+   `version:u16=1 || asset_id32 || salt32 || symbol_len:u8 || symbol || name_len:u8 || name || decimals:u8 || supply_cap:u128 || issuer_kind:u8 || custody_ref_len:u8 || custody_ref`.
 2. **Open** the issuer's per-asset account (ordinal 4):
    `version:u16=1 || asset_id32`. Name:
    `agent:<DID>:asset:<lowercase hex64 asset_id>`.
@@ -128,13 +136,13 @@ wire is:
    Actor must be the issuer; destination must exist for that asset.
 
 On `lane/pay-signer-sdk`, MCP `token.create` and `token.mint` submit those
-activities through the daemon. There is no `layerx token` CLI command on
-`main` or on any fetched payment branch.
+activities through the daemon. `layerx token` is on the testnet branch
+`lane/pay-wallet-cli`; token writes require the API support described above.
 
 On `lane/pay-native`, register / account_open / mint / burn decode to the
-payloads above; asset-module execute for those ordinals is not wired
-(`src/modules/asset/lx_asset_registry.c` on that branch). Treat a decoded
-payload as a codec, not as a live mint.
+payloads above and execute through `asset_execute_typed`
+(`src/modules/asset/lx_asset_execution.h`). These source paths do not
+establish deployment or public wallet integration.
 
 Full field bounds: [Assets](Assets.md).
 
@@ -195,8 +203,8 @@ exact offer defaults to `executed`. Metered and subscription schemes
 carry a canonical Asset receive (ordinal 6) in the payment payload; a
 grant alone never releases the resource.
 
-Buyer middleware on that branch: parse `PAYMENT-REQUIRED`, construct the
-payment, attach `PAYMENT-SIGNATURE`, and accept `PAYMENT-RESPONSE` only
+Buyer middleware on that branch parses `PAYMENT-REQUIRED`, construct the
+payment, attaches `PAYMENT-SIGNATURE`, and accepts `PAYMENT-RESPONSE` only
 after the requested commitment verifies
 (`platform/middleware/seller/src/commitment.ts`).
 `transaction` remains `lxp:<receipt_digest>`. HTTP 202 pending is not
@@ -208,10 +216,10 @@ proof of payment.
 
 | Step | On `main` | On the testnet branch |
 | --- | --- | --- |
-| Create a key / DID | `layerx key create` | same |
+| Create a key / DID | `layerx key create` | plus local `wallet create` on `lane/pay-wallet-cli` |
 | Faucet claim | `POST /v1/faucet/claims` | same |
 | Send a signed activity | `POST /v1/activities` | plus `lx_sendActivity` on `lane/pay-public-rpc` |
-| Register / mint a token | not executable | codecs on `lane/pay-native`; MCP tools on `lane/pay-signer-sdk` |
+| Register / mint a token | not executable | execution on `lane/pay-native`; MCP tools on `lane/pay-signer-sdk`; wallet token writes require identity reads; send/transfer refuse signing |
 | Deploy a program | `layerx program deploy` | plus LXT-20 / merchant example on `lane/pay-programs-tokens` |
 | Pay HTTP 402 | `layerx-x402` receipt binding | plus commitment extras and receive codecs on `lane/pay-402lxp` |
 | Public JSON-RPC | not present | `POST /rpc`, `GET /rpc/schema`, `GET /rpc/ws` on `lane/pay-public-rpc` |

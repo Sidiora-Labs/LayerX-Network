@@ -1,6 +1,6 @@
 # Public JSON-RPC
 
-Generated from `platform/hosted/gateway/openrpc.json` on **the testnet
+Checked against `platform/hosted/gateway/openrpc.json` on **the testnet
 branch** `lane/pay-public-rpc` (OpenRPC 1.3.2, API version 0.1.0). That
 file is not on `main`. `main` has no `/rpc`, `/rpc/schema`, or `/rpc/ws`
 route (`platform/hosted/gateway/src/main.rs` on `main`).
@@ -175,7 +175,7 @@ On `lane/pay-public-rpc`:
 - WebSocket: `platform/hosted/gateway/src/ws.rs`, `ws_wire.rs`
 - `GET /rpc/schema` serves the embedded document
 
-Regenerate this page from that OpenRPC file when the branch changes.
-Do not invent result fields the document leaves as `"type": "object"`.
+The document leaves generic results as `"type": "object"`; it does not
+define additional result fields.
 
 [Home](Home.md)

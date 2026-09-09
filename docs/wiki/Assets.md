@@ -6,10 +6,10 @@ are display metadata only (`spec/layerx-protocol/spec.kvx` on
 ([Protocol](Protocol.md), [Modules](Modules.md)).
 
 Per-asset agent accounts, native asset-id derivation, register / open /
-mint / burn payloads, and the issuance account are specified on the
-payment lanes. They are **on the testnet branch**, not merged to `main`.
-This page records the shared encodings those lanes are required to
-implement. Where a branch differs, the difference is named.
+mint / burn payloads, and the issuance account are implemented
+**on the testnet branch** `lane/pay-native`, not merged to
+`main`. This page describes the shared wire contract and identifies
+source differences between the testnet branches.
 
 Related pages: [Payments developer path](PaymentsQuickstart.md),
 [Public JSON-RPC](PublicRpc.md), [Modules](Modules.md), [Custody](Custody.md).
@@ -24,7 +24,7 @@ Integers on the wire are big-endian. `H` is SHA-256.
 | --- | --- | --- |
 | Native-asset agent account | `agent:<DID>:main` | existing `LX:ACCOUNT:v1` rule |
 | Per-asset agent account | `agent:<DID>:asset:<lowercase hex64 asset_id>` | same rule |
-| Issuance account | `asset:<lowercase hex64 asset_id>:issuance` | specified as a module-value account on `lane/pay-native` (`spec.kvx` ac_12); not constructed on `main` |
+| Issuance account | `asset:<lowercase hex64 asset_id>:issuance` | `LX:ACCOUNT:v1` named-account hash; module-value account on the testnet branch |
 
 `LX:ACCOUNT:v1` for named (non-module-value) accounts is already on
 `main`:
@@ -41,9 +41,8 @@ budget / escrow / stream / margin forms. The `:asset:` suffix is added
 on `lane/pay-native` (`src/ledger/lx_account_id.c` on that branch).
 `agent:<DID>:main` remains the native-asset account.
 
-The issuance name `asset:<hex64>:issuance` is specified on
-`lane/pay-native` (`spec/layerx-protocol/spec.kvx` ac_12). That branch
-does not construct the account during register execute.
+On the testnet branch, register execution stages `asset:<hex64>:issuance`
+through `lxp_ctx_asset_issuance_stage` (`src/modules/asset/lx_asset_execution.h`).
 
 ---
 
@@ -59,8 +58,8 @@ does not construct the account during register execute.
 
 `lane/pay-signer-sdk` implements `asset_id(issuer, salt)` as that hash
 (`agent/crates/layerx-crypto/src/payments.rs` on that branch).
-`lane/pay-native` records the same rule in `spec.kvx` ac_11 and does not
-verify it in C decode.
+`lane/pay-native` verifies the same hash during register execution
+(`src/modules/asset/lx_asset_execution.h`), after payload decoding.
 
 ---
 
@@ -79,7 +78,7 @@ Module id `1` (`0x0001xxxx`). Ordinal is the low 16 bits of
 | 6 | receive | existing `lxp_receive` encoding (`src/ledger/lxp_receive.c`, tag `0x5201`, 10 fields) |
 | 7 | grant_issue | existing payer-grant canonical encoding |
 | 8 | grant_revoke | `version:u16=1 \|\| grant_id32 \|\| revocation_sequence:u64` |
-| 9 | **RESERVED** | WITHDRAW; owned by `lane/settlement-witness-proofs`. Do not define. |
+| 9 | **RESERVED** | WITHDRAW; no payload defined here. |
 | 10 | mint | `version:u16=1 \|\| asset_id32 \|\| to_account32 \|\| amount:u128` |
 | 11 | burn | `version:u16=1 \|\| asset_id32 \|\| from_account32 \|\| amount:u128` |
 
@@ -98,7 +97,7 @@ Issuer = actor.
 - Kind `1` (native): `asset_id` must match
   `H("LX:ASSET:v1" || issuer_did_id32 || salt32)`; `custody_ref_len`
   must be `0`.
-- Kind `2` (paxeer_custody): custody reference is 1..128 bytes; asset id
+- Kind `2` (paxeer_custody): custody reference is 0..128 bytes; asset id
   is the existing custody id.
 - Duplicates are refused.
 - `supply_cap` `0` means uncapped.
@@ -107,8 +106,9 @@ On `lane/pay-native`, decode enforces version `1`, symbol length 1..16
 with bytes `<= 0x7F`, UTF-8 name 1..32, decimals `<= 38`, issuer_kind
 `1` or `2`, and native custody length `0`
 (`src/modules/asset/lx_asset_decode.c` on that branch). Decode does not
-check the native asset-id hash. Module execute for ordinal 1 returns
-`LXP_ERR_UNKNOWN_ACTIVITY`.
+check the native asset-id hash; execution checks it, refuses duplicates,
+saves metadata, and stages the issuance account
+(`src/modules/asset/lx_asset_execution.h`).
 
 The helper `lx_asset_register()` on `main` still requires a Paxeer
 custody reference and `A-Z0-9` symbols
@@ -125,7 +125,8 @@ Opens the actor's per-asset account `agent:<DID>:asset:<hex64>`. The
 account must not already exist. The asset must be registered and
 unpaused.
 
-On `lane/pay-native` this is decode-only in the asset module. Helper
+On the testnet branch `lane/pay-native`, execution loads the asset,
+refuses paused assets and stages the account. Helper
 `lx_asset_account_open` on `main` still takes a caller-supplied name
 (`include/layerx/lx_asset.h`).
 
@@ -179,14 +180,17 @@ version:u16=1 || asset_id32 || account32 || amount:u128
   exist for that asset.
 - **Burn:** actor owns `from_account`; balance must cover `amount`.
 
-Specified issuance accounting (`lane/pay-native` ac_12): registration
+On the testnet branch (`src/modules/asset/lx_asset_execution.h`), registration
 creates `asset:<hex>:issuance` with initial units equal to `supply_cap`,
 or `u128` max when uncapped. Mint transfers issuance → destination.
 Burn transfers source → issuance. `total_units` is initial issuance
-minus current issuance balance and is not a separately stored counter.
+minus current issuance balance. The asset record also stores `total_units`;
+execution checks that it equals this derived value before updating it.
 
 On `lane/pay-native`, mint/burn decode rejects zero amount
-(`LXP_ERR_INVALID_AMOUNT`) and do not execute. Receipts on `main` bind
+(`LXP_ERR_INVALID_AMOUNT`). Execution checks issuer/owner authority, asset
+matching, pause state, supply bounds and balances, then emits a monetary
+transfer and saves the updated total. Receipts on `main` bind
 from/to and before/after balances (`include/layerx/lxp_receipt.h`); they
 do not carry a `total_units` field.
 
