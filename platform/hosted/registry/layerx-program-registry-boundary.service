@@ -1,8 +1,7 @@
 [Unit]
-Description=Provision LayerX registry cgroup and quota boundary
+Description=Provision LayerX registry quota boundary
 Before=kubelet.service
-RequiresMountsFor=/sys/fs/cgroup /var/lib/layerx-program-registry-builds
-ConditionPathExists=/sys/fs/cgroup/cgroup.controllers
+RequiresMountsFor=/var/lib/layerx-program-registry-builds
 
 [Service]
 Type=oneshot
@@ -17,9 +16,9 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/sys/fs/cgroup /var/lib/layerx-program-registry-builds /run/lock
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE
-AmbientCapabilities=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE
+ReadWritePaths=/var/lib/layerx-program-registry-builds /run/lock
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_CHOWN CAP_DAC_OVERRIDE
 
 [Install]
 WantedBy=multi-user.target

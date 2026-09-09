@@ -1,0 +1,16 @@
+{
+  "version": "layerx-beta-v1",
+  "presets": [{
+    "id": "beta-protocol",
+    "amount_ceiling": 1000,
+    "rate_maximum_uses": 10,
+    "rate_window_sequences": 100,
+    "purposes": ["beta-protocol"],
+    "expiry_sequence": 100000,
+    "session_scopes": ["agent:execute"],
+    "session_lifetime_seconds": 3600,
+    "budget_period_seconds": 86400,
+    "budget_expiry_seconds": 604800,
+    "initial_funding": 1
+  }]
+}

@@ -1,0 +1,134 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: layerx-human-provision-owner
+  namespace: layerx-testnet
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        app: layerx-human-provision-owner
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: provision-owner
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              umask 077
+              install -m 0600 /run/provision-input/recovery-policy.json /run/provision-private/recovery-policy.json
+              exec /usr/local/bin/layerx-human-identity-provider provision-owner < /run/provision-input/owner-request.json
+          env:
+            - name: LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT
+              value: /var/lib/layerx/human/identity
+            - name: LAYERX_HUMAN_IDENTITY_PROVIDER_RECOVERY_POLICY_FILE
+              value: /run/provision-private/recovery-policy.json
+          securityContext:
+            runAsUser: 4020
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: '1', memory: 256Mi}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/layerx/human
+              subPath: identity
+            - name: input
+              mountPath: /run/provision-input
+              readOnly: true
+            - name: private
+              mountPath: /run/provision-private
+        - name: provision-treasury
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          command: [/bin/sh, -ec]
+          args:
+            - exec /usr/local/bin/layerx-human-identity-provider provision-account < /run/provision-input/treasury-request.json
+          securityContext:
+            runAsUser: 4020
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 100m, memory: 32Mi}
+            limits: {cpu: '1', memory: 64Mi}
+          volumeMounts:
+            - name: input
+              mountPath: /run/provision-input
+              readOnly: true
+        - name: provision-sequencer
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          command: [/bin/sh, -ec]
+          args:
+            - exec /usr/local/bin/layerx-human-identity-provider provision-account < /run/provision-input/sequencer-request.json
+          securityContext:
+            runAsUser: 4020
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 100m, memory: 32Mi}
+            limits: {cpu: '1', memory: 64Mi}
+          volumeMounts:
+            - name: input
+              mountPath: /run/provision-input
+              readOnly: true
+        - name: validate-account-head
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          command: [/bin/sh, -ec]
+          args:
+            - exec /usr/local/bin/layerx-human-identity-provider validate-account-head < /run/provision-input/account-head-request.json
+          securityContext:
+            runAsUser: 4020
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 100m, memory: 32Mi}
+            limits: {cpu: '1', memory: 64Mi}
+          volumeMounts:
+            - name: input
+              mountPath: /run/provision-input
+              readOnly: true
+      initContainers:
+        - name: private-directory
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          command: [/bin/sh, -ec]
+          args:
+            - install -d -o 4020 -g 4020 -m 0700 /private
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, FOWNER, DAC_OVERRIDE]
+          volumeMounts:
+            - name: private
+              mountPath: /private
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: layerx-human-state
+        - name: input
+          secret:
+            secretName: layerx-human-provision-owner-input
+            defaultMode: 0444
+        - name: private
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}

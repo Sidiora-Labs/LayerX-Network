@@ -13,6 +13,27 @@ use serde_json::Value;
 const ACCOUNT_ACTIVITY: u32 = 0x0009_0006;
 const WIND_DOWN_ACTIVITY: u32 = 0x0009_0007;
 const MAX_CHANGE_RECORDS: usize = 4_096;
+const PROJECTION_STALE: i64 = -903;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HeadAnswer {
+    Head,
+    Pending,
+    Refused(u16),
+}
+
+fn classify_head_answer(status: u16, body: &Value) -> HeadAnswer {
+    if (200..300).contains(&status) {
+        return HeadAnswer::Head;
+    }
+    if status == 503
+        && body.as_object().is_some_and(|fields| fields.len() == 1)
+        && body["error"].as_i64() == Some(PROJECTION_STALE)
+    {
+        return HeadAnswer::Pending;
+    }
+    HeadAnswer::Refused(status)
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProgramStateCursor {
@@ -60,6 +81,7 @@ impl NodeProgramStateSource {
     pub fn connect(
         endpoint: &str,
         authorization: String,
+        outbound_ca_der: &[u8],
         authority_endpoint: &str,
         authority_authorization: String,
         authority_replica_id: [u8; 32],
@@ -81,9 +103,18 @@ impl NodeProgramStateSource {
                 "node state and independent receipt authority must be distinct HTTPS or loopback endpoints".to_owned(),
             );
         }
+        if outbound_ca_der.is_empty() {
+            return Err("an outbound CA certificate is required".to_owned());
+        }
+        let root = ureq::tls::Certificate::from_der(outbound_ca_der).to_owned();
+        let tls = ureq::tls::TlsConfig::builder()
+            .provider(ureq::tls::TlsProvider::NativeTls)
+            .root_certs(ureq::tls::RootCerts::new_with_certs(&[root]))
+            .build();
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
+            .tls_config(tls)
             .build();
         Ok(Self {
             agent: config.into(),
@@ -138,6 +169,24 @@ impl NodeProgramStateSource {
     /// Refuses unavailable node or replica responses and invalid, unverified or stale head evidence.
     pub fn current_head(&self, now_ms: u64) -> Result<AccountStateHead, String> {
         self.parse_head(&self.get("/v1/protocol/account-state/head")?, Some(now_ms))
+    }
+
+    /// Reads the current head, distinguishing a network that has not yet
+    /// sequenced its first receipt from every other refusal.
+    ///
+    /// # Errors
+    /// Refuses unavailable node responses other than the stale-projection
+    /// answer and invalid, unverified or stale head evidence.
+    pub fn current_head_or_pending(&self, now_ms: u64) -> Result<Option<AccountStateHead>, String> {
+        let path = "/v1/protocol/account-state/head";
+        let (status, body) = self.fetch_from(&self.endpoint, &self.authorization, path)?;
+        match classify_head_answer(status, &body) {
+            HeadAnswer::Head => self.parse_head(&body, Some(now_ms)).map(Some),
+            HeadAnswer::Pending => Ok(None),
+            HeadAnswer::Refused(status) => {
+                Err(format!("node authority GET {path} returned HTTP {status}"))
+            }
+        }
     }
 
     ///
@@ -297,6 +346,19 @@ impl NodeProgramStateSource {
     }
 
     fn get_from(&self, endpoint: &str, authorization: &str, path: &str) -> Result<Value, String> {
+        let (status, body) = self.fetch_from(endpoint, authorization, path)?;
+        if !(200..300).contains(&status) {
+            return Err(format!("node authority GET {path} returned HTTP {status}"));
+        }
+        Ok(body)
+    }
+
+    fn fetch_from(
+        &self,
+        endpoint: &str,
+        authorization: &str,
+        path: &str,
+    ) -> Result<(u16, Value), String> {
         let remaining = self
             .request_deadline
             .get()
@@ -323,12 +385,13 @@ impl NodeProgramStateSource {
             .read_to_string()
             .map_err(|error| format!("node authority GET {path} was unreadable: {error}"))?;
         if !status.is_success() {
-            return Err(format!(
-                "node authority GET {path} returned HTTP {}",
-                status.as_u16()
+            return Ok((
+                status.as_u16(),
+                serde_json::from_str(&body).unwrap_or(Value::Null),
             ));
         }
         serde_json::from_str(&body)
+            .map(|value| (status.as_u16(), value))
             .map_err(|error| format!("node authority GET {path} returned invalid JSON: {error}"))
     }
 
@@ -467,4 +530,35 @@ fn loopback_http(endpoint: &str) -> bool {
                 || host == "[::1]"
                 || host.starts_with("[::1]:")
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_head_answer, HeadAnswer};
+    use serde_json::json;
+
+    #[test]
+    fn only_the_stale_projection_answer_is_a_pending_head() {
+        assert_eq!(
+            classify_head_answer(503, &json!({"error": -903})),
+            HeadAnswer::Pending
+        );
+        assert_eq!(
+            classify_head_answer(200, &json!({"current": true})),
+            HeadAnswer::Head
+        );
+        for (status, body) in [
+            (503, json!({"error": -903, "detail": "x"})),
+            (503, json!({"error": -902})),
+            (503, json!({"error": "node_unavailable"})),
+            (503, json!(null)),
+            (500, json!({"error": -903})),
+            (404, json!({"error": -903})),
+        ] {
+            assert_eq!(
+                classify_head_answer(status, &body),
+                HeadAnswer::Refused(status)
+            );
+        }
+    }
 }

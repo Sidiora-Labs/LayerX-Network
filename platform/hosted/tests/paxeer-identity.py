@@ -3,12 +3,31 @@ import json
 from pathlib import Path
 import ssl
 import sys
+import time
+import urllib.error
 import urllib.request
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise ValueError("genesis redirect refused")
+
+
+def open_recovering(opener, request, timeout):
+    deadline = time.monotonic() + 60
+    while True:
+        remaining = deadline - time.monotonic()
+        try:
+            return opener.open(request, timeout=min(timeout, max(0.001, remaining)))
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as error:
+            reason = error.reason if isinstance(error, urllib.error.URLError) else error
+            if not isinstance(reason, (ConnectionError, TimeoutError)):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            print("Paxeer identity: transport interrupted; waiting for endpoint recovery (60s budget)", file=sys.stderr)
+            time.sleep(min(1, remaining))
 
 
 def verify(path, comet_chain_id):
@@ -22,7 +41,7 @@ def verify(path, comet_chain_id):
     bodies = []
     for origin in origins:
         assert origin.startswith("https://")
-        with opener.open(origin + "/genesis", timeout=30) as response:
+        with open_recovering(opener, origin + "/genesis", timeout=30) as response:
             body = response.read(32 * 1024 * 1024 + 1)
             assert len(body) <= 32 * 1024 * 1024
             assert response.headers.get_all("X-LayerX-Genesis-SHA256") == [hashlib.sha256(body).hexdigest()]
@@ -31,7 +50,7 @@ def verify(path, comet_chain_id):
         request = urllib.request.Request(origin, data=json.dumps({
             "jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": []}).encode(),
             headers={"Content-Type": "application/json"})
-        with opener.open(request, timeout=20) as response:
+        with open_recovering(opener, request, timeout=20) as response:
             raw = response.read(65537)
         assert len(raw) <= 65536
         result = json.loads(raw)
