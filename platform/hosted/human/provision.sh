@@ -193,6 +193,7 @@ PYHEAD
     human_owner_provision
     python3 "$provision" --prepare-owner-admission --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
     human_custody_step deposit
+    human_native_provision
     python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
     python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
         --registry "$SECRETS_DIR/module-registry.json" --journal "$LAYERX_REGISTRY_JOURNAL"
@@ -212,4 +213,86 @@ human_custody_step() (
         --ca-bundle "$CA_DIR/ca.pem" --disposable-identity "$WORK_DIR/paxeer/rpc-origins.json" \
         --key-file "$SECRETS_DIR/paxeer-deployer.key" --attestor-key "$SECRETS_DIR/custody-attestor.seed" \
         --network-id "$NODE_NETWORK_ID" --asset "$NODE_ASSET_ID"
+)
+
+human_native_provision() (
+    set -euo pipefail
+    umask 077
+    local input="$WORK_DIR/human-evidence-input" state="$WORK_DIR/human-native-statefulset.json"
+    local manifest="$WORK_DIR/human-native-producer.json" status=0
+    [ ! -e "$input/owner-native.started" ] || fail 'owner-native.started: reconcile the retained native outcome before retry'
+    kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- sh -ec '
+        set -eu
+        umask 077
+        target=/var/lib/layerx/node/identities.txt
+        [ ! -e "$target.owner-pending" ]
+        cat "$target" > "$target.owner-pending"
+        cat >> "$target.owner-pending"
+        sync "$target.owner-pending"
+        mv "$target.owner-pending" "$target"
+        for identity in 1 2; do
+            destination="/var/lib/layerx/guarantor-$identity/identity/identities.txt"
+            install -m 0440 "$target" "$destination.owner-pending"
+            mv "$destination.owner-pending" "$destination"
+        done
+    ' < "$input/owner-admission.txt"
+    local did admitted=0 attempt
+    did=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["did"])' "$input/owner-admission.json")
+    for attempt in $(seq 1 100); do
+        if kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c registry-check -- \
+            /usr/local/bin/layerxctl read-state --socket /run/layerx/node/layerxd.lni.sock \
+            --network-id "$NODE_NETWORK_ID" --protocol-version 3 --actor "$did" > "$input/owner-admission-state.json" 2>/dev/null; then
+            admitted=1
+            break
+        fi
+        sleep 0.1
+    done
+    [ "$admitted" = 1 ] || fail 'owner-admission.json: native genesis admission did not complete; preserve identity files'
+    python3 - "$input/owner-admission-state.json" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1]))
+if state['account_sequence'] != 0 or state['global_sequence'] != 0:
+    raise SystemExit('owner admission requires a fresh native genesis head')
+PY
+    kube -n "$TESTNET_NAMESPACE" get statefulset layerx-node -o json > "$state"
+    python3 "$REPO_ROOT/platform/hosted/human/native_manifest.py" "$WORK_DIR" "$NODE_NETWORK_ID" \
+        "$NODE_SEQUENCER_PUBLIC_KEY" "$(image_ref layerx-human)" "$state" "$manifest"
+    apply_secret "$TESTNET_NAMESPACE" layerx-human-native-input \
+        --from-file=owner-native.json="$input/owner-native.json" \
+        --from-file=recovery-policy.json="$input/recovery-policy.json" \
+        --from-file=recovery-guardians.json="$input/recovery-guardians.json" \
+        --from-file=owner-admission.json="$input/owner-admission.json" \
+        --from-file=custody-credit.bin="$input/custody-credit.bin" \
+        --from-file=human-owner-result.json="$WORK_DIR/human-owner-result.json" \
+        --from-file=owner.seed="$SECRETS_DIR/human-owner/owner.seed" \
+        --from-file=pending.seed="$SECRETS_DIR/human-owner/pending.seed" \
+        --from-file=authority.token="$SECRETS_DIR/registry-authority.token" --from-file=ca.crt="$CA_DIR/ca.crt"
+    kube apply -f "$manifest" > /dev/null
+    kube -n "$TESTNET_NAMESPACE" rollout status statefulset/layerx-node --timeout=300s > /dev/null
+    printf 'preserve owner-native-run and reconcile before retry\n' > "$input/owner-native.started"
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c owner-producer -- \
+        python3 /usr/local/lib/layerx-human/provision.py --produce-owner-registration --work-dir /run/owner/work \
+        > "$LOG_DIR/human-native-producer.log" 2>&1 || status=$?
+    mkdir "$input/owner-native-run"
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c owner-producer -- \
+        tar -C /run/owner/work/human-evidence-input/owner-native-run -cf - . \
+        | tar -C "$input/owner-native-run" -xf -
+    [ "$status" = 0 ] || fail "native owner producer refused; see $LOG_DIR/human-native-producer.log and retained owner-native-run"
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c owner-producer -- \
+        cat /run/owner/work/human-evidence-input/owner-registration.json > "$input/owner-registration.json"
+    python3 "$REPO_ROOT/platform/hosted/human/provision.py" --validate-owner-registration --work-dir "$WORK_DIR"
+    python3 - "$input" "$WORK_DIR/human-owner.env" <<'PY'
+import base64, json, shlex, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+registration = json.loads((root / 'owner-registration.json').read_text())
+policy = json.loads((root / 'recovery-policy.json').read_text())
+values = dict(ACTOR=registration['identity']['did'], AUTHORITY=registration['authority'],
+              OWNER_ACCOUNT='agent:' + registration['identity']['did'] + ':main',
+              RECOVERY_ROOT=base64.urlsafe_b64encode(bytes(policy['root'])).decode().rstrip('='),
+              RECOVERY_THRESHOLD=str(policy['threshold']))
+with open(sys.argv[2], 'x') as output:
+    for name, value in values.items():
+        output.write('export LAYERX_HUMAN_AGENT_' + name + '=' + shlex.quote(value) + '\n')
+PY
 )

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import time
@@ -127,6 +128,20 @@ def receipt_fields(data, public_key, path):
         Ed25519PublicKey.from_public_bytes(public_key).verify(signature, receipt_digest)
     except Exception as error:
         raise Refused(f'{path}: native receipt signature refused') from error
+    if module == 8:
+        credits = [body for emitted_module, event, kind, monetary, body in effects
+                   if emitted_module == 8 and event == 1 and kind == 3 and not monetary]
+        balances = [body for emitted_module, event, kind, monetary, body in effects
+                    if emitted_module == 8 and event == 2 and kind == 3 and not monetary]
+        require(operation == 0 and amount == 0 and target == bytes(32) and asset == bytes(32)
+                and len(credits) == 1 and len(credits[0]) == 208
+                and len(balances) == 1 and len(balances[0]) == 112, path, 'canonical custody credit events')
+        event, balance = credits[0], balances[0]
+        asset, target, amount = event[32:64], event[64:96], int.from_bytes(event[96:112], 'big')
+        require(amount > 0 and int.from_bytes(event[176:192], 'big') + amount == int.from_bytes(event[192:208], 'big')
+                and balance[32:48] == balance[48:64]
+                and int.from_bytes(balance[64:80], 'big') + amount == int.from_bytes(balance[80:96], 'big'),
+                path, 'committed credit supply and balance conservation')
     return dict(activity_id=activity.hex(), receipt_digest=receipt_digest.hex(), sequence=sequence,
                 batch=batch.hex(), module=module, version=version, operation=operation,
                 asset=asset.hex(), amount=amount, source=source.hex(), target=target.hex(),
@@ -139,7 +154,7 @@ def _produce(work_dir):
     root = Path(work_dir) / 'human-evidence-input'
     path = root / 'owner-native.json'
     config = protected_json(path)
-    fields(config, 'node_socket network_id owner_seed_file pending_seed_file sequencer_public_key layerxctl fee_limit authority_url authority_token_file authority_ca_file', path, 'native producer configuration')
+    fields(config, 'node_socket network_id owner_seed_file pending_seed_file sequencer_public_key layerxctl fee_limit authority_url authority_token_file authority_ca_file authority_state_root', path, 'native producer configuration')
     uint(config['network_id'], 32, path, 'network_id', 1)
     uint(config['fee_limit'], 128, path, 'fee_limit')
     h32(config['sequencer_public_key'], path, 'sequencer_public_key')
@@ -147,6 +162,10 @@ def _produce(work_dir):
     require(url.scheme == 'https' and bool(url.hostname) and url.username is None and url.password is None
             and not url.query and not url.fragment, path, 'HTTPS receipt authority')
     require(Path(config['layerxctl']).is_absolute(), path, 'absolute layerxctl path')
+    evidence_dir = Path(config['authority_state_root'])
+    info = evidence_dir.lstat()
+    require(evidence_dir.is_absolute() and evidence_dir.resolve() == evidence_dir and stat.S_ISDIR(info.st_mode)
+            and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700, evidence_dir, 'protected authority state directory')
     seed = protected_bytes(config['owner_seed_file'], 32)
     require(len(seed) == 32, config['owner_seed_file'], 'custody owner Ed25519 seed')
     signer = Ed25519PrivateKey.from_private_bytes(seed)
@@ -196,6 +215,8 @@ def _produce(work_dir):
 
     def command(arguments, label):
         completed = subprocess.run([config['layerxctl'], *arguments, *common], capture_output=True)
+        if completed.returncode != 0:
+            protected_write(run_dir / 'layerxctl-refusal.txt', completed.stderr)
         require(completed.returncode == 0, label, 'layerxctl refused or submission outcome unknown')
         return json.loads(completed.stdout)
 
@@ -203,10 +224,11 @@ def _produce(work_dir):
         state = command(['read-state'], path)
         sequence = state['account_sequence']
         now = time.time_ns() // 1000000
+        idempotency = hashlib.sha256(b'LX:DEPOSIT:NULLIFIER:v1' + payload[43:75]).digest() if module == 8 else os.urandom(32)
         fields_bytes = (b'\1' + struct.pack('>H', 3) + b'\2' + struct.pack('>I', config['network_id'])
             + b'\3' + struct.pack('>I', (module << 16) | ordinal) + b'\4' + span(did)
             + b'\5' + span(public) + b'\6' + struct.pack('>Q', sequence)
-            + b'\7' + struct.pack('>QQ', now, now + 300000) + b'\10' + span(os.urandom(32))
+            + b'\7' + struct.pack('>QQ', now, now + 300000) + b'\10' + span(idempotency)
             + b'\11' + config['fee_limit'].to_bytes(16, 'big') + b'\12' + span(digest(b'payload-hash', payload))
             + b'\13' + span(payload))
         unsigned = b'\0\3\x10\1\13' + fields_bytes
@@ -230,6 +252,13 @@ def _produce(work_dir):
             verified = json.loads(response.read(1048577))
         require(verified['activity_id'] == activity_id.hex() and verified['batch_id'] == result['batch']
                 and verified['sequencer_public_key'] == config['sequencer_public_key'], receipt_path, 'authorized batch binding')
+        proof_url = config['authority_url'].rstrip('/') + '/v1/batches/' + result['batch'] + '/receipt-authority?receipt_digest=' + result['receipt_digest']
+        request = urllib.request.Request(proof_url, headers={'Authorization': 'Bearer ' + token})
+        with urllib.request.urlopen(request, context=context, timeout=30) as response:
+            document = json.loads(response.read(1048577))
+        record = json.dumps(dict(receipt_hex=raw.hex(), replica_document=document),
+                            sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+        protected_write(evidence_dir / (activity_id.hex() + '.json'), record)
         return result
 
     credited = execute(1, credit, 'credit', 8)
