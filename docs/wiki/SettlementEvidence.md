@@ -57,3 +57,21 @@ The checkpoint proof is the existing `wire::encode_checkpoint_proof_for_protocol
 6. For withdrawals call `CheckpointProof::fetch_published` with the debit expectation, then pass the returned proof and verified `CommittedWithdrawalDebit` to `WithdrawalBoundary::construct_claim`. For exits call `ExitEvidence::fetch_published`, then `EmergencyExit::construct_claim`. These existing boundaries remain mandatory: they verify certificate standing, asset and debit bindings, nullifiers, roots and exit eligibility before settlement. Publication itself is not a payout authorization.
 
 The fetch methods return untrusted evidence and typed endpoint failures. They do not replace the existing quorum and admission APIs. Balance witnesses are available before `executeExit`; the exit event is never used as a pre-settlement proof source.
+
+## Native state witness version 2
+
+The native witness codec is independent of the publication envelope and the checkpoint protocol version. All integers are big-endian:
+
+```
+version:u16=2 || module_id:u16 || key_len:u32 || key || value_len:u32 || value
+|| leaf_index_a:u32 || leaf_count_a:u32 || depth_a:u8 || siblings_a[32]*
+|| leaf_count_b:u32 || depth_b:u8 || siblings_b[32]*
+```
+
+The leaf hash is SHA256(`LXP/v1/state-leaf\0 || key_len:u32 || value_len:u32 || key || value`). Note that both lengths precede the key in the hash preimage, whereas each length precedes its bytes on the wire. Each path hashes SHA256(`LXP/v1/state-node\0 || left[32] || right[32]`) in native positional order. At odd widths the last node duplicates itself; the proof must carry that exact sibling. Counts, indices, depths and trailing bytes are checked strictly. The layer-B index is `module_id` and its leaf is SHA256(`LXP/v1/state-leaf\0 || u32(2) || u32(32) || module_id:u16 || module_subtree_root[32]`). The current native module count is 9 or 10, including empty module subtrees.
+
+`lxp_state_proof_build` composes the existing native subtree and root constructors and verifies the result before returning it. `lxp_state_proof_encode`, `lxp_state_proof_decode` and `lxp_state_proof_verify` share that representation. Allocate `lxp_state_witness` on the heap: it owns up to one MiB of blob value material. `gp_runtime_state_proof` exposes the same constructor over the guarantor's independently replayed kernel. Rust `state_proof::StateWitness` and Solidity `NativeStateProof` verify the identical bytes. `build/tests/lxp_test_state_proof --vectors` emits the shared fixtures under `contracts/config/native-state-proofs.json` and the paxeer-client test vectors directory.
+
+This generic proof does not yet enable version-2 settlement publication. Native account balances are inside a third account-registry tree under module-zero `account-tree`, with no EVM recipient field, and the withdrawal store is not committed as module KV. A proof of the account-tree root is not a proof of a particular account balance. The standalone asset balance root is not the composite checkpoint root. These gaps must be resolved without inventing settlement leaves or accepting an unsigned recipient binding.
+
+The required rollout sequence remains: independently replay the checkpoint; decode committed settlement facts and build their proofs and deposit leaf ordering; register the checkpoint; publish the withdrawal and balance witness vectors; register the signed deposit root; fetch through `PublishedDepositProof::fetch_published`, `CheckpointProof::fetch_published` and `ExitEvidence::fetch_published`; then apply the existing custody, debit, certificate, nullifier and eligibility checks. The claim consumers and publication contracts still use version 1 until this entire sequence can carry real facts. A coordinated rollout must change both `EVIDENCE_VERSION` constants and the deployment finalization expectation to 2. The generic vectors are not settlement balance or withdrawal vectors.
