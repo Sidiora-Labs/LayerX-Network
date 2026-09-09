@@ -7734,6 +7734,7 @@ assumption = "Consumers of the new receipt structure must retain the supply byte
 severity = "note"
 
 [observation.3.7.70]
+[observation.3.7.53]
 task = "3.7"
 file = "src/modules/asset/lx_asset_registry.c cmd/layerxd/lxp_daemon_process.c cmd/layerx-genesis/lxp_genesis_build_cli.c cmd/layerx-genesis/lxp_genesis_builder.c"
 symbol = "lx_asset_committed_records collect_assets parse_request"
