@@ -246,12 +246,19 @@ static lxp_result asset_execute_typed(lxp_module_ctx *ctx, const lxp_activity *a
             input.global_sequence = ctx->global_sequence;
             input.timestamp = lxp_ctx_batch_timestamp_ms(ctx);
             (void)memcpy(input.asset, record.asset_id, 32U);
-            lx_account *owner_account;
+            lx_account *owner_account = NULL;
             status = lxp_ctx_account_find(ctx, authority->principal, &owner_account);
+            if (status == LXP_OK) {
+                input.from_balance_before = owner_account->balance;
+                input.from_balance_after = owner_account->balance;
+                input.from_sequence = owner_account->next_sequence;
+            } else if (status == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) {
+                input.from_balance_before = (lxp_u128){0U, 0U};
+                input.from_balance_after = (lxp_u128){0U, 0U};
+                input.from_sequence = 0U;
+                status = LXP_OK;
+            }
             if (status != LXP_OK) return status;
-            input.from_balance_before = owner_account->balance;
-            input.from_balance_after = owner_account->balance;
-            input.from_sequence = owner_account->next_sequence;
             (void)memcpy(input.from, authority->principal, 32U);
             (void)memcpy(input.to, account->id, 32U);
             (void)memcpy(input.context_hash, context, 32U);

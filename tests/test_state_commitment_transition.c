@@ -1098,6 +1098,40 @@ static int pay1_issuance(uint8_t final_root[32])
     return 0;
 }
 
+static int pay1_account_open_without_main(void)
+{
+    fixture *f = (fixture *)calloc(1U, sizeof(*f));
+    const lx_account *opened;
+    uint8_t principal[32];
+    REQUIRE(f != NULL);
+    REQUIRE(prepare(f, 3U, true) == 0);
+    (void)memcpy(principal, f->authority.principal, 32U);
+    REQUIRE(lxp_ledger_bootstrap_balance(&f->accounts.accounts[0],
+        f->accounts.accounts[0].asset_id, (lxp_u128){0U, 0U}, 0U) == LXP_OK);
+    REQUIRE(lx_account_close(&f->accounts, principal) == LXP_OK);
+    REQUIRE(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
+    f->payload[0] = 0U;
+    f->payload[1] = 1U;
+    (void)memcpy(f->payload + 2U, f->asset.asset_id, 32U);
+    REQUIRE(pay1_submit(f, 4U, 34U, LXP_OK) == 0);
+    REQUIRE(f->receipt.result_code == LXP_OK);
+    REQUIRE(f->receipt.operation == 4U);
+    REQUIRE(memcmp(f->receipt.from, principal, 32U) == 0);
+    REQUIRE(lxp_u128_is_zero(f->receipt.from_balance_before));
+    REQUIRE(lxp_u128_is_zero(f->receipt.from_balance_after));
+    REQUIRE(f->receipt.from_sequence == 0U);
+    REQUIRE(lxp_u128_is_zero(f->receipt.to_balance_before));
+    REQUIRE(lxp_u128_is_zero(f->receipt.to_balance_after));
+    opened = &f->accounts.accounts[f->accounts.count - 1U];
+    REQUIRE(opened->kind == LX_ACCOUNT_AGENT_MAIN && opened->has_asset);
+    REQUIRE(lxp_u128_is_zero(opened->balance));
+    REQUIRE(memcmp(opened->id, f->receipt.to, 32U) == 0);
+    REQUIRE(memcmp(opened->asset_id, f->asset.asset_id, 32U) == 0);
+    REQUIRE(lxp_state_store_destroy(&f->state) == LXP_OK);
+    free(f);
+    return 0;
+}
+
 static int pay1_malformed(void)
 {
     static const uint16_t ordinals[] = {1U, 4U, 6U, 7U, 8U, 10U, 11U};
@@ -1148,6 +1182,7 @@ int main(void)
     REQUIRE(pay1_receive_grant(1U) == 0);
     REQUIRE(pay1_receive_grant(2U) == 0);
     REQUIRE(pay1_malformed() == 0);
+    REQUIRE(pay1_account_open_without_main() == 0);
     REQUIRE(pay1_prepared_account(0U) == 0);
     REQUIRE(pay1_prepared_account(1U) == 0);
     REQUIRE(pay1_prepared_account(2U) == 0);

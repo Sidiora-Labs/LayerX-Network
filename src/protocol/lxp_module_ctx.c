@@ -1705,10 +1705,21 @@ lxp_result lxp_ctx_bind_ledger_receipt(
             !lxp_ct_is_zero(input->previous_state_root, 32U) ||
             !lxp_ct_is_zero(input->resulting_state_root, 32U) ||
             !lxp_ct_is_zero(input->batch_id, 32U)) return LXP_ERR_NON_CANONICAL;
-        if (lxp_ctx_account_find(ctx, input->from, &owner_account) != LXP_OK ||
-            lxp_u128_cmp(owner_account->balance, input->from_balance_before) != 0 ||
-            owner_account->next_sequence != input->from_sequence)
-            return LXP_ERR_NON_CANONICAL;
+        {
+            lxp_result find = lxp_ctx_account_find(ctx, input->from, &owner_account);
+            if (find == LXP_OK) {
+                if (lxp_u128_cmp(owner_account->balance, input->from_balance_before) != 0 ||
+                    owner_account->next_sequence != input->from_sequence)
+                    return LXP_ERR_NON_CANONICAL;
+            } else if (find == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) {
+                if (!lxp_u128_is_zero(input->from_balance_before) ||
+                    !lxp_u128_is_zero(input->from_balance_after) ||
+                    input->from_sequence != 0U)
+                    return LXP_ERR_NON_CANONICAL;
+            } else {
+                return LXP_ERR_NON_CANONICAL;
+            }
+        }
         account = &ctx->staged_accounts[0].account;
         if (account->kind != LX_ACCOUNT_AGENT_MAIN ||
             lx_account_validate_canonical(account) != LXP_OK ||
