@@ -1100,6 +1100,108 @@ manifests_apply() {
     kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
 }
 
+registry_deployment_produce() (
+    set -euo pipefail
+    umask 077
+    local input="$WORK_DIR/human-evidence-input" temporary producer
+    local artifact="$REPO_ROOT/programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
+    make -C "$REPO_ROOT" programs-reference-escrow >&2
+    mkdir -p "$input"
+    [ ! -e "$input/program-deployment.lxa" ] && [ ! -L "$input/program-deployment.lxa" ] || fail 'deployment input exists; reconcile before retry'
+    temporary=$(mktemp "$input/.program-deployment.XXXXXXXX")
+    trap 'rm -f "$temporary"' EXIT
+    producer=$(cat <<'PYREGDEPLOY'
+import hashlib, json, os, stat, struct, subprocess, sys, time
+from pathlib import Path
+
+def protected(path, mode=0o600):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as handle:
+        info = os.fstat(handle.fileno())
+        assert stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+        assert stat.S_IMODE(info.st_mode) == mode and info.st_nlink == 1
+        value = handle.read(65537)
+        assert 0 < len(value) <= 65536
+        return value
+
+def memory_file(name, value):
+    fd = os.memfd_create(name, 0)
+    os.write(fd, value)
+    os.lseek(fd, 0, os.SEEK_SET)
+    return fd
+
+def run(args, descriptors=()):
+    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            pass_fds=descriptors, check=False)
+    assert result.returncode == 0, 'node deployment producer command refused'
+    return result.stdout
+
+def blob(value):
+    return struct.pack('>I', len(value)) + value
+
+node = dict(line.split('=', 1) for line in protected(sys.argv[1], 0o644).decode().splitlines())
+network = int(sys.argv[2])
+assert network > 0
+wasm = sys.stdin.buffer.read(524289)
+assert wasm.startswith(b'\0asm\x01\0\0\0') and 0 < len(wasm) <= 524184
+seed = bytes.fromhex(protected(node['LAYERX_NODE_TREASURY_KEY_FILE']).decode())
+assert len(seed) == 32
+key = memory_file('deployment-signer', bytes.fromhex('302e020100300506032b657004220420') + seed)
+try:
+    public = run(['openssl', 'pkey', '-inform', 'DER', '-in', f'/proc/self/fd/{key}',
+                  '-pubout', '-outform', 'DER'], (key,))[-32:]
+    assert public.hex() == node['LAYERX_NODE_TREASURY_PUBLIC_KEY']
+    did = node['LAYERX_NODE_TREASURY_DID'].encode()
+    assert did == b'did:layerx:' + public.hex().encode()
+    state = json.loads(run([sys.argv[3], 'read-state', '--socket', node['LAYERX_NODE_LNI_SOCKET'],
+                           '--network-id', str(network), '--protocol-version', '3', '--actor', did.decode()]))
+    assert state['network_id'] == network and state['protocol_version'] == 3
+    assert state['evidence'] == 'authenticated_node_snapshot'
+    sequence = state['account_sequence']
+    assert type(sequence) is int and 0 <= sequence < 2**64
+    payload = (os.urandom(32) + struct.pack('>HBB', 2, 0, 0) + bytes(32)
+               + hashlib.sha256(wasm).digest() + blob(wasm))
+    now = time.time_ns() // 1000000
+    fields = (b'\x01' + struct.pack('>H', 3) + b'\x02' + struct.pack('>I', network)
+              + b'\x03' + struct.pack('>I', (9 << 16) | 1) + b'\x04' + blob(did)
+              + b'\x05' + blob(public) + b'\x06' + struct.pack('>Q', sequence)
+              + b'\x07' + struct.pack('>QQ', now - 30000, now + 120000)
+              + b'\x08' + blob(os.urandom(32)) + b'\x09' + bytes(16)
+              + b'\x0a' + blob(hashlib.sha256(b'LXP/v1/payload-hash\0' + payload).digest())
+              + b'\x0b' + blob(payload))
+    unsigned = struct.pack('>HHB', 3, 0x1001, 11) + fields
+    digest = memory_file('deployment-preimage', hashlib.sha256(b'LXP/v1/signature-preimage\0' + unsigned).digest())
+    try:
+        signature = run(['openssl', 'pkeyutl', '-sign', '-rawin', '-keyform', 'DER',
+                         '-inkey', f'/proc/self/fd/{key}', '-in', f'/proc/self/fd/{digest}'], (key, digest))
+    finally:
+        os.close(digest)
+    assert len(signature) == 64
+    signed = struct.pack('>HHB', 3, 0x1001, 12) + fields + b'\x0c' + blob(signature)
+    assert len(signed) <= 1048576
+    sys.stdout.buffer.write(signed)
+finally:
+    os.close(key)
+PYREGDEPLOY
+)
+    kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- \
+        python3 -c "$producer" /var/lib/layerx/node/node.env "$NODE_NETWORK_ID" /usr/local/bin/layerxctl \
+        < "$artifact" > "$temporary"
+    python3 - "$temporary" "$input/program-deployment.lxa" <<'PYPUBLISH'
+import os, sys
+with open(sys.argv[1], 'rb') as handle:
+    assert 0 < os.fstat(handle.fileno()).st_size <= 1048576
+    os.fsync(handle.fileno())
+os.link(sys.argv[1], sys.argv[2])
+os.unlink(sys.argv[1])
+fd = os.open(os.path.dirname(sys.argv[2]), os.O_RDONLY | os.O_DIRECTORY)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PYPUBLISH
+)
+
 internal_apply() {
     kube apply -f "$MANIFESTS_DIR/internal.yaml" > /dev/null
     kube -n "$DEVELOPER_NAMESPACE" apply -f "$MANIFESTS_DIR/developer.yaml" > /dev/null
@@ -1719,6 +1821,7 @@ beta_cluster_up() {
         identity_provision
         kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
         wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-program-registry 600
+        registry_deployment_produce
         human_journal_deploy
         human_evidence_provision
         human_policy_publish
