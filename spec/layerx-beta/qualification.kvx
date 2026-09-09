@@ -12233,3 +12233,11 @@ symbol = "observation.6.11.130"
 observed = "make beta-ledger-check exits 2 after merging 074a399173b4632b4dfbcc160787720a2172f71f: file, symbol, observed, assumption and severity occur twice in observation.6.11.130. The appended record has no section header. Raw output: qual-logs/pay3/rpc-ledger.log."
 assumption = "The inherited records are preserved under append-only ownership. The qualification owner must restore a distinct section header for the second record before the aggregate ledger gate can pass."
 severity = "blocker"
+
+[observation.6.11.135]
+task = "6.11"
+file = "platform/cli/src/wallet_send.rs agent/crates/layerx-crypto/src/disclosure.rs agent/crates/layerx-crypto/src/signer.rs src/ledger/lxp_send.c"
+symbol = "Send::prepare decode_send SigningRequest::new lxp_send_authorization_message"
+observed = "The CLI-local Send payload and authorization-message encoders match the real native lxp_send.c encoder in a compiled differential fixture. The unsigned envelope retains identity sequence 17 while the payload retains source sequence 72623859790382856. The shared decode_send still rejects unequal sequences. SigningRequest requires a validated Disclosure and provides no public request constructor for the separate native Send debit-authorization preimage. Source evidence: qual-logs/pay3/pay3c-signing-boundary.log."
+assumption = "The local encoder does not change the signer boundary or supply identity state. Send submission requires separate-sequence disclosure support and a disclosed native debit-authorization signing API. Token submission requires an authenticated identity.next_sequence read. No account sequence substitution or raw-key signer bypass is authorized by the local encoder grant."
+severity = "blocker"
