@@ -8,7 +8,7 @@ Charge for a route you already have. Eight lines mount a payment gate in front o
 npm install @sidiora/layerx-express express
 ```
 
-The integration reads its whole configuration from the environment, so nothing is hard-coded into your source. The declared keys are `LAYERX_PRINCIPAL`, `LAYERX_PROTECTED_PATH`, the `LAYERX_RESOURCE_*` description fields, `LAYERX_X402_SCHEME`, `LAYERX_X402_NETWORK`, `LAYERX_PRICE`, `LAYERX_ASSET`, `LAYERX_PAY_TO`, `LAYERX_PAYMENT_TIMEOUT_SECONDS`, `LAYERX_AUTHORIZED_BATCH_JSON`, and the four `LAYERX_WEBHOOK_*` values. `LAYERX_TOKEN` is the only declared secret.
+The integration reads its whole configuration from the environment, so nothing is hard-coded into your source. The declared keys are `LAYERX_PRINCIPAL`, `LAYERX_PROTECTED_PATH`, the `LAYERX_RESOURCE_*` description fields, `LAYERX_X402_SCHEME`, `LAYERX_X402_NETWORK`, `LAYERX_PRICE`, `LAYERX_ASSET`, `LAYERX_PAY_TO`, `LAYERX_PAYER`, optional `LAYERX_COMMITMENT` (`executed` when unset), `LAYERX_PURPOSE_HASH` for metered and subscription schemes, `LAYERX_WINDOW_SECONDS` for subscriptions, `LAYERX_PAYMENT_TIMEOUT_SECONDS`, `LAYERX_AUTHORIZED_BATCH_JSON`, and the four `LAYERX_WEBHOOK_*` values. `LAYERX_TOKEN` is the only declared secret. Every 402 challenge includes `extra.layerx.payer`.
 
 ## The integration
 

@@ -31,6 +31,10 @@ MCP-only write path (`agent/crates/layerx-mcp/README.md:5-6`;
 server. It signs locally and posts JSON to `/v1/activities`
 (`platform/cli/src/toolset.rs:190-204, 288-291`).
 
+## 402LXP grant payments
+
+Metered and subscription payments are Asset ordinal 6 receives, not MCP `activity.submit` SEND. The seller issues a 402 challenge. The buyer returns a grant-backed receive. The receiver submits `lx_sendActivity` at `POST /rpc` with commitment `executed`, then `batched` when the offer requires inclusion. Verify `lx_getReceipt` against configured sequencer authority and bind amount, asset, payTo, payer, and purpose. Renewals use a new idempotency key per subscription period and the same signed bytes on retry. See [402LXP payments](Payments402.md).
+
 `layerx-agentd` is a library plus a binary
 (`agent/crates/layerx-agentd/src/lib.rs:1`;
 `agent/crates/layerx-agentd/src/main.rs:554-558`). The binary does

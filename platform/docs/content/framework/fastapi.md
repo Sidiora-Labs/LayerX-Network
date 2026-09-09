@@ -8,7 +8,7 @@ Charge for a FastAPI route. Seven lines mount a payment gate and a verified webh
 python3 -m pip install layerx-fastapi uvicorn
 ```
 
-The integration reads twenty declared keys from the environment: `LAYERX_PRINCIPAL`, `LAYERX_PROTECTED_PATH`, the `LAYERX_RESOURCE_*` description fields, `LAYERX_X402_SCHEME`, `LAYERX_X402_NETWORK`, `LAYERX_PRICE`, `LAYERX_ASSET`, `LAYERX_PAY_TO`, `LAYERX_PAYMENT_TIMEOUT_SECONDS`, `LAYERX_AUTHORIZED_BATCH_JSON`, the four `LAYERX_WEBHOOK_*` values, `LAYERX_HUMAN_URL`, `LAYERX_SOURCE` and `LAYERX_TOKEN`. `LAYERX_TOKEN` is the only secret among them.
+The integration reads the declared keys from the environment: `LAYERX_PRINCIPAL`, `LAYERX_PROTECTED_PATH`, the `LAYERX_RESOURCE_*` description fields, `LAYERX_X402_SCHEME`, `LAYERX_X402_NETWORK`, `LAYERX_PRICE`, `LAYERX_ASSET`, `LAYERX_PAY_TO`, `LAYERX_PAYER`, optional `LAYERX_COMMITMENT` (`executed` when unset), `LAYERX_PURPOSE_HASH` for metered and subscription schemes, `LAYERX_WINDOW_SECONDS` for subscriptions, `LAYERX_PAYMENT_TIMEOUT_SECONDS`, `LAYERX_AUTHORIZED_BATCH_JSON`, the four `LAYERX_WEBHOOK_*` values, `LAYERX_HUMAN_URL`, `LAYERX_SOURCE` and `LAYERX_TOKEN`. `LAYERX_TOKEN` is the only secret among them. Every 402 challenge includes `extra.layerx.payer`. Grant schemes also include `purposeHash` and an explicit commitment.
 
 Before it configures anything, `read_declared_config` refuses to start if a declared secret has been copied into a variable with a published prefix - `NEXT_PUBLIC_`, `PUBLIC_`, `VITE_`, `REACT_APP_` or `EXPO_PUBLIC_`. A misconfiguration that would leak a token to a browser is a startup failure, not a runtime surprise.
 

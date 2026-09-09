@@ -61,6 +61,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [SDK terminal verification](SdkTerminalVerification.md)
 - [Portable receipt verifier](PortableVerifier.md)
 - [x402 transport](X402Transport.md)
+- [402LXP payments](Payments402.md)
 - [Agentd](Agentd.md)
 - [CLI](Cli.md)
 - [Hosted core](HostedCore.md)

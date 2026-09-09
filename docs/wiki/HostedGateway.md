@@ -215,6 +215,14 @@ unless the request is a successful `POST` call or lifecycle mutation
 (`platform/hosted/gateway/src/main.rs:749-825`;
 `platform/hosted/gateway/src/main.rs:1777-1785`).
 
+## Public JSON-RPC
+
+`POST /rpc` is JSON-RPC 2.0 (`platform/hosted/gateway/src/rpc.rs`). `GET /rpc/ws` is the authenticated WebSocket (`platform/hosted/gateway/src/ws.rs`; `platform/hosted/gateway/src/main.rs:2480`). Schema is `GET /rpc/schema` (`platform/hosted/gateway/src/rpc.rs:410`).
+
+`lx_sendActivity(canonical_hex, commitment)` authenticates the caller, forwards the signed activity, and returns `activity_id` plus `receipt` only after a verified receipt exists. Commitment `executed` requires that receipt. `batched` adds receipt Merkle inclusion in a signed batch header. `finalised` adds the guarantor checkpoint covering that exact header. A 202 upstream stays `state: "pending"` (`platform/hosted/gateway/src/rpc.rs:214-219, 320-345`). An admission acknowledgement is never a successful result.
+
+Read methods: `lx_getAccount`, `lx_getBalance`, `lx_getBalances`, `lx_getSequence`, `lx_estimateFee`, `lx_getReceipt`, `lx_getActivityStatus`, `lx_getBatchHeader`, `lx_getCheckpoint`, `lx_getProof`, `lx_listAssets`, `lx_getAsset`, `lx_getNodeInfo`. `lx_subscribe` requires the WebSocket. See [402LXP payments](Payments402.md).
+
 Unknown `production_route` values are `404 not_found`
 (`platform/hosted/gateway/src/main.rs:1740-1746`).
 `GET /__emulator/reset` is 404

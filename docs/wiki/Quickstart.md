@@ -12,7 +12,7 @@ receipt verify` result, and a Paxeer-boundary observation of chain id `125`.
 This page covers that path. Commands, flags, printed fields, and HTTP routes are
 cited to the tree. Related pages: [CLI](Cli.md), [Beta cluster](BetaCluster.md),
 [Hosted gateway](HostedGateway.md), [Hosted identity](HostedIdentity.md),
-[Programs](Programs.md), [Finality](Finality.md).
+[Programs](Programs.md), [Finality](Finality.md), [402LXP payments](Payments402.md).
 
 ---
 
