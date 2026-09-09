@@ -7,7 +7,7 @@
 
 typedef struct state_entry {
     uint8_t key[64];
-    uint8_t value[256];
+    uint8_t value[384];
     size_t value_length;
 } state_entry;
 
@@ -74,6 +74,10 @@ static lxp_result sum_units(const lx_account_registry *accounts,
         lxp_u128 next;
         if (!accounts->accounts[i].has_asset ||
             memcmp(accounts->accounts[i].asset_id, asset_id, 32U) != 0) continue;
+        if (accounts->accounts[i].kind == LX_ACCOUNT_MODULE_VALUE &&
+            accounts->accounts[i].name_length == 79U &&
+            memcmp(accounts->accounts[i].name, "asset:", 6U) == 0 &&
+            memcmp(accounts->accounts[i].name + 70U, ":issuance", 9U) == 0) continue;
         if (lxp_u128_add(sum, accounts->accounts[i].balance, &next) != LXP_OK)
             return LXP_FATAL_SUPPLY_MISMATCH;
         sum = next;
@@ -129,11 +133,14 @@ lxp_result lx_asset_state_root(const lx_asset_registry *assets,
         size_t encoded_length;
         uint8_t total_bytes[16];
         (void)memcpy(entries[count].key, assets->assets[i].asset_id, 32U);
-        status = lx_asset_record_encode(&assets->assets[i], entries[count].value,
-                                        sizeof(entries[count].value) - 16U,
-                                        &encoded_length);
-        if (status == LXP_OK)
-            status = sum_units(accounts, assets->assets[i].asset_id, &total);
+        lx_asset_record record = assets->assets[i];
+        status = sum_units(accounts, record.asset_id, &total);
+        if (status == LXP_OK) {
+            record.total_units = total;
+            status = lx_asset_record_encode(&record, entries[count].value,
+                                            sizeof(entries[count].value) - 16U,
+                                            &encoded_length);
+        }
         if (status == LXP_OK) status = lxp_u128_to_be(total, total_bytes);
         if (status != LXP_OK) return status;
         (void)memcpy(entries[count].value + encoded_length, total_bytes, 16U);
@@ -153,7 +160,7 @@ lxp_result lx_asset_state_root(const lx_asset_registry *assets,
     }
     sort_entries(entries, count);
     for (i = 0U; i < count; ++i) {
-        uint8_t leaf[64U + 256U];
+        uint8_t leaf[64U + 384U];
         (void)memcpy(leaf, entries[i].key, 64U);
         (void)memcpy(leaf + 64U, entries[i].value, entries[i].value_length);
         status = lxp_hash_domain(LXP_DOMAIN_STATE_LEAF, leaf,

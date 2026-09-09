@@ -73,6 +73,13 @@ lxp_result lxp_kernel_bind_ledger_admission(
     if (ctx == NULL || ctx->kernel == NULL || authority == NULL)
         return LXP_ERR_NON_CANONICAL;
     if (ctx->ledger_admission.bound) return LXP_ERR_CONTEXT_MISMATCH;
+    if (ctx->module_id == LXP_MODULE_ASSET) {
+        ctx->ledger_admission.activity_type = activity_type;
+        (void)memcpy(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U);
+        (void)memcpy(ctx->ledger_admission.account_id, authority->principal, 32U);
+        ctx->ledger_admission.bound = true;
+        return LXP_OK;
+    }
     if (ctx->module_id != LXP_MODULE_PROGRAMS ||
         ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         return LXP_OK;
@@ -1228,6 +1235,17 @@ lxp_result lxp_kernel_dispatch(const lxp_module_registration *registration,
     if (registration == NULL || ctx == NULL || activity == NULL ||
         authority == NULL || effects == NULL || module_result == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (ctx->module_id == LXP_MODULE_ASSET) {
+        if (lxp_activity_module_id(activity->activity_type) != LXP_MODULE_ASSET)
+            return LXP_ERR_UNKNOWN_ACTIVITY;
+        if (!ctx->ledger_admission.bound) {
+            status = lxp_kernel_bind_ledger_admission(ctx, authority, activity->activity_type);
+            if (status != LXP_OK) return status;
+        }
+        if (ctx->ledger_admission.activity_type != activity->activity_type ||
+            memcmp(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U) != 0)
+            return LXP_ERR_CONTEXT_MISMATCH;
+    }
     status = registration->iface->decode(
         ctx, lxp_activity_type_ordinal(activity->activity_type),
         activity->payload.bytes, activity->payload.length, &decoded);
@@ -4347,7 +4365,8 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         if (status == LXP_OK)
             (void)memcpy(module_ctx.activity_id, canonical_activity_id, 32U);
         if (status == LXP_OK &&
-            (activity->activity_type == LX_PROGRAMS_CALL ||
+            (lxp_activity_module_id(activity->activity_type) == LXP_MODULE_ASSET ||
+             activity->activity_type == LX_PROGRAMS_CALL ||
              activity->activity_type == LX_PROGRAMS_WIND_DOWN))
             status = lxp_kernel_bind_ledger_admission(
                 &module_ctx, execution->authority, activity->activity_type);

@@ -128,6 +128,27 @@ lxp_result lx_account_validate_canonical(const lx_account *account)
          bytes_zero(account->authority_key,
                     sizeof(account->authority_key))))
         return status != LXP_OK ? status : LXP_ERR_NON_CANONICAL;
+    if (account->name_length > 77U &&
+        memcmp(account->name, "agent:", 6U) == 0 &&
+        memcmp(account->name + account->name_length - 71U, ":asset:", 7U) == 0 &&
+        account->has_asset) {
+        static const uint8_t hex[] = "0123456789abcdef";
+        size_t i;
+        const uint8_t *encoded = account->name + account->name_length - 64U;
+        for (i = 0U; i < 32U; ++i)
+            if (encoded[i * 2U] != hex[account->asset_id[i] >> 4U] ||
+                encoded[i * 2U + 1U] != hex[account->asset_id[i] & 15U])
+                return LXP_ERR_ASSET_MISMATCH;
+    }
+    if (account->kind == LX_ACCOUNT_MODULE_VALUE && account->name_length == 79U &&
+        memcmp(account->name, "asset:", 6U) == 0) {
+        static const uint8_t hex[] = "0123456789abcdef";
+        if (!account->has_asset) return LXP_ERR_ASSET_MISMATCH;
+        for (size_t i = 0U; i < 32U; ++i)
+            if (account->name[6U + i * 2U] != hex[account->asset_id[i] >> 4U] ||
+                account->name[7U + i * 2U] != hex[account->asset_id[i] & 15U])
+                return LXP_ERR_ASSET_MISMATCH;
+    }
     return LXP_OK;
 }
 

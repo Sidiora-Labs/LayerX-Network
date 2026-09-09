@@ -262,6 +262,10 @@ lxp_result lx_account_kind_of(const uint8_t *name, size_t name_length,
 lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
                                      uint8_t account_id[LX_ACCOUNT_ID_BYTES]);
 lxp_result lx_account_registry_init(lx_account_registry *registry);
+lxp_result lx_account_list_did(const lx_account_registry *registry,
+    const uint8_t did_id[32], uint8_t (*account_ids)[32], size_t capacity,
+    size_t *count);
+
 lxp_result lx_account_validate_canonical(const lx_account *account);
 lxp_result lx_account_registry_snapshot(lx_account_registry *source,
                                         lx_account_registry *snapshot);
@@ -310,6 +314,10 @@ lxp_result lxp_send_build_transfer_set(const lxp_send *send,
 lxp_result lxp_send_execute(const lxp_send *send,
                             lxp_send_environment *environment,
                             lxp_send_receipt_projection *receipt);
+lxp_result lxp_payer_grant_encode(const lxp_payer_grant *grant,
+                                  uint8_t *bytes, size_t capacity, size_t *length);
+lxp_result lxp_payer_grant_decode(const uint8_t *bytes, size_t length,
+                                  lxp_payer_grant *grant);
 lxp_result lxp_grant_authorization_message(const lxp_payer_grant *grant,
                                            uint8_t *bytes, size_t capacity,
                                            size_t *length);
