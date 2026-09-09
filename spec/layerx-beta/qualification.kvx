@@ -7238,6 +7238,7 @@ observed = "Protected catalog generation, tenant request/response binding valida
 assumption = "This is partial local qualification. No Kubernetes Job, image, cluster or generated-catalog Rust loadability gate ran. The Job is not wired into bring-up, no complete evidence assembler or atomic full-set publisher is implemented, and no full Human evidence set was produced. The producer conflicts in observation 6.8.87 remain unresolved; existing consumer assertions are unchanged."
 
 [observation.6.8.132]
+[observation.6.8.89]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/human/provision.py platform/hosted/human/material.py platform/hosted/paxeer/deploy-contracts.sh contracts/custody/LayerXVault.sol human/crates/layerx-paxeer-client/src/deposit.rs"
@@ -7246,6 +7247,7 @@ observed = "The movement configuration consumer reads LAYERX_HUMAN_MOVEMENT_PROV
 assumption = "A producer must supply the custody reference used by the signed deposit registration, or identify an existing canonical derivation before deployment finalization can emit it. An address hash would invent a binding."
 
 [observation.6.8.133]
+[observation.6.8.90]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/tests/beta-cluster.sh interop/deploy/gateway/module-registry.example.json agent/crates/layerx-agentd/src/main.rs platform/hosted/human/provision.py"
@@ -7254,6 +7256,7 @@ observed = "The cluster copies module-registry.example.json directly into its pu
 assumption = "The registry producer must publish the actual v2 asset metadata. The peer-map consumer needs an unambiguous representation for the returned DID principal while preserving the original tenant binding. These changes are outside evidence provisioning ownership."
 
 [observation.6.8.134]
+[observation.6.8.91]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/human/provision.py platform/hosted/human/provision.sh platform/hosted/human/provision-owner-job.yaml"
@@ -7262,6 +7265,7 @@ observed = "Generated-set material integration was invoked and refused at /root/
 assumption = "Positive full-set material integration, successful fresh-head acceptance, Kubernetes Job execution and cluster qualification require the real external producers and an execution environment with the cluster tools. No source branch was fetched or merged and no cluster or chain operation ran."
 
 [observation.6.8.135]
+[observation.6.8.92]
 task = "6.8"
 severity = "note"
 file = "platform/hosted/identity/src/main.rs platform/hosted/identity/tests/service.rs platform/hosted/human/provision.py platform/hosted/human/provision.sh human/crates/layerx-human-identity-provider/src/provision_head.rs"
