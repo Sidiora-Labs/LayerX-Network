@@ -229,13 +229,10 @@ impl Wallet<'_> {
         {
             return Err(RpcError::MissingFinalityTrust);
         }
-        let snapshot = self.rpc.get_sequence(&options.actor)?;
-        if snapshot["did"] != options.actor
-            || snapshot["verification"] != "authenticated_node_snapshot"
-        {
-            return Err(RpcError::InvalidResponse);
-        }
-        let sequence = decimal(&snapshot, "next_sequence")?;
+        let sequence = self
+            .rpc
+            .get_identity_sequence(&options.actor)?
+            .next_sequence;
         let prepared = prepare_payload(
             module,
             ordinal,

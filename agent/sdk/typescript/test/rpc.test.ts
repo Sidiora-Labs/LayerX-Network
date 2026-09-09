@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { decodeJsonRpcResponse, JsonRpcClient, JsonRpcError, walletAccount } from "../src/rpc.js";
+import { decodeAssetListSnapshot, decodeAssetSnapshot, decodeIdentitySequenceSnapshot, decodeJsonRpcResponse, JsonRpcClient, JsonRpcError, walletAccount } from "../src/rpc.js";
 
 assert.throws(() => new JsonRpcClient("http://example.com"));
 assert.throws(() => new JsonRpcClient("https://user:secret@example.com"));
@@ -29,6 +29,12 @@ const feeClient = new JsonRpcClient("http://127.0.0.1:1");
 assert.throws(() => feeClient.estimateFee(new Uint8Array()));
 assert.throws(() => feeClient.estimateFee(new Uint8Array(524289)));
 assert.throws(() => feeClient.getAsset("AB".repeat(32)));
+
+const asset = {asset_id:"11".repeat(32),symbol:"USD",name:"Test Dollar",decimals:6,custody_kind:0,custody_reference:"",paused:false,supply_cap:"1000000",issuer_did:"22".repeat(32),issuer_kind:1,total_units:"100",salt:"33".repeat(32)};
+assert.deepEqual(decodeAssetSnapshot({asset,observed_head_sequence:"9",state_root:"44".repeat(32),verification:"authenticated_committed_snapshot"}),{asset:{assetId:"11".repeat(32),symbol:"USD",name:"Test Dollar",decimals:6,custodyKind:0,custodyReference:"",paused:false,supplyCap:1000000n,issuerDid:"22".repeat(32),issuerKind:1,totalUnits:100n,salt:"33".repeat(32)},observedHeadSequence:9n,stateRoot:"44".repeat(32)});
+assert.throws(()=>decodeAssetListSnapshot({assets:[{...asset,asset_id:"22".repeat(32)},asset],observed_head_sequence:"9",state_root:"44".repeat(32),verification:"authenticated_committed_snapshot"}));
+assert.deepEqual(decodeIdentitySequenceSnapshot({did:"did:layerx:alice",next_sequence:"7",observed_head_sequence:"11",state_root:"44".repeat(32),verification:"authenticated_node_snapshot"}),{did:"did:layerx:alice",nextSequence:7n,observedHeadSequence:11n,stateRoot:"44".repeat(32)});
+assert.throws(()=>decodeIdentitySequenceSnapshot({did:"did:layerx:alice",next_sequence:"07",observed_head_sequence:"11",state_root:"44".repeat(32),verification:"authenticated_node_snapshot"}));
 
 const { subscriptionAcknowledgement, subscriptionNotification } = await import("../src/rpc-subscription.js");
 assert.equal(subscriptionAcknowledgement({jsonrpc:"2.0",id:"1",result:"sub"},"1"),"sub");

@@ -116,7 +116,12 @@ fn execute(v: &Value) -> Result<Value, BridgeError> {
     } else {
         None
     };
-    let rpc = RpcClient::connect(text(c, "endpoint")?, credential).map_err(|_| ())?;
+    let rpc = if c.get("ca_der").is_some() {
+        RpcClient::connect_with_ca_der(text(c, "endpoint")?, credential, &bytes(c, "ca_der")?)
+    } else {
+        RpcClient::connect(text(c, "endpoint")?, credential)
+    }
+    .map_err(|_| ())?;
     let policy = ReceiptPolicy {
         protocol_version: u16::try_from(number(c, "protocol_version")?).map_err(|_| ())?,
         network_id: u32::try_from(number(c, "network_id")?).map_err(|_| ())?,

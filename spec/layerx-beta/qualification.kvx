@@ -8751,3 +8751,19 @@ symbol = "lxp_receive_encode lxp_payer_grant_encode native_generated_receive_and
 observed = "agent/crates/layerx-crypto/tests/generate-native-payments.sh exits 0 after make -j16 and make -j16 programs/target/debug/liblayerx_programs_sandbox.a. Its C generator invokes lxp_receive_encode and lxp_payer_grant_encode directly, requires lengths 733 and 346, and requires byte equality between the independently encoded grant and the receive grant segment before writing both committed fixtures. cargo test --manifest-path agent/Cargo.toml -p layerx-crypto exits 0, including native byte equality plus complete accepted-byte mutation refusal for both encodings. Evidence: qual-logs/pay2/stage-native/generate-native-payments-rerun-2.log and test-crypto-2.log."
 assumption = "The fixtures did not change under the merged native build. The proof exercises the merged C implementation and Rust decoder with real signatures; no fixture-derived native encoding path is used."
 severity = "note"
+
+[observation.6.11.143]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/wallet.rs agent/crates/layerx-sdk/src/bin/layerx-wallet-rpc.rs agent/sdk/typescript/src/rpc.ts agent/sdk/typescript/src/wallet.ts"
+symbol = "RpcClient::get_identity_sequence Wallet::prepare_payload RpcClient::get_asset RpcClient::list_assets RpcClient::connect_with_ca_der"
+observed = "Wallet envelope preparation now obtains identity.next_sequence only through lx_getSequence with the exact positional parameters [did, identity], while Send and Receive source-account sequences continue to come from lx_getAccount. Rust and TypeScript reject malformed identity snapshots and expose typed Asset metadata, list ordering, committed sequence and state root. Explicit local CA trust uses native TLS certificate verification and never disables hostname or certificate checks. cargo clippy --manifest-path agent/Cargo.toml -p layerx-sdk --all-targets -- -D warnings, cargo test --manifest-path agent/Cargo.toml -p layerx-sdk, npm --prefix agent/sdk/typescript run build, npm --prefix agent/sdk/typescript test and git diff --check exit 0. Evidence: qual-logs/pay2/stage-sdk/clippy-rerun-3.log, test-sdk-rerun.log, ts-build-rerun.log and ts-test-rerun.log."
+assumption = "The Asset read verification label authenticates the gateway-to-native snapshot but is not promoted to an independent Merkle-proof guarantee. Finalised receipt verification still requires the configured trusted checkpoint context."
+severity = "note"
+
+[observation.6.11.144]
+task = "6.11"
+file = "agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/program-admission.sh tests/daemon/lxp_test_program_admission.c cmd/layerxd/lxp_daemon_lni.c"
+symbol = "real_daemon_availability_refusals handshake"
+observed = "The supplied /root/lx-lanes/native-bin directory is absent on this build server. After building current-lane layerxd, layerx-genesis-build and both required native test clients in the worktree, cargo test --manifest-path agent/Cargo.toml -p layerx-client launches the real availability harness but reproducibly fails its initial LNI minor-4 node-info handshake. The current merged daemon includes minor-5 public-read behavior and the unchanged native test client requires an exact minor-4 node-info response. Evidence: qual-logs/pay2/stage-sdk/test-client-rerun.log and test-client-availability-rerun.log; disposable raw audit directories are named in those logs."
+assumption = "No LNI handshake assertion or daemon compatibility check was changed. The layerx-sdk and TypeScript suites pass independently; the full layerx-client suite remains unqualified until the disclosed native binary set is available or the non-owned native handshake is reconciled."
+severity = "blocker"

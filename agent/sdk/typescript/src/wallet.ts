@@ -14,6 +14,7 @@ export interface WalletExecutionOptions {
 }
 export interface WalletRpcConfiguration {
   readonly endpoint: string;
+  readonly ca_der?: string;
   readonly protocol_version: string;
   readonly network_id: string;
   readonly native_asset: string;

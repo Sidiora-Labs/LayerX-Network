@@ -62,12 +62,298 @@ macro_rules! read_result {
         }
     )+};
 }
-read_result!(
-    AssetSnapshot,
-    AssetListSnapshot,
-    BalancesSnapshot,
-    FeeEstimate
-);
+read_result!(BalancesSnapshot, FeeEstimate);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetMetadata {
+    pub asset_id: [u8; 32],
+    pub symbol: String,
+    pub name: String,
+    pub decimals: u8,
+    pub custody_kind: u8,
+    pub custody_reference: Vec<u8>,
+    pub paused: bool,
+    pub supply_cap: u128,
+    pub issuer_did: [u8; 32],
+    pub issuer_kind: u8,
+    pub total_units: u128,
+    pub salt: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssetSnapshot {
+    pub asset: AssetMetadata,
+    pub observed_head_sequence: u64,
+    pub state_root: [u8; 32],
+    raw: serde_json::Map<String, Value>,
+}
+
+impl AssetSnapshot {
+    #[must_use]
+    pub const fn unverified_fields(&self) -> &serde_json::Map<String, Value> {
+        &self.raw
+    }
+
+    #[must_use]
+    pub fn into_value(self) -> Value {
+        Value::Object(self.raw)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssetListSnapshot {
+    pub assets: Vec<AssetMetadata>,
+    pub observed_head_sequence: u64,
+    pub state_root: [u8; 32],
+    raw: serde_json::Map<String, Value>,
+}
+
+impl AssetListSnapshot {
+    #[must_use]
+    pub const fn unverified_fields(&self) -> &serde_json::Map<String, Value> {
+        &self.raw
+    }
+
+    #[must_use]
+    pub fn into_value(self) -> Value {
+        Value::Object(self.raw)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdentitySequenceSnapshot {
+    pub did: String,
+    pub next_sequence: u64,
+    pub observed_head_sequence: u64,
+    pub state_root: [u8; 32],
+}
+
+fn object(value: &Value) -> Result<&serde_json::Map<String, Value>, RpcError> {
+    value.as_object().ok_or(RpcError::InvalidResponse)
+}
+
+fn text_field<'a>(
+    fields: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<&'a str, RpcError> {
+    fields
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or(RpcError::InvalidResponse)
+}
+
+fn decimal_u128_field(
+    fields: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<u128, RpcError> {
+    let text = text_field(fields, key)?;
+    let value: u128 = text.parse().map_err(|_| RpcError::InvalidResponse)?;
+    if value.to_string() != text {
+        return Err(RpcError::InvalidResponse);
+    }
+    Ok(value)
+}
+
+fn decimal_u64_field(fields: &serde_json::Map<String, Value>, key: &str) -> Result<u64, RpcError> {
+    let value = decimal_u128_field(fields, key)?;
+    u64::try_from(value).map_err(|_| RpcError::InvalidResponse)
+}
+
+fn unsigned_field<T>(fields: &serde_json::Map<String, Value>, key: &str) -> Result<T, RpcError>
+where
+    T: TryFrom<u64>,
+{
+    fields
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| T::try_from(value).ok())
+        .ok_or(RpcError::InvalidResponse)
+}
+
+fn decode_hex<const N: usize>(text: &str) -> Result<[u8; N], RpcError> {
+    if text.len() != N * 2
+        || !text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(RpcError::InvalidResponse);
+    }
+    let mut output = [0; N];
+    for (index, pair) in text.as_bytes().chunks_exact(2).enumerate() {
+        let pair = std::str::from_utf8(pair).map_err(|_| RpcError::InvalidResponse)?;
+        output[index] = u8::from_str_radix(pair, 16).map_err(|_| RpcError::InvalidResponse)?;
+    }
+    Ok(output)
+}
+
+fn fixed_hex_field<const N: usize>(
+    fields: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<[u8; N], RpcError> {
+    decode_hex(text_field(fields, key)?)
+}
+
+fn identity_sequence_params(did: &str) -> Result<Value, RpcError> {
+    layerx_types::ids::Did::new(did.as_bytes()).map_err(|_| RpcError::InvalidRequest)?;
+    if did
+        .bytes()
+        .any(|byte| !byte.is_ascii_alphanumeric() && !b"-._:".contains(&byte))
+    {
+        return Err(RpcError::InvalidRequest);
+    }
+    Ok(json!([did, "identity"]))
+}
+
+fn variable_hex_field(
+    fields: &serde_json::Map<String, Value>,
+    key: &str,
+    maximum: usize,
+) -> Result<Vec<u8>, RpcError> {
+    let text = text_field(fields, key)?;
+    if text.len() > maximum * 2
+        || !text.len().is_multiple_of(2)
+        || !text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(RpcError::InvalidResponse);
+    }
+    text.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            std::str::from_utf8(pair)
+                .ok()
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                .ok_or(RpcError::InvalidResponse)
+        })
+        .collect()
+}
+
+impl TryFrom<&Value> for AssetMetadata {
+    type Error = RpcError;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        let fields = object(value)?;
+        let metadata = Self {
+            asset_id: fixed_hex_field(fields, "asset_id")?,
+            symbol: text_field(fields, "symbol")?.to_owned(),
+            name: text_field(fields, "name")?.to_owned(),
+            decimals: unsigned_field(fields, "decimals")?,
+            custody_kind: unsigned_field(fields, "custody_kind")?,
+            custody_reference: variable_hex_field(fields, "custody_reference", 128)?,
+            paused: fields
+                .get("paused")
+                .and_then(Value::as_bool)
+                .ok_or(RpcError::InvalidResponse)?,
+            supply_cap: decimal_u128_field(fields, "supply_cap")?,
+            issuer_did: fixed_hex_field(fields, "issuer_did")?,
+            issuer_kind: unsigned_field(fields, "issuer_kind")?,
+            total_units: decimal_u128_field(fields, "total_units")?,
+            salt: fixed_hex_field(fields, "salt")?,
+        };
+        if metadata.asset_id == [0; 32]
+            || !(1..=16).contains(&metadata.symbol.len())
+            || !metadata.symbol.is_ascii()
+            || metadata.name.is_empty()
+            || metadata.name.len() > 32
+            || metadata.decimals > 38
+            || metadata.issuer_kind > 2
+            || (metadata.issuer_kind != 0 && metadata.issuer_did == [0; 32])
+            || (metadata.issuer_kind == 1 && !metadata.custody_reference.is_empty())
+            || (metadata.issuer_kind == 0 && metadata.custody_reference.is_empty())
+            || (metadata.supply_cap != 0 && metadata.total_units > metadata.supply_cap)
+        {
+            return Err(RpcError::InvalidResponse);
+        }
+        Ok(metadata)
+    }
+}
+
+fn committed_snapshot(
+    fields: &serde_json::Map<String, Value>,
+) -> Result<(u64, [u8; 32]), RpcError> {
+    if text_field(fields, "verification")? != "authenticated_committed_snapshot" {
+        return Err(RpcError::InvalidResponse);
+    }
+    let state_root = fixed_hex_field(fields, "state_root")?;
+    if state_root == [0; 32] {
+        return Err(RpcError::InvalidResponse);
+    }
+    Ok((
+        decimal_u64_field(fields, "observed_head_sequence")?,
+        state_root,
+    ))
+}
+
+impl TryFrom<Value> for AssetSnapshot {
+    type Error = RpcError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let fields = object(&value)?;
+        let asset = fields
+            .get("asset")
+            .ok_or(RpcError::InvalidResponse)?
+            .try_into()?;
+        let (observed_head_sequence, state_root) = committed_snapshot(fields)?;
+        Ok(Self {
+            asset,
+            observed_head_sequence,
+            state_root,
+            raw: fields.clone(),
+        })
+    }
+}
+
+impl TryFrom<Value> for AssetListSnapshot {
+    type Error = RpcError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let fields = object(&value)?;
+        let values = fields
+            .get("assets")
+            .and_then(Value::as_array)
+            .filter(|values| values.len() <= 64)
+            .ok_or(RpcError::InvalidResponse)?;
+        let assets = values
+            .iter()
+            .map(AssetMetadata::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        if assets
+            .windows(2)
+            .any(|pair| pair[0].asset_id >= pair[1].asset_id)
+        {
+            return Err(RpcError::InvalidResponse);
+        }
+        let (observed_head_sequence, state_root) = committed_snapshot(fields)?;
+        Ok(Self {
+            assets,
+            observed_head_sequence,
+            state_root,
+            raw: fields.clone(),
+        })
+    }
+}
+
+impl TryFrom<Value> for IdentitySequenceSnapshot {
+    type Error = RpcError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let fields = object(&value)?;
+        if text_field(fields, "verification")? != "authenticated_node_snapshot" {
+            return Err(RpcError::InvalidResponse);
+        }
+        let state_root = fixed_hex_field(fields, "state_root")?;
+        if state_root == [0; 32] {
+            return Err(RpcError::InvalidResponse);
+        }
+        Ok(Self {
+            did: text_field(fields, "did")?.to_owned(),
+            next_sequence: decimal_u64_field(fields, "next_sequence")?,
+            observed_head_sequence: decimal_u64_field(fields, "observed_head_sequence")?,
+            state_root,
+        })
+    }
+}
 
 pub struct RpcClient {
     agent: ureq::Agent,
@@ -138,6 +424,33 @@ impl RpcClient {
         endpoint: &str,
         credential: Option<LayerXKeyCredential>,
     ) -> Result<Self, RpcError> {
+        Self::connect_with_roots(endpoint, credential, ureq::tls::RootCerts::PlatformVerifier)
+    }
+
+    /// Connects with one explicitly trusted DER root certificate.
+    /// # Errors
+    /// Rejects an empty or oversized trust root and invalid endpoints.
+    pub fn connect_with_ca_der(
+        endpoint: &str,
+        credential: Option<LayerXKeyCredential>,
+        ca_der: &[u8],
+    ) -> Result<Self, RpcError> {
+        if ca_der.is_empty() || ca_der.len() > 1_048_576 {
+            return Err(RpcError::InvalidRequest);
+        }
+        let certificate = ureq::tls::Certificate::from_der(ca_der).to_owned();
+        Self::connect_with_roots(
+            endpoint,
+            credential,
+            ureq::tls::RootCerts::new_with_certs(&[certificate]),
+        )
+    }
+
+    fn connect_with_roots(
+        endpoint: &str,
+        credential: Option<LayerXKeyCredential>,
+        roots: ureq::tls::RootCerts,
+    ) -> Result<Self, RpcError> {
         let mut endpoint =
             crate::programs::http::validate_endpoint(endpoint).map_err(RpcError::Configuration)?;
         let base = endpoint.path().trim_end_matches('/');
@@ -151,6 +464,12 @@ impl RpcClient {
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
             .max_redirects(0)
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .provider(ureq::tls::TlsProvider::NativeTls)
+                    .root_certs(roots)
+                    .build(),
+            )
             .build()
             .into();
         Ok(Self {
@@ -166,6 +485,19 @@ impl RpcClient {
         get_sequence => "lx_getSequence",
         get_receipt => "lx_getReceipt", get_activity_status => "lx_getActivityStatus",
         get_batch_header => "lx_getBatchHeader", get_checkpoint => "lx_getCheckpoint",
+    }
+
+    /// Reads the authenticated identity sequence used by the activity envelope.
+    /// # Errors
+    /// Rejects malformed DIDs and any mismatched or malformed snapshot.
+    pub fn get_identity_sequence(&self, did: &str) -> Result<IdentitySequenceSnapshot, RpcError> {
+        let params = identity_sequence_params(did)?;
+        let snapshot: IdentitySequenceSnapshot =
+            self.call("lx_getSequence", &params)?.try_into()?;
+        if snapshot.did != did {
+            return Err(RpcError::InvalidResponse);
+        }
+        Ok(snapshot)
     }
 
     /// # Errors
@@ -201,8 +533,13 @@ impl RpcClient {
     /// # Errors
     /// Preserves native asset metadata refusals; returned read data is unverified.
     pub fn get_asset(&self, asset: [u8; 32]) -> Result<AssetSnapshot, RpcError> {
-        self.call("lx_getAsset", &json!([encode_hex(&asset)]))?
-            .try_into()
+        let snapshot: AssetSnapshot = self
+            .call("lx_getAsset", &json!([encode_hex(&asset)]))?
+            .try_into()?;
+        if snapshot.asset.asset_id != asset {
+            return Err(RpcError::InvalidResponse);
+        }
+        Ok(snapshot)
     }
 
     /// # Errors
@@ -359,6 +696,7 @@ mod tests {
         assert!(wallet_account("did::alice", [0; 32], [0; 32]).is_err());
         assert!(RpcClient::connect("http://example.com", None).is_err());
         assert!(RpcClient::connect("https://user:secret@example.com", None).is_err());
+        assert!(RpcClient::connect_with_ca_der("https://127.0.0.1:1", None, &[]).is_err());
     }
 
     #[test]
@@ -403,8 +741,26 @@ mod tests {
 #[cfg(test)]
 mod read_result_tests {
     use super::*;
+
+    fn asset_value(id: &str) -> Value {
+        json!({
+            "asset_id": id,
+            "symbol": "USD",
+            "name": "Test Dollar",
+            "decimals": 6,
+            "custody_kind": 0,
+            "custody_reference": "",
+            "paused": false,
+            "supply_cap": "1000000",
+            "issuer_did": "22".repeat(32),
+            "issuer_kind": 1,
+            "total_units": "100",
+            "salt": "33".repeat(32)
+        })
+    }
+
     #[test]
-    fn openrpc_object_contract_is_preserved_without_inventing_metadata() {
+    fn openrpc_typed_assets_refuse_malformed_or_unordered_metadata() {
         for value in [
             Value::Null,
             json!([]),
@@ -417,8 +773,56 @@ mod read_result_tests {
             assert!(BalancesSnapshot::try_from(value.clone()).is_err());
             assert!(FeeEstimate::try_from(value).is_err());
         }
-        let fields = json!({"unrecognised_native_field":"340282366920938463463374607431768211455"});
-        let snapshot = AssetSnapshot::try_from(fields.clone()).unwrap_or_else(|e| panic!("{e:?}"));
+        let asset = asset_value(&"11".repeat(32));
+        let fields = json!({
+            "asset": asset.clone(),
+            "observed_head_sequence": "9",
+            "state_root": "44".repeat(32),
+            "verification": "authenticated_committed_snapshot",
+            "unrecognised_native_field": "preserved"
+        });
+        let snapshot =
+            AssetSnapshot::try_from(fields.clone()).unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(snapshot.asset.total_units, 100);
+        assert_eq!(snapshot.observed_head_sequence, 9);
         assert_eq!(snapshot.into_value(), fields);
+
+        let unordered = json!({
+            "assets": [asset_value(&"22".repeat(32)), asset],
+            "observed_head_sequence": "9",
+            "state_root": "44".repeat(32),
+            "verification": "authenticated_committed_snapshot"
+        });
+        assert!(AssetListSnapshot::try_from(unordered).is_err());
+        let mut malformed = asset_value(&"11".repeat(32));
+        malformed["supply_cap"] = json!("0100");
+        assert!(AssetMetadata::try_from(&malformed).is_err());
+    }
+
+    #[test]
+    fn identity_sequence_uses_the_two_parameter_domain_and_strict_snapshot() {
+        assert_eq!(
+            identity_sequence_params("did:layerx:alice").ok(),
+            Some(json!(["did:layerx:alice", "identity"]))
+        );
+        assert!(identity_sequence_params("did:layerx:ali ce").is_err());
+        let snapshot = IdentitySequenceSnapshot::try_from(json!({
+            "did": "did:layerx:alice",
+            "next_sequence": "7",
+            "observed_head_sequence": "11",
+            "state_root": "44".repeat(32),
+            "verification": "authenticated_node_snapshot"
+        }))
+        .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(snapshot.next_sequence, 7);
+        assert_eq!(snapshot.observed_head_sequence, 11);
+        assert!(IdentitySequenceSnapshot::try_from(json!({
+            "did": "did:layerx:alice",
+            "next_sequence": "07",
+            "observed_head_sequence": "11",
+            "state_root": "44".repeat(32),
+            "verification": "authenticated_node_snapshot"
+        }))
+        .is_err());
     }
 }
