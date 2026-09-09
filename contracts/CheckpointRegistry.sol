@@ -250,6 +250,11 @@ contract CheckpointRegistry is LayerXComponent {
             && (firstInvalidatedBatch == 0 || batchNumber < firstInvalidatedBatch);
     }
 
+    function isRecordedAncestor(bytes32 requestAnchor, bytes32 inclusionCheckpoint) public view returns (bool) {
+        return isCanonicalCheckpoint(requestAnchor) && isCanonicalCheckpoint(inclusionCheckpoint)
+            && checkpointBatchNumber[requestAnchor] <= checkpointBatchNumber[inclusionCheckpoint];
+    }
+
     function latestCanonicalCheckpointHash() public view returns (bytes32) {
         uint64 invalidatedBatch = firstInvalidatedBatch;
         if (invalidatedBatch == 0) return checkpointAtBatch[finalisedBatchNumber];
