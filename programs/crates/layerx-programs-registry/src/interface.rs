@@ -11,6 +11,7 @@ use crate::hash::sha256;
 use crate::{VerifiedDeploymentEvidence, VerifiedProgramHead};
 
 const DOMAIN: &[u8] = b"LayerX/program-interface/v1\0";
+const DOMAIN_V2: &[u8] = b"LayerX/program-interface/v2\0";
 const STATE_PREFIX: &[u8] = b"interface\0";
 const MAX_INTERFACE_BYTES: usize = 952;
 const MAX_ENTRIES: usize = 256;
@@ -79,6 +80,12 @@ pub enum InterfaceCapability {
         asset: [u8; 32],
         to: [u8; 32],
         maximum_amount: u128,
+    },
+    CallerAuthorizedSpend {
+        asset: [u8; 32],
+        maximum_amount: u128,
+        recipient_offset: u32,
+        amount_offset: u32,
     },
     ReceiptRead {
         receipt_digest: [u8; 32],
@@ -300,6 +307,18 @@ impl ProgramInterface {
             return Err(InterfaceRefusal::Invalid);
         }
         validate_entries(&entries)?;
+        if abi_version != ABI_V2_VERSION
+            && entries.iter().any(|entry| {
+                entry.capabilities.iter().any(|capability| {
+                    matches!(
+                        capability,
+                        InterfaceCapability::CallerAuthorizedSpend { .. }
+                    )
+                })
+            })
+        {
+            return Err(InterfaceRefusal::Invalid);
+        }
         let encoding = encode_interface(code_hash, abi_version, &entries)?;
         if encoding.len() > MAX_INTERFACE_BYTES {
             return Err(InterfaceRefusal::Invalid);
@@ -355,6 +374,36 @@ impl ProgramInterface {
     }
 
     /// # Errors
+    /// Refuses calldata whose dynamic spend is not covered by the caller's grants.
+    pub fn authorize_call(
+        &self,
+        program: ProgramId,
+        calldata: &[u8],
+        grants: &[layerx_programs_runtime::Capability],
+    ) -> Result<(), InterfaceRefusal> {
+        let (entry, _) = self.decode_call(calldata)?;
+        for capability in &entry.capabilities {
+            if let InterfaceCapability::CallerAuthorizedSpend {
+                asset,
+                maximum_amount,
+                recipient_offset,
+                amount_offset,
+            } = capability
+            {
+                layerx_programs_runtime::dynamic_spend::CallerAuthorizedSpend {
+                    asset: *asset,
+                    maximum_amount: *maximum_amount,
+                    recipient_offset: *recipient_offset,
+                    amount_offset: *amount_offset,
+                }
+                .authorize(program, calldata, grants)
+                .map_err(|_| InterfaceRefusal::Invalid)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// # Errors
     ///
     /// Refuses truncated or unknown entry-point discriminators.
     pub fn decode_call<'a>(
@@ -378,7 +427,9 @@ impl ProgramInterface {
     ///
     /// Refuses malformed, oversized, invalid or non-canonical interface encodings.
     pub fn decode(bytes: &[u8]) -> Result<Self, InterfaceRefusal> {
-        if bytes.len() > MAX_INTERFACE_BYTES || bytes.get(..DOMAIN.len()) != Some(DOMAIN) {
+        if bytes.len() > MAX_INTERFACE_BYTES
+            || !matches!(bytes.get(..DOMAIN.len()), Some(prefix) if prefix == DOMAIN || prefix == DOMAIN_V2)
+        {
             return Err(InterfaceRefusal::NonCanonical);
         }
         let mut cursor = DOMAIN.len();
@@ -654,6 +705,17 @@ fn capability_valid(capability: &InterfaceCapability) -> bool {
                 && to != &[0; 32]
                 && *maximum_amount != 0
         }
+        InterfaceCapability::CallerAuthorizedSpend {
+            asset,
+            maximum_amount,
+            recipient_offset,
+            amount_offset,
+        } => {
+            asset != &[0; 32]
+                && *maximum_amount != 0
+                && recipient_offset.checked_add(32).is_some()
+                && amount_offset.checked_add(16).is_some()
+        }
         InterfaceCapability::ReceiptRead { receipt_digest } => receipt_digest != &[0; 32],
         InterfaceCapability::BalanceView {
             account,
@@ -675,7 +737,8 @@ fn capability_mask(capabilities: &[InterfaceCapability]) -> u16 {
                 InterfaceCapability::EmitEvent => 4,
                 InterfaceCapability::Call { .. } => 5,
                 InterfaceCapability::Transfer402 { .. } => 6,
-                InterfaceCapability::ProgramSpend { .. } => 7,
+                InterfaceCapability::ProgramSpend { .. }
+                | InterfaceCapability::CallerAuthorizedSpend { .. } => 7,
                 InterfaceCapability::ReceiptRead { .. } => 8,
                 InterfaceCapability::BalanceView { .. } => 9,
             })
@@ -760,7 +823,15 @@ fn encode_interface(
     entries: &[InterfaceEntryPoint],
 ) -> Result<Vec<u8>, InterfaceRefusal> {
     let mut out = Vec::new();
-    out.extend_from_slice(DOMAIN);
+    let dynamic = entries.iter().any(|entry| {
+        entry.capabilities.iter().any(|capability| {
+            matches!(
+                capability,
+                InterfaceCapability::CallerAuthorizedSpend { .. }
+            )
+        })
+    });
+    out.extend_from_slice(if dynamic { DOMAIN_V2 } else { DOMAIN });
     out.extend_from_slice(&code_hash);
     out.extend_from_slice(&abi.to_be_bytes());
     out.extend_from_slice(
@@ -985,6 +1056,18 @@ fn encode_capability(
             out.extend_from_slice(to);
             out.extend_from_slice(&maximum_amount.to_be_bytes());
         }
+        InterfaceCapability::CallerAuthorizedSpend {
+            asset,
+            maximum_amount,
+            recipient_offset,
+            amount_offset,
+        } => {
+            out.push(10);
+            out.extend_from_slice(asset);
+            out.extend_from_slice(&maximum_amount.to_be_bytes());
+            out.extend_from_slice(&recipient_offset.to_be_bytes());
+            out.extend_from_slice(&amount_offset.to_be_bytes());
+        }
         InterfaceCapability::ReceiptRead { receipt_digest } => {
             out.push(8);
             out.extend_from_slice(receipt_digest);
@@ -1035,6 +1118,12 @@ fn decode_capability(
                 maximum_amount: u128::from_be_bytes(take::<16>(bytes, cursor)?),
             }
         }
+        10 => InterfaceCapability::CallerAuthorizedSpend {
+            asset: take::<32>(bytes, cursor)?,
+            maximum_amount: u128::from_be_bytes(take::<16>(bytes, cursor)?),
+            recipient_offset: u32::from_be_bytes(take::<4>(bytes, cursor)?),
+            amount_offset: u32::from_be_bytes(take::<4>(bytes, cursor)?),
+        },
         8 => InterfaceCapability::ReceiptRead {
             receipt_digest: take::<32>(bytes, cursor)?,
         },
@@ -1165,6 +1254,50 @@ mod conformance_vectors {
                 detail: ValueSchema::layerx(ValueType::Bytes { max_len: 64 }),
             }],
         }
+    }
+
+    #[test]
+    fn dynamic_descriptor_uses_v2_and_refuses_old_shapes() {
+        let mut dynamic = entry(80);
+        dynamic.capabilities = vec![InterfaceCapability::CallerAuthorizedSpend {
+            asset: [2; 32],
+            maximum_amount: 100,
+            recipient_offset: 10,
+            amount_offset: 42,
+        }];
+        let interface =
+            ProgramInterface::from_parts([1; 32], ABI_V2_VERSION, vec![dynamic.clone()])
+                .unwrap_or_else(|e| panic!("{e}"));
+        assert!(interface.canonical_encoding().starts_with(DOMAIN_V2));
+        assert_eq!(
+            ProgramInterface::decode(interface.canonical_encoding()),
+            Ok(interface.clone())
+        );
+        let mut old = interface.canonical_encoding().to_vec();
+        old[..DOMAIN.len()].copy_from_slice(DOMAIN);
+        assert_eq!(
+            ProgramInterface::decode(&old),
+            Err(InterfaceRefusal::NonCanonical)
+        );
+        assert_eq!(
+            ProgramInterface::from_parts([1; 32], ABI_V1_VERSION, vec![dynamic]),
+            Err(InterfaceRefusal::Invalid)
+        );
+        assert_eq!(
+            capability_mask(&interface.entries()[0].capabilities),
+            1 << 7
+        );
+        let mut invalid = interface.entries()[0].clone();
+        invalid.capabilities = vec![InterfaceCapability::CallerAuthorizedSpend {
+            asset: [2; 32],
+            maximum_amount: 0,
+            recipient_offset: 10,
+            amount_offset: 42,
+        }];
+        assert_eq!(
+            ProgramInterface::from_parts([1; 32], ABI_V2_VERSION, vec![invalid]),
+            Err(InterfaceRefusal::Invalid)
+        );
     }
 
     #[test]

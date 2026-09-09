@@ -475,6 +475,60 @@ lxp_result layerx_programs_call_catalog_count(uint64_t token)
     return (lxp_result)value->catalog_count;
 }
 
+static lxp_result catalog_interface(lxp_programs_call_activity *value,
+                                     uint32_t index, const uint8_t **encoding,
+                                     size_t *length)
+{
+    lxp_programs_call_catalog_entry *entry = catalog_entry(value, index);
+    uint8_t key[42] = "interface";
+    uint8_t digest[32];
+    const uint8_t *stored;
+    size_t stored_length;
+    lxp_result status;
+    if (entry == NULL || encoding == NULL || length == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(key + 10U, entry->program_id, 32U);
+    status = lxp_ctx_kv_get(value->ctx, key, sizeof(key), &stored, &stored_length);
+    if (status == LXP_ERR_UNKNOWN_FIELD) {
+        *encoding = NULL;
+        *length = 0U;
+        return LXP_OK;
+    }
+    if (status != LXP_OK) return status;
+    if (stored_length <= 72U || stored_length > 1024U ||
+        lxp_ct_memcmp(stored, entry->program_id, 32U) != 0 ||
+        read_u32(stored + 32U) == 0U ||
+        read_u32(stored + 68U) != stored_length - 72U)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_hash_sha256(stored + 72U, stored_length - 72U, digest);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(digest, stored + 36U, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    *encoding = stored + 72U;
+    *length = stored_length - 72U;
+    return LXP_OK;
+}
+
+lxp_result layerx_programs_call_catalog_interface_length(uint64_t token, uint32_t index)
+{
+    const uint8_t *encoding;
+    size_t length;
+    lxp_result status = catalog_interface((lxp_programs_call_activity *)(uintptr_t)token,
+                                         index, &encoding, &length);
+    return status == LXP_OK ? (lxp_result)length : status;
+}
+
+lxp_result layerx_programs_call_catalog_interface_byte(uint64_t token, uint32_t index,
+                                                       uint32_t offset)
+{
+    const uint8_t *encoding;
+    size_t length;
+    lxp_result status = catalog_interface((lxp_programs_call_activity *)(uintptr_t)token,
+                                         index, &encoding, &length);
+    if (status != LXP_OK) return status;
+    return offset < length ? (lxp_result)encoding[offset] : LXP_ERR_TRUNCATED;
+}
+
 lxp_result layerx_programs_call_catalog_wasm_length(uint64_t token,
                                                      uint32_t index)
 {
