@@ -103,10 +103,13 @@ static lxp_result commit_account(const lxp_module_ctx *ctx,
         if (registration->account.kind == LX_ACCOUNT_MODULE_VALUE) {
             lxp_u128 initial = lxp_u128_is_zero(record.supply_cap) ?
                 (lxp_u128){UINT64_MAX, UINT64_MAX} : record.supply_cap;
-            if (ctx->ledger_admission.activity_type != LX_ASSET_REGISTER ||
-                registration->account.name_length != 79U ||
-                memcmp(registration->account.name, "asset:", 6U) != 0 ||
-                memcmp(registration->account.name + 70U, ":issuance", 9U) != 0 ||
+            uint8_t name[LX_ASSET_ISSUANCE_NAME_BYTES];
+            uint8_t id[32];
+            if (lx_asset_issuance_name(record.asset_id, name, id) != LXP_OK ||
+                ctx->ledger_admission.activity_type != LX_ASSET_REGISTER ||
+                registration->account.name_length != sizeof(name) ||
+                memcmp(registration->account.name, name, sizeof(name)) != 0 ||
+                memcmp(registration->account.id, id, sizeof(id)) != 0 ||
                 registration->account.has_authority_key ||
                 registration->account.next_sequence != 0U ||
                 !lxp_u128_is_zero(record.total_units) ||
@@ -408,7 +411,6 @@ lxp_result lxp_ctx_asset_issuance_stage(
     lxp_module_ctx *ctx, const lxp_activity *activity,
     const lxp_authority_resolved *authority, lx_account **account)
 {
-    static const uint8_t hex[] = "0123456789abcdef";
     lx_asset_register_payload payload;
     lx_account_registration registration;
     lx_account *existing;
@@ -436,17 +438,11 @@ lxp_result lxp_ctx_asset_issuance_stage(
         ctx->kernel->state->accounts->count + ctx->staged_account_count >=
             LX_ACCOUNT_REGISTRY_CAPACITY) return LXP_ERR_ARENA_EXHAUSTED;
     (void)memset(&registration, 0, sizeof(registration));
-    (void)memcpy(registration.account.name, "asset:", 6U);
-    for (size_t i = 0U; i < 32U; ++i) {
-        registration.account.name[6U + i * 2U] = hex[payload.asset_id[i] >> 4U];
-        registration.account.name[7U + i * 2U] = hex[payload.asset_id[i] & 15U];
-    }
-    (void)memcpy(registration.account.name + 70U, ":issuance", 9U);
-    registration.account.name_length = 79U;
+    status = lx_asset_issuance_name(payload.asset_id, registration.account.name,
+                                     registration.account.id);
+    registration.account.name_length = LX_ASSET_ISSUANCE_NAME_BYTES;
     registration.account.kind = LX_ACCOUNT_MODULE_VALUE;
     registration.account.created_at_sequence = ctx->global_sequence;
-    status = lx_account_id_from_string(registration.account.name, 79U,
-                                       registration.account.id);
     if (status != LXP_OK) return status;
     status = lxp_ctx_account_find(ctx, registration.account.id, &existing);
     if (status == LXP_OK) return LXP_ERR_ASSET_ALREADY_REGISTERED;

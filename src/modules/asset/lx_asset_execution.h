@@ -37,16 +37,9 @@ static lxp_result asset_save(lxp_module_ctx *ctx, const lx_asset_record *record)
 
 static lxp_result issuance_find(lxp_module_ctx *ctx, const uint8_t id[32], lx_account **account)
 {
-    static const uint8_t hex[] = "0123456789abcdef";
-    uint8_t name[79];
+    uint8_t name[LX_ASSET_ISSUANCE_NAME_BYTES];
     uint8_t account_id[32];
-    (void)memcpy(name, "asset:", 6U);
-    for (size_t i = 0U; i < 32U; ++i) {
-        name[6U + i * 2U] = hex[id[i] >> 4U];
-        name[7U + i * 2U] = hex[id[i] & 15U];
-    }
-    (void)memcpy(name + 70U, ":issuance", 9U);
-    lxp_result status = lx_account_id_from_string(name, sizeof(name), account_id);
+    lxp_result status = lx_asset_issuance_name(id, name, account_id);
     return status == LXP_OK ? lxp_ctx_account_find(ctx, account_id, account) : status;
 }
 

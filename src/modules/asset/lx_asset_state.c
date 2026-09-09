@@ -74,10 +74,12 @@ static lxp_result sum_units(const lx_account_registry *accounts,
         lxp_u128 next;
         if (!accounts->accounts[i].has_asset ||
             memcmp(accounts->accounts[i].asset_id, asset_id, 32U) != 0) continue;
+        uint8_t issuance_name[LX_ASSET_ISSUANCE_NAME_BYTES];
+        uint8_t issuance_id[32];
+        if (lx_asset_issuance_name(asset_id, issuance_name, issuance_id) != LXP_OK)
+            return LXP_FATAL_SUPPLY_MISMATCH;
         if (accounts->accounts[i].kind == LX_ACCOUNT_MODULE_VALUE &&
-            accounts->accounts[i].name_length == 79U &&
-            memcmp(accounts->accounts[i].name, "asset:", 6U) == 0 &&
-            memcmp(accounts->accounts[i].name + 70U, ":issuance", 9U) == 0) continue;
+            memcmp(accounts->accounts[i].id, issuance_id, 32U) == 0) continue;
         if (lxp_u128_add(sum, accounts->accounts[i].balance, &next) != LXP_OK)
             return LXP_FATAL_SUPPLY_MISMATCH;
         sum = next;

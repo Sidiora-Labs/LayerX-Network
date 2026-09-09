@@ -60,16 +60,6 @@ static bool agent_asset(const uint8_t *name, size_t length)
     return true;
 }
 
-static bool asset_issuance(const uint8_t *name, size_t length)
-{
-    if (length != 79U || memcmp(name, "asset:", 6U) != 0 ||
-        memcmp(name + 70U, ":issuance", 9U) != 0) return false;
-    for (size_t i = 6U; i < 70U; ++i)
-        if (!((name[i] >= '0' && name[i] <= '9') ||
-              (name[i] >= 'a' && name[i] <= 'f'))) return false;
-    return true;
-}
-
 static bool system_funding(const uint8_t *name, size_t length,
                            const char *suffix)
 {
@@ -169,7 +159,7 @@ lxp_result lx_account_name_parse(const uint8_t *name, size_t name_length,
         kind = LX_ACCOUNT_AGENT_STREAM;
     else if (has_agent_shape(name, name_length, ":margin:"))
         kind = LX_ACCOUNT_AGENT_MARGIN;
-    else if (module_value(name, name_length) || asset_issuance(name, name_length))
+    else if (module_value(name, name_length))
         kind = LX_ACCOUNT_MODULE_VALUE;
     else return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
     parsed->bytes = name;
@@ -201,7 +191,7 @@ lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
         return LXP_ERR_NON_CANONICAL;
     status = lx_account_name_parse(name, name_length, &parsed);
     if (status != LXP_OK) return status;
-    if (parsed.kind == LX_ACCOUNT_MODULE_VALUE && !asset_issuance(name, name_length)) {
+    if (parsed.kind == LX_ACCOUNT_MODULE_VALUE) {
         const uint8_t *encoded = name + name_length - 64U;
         size_t i;
         for (i = 0U; i < 32U; ++i)
@@ -219,4 +209,34 @@ lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
         status = lxp_hash_update(&context, length_be, sizeof(length_be));
     if (status == LXP_OK) status = lxp_hash_update(&context, name, name_length);
     return status == LXP_OK ? lxp_hash_final(&context, account_id) : status;
+}
+
+lxp_result lx_asset_issuance_name(const uint8_t asset_id[32],
+    uint8_t name[LX_ASSET_ISSUANCE_NAME_BYTES], uint8_t account_id[32])
+{
+    static const uint8_t hex[] = "0123456789abcdef";
+    uint8_t seed[79];
+    lxp_result status;
+    if (asset_id == NULL || name == NULL || account_id == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(seed, "asset:", 6U);
+    for (size_t i = 0U; i < 32U; ++i) {
+        seed[6U + i * 2U] = hex[asset_id[i] >> 4U];
+        seed[7U + i * 2U] = hex[asset_id[i] & 15U];
+    }
+    (void)memcpy(seed + 70U, ":issuance", 9U);
+    lxp_hash_context hash;
+    const uint8_t seed_length[4] = {0U, 0U, 0U, 79U};
+    lxp_hash_init(&hash);
+    status = lxp_hash_update(&hash, (const uint8_t *)"LX:ACCOUNT:v1", 13U);
+    if (status == LXP_OK) status = lxp_hash_update(&hash, seed_length, sizeof(seed_length));
+    if (status == LXP_OK) status = lxp_hash_update(&hash, seed, sizeof(seed));
+    if (status == LXP_OK) status = lxp_hash_final(&hash, account_id);
+    if (status != LXP_OK) return status;
+    (void)memcpy(name, "module:asset:value:", 19U);
+    for (size_t i = 0U; i < 32U; ++i) {
+        name[19U + i * 2U] = hex[account_id[i] >> 4U];
+        name[20U + i * 2U] = hex[account_id[i] & 15U];
+    }
+    return LXP_OK;
 }
