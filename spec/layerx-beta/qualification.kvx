@@ -7256,8 +7256,6 @@ severity = "blocker"
 
 [observation.3.7.77]
 task = "3.7"
-[observation.3.7.24]
-task = "3.7"
 file = "src/ledger/lxp_journal.c"
 symbol = "lxp_conservation_check lxp_apply_transfer_set"
 observed = "Native mint and burn require a change in total account units, but the transfer set unconditionally rejects unequal per-asset debit and credit totals. The current balance primitive applies both endpoints. These checks are identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
@@ -7520,14 +7518,6 @@ assumption = "Extend daemon admission and replay to the assigned asset ordinals 
 severity = "blocker"
 
 [observation.3.7.78]
-task = "3.7"
-file = "cmd/layerxd/lxp_daemon_process.c"
-symbol = "collect_assets verify replay admission"
-observed = "Daemon asset admission and replay allow only LX_ASSET_SEND. Runtime registry reconstruction collects asset ids from accounts without issuer, cap, name or pause metadata. The file is outside the permitted account-read changes and identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
-assumption = "Extend daemon admission and replay to the assigned asset ordinals and reconstruct the committed asset registry without synthesizing metadata from balances."
-severity = "blocker"
-
-[observation.3.7.26]
 task = "3.7"
 file = "include/layerx/lxp_receipt.h"
 symbol = "lxp_receipt lxp_ledger_receipt_input"
@@ -8100,12 +8090,6 @@ file = "agent/crates/layerx-sdk/src/lib.rs agent/sdk/typescript/src/agent-http.t
 symbol = "lx_getAccount lx_getBalances lx_sendActivity lx_getActivityStatus lx_getReceipt"
 observed = "Source search for the public wallet JSON-RPC methods finds no implementations. Existing SDK transports expose the typed node boundary and Programs HTTP routes, but no public wallet RPC result schema binds canonical receipts, inclusion proofs and guarantor certificates for the executed, batched and finalised commitment levels. Search evidence: qual-logs/pay2/rpc-contract-search.log; rg exit 1."
 assumption = "Wallet execution and commitment verification require the gateway request/result and proof transport contracts. An admission acknowledgement cannot substitute for verified receipt evidence."
-[observation.6.11.129]
-task = "6.11"
-file = "src/modules/programs/call.c programs/crates/layerx-programs-runtime/src/transfer.rs include/layerx/lxp_transfer.h src/protocol/lxp_module_ctx.c src/ledger/lxp_apply.c"
-symbol = "transfer_source_validate layerx_programs_call_transfer_apply TransferSource::account"
-observed = "Principal-funded Programs transfers compare leg.from.id to authority.principal, look up the sequence account by authority.principal and encode principal bytes as the source account. The shared payments contract instead identifies the actor by signer DID and derives native/per-asset accounts independently. SDK preparation now produces the existing native registration payload, program-account derivation and bounded funding/spend requests, but does not reconcile this identity/account boundary."
-assumption = "Complete DID/per-asset program funding requires an authenticated owner-to-account mapping and identity.next_sequence integration across the module context, ledger, Programs transfer evidence and native call tests. Do not substitute an account ID for the signer DID or relax source ownership assertions. The merchant guest is built but its settlement round trip remains unqualified."
 severity = "blocker"
 
 [observation.6.11.130]
@@ -9085,13 +9069,25 @@ file = "tests/test_genesis_builder_cli.c tests/fixtures/pay1-retired-genesis.man
 symbol = "signed_snapshot_migration_fixture lxp_genesis_verify_signature"
 observed = "build/tests/test_genesis_builder_cli exits 1 with no output. The failing step is tests/test_genesis_builder_cli.c:182, where lxp_genesis_verify_signature on tests/fixtures/pay1-retired-genesis.manifest returns LXP_ERR_ROOT_MISMATCH; the leftover temporary directory shows the test completed both lxp_genesis_build_artifacts cases and the protocol 2 case and reaches signed_snapshot_migration_fixture at line 139 before failing. A diagnostic linked against build/liblayerx.a that parses the fixture, initialises an arena and verifies the signature reported protocol_version 3, network_id 77 and LXP_ERR_ROOT_MISMATCH, and the identical diagnostic linked against a liblayerx.a rebuilt from a pristine tree with every change of this lane stashed reported the same three values, so the stored genesis_state_root of that fixture is stale on origin/main and the table reproduces the same root. Regenerating the fixture requires the signer key that produced it, which is not in the tree. The fixture, the assertion and the migration path were all left unchanged. Evidence: qual-logs/test-genesis-builder-cli.log and qual-logs/test-genesis-builder-cli-main.log."
 assumption = "A signed fixture whose genesis root no longer matches the computed root has to be re-signed by whoever holds its signer key, which is out of reach from this lane and out of its owned paths, so it is recorded rather than repaired. The migration path itself was never exercised, so nothing here says whether it works."
+severity = "blocker"
+
+[observation.6.11.6500]
+task = "6.11"
+file = "src/modules/programs/call.c programs/crates/layerx-programs-runtime/src/transfer.rs include/layerx/lxp_transfer.h src/protocol/lxp_module_ctx.c src/ledger/lxp_apply.c"
+symbol = "transfer_source_validate layerx_programs_call_transfer_apply TransferSource::account"
+observed = "Principal-funded Programs transfers compare leg.from.id to authority.principal, look up the sequence account by authority.principal and encode principal bytes as the source account. The shared payments contract instead identifies the actor by signer DID and derives native/per-asset accounts independently. SDK preparation now produces the existing native registration payload, program-account derivation and bounded funding/spend requests, but does not reconcile this identity/account boundary."
+assumption = "Complete DID/per-asset program funding requires an authenticated owner-to-account mapping and identity.next_sequence integration across the module context, ledger, Programs transfer evidence and native call tests. Do not substitute an account ID for the signer DID or relax source ownership assertions. The merchant guest is built but its settlement round trip remains unqualified."
+severity = "blocker"
+
+[observation.6.11.6501]
+task = "6.11"
 file = "programs/crates/layerx-programs-registry/src/interface.rs programs/crates/layerx-programs-runtime/src/validate.rs programs/sdk/rust/src/lxt20.rs"
 symbol = "InterfaceCapability ProgramInterface::bind exact_interface_capability_mask"
 observed = "The LXT-20 request codec covers transfer, approve, transfer_from, balance_of, allowance, total_supply and metadata with committed canonical calldata vectors. Registry interfaces currently encode concrete ProgramSpend destinations and ceilings and require exact imported capability masks. No generic dynamic-recipient interface representation, published LXT-20 interface hash, token-lxt20 settlement reference or token native deploy/call evidence was produced. Codec/parser tests are not execution tests."
 assumption = "A complete token interface needs agreed canonical discovery semantics for caller-authorized dynamic recipients, native consumer conformance and a real settlement reference with atomic allowances and refusal coverage. Existing interface bounds and exact capability checks remain intact."
 severity = "blocker"
 
-[observation.6.11.131]
+[observation.6.11.6502]
 task = "6.11"
 file = "programs/crates/layerx-programs-sandbox/src/lease.rs programs/crates/layerx-programs-sandbox/src/escrow.rs programs/crates/layerx-programs-sandbox/src/usage.rs agent/crates/layerx-agent-api/src/generated.rs programs/vendor/wasmi-0.31.2/src/engine/executor.rs"
 symbol = "record_expiry_usage terminalize_by_sweep apply_host_activity projected_spend record_host_settlement_reserved"
@@ -9099,7 +9095,7 @@ observed = "cargo clippy --manifest-path programs/Cargo.toml --workspace --all-t
 assumption = "These aggregate gates remain failed. Unrelated sandbox code and dependency formatting were not modified or suppressed. Codify inspection was unavailable because cg is not installed. Cluster and image gates were not run."
 severity = "blocker"
 
-[observation.6.11.132]
+[observation.6.11.6503]
 task = "6.11"
 file = "programs/vendor/parity-wasm/src/elements/module.rs programs/vendor/parity-wasm/src/elements/name_section.rs programs/vendor/parity-wasm/src/elements/reloc_section.rs programs/vendor/parity-wasm/src/elements/section.rs programs/crates/layerx-programs-runtime/tests/interpreter_program.rs"
 symbol = "integration_tests artifact"
@@ -9784,6 +9780,7 @@ symbol = "emit_identifier_event lxp_ctx_emit_event"
 observed = "emit_identifier_event at src/modules/perps/lx_perps_dispatch.c:437 assembles every perpetuals event body as two 32-byte identifiers followed by an ordinal-specific tail and refuses a tail that would not fit its buffer with LXP_ERR_LENGTH_LIMIT. The buffer holds 128 bytes, which admits the longest tail any ordinal produces - the funding tick's two signed 17-byte encodings, and the auto-deleverage count plus 16-byte deficit amount - against the 256-byte body limit lxp_ctx_emit_event enforces. An earlier 96-byte buffer left only 32 bytes of tail and made the funding tick unreachable; the buffer was widened rather than the guard removed."
 assumption = "The guard is the load-bearing check and was left exactly as written; only the buffer it measures grew, and it still sits well inside the kernel's own 256-byte limit."
 [observation.6.11.133]
+[observation.6.11.6504]
 task = "6.11"
 file = "programs/vendor/parity-wasm programs/vendor/wasmi-0.31.2 agent/crates/layerx-agent-api/src/generated.rs"
 symbol = "integration_tests"
@@ -9791,7 +9788,7 @@ observed = "Local origin/main and git merge-base HEAD origin/main both resolve t
 assumption = "These aggregate failures are inherited at the merge base. Vendored sources and tests remain unchanged. Programs package qualification is recorded separately; this comparison does not assert any unrun aggregate gate passed."
 severity = "note"
 
-[observation.6.11.134]
+[observation.6.11.6505]
 task = "6.11"
 file = "programs/crates/layerx-programs-registry/src/interface.rs programs/crates/layerx-programs-runtime/src/dynamic_spend.rs programs/crates/layerx-programs-runtime/src/ffi_interface.rs src/modules/programs/call.c"
 symbol = "CallerAuthorizedSpend authorize_interface_call catalog_interface"
@@ -9799,7 +9796,7 @@ observed = "CallerAuthorizedSpend interface tag 10 binds asset, ceiling and big-
 assumption = "cargo clippy --manifest-path programs/Cargo.toml -p layerx-programs-runtime -p layerx-programs-registry --all-targets -- -D warnings exits 0; cargo test --manifest-path programs/Cargo.toml -p layerx-programs-runtime --test dynamic_spend exits 0; cargo test --manifest-path programs/Cargo.toml -p layerx-programs-registry --lib exits 0 (17 tests); make -j16 programs-core-test and touched-file rustfmt --check exit 0. Logs: qual-logs/pay5/dynamic-clippy-qualified.log, dynamic-test-final.log, interface-test.log, dynamic-native-final.log and dynamic-fmt.log. Initial Clippy failures for unused self and test slice clones were repaired without suppressions. Token deployment and dynamic-interface native execution fixtures are not established by these gates."
 severity = "note"
 
-[observation.6.11.135]
+[observation.6.11.6506]
 task = "6.11"
 file = "programs/sdk/rust/examples/token-lxt20 programs/crates/layerx-programs-runtime/src/lxt20_tests.rs programs/crates/layerx-programs-registry/src/lxt20.rs programs/fixtures/pay5"
 symbol = "initialize_impl transfer_impl transfer_from_impl reference_interface"
@@ -9807,7 +9804,7 @@ observed = "The real token-lxt20 WASM reference stages fixed-supply issuer fundi
 assumption = "cargo test --locked --manifest-path programs/Cargo.toml -p layerx-programs-runtime -p layerx-programs-registry -p layerx-program-sdk exits 0 with LAYERX_INTERPRETER_WASM=/root/lx/pay5/programs/target/wasm32-unknown-unknown/release/layerx_programs_interpreter.wasm. Scoped all-target Clippy with -D warnings exits 0. Token guest WASM release build, release Clippy, formatting and byte-for-byte fixture rebuild comparison exit 0. Native make -j16 and make -j16 programs-core-test exit 0. Logs: qual-logs/pay5/scoped-test-final.log, scoped-clippy-final.log, token-build-final.log, token-guest-clippy.log, token-guest-fmt.log, token-reproducibility.log, token-registry-final.log, token-execution-final.log, continuation-native-build.log and continuation-native-core.log. Generated registry state bytes are publication inputs, not a native deployment receipt. Runtime storage/effect tests are not proof of kernel settlement atomicity. Native signer/account integration and merchant/token native payment fixtures remain unqualified."
 severity = "note"
 
-[observation.6.11.136]
+[observation.6.11.6507]
 task = "6.11"
 file = "programs/crates/layerx-programs-runtime programs/sdk/rust"
 symbol = "rustfmt"
@@ -9815,7 +9812,7 @@ observed = "cargo fmt --manifest-path programs/Cargo.toml -p layerx-programs-run
 assumption = "The final-source scoped tests, all-target Clippy and native build/core tests recorded in observation 6.11.135 include this formatting. Evidence: qual-logs/pay5/scoped-fmt-before.log, scoped-fmt-final.log, scoped-test-final.log and scoped-clippy-final.log. Workspace-wide formatting remains inherited as recorded in observation 6.11.133."
 severity = "note"
 
-[observation.6.11.137]
+[observation.6.11.6508]
 task = "6.11"
 file = "programs/sdk/rust/src/payments.rs programs/sdk/rust/src/capability.rs programs/crates/layerx-programs-runtime/tests/payment_preparation.rs"
 symbol = "ProgramPaymentCapabilities PaymentGrant"
@@ -9823,7 +9820,7 @@ observed = "The SDK now builds one canonical mixed grant set containing ordinary
 assumption = "cargo test --locked --manifest-path programs/Cargo.toml -p layerx-programs-runtime --test payment_preparation exits 0 (4 tests). SDK/runtime all-target Clippy with -D warnings and package-scoped cargo fmt --check exit 0. Evidence: qual-logs/pay5/mixed-grants-qualified-test.log, mixed-grants-qualified-clippy.log and mixed-grants-qualified-fmt.log. This completes grant composition but does not resolve native signer/account admission or establish native settlement."
 severity = "note"
 
-[observation.6.11.138]
+[observation.6.11.6509]
 task = "6.11"
 file = "programs/fixtures/pay5/payments-merchant.wasm programs/crates/layerx-programs-runtime/src/merchant_tests.rs"
 symbol = "merchant_stages_one_funding_leg_and_two_exact_owner_payouts merchant_discards_all_staged_legs_when_either_payout_is_refused"
@@ -9831,7 +9828,7 @@ observed = "The real merchant WASM fixture stages a funding leg and exact mercha
 assumption = "cargo build --locked --manifest-path programs/sdk/rust/examples/payments-merchant/Cargo.toml --target wasm32-unknown-unknown --release exits 0. cargo test --locked --manifest-path programs/Cargo.toml -p layerx-programs-runtime --lib merchant_tests exits 0 (3 tests); runtime all-target Clippy with -D warnings exits 0. Evidence: qual-logs/pay5/merchant-continuation-build.log, merchant-execution.log and merchant-runtime-clippy.log. These are runtime guest/effect tests, not native deploy/call or kernel settlement proofs."
 severity = "note"
 
-[observation.6.11.139]
+[observation.6.11.6510]
 task = "6.11"
 file = "src/protocol/lxp_kernel.c include/layerx/lxp_kernel.h src/protocol/lxp_module_ctx.c src/ledger/lx_account_id.c include/layerx/lxp_ledger.h src/ledger/lx_account_registry.c tests/programs/test_call_activity.c"
 symbol = "lxp_kernel_bind_ledger_admission snapshot_bind_call_admission kernel_snapshot_payer_balance lxp_ctx_ledger_execution_sequence lx_account_name_parse"
@@ -9839,7 +9836,7 @@ observed = "The native Programs identity/account integration remains blocked by 
 assumption = "Required integration changes are independent signer/account admission and payer binding in src/protocol/lxp_kernel.c and the corresponding facts in include/layerx/lxp_kernel.h, canonical per-asset account parsing/kind/registration in the shared ledger paths, and migration of native fixture setup while preserving every ownership, balance, asset, fee, sequence and receipt assertion. These paths were not modified. The granted downstream paths alone do not repair the shared payer/admission contract. Native successful merchant/token payment fixtures, actual registry publication receipts and native allowance/settlement rollback proof remain unqualified; the committed runtime and registry-input fixtures do not establish them."
 severity = "blocker"
 
-[observation.6.11.140]
+[observation.6.11.6511]
 task = "6.11"
 file = "programs/sdk/rust programs/crates/layerx-programs-runtime programs/crates/layerx-programs-registry programs/fixtures/pay5 programs/porting/evm/MIGRATION.md programs/porting/solana/MIGRATION.md"
 symbol = "ProgramPaymentCapabilities reference_interface merchant_tests lxt20_tests"
@@ -9847,14 +9844,15 @@ observed = "Final-source package-scoped cargo fmt --check, cargo clippy --locked
 assumption = "Exact commands, exits and log paths are in qual-logs/pay5/gates.tsv. Final gate logs are qual-logs/pay5/final-*.log with sibling .exit files; the reproducible local command runner is qual-logs/pay5/final_gates.py. CARGO_BUILD_JOBS=16 and MAKEFLAGS=-j16 are set; runtime tests use the real interpreter artifact named in observation 6.11.135. Inherited workspace formatting/parity-wasm failures remain as recorded at the merge base. Native merchant/token successful payment execution and registry receipt publication remain blocked as recorded in observation 6.11.139. Cluster and image gates were not run."
 severity = "note"
 
-[observation.6.11.141]
+[observation.6.11.6512]
 task = "6.11"
 file = "programs/crates/layerx-programs-runtime/src/dynamic_spend.rs programs/crates/layerx-programs-runtime/src/ffi_interface.rs programs/crates/layerx-programs-runtime/src/ffi_call.rs programs/crates/layerx-programs-runtime/src/calls.rs"
 symbol = "CallerAuthorizedSpend::constrain_grants authorize_interface_call"
 observed = "Dynamic interface admission now narrows the actual runtime capability set before root or nested guest execution. For the executing program, only descriptor-matching asset/recipient spend keys survive, and each retained ceiling is the minimum of the caller grant and published descriptor ceiling. Other-program grants remain subject to the existing owner-frame and nested narrowing rules. This closes the case where valid calldata could otherwise leave an overly broad caller grant available to guest code. Tests verify removal of undescribed recipients/assets, ceiling reduction, preservation of the original caller grants and absence of program spending on descriptor-free entries of a dynamic interface."
 assumption = "The focused dynamic_spend test exits 0 (2 tests). The initial Clippy refusal for using an underscore-prefixed argument was repaired without suppression. The complete final gate runner was repeated after this change: all scoped formatting/Clippy/tests, both guest build/fixture comparisons, native build/core/boundary checks, beta-ledger-check and whitespace checks exit 0. Evidence: qual-logs/pay5/descriptor-narrowing-test.log, descriptor-narrowing-clippy.log, final-*.log and gates.tsv. The independent native payer/account integration blockers in observation 6.11.139 remain."
 severity = "note"
-[observation.3.7.24]
+
+[observation.3.7.6513]
 task = "3.7"
 file = "src/ledger/lxp_journal.c"
 symbol = "lxp_conservation_check lxp_apply_transfer_set"
@@ -9862,7 +9860,7 @@ observed = "Native mint and burn require a change in total account units, but th
 assumption = "An authenticated issuance and destruction invariant must be specified before altering the existing conservation check; a direct balance write or fabricated reserve does not satisfy the contract."
 severity = "blocker"
 
-[observation.3.7.25]
+[observation.3.7.6514]
 task = "3.7"
 file = "cmd/layerxd/lxp_daemon_process.c"
 symbol = "collect_assets verify replay admission"
@@ -9870,7 +9868,7 @@ observed = "Daemon asset admission and replay allow only LX_ASSET_SEND. Runtime 
 assumption = "Extend daemon admission and replay to the assigned asset ordinals and reconstruct the committed asset registry without synthesizing metadata from balances."
 severity = "blocker"
 
-[observation.3.7.26]
+[observation.3.7.6515]
 task = "3.7"
 file = "include/layerx/lxp_receipt.h"
 symbol = "lxp_receipt lxp_ledger_receipt_input"
@@ -9878,7 +9876,7 @@ observed = "The existing canonical ledger receipt fields have balances but no to
 assumption = "Define and implement a versioned supply receipt binding across native encoding, decoding, signing and replay before qualifying native mint and burn."
 severity = "blocker"
 
-[observation.3.7.27]
+[observation.3.7.6516]
 task = "3.7"
 file = "src/protocol/lxp_module_ctx.c include/layerx/lxp_module.h src/ledger/lx_account_registry.c"
 symbol = "lxp_ctx_bind_ledger_receipt commit_account lxp_ctx_account_stage_module_value"
@@ -9886,7 +9884,7 @@ observed = "The approved issuance account model preserves per-asset conservation
 assumption = "Asset register, account_open, receive, mint and burn require scoped module-context staging, commit/import/export and receipt-operation integration while preserving generic registration, conserved transfer, balance, authorization and receipt checks. These paths are outside the granted daemon and asset-dispatch ownership. The typed activities remain refused until execution is implemented; registry reconstruction and full new-ordinal execution qualification remain incomplete."
 severity = "blocker"
 
-[observation.3.7.28]
+[observation.3.7.6517]
 task = "3.7"
 file = "src/protocol/lxp_fee.c src/protocol/lxp_fee_policy.c include/layerx/lxp_fee.h cmd/layerx-genesis/lxp_genesis_builder.c"
 symbol = "lxp_fee_compute materialize_snapshot"
@@ -9894,7 +9892,7 @@ observed = "The current fee representation multiplies per_activity_type_unit by 
 assumption = "A separately configured per-ordinal price schedule requires a canonical parameter representation and ownership of the fee calculator and parameter codec paths. Account enumeration, persisted registry reconstruction and complete new-ordinal replay remain unimplemented; existing genesis and account-read regression gates do not qualify those absent behaviors."
 severity = "blocker"
 
-[observation.3.7.29]
+[observation.3.7.6518]
 task = "3.7"
 file = "include/layerx/lx_asset.h src/modules/asset/lx_asset_decode.c src/modules/asset/lx_asset_registry.c src/ledger/lxp_receive.c cmd/layerxd/lxp_daemon_process.c tests/modules/test_asset_payloads.h"
 symbol = "module_decode asset_activity_supported"
@@ -9902,7 +9900,7 @@ observed = "make -j16; make test-asset-registry test-asset-balance test-asset-tr
 assumption = "These gates qualify the canonical decoders and existing regression paths, not missing registry, issuance, receive/grant execution or account enumeration. Daemon admission and replay now share the explicit Asset allowlist and constrain Asset owner scopes to the submitted ordinal; successful execution and persisted registry replay remain unqualified. Codify gates were not run because cg is unavailable. Cluster and image gates were not run because this host has no cluster or image tooling. No inherited executed failure is asserted."
 severity = "blocker"
 
-[observation.3.7.30]
+[observation.3.7.6519]
 task = "3.7"
 file = "src/protocol/lxp_fee.c include/layerx/lxp_fee.h src/modules/governance/lxp_fee_params.c src/protocol/lxp_fee_policy.c"
 symbol = "lxp_fee_compute lxp_fee_params"
@@ -9910,7 +9908,7 @@ observed = "Version-1 fee parameters contain per_activity_type_unit, which lxp_f
 assumption = "A separately configured ordinal table requires an explicit canonical representation and version/migration contract plus ownership of the calculator, parameter declaration and governance/genesis serialization consumers. Those paths are outside the fee-policy grant. Existing fee calculation and assertions remain intact; no unused parallel price table is introduced."
 severity = "blocker"
 
-[observation.3.7.31]
+[observation.3.7.6520]
 task = "3.7"
 file = "src/modules/asset/lx_asset_execution.h src/protocol/lxp_module_ctx.c src/modules/asset/lx_asset_state.c tests/test_state_commitment_transition.c cmd/layerxd/lxp_daemon_lni.c cmd/layerxd/lxp_daemon_process.c"
 symbol = "asset_execute_typed lxp_ctx_asset_account_stage lxp_ctx_asset_issuance_stage lxp_ctx_bind_ledger_receipt lx_account_list_did collect_assets"
@@ -9918,7 +9916,7 @@ observed = "make -j16; make test-asset-registry test-asset-balance test-asset-tr
 assumption = "These gates do not establish exhaustive new-ordinal refusal coverage or process-level replay/restart and wire enumeration qualification for every new activity. Existing genesis registration and account-evidence gates pass. The configurable ordinal fee representation remains the scope boundary in observation.3.7.30. Task-scoped regressions in cached supply-root derivation, bootstrap pause checking and a sanitizer link dependency were repaired without weakening assertions; earlier attempt logs remain under qual-logs/pay1. No executed failure is classified as inherited. Codify gates were not run because cg is unavailable; cluster and image gates were not run on this host."
 severity = "blocker"
 
-[observation.6.11.142]
+[observation.6.11.6521]
 task = "6.11"
 file = "tests/programs/test_winddown.c src/protocol/lxp_kernel.c src/modules/programs/winddown.c"
 symbol = "activity_dispatch lxp_kernel_bind_ledger_admission lxp_ctx_ledger_execution_sequence"
@@ -9926,7 +9924,7 @@ observed = "Programs protocol-3 admission now resolves the signer DID to its can
 assumption = "Migrate tests/programs/test_winddown.c to signer-DID principals and canonical account names, and pass the independently bound payment account ID to lxp_ctx_ledger_execution_sequence while retaining all sequence and prepared-state tamper assertions. Evidence: qual-logs/pay5/pay5c-binding-qualified-native-core.log. Scoped Rust formatting, all-target Clippy and tests pass; the migrated signed direct native/per-asset Call fixtures and prepared post-upgrade batch fixture pass. This aggregate failure is an integration conflict introduced by the required identity/account separation, not an inherited failure."
 severity = "blocker"
 
-[observation.6.11.143]
+[observation.6.11.6522]
 task = "6.11"
 file = "platform/sdk/go/programs.go platform/sdk/swift/Sources/LayerXSDK/Programs.swift platform/sdk/dotnet/Programs.cs platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/ProgramsClient.java programs/crates/layerx-programs-runtime/src/transfer.rs"
 symbol = "verifyProgramTerminal verifyProgramTransferAuthorization verifyTerminalAttachments decodeAuthorizationRoot VerifyTerminalAttachments DecodeAuthorizationRoot verifyAuthorizationRoot AtomicTransferSet::decode_account_bound"
@@ -9934,7 +9932,7 @@ observed = "The native account-bound transfer artifact wraps the original signer
 assumption = "Extend each verifier to consume LayerX/programs/402LXP/account-bound-set/v1 with the same name, DID, asset, exact canonical-byte and kernel-root checks. Preserve historical transfer-set v1/v2 verification and reject nesting, malformed names, foreign owners, wrong assets, trailing bytes and tampered roots. Source evidence: qual-logs/pay5/account-bound-sdk-boundary.log. Native kernel fixtures do not qualify these wallet surfaces."
 severity = "blocker"
 
-[observation.6.11.144]
+[observation.6.11.6523]
 task = "6.11"
 file = "programs/fixtures/pay5/native_roundtrip.c programs/fixtures/pay5/native_roundtrip.h programs/fixtures/pay5/run_native_roundtrip.py src/modules/programs/call.c programs/porting/evm/MIGRATION.md programs/porting/solana/MIGRATION.md"
 symbol = "pay5_token_roundtrip pay5_merchant_roundtrip layerx_programs_call_transfer_apply"
@@ -9942,7 +9940,7 @@ observed = "Real native kernel fixtures deploy the committed LXT-20 and merchant
 assumption = "python3 programs/fixtures/pay5/run_native_roundtrip.py --write-fixtures exits 0; exact native compilation and execution commands, exit codes and logs are in qual-logs/pay5/gates.tsv and pay5c-native-generate-*.log. python3 programs/fixtures/pay5/run_native_roundtrip.py exits 0 and confirms byte-for-byte equality of both complete artifact sets; evidence is qual-logs/pay5/pay5c-native-final-replay.log. These isolated kernel fixtures do not certify a live deployment or the external wallet verifiers identified in observation.6.11.143. The aggregate wind-down fixture conflict in observation.6.11.142 remains outside the granted test scope. No cluster or image gates were run."
 severity = "blocker"
 
-[observation.6.11.145]
+[observation.6.11.6524]
 task = "6.11"
 file = "tests/programs/test_winddown.c"
 symbol = "activity_dispatch wind_down_lifecycle"
@@ -9950,7 +9948,7 @@ observed = "Protocol-3 wind-down fixtures use signer DID principals, canonical a
 assumption = "Evidence: qual-logs/pay5/pay5d-core-final.log and pay5d-core-final.exit. The first attempt exposed a missing fixture occupancy_asset_id binding and remains in pay5d-core.log. This resolves the fixture conflict recorded in observation.6.11.142 without changing runtime checks."
 severity = "note"
 
-[observation.6.11.146]
+[observation.6.11.6525]
 task = "6.11"
 file = "programs/vendor/parity-wasm/res/cases/v1 programs/vendor/parity-wasm/src/elements/module.rs programs/vendor/parity-wasm/src/elements/name_section.rs programs/vendor/parity-wasm/src/elements/reloc_section.rs programs/vendor/parity-wasm/src/elements/section.rs"
 symbol = "integration_tests"
@@ -9958,7 +9956,7 @@ observed = "The sixteen resource files referenced by existing parity-wasm tests 
 assumption = "Evidence: qual-logs/pay5/pay5d-parity-final.log and pay5d-parity-final.exit. The upstream archive is retained untracked at qual-logs/pay5/parity-wasm-upstream.tar.gz. This repairs the missing inputs in observation.6.11.132; it does not assert the full workspace passes."
 severity = "note"
 
-[observation.6.11.147]
+[observation.6.11.6526]
 task = "6.11"
 file = "programs/vendor/wasmi-0.31.2/src/engine/bytecode/tests.rs programs/vendor/wasmi-0.31.2/src/engine/tests.rs programs/vendor/wasmi-0.31.2/src/engine/bytecode/mod.rs"
 symbol = "size_of_instruction assert_func_body Observe"
@@ -9966,7 +9964,7 @@ observed = "Locked workspace tests reproduce 41 wasmi assertion failures after p
 assumption = "Evidence: qual-logs/pay5/pay5d-workspace-test.log, pay5d-workspace-final.log and pay5d-wasmi-inherited.log. Both workspace runs exit 101. The code and assertions remain intact. Removing metering, filtering Observe from comparisons or increasing the expected size merely to pass would violate the no-weakening contract. An agreed instruction representation and assertion contract is required."
 severity = "blocker"
 
-[observation.6.11.148]
+[observation.6.11.6527]
 task = "6.11"
 file = "agent/crates/layerx-agent-api/src/generated.rs agent/crates/layerx-agent-api/tests interop/crates/layerx-ap2 interop/crates/layerx-interop-gateway interop/crates/layerx-ucp interop/crates/layerx-visa-tap platform/tools/kvx platform/tools/workspace-gate"
 symbol = "workspace_formatting"
@@ -9974,7 +9972,7 @@ observed = "cargo fmt --manifest-path programs/Cargo.toml --all --check exits 1 
 assumption = "Evidence: qual-logs/pay5/pay5d-fmt.log, pay5d-fmt-final.log, pay5d-owned-fmt.log and adjacent exit files. Exact remaining file locations are in pay5d-fmt-final.log. No formatting check is suppressed and no out-of-scope source is modified."
 severity = "blocker"
 
-[observation.6.11.149]
+[observation.6.11.6528]
 task = "6.11"
 file = "platform/Cargo.lock platform/Cargo.toml platform/Makefile.inc"
 symbol = "platform-test platform-test-registry platform-test-core"
@@ -9982,7 +9980,7 @@ observed = "make -k platform-test platform-test-registry platform-test-core exit
 assumption = "Evidence: qual-logs/pay5/pay5d-hosted.log and pay5d-hosted.exit. Lockfile reconciliation belongs to the platform paths; removing --locked would weaken the gate. Hosted workspace, registry and core runtime qualification remain unproven. Cluster, image and live-chain gates were not run because this host has no cluster or image tooling and the persistent chain is excluded."
 severity = "blocker"
 
-[observation.6.11.150]
+[observation.6.11.6529]
 task = "6.11"
 file = "programs/crates/layerx-programs-runtime/src/dynamic_spend.rs programs/crates/layerx-programs-runtime/src/lxt20_tests.rs programs/crates/layerx-programs-runtime/src/merchant_tests.rs programs/crates/layerx-programs-registry/src/lxt20.rs programs/fixtures/pay5 programs/porting/evm/MIGRATION.md programs/porting/solana/MIGRATION.md"
 symbol = "CallerAuthorizedSpend::constrain_grants reference_interface pay5_token_roundtrip pay5_merchant_roundtrip"
@@ -9990,7 +9988,7 @@ observed = "QA source reconciliation finds authenticated dynamic recipient descr
 assumption = "Evidence: qual-logs/pay5/pay5d-native-replay.log and pay5d-native-replay.exit; underlying commands retain the runner's pay5c-native-replay log names. Guides retain the distinction between program calldata and native Asset/RPC operations. Asset ordinal 9 remains reserved and unchanged. Removing ownership checks, relaxing masks or spend ceilings, coercing identities to account IDs, or adding an ordinal-9 prefix is rejected as incompatible with the authority and shared encoding contracts. No unused merchant helper is introduced; the supplied QA has no concrete contract for the suggested helper. External wallet account-bound evidence decoding remains unqualified as in observation.6.11.143."
 severity = "note"
 
-[observation.6.11.151]
+[observation.6.11.6530]
 task = "6.11"
 file = "src/protocol/lxp_kernel.c programs/tests/differential/parallel.c"
 symbol = "kernel_snapshot_payer_balance lxp_kernel_prepare_activity_batch execute_workload"
@@ -9998,7 +9996,7 @@ observed = "make -j16 programs-test reaches native parallel differential executi
 assumption = "Evidence: qual-logs/pay5/pay5d-programs-aggregate-final.log, pay5d-differential-final.log and pay5d-differential-diagnostic2.log through pay5d-differential-diagnostic4.log. Propagate the actual activity protocol version into snapshot payer lookup while preserving both legacy account-principal and protocol-3 signer-DID ownership checks. src/protocol/lxp_kernel.c is outside the granted paths. This is a binding integration regression from the preceding implementation, not an inherited unrelated defect. Do not migrate the legacy fixture to protocol 3 merely to conceal the regression."
 severity = "blocker"
 
-[observation.6.11.152]
+[observation.6.11.6531]
 task = "6.11"
 file = "programs/crates/layerx-programs-sandbox/src/escrow.rs programs/crates/layerx-programs-sandbox/src/lease.rs programs/crates/layerx-programs-sandbox/src/usage.rs"
 symbol = "projected_spend record_host_settlement_reserved record_expiry_usage"
@@ -10006,7 +10004,7 @@ observed = "Default-feature workspace Clippy reproduces unused host settlement h
 assumption = "Evidence: qual-logs/pay5/pay5d-default-qualified.log, pay5d-host-qualified.log and pay5d-sandbox-serial.log with exits recorded in pay5d-gates.tsv. The initial concurrent sandbox run passed executable tests but rustdoc exited 1 with crate-resolution errors; its raw output remains in pay5d-sandbox-qualified.log. The serialized rerun passed without suppressing doctests. Earlier attribute-formatting Clippy failures were repaired and retained in pay5d-clippy-repair.log."
 severity = "note"
 
-[observation.6.11.153]
+[observation.6.11.6532]
 task = "6.11"
 file = "Makefile programs/deny.toml programs/tools/dependency-policy.sh"
 symbol = "programs-lint"
@@ -10014,7 +10012,7 @@ observed = "make programs-lint passes workspace Clippy and the dependency policy
 assumption = "Evidence: qual-logs/pay5/pay5d-programs-lint.log, pay5d-deny-advisories.log, pay5d-deny-bans.log and pay5d-deny-bans-canonical.log with adjacent exit files. Tool provenance is in qual-logs/pay5/cargo-deny/provenance.json. The root Makefile is outside granted paths; move the option before check in its owning scope. No dependency ban, advisory or source rule was relaxed."
 severity = "blocker"
 
-[observation.6.11.154]
+[observation.6.11.6533]
 task = "6.11"
 file = "programs tests/programs platform/Makefile.inc spec/layerx-beta/qualification.kvx"
 symbol = "programs-test programs-core-test beta-ledger-check"
@@ -10022,7 +10020,7 @@ observed = "Final native make -j16 exits 0. The dependency-provisioned make -j16
 assumption = "Exact aggregate command results are in qual-logs/pay5/pay5d-gates.tsv; final aggregate output is pay5d-aggregate-qualified.log. Initial missing asc and wasm-ld-18 failures remain in pay5d-programs-test.log. Dependencies were installed only as untracked local artifacts. make beta-ledger-check passes after the appended observations. This is a partial aggregate qualification, not deployment or full-system certification. Cluster, image and live-chain gates were not run."
 severity = "blocker"
 
-[observation.6.11.155]
+[observation.6.11.6534]
 task = "6.11"
 file = "programs/Cargo.toml programs/vendor/wasmi-0.31.2/Cargo.toml programs/vendor/wasmi-0.31.2/src/engine/bytecode/mod.rs programs/vendor/wasmi-0.31.2/src/engine/bytecode/tests.rs"
 symbol = "Instruction::Observe size_of_instruction"
@@ -10030,7 +10028,7 @@ observed = "Cargo metadata identifies exactly one wasmi package and one library 
 assumption = "Evidence: qual-logs/pay5/pay5e-workspace-before.json and qual-logs/pay5/pay5e-wasmi.log. Vendored sources are not authorized for edits. Excluding the dependency from the workspace would suppress its failing tests rather than resolve the representation conflict. Preserve both implementation and assertions pending an agreed representation contract."
 severity = "blocker"
 
-[observation.6.11.156]
+[observation.6.11.6535]
 task = "6.11"
 file = "src/protocol/lxp_kernel.c programs/tests/differential/parallel.c"
 symbol = "kernel_snapshot_payer_balance qualify_payment_account_balance execute_workload"
@@ -10038,7 +10036,7 @@ observed = "Snapshot payer lookup now uses the actual activity protocol version 
 assumption = "Evidence: qual-logs/pay5/pay5e-core.log and qual-logs/pay5/pay5e-differential-final.log. Earlier diagnostics retain the preparation success followed by missing availability metadata (-801), then missing retained artifact binding (-3), in pay5e-payer-diagnostic2.log and pay5e-differential-da-diagnostic2.log. The fixes supply real evidence rather than bypass either validator."
 severity = "note"
 
-[observation.6.11.157]
+[observation.6.11.6536]
 task = "6.11"
 file = "platform/sdk/go/programs.go platform/sdk/swift/Sources/LayerXSDK/Programs.swift platform/sdk/dotnet/Programs.cs platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/ProgramsClient.java programs/fixtures/pay5"
 symbol = "verifyProgramTransferAuthorization decodeAuthorizationRoot DecodeAuthorizationRoot verifyAuthorizationRoot"
@@ -10046,7 +10044,7 @@ observed = "All four SDK decoders consume the account-bound transfer-set envelop
 assumption = "Evidence: qual-logs/pay5/pay5e-go-qualified.log, pay5e-shared-rust.log, pay5e-rust-account.log and pay5e-sdk-fixtures-final.log. Swift, dotnet and Maven suite attempts exit 127 because those toolchains are absent; retain their logs as pay5e-swift-final.log, pay5e-dotnet.log and pay5e-jvm.log. Their implementations and tests are not host-qualified. The Swift negative test evaluates decoder throws outside XCTest comparison autoclosures."
 severity = "blocker"
 
-[observation.6.11.158]
+[observation.6.11.6537]
 task = "6.11"
 file = "agent/crates/layerx-agent-api/build.rs agent/crates/layerx-agent-api/src/generated.rs agent/crates/layerx-agent-api/tests/errors.rs agent/crates/layerx-agent-api/tests/identity.rs agent/Cargo.lock"
 symbol = "generated_source agent_api_compat_gate"
@@ -10054,7 +10052,7 @@ observed = "The existing schema generator template now emits rustfmt-compatible 
 assumption = "Evidence: qual-logs/pay5/pay5e-api-generation.log, pay5e-agent-fmt.log and pay5e-api-platform.log. The direct agent workspace command remains blocked by its separate stale Cargo.lock, recorded in pay5e-agent-api.log. The Programs workspace does not contain this package, as recorded in pay5e-agent-api-programs.log. No agent lockfile was changed."
 severity = "note"
 
-[observation.6.11.159]
+[observation.6.11.6538]
 task = "6.11"
 file = "platform/Cargo.lock"
 symbol = "layerx-programs-registry workspace dependency resolution"
@@ -10062,7 +10060,7 @@ observed = "cargo update --manifest-path platform/Cargo.toml --workspace adds on
 assumption = "Evidence: qual-logs/pay5/pay5e-platform-lock.log, pay5e-platform-metadata.json, pay5e-platform-registry-check.log and pay5e-api-platform.log. The lockfile change is a single dependency-list entry."
 severity = "note"
 
-[observation.6.11.160]
+[observation.6.11.6539]
 task = "6.11"
 file = "Makefile"
 symbol = "programs-lint"
@@ -10070,7 +10068,7 @@ observed = "The cargo-deny global --exclude-dev option now precedes check bans. 
 assumption = "Evidence: qual-logs/pay5/pay5e-programs-lint.log. The existing exclusion and every dependency rule remain unchanged; only CLI argument ordering changed."
 severity = "note"
 
-[observation.6.11.161]
+[observation.6.11.6540]
 task = "6.11"
 file = "programs Makefile spec/layerx-beta/qualification.kvx"
 symbol = "programs-test programs-differential beta-ledger-check"
@@ -10078,7 +10076,7 @@ observed = "The aggregate run against 94bc7926 passes default and host-FFI all-t
 assumption = "Exact commands, exits, source revision and retained log paths are in qual-logs/pay5/pay5e-qualified-gates.tsv; earlier attempts remain in pay5e-gates.tsv and stage commands in pay5e-stage-gates.tsv. Full formatting exits 1 on outside-scope files. Platform qualification exits 2 as detailed separately. Cluster, image and persistent-chain gates were not run. Codify is unavailable (exit 127). No task statuses were changed."
 severity = "blocker"
 
-[observation.6.11.162]
+[observation.6.11.6541]
 task = "6.11"
 file = "interop/crates/layerx-ap2/tests/pinned_spec.rs interop/crates/layerx-interop-gateway/src/audit.rs interop/crates/layerx-interop-gateway/src/error.rs interop/crates/layerx-ucp/tests/pinned_spec.rs interop/crates/layerx-visa-tap/src/lib.rs interop/crates/layerx-visa-tap/tests/conformance.rs interop/crates/layerx-visa-tap/tests/pinned_spec.rs platform/tools/kvx/tests/parse.rs platform/tools/workspace-gate/src/main.rs"
 symbol = "workspace formatting"
@@ -10086,7 +10084,7 @@ observed = "cargo fmt --manifest-path programs/Cargo.toml --all --check exits 1 
 assumption = "Evidence: qual-logs/pay5/pay5e-qualified-fmt.log. These paths were not granted for edits. Preserve their semantics and resolve formatting in their owning scope."
 severity = "blocker"
 
-[observation.6.11.163]
+[observation.6.11.6542]
 task = "6.11"
 file = "platform/hosted/agent-boundary/tests/real_node.rs platform/hosted/agent-boundary/tests/real_node/custody.rs platform/hosted/agent-boundary/tests/real_node/lifecycle.rs platform/hosted/core/tests/boundary.rs platform/hosted/node/supervisor.sh"
 symbol = "platform-test platform-test-registry platform-test-core"
@@ -10094,7 +10092,7 @@ observed = "After native host binaries, bridge signing/credit helpers and the br
 assumption = "Evidence: qual-logs/pay5/pay5e-platform-complete.log. A local socat executable was extracted under qual-logs/pay5/socat, but core/tests/boundary.rs clears child environment and fixes PATH to /usr/bin:/bin. Native and Python prerequisite build/install logs are pay5e-native-host-build.log, pay5e-bridge-helpers.log, pay5e-python-dependencies.log and pay5e-socat.log. These boundary implementations and tests are outside the granted changes; no response assertion, identity binding or retry rule was relaxed. Temporary custody tests use chain 31337 and avoid port 18545."
 severity = "blocker"
 
-[observation.6.11.164]
+[observation.6.11.6543]
 task = "6.11"
 file = "agent/Cargo.lock agent/crates/layerx-agent-api interop/crates/layerx-ap2/tests/pinned_spec.rs interop/crates/layerx-interop-gateway/src/audit.rs interop/crates/layerx-interop-gateway/src/error.rs interop/crates/layerx-ucp/tests/pinned_spec.rs interop/crates/layerx-visa-tap/src/lib.rs interop/crates/layerx-visa-tap/tests/conformance.rs interop/crates/layerx-visa-tap/tests/pinned_spec.rs platform/tools/kvx/tests/parse.rs platform/tools/workspace-gate/src/main.rs"
 symbol = "agent_api_compat_gate workspace formatting"
@@ -10102,7 +10100,7 @@ observed = "The separate agent workspace lockfile is reconciled without package 
 assumption = "Evidence: qual-logs/pay5/pay5f-agent-sdk-generate.log, pay5f-agent-api-locked.log, pay5f-programs-fmt-check.log, pay5f-platform-fmt-check.log and pay5f-interop-fmt-check.log. This supersedes the lockfile and formatting blockers in observations 6.11.158 and 6.11.162."
 severity = "note"
 
-[observation.6.11.165]
+[observation.6.11.6544]
 task = "6.11"
 file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_lni.c include/layerx/programs.h src/modules/programs/accounts.c src/modules/programs/call.c src/modules/programs/deploy.c src/modules/programs/occupancy.c src/modules/programs/occupancy_evidence.c src/protocol/lxp_kernel.c platform/hosted/agent-boundary/tests/real_node.rs platform/hosted/core/tests/boundary.rs platform/emulator/core/emulator_core.c"
 symbol = "kernel_program_signer_binding lxp_kernel_program_payment_account layerx_programs_call_begin owner_authority"
@@ -10110,7 +10108,7 @@ observed = "Protocol-3 Programs execution preserves the signer DID as the author
 assumption = "Evidence: qual-logs/pay5/pay5f-programs-core-final-2.log, pay5f-core-boundary-final-3.log, pay5f-agent-real-node-final-2.log, pay5f-emulator-gateway.log and pay5f-emulator-programs-core.log. The full serial platform workspace rerun also passes these targets. This supersedes the boundary integration blocker in observation 6.11.163."
 severity = "note"
 
-[observation.6.11.166]
+[observation.6.11.6545]
 task = "6.11"
 file = "programs/Cargo.toml programs/vendor/wasmi-0.31.2 platform/Cargo.toml platform/cli/tests/common/credential_environment.rs platform/hosted/paxeer/tests/real_chain.py platform/sdk/swift platform/sdk/dotnet platform/sdk/jvm"
 symbol = "programs-test Instruction::Observe platform workspace SDK verifier qualification"
@@ -10118,7 +10116,7 @@ observed = "The final locked Programs workspace and make -k -j16 programs-test e
 assumption = "Evidence: qual-logs/pay5/pay5f-programs-workspace-final.log, pay5f-programs-aggregate.log, pay5f-native-roundtrip.log, pay5f-platform-workspace-qualified.log, pay5f-platform-cli.log, pay5f-swift-sdk.log, pay5f-dotnet-sdk.log and pay5f-jvm-sdk.log. make -C paxeer-network build exits 0, but the real-chain test is not rerun because its source submits eth_sendRawTransaction on chain 125, which is excluded from this qualification. Vendored wasmi sources remain unchanged because edits are forbidden and workspace feature configuration cannot repair the unconditional Observe representation without suppressing tests. Cluster and image gates are not run on this host. This is an unqualified aggregate checkpoint."
 severity = "blocker"
 
-[observation.6.11.167]
+[observation.6.11.6546]
 task = "6.11"
 file = "programs/Cargo.toml programs/Cargo.lock programs/README.md programs/vendor/parity-wasm programs/vendor/wasm-instrument programs/vendor/wasmi-0.31.2"
 symbol = "workspace members exclude programs-test programs-lint"
@@ -10126,7 +10124,7 @@ observed = "The Programs workspace explicitly excludes all three vendored path p
 assumption = "Evidence: qual-logs/pay5/pay5g-programs-membership-final.log, pay5g-programs-fmt.log, pay5g-programs-clippy-vendored-default.log, pay5g-programs-lint-final.log, pay5g-programs-workspace.log and pay5g-programs-aggregate-final.log with sibling exit files. The aggregate executes the native, Rust, C, AssemblyScript, interpreter, fuzz, differential and porting gates without a vendor test executable. The earlier failed aggregate remains in pay5g-programs-aggregate.log and records the missing wasm-ld-18 host prerequisite before lld-18 was installed. No vendored source was edited. This supersedes the wasmi workspace blockers in observations 6.11.147, 6.11.155, 6.11.161 and 6.11.166."
 severity = "note"
 
-[observation.6.11.168]
+[observation.6.11.6547]
 task = "6.11"
 file = "platform/sdk/swift platform/sdk/dotnet platform/sdk/jvm tests/bridge/requirements.txt"
 symbol = "verifyAuthorizationRoot VerifyTerminalAttachments DecodeAuthorizationRoot"
@@ -10134,7 +10132,7 @@ observed = "Swift 6.3.3, .NET SDK 8.0.130, OpenJDK 21.0.12 and Maven 3.8.7 are i
 assumption = "Exact installation commands and results are retained in qual-logs/pay5/pay5g-toolchain-apt.log, pay5g-swiftly-download.log, pay5g-swiftly-install.log, pay5g-toolchain-versions.log and pay5g-platform-python-deps.log. Suite evidence is pay5g-swift-sdk.log, pay5g-dotnet-sdk.log and pay5g-jvm-sdk.log with sibling exit files. This supersedes the missing-toolchain blockers in observations 6.11.157 and 6.11.166."
 severity = "note"
 
-[observation.6.11.169]
+[observation.6.11.6548]
 task = "6.11"
 file = "platform/hosted/paxeer/tests/real_chain.py platform/hosted/paxeer/init-chain.sh paxeer-network/build/paxd"
 symbol = "real_paxd_boundary settlement_domains"
@@ -10142,7 +10140,7 @@ observed = "The Paxeer real-chain test starts its own disposable paxd on random 
 assumption = "Evidence: qual-logs/pay5/pay5g-paxeer-real-chain.log, pay5g-paxeer-genesis-diagnostic.log, pay5g-paxeer-real-chain-rerun.log and pay5g-platform-test-serial.log with sibling exit files. The first focused attempt observed a transient missing JSON-RPC result during initial contract probing; a separate disposable-chain probe verified deployed code, owner storage and contract calls, and the unchanged focused rerun passed. This supersedes the unqualified-chain blocker in observation 6.11.166."
 severity = "note"
 
-[observation.6.11.170]
+[observation.6.11.6549]
 task = "6.11"
 file = "agent platform programs/fixtures/pay5 platform/cli/tests/common/credential_environment.rs platform/hosted/core/tests/boundary.rs platform/hosted/agent-boundary/tests/real_node.rs"
 symbol = "agent-test platform-test pay5_token_roundtrip pay5_merchant_roundtrip"
@@ -10150,7 +10148,7 @@ observed = "The complete locked agent workspace test suite and agent strict work
 assumption = "Evidence: qual-logs/pay5/pay5g-agent-native-prereqs.log, pay5g-agent-test-final.log, pay5g-agent-lint.log, pay5g-agent-sdk-generate.log, pay5g-platform-test-serial.log, pay5g-native-roundtrip.log, pay5g-agent-fmt.log and pay5g-platform-fmt.log with sibling exit files. Earlier full-workspace attempts remain in pay5g-agent-test.log, pay5g-platform-test.log and pay5g-platform-test-final.log: they record missing native or Python prerequisites and a concurrent real-process receipt poll that returned 202 before the terminal result. No assertion or test was changed. Cluster and image gates are unavailable on this host and were not run."
 severity = "note"
 
-[observation.6.11.171]
+[observation.6.11.6550]
 task = "6.11"
 file = "platform/hosted/core/tests/boundary.rs platform/Makefile.inc"
 symbol = "supervisor_arguments platform-lint"
@@ -10158,7 +10156,7 @@ observed = "make -j16 platform-lint exits 2 during strict workspace Clippy. The 
 assumption = "Evidence: qual-logs/pay5/pay5g-platform-lint.log and pay5g-platform-lint.exit. The core boundary file is outside the permitted Programs paths, so the expression and the pedantic assertion remain unchanged. The later workspace-gate, marketplace, dependency-policy and cargo-deny steps in platform-lint do not execute after this Clippy failure."
 severity = "blocker"
 
-[observation.6.11.172]
+[observation.6.11.6551]
 task = "6.11"
 file = "tests/modules/test_escrow_open.c src/modules/escrow/lx_escrow_timeout.c src/protocol/lxp_kernel.c"
 symbol = "lx_escrow_open_execute lx_escrow_epoch_begin lxp_kernel_apply_transfer_set"

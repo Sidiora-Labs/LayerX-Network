@@ -384,6 +384,7 @@ Programs envelopes identify the signer DID and consume its identity sequence.
 Funding resolves the signer's canonical backing-asset account and consumes that
 account's separate payment sequence; fees may use a separate native account.
 Account-bound settlement evidence retains the signer authorization and commits
-the actual account endpoints. Go, Swift, .NET and JVM terminal verifiers still
-need support for this evidence encoding; their integration is not qualified.
+the actual account endpoints. The Go, Swift, .NET and JVM terminal verifiers
+decode and bind the `LayerX/programs/402LXP/account-bound-set/v1` evidence; the
+native PAY5 fixture exercises the same encoding end to end.
 Never sign an envelope as an account ID.

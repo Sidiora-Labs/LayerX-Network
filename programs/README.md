@@ -47,19 +47,17 @@ arithmetic are denied across the tree.
 | `crates/layerx-programs-runtime` | Deterministic WASM runtime: validation, metering, the ABI/capability boundary, cross-program calls, transfers, occupancy accounting, and the FFI bridge into the C kernel |
 | `crates/layerx-programs-registry` | Receipt-bound registry: deployment journal, program value-account bindings, real-balance proofs, and wind-down/deprecation |
 | `crates/layerx-programs-protocol-adapter` | Thin C↔Rust adapter exposing receipt-verified program state reads to the rest of the protocol |
-| `sdk/rust`, `sdk/c`, `sdk/assemblyscript` | Guest program SDKs; Rust ships `escrow` and `vault`, while C and AssemblyScript ship `paid-counter` |
+| `sdk/rust`, `sdk/c`, `sdk/assemblyscript` | Guest program SDKs; Rust ships `escrow`, `vault`, `token-lxt20`, and `payments-merchant`, while C and AssemblyScript ship `paid-counter` |
 | `porting/evm`, `porting/solana`, `porting/cosmwasm` | Migration crates and `MIGRATION.md` guides mapping Solidity / Anchor / CosmWasm vocabulary onto the programs ABI |
 | `fuzz` | Structure-aware fuzz target and corpus for the runtime |
 | `tools` | Boundary scripts: `dependency-policy.sh`, `runtime-module-boundaries.sh` |
 | `tests` | Cross-implementation vectors, the hostile-program `gauntlet`, and calldata fixtures |
 | `vendor` | Vendored, pinned dependencies for a hermetic build |
 
-Cargo otherwise promotes path dependencies below the workspace root into workspace
-members. The workspace explicitly excludes the vendored `parity-wasm`,
-`wasm-instrument`, and `wasmi` packages so `--workspace` gates exercise every LayerX
-member without treating third-party unit and documentation tests as LayerX
-qualification. Vendored crates are still compiled through the real LayerX dependency
-graph and remain subject to `tools/dependency-policy.sh`.
+Cargo promotes path dependencies below the workspace root into workspace members.
+Consequently `--workspace` gates exercise the vendored `parity-wasm`, `wasm-instrument`,
+and `wasmi` unit and documentation tests as well as every LayerX package. The vendored
+crates also remain subject to `tools/dependency-policy.sh`.
 
 ### The three crates
 
@@ -207,10 +205,11 @@ Guest program SDKs include:
 - **`sdk/assemblyscript`** - an AssemblyScript SDK (`abi`, `capability`, `transfer`,
   `storage`, `event`, `call`, `receipt` bindings) with a determinism lint.
 
-The Rust SDK ships `escrow` and `vault` examples; the C and AssemblyScript SDKs
-ship `paid-counter` examples. ProgramSpend (tag 9) and BalanceView (tag 10) are
-part of frozen ABI 2; the runtime crate defines their canonical encoding and
-amount-monotone narrowing rules. ABI 1 does not admit these grants.
+The Rust SDK ships `escrow`, `vault`, `token-lxt20`, and `payments-merchant`
+examples; the C and AssemblyScript SDKs ship `paid-counter` examples.
+ProgramSpend (tag 9) and BalanceView (tag 10) are part of frozen ABI 2; the
+runtime crate defines their canonical encoding and amount-monotone narrowing
+rules. ABI 1 does not admit these grants.
 
 `sdk/rust` is documented as also shipping `lxt20` request codecs, `payments`
 program-account preparation, and `examples/payments-merchant`. None of those

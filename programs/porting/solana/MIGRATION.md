@@ -412,9 +412,10 @@ program accounts use the program-account domain with a u32 big-endian seed lengt
 Programs envelopes bind the signer DID and identity sequence separately from
 the canonical payment account and its sequence. Native fees can use a different
 account from token funding. Account-bound terminal evidence commits actual
-account endpoints while retaining signer authorization. Go, Swift, .NET and JVM
-terminal verifiers still need support for that encoding; their integration is
-not qualified.
+account endpoints while retaining signer authorization. The Go, Swift, .NET and
+JVM terminal verifiers decode and bind the
+`LayerX/programs/402LXP/account-bound-set/v1` encoding, and the native PAY5
+fixture exercises it end to end.
 
 SPL account closing/rent recovery, Token-2022 extensions, mint/freeze authority
 migration, multisig signer lists and an enumerable Anchor account context are not
