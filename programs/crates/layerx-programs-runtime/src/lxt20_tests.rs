@@ -9,7 +9,7 @@ use layerx_programs_runtime::{
     CompositionContext, Executor, PrincipalId, ProgramId, Storage, TransferSource, WasmEngine,
 };
 
-fn program() -> ProgramId {
+pub(super) fn program() -> ProgramId {
     ProgramId::new([0x55; 32]).unwrap_or_else(|e| panic!("{e}"))
 }
 fn principal(bytes: [u8; 32]) -> Principal {
@@ -51,9 +51,20 @@ fn invoke(
         "/../../fixtures/pay5/token-lxt20.wasm"
     ))
     .unwrap_or_else(|e| panic!("built reference fixture: {e}"));
+    invoke_guest(&wasm, storage, caller, name, input, grants)
+}
+
+pub(super) fn invoke_guest(
+    wasm: &[u8],
+    storage: &mut Storage,
+    caller: Principal,
+    name: &str,
+    input: &[u8],
+    grants: Vec<Capability>,
+) -> CandidateAuthorizedExecutionRecord {
     let module = WasmEngine::declared()
         .unwrap_or_else(|e| panic!("{e}"))
-        .validate_v2(&wasm)
+        .validate_v2(wasm)
         .unwrap_or_else(|e| panic!("{e}"));
     Executor::declared()
         .for_abi(2)
