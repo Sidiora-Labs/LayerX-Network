@@ -102,3 +102,29 @@ fn full_requires_journal_and_probe_even_when_transport_inputs_are_present(
     std::fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn human_owner_refuses_ambiguous_peer_configuration_before_connecting() -> Result<(), Box<dyn Error>>
+{
+    for peers in [
+        "4020:did:layerx:beta:alice:beta",
+        "uid=4020;tenant=beta;principal=did:layerx:beta:alice;extra=value",
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_layerx-agentd"))
+            .env_clear()
+            .env("LAYERX_AGENT_MODE", "human-owner")
+            .env("LAYERX_AGENT_PROGRAM_LISTEN", "127.0.0.1:0")
+            .env("LAYERX_AGENT_PROGRAM_BEARER_TOKEN", "h".repeat(32))
+            .env("LAYERX_AGENT_HUMAN_AUTHORITY_BEARER", "a".repeat(32))
+            .env("LAYERX_AGENT_HUMAN_PEERS", peers)
+            .output()?;
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains("LAYERX_AGENT_HUMAN_PEERS entry 0: Fields"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains(peers));
+    }
+    Ok(())
+}
