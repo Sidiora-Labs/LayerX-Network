@@ -868,6 +868,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sdk_remote_error_retains_every_field() -> Result<(), String> {
+        let message = "DID enumeration unavailable: account index not ready";
+        let error = rpc_error(layerx_sdk::rpc::RpcError::Remote {
+            code: -32005,
+            message: message.into(),
+            data: Some(json!({"did":"did:layerx:alice","retry":false})),
+        });
+        let decoded: Value = serde_json::from_str(&error).map_err(|e| e.to_string())?;
+        assert_eq!(
+            decoded,
+            json!({"code":-32005,"message":message,"data":{"did":"did:layerx:alice","retry":false}})
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn policy_scope_and_sdk_wait_fail_closed() -> Result<(), String> {
+        let config = Configuration::default();
+        let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let path = directory.path().join("policy.json");
+        let key = ed25519_dalek::SigningKey::from_bytes(&[19; 32])
+            .verifying_key()
+            .to_bytes();
+        let good = json!({"protocol_version":3,"network_id":402,"sequencer_id":"11".repeat(32),"sequencer_key":hex_encode(&key),"first_batch":1,"last_batch":100,"checkpoint_context_digest":null});
+        std::fs::write(&path, good.to_string()).map_err(|e| e.to_string())?;
+        let policy = read_policy(Some(&path), &config)?;
+        let client = layerx_sdk::rpc::RpcClient::connect("http://127.0.0.1:1/rpc", None)
+            .map_err(rpc_error)?;
+        let id = [7; 32];
+        assert!(
+            matches!(client.wait_for(id, layerx_sdk::rpc::Commitment::Executed, &policy, std::time::Duration::ZERO), Err(layerx_sdk::rpc::RpcError::Pending { activity_id }) if activity_id == id)
+        );
+        assert!(matches!(
+            client.wait_for(
+                id,
+                layerx_sdk::rpc::Commitment::Finalised,
+                &policy,
+                std::time::Duration::ZERO
+            ),
+            Err(layerx_sdk::rpc::RpcError::MissingFinalityTrust)
+        ));
+        assert!(read_policy(None, &config).is_err());
+        for (field, value) in [
+            ("protocol_version", json!(2)),
+            ("network_id", json!(401)),
+            ("first_batch", json!(0)),
+            ("last_batch", json!(0)),
+            ("sequencer_key", json!("broken")),
+            ("checkpoint_context_digest", json!("broken")),
+        ] {
+            let mut bad = good.clone();
+            bad[field] = value;
+            std::fs::write(&path, bad.to_string()).map_err(|e| e.to_string())?;
+            assert!(read_policy(Some(&path), &config).is_err(), "{field}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn namespaces_and_sequence_bounds() -> Result<(), String> {
         let did = "did:layerx:alice";
         assert_ne!(account(did, &native_asset())?, account(did, &[1; 32])?);

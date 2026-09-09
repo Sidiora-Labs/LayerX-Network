@@ -186,6 +186,20 @@ mod tests {
     }
 
     #[test]
+    fn remote_enumeration_error_is_preserved() -> Result<(), String> {
+        let fields = json!({"code":-32005,"message":"DID enumeration unavailable","data":{"reason":"native_index_unavailable"}});
+        let response = json!({"jsonrpc":"2.0","id":1,"error":fields});
+        let error = decode_response("lx_getBalances", &response)
+            .err()
+            .ok_or("RPC error was hidden")?;
+        assert_eq!(
+            serde_json::from_str::<Value>(&error).map_err(|e| e.to_string())?,
+            fields
+        );
+        Ok(())
+    }
+
+    #[test]
     fn response_validation_refuses_errors_and_unbound_results() -> Result<(), String> {
         let good = json!({"jsonrpc":"2.0","id":1,"result":{"state":"pending"}});
         assert_eq!(
