@@ -19,18 +19,6 @@ typedef struct programs_fee_token {
     bool treasury_has_asset;
 } programs_fee_token;
 
-static lx_account *principal_account(lx_account_registry *registry,
-                                     const uint8_t principal[32])
-{
-    size_t index;
-    if (registry == NULL || principal == NULL) return NULL;
-    for (index = 0U; index < registry->count; ++index)
-        if (registry->accounts[index].kind == LX_ACCOUNT_AGENT_MAIN &&
-            memcmp(registry->accounts[index].id, principal, 32U) == 0)
-            return &registry->accounts[index];
-    return NULL;
-}
-
 static lxp_result prepare_fee(lxp_kernel *kernel, const lxp_activity *activity,
                               const lxp_authority_resolved *authority,
                               lxp_u128 fee, void **transaction)
@@ -52,8 +40,10 @@ static lxp_result prepare_fee(lxp_kernel *kernel, const lxp_activity *activity,
     if (runtime == NULL || runtime->accounts == NULL ||
         runtime->assets == NULL || runtime->asset_count == 0U)
         return LXP_FATAL_INVARIANT;
-    actor = principal_account(runtime->accounts, authority->principal);
-    if (actor == NULL) return LXP_ERR_AUTH_SCOPE;
+    status = lxp_kernel_program_payment_account(runtime->accounts,
+        authority->principal, runtime->occupancy_asset_id,
+        activity->protocol_version, &actor);
+    if (status != LXP_OK) return status;
     if (!actor->has_asset) return LXP_ERR_ASSET_MISMATCH;
     status = lxp_fee_treasury_account(runtime->accounts, &treasury);
     if (status != LXP_OK) return status;
@@ -72,7 +62,7 @@ static lxp_result prepare_fee(lxp_kernel *kernel, const lxp_activity *activity,
     (void)memset(&context, 0, sizeof(context));
     context.assets = runtime->assets;
     context.asset_count = runtime->asset_count;
-    (void)memcpy(context.authorized_from, authority->principal, 32U);
+    (void)memcpy(context.authorized_from, actor->id, 32U);
     context.actor_sequence = actor->next_sequence;
     context.protocol_system_capability = true;
     context.sequence_account = treasury;

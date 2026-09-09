@@ -63,6 +63,67 @@ struct lxp_kernel_prepared_batch {
     bool committed;
 };
 
+static lxp_result kernel_program_signer_binding(
+    const lxp_activity *activity, const lxp_kernel_execution *execution,
+    const lxp_identity *identity)
+{
+    const lxp_authority_resolved *authority = execution->authority;
+    if (activity->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS)
+        return LXP_OK;
+    if (authority == NULL || identity == NULL || activity->authority.length != 32U ||
+        memcmp(authority->actor, identity->did_id, 32U) != 0 ||
+        memcmp(authority->principal, identity->did_id, 32U) != 0 ||
+        memcmp(authority->verified_key, activity->authority.bytes, 32U) != 0)
+        return LXP_ERR_AUTH_SCOPE;
+    if (authority->kind == LXP_AUTHORITY_OWNER &&
+        !lxp_identity_key_valid(identity, authority->verified_key,
+            execution->batch_timestamp_ms, execution->global_sequence))
+        return LXP_ERR_AUTH_SCOPE;
+    return lxp_activity_verify_signature(activity);
+}
+
+lxp_result lxp_kernel_program_payment_account(
+    lx_account_registry *accounts, const uint8_t principal[32],
+    const uint8_t asset[32], uint16_t protocol_version, lx_account **account)
+{
+    uint8_t (*ids)[32];
+    size_t count = 0U;
+    lxp_result status;
+    if (accounts == NULL || principal == NULL || asset == NULL || account == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *account = NULL;
+    if (protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        for (size_t i = 0U; i < accounts->count; ++i)
+            if (accounts->accounts[i].kind == LX_ACCOUNT_AGENT_MAIN &&
+                memcmp(accounts->accounts[i].id, principal, 32U) == 0) {
+                *account = &accounts->accounts[i];
+                return LXP_OK;
+            }
+        return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    }
+    ids = calloc(LX_ACCOUNT_REGISTRY_CAPACITY, sizeof(*ids));
+    if (ids == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    status = lx_account_list_did(accounts, principal, ids,
+                                 LX_ACCOUNT_REGISTRY_CAPACITY, &count);
+    for (size_t i = 0U; status == LXP_OK && i < count; ++i)
+        for (size_t j = 0U; j < accounts->count; ++j) {
+            lx_account *candidate = &accounts->accounts[j];
+            if (memcmp(candidate->id, ids[i], 32U) != 0 ||
+                candidate->kind != LX_ACCOUNT_AGENT_MAIN ||
+                !candidate->has_asset || memcmp(candidate->asset_id, asset, 32U) != 0)
+                continue;
+            if (*account != NULL) {
+                status = LXP_ERR_CONTEXT_MISMATCH;
+                break;
+            }
+            *account = candidate;
+        }
+    free(ids);
+    if (status != LXP_OK) return status;
+    return *account == NULL ? LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE : LXP_OK;
+}
+
 lxp_result lxp_kernel_bind_ledger_admission(
     lxp_module_ctx *ctx, const lxp_authority_resolved *authority,
     uint32_t activity_type)
@@ -91,11 +152,17 @@ lxp_result lxp_kernel_bind_ledger_admission(
     ctx->ledger_admission.activity_type = activity_type;
     if (activity_type != LX_PROGRAMS_CALL && activity_type != LX_PROGRAMS_WIND_DOWN)
         return LXP_OK;
-    status = lxp_ctx_account_find(ctx, authority->principal, &account);
-    if (status != LXP_OK && status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE)
-        return status;
+    {
+        const lx_programs_transfer_runtime *runtime =
+            lxp_ctx_module_runtime(ctx);
+        if (runtime == NULL) return LXP_ERR_MODULE_DISABLED;
+        status = lxp_kernel_program_payment_account(runtime->accounts,
+            authority->principal, runtime->occupancy_asset_id,
+            ctx->protocol_version, &account);
+    }
+    if (status != LXP_OK) return status;
     (void)memcpy(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U);
-    (void)memcpy(ctx->ledger_admission.account_id, authority->principal, 32U);
+    (void)memcpy(ctx->ledger_admission.account_id, account->id, 32U);
     ctx->ledger_admission.account_present = account != NULL;
     ctx->ledger_admission.next_sequence = account == NULL ? 0U :
                                                         account->next_sequence;
@@ -139,7 +206,14 @@ static lxp_result snapshot_bind_call_admission(
         snapshot->fee_schedule.occupancy_byte_batch;
     ctx->call_admission.parameter_version = execution->parameter_version;
     ctx->call_admission.present = true;
-    return lxp_kernel_bind_ledger_admission(ctx, execution->authority, activity_type);
+    {
+        lxp_result status = lxp_kernel_bind_ledger_admission(
+            ctx, execution->authority, activity_type);
+        if (status == LXP_OK && ctx->ledger_admission.bound)
+            (void)memcpy(ctx->call_admission.payer,
+                         ctx->ledger_admission.account_id, 32U);
+        return status;
+    }
 }
 
 static lxp_result snapshot_metering_schedule(
@@ -732,20 +806,16 @@ static lxp_result kernel_snapshot_payer_balance(
     const lxp_kernel_batch_snapshot *snapshot,
     const lxp_authority_resolved *authority, lxp_u128 *balance)
 {
-    const lx_account_registry *accounts;
-    size_t index;
+    lx_account *account;
+    lxp_result status;
     if (snapshot == NULL || authority == NULL || balance == NULL)
         return LXP_ERR_NON_CANONICAL;
-    accounts = lxp_state_snapshot_accounts(snapshot->state);
-    if (accounts == NULL) return LXP_FATAL_INVARIANT;
-    for (index = 0U; index < accounts->count; ++index)
-        if (accounts->accounts[index].kind == LX_ACCOUNT_AGENT_MAIN &&
-            lxp_ct_memcmp(accounts->accounts[index].id,
-                          authority->principal, 32U) == 0) {
-            *balance = accounts->accounts[index].balance;
-            return LXP_OK;
-        }
-    return LXP_ERR_AUTH_SCOPE;
+    status = lxp_kernel_program_payment_account(
+        snapshot->programs_runtime.accounts, authority->principal,
+        snapshot->occupancy_asset_id, LXP_PROTOCOL_VERSION_STATE_COMMITMENT,
+        &account);
+    if (status == LXP_OK) *balance = account->balance;
+    return status;
 }
 
 static const char *const module_names[LXP_MODULE_RESERVED_COUNT] = {
@@ -2352,6 +2422,8 @@ lxp_result lxp_kernel_prepare_activity(
         status = lxp_identity_resolve(&work->identities,
                                       activity->actor_did.bytes,
                                       activity->actor_did.length, &identity);
+    if (status == LXP_OK)
+        status = kernel_program_signer_binding(activity, execution, identity);
     if (status == LXP_OK)
         status = lxp_idempotency_lookup(
             work->kernel.state, activity->actor_did.bytes,
@@ -4285,6 +4357,8 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     status = lxp_identity_resolve(execution->identities,
                                   activity->actor_did.bytes,
                                   activity->actor_did.length, &identity);
+    if (status == LXP_OK)
+        status = kernel_program_signer_binding(activity, execution, identity);
     if (status != LXP_OK) return status;
     status = lxp_idempotency_lookup(kernel->state,
                                     activity->actor_did.bytes,
@@ -4374,7 +4448,9 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
             (void)memcpy(module_ctx.call_admission.activity_binding,
                          canonical_activity_id, 32U);
             (void)memcpy(module_ctx.call_admission.payer,
-                         execution->authority->principal, 32U);
+                         module_ctx.ledger_admission.bound ?
+                             module_ctx.ledger_admission.account_id :
+                             execution->authority->principal, 32U);
             module_ctx.call_admission.available_fee_units =
                 execution->fee_balance;
             module_ctx.call_admission.signed_fee_limit = activity->fee_limit;

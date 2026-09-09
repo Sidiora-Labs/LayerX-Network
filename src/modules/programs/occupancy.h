@@ -77,7 +77,7 @@ lxp_result lxp_programs_occupancy_bridge_init(
     lxp_programs_occupancy_bridge *bridge, lxp_module_ctx *ctx);
 lxp_result lxp_programs_occupancy_bind_call(
     lxp_programs_occupancy_bridge *bridge, const uint8_t root_program[32],
-    const uint64_t budget[LX_PROGRAMS_CALL_BUDGET_FIELDS]);
+    const uint8_t principal[32], const uint64_t budget[LX_PROGRAMS_CALL_BUDGET_FIELDS]);
 lxp_result lxp_ctx_emit_programs_maintenance_transfer_set(
     lxp_module_ctx *ctx, const lxp_transfer_set *set, lxp_receipt *receipt);
 lxp_result layerx_programs_occupancy_ledger_length(uint64_t token);
