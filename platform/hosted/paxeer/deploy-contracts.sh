@@ -488,7 +488,9 @@ phase_finalize() {
         [ "$(call "$(jq -r ".addresses.$component" "$RECORD")" 'EVIDENCE_VERSION()(uint16)')" = 2 ] \
             || fail "$component evidence publication version mismatch"
     done
-    jq '.phases += ["finalize"]' "$RECORD" > "$WORK/record.json" && mv "$WORK/record.json" "$RECORD"
+    [ "$(call "$(jq -r '.addresses.checkpoint_registry' "$RECORD")" 'CHECKPOINT_ORDER_VERSION()(uint16)')" = 2 ] \
+        || fail "checkpoint ordering contract version mismatch"
+    jq '.checkpoint_order_version = 2 | .phases += ["finalize"]'  "$RECORD" > "$WORK/record.json" && mv "$WORK/record.json" "$RECORD"
     echo "deploy-contracts: deployment finalized and sealed" >&2
 }
 
