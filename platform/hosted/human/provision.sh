@@ -113,6 +113,51 @@ PYJOURNAL
         --work-dir "$WORK_DIR" --journal "$stage/journal"
 )
 
+human_journal_deploy() (
+    set -euo pipefail
+    umask 077
+    local request="$WORK_DIR/human-evidence-input/program-deployment.lxa"
+    local response="$WORK_DIR/registry-deployment-result.json" status
+    local provision="$REPO_ROOT/platform/hosted/human/provision.py"
+    python3 - "$provision" "$request" "$response" <<'PYDEPLOY'
+import importlib.util
+from pathlib import Path
+import sys
+spec = importlib.util.spec_from_file_location('provision', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.protected_bytes(Path(sys.argv[2]))
+module.require(not Path(sys.argv[3]).exists() and not Path(sys.argv[3]).is_symlink(),
+               sys.argv[3], 'existing deployment result requires reconciliation')
+PYDEPLOY
+    port_forward registry "$TESTNET_NAMESPACE" layerx-program-registry 19455 9420
+    status=$(curl --silent --show-error --max-time 120 --max-filesize 1048576 --noproxy '*' \
+        --cacert "$CA_DIR/ca.crt" --cert "$CA_DIR/gateway-client/cert.pem" --key "$CA_DIR/gateway-client/key.pem" \
+        --connect-to 'layerx-program-registry:9420:127.0.0.1:19455' \
+        --header "Authorization: Bearer $(cat "$SECRETS_DIR/registry-request.token")" \
+        --header 'Content-Type: application/octet-stream' --data-binary "@$request" \
+        --output "$response" --write-out '%{http_code}' \
+        'https://layerx-program-registry:9420/__registry/deployments')
+    [ "$status" = 200 ] || fail "registry ingress refused deployment with status $status; evidence not published"
+    human_journal_materialize
+    python3 - "$provision" "$response" "$WORK_DIR/registry-journal" <<'PYPAIR'
+import importlib.util
+from pathlib import Path
+import sys
+spec = importlib.util.spec_from_file_location('provision', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+response = module.protected_json(Path(sys.argv[2]))
+module.fields(response, 'activity_id receipt_digest state', sys.argv[2], 'deployment response')
+module.require(response['state'] == 'deployed', sys.argv[2], 'deployed state')
+for key in ('activity_id', 'receipt_digest'):
+    module.h32(response[key], sys.argv[2], key)
+records = module.journal_records(Path(sys.argv[3]))
+for suffix in ('.admission', '.deployment'):
+    module.require(response['receipt_digest'] + suffix in records, sys.argv[3], 'ingress journal pair')
+PYPAIR
+)
+
 human_evidence_provision() (
     set -euo pipefail
     umask 077
@@ -121,7 +166,6 @@ human_evidence_provision() (
     [ -d "$input" ] && [ ! -L "$input" ] || fail "$input: owner registration producer inputs required"
     python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
     python3 "$provision" --validate-job-input --work-dir "$WORK_DIR"
-    human_journal_materialize
     python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
         --registry "$SECRETS_DIR/module-registry.json" --journal "$WORK_DIR/registry-journal"
     kube -n "$TESTNET_NAMESPACE" get secret layerx-guarantor-checkpoint-authority \
