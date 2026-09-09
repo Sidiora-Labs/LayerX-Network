@@ -610,6 +610,13 @@ lxp_result lxp_kernel_batch_snapshot_begin_level(
     if (status == LXP_OK)
         status = level_token_mix(schedule_root, scalar, sizeof(scalar));
     SCHEDULE_U64(snapshot->fee_parameters.multiplier_basis_points);
+    if (snapshot->fee_parameters.version == 2U) {
+        SCHEDULE_U64(snapshot->fee_parameters.asset_price_count);
+        for (index = 0U; status == LXP_OK && index < LXP_ASSET_FEE_PRICE_COUNT; ++index) {
+            lxp_u128_to_be(snapshot->fee_parameters.asset_prices[index], scalar);
+            status = level_token_mix(schedule_root, scalar, sizeof(scalar));
+        }
+    }
     if (status == LXP_OK)
         status = level_token_mix(schedule_root,
                                  snapshot->occupancy_asset_id, 32U);

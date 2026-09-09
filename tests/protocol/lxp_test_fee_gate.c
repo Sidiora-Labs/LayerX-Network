@@ -11,7 +11,7 @@ int main(void)
         { 0U, 2U },
         { 0U, 3U },
         { 0U, 4U },
-        10001U
+        10001U, 0U, {{0U, 0U}}
     };
     lxp_fee_meter meter = {
         .canonical_encoded_bytes = 5U,

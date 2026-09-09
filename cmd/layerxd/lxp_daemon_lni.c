@@ -2338,11 +2338,7 @@ static lxp_result simulation_schedule(const lxp_kernel *kernel,
     if (version == 0U || version > UINT16_MAX)
         return LXP_ERR_VERSION_UNSUPPORTED;
     *parameter_version = version;
-    *fees = (lxp_fee_params){
-        (uint16_t)version, {0U, 0U}, {0U, 0U}, {0U, 0U},
-        {0U, 0U}, {0U, 0U}, 10000U
-    };
-    return LXP_OK;
+    return lxp_fee_committed_schedule(kernel, version, fees);
 }
 
 static lxp_result simulation_batch_number(

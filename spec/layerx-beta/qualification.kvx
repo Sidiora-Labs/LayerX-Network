@@ -5428,3 +5428,11 @@ symbol = "lx_asset_issuance_name"
 observed = "New issuance staging, lookup, commit validation, supply summation and reconstruction share module:asset:value:<hex64 account_id>. The account id retains the prior LX:ACCOUNT:v1 seed derivation; the former asset:<hex>:issuance name is no longer accepted by the general account parser. Account-name roots change even though account ids remain stable."
 assumption = "Existing snapshots with the retired account name require an explicit operator migration and a newly authorized root; rewriting a name in an already signed snapshot is invalid."
 severity = "note"
+
+[observation.3.7.52]
+task = "3.7"
+file = "include/layerx/lxp_fee.h src/protocol/lxp_fee.c src/modules/governance/lxp_fee_params.c"
+symbol = "lxp_fee_schedule lxp_fee_compute lxp_fee_params_decode"
+observed = "Fee parameter encoding 2 carries exactly eight named Asset prices ordered register, account_open, send, receive, grant_issue, grant_revoke, mint, burn. Governance fee.encoding selects this encoding; every named price must resolve at the same parameter version. Encoding 1 retains its historical calculation. Encoding 2 uses the named Asset price, never the complete activity-type multiplier; reserved ordinal 9 is refused. Exact price, missing-price, truncated, trailing-byte and legacy round-trip checks pass in test-fees."
+assumption = "Committed fee.schedule records carry the canonical encoding. An absent committed schedule is accepted only for the existing parameter-version-1 zero-fee replay representation. New bootstrap inputs provide the explicit encoding-2 schedule."
+severity = "note"
