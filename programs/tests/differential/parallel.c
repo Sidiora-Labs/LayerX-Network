@@ -1209,8 +1209,47 @@ static int qualify_planning_refusal(void)
            differential_fixture_destroy(&parallel_fixture) == LXP_OK ? 0 : 1;
 }
 
+static int qualify_payment_account_balance(void)
+{
+    static lx_account_registry accounts;
+    static const uint8_t name[] = "agent:did:lxp:payer:main";
+    static const uint8_t did[] = "did:lxp:payer";
+    const uint8_t asset[32] = {9U};
+    const uint8_t wrong_asset[32] = {10U};
+    uint8_t principal[32], id[32];
+    lx_account *account = NULL, *resolved = NULL;
+    if (lx_account_registry_init(&accounts) != LXP_OK ||
+        lxp_did_id_derive(did, sizeof(did) - 1U, principal) != LXP_OK ||
+        lx_account_id_from_string(name, sizeof(name) - 1U, id) != LXP_OK ||
+        lx_account_open(&accounts, name, sizeof(name) - 1U, id, 1U,
+                        LX_ACCOUNT_OPEN_GENESIS, NULL, &account) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(account, asset,
+                                     (lxp_u128){0U, 12345U}, 1U) != LXP_OK ||
+        lxp_kernel_program_payment_account(&accounts, principal, asset,
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, &resolved) != LXP_OK ||
+        resolved != account || resolved->balance.hi != 0U ||
+        resolved->balance.lo != 12345U)
+        return 1;
+    account->balance = (lxp_u128){0U, 0U};
+    if (lxp_kernel_program_payment_account(&accounts, principal, asset,
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, &resolved) != LXP_OK ||
+        resolved != account || resolved->balance.hi != 0U ||
+        resolved->balance.lo != 0U ||
+        lxp_kernel_program_payment_account(&accounts, principal, wrong_asset,
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, &resolved) !=
+            LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE || resolved != NULL ||
+        lxp_kernel_program_payment_account(&accounts, id, asset,
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, &resolved) !=
+            LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE || resolved != NULL ||
+        lxp_kernel_program_payment_account(&accounts, id, asset,
+            LXP_PROTOCOL_VERSION, &resolved) != LXP_OK || resolved != account)
+        return 1;
+    return 0;
+}
+
 int main(void)
 {
+    if (qualify_payment_account_balance() != 0) return 1;
     if (qualify_workload(DIFFERENTIAL_LOW_CONFLICT) != 0) {
         (void)fputs("low-conflict differential failed\n", stderr);
         return 1;
