@@ -458,7 +458,7 @@ encode_trust_history() {
     python3 - "$1" "$2" "$3" "$NODE_NETWORK_ID" <<'PY'
 import struct, sys
 out, sequencer_id, public_key = sys.argv[1], bytes.fromhex(sys.argv[2]), bytes.fromhex(sys.argv[3])
-entry = struct.pack(">HIQ", 2, int(sys.argv[4]), 1) + sequencer_id + public_key + struct.pack(">QQBQ", 1, 1 << 40, 0, 0)
+entry = struct.pack(">HIQ", 3, int(sys.argv[4]), 1) + sequencer_id + public_key + struct.pack(">QQBQ", 1, 1 << 40, 0, 0)
 assert len(entry) == 103
 payload = b"LayerX/sequencer-trust-history/v1\0" + struct.pack(">HH", 1, 0) + entry
 with open(out, "wb") as handle:
