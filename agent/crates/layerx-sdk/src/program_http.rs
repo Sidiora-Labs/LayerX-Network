@@ -61,7 +61,7 @@ impl LayerXKeyCredential {
         Ok(Self { key_id, secret })
     }
 
-    fn authorization(&self) -> Result<Zeroizing<String>, ProgramOperationError> {
+    pub(crate) fn authorization(&self) -> Result<Zeroizing<String>, ProgramOperationError> {
         self.secret.expose_to(|bytes| {
             let secret =
                 std::str::from_utf8(bytes).map_err(|_| ProgramOperationError::Authentication)?;
@@ -536,7 +536,7 @@ struct SubmissionExpectation<'a> {
     trusted_sequencer_public_key: [u8; 32],
 }
 
-fn validate_endpoint(value: &str) -> Result<Url, ProgramOperationError> {
+pub(crate) fn validate_endpoint(value: &str) -> Result<Url, ProgramOperationError> {
     let endpoint = Url::parse(value).map_err(|_| ProgramOperationError::InvalidEndpoint)?;
     if !matches!(endpoint.scheme(), "http" | "https")
         || endpoint.host().is_none()
