@@ -4,6 +4,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "support/lxp_real_replay.h"
+#include "support/lxp_pay1_replay.h"
 
 #include <fcntl.h>
 #include <openssl/evp.h>
@@ -167,6 +168,7 @@ int main(void)
     size_t public_length = 32U;
     EVP_PKEY *sequencer_key = NULL;
 
+    if (pay1_guarantor_replay() != 0) goto cleanup;
     if (storage == NULL || mkdtemp(directory) == NULL ||
         snprintf(source_path, sizeof(source_path), "%s/batch.lxb", directory) < 0 ||
         snprintf(stored_path, sizeof(stored_path), "%s/stored.lxb", directory) < 0 ||

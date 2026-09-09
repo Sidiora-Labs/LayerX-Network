@@ -1,4 +1,5 @@
 #include "layerx/lxp_fee.h"
+#include "layerx/lx_asset.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -56,6 +57,21 @@ int main(void)
         current_schedule.base_fee.lo != 20U ||
         historical_version == current_version)
         return 1;
+    {
+        static const uint32_t types[] = {LX_ASSET_REGISTER, LX_ASSET_ACCOUNT_OPEN,
+            LX_ASSET_RECEIVE, LX_ASSET_GRANT_ISSUE, LX_ASSET_GRANT_REVOKE,
+            LX_ASSET_MINT, LX_ASSET_BURN};
+        lxp_fee_meter meter = {.canonical_encoded_bytes = 101U,
+            .execution_units = 17U, .storage_units = 9U};
+        for (size_t ordinal = 0U; ordinal < sizeof(types) / sizeof(types[0]); ++ordinal) {
+            lxp_u128 fee;
+            uint64_t raw = 10U + 2U * types[ordinal] + 3U * 101U + 4U * 17U + 5U * 9U;
+            uint64_t expected = (raw * 10001U + 9999U) / 10000U;
+            if (historical_schedule.version != 1U ||
+                lxp_fee_compute(&historical_schedule, types[ordinal], meter, &fee) != LXP_OK ||
+                fee.hi != 0U || fee.lo != expected) return 1;
+        }
+    }
     if (lx_account_registry_init(&registry) != LXP_OK ||
         lx_account_id_from_string(actor_name, sizeof(actor_name) - 1U,
                                   actor_id) != LXP_OK ||
