@@ -5,6 +5,7 @@
 
 mod auth;
 mod builder;
+pub mod deployment;
 mod http;
 mod journal;
 mod mirror;
@@ -36,6 +37,7 @@ pub use verified::{VerifiedSource, VerifiedSourceStore};
 pub struct Config {
     pub listen: String,
     pub journal: PathBuf,
+    pub deployment_lni_socket: Option<PathBuf>,
     pub mirror: PathBuf,
     pub verified: PathBuf,
     pub workspace: PathBuf,

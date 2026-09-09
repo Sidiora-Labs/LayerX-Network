@@ -1,4 +1,5 @@
 #include "layerx/lxp_daemon.h"
+#include "lxp_daemon_deployment.h"
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -3042,3 +3043,5 @@ lxp_result lxp_daemon_finality_evidence_lookup(
     }
     return status == LXP_OK ? LXP_ERR_UNKNOWN_FIELD : status;
 }
+
+#include "lxp_daemon_deployment.inc"
