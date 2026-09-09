@@ -913,3 +913,4 @@ async function merkleLeafDigest(canonicalReceipt: Uint8Array): Promise<Uint8Arra
 
 export * from "./rpc.js";
 export * from "./grant.js";
+export * from "./checkpoint.js";
