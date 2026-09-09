@@ -333,9 +333,10 @@ the original port, which is why the rebuild is reproducible.
 The runnable `programs/sdk/rust/examples/token-lxt20` guest implements the seven
 methods over registered program-derived backing accounts. Its runtime tests
 cover methods, allowances and refusal rollback. The bound interface and registry
-state-value inputs are committed under `programs/fixtures/pay5`; they are not a
-native deployment receipt. Native deploy/call and settlement proof remain blocked
-on the signer-DID/account admission integration recorded in `NEEDS.md`.
+state-value inputs and signed native deployment/call receipts are committed under
+`programs/fixtures/pay5`. Run `python3 programs/fixtures/pay5/run_native_roundtrip.py`
+to replay the isolated native token and merchant settlement fixtures and compare
+the canonical artifacts byte for byte. These fixtures do not certify a live deployment.
 
 | ERC-20 flow | LayerX mapping |
 | --- | --- |
@@ -379,7 +380,10 @@ Native issued asset IDs follow SHA-256 of `LX:ASSET:v1 || issuer_id32 || salt32`
 An actor's per-asset account uses the existing `LX:ACCOUNT:v1` derivation over
 `agent:<DID>:asset:<lowercase asset hex>`; `agent:<DID>:main` remains the native
 asset account. Program-derived accounts use a different domain and seed rule.
-The current Programs transfer path equates principal and debit account IDs;
-DID/per-asset funding and identity sequencing are an unresolved integration seam,
-recorded in the beta qualification ledger. Never work around it by signing as an
-account ID or changing ownership checks.
+Programs envelopes identify the signer DID and consume its identity sequence.
+Funding resolves the signer's canonical backing-asset account and consumes that
+account's separate payment sequence; fees may use a separate native account.
+Account-bound settlement evidence retains the signer authorization and commits
+the actual account endpoints. Go, Swift, .NET and JVM terminal verifiers still
+need support for this evidence encoding; their integration is not qualified.
+Never sign an envelope as an account ID.

@@ -1779,6 +1779,7 @@ lxp_result layerx_programs_call_transfer_apply(uint64_t token)
     lx_programs_transfer_runtime *runtime;
     lxp_transfer_set *set;
     lx_account *sequence_account;
+    lx_account *payment_account = NULL;
     size_t authority_count = 0U;
     size_t index;
     if (value == NULL || value->ctx == NULL || value->authority == NULL ||
@@ -1812,6 +1813,21 @@ lxp_result layerx_programs_call_transfer_apply(uint64_t token)
             value->ctx, sequence_account->id,
             set->context.actor_sequence, &set->context.actor_sequence);
         if (status != LXP_OK) return status;
+    }
+    if (value->ctx->ledger_admission.bound) {
+        for (index = 0U; index < set->leg_count; ++index) {
+            if (value->transfer_sources[index].kind != PROGRAM_TRANSFER_SOURCE_PRINCIPAL &&
+                value->transfer_sources[index].kind != PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING)
+                continue;
+            if (payment_account != NULL && payment_account != set->legs[index].from)
+                return LXP_ERR_ASSET_MISMATCH;
+            payment_account = set->legs[index].from;
+        }
+        if (payment_account != NULL) {
+            sequence_account = payment_account;
+            set->context.actor_sequence = payment_account->next_sequence;
+            (void)memcpy(set->context.authorized_from, payment_account->id, 32U);
+        }
     }
     set->context.batch_timestamp = lxp_ctx_batch_timestamp_ms(value->ctx);
     set->context.sequence_account = sequence_account;
