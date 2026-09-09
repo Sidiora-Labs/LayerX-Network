@@ -28,6 +28,13 @@
 #include <time.h>
 #include <unistd.h>
 
+static uint64_t pay_timing_us(void)
+{
+    struct timespec now;
+    return clock_gettime(CLOCK_MONOTONIC, &now) == 0 ?
+        (uint64_t)now.tv_sec * 1000000U + (uint64_t)now.tv_nsec / 1000U : 0U;
+}
+
 enum {
     NODE_EXECUTION_ARENA_BYTES = LXP_MAX_ACTIVITY_BYTES * 3U,
     NODE_SNAPSHOT_ARENA_BYTES = LXP_MAX_ACTIVITY_BYTES * 4U
@@ -2377,6 +2384,7 @@ static lxp_result apply_canonical_batch(
     const lxp_daemon_activity *offered, size_t offered_count,
     size_t *consumed_count)
 {
+    uint64_t started_us = pay_timing_us(), prepared_us = 0U, committed_us = 0U, published_us = 0U;
     lxp_daemon_process *process = (lxp_daemon_process *)context;
     lxp_activity activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_kernel_execution executions[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
@@ -2578,11 +2586,13 @@ static lxp_result apply_canonical_batch(
         status = lxp_receipt_encode(
             &prepared_receipts[i], true, &process->execution_arena,
             &canonical_receipts[i]);
+    prepared_us = pay_timing_us();
     if (status == LXP_OK)
         status = commit_prepared_batch_wal(
             process, activities, canonical_activities, canonical_receipts,
             prepared_events, prepared_receipts, count, timestamp,
             prepared_batch, &wal_record);
+    committed_us = pay_timing_us();
     if (status == LXP_OK) live_committed = true;
     if (status == LXP_OK)
         status = availability_store_body(process, &process->prepared_availability_body);
@@ -2592,6 +2602,7 @@ static lxp_result apply_canonical_batch(
             prepared_receipts, count, prepared_events, count,
             activities[0].protocol_version, timestamp, true,
             lxp_kernel_prepared_batch_maintenance(prepared_batch), NULL);
+    published_us = pay_timing_us();
     if (status == LXP_OK)
         status = lxp_kernel_batch_boundary_read(
             &process->kernel, &live_boundary);
@@ -2621,6 +2632,11 @@ static lxp_result apply_canonical_batch(
     (void)lxp_arena_reset(&process->execution_arena, mark);
     if (pthread_mutex_unlock(&process->owner.mutex) != 0 && status == LXP_OK)
         status = LXP_FATAL_INVARIANT;
+    if (getenv("LAYERX_PAY_TIMING") != NULL)
+        (void)fprintf(stderr, "pay-native sequence=%llu prepare_us=%llu commit_us=%llu publication_us=%llu total_us=%llu result=%d\n",
+            (unsigned long long)first_global_sequence,
+            (unsigned long long)(prepared_us - started_us), (unsigned long long)(committed_us - prepared_us),
+            (unsigned long long)(published_us - committed_us), (unsigned long long)(pay_timing_us() - started_us), (int)status);
     return status;
 }
 
