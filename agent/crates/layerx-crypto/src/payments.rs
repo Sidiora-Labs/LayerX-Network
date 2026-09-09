@@ -29,6 +29,7 @@ pub struct Registration {
     pub custody_ref: Vec<u8>,
 }
 
+/// Existing authority-grant structure used by Asset ordinal 7.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Grant {
     pub id: Id,
@@ -48,6 +49,7 @@ pub struct Grant {
     pub signature: [u8; 64],
 }
 
+/// One conserved Programs transfer leg (from, asset, to, amount).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReceiverAuthorization {
     pub kind: u8,
