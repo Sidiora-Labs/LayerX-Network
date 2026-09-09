@@ -88,6 +88,8 @@ fn resolver_selects_every_normative_mechanism_and_vocabulary_term() {
         Endpoint::Human(human()),
         Endpoint::PaxeerWallet,
         Relationship::Custody(CustodyRoute::Withdrawal {
+            request_anchor: CheckpointId::new([18; 32]),
+            fee_limit: 100,
             withdrawal_id: WithdrawalId::new([4; 32]),
             withdrawals_account: account("system:paxeer-withdrawals"),
             payout_address: EvmAddress::new([5; 20]),
@@ -288,6 +290,8 @@ fn relationship(selector: u8, sequence: u64, byte: u8) -> Relationship {
             idempotency_key: key(nonzero),
         }),
         _ => Relationship::Custody(CustodyRoute::Withdrawal {
+            request_anchor: CheckpointId::new([18; 32]),
+            fee_limit: 100,
             withdrawal_id: WithdrawalId::new([nonzero; 32]),
             withdrawals_account: account("system:paxeer-withdrawals"),
             payout_address: EvmAddress::new([nonzero; 20]),
