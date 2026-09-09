@@ -364,10 +364,13 @@ primitive, which stays a caller-supplied boundary.
 
 ## SPL tokens, LXT-20 and native assets
 
-LXT-20 request codecs live in `programs/sdk/rust/src/lxt20.rs`. A runnable
-`token-lxt20` settlement reference, registry discovery and native deploy/call
-proof are still outstanding. These request types do not emulate the SPL Token
-program or make an unregistered asset spendable.
+LXT-20 request codecs live in `programs/sdk/rust/src/lxt20.rs`. The real
+`programs/sdk/rust/examples/token-lxt20` WASM reference executes all seven methods
+in runtime tests. Its bound interface and registry state-value inputs live in
+`programs/fixtures/pay5`; they do not prove native publication or settlement.
+Merchant/token native deploy/call proof remains blocked on signer-DID/account
+admission integration. The reference does not emulate the SPL Token program or
+make an unregistered backing account spendable.
 
 | SPL flow | LayerX mapping |
 | --- | --- |
@@ -375,7 +378,7 @@ program or make an unregistered asset spendable.
 | Approve / revoke delegate | `Approve` using a spender DID identity; zero revokes the program allowance, not an unrelated kernel grant |
 | Read token account balance | `BalanceOf`; a native balance read requires receipt-bound `BalanceView` authority |
 | Read delegated amount | `Allowance` with owner and spender identities |
-| Read mint supply and metadata | `TotalSupply` and `Metadata`; the executing reference must bind native asset facts |
+| Read mint supply and metadata | `TotalSupply` and `Metadata` return token supply and configured token metadata; backing-asset facts come from the native asset registry |
 | PDA custody / CPI payout | Registered program-derived account plus `ProgramSpend`; a public derivation seed is not spending authority |
 
 The seven selectors and committed request vectors are shared with the EVM guide.
@@ -386,6 +389,15 @@ must not be copied into these calls unchanged.
 
 Use `PreparedProgramAccount::registration_payload` under deployment authority,
 verify registration, then authorize the funding grant and subsequent spend grants.
+`ProgramPaymentCapabilities` builds a mixed canonical set and refuses duplicate
+keys. The token reference uses the owner DID id32 as its account seed; recipients
+call `approve` (zero is sufficient) to register in token storage, and deployment
+authority separately registers their native program accounts. Initialization is
+restricted to the configured issuer and stages funding of the full fixed supply.
+The published interface uses version 2 dynamic-spend descriptors bound to the
+backing asset and ceiling; native admission resolves recipient and amount from
+calldata and checks actual caller grants on every call. Descriptors grant no
+spending authority.
 The merchant example at `programs/sdk/rust/examples/payments-merchant` shows the
 real guest bindings for a deposit and fee split. Its WASM build is not proof of
 native settlement. A token allowance alone does not authorize debiting another
