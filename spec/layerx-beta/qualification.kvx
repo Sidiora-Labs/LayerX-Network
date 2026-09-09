@@ -8671,3 +8671,83 @@ symbol = "genesis_request metadata build_legacy_request"
 observed = "Repository genesis producers emit LXGB v2 with explicit canonical Asset records and named fees. Hosted producers require --genesis-metadata; existing-asset salts are supplied rather than synthesized. Disposable fixtures generate new issuer keys and salts, with explicit zero supply, uncapped custody records, unpaused state and named zero prices matching their unfunded setup. The C legacy-request fixture retains v1 signed-artifact coverage. make -j16, make test, make -j16 test-genesis and sh tools/lxp_check_sole_writer.sh exit 0. python3 tests/test_lxgb_producers.py --builder build/bin/layerx-genesis-build --output qual-logs/pay1/producers-g1 exits 0; native signing accepts the complete producer output and refuses missing, truncated and trailing metadata. Evidence: qual-logs/pay1/pay1g-build.log, pay1g-test.log, pay1g-genesis.log, pay1g-sole-writer.log and pay1g-producers.log, each with adjacent exit file."
 assumption = "cargo test --manifest-path platform/Cargo.toml -p layerx-platform-core --test boundary -p layerx-platform-authority --test real_node -p layerx-platform-agent-boundary --test real_node --no-run and cargo test --manifest-path agent/Cargo.toml -p layerx-agentd --test protocol2_restart --no-run exit 0 in pay1g-platform-compile.log and pay1g-agentd-compile.log; these are compilation checks, not hosted runtime passes. Deployment callers must mount authoritative metadata and pass its path. Cluster, image and external custody deployment gates were not run."
 severity = "note"
+
+[observation.3.7.59]
+task = "3.7"
+file = "tests/daemon/pay1.py tests/daemon/lxp_test_pay1.c src/modules/asset/lx_asset_execution.h src/protocol/lxp_module_ctx.c cmd/layerxd/lxp_daemon_process.c"
+symbol = "asset_execute_typed lxp_ctx_bind_ledger_receipt principal_authority"
+observed = "python3 tests/daemon/pay1.py --output qual-logs/pay1/runtime-g3 --bin-dir build/bin --client qual-logs/pay1/pay1-client --poll exits 1. Fresh layerxd and its real authority replica accept native registration; the client verifies its sequencer signature. Asset list/detail tags 32/33, fee tags 34/35 and DID enumeration tags 7/8 produce identical bytes before and after process restart. Assertions verify native asset id, issuer, supplied salt, cap 10000, unpaused state and zero supply. The next signed account_open receipt returns -208: asset_execute_typed looks up the actor main account before binding the receipt, and lxp_ctx_bind_ledger_receipt independently requires it. Fresh genesis contains only system accounts. Evidence: qual-logs/pay1/pay1g-runtime-poll-r2.log, runtime-g3/0-register.log, runtime-g3/0-before.log, runtime-g3/0-after.log and runtime-g3/1-open.log."
+assumption = "The native source comparison against 508ee475 exits 0 for src, include and cmd; pay1g-native-base-comparison.log records identical sources, not a separate base runtime invocation. The module-context binding is outside the granted paths and remains intact. Opening, mint, burn, grant issue/revoke, positive DID account enumeration and their restart assertions remain unqualified. The harness uses real binaries and real signatures; it does not manufacture a main account or bypass the receipt assertion."
+severity = "blocker"
+
+[observation.3.7.60]
+task = "3.7"
+file = "cmd/layerx-genesis/lxp_genesis_builder.c include/layerx/lxp_genesis.h include/layerx/lxp_snapshot.h src/storage/lxp_snapshot_store.c src/protocol/lxp_genesis.c cmd/layerxd/lxp_daemon_process.c"
+symbol = "sign_manifest validate lxp_snapshot_store_read load_genesis_settlement_anchor"
+observed = "The existing builder signing path signs a genesis manifest whose validation requires zero-balance system accounts. The snapshot store carries sequence, canonical root, receipt root and a snapshot digest, without a signer signature. The daemon independently requires the finalized bootstrap registration to match the signed genesis receipt root. Renaming a retired issuance account therefore cannot be made an accepted post-genesis root by rerunning the current genesis signer or recomputing the snapshot digest. Source excerpts: qual-logs/pay1/pay1g-migration-boundary.log."
+assumption = "The operator snapshot migration command and real signed migration fixture are not implemented or qualified. A consumable migration needs coordinated authorization and verification in the genesis/snapshot interfaces, snapshot storage and daemon recovery, which are outside the granted builder and state paths. Existing root, signature, account-kind and balance checks remain unchanged; no newly authorized migration root is claimed."
+severity = "blocker"
+
+[observation.3.7.61]
+task = "3.7"
+file = "tests/daemon/pay1.py tests/daemon/lxp_test_pay1.c cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_lni.c"
+symbol = "submit_pay send_receipt apply_canonical_batch"
+observed = "LAYERX_PAY_TIMING was enabled on the real daemon. The waiting registration lookup reached the unchanged 2000 ms LNI timeout, with history_us=2000289 and result=-303 in runtime-g1/sequencer.log; the harness then stopped the process. A subsequent polling diagnostic completed registration publication with prepare_us=198988, commit_us=1364442, publication_us=1521962 and total_us=3381233 in runtime-g2/sequencer.log. The final diagnostic verifies registration and restart before the account_open refusal in observation.3.7.59. Extracted execution samples: qual-logs/pay1/pay1g-timing.json; raw history samples remain in runtime-g1, runtime-g2 and runtime-g3/sequencer.log."
+assumption = "These are registration and refused-open diagnostics, not Send measurements. Zero of the requested 20 Sends executed; no parent binary before-run was built, and no before/after performance claim is made. The account-opening boundary prevents the remaining issuance and Send fixture setup. The gateway p50/p99 comparison remains outside this native qualification."
+severity = "blocker"
+
+[observation.3.7.62]
+task = "3.7"
+file = "tests/daemon/pay1.py tests/daemon/lxp_test_pay1.c tests/test_lxgb_producers.py agent/schema/lni/README.md"
+symbol = "submit_pay validate_reads genesis_request"
+observed = "make -j16 test-state-commitment-transition test-asset-registry test-asset-balance test-fees test-fee-replay test-genesis test-daemon-lni-admission test-daemon-lni-account exits 0 in qual-logs/pay1/pay1g-focused.log. cargo test --manifest-path agent/Cargo.toml -p layerx-wire exits 0 in pay1g-wire.log. cargo test --manifest-path agent/Cargo.toml -p layerx-client --lib --test receipt --test reads --test lni_handshake --test lni_preparation --test lni_transport --test lni_schema --test supply_receipt exits 0 in pay1g-client-focused.log. The earlier full make -j16 and make test runs exit 0 in pay1g-build.log and pay1g-test.log. Every command has an adjacent exit file."
+assumption = "The real waiting-mode rerun exits 1 at registration lookup in pay1g-runtime-wait-r2.log; runtime-g4/sequencer.log records history_us=1999357 and result=-303 with the unchanged 2000 ms LNI timeout. This does not supersede the successful polling registration/restart evidence or resolve the main-account binding blocker. The migration command, remaining activity restart matrix and 20-Send before/after comparison remain incomplete. No graph, render, cluster, image or deployment qualification is claimed."
+severity = "note"
+
+[observation.3.7.63]
+task = "3.7"
+file = "src/protocol/lxp_kernel.c src/protocol/lxp_module_ctx.c src/modules/asset/lx_asset_execution.h tests/daemon/pay1.py tests/daemon/lxp_test_pay1.c"
+symbol = "lxp_kernel_bind_ledger_admission lxp_ctx_bind_ledger_receipt asset_execute_typed"
+observed = "Asset admission now records whether the authenticated actor main account exists. Account-open binds the derived principal id, activity, authorization, staged account, zero balance and zero sequence when that native main account is absent; the existing account path retains its balance and sequence checks. The real daemon matrix registers an asset, opens issuer and recipient per-asset accounts, mints, burns, issues and revokes a payer grant, performs 20 Sends, verifies every sequencer-signed receipt and compares committed Asset, fee and DID account proof bytes after each stop/start. Supply progresses 0, 9000 and 8900; final balances are 8880 and 20. Issuer, supplied salt, cap 10000, unpaused state and roots remain identical across restart. Evidence: qual-logs/pay1/pay1h-runtime-fixed.log and runtime-h8; the command exits 0."
+assumption = "The checked-in harness now uses lx_account_id_from_string for the canonical LX:ACCOUNT:v1 per-asset account id. No main-account balance was injected and no receipt, transfer, state-root or signature check was bypassed."
+severity = "note"
+
+[observation.3.7.64]
+task = "3.7"
+file = "cmd/layerx-genesis/lxp_genesis_build_cli.c cmd/layerx-genesis/lxp_genesis_builder.c include/layerx/lxp_snapshot.h src/state/lxp_snapshot.c src/storage/lxp_snapshot_store.c cmd/layerxd/lxp_daemon_process.c"
+symbol = "lxp_genesis_build_snapshot_migration lxp_snapshot_migration_authorization_verify verify_snapshot_migration"
+observed = "layerx-genesis-build --migrate-snapshot-issuance SOURCE.lxs GENESIS.manifest SIGNER.key OUTPUT_DIR verifies an LXS2 source with retired asset:<asset-id>:issuance names, preserves account ids, balances and all non-name state, derives a new canonical and receipt root, and emits a same-sequence LXS3 snapshot. The Ed25519 authorization binds network, rename count, source sequence, both source roots and digest, target sequence, both target roots and digest, and signer. Daemon restore verifies that signature against the signed genesis manifest before loading state. The historical signed-genesis and retired-snapshot fixture passes test-genesis-bootstrap and test-snapshot; the real operator command succeeds with the matching signer and refuses a different signer without creating output. Evidence: qual-logs/pay1/pay1h-item2-focused.log, pay1h-item2-command.log and pay1h-item2-command-negative.log."
+assumption = "The matching identity .lxi sidecar must be preserved beside the migrated .lxs. This migration does not authorize arbitrary state edits, change global sequence or rewrite identity history."
+severity = "note"
+
+[observation.3.7.65]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_lni.c tests/daemon/pay1.py"
+symbol = "apply_canonical_batch send_receipt"
+observed = "Two real local-daemon polling runs completed 20 native Sends each with LAYERX_PAY_TIMING. Before uses d99eed99, the parent of event-driven commit 508ee475, with only the same timing probes applied to make the phases observable. Before prepare_us=[39426,26626,34270,36534,36264,33538,36262,36871,41562,38372,36929,38216,38102,201489,199510,187290,199409,200316,202237,495738], commit_us=[161236,159277,151885,160811,163800,150948,164565,195823,172193,175407,163139,177129,179478,1297187,1493384,1272200,1336166,2054160,1378292,2881800], publication_us=[194834,209670,204520,220256,215160,215259,228295,230343,240110,239746,241667,247361,1648779,1702849,1823751,1611038,1787699,1768253,1904531,2283726], history_us=[288,375,408,395,433,818,500,532,583,618,1056,687,796,755,798,818,867,896,958,1035]. After 042c69e1 prepare_us=[207232,195723,279382,52130,34782,40501,34275,34696,38693,37148,36905,36546,41798,37715,37878,34542,35691,36098,38052,44322], commit_us=[1412462,1358125,2047423,321835,154761,159180,157889,168654,165068,162603,158582,163511,167231,162812,164863,157904,152888,159651,176404,214917], publication_us=[1617187,2074375,1724827,451326,217716,219074,220277,218167,231766,234072,233085,243165,241798,250178,259010,257044,269761,268035,291320,268698], history_us=[304,349,372,454,529,803,515,537,583,610,792,679,1171,766,794,1091,883,902,1440,1059]. P50 before/after microseconds are prepare 38294/37796, commit 176268/164187, publication 240888/253611 and history 721/722."
+assumption = "History values are the last lookup logged before each completed Send timing line. Both runs used polling so the native phase samples are comparable; these local samples do not establish a hosted gateway p50 or p99 target. Raw evidence and extraction are qual-logs/pay1/timing-before-state2/sequencer.log, runtime-h10-final/sequencer.log and pay1h-timing.json."
+severity = "note"
+
+[observation.3.7.66]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_batch_wal.c src/storage/lxp_log.c"
+symbol = "apply_canonical_batch commit_prepared_batch_wal publish_canonical_batch lxp_log_sync"
+observed = "A complete real LNI run executed 20 native Sends with signed receipts and byte-identical committed reads after restart. P50 microseconds are prepare 40169, WAL commit 152461, availability 20661, publication 214951, authenticated history 660 and total 411891. Within WAL commit, p50 is prepared-slot sync 33813, durable-byte verification 15221, kernel commit 999, checkpoint persistence 59557 and observer publication 99958. Publication p50 includes setup 32447, proof construction 14, local authority storage 46241, activity evidence 19927, replica handshake 51767 and account evidence 113895. The native target remains unmet. A before trace measured 49 sequencer sync calls per Send; 19 completed post-change traced Sends measured 46. The prepared batch now uses exactly one fdatasync and no finalize sync. Median post-change placement is 14 evidence-log, 6 canonical-log, 4 receipt-authority-log, 4 program-feed-log, 4 history, 4 checkpoint-persistence, 3 LNI-admission, 2 availability-file, 2 availability-log and 2 batch-log sync calls, plus the one prepared-batch sync. Evidence: qual-logs/pay1/pay1i-timing-after-complete.log, pay1i-timing-after-summary.json, pay1i-profile-before-strace.json, pay1i-profile-after-strace.json and pay1i-after-strace.*."
+assumption = "Availability persistence and checkpoint persistence overlap the WAL observer, and replica publication overlaps local evidence while receipt visibility still waits for every attested artifact. No fixed sleep or polling interval remains in execution through authenticated history. The local polling run does not establish hosted end-to-end latency. Recovery-safe coalescing of the remaining per-log data and marker sync boundaries requires the shared storage log implementation outside this lane's owned paths; replay, ordering and marker strictness remain unchanged."
+severity = "blocker"
+
+[observation.6.11.141]
+task = "6.11"
+file = "platform/hosted/core/tests/boundary.rs"
+symbol = "native lane merge conflict resolution"
+observed = "The authorized merge of lane/pay-native conflicted with the already integrated lane/pay-402lxp version of the hosted core boundary target. The incoming native lane version was retained exactly because this path is outside the signer SDK lane ownership."
+assumption = "No hosted-core boundary behavior was reconciled or qualified by the signer SDK lane. The native lane version remains authoritative for this non-owned conflict."
+severity = "note"
+
+[observation.6.11.142]
+task = "6.11"
+file = "agent/crates/layerx-crypto/tests/native_payment_vectors.c agent/crates/layerx-crypto/tests/generate-native-payments.sh agent/crates/layerx-crypto/tests/fixtures/payments/native-1-6.hex agent/crates/layerx-crypto/tests/fixtures/payments/native-1-7.hex"
+symbol = "lxp_receive_encode lxp_payer_grant_encode native_generated_receive_and_grant_are_byte_identical"
+observed = "agent/crates/layerx-crypto/tests/generate-native-payments.sh exits 0 after make -j16 and make -j16 programs/target/debug/liblayerx_programs_sandbox.a. Its C generator invokes lxp_receive_encode and lxp_payer_grant_encode directly, requires lengths 733 and 346, and requires byte equality between the independently encoded grant and the receive grant segment before writing both committed fixtures. cargo test --manifest-path agent/Cargo.toml -p layerx-crypto exits 0, including native byte equality plus complete accepted-byte mutation refusal for both encodings. Evidence: qual-logs/pay2/stage-native/generate-native-payments-rerun-2.log and test-crypto-2.log."
+assumption = "The fixtures did not change under the merged native build. The proof exercises the merged C implementation and Rust decoder with real signatures; no fixture-derived native encoding path is used."
+severity = "note"

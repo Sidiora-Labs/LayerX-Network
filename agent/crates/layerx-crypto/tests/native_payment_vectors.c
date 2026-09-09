@@ -35,8 +35,8 @@ static void dump(const char *directory, const char *name, const unsigned char *b
     require(fputc('\n', file) != EOF && fclose(file) == 0);
 }
 int main(int argc, char **argv) {
-    unsigned char bytes[1024], message[512];
-    size_t length = 0, message_length = 0;
+    unsigned char bytes[1024], grant_bytes[346], message[512];
+    size_t length = 0, grant_length = 0, message_length = 0;
     lxp_receive receive = {0};
     lxp_send send = {0};
     require(argc == 2);
@@ -64,9 +64,11 @@ int main(int argc, char **argv) {
     require(lxp_ed25519_verify(auth->public_key, auth->signature, LXP_DOMAIN_SIGNATURE_PREIMAGE, message, message_length) == LXP_OK);
     lx_account account = {0}; memcpy(account.id, grant->from, 32); memcpy(account.authority_key, grant->public_key, 32); account.has_authority_key = true;
     require(lxp_verify_payer_grant(grant, &account) == LXP_OK);
+    require(lxp_payer_grant_encode(grant, grant_bytes, sizeof(grant_bytes), &grant_length) == LXP_OK && grant_length == sizeof(grant_bytes));
     require(lxp_receive_encode(&receive, bytes, sizeof(bytes), &length) == LXP_OK && length == 733);
+    require(memcmp(bytes + 387, grant_bytes, grant_length) == 0);
     dump(argv[1], "native-1-6.hex", bytes, length);
-    dump(argv[1], "native-1-7.hex", bytes + 387, 346);
+    dump(argv[1], "native-1-7.hex", grant_bytes, grant_length);
     memcpy(send.from, receive.from, 32); memcpy(send.to, receive.to, 32); memcpy(send.asset, receive.asset, 32);
     send.amount.lo = 123; send.sequence = 7; memcpy(send.idempotency_key, receive.idempotency_key, 32);
     send.expires_at = 100; memset(send.context_hash, 5, 32);

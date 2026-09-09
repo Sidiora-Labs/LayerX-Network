@@ -652,14 +652,80 @@ fn decode_program_outcome(
     Ok(outcome)
 }
 
+fn decode_supply(
+    decoder: &mut Decoder<'_>,
+    supply_present: bool,
+    module_id: u16,
+    result_code: i32,
+    operation: u8,
+    asset: [u8; 32],
+    amount: u128,
+) -> Result<Option<(u128, u128)>, WireError> {
+    if !supply_present {
+        return Ok(None);
+    }
+    let before = decoder.u128()?;
+    let after = decoder.u128()?;
+    let expected = match operation {
+        1 if before == 0 => Some(0),
+        4..=8 => Some(before),
+        10 if amount > 0 => before.checked_add(amount),
+        11 if amount > 0 => before.checked_sub(amount),
+        _ => None,
+    };
+    if module_id != 1 || result_code != 0 || asset == [0; 32] || expected != Some(after) {
+        return Err(WireError::known(
+            KnownResult::NonCanonical,
+            decoder.offset(),
+        ));
+    }
+    Ok(Some((before, after)))
+}
+
+fn validate_program_receipt_binding(
+    outcome: &ProgramOutcome,
+    module_id: u16,
+    result_code: i32,
+    transfer_set_root: [u8; 32],
+    offset: usize,
+) -> Result<(), WireError> {
+    if module_id != 9
+        || outcome.result_code != result_code
+        || (outcome.terminal_kind == 1 && outcome.transfer_root != transfer_set_root)
+        || (outcome.terminal_kind != 1 && transfer_set_root != [0; 32])
+    {
+        return Err(WireError::known(KnownResult::FatalInvariant, offset));
+    }
+    Ok(())
+}
+
+fn decode_sequencer_signature(decoder: &mut Decoder<'_>) -> Result<Option<[u8; 64]>, WireError> {
+    match decoder.u8()? {
+        0 => Ok(None),
+        1 => Ok(Some(bounded_array(decoder)?)),
+        _ => Err(WireError::known(
+            KnownResult::NonCanonical,
+            decoder.offset(),
+        )),
+    }
+}
+
+fn receipt_tag(bytes: &[u8]) -> (bool, u16) {
+    let supply_present = bytes.get(2..4) == Some(&[0x52, 0x02]);
+    (
+        supply_present,
+        if supply_present {
+            SUPPLY_RECEIPT_TAG
+        } else {
+            RECEIPT_TAG
+        },
+    )
+}
+
 fn decode_protocol(bytes: &[u8]) -> Result<Receipt, WireError> {
     let mut decoder = Decoder::new(bytes, MAX_MESSAGE_BYTES);
-    let supply_present = bytes.get(2..4) == Some(&[0x52, 0x02]);
-    let envelope_version = decoder.structure_header_version(if supply_present {
-        SUPPLY_RECEIPT_TAG
-    } else {
-        RECEIPT_TAG
-    })?;
+    let (supply_present, tag) = receipt_tag(bytes);
+    let envelope_version = decoder.structure_header_version(tag)?;
     let protocol_version = decoder.u16()?;
     if protocol_version != envelope_version {
         return Err(WireError::known(
@@ -697,53 +763,30 @@ fn decode_protocol(bytes: &[u8]) -> Result<Receipt, WireError> {
     let authorization_hash = bounded_array(&mut decoder)?;
     let context_hash = bounded_array(&mut decoder)?;
     let timestamp = decoder.u64()?;
-    let supply = if supply_present {
-        let before = decoder.u128()?;
-        let after = decoder.u128()?;
-        let expected = match operation {
-            1 if before == 0 => Some(0),
-            4..=8 => Some(before),
-            10 if amount > 0 => before.checked_add(amount),
-            11 if amount > 0 => before.checked_sub(amount),
-            _ => None,
-        };
-        if module_id != 1 || result_code != 0 || asset == [0; 32] || expected != Some(after) {
-            return Err(WireError::known(
-                KnownResult::NonCanonical,
-                decoder.offset(),
-            ));
-        }
-        Some((before, after))
-    } else {
-        None
-    };
+    let supply = decode_supply(
+        &mut decoder,
+        supply_present,
+        module_id,
+        result_code,
+        operation,
+        asset,
+        amount,
+    )?;
     let program_outcome = if decoder.remaining() > 69 {
         Some(decode_program_outcome(&mut decoder, protocol_version)?)
     } else {
         None
     };
     if let Some(outcome) = &program_outcome {
-        if module_id != 9
-            || outcome.result_code != result_code
-            || (outcome.terminal_kind == 1 && outcome.transfer_root != transfer_set_root)
-            || (outcome.terminal_kind != 1 && transfer_set_root != [0; 32])
-        {
-            return Err(WireError::known(
-                KnownResult::FatalInvariant,
-                decoder.offset(),
-            ));
-        }
+        validate_program_receipt_binding(
+            outcome,
+            module_id,
+            result_code,
+            transfer_set_root,
+            decoder.offset(),
+        )?;
     }
-    let sequencer_signature = match decoder.u8()? {
-        0 => None,
-        1 => Some(bounded_array(&mut decoder)?),
-        _ => {
-            return Err(WireError::known(
-                KnownResult::NonCanonical,
-                decoder.offset(),
-            ))
-        }
-    };
+    let sequencer_signature = decode_sequencer_signature(&mut decoder)?;
     decoder.finish()?;
     Ok(Receipt::Protocol(Box::new(ProtocolReceipt {
         protocol_version,
