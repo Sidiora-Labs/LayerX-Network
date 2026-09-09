@@ -1,0 +1,40 @@
+# Registry deployment journal
+
+`POST /__registry/deployments` accepts a canonical signed Programs deploy or
+upgrade activity as an octet-stream body under the existing registry bearer
+policy. It submits those exact bytes through `LAYERX_REGISTRY_LNI_SOCKET` and
+requests native proof-bundle tag 16, payload version 1, selector 4, followed by
+the 32-byte activity ID. Tag 17 returns the canonical `DeploymentProof` as its
+payload and an empty proof-material field. Selectors 1–3 remain unchanged.
+
+The proof carries the signed activity and its inclusion path, signed receipt
+and its inclusion path, signed batch header, Programs subtree root and outer
+membership path, exact program-record leaf and membership path, and lifecycle
+membership or adjacent absence witnesses. The node derives all witnesses from
+its real kernel and retained batch evidence. It refuses a failed deployment or
+a live state root different from the deployment receipt root. Historical state
+reconstruction is not provided by this selector.
+
+The registry verifies the full proof with its protected sequencer history and
+checks the receipt against the independent receipt authority before publishing.
+An admission acknowledgement alone never produces a deployment record. An
+unavailable or indeterminate result remains unavailable; clients reconcile with
+the same signed activity and idempotency key.
+
+`LAYERX_REGISTRY_JOURNAL` holds the existing sealed `.envelope` commit units.
+The `pairs/` directory exports `<unsigned-receipt-digest>.admission` using
+`DeploymentProof::canonical_encoding()` and the matching `.deployment` using
+`DeploymentRecord::canonical_encoding()`, with lowercase 64-digit digest names.
+These are precisely the legacy pair encodings consumed by Human. Files are
+mode 0600, the export directory is mode 0700, and each file is staged, fsynced,
+renamed and followed by a directory fsync. The envelope remains the atomic
+commit authority. Verified startup replay regenerates exports, including an
+interrupted pair; a consumer presented an incomplete pair must refuse it.
+Temporary export files remain outside `pairs/`.
+
+Configure the Human assembler's journal input to the exported `pairs/`
+directory, not the internal journal containing envelopes and head metadata.
+The current hosted topology still requires a transport and shared-volume
+integration: its registry pod has no node LNI mount and its evidence assembler
+runs on the invoking host. Protocol-3 trust-history support in the Programs
+verifier is also required before version-3 journal publication can succeed.
