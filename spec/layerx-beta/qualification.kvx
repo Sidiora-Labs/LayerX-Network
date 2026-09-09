@@ -12183,6 +12183,13 @@ symbol = "asset ordinal 9"
 observed = "docs/wiki/Modules.md:73 states that ordinal 9 is reserved for withdraw and is not defined on the Asset module, docs/wiki/Assets.md:48 lists ordinal 9 as reserved with no public payload, and docs/wiki/PublicRpc.md:151 lists the admitted native Asset ordinals without 9. src/modules/asset/lx_asset_registry.c:11-16 advertises LX_ASSET_WITHDRAW and lines 322, 380-385 and 419-420 decode, validate and execute it, and cmd/layerxd/lxp_daemon_process.c:570-588 admits it natively; only the hosted submission path at platform/hosted/core/src/main.rs:714 refuses it. The module description is therefore wrong about the module table and the native admission list, while the hosted-admission statement is accurate. These documents are outside the paths of the change that resolved 6.11.2602 through 6.11.2604, so they are unchanged here."
 assumption = "Modules.md should describe ordinal 9 as advertised and dispatched by the module with a 108-byte payload, admitted natively and refused only by the hosted submission path, and Assets.md should carry the withdraw payload shape. The correction belongs to the documentation owner."
 severity = "suspect"
+[observation.6.11.pay2_rpc_contract]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/lib.rs agent/sdk/typescript/src/agent-http.ts platform/ src/"
+symbol = "lx_getAccount lx_getBalances lx_sendActivity lx_getActivityStatus lx_getReceipt"
+observed = "Source search for the public wallet JSON-RPC methods finds no implementations. Existing SDK transports expose the typed node boundary and Programs HTTP routes, but no public wallet RPC result schema binds canonical receipts, inclusion proofs and guarantor certificates for the executed, batched and finalised commitment levels. Search evidence: qual-logs/pay2/rpc-contract-search.log; rg exit 1."
+assumption = "Wallet execution and commitment verification require the gateway request/result and proof transport contracts. An admission acknowledgement cannot substitute for verified receipt evidence."
+
 [observation.6.11.129]
 task = "6.11"
 file = "agent/crates/layerx-types/src/account.rs agent/crates/layerx-wire/src/hash.rs agent/crates/layerx-crypto/src/disclosure.rs platform/cli/src/account.rs platform/hosted/gateway/src/lib.rs"
