@@ -5236,3 +5236,18 @@ symbol = "fixture tool_operation execute_payment wait"
 observed = "cargo test --manifest-path agent/Cargo.toml -p layerx-mcp -p layerx-agentd exits 101 because build/bin/layerxd is absent; subsequent budget cases encounter the poisoned fixture lock. The advertised /root/lx-lanes/native-bin/layerxd and layerx-genesis-build binaries are also absent. Logs: qual-logs/pay2/mcp-test.log. Separate cargo test -p layerx-mcp exits 0; focused agentd tenant_resolve, tenant_leakage, tenant_store, tenant_isolation and session tests exit 0. Logs: qual-logs/pay2/mcp-test-isolated.log and qual-logs/pay2/agentd-scope-tests.log. Formatting checks and all-target Clippy with -D warnings pass for crypto, MCP and agentd. The existing TypeScript build and tests pass."
 assumption = "The named payment tools have explicit scopes, canonical daemon operation mappings and ordinary receipt-stage refusal checks. Wallet backend execution and executed/batched/finalised wait evidence remain dependent on the public RPC contract. Full agentd qualification requires real native binaries. No cluster or image gates ran."
 severity = "blocker"
+[observation.6.11.131]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/rpc_verification.rs agent/crates/layerx-sdk/src/wallet.rs agent/sdk/typescript/src/wallet.ts"
+symbol = "RpcClient Wallet wait_for WalletRpc"
+observed = "The OpenRPC document defines eleven positional methods, including submission and three commitment selectors. Rust and TypeScript clients implement those methods and preserve JSON-RPC errors. The upstream public-core reference supplies exact sequence, receipt, inclusion and CP1/CX1 checkpoint result encodings. Wallet execution obtains independent identity and source sequences, binds full disclosure, uses the external signer and requires verified receipt evidence after submission. Batched verification checks the configured sequencer and Merkle inclusion. Finalised verification additionally pins the trusted context digest and verifies the exact CP1/CX1 certificate and matching header. The TypeScript wallet binding executes the real Rust wallet binary with an external signer socket."
+assumption = "The contract omits lx_estimateFee, lx_listAssets and lx_getAsset; lx_getBalances still returns unavailable until native DID enumeration exists. Fee ceilings and finality trust inputs remain explicit configuration. Live public-RPC wallet execution was not exercised against an integrated gateway endpoint."
+severity = "note"
+
+[observation.6.11.132]
+task = "6.11"
+file = "tests/daemon/lxp_test_program_admission.c tests/daemon/program-admission.sh agent/crates/layerx-client/tests/availability_daemon.rs"
+symbol = "availability_batches real_daemon_availability_refusals"
+observed = "After make -j16, named native binary builds and the admission/finality harness prerequisite builds, cargo test --manifest-path agent/Cargo.toml -p layerx-client exits 101. The native harness reports test_daemon_lni_admission:620: found and line 649: availability_batches(descriptor, &key) == 0 before the Rust integration test fails at line 296. Evidence: qual-logs/pay2/wallet-client-test.log and qual-logs/pay2/wallet-client-native-prerequisites.log; native diagnostics: /tmp/lxp-program-admission-M7nARO."
+assumption = "The existing native availability failure is outside the wallet client changes. No native assertion or test was altered. The full daemon suite passed with LAYERX_TEST_NATIVE_BIN_DIR=/root/lx/pay2/build/bin. Evidence: qual-logs/pay2/continuation-agentd-test.log."
+severity = "blocker"

@@ -175,9 +175,19 @@ pub struct FinalityEvidenceCandidate {
     context_bytes: Vec<u8>,
     checkpoint_id: [u8; 32],
     batch_number: u64,
+    canonical_header: Vec<u8>,
 }
 
 impl FinalityEvidenceCandidate {
+    #[must_use]
+    pub fn canonical_header(&self) -> &[u8] {
+        &self.canonical_header
+    }
+    #[must_use]
+    pub const fn checkpoint_id(&self) -> [u8; 32] {
+        self.checkpoint_id
+    }
+
     /// Checks exact core/Paxeer evidence bytes before they can be submitted to
     /// the node's independently configured finality-authority callback.
     ///
@@ -204,6 +214,7 @@ impl FinalityEvidenceCandidate {
                 EvidenceError::Checkpoint(CheckpointError::CheckpointIdentifier),
             )?,
             batch_number: checked.report.batch_number(),
+            canonical_header: checked.canonical_header,
         })
     }
 }
