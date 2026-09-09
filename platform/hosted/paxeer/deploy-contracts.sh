@@ -6,13 +6,20 @@
 # Foundry through the boundary. The immediate-beta input selects a separate zero-delay
 # artifact; standard inputs retain their minimum one-day governance delay.
 #
-#   bootstrap    run deploy, permissions, activate, bond and finalize for immediate-beta
+#   bootstrap <ed25519-public-key>  run all phases for immediate-beta with an explicit authority
 #   deploy       fund and approve the guarantor bond controllers, deploy the suite, schedule the
 #                timelock permissions and write the beta settlement domain
 #   permissions  execute the permission grants and schedule the genesis activation
 #   activate     execute the genesis activation (asset, vault bond, guarantor activation)
 #   bond         every bond controller deposits its genesis bond
-#   finalize     execute the remaining genesis calls, seal the blueprint
+#   authority-schedule <ed25519-public-key>  schedule the vault authority through its timelock
+#   authority-execute <ed25519-public-key>   execute the recorded operation after its delay
+#   finalize     require the recorded authority, execute remaining genesis calls and seal
+#
+# The authority argument is a nonzero 0x-prefixed 32-byte Ed25519 public key supplied by
+# the deployment owner. There is no default. Run authority-schedule after permissions;
+# review the key and nonce in the deployment record, then run authority-execute with the
+# same key after the configured timelock delay. Both phases precede finalize.
 #   check-profile validate the selected profile against any existing deployment record
 #   status       print the recorded deployment and the on-chain view
 #
@@ -48,6 +55,7 @@
 set -euo pipefail
 
 PHASE=${1:-}
+DEPOSIT_ROOT_AUTHORITY=${2:-}
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$SCRIPT_DIR/../../.." && pwd)
 FOUNDRY_BIN=${LAYERX_PAXEER_FOUNDRY_BIN:-/root/.foundry/bin}
@@ -92,7 +100,7 @@ fail() {
 }
 
 usage() {
-    sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+    sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
     exit 2
 }
 
@@ -418,17 +426,66 @@ phase_bond() {
     echo "deploy-contracts: genesis bonds deposited for $GUARANTOR_COUNT guarantors" >&2
 }
 
+require_authority_argument() {
+    [[ "$DEPOSIT_ROOT_AUTHORITY" =~ ^0x[0-9a-fA-F]{64}$ ]] || fail "an explicit 0x-prefixed 32-byte Ed25519 public key argument is required"
+    [[ "$DEPOSIT_ROOT_AUTHORITY" != "0x$(printf '%064d' 0)" ]] || fail "the deposit-root authority must be nonzero"
+    DEPOSIT_ROOT_AUTHORITY=${DEPOSIT_ROOT_AUTHORITY,,}
+}
+
+phase_authority_schedule() {
+    require_authority_argument
+    require_tools
+    require_endpoint
+    require_deployer
+    require_record
+    load_inputs
+    jq -e '.deposit_root_authority == null' "$RECORD" >/dev/null || fail "deposit-root authority operation already recorded; review it before proceeding"
+    local nonce
+    nonce=$(timelock_nonce "$(jq -r '.addresses.timelock' "$RECORD")")
+    run_script "scheduleDepositRootAuthority((address,address,address,address,address,address,address,address,address,address,address,address,address,address),(string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),bytes32)" \
+        "$(addresses_tuple)" "$INPUT_TUPLE" "$DEPOSIT_ROOT_AUTHORITY"
+    jq --arg key "$DEPOSIT_ROOT_AUTHORITY" --arg nonce "$nonce" \
+        '.deposit_root_authority = {public_key: $key, nonce: $nonce, executed: false} | .phases += ["authority-schedule"]' \
+        "$RECORD" > "$WORK/record.json" && mv "$WORK/record.json" "$RECORD"
+    echo "deploy-contracts: deposit-root authority scheduled; review its public key and nonce in $RECORD and wait for the configured timelock delay" >&2
+}
+
+phase_authority_execute() {
+    require_authority_argument
+    require_tools
+    require_endpoint
+    require_deployer
+    require_record
+    load_inputs
+    [ "$(jq -r '.deposit_root_authority.public_key // empty' "$RECORD")" = "$DEPOSIT_ROOT_AUTHORITY" ] || fail "authority argument differs from the recorded scheduled public key"
+    jq -e '.deposit_root_authority.executed == false and (.deposit_root_authority.nonce | type == "string" and test("^[0-9]+$"))' "$RECORD" >/dev/null || fail "authority operation is not pending"
+    run_script "executeDepositRootAuthority((address,address,address,address,address,address,address,address,address,address,address,address,address,address),(string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),bytes32,uint256)" \
+        "$(addresses_tuple)" "$INPUT_TUPLE" "$DEPOSIT_ROOT_AUTHORITY" "$(jq -r '.deposit_root_authority.nonce' "$RECORD")"
+    [ "$(call "$(jq -r '.addresses.vault' "$RECORD")" 'depositRootAuthority()(bytes32)')" = "$DEPOSIT_ROOT_AUTHORITY" ] || fail "vault authority differs from the scheduled key"
+    jq '.deposit_root_authority.executed = true | .phases += ["authority-execute"]' "$RECORD" > "$WORK/record.json" && mv "$WORK/record.json" "$RECORD"
+}
+
+require_recorded_authority() {
+    local recorded observed
+    recorded=$(jq -r '.deposit_root_authority.public_key // empty' "$RECORD")
+    [[ "$recorded" =~ ^0x[0-9a-f]{64}$ ]] && [[ "$recorded" != "0x$(printf '%064d' 0)" ]] || fail "a nonzero deposit-root authority must be recorded before finalization"
+    jq -e '.deposit_root_authority.executed == true' "$RECORD" >/dev/null || fail "the deposit-root authority operation has not been executed"
+    observed=$(call "$(jq -r '.addresses.vault' "$RECORD")" 'depositRootAuthority()(bytes32)')
+    [ "$observed" = "$recorded" ] || fail "vault authority differs from the recorded public key"
+}
+
 phase_finalize() {
     require_tools
     require_endpoint
     require_deployer
     require_record
     load_inputs
+    require_recorded_authority
     run_script "finalize((address,address,address,address,address,address,address,address,address,address,address,address,address,address),(string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),(bytes32,address,address,uint64,uint64,uint256)[],uint256)" \
         "$(addresses_tuple)" "$INPUT_TUPLE" "$GUARANTOR_TUPLES" "$(jq -r '.timelock.genesis_start_nonce' "$RECORD")"
     [ "$(call "$(jq -r '.blueprint' "$RECORD")" "deploymentsSealed()(bool)")" = "true" ] || fail "blueprint is not sealed"
     for component in checkpoint_registry vault; do
-        [ "$(call "$(jq -r ".addresses.$component" "$RECORD")" 'EVIDENCE_VERSION()(uint16)')" = 1 ] \
+        [ "$(call "$(jq -r ".addresses.$component" "$RECORD")" 'EVIDENCE_VERSION()(uint16)')" = 2 ] \
             || fail "$component evidence publication version mismatch"
     done
     jq '.phases += ["finalize"]' "$RECORD" > "$WORK/record.json" && mv "$WORK/record.json" "$RECORD"
@@ -436,13 +493,16 @@ phase_finalize() {
 }
 
 phase_bootstrap() {
+    require_authority_argument
     require_tools
     [ -n "$INPUT_JSON" ] && [ -r "$INPUT_JSON" ] || fail "deployment input is required"
     [ "$(jq -r '.timelock_profile // "standard"' "$INPUT_JSON")" = immediate-beta ] || fail "bootstrap requires the explicit immediate-beta profile"
     phase_deploy
     phase_permissions
+    phase_authority_schedule
     phase_activate
     phase_bond
+    phase_authority_execute
     phase_finalize
 }
 
@@ -465,6 +525,8 @@ case "$PHASE" in
     permissions) phase_permissions ;;
     activate) phase_activate ;;
     bond) phase_bond ;;
+    authority-schedule) phase_authority_schedule ;;
+    authority-execute) phase_authority_execute ;;
     finalize) phase_finalize ;;
     status) phase_status ;;
     *) usage ;;

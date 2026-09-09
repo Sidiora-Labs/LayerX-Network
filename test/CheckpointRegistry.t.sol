@@ -824,7 +824,11 @@ contract CheckpointRegistryTest {
         bond.setSlashingAuthority(address(this));
         registry.invalidateCheckpoint(checkpoint);
         vm.expectRevert(CheckpointRegistry.InvalidHeader.selector);
-        registry.publishCheckpointWitnesses(checkpoint, hex"0102", hex"0304");
+        registry.publishCheckpointWitnesses(
+            checkpoint,
+            abi.encodePacked("LXP/Paxeer/withdrawal-witnesses/v1\x00", uint32(0)),
+            abi.encodePacked("LXP/Paxeer/balance-witnesses/v1\x00", uint32(0))
+        );
     }
 
     function testWitnessPublicationAuthorizationDigestEventAndDuplicate() public {
@@ -834,18 +838,61 @@ contract CheckpointRegistryTest {
         require(registry.checkpointProposer(checkpoint) == address(this), "proposer not bound");
         vm.prank(address(0x1234));
         vm.expectRevert(CheckpointRegistry.CheckpointProposerOnly.selector);
-        registry.publishCheckpointWitnesses(checkpoint, hex"0102", hex"0304");
+        registry.publishCheckpointWitnesses(
+            checkpoint,
+            abi.encodePacked("LXP/Paxeer/withdrawal-witnesses/v1\x00", uint32(0)),
+            abi.encodePacked("LXP/Paxeer/balance-witnesses/v1\x00", uint32(0))
+        );
         vm.expectRevert(CheckpointRegistry.CheckpointProposerOnly.selector);
-        registry.publishCheckpointWitnesses(bytes32(uint256(5)), hex"0102", hex"0304");
+        registry.publishCheckpointWitnesses(
+            bytes32(uint256(5)),
+            abi.encodePacked("LXP/Paxeer/withdrawal-witnesses/v1\x00", uint32(0)),
+            abi.encodePacked("LXP/Paxeer/balance-witnesses/v1\x00", uint32(0))
+        );
         vm.expectRevert(CheckpointRegistry.InvalidWitnesses.selector);
-        registry.publishCheckpointWitnesses(checkpoint, "", hex"0304");
+        registry.publishCheckpointWitnesses(
+            checkpoint, "", abi.encodePacked("LXP/Paxeer/balance-witnesses/v1\x00", uint32(0))
+        );
         vm.recordLogs();
-        registry.publishCheckpointWitnesses(checkpoint, hex"0102", hex"0304");
+        registry.publishCheckpointWitnesses(
+            checkpoint,
+            abi.encodePacked("LXP/Paxeer/withdrawal-witnesses/v1\x00", uint32(0)),
+            abi.encodePacked("LXP/Paxeer/balance-witnesses/v1\x00", uint32(0))
+        );
         CheckpointVm.Log[] memory logs = vm.getRecordedLogs();
-        bytes32 digest = sha256(abi.encode(checkpoint, uint16(1), hex"0102", hex"0304"));
+        bytes32 digest = sha256(
+            abi.encode(
+                checkpoint,
+                uint16(1),
+                abi.encodePacked("LXP/Paxeer/withdrawal-witnesses/v1\x00", uint32(0)),
+                abi.encodePacked("LXP/Paxeer/balance-witnesses/v1\x00", uint32(0))
+            )
+        );
         require(registry.witnessesDigest(checkpoint) == digest, "digest binding");
-        require(digest != sha256(abi.encode(checkpoint, uint16(1), hex"0103", hex"0304")), "withdrawal binding");
-        require(digest != sha256(abi.encode(checkpoint, uint16(1), hex"0102", hex"0305")), "balance binding");
+        require(
+            digest
+                != sha256(
+                    abi.encode(
+                        checkpoint,
+                        uint16(1),
+                        hex"0103",
+                        abi.encodePacked("LXP/Paxeer/balance-witnesses/v1\x00", uint32(0))
+                    )
+                ),
+            "withdrawal binding"
+        );
+        require(
+            digest
+                != sha256(
+                    abi.encode(
+                        checkpoint,
+                        uint16(1),
+                        abi.encodePacked("LXP/Paxeer/withdrawal-witnesses/v1\x00", uint32(0)),
+                        hex"0305"
+                    )
+                ),
+            "balance binding"
+        );
         require(logs.length == 1 && logs[0].emitter == address(registry), "emitter");
         require(logs[0].topics.length == 2 && logs[0].topics[1] == checkpoint, "indexed checkpoint");
         require(
@@ -853,7 +900,11 @@ contract CheckpointRegistryTest {
         );
         require(keccak256(logs[0].data) == keccak256(abi.encode(uint16(1), digest)), "event data");
         vm.expectRevert(CheckpointRegistry.WitnessesAlreadyPublished.selector);
-        registry.publishCheckpointWitnesses(checkpoint, hex"0102", hex"0304");
+        registry.publishCheckpointWitnesses(
+            checkpoint,
+            abi.encodePacked("LXP/Paxeer/withdrawal-witnesses/v1\x00", uint32(0)),
+            abi.encodePacked("LXP/Paxeer/balance-witnesses/v1\x00", uint32(0))
+        );
     }
 
     function _header() private pure returns (CanonicalCheckpoint.HeaderCommitments memory header) {

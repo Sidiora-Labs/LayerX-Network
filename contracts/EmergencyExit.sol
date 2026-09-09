@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
+import {Ed25519Verifier} from "./crypto/Ed25519.sol";
+import {NativeStateProof} from "./libraries/NativeStateProof.sol";
 import {CanonicalCheckpoint} from "./libraries/CanonicalCheckpoint.sol";
 import {PaxeerWithdrawalCodec} from "./libraries/PaxeerWithdrawalCodec.sol";
 import {CheckpointRegistry} from "./CheckpointRegistry.sol";
@@ -22,6 +24,16 @@ contract EmergencyExit is Governed, ReentrancyLock, LayerXComponent {
         bytes32 checkpointHash;
     }
 
+    struct NativeExitClaim {
+        bytes32 withdrawalId;
+        bytes32 account;
+        bytes32 assetId;
+        uint128 finalisedBalance;
+        address recipient;
+        bytes32 requestAnchor;
+        bytes32 inclusionCheckpoint;
+    }
+
     struct BalanceProof {
         uint256 leafIndex;
         bytes32[] siblings;
@@ -37,7 +49,9 @@ contract EmergencyExit is Governed, ReentrancyLock, LayerXComponent {
     LayerXVault public immutable vault;
     uint64 public immutable livenessBound;
     uint32 public immutable networkId;
+    Ed25519Verifier public recipientVerifier = new Ed25519Verifier();
     bool public governanceEmergency;
+    mapping(bytes32 => mapping(bytes32 => mapping(bytes32 => bool))) public balanceConsumed;
 
     event EmergencyDeclarationSet(bool enabled);
     event EmergencyExitExecuted(
@@ -119,6 +133,64 @@ contract EmergencyExit is Governed, ReentrancyLock, LayerXComponent {
     }
 
     function executeExit(
+        NativeExitClaim calldata exitClaim,
+        bytes32 stateRoot,
+        bytes calldata witness,
+        bytes calldata recipientSignature,
+        CanonicalCheckpoint.GuarantorAttestation[] calldata recordedAttestations
+    ) external nonReentrant returns (bytes32 claimId) {
+        bytes32 nullifier = PaxeerWithdrawalCodec.nullifier(
+            networkId,
+            exitClaim.withdrawalId,
+            exitClaim.account,
+            exitClaim.assetId,
+            exitClaim.finalisedBalance,
+            exitClaim.requestAnchor
+        );
+        if (
+            nullifierRegistry.status(nullifier) != WithdrawalNullifierRegistry.Status.None
+                || nullifierRegistry.withdrawalIdUsed(exitClaim.withdrawalId)
+                || balanceConsumed[exitClaim.account][exitClaim.assetId][exitClaim.inclusionCheckpoint]
+        ) revert ExitAlreadyConsumed();
+        if (!eligible()) revert ExitNotEligible();
+        bytes32 latest = latestCheckpointHash();
+        if (
+            exitClaim.inclusionCheckpoint != latest || !registry.isRecordedAncestor(exitClaim.requestAnchor, latest)
+                || exitClaim.withdrawalId
+                    != requiredWithdrawalId(exitClaim.account, exitClaim.assetId, exitClaim.requestAnchor)
+                || exitClaim.account == bytes32(0) || exitClaim.assetId == bytes32(0) || exitClaim.finalisedBalance == 0
+                || exitClaim.recipient == address(0) || !registry.isFinalised(latest, stateRoot)
+                || !registry.isRecordedCertificate(latest, recordedAttestations)
+        ) revert InvalidExitClaim();
+        NativeStateProof.verifyBalance(
+            recipientVerifier,
+            witness,
+            stateRoot,
+            exitClaim.account,
+            exitClaim.assetId,
+            exitClaim.finalisedBalance,
+            networkId,
+            exitClaim.recipient,
+            exitClaim.requestAnchor,
+            recipientSignature
+        );
+        claimId = sha256(abi.encode("LXP/Paxeer/emergency-exit/v1", block.chainid, address(this), nullifier));
+        balanceConsumed[exitClaim.account][exitClaim.assetId][latest] = true;
+        nullifierRegistry.reserve(nullifier, exitClaim.withdrawalId, claimId);
+        nullifierRegistry.consume(nullifier, claimId);
+        vault.release(claimId, exitClaim.assetId, exitClaim.recipient, exitClaim.finalisedBalance);
+        emit EmergencyExitExecuted(
+            claimId,
+            nullifier,
+            latest,
+            exitClaim.account,
+            exitClaim.assetId,
+            exitClaim.recipient,
+            exitClaim.finalisedBalance
+        );
+    }
+
+    function executeExit(
         ExitClaim calldata exitClaim,
         bytes32 stateRoot,
         BalanceProof calldata balanceProof,
@@ -128,6 +200,7 @@ contract EmergencyExit is Governed, ReentrancyLock, LayerXComponent {
         if (
             nullifierRegistry.status(nullifier) != WithdrawalNullifierRegistry.Status.None
                 || nullifierRegistry.withdrawalIdUsed(exitClaim.withdrawalId)
+                || balanceConsumed[exitClaim.account][exitClaim.assetId][exitClaim.checkpointHash]
         ) {
             revert ExitAlreadyConsumed();
         }
@@ -150,6 +223,7 @@ contract EmergencyExit is Governed, ReentrancyLock, LayerXComponent {
             revert InvalidExitClaim();
         }
         claimId = sha256(abi.encode("LXP/Paxeer/emergency-exit/v1", block.chainid, address(this), nullifier));
+        balanceConsumed[exitClaim.account][exitClaim.assetId][latest] = true;
         nullifierRegistry.reserve(nullifier, exitClaim.withdrawalId, claimId);
         nullifierRegistry.consume(nullifier, claimId);
         vault.release(claimId, exitClaim.assetId, exitClaim.recipient, exitClaim.finalisedBalance);

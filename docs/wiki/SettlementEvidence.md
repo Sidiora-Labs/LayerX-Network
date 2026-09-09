@@ -1,62 +1,42 @@
 # Settlement evidence publication
 
-Publication version 1 uses the existing CheckpointRegistry and LayerXVault addresses. It does not change the guarantor certificate, Ed25519 checkpoint authority, custody finality, withdrawal debit or emergency-exit verification rules. Deployment finalization checks both contracts' `EVIDENCE_VERSION()` equals 1. Existing deployed bytecode must be redeployed through the normal suite deployment; editing source does not upgrade it.
+Both publication contracts expose `EVIDENCE_VERSION() == 2`; deployment finalization requires 2. Existing deployed contracts require the normal redeployment process. Guarantor checkpoint certificates retain their existing signature scheme and all certificate checks.
 
-## Authority and ABI
+## Authority and publication
 
-`registerCheckpoint` continues to require a valid guarantor certificate. It records its caller in `checkpointProposer(bytes32)`. Only that caller can publish witnesses for the registered canonical checkpoint, once:
+`registerCheckpoint` records its proposer. Only that proposer can call `publishCheckpointWitnesses(bytes32,bytes,bytes)` once for a canonical checkpoint. Version-2 publications validate native inclusion, signed recipient bindings, the exact recorded certificate, and request-anchor ancestry before recording `SHA256(abi.encode(checkpointHash,uint16(2),withdrawals,balances))`. The event carries version 2. Legacy version-1 publication and proof paths remain available for their existing consumers; envelopes cannot mix versions.
 
-```solidity
-publishCheckpointWitnesses(bytes32 checkpointHash, bytes canonicalWithdrawalStateWitnesses, bytes canonicalBalanceWitnesses)
-event CheckpointWitnessesPublished(bytes32 indexed checkpointHash, uint16 version, bytes32 witnessesDigest)
-```
+The vault's governance configures `setDepositRootAuthority(bytes32)` with the independently provisioned Ed25519 checkpoint authority public key. The deployment script grants this selector through the existing timelock. Run `authority-schedule <ed25519-public-key>` after permissions, then `authority-execute <ed25519-public-key>` after the recorded delay; the explicit nonzero key and operation nonce are recorded and must match on execution. Finalization refuses an absent or mismatched authority before broadcasting. There is no default authority. An absent key refuses registration. `registerDepositRoot(bytes,bytes,bytes32[])` requires the recorded proposer and canonical root/network/protocol, then verifies the Ed25519 signature over the exact registration bytes. Its digest is `SHA256(abi.encode(uint16(2),registration,signature,leafOrdering))`. Ordering is positional, contains 1–4096 leaves, and consumers reconstruct the deposit root with the existing Merkle codec.
 
-The selector is `0x69929738`. The digest is SHA256 of `abi.encode(checkpointHash, uint16(1), canonicalWithdrawalStateWitnesses, canonicalBalanceWitnesses)`. The full bytes remain in transaction input. Both byte strings must be nonempty and together at most 1,000,000 bytes. Empty vectors have their tag and zero count. `witnessesPublished` refuses repeated publication independently of digest value; `witnessesDigest` exposes the commitment.
+`contracts/crypto/Ed25519.sol` implements SHA-512 and the cofactorless RFC 8032 verification equation with canonical point/scalar decoding and small-order refusals. Constructor-installed verifier helper contracts with no replacement setters keep this code outside the settlement contracts' runtime size. No EVM address is derived from an Ed25519 key.
 
-```solidity
-registerDepositRoot(bytes canonicalRegistration, bytes ed25519Signature, bytes32[] leafOrdering)
-event DepositRootRegistered(bytes32 indexed checkpointId, bytes32 indexed depositRoot, bytes32 registrationDigest, uint16 version)
-```
+## Version-2 publication encoding
 
-The selector is `0x8ff1fac9`. The vault resolves the existing registry through `guarantorBond.slashingAuthority().registry()`, checks its `guarantorEligibility()` equals the configured bond and requires the recorded checkpoint proposer. The same governance-controlled bond/challenge-manager wiring already used for settlement supplies this path; there is no new address or signing key configuration. The registration must match that registry's canonical checkpoint state root, network and protocol. It requires exactly 64 signature bytes and 1–4096 ordered leaf hashes. The contract pins the bytes; Ed25519 verification remains off-chain.
+All integers are unsigned big-endian. Vector framing is `tag || count:u32 || (item_length:u32 || item)*`.
 
-`registrationDigest = SHA256(abi.encode(uint16(1), canonicalRegistration, ed25519Signature, leafOrdering))`. `depositRegistrationDigest(checkpointId)` stores it; `depositRootRegistered(checkpointId)` refuses duplicates, including replacement signatures or orderings. Leaf ordering is Merkle positional order, not sorted hash order. The consumer rejects duplicate leaf hashes and reconstructs the root and index-aware path with `layerx_proof::merkle`.
+| Tag | Item |
+| --- | --- |
+| `LXP/Paxeer/withdrawal-witnesses/v2\0` | withdrawal_id32, semantic withdrawal_leaf32, checkpoint proof |
+| `LXP/Paxeer/balance-witnesses/v2\0` | account32, asset32, amount:u128, recipient20, checkpoint proof |
 
-## Canonical encodings
+Checkpoint proof wire is `0x02 0x02 || inclusion_checkpoint32 || state_root32 || epoch:u64 || batch:u64 || data_availability_root32 || leaf_index:u64=0 || sibling_count:u16=0 || attestation_count:u32 || packed_attestations || native_evidence`. Attestations retain the existing 18 fields and canonical widths.
 
-Integers below are unsigned big-endian. Tags are exact ASCII bytes, with a terminating zero only where explicitly shown. No trailing bytes are accepted. Publication version 1 is independent of the LayerX protocol version selected for proof validation.
+Native evidence is `request_anchor32 || inclusion_checkpoint32 || network_id:u32 || witness_length:u32 || witness || signature_length:u16 || signature`. Withdrawal signatures are empty because the committed native request already authenticates its recipient. Balance signatures are exactly 64 bytes. All native witnesses must reproduce the registered composite root. An empty balance publication is refused; an empty list cannot substitute for evidence of accounts in replayed state.
 
-Deposit `canonicalRegistration` is exactly the existing `deposit_root_registration_message` output:
+Recipient authorization signs `"LX:SETTLE:RECIPIENT:v1" || 0x00 || network_id:u32 || account32 || asset32 || recipient20 || request_anchor32` using the authority committed in the account leaf. The signature, native witness and both checkpoint identities persist through Human exit/withdrawal plans. Version-2 claim ABIs carry the inclusion checkpoint separately while retaining the request anchor in the existing nullifier domain. Both exit paths also consume the account/asset/inclusion balance once, so different valid signed anchors cannot spend that same proven balance twice.
 
-```
-"LX:PAXEER:DEPOSIT:ROOT:v1"
-checkpoint_id[32] checkpoint_state_root[32] deposit_root[32]
-custody_reference[32] network_id:u32 protocol_version:u16
-```
+Deposit registration signing bytes remain `"LX:PAXEER:DEPOSIT:ROOT:v1" || checkpoint_id32 || checkpoint_state_root32 || deposit_root32 || custody_reference32 || network_id:u32 || protocol_version:u16`, with no terminating zero in that domain.
 
-The authority signs these exact bytes with Ed25519. Leaf hashes are the real deposit leaf encoding passed through the protocol Merkle leaf hash. The signature is separate ABI calldata, not appended to the signing message.
+## Consumer sequence
 
-Both checkpoint witness byte strings use `tag || count:u32 || (item_length:u32 || item_bytes)*`, with at most 4096 entries and at most 1,048,576 bytes per decoded vector:
+1. Independently replay native state and construct account/withdrawal witnesses and actual deposit ordering.
+2. Obtain each account's recipient-binding signature and the configured checkpoint authority's deposit registration signature. A guarantor signing key cannot substitute for either authority.
+3. Register the inclusion checkpoint with its full guarantor certificate. Require the request anchor to be a recorded canonical ancestor or equal.
+4. Publish the version-2 vectors and register the signed deposit root.
+5. Fetch through `PublishedDepositProof::fetch_published`, `CheckpointProof::fetch_published` and `ExitEvidence::fetch_published`. These verify transaction/receipt/block consistency, confirmation depth, proposer, canonical ABI, event version, digest and native proof. Endpoint TLS and chain identity checks remain required.
+6. Apply the existing custody, committed-debit, certificate, nullifier, recipient and exit-eligibility boundaries before payout. Publication alone is not payout authorization.
 
-| Vector tag | Item bytes | Strict entry ordering |
-| --- | --- | --- |
-| `LXP/Paxeer/withdrawal-witnesses/v1\0` | withdrawal_id[32], withdrawal_leaf_hash[32], canonical checkpoint proof | withdrawal_id |
-| `LXP/Paxeer/balance-witnesses/v1\0` | account[32], asset[32], balance:u128, recipient[20], canonical checkpoint proof | (account, asset, recipient) |
-
-The checkpoint proof is the existing `wire::encode_checkpoint_proof_for_protocol` representation: `0x01 0x02`, checkpoint hash[32], state root[32], epoch:u64, batch:u64, data-availability root[32], leaf index:u64, sibling count:u16, siblings[32] each, attestation count:u32, then the existing canonical guarantor attestations. Its decoder applies all existing protocol, depth, index and attestation structural checks. Withdrawal leaves and balance leaves use the existing verifier hash functions, including ABI address padding. Every witness root must equal the registered resulting state root.
-
-`CheckpointProof::encode_publication` and `ExitEvidence::encode_publication` produce these encodings from the workspace's real types and reject mismatched roots and unordered entries. The complete proof carries guarantor attestations; the existing claim verifiers check them against the certificate recorded on-chain.
-
-## Consumer flow
-
-1. Configure the normal `EndpointConfig` with the exact chain ID and TLS trust, or `LocalEmulator` for a loopback Anvil. Supply the existing vault and registry addresses, expected checkpoint identity, protocol version and confirmation depth. No custom RPC method or provider-specific indexer is used.
-2. Fetch `CheckpointRegistered` and the appropriate publication event using `eth_getLogs`. Fetch each transaction input using `eth_getTransactionByHash` and its receipt using `eth_getTransactionReceipt`. Require successful execution, matching emitting contract, checkpoint topics, transaction hash/index and block identity. Require the publication caller to equal the checkpoint registration caller.
-3. Use `eth_getBlockByNumber` for the head and containing blocks; require the requested confirmation depth, matching canonical block hashes and inclusion at the declared transaction index. `raw_call` also checks `eth_chainId` against endpoint configuration on each request. Refuse absent or ambiguous observations.
-4. Strictly decode the ABI, reconstruct it to reject aliasing, padding and trailing calldata, and recompute the complete publication digest. Decode canonical witnesses and bind checkpoint hash, resulting root, epoch, batch and data-availability root to the registration event.
-5. For deposits call `PublishedDepositProof::fetch_published` with the actual custody event facts, then pass its result and the separately tracked custody `FinalityReport` to `DepositProofVerifier::obtain`. That existing verifier checks the configured Ed25519 key, network, protocol, custody reference, quorum/finality and custody leaf inclusion.
-6. For withdrawals call `CheckpointProof::fetch_published` with the debit expectation, then pass the returned proof and verified `CommittedWithdrawalDebit` to `WithdrawalBoundary::construct_claim`. For exits call `ExitEvidence::fetch_published`, then `EmergencyExit::construct_claim`. These existing boundaries remain mandatory: they verify certificate standing, asset and debit bindings, nullifiers, roots and exit eligibility before settlement. Publication itself is not a payout authorization.
-
-The fetch methods return untrusted evidence and typed endpoint failures. They do not replace the existing quorum and admission APIs. Balance witnesses are available before `executeExit`; the exit event is never used as a pre-settlement proof source.
+The autonomous producer still needs the actual account-signed bindings and checkpoint-authority registration material; native replay cannot manufacture those signatures. Source support and focused contract tests are separate from a qualified end-to-end producer publication run.
 
 ## Native state witness version 2
 
@@ -78,31 +58,6 @@ and the first key byte is `04`. It proves the canonical account record into the
 account registry; layer A then proves the `account-tree` binding, and layer B
 proves the preserved module wrapper under the composite root. All other leaves
 omit that segment. The shared C vectors include three real account balances.
-
-Version-2 payout publication remains incomplete. Recipient authorization signs
-`"LX:SETTLE:RECIPIENT:v1" || 0x00 || network_id:u32be || account_id32 ||
-asset32 || evm_recipient20 || request_anchor32` with the committed account
-Ed25519 authority. `ExitEvidence::verify_native_balance` passes the native
-account inclusion and this signature through `verify_balance_proof`; it refuses
-an absent authority, altered signed field, invalid signature or mismatched
-account, asset, balance or composite root. The caller supplies the expected
-network and anchor. This method does not replace registry, certificate or exit
-eligibility checks. The publication and claim APIs still use their version-1
-path. Solidity checkpoint registration uses secp256k1; this checkout has no
-Solidity Ed25519 verifier to connect to the recipient binding.
-The real withdrawal request is now committed in asset KV, but its checkpoint ID
-is part of the nullifier. That request anchor must be distinguished from the
-later checkpoint proving inclusion: embedding the inclusion checkpoint's own
-hash in its committed state would be circular. The asset interface now advertises WITHDRAW at ordinal 9. Its signed activity
-payload is `asset32 || amount:u128be || evm_recipient20 || request_anchor32 ||
-fee_limit:u64be`. The owner authority and fee limit are bound to the activity,
-and the handler calls `lx_asset_withdraw_request`; the activity ID supplies the
-withdrawal ID and the EVM recipient is left-padded to the existing 32-byte
-record field. Real signed module-dispatch tests prove committed KV inclusion
-and refusal behavior. The daemon still rejects the new operation in admission
-and replay; its allowlists are outside the current lane scope.
-
-The required rollout sequence remains: independently replay the checkpoint; decode committed settlement facts and build their proofs and deposit leaf ordering; register the checkpoint; publish the withdrawal and balance witness vectors; register the signed deposit root; fetch through `PublishedDepositProof::fetch_published`, `CheckpointProof::fetch_published` and `ExitEvidence::fetch_published`; then apply the existing custody, debit, certificate, nullifier and eligibility checks. The claim consumers and publication contracts still use version 1 until this entire sequence can carry real facts. A coordinated rollout must change both `EVIDENCE_VERSION` constants and the deployment finalization expectation to 2. The account vectors prove balances but do not authorize EVM payouts.
 
 For module zero and a 33-byte key beginning with `04`, version 2 carries the
 canonical account leaf from `lx_account_state_leaf_material`. Immediately after
@@ -133,6 +88,4 @@ that record. `CheckpointRegistry::isRecordedAncestor(requestAnchor,
 inclusionCheckpoint)` requires both checkpoints to remain canonical and checks
 their recorded batch order. Registration already enforces consecutive batches,
 sequence continuity and state-root continuity. Unknown, future and invalidated
-anchors or inclusion checkpoints are refused. The consumer rollout must carry
-both fields and enforce this predicate together with `isFinalised` for the
-inclusion root; the existing version-1 proof transport has not yet been migrated.
+anchors or inclusion checkpoints are refused. Version-2 consumers carry both fields and enforce this predicate together with `isFinalised` for the inclusion root.
