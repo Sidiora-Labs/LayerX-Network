@@ -1,3 +1,5 @@
+import { subscribeRpc, type SubscriptionTopic } from "./rpc-subscription.js";
+export type { SubscriptionTopic } from "./rpc-subscription.js";
 import { createHash } from "node:crypto";
 import * as http from "node:http";
 import * as https from "node:https";
@@ -23,6 +25,11 @@ export class JsonRpcClient {
     accounts: (did: string): Promise<Record<string, unknown>> => this.getBalances(did),
     balance: (did: string, asset: string): Promise<Record<string, unknown>> => this.getBalance(walletAccount(did, asset, nativeAsset)),
   }; }
+  public subscribe(topic: SubscriptionTopic, account?: string, signal?: AbortSignal): AsyncGenerator<Record<string, unknown>> {
+    let authorization: string | undefined;
+    this.credential?.use(value => { authorization = value; });
+    return subscribeRpc(this.#endpoint, authorization, (++this.#id).toString(), topic, account, signal);
+  }
   public getAccount(account: string): Promise<Record<string, unknown>> { return this.call("lx_getAccount", [account]); }
   public getBalance(account: string): Promise<Record<string, unknown>> { return this.call("lx_getBalance", [account]); }
   public getBalances(did: string): Promise<Record<string, unknown>> { return this.call("lx_getBalances", [did]); }
@@ -32,6 +39,15 @@ export class JsonRpcClient {
   public getBatchHeader(batch: string): Promise<Record<string, unknown>> { return this.call("lx_getBatchHeader", [batch]); }
   public getCheckpoint(checkpoint: string): Promise<Record<string, unknown>> { return this.call("lx_getCheckpoint", [checkpoint]); }
   public getNodeInfo(): Promise<Record<string, unknown>> { return this.call("lx_getNodeInfo", []); }
+  public listAssets(): Promise<Record<string, unknown>> { return this.call("lx_listAssets", []); }
+  public getAsset(asset: string): Promise<Record<string, unknown>> {
+    if (!/^[0-9a-f]{64}$/u.test(asset)) throw new Error("Invalid asset identifier");
+    return this.call("lx_getAsset", [asset]);
+  }
+  public estimateFee(canonical: Uint8Array): Promise<Record<string, unknown>> {
+    if (canonical.length === 0 || canonical.length > 524288) throw new Error("Invalid activity length");
+    return this.call("lx_estimateFee", [Buffer.from(canonical).toString("hex")]);
+  }
   public getProof(kind: "activity" | "receipt" | "account", activity: string, account?: string): Promise<Record<string, unknown>> {
     if ((kind === "account") !== (account !== undefined)) throw new Error("Invalid proof selector");
     return this.call("lx_getProof", account === undefined ? [kind, activity] : [kind, activity, account]);
@@ -83,7 +99,7 @@ export function decodeJsonRpcResponse(value: unknown, id: string): Record<string
 function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 
 export function walletAccount(did: string, asset: string, nativeAsset: string): string {
-  if (!/^[a-z0-9._:-]{1,255}$/u.test(did) || did.startsWith(":") || did.endsWith(":") || did.includes("::") ||
+  if (!/^[a-z0-9._:-]{1,255}$/u.test(did) || did.startsWith(":") || did.endsWith(":") || did.includes("::") || did.includes(":asset:") ||
       !/^[0-9a-f]{64}$/u.test(asset) || !/^[0-9a-f]{64}$/u.test(nativeAsset)) throw new Error("Invalid wallet selector");
   const name = Buffer.from(asset === nativeAsset ? `agent:${did}:main` : `agent:${did}:asset:${asset}`);
   const length = Buffer.alloc(4); length.writeUInt32BE(name.length);

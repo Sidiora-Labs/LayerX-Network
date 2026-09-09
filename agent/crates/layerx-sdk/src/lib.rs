@@ -452,3 +452,5 @@ const fn validate_contract(contract: ContractVersion) -> Result<(), SdkError> {
         })
     }
 }
+
+mod rpc_subscription;

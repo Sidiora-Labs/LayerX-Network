@@ -29,6 +29,10 @@
   },
   "devDependencies": {
     "@types/node": "22.18.1",
+    "@types/ws": "8.18.1",
     "typescript": "5.9.2"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
   }
 }

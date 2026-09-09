@@ -1,3 +1,4 @@
+pub use crate::rpc_subscription::{RpcSubscription, SubscriptionTopic};
 use serde_json::{json, Value};
 pub type RpcValue = Value;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -142,10 +143,42 @@ impl RpcClient {
         get_batch_header => "lx_getBatchHeader", get_checkpoint => "lx_getCheckpoint",
     }
 
+    /// Opens an authenticated public subscription. Notifications are unverified hints.
+    /// # Errors
+    /// Refuses invalid topic selectors, transport failures and mismatched acknowledgements.
+    pub fn subscribe(
+        &self,
+        topic: SubscriptionTopic,
+        account: Option<[u8; 32]>,
+    ) -> Result<RpcSubscription, RpcError> {
+        crate::rpc_subscription::connect(&self.endpoint, self.credential.as_ref(), topic, account)
+    }
+
     /// # Errors
     /// Preserves node-info RPC refusals.
     pub fn get_node_info(&self) -> Result<Value, RpcError> {
         self.call("lx_getNodeInfo", &json!([]))
+    }
+
+    /// # Errors
+    /// Preserves native asset-listing refusals; returned read data is unverified.
+    pub fn list_assets(&self) -> Result<Value, RpcError> {
+        self.call("lx_listAssets", &json!([]))
+    }
+
+    /// # Errors
+    /// Preserves native asset metadata refusals; returned read data is unverified.
+    pub fn get_asset(&self, asset: [u8; 32]) -> Result<Value, RpcError> {
+        self.call("lx_getAsset", &json!([encode_hex(&asset)]))
+    }
+
+    /// # Errors
+    /// Refuses empty or oversized activities and preserves native fee-estimation errors.
+    pub fn estimate_fee(&self, canonical: &[u8]) -> Result<Value, RpcError> {
+        if canonical.is_empty() || canonical.len() > 524_288 {
+            return Err(RpcError::InvalidRequest);
+        }
+        self.call("lx_estimateFee", &json!([encode_hex(canonical)]))
     }
 
     /// # Errors
@@ -317,5 +350,18 @@ mod tests {
             .ok(),
             Some(json!({"state":"pending"}))
         );
+    }
+    #[test]
+    fn fee_estimation_refuses_invalid_lengths_before_transport() {
+        let rpc =
+            RpcClient::connect("http://127.0.0.1:1", None).unwrap_or_else(|e| panic!("{e:?}"));
+        assert!(matches!(
+            rpc.estimate_fee(&[]),
+            Err(RpcError::InvalidRequest)
+        ));
+        assert!(matches!(
+            rpc.estimate_fee(&vec![0; 524_289]),
+            Err(RpcError::InvalidRequest)
+        ));
     }
 }

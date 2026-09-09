@@ -24,3 +24,20 @@ const decimalsOffset=nameOffset+1+nameLength;
 const cap=BigInt(`0x${registration.subarray(decimalsOffset+1,decimalsOffset+17).toString("hex")}`);
 assert.equal(Buffer.from(encodeNativeRegistration({salt:registration.subarray(34,66).toString("hex"),symbol:registration.subarray(67,nameOffset).toString(),name:registration.subarray(nameOffset+1,decimalsOffset).toString(),decimals:registration[decimalsOffset]!,supplyCap:cap},"did:layerx:alice")).toString("hex"),registration.toString("hex"));
 assert.throws(()=>new WalletRpc("relative",{} as never));
+
+const feeClient = new JsonRpcClient("http://127.0.0.1:1");
+assert.throws(() => feeClient.estimateFee(new Uint8Array()));
+assert.throws(() => feeClient.estimateFee(new Uint8Array(524289)));
+assert.throws(() => feeClient.getAsset("AB".repeat(32)));
+
+const { subscriptionAcknowledgement, subscriptionNotification } = await import("../src/rpc-subscription.js");
+assert.equal(subscriptionAcknowledgement({jsonrpc:"2.0",id:"1",result:"sub"},"1"),"sub");
+assert.throws(() => subscriptionAcknowledgement({jsonrpc:"2.0",id:"2",result:"sub"},"1"));
+assert.throws(() => subscriptionAcknowledgement({jsonrpc:"2.0",id:"1",result:{state:"accepted"}},"1"));
+const event = {jsonrpc:"2.0",method:"lx_subscription",params:{subscription:"sub",result:{state:"pending"}}};
+assert.deepEqual(subscriptionNotification(event,"sub"),{state:"pending"});
+assert.throws(() => subscriptionNotification(event,"other"));
+await assert.rejects(feeClient.subscribe("account").next());
+await assert.rejects(feeClient.subscribe("receipts","ab".repeat(32)).next());
+const cancellation = new AbortController(); cancellation.abort();
+await assert.rejects(feeClient.subscribe("receipts",undefined,cancellation.signal).next());
