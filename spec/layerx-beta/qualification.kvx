@@ -7648,3 +7648,11 @@ symbol = "send_did_accounts"
 observed = "Native DID enumeration exists as tag 7 kind 3 and tag 8 sorted canonical account values with proofs. The named hosted public-read and gateway files do not exist in this clone. No gateway ownership was duplicated."
 assumption = "Public RPC ownership must integrate committed Asset metadata, enumeration and canonical fee reads; method presence and decoders must not be reported as executed activities."
 severity = "blocker"
+
+[observation.3.7.48]
+task = "3.7"
+file = "include/layerx/lx_asset.h"
+symbol = "lx_asset_register_decode"
+observed = "The merged payload comments used dotted numeric ranges that matched the existing consensus floating-point scanner. make test exited 2 at test-arith-nofloat; evidence: qual-logs/pay1/pay1e-test.log. Spelling the same bounds as 1 to 16 and 1 to 32 fixes the comment-only diagnostic without altering payload bounds or the scanner. make test-arith-nofloat exits 0; evidence: qual-logs/pay1/pay1e-qa-comments.log and pay1e-qa-comments.exit."
+assumption = "This is a merge-introduced comment failure, not an inherited implementation failure. No test, scanner rule or protocol check was weakened."
+severity = "note"

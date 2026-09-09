@@ -60,8 +60,8 @@ typedef struct lx_asset_grant_revoke_payload {
     uint64_t revocation_sequence;
 } lx_asset_grant_revoke_payload;
 
-/* version:u16=1 || asset_id32 || salt32 || symbol_len:u8 || symbol(1..16 ASCII)
- * || name_len:u8 || name(1..32 UTF-8) || decimals:u8<=38 || supply_cap:u128
+/* version:u16=1 || asset_id32 || salt32 || symbol_len:u8 || symbol(1 to 16 ASCII)
+ * || name_len:u8 || name(1 to 32 UTF-8) || decimals:u8<=38 || supply_cap:u128
  * || issuer_kind:u8 || custody_ref_len:u8 || custody_ref. Integers big-endian. */
 lxp_result lx_asset_register_decode(const uint8_t *bytes, size_t length,
                                     lx_asset_register_payload *payload);
