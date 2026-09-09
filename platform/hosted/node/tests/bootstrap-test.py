@@ -78,11 +78,13 @@ class BootstrapTest(unittest.TestCase):
                 key_publics = []
                 keys = list((data / 'secrets').glob('guarantor-key*.pem'))
                 self.assertEqual(len(keys), count)
+                legacy_key = Path(exports['LAYERX_NODE_GENESIS_GUARANTOR_KEY_FILE'])
+                self.assertIn(legacy_key, keys)
                 for key in keys:
                     self.assertEqual(key.stat().st_mode & 0o777, 0o600)
                     der = subprocess.check_output(['openssl', 'ec', '-in', str(key), '-pubout', '-conv_form', 'compressed', '-outform', 'DER'], stderr=subprocess.DEVNULL)
                     key_publics.append(der[-33:].hex())
-                    if key.name == 'guarantor-key.pem':
+                    if key == legacy_key:
                         self.assertEqual(exports['LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY'], der[-33:].hex())
                         self.assertEqual(exports['LAYERX_NODE_GENESIS_GUARANTOR_KEY_FILE'], str(key))
                 self.assertEqual(sorted(key_publics), sorted(publics))
