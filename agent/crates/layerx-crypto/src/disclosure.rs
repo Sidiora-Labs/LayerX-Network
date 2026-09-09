@@ -256,7 +256,6 @@ fn decode_send(payload: &[u8], activity: &Activity) -> Result<SendSemantics, Dis
         || signed_context_hash != context_hash
         || network_id != activity.network_id()
         || protocol_version != activity.protocol_version()
-        || sequence != activity.account_sequence()
         || idempotency_key != activity.idempotency_key()
     {
         return Err(DisclosureError::MalformedPayload);
@@ -286,11 +285,7 @@ fn decode_receive(payload: &[u8], activity: &Activity) -> Result<SendSemantics, 
     let idempotency_key = fixed(&mut decoder)?;
     let _context_hash: [u8; 32] = fixed(&mut decoder)?;
     decoder.finish()?;
-    if amount == 0
-        || from == to
-        || sequence != activity.account_sequence()
-        || idempotency_key != activity.idempotency_key()
-    {
+    if amount == 0 || from == to || idempotency_key != activity.idempotency_key() {
         return Err(DisclosureError::MalformedPayload);
     }
     Ok(SendSemantics {
@@ -549,14 +544,10 @@ fn payment_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
     }
     let payment = Payment::decode(kind.0, kind.1, activity.payload(), activity.actor_did())?;
     if let Payment::Receive {
-        sequence,
-        idempotency_key,
-        ..
+        idempotency_key, ..
     } = &payment
     {
-        if *sequence != activity.account_sequence()
-            || *idempotency_key != activity.idempotency_key()
-        {
+        if *idempotency_key != activity.idempotency_key() {
             return Err(DisclosureError::MalformedPayload);
         }
     }
@@ -766,6 +757,28 @@ struct DisclosureFields {
 }
 
 impl Disclosure {
+    #[must_use]
+    pub const fn envelope_sequence(&self) -> u64 {
+        self.activity.account_sequence()
+    }
+
+    /// # Errors
+    /// Returns a payload decoding error for malformed canonical semantics.
+    pub fn payload_sequence(&self) -> Result<Option<u64>, DisclosureError> {
+        if let Some(payment) = &self.payment {
+            return Ok(match payment {
+                Payment::Receive { sequence, .. } => Some(*sequence),
+                _ => None,
+            });
+        }
+        match (self.activity_type.module(), self.activity_type.ordinal()) {
+            (ModuleId::Asset, 5 | 6) | (ModuleId::Budget, 7) => {
+                Ok(Some(semantics(&self.activity)?.sequence))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn validate_fields(&self) -> Result<(), DisclosureError> {
         let expected = decoded_fields(&self.activity)?;
         macro_rules! require_field {
@@ -817,11 +830,15 @@ impl Disclosure {
         self.validate_fields()?;
         let mut encoder = Encoder::new(MAX_TRANSPORT_DISCLOSURE_BYTES);
         encoder.structure_header(0x4453)?;
-        encoder.u8(if self.withdrawal.is_some() || self.payment.is_some() {
-            2
-        } else {
-            1
-        })?;
+        encoder.u8(3)?;
+        encoder.u64(self.envelope_sequence())?;
+        match self.payload_sequence()? {
+            Some(sequence) => {
+                encoder.u8(1)?;
+                encoder.u64(sequence)?;
+            }
+            None => encoder.u8(0)?,
+        }
         encoder.u32(self.activity_type.value())?;
         encoder.bytes(&self.actor, 255)?;
         encoder.bytes(&self.authority, 524_288)?;

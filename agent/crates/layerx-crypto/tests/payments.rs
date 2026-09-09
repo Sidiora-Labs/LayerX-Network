@@ -190,3 +190,22 @@ fn every_accepted_field_mutation_is_refused_at_the_signing_boundary(
     }
     Ok(())
 }
+
+#[test]
+fn receive_discloses_source_sequence_independently() -> Result<(), Box<dyn std::error::Error>> {
+    let mut payment = Payment::decode(ModuleId::Asset, 6, &hex(VECTORS[2].2), ACTOR)?;
+    if let Payment::Receive { sequence, .. } = &mut payment {
+        *sequence = 23;
+    }
+    let payload = payment.encode(ACTOR)?;
+    assert_eq!(
+        payload,
+        hex(include_str!("fixtures/payments/1-6-source-sequence-23.hex"))
+    );
+    let (bytes, registry) = canonical(ModuleId::Asset, 6, &payload)?;
+    let disclosure = bind(&bytes, &registry)?;
+    assert_eq!(disclosure.envelope_sequence(), 7);
+    assert_eq!(disclosure.payload_sequence()?, Some(23));
+    assert_eq!(disclosure.reencode()?, bytes);
+    Ok(())
+}

@@ -254,3 +254,18 @@ fn native_withdrawal_refuses_old_unknown_truncated_extended_and_invalid_fields()
         Err(DisclosureError::UnsupportedActivity(_))
     ));
 }
+
+#[test]
+fn send_discloses_independent_identity_and_source_sequences() {
+    let registry = support::registry();
+    let canonical = support::canonical_send_sequences(25, 19);
+    let Ok(disclosure) = bind(&canonical, &registry) else {
+        panic!("independent sequences rejected");
+    };
+    assert_eq!(disclosure.envelope_sequence(), 19);
+    assert_eq!(disclosure.payload_sequence(), Ok(Some(7)));
+    let signer = LocalSigner::new([0xa5; 32]);
+    assert!(ready(sign_disclosed(&signer, &canonical, &disclosure, &registry)).is_ok());
+    let other = support::canonical_send_sequences(25, 20);
+    assert!(ready(sign_disclosed(&signer, &other, &disclosure, &registry)).is_err());
+}
