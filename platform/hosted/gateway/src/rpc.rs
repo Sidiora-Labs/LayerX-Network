@@ -99,12 +99,16 @@ fn invalid_request(value: &Value) -> Option<Value> {
     }
 }
 
-fn dispatch(config: &Config, value: &Value) -> Option<Value> {
+fn dispatch(config: &Config, request: &IncomingRequest, value: &Value) -> Option<Value> {
     if let Some(refusal) = invalid_request(value) {
         return Some(refusal);
     }
     let id = value.get("id").cloned().unwrap_or(Value::Null);
     let method = value["method"].as_str()?;
+    if method == "lx_sendActivity" {
+        let result = send(config, request, &id, value.get("params"));
+        return value.get("id").map(|_| result);
+    }
     let result = match selector(method, value.get("params")) {
         Ok(path) => {
             let upstream = public_reads::read(config, &path);
@@ -138,6 +142,188 @@ fn dispatch(config: &Config, value: &Value) -> Option<Value> {
     value.get("id").map(|_| result)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Commitment {
+    Executed,
+    Batched,
+    Finalised,
+}
+
+fn send_params(params: Option<&Value>) -> Result<(Vec<u8>, Commitment), i32> {
+    let Some(Value::Array(args)) = params else {
+        return Err(-32602);
+    };
+    let [Value::String(canonical), Value::String(commitment)] = args.as_slice() else {
+        return Err(-32602);
+    };
+    let commitment = match commitment.as_str() {
+        "executed" => Commitment::Executed,
+        "batched" => Commitment::Batched,
+        "finalised" => Commitment::Finalised,
+        _ => return Err(-32602),
+    };
+    let canonical = super::decode_hex(canonical, 512 * 1024).map_err(|_| -32602)?;
+    if canonical.is_empty() {
+        return Err(-32602);
+    }
+    Ok((canonical, commitment))
+}
+
+fn upstream_result(id: &Value, answer: &OutgoingResponse) -> Result<Value, Value> {
+    let body: Value = serde_json::from_slice(&answer.body)
+        .map_err(|_| error(id, -32603, "Invalid upstream response"))?;
+    if matches!(answer.status, 200 | 202) && body.get("result").is_some() {
+        return Ok(body["result"].clone());
+    }
+    let code = match answer.status {
+        400 | 415 => -32602,
+        401 | 403 => -32002,
+        429 => -32005,
+        _ => -32001,
+    };
+    let mut refused = error(id, code, "Submission unavailable");
+    refused["error"]["data"] = body;
+    Err(refused)
+}
+
+fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&Value>) -> Value {
+    let (canonical, commitment) = match send_params(params) {
+        Ok(value) => value,
+        Err(code) => return error(id, code, "Invalid params"),
+    };
+    let record = match super::authenticate_key(config, request) {
+        Ok(record) => record,
+        Err(answer) => return upstream_result(id, &answer).unwrap_or_else(|value| value),
+    };
+    if !super::permits(&record, &super::ProductionRoute::Activity) {
+        return error(id, -32002, "Insufficient scope");
+    }
+    let Ok(activity) = super::decode_signed(&canonical, &config.modules) else {
+        return error(id, -32602, "Invalid canonical activity");
+    };
+    let path = match (
+        activity.activity_type().module(),
+        activity.activity_type().ordinal(),
+    ) {
+        (super::ModuleId::Programs, 1) => "/v1/programs/deploy",
+        (super::ModuleId::Programs, 2) => "/v1/programs/upgrade",
+        (super::ModuleId::Programs, 3) => "/v1/programs/call",
+        (super::ModuleId::Programs, 7) => "/v1/programs/wind-down",
+        _ => "/v1/activities",
+    };
+    let Ok(route) = super::production_route("POST", path) else {
+        return error(id, -32603, "Invalid submission route");
+    };
+    if !super::permits(&record, &route) {
+        return error(id, -32002, "Insufficient scope");
+    }
+    let mut headers = request.headers.clone();
+    headers.insert("content-type".into(), "application/octet-stream".into());
+    headers.insert(
+        "idempotency-key".into(),
+        super::hex(&activity.idempotency_key()),
+    );
+    let forwarded = IncomingRequest {
+        method: "POST".into(),
+        path: path.into(),
+        headers,
+        body: canonical,
+    };
+    let answer = super::activity(
+        config,
+        &forwarded,
+        &record,
+        &super::trace(request),
+        path == "/v1/programs/call",
+        true,
+    );
+    let mut result = match upstream_result(id, &answer) {
+        Ok(result) => result,
+        Err(error) => return error,
+    };
+    if answer.status == 202 {
+        result["state"] = json!("pending");
+        return json!({"jsonrpc":"2.0", "id":id, "result":result});
+    }
+    if result
+        .get("receipt")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return error(id, -32603, "Missing verified receipt");
+    }
+    if commitment == Commitment::Executed {
+        result["commitment"] = json!("executed");
+    } else {
+        complete_commitment(config, &mut result, commitment);
+    }
+    json!({"jsonrpc":"2.0", "id":id, "result":result})
+}
+
+fn read_result(config: &Config, path: &str) -> Option<Value> {
+    let answer = public_reads::read(config, path);
+    if answer.status != 200 {
+        return None;
+    }
+    let document: Value = serde_json::from_slice(&answer.body).ok()?;
+    document.get("result").cloned()
+}
+
+fn complete_commitment(config: &Config, result: &mut Value, commitment: Commitment) {
+    let Some(activity) = result
+        .get("activity_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        result["state"] = json!("pending");
+        return;
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(proof) =
+            read_result(config, &format!("/v1/proofs/receipt/{activity}")).filter(|proof| {
+                proof["activity_id"] == activity && proof["canonical_value"] == result["receipt"]
+            })
+        {
+            if commitment == Commitment::Batched {
+                result["commitment"] = json!("batched");
+                result["batch_evidence"] = proof;
+                return;
+            }
+            if let Some(node) = read_result(config, "/v1/node-info") {
+                if let Some(checkpoint) = node
+                    .get("latest_finalised_checkpoint")
+                    .and_then(Value::as_str)
+                    .filter(|id| parse_hex32(id).is_ok() && *id != "00".repeat(32))
+                {
+                    if let Some(evidence) =
+                        read_result(config, &format!("/v1/checkpoints/{checkpoint}"))
+                    {
+                        if evidence
+                            .get("canonical_header")
+                            .and_then(Value::as_str)
+                            .is_some()
+                            && evidence["canonical_header"]
+                                == proof["signed_header"]["canonical_header"]
+                        {
+                            result["commitment"] = json!("finalised");
+                            result["batch_evidence"] = proof;
+                            result["checkpoint_evidence"] = evidence;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            result["state"] = json!("pending");
+            result["commitment"] = json!("executed");
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 pub(super) fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     if request.path == "/rpc/schema" {
         return if request.method == "GET" {
@@ -165,7 +351,7 @@ pub(super) fn route(config: &Config, request: &IncomingRequest) -> OutgoingRespo
         } else {
             let results: Vec<_> = batch
                 .iter()
-                .filter_map(|entry| dispatch(config, entry))
+                .filter_map(|entry| dispatch(config, request, entry))
                 .collect();
             if results.is_empty() {
                 None
@@ -174,7 +360,7 @@ pub(super) fn route(config: &Config, request: &IncomingRequest) -> OutgoingRespo
             }
         }
     } else {
-        dispatch(config, &value)
+        dispatch(config, request, &value)
     };
     result.map_or_else(
         || OutgoingResponse {
@@ -189,6 +375,32 @@ pub(super) fn route(config: &Config, request: &IncomingRequest) -> OutgoingRespo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn send_params_require_canonical_hex_and_an_explicit_commitment() {
+        for (name, commitment) in [
+            ("executed", Commitment::Executed),
+            ("batched", Commitment::Batched),
+            ("finalised", Commitment::Finalised),
+        ] {
+            assert_eq!(
+                send_params(Some(&json!(["abcd", name]))),
+                Ok((vec![0xab, 0xcd], commitment))
+            );
+        }
+        for params in [
+            json!([]),
+            json!(["abcd"]),
+            json!(["", "executed"]),
+            json!(["0xz1", "executed"]),
+            json!(["abc", "executed"]),
+            json!(["abcd", "ack"]),
+            json!(["abcd", "executed", 3]),
+            json!({}),
+        ] {
+            assert_eq!(send_params(Some(&params)), Err(-32602));
+        }
+    }
 
     #[test]
     fn invalid_envelopes_have_json_rpc_errors_and_null_ids() {

@@ -162,7 +162,8 @@ fn evidence(config: &Config, kind: &str, id: &str) -> Response {
     match client.checkpoint_evidence(CheckpointSelector::Identifier(id), 1) {
         Ok(checkpoint) => success(&serde_json::json!({
             "checkpoint_id": hex_encode(&id), "checkpoint": hex_encode(checkpoint.checkpoint_bytes()),
-            "context": hex_encode(checkpoint.context_bytes())
+            "context": hex_encode(checkpoint.context_bytes()),
+            "canonical_header": hex_encode(checkpoint.canonical_header())
         })),
         Err(_) => refusal(503, "checkpoint_evidence_unavailable", Some(5)),
     }

@@ -1524,6 +1524,7 @@ fn activity(
     record: &KeyRecord,
     trace_id: &str,
     program_call: bool,
+    rpc_submission: bool,
 ) -> OutgoingResponse {
     let lifecycle_ordinal = program_lifecycle::ordinal(&request.path);
     let program_mutation = program_call || lifecycle_ordinal.is_some();
@@ -1582,7 +1583,11 @@ fn activity(
     ]);
     let scope = digest(&[
         record.principal_digest.as_bytes(),
-        protocol_idempotency.as_bytes(),
+        if rpc_submission {
+            submitted_activity_id.as_bytes()
+        } else {
+            protocol_idempotency.as_bytes()
+        },
     ]);
     let operation = ActivityOperation {
         scope,
@@ -2426,11 +2431,13 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         };
     }
     let result = match parsed {
-        ProductionRoute::ProgramCall => activity(config, request, &record, &trace_id, true),
+        ProductionRoute::ProgramCall => activity(config, request, &record, &trace_id, true, false),
         ProductionRoute::Activity
         | ProductionRoute::ProgramDeploy
         | ProductionRoute::ProgramUpgrade
-        | ProductionRoute::ProgramWindDown => activity(config, request, &record, &trace_id, false),
+        | ProductionRoute::ProgramWindDown => {
+            activity(config, request, &record, &trace_id, false, false)
+        }
         ProductionRoute::ProgramSimulation => {
             program_simulation(config, request, &record, &trace_id)
         }

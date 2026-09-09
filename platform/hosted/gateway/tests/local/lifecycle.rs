@@ -379,7 +379,7 @@ fn start_local_gateway(
             local_secret(
                 &cluster.root,
                 "modules.json",
-                r#"{"modules":[{"module":9,"ordinals":[1,2,3,7]}]}"#,
+                &serde_json::json!({"schema_version":2,"assets":[{"asset":hex_encode(&cluster.asset),"currency":"NATIVE","decimals":0,"symbol":"LXR"}],"modules":[{"module":1,"ordinals":[5]},{"module":9,"ordinals":[1,2,3,5,6,7]}]}).to_string(),
             ),
         ),
     ]);
@@ -408,6 +408,10 @@ fn gateway_upstream_environment(
     let redis_port = redis.port;
     let redis_password = &redis.password;
     BTreeMap::from([
+        (
+            "LAYERX_GATEWAY_PUBLIC_CORE_URL",
+            format!("https://localhost:{}", boundary.core.port),
+        ),
         (
             "LAYERX_GATEWAY_COMPONENT_URL",
             format!("https://localhost:{}", boundary.core.port),
@@ -460,6 +464,15 @@ fn issue_local_key(
     gateway: &Gateway,
     identity: &LocalIdentity,
 ) -> serde_json::Value {
+    issue_local_scoped_key(certificates, gateway, identity, &["program:call"])
+}
+
+fn issue_local_scoped_key(
+    certificates: &Certificates,
+    gateway: &Gateway,
+    identity: &LocalIdentity,
+    scopes: &[&str],
+) -> serde_json::Value {
     let gateway_port = gateway.port;
     let session_token = identity.session.as_str();
     let signer = &identity.signer;
@@ -489,21 +502,21 @@ fn issue_local_key(
         &gateway_http,
         "/v1/keys",
         session_token,
-        &serde_json::json!({"signer_public_key":hex_encode(&SigningKey::from_bytes(&random32()).verifying_key().to_bytes()),"scopes":["program:call"],"quota_requests":1000,"quota_window_seconds":60}),
+        &serde_json::json!({"signer_public_key":hex_encode(&SigningKey::from_bytes(&random32()).verifying_key().to_bytes()),"scopes":scopes,"quota_requests":1000,"quota_window_seconds":60}),
         403,
     );
     let key = local_json(
         &gateway_http,
         "/v1/keys",
         session_token,
-        &serde_json::json!({"signer_public_key":signer,"scopes":["program:call"],"quota_requests":1000,"quota_window_seconds":60}),
+        &serde_json::json!({"signer_public_key":signer,"scopes":scopes,"quota_requests":1000,"quota_window_seconds":60}),
         201,
     );
     let replayed_key = local_json(
         &gateway_http,
         "/v1/keys",
         session_token,
-        &serde_json::json!({"signer_public_key":signer,"scopes":["program:call"],"quota_requests":1000,"quota_window_seconds":60}),
+        &serde_json::json!({"signer_public_key":signer,"scopes":scopes,"quota_requests":1000,"quota_window_seconds":60}),
         200,
     );
     assert!(
@@ -708,4 +721,106 @@ fn local_manifest(cluster: &Cluster) -> PathBuf {
         0o600,
     );
     path
+}
+
+#[test]
+fn local_gateway_rpc() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    establish_receipt_head(&boundary, &cluster);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let key = issue_local_scoped_key(
+        &certificates,
+        &gateway,
+        &identity,
+        &["activity:write", "program:call"],
+    );
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let authorization = format!(
+        "LayerX-Key {}:{}",
+        key["key"]["id"].as_str().required("key id"),
+        key["key"]["secret"].as_str().required("key secret")
+    );
+    let call = |method: &str, params: serde_json::Value, authenticated: bool| {
+        let mut headers = vec![("Content-Type", "application/json")];
+        if authenticated {
+            headers.push(("Authorization", authorization.as_str()));
+        }
+        let answer = http.request(
+            "POST",
+            "/rpc",
+            &headers,
+            &serde_json::to_vec(
+                &serde_json::json!({"jsonrpc":"2.0","id":7,"method":method,"params":params}),
+            )
+            .required("RPC"),
+        );
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let result = json(&answer);
+        assert_eq!(result["id"], 7);
+        result
+    };
+    assert_eq!(
+        call("lx_getNodeInfo", serde_json::json!([]), false)["result"]["network_id"],
+        NETWORK_ID
+    );
+    let manifest = local_manifest(&cluster);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(manifest).required("manifest")).required("manifest JSON");
+    let signed = fs::read(manifest[0]["signed_file"].as_str().required("signed path"))
+        .required("signed bytes");
+    let params = serde_json::json!([hex_encode(&signed), "executed"]);
+    assert_eq!(
+        call("lx_sendActivity", params.clone(), false)["error"]["code"],
+        -32002
+    );
+    let first = call("lx_sendActivity", params.clone(), true);
+    assert_eq!(first["result"]["commitment"], "executed", "{first}");
+    assert!(first["result"]["receipt"]
+        .as_str()
+        .is_some_and(|r| !r.is_empty()));
+    assert_eq!(
+        call("lx_sendActivity", params, true)["result"],
+        first["result"]
+    );
+    let batched = call(
+        "lx_sendActivity",
+        serde_json::json!([hex_encode(&signed), "batched"]),
+        true,
+    );
+    assert_eq!(batched["result"]["commitment"], "batched", "{batched}");
+    assert_eq!(
+        batched["result"]["batch_evidence"]["canonical_value"],
+        first["result"]["receipt"]
+    );
+    let finalised = call(
+        "lx_sendActivity",
+        serde_json::json!([hex_encode(&signed), "finalised"]),
+        true,
+    );
+    assert_eq!(finalised["result"]["state"], "pending", "{finalised}");
+    assert_eq!(finalised["result"]["commitment"], "executed");
+    assert_eq!(
+        call(
+            "lx_sendActivity",
+            serde_json::json!([hex_encode(&signed), "ack"]),
+            true
+        )["error"]["code"],
+        -32602
+    );
 }
