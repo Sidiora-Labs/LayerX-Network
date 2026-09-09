@@ -7256,6 +7256,8 @@ severity = "blocker"
 
 [observation.3.7.77]
 task = "3.7"
+[observation.3.7.24]
+task = "3.7"
 file = "src/ledger/lxp_journal.c"
 symbol = "lxp_conservation_check lxp_apply_transfer_set"
 observed = "Native mint and burn require a change in total account units, but the transfer set unconditionally rejects unequal per-asset debit and credit totals. The current balance primitive applies both endpoints. These checks are identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
@@ -7518,6 +7520,14 @@ assumption = "Extend daemon admission and replay to the assigned asset ordinals 
 severity = "blocker"
 
 [observation.3.7.78]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "collect_assets verify replay admission"
+observed = "Daemon asset admission and replay allow only LX_ASSET_SEND. Runtime registry reconstruction collects asset ids from accounts without issuer, cap, name or pause metadata. The file is outside the permitted account-read changes and identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
+assumption = "Extend daemon admission and replay to the assigned asset ordinals and reconstruct the committed asset registry without synthesizing metadata from balances."
+severity = "blocker"
+
+[observation.3.7.26]
 task = "3.7"
 file = "include/layerx/lxp_receipt.h"
 symbol = "lxp_receipt lxp_ledger_receipt_input"
