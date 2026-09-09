@@ -1,6 +1,5 @@
 use serde_json::{json, Value};
 pub type RpcValue = Value;
-use sha2::{Digest as _, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -89,29 +88,13 @@ pub fn wallet_account(
     asset: [u8; 32],
     native_asset: [u8; 32],
 ) -> Result<[u8; 32], RpcError> {
-    if did.is_empty()
-        || did.len() > 255
-        || did.starts_with(':')
-        || did.ends_with(':')
-        || did.contains("::")
-        || !did
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-:".contains(&b))
-    {
-        return Err(RpcError::InvalidRequest);
-    }
-    let name = if asset == native_asset {
-        format!("agent:{did}:main")
-    } else {
-        let asset: String = encode_hex(&asset);
-        format!("agent:{did}:asset:{asset}")
-    };
-    let length = u32::try_from(name.len()).map_err(|_| RpcError::InvalidRequest)?;
-    let mut hash = Sha256::new();
-    hash.update(b"LX:ACCOUNT:v1");
-    hash.update(length.to_be_bytes());
-    hash.update(name.as_bytes());
-    Ok(hash.finalize().into())
+    let account = layerx_types::account::AccountId::for_asset(did, asset, native_asset)
+        .map_err(|_| RpcError::InvalidRequest)?;
+    layerx_wire::hash::account_id_for_protocol(
+        &account,
+        layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
+    )
+    .map_err(|_| RpcError::InvalidRequest)
 }
 
 impl RpcClient {
