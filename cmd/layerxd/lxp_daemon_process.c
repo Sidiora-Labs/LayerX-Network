@@ -12,6 +12,7 @@
 #include "layerx/lxp_snapshot.h"
 #include "lxp_daemon_artifact.h"
 #include "lxp_daemon_batch_wal.h"
+#include "lxp_daemon_lni_internal.h"
 #include "lxp_daemon_finality_authority.h"
 
 #include <openssl/evp.h>
@@ -2021,6 +2022,8 @@ static lxp_result publish_canonical_batch(
                 status = LXP_FATAL_INVARIANT;
         }
     }
+    if (status == LXP_OK)
+        status = lxp_daemon_lni_receipts_committed();
     if (status == LXP_OK)
         status = availability_prune(process, header.batch_number);
     if (status == LXP_OK) {

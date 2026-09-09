@@ -47,7 +47,6 @@ const RESET_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_CONNECTIONS: usize = 128;
 const LNI_FRAME_BYTES: usize = 1_212_416;
 const LNI_DEADLINE: Duration = Duration::from_secs(5);
-const RECEIPT_POLL: Duration = Duration::from_millis(200);
 const WIRE_VERSION: &str = "3";
 const RECEIPT_LOOKUP_REQUEST_TAG: u16 = 5;
 const RECEIPT_LOOKUP_RESPONSE_TAG: u16 = 6;
@@ -518,6 +517,7 @@ fn lookup_receipt_bytes(
     handshake: &Handshake,
     activity_id: [u8; 32],
     correlation_id: u64,
+    wait_ms: u32,
 ) -> Result<Option<Vec<u8>>, String> {
     if !handshake.capabilities().contains(Capability::ReceiptLookup) {
         return Err("receipt_lookup capability is unavailable".to_owned());
@@ -525,6 +525,9 @@ fn lookup_receipt_bytes(
     let mut selector = Vec::with_capacity(33);
     selector.push(1);
     selector.extend_from_slice(&activity_id);
+    if wait_ms > 0 {
+        selector.extend_from_slice(&wait_ms.to_be_bytes());
+    }
     let request = encode_envelope(Envelope {
         version: handshake.node().interface_version,
         message_tag: RECEIPT_LOOKUP_REQUEST_TAG,
@@ -611,9 +614,19 @@ fn await_receipt(
     let started = Instant::now();
     let mut correlation = 1_u64;
     loop {
-        if let Some(bytes) =
-            lookup_receipt_bytes(&mut transport, &handshake, activity_id, correlation)?
-        {
+        if let Some(bytes) = lookup_receipt_bytes(
+            &mut transport,
+            &handshake,
+            activity_id,
+            correlation,
+            u32::try_from(
+                deadline
+                    .saturating_sub(started.elapsed())
+                    .as_millis()
+                    .min(3000),
+            )
+            .map_err(|_| "receipt deadline overflow".to_owned())?,
+        )? {
             let facts = receipt_facts(&bytes, handshake.node().authorised_sequencer_key)?;
             if facts.activity_id != activity_id {
                 return Err("receipt names another activity".to_owned());
@@ -624,7 +637,6 @@ fn await_receipt(
             return Ok(None);
         }
         correlation += 1;
-        thread::sleep(RECEIPT_POLL);
     }
 }
 
@@ -905,7 +917,7 @@ fn receipt_route(config: &Config, activity_hex: &str) -> Response {
         return refusal(400, "invalid_argument", None);
     }
     let lookup = connect_raw(config).and_then(|(mut transport, handshake)| {
-        lookup_receipt_bytes(&mut transport, &handshake, activity_id, 1)
+        lookup_receipt_bytes(&mut transport, &handshake, activity_id, 1, 0)
     });
     match lookup {
         Ok(Some(bytes)) => success(&serde_json::json!({
