@@ -901,3 +901,5 @@ async function sha256(...values: readonly Uint8Array[]): Promise<Uint8Array> {
 async function merkleLeafDigest(canonicalReceipt: Uint8Array): Promise<Uint8Array> {
   return sha256(MERKLE_LEAF_DOMAIN, canonicalReceipt);
 }
+
+export * from "./rpc.js";
