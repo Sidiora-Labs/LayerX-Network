@@ -42,6 +42,28 @@ export function paymentCommitment(extra: unknown): PaymentCommitment {
   return commitment;
 }
 
+function layerXTerms(extra: unknown): Record<string, unknown> | undefined {
+  if (extra === undefined || extra === null || typeof extra !== "object" || Array.isArray(extra)) return undefined;
+  const layerx = (extra as Record<string, unknown>)["layerx"];
+  if (layerx === undefined) return undefined;
+  if (layerx === null || typeof layerx !== "object" || Array.isArray(layerx)) return failure();
+  return layerx as Record<string, unknown>;
+}
+
+export function paymentPayer(extra: unknown, required = false): string | undefined {
+  const payer = layerXTerms(extra)?.["payer"];
+  if (payer === undefined && !required) return undefined;
+  if (typeof payer !== "string" || !/^[0-9a-f]{64}$/u.test(payer) || /^0+$/u.test(payer)) return failure();
+  return payer;
+}
+
+export function paymentPurpose(extra: unknown, required = false): string | undefined {
+  const purpose = layerXTerms(extra)?.["purposeHash"];
+  if (purpose === undefined && !required) return undefined;
+  if (typeof purpose !== "string" || !/^[0-9a-f]{64}$/u.test(purpose) || /^0+$/u.test(purpose)) return failure();
+  return purpose;
+}
+
 function equal(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }

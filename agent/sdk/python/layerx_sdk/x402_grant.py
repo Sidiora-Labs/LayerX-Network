@@ -21,14 +21,18 @@ def validate_grant_draw(
         not integer(offer["amount"], 128)
         or int(offer["amount"]) == 0
         or terms["commitment"] not in ("executed", "batched", "finalised")
-        or not isinstance(terms["purposeHash"], str)
-        or re.fullmatch(r"[0-9a-f]{64}", terms["purposeHash"]) is None
-        or terms["purposeHash"] == "00" * 32
+        or not isinstance(terms.get("payer"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", terms.get("payer", "")) is None
+        or terms.get("payer") == "00" * 32
+        or not isinstance(terms.get("purposeHash"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", terms.get("purposeHash", "")) is None
+        or terms.get("purposeHash") == "00" * 32
         or receive["asset"] != offer["asset"]
         or receive["to"] != offer["payTo"]
         or receive["amount"] != offer["amount"]
         or receive["idempotency_key"] != idempotency_key
         or receive["grant_id"] != grant["grant_id"]
+        or receive["from"] != terms["payer"]
         or receive["from"] != grant["from"]
         or receive["to"] != grant["recipient"]
         or receive["asset"] != grant["asset"]

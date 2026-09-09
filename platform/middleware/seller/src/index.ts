@@ -1,4 +1,10 @@
-import { paymentCommitment, verifyPaymentCommitment, type PaymentCommitmentResolver } from "./commitment.js";
+import {
+  paymentCommitment,
+  paymentPayer,
+  paymentPurpose,
+  verifyPaymentCommitment,
+  type PaymentCommitmentResolver,
+} from "./commitment.js";
 export * from "./commitment.js";
 import {
   PlatformSdkError,
@@ -63,6 +69,7 @@ export interface LayerXReceiptEvidence {
   readonly receipt: string;
   readonly receiptDigest: string;
   readonly verificationLevel: "sequencer-signed";
+  readonly purposeHash?: string;
 }
 
 export interface SettlementResponse {
@@ -251,10 +258,12 @@ export class SellerMiddleware<T> {
       throw new MiddlewareError("fulfillment-conflict");
     }
     const receiptDigest = toHex(await merkleLeafDigest(stored.canonicalReceipt));
+    const purposeHash = paymentPurpose(requirements.extra);
     const evidence: LayerXReceiptEvidence = {
       receipt: encodeBase64(stored.canonicalReceipt),
       receiptDigest,
       verificationLevel: "sequencer-signed",
+      ...(purposeHash === undefined ? {} : { purposeHash }),
     };
     const settlement: SettlementResponse = {
       success: true,
@@ -317,10 +326,18 @@ export async function verifyPaymentReceipt(
     }
     throw error;
   }
+  let payer: string | undefined;
+  try {
+    payer = paymentPayer(requirements.extra, requirements.scheme !== "exact");
+  } catch (error) {
+    if (error instanceof PlatformSdkError) throw new MiddlewareError("verification-failure");
+    throw error;
+  }
   if (
     verified.receipt.amount !== BigInt(requirements.amount)
     || !equalBytes(verified.receipt.asset, parseHex32(requirements.asset))
     || !equalBytes(verified.receipt.to, parseHex32(requirements.payTo))
+    || (payer !== undefined && !equalBytes(verified.receipt.from, parseHex32(payer)))
   ) {
     throw new MiddlewareError("verification-failure");
   }
@@ -529,6 +546,10 @@ function parseSettlement(value: unknown): SettlementResponse {
   if (!object["success"] && errorReason === "settlement_pending" && transaction.length === 0) {
     throw new MiddlewareError("invalid-payment-payload");
   }
+  if (object["success"] && (typeof object["payer"] !== "string"
+    || !/^[0-9a-f]{64}$/u.test(object["payer"]) || /^0+$/u.test(object["payer"]))) {
+    throw new MiddlewareError("invalid-payment-payload");
+  }
   return {
     success: object["success"],
     transaction,
@@ -571,10 +592,16 @@ function parseRequirements(value: unknown): PaymentRequirements {
   const scheme = asIdentifier(object["scheme"], 32, "invalid-payment-required");
   if (!["exact", "metered", "subscription"].includes(scheme)) throw new MiddlewareError("unsupported-payment");
   const extra = object["extra"];
-  paymentCommitment(extra);
+  try {
+    paymentCommitment(extra);
+    paymentPayer(extra, scheme !== "exact");
+    paymentPurpose(extra, scheme !== "exact");
+  } catch (error) {
+    if (error instanceof PlatformSdkError) throw new MiddlewareError("invalid-payment-required");
+    throw error;
+  }
   if (scheme !== "exact") {
     const terms = asObject(asObject(extra, "invalid-payment-required")["layerx"], "invalid-payment-required");
-    if (typeof terms["purposeHash"] !== "string" || !/^[0-9a-f]{64}$/u.test(terms["purposeHash"]) || /^0+$/u.test(terms["purposeHash"])) throw new MiddlewareError("invalid-payment-required");
     const window = terms["windowSeconds"];
     if (scheme === "subscription" ? typeof window !== "string" || !/^[1-9][0-9]{0,19}$/u.test(window) || BigInt(window) > 0xffff_ffff_ffff_ffffn : window !== undefined) throw new MiddlewareError("invalid-payment-required");
   }
@@ -648,16 +675,21 @@ function refusalDecision<T>(
 
 function parseLayerXEvidence(value: Readonly<Record<string, JsonValue>>): LayerXReceiptEvidence {
   const object = asObject(value, "invalid-payment-payload");
-  exactKeys(object, ["receipt", "receiptDigest", "verificationLevel"], ["idempotencyKey"], "invalid-payment-payload");
+  exactKeys(object, ["receipt", "receiptDigest", "verificationLevel"], ["idempotencyKey", "purposeHash"], "invalid-payment-payload");
   if (object["verificationLevel"] !== "sequencer-signed") {
     throw new MiddlewareError("verification-failure");
   }
   const receiptDigest = asString(object["receiptDigest"], "invalid-payment-payload");
   parseHex32(receiptDigest);
+  const purposeHash = object["purposeHash"] === undefined
+    ? undefined
+    : asString(object["purposeHash"], "invalid-payment-payload");
+  if (purposeHash !== undefined) parseHex32(purposeHash);
   return {
     receipt: asBoundedString(object["receipt"], MAX_HEADER_BYTES, "invalid-payment-payload"),
     receiptDigest,
     verificationLevel: "sequencer-signed",
+    ...(purposeHash === undefined ? {} : { purposeHash }),
   };
 }
 

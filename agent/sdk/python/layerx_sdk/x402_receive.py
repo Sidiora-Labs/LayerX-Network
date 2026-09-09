@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Mapping
 
 _CORE = (
@@ -169,6 +170,83 @@ def decode_receive(value: bytes) -> dict[str, object]:
     if offset != len(value):
         raise ValueError("invalid-receive")
     return result
+
+
+def derive_native_asset_id(issuer_did_id32: str, salt: str) -> str:
+    try:
+        issuer = _encode({"issuer": issuer_did_id32}, (("issuer", "hex", 32),))
+        salt_bytes = _encode({"salt": salt}, (("salt", "hex", 32),))
+    except ValueError as error:
+        raise ValueError("invalid-asset-register") from error
+    return hashlib.sha256(b"LX:ASSET:v1" + issuer + salt_bytes).hexdigest()
+
+
+def encode_asset_register(
+    issuer_did_id32: str, registration: Mapping[str, object]
+) -> bytes:
+    source = _record(registration)
+    required = {
+        "salt",
+        "symbol",
+        "name",
+        "decimals",
+        "supply_cap",
+        "issuer_kind",
+        "custody_ref",
+    }
+    if not required <= source.keys() or source.keys() - required - {"asset_id"}:
+        raise ValueError("invalid-asset-register")
+    try:
+        salt = _encode(source, (("salt", "hex", 32),))
+        symbol = source["symbol"].encode("ascii")
+        name = source["name"].encode("utf-8")
+    except (AttributeError, UnicodeError, ValueError) as error:
+        raise ValueError("invalid-asset-register") from error
+    decimals = source["decimals"]
+    issuer_kind = source["issuer_kind"]
+    custody_ref = source["custody_ref"]
+    if (
+        not 1 <= len(symbol) <= 16
+        or not 1 <= len(name) <= 32
+        or type(decimals) is not int
+        or not 0 <= decimals <= 38
+        or type(issuer_kind) is not int
+        or issuer_kind not in (1, 2)
+        or type(custody_ref) is not bytes
+        or len(custody_ref) > 128
+        or (issuer_kind == 1 and custody_ref)
+    ):
+        raise ValueError("invalid-asset-register")
+    derived = derive_native_asset_id(issuer_did_id32, source["salt"])
+    asset_id = source.get("asset_id", derived)
+    if (issuer_kind == 1 and asset_id != derived) or (
+        issuer_kind == 2 and "asset_id" not in source
+    ):
+        raise ValueError("invalid-asset-register")
+    try:
+        asset = _encode({"asset": asset_id}, (("asset", "hex", 32),))
+        tail = _encode(
+            source,
+            (
+                ("decimals", "number", 1),
+                ("supply_cap", "integer", 16),
+                ("issuer_kind", "number", 1),
+            ),
+        )
+    except ValueError as error:
+        raise ValueError("invalid-asset-register") from error
+    return (
+        b"\x00\x01"
+        + asset
+        + salt
+        + bytes((len(symbol),))
+        + symbol
+        + bytes((len(name),))
+        + name
+        + tail
+        + bytes((len(custody_ref),))
+        + custody_ref
+    )
 
 
 def encode_account_open(asset: str) -> bytes:

@@ -9,8 +9,14 @@ from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import urlsplit
 
-from .x402 import payment_commitment, verify_payment_receipt
+from .x402 import (
+    payment_commitment,
+    payment_payer,
+    payment_purpose,
+    verify_payment_receipt,
+)
 from .x402_rpc import rpc_hex, verify_rpc_payment
+from .production import PlatformSdkError
 
 
 def _object(value):
@@ -97,12 +103,14 @@ def validate_requirements(value):
     timeout = value["maxTimeoutSeconds"]
     if type(timeout) is not int or not 0 < timeout < 1 << 32:
         raise ValueError("invalid-payment-timeout")
-    payment_commitment(value.get("extra"))
+    try:
+        payment_commitment(value.get("extra"))
+        payment_payer(value.get("extra"), required=value["scheme"] != "exact")
+        payment_purpose(value.get("extra"), required=value["scheme"] != "exact")
+    except PlatformSdkError as error:
+        raise ValueError("invalid-payment-terms") from error
     if value["scheme"] != "exact":
         terms = _object(_object(value.get("extra")).get("layerx"))
-        rpc_hex(terms.get("purposeHash"), 32)
-        if terms["purposeHash"] == "00" * 32:
-            raise ValueError("invalid-payment-purpose")
         window = terms.get("windowSeconds")
         if value["scheme"] == "subscription":
             if (
@@ -305,6 +313,9 @@ class SellerMiddleware:
             amount=offer["amount"],
             asset=offer["asset"],
             pay_to=offer["payTo"],
+            payer=payment_payer(
+                offer.get("extra"), required=offer["scheme"] != "exact"
+            ),
             commitment=payment_commitment(offer.get("extra")),
             evidence=evidence.commitment_evidence,
         )
@@ -312,6 +323,7 @@ class SellerMiddleware:
             b"LXP/v1/merkle-leaf\0" + evidence.canonical_receipt
         ).hexdigest()
         resource = self.fulfillments.fulfill(key, digest, receipt_digest, release)
+        purpose_hash = payment_purpose(offer.get("extra"))
         settlement = {
             "success": True,
             "transaction": "lxp:" + receipt_digest,
@@ -323,6 +335,11 @@ class SellerMiddleware:
                     "receipt": base64.b64encode(evidence.canonical_receipt).decode(),
                     "receiptDigest": receipt_digest,
                     "verificationLevel": "sequencer-signed",
+                    **(
+                        {"purposeHash": purpose_hash}
+                        if purpose_hash is not None
+                        else {}
+                    ),
                 }
             },
         }
@@ -476,6 +493,11 @@ class BuyerMiddleware:
             settlement.get("success") is not True
             or settlement.get("network") != offer["network"]
             or settlement.get("amount") != offer["amount"]
+            or settlement.get("payer") != receive["from"]
+            or settlement.get("payer")
+            != payment_payer(offer.get("extra"), required=True)
+            or body.get("purposeHash")
+            != payment_purpose(offer.get("extra"), required=True)
             or body.get("verificationLevel") != "sequencer-signed"
         ):
             raise ValueError("settlement-mismatch")
@@ -531,16 +553,20 @@ class BuyerMiddleware:
         evidence = self.resolve_receipt(receipt, offer)
         if evidence.canonical_receipt != receipt:
             raise ValueError("receipt-mismatch")
-        return verify_payment_receipt(
+        verified = verify_payment_receipt(
             receipt,
             evidence.authorized_batch,
             self.signatures,
             amount=offer["amount"],
             asset=offer["asset"],
             pay_to=offer["payTo"],
+            payer=payment_payer(offer.get("extra")),
             commitment=payment_commitment(offer.get("extra")),
             evidence=evidence.commitment_evidence,
         )
+        if settlement.get("payer") != verified.receipt.from_account.hex():
+            raise ValueError("settlement-payer-mismatch")
+        return verified
 
 
 class ConfiguredReceiptAuthority:
@@ -559,12 +585,20 @@ def grant_payment_header(required, accepted, receive_hex):
     validate_required(required)
     validate_requirements(accepted)
     receive = decode_receive(rpc_hex(receive_hex, 733))
+    terms = accepted["extra"]["layerx"]
+    grant = receive["payer_grant"]
     if (
         accepted["scheme"] not in ("metered", "subscription")
         or accepted not in required["accepts"]
         or receive["to"] != accepted["payTo"]
         or receive["asset"] != accepted["asset"]
         or receive["amount"] != accepted["amount"]
+        or receive["from"] != terms["payer"]
+        or receive["from"] != grant["from"]
+        or receive["grant_id"] != grant["grant_id"]
+        or receive["to"] != grant["recipient"]
+        or receive["asset"] != grant["asset"]
+        or grant["purpose_hash"] != terms["purposeHash"]
     ):
         raise ValueError("requirements-mismatch")
     return encode_header(

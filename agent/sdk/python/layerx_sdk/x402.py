@@ -51,6 +51,45 @@ def payment_commitment(extra: object = None) -> PaymentCommitment:
     return commitment
 
 
+def _layerx_terms(extra: object) -> Mapping | None:
+    if not isinstance(extra, Mapping):
+        return None
+    layerx = extra.get("layerx")
+    if layerx is None:
+        return None
+    if not isinstance(layerx, Mapping):
+        _failure()
+    return layerx
+
+
+def payment_payer(extra: object = None, *, required: bool = False) -> str | None:
+    payer = (_layerx_terms(extra) or {}).get("payer")
+    if payer is None and not required:
+        return None
+    if (
+        not isinstance(payer, str)
+        or len(payer) != 64
+        or any(c not in "0123456789abcdef" for c in payer)
+        or payer == "0" * 64
+    ):
+        _failure()
+    return payer
+
+
+def payment_purpose(extra: object = None, *, required: bool = False) -> str | None:
+    purpose = (_layerx_terms(extra) or {}).get("purposeHash")
+    if purpose is None and not required:
+        return None
+    if (
+        not isinstance(purpose, str)
+        or len(purpose) != 64
+        or any(c not in "0123456789abcdef" for c in purpose)
+        or purpose == "0" * 64
+    ):
+        _failure()
+    return purpose
+
+
 def verify_payment_commitment_evidence(
     verified: ReceiptVerification,
     sequencer_public_key: bytes,
@@ -111,6 +150,7 @@ def verify_payment_receipt(
     amount: str,
     asset: str,
     pay_to: str,
+    payer: str | None = None,
     commitment: PaymentCommitment = "executed",
     evidence: PaymentCommitmentEvidence | None = None,
 ) -> ReceiptVerification:
@@ -122,18 +162,21 @@ def verify_payment_receipt(
         or not 0 < int(amount) < 1 << 128
     ):
         _failure()
-    for identifier in (asset, pay_to):
+    for identifier in (asset, pay_to) + (() if payer is None else (payer,)):
         if (
             not isinstance(identifier, str)
             or len(identifier) != 64
             or any(c not in "0123456789abcdef" for c in identifier)
         ):
             _failure()
+    if payer == "0" * 64:
+        _failure()
     verified = verify_receipt(canonical_receipt, authorized, signatures)
     if (
         verified.receipt.amount != int(amount)
         or verified.receipt.asset.hex() != asset
         or verified.receipt.to_account.hex() != pay_to
+        or (payer is not None and verified.receipt.from_account.hex() != payer)
     ):
         _failure()
     if commitment not in ("executed", "batched", "finalised"):

@@ -20,10 +20,12 @@ const offer = {
 };
 
 test("native executed receipt and amount, asset, recipient binding", async () => {
-  await verifyPaymentReceipt(evidence, offer);
+  const payer = Buffer.from((await verifyPaymentReceipt(evidence, offer)).receipt.from).toString("hex");
+  await verifyPaymentReceipt(evidence, { ...offer, extra: { layerx: { commitment: "executed", payer } } });
   for (const change of [{ amount: "25001" }, { asset: "01".repeat(32) }, { payTo: "01".repeat(32) }]) {
     await assert.rejects(verifyPaymentReceipt(evidence, { ...offer, ...change }));
   }
+  await assert.rejects(verifyPaymentReceipt(evidence, { ...offer, extra: { layerx: { commitment: "executed", payer: "01".repeat(32) } } }));
   const corrupt = evidence.canonicalReceipt.slice();
   corrupt[corrupt.length - 1] ^= 1;
   await assert.rejects(verifyPaymentReceipt({ ...evidence, canonicalReceipt: corrupt }, offer));

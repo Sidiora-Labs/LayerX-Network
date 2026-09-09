@@ -52,6 +52,7 @@ class DrawTests(unittest.TestCase):
                 extra={
                     "layerx": {
                         "commitment": "executed",
+                        "payer": r["from"],
                         "purposeHash": r["payer_grant"]["purpose_hash"],
                         "windowSeconds": "3600",
                     }

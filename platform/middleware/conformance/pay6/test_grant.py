@@ -18,6 +18,7 @@ class GrantTests(unittest.TestCase):
             extra={
                 "layerx": {
                     "commitment": "executed",
+                    "payer": r["from"],
                     "purposeHash": r["payer_grant"]["purpose_hash"],
                     "windowSeconds": "3600",
                 }
@@ -31,6 +32,12 @@ class GrantTests(unittest.TestCase):
             {"asset": "ab" * 32},
             {"payTo": "ab" * 32},
             {"scheme": "metered"},
+            {"extra": {"layerx": offer["extra"]["layerx"] | {"payer": "ab" * 32}}},
+            {
+                "extra": {
+                    "layerx": offer["extra"]["layerx"] | {"purposeHash": "ab" * 32}
+                }
+            },
         ):
             with self.assertRaises(ValueError):
                 validate_grant_draw(wire, offer | change, r["idempotency_key"], 7, 0)
@@ -59,6 +66,7 @@ class GrantTests(unittest.TestCase):
             extra={
                 "layerx": {
                     "commitment": "executed",
+                    "payer": r["from"],
                     "purposeHash": r["payer_grant"]["purpose_hash"],
                     "windowSeconds": "3600",
                 }
@@ -70,5 +78,16 @@ class GrantTests(unittest.TestCase):
         payload = decode_header(grant_payment_header(required, offer, wire.hex()))
         self.assertEqual(payload["accepted"], offer)
         self.assertEqual(payload["payload"]["idempotencyKey"], r["idempotency_key"])
-        with self.assertRaises(ValueError):
-            grant_payment_header(required, offer | {"amount": "1"}, wire.hex())
+        for accepted in (
+            offer | {"amount": "1"},
+            offer
+            | {"extra": {"layerx": offer["extra"]["layerx"] | {"payer": "ab" * 32}}},
+            offer
+            | {
+                "extra": {
+                    "layerx": offer["extra"]["layerx"] | {"purposeHash": "ab" * 32}
+                }
+            },
+        ):
+            with self.assertRaises(ValueError):
+                grant_payment_header(required, accepted, wire.hex())

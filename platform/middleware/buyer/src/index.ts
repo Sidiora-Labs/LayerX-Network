@@ -20,6 +20,8 @@ import {
   encodePaymentPayloadHeader,
   verifyPaymentReceipt,
   paymentCommitment,
+  paymentPayer,
+  paymentPurpose,
   type AuthorizedBatchResolver,
   type PaymentCommitmentResolver,
   type JsonValue,
@@ -321,14 +323,19 @@ export class BuyerMiddleware {
     const receive = payload.payload["receive"];
     if (typeof receive !== "string" || !/^[0-9a-f]{1466}$/u.test(receive) || !/^[0-9a-f]{64}$/u.test(expectedActivity)) throw new MiddlewareError("invalid-payment-payload");
     const response = decodeSettlementHeader(responseHeader);
-    if (!response.success || response.network !== payload.accepted.network || response.amount !== payload.accepted.amount) throw new MiddlewareError("verification-failure");
+    const payer = paymentPayer(payload.accepted.extra, true)!;
+    const purpose = paymentPurpose(payload.accepted.extra, true)!;
+    if (!response.success || response.network !== payload.accepted.network || response.amount !== payload.accepted.amount
+      || response.payer !== payer) throw new MiddlewareError("verification-failure");
     const evidence = parseReceiptEvidence(asObject(response.extensions?.["layerx"]));
+    if (evidence.purposeHash !== purpose) throw new MiddlewareError("verification-failure");
     const canonicalReceipt = decodeBase64(evidence.receipt);
     const authorizedBatch = await this.#authorizedBatches.resolve(canonicalReceipt);
     const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, payload.accepted, this.#commitments);
     const digest = toHex(await merkleLeafDigest(canonicalReceipt));
     if (evidence.receiptDigest !== digest || response.transaction !== `lxp:${digest}`
-      || toHex(verification.receipt.activityId) !== expectedActivity || toHex(verification.receipt.from) !== receive.slice(8, 72)) throw new MiddlewareError("verification-failure");
+      || toHex(verification.receipt.activityId) !== expectedActivity || toHex(verification.receipt.from) !== receive.slice(8, 72)
+      || toHex(verification.receipt.from) !== payer) throw new MiddlewareError("verification-failure");
     return { response, verification, canonicalReceipt };
   }
 
@@ -362,6 +369,7 @@ export class BuyerMiddleware {
       payment.offer.accepted,
       this.#commitments,
     );
+    if (response.payer !== toHex(verification.receipt.from)) throw new MiddlewareError("verification-failure");
     return { response, verification, canonicalReceipt };
   }
 
@@ -718,10 +726,16 @@ function parseReceiptEvidence(value: Readonly<Record<string, JsonValue>>): Layer
   ) {
     throw new MiddlewareError("verification-failure");
   }
+  const purposeHash = value["purposeHash"];
+  if (purposeHash !== undefined && (typeof purposeHash !== "string"
+    || !/^[0-9a-f]{64}$/u.test(purposeHash) || /^0+$/u.test(purposeHash))) {
+    throw new MiddlewareError("verification-failure");
+  }
   return {
     receipt: value["receipt"],
     receiptDigest: value["receiptDigest"],
     verificationLevel: "sequencer-signed",
+    ...(purposeHash === undefined ? {} : { purposeHash }),
   };
 }
 
@@ -872,9 +886,15 @@ function toHex(value: Uint8Array): string {
 }
 
 export function grantPaymentHeader(required: PaymentRequired, accepted: PaymentRequirements, receiveHex: string): string {
+  const payer = paymentPayer(accepted.extra, true)!;
+  const purpose = paymentPurpose(accepted.extra, true)!;
   if ((accepted.scheme !== "metered" && accepted.scheme !== "subscription") || !/^[0-9a-f]{1466}$/u.test(receiveHex)
-    || receiveHex.slice(0, 8) !== "5201000a" || receiveHex.slice(72, 136) !== accepted.payTo
+    || receiveHex.slice(0, 8) !== "5201000a" || receiveHex.slice(8, 72) !== payer
+    || receiveHex.slice(72, 136) !== accepted.payTo
     || receiveHex.slice(136, 200) !== accepted.asset || BigInt(`0x${receiveHex.slice(200, 232)}`) !== BigInt(accepted.amount)
+    || receiveHex.slice(232, 296) !== receiveHex.slice(774, 838)
+    || receiveHex.slice(838, 902) !== payer || receiveHex.slice(902, 966) !== accepted.payTo
+    || receiveHex.slice(966, 1030) !== accepted.asset || receiveHex.slice(1128, 1192) !== purpose
     || !required.accepts.some(value => JSON.stringify(value) === JSON.stringify(accepted))) throw new MiddlewareError("requirements-mismatch");
   return encodePaymentPayloadHeader({ x402Version: X402_VERSION, resource: required.resource, accepted,
     extensions: required.extensions ?? {}, payload: { receive: receiveHex, idempotencyKey: receiveHex.slice(312, 376) } });

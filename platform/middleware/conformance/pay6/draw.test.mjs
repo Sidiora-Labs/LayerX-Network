@@ -27,7 +27,7 @@ test("persistent draw registrations preserve signed bytes and reject changed req
     store.register("payer", "ab".repeat(32), canonical, receive, key, "subscription:period:1");
     const r = decodeReceive(receive);
     const request = { principal: "payer", requestDigest: "ab".repeat(32), receive: Buffer.from(receive).toString("hex"), idempotencyKey: key,
-      requirements: { scheme: "subscription", asset: r.asset, amount: r.amount, payTo: r.to, extra: { layerx: { commitment: "executed", purposeHash: r.payer_grant.purpose_hash, windowSeconds: "3600" } } } };
+      requirements: { scheme: "subscription", asset: r.asset, amount: r.amount, payTo: r.to, extra: { layerx: { commitment: "executed", payer: r.from, purposeHash: r.payer_grant.purpose_hash, windowSeconds: "3600" } } } };
     assert.deepEqual(await store.execute(request), { kind: "pending" });
     assert.deepEqual(await store.execute(request), { kind: "pending" });
     assert.throws(() => store.register("other", "ab".repeat(32), canonical, receive, key, "subscription:period:1"));

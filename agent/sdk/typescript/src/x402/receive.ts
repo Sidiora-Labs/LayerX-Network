@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface PayerGrant {
   readonly grant_id: string;
   readonly from: string;
@@ -37,6 +39,17 @@ export interface Receive {
   readonly context_hash: string;
   readonly receiver_authorization: ReceiverAuthorization;
   readonly payer_grant: PayerGrant;
+}
+
+export interface AssetRegistration {
+  readonly asset_id?: string;
+  readonly salt: string;
+  readonly symbol: string;
+  readonly name: string;
+  readonly decimals: number;
+  readonly supply_cap: string;
+  readonly issuer_kind: 1 | 2;
+  readonly custody_ref: Uint8Array;
 }
 
 type Field = readonly [string, "hex" | "integer" | "number" | "boolean", number];
@@ -92,6 +105,42 @@ function concatenate(...parts: readonly Uint8Array[]): Uint8Array {
   let offset = 0;
   for (const part of parts) { output.set(part, offset); offset += part.length; }
   return output;
+}
+
+function hexBytes(value: string): Uint8Array {
+  return encode({ value }, [["value", "hex", 32]]);
+}
+
+export function deriveNativeAssetId(issuerDidId32: string, salt: string): string {
+  return createHash("sha256")
+    .update("LX:ASSET:v1", "ascii")
+    .update(hexBytes(issuerDidId32))
+    .update(hexBytes(salt))
+    .digest("hex");
+}
+
+export function encodeAssetRegister(issuerDidId32: string, registration: AssetRegistration): Uint8Array {
+  const input = record(registration);
+  const required = ["salt", "symbol", "name", "decimals", "supply_cap", "issuer_kind", "custody_ref"];
+  if (Object.keys(input).some((key) => key !== "asset_id" && !required.includes(key))
+    || required.some((key) => !Object.hasOwn(input, key))) throw new Error("invalid-asset-register");
+  const salt = hexBytes(registration.salt);
+  const symbol = new TextEncoder().encode(registration.symbol);
+  const name = new TextEncoder().encode(registration.name);
+  if (symbol.length === 0 || symbol.length > 16 || Array.from(symbol).some((byte) => byte > 0x7f)
+    || name.length === 0 || name.length > 32
+    || new TextDecoder("utf-8", { fatal: true }).decode(name) !== registration.name
+    || !Number.isSafeInteger(registration.decimals) || registration.decimals < 0 || registration.decimals > 38
+    || !Number.isSafeInteger(registration.issuer_kind) || ![1, 2].includes(registration.issuer_kind)
+    || !(registration.custody_ref instanceof Uint8Array) || registration.custody_ref.length > 128
+    || (registration.issuer_kind === 1 && registration.custody_ref.length !== 0)) throw new Error("invalid-asset-register");
+  const derived = deriveNativeAssetId(issuerDidId32, registration.salt);
+  if (registration.issuer_kind === 1 && registration.asset_id !== undefined && registration.asset_id !== derived) throw new Error("invalid-asset-register");
+  if (registration.issuer_kind === 2 && registration.asset_id === undefined) throw new Error("invalid-asset-register");
+  const asset = hexBytes(registration.asset_id ?? derived);
+  const tail = encode(registration, [["decimals", "number", 1], ["supply_cap", "integer", 16], ["issuer_kind", "number", 1]]);
+  return concatenate(new Uint8Array([0, 1]), asset, salt, new Uint8Array([symbol.length]), symbol,
+    new Uint8Array([name.length]), name, tail, new Uint8Array([registration.custody_ref.length]), registration.custody_ref.slice());
 }
 
 function exact(value: unknown, keys: readonly string[]): void {

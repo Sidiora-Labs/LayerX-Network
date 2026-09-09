@@ -7,6 +7,7 @@ import urllib.parse
 from typing import Mapping
 
 from .x402 import verify_payment_receipt
+from .production import PlatformSdkError
 
 
 def rpc_hex(value: object, size: int | None = None) -> bytes:
@@ -134,16 +135,20 @@ def verify_rpc_payment(
         raise ValueError("payment-refused")
     if "commitment" in result and result["commitment"] != commitment:
         raise ValueError("commitment-mismatch")
-    verified = verify_payment_receipt(
-        rpc_hex(result.get("receipt")),
-        authorized,
-        signatures,
-        amount=amount,
-        asset=asset,
-        pay_to=pay_to,
-        commitment=commitment,
-        evidence=evidence,
-    )
+    try:
+        verified = verify_payment_receipt(
+            rpc_hex(result.get("receipt")),
+            authorized,
+            signatures,
+            amount=amount,
+            asset=asset,
+            pay_to=pay_to,
+            payer=expected_payer,
+            commitment=commitment,
+            evidence=evidence,
+        )
+    except PlatformSdkError as error:
+        raise ValueError("payment-binding-mismatch") from error
     if (
         verified.receipt.activity_id.hex() != expected_activity
         or verified.receipt.from_account.hex() != expected_payer

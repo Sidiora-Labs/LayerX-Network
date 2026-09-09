@@ -259,6 +259,7 @@ export async function runScenarios(): Promise<Suite> {
     assert(repository.releaseCount === 1, "the resource must be released exactly once");
     assert(decision.resource === "the-paid-resource", "the released resource must be returned");
     assert(decision.settlement.success, "the settlement response must report success");
+    assert(decision.settlement.payer === toHex(facts.from), "the settlement must bind the verified receipt payer");
     assert(decision.settlement.transaction === `lxp:${receipt.receiptDigest}`, "the settlement must reference the receipt digest");
     assert(decision.verification.level === "sequencer-signed", "the verification level must be recorded");
   });
@@ -355,6 +356,11 @@ export async function runScenarios(): Promise<Suite> {
       prepared,
     );
     assert(captured.verification.level === "sequencer-signed", "the buyer must verify the captured receipt");
+    await expectThrows(
+      () => buyer.captureSettlement(encodeSettlementHeader({ ...decision.settlement, payer: "01".repeat(32) }), prepared),
+      isMiddlewareError("verification-failure"),
+      "settlement payer mismatch",
+    );
   });
 
   await suite.check("buyer: a failed settlement is never reported as paid", async () => {

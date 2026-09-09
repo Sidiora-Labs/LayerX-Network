@@ -48,7 +48,8 @@ class CommitmentTests(unittest.TestCase):
         )
 
     def test_executed_payment_binding(self):
-        self.verify()
+        payer = self.verify().receipt.from_account.hex()
+        self.verify(payer=payer)
         for change in (
             {"amount": "25001"},
             {"asset": "01" * 32},
@@ -56,6 +57,9 @@ class CommitmentTests(unittest.TestCase):
         ):
             with self.assertRaises(PlatformSdkError):
                 self.verify(**change)
+        for invalid_payer in ("01" * 32, "00" * 32):
+            with self.assertRaises(PlatformSdkError):
+                self.verify(payer=invalid_payer)
         with self.assertRaises(PlatformSdkError):
             verify_payment_receipt(
                 self.wire[:-1] + bytes([self.wire[-1] ^ 1]),

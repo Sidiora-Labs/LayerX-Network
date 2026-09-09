@@ -75,6 +75,10 @@ class HttpTests(unittest.TestCase):
         )
         verified = buyer.capture_settlement(first[1]["PAYMENT-RESPONSE"], header)
         self.assertEqual(verified.canonical_bytes, self.fixture.wire)
+        settlement = decode_header(first[1]["PAYMENT-RESPONSE"])
+        settlement["payer"] = "01" * 32
+        with self.assertRaises(ValueError):
+            buyer.capture_settlement(encode_header(settlement), header)
         with self.assertRaises(ValueError):
             self.seller.handle("different-payer", header, lambda: b"resource")
 

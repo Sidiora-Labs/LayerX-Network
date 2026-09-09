@@ -7,13 +7,19 @@ import urllib.parse
 from pathlib import Path
 
 from layerx_sdk.x402_http import decode_header, validate_required
-from layerx_sdk.x402_rpc import PaymentRpc, rpc_hex, verify_rpc_payment, _NoRedirect
-from layerx_sdk.verifier import AuthorizedReceiptBatch
+from layerx_sdk.x402_rpc import (
+    PaymentRpc,
+    rpc_batch_evidence,
+    rpc_hex,
+    verify_rpc_payment,
+    _NoRedirect,
+)
+from layerx_sdk.verifier import AuthorizedReceiptBatch, SequencerAuthorization
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Read public RPC sequence, claim faucet funding, or verify a signed exact payment."
+        description="Read public RPC sequence, claim faucet funding, or verify a signed payment activity."
     )
     parser.add_argument("--rpc", default=os.environ.get("LAYERX_RPC_URL"))
     parser.add_argument("--did", default=os.environ.get("LAYERX_DID"))
@@ -80,7 +86,10 @@ def main():
             for v in required["accepts"]
             if v["scheme"] in ("exact", "metered", "subscription")
             and v.get("extra", {}).get("layerx", {}).get("commitment", "executed")
-            == "executed"
+            in ("executed", "batched")
+        )
+        commitment = (
+            offer.get("extra", {}).get("layerx", {}).get("commitment", "executed")
         )
         canonical = Path(args.activity).read_text().strip()
         activity = hashlib.sha256(
@@ -110,7 +119,37 @@ def main():
                 except (InvalidSignature, ValueError):
                     return False
 
-        result = rpc.send(canonical, "executed")
+        result = rpc.send(canonical, commitment)
+        evidence = None
+        if commitment == "batched" and result.get("state") != "pending":
+            network_id = configured.get("networkId")
+            first = configured.get("firstBatchNumber")
+            last = configured.get("lastBatchNumber")
+            if (
+                type(network_id) is not int
+                or network_id <= 0
+                or not isinstance(first, str)
+                or not first.isdecimal()
+                or len(first) > 1
+                and first[0] == "0"
+                or not isinstance(last, str)
+                or not last.isdecimal()
+                or len(last) > 1
+                and last[0] == "0"
+            ):
+                raise ValueError("invalid-batch-authority")
+            evidence = rpc_batch_evidence(
+                result,
+                activity,
+                rpc_hex(result.get("receipt")),
+                network_id,
+                SequencerAuthorization(
+                    rpc_hex(configured.get("sequencerId"), 32),
+                    authority.sequencer_public_key,
+                    int(first),
+                    int(last),
+                ),
+            )
         verified = verify_rpc_payment(
             result,
             activity,
@@ -120,6 +159,8 @@ def main():
             amount=offer["amount"],
             asset=offer["asset"],
             pay_to=offer["payTo"],
+            commitment=commitment,
+            evidence=evidence,
         )
         if verified is None:
             print(json.dumps({"state": "pending", "activity_id": activity}))
@@ -131,7 +172,7 @@ def main():
         digest = hashlib.sha256(
             b"LXP/v1/merkle-leaf\0" + verified.canonical_bytes
         ).hexdigest()
-        print(json.dumps({"transaction": "lxp:" + digest, "commitment": "executed"}))
+        print(json.dumps({"transaction": "lxp:" + digest, "commitment": commitment}))
     return 0
 
 
