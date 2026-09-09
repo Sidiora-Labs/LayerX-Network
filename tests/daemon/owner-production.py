@@ -19,7 +19,7 @@ sys.path.insert(0, str(repo / 'platform/hosted/human'))
 from provision import write_json
 from owner_native import produce
 sys.path.insert(0, str(repo / "tests/daemon"))
-from governance_lifecycle import session
+from governance_lifecycle import session, lifecycle
 from owner_checkpoint import checkpoint, hosted
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from custody_credit import Rpc, unhex
@@ -42,6 +42,7 @@ def run(work, asset, rpc_port):
         path = work / (name + '.seed')
         path.write_bytes(os.urandom(32))
         path.chmod(0o600)
+    treasury_seed = (work / 'treasury.seed').read_bytes()
     env = dict(os.environ)
     bootstrap = ['bash', str(repo / 'platform/hosted/node/bootstrap.sh'), '--data-dir', str(work / 'node'),
         '--run-dir', str(work / 'run'), '--network-id', '77', '--asset', asset,
@@ -170,34 +171,43 @@ def run(work, asset, rpc_port):
                     break
             except OSError:
                 time.sleep(0.1)
-        with open(work / 'producer.log', 'wb') as log:
-            child = os.fork()
-            if child == 0:
-                os.dup2(log.fileno(), 1)
-                os.dup2(log.fileno(), 2)
-                os.setgroups([])
-                os.setgid(4021)
-                os.setuid(4021)
-                try:
-                    produce(work)
-                    if "--governance" in sys.argv:
-                        session(work)
-                except BaseException:
-                    traceback.print_exc()
-                    sys.stderr.flush()
-                    os._exit(1)
-                os._exit(0)
-            deadline = time.monotonic() + 90
-            while True:
-                finished, result = os.waitpid(child, os.WNOHANG)
-                if finished:
-                    assert result == 0, 'owner producer failed; see producer.log'
-                    break
-                if time.monotonic() >= deadline:
-                    os.kill(child, 15)
-                    os.waitpid(child, 0)
-                    raise AssertionError('owner producer timeout')
-                time.sleep(0.1)
+        def as_peer(label, operation):
+            sys.stdout.flush()
+            sys.stderr.flush()
+            with open(work / (label + '.log'), 'wb') as log:
+                child = os.fork()
+                if child == 0:
+                    os.dup2(log.fileno(), 1)
+                    os.dup2(log.fileno(), 2)
+                    os.setgroups([])
+                    os.setgid(4021)
+                    os.setuid(4021)
+                    try:
+                        operation()
+                    except BaseException:
+                        traceback.print_exc()
+                        sys.stderr.flush()
+                        os._exit(1)
+                    os._exit(0)
+                deadline = time.monotonic() + 90
+                while True:
+                    finished, result = os.waitpid(child, os.WNOHANG)
+                    if finished:
+                        assert result == 0, label + ' failed; see retained log'
+                        break
+                    if time.monotonic() >= deadline:
+                        os.kill(child, 15)
+                        os.waitpid(child, 0)
+                        raise AssertionError(label + ' timeout')
+                    time.sleep(0.1)
+            print((work / (label + '.log')).read_text(), end='', flush=True)
+
+        as_peer('producer', lambda: produce(work))
+        if '--governance' in sys.argv:
+            as_peer('session', lambda: session(work))
+        if '--lifecycle' in sys.argv:
+            assert '--governance' in sys.argv and '--checkpoint' not in sys.argv
+            as_peer('lifecycle', lambda: lifecycle(work, treasury_seed))
         registration = json.loads((inputs / 'owner-registration.json').read_text())
         binding = json.loads((inputs / 'owner-admission.json').read_text())
         assert registration['owner_account'] == binding['owner_account']
@@ -217,7 +227,11 @@ def run(work, asset, rpc_port):
                 break
             time.sleep(0.1)
         expected_sequence = 10 if '--governance' in sys.argv else 4
+        if '--lifecycle' in sys.argv:
+            expected_sequence = json.loads((inputs / 'governance-run/before-restart.json').read_text())['account_sequence']
         assert state.returncode == 0 and json.loads(state.stdout)['account_sequence'] == expected_sequence
+        if '--lifecycle' in sys.argv:
+            as_peer('lifecycle-restart', lambda: lifecycle(work, treasury_seed, restart=True))
         print('real native credit, identity, rotation and recovery producer passed with authenticated replica evidence and restart')
     finally:
         for process in reversed(processes):
