@@ -8085,6 +8085,7 @@ assumption = "No deployment was run. The core container still needs an outside-o
 severity = "blocker"
 
 [observation.6.11.129]
+[observation.6.11.pay2_rpc_contract]
 task = "6.11"
 file = "agent/crates/layerx-sdk/src/lib.rs agent/sdk/typescript/src/agent-http.ts platform/ src/"
 symbol = "lx_getAccount lx_getBalances lx_sendActivity lx_getActivityStatus lx_getReceipt"
