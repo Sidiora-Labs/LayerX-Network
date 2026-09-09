@@ -1,0 +1,35 @@
+[package]
+name = "layerx-payments-merchant"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91.1"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+layerx-program-sdk = { path = "../.." }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+float_arithmetic = "deny"
+lossy_float_literal = "deny"
