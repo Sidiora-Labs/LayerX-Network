@@ -1,3 +1,14 @@
+# Hosted gateway
+
+Receipt-verifying public ingress. Routes, scopes, and TLS are on
+[`docs/wiki/HostedGateway.md`](../../../docs/wiki/HostedGateway.md).
+
+Public JSON-RPC `POST /rpc`, `GET /rpc/schema`, and `GET /rpc/ws` are
+**on the testnet branch** `lane/pay-public-rpc` (OpenRPC document
+`openrpc.json` on that branch). They are not in this tree on `main`.
+Method list: [`docs/wiki/PublicRpc.md`](../../../docs/wiki/PublicRpc.md).
+Commitment parameter: [`docs/wiki/CommitmentLevels.md`](../../../docs/wiki/CommitmentLevels.md).
+
 # Canonical module registry
 
 `LAYERX_GATEWAY_MODULE_REGISTRY_FILE` names a JSON file shared with the human

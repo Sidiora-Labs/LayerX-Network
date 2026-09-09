@@ -17,6 +17,11 @@ Every other page under `content/` is written by hand and must carry an `Enforced
 
 `testnet.md` sits outside `content/` and is never rewritten.
 
+Public wiki pages for payments (wallet, faucet, send, token, 402), the
+OpenRPC method list, asset encodings, and commitment levels live under
+[`docs/wiki/`](../../docs/wiki/Home.md). Those payment-lane surfaces that
+are not on `main` are marked on the testnet branch there.
+
 ## Samples
 
 `samples.kvx` declares every sample directory in `samples/`. A code fence in a page carrying `sample=<id>` is filled from that sample's entry file; `file=` selects a different file in the directory, and `region=` selects a `layerx:begin <name>` / `layerx:end <name>` block within it. The fence language must match the language the sample declares.

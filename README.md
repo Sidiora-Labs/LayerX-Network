@@ -21,7 +21,9 @@ This repository is the Sidiora Labs monorepo for LayerX Network and the Paxeer N
 
 ## Try the testnet
 
-The full path is [`docs/wiki/Quickstart.md`](docs/wiki/Quickstart.md): install the `layerx` CLI from `platform/cli`, bring up the cluster, source `build/beta-cluster/env`, then create a credential, claim from the faucet, submit an activity, verify the receipt, and deploy a program.
+The cluster path is [`docs/wiki/Quickstart.md`](docs/wiki/Quickstart.md): install the `layerx` CLI from `platform/cli`, bring up the cluster, source `build/beta-cluster/env`, then create a credential, claim from the faucet, submit an activity, verify the receipt, and deploy a program.
+
+The payments path — wallet, faucet, send, create a token, deploy a program, pay a 402 endpoint — is [`docs/wiki/PaymentsQuickstart.md`](docs/wiki/PaymentsQuickstart.md). Token register/mint, public `POST /rpc`, and 402 commitment extras are on the testnet branches (`lane/pay-native`, `lane/pay-signer-sdk`, `lane/pay-programs-tokens`, `lane/pay-402lxp`, `lane/pay-public-rpc`) and are not merged to `main`. Encodings: [`docs/wiki/Assets.md`](docs/wiki/Assets.md). RPC methods: [`docs/wiki/PublicRpc.md`](docs/wiki/PublicRpc.md). `executed` / `batched` / `finalised`: [`docs/wiki/CommitmentLevels.md`](docs/wiki/CommitmentLevels.md). There is no `lane/pay-wallet-cli` branch.
 
 ```sh
 layerx key create quickstart
@@ -111,6 +113,10 @@ make paxeer-ci
 ## Documentation
 
 - Wiki index: [`docs/wiki/Home.md`](docs/wiki/Home.md)
+- Payments developer path: [`docs/wiki/PaymentsQuickstart.md`](docs/wiki/PaymentsQuickstart.md)
+- Public JSON-RPC (on the testnet branch): [`docs/wiki/PublicRpc.md`](docs/wiki/PublicRpc.md)
+- Assets and tokens: [`docs/wiki/Assets.md`](docs/wiki/Assets.md)
+- Commitment levels: [`docs/wiki/CommitmentLevels.md`](docs/wiki/CommitmentLevels.md)
 - Monorepo layout and release tags: [`docs/MONOREPO.md`](docs/MONOREPO.md)
 - Qualification gates: [`docs/QUALIFICATION.md`](docs/QUALIFICATION.md)
 - Specifications: [`spec/`](spec/)

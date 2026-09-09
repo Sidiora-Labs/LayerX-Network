@@ -1,6 +1,11 @@
 # LayerX reference applications
 
-The four applications in `reference-apps.json` are complete Node.js projects selected by a checked-in environment profile. Clone this repository, install the locked workspace once with `npm ci`, then use one declared command:
+The four applications in `reference-apps.json` are complete Node.js projects selected by a checked-in environment profile. Clone this repository, install the locked workspace once with `npm ci`, then use one declared command.
+
+The encodings and 402 commitment extras used by payment lanes that are not
+on `main` are documented on
+[`docs/wiki/PaymentsQuickstart.md`](../../docs/wiki/PaymentsQuickstart.md)
+and [`docs/wiki/CommitmentLevels.md`](../../docs/wiki/CommitmentLevels.md).
 
 | Application | Emulator | Testnet |
 |---|---|---|

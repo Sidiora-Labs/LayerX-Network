@@ -11,3 +11,8 @@ This Rust 2021 workspace owns agent-facing types, canonical encoding, cryptograp
 ## MCP
 
 The MCP server is [`crates/layerx-mcp`](crates/layerx-mcp/README.md): one tenant, one scope set, daemon-only routing. Interop MCP/A2A transports and the `layerx install mcp` / `layerx install a2a` CLI live next door in [`interop/`](../interop/README.md) and `platform/cli/`.
+
+Payment encodings and `wallet.*` / `token.*` MCP tools are **on the testnet
+branch** `lane/pay-signer-sdk` (`crates/layerx-crypto/src/payments.rs` on
+that branch). Developer path:
+[`docs/wiki/PaymentsQuickstart.md`](../docs/wiki/PaymentsQuickstart.md).

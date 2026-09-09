@@ -33,6 +33,11 @@ Read tools are absent from the list when the bound scope does not include them:
 
 Write tools follow the ordinary daemon path: prepare, disclose, sign, submit, track. Outcomes are evidence-shaped (`Executed` + receipt, `Unknown`, or `Failed`). Read-only deployment omits write tools entirely.
 
+**On the testnet branch** `lane/pay-signer-sdk`, the catalogue also includes
+`wallet.accounts`, `wallet.balance`, `wallet.send`, `token.create`,
+`token.mint`, and `token.transfer`. Those names are not on `main`. See
+[`docs/wiki/PaymentsQuickstart.md`](../../../docs/wiki/PaymentsQuickstart.md).
+
 Untrusted tool arguments cannot change tenant, scope, or counterparty. See `src/untrusted.rs` and `src/validate.rs`.
 
 ## Test
