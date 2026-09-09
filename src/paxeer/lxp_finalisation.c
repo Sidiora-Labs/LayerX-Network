@@ -117,6 +117,7 @@ lxp_result lxp_checkpoint_finalisable(
     size_t eligible_count = 0U;
     size_t i;
     lxp_result status;
+    if (finalisable != NULL) *finalisable = false;
     if (state == NULL || certificate == NULL || set == NULL ||
         requirements == NULL || arena == NULL || finalisable == NULL ||
         requirements->threshold == 0U ||
@@ -127,7 +128,6 @@ lxp_result lxp_checkpoint_finalisable(
         return LXP_ERR_NON_CANONICAL;
     if (lxp_guarantor_set_validate(set) != LXP_OK)
         return LXP_ERR_NON_CANONICAL;
-    *finalisable = false;
     if (state->finalisation_halted ||
         (state->unfinalized_checkpoint_blocked &&
          state->blocked_checkpoint_batch_number ==
