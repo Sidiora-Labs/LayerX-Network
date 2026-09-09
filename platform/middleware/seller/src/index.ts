@@ -1,3 +1,5 @@
+import { paymentCommitment, verifyPaymentCommitment, type PaymentCommitmentResolver } from "./commitment.js";
+export * from "./commitment.js";
 import {
   PlatformSdkError,
   verifyReceipt,
@@ -136,6 +138,7 @@ export interface SellerMiddlewareConfig<T> {
   readonly paymentRequired: PaymentRequired;
   readonly authority: SellerPaymentAuthority;
   readonly fulfillments: FulfillmentRepository<T>;
+  readonly commitments?: PaymentCommitmentResolver;
 }
 
 export type SellerDecision<T> =
@@ -180,11 +183,13 @@ export class SellerMiddleware<T> {
   readonly #required: PaymentRequired;
   readonly #authority: SellerPaymentAuthority;
   readonly #fulfillments: FulfillmentRepository<T>;
+  readonly #commitments: PaymentCommitmentResolver | undefined;
 
   public constructor(config: SellerMiddlewareConfig<T>) {
     this.#required = validatePaymentRequired(config.paymentRequired);
     this.#authority = config.authority;
     this.#fulfillments = config.fulfillments;
+    this.#commitments = config.commitments;
   }
 
   public paymentRequired(): Extract<SellerDecision<T>, { readonly kind: "payment-required" }> {
@@ -236,12 +241,12 @@ export class SellerMiddleware<T> {
       canonicalReceipt: outcome.canonicalReceipt,
       authorizedBatch: outcome.authorizedBatch,
     };
-    const verification = await verifyPaymentReceipt(proposed, requirements);
+    const verification = await verifyPaymentReceipt(proposed, requirements, this.#commitments);
     const stored = await this.#fulfillments.fulfill(proposed, release);
     if (stored.idempotencyKey !== idempotencyKey || stored.requestDigest !== requestDigest) {
       throw new MiddlewareError("fulfillment-conflict");
     }
-    const storedVerification = await verifyPaymentReceipt(stored, requirements);
+    const storedVerification = await verifyPaymentReceipt(stored, requirements, this.#commitments);
     if (!equalBytes(verification.receiptDigest, storedVerification.receiptDigest)) {
       throw new MiddlewareError("fulfillment-conflict");
     }
@@ -301,6 +306,7 @@ export function decodeSettlementHeader(value: string): SettlementResponse {
 export async function verifyPaymentReceipt(
   evidence: Pick<StoredFulfillment<unknown>, "canonicalReceipt" | "authorizedBatch">,
   requirements: PaymentRequirements,
+  commitments?: PaymentCommitmentResolver,
 ): Promise<ReceiptVerification> {
   let verified: ReceiptVerification;
   try {
@@ -317,6 +323,13 @@ export async function verifyPaymentReceipt(
     || !equalBytes(verified.receipt.to, parseHex32(requirements.payTo))
   ) {
     throw new MiddlewareError("verification-failure");
+  }
+  try {
+    await verifyPaymentCommitment(verified, evidence.authorizedBatch.sequencerPublicKey,
+      requirements.network, paymentCommitment(requirements.extra), commitments);
+  } catch (error) {
+    if (error instanceof PlatformSdkError) throw new MiddlewareError("verification-failure");
+    throw error;
   }
   return verified;
 }
