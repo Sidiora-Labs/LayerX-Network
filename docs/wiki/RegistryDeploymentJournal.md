@@ -2,7 +2,8 @@
 
 `POST /__registry/deployments` accepts a canonical signed Programs deploy or
 upgrade activity as an octet-stream body under the existing registry bearer
-policy. It submits those exact bytes through `LAYERX_REGISTRY_LNI_SOCKET` and
+policy. It submits those exact bytes through `LAYERX_REGISTRY_LNI_SOCKET` when configured,
+or through the authenticated `LAYERX_REGISTRY_NODE_ENDPOINT` boundary, and
 requests native proof-bundle tag 16, payload version 1, selector 4, followed by
 the 32-byte activity ID. Tag 17 returns the canonical `DeploymentProof` as its
 payload and an empty proof-material field. Selectors 1–3 remain unchanged.
@@ -42,6 +43,10 @@ Temporary export files remain outside `pairs/`.
 
 Configure the Human assembler's journal input to the exported `pairs/`
 directory, not the internal journal containing envelopes and head metadata.
-The current hosted topology still requires a transport and shared-volume
-integration: its registry pod has no node LNI mount and its evidence assembler
-runs on the invoking host. Protocol-3 trust histories are accepted explicitly alongside legacy versions 1/2.
+The boundary exposes registry-only `POST /internal/v1/programs/deploy` and
+`/upgrade` for canonical admission, and `GET /internal/v1/deployment-proof/<activity-id>`
+for selector 4. Submission returns the native acknowledged activity ID; proof
+responses retain native refusals or carry canonical proof bytes as `proof_hex`.
+The existing node bearer and outbound CA settings authenticate this bridge.
+The registry network policies allow only its required boundary port 9443.
+The evidence assembler still runs on the invoking host and needs journal export. Protocol-3 trust histories are accepted explicitly alongside legacy versions 1/2.
