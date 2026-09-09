@@ -7661,3 +7661,11 @@ symbol = "bootstrap_kernel"
 observed = "The executable Governance module changes the daemon module registry. Fresh snapshots from the unchanged genesis builder still register only Programs, Asset and optional Bridge. The real disposable daemon exits with LXP_ERR_SNAPSHOT_MISMATCH (-902), before opening LNI, under sudo -n env CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 bash tests/daemon/program-admission.sh build --governance. Evidence: qual-logs/own1/own1b-governance-daemon.log and /tmp/lxp-program-admission-Hk1Xuw/sequencer.log. src/state/lxp_snapshot.c preserves its exact module-count and registration comparisons. The genesis builder path requires a coordinated Governance registration before real registration, recovery, rotation, session, revocation and restart qualification can pass."
 assumption = "Native compilation and existing state-helper tests do not qualify the new Governance handlers or establish a runnable owner-registration deployment."
 severity = "blocker"
+
+[observation.3.7.29]
+task = "3.7"
+file = "platform/hosted/human/owner_native.py"
+symbol = "produce"
+observed = "The owner-registration producer submits signed custody credit and Governance activities through the existing layerxctl real-client CLI, verifies native receipt signatures and requests authorized batch verification from the HTTPS receipt authority. It consumes custody-produced owner and rotation keys, a pre-bootstrap owner DID binding, a real signed custody credit and LXIP owner output; it does not create the custody key, vault deposit or attestation itself. python3 -m pytest platform/hosted/human -q under qual-logs/own1/venv passes 21 tests after building the real identity-provider binary. The native signature parser is checked against the retained real-program-deploy receipt and tamper cases. The complete producer flow has not run: the node snapshot registry is mismatched, no cluster is available, and deployment/custody inputs are absent. Evidence: qual-logs/own1/own1b-pytest-final.log and qual-logs/own1/own1b-producer-tests.log."
+assumption = "Structural registration validation and receipt-parser tests do not establish funded owner registration or positive checkpoint-finalised Human policy verification."
+severity = "blocker"
