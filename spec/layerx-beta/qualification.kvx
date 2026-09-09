@@ -5491,3 +5491,11 @@ symbol = "programs-test programs-core-test beta-ledger-check"
 observed = "Final native make -j16 exits 0. The dependency-provisioned make -j16 programs-test rerun exits 2 at the unchanged protocol-2 differential payer lookup regression in observation.6.11.151; C and AssemblyScript SDK gates now execute successfully. Core fixtures, native replay, default and host-ffi workspace Clippy, parity-wasm tests and serialized sandbox tests pass as individually recorded. Full locked workspace tests still fail the inherited wasmi assertions, full formatting still fails outside-scope files, and hosted gates stop on the platform lockfile."
 assumption = "Exact aggregate command results are in qual-logs/pay5/pay5d-gates.tsv; final aggregate output is pay5d-aggregate-qualified.log. Initial missing asc and wasm-ld-18 failures remain in pay5d-programs-test.log. Dependencies were installed only as untracked local artifacts. make beta-ledger-check passes after the appended observations. This is a partial aggregate qualification, not deployment or full-system certification. Cluster, image and live-chain gates were not run."
 severity = "blocker"
+
+[observation.6.11.155]
+task = "6.11"
+file = "programs/Cargo.toml programs/vendor/wasmi-0.31.2/Cargo.toml programs/vendor/wasmi-0.31.2/src/engine/bytecode/mod.rs programs/vendor/wasmi-0.31.2/src/engine/bytecode/tests.rs"
+symbol = "Instruction::Observe size_of_instruction"
+observed = "Cargo metadata identifies exactly one wasmi package and one library target with tests enabled. Its only features are default and std; Observe(u64) is unconditional. cargo test --locked --manifest-path programs/Cargo.toml -p wasmi --lib exits 101 with 20 passing and 41 failing tests, including the 16-byte instruction layout versus the unchanged 8-byte assertion. No duplicate test target or feature switch explains this conflict."
+assumption = "Evidence: qual-logs/pay5/pay5e-workspace-before.json and qual-logs/pay5/pay5e-wasmi.log. Vendored sources are not authorized for edits. Excluding the dependency from the workspace would suppress its failing tests rather than resolve the representation conflict. Preserve both implementation and assertions pending an agreed representation contract."
+severity = "blocker"
