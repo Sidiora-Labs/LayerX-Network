@@ -5181,3 +5181,11 @@ symbol = "fixture LAYERX_TEST_NATIVE_BIN_DIR"
 observed = "cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd exits 101 at budget_create because build/bin/layerxd is absent; subsequent fixture users report a poisoned lock (qual-logs/ag3/test.log). The supplied /root/lx-lanes/native-bin directory is also absent. The binary unit and runtime_mode targets pass separately, including DID peer parsing and real-binary positional-format refusal (qual-logs/ag3/test-focused.log). All-target Clippy with warnings denied passes (qual-logs/ag3/clippy-final.log)."
 assumption = "Full package execution requires qualified native layerxd and layerx-genesis-build binaries supplied through LAYERX_TEST_NATIVE_BIN_DIR. Focused success does not qualify the full package."
 severity = "blocker"
+
+[observation.6.4.182]
+task = "6.4"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs agent/crates/layerx-agentd/tests/budget_create.rs"
+symbol = "fixture"
+observed = "After rebasing the named-field Human peer parser onto main, cargo fmt --check --manifest-path agent/Cargo.toml -p layerx-agentd and cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-agentd --all-targets -- -D warnings exit 0. cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd exits 101 at budget_create: the real-node harness requires uid 0 but executes as uid 1000; subsequent fixture users report a poisoned lock. The three availability tests pass. Evidence: qual-logs/fmt.log, qual-logs/clippy.log, qual-logs/test.log and qual-logs/gates.tsv. make beta-ledger-check exits 0 (qual-logs/ledger.log)."
+assumption = "Full package qualification requires a root execution environment and qualified native binaries; /root/lx-lanes/native-bin is absent on this host. No harness assertions were changed. Cluster and image gates were not run."
+severity = "blocker"
