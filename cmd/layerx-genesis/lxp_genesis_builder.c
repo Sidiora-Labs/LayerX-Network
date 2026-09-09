@@ -31,6 +31,82 @@ static lxp_result signer_public_key(
 
 static lxp_result sign_manifest(
     const uint8_t private_key[32], const uint8_t *bytes, size_t length,
+    uint8_t signature[64]);
+
+lxp_result lxp_genesis_sign_preimage(
+    const uint8_t private_key[32], const uint8_t *bytes, size_t length,
+    uint8_t signature[64])
+{
+    return sign_manifest(private_key, bytes, length, signature);
+}
+
+static void put_u64_be(uint8_t out[8], uint64_t value)
+{
+    size_t i;
+    for (i = 0U; i < 8U; ++i)
+        out[7U - i] = (uint8_t)(value >> (i * 8U));
+}
+
+lxp_result lxp_genesis_issuance_migration_authorize(
+    const uint8_t private_key[32], uint64_t sequence,
+    const uint8_t old_digest[32], const uint8_t old_canonical[32],
+    const uint8_t old_receipt[32], const uint8_t new_digest[32],
+    const uint8_t new_canonical[32], const uint8_t new_receipt[32],
+    uint8_t encoded[LXP_ISSUANCE_MIGRATION_BYTES])
+{
+    uint8_t public_key[32];
+    lxp_result status;
+    if (private_key == NULL || old_digest == NULL || old_canonical == NULL ||
+        old_receipt == NULL || new_digest == NULL || new_canonical == NULL ||
+        new_receipt == NULL || encoded == NULL ||
+        lxp_ct_is_zero(old_digest, 32U) || lxp_ct_is_zero(old_canonical, 32U) ||
+        lxp_ct_is_zero(old_receipt, 32U) || lxp_ct_is_zero(new_digest, 32U) ||
+        lxp_ct_is_zero(new_canonical, 32U) || lxp_ct_is_zero(new_receipt, 32U) ||
+        memcmp(old_digest, new_digest, 32U) == 0 ||
+        memcmp(old_canonical, new_canonical, 32U) == 0)
+        return LXP_ERR_NON_CANONICAL;
+    status = signer_public_key(private_key, public_key);
+    if (status != LXP_OK) return status;
+    (void)memset(encoded, 0, LXP_ISSUANCE_MIGRATION_BYTES);
+    (void)memcpy(encoded, "LXIM", 4U);
+    encoded[4] = 1U;
+    put_u64_be(encoded + 5U, sequence);
+    (void)memcpy(encoded + 13U, old_digest, 32U);
+    (void)memcpy(encoded + 45U, old_canonical, 32U);
+    (void)memcpy(encoded + 77U, old_receipt, 32U);
+    (void)memcpy(encoded + 109U, new_digest, 32U);
+    (void)memcpy(encoded + 141U, new_canonical, 32U);
+    (void)memcpy(encoded + 173U, new_receipt, 32U);
+    (void)memcpy(encoded + 205U, public_key, 32U);
+    return sign_manifest(private_key, encoded, 205U, encoded + 237U);
+}
+
+lxp_result lxp_genesis_issuance_migration_verify(
+    const uint8_t encoded[LXP_ISSUANCE_MIGRATION_BYTES], uint64_t sequence,
+    const uint8_t old_digest[32], const uint8_t old_canonical[32],
+    const uint8_t old_receipt[32], const uint8_t new_digest[32],
+    const uint8_t new_canonical[32], const uint8_t new_receipt[32])
+{
+    uint8_t expected[8];
+    if (encoded == NULL || old_digest == NULL || old_canonical == NULL ||
+        old_receipt == NULL || new_digest == NULL || new_canonical == NULL ||
+        new_receipt == NULL || memcmp(encoded, "LXIM", 4U) != 0 ||
+        encoded[4] != 1U)
+        return LXP_ERR_NON_CANONICAL;
+    put_u64_be(expected, sequence);
+    if (memcmp(encoded + 5U, expected, 8U) != 0 ||
+        memcmp(encoded + 13U, old_digest, 32U) != 0 ||
+        memcmp(encoded + 45U, old_canonical, 32U) != 0 ||
+        memcmp(encoded + 77U, old_receipt, 32U) != 0 ||
+        memcmp(encoded + 109U, new_digest, 32U) != 0 ||
+        memcmp(encoded + 141U, new_canonical, 32U) != 0 ||
+        memcmp(encoded + 173U, new_receipt, 32U) != 0)
+        return LXP_ERR_ROOT_MISMATCH;
+    return lxp_ed25519_verify_raw(encoded + 205U, encoded + 237U, encoded, 205U);
+}
+
+static lxp_result sign_manifest(
+    const uint8_t private_key[32], const uint8_t *bytes, size_t length,
     uint8_t signature[64])
 {
     EVP_PKEY *key;

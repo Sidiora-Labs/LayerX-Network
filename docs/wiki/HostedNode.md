@@ -207,6 +207,38 @@ manifest overrides replica id from ConfigMap
 
 ---
 
+## Retired issuance-name snapshot migration
+
+Snapshots that still store issuance accounts under the retired
+name `asset:<64-hex asset id>:issuance` are rewritten with:
+
+```
+layerx-genesis-build --migrate-issuance-names INPUT.lxs SIGNER_KEY OUTPUT_DIR
+```
+
+`INPUT.lxs` is an occupancy snapshot produced by the existing
+snapshot store. `SIGNER_KEY` is a 32-byte Ed25519 seed and uses
+the same raw signing path as genesis manifests
+(`cmd/layerx-genesis/lxp_genesis_builder.c` `sign_manifest`).
+`OUTPUT_DIR` must not already exist. The command creates it and
+writes:
+
+| File | Contents |
+| --- | --- |
+| `{global_sequence:020}.lxs` | Snapshot whose retired issuance accounts are renamed to `module:asset:value:<64-hex account id>` |
+| `issuance-migration.lxim` | 301-byte authorization: magic `LXIM`, version `1`, sequence u64be, old digest/canonical/receipt roots, new digest/canonical/receipt roots, signer public key 32, Ed25519 signature 64 over the first 205 bytes |
+
+Account ids stay the `LX:ACCOUNT:v1` digest of the 79-byte
+retired name. Balances, asset ids, sequences, freeze flags,
+authority keys and every other non-name field are unchanged.
+The command refuses a snapshot that contains no retired
+issuance name and does not reopen that name as a live
+namespace. Verify `issuance-migration.lxim` against both
+snapshot manifests before accepting the new canonical root.
+The signed fixture is `tests/test_snapshot_issuance_migrate.c`.
+
+---
+
 ## Settlement environment
 
 Five keys bind Paxeer settlement. They are either in the

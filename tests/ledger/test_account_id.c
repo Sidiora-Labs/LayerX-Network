@@ -107,5 +107,100 @@ int main(void)
         return 1;
     if (lxp_log_close(&log) != LXP_OK || unlink(path) != 0 ||
         rmdir(directory) != 0) return 1;
+    {
+        static const uint8_t hex[] = "0123456789abcdef";
+        uint8_t asset_id[32];
+        uint8_t current_name[LX_ASSET_ISSUANCE_NAME_BYTES];
+        uint8_t expected_id[32];
+        uint8_t retired[79];
+        lx_account_name parsed_name;
+        lx_account retired_account;
+        lx_account already_current;
+        lx_account_registry rewrite_registry;
+        size_t renamed = 0U;
+        size_t index;
+        (void)memset(asset_id, 0x11, sizeof(asset_id));
+        (void)memcpy(retired, "asset:", 6U);
+        for (index = 0U; index < 32U; ++index) {
+            retired[6U + index * 2U] = hex[asset_id[index] >> 4U];
+            retired[7U + index * 2U] = hex[asset_id[index] & 15U];
+        }
+        (void)memcpy(retired + 70U, ":issuance", 9U);
+        if (lx_account_id_from_string(retired, sizeof(retired), actual) !=
+                LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE ||
+            lx_account_name_parse(retired, sizeof(retired), &parsed_name) !=
+                LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE ||
+            lx_asset_issuance_name(asset_id, current_name, expected_id) !=
+                LXP_OK)
+            return 1;
+        (void)memset(&retired_account, 0, sizeof(retired_account));
+        (void)memcpy(retired_account.name, retired, sizeof(retired));
+        retired_account.name_length = (uint16_t)sizeof(retired);
+        (void)memcpy(retired_account.id, expected_id, sizeof(expected_id));
+        retired_account.kind = LX_ACCOUNT_MODULE_VALUE;
+        retired_account.balance = (lxp_u128){0U, 100U};
+        (void)memcpy(retired_account.asset_id, asset_id, sizeof(asset_id));
+        retired_account.has_asset = true;
+        retired_account.next_sequence = 4U;
+        retired_account.created_at_sequence = 2U;
+        if (lx_account_validate_canonical(&retired_account) != LXP_OK)
+            return 1;
+        retired_account.id[0] ^= 1U;
+        if (lx_account_validate_canonical(&retired_account) !=
+                LXP_ERR_ACCOUNT_ID_MISMATCH ||
+            lx_account_rewrite_retired_issuance(&retired_account) !=
+                LXP_ERR_ACCOUNT_ID_MISMATCH)
+            return 1;
+        retired_account.id[0] ^= 1U;
+        if (lx_account_rewrite_retired_issuance(&retired_account) != LXP_OK ||
+            retired_account.name_length != LX_ASSET_ISSUANCE_NAME_BYTES ||
+            memcmp(retired_account.name, current_name,
+                   LX_ASSET_ISSUANCE_NAME_BYTES) != 0 ||
+            memcmp(retired_account.id, expected_id, sizeof(expected_id)) != 0 ||
+            lxp_u128_cmp(retired_account.balance, (lxp_u128){0U, 100U}) != 0 ||
+            memcmp(retired_account.asset_id, asset_id, sizeof(asset_id)) != 0 ||
+            retired_account.next_sequence != 4U ||
+            retired_account.created_at_sequence != 2U ||
+            retired_account.kind != LX_ACCOUNT_MODULE_VALUE ||
+            lx_account_validate_canonical(&retired_account) != LXP_OK ||
+            lx_account_rewrite_retired_issuance(&retired_account) !=
+                LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE)
+            return 1;
+        already_current = retired_account;
+        if (lx_account_registry_init(&rewrite_registry) != LXP_OK)
+            return 1;
+        rewrite_registry.accounts[0] = already_current;
+        rewrite_registry.count = 1U;
+        if (lx_account_registry_rewrite_retired_issuance(
+                &rewrite_registry, &renamed) !=
+                LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE ||
+            renamed != 0U)
+            return 1;
+        (void)memset(&retired_account, 0, sizeof(retired_account));
+        (void)memcpy(retired_account.name, retired, sizeof(retired));
+        retired_account.name_length = (uint16_t)sizeof(retired);
+        (void)memcpy(retired_account.id, expected_id, sizeof(expected_id));
+        retired_account.kind = LX_ACCOUNT_MODULE_VALUE;
+        retired_account.balance = (lxp_u128){0U, 100U};
+        (void)memcpy(retired_account.asset_id, asset_id, sizeof(asset_id));
+        retired_account.has_asset = true;
+        retired_account.next_sequence = 4U;
+        retired_account.created_at_sequence = 2U;
+        rewrite_registry.accounts[0] = retired_account;
+        rewrite_registry.accounts[1] = already_current;
+        rewrite_registry.count = 2U;
+        if (lx_account_registry_rewrite_retired_issuance(
+                &rewrite_registry, &renamed) != LXP_OK ||
+            renamed != 1U ||
+            rewrite_registry.accounts[0].name_length !=
+                LX_ASSET_ISSUANCE_NAME_BYTES ||
+            memcmp(rewrite_registry.accounts[0].name, current_name,
+                   LX_ASSET_ISSUANCE_NAME_BYTES) != 0 ||
+            memcmp(rewrite_registry.accounts[0].id, expected_id,
+                   sizeof(expected_id)) != 0 ||
+            memcmp(rewrite_registry.accounts[1].id, already_current.id,
+                   sizeof(already_current.id)) != 0)
+            return 1;
+    }
     return 0;
 }

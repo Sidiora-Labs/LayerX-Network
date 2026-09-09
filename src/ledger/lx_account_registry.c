@@ -1,5 +1,6 @@
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_hash.h"
 
 #include <string.h>
 
@@ -25,6 +26,61 @@ static bool bytes_zero(const uint8_t *bytes, size_t length)
     for (i = 0U; i < length; ++i)
         if (bytes[i] != 0U) return false;
     return true;
+}
+
+static bool lowercase_hex64(const uint8_t *bytes)
+{
+    size_t i;
+    for (i = 0U; i < 64U; ++i) {
+        uint8_t byte = bytes[i];
+        if (!((byte >= (uint8_t)'0' && byte <= (uint8_t)'9') ||
+              (byte >= (uint8_t)'a' && byte <= (uint8_t)'f')))
+            return false;
+    }
+    return true;
+}
+
+static lxp_result retired_issuance_match(
+    const uint8_t *name, size_t name_length, const uint8_t account_id[32],
+    const uint8_t asset_id[32])
+{
+    static const uint8_t hex[] = "0123456789abcdef";
+    static const uint8_t tag[] = "LX:ACCOUNT:v1";
+    uint8_t length_be[4] = {0U, 0U, 0U, 79U};
+    uint8_t derived[32];
+    uint8_t decoded[32];
+    lxp_hash_context context;
+    lxp_result status;
+    size_t i;
+    if (name == NULL || account_id == NULL || asset_id == NULL ||
+        name_length != 79U || memcmp(name, "asset:", 6U) != 0 ||
+        memcmp(name + 70U, ":issuance", 9U) != 0 || !lowercase_hex64(name + 6U))
+        return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    for (i = 0U; i < 32U; ++i) {
+        uint8_t hi = name[6U + i * 2U];
+        uint8_t lo = name[7U + i * 2U];
+        uint8_t hi_nibble = hi <= (uint8_t)'9' ?
+            (uint8_t)(hi - (uint8_t)'0') :
+            (uint8_t)(hi - (uint8_t)'a' + 10U);
+        uint8_t lo_nibble = lo <= (uint8_t)'9' ?
+            (uint8_t)(lo - (uint8_t)'0') :
+            (uint8_t)(lo - (uint8_t)'a' + 10U);
+        decoded[i] = (uint8_t)((hi_nibble << 4U) | lo_nibble);
+        if (name[6U + i * 2U] != hex[decoded[i] >> 4U] ||
+            name[7U + i * 2U] != hex[decoded[i] & 15U])
+            return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    }
+    if (memcmp(decoded, asset_id, 32U) != 0) return LXP_ERR_ASSET_MISMATCH;
+    lxp_hash_init(&context);
+    status = lxp_hash_update(&context, tag, sizeof(tag) - 1U);
+    if (status == LXP_OK)
+        status = lxp_hash_update(&context, length_be, sizeof(length_be));
+    if (status == LXP_OK)
+        status = lxp_hash_update(&context, name, name_length);
+    if (status == LXP_OK) status = lxp_hash_final(&context, derived);
+    if (status != LXP_OK) return status;
+    return memcmp(derived, account_id, 32U) == 0 ?
+           LXP_OK : LXP_ERR_ACCOUNT_ID_MISMATCH;
 }
 
 static bool module_name_valid(const uint8_t *name, size_t length)
@@ -114,6 +170,19 @@ lxp_result lx_account_validate_canonical(const lx_account *account)
     if (status == LXP_OK)
         status = lx_account_id_from_string(account->name,
                                            account->name_length, derived);
+    else if (status == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE &&
+             account->kind == LX_ACCOUNT_MODULE_VALUE && account->has_asset) {
+        lxp_result retired = retired_issuance_match(
+            account->name, account->name_length, account->id,
+            account->asset_id);
+        if (retired == LXP_OK) {
+            (void)memcpy(derived, account->id, LX_ACCOUNT_ID_BYTES);
+            parsed.kind = LX_ACCOUNT_MODULE_VALUE;
+            status = LXP_OK;
+        } else if (retired != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) {
+            status = retired;
+        }
+    }
     if (status != LXP_OK || parsed.kind != account->kind ||
         memcmp(derived, account->id, LX_ACCOUNT_ID_BYTES) != 0 ||
         (!account->has_asset &&
@@ -149,6 +218,69 @@ lxp_result lx_account_validate_canonical(const lx_account *account)
                 account->name[7U + i * 2U] != hex[account->asset_id[i] & 15U])
                 return LXP_ERR_ASSET_MISMATCH;
     }
+    return LXP_OK;
+}
+
+lxp_result lx_account_rewrite_retired_issuance(lx_account *account)
+{
+    lx_account before;
+    uint8_t name[LX_ASSET_ISSUANCE_NAME_BYTES];
+    uint8_t expected_id[32];
+    lxp_result status;
+    if (account == NULL) return LXP_ERR_NON_CANONICAL;
+    before = *account;
+    status = retired_issuance_match(account->name, account->name_length,
+                                    account->id, account->asset_id);
+    if (status != LXP_OK) return status;
+    if (account->kind != LX_ACCOUNT_MODULE_VALUE || !account->has_asset)
+        return LXP_ERR_NON_CANONICAL;
+    status = lx_asset_issuance_name(account->asset_id, name, expected_id);
+    if (status != LXP_OK || memcmp(expected_id, account->id, 32U) != 0)
+        return LXP_ERR_ACCOUNT_ID_MISMATCH;
+    (void)memset(account->name, 0, sizeof(account->name));
+    (void)memcpy(account->name, name, sizeof(name));
+    account->name_length = (uint16_t)sizeof(name);
+    if (memcmp(account->id, before.id, 32U) != 0 ||
+        account->kind != before.kind ||
+        lxp_u128_cmp(account->balance, before.balance) != 0 ||
+        memcmp(account->asset_id, before.asset_id, 32U) != 0 ||
+        account->has_asset != before.has_asset ||
+        account->next_sequence != before.next_sequence ||
+        account->created_at_sequence != before.created_at_sequence ||
+        account->frozen != before.frozen ||
+        account->has_open_reference != before.has_open_reference ||
+        memcmp(account->authority_key, before.authority_key, 32U) != 0 ||
+        account->has_authority_key != before.has_authority_key)
+        return LXP_FATAL_INVARIANT;
+    return lx_account_validate_canonical(account);
+}
+
+lxp_result lx_account_registry_rewrite_retired_issuance(
+    lx_account_registry *registry, size_t *renamed)
+{
+    size_t count = 0U;
+    size_t i;
+    lxp_result status;
+    if (registry == NULL || renamed == NULL ||
+        registry->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
+    *renamed = 0U;
+    for (i = 0U; i < registry->count; ++i) {
+        status = retired_issuance_match(registry->accounts[i].name,
+                                        registry->accounts[i].name_length,
+                                        registry->accounts[i].id,
+                                        registry->accounts[i].asset_id);
+        if (status == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE ||
+            status == LXP_ERR_ASSET_MISMATCH ||
+            status == LXP_ERR_ACCOUNT_ID_MISMATCH)
+            continue;
+        if (status != LXP_OK) return status;
+        status = lx_account_rewrite_retired_issuance(&registry->accounts[i]);
+        if (status != LXP_OK) return status;
+        ++count;
+    }
+    if (count == 0U) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    *renamed = count;
     return LXP_OK;
 }
 

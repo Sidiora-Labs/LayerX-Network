@@ -284,6 +284,9 @@ lxp_result lx_account_lookup(lx_account_registry *registry,
                              const uint8_t *name, size_t name_length,
                              const uint8_t presented_id[LX_ACCOUNT_ID_BYTES],
                              lx_account **account);
+lxp_result lx_account_rewrite_retired_issuance(lx_account *account);
+lxp_result lx_account_registry_rewrite_retired_issuance(
+    lx_account_registry *registry, size_t *renamed);
 lxp_result lx_account_open(lx_account_registry *registry,
                            const uint8_t *name, size_t name_length,
                            const uint8_t presented_id[LX_ACCOUNT_ID_BYTES],

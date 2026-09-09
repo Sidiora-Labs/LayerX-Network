@@ -5,7 +5,12 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_fee.h"
+#include "layerx/lxp_kernel.h"
+#include "layerx/lxp_ledger.h"
 #include "layerx/lxp_protocol.h"
+#include "layerx/lxp_snapshot.h"
+#include "layerx/lxp_state.h"
+#include "layerx/programs.h"
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -571,10 +576,175 @@ static lxp_result migrate_asset_v2(const char *input_path, const char *salt_path
     return status;
 }
 
+static lxp_result migrate_issuance_names(
+    const char *snapshot_path, const char *signer_key_path,
+    const char *output_directory)
+{
+    static const char authorization_name[] = "issuance-migration.lxim";
+    uint64_t parameters = 1U;
+    uint8_t *signer_key = NULL;
+    uint8_t *arena_bytes = NULL;
+    uint8_t *read_bytes = NULL;
+    lxp_state_store *state = NULL;
+    lxp_state_journal *journal = NULL;
+    lxp_kernel *kernel = NULL;
+    lx_account_registry *accounts = NULL;
+    lxp_arena read_arena;
+    lxp_arena write_arena;
+    lxp_snapshot_manifest_record old_manifest;
+    lxp_snapshot_manifest_record new_manifest;
+    lxp_byte_span old_snapshot;
+    lxp_byte_span new_snapshot;
+    uint8_t authorization[LXP_ISSUANCE_MIGRATION_BYTES];
+    uint8_t new_canonical[32];
+    char authorization_path[4096];
+    size_t signer_key_length = 0U;
+    size_t renamed = 0U;
+    bool directory_created = false;
+    bool state_open = false;
+    int directory_descriptor = -1;
+    lxp_result status;
+    (void)memset(&old_manifest, 0, sizeof(old_manifest));
+    authorization_path[0] = '\0';
+    if (snapshot_path == NULL || signer_key_path == NULL ||
+        output_directory == NULL || output_directory[0] == '\0')
+        return LXP_ERR_NON_CANONICAL;
+    state = (lxp_state_store *)malloc(sizeof(*state));
+    journal = (lxp_state_journal *)calloc(1U, sizeof(*journal));
+    kernel = (lxp_kernel *)malloc(sizeof(*kernel));
+    accounts = (lx_account_registry *)malloc(sizeof(*accounts));
+    arena_bytes = (uint8_t *)malloc(GENESIS_BUILD_ARENA_BYTES);
+    read_bytes = (uint8_t *)malloc(GENESIS_BUILD_ARENA_BYTES);
+    if (state == NULL || journal == NULL || kernel == NULL ||
+        accounts == NULL || arena_bytes == NULL || read_bytes == NULL)
+        status = LXP_ERR_IO;
+    else
+        status = read_regular_file(signer_key_path, 32U, true, &signer_key,
+                                   &signer_key_length);
+    if (status == LXP_OK && signer_key_length != 32U)
+        status = LXP_ERR_NON_CANONICAL;
+    if (status == LXP_OK) status = lx_account_registry_init(accounts);
+    if (status == LXP_OK) {
+        status = lxp_state_store_init(state, 1U);
+        state_open = status == LXP_OK;
+    }
+    if (status == LXP_OK)
+        status = lxp_state_store_bind_accounts(state, accounts);
+    if (status == LXP_OK)
+        status = lxp_kernel_create(kernel, state, journal, &parameters, 1U);
+    if (status == LXP_OK)
+        status = lxp_kernel_register_module(
+            kernel, programs_module_registration_v4());
+    if (status == LXP_OK)
+        status = lxp_kernel_register_module(kernel, lx_asset_module_iface());
+    if (status == LXP_OK)
+        status = lxp_arena_init(&read_arena, read_bytes,
+                                GENESIS_BUILD_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_snapshot_store_read(snapshot_path, &read_arena,
+                                         &old_manifest, &old_snapshot);
+    if (status == LXP_OK)
+        status = lxp_snapshot_load(old_snapshot.bytes, old_snapshot.length,
+                                   &old_manifest, kernel);
+    if (status == LXP_OK)
+        status = lx_account_registry_rewrite_retired_issuance(
+            kernel->state->accounts, &renamed);
+    if (status == LXP_OK)
+        status = lxp_state_root(kernel, new_canonical);
+    if (status == LXP_OK)
+        (void)memcpy(kernel->current_state_root, new_canonical, 32U);
+    if (status == LXP_OK)
+        status = lxp_arena_init(&write_arena, arena_bytes,
+                                GENESIS_BUILD_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_snapshot_write(kernel, old_manifest.global_sequence,
+                                    &write_arena, &new_snapshot);
+    if (status == LXP_OK)
+        status = lxp_snapshot_manifest_build(
+            new_snapshot.bytes, new_snapshot.length,
+            old_manifest.global_sequence, new_canonical, new_canonical,
+            &new_manifest);
+    if (status == LXP_OK)
+        status = lxp_genesis_issuance_migration_authorize(
+            signer_key, old_manifest.global_sequence,
+            old_manifest.snapshot_digest, old_manifest.canonical_state_root,
+            old_manifest.receipt_state_root, new_manifest.snapshot_digest,
+            new_manifest.canonical_state_root, new_manifest.receipt_state_root,
+            authorization);
+    if (status == LXP_OK)
+        status = lxp_genesis_issuance_migration_verify(
+            authorization, old_manifest.global_sequence,
+            old_manifest.snapshot_digest, old_manifest.canonical_state_root,
+            old_manifest.receipt_state_root, new_manifest.snapshot_digest,
+            new_manifest.canonical_state_root, new_manifest.receipt_state_root);
+    if (status == LXP_OK)
+        status = join_path(authorization_path, sizeof(authorization_path),
+                           output_directory, authorization_name);
+    if (status == LXP_OK && mkdir(output_directory, 0700) != 0)
+        status = LXP_ERR_IO;
+    else if (status == LXP_OK)
+        directory_created = true;
+    if (status == LXP_OK)
+        status = lxp_snapshot_store_write(output_directory, &new_manifest,
+                                          new_snapshot.bytes,
+                                          new_snapshot.length);
+    if (status == LXP_OK)
+        status = write_exclusive(authorization_path, authorization,
+                                 sizeof(authorization));
+    if (status == LXP_OK) {
+        directory_descriptor = open(output_directory,
+                                    O_RDONLY | O_DIRECTORY | O_CLOEXEC |
+                                        O_NOFOLLOW);
+        if (directory_descriptor < 0 || fsync(directory_descriptor) != 0)
+            status = LXP_ERR_IO;
+    }
+    if (directory_descriptor >= 0 && close(directory_descriptor) != 0 &&
+        status == LXP_OK)
+        status = LXP_ERR_IO;
+    if (status != LXP_OK && directory_created) {
+        char snapshot_path_buffer[4096];
+        int snapshot_length = snprintf(
+            snapshot_path_buffer, sizeof(snapshot_path_buffer),
+            "%s/%020llu.lxs", output_directory,
+            (unsigned long long)old_manifest.global_sequence);
+        if (snapshot_length >= 0 &&
+            (size_t)snapshot_length < sizeof(snapshot_path_buffer))
+            (void)unlink(snapshot_path_buffer);
+        (void)unlink(authorization_path);
+        (void)rmdir(output_directory);
+    }
+    if (state_open) {
+        lxp_result close_status = lxp_state_store_destroy(state);
+        if (status == LXP_OK && close_status != LXP_OK) status = close_status;
+    }
+    if (accounts != NULL) lxp_secure_zero(accounts, sizeof(*accounts));
+    if (kernel != NULL) lxp_secure_zero(kernel, sizeof(*kernel));
+    if (journal != NULL) lxp_secure_zero(journal, sizeof(*journal));
+    if (signer_key != NULL) {
+        lxp_secure_zero(signer_key, signer_key_length);
+        free(signer_key);
+    }
+    if (arena_bytes != NULL)
+        lxp_secure_zero(arena_bytes, GENESIS_BUILD_ARENA_BYTES);
+    if (read_bytes != NULL)
+        lxp_secure_zero(read_bytes, GENESIS_BUILD_ARENA_BYTES);
+    lxp_secure_zero(authorization, sizeof(authorization));
+    free(accounts);
+    free(kernel);
+    free(journal);
+    free(state);
+    free(arena_bytes);
+    free(read_bytes);
+    return status;
+}
+
 int lxp_genesis_builder_cli_main(int argc, char **argv)
 {
     if (argv != NULL && argc == 6 && strcmp(argv[1], "--migrate-asset-v2") == 0)
         return migrate_asset_v2(argv[2], argv[3], argv[4], argv[5]) == LXP_OK ? 0 : 1;
+    if (argv != NULL && argc == 5 &&
+        strcmp(argv[1], "--migrate-issuance-names") == 0)
+        return migrate_issuance_names(argv[2], argv[3], argv[4]) == LXP_OK ? 0 : 1;
     if (argv == NULL || (argc != 4 && argc != 6) ||
         (argc == 6 && strcmp(argv[4], "--custody-profile") != 0))
         return 2;

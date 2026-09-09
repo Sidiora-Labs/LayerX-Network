@@ -8,7 +8,8 @@
 
 enum {
     LXP_GENESIS_REGISTRATION_REQUEST_BYTES = 73,
-    LXP_GENESIS_DEPLOYMENT_DESCRIPTOR_BYTES = 105
+    LXP_GENESIS_DEPLOYMENT_DESCRIPTOR_BYTES = 105,
+    LXP_ISSUANCE_MIGRATION_BYTES = 301
 };
 
 lxp_result lxp_genesis_build_fresh_empty(
@@ -39,6 +40,20 @@ lxp_result lxp_genesis_deployment_descriptor_encode(
 lxp_result lxp_genesis_build_artifacts(
     const char *request_path, const char *signer_key_path,
     const char *output_directory);
+lxp_result lxp_genesis_sign_preimage(
+    const uint8_t private_key[32], const uint8_t *bytes, size_t length,
+    uint8_t signature[64]);
+lxp_result lxp_genesis_issuance_migration_authorize(
+    const uint8_t private_key[32], uint64_t sequence,
+    const uint8_t old_digest[32], const uint8_t old_canonical[32],
+    const uint8_t old_receipt[32], const uint8_t new_digest[32],
+    const uint8_t new_canonical[32], const uint8_t new_receipt[32],
+    uint8_t encoded[LXP_ISSUANCE_MIGRATION_BYTES]);
+lxp_result lxp_genesis_issuance_migration_verify(
+    const uint8_t encoded[LXP_ISSUANCE_MIGRATION_BYTES], uint64_t sequence,
+    const uint8_t old_digest[32], const uint8_t old_canonical[32],
+    const uint8_t old_receipt[32], const uint8_t new_digest[32],
+    const uint8_t new_canonical[32], const uint8_t new_receipt[32]);
 int lxp_genesis_builder_cli_main(int argc, char **argv);
 
 #endif
