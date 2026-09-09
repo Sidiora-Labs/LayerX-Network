@@ -16,6 +16,11 @@ not document SDK clients; those live under `platform/docs/content/`. It does
 not document portable receipt JSON; see
 [Portable receipt verifier](PortableVerifier.md).
 
+Wallet, faucet, send, token, program, and 402 steps:
+[Payments developer path](PaymentsQuickstart.md). There is no
+`layerx token` or `layerx wallet` command on `main`, and
+`lane/pay-wallet-cli` is not a remote branch.
+
 ---
 
 ## Commands

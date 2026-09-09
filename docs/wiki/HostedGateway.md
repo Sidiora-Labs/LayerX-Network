@@ -36,6 +36,10 @@ administration surface. `production_route` never accepts emulator
 paths (`platform/hosted/gateway/src/lib.rs:804-808`;
 `platform/hosted/gateway/src/lib.rs:880-881`).
 
+Public JSON-RPC `POST /rpc`, `GET /rpc/schema`, and `GET /rpc/ws` are
+**on the testnet branch** `lane/pay-public-rpc` and are not served by
+this tree on `main`. See [Public JSON-RPC](PublicRpc.md).
+
 ---
 
 ## TLS
@@ -556,6 +560,10 @@ inputs appear here:
 | `platform-hosted-smoke` | requires `LAYERX_GATEWAY_URL` (`platform/Makefile.inc:161-173`) |
 | `platform-hosted-topology-check` | `topology-check.sh`, default manifests include the gateway (`platform/Makefile.inc:177-178`; `platform/hosted/tests/topology-check.sh:22`) |
 | `platform-test-agent-install` | requires `LAYERX_GATEWAY_URL` (`platform/Makefile.inc:190-201`) |
+
+On the testnet branch the gateway also serves `/rpc` as documented on
+[Public JSON-RPC](PublicRpc.md). Commitment names for
+`lx_sendActivity` are on [Commitment levels](CommitmentLevels.md).
 
 [Home](Home.md)
 

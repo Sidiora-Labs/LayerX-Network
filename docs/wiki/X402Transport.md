@@ -23,6 +23,13 @@ no floating-point path (`interop/crates/layerx-x402/src/model.rs:1-3,
 This page covers that crate, the gateway routes that mount it, and the
 local conformance matrix. It does not cover AP2, UCP, Visa TAP, or fiat.
 
+**On the testnet branch** `lane/pay-402lxp`, offers may carry
+`extra.layerx.commitment` (`executed`, `batched`, or `finalised`) and
+metered/subscription payloads carry a canonical Asset receive. See
+[Commitment levels](CommitmentLevels.md) and
+[Payments developer path](PaymentsQuickstart.md). Those extras are not
+on `main`.
+
 ---
 
 ## Payment-required flow

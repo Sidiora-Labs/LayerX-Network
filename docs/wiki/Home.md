@@ -44,7 +44,11 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 
 ## Resources
 
-- [Testnet quickstart](Quickstart.md)
+- [Testnet cluster quickstart](Quickstart.md)
+- [Payments developer path](PaymentsQuickstart.md)
+- [Public JSON-RPC](PublicRpc.md)
+- [Assets and tokens](Assets.md)
+- [Commitment levels](CommitmentLevels.md)
 - [Running an agent](RunningAnAgent.md)
 - [Protocol](Protocol.md)
 - [Modules](Modules.md)
