@@ -1312,3 +1312,94 @@ fn assert_maintained_root(
         "Programs root",
     );
 }
+
+fn cluster_producer(cluster: &Cluster, artifact: &Path) -> std::process::Output {
+    let key = cluster.root.join("producer-treasury.hex");
+    write(&key, hex_encode(&cluster.treasury_seed).as_bytes(), 0o600);
+    let public = SigningKey::from_bytes(&cluster.treasury_seed).verifying_key();
+    let environment = cluster.root.join("producer.env");
+    write(&environment, format!(
+        "LAYERX_NODE_TREASURY_KEY_FILE={}\nLAYERX_NODE_TREASURY_PUBLIC_KEY={}\nLAYERX_NODE_TREASURY_DID={}\nLAYERX_NODE_LNI_SOCKET={}\n",
+        key.display(), hex_encode(public.as_bytes()), cluster.treasury_did, cluster.lni_socket.display()
+    ).as_bytes(), 0o644);
+    let script = must(
+        fs::read_to_string(repository_root().join("platform/hosted/tests/beta-cluster.sh")),
+        "cluster script",
+    );
+    let producer = script
+        .split("<<'PYREGDEPLOY'\n")
+        .nth(1)
+        .and_then(|body| body.split("\nPYREGDEPLOY").next())
+        .unwrap_or_else(|| panic!("producer body"));
+    let binaries = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
+        .map_or_else(|| repository_root().join("build/bin"), PathBuf::from);
+    must(
+        Command::new("python3")
+            .arg("-c")
+            .arg(producer)
+            .arg(environment)
+            .arg(NETWORK_ID.to_string())
+            .arg(binaries.join("layerxctl"))
+            .stdin(fs::File::open(artifact).unwrap_or_else(|error| panic!("artifact: {error}")))
+            .output(),
+        "real cluster producer",
+    )
+}
+
+#[test]
+fn cluster_producer_signs_built_program_for_live_treasury() {
+    use layerx_types::program_lifecycle::NativeProgramDeploy;
+    let cluster = start_cluster(true);
+    let artifact = repository_root().join("programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm");
+    let sequence = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
+    let output = cluster_producer(&cluster, &artifact);
+    assert!(
+        output.status.success(),
+        "producer refused: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let activity_type = must(ActivityType::new(ModuleId::Programs, 1), "type");
+    let registration = must(
+        ModuleRegistration::new(ModuleId::Programs, &[activity_type]),
+        "registration",
+    );
+    let registry = must(ModuleRegistry::new(&[registration]), "registry");
+    let activity = must(
+        layerx_wire::activity::decode_signed(&output.stdout, &registry),
+        "canonical producer activity",
+    );
+    assert_eq!(activity.account_sequence(), sequence);
+    assert_eq!(activity.actor_did(), cluster.treasury_did.as_bytes());
+    let payload = must(
+        NativeProgramDeploy::decode(activity.payload()),
+        "native deploy",
+    );
+    assert_eq!(
+        must(payload.encode(), "canonical payload"),
+        activity.payload()
+    );
+    assert_eq!(payload.wasm, must(fs::read(&artifact), "built artifact"));
+    assert_eq!(payload.guest_abi, 2);
+    let proof = must(
+        layerx_platform_registry::deployment::deploy(
+            &cluster.lni_socket,
+            &output.stdout,
+            Instant::now() + Duration::from_secs(15),
+        ),
+        "real producer deployment",
+    );
+    assert_eq!(proof.activity, output.stdout);
+    let mut altered = output.stdout;
+    let last = altered.len() - 1;
+    altered[last] ^= 1;
+    assert!(layerx_platform_registry::deployment::deploy(
+        &cluster.lni_socket,
+        &altered,
+        Instant::now() + Duration::from_secs(5)
+    )
+    .is_err());
+    let bad_artifact = cluster.root.join("invalid.wasm");
+    write(&bad_artifact, b"invalid", 0o600);
+    let refused = cluster_producer(&cluster, &bad_artifact);
+    assert!(!refused.status.success() && refused.stdout.is_empty());
+}
