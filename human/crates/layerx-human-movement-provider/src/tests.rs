@@ -674,9 +674,75 @@ fn withdrawal_mapping_preserves_anchor_and_refuses_old_plan_shape() -> Result {
     let mut old = encoded;
     let tag = old
         .windows(2)
-        .position(|bytes| bytes == [1, 5])
+        .position(|bytes| bytes == [1, 6])
         .ok_or("plan tag absent")?;
-    old[tag + 1] = 2;
+    old[tag + 1] = 5;
     assert!(codec.decode_response(&old).is_err());
+    Ok(())
+}
+
+#[test]
+fn receipt_identity_mapping_survives_restart_and_refuses_reassignment() -> Result {
+    let dir = Directory::new()?;
+    let codec = NativeMovementCodec::new();
+    let planning = plan("withdraw.start")?;
+    let identity = layerx_human_service::journeys::MovementExecutionIdentity {
+        principal: planning.principal.clone(),
+        tenant: planning.tenant.clone(),
+        account: checked(layerx_paxeer_client::account_address_for_protocol(
+            &planning.context.account,
+            2,
+        ))?,
+        wallet: planning.context.wallet,
+        plan_id: planning.idempotency_key,
+    };
+    let debit = layerx_paxeer_client::DebitExpectation {
+        activity_id: [31; 32],
+        withdrawal_id: [31; 32],
+        network_id: planning.context.network.value(),
+        account: identity.account,
+        withdrawals_account: checked(layerx_paxeer_client::account_address_for_protocol(
+            &planning.context.withdrawals_account,
+            2,
+        ))?,
+        asset_id: planning.context.asset.bytes(),
+        amount: planning.context.amount.value(),
+        recipient: identity.wallet,
+    };
+    let request = Request::BindWithdrawalDebit {
+        identity: identity.clone(),
+        debit,
+        receipt_reference: [32; 32],
+    };
+    let bytes = checked(codec.encode_request(&request))?;
+    assert_eq!(checked(codec.decode_request(&bytes))?, request);
+    let key = hex_string(&[30; 32]);
+    let root = dir.0.join("journal");
+    let mut journal = Journal::open(&root, 2)?;
+    journal.begin(&key, &bytes)?;
+    assert!(!journal.has_withdrawal_debit(&debit));
+    journal.complete(&key, &checked(codec.encode_response(&Response::Ready))?)?;
+    drop(journal);
+    let mut journal = Journal::open(&root, 2)?;
+    assert!(journal.has_withdrawal_debit(&debit));
+    journal.begin(&key, &bytes)?;
+    let mut other = debit;
+    other.activity_id = [33; 32];
+    other.withdrawal_id = other.activity_id;
+    let changed = checked(codec.encode_request(&Request::BindWithdrawalDebit {
+        identity: identity.clone(),
+        debit: other,
+        receipt_reference: [34; 32],
+    }))?;
+    assert!(journal.begin(&key, &changed).is_err());
+    assert!(!journal.has_withdrawal_debit(&other));
+    other.withdrawal_id = [35; 32];
+    assert!(codec
+        .encode_request(&Request::BindWithdrawalDebit {
+            identity,
+            debit: other,
+            receipt_reference: [34; 32]
+        })
+        .is_err());
     Ok(())
 }
