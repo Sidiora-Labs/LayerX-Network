@@ -826,6 +826,25 @@ fn local_gateway_rpc() {
     );
 }
 
+fn rpc_account_sequence(http: &Http, source: &str, index: u64) -> u64 {
+    let sequence_request = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc":"2.0", "id":index, "method":"lx_getSequence", "params":[source]
+    }))
+    .required("account sequence request");
+    let sequence_response = http.request(
+        "POST",
+        "/rpc",
+        &[("Content-Type", "application/json")],
+        &sequence_request,
+    );
+    assert_eq!(sequence_response.status, 200, "{}", sequence_response.body);
+    json(&sequence_response)["result"]["next_sequence"]
+        .as_str()
+        .required("account sequence")
+        .parse::<u64>()
+        .required("sequence integer")
+}
+
 #[test]
 fn local_gateway_successful_send_latency() {
     let (cluster, _funding) = funding::start();
@@ -866,15 +885,18 @@ fn local_gateway_successful_send_latency() {
     );
     let mut samples = Vec::new();
     for index in 0..20 {
+        let account_next = rpc_account_sequence(&http, &source, index);
+        let identity_next = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
         let signed = funding::send(
             &cluster.treasury_seed,
+            identity_next,
             &SendRequest {
                 network_id: NETWORK_ID,
                 source_did: cluster.treasury_did.clone(),
                 destination_did: String::new(),
                 asset: cluster.asset,
                 amount: 1,
-                account_sequence: account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+                account_sequence: account_next,
                 idempotency_key: random32(),
                 not_before_ms: now_ms() - 1000,
                 expires_at_ms: now_ms() + 60000,

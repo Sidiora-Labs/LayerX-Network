@@ -47,8 +47,8 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         };
     }
     let prefix = match method {
-        "lx_getAccount" | "lx_getBalance" => "/v1/accounts/",
-        "lx_getBalances" | "lx_getSequence" => "/v1/dids/",
+        "lx_getAccount" | "lx_getBalance" | "lx_getSequence" => "/v1/accounts/",
+        "lx_getBalances" => "/v1/dids/",
         "lx_getReceipt" | "lx_getActivityStatus" => "/v1/receipts/",
         "lx_getBatchHeader" => "/v1/batches/",
         "lx_getCheckpoint" => "/v1/checkpoints/",
@@ -66,7 +66,7 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         {
             return Err(-32602);
         }
-    } else if matches!(method, "lx_getBalances" | "lx_getSequence") {
+    } else if method == "lx_getBalances" {
         if layerx_types::ids::Did::new(id.as_bytes()).is_err()
             || id
                 .bytes()
@@ -78,9 +78,8 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         return Err(-32602);
     }
     let suffix = match method {
-        "lx_getBalance" => "/balance",
+        "lx_getBalance" | "lx_getSequence" => "/balance",
         "lx_getBalances" => "/accounts",
-        "lx_getSequence" => "/sequence",
         _ => "",
     };
     Ok(format!("{prefix}{id}{suffix}"))
@@ -436,6 +435,7 @@ mod tests {
         for (method, path) in [
             ("lx_getAccount", format!("/v1/accounts/{id}")),
             ("lx_getBalance", format!("/v1/accounts/{id}/balance")),
+            ("lx_getSequence", format!("/v1/accounts/{id}/balance")),
             ("lx_getReceipt", format!("/v1/receipts/{id}")),
             ("lx_getActivityStatus", format!("/v1/receipts/{id}")),
             ("lx_getCheckpoint", format!("/v1/checkpoints/{id}")),
@@ -467,8 +467,8 @@ mod tests {
             Ok("/v1/dids/did:layerx:alice/accounts".into())
         );
         assert_eq!(
-            selector("lx_getSequence", Some(&json!(["did:layerx:alice"]))),
-            Ok("/v1/dids/did:layerx:alice/sequence".into())
+            selector("lx_getSequence", Some(&json!([id]))),
+            Ok(format!("/v1/accounts/{id}/balance"))
         );
         for kind in ["activity", "receipt"] {
             assert_eq!(
