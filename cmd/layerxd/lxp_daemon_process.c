@@ -83,6 +83,8 @@ typedef struct lxp_daemon_process {
     uint16_t authority_replica_port;
     uint8_t *owner_scratch_bytes;
     lxp_arena owner_scratch;
+    uint8_t *availability_scratch_bytes;
+    lxp_arena availability_scratch;
     uint8_t *execution_arena_bytes;
     lxp_arena execution_arena;
     uint8_t *checkpoint_arena_bytes;
@@ -160,24 +162,54 @@ static lxp_result availability_prune(lxp_daemon_process *process, uint64_t head)
     return status;
 }
 
-static lxp_result availability_store_body(lxp_daemon_process *process,
-                                         const lxp_batch_body *body)
+static lxp_result availability_store_body_with_arena(
+    lxp_daemon_process *process, const lxp_batch_body *body,
+    lxp_arena *arena)
 {
     lxp_da_bundle bundle;
     uint8_t root[32];
-    size_t mark = lxp_arena_mark(&process->owner_scratch);
-    lxp_result status = lxp_batch_availability_root(body, &process->owner_scratch, root);
+    size_t mark;
+    lxp_result status;
+    if (process == NULL || body == NULL || arena == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    mark = lxp_arena_mark(arena);
+    status = lxp_batch_availability_root(body, arena, root);
     if (status == LXP_OK &&
         lxp_ct_memcmp(root, body->header.data_availability_root, 32U) != 0)
         status = LXP_ERR_ROOT_MISMATCH;
     if (status == LXP_OK)
         status = lxp_da_bundle_build(body, LXP_DA_CANONICAL_CHUNK_BYTES,
-                                     &process->owner_scratch, &bundle);
+                                     arena, &bundle);
     if (status == LXP_OK)
         status = lxp_da_store_bundle(&process->availability_store, &bundle,
-                                     &process->owner_scratch);
-    (void)lxp_arena_reset(&process->owner_scratch, mark);
+                                     arena);
+    (void)lxp_arena_reset(arena, mark);
     return status;
+}
+
+static lxp_result availability_store_body(lxp_daemon_process *process,
+                                         const lxp_batch_body *body)
+{
+    return availability_store_body_with_arena(
+        process, body, &process->owner_scratch);
+}
+
+typedef struct availability_store_job {
+    lxp_daemon_process *process;
+    const lxp_batch_body *body;
+    lxp_result status;
+    uint64_t started_us;
+    uint64_t finished_us;
+} availability_store_job;
+
+static void *availability_store_worker(void *context)
+{
+    availability_store_job *job = (availability_store_job *)context;
+    job->started_us = pay_timing_us();
+    job->status = availability_store_body_with_arena(
+        job->process, job->body, &job->process->availability_scratch);
+    job->finished_us = pay_timing_us();
+    return NULL;
 }
 
 static void availability_verify_retained(lxp_daemon_process *process)
@@ -1868,13 +1900,69 @@ static lxp_result replay_canonical_after_snapshot(
     return status;
 }
 
+typedef struct pay_publication_timing {
+    uint64_t setup_us;
+    uint64_t proofs_us;
+    uint64_t authority_us;
+    uint64_t evidence_us;
+    uint64_t replica_us;
+    uint64_t account_evidence_us;
+    uint64_t visibility_us;
+    uint64_t prune_us;
+    lxp_result replica_result;
+} pay_publication_timing;
+
+typedef struct authority_replica_job {
+    lxp_daemon_process *process;
+    const lxp_byte_span *receipts;
+    const lxp_merkle_proof *receipt_proofs;
+    size_t activity_count;
+    lxp_byte_span maintenance;
+    const lxp_merkle_proof *maintenance_proof;
+    lxp_byte_span canonical_header;
+    uint8_t header_signature[64];
+    lxp_result status;
+    uint64_t started_us;
+    uint64_t finished_us;
+} authority_replica_job;
+
+static void *authority_replica_worker(void *context)
+{
+    authority_replica_job *job = (authority_replica_job *)context;
+    size_t i;
+    job->started_us = pay_timing_us();
+    job->status = LXP_OK;
+    for (i = 0U; job->status == LXP_OK && i < job->activity_count; ++i)
+        job->status = lxp_daemon_authority_replica_publish(
+            job->process->authority_replica_address,
+            job->process->authority_replica_port,
+            job->process->authority_replica_token,
+            job->process->authority_replica_token_length,
+            job->process->authority_replica_id,
+            job->receipts[i].bytes, job->receipts[i].length,
+            job->canonical_header.bytes, job->canonical_header.length,
+            job->header_signature, &job->receipt_proofs[i]);
+    if (job->status == LXP_OK && job->maintenance.length != 0U)
+        job->status = lxp_daemon_authority_replica_publish_maintenance(
+            job->process->authority_replica_address,
+            job->process->authority_replica_port,
+            job->process->authority_replica_token,
+            job->process->authority_replica_token_length,
+            job->process->authority_replica_id,
+            job->maintenance.bytes, job->maintenance.length,
+            job->canonical_header.bytes, job->canonical_header.length,
+            job->header_signature, job->maintenance_proof);
+    job->finished_us = pay_timing_us();
+    return NULL;
+}
+
 static lxp_result publish_canonical_batch(
     lxp_daemon_process *process, const lxp_byte_span *activities,
     const lxp_byte_span *receipts, const lxp_receipt *decoded_receipts,
     size_t activity_count, const lxp_byte_span *events, size_t event_count,
     uint16_t protocol_version, uint64_t timestamp,
     bool checkpoint_persisted, lxp_byte_span maintenance,
-    const lxp_kernel *base_kernel)
+    const lxp_kernel *base_kernel, pay_publication_timing *timing)
 {
     lxp_batch_roots roots;
     lxp_batch_header header;
@@ -1886,12 +1974,19 @@ static lxp_result publish_canonical_batch(
     uint8_t header_signature[64];
     uint8_t activity_hashes[LXP_DAEMON_MAX_BATCH_ACTIVITIES][32];
     uint8_t receipt_hashes[LXP_DAEMON_MAX_BATCH_ACTIVITIES + 1U][32];
+    lxp_merkle_proof activity_proofs[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_merkle_proof receipt_proofs[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_byte_span combined[LXP_DAEMON_MAX_BATCH_ACTIVITIES + 1U];
     lxp_programs_occupancy_receipt maintenance_record;
     size_t receipt_count = activity_count + (maintenance.length != 0U ? 1U : 0U);
     lxp_merkle_proof head_receipt_proof;
+    authority_replica_job replica_job;
+    pthread_t replica_thread;
+    bool replica_started = false;
+    uint64_t stage_started = pay_timing_us();
     size_t i;
     lxp_result status;
+    if (timing != NULL) (void)memset(timing, 0, sizeof(*timing));
     if (process == NULL || activities == NULL || receipts == NULL ||
         decoded_receipts == NULL || activity_count == 0U ||
         activity_count > LXP_DAEMON_MAX_BATCH_ACTIVITIES || timestamp == 0U ||
@@ -2041,6 +2136,8 @@ static lxp_result publish_canonical_batch(
         status = lxp_da_log_store_body(&process->availability_log,
             &process->prepared_availability_body, &process->execution_arena);
     }
+    if (timing != NULL) timing->setup_us = pay_timing_us() - stage_started;
+    stage_started = pay_timing_us();
     (void)memset(&head_receipt_proof, 0, sizeof(head_receipt_proof));
     for (i = 0U; status == LXP_OK && i < activity_count; ++i)
         status = lxp_merkle_leaf_hash(activities[i].bytes,
@@ -2050,85 +2147,108 @@ static lxp_result publish_canonical_batch(
         status = lxp_merkle_leaf_hash(combined[i].bytes, combined[i].length,
                                       receipt_hashes[i]);
     for (i = 0U; status == LXP_OK && i < activity_count; ++i) {
-        lxp_merkle_proof activity_proof;
-        lxp_merkle_proof receipt_proof;
         uint8_t proof_root[32];
         status = lxp_merkle_proof_generate(
             (const uint8_t (*)[32])receipt_hashes, receipt_count, i,
-            &process->execution_arena, &receipt_proof, proof_root);
+            &process->execution_arena, &receipt_proofs[i], proof_root);
         if (status == LXP_OK &&
             lxp_ct_memcmp(proof_root, roots.receipt_merkle_root, 32U) != 0)
             status = LXP_FATAL_INVARIANT;
         if (status == LXP_OK)
             status = lxp_merkle_proof_generate(
                 (const uint8_t (*)[32])activity_hashes, activity_count, i,
-                &process->execution_arena, &activity_proof, proof_root);
+                &process->execution_arena, &activity_proofs[i], proof_root);
         if (status == LXP_OK &&
             lxp_ct_memcmp(proof_root, roots.activity_merkle_root, 32U) != 0)
             status = LXP_FATAL_INVARIANT;
         if (status == LXP_OK && i + 1U == activity_count)
-            head_receipt_proof = receipt_proof;
+            head_receipt_proof = receipt_proofs[i];
+    }
+    if (status == LXP_OK && maintenance.length != 0U) {
+        uint8_t root[32];
+        status = lxp_merkle_proof_generate(
+            (const uint8_t (*)[32])receipt_hashes, receipt_count,
+            activity_count, &process->execution_arena,
+            &head_receipt_proof, root);
+        if (status == LXP_OK &&
+            lxp_ct_memcmp(root, roots.receipt_merkle_root, 32U) != 0)
+            status = LXP_FATAL_INVARIANT;
+    }
+    if (timing != NULL) timing->proofs_us = pay_timing_us() - stage_started;
+    stage_started = pay_timing_us();
+    for (i = 0U; status == LXP_OK && i < activity_count; ++i)
         if (status == LXP_OK)
             status = lxp_daemon_receipt_authority_append_artifacts(
                 &process->receipt_authority,
                 receipts[i].bytes, receipts[i].length,
                 canonical_header.bytes, canonical_header.length,
-                header_signature, &receipt_proof,
+                header_signature, &receipt_proofs[i],
                 &process->execution_arena,
                 decoded_receipts[i].program_outcome.terminal_payload,
                 decoded_receipts[i].program_outcome.call_graph_payload);
-        if (status == LXP_OK)
-            status = lxp_daemon_activity_evidence_publish(
-                &process->evidence_store, activities[i], &activity_proof,
-                receipts[i], &receipt_proof,
-                &process->sequencer_authorization, canonical_header,
-                header_signature, &process->execution_arena, NULL);
+    if (status == LXP_OK && maintenance.length != 0U) {
+        status = lxp_daemon_receipt_authority_append_maintenance(
+            &process->receipt_authority, maintenance.bytes, maintenance.length,
+            canonical_header.bytes, canonical_header.length, header_signature,
+            &head_receipt_proof, &process->execution_arena);
+    }
+    if (timing != NULL) timing->authority_us = pay_timing_us() - stage_started;
+    (void)memset(&replica_job, 0, sizeof(replica_job));
+    replica_job.process = process;
+    replica_job.receipts = receipts;
+    replica_job.receipt_proofs = receipt_proofs;
+    replica_job.activity_count = activity_count;
+    replica_job.maintenance = maintenance;
+    replica_job.maintenance_proof = &head_receipt_proof;
+    replica_job.canonical_header = canonical_header;
+    (void)memcpy(replica_job.header_signature, header_signature,
+                 sizeof(replica_job.header_signature));
+    if (status == LXP_OK && pthread_create(
+            &replica_thread, NULL, authority_replica_worker,
+            &replica_job) == 0)
+        replica_started = true;
+    else if (status == LXP_OK)
+        (void)authority_replica_worker(&replica_job);
+    stage_started = pay_timing_us();
+    for (i = 0U; status == LXP_OK && i < activity_count; ++i) {
+        status = lxp_daemon_activity_evidence_publish(
+            &process->evidence_store, activities[i], &activity_proofs[i],
+            receipts[i], &receipt_proofs[i],
+            &process->sequencer_authorization, canonical_header,
+            header_signature, &process->execution_arena, NULL);
         if (status == LXP_OK)
             status = lxp_verified_receipt_index_add(
                 &process->verified_receipts, &decoded_receipts[i],
                 process->sequencer_authorization.public_key,
                 &process->execution_arena);
-        if (status == LXP_OK)
-            status = lxp_daemon_authority_replica_publish(
-                process->authority_replica_address,
-                process->authority_replica_port,
-                process->authority_replica_token,
-                process->authority_replica_token_length,
-                process->authority_replica_id,
-                receipts[i].bytes, receipts[i].length,
-                canonical_header.bytes, canonical_header.length,
-                header_signature, &receipt_proof);
     }
-    if (status == LXP_OK && maintenance.length != 0U) {
-        uint8_t root[32];
-        status = lxp_merkle_proof_generate((const uint8_t (*)[32])receipt_hashes,
-            receipt_count, activity_count, &process->execution_arena, &head_receipt_proof, root);
-        if (status == LXP_OK && lxp_ct_memcmp(root, roots.receipt_merkle_root, 32U) != 0)
-            status = LXP_FATAL_INVARIANT;
-        if (status == LXP_OK)
-            status = lxp_daemon_receipt_authority_append_maintenance(
-                &process->receipt_authority, maintenance.bytes, maintenance.length,
-                canonical_header.bytes, canonical_header.length, header_signature,
-                &head_receipt_proof, &process->execution_arena);
-        if (status == LXP_OK)
-            status = lxp_daemon_authority_replica_publish_maintenance(
-                process->authority_replica_address, process->authority_replica_port,
-                process->authority_replica_token, process->authority_replica_token_length,
-                process->authority_replica_id, maintenance.bytes, maintenance.length,
-                canonical_header.bytes, canonical_header.length, header_signature, &head_receipt_proof);
-        if (status == LXP_OK && process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
-            status = lxp_daemon_account_evidence_publish_batch_maintenance(
-                &process->evidence_store, &process->kernel, maintenance, &head_receipt_proof,
-                &process->sequencer_authorization, canonical_header, header_signature,
-                &process->execution_arena);
-    }
-    if (status == LXP_OK && maintenance.length == 0U && process->protocol_version ==
-                                LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+    if (timing != NULL) timing->evidence_us = pay_timing_us() - stage_started;
+    stage_started = pay_timing_us();
+    if (status == LXP_OK && maintenance.length != 0U &&
+        process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_daemon_account_evidence_publish_batch_maintenance(
+            &process->evidence_store, &process->kernel, maintenance,
+            &head_receipt_proof, &process->sequencer_authorization,
+            canonical_header, header_signature, &process->execution_arena);
+    if (status == LXP_OK && maintenance.length == 0U &&
+        process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_daemon_account_evidence_publish_batch(
             &process->evidence_store, &process->kernel,
             receipts[activity_count - 1U], &head_receipt_proof,
             &process->sequencer_authorization, canonical_header,
             header_signature, &process->execution_arena);
+    if (timing != NULL)
+        timing->account_evidence_us = pay_timing_us() - stage_started;
+    if (replica_started && pthread_join(replica_thread, NULL) != 0 &&
+        status == LXP_OK)
+        status = LXP_ERR_IO;
+    if (timing != NULL &&
+        replica_job.finished_us >= replica_job.started_us)
+        timing->replica_us = replica_job.finished_us - replica_job.started_us;
+    if (timing != NULL) timing->replica_result = replica_job.status;
+    if (status == LXP_OK && replica_job.status != LXP_OK)
+        status = replica_job.status;
+    stage_started = pay_timing_us();
     if (status == LXP_OK) {
         if (pthread_mutex_lock(&process->owner.receipt_mutex) != 0)
             status = LXP_ERR_IO;
@@ -2144,8 +2264,11 @@ static lxp_result publish_canonical_batch(
                 status = LXP_FATAL_INVARIANT;
         }
     }
+    if (timing != NULL) timing->visibility_us = pay_timing_us() - stage_started;
+    stage_started = pay_timing_us();
     if (status == LXP_OK)
         status = availability_prune(process, header.batch_number);
+    if (timing != NULL) timing->prune_us = pay_timing_us() - stage_started;
     if (status == LXP_OK) {
         process->owner.latest_sealed_timestamp = timestamp;
         process->next_batch = process->next_batch ==
@@ -2306,7 +2429,7 @@ static lxp_result apply_canonical_activity(
         process, activities, receipts, &receipt, 1U,
         &canonical_events, 1U,
         activity.protocol_version, timestamp, false, (lxp_byte_span){NULL, 0U},
-        &base_kernel);
+        &base_kernel, NULL);
     if (status == LXP_OK && process->next_batch == 0U) {
         if (pthread_mutex_lock(&process->daemon.mutex) != 0)
             status = LXP_FATAL_INVARIANT;
@@ -2334,7 +2457,9 @@ static lxp_result commit_prepared_batch_wal(
     const lxp_byte_span *events, const lxp_receipt *decoded_receipts,
     size_t count, uint64_t timestamp,
     lxp_kernel_prepared_batch *owned_prepared,
-    lxp_daemon_batch_wal_record **record)
+    lxp_daemon_batch_wal_record **record,
+    uint64_t *wal_prepare_us, uint64_t *wal_commit_us,
+    uint64_t *availability_us)
 {
     lxp_batch_roots roots;
     lxp_batch_header header;
@@ -2351,8 +2476,20 @@ static lxp_result commit_prepared_batch_wal(
     lxp_byte_span call_graphs[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     const lxp_kernel_batch_boundary *base;
     const lxp_kernel_batch_boundary *settled;
+    availability_store_job availability_job;
+    pthread_t availability_thread;
+    uint64_t started_us;
+    bool availability_started = false;
     size_t i;
     lxp_result status;
+    if (record == NULL || wal_prepare_us == NULL || wal_commit_us == NULL ||
+        availability_us == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *record = NULL;
+    *wal_prepare_us = 0U;
+    *wal_commit_us = 0U;
+    *availability_us = 0U;
+    started_us = pay_timing_us();
     if (count == 0U || count > LXP_DAEMON_MAX_BATCH_ACTIVITIES)
         return LXP_ERR_LENGTH_LIMIT;
     for (i = 0U; i < count; ++i) combined[i] = receipts[i];
@@ -2450,11 +2587,35 @@ static lxp_result commit_prepared_batch_wal(
     input.state_diff = process->prepared_availability_body.state_diff;
     input.recovery_metadata = process->prepared_availability_body.recovery_metadata;
     if (maintenance.length != 0U) input.maintenance_proof = proofs[count];
-    return lxp_daemon_batch_wal_commit_kernel(
-        process->checkpoint_directory, &input,
-        &process->kernel, &process->identities,
-        decoded_activities, owned_prepared,
-        persist_prepared_batch_checkpoint, process, record);
+    process->prepared_availability_body.header = header;
+    (void)memcpy(process->prepared_availability_body.sequencer_signature,
+                 signature, sizeof(signature));
+    availability_job = (availability_store_job){
+        process, &process->prepared_availability_body, LXP_OK, 0U, 0U};
+    *wal_prepare_us = pay_timing_us() - started_us;
+    if (pthread_create(&availability_thread, NULL,
+                       availability_store_worker, &availability_job) == 0)
+        availability_started = true;
+    else
+        (void)availability_store_worker(&availability_job);
+    started_us = pay_timing_us();
+    status = availability_started || availability_job.status == LXP_OK ?
+        lxp_daemon_batch_wal_commit_kernel(
+            process->checkpoint_directory, &input,
+            &process->kernel, &process->identities,
+            decoded_activities, owned_prepared,
+            persist_prepared_batch_checkpoint, process, record) :
+        availability_job.status;
+    *wal_commit_us = pay_timing_us() - started_us;
+    if (availability_started && pthread_join(availability_thread, NULL) != 0 &&
+        status == LXP_OK)
+        status = LXP_ERR_IO;
+    if (availability_job.finished_us >= availability_job.started_us)
+        *availability_us = availability_job.finished_us -
+                           availability_job.started_us;
+    if (status == LXP_OK && availability_job.status != LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
 }
 
 static lxp_result apply_canonical_batch(
@@ -2462,7 +2623,11 @@ static lxp_result apply_canonical_batch(
     const lxp_daemon_activity *offered, size_t offered_count,
     size_t *consumed_count)
 {
-    uint64_t started_us = pay_timing_us(), prepared_us = 0U, committed_us = 0U, published_us = 0U;
+    uint64_t started_us = pay_timing_us(), prepared_us = 0U;
+    uint64_t committed_us = 0U, published_us = 0U, finalized_us = 0U;
+    uint64_t wal_prepare_us = 0U, wal_commit_us = 0U;
+    uint64_t availability_us = 0U;
+    pay_publication_timing publication_timing = {0};
     lxp_daemon_process *process = (lxp_daemon_process *)context;
     lxp_activity activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_kernel_execution executions[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
@@ -2673,17 +2838,17 @@ static lxp_result apply_canonical_batch(
         status = commit_prepared_batch_wal(
             process, activities, canonical_activities, canonical_receipts,
             prepared_events, prepared_receipts, count, timestamp,
-            prepared_batch, &wal_record);
+            prepared_batch, &wal_record, &wal_prepare_us, &wal_commit_us,
+            &availability_us);
     committed_us = pay_timing_us();
     if (status == LXP_OK) live_committed = true;
-    if (status == LXP_OK)
-        status = availability_store_body(process, &process->prepared_availability_body);
     if (status == LXP_OK)
         status = publish_canonical_batch(
             process, canonical_activities, canonical_receipts,
             prepared_receipts, count, prepared_events, count,
             activities[0].protocol_version, timestamp, true,
-            lxp_kernel_prepared_batch_maintenance(prepared_batch), NULL);
+            lxp_kernel_prepared_batch_maintenance(prepared_batch), NULL,
+            &publication_timing);
     published_us = pay_timing_us();
     if (status == LXP_OK)
         status = lxp_kernel_batch_boundary_read(
@@ -2696,6 +2861,7 @@ static lxp_result apply_canonical_batch(
     if (status == LXP_OK)
         status = lxp_daemon_batch_wal_retire(
             process->checkpoint_directory, wal_record, &live_boundary);
+    finalized_us = pay_timing_us();
     if (status == LXP_OK && process->next_batch == 0U) {
         if (pthread_mutex_lock(&process->daemon.mutex) != 0)
             status = LXP_FATAL_INVARIANT;
@@ -2715,10 +2881,24 @@ static lxp_result apply_canonical_batch(
     if (pthread_mutex_unlock(&process->owner.mutex) != 0 && status == LXP_OK)
         status = LXP_FATAL_INVARIANT;
     if (getenv("LAYERX_PAY_TIMING") != NULL)
-        (void)fprintf(stderr, "pay-native sequence=%llu prepare_us=%llu commit_us=%llu publication_us=%llu total_us=%llu result=%d\n",
+        (void)fprintf(stderr, "pay-native sequence=%llu prepare_us=%llu wal_prepare_us=%llu wal_commit_us=%llu availability_us=%llu publication_us=%llu publication_setup_us=%llu proof_us=%llu authority_us=%llu evidence_us=%llu replica_us=%llu replica_result=%d account_evidence_us=%llu visibility_us=%llu prune_us=%llu wal_finalize_us=%llu total_us=%llu result=%d\n",
             (unsigned long long)first_global_sequence,
-            (unsigned long long)(prepared_us - started_us), (unsigned long long)(committed_us - prepared_us),
-            (unsigned long long)(published_us - committed_us), (unsigned long long)(pay_timing_us() - started_us), (int)status);
+            (unsigned long long)(prepared_us - started_us),
+            (unsigned long long)wal_prepare_us,
+            (unsigned long long)wal_commit_us,
+            (unsigned long long)availability_us,
+            (unsigned long long)(published_us - committed_us),
+            (unsigned long long)publication_timing.setup_us,
+            (unsigned long long)publication_timing.proofs_us,
+            (unsigned long long)publication_timing.authority_us,
+            (unsigned long long)publication_timing.evidence_us,
+            (unsigned long long)publication_timing.replica_us,
+            (int)publication_timing.replica_result,
+            (unsigned long long)publication_timing.account_evidence_us,
+            (unsigned long long)publication_timing.visibility_us,
+            (unsigned long long)publication_timing.prune_us,
+            (unsigned long long)(finalized_us - published_us),
+            (unsigned long long)(pay_timing_us() - started_us), (int)status);
     return status;
 }
 
@@ -3906,6 +4086,7 @@ static void close_process(lxp_daemon_process *process)
                     sizeof(process->authority_replica_token));
     free(process->checkpoint_arena_bytes);
     free(process->execution_arena_bytes);
+    free(process->availability_scratch_bytes);
     free(process->owner_scratch_bytes);
 }
 
@@ -3933,12 +4114,15 @@ static lxp_result open_process(lxp_daemon_process *process,
     (void)memset(process, 0, sizeof(*process));
     process->owner_scratch_bytes =
         (uint8_t *)malloc(LXP_DAEMON_PROTOCOL_SCRATCH_MIN_BYTES);
+    process->availability_scratch_bytes =
+        (uint8_t *)malloc(LXP_DAEMON_PROTOCOL_SCRATCH_MIN_BYTES);
     process->execution_arena_bytes =
         (uint8_t *)malloc(NODE_EXECUTION_ARENA_BYTES);
     process->checkpoint_arena_bytes =
         (uint8_t *)malloc(NODE_SNAPSHOT_ARENA_BYTES);
     snapshot_bytes = (uint8_t *)malloc(NODE_SNAPSHOT_ARENA_BYTES);
     if (process->owner_scratch_bytes == NULL ||
+        process->availability_scratch_bytes == NULL ||
         process->execution_arena_bytes == NULL ||
         process->checkpoint_arena_bytes == NULL || snapshot_bytes == NULL) {
         free(snapshot_bytes);
@@ -3949,6 +4133,10 @@ static lxp_result open_process(lxp_daemon_process *process,
     if (status == LXP_OK)
         status = lxp_arena_init(&process->owner_scratch,
             process->owner_scratch_bytes,
+            LXP_DAEMON_PROTOCOL_SCRATCH_MIN_BYTES);
+    if (status == LXP_OK)
+        status = lxp_arena_init(&process->availability_scratch,
+            process->availability_scratch_bytes,
             LXP_DAEMON_PROTOCOL_SCRATCH_MIN_BYTES);
     if (status == LXP_OK)
         status = lxp_arena_init(&process->execution_arena,
@@ -4120,6 +4308,10 @@ static lxp_result open_process(lxp_daemon_process *process,
             required_environment("LAYERX_NODE_LAST_BATCH"), &value);
     if (status == LXP_OK) process->sequencer_authorization.last_batch_number = value;
     process->sequencer_authorization.authorized = 1U;
+    if (status == LXP_OK) stage = "batch wal";
+    if (status == LXP_OK)
+        status = lxp_daemon_batch_wal_initialize(
+            process->checkpoint_directory);
     if (status == LXP_OK)
         status = lxp_daemon_receipt_authority_open(
             &process->receipt_authority, &process->authority_log,

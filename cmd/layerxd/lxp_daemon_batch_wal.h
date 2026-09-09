@@ -64,6 +64,9 @@ typedef struct lxp_daemon_batch_wal_record
 typedef lxp_result (*lxp_daemon_batch_wal_checkpoint_fn)(
     void *context, const lxp_kernel_batch_boundary *settled);
 
+lxp_result lxp_daemon_batch_wal_initialize(
+    const char *checkpoint_directory);
+
 lxp_result lxp_daemon_batch_bind_prefix(
     const lxp_byte_span *canonical_activities, size_t count,
     const uint8_t base_state_root[32],

@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 struct lxp_daemon_batch_wal_record {
@@ -633,6 +634,71 @@ static int sweep_interrupted_replacement(void)
     return 0;
 }
 
+static int rotate_grouped_commit_for_replay(void)
+{
+    canonical_batch_fixture fixture;
+    lxp_daemon_batch_wal_record *record = NULL;
+    lxp_daemon_batch_wal_record *reloaded = NULL;
+    lxp_daemon_batch_wal_recovery recovery;
+    const lxp_daemon_batch_wal_input *view;
+    char directory[] = "/tmp/lxp-batch-wal-group-XXXXXX";
+    char paths[2][160];
+    uint8_t digest[32];
+    bool present = false;
+    struct stat information;
+    unsigned slot;
+    if (build_canonical_batch(&fixture, false) != 0 ||
+        mkdtemp(directory) == NULL ||
+        snprintf(paths[0], sizeof(paths[0]),
+                 "%s/prepared-batch.group-0.lxw", directory) < 0 ||
+        snprintf(paths[1], sizeof(paths[1]),
+                 "%s/prepared-batch.group-1.lxw", directory) < 0 ||
+        lxp_daemon_batch_wal_initialize(directory) != LXP_OK ||
+        lxp_daemon_batch_wal_initialize(directory) != LXP_OK)
+        return 1;
+    for (slot = 0U; slot < 2U; ++slot) {
+        if (stat(paths[slot], &information) != 0 ||
+            !S_ISREG(information.st_mode) || information.st_nlink != 1U ||
+            (information.st_mode & 0777U) != 0600U ||
+            information.st_size != 0)
+            return 1;
+    }
+    slot = (unsigned)((fixture.input.batch_number - 1U) & 1U);
+    if (lxp_daemon_batch_wal_write_prepared(
+            directory, &fixture.input, digest) != LXP_OK ||
+        stat(paths[slot], &information) != 0 || information.st_size <= 0 ||
+        lxp_daemon_batch_wal_load(
+            directory, &fixture.input.authorization,
+            &record, &present) != LXP_OK || !present || record == NULL)
+        return 1;
+    view = lxp_daemon_batch_wal_view(record);
+    if (view == NULL || view->batch_number != fixture.input.batch_number ||
+        lxp_daemon_batch_wal_transition(
+            directory, record, &view->settled,
+            LXP_DAEMON_BATCH_WAL_COMMITTED) != LXP_OK ||
+        lxp_daemon_batch_wal_load(
+            directory, &fixture.input.authorization,
+            &reloaded, &present) != LXP_OK || !present || reloaded == NULL ||
+        lxp_daemon_batch_wal_record_state(reloaded) !=
+            LXP_DAEMON_BATCH_WAL_PREPARED ||
+        lxp_daemon_batch_wal_classify(
+            reloaded, &view->settled, &recovery) != LXP_OK ||
+        recovery != LXP_DAEMON_BATCH_WAL_FINALIZE_SETTLED ||
+        lxp_daemon_batch_wal_retire(
+            directory, record, &view->settled) != LXP_OK)
+        return 1;
+    lxp_daemon_batch_wal_destroy(reloaded);
+    reloaded = NULL;
+    if (lxp_daemon_batch_wal_load(
+            directory, &fixture.input.authorization,
+            &reloaded, &present) != LXP_OK || present || reloaded != NULL ||
+        stat(paths[slot], &information) != 0 || information.st_size != 0)
+        return 1;
+    lxp_daemon_batch_wal_destroy(record);
+    return unlink(paths[0]) != 0 || unlink(paths[1]) != 0 ||
+        rmdir(directory) != 0;
+}
+
 int main(void)
 {
     return recover_both_schemas() != 0 ||
@@ -640,5 +706,6 @@ int main(void)
         refuse_invalid_canonical_activity_signature() != 0 ||
         classify_recovery_matrix() != 0 ||
         refuse_malformed_record() != 0 ||
-        sweep_interrupted_replacement() != 0 ? 1 : 0;
+        sweep_interrupted_replacement() != 0 ||
+        rotate_grouped_commit_for_replay() != 0 ? 1 : 0;
 }
