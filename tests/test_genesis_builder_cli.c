@@ -57,7 +57,7 @@ static int append_u64(request_writer *writer, uint64_t value)
     return append(writer, bytes, sizeof(bytes));
 }
 
-static int build_request(request_writer *writer, const uint8_t asset_id[32])
+static int build_legacy_request(request_writer *writer, const uint8_t asset_id[32])
 {
     static const uint8_t parameter_key[32] = {
         'p','a','r','a','m','e','t','e','r','-','v','e','r','s','i','o','n'
@@ -151,7 +151,7 @@ int main(void)
     char deployment_descriptor_path[192];
     char output_path[160];
     char rejected_output_path[160];
-    if (mkdtemp(base) == NULL || build_request(&request, asset_id) != 0 ||
+    if (mkdtemp(base) == NULL || build_legacy_request(&request, asset_id) != 0 ||
         snprintf(request_path, sizeof(request_path), "%s/request.lxgb", base) < 0 ||
         snprintf(key_path, sizeof(key_path), "%s/signer.key", base) < 0 ||
         snprintf(key_link_path, sizeof(key_link_path), "%s/signer-link", base) < 0 ||

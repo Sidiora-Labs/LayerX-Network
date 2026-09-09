@@ -15,6 +15,8 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from custody_credit import Rpc
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'tests/support'))
+from lxgb_metadata import metadata
 
 
 def run(*args):
@@ -82,7 +84,7 @@ def main():
             Encoding.X962, PublicFormat.CompressedPoint)
         def be(value, length):
             return value.to_bytes(length, 'big')
-        request = (b'LXGB' + be(1, 1) + be(3, 2) + be(77, 4) + be(timestamp, 8) +
+        request = (b'LXGB' + be(2, 1) + be(3, 2) + be(77, 4) + be(timestamp, 8) +
                    be(1, 2) + be(7, 2) + b'parameter-version'.ljust(32, b'\0') + be(1, 32) +
                    be(1, 2) + hashlib.sha256(guarantor).digest() + guarantor + be(0, 16) + asset +
                    be(1, 4) + b''.join(be(v, 8) for v in (1, 1, 1, 1, 1, 8, 8, 64, 8)) +
@@ -90,6 +92,7 @@ def main():
                    b''.join(be(v, 8) for v in (1, 1, 2, 4, 1, 1, 100, 100, 1, 1, 10, 1, 1000)))
         if len(request) != 395:
             raise ValueError('genesis request length')
+        request += metadata(asset, public, os.urandom(32))
         (work / 'request.lxgb').write_bytes(request)
         with chain(work, 'custody') as first:
             run(sys.executable, 'tests/bridge/deploy_local_custody.py', '--allow-local-chain',

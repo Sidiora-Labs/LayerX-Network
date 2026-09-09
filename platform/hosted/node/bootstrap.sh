@@ -19,6 +19,7 @@
 #                           with --lni-gid as its group. Must differ from the
 #                           data directory.
 #   --network-id N          Decimal network id, 1..4294967295.
+#   --genesis-metadata FILE LXGB v2 suffix: canonical Asset records and named fees.
 #   --sequencer-key FILE    Sequencer ed25519 seed: 32 raw bytes or 64 hex
 #                           characters. Signs genesis and every batch.
 #   --treasury-key FILE     Treasury ed25519 seed (same format). The treasury
@@ -157,6 +158,7 @@ MIGRATIONS=""
 LAYERXD=""
 GENESIS_BUILD=""
 CUSTODY_PROFILE=""
+GENESIS_METADATA=""
 SETTLEMENT_ENV=""
 FORCE=0
 
@@ -168,6 +170,7 @@ while [ $# -gt 0 ]; do
         --sequencer-key) SEQUENCER_KEY_FILE=$2; shift 2 ;;
         --treasury-key) TREASURY_KEY_FILE=$2; shift 2 ;;
         --asset) ASSET_ID=$2; shift 2 ;;
+        --genesis-metadata) GENESIS_METADATA=$2; shift 2 ;;
         --treasury-balance) TREASURY_BALANCE=$2; shift 2 ;;
         --program-port) PROGRAM_PORT=$2; shift 2 ;;
         --replica-port) REPLICA_PORT=$2; shift 2 ;;
@@ -188,6 +191,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+[ -n "$GENESIS_METADATA" ] && [ -f "$GENESIS_METADATA" ] && [ ! -L "$GENESIS_METADATA" ] && [ -r "$GENESIS_METADATA" ] || fail "--genesis-metadata requires an authoritative LXGB v2 metadata file"
+GENESIS_METADATA=$(readlink -f "$GENESIS_METADATA")
+case "$GENESIS_METADATA" in "$(readlink -m "$DATA_DIR")"/*) fail "genesis metadata must be outside the data directory" ;; esac
+[ "$(stat -c %s "$GENESIS_METADATA")" -gt 219 ] && [ "$(stat -c %s "$GENESIS_METADATA")" -le 15989 ] || fail "genesis metadata length is outside request bounds"
 [ -n "$DATA_DIR" ] || fail "--data-dir is required"
 [ -n "$RUN_DIR" ] || fail "--run-dir is required"
 [ -n "$NETWORK_ID" ] || fail "--network-id is required"
@@ -367,14 +374,14 @@ GUARANTOR_PUBLIC=$(openssl ec -in "$GUARANTOR_KEY_FILE" -pubout -conv_form compr
 [[ $GUARANTOR_PUBLIC =~ ^0[23][0-9a-f]{64}$ ]] || fail "could not derive a compressed secp256k1 guarantor public key"
 GUARANTOR_ID=$(printf 'layerx-beta-guarantor:%s' "$GUARANTOR_PUBLIC" | sha256_hex)
 
-# --- genesis request (LXGB v1) -------------------------------------------
+# --- genesis request (LXGB v2) -------------------------------------------
 PARAMETER_KEY=$(printf 'parameter-version' | bin_to_hex)
 PARAMETER_KEY="$PARAMETER_KEY$(printf '0%.0s' $(seq 1 $(( 64 - ${#PARAMETER_KEY} ))))"
 PARAMETER_VALUE="$(printf '0%.0s' $(seq 1 56))00000001"
 REQUEST="$DATA_DIR/work/genesis-request.lxgb"
 {
     printf 'LXGB'
-    hex_to_bin 01
+    hex_to_bin 02
     hex_to_bin "$(be_hex 3 2)"
     hex_to_bin "$(be_hex "$NETWORK_ID" 4)"
     hex_to_bin "$(be_hex "$GENESIS_TIMESTAMP_MS" 8)"
@@ -394,8 +401,9 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     hex_to_bin "$(be_hex 1 4)"
     for price in 1 1 2 4 1 1 100; do hex_to_bin "$(be_hex "$price" 8)"; done
     for demand in 100 1 1 10 1 1000; do hex_to_bin "$(be_hex "$demand" 8)"; done
+    cat "$GENESIS_METADATA"
 } > "$REQUEST"
-[ "$(stat -c %s "$REQUEST")" -eq 395 ] || fail "genesis request has an unexpected length"
+[ "$(stat -c %s "$REQUEST")" -eq "$((395 + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
 
 SIGNER_KEY="$DATA_DIR/work/genesis-signer.key"
 hex_to_bin "$SEQUENCER_PRIVATE" > "$SIGNER_KEY"
