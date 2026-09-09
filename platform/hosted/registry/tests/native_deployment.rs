@@ -1014,6 +1014,17 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
             0o600
         );
     }
+    let consumer = Command::new("python3")
+        .args(["-c", "import importlib.util, pathlib, sys; spec = importlib.util.spec_from_file_location('provision', sys.argv[1]); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); root = pathlib.Path(sys.argv[2]); records = module.journal_records(root); assert len(records) == 2; assert all(data == (root / name).read_bytes() for name, data in records.items())"])
+        .arg(repository_root().join("platform/hosted/human/provision.py"))
+        .arg(cluster.root.join("journal/pairs"))
+        .output();
+    let output = must(consumer, "Human journal consumer");
+    assert!(
+        output.status.success(),
+        "Human consumer refused native pair: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn assert_lifecycle_neighbors(proof: &layerx_programs::DeploymentProof) {
