@@ -1012,3 +1012,10 @@ lxp_result gp_runtime_oracle(void *context, lxp_byte_span canonical, bool *valid
     *valid = false;
     return LXP_ERR_MODULE_DISABLED;
 }
+
+lxp_result gp_runtime_state_proof(gp_runtime *runtime, uint16_t module_id,
+                                  lxp_byte_span key, lxp_state_witness *proof)
+{
+    if (runtime == NULL) return LXP_ERR_NON_CANONICAL;
+    return lxp_state_proof_build(&runtime->kernel, module_id, key, proof);
+}
