@@ -1924,7 +1924,9 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
         status = lxp_identity_resolve(server->owner->identities,
                                       activity.actor_did.bytes,
                                       activity.actor_did.length, &identity);
-    if (status == LXP_OK) status = lxp_governance_identity_refresh(server->owner->kernel, identity);
+    if (status == LXP_OK &&
+        server->owner->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_governance_identity_refresh(server->owner->kernel, identity);
     if (status == LXP_OK &&
         (activity.authority.length != 32U ||
          !lxp_identity_key_valid(identity, activity.authority.bytes,
@@ -2581,7 +2583,9 @@ lxp_result lxp_daemon_lni_simulate(
                                       activity.actor_did.bytes,
                                       activity.actor_did.length, &identity);
     }
-    if (status == LXP_OK) status = lxp_governance_identity_refresh(owner->kernel, identity);
+    if (status == LXP_OK &&
+        owner->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_governance_identity_refresh(owner->kernel, identity);
     if (status == LXP_OK &&
         (activity.authority.length != 32U ||
          !lxp_identity_key_valid(identity, activity.authority.bytes,
