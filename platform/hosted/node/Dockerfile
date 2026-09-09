@@ -7,8 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . .
 ARG LXP_REVISION=unknown
 RUN rustup show active-toolchain \
-    && make LXP_REVISION="$LXP_REVISION" layerxd layerx-genesis-build layerxctl \
-    && test -x build/bin/layerxd && test -x build/bin/layerx-genesis-build && test -x build/bin/layerxctl
+    && make LXP_REVISION="$LXP_REVISION" layerxd layerx-genesis-build layerxctl layerx-module-registry \
+    && test -x build/bin/layerxd && test -x build/bin/layerx-genesis-build && test -x build/bin/layerxctl && test -x build/bin/layerx-module-registry
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /src/build/bin/layerxd /usr/local/bin/layerxd
 COPY --from=build /src/build/bin/layerx-genesis-build /usr/local/bin/layerx-genesis-build
 COPY --from=build /src/build/bin/layerxctl /usr/local/bin/layerxctl
+COPY --from=build /src/build/bin/layerx-module-registry /usr/local/bin/layerx-module-registry
 COPY --from=build /src/migrations/0007_history_index.sql /opt/layerx/migrations/0007_history_index.sql
 COPY --from=build /src/platform/hosted/node/bootstrap.sh /opt/layerx/bootstrap.sh
 COPY --from=build /src/platform/hosted/node/supervisor.sh /opt/layerx/supervisor.sh
