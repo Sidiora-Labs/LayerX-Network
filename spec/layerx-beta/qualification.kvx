@@ -7624,3 +7624,11 @@ symbol = "lxp_fee_compute"
 observed = "The fee calculator still multiplies per_activity_type_unit by the full module/ordinal value. The owned policy file controls admission/refusal decisions, not the schedule. The Asset requirement now mandates canonical named prices and retracts the earlier version-1 formula as resolution."
 assumption = "Pricing types, calculation, canonical parameters and replay must change together outside the owned policy path. Existing exact-fee assertions are retained. Prior fee tests establish only current formula behavior."
 severity = "blocker"
+
+[observation.3.7.44]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c src/modules/asset/lx_asset_registry.c spec/layerx-protocol/spec.kvx"
+symbol = "asset_activity_supported module_execute"
+observed = "Pause/unpause are explicitly excluded from supported authenticated Asset activity execution in the Asset requirement. Daemon admission excludes ordinals 2 and 3. The module table retains legacy constants and direct registry helpers; its event-only path does not establish execution support."
+assumption = "No new ordinal 2/3 encoding or authority rule is introduced. Paused-state refusal checks remain required and unchanged."
+severity = "note"
