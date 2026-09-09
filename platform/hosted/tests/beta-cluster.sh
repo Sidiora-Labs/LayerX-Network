@@ -87,8 +87,7 @@ DEVELOPER_NAMESPACE=layerx-developer
 IMAGE_LABEL=io.layerx.beta-cluster
 BOUNDARY_LABEL=layerx.io/program-registry-boundary
 
-IMAGE_NAMES=(layerx-testnet-control layerx-gateway layerx-faucet layerx-program-registry layerx-webhooks layerx-dashboard layerx-dashboard-web
-    layerx-internal layerx-human layerx-node layerx-core-boundary layerx-receipt-authority layerx-agent-boundary layerx-identity layerx-paxeer-boundary paxd-node paxd)
+source "$SCRIPT_DIR/beta-images.sh"
 TRUSTED_BOUNDARY_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-boundary layerx-identity layerx-receipt-authority layerx-agent-boundary)
 INTERNAL_NAMESPACE=layerx-internal
 FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
@@ -110,31 +109,19 @@ require_tool() {
     done
 }
 
-image_source() {
-    case "$1" in
-        layerx-testnet-control) printf 'ghcr.io/sidiora-labs/layerx-testnet-control:0.1.0 platform/hosted/testnet/Dockerfile' ;;
-        layerx-gateway) printf 'ghcr.io/sidiora-labs/layerx-gateway:0.1.0 platform/hosted/gateway/Dockerfile' ;;
-        layerx-faucet) printf 'ghcr.io/sidiora-labs/layerx-faucet:0.1.0 platform/hosted/faucet/Dockerfile' ;;
-        layerx-program-registry) printf 'ghcr.io/sidiora-labs/layerx-program-registry:0.1.0 platform/hosted/registry/Dockerfile' ;;
-        layerx-webhooks) printf 'ghcr.io/sidiora-labs/layerx-webhooks:0.1.0 platform/hosted/webhooks/Dockerfile' ;;
-        layerx-dashboard) printf 'ghcr.io/sidiora-labs/layerx-dashboard:0.1.0 platform/hosted/dashboard/Dockerfile' ;;
-        layerx-dashboard-web) printf 'ghcr.io/sidiora-labs/layerx-dashboard-web:0.1.0 platform/hosted/dashboard/web/Dockerfile' ;;
-        layerx-internal) printf 'ghcr.io/sidiora-labs/layerx-internal:0.1.0 platform/hosted/internal/Dockerfile' ;;
-        layerx-human) printf 'ghcr.io/sidiora-labs/layerx-human:0.1.0 platform/hosted/human/Dockerfile' ;;
-        layerx-node) printf 'ghcr.io/sidiora-labs/layerx-node:0.1.0 platform/hosted/node/Dockerfile' ;;
-        layerx-core-boundary) printf 'ghcr.io/sidiora-labs/layerx-core-boundary:0.1.0 platform/hosted/core/Dockerfile' ;;
-        layerx-receipt-authority) printf 'ghcr.io/sidiora-labs/layerx-receipt-authority:0.1.0 platform/hosted/authority/Dockerfile' ;;
-        layerx-agent-boundary) printf 'ghcr.io/sidiora-labs/layerx-agent-boundary:0.1.0 platform/hosted/agent-boundary/Dockerfile' ;;
-        layerx-identity) printf 'ghcr.io/sidiora-labs/layerx-identity:0.1.0 platform/hosted/identity/Dockerfile' ;;
-        layerx-paxeer-boundary) printf 'ghcr.io/sidiora-labs/layerx-paxeer-boundary:0.1.0 platform/hosted/paxeer/Dockerfile' ;;
-        paxd-node) printf 'ghcr.io/sidiora-labs/paxd-node:0.1.0 platform/hosted/paxeer/Dockerfile.paxd-node' ;;
-        paxd) printf 'ghcr.io/sidiora-labs/paxd:0.1.0 platform/hosted/paxeer/Dockerfile.paxd' ;;
-        *) fail "unknown image $1" ;;
-    esac
-}
-
 revision() {
     local rev
+    case "${LAYERX_BETA_IMAGE_SOURCE:-build}" in
+        build) ;;
+        ghcr)
+            [ "$(cluster_mode)" = kind ] || fail "GHCR image source requires a kind cluster"
+            rev=${LAYERX_BETA_IMAGE_TAG:-beta}
+            [[ $rev =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]] || fail "invalid LAYERX_BETA_IMAGE_TAG"
+            printf '%s' "$rev"
+            return
+            ;;
+        *) fail "LAYERX_BETA_IMAGE_SOURCE must be build or ghcr" ;;
+    esac
     rev=$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)
     if [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no -- platform)" ]; then
         rev="$rev-dirty"
@@ -143,7 +130,9 @@ revision() {
 }
 
 image_ref() {
-    printf '%s/%s:%s' "${LAYERX_BETA_IMAGE_REGISTRY:-layerx-beta}" "$1" "$REVISION"
+    local registry=${LAYERX_BETA_IMAGE_REGISTRY:-layerx-beta}
+    if [ "${LAYERX_BETA_IMAGE_SOURCE:-build}" = ghcr ]; then registry=layerx-beta; fi
+    printf '%s/%s:%s' "$registry" "$1" "$REVISION"
 }
 
 cluster_mode() {
@@ -222,15 +211,6 @@ build_context() {
         | tar --null --files-from - -cf "$WORK_DIR/context.tar")
 }
 
-image_build_args() {
-    case "$1" in
-        layerx-node) printf -- '--build-arg LXP_REVISION=%s' "$REVISION" ;;
-        paxd-node) printf -- '--build-arg PAX_CHAIN_REF=%s' "$REVISION" ;;
-        paxd) printf -- '--build-arg PAXD_IMAGE=%s' "$(image_ref paxd-node)" ;;
-        *) ;;
-    esac
-}
-
 build_images() {
     local name canonical dockerfile ref id
     local -a build_args
@@ -247,6 +227,36 @@ build_images() {
         id=$(docker image inspect --format '{{.Id}}' "$ref")
         printf '%s %s %s %s\n' "$name" "$canonical" "$ref" "$id" >> "$WORK_DIR/images"
     done
+}
+
+pull_images() {
+    local name canonical dockerfile remote digest ref id
+    mkdir -p "$LOG_DIR"
+    : > "$WORK_DIR/images"
+    for name in "${IMAGE_NAMES[@]}"; do
+        read -r canonical dockerfile <<<"$(image_source "$name")"
+        remote="ghcr.io/sidiora-labs/$name"
+        digest=$(registry_image_digest "$remote:$REVISION")
+        log "pulling $remote:$REVISION at $digest"
+        docker pull "$remote@$digest" > "$LOG_DIR/pull-$name.log" 2>&1 \
+            || fail "image pull failed for $name (log $LOG_DIR/pull-$name.log)"
+        docker image inspect "$remote@$digest" --format '{{json .RepoDigests}}' \
+            | jq -e --arg expected "$remote@$digest" 'index($expected) != null' >/dev/null \
+            || fail "pulled digest differs from registry manifest for $name"
+        ref=$(image_ref "$name")
+        docker tag "$remote@$digest" "$ref"
+        id=$(docker image inspect --format '{{.Id}}' "$ref")
+        printf '%s %s %s %s\n' "$name" "$canonical" "$ref" "$id" >> "$WORK_DIR/images"
+        printf '%s %s\n' "$remote:$REVISION" "$digest" >> "$LOG_DIR/pulled-digests.log"
+    done
+}
+
+prepare_images() {
+    case "${LAYERX_BETA_IMAGE_SOURCE:-build}" in
+        build) build_images ;;
+        ghcr) require_tool jq; pull_images ;;
+        *) fail "LAYERX_BETA_IMAGE_SOURCE must be build or ghcr" ;;
+    esac
 }
 
 kind_nodes() {
@@ -447,7 +457,7 @@ encode_trust_history() {
     python3 - "$1" "$2" "$3" "$NODE_NETWORK_ID" <<'PY'
 import struct, sys
 out, sequencer_id, public_key = sys.argv[1], bytes.fromhex(sys.argv[2]), bytes.fromhex(sys.argv[3])
-entry = struct.pack(">HIQ", 2, int(sys.argv[4]), 1) + sequencer_id + public_key + struct.pack(">QQBQ", 1, 1 << 40, 0, 0)
+entry = struct.pack(">HIQ", 3, int(sys.argv[4]), 1) + sequencer_id + public_key + struct.pack(">QQBQ", 1, 1 << 40, 0, 0)
 assert len(entry) == 103
 payload = b"LayerX/sequencer-trust-history/v1\0" + struct.pack(">HH", 1, 0) + entry
 with open(out, "wb") as handle:
@@ -1037,6 +1047,7 @@ PYREG
     paxeer_observer_render
     render_manifest "$REPO_ROOT/platform/hosted/testnet/deployment.yaml" "$MANIFESTS_DIR/testnet.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/gateway/deployment.yaml" "$MANIFESTS_DIR/gateway.yaml"
+    render_manifest "$REPO_ROOT/platform/hosted/registry/journal-pvc.yaml" "$MANIFESTS_DIR/registry-journal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/human/deployment.yaml" "$MANIFESTS_DIR/human.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/internal/deployment.yaml" "$MANIFESTS_DIR/internal.yaml"
@@ -1065,6 +1076,7 @@ EOF
 
 trusted_boundary_apply() {
     local ns="$TESTNET_NAMESPACE" service
+    kube apply -f "$MANIFESTS_DIR/registry-journal.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/paxeer.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/identity.yaml" > /dev/null
     kube -n "$ns" delete deployment layerx-human --ignore-not-found --wait=true > /dev/null
@@ -1087,6 +1099,108 @@ manifests_apply() {
     kube apply -f "$MANIFESTS_DIR/gateway.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
 }
+
+registry_deployment_produce() (
+    set -euo pipefail
+    umask 077
+    local input="$WORK_DIR/human-evidence-input" temporary producer
+    local artifact="$REPO_ROOT/programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
+    make -C "$REPO_ROOT" programs-reference-escrow >&2
+    mkdir -p "$input"
+    [ ! -e "$input/program-deployment.lxa" ] && [ ! -L "$input/program-deployment.lxa" ] || fail 'deployment input exists; reconcile before retry'
+    temporary=$(mktemp "$input/.program-deployment.XXXXXXXX")
+    trap 'rm -f "$temporary"' EXIT
+    producer=$(cat <<'PYREGDEPLOY'
+import hashlib, json, os, stat, struct, subprocess, sys, time
+from pathlib import Path
+
+def protected(path, mode=0o600):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as handle:
+        info = os.fstat(handle.fileno())
+        assert stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+        assert stat.S_IMODE(info.st_mode) == mode and info.st_nlink == 1
+        value = handle.read(65537)
+        assert 0 < len(value) <= 65536
+        return value
+
+def memory_file(name, value):
+    fd = os.memfd_create(name, 0)
+    os.write(fd, value)
+    os.lseek(fd, 0, os.SEEK_SET)
+    return fd
+
+def run(args, descriptors=()):
+    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            pass_fds=descriptors, check=False)
+    assert result.returncode == 0, 'node deployment producer command refused'
+    return result.stdout
+
+def blob(value):
+    return struct.pack('>I', len(value)) + value
+
+node = dict(line.split('=', 1) for line in protected(sys.argv[1], 0o644).decode().splitlines())
+network = int(sys.argv[2])
+assert network > 0
+wasm = sys.stdin.buffer.read(524289)
+assert wasm.startswith(b'\0asm\x01\0\0\0') and 0 < len(wasm) <= 524184
+seed = bytes.fromhex(protected(node['LAYERX_NODE_TREASURY_KEY_FILE']).decode())
+assert len(seed) == 32
+key = memory_file('deployment-signer', bytes.fromhex('302e020100300506032b657004220420') + seed)
+try:
+    public = run(['openssl', 'pkey', '-inform', 'DER', '-in', f'/proc/self/fd/{key}',
+                  '-pubout', '-outform', 'DER'], (key,))[-32:]
+    assert public.hex() == node['LAYERX_NODE_TREASURY_PUBLIC_KEY']
+    did = node['LAYERX_NODE_TREASURY_DID'].encode()
+    assert did == b'did:layerx:' + public.hex().encode()
+    state = json.loads(run([sys.argv[3], 'read-state', '--socket', node['LAYERX_NODE_LNI_SOCKET'],
+                           '--network-id', str(network), '--protocol-version', '3', '--actor', did.decode()]))
+    assert state['network_id'] == network and state['protocol_version'] == 3
+    assert state['evidence'] == 'authenticated_node_snapshot'
+    sequence = state['account_sequence']
+    assert type(sequence) is int and 0 <= sequence < 2**64
+    payload = (os.urandom(32) + struct.pack('>HBB', 2, 0, 0) + bytes(32)
+               + hashlib.sha256(wasm).digest() + blob(wasm))
+    now = time.time_ns() // 1000000
+    fields = (b'\x01' + struct.pack('>H', 3) + b'\x02' + struct.pack('>I', network)
+              + b'\x03' + struct.pack('>I', (9 << 16) | 1) + b'\x04' + blob(did)
+              + b'\x05' + blob(public) + b'\x06' + struct.pack('>Q', sequence)
+              + b'\x07' + struct.pack('>QQ', now - 30000, now + 120000)
+              + b'\x08' + blob(os.urandom(32)) + b'\x09' + bytes(16)
+              + b'\x0a' + blob(hashlib.sha256(b'LXP/v1/payload-hash\0' + payload).digest())
+              + b'\x0b' + blob(payload))
+    unsigned = struct.pack('>HHB', 3, 0x1001, 11) + fields
+    digest = memory_file('deployment-preimage', hashlib.sha256(b'LXP/v1/signature-preimage\0' + unsigned).digest())
+    try:
+        signature = run(['openssl', 'pkeyutl', '-sign', '-rawin', '-keyform', 'DER',
+                         '-inkey', f'/proc/self/fd/{key}', '-in', f'/proc/self/fd/{digest}'], (key, digest))
+    finally:
+        os.close(digest)
+    assert len(signature) == 64
+    signed = struct.pack('>HHB', 3, 0x1001, 12) + fields + b'\x0c' + blob(signature)
+    assert len(signed) <= 1048576
+    sys.stdout.buffer.write(signed)
+finally:
+    os.close(key)
+PYREGDEPLOY
+)
+    kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- \
+        python3 -c "$producer" /var/lib/layerx/node/node.env "$NODE_NETWORK_ID" /usr/local/bin/layerxctl \
+        < "$artifact" > "$temporary"
+    python3 - "$temporary" "$input/program-deployment.lxa" <<'PYPUBLISH'
+import os, sys
+with open(sys.argv[1], 'rb') as handle:
+    assert 0 < os.fstat(handle.fileno()).st_size <= 1048576
+    os.fsync(handle.fileno())
+os.link(sys.argv[1], sys.argv[2])
+os.unlink(sys.argv[1])
+fd = os.open(os.path.dirname(sys.argv[2]), os.O_RDONLY | os.O_DIRECTORY)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PYPUBLISH
+)
 
 internal_apply() {
     kube apply -f "$MANIFESTS_DIR/internal.yaml" > /dev/null
@@ -1302,17 +1416,25 @@ identity_request() {
 }
 
 identity_provision() {
-    local dir="$WORK_DIR/identity" status
+    local dir="$WORK_DIR/identity" status tenant="${LAYERX_BETA_HUMAN_TENANT:-beta}"
+    local provision="$REPO_ROOT/platform/hosted/human/provision.py"
+    umask 077
     mkdir -p "$dir"
     chmod 0700 "$dir"
-    jq -n --arg sub "$TEST_SOURCE_DID" --arg key "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")" \
-        '{sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/source-principal.json"
+    jq -n --arg tenant "$tenant" --arg sub "$TEST_SOURCE_DID" --arg key "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")" \
+        '{tenant: $tenant, sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/source-principal.json"
     status=$(identity_request POST /v1/principals "$dir/source-principal.json" "$dir/source-principal.response.json")
     [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke source principal with status $status: $(cat "$dir/source-principal.response.json")"
-    jq -n --arg sub "$TEST_DESTINATION_DID" --arg key "$(cat "$SECRETS_DIR/test-destination-signer.pub.hex")" \
-        '{sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/destination-principal.json"
+    jq -n --arg tenant "$tenant" --arg sub "$TEST_DESTINATION_DID" --arg key "$(cat "$SECRETS_DIR/test-destination-signer.pub.hex")" \
+        '{tenant: $tenant, sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/destination-principal.json"
     status=$(identity_request POST /v1/principals "$dir/destination-principal.json" "$dir/destination-principal.response.json")
     [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke destination principal with status $status: $(cat "$dir/destination-principal.response.json")"
+    python3 "$provision" --preserve-binding --work-dir "$WORK_DIR" \
+        --request "$dir/source-principal.json" --response "$dir/source-principal.response.json" \
+        --output "$dir/source-binding.json"
+    python3 "$provision" --preserve-binding --work-dir "$WORK_DIR" \
+        --request "$dir/destination-principal.json" --response "$dir/destination-principal.response.json" \
+        --output "$dir/destination-binding.json"
     if [ "$TEST_AUTH_SOURCE" = identity-provisioning ]; then
         jq -n --arg sub "$TEST_SOURCE_DID" '{sub: $sub}' > "$dir/source-session.json"
         (umask 077; : > "$dir/source-session.response.json")
@@ -1655,7 +1777,7 @@ beta_cluster_up() {
     [ "$(cluster_mode)" = owner ] && PULL_POLICY=Always
     preflight_disk
     tools_install
-    build_images
+    prepare_images
     cluster_create
     load_images
     node_boundary_install
@@ -1692,12 +1814,19 @@ beta_cluster_up() {
     else
         paxeer_contracts_deploy
         settlement_publish
+    fi
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-identity 300
+    port_forward identity "$TESTNET_NAMESPACE" layerx-identity "$IDENTITY_PORT" 9443
+    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then
+        identity_provision
+        kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
+        wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-program-registry 600
+        registry_deployment_produce
+        human_journal_deploy
+        human_evidence_provision
         human_policy_publish
     fi
     kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
-    wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-identity 300
-    port_forward identity "$TESTNET_NAMESPACE" layerx-identity "$IDENTITY_PORT" 9443
-    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then identity_provision; fi
     manifests_apply
     port_forward testnet "$TESTNET_NAMESPACE" layerx-testnet-public "$TESTNET_PORT" 443
     port_forward gateway "$TESTNET_NAMESPACE" layerx-gateway "$GATEWAY_PORT" 443
@@ -1784,7 +1913,10 @@ main() {
             require_tool docker git tar
             REVISION=$(revision)
             preflight_disk
-            build_images
+            prepare_images
+            ;;
+        publish-images)
+            bash "$SCRIPT_DIR/publish-images.sh" "$@"
             ;;
         up)
             for argument in "$@"; do

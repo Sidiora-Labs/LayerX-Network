@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use layerx_platform_registry::{
-    parse_request, refusal, write_response, Config, Registrar, RegistryAuthority,
+    parse_request, refusal, write_response, Config, HermeticBuilder, Registrar, RegistryAuthority,
 };
 use layerx_programs::hex;
 use rustix::process::{kill_process, Pid, Signal};
@@ -205,6 +205,8 @@ impl Drop for BuildGuard<'_> {
 }
 
 struct Service {
+    builder: HermeticBuilder,
+    builder_ready: Arc<Mutex<Option<Instant>>>,
     registrar_gate: Mutex<()>,
     request_authority: RegistryAuthority,
     publication_authority: RegistryAuthority,
@@ -409,6 +411,7 @@ fn config(builder_cgroup_root: &Path) -> Result<Config, String> {
     Ok(Config {
         listen: env::var("LAYERX_REGISTRY_LISTEN").unwrap_or_else(|_| DEFAULT_LISTEN.to_owned()),
         journal: parse_path("LAYERX_REGISTRY_JOURNAL", root.join("journal")),
+        deployment_lni_socket: std::env::var_os("LAYERX_REGISTRY_LNI_SOCKET").map(PathBuf::from),
         mirror: parse_path("LAYERX_REGISTRY_SOURCE_MIRROR", root.join("sources")),
         verified: parse_path("LAYERX_REGISTRY_VERIFIED", root.join("verified")),
         workspace: parse_path("LAYERX_REGISTRY_BUILD_ROOT", root.join("builds")),
@@ -642,16 +645,24 @@ fn request_worker(remaining_ms: u64, build_root: &Path) -> Result<(), String> {
     if u64::try_from(encoded.len()).map_or(true, |length| length >= MAX_WORKER_IPC_BYTES) {
         return Err("worker request exceeds bounded IPC".to_owned());
     }
-    let request = serde_json::from_slice(&encoded).map_err(|error| error.to_string())?;
+    let (request, builder): (layerx_platform_registry::Request, HermeticBuilder) =
+        serde_json::from_slice(&encoded).map_err(|error| error.to_string())?;
     let config = config(build_root)?;
     let deadline = Instant::now()
         .checked_add(Duration::from_millis(remaining_ms))
         .ok_or_else(|| "worker deadline is invalid".to_owned())?;
-    let response = Registrar::open(&config, now())?.route(&request, now(), deadline);
+    let builder = builder.bind_worker(&config)?;
+    let response =
+        Registrar::open_with_builder(&config, now(), builder, request.path == "/healthz")?.route(
+            &request,
+            now(),
+            deadline,
+        );
     serde_json::to_writer(io::stdout().lock(), &response).map_err(|error| error.to_string())
 }
 
 fn isolated_route(
+    builder: &HermeticBuilder,
     request: &layerx_platform_registry::Request,
     deadline: Instant,
 ) -> layerx_platform_registry::Response {
@@ -662,7 +673,7 @@ fn isolated_route(
             "the registry request deadline expired",
         );
     };
-    let encoded = match serde_json::to_vec(request) {
+    let encoded = match serde_json::to_vec(&(request, builder)) {
         Ok(encoded)
             if u64::try_from(encoded.len()).is_ok_and(|length| length < MAX_WORKER_IPC_BYTES) =>
         {
@@ -752,8 +763,29 @@ fn serve(config: &Config) -> Result<(), String> {
     for unit in registrar.quarantined_units() {
         eprintln!("layerx-program-registry: {unit}");
     }
+    let builder = registrar.verified_builder();
     drop(registrar);
+    let builder_ready = Arc::new(Mutex::new(Some(Instant::now())));
+    let monitor_ready = Arc::clone(&builder_ready);
+    let mut monitored_builder = builder.clone();
+    thread::spawn(move || loop {
+        let checked = Instant::now();
+        let valid = if monitored_builder.check_environment_metadata().is_ok() {
+            true
+        } else {
+            if let Ok(mut ready) = monitor_ready.lock() {
+                *ready = None;
+            }
+            monitored_builder.reverify_environment().is_ok()
+        };
+        if let Ok(mut ready) = monitor_ready.lock() {
+            *ready = valid.then_some(checked);
+        }
+        thread::sleep(Duration::from_millis(250));
+    });
     let service = Arc::new(Service {
+        builder,
+        builder_ready,
         registrar_gate: Mutex::new(()),
         request_authority: config.request_authority.clone(),
         publication_authority: config.publication_authority.clone(),
@@ -888,6 +920,79 @@ fn complete_worker(
     })
 }
 
+fn route_request(
+    service: &Service,
+    request: &layerx_platform_registry::Request,
+    deadline: Instant,
+) -> layerx_platform_registry::Response {
+    let header = request.headers.get("authorization").map(String::as_str);
+    let authenticated = if request.path == "/healthz" {
+        true
+    } else if request.path == "/__registry/sources" {
+        service.publication_authority.verifies(header)
+    } else {
+        service.request_authority.verifies(header)
+    };
+    if !authenticated {
+        return refusal(
+            401,
+            "authentication_required",
+            "a valid registry authority is required",
+        );
+    }
+    if service
+        .builder_ready
+        .lock()
+        .ok()
+        .and_then(|ready| *ready)
+        .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(2))
+    {
+        return refusal(
+            503,
+            "builder_unavailable",
+            "startup-verified builder state is unavailable or changed",
+        );
+    }
+    if request.path == "/healthz" {
+        return isolated_route(&service.builder, request, deadline);
+    }
+    let is_build = request.method == "POST"
+        && request.path.starts_with("/v1/programs/registry/")
+        && request.path.ends_with("/source");
+    let _build = if is_build {
+        if service.active_builds.fetch_add(1, Ordering::AcqRel) >= service.max_builds {
+            service.active_builds.fetch_sub(1, Ordering::AcqRel);
+            return refusal(503, "build_queue_full", "the bounded build queue is full");
+        }
+        Some(BuildGuard(&service.active_builds))
+    } else {
+        None
+    };
+    let _registrar_gate = loop {
+        match service.registrar_gate.try_lock() {
+            Ok(gate) => break gate,
+            Err(TryLockError::Poisoned(_)) => {
+                return refusal(
+                    503,
+                    "registry_unavailable",
+                    "registry state lock is unavailable",
+                );
+            }
+            Err(TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return refusal(
+                        503,
+                        "request_deadline_exceeded",
+                        "the registry request deadline expired in the bounded queue",
+                    );
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+    };
+    isolated_route(&service.builder, request, deadline)
+}
+
 fn serve_connection(
     stream: std::net::TcpStream,
     tls: Arc<ServerConfig>,
@@ -915,58 +1020,7 @@ fn serve_connection(
     };
     let response = parse_request(&mut stream).map_or_else(
         |_| refusal(400, "invalid_request", "request could not be parsed"),
-        |request| {
-            let header = request.headers.get("authorization").map(String::as_str);
-            let authenticated = if request.path == "/healthz" {
-                true
-            } else if request.path == "/__registry/sources" {
-                service.publication_authority.verifies(header)
-            } else {
-                service.request_authority.verifies(header)
-            };
-            if !authenticated {
-                return refusal(
-                    401,
-                    "authentication_required",
-                    "a valid registry authority is required",
-                );
-            }
-            let is_build = request.method == "POST"
-                && request.path.starts_with("/v1/programs/registry/")
-                && request.path.ends_with("/source");
-            let _build = if is_build {
-                if service.active_builds.fetch_add(1, Ordering::AcqRel) >= service.max_builds {
-                    service.active_builds.fetch_sub(1, Ordering::AcqRel);
-                    return refusal(503, "build_queue_full", "the bounded build queue is full");
-                }
-                Some(BuildGuard(&service.active_builds))
-            } else {
-                None
-            };
-            let _registrar_gate = loop {
-                match service.registrar_gate.try_lock() {
-                    Ok(gate) => break gate,
-                    Err(TryLockError::Poisoned(_)) => {
-                        return refusal(
-                            503,
-                            "registry_unavailable",
-                            "registry state lock is unavailable",
-                        );
-                    }
-                    Err(TryLockError::WouldBlock) => {
-                        if Instant::now() >= deadline {
-                            return refusal(
-                                503,
-                                "request_deadline_exceeded",
-                                "the registry request deadline expired in the bounded queue",
-                            );
-                        }
-                        thread::sleep(Duration::from_millis(1));
-                    }
-                }
-            };
-            isolated_route(&request, deadline)
-        },
+        |request| route_request(service, &request, deadline),
     );
     let response = if Instant::now() >= deadline {
         refusal(

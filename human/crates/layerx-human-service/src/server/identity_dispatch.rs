@@ -117,7 +117,11 @@ impl RemoteIdentityProvider {
         }
     }
 
-    fn call(&self, operation: u8, fields: &[&[u8]]) -> Result<Vec<Vec<u8>>, IdentityDispatchError> {
+    pub(crate) fn call(
+        &self,
+        operation: u8,
+        fields: &[&[u8]],
+    ) -> Result<Vec<Vec<u8>>, IdentityDispatchError> {
         let metadata = std::fs::symlink_metadata(&self.config.socket)
             .map_err(|_| IdentityDispatchError::ProviderUnavailable)?;
         if !metadata.file_type().is_socket()

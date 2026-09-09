@@ -22,6 +22,7 @@ subtle.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+layerx-programs = { package = "layerx-programs-registry", path = "../../../programs/crates/layerx-programs-registry" }
 ed25519-dalek.workspace = true
 getrandom.workspace = true
 layerx-programs-runtime = { path = "../../../programs/crates/layerx-programs-runtime" }
