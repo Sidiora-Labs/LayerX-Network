@@ -3,8 +3,11 @@ from pathlib import Path
 import unittest
 
 from layerx_sdk.x402_receive import (
-    decode_receive, encode_grant, encode_receive,
-    grant_authorization_message, receive_authorization_message,
+    decode_receive,
+    encode_grant,
+    encode_receive,
+    grant_authorization_message,
+    receive_authorization_message,
 )
 
 FIXTURE = Path(__file__).with_name("receive.hex").read_text().splitlines()
@@ -17,7 +20,9 @@ class ReceiveTests(unittest.TestCase):
 
     def test_native_canonical_and_signing_preimages(self):
         self.assertEqual(encode_receive(self.receive), self.wire)
-        self.assertEqual(grant_authorization_message(self.receive["payer_grant"]).hex(), FIXTURE[1])
+        self.assertEqual(
+            grant_authorization_message(self.receive["payer_grant"]).hex(), FIXTURE[1]
+        )
         self.assertEqual(receive_authorization_message(self.receive).hex(), FIXTURE[2])
         self.assertEqual(encode_grant(self.receive["payer_grant"]), self.wire[387:])
         self.assertEqual(self.receive["amount"], str(2**64 + 25))
@@ -44,7 +49,10 @@ class ReceiveTests(unittest.TestCase):
         }.items():
             for value in values:
                 invalid = dict(self.receive, **{field: value})
-                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                with (
+                    self.subTest(field=field, value=value),
+                    self.assertRaises(ValueError),
+                ):
                     encode_receive(invalid)
         for value in (0, 1, "true", None):
             invalid = copy.deepcopy(self.receive)
@@ -53,7 +61,10 @@ class ReceiveTests(unittest.TestCase):
                 encode_receive(invalid)
 
     def test_exact_keys_hex_and_maximums(self):
-        for value in (dict(self.receive, unknown=1), {k: v for k, v in self.receive.items() if k != "asset"}):
+        for value in (
+            dict(self.receive, unknown=1),
+            {k: v for k, v in self.receive.items() if k != "asset"},
+        ):
             with self.assertRaises(ValueError):
                 encode_receive(value)
         for value in ("AB" * 32, "0x" + "00" * 32, "00" * 31, "gg" * 32):

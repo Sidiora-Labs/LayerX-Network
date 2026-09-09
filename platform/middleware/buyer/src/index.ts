@@ -18,7 +18,9 @@ import {
   decodeSettlementHeader,
   encodePaymentPayloadHeader,
   verifyPaymentReceipt,
+  paymentCommitment,
   type AuthorizedBatchResolver,
+  type PaymentCommitmentResolver,
   type JsonValue,
   type LayerXReceiptEvidence,
   type PaymentPayload,
@@ -51,6 +53,7 @@ export interface BuyerMiddlewareConfig {
   readonly source: string;
   readonly supported: readonly BuyerSupportedKind[];
   readonly authorizedBatches: AuthorizedBatchResolver;
+  readonly commitments?: PaymentCommitmentResolver;
   readonly retry?: Partial<BuyerRetryPolicy>;
   readonly now?: () => number;
   readonly fetch?: typeof globalThis.fetch;
@@ -166,6 +169,7 @@ export class BuyerMiddleware {
   readonly #source: string;
   readonly #supported: readonly BuyerSupportedKind[];
   readonly #authorizedBatches: AuthorizedBatchResolver;
+  readonly #commitments: PaymentCommitmentResolver | undefined;
   readonly #retry: BuyerRetryPolicy;
   readonly #now: () => number;
   readonly #fetch: typeof globalThis.fetch;
@@ -186,6 +190,7 @@ export class BuyerMiddleware {
     this.#source = config.source;
     this.#supported = config.supported;
     this.#authorizedBatches = config.authorizedBatches;
+    this.#commitments = config.commitments;
     this.#retry = retryPolicy(config.retry);
     this.#now = config.now ?? Date.now;
     this.#fetch = config.fetch ?? globalThis.fetch;
@@ -197,6 +202,9 @@ export class BuyerMiddleware {
       (kind) => kind.scheme === candidate.scheme && kind.network === candidate.network,
     ));
     if (accepted === undefined) {
+      throw new MiddlewareError("unsupported-payment");
+    }
+    if (paymentCommitment(accepted.extra) !== "executed" && this.#commitments === undefined) {
       throw new MiddlewareError("unsupported-payment");
     }
     return { required, accepted };
@@ -311,6 +319,7 @@ export class BuyerMiddleware {
     const verification = await verifyPaymentReceipt(
       { canonicalReceipt, authorizedBatch },
       payment.offer.accepted,
+      this.#commitments,
     );
     return { response, verification, canonicalReceipt };
   }
@@ -387,7 +396,7 @@ export class BuyerMiddleware {
         readonly receiptDigest: string;
       };
       try {
-        const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, requirements);
+        const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, requirements, this.#commitments);
         const receiptDigest = toHex(await merkleLeafDigest(canonicalReceipt));
         candidate = { canonicalReceipt, authorizedBatch, verification, receiptDigest };
       } catch (error) {

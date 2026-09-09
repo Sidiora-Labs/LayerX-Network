@@ -6,6 +6,7 @@ import {
   verifyPaymentReceipt,
   type JsonValue,
   type PaymentRequired,
+  type PaymentCommitmentResolver,
   type SellerDecision,
   type WebhookConsumeResult,
   type WebhookRequestHeaders,
@@ -25,6 +26,7 @@ export interface CatalogItem {
   readonly scheme: string;
   readonly network: string;
   readonly maxTimeoutSeconds: number;
+  readonly extra?: JsonValue;
 }
 
 export interface CatalogProvider {
@@ -149,6 +151,7 @@ export class MerchantMiddleware {
         || item.payTo !== first.payTo
         || item.scheme !== first.scheme
         || item.network !== first.network
+        || JSON.stringify(item.extra) !== JSON.stringify(first.extra)
       ) {
         throw new MerchantError("mixed-payment-facts");
       }
@@ -184,6 +187,7 @@ export class MerchantMiddleware {
         asset: first.asset,
         payTo: first.payTo,
         maxTimeoutSeconds: first.maxTimeoutSeconds,
+        ...(first.extra === undefined ? {} : { extra: first.extra }),
       }],
       extensions: {},
     };
@@ -289,6 +293,7 @@ export class MerchantSettlementWebhooks {
     private readonly verifier: VerifiedWebhookConsumer,
     private readonly orders: MerchantOrderStore,
     private readonly receipts: MerchantReceiptResolver,
+    private readonly commitments?: PaymentCommitmentResolver,
   ) {}
 
   public consume(rawBody: Uint8Array, headers: WebhookRequestHeaders): Promise<WebhookConsumeResult> {
@@ -303,7 +308,7 @@ export class MerchantSettlementWebhooks {
         throw new MerchantError("order-conflict");
       }
       const evidence = await this.receipts.resolve(event.receipt_ref);
-      const verification = await verifyPaymentReceipt(evidence, current.quote.paymentRequired.accepts[0]!);
+      const verification = await verifyPaymentReceipt(evidence, current.quote.paymentRequired.accepts[0]!, this.commitments);
       if (verificationRank(event.verification) > verificationRank(verification.level)) {
         throw new MerchantError("invalid-webhook");
       }

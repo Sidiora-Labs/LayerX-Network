@@ -5220,3 +5220,19 @@ symbol = "lxp_ledger_apply_bridge_credit lxp_ctx_bridge_credit"
 observed = "The bridge reserve top-up now invokes ledger apply after the existing authorization, supply preflight and rollback snapshot. make -j16, make test-asset-transfer, make test and make beta-ledger-check exit 0. The unchanged sole-writer check passes. BRIDGE_PYTHON=qual-logs/nat3/venv/bin/python3 bash tests/bridge/sole_writer.sh exits 0: a real custody deposit on isolated chain 31337 produces byte-identical canonical account state diffs (397 bytes) and unsigned receipt encodings (1006 bytes) through original and updated module contexts, with real signature verification, rollback stages, replay refusal and nine custody evidence tests passing. Evidence: qual-logs/nat3/build.log, asset-transfer.log, test.log, beta-ledger.log, bridge-differential-venv.log and gates.tsv."
 assumption = "The initial bridge comparison exited 1 because system Python lacked Crypto; the isolated virtual environment satisfies tests/bridge/requirements.txt. Codify inspection could not run because cg is unavailable. Cluster and image gates were not run. Task statuses are unchanged."
 severity = "note"
+
+[observation.6.7.4021]
+task = "6.7"
+file = "platform/hosted/gateway/src/lib.rs agent/sdk/typescript/package.json agent/sdk/typescript/src/index.ts platform/middleware/seller/src/commitment.ts"
+symbol = "lx_sendActivity lx_getReceipt PaymentCommitmentResolver"
+observed = "The checkout has no lx_sendActivity or lx_getReceipt handler or public JSON-RPC result schema. Canonical grant and receive codecs match the native signed fixture in Python and TypeScript. Payment verification invokes existing receipt, signed batch inclusion and checkpoint verifiers, with missing evidence refused. The TypeScript x402 receive module is not exported through the package entry points. Public RPC grant draws, recurring draws, faucet examples, complete Python buyer/seller HTTP middleware parity and agent commitment integration remain incomplete. Positive finalised payment evidence has not been qualified."
+assumption = "Public activity submission and evidence resolution require concrete gateway schemas, identity-bound Asset activity envelopes, trusted network/checkpoint inputs and the package export change. Payload parity and offline proof verification do not prove public RPC execution. Exact integration requests are retained in the untracked NEEDS.md."
+severity = "blocker"
+
+[observation.6.7.4022]
+task = "6.7"
+file = "platform/middleware/conformance/service.mjs platform/examples/paid-api/index.mjs platform/examples/support/runtime.mjs platform/middleware/conformance/src/scenarios.ts platform/middleware/merchant/src/index.ts"
+symbol = "runServiceScenarios parseArguments MerchantSettlementWebhooks"
+observed = "npm run conformance --workspace platform/middleware/conformance exits 1 because the paid-api child exits before readiness. The harness supplies no environment argument, while parseArguments requires --environment emulator or testnet; direct example startup reproduces usage_--environment_emulator_or_testnet. In-process conformance exits 1 with the signed merchant settlement webhook positive check reporting invalid-webhook. Compiling and loading the unchanged merchant source from d4d4e0a4 reproduces the identical failed check. Evidence: qual-logs/pay6/middleware-conformance.log, paid-api-startup.log, middleware-in-process.log, baseline-build.log and middleware-baseline.log."
+assumption = "The existing service harness and example configuration contracts require reconciliation. The merchant webhook failure predates the commitment changes and remains unchanged. Its existing verification-rank and digest assertions were not weakened; stronger webhook-level claims still require separate qualification."
+severity = "blocker"
