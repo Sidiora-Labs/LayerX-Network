@@ -2215,9 +2215,10 @@ fn supervised_files(root: &Path, builder: &Path, keys: [&[u8; 32]; 2], tokens: [
 }
 
 fn supervisor_arguments(root: &Path, role: &str) -> Vec<String> {
-    let socat = std::env::var_os("LAYERX_TEST_SOCAT_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| panic!("LAYERX_TEST_SOCAT_BIN must name the real socat executable"));
+    let socat = std::env::var_os("LAYERX_TEST_SOCAT_BIN").map_or_else(
+        || panic!("LAYERX_TEST_SOCAT_BIN must name the real socat executable"),
+        PathBuf::from,
+    );
     assert!(
         socat.is_file(),
         "{} is not a socat executable",
