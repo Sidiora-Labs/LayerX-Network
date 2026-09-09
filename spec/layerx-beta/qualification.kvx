@@ -5196,4 +5196,11 @@ file = "Makefile tests/test_guarantor_duties.c tests/test_da_retrieval.c tests/t
 symbol = "test-wave-12 test-guarantor test-da-retrieval test-da-unavailable"
 observed = "make test-wave-12 exits 2: test_guarantor_duties and test_da_retrieval fail to link Programs runtime symbols including layerx_programs_consume_program_spend_authorization and layerx_programs_interface_validate; test-da-unavailable exits 1 without an assertion diagnostic. Raw output is qual-logs/nat1/wave12.log. make -j16, make test-guarantor-bond, make test and make beta-ledger-check each exit 0. The finalisation refusal output is cleared before argument and guarantor-set validation; the existing guarantor bond assertion predicates are unchanged."
 assumption = "The broader aggregate is not qualified. Its Programs runtime link wiring and DA unavailability failure require separate task-scoped diagnosis; no assertion or return code was weakened to bypass them."
+
+[observation.6.1.39]
+task = "6.1"
+file = "tests/test_guarantor_bond.c Makefile"
+symbol = "main test-guarantor-bond test-wave-12"
+observed = "make test-wave-12 exits 2 because build/tests/test_guarantor_bond exits 1; reproduced after the Programs runtime build completes. Logs: qual-logs/nat2/wave12.log and qual-logs/nat2/wave12-final.log with sibling exit files. make test-guarantor test-da-retrieval test-da-unavailable exits 0, including both real Programs runtime links and every withheld DA class. make -j16 and make test exit 0. Logs: qual-logs/nat2/focused.log, build.log and test.log with sibling exit files."
+assumption = "The bond fixture or its native implementation requires separate diagnosis and repair in its owning scope. The historical link and canonical DA fixture fixes are present in the checkout. DA refusal predicates and exit codes remain unchanged; assertion reporting identifies individual failures. Image and cluster gates were not run."
 severity = "blocker"
