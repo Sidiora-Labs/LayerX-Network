@@ -800,6 +800,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-program-sdk"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "layerx-programs-protocol-adapter"
 version = "0.1.0"
 dependencies = [
@@ -810,6 +817,7 @@ dependencies = [
 name = "layerx-programs-registry"
 version = "0.1.0"
 dependencies = [
+ "layerx-program-sdk",
  "layerx-programs-runtime",
  "layerx-proof",
  "layerx-types",
