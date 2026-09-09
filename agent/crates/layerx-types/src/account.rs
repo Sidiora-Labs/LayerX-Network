@@ -100,6 +100,19 @@ fn parse_agent(agent: &str) -> Result<AccountNamespace, AccountError> {
             Ok(AccountNamespace::AgentMain)
         };
     }
+    if let Some((did, asset)) = agent.rsplit_once(":asset:") {
+        if asset.len() == 64
+            && asset
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return if did.is_empty() || did.len() > MAX_DID_BYTES {
+                Err(AccountError::EmptyComponent)
+            } else {
+                Ok(AccountNamespace::AgentAsset)
+            };
+        }
+    }
     for (marker, namespace) in [
         (":budget:", AccountNamespace::AgentBudget),
         (":escrow:", AccountNamespace::AgentEscrow),
@@ -113,18 +126,6 @@ fn parse_agent(agent: &str) -> Result<AccountNamespace, AccountError> {
             } else {
                 Ok(namespace)
             };
-        }
-    }
-    if let Some((did, asset)) = agent.rsplit_once(":asset:") {
-        if did.is_empty() || did.len() > MAX_DID_BYTES {
-            return Err(AccountError::EmptyComponent);
-        }
-        if asset.len() == 64
-            && asset
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
-            return Ok(AccountNamespace::AgentAsset);
         }
     }
     Err(AccountError::UnknownNamespace)
@@ -157,6 +158,17 @@ mod tests {
             "ab".repeat(32)
         ))
         .is_err());
+        for did in [
+            "did:layerx:budget:alice",
+            "did:layerx:escrow:alice",
+            "did:layerx:margin:alice",
+        ] {
+            assert_eq!(
+                AccountId::parse(&format!("agent:{did}:asset:{}", "ab".repeat(32)))
+                    .map(|a| a.namespace()),
+                Ok(AccountNamespace::AgentAsset)
+            );
+        }
         assert!(AccountId::parse("agent:did:layerx:alice:main").is_ok());
         assert!(AccountId::parse("agent:did:layerx:alice:unknown:abc").is_err());
     }
