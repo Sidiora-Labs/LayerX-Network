@@ -12,8 +12,10 @@ final class ReceiptFixtureTests: XCTestCase {
             if try XCTUnwrap(vector["accept"] as? Bool) {
                 XCTAssertEqual(try ProgramsWireTestSupport.authorizationRoot(encoded), root)
             } else {
-                do { XCTAssertNotEqual(try ProgramsWireTestSupport.authorizationRoot(encoded), root) }
-                catch { }
+                let actual: Data
+                do { actual = try ProgramsWireTestSupport.authorizationRoot(encoded) }
+                catch { continue }
+                XCTAssertNotEqual(actual, root)
             }
         }
     }
