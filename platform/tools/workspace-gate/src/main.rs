@@ -87,7 +87,9 @@ pub fn workspace_gate(repo_root: &Path, source: &str) -> Result<(), String> {
     }
     for required in REQUIRED_DIRECTORIES {
         if !directories.iter().any(|declared| declared == required) {
-            return Err(format!("mandated workspace directory undeclared: {required}"));
+            return Err(format!(
+                "mandated workspace directory undeclared: {required}"
+            ));
         }
     }
     if !ecosystems.iter().any(|declared| declared == "rust") {
@@ -101,7 +103,9 @@ fn run() -> Result<(), String> {
     let manifest_path = arguments
         .first()
         .map_or_else(|| PathBuf::from(MANIFEST_PATH), PathBuf::from);
-    let repo_root = arguments.get(1).map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let repo_root = arguments
+        .get(1)
+        .map_or_else(|| PathBuf::from("."), PathBuf::from);
     let source = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
     workspace_gate(&repo_root, &source)
