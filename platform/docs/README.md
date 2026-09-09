@@ -18,9 +18,9 @@ Every other page under `content/` is written by hand and must carry an `Enforced
 `testnet.md` sits outside `content/` and is never rewritten.
 
 Public wiki pages for payments (wallet, faucet, send, token, 402), the
-OpenRPC method list, asset encodings, and commitment levels live under
-[`docs/wiki/`](../../docs/wiki/Home.md). Those payment-lane surfaces that
-are not on `main` are marked on the testnet branch there.
+OpenRPC method list, Asset encodings, and commitment levels live under
+[`docs/wiki/`](../../docs/wiki/Home.md). Unmerged payment surfaces are marked
+"on the testnet branch" there.
 
 ## Samples
 

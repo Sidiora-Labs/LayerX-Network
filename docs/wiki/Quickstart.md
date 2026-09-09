@@ -14,8 +14,9 @@ cited to the tree. Related pages: [CLI](Cli.md), [Beta cluster](BetaCluster.md),
 [Hosted gateway](HostedGateway.md), [Hosted identity](HostedIdentity.md),
 [Programs](Programs.md), [Finality](Finality.md).
 
-Wallet, faucet, send, token, program, and 402 steps that include surfaces
-still on unmerged payment lanes are on [Payments developer path](PaymentsQuickstart.md).
+Wallet, faucet, send, token, program, and 402 surfaces on the testnet branch
+are on [Payments developer path](PaymentsQuickstart.md). The public endpoint
+checklist is [Getting started on testnet](Getting-Started-Testnet.md).
 Asset encodings: [Assets](Assets.md). Public `POST /rpc`: [Public JSON-RPC](PublicRpc.md)
 (on the testnet branch). `executed` / `batched` / `finalised`:
 [Commitment levels](CommitmentLevels.md).
@@ -209,6 +210,12 @@ current identity sequence through `lx_getSequence`. The examples read
 [402LXP transport](X402Transport.md) for the offer, grant and commitment
 contracts.
 
+The public hosted equivalents are `https://api.testnet.layerx.network/rpc` and
+`wss://api.testnet.layerx.network/rpc/ws`; the faucet origin is
+`https://faucet.testnet.layerx.network`. See
+[Getting started on testnet](Getting-Started-Testnet.md) for the public
+checklist and [Public JSON-RPC](PublicRpc.md) for every method and typed error.
+
 ---
 
 ## 3. Create a credential
@@ -321,6 +328,12 @@ A 200 body has `funded` `true`, `funding_id`, optional `transaction_id`,
 (`platform/hosted/testnet/tests/hosted-smoke.sh:110`). A 202 body is
 `state` `still_checking`, `retry` `after`, `retry_after_seconds` `10`
 (`platform/hosted/faucet/src/main.rs:1028-1034`).
+
+For a complete request and response copied from a real faucet, hosted gateway,
+and native-node run on the testnet branch, continue with
+[Public payment API](PublicAPI.md). The transcript covers asset registration,
+account opening, mint, SEND, balances, asset metadata, and receipt calls without
+shortening canonical bytes.
 
 Testnet control admits the funding journey at `GET /v1/journeys/funding`
 (`platform/hosted/testnet/src/main.rs:229, 1165-1171`). Smoke requires

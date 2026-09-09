@@ -23,7 +23,17 @@ This repository is the Sidiora Labs monorepo for LayerX Network and the Paxeer N
 
 The cluster path is [`docs/wiki/Quickstart.md`](docs/wiki/Quickstart.md): install the `layerx` CLI from `platform/cli`, bring up the cluster, source `build/beta-cluster/env`, then create a credential, claim from the faucet, submit an activity, verify the receipt, and deploy a program.
 
-The payments path — wallet, faucet, send, create a token, deploy a program, pay a 402 endpoint — is [`docs/wiki/PaymentsQuickstart.md`](docs/wiki/PaymentsQuickstart.md). Token register/mint, public `POST /rpc`, and 402 commitment extras are on the testnet branches (`lane/pay-native`, `lane/pay-signer-sdk`, `lane/pay-programs-tokens`, `lane/pay-402lxp`, `lane/pay-public-rpc`) and are not merged to `main`. Encodings: [`docs/wiki/Assets.md`](docs/wiki/Assets.md). RPC methods: [`docs/wiki/PublicRpc.md`](docs/wiki/PublicRpc.md). `executed` / `batched` / `finalised`: [`docs/wiki/CommitmentLevels.md`](docs/wiki/CommitmentLevels.md). Wallet and token commands are on the testnet branch `lane/pay-wallet-cli` (draft PR #208).
+The public endpoint checklist is
+[`docs/wiki/Getting-Started-Testnet.md`](docs/wiki/Getting-Started-Testnet.md).
+The complete wallet, faucet, Asset, Programs, and HTTP 402 path is
+[`docs/wiki/PaymentsQuickstart.md`](docs/wiki/PaymentsQuickstart.md). Native
+Asset issuance, wallet/token commands, public `POST /rpc`, LXT20, and 402
+commitment extras are on the testnet branch. Encodings:
+[`docs/wiki/Assets.md`](docs/wiki/Assets.md). RPC methods:
+[`docs/wiki/PublicRpc.md`](docs/wiki/PublicRpc.md). Evidence levels:
+[`docs/wiki/CommitmentLevels.md`](docs/wiki/CommitmentLevels.md).
+An exact real-process transcript of the public payment flow is
+[`docs/wiki/PublicAPI.md`](docs/wiki/PublicAPI.md).
 
 ```sh
 layerx key create quickstart
@@ -113,6 +123,7 @@ make paxeer-ci
 ## Documentation
 
 - Wiki index: [`docs/wiki/Home.md`](docs/wiki/Home.md)
+- Getting started on testnet: [`docs/wiki/Getting-Started-Testnet.md`](docs/wiki/Getting-Started-Testnet.md)
 - Payments developer path: [`docs/wiki/PaymentsQuickstart.md`](docs/wiki/PaymentsQuickstart.md)
 - Public JSON-RPC (on the testnet branch): [`docs/wiki/PublicRpc.md`](docs/wiki/PublicRpc.md)
 - Assets and tokens: [`docs/wiki/Assets.md`](docs/wiki/Assets.md)

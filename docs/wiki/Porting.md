@@ -19,9 +19,10 @@ builds the three `reference-v2` guests for `wasm32-unknown-unknown` release,
 runs `layerx-program-lint --abi-version 2` on each artifact, and passes the
 three `.wasm` paths to `programs_call_activity` (`Makefile:3091-3101`).
 
-**On the testnet branch** `lane/pay-programs-tokens`, the EVM and Solana
-`MIGRATION.md` files add a payments-account note. Those edits are not on
-`main`. See [Assets](Assets.md) and [Payments developer path](PaymentsQuickstart.md).
+On the testnet branch, the EVM and Solana migration guides describe how their
+account models map to registered native Asset accounts and program-derived
+accounts. See [Assets](Assets.md) and
+[Payments developer path](PaymentsQuickstart.md).
 
 Sources:
 

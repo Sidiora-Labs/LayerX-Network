@@ -1,11 +1,21 @@
 # LayerX developer CLI
 
-Binary `layerx` (`platform/cli`). Commands, refusals, and receipt verify
-are on [`docs/wiki/Cli.md`](../../docs/wiki/Cli.md). The payments path
-(create a key, faucet, send, token, program, 402) is
+Binary `layerx` (`platform/cli`). The wallet and token commands described here
+are on the testnet branch. The complete payment path is
 [`docs/wiki/PaymentsQuickstart.md`](../../docs/wiki/PaymentsQuickstart.md).
-There is no `layerx token` or `layerx wallet` command on `main`;
-`lane/pay-wallet-cli` provides both on the testnet branch (draft PR #208).
+
+Wallet commands are `create`, `import`, `list`, `balance`, `history`,
+`receipt`, `send`, `open-account`, `estimate-fee`, and `watch`. Token commands
+are `create`, `mint`, `burn`, `transfer`, `info`, and `list`. Public writes
+require `--rpc`, `--gateway-credential`, `--receipt-policy`, and `--fee-limit`.
+The RPC URL must end in `/rpc`; remote RPC requires HTTPS.
+
+Send and token transfer read the identity and source-account sequences
+independently, sign the native debit authorization, then sign the canonical
+outer activity. Pending outcomes retain the activity id for recovery. Each new
+invocation creates a new idempotency key, so do not repeat an uncertain write.
+Public wallet registration and DID history are unavailable and fail without
+inventing results.
 
 ## Headless credential storage
 

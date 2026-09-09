@@ -14,8 +14,8 @@ of a `layerx` subcommand (`platform/cli/src/main.rs:42-80`).
 This is the second developer path after the testnet quickstart. It
 does not document emulator administration. MCP and A2A installation
 refuse the emulator
-(`platform/cli/src/install/mod.rs:573-577`). Wallet, faucet, send,
-token, and 402 steps that include unmerged payment lanes are on
+(`platform/cli/src/install/mod.rs:573-577`). The expanded wallet, token, and
+payment-agent surfaces are on the testnet branch; see
 [Payments developer path](PaymentsQuickstart.md).
 
 Two MCP surfaces exist and do not share a tool catalogue or a
@@ -568,8 +568,8 @@ There is no CLI command that registers that endpoint.
 `agent/crates/layerx-mcp/README.md:16-40`). Mapped daemon operations:
 `ReadBalance`, `ReadAccount`, `ReadHistory`, `ProgramReceipt`,
 `ReadCheckpoint`, `ReadProofBundle`, `AvailabilityFetch`, `Prepare`,
-`Sign`, `Submit`, `Track` (`agent/crates/layerx-mcp/src/server.rs:673-688`).
-Wallet and token writes alias `Submit`; `activity.wait` aliases `Track`.
+`Sign`, `Submit`, `Track`, `Wait` (`agent/crates/layerx-mcp/src/server.rs:673-688`).
+Wallet, token, and grant writes alias `Submit`; `activity.wait` uses `Wait`.
 
 ---
 

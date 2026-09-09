@@ -10,7 +10,7 @@ This is the Rust workspace in `interop/`. It is not a second ledger.
 | --- | --- | --- |
 | Gateway | Transport-neutral routes, redaction, adapter host | `crates/layerx-interop-gateway`, executable composition in `crates/layerx-interop-service` |
 | MCP / A2A transports | Ingress labels `mcp` and `a2a` next to `http` | Gateway `IngressTransport`; x402 `TransportKind` |
-| x402 v2 | Buyer, seller, facilitator over HTTP, MCP, and A2A | `crates/layerx-x402` - [COMPATIBILITY.md](crates/layerx-x402/COMPATIBILITY.md). Commitment extras (`executed` / `batched` / `finalised`) are on the testnet branch `lane/pay-402lxp`; see [`docs/wiki/CommitmentLevels.md`](../docs/wiki/CommitmentLevels.md) |
+| x402 v2 | Buyer, seller, facilitator over HTTP, MCP, and A2A | `crates/layerx-x402` - [COMPATIBILITY.md](crates/layerx-x402/COMPATIBILITY.md). Commitment extras and metered/subscription grant draws are on the testnet branch; see [`docs/wiki/X402Transport.md`](../docs/wiki/X402Transport.md) |
 | Ethereum / Solana mirrors | Batch archive publication and verification. Pure archives: no vault, no portal, no custody | `crates/layerx-mirror`; contracts in `contracts/ethereum-mirror/` and `contracts/solana-mirror/`; deploy notes in `deploy/mirror/` |
 | Ethereum / Solana migration | Source-chain verifiers and the `migration` adapter | `crates/layerx-migrate` - [OPERATIONS.md](crates/layerx-migrate/OPERATIONS.md) |
 | Portable receipts | Verify LayerX receipts without a live node | `crates/layerx-portable` - [PORTABILITY.md](PORTABILITY.md) |

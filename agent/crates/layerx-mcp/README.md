@@ -45,6 +45,7 @@ Write tools follow the ordinary daemon path: prepare, disclose, sign, submit, tr
 The wallet and token tools (`wallet.accounts`, `wallet.balance`, `wallet.send`, `token.create`, `token.mint`, `token.transfer`) are registered in `src/server.rs` and implemented in `src/tools/wallet.rs` and `src/tools/write.rs`. Payment walkthrough: [`docs/wiki/PaymentsQuickstart.md`](../../../docs/wiki/PaymentsQuickstart.md).
 
 Untrusted tool arguments cannot change tenant, scope, or counterparty. See `src/untrusted.rs` and `src/validate.rs`. Payment payload bytes bound at disclose/sign live in `layerx-crypto` (`payments` / `disclosure`).
+The signer binds payment payload and disclosure bytes before signing; it does not accept an unstructured approval.
 
 ## Test
 

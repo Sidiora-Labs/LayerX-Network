@@ -1,13 +1,6 @@
-<!--
-Draft copy for the GitHub wiki page "Finality".
-The wiki has no PR flow, so this file is the reviewable source. After this PR
-merges, paste the body below (everything under the first `# Finality`) into the
-wiki page. Do not commit this note to the wiki.
--->
-
 # Finality
 
-Ordered instantly in-channel. Anchored to Paxeer on the L0 → L4 ladder.
+Ordered in-channel. Anchored to Paxeer on the L0 → L4 ladder.
 
 An activity is not final all at once. Each step names who is on the hook if the claim turns out to be wrong. The guarantee behind a batch is not a validity proof. It is bonded re-execution, a challenge window, and withdrawal limits.
 

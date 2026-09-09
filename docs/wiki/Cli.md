@@ -16,10 +16,10 @@ not document SDK clients; those live under `platform/docs/content/`. It does
 not document portable receipt JSON; see
 [Portable receipt verifier](PortableVerifier.md).
 
-Wallet, faucet, send, token, program, and 402 steps:
-[Payments developer path](PaymentsQuickstart.md). There is no
-`layerx token` or `layerx wallet` command on `main`, and
-`lane/pay-wallet-cli` provides both on the testnet branch (draft PR #208).
+Wallet and token commands are on the testnet branch. Their public-write path
+uses independent identity/source sequences, structured disclosure, native
+debit signing, and verified commitment evidence. Wallet, faucet, send, token,
+program, and 402 steps: [Payments developer path](PaymentsQuickstart.md).
 
 ---
 
@@ -79,6 +79,35 @@ that the binary implements are listed; unimplemented flags are omitted.
 | `layerx a2a start` | Start the installed managed A2A runtime (`platform/cli/src/main.rs:479-480, 574-577`; `platform/cli/src/a2a.rs:710-748`) | none (reads `a2a/runtime.json`) |
 | `layerx a2a stop` | Stop the installed managed A2A runtime (`platform/cli/src/main.rs:481-482, 578-582`; `platform/cli/src/a2a.rs:750-770`) | none |
 | `layerx a2a status` | Report the installed managed A2A runtime state (`platform/cli/src/main.rs:483-484, 583-587`; `platform/cli/src/a2a.rs:772-781`) | none |
+
+The testnet branch adds these command groups:
+
+| Command | Purpose and important inputs |
+| --- | --- |
+| `layerx wallet create <name>` | Emulator only: create a private wallet, register its DID, and open its main account; public use returns `wallet_registration_unavailable` before generating a key |
+| `layerx wallet import <name>` | Import a 32-byte hexadecimal seed from stdin; does not register or fund |
+| `layerx wallet list` | List public wallet metadata without exposing seeds |
+| `layerx wallet balance` | Read one DID or Asset balance through public RPC |
+| `layerx wallet history` | Read history where the public surface supports it; DID history otherwise returns unavailable |
+| `layerx wallet receipt <activity_id>` | Retrieve and verify a receipt; `--wait` selects commitment |
+| `layerx wallet send` | Sign native debit and envelope; requires `--to`, `--asset`, `--amount`, receipt policy, and fee limit |
+| `layerx wallet open-account` | Open the selected wallet's per-Asset account |
+| `layerx wallet estimate-fee <canonical_hex>` | Estimate from the committed native fee schedule |
+| `layerx wallet watch` | Receive one live `receipts`, `checkpoints`, or `account` notification, then reconcile |
+| `layerx token create` | Register a native Asset from symbol, name, decimals, cap, and salt |
+| `layerx token mint` | Move issuance units to an existing per-Asset account |
+| `layerx token burn` | Return selected-wallet units to issuance |
+| `layerx token transfer` | Transfer from the selected wallet's per-Asset account |
+| `layerx token info <asset_id>` | Call `lx_getAsset` |
+| `layerx token list` | Call `lx_listAssets` |
+
+Public writes require global `--rpc` and `--gateway-credential`, plus an
+independently supplied `--receipt-policy` and a `--fee-limit`. Remote RPC URLs
+must use HTTPS and end in `/rpc`. Wallet send and token transfer fetch the
+identity and source-account sequences independently, sign the debit
+authorization, then sign the outer activity. `--timeout-seconds` is 1–300 and
+defaults to 60. A pending result retains the activity id; rerun receipt lookup
+instead of creating a second payment.
 
 Lifecycle flags shared by deploy, upgrade, and wind-down
 (`platform/cli/src/main.rs:279-297, 1409-1475`): `--program-id`,

@@ -204,8 +204,9 @@ layerx-genesis-build --migrate-snapshot-issuance \
 
 `MIGRATED-CHECKPOINTS` must not exist. The command verifies the signed genesis
 manifest and requires its Ed25519 signer key, verifies the source snapshot and
-its legacy state root, renames only retired issuance accounts while preserving
-their account ids and all other state, and writes a same-sequence LXS3
+its legacy state root, renames only retired issuance accounts to the
+`module:asset:value:<account-id>` form while preserving their account ids and
+all other state, and writes a same-sequence LXS3
 checkpoint. Its authorization binds both snapshot digests, both canonical
 roots, the prior receipt root, the newly derived receipt root, network id and
 rename count. On restore, `layerxd` accepts LXS3 only when that authorization

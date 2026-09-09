@@ -1,109 +1,80 @@
 # Commitment levels
 
-A payment or activity submit names one commitment: `executed`, `batched`,
-or `finalised`. The word is evidence, not a status the caller may
-downgrade. An admission acknowledgement, queue position, HTTP 202, or
-`pending` body is never success.
+`lx_sendActivity` and the payment middleware use three exact commitment names:
+`executed`, `batched`, and `finalised`. These surfaces are on the testnet
+branch. A commitment is an evidence requirement, not a progress label. The
+gateway never converts a stronger request into a weaker success.
 
-These three names are the public submit/verify vocabulary. They sit
-beside the L0–L4 settlement ladder on [Finality](Finality.md); they do
-not replace it.
+See [Public JSON-RPC](PublicRpc.md),
+[Payments developer path](PaymentsQuickstart.md), and
+[x402 transport](X402Transport.md).
 
-Related pages: [Public JSON-RPC](PublicRpc.md),
-[Payments developer path](PaymentsQuickstart.md),
-[x402 transport](X402Transport.md), [Finality](Finality.md).
+## Evidence at each level
 
----
+| Level | Required result |
+| --- | --- |
+| `executed` | A verified canonical receipt for the submitted activity |
+| `batched` | `executed`, plus the authenticated receipt proof whose `canonical_value` exactly equals the returned receipt |
+| `finalised` | `batched`, plus the latest finalised checkpoint evidence whose `canonical_header` exactly equals the proof's signed batch header |
 
-## The three levels
+For `executed`, the receipt must already be present and verified by the
+ordinary gateway activity path. An admission acknowledgement, queue state,
+HTTP 202, or activity id without a receipt is not execution evidence.
 
-| Level | Evidence | Who signed it |
-| --- | --- | --- |
-| `executed` | Canonical successful receipt | Authorized sequencer |
-| `batched` | Executed evidence plus receipt inclusion in a signed batch header | Sequencer over the authorized batch |
-| `finalised` | Batched evidence plus the guarantor checkpoint certificate covering that batch | Bonded guarantor quorum |
+For `batched`, the gateway reads the receipt proof by activity id. It requires
+the proof to name the same activity and its canonical value to equal the
+receipt byte-for-byte. The proof is returned as `batch_evidence`.
 
-Definitions match `lane/pay-public-rpc`
-(`platform/hosted/gateway/openrpc.json`, `lx_sendActivity`) and
-`lane/pay-402lxp` (`spec/402lxp/protocol.md`). Both branches are
-**on the testnet branch**; `main` has no `commitment` parameter on a
-public RPC method.
+For `finalised`, the gateway reads node info, selects its nonzero
+`latest_finalised_checkpoint`, reads that checkpoint, and requires its exact
+canonical header to match the signed header in `batch_evidence`. The checkpoint
+is returned as `checkpoint_evidence`. A different checkpoint or merely newer
+head is not substituted.
 
-Trust inputs come from the verifier's configured network authority
-(pinned sequencer key, network id, protocol version, guarantor set),
-not from the payment header or RPC result alone.
+These names are public submission and verification vocabulary. They do not
+replace the broader L0–L4 lifecycle described in [Finality](Finality.md).
 
----
+## Pending and refusal behavior
 
-## `executed`
+When the bounded wait cannot establish the requested level, JSON-RPC returns
+an error rather than a result:
 
-A sequencer-signed receipt for the submitted activity. The receipt must
-verify, name a successful `result_code`, and bind the payment facts
-(asset, amount, payer, recipient, activity id).
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32001,
+    "message": "Requested commitment unavailable",
+    "data": {
+      "state": "pending",
+      "requested_commitment": "finalised",
+      "evidence": {}
+    }
+  }
+}
+```
 
-On `main`, hosted `POST /v1/activities` already refuses to treat
-component HTTP 202 as verified success
-(`platform/hosted/gateway/src/main.rs`). The public RPC name `executed`
-is the same bar: a verified receipt, not an ack.
+An upstream HTTP 202 is also translated to `-32001` with `state: "pending"`
+and the requested commitment. Preserve the original signed activity and
+activity id, then recover with `lx_getActivityStatus`, `lx_getReceipt`, and the
+required proof reads. Do not create a replacement activity to escape an
+unknown result.
 
-On [Finality](Finality.md) this is in-channel accept (L0): the sequencer
-is on the hook for inclusion and ordering in the current batch.
+Values such as `ack`, `accepted`, `finalized`, and uppercase variants are
+invalid parameters (`-32602`). The wire spelling is the British
+`finalised`.
 
----
+## x402 binding
 
-## `batched`
+An x402 offer may carry the commitment in `extra.layerx.commitment`.
+`executed` is the default only for an exact offer that omits the LayerX extra;
+metered and subscription offers require their LayerX payer and purpose terms.
+The seller verifies the exact requested level before releasing the resource.
 
-`executed` plus Merkle inclusion of that receipt in a signed, authorized
-batch header. The header's network, protocol, sequence coverage, and
-sequencer authorization must verify.
-
-On [Finality](Finality.md) a sealed batch is L1: ordering is fixed.
-`batched` is the public name for verified inclusion in that header.
-
----
-
-## `finalised`
-
-`batched` plus the guarantor checkpoint certificate for that batch.
-The certificate must cover the same canonical header as the batch
-evidence. A certificate for a different batch does not promote the
-receipt.
-
-On [Finality](Finality.md) bonded re-execution and checkpoint
-registration are L3–L4. `finalised` is the public name for that
-certificate. Custody still moves only on Paxeer.
-
----
-
-## What is refused
-
-- `"ack"` as a commitment value (JSON-RPC `-32602` on
-  `lane/pay-public-rpc`).
-- Treating missing or invalid evidence as `executed`.
-- Substituting a weaker commitment than the offer or submit requested.
-- Releasing a 402 resource on HTTP 202 or `settlement_pending`
-  (`interop/crates/layerx-x402`; `lane/pay-402lxp` seller commitment).
-
-On `lane/pay-public-rpc`, `lx_sendActivity` waits a bounded interval
-(5 seconds, 50 ms poll) for the requested evidence. If the evidence is
-absent it returns `state: "pending"`. That result is not execution.
-OpenRPC: *"An admission acknowledgement never establishes execution."*
-
-On `lane/pay-402lxp`, `extra.layerx.commitment` on a 402 offer is
-`executed`, `batched`, or `finalised`. An exact offer without
-`extra.layerx` defaults to `executed`. Grant schemes require an explicit
-commitment.
-
----
-
-## Where the names appear
-
-| Surface | On `main` | On the testnet branch |
-| --- | --- | --- |
-| Hosted activity POST | Verified receipt or 202 `unknown`; no `commitment` field | same hosted path |
-| `lx_sendActivity` | not present | required param on `lane/pay-public-rpc` |
-| x402 `PAYMENT-REQUIRED` | no `extra.layerx.commitment` | `lane/pay-402lxp` |
-| x402 settlement `verificationLevel` | literal `sequencer-signed` | plus batch / checkpoint checks when requested |
-| Portable receipt verify | local `layerx receipt verify` against caller-supplied batch facts ([CLI](Cli.md)) | same |
+Successful settlement identifies the verified receipt as
+`lxp:<receipt_digest>`. That reference, an HTTP success, or a
+`verificationLevel` string does not stand alone: the buyer and seller validate
+the receipt, payment facts, configured authority, and commitment evidence.
 
 [Home](Home.md)

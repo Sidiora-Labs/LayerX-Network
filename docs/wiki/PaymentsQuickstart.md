@@ -1,227 +1,274 @@
 # Payments developer path
 
-This page covers local Ed25519 keys, faucet claims, payment submission,
-native tokens, program deployment, and HTTP 402 payments, including
-source limitations that prevent an end-to-end wallet write. Commands and HTTP routes that already exist on `main` are
-cited here. Surfaces that exist only on unmerged payment lanes are marked
-**on the testnet branch** and are not live on `main`.
+This path covers a wallet, faucet funding, an Asset transfer, token issuance,
+an LXT20 program, and an HTTP 402 payment. The wallet/token CLI, native Asset
+execution, public RPC, payment signer, LXT20 example, and extended 402LXP flow
+described here are on the testnet branch.
 
-Related pages: [CLI](Cli.md), [Assets](Assets.md),
-[Public JSON-RPC](PublicRpc.md), [Commitment levels](CommitmentLevels.md),
-[Hosted faucet](HostedFaucet.md), [Programs](Programs.md),
-[x402 transport](X402Transport.md), [Testnet cluster quickstart](Quickstart.md).
+For a shorter environment checklist, start with
+[Getting started on testnet](Getting-Started-Testnet.md). Wire details are in
+[Assets](Assets.md), [Public JSON-RPC](PublicRpc.md), and
+[Commitment levels](CommitmentLevels.md).
 
-Wallet and token commands are **on the testnet branch** `lane/pay-wallet-cli`
-(draft PR #208; `platform/cli/src/wallet.rs`). It provides `wallet create`,
-`import`, `list`, `balance`, `history`, `receipt`, `send`, `open-account`,
-and `token create`, `mint`, `burn`, `transfer`, `info`, `list`.
-Local emulator creation registers the DID and opens its main account.
-Public registration and DID history remain unavailable. Token writes use
-the SDK prepare/disclose/execute path and require authenticated identity
-sequence reads plus native operation support. Send and token transfer
-refuse before signing because debit-authorization signing is unavailable.
-Token metadata reads forward to RPC and preserve upstream unavailability. The commands' presence does not establish a live payment.
-The `main` key-only command below is `layerx key create`.
+## 1. Configure trusted testnet inputs
 
----
-
-## 1. Create a wallet
-
-For hosts without an OS Secret Service, follow
-[headless credential storage](../../platform/cli/README.md#headless-credential-storage)
-first.
+The published gateway and faucet origins are:
 
 ```sh
-layerx key create quickstart
+export RPC_URL=https://api.testnet.layerx.network/rpc
+export FAUCET_URL=https://faucet.testnet.layerx.network
 ```
 
-`name` is 1–128 ASCII alnum/`-`/`_` (`platform/cli/src/credential.rs`).
-Without `--did` the DID is `did:layerx:` plus the 64-hex Ed25519 public key.
-Human output is `Created key {name} in credential storage` with
-`{name, did, public_key}`. The seed is 32 OS-random bytes in the selected
-credential backend.
+You also need:
 
-Store a hosted session token (do not print the file contents) and select
-the testnet profile as in [Testnet cluster quickstart](Quickstart.md#3-create-a-credential).
+- a bearer session token for the faucet;
+- a stored `LayerX-Key` gateway credential with the scopes required by the
+  operations you will submit;
+- the network id and a receipt policy obtained independently of the RPC
+  response being verified;
+- a fee limit in integer base units.
 
-The native-asset account name for that DID is `agent:<DID>:main`. Per-asset
-account names and ids are on [Assets](Assets.md).
+The receipt-policy JSON contains `protocol_version` (`3`), `network_id`,
+64-hex `sequencer_id` and `sequencer_key`, inclusive `first_batch` and
+`last_batch`, and `checkpoint_context_digest`. Use `null` for the checkpoint
+digest when only execution or batch verification is required.
 
----
+For the disposable local cluster, run the existing cluster quickstart and
+source `build/beta-cluster/env`. Its exported `LAYERX_TEST_CA_FILE` is
+`build/beta-cluster/ca/ca.crt`; use that CA only for the cluster endpoints it
+was generated for. The public HTTPS hosts use their deployed certificate
+chain.
 
-## 2. Get test funds from the faucet
+## 2. Create or import a signing key
 
-There is no `layerx faucet` command. Claim at `POST /v1/faucet/claims`
-(`platform/hosted/faucet/src/main.rs`).
+Build the testnet-branch CLI and put `platform/target/debug` on `PATH`. For a
+public testnet identity, create an ordinary key and select it:
 
 ```sh
-jq -n --arg did "$LAYERX_TEST_SOURCE_DID" --arg public_key "$LAYERX_TEST_SOURCE_PUBLIC_KEY" \
+cargo build --manifest-path platform/cli/Cargo.toml
+export PATH="$PWD/platform/target/debug:$PATH"
+layerx key create alice
+layerx key default alice
+layerx wallet list
+```
+
+The OS keyring is the default. A headless host must configure the encrypted
+file store before creating the wallet; see
+[headless credential storage](../../platform/cli/README.md#headless-credential-storage).
+`layerx wallet create` is emulator-only: it generates a key, registers the DID,
+and opens the native main account in that emulator. Against a public endpoint
+it returns `wallet_registration_unavailable` and generates no key. `wallet
+import` reads one 32-byte hexadecimal seed from standard input and never
+registers or funds the identity.
+
+Record the wallet's public DID and Ed25519 public key without exposing its
+seed:
+
+```sh
+export WALLET_DID='<did from layerx wallet list>'
+export WALLET_PUBLIC_KEY='<64-hex public key>'
+```
+
+Public wallet registration and public DID history are not exposed by the CLI;
+those attempts return typed unavailable errors.
+
+## 3. Request test funds
+
+The faucet accepts exactly `did` and `public_key`. It requires a bearer session,
+`Content-Type: application/json`, and a unique `Idempotency-Key` of 1–128
+letters, digits, `-`, `_`, `.`, or `:`. Preserve the key for retries.
+
+```sh
+jq -n --arg did "$WALLET_DID" --arg public_key "$WALLET_PUBLIC_KEY" \
   '{did:$did, public_key:$public_key}' > faucet-request.json
-curl --fail --silent --show-error --max-time 30 --cacert "$LAYERX_TEST_CA_FILE" \
-  --header "Authorization: Bearer $(tr -d '\r\n' < "$LAYERX_TEST_AUTH_TOKEN_FILE")" \
-  --request POST "$LAYERX_FAUCET_URL/v1/faucet/claims" \
-  --header "Idempotency-Key: faucet-quickstart-01" \
-  --header 'Content-Type: application/json' --data-binary @faucet-request.json
+
+curl --fail-with-body --silent --show-error \
+  --request POST "$FAUCET_URL/v1/faucet/claims" \
+  --header 'Content-Type: application/json' \
+  --header "Authorization: Bearer $FAUCET_SESSION_TOKEN" \
+  --header "Idempotency-Key: $FAUCET_REQUEST_ID" \
+  --data-binary @faucet-request.json > faucet-response.json
+
+jq -e '.funded == true and (.funding_id | type == "string")' faucet-response.json
 ```
 
-A 200 body has `funded` `true`, `funding_id`, `amount` as a decimal string
-of `LAYERX_FAUCET_CLAIM_AMOUNT` (default `1000000`), and `network`
-`layerx-testnet`. A 202 body is `still_checking` and is not a funded
-balance. Confirm the claim before treating funds as spendable.
-Details: [Hosted faucet](HostedFaucet.md).
+For a disposable cluster, add `--cacert "$LAYERX_TEST_CA_FILE"`. A successful
+body contains `funded: true`, `funding_id`, optional `transaction_id`, decimal
+string `amount`, and `network: "layerx-testnet"`. HTTP 202
+`still_checking`, any refusal, or an unobserved response is not funding
+confirmation. Retry only with the same idempotency key and body, then confirm
+the account through `lx_getAccount`, `lx_getBalance`, or `lx_getBalances`.
 
----
+## 4. Create and use an Asset
 
-## 3. Send
-
-On `main`, a signed Asset SEND reaches the hosted gateway as
-`POST /v1/activities` with `Authorization: LayerX-Key` and scope
-`activity:write` (`platform/hosted/gateway/src/lib.rs`;
-`platform/cli/src/toolset.rs`). MCP/A2A `activity.submit` posts
-`{"activity": <hex>}` on that route.
-
-Issue a gateway key with `layerx install mcp` or `layerx install a2a`
-(hosted environment only). Payment-capable install requires
-`--source-account` and `--asset` as 64-hex
-(`platform/cli/src/install/mcp.rs`).
-
-`layerx payment test` quotes `POST /v1/moves/quote` then commits
-`POST /v1/moves` (`platform/cli/src/payment.rs`). Hosted
-`production_route` does not accept those paths
-(`platform/hosted/gateway/src/lib.rs`). Use `POST /v1/activities` for a
-signed activity on `main`.
-
-**On the testnet branch** `lane/pay-public-rpc`, submit the same canonical
-hex through JSON-RPC:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "lx_sendActivity",
-  "params": ["<canonical_hex>", "executed"]
-}
-```
-
-`POST /rpc` on the gateway. `commitment` is `executed`, `batched`, or
-`finalised`. An admission acknowledgement is never success. See
-[Public JSON-RPC](PublicRpc.md) and [Commitment levels](CommitmentLevels.md).
-
-**On the testnet branch** `lane/pay-signer-sdk`, MCP tools `wallet.send`
-and `token.transfer` encode a payment and follow the daemon
-prepare → disclose → sign → submit → track path
-(`agent/crates/layerx-mcp/src/tools/write.rs`). Those tool names are not
-on `main` (`agent/crates/layerx-mcp/README.md`).
-
-Fetch and verify the receipt as in [Testnet cluster quickstart](Quickstart.md#7-fetch-the-receipt).
-
----
-
-## 4. Create a token
-
-Native token issuance is **on the testnet branch**. `main` decodes Asset
-ordinals 1–8 and executes SEND; it does not define mint/burn activity
-types (`include/layerx/lx_asset.h`).
-
-The shared register/open/mint wire is:
-
-1. **Register** (Asset ordinal 1). Native `asset_id32` is
-   `SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`. Payload:
-   `version:u16=1 || asset_id32 || salt32 || symbol_len:u8 || symbol || name_len:u8 || name || decimals:u8 || supply_cap:u128 || issuer_kind:u8 || custody_ref_len:u8 || custody_ref`.
-2. **Open** the issuer's per-asset account (ordinal 4):
-   `version:u16=1 || asset_id32`. Name:
-   `agent:<DID>:asset:<lowercase hex64 asset_id>`.
-3. **Mint** (ordinal 10):
-   `version:u16=1 || asset_id32 || to_account32 || amount:u128`.
-   Actor must be the issuer; destination must exist for that asset.
-
-On `lane/pay-signer-sdk`, MCP `token.create` and `token.mint` submit those
-activities through the daemon. `layerx token` is on the testnet branch
-`lane/pay-wallet-cli`; token writes require the API support described above.
-
-On `lane/pay-native`, register / account_open / mint / burn decode to the
-payloads above and execute through `asset_execute_typed`
-(`src/modules/asset/lx_asset_execution.h`). These source paths do not
-establish deployment or public wallet integration.
-
-Full field bounds: [Assets](Assets.md).
-
----
-
-## 5. Deploy a program
-
-On `main`:
+Set your locally trusted receipt policy and fee ceiling:
 
 ```sh
-layerx new quickstart-program
-layerx --json program build --manifest-path quickstart-program/Cargo.toml
-layerx --json program deploy \
-  quickstart-program/target/wasm32-unknown-unknown/release/quickstart_program.wasm \
-  --program-id <program_id> \
-  --idempotency-key <idempotency_key> \
-  --key quickstart \
-  --account-sequence 0 \
-  --not-before-ms <not_before_ms> \
-  --expires-at-ms <expires_at_ms> \
-  --previous-state-root <previous_state_root>
+export RECEIPT_POLICY=/absolute/path/to/receipt-policy.json
+export FEE_LIMIT='<maximum fee in base units>'
 ```
 
-The command POSTs canonical signed bytes to `POST /v1/programs/deploy`
-(`platform/cli/src/programs.rs`). Hosted deploy authenticates `LayerX-Key`
-with scope `program:call`. Lifecycle flags and receipt shape:
-[Testnet cluster quickstart](Quickstart.md#5-deploy-a-program) and
-[Programs](Programs.md).
-
-**On the testnet branch** `lane/pay-programs-tokens`, the Rust guest SDK
-adds `lxt20` request codecs and `payments` program-account preparation
-(`programs/sdk/rust/src/lxt20.rs`, `programs/sdk/rust/src/payments.rs`).
-The merchant example builds with:
+Create a native Asset:
 
 ```sh
-cargo build --manifest-path programs/sdk/rust/examples/payments-merchant/Cargo.toml \
+layerx --rpc "$RPC_URL" --gateway-credential testnet token create \
+  --symbol PAY --name 'Payment Token' --decimals 6 \
+  --supply-cap 1000000000 --salt "$(openssl rand -hex 32)" \
+  --receipt-policy "$RECEIPT_POLICY" --fee-limit "$FEE_LIMIT" \
+  --wait executed
+```
+
+The disclosure prints the derived Asset id. The id is
+`SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`. Store it, then open the
+recipient's per-Asset account before minting or transferring:
+
+```sh
+export ASSET_ID='<64-hex Asset id>'
+export RECIPIENT_DID='<recipient DID>'
+
+layerx --rpc "$RPC_URL" --gateway-credential testnet wallet open-account \
+  --asset "$ASSET_ID" --receipt-policy "$RECEIPT_POLICY" \
+  --fee-limit "$FEE_LIMIT"
+
+layerx --rpc "$RPC_URL" --gateway-credential testnet token mint \
+  --asset "$ASSET_ID" --to "$RECIPIENT_DID" --amount 100 \
+  --receipt-policy "$RECEIPT_POLICY" --fee-limit "$FEE_LIMIT"
+```
+
+`wallet open-account` acts for the selected local wallet; run it with the
+recipient wallet selected when preparing the recipient account. Other writes
+use the same path:
+
+```sh
+layerx --rpc "$RPC_URL" --gateway-credential testnet wallet send \
+  --to "$RECIPIENT_DID" --asset "$ASSET_ID" --amount 10 \
+  --wait executed --receipt-policy "$RECEIPT_POLICY" \
+  --fee-limit "$FEE_LIMIT"
+
+layerx --rpc "$RPC_URL" --gateway-credential testnet token transfer \
+  --to "$RECIPIENT_DID" --asset "$ASSET_ID" --amount 10 \
+  --wait finalised --receipt-policy "$RECEIPT_POLICY" \
+  --fee-limit "$FEE_LIMIT"
+```
+
+The CLI obtains the identity sequence with
+`lx_getSequence([did, "identity"])` and the source-account sequence
+independently. For a debit it discloses and signs the native debit
+authorization before disclosing and signing the outer activity. The signing
+request is bound to the canonical bytes and disclosure; a changed disclosure,
+stale sequence, invalid signature, missing scope, failed native receipt, or
+missing commitment evidence exits nonzero.
+
+The signer accepts a typed `SigningRequest`, not arbitrary approval text. The
+activity disclosure names the activity type, actor, authority, payer and
+recipient roles, transfer or spending-limit amounts, Asset, fee limit,
+not-before/expiry bounds, idempotency key, optional EVM binding, and decoded
+payment. A SEND debit disclosure separately binds `from`, `to`, Asset, amount,
+source sequence, idempotency key, expiry, context, conditions, authorization
+kind, network, and protocol. Both disclosures are re-encoded and checked
+against the signature-message digest before a signature is released.
+
+Every invocation creates a new idempotency key. If a write times out or remains
+pending, retain its activity id and recover it rather than repeating the write:
+
+```sh
+layerx --rpc "$RPC_URL" --gateway-credential testnet wallet receipt \
+  "$ACTIVITY_ID" --receipt-policy "$RECEIPT_POLICY" --wait finalised
+```
+
+`--timeout-seconds` is 1–300 and defaults to 60.
+
+## 5. Inspect Assets, balances, and fees
+
+```sh
+layerx --rpc "$RPC_URL" --gateway-credential testnet wallet balance \
+  --did "$WALLET_DID"
+layerx --rpc "$RPC_URL" --gateway-credential testnet token info "$ASSET_ID"
+layerx --rpc "$RPC_URL" --gateway-credential testnet token list
+layerx --rpc "$RPC_URL" --gateway-credential testnet wallet estimate-fee \
+  "$CANONICAL_HEX"
+```
+
+The corresponding RPC methods are `lx_getBalances`, `lx_getAsset`,
+`lx_listAssets`, and `lx_estimateFee`. Snapshot-authentication labels are not
+finality claims, and a fee estimate neither reserves the fee nor proves that
+the activity will execute.
+
+Live `receipts`, `checkpoints`, and `account` watches are unverified wake-ups.
+Always reconcile with a verified read or `wallet receipt` after a notification
+or stream closure.
+
+## 6. Build and deploy the LXT20 example
+
+The testnet branch's LXT20 example is a Programs ABI-v2 token backed by one
+native Asset. It is not a second ledger and does not mint native units.
+
+```sh
+cargo build \
+  --manifest-path programs/sdk/rust/examples/payments-merchant/Cargo.toml \
   --target wasm32-unknown-unknown --release
 ```
 
-Register the program account for seed `payments-merchant` and the chosen
-asset before funding (`PreparedProgramAccount::registration_payload`).
-Those files are not on `main`.
+Before funding, derive and register the program account for the selected
+Asset using `PreparedProgramAccount::registration_payload`. Include the
+generated ABI-v2 interface in the native Programs deploy activity. A registry
+record or state upload alone is not a deployment receipt.
 
----
+The reference interface contains `initialize`, `transfer`, `approve`,
+`transfer_from`, `balance_of`, `allowance`, `total_supply`, and `metadata`.
+Recipients call `approve`, including approval of zero, once to register their
+derived program-account storage before receiving. Initialization stages the
+fixed supply from the issuer to the registered program account atomically.
+There is no LXT20 mint, burn, permit, or nested-call surface.
 
-## 6. Pay a 402 endpoint
+For the exact account, grants, calldata, and receipt-read contract, see
+[Programs](Programs.md).
 
-On `main`, x402 v2 uses headers `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`,
-and `PAYMENT-RESPONSE` (`interop/crates/layerx-x402/src/model.rs`). A
-seller issues HTTP 402; a buyer returns a payload; settlement success
-requires a gateway-verified canonical LayerX receipt. See
-[x402 transport](X402Transport.md).
+## 7. Pay an HTTP 402 endpoint
 
-**On the testnet branch** `lane/pay-402lxp`, an offer may carry
-`extra.layerx.commitment` ∈ `{executed, batched, finalised}`
-(`spec/402lxp/protocol.md` on that branch). Missing `extra.layerx` on an
-exact offer defaults to `executed`. Metered and subscription schemes
-carry a canonical Asset receive (ordinal 6) in the payment payload; a
-grant alone never releases the resource.
+LayerX uses x402 v2 headers:
 
-Buyer middleware on that branch parses `PAYMENT-REQUIRED`, construct the
-payment, attaches `PAYMENT-SIGNATURE`, and accepts `PAYMENT-RESPONSE` only
-after the requested commitment verifies
-(`platform/middleware/seller/src/commitment.ts`).
-`transaction` remains `lxp:<receipt_digest>`. HTTP 202 pending is not
-proof of payment.
+1. The seller returns HTTP 402 with `PAYMENT-REQUIRED`.
+2. The buyer selects one offered requirement without changing it.
+3. The buyer returns `PAYMENT-SIGNATURE`.
+4. The seller releases the resource only after verifying the payment and
+   returns `PAYMENT-RESPONSE`.
 
----
+For an `exact` offer, the buyer submits its canonical activity with
+`lx_sendActivity`, verifies the requested commitment, and puts the canonical
+receipt, receipt digest, and `sequencer-signed` verification label in the
+payment payload.
 
-## What is on `main` vs the testnet branches
+For `metered` or `subscription`, the challenge also binds
+`extra.layerx.payer`, `purposeHash`, and `commitment`; a subscription includes
+`windowSeconds`. The payer first signs and submits the 346-byte ordinal-7
+grant. The receiver prepares and signs a 733-byte ordinal-6 receive for each
+draw. The payment payload carries that exact receive and its idempotency key.
+The seller validates payer, recipient, Asset, amount, purpose, grant limits,
+expiry, network, and receiver authorization before submitting the draw.
 
-| Step | On `main` | On the testnet branch |
-| --- | --- | --- |
-| Create a key / DID | `layerx key create` | plus local `wallet create` on `lane/pay-wallet-cli` |
-| Faucet claim | `POST /v1/faucet/claims` | same |
-| Send a signed activity | `POST /v1/activities` | plus `lx_sendActivity` on `lane/pay-public-rpc` |
-| Register / mint a token | not executable | execution on `lane/pay-native`; MCP tools on `lane/pay-signer-sdk`; wallet token writes require identity reads; send/transfer refuse signing |
-| Deploy a program | `layerx program deploy` | plus LXT-20 / merchant example on `lane/pay-programs-tokens` |
-| Pay HTTP 402 | `layerx-x402` receipt binding | plus commitment extras and receive codecs on `lane/pay-402lxp` |
-| Public JSON-RPC | not present | `POST /rpc`, `GET /rpc/schema`, `GET /rpc/ws` on `lane/pay-public-rpc` |
+A metered grant is non-recurring with zero window length. A subscription grant
+is recurring and its window length must equal `windowSeconds`. Every renewal is
+a newly signed receive with current sequences and a distinct period
+idempotency key. The allowance alone does not prove one renewal per period.
+
+Pending draw state returns HTTP 202 without releasing the resource. The
+persistent draw store recovers the registered activity by id and never creates
+a replacement debit. Successful settlement is
+`lxp:<SHA-256("LXP/v1/merkle-leaf\\0" || canonical_receipt)>` and is accepted
+only after the requested `executed`, `batched`, or `finalised` evidence and all
+payment facts verify.
+
+See [x402 transport](X402Transport.md) for the header schemas and refusal
+behavior.
+
+## CLI and MCP boundaries
+
+The payment MCP catalogue on the testnet branch has 18 tools. Its payment
+writes are `wallet.send`, `token.create`, `token.mint`, and `token.transfer`;
+they use the daemon's ordinary prepare, disclose, sign, submit, and track
+stages. The CLI additionally exposes burn, account-open, Asset info/list, fee
+estimate, receipt wait, and live watch commands. Installing MCP does not add
+those CLI-only operations to the MCP catalogue.
 
 [Home](Home.md)

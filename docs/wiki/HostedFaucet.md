@@ -1,5 +1,8 @@
 # Hosted faucet
 
+An exact successful claim and the resulting JSON-RPC payment flow on the
+testnet branch are in [Public payment API](PublicAPI.md).
+
 `layerx-faucet` is the public claim surface for hosted testnet funds
 (`platform/hosted/faucet/Cargo.toml:8-10`;
 `platform/hosted/faucet/src/main.rs:914`). The crate is

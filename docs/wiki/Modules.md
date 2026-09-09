@@ -1,10 +1,3 @@
-<!--
-Draft copy for the GitHub wiki page "Modules".
-The wiki has no PR flow, so this file is the reviewable source. After this PR
-merges, paste the body below (everything under the first `# Modules`) into the
-wiki page. Do not commit this note to the wiki.
--->
-
 # Modules
 
 Eight economic modules (`0x01`–`0x08`) plus Programs (`0x09`) on a kernel that owns identity and authority.
@@ -54,7 +47,7 @@ system:fees
 system:paxeer-reserve
 ```
 
-`agent:<did>:asset:…` and `asset:<id>:issuance` parse alongside `agent:<did>:main` and the budget / escrow / stream / margin forms (`src/ledger/lx_account_id.c`). Their encodings are on [Assets](Assets.md).
+`agent:<did>:asset:…` and `asset:<id>:issuance` parse alongside `agent:<did>:main` and the budget / escrow / stream / margin forms (`src/ledger/lx_account_id.c`). The issuance-account id remains the named-account hash of the `asset:<id>:issuance` seed, while its stored canonical name is the `module:asset:value:<issuance-account-id>` form (`lx_asset_issuance_name`). Their encodings are on [Assets](Assets.md).
 
 Opening a position is a transfer into a margin account. Capturing escrow is a transfer out of an escrow account. Native issuance still compiles to `402LXP` legs against the issuance account; modules do not assign balances and ordinary modules do not mint and do not burn. `agent:<did>:main` remains the native-asset account. Per-asset accounts use the existing `LX:ACCOUNT:v1` id rule. An issuance account's id is that rule applied to the string `asset:<lowercase hex64 asset_id>:issuance`, while the name it is stored under is the `module:asset:value:` form above; records still carrying the older string as their name are renamed on load. See `spec/layerx-protocol/spec.kvx` requirement 14.
 

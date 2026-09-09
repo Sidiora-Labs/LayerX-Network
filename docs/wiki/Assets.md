@@ -1,234 +1,222 @@
 # Assets and tokens
 
-LayerX amounts are unsigned integer counts of the smallest unit. Decimals
-are display metadata only (`spec/layerx-protocol/spec.kvx` on
-`lane/pay-native`). `402LXP` is the only balance writer
-([Protocol](Protocol.md), [Modules](Modules.md)).
+The Asset module is the balance authority for LayerX payments. Amounts are
+unsigned integer counts of the smallest unit; `decimals` is display metadata.
+The native Asset activity, record-v3, genesis, account-enumeration, and fee
+surfaces described here are on the testnet branch.
 
-Per-asset agent accounts, native asset-id derivation, register / open /
-mint / burn payloads, and the issuance account are implemented
-**on the testnet branch** `lane/pay-native`, not merged to
-`main`. This page describes the shared wire contract and identifies
-source differences between the testnet branches.
+See also [Payments developer path](PaymentsQuickstart.md),
+[Public JSON-RPC](PublicRpc.md), and [Programs](Programs.md).
 
-Related pages: [Payments developer path](PaymentsQuickstart.md),
-[Public JSON-RPC](PublicRpc.md), [Modules](Modules.md), [Custody](Custody.md).
+## Account names and identifiers
 
----
+Named accounts use:
 
-## Account names
-
-Integers on the wire are big-endian. `H` is SHA-256.
-
-| Account | Name | Id |
-| --- | --- | --- |
-| Native-asset agent account | `agent:<DID>:main` | existing `LX:ACCOUNT:v1` rule |
-| Per-asset agent account | `agent:<DID>:asset:<lowercase hex64 asset_id>` | same rule |
-| Issuance account | `asset:<lowercase hex64 asset_id>:issuance` | `LX:ACCOUNT:v1` named-account hash; module-value account on the testnet branch |
-
-`LX:ACCOUNT:v1` for named (non-module-value) accounts is already on
-`main`:
-
-```
+```text
 account_id32 = SHA-256("LX:ACCOUNT:v1" || u32_be(name_length) || name_bytes)
 ```
 
-(`src/ledger/lx_account_id.c`). Allowed name bytes are `a-z`, `0-9`,
-`.`, `_`, `-`, `:`; empty segments are refused.
+All hexadecimal text in account names is lowercase.
 
-On `main`, `lx_account_name_parse` accepts `agent:<DID>:main` and the
-budget / escrow / stream / margin forms. The `:asset:` suffix is added
-on `lane/pay-native` (`src/ledger/lx_account_id.c` on that branch).
-`agent:<DID>:main` remains the native-asset account.
-
-On the testnet branch, register execution stages `asset:<hex64>:issuance`
-through `lxp_ctx_asset_issuance_stage` (`src/modules/asset/lx_asset_execution.h`).
-
----
-
-## Asset identifiers
-
-| Kind | Id |
+| Purpose | Canonical name or identifier |
 | --- | --- |
-| Natively issued token | `asset_id32 = H("LX:ASSET:v1" \|\| issuer_did_id32 \|\| salt32)` |
-| Paxeer-custody asset | existing registered id; not re-derived |
+| Native-asset account for a DID | `agent:<DID>:main` |
+| Account for one Asset | `agent:<DID>:asset:<asset_id_hex64>` |
+| Native Asset id | `SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)` |
+| Paxeer-custody Asset id | Supplied custody Asset id; it is not re-derived |
 
-`issuer_did_id32` is the identity id32 of the envelope signer DID
-(Actor). Actor is the envelope signer.
+The issuance-account identifier is preserved from the named-account hash of
+`asset:<asset_id_hex64>:issuance`. Its current stored name is
+`module:asset:value:<issuance_account_id_hex64>`. The migration keeps the
+identifier stable while retiring the old name.
 
-`lane/pay-signer-sdk` implements `asset_id(issuer, salt)` as that hash
-(`agent/crates/layerx-crypto/src/payments.rs` on that branch).
-`lane/pay-native` verifies the same hash during register execution
-(`src/modules/asset/lx_asset_execution.h`), after payload decoding.
+## Activity ordinals and payloads
 
----
+Asset is module `1`. Every integer below is big-endian.
 
-## Asset activity ordinals
-
-Module id `1` (`0x0001xxxx`). Ordinal is the low 16 bits of
-`activity_type` (`src/protocol/lxp_activity.c`).
-
-| Ordinal | Type | Payload |
+| Ordinal | Operation | Canonical payload |
 | ---: | --- | --- |
-| 1 | register | `version:u16=1 \|\| asset_id32 \|\| salt32 \|\| symbol_len:u8 \|\| symbol(1..16 ASCII) \|\| name_len:u8 \|\| name(1..32 UTF-8) \|\| decimals:u8(<=38) \|\| supply_cap:u128 (0 = uncapped) \|\| issuer_kind:u8 (1 native, 2 paxeer_custody) \|\| custody_ref_len:u8 \|\| custody_ref(<=128)` |
-| 2 | pause | existing pause activity |
-| 3 | unpause | existing unpause activity |
-| 4 | account_open | `version:u16=1 \|\| asset_id32` |
-| 5 | send | existing `lxp_send` encoding (`src/ledger/lxp_send.c`, tag `0x5301`) |
-| 6 | receive | existing `lxp_receive` encoding (`src/ledger/lxp_receive.c`, tag `0x5201`, 10 fields) |
-| 7 | grant_issue | existing payer-grant canonical encoding |
-| 8 | grant_revoke | `version:u16=1 \|\| grant_id32 \|\| revocation_sequence:u64` |
-| 9 | **RESERVED** | WITHDRAW; no payload defined here. |
-| 10 | mint | `version:u16=1 \|\| asset_id32 \|\| to_account32 \|\| amount:u128` |
-| 11 | burn | `version:u16=1 \|\| asset_id32 \|\| from_account32 \|\| amount:u128` |
+| `1` | register | `version:u16=1 || asset_id32 || salt32 || symbol_len:u8 || symbol || name_len:u8 || name || decimals:u8 || supply_cap:u128 || issuer_kind:u8 || custody_ref_len:u8 || custody_ref` |
+| `2` | pause | Existing pause payload; not admitted by public `lx_sendActivity` |
+| `3` | unpause | Existing unpause payload; not admitted by public `lx_sendActivity` |
+| `4` | account open | `version:u16=1 || asset_id32` (34 bytes) |
+| `5` | send | Canonical `lxp_send` payload, tag `0x5301` |
+| `6` | receive | Canonical ten-field `lxp_receive` payload, tag `0x5201` (733 bytes) |
+| `7` | grant issue | Canonical payer grant (346 bytes) |
+| `8` | grant revoke | `version:u16=1 || grant_id32 || revocation_sequence:u64` (42 bytes) |
+| `9` | reserved | Refused; no public payload |
+| `10` | mint | `version:u16=1 || asset_id32 || to_account32 || amount:u128` (82 bytes) |
+| `11` | burn | `version:u16=1 || asset_id32 || from_account32 || amount:u128` (82 bytes) |
 
-On `main`, `include/layerx/lx_asset.h` defines ordinals 1–8 only
-(`LX_ASSET_REGISTER` … `LX_ASSET_GRANT_REVOKE`). Mint and burn constants
-`0x0001000a` / `0x0001000b` are **on the testnet branch**
-`lane/pay-native`. Ordinal 9 is absent on `main` and rejected on
-`lane/pay-native` (`LXP_ERR_UNKNOWN_ACTIVITY`).
+The authenticated public RPC admits ordinals `1`, `4`, `5`, `6`, `7`, `8`,
+`10`, and `11`. Payload decoding alone is not execution: execution also checks
+the actor, authorization, sequence, registered Asset, pause state, account
+ownership, balances, and supply invariants.
 
----
+### Register
 
-## Register (ordinal 1)
+The register payload has these bounds:
 
-Issuer = actor.
+- `symbol` is 1–16 ASCII bytes.
+- `name` is 1–32 bytes of valid UTF-8.
+- `decimals` is at most `38`.
+- `supply_cap` is a `u128`; zero means uncapped.
+- `issuer_kind` is `1` for native or `2` for Paxeer custody.
+- `custody_ref` is at most 128 bytes. Native Assets require an empty custody
+  reference and the derived Asset id shown above. Custody Assets require the
+  supplied Asset id.
 
-- Kind `1` (native): `asset_id` must match
-  `H("LX:ASSET:v1" || issuer_did_id32 || salt32)`; `custody_ref_len`
-  must be `0`.
-- Kind `2` (paxeer_custody): custody reference is 0..128 bytes; asset id
-  is the existing custody id.
-- Duplicates are refused.
-- `supply_cap` `0` means uncapped.
+Registration creates a version-3 Asset record and its issuance account.
+Duplicate Assets are refused.
 
-On `lane/pay-native`, decode enforces version `1`, symbol length 1..16
-with bytes `<= 0x7F`, UTF-8 name 1..32, decimals `<= 38`, issuer_kind
-`1` or `2`, and native custody length `0`
-(`src/modules/asset/lx_asset_decode.c` on that branch). Decode does not
-check the native asset-id hash; execution checks it, refuses duplicates,
-saves metadata, and stages the issuance account
-(`src/modules/asset/lx_asset_execution.h`).
+### Open, mint, and burn
 
-The helper `lx_asset_register()` on `main` still requires a Paxeer
-custody reference and `A-Z0-9` symbols
-(`src/modules/asset/lx_asset_registry.c`). That helper is not the
-ordinal-1 activity decoder.
+Account open creates the actor's per-Asset account and refuses an unknown,
+paused, or already-open Asset account.
 
----
+Mint requires the actor to be the issuer, a positive amount, a destination
+account for that Asset, and sufficient units in the issuance account. A
+nonzero supply cap is enforced. Burn requires a positive amount, an
+actor-owned source account for the Asset, and sufficient balance. Mint moves
+units from issuance to the destination; burn returns units to issuance.
+`total_units` is checked against issuance before every update, and the supply
+before/after values are bound into the transition context.
 
-## Account open (ordinal 4)
+## Receive and payer grants
 
-Payload is exactly 34 bytes: `version:u16=1 || asset_id32`.
+An ordinal-6 receive is exactly 733 bytes:
 
-Opens the actor's per-asset account `agent:<DID>:asset:<hex64>`. The
-account must not already exist. The asset must be registered and
-unpaused.
-
-On the testnet branch `lane/pay-native`, execution loads the asset,
-refuses paused assets and stages the account. Helper
-`lx_asset_account_open` on `main` still takes a caller-supplied name
-(`include/layerx/lx_asset.h`).
-
----
-
-## Receive and grants (ordinals 6–8)
-
-Ordinal 6 reuses `lxp_receive_encode` / `lxp_receive_decode` on `main`
-(`src/ledger/lxp_receive.c`):
-
-```
-tag:u16=0x5201 || field_count:u16=10
+```text
+0x5201 || field_count:u16=10
 || from32 || to32 || asset32 || amount:u128
-|| grant_id32 || receiver_sequence:u64 || idempotency_key32 || context_hash32
-|| receiver_authorization || payer_grant
+|| grant_id32 || receiver_sequence:u64
+|| idempotency_key32 || context_hash32
+|| receiver_authorization
+|| payer_grant
 ```
 
-Receiver authorization is
-`kind:u8 || controller32 || public_key32 || signature64 || signed_context_hash32 || network_id:u32 || protocol_version:u16`.
-The payer grant is the existing 346-byte grant struct. Grant issue
-(ordinal 7) is that same grant encoding. Authorization preimages are
-`LXP:RECEIVE:v1` and `LXP:GRANT:v1` (`src/ledger/lxp_receive.c`,
-`src/ledger/lxp_grant_store.c`).
+The receiver authorization is:
 
-`lane/pay-402lxp` documents the concatenated receive as 733 bytes
-(`spec/402lxp/protocol.md` on that branch).
-
-Ordinal 8 revoke: `version:u16=1 || grant_id32 || revocation_sequence:u64`
-(exactly 42 bytes on `lane/pay-native`).
-
-**On the testnet branch** `lane/pay-signer-sdk`, `Payment::Receive` encodes
-an 8-field body (`field_count=8`, grant id only, no embedded
-authorization or grant) and `Payment::IssueGrant` encodes a capability
-grant under structure header `0x2001`. Those encodings are not the
-shared receive / payer-grant wires.
-
----
-
-## Mint and burn (ordinals 10–11)
-
-Shared payload, 82 bytes:
-
-```
-version:u16=1 || asset_id32 || account32 || amount:u128
+```text
+kind:u8 || controller32 || public_key32 || signature64
+|| signed_context_hash32 || network_id:u32 || protocol_version:u16
 ```
 
-`amount` must be `> 0`.
+The embedded payer grant is exactly 346 bytes:
 
-- **Mint:** actor is the asset issuer; `total_units + amount` must be
-  `<= supply_cap` when the cap is nonzero; destination account must
-  exist for that asset.
-- **Burn:** actor owns `from_account`; balance must cover `amount`.
-
-On the testnet branch (`src/modules/asset/lx_asset_execution.h`), registration
-creates `asset:<hex>:issuance` with initial units equal to `supply_cap`,
-or `u128` max when uncapped. Mint transfers issuance → destination.
-Burn transfers source → issuance. `total_units` is initial issuance
-minus current issuance balance. The asset record also stores `total_units`;
-execution checks that it equals this derived value before updating it.
-
-On `lane/pay-native`, mint/burn decode rejects zero amount
-(`LXP_ERR_INVALID_AMOUNT`). Execution checks issuer/owner authority, asset
-matching, pause state, supply bounds and balances, then emits a monetary
-transfer and saves the updated total. Receipts on `main` bind
-from/to and before/after balances (`include/layerx/lxp_receipt.h`); they
-do not carry a `total_units` field.
-
----
-
-## Fees, sequence, receipts
-
-Every new activity consumes `identity.next_sequence` the same way SEND
-does and is charged by the existing fee schedule with type prices for
-the new ordinals. A receipt binds both transfer endpoints and their
-before/after balances. The shared rule also binds `total_units`; that
-field is not on the `main` receipt schema.
-
----
-
-## LXT-20 program requests
-
-**On the testnet branch** `lane/pay-programs-tokens`, LXT-20 is a guest
-calldata codec, not a second ledger:
-
-```
-selector:4 || 0x01 || 0x20 || payload_len:u32_be || payload
+```text
+grant_id32 || from32 || recipient32 || asset32
+|| per_draw_maximum:u128 || allowance:u128 || recurring:u8
+|| window_length:u64 || expiration:u64 || purpose_hash32
+|| has_reference:u8 || reference_hash32 || revocation_sequence:u64
+|| public_key32 || signature64
 ```
 
-Selector bytes are `4c 58 14` plus method `1..7` (transfer, approve,
-transfer_from, balance_of, allowance, total_supply, metadata)
-(`programs/sdk/rust/src/lxt20.rs` on that branch). Creating a token is
-still Asset register / open / mint, not an LXT-20 request.
+The grant authorization preimage begins `LXP:GRANT:v1`; the receiver
+authorization preimage begins `LXP:RECEIVE:v1`. The receive must bind the same
+grant id, payer, recipient, Asset, purpose, network, and signed context as its
+grant and envelope. See [x402 transport](X402Transport.md) for metered draws and
+subscription renewals.
 
----
+## Asset record v3
 
-## Public reads
+The persisted canonical record is variable length:
 
-**On the testnet branch** `lane/pay-public-rpc`, `lx_listAssets` and
-`lx_getAsset` are declared on `POST /rpc`. The OpenRPC document states
-that asset listing and detail forward to core and return explicit
-upstream unavailability until native integration exists
-(`platform/hosted/gateway/openrpc.json` on that branch). See
-[Public JSON-RPC](PublicRpc.md).
+```text
+version:u16=3
+|| asset_id32
+|| symbol_len:u8 || symbol
+|| decimals:u8
+|| custody_kind:u8
+|| custody_ref_len:u16 || custody_ref
+|| paused:u8
+|| name_len:u8 || name
+|| supply_cap:u128
+|| issuer_did32
+|| issuer_kind:u8
+|| total_units:u128
+|| salt32
+```
+
+Version 2 can be migrated to version 3 by supplying the missing salt and a
+non-empty salt-source label:
+
+```sh
+layerx-genesis-build --migrate-asset-v2 INPUT SALT_FILE SALT_SOURCE OUTPUT_DIR
+```
+
+The migration validates a native derived id and writes `asset-v3.bin` plus
+`salt-source.txt`; it does not guess the missing salt.
+
+## LXGB v2 genesis metadata
+
+An `LXGB` version-2 genesis body retains the fixed protocol, network,
+timestamp, parameter, guarantor, Asset-id, Programs metering, and Programs fee
+fields. It then appends:
+
+```text
+asset_record_count:u16
+repeat asset_record_count times:
+  asset_record_length:u16 || asset_record_v3
+fee_schedule_length:u16 || fee_schedule_v2
+```
+
+The record count is 1–64, records are keyed by Asset id, every genesis record
+has `total_units == 0`, and the requested genesis Asset must be present.
+Genesis records use custody issuer kind `2`; native issuance is performed by
+an authenticated register activity. Version 1 remains readable for old
+artifacts but carries no Asset-record or fee-schedule metadata.
+
+## Named fee schedule
+
+The canonical Asset fee schedule is version 2 and exactly 215 bytes:
+
+```text
+version:u16=2
+|| base_fee:u128
+|| per_activity_type_unit:u128
+|| per_encoded_byte:u128
+|| per_execution_unit:u128
+|| per_storage_unit:u128
+|| multiplier_basis_points:u32
+|| asset_price_count:u8=8
+|| eight asset prices:u128
+```
+
+The eight prices are ordered and named:
+
+1. `fee.asset.register` — ordinal `1`
+2. `fee.asset.account_open` — ordinal `4`
+3. `fee.asset.send` — ordinal `5`
+4. `fee.asset.receive` — ordinal `6`
+5. `fee.asset.grant_issue` — ordinal `7`
+6. `fee.asset.grant_revoke` — ordinal `8`
+7. `fee.asset.mint` — ordinal `10`
+8. `fee.asset.burn` — ordinal `11`
+
+Fee estimation uses the committed schedule and canonical activity length. An
+unsupported Asset ordinal or a schedule requiring unavailable execution or
+storage units fails closed.
+
+## Authenticated public reads
+
+The testnet branch's LNI minor-5 read contract provides:
+
+- `AssetReadRequest` version 1: kind `1` lists the complete Asset registry;
+  kind `2` gets one nonzero Asset id. The list is bounded to 64 records and is
+  sorted by Asset id.
+- `AssetReadResponse` version 1: observed sequence, committed state root, count,
+  and length-prefixed version-3 records.
+- DID account enumeration: the complete bounded account list at the committed
+  snapshot, including canonical values and native proof material.
+- `FeeEstimateRequest` version 1: activity type, canonical byte count,
+  execution units, and storage units. The response carries observed sequence,
+  state root, parameter version, decimal fee, and the canonical schedule.
+
+The gateway exposes these through `lx_listAssets`, `lx_getAsset`,
+`lx_getBalances`, and `lx_estimateFee`. Their
+`verification=authenticated_committed_snapshot` label means an authenticated
+same-process committed snapshot; it is not an independent Merkle proof or a
+finality claim.
 
 [Home](Home.md)
