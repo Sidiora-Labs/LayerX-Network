@@ -8496,4 +8496,26 @@ file = "agent/sdk/typescript/src/index.ts agent/sdk/python/layerx_sdk/__init__.p
 symbol = "package exports 402LXP quickstart"
 observed = "Built TypeScript and installed Python package entry points do not export the x402 receive, register, supply or commitment helpers. The package import probes exit 1 with the expected missing-export errors. The wiki module page describes typed Asset ordinals but still says module execution applies only SEND and the pause/unpause event path; the quickstart and x402 transport pages do not document the maintained challenge, payer grant, receipt settlement and recurring renewal flow through lx_sendActivity and receipt recovery. Evidence: qual-logs/pay6/pay6d-typescript-package-import.log and pay6d-python-package-import.log."
 assumption = "These package-root and wiki paths are outside the lane ownership contract. Their owners must export the already qualified codecs and helpers, test installed imports, reconcile Asset execution wording and document the public JSON-RPC flow without presenting unqualified deployment as live."
+[observation.6.11.134]
+task = "6.11"
+file = "src/state/lxp_identity.c agent/crates/layerx-types/src/account.rs agent/crates/layerx-wire/src/hash.rs agent/crates/layerx-sdk/src/rpc.rs"
+symbol = "account_namespace_valid AccountId::for_asset account_id_for_protocol wallet_account"
+observed = "The shared Rust account builder admits exactly 64 lowercase hexadecimal asset suffixes, preserves native main accounts, and rejects mismatched asset selections. Wire hashing uses LX:ACCOUNT:v1 with the big-endian name length. Native account_namespace_valid still has no asset suffix branch. Native source is outside the authorized paths."
+assumption = "Native identity and ledger account admission must accept the same per-asset names and reject malformed or mismatched suffixes before end-to-end per-asset account qualification."
+severity = "blocker"
+
+[observation.6.11.135]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/sdk/typescript/src/rpc.ts agent/crates/layerx-sdk/src/rpc_verification.rs"
+symbol = "estimate_fee list_assets get_asset wait_for"
+observed = "The refreshed OpenRPC document supplies positional lx_estimateFee, lx_listAssets and lx_getAsset contracts. Both HTTP clients now expose them, retaining native errors and unverified read status. Signed receipt, batch inclusion and exact CP1/CX1 checkpoint verification remain required for commitment waits; acknowledgements do not establish success. The contract still marks native asset and fee integration as required."
+assumption = "Live assembled gateway execution and authenticated WebSocket subscription qualification have not run. Native-backed read availability must be qualified by the gateway integration path."
+severity = "note"
+
+[observation.6.11.136]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/disclosure.rs agent/crates/layerx-sdk/src/wallet.rs agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-mcp/tests/write.rs"
+symbol = "decode_send payload_sequence EvaluationInput execute_payment wait"
+observed = "SEND disclosure independently binds the source-account and envelope identity sequences and verifies the inner authorization signature. RECEIVE independently binds the receiver-account sequence, both embedded signatures, grant identifier, purpose context and envelope network/protocol. Direct exported MCP payment and wait tests retain unrelated-scope refusal. Both EvaluationInput constructors still set private cumulative_count to None while context validation requires authenticated cumulative use and verified budget reconciliation."
+assumption = "A permitting MCP payment requires the canonical cumulative-use and budget producer. Positive funded SEND through the assembled wallet/RPC stack and positive MCP evidence completion remain unqualified; fabricated transcripts cannot supply that evidence."
 severity = "blocker"
