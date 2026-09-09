@@ -4449,3 +4449,7 @@ mod budgeted_v1_invariant_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "lxt20_tests.rs"]
+mod lxt20_tests;
