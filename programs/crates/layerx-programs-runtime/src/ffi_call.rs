@@ -1644,6 +1644,51 @@ impl ReceiptOracle for CReceiptOracle {
     }
 }
 
+unsafe extern "C" {
+    fn layerx_programs_call_payment_name_byte(
+        token: u64,
+        a0: u64,
+        a1: u64,
+        a2: u64,
+        a3: u64,
+        offset: u32,
+    ) -> i32;
+}
+
+fn bind_payment_accounts(token: u64, set: &mut AtomicTransferSet) -> Result<(), i32> {
+    let mut names = Vec::with_capacity(set.legs().len());
+    for leg in set.legs() {
+        if matches!(leg.source, TransferSource::Program(_)) {
+            names.push(Vec::new());
+            continue;
+        }
+        let asset = words(leg.asset);
+        let length = unsafe {
+            layerx_programs_call_payment_name_byte(
+                token,
+                asset[0],
+                asset[1],
+                asset[2],
+                asset[3],
+                u32::MAX,
+            )
+        };
+        let length = u32::try_from(length).map_err(|_| NON_CANONICAL)?;
+        if length == 0 || length > 512 {
+            return Err(NON_CANONICAL);
+        }
+        names.push(scalar_bytes(
+            usize::try_from(length).map_err(|_| LENGTH_LIMIT)?,
+            |offset| unsafe {
+                layerx_programs_call_payment_name_byte(
+                    token, asset[0], asset[1], asset[2], asset[3], offset,
+                )
+            },
+        )?);
+    }
+    set.bind_account_names(&names).map_err(|_| NON_CANONICAL)
+}
+
 fn submit_kernel_transfer_leg(
     token: u64,
     index: usize,
@@ -2792,7 +2837,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         return Err(NON_CANONICAL);
                     }
                     let transfer = v2_transfer.ok_or(FATAL_INVARIANT)?;
-                    let transfer_set = if effects.transfers.is_empty() {
+                    let mut transfer_set = if effects.transfers.is_empty() {
                         None
                     } else {
                         match transfer.authorize_for_graph_with_version(
@@ -2825,6 +2870,11 @@ pub extern "C" fn layerx_programs_call_begin(
                             }
                         }
                     };
+                    if protocol_version == 3 {
+                        if let Some(set) = transfer_set.as_mut() {
+                            bind_payment_accounts(token, set)?;
+                        }
+                    }
                     let program_authority_evidence = transfer_set
                         .as_ref()
                         .filter(|set| set.is_v2())
@@ -3236,7 +3286,12 @@ pub extern "C" fn layerx_programs_call_begin(
             )
             .map_err(|_| NON_CANONICAL)?
         {
-            PreparedAuthorizedActivityOutcome::Success(prepared) => {
+            PreparedAuthorizedActivityOutcome::Success(mut prepared) => {
+                if protocol_version == 3 {
+                    if let Some(set) = prepared.transfer_set_mut() {
+                        bind_payment_accounts(token, set)?;
+                    }
+                }
                 let program_authority_evidence = prepared
                     .transfer_set()
                     .filter(|set| set.is_v2())

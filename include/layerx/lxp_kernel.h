@@ -267,6 +267,9 @@ lxp_result lxp_ctx_bind_activity_state(lxp_module_ctx *ctx, void *state,
 void *lxp_ctx_activity_state(const lxp_module_ctx *ctx);
 void *lxp_ctx_take_activity_state(lxp_module_ctx *ctx);
 const uint8_t *lxp_ctx_activity_id(const lxp_module_ctx *ctx);
+lxp_result lxp_kernel_program_payment_account(
+    lx_account_registry *accounts, const uint8_t principal[32],
+    const uint8_t asset[32], uint16_t protocol_version, lx_account **account);
 lxp_result lxp_kernel_bind_ledger_admission(
     lxp_module_ctx *ctx, const lxp_authority_resolved *authority,
     uint32_t activity_type);

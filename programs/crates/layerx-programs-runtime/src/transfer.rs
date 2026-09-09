@@ -13,6 +13,7 @@ use crate::calls::CallGraph;
 use crate::crypto::{hash_bytes, HashAlgorithm};
 use crate::storage::{PrincipalId, ProgramId};
 
+const ACCOUNT_BOUND_DOMAIN: &[u8] = b"LayerX/programs/402LXP/account-bound-set/v1\0";
 const SET_DOMAIN_V1: &[u8] = b"LayerX/programs/402LXP/transfer-set/v1\0";
 const SET_DOMAIN_V2: &[u8] = b"LayerX/programs/402LXP/transfer-set/v2\0";
 const PROGRAM_AUTHORITY_DOMAIN: &[u8] = b"LayerX/programs/402LXP/program-authority/v1\0";
@@ -878,8 +879,73 @@ impl AtomicTransferSet {
         self.v2
     }
 
+    pub(crate) fn bind_account_names(&mut self, names: &[Vec<u8>]) -> Result<(), TransferLawError> {
+        if names.len() != self.legs.len()
+            || self
+                .authorization_evidence
+                .starts_with(ACCOUNT_BOUND_DOMAIN)
+        {
+            return Err(TransferLawError::InvalidTransferSet);
+        }
+        let mut canonical = canonical_kernel_legs(&self.legs)?;
+        let mut evidence = ACCOUNT_BOUND_DOMAIN.to_vec();
+        let length = u32::try_from(self.authorization_evidence.len())
+            .map_err(|_| TransferLawError::InvalidTransferSet)?;
+        evidence.extend_from_slice(&length.to_be_bytes());
+        evidence.extend_from_slice(&self.authorization_evidence);
+        for (index, (leg, name)) in self.legs.iter().zip(names).enumerate() {
+            let account = match &leg.source {
+                TransferSource::Program(authority) => {
+                    if !name.is_empty() {
+                        return Err(TransferLawError::InvalidProgramAuthority);
+                    }
+                    authority.source_account()
+                }
+                TransferSource::Principal(principal)
+                | TransferSource::ProgramFunding { principal, .. } => {
+                    principal_payment_account(*principal, leg.asset, name)?
+                }
+            };
+            canonical[index * 115 + 1..index * 115 + 33].copy_from_slice(&account);
+            let length =
+                u16::try_from(name.len()).map_err(|_| TransferLawError::InvalidTransferSet)?;
+            evidence.extend_from_slice(&length.to_be_bytes());
+            evidence.extend_from_slice(name);
+        }
+        self.kernel_root = canonical_kernel_root(&canonical, self.legs.len())?;
+        self.kernel_canonical = canonical;
+        self.authorization_evidence = evidence;
+        Ok(())
+    }
+
+    fn decode_account_bound(encoded: &[u8], bound: &[u8]) -> Result<Self, TransferLawError> {
+        let mut cursor = TransferCursor::new(bound);
+        let length = u32::from_be_bytes(cursor.array()?) as usize;
+        let original = cursor.take(length)?;
+        if original.starts_with(ACCOUNT_BOUND_DOMAIN) {
+            return Err(TransferLawError::InvalidTransferSet);
+        }
+        let mut set = Self::canonical_decode(original)?;
+        let mut names = Vec::with_capacity(set.legs.len());
+        for _ in &set.legs {
+            let length = usize::from(u16::from_be_bytes(cursor.array()?));
+            names.push(cursor.take(length)?.to_vec());
+        }
+        if !cursor.is_empty() {
+            return Err(TransferLawError::InvalidTransferSet);
+        }
+        set.bind_account_names(&names)?;
+        if set.canonical() != encoded {
+            return Err(TransferLawError::InvalidTransferSet);
+        }
+        Ok(set)
+    }
+
     /// Strictly decodes and validates a persisted authorisation artifact.
     fn canonical_decode(encoded: &[u8]) -> Result<Self, TransferLawError> {
+        if let Some(bound) = encoded.strip_prefix(ACCOUNT_BOUND_DOMAIN) {
+            return Self::decode_account_bound(encoded, bound);
+        }
         let mut cursor = TransferCursor::new(encoded);
         let v2 = if encoded.starts_with(SET_DOMAIN_V1) {
             false
@@ -1341,6 +1407,65 @@ fn decode_program_funding(encoded: &[u8]) -> Result<ProgramFundingBinding, Trans
         return Err(TransferLawError::InvalidProgramFunding);
     }
     Ok(binding)
+}
+
+fn principal_payment_account(
+    principal: PrincipalId,
+    asset: [u8; 32],
+    name: &[u8],
+) -> Result<[u8; 32], TransferLawError> {
+    if name.len() > 512
+        || name.iter().any(|byte| {
+            !byte.is_ascii_lowercase() && !byte.is_ascii_digit() && !b"._-:".contains(byte)
+        })
+        || name.windows(2).any(|pair| pair == b"::")
+    {
+        return Err(TransferLawError::InvalidTransferSet);
+    }
+    let tail = name
+        .strip_prefix(b"agent:")
+        .ok_or(TransferLawError::InvalidTransferSet)?;
+    let did = if let Some(did) = tail.strip_suffix(b":main") {
+        did
+    } else {
+        let (did, encoded) = tail
+            .split_at_checked(
+                tail.len()
+                    .checked_sub(71)
+                    .ok_or(TransferLawError::InvalidTransferSet)?,
+            )
+            .ok_or(TransferLawError::InvalidTransferSet)?;
+        if !encoded.starts_with(b":asset:") {
+            return Err(TransferLawError::InvalidTransferSet);
+        }
+        let hex = b"0123456789abcdef";
+        for (index, byte) in asset.iter().copied().enumerate() {
+            if encoded[7 + index * 2] != hex[usize::from(byte >> 4)]
+                || encoded[8 + index * 2] != hex[usize::from(byte & 15)]
+            {
+                return Err(TransferLawError::InvalidTransferSet);
+            }
+        }
+        did
+    };
+    if did.is_empty() || did.first() == Some(&b':') || did.last() == Some(&b':') {
+        return Err(TransferLawError::InvalidTransferSet);
+    }
+    let mut owner = b"LXP/v1/did-id\0".to_vec();
+    let length = u16::try_from(did.len()).map_err(|_| TransferLawError::InvalidTransferSet)?;
+    owner.extend_from_slice(&length.to_be_bytes());
+    owner.extend_from_slice(did);
+    if hash_bytes(HashAlgorithm::Sha256, &owner)
+        .map_err(|_| TransferLawError::InvariantViolation)?
+        != principal.bytes()
+    {
+        return Err(TransferLawError::UnverifiedAuthority);
+    }
+    let mut account = b"LX:ACCOUNT:v1".to_vec();
+    let length = u32::try_from(name.len()).map_err(|_| TransferLawError::InvalidTransferSet)?;
+    account.extend_from_slice(&length.to_be_bytes());
+    account.extend_from_slice(name);
+    hash_bytes(HashAlgorithm::Sha256, &account).map_err(|_| TransferLawError::InvariantViolation)
 }
 
 fn canonical_kernel_legs(legs: &[TransferRequest]) -> Result<Vec<u8>, TransferLawError> {
@@ -1815,6 +1940,69 @@ mod tests {
             capability.authorize_v2(&AbiEffects::default()),
             Err(TransferLawError::InvalidTransferSet)
         );
+    }
+
+    #[test]
+    fn account_bound_commitment_preserves_signer_and_refuses_forged_names() {
+        let did = b"did:lxp:program-call";
+        let mut preimage = b"LXP/v1/did-id\0".to_vec();
+        preimage.extend_from_slice(
+            &u16::try_from(did.len())
+                .unwrap_or_else(|error| panic!("{error:?}"))
+                .to_be_bytes(),
+        );
+        preimage.extend_from_slice(did);
+        let principal = PrincipalId::new(
+            hash_bytes(HashAlgorithm::Sha256, &preimage)
+                .unwrap_or_else(|error| panic!("{error:?}")),
+        )
+        .unwrap_or_else(|error| panic!("{error:?}"));
+        let program = program_id(1);
+        let capability = capability(program, principal);
+        let effects = AbiEffects {
+            transfers: vec![request(program, principal, 7)],
+            ..AbiEffects::default()
+        };
+        for name in [
+            b"agent:did:lxp:program-call:main".to_vec(),
+            format!("agent:did:lxp:program-call:asset:{}", "03".repeat(32)).into_bytes(),
+        ] {
+            let mut set = capability
+                .authorize_v2(&effects)
+                .unwrap_or_else(|error| panic!("{error:?}"));
+            let original = set.kernel_root();
+            set.bind_account_names(std::slice::from_ref(&name))
+                .unwrap_or_else(|error| panic!("{error:?}"));
+            assert_eq!(set.principal(), principal);
+            assert_ne!(set.kernel_root(), original);
+            assert_eq!(
+                verify_authorization_root(set.canonical(), set.kernel_root()),
+                Ok(())
+            );
+            assert_eq!(
+                AtomicTransferSet::canonical_decode(set.canonical()).as_ref(),
+                Ok(&set)
+            );
+            assert!(set.bind_account_names(&[name]).is_err());
+            let mut changed = set.canonical().to_vec();
+            *changed
+                .last_mut()
+                .unwrap_or_else(|| panic!("empty evidence")) ^= 1;
+            assert!(verify_authorization_root(&changed, set.kernel_root()).is_err());
+            assert!(verify_authorization_root(set.canonical(), original).is_err());
+        }
+        for name in [
+            b"agent:did:lxp:other:main".to_vec(),
+            format!("agent:did:lxp:program-call:asset:{}", "04".repeat(32)).into_bytes(),
+            b"agent::did:lxp:program-call:main".to_vec(),
+        ] {
+            let mut set = capability
+                .authorize_v2(&effects)
+                .unwrap_or_else(|error| panic!("{error:?}"));
+            let original = set.kernel_root();
+            assert!(set.bind_account_names(&[name]).is_err());
+            assert_eq!(set.kernel_root(), original);
+        }
     }
 
     #[test]
