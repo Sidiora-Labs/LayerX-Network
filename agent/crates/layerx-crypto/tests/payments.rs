@@ -147,7 +147,7 @@ fn invalid_shapes_are_refused() -> Result<(), Box<dyn std::error::Error>> {
             Payment::Receive { amount, .. }
             | Payment::Mint { amount, .. }
             | Payment::Burn { amount, .. } => *amount = 0,
-            Payment::IssueGrant(g) => g.maximum_per_activity = 0,
+            Payment::IssueGrant(g) => g.per_draw_maximum = 0,
             Payment::ProgramTransfer { legs, .. } => legs.clear(),
             Payment::ProgramAccount { seed, .. } => *seed = vec![0; 129],
             Payment::OpenAccount { .. } | Payment::RevokeGrant { .. } => continue,
@@ -208,4 +208,15 @@ fn receive_discloses_source_sequence_independently() -> Result<(), Box<dyn std::
     assert_eq!(disclosure.payload_sequence()?, Some(23));
     assert_eq!(disclosure.reencode()?, bytes);
     Ok(())
+}
+
+#[test]
+fn payer_grant_signature_and_identifier_are_bound() {
+    let payload = hex(VECTORS[3].2);
+    assert_eq!(payload.len(), 346);
+    for offset in 0..payload.len() {
+        let mut changed = payload.clone();
+        changed[offset] ^= 1;
+        assert!(Payment::decode(ModuleId::Asset, 7, &changed, ACTOR).is_err());
+    }
 }

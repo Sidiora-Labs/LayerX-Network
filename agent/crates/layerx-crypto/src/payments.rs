@@ -5,8 +5,8 @@
 //! `issuer_did_id32` is the existing `lxp_did_id_derive` identity
 //! (`SHA-256("LXP/v1/did-id\0" || u16be(len) || did)`). Asset ordinal 9
 //! (WITHDRAW) is refused. Receive and grant-issue bytes match the
-//! existing activity payloads (`0x5201` / 8 fields and `0x2001` grant
-//! structure). See [`crate::disclosure`].
+//! native payer-grant concatenation (346 bytes); authority capabilities
+//! retain their separate codec. See [`crate::disclosure`].
 
 use layerx_types::payload::ModuleId;
 use layerx_wire::{decode::Decoder, encode::Encoder};
@@ -29,30 +29,22 @@ pub struct Registration {
     pub custody_ref: Vec<u8>,
 }
 
-/// Existing authority-grant structure used by Asset ordinal 7.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Grant {
-    pub grantor: Id,
-    pub grantee: Id,
-    pub kind: u8,
-    pub key: Id,
-    pub module_mask: u64,
-    pub ordinal_min: u16,
-    pub ordinal_max: u16,
+    pub id: Id,
+    pub from: Id,
+    pub recipient: Id,
     pub asset: Id,
-    pub maximum_per_activity: u128,
-    pub maximum_total: u128,
-    pub spent_total: u128,
-    pub period_length: u64,
-    pub maximum_per_period: u128,
-    pub spent_this_period: u128,
-    pub period_start: u64,
+    pub per_draw_maximum: u128,
+    pub allowance: u128,
+    pub recurring: bool,
+    pub window_length: u64,
+    pub expiration: u64,
     pub purpose_hash: Id,
-    pub not_before: u64,
-    pub not_after: u64,
+    pub has_reference: bool,
+    pub reference_hash: Id,
     pub revocation_sequence: u64,
-    pub revoked: bool,
-    pub revoked_at_sequence: u64,
+    pub public_key: Id,
     pub signature: [u8; 64],
 }
 
@@ -113,11 +105,6 @@ fn bad<T>() -> Result<T, DisclosureError> {
 }
 fn fixed<const N: usize>(d: &mut Decoder<'_>) -> Result<[u8; N], DisclosureError> {
     d.fixed(N)?
-        .try_into()
-        .map_err(|_| DisclosureError::MalformedPayload)
-}
-fn bytes<const N: usize>(d: &mut Decoder<'_>) -> Result<[u8; N], DisclosureError> {
-    d.bytes(N)?
         .try_into()
         .map_err(|_| DisclosureError::MalformedPayload)
 }
@@ -202,29 +189,7 @@ impl Payment {
                     return bad();
                 }
             }
-            Self::IssueGrant(g) => {
-                if actor_id(actor)? != g.grantor
-                    || !(1..=6).contains(&g.kind)
-                    || g.not_after == 0
-                    || g.not_after <= g.not_before
-                    || g.grantee == [0; 32]
-                    || g.key == [0; 32]
-                    || g.module_mask == 0
-                    || g.ordinal_min > g.ordinal_max
-                {
-                    return bad();
-                }
-                if matches!(g.kind, 3 | 4)
-                    && (g.asset == [0; 32]
-                        || g.maximum_per_activity == 0
-                        || g.purpose_hash == [0; 32]
-                        || g.revocation_sequence == 0
-                        || (g.maximum_total == 0
-                            && (g.period_length == 0 || g.maximum_per_period == 0)))
-                {
-                    return bad();
-                }
-            }
+            Self::IssueGrant(g) => g.verify()?,
             Self::ProgramTransfer { legs, .. } => {
                 if legs.is_empty()
                     || legs.len() > 256
@@ -439,84 +404,76 @@ impl Payment {
 }
 
 fn encode_grant(e: &mut Encoder, g: &Grant) -> Result<(), DisclosureError> {
-    e.structure_header(0x2001)?;
-    e.u8(1)?;
-    e.bytes(&g.grantor, 32)?;
-    e.bytes(&g.grantee, 32)?;
-    e.u8(g.kind)?;
-    e.bytes(&g.key, 32)?;
-    e.u64(g.module_mask)?;
-    e.u16(g.ordinal_min)?;
-    e.u16(g.ordinal_max)?;
-    e.bytes(&g.asset, 32)?;
-    e.u128(g.maximum_per_activity)?;
-    e.u128(g.maximum_total)?;
-    e.u128(g.spent_total)?;
-    e.u64(g.period_length)?;
-    e.u128(g.maximum_per_period)?;
-    e.u128(g.spent_this_period)?;
-    e.u64(g.period_start)?;
-    e.bytes(&g.purpose_hash, 32)?;
-    e.u64(g.not_before)?;
-    e.u64(g.not_after)?;
+    e.fixed(&g.id)?;
+    e.fixed(&g.from)?;
+    e.fixed(&g.recipient)?;
+    e.fixed(&g.asset)?;
+    e.u128(g.per_draw_maximum)?;
+    e.u128(g.allowance)?;
+    e.u8(u8::from(g.recurring))?;
+    e.u64(g.window_length)?;
+    e.u64(g.expiration)?;
+    e.fixed(&g.purpose_hash)?;
+    e.u8(u8::from(g.has_reference))?;
+    e.fixed(&g.reference_hash)?;
     e.u64(g.revocation_sequence)?;
-    e.u8(u8::from(g.revoked))?;
-    e.u64(g.revoked_at_sequence)?;
-    e.bytes(&g.signature, 64)?;
+    e.fixed(&g.public_key)?;
+    e.fixed(&g.signature)?;
     Ok(())
 }
 
-fn decode_grant(d: &mut Decoder<'_>) -> Result<Grant, DisclosureError> {
-    d.structure_header(0x2001)?;
-    if d.u8()? != 1 {
-        return bad();
+fn boolean(d: &mut Decoder<'_>) -> Result<bool, DisclosureError> {
+    match d.u8()? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => bad(),
     }
-    let grantor = bytes(d)?;
-    let grantee = bytes(d)?;
-    let kind = d.u8()?;
-    let key = bytes(d)?;
-    let module_mask = d.u64()?;
-    let ordinal_min = d.u16()?;
-    let ordinal_max = d.u16()?;
-    let asset = bytes(d)?;
-    let maximum_per_activity = d.u128()?;
-    let maximum_total = d.u128()?;
-    let spent_total = d.u128()?;
-    let period_length = d.u64()?;
-    let maximum_per_period = d.u128()?;
-    let spent_this_period = d.u128()?;
-    let period_start = d.u64()?;
-    let purpose_hash = bytes(d)?;
-    let not_before = d.u64()?;
-    let not_after = d.u64()?;
-    let revocation_sequence = d.u64()?;
-    let revoked = match d.u8()? {
-        0 => false,
-        1 => true,
-        _ => return bad(),
-    };
+}
+
+fn decode_grant(d: &mut Decoder<'_>) -> Result<Grant, DisclosureError> {
     Ok(Grant {
-        grantor,
-        grantee,
-        kind,
-        key,
-        module_mask,
-        ordinal_min,
-        ordinal_max,
-        asset,
-        maximum_per_activity,
-        maximum_total,
-        spent_total,
-        period_length,
-        maximum_per_period,
-        spent_this_period,
-        period_start,
-        purpose_hash,
-        not_before,
-        not_after,
-        revocation_sequence,
-        revoked,
-        revoked_at_sequence: d.u64()?,
-        signature: bytes(d)?,
+        id: fixed(d)?,
+        from: fixed(d)?,
+        recipient: fixed(d)?,
+        asset: fixed(d)?,
+        per_draw_maximum: d.u128()?,
+        allowance: d.u128()?,
+        recurring: boolean(d)?,
+        window_length: d.u64()?,
+        expiration: d.u64()?,
+        purpose_hash: fixed(d)?,
+        has_reference: boolean(d)?,
+        reference_hash: fixed(d)?,
+        revocation_sequence: d.u64()?,
+        public_key: fixed(d)?,
+        signature: fixed(d)?,
     })
+}
+
+impl Grant {
+    fn verify(&self) -> Result<(), DisclosureError> {
+        if self.per_draw_maximum == 0
+            || self.allowance == 0
+            || self.expiration == 0
+            || self.recurring != (self.window_length != 0)
+            || self.recipient == [0; 32]
+            || self.asset == [0; 32]
+            || self.purpose_hash == [0; 32]
+        {
+            return bad();
+        }
+        let mut e = Encoder::new(346);
+        encode_grant(&mut e, self)?;
+        let bytes = e.finish();
+        let mut h = Sha256::new();
+        h.update(layerx_wire::hash::Domain::AuthorityHash.tag());
+        h.update(b"LXP:GRANT:v1");
+        h.update(&bytes[32..282]);
+        let digest: Id = h.finalize().into();
+        if digest != self.id {
+            return bad();
+        }
+        crate::ed25519::verify_digest(&self.public_key, &self.signature, &digest)
+            .map_err(|_| DisclosureError::MalformedPayload)
+    }
 }
