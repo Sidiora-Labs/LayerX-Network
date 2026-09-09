@@ -1,4 +1,5 @@
 mod artifacts;
+mod deployment;
 #[cfg(test)]
 mod lifecycle_tests;
 
@@ -1717,6 +1718,9 @@ fn route(config: &Config, request: &Request) -> Response {
         Ok(plane) => plane,
         Err(response) => return response,
     };
+    if let Some(response) = deployment::route(config, request, path, query, plane) {
+        return response;
+    }
     if relay_path_allowed(path, query) {
         if plane != Plane::Registry {
             return refusal(403, "entitlement_denied", None);
