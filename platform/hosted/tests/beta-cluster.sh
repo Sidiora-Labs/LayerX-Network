@@ -5,10 +5,15 @@
 #   beta-cluster.sh up [--boundary-checks]
 #   beta-cluster.sh down
 #   beta-cluster.sh render
+#   beta-cluster.sh images
+#   beta-cluster.sh publish-images [--check] [build-image-inventory]
 #
 # Inputs (environment variables, all optional unless stated):
 #   LAYERX_BETA_KUBECONFIG              owner cluster kubeconfig; unset selects a disposable local kind cluster
 #   LAYERX_BETA_CLUSTER_NAME            kind cluster name (default layerx-beta)
+#   LAYERX_BETA_IMAGE_SOURCE            build (default) or ghcr; ghcr pulls digest-pinned GHCR tags into kind
+#   LAYERX_BETA_IMAGE_TAG               GHCR tag when IMAGE_SOURCE=ghcr (default beta)
+#   LAYERX_BETA_RETAIN_MATERIAL         set to 1 to reuse a complete prior Human material inventory
 #   LAYERX_BETA_IMAGE_REGISTRY          registry prefix images are pushed to for an owner cluster; unset loads
 #                                       the locally built images into the kind nodes
 #   LAYERX_BETA_BUILDER_ENVIRONMENT_DIR owner hermetic builder root filesystem (regular files and directories only,
@@ -39,9 +44,9 @@
 #   LAYERX_BETA_FORBIDDEN_CHAIN_ID      refuse contract transactions on this chain id, including disposable clusters
 #   LAYERX_BETA_KEEP_TOOLS              set to 1 to keep the pinned kind/kubectl downloads on teardown
 #
-# The trusted-boundary services (node with core boundary, receipt authority and agent boundary; identity;
-# Paxeer chain with its boundary) are built from the repository, applied before the testnet, gateway,
-# registry and developer manifests, and bound together in this order: the Paxeer chain starts with the
+# The trusted-boundary services (node with core boundary, receipt authority, agent boundary and Human;
+# identity; Paxeer chain with its boundary) are built from the repository, applied before the testnet,
+# gateway, registry and developer manifests, and bound together in this order: the Paxeer chain starts with the
 # generated deployer address, the node bootstraps its genesis, deploy-contracts.sh deploys the settlement
 # contracts from the node's genesis artifacts through the Paxeer boundary, and the resulting GuarantorBond
 # and CheckpointRegistry addresses are published to the node as the layerx-node-settlement ConfigMap the
@@ -1936,7 +1941,7 @@ main() {
         test-guarantor-sequences) guarantor_sequence_test ;;
         down) beta_cluster_down ;;
         render) beta_cluster_render ;;
-        *) sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
+        *) sed -n '2,46p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
     esac
 }
 

@@ -80,11 +80,11 @@ Default host ports are testnet `19443`, gateway `19444`, faucet `19445`
 `PAXEER_OBSERVER_URL=https://localhost:19452`,
 `IDENTITY_URL=https://localhost:19451`,
 `HUMAN_URL=https://localhost:19453`
-(`platform/hosted/tests/beta-cluster.sh:1258-1266`). Port-forwards are
+(`platform/hosted/tests/beta-cluster.sh:1810`). Port-forwards include
 Paxeer-boundary `19449`, Paxeer-observer-boundary `19452`, identity
 `19451`, testnet, gateway, faucet, developer `19450`, pending-core
-`19446`, and agent-boundary `19447`
-(`platform/hosted/tests/beta-cluster.sh:1268-1283`). Human is forwarded on `19453` to port `9443`. There is no agentd port-forward.
+`19446`, agent-boundary `19447`, and Human `19453:9443`
+(`platform/hosted/tests/beta-cluster.sh:1846`). There is no agentd port-forward.
 
 The kind cluster name defaults to `layerx-beta`
 (`platform/hosted/tests/beta-cluster.sh:11, 73`). Paxeer EVM chain id is
@@ -95,7 +95,7 @@ The kind cluster name defaults to `layerx-beta`
 ## 2. Exported endpoints
 
 `up` writes `build/beta-cluster/env` from `env_write`
-(`platform/hosted/tests/beta-cluster.sh:61, 1110-1142, 1284`). There is no
+(`platform/hosted/tests/beta-cluster.sh:63, 1640-1672`). There is no
 separate export step. Source it:
 
 ```sh
