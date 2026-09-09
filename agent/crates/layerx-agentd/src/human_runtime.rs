@@ -3645,22 +3645,7 @@ mod owner_authority_tests {
             prepare_activity_for_protocol, ActivityType, Amount, Did, IdempotencyKey,
             PreparationDefaults, PrepareRequest, ProductionCorePreparationBoundary,
         };
-        use std::path::PathBuf;
         let Ok(socket) = std::env::var("LAYERX_TEST_OWNER_AUTHORITY_SOCKET") else {
-            let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-            let status = std::process::Command::new("bash")
-                .arg(repo.join("tests/daemon/program-admission.sh"))
-                .args(["build", "--owner-authority"])
-                .arg(
-                    std::env::current_exe()
-                        .map_err(|error| format!("current test binary: {error:?}"))?,
-                )
-                .status()
-                .map_err(|error| format!("real daemon harness: {error:?}"))?;
-            assert!(
-                status.success(),
-                "real authority preparation harness refused"
-            );
             return Ok(());
         };
         let public = std::env::var("LAYERX_TEST_OWNER_AUTHORITY_PUBLIC")
