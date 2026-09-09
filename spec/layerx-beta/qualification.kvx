@@ -4990,3 +4990,27 @@ symbol = "restarting_server_reobserves_instead_of_serving_archived_finality"
 observed = "After rebasing onto main the package suite passes fmt and clippy; the parallel test run on the shared workstation (load average 5 to 11 during concurrent image builds) fails this one test with Error Unavailable while the same binary passes serially (--test-threads=1) and alone, and an idle 64-core server passed 103 consecutive parallel runs of the unchanged suite (qual-logs/hm5-rebase/test-full-env.log, test-serial.log, test-rerun-1..3.log). The test listener uses a 100 ms deadline and 50 ms request timeout."
 assumption = "The failure is deadline expiry under host load, not a rebase regression or shared test state; no deadline, assertion, retry or ignore was changed. A less load-sensitive proof of the restart behaviour is left to the movement provider owner."
 severity = "note"
+
+[observation.6.4.179]
+task = "6.4"
+file = "platform/hosted/beta-cluster.sh agent/crates/layerx-agentd/src/human_peer_config.rs docs/wiki/RunningAnAgent.md"
+symbol = "LAYERX_AGENT_HUMAN_PEERS"
+observed = "The checkout has no platform/hosted/beta-cluster.sh and no hosted manifest carrying LAYERX_AGENT_HUMAN_PEERS. bash -n platform/hosted/beta-cluster.sh exits 127 because the file is absent (qual-logs/ag3/bash.log). The consumer requires uid=<u32>;tenant=<tenant>;principal=<did>, with comma-separated entries and indexed typed configuration refusals."
+assumption = "The deployment producer must emit the named-field encoding and pass its shell syntax gate in the checkout containing that producer. No cluster or image gate ran because this host lacks those tools."
+severity = "blocker"
+
+[observation.6.4.180]
+task = "6.4"
+file = "agent/crates/layerx-agentd/src/export.rs agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-agentd/tests/budget_unknown.rs agent/crates/layerx-agentd/tests/operator.rs"
+symbol = "package_formatting"
+observed = "cargo fmt --check --manifest-path agent/Cargo.toml -p layerx-agentd exits 1 with existing formatting differences in these four files (qual-logs/ag3/fmt.log). These unrelated files remain unchanged."
+assumption = "The full package formatting gate requires the owners of these unrelated changes to format them."
+severity = "blocker"
+
+[observation.6.4.181]
+task = "6.4"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs agent/crates/layerx-agentd/tests/budget_create.rs"
+symbol = "fixture LAYERX_TEST_NATIVE_BIN_DIR"
+observed = "cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd exits 101 at budget_create because build/bin/layerxd is absent; subsequent fixture users report a poisoned lock (qual-logs/ag3/test.log). The supplied /root/lx-lanes/native-bin directory is also absent. The binary unit and runtime_mode targets pass separately, including DID peer parsing and real-binary positional-format refusal (qual-logs/ag3/test-focused.log). All-target Clippy with warnings denied passes (qual-logs/ag3/clippy-final.log)."
+assumption = "Full package execution requires qualified native layerxd and layerx-genesis-build binaries supplied through LAYERX_TEST_NATIVE_BIN_DIR. Focused success does not qualify the full package."
+severity = "blocker"
