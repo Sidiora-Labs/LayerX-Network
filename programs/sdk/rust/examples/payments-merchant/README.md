@@ -12,9 +12,10 @@ account state. Derivation alone does not register or fund an account.
 
 The caller authorizes a Transfer402 grant to the derived account for `gross`,
 and ProgramSpend grants from that account to the merchant for `gross - fee`
-and the fee collector for `fee`. Grants must be merged into one runtime-canonical
-set, with duplicate keys refused. The SDK preparation helper produces individual
-spend sets; concatenating those encodings is invalid. The destinations and split
+and the fee collector for `fee`. Use `ProgramPaymentCapabilities` with one `PaymentGrant::Basic` funding grant
+and two `PaymentGrant::ProgramSpend` payouts. The SDK sorts the mixed set in
+runtime authority-key order and refuses duplicate keys, zero ceilings and
+short output buffers. Concatenating individual set encodings is invalid. The destinations and split
 are caller-approved inputs, not an authenticated merchant pricing policy.
 
 Calldata, all integers big-endian:
