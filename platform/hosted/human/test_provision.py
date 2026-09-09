@@ -201,6 +201,12 @@ class RegistrationInputTests(unittest.TestCase):
         self.assertFalse((self.root / 'human-evidence').exists())
         self.assertFalse(list(self.root.glob('.human-evidence-*')))
 
+    def test_journal_export_selects_only_canonical_pairs(self):
+        script = Path(provision.__file__).with_name('provision.sh').read_text()
+        source = '$pod:/var/lib/layerx-registry-journal/pairs/.'
+        self.assertIn(source, script)
+        self.assertNotIn('$pod:/var/lib/layerx-registry-journal/.', script)
+
     def test_custody_source_missing_field_is_not_derived_from_address(self):
         paxeer = self.root / 'paxeer'
         paxeer.mkdir()

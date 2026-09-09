@@ -78,6 +78,9 @@ def main():
                     if time.monotonic() >= limit:
                         raise RuntimeError('registry startup deadline exceeded')
                     time.sleep(0.1)
+                for untrusted in (b'{"record_hex":"4c6179657258"}', b'{"proof_hex":"00"}'):
+                    status, _ = request('/__registry/deployments', untrusted)
+                    assert status == 503, status
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
                     builds = [pool.submit(request, args.build_path, body) for _ in range(2)]
                     latencies = []
