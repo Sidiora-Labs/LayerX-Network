@@ -2432,8 +2432,6 @@ static lxp_result publish_canonical_batch(
     if (status == LXP_OK)
         status = lxp_daemon_lni_receipts_committed();
     if (status == LXP_OK)
-        status = lxp_daemon_lni_receipts_committed();
-    if (status == LXP_OK)
         status = availability_prune(process, header.batch_number);
     if (timing != NULL) timing->prune_us = pay_timing_us() - stage_started;
     if (status == LXP_OK) {
