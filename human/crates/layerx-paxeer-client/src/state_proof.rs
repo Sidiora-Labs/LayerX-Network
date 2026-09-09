@@ -20,11 +20,19 @@ pub struct StateWitness {
     pub module_id: u16,
     pub key: Vec<u8>,
     pub value: Vec<u8>,
+    pub account_path: Option<AccountPath>,
     pub leaf_index_a: u32,
     pub leaf_count_a: u32,
     pub siblings_a: Vec<[u8; 32]>,
     pub leaf_count_b: u32,
     pub siblings_b: Vec<[u8; 32]>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccountPath {
+    pub index: u32,
+    pub count: u32,
+    pub siblings: Vec<[u8; 32]>,
 }
 
 impl StateWitness {
@@ -36,8 +44,20 @@ impl StateWitness {
             return Err(StateProofError::Version);
         }
         let module_id = u16::from_be_bytes(reader.array()?);
+        if module_id > 9 {
+            return Err(StateProofError::Module);
+        }
         let key = reader.vector(MAX_KEY)?;
         let value = reader.vector(MAX_VALUE)?;
+        let account_path = if module_id == 0 && key.len() == 33 && key[0] == 4 {
+            Some(AccountPath {
+                index: u32::from_be_bytes(reader.array()?),
+                count: u32::from_be_bytes(reader.array()?),
+                siblings: reader.path()?,
+            })
+        } else {
+            None
+        };
         let leaf_index_a = u32::from_be_bytes(reader.array()?);
         let leaf_count_a = u32::from_be_bytes(reader.array()?);
         let siblings_a = reader.path()?;
@@ -50,6 +70,7 @@ impl StateWitness {
             module_id,
             key,
             value,
+            account_path,
             leaf_index_a,
             leaf_count_a,
             siblings_a,
@@ -70,6 +91,11 @@ impl StateWitness {
             let len = u32::try_from(bytes.len()).map_err(|_| StateProofError::Encoding)?;
             out.extend_from_slice(&len.to_be_bytes());
             out.extend_from_slice(bytes);
+        }
+        if let Some(path) = &self.account_path {
+            out.extend_from_slice(&path.index.to_be_bytes());
+            out.extend_from_slice(&path.count.to_be_bytes());
+            append_path(&mut out, &path.siblings)?;
         }
         out.extend_from_slice(&self.leaf_index_a.to_be_bytes());
         out.extend_from_slice(&self.leaf_count_a.to_be_bytes());
@@ -98,12 +124,16 @@ impl StateWitness {
         if self.key.is_empty() || self.key.len() > MAX_KEY || self.value.len() > MAX_VALUE {
             return Err(StateProofError::Encoding);
         }
-        let subtree = fold(
-            leaf(&self.key, &self.value)?,
-            self.leaf_index_a,
-            self.leaf_count_a,
-            &self.siblings_a,
-        )?;
+        let is_account = self.module_id == 0 && self.key.len() == 33 && self.key[0] == 4;
+        if is_account != self.account_path.is_some() {
+            return Err(StateProofError::Encoding);
+        }
+        let mut node = leaf(&self.key, &self.value)?;
+        if let Some(path) = &self.account_path {
+            node = fold(node, path.index, path.count, &path.siblings)?;
+            node = leaf(b"account-tree", &node)?;
+        }
+        let subtree = fold(node, self.leaf_index_a, self.leaf_count_a, &self.siblings_a)?;
         fold(
             leaf(&self.module_id.to_be_bytes(), &subtree)?,
             u32::from(self.module_id),
