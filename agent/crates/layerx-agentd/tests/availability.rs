@@ -15,6 +15,7 @@ use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Ver
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_proof::availability::{AvailabilityCheck, AvailabilityClass, Chunk, RootCommitments};
 use layerx_proof::merkle::{build_leaf_hash_proof, root, Proof};
+use layerx_wire::encode::Encoder;
 use layerx_wire::hash::availability_chunk_digest;
 
 static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
@@ -45,29 +46,28 @@ struct Fixture {
     record_roots: RootCommitments,
 }
 
-fn framed(bytes: &[u8]) -> Vec<u8> {
-    let mut output = u32::try_from(bytes.len())
-        .unwrap_or_else(|error| panic!("record length: {error}"))
-        .to_be_bytes()
-        .to_vec();
-    output.extend_from_slice(bytes);
-    output
+fn sequence(bytes: &[u8]) -> Vec<u8> {
+    let mut encoder = Encoder::new(1024);
+    assert_eq!(encoder.sequence_length(1, 1), Ok(()));
+    assert_eq!(encoder.bytes(bytes, 1024), Ok(()));
+    encoder.finish()
 }
 
 fn tagged(kind: u8, bytes: &[u8]) -> Vec<u8> {
-    let mut output = vec![kind];
-    output.extend_from_slice(&framed(bytes));
-    output
+    let mut encoder = Encoder::new(1024);
+    assert_eq!(encoder.u8(kind), Ok(()));
+    assert_eq!(encoder.bytes(bytes, 1024), Ok(()));
+    encoder.finish()
 }
 
 fn fixture() -> Fixture {
-    let activities = framed(b"activity");
+    let activities = sequence(b"activity");
     let mut receipts = tagged(1, b"receipt");
     receipts.extend_from_slice(&tagged(2, b"event"));
     let classes = [
         (AvailabilityClass::Activities, activities),
         (AvailabilityClass::Receipts, receipts),
-        (AvailabilityClass::Oracle, framed(b"oracle")),
+        (AvailabilityClass::Oracle, sequence(b"oracle")),
         (AvailabilityClass::StateDiff, b"state-diff".to_vec()),
         (AvailabilityClass::Recovery, b"recovery".to_vec()),
     ];
@@ -318,4 +318,77 @@ fn corruption_withholding_and_repeated_provider_failure_are_durable_evidence() {
     assert_eq!(audit.failures().len(), 2);
     assert_eq!(store.list_object_ids(&tenant(), ObjectKind::Audit).len(), 2);
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn class_presence_precedes_decoding_and_complete_chunks_require_order() {
+    for (case, order, expected) in [
+        ("empty", vec![], Some(AvailabilityCheck::MissingClass)),
+        ("missing", vec![0, 1], Some(AvailabilityCheck::MissingClass)),
+        (
+            "missing-reordered",
+            vec![1, 0],
+            Some(AvailabilityCheck::MissingClass),
+        ),
+        (
+            "complete-reordered",
+            vec![1, 0, 2, 3, 4],
+            Some(AvailabilityCheck::ChunkOrder),
+        ),
+        ("complete", vec![0, 1, 2, 3, 4], None),
+    ] {
+        let mut fixture = fixture();
+        let original = fixture.clone();
+        fixture.chunks = order
+            .iter()
+            .map(|&index| original.chunks[index].clone())
+            .collect();
+        fixture.proofs = order
+            .iter()
+            .map(|&index| original.proofs[index].clone())
+            .collect();
+        let socket = SocketPath::new(case);
+        let server = provider(&socket, fixture.clone(), order.len(), None);
+        let gate = ConnectionGate::new(1);
+        let mut transport = Uds::connect(&socket.0, &gate, transport_limits())
+            .unwrap_or_else(|error| panic!("connect: {error:?}"));
+        let mut providers = ProviderSet::new(vec![Provider {
+            name: "provider-a".to_owned(),
+            transport: &mut transport,
+        }]);
+        let outcome = layerx_client::availability::fetch(
+            &mut providers,
+            AvailabilitySelector::Batch(7),
+            context(&fixture, 90),
+            |_| {},
+        )
+        .unwrap_or_else(|error| panic!("fetch: {error:?}"));
+        match (expected, outcome) {
+            (None, layerx_client::availability::FetchOutcome::Complete(result)) => {
+                assert!(result.report.classes.missing.is_empty());
+                assert_eq!(result.records().activities, vec![b"activity".to_vec()]);
+                assert_eq!(result.records().oracle_inputs, vec![b"oracle".to_vec()]);
+            }
+            (Some(expected), layerx_client::availability::FetchOutcome::Partial(reports)) => {
+                assert_eq!(reports.len(), 1);
+                let layerx_client::availability::ProviderFailure::Reassembly(failure) =
+                    &reports[0].failure
+                else {
+                    panic!("expected reassembly failure: {reports:?}");
+                };
+                assert_eq!(failure.check, expected, "{case}");
+                assert_eq!(failure.classes, reports[0].classes);
+                assert_eq!(
+                    failure.served_bytes,
+                    fixture
+                        .chunks
+                        .iter()
+                        .flat_map(|chunk| chunk.bytes.clone())
+                        .collect::<Vec<_>>()
+                );
+            }
+            (expected, outcome) => panic!("{case}: expected {expected:?}, got {outcome:?}"),
+        }
+        assert!(server.join().is_ok(), "provider failed");
+    }
 }

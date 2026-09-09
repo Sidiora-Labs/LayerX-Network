@@ -2,6 +2,10 @@
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_merkle.h"
+#include "layerx/lxp_kernel.h"
+#include "layerx/lxp_state_diff.h"
+#include "layerx/lxp_replica.h"
+#include "../state/lxp_state_internal.h"
 
 #include <string.h>
 
@@ -232,4 +236,200 @@ lxp_result lxp_da_bundle_root(const lxp_da_bundle *bundle, lxp_arena *arena,
                                   bundle->chunk_count, arena, root);
     (void)lxp_arena_reset(arena, mark);
     return status;
+}
+
+
+lxp_result lxp_batch_availability_root(const lxp_batch_body *body,
+                                       lxp_arena *arena, uint8_t root[32])
+{
+    lxp_da_bundle bundle;
+    uint8_t computed[32];
+    size_t mark;
+    lxp_result status;
+    if (body == NULL || arena == NULL || root == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    mark = lxp_arena_mark(arena);
+    status = lxp_da_bundle_build(body, LXP_DA_CANONICAL_CHUNK_BYTES,
+                                 arena, &bundle);
+    if (status == LXP_OK)
+        status = lxp_da_bundle_root(&bundle, arena, computed);
+    (void)lxp_arena_reset(arena, mark);
+    if (status == LXP_OK) (void)memcpy(root, computed, sizeof(computed));
+    return status;
+}
+
+lxp_result lxp_da_receipt_section_encode(
+    const lxp_byte_span *receipts, size_t receipt_count,
+    const lxp_byte_span *events, size_t event_count,
+    lxp_arena *arena, lxp_byte_span *encoded)
+{
+    lxp_codec_writer writer;
+    size_t capacity = 0U, i, group;
+    lxp_result status;
+    if (arena == NULL || encoded == NULL ||
+        (receipts == NULL && receipt_count != 0U) ||
+        (events == NULL && event_count != 0U) ||
+        receipt_count > LXP_MAX_BATCH_ACTIVITIES ||
+        event_count > LXP_MAX_BATCH_ACTIVITIES)
+        return LXP_ERR_NON_CANONICAL;
+    for (group = 0U; group < 2U; ++group) {
+        const lxp_byte_span *items = group == 0U ? receipts : events;
+        size_t count = group == 0U ? receipt_count : event_count;
+        for (i = 0U; i < count; ++i) {
+            if ((items[i].bytes == NULL && items[i].length != 0U) ||
+                items[i].length > LXP_MAX_BATCH_BODY_BYTES ||
+                capacity > LXP_MAX_BATCH_BODY_BYTES - items[i].length ||
+                LXP_MAX_BATCH_BODY_BYTES - capacity - items[i].length < 5U)
+                return LXP_ERR_LENGTH_LIMIT;
+            capacity += 5U + items[i].length;
+        }
+    }
+    status = lxp_codec_writer_init(&writer, arena, capacity);
+    for (group = 0U; status == LXP_OK && group < 2U; ++group) {
+        const lxp_byte_span *items = group == 0U ? receipts : events;
+        size_t count = group == 0U ? receipt_count : event_count;
+        for (i = 0U; status == LXP_OK && i < count; ++i) {
+            status = lxp_codec_write_u8(&writer, (uint8_t)(group + 1U));
+            if (status == LXP_OK)
+                status = lxp_codec_write_bytes(&writer, items[i].bytes,
+                    items[i].length, LXP_MAX_BATCH_BODY_BYTES);
+        }
+    }
+    if (status == LXP_OK)
+        *encoded = (lxp_byte_span){writer.bytes, writer.length};
+    return status;
+}
+
+
+
+lxp_result lxp_da_receipt_section_decode(
+    lxp_byte_span encoded, lxp_arena *arena,
+    lxp_byte_span **receipts, size_t *receipt_count,
+    lxp_byte_span **events, size_t *event_count)
+{
+    lxp_codec_reader reader;
+    lxp_byte_span *groups[2] = {NULL, NULL};
+    size_t counts[2] = {0U, 0U}, positions[2] = {0U, 0U};
+    size_t mark, pass, i;
+    lxp_result status = LXP_OK;
+    if (arena == NULL || receipts == NULL || receipt_count == NULL ||
+        events == NULL || event_count == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *receipts = NULL;
+    *events = NULL;
+    *receipt_count = 0U;
+    *event_count = 0U;
+    mark = lxp_arena_mark(arena);
+    for (pass = 0U; status == LXP_OK && pass < 2U; ++pass) {
+        uint8_t previous = 1U;
+        status = lxp_codec_reader_init(&reader, encoded.bytes, encoded.length);
+        while (status == LXP_OK && reader.offset < encoded.length) {
+            uint8_t kind;
+            lxp_byte_span item;
+            status = lxp_codec_read_u8(&reader, &kind);
+            if (status == LXP_OK && (kind < previous || kind > 2U))
+                status = LXP_ERR_NON_CANONICAL;
+            if (status == LXP_OK)
+                status = lxp_codec_read_bytes(&reader, &item, LXP_MAX_BATCH_BODY_BYTES);
+            if (status != LXP_OK) break;
+            previous = kind;
+            i = (size_t)kind - 1U;
+            if (pass == 0U) {
+                if (counts[i] == LXP_MAX_BATCH_ACTIVITIES) {
+                    status = LXP_ERR_LENGTH_LIMIT;
+                    break;
+                }
+                ++counts[i];
+            } else {
+                groups[i][positions[i]++] = item;
+            }
+        }
+        if (status == LXP_OK) status = lxp_codec_finish(&reader);
+        if (pass == 0U) {
+            for (i = 0U; status == LXP_OK && i < 2U; ++i) {
+                void *memory = NULL;
+                if (counts[i] != 0U)
+                    status = lxp_arena_alloc(arena, counts[i] * sizeof(lxp_byte_span),
+                                             _Alignof(lxp_byte_span), &memory);
+                groups[i] = memory;
+            }
+        }
+    }
+    if (status != LXP_OK) {
+        (void)lxp_arena_reset(arena, mark);
+        return status;
+    }
+    *receipts = groups[0];
+    *events = groups[1];
+    *receipt_count = counts[0];
+    *event_count = counts[1];
+    return LXP_OK;
+}
+
+
+lxp_result lxp_da_bundle_body(const lxp_da_bundle *bundle,
+                              const lxp_batch_header *header,
+                              lxp_arena *arena, lxp_batch_body *body)
+{
+    lxp_batch_body built = {0};
+    lxp_byte_span classes[LXP_DA_CLASS_COUNT] = {{0}};
+    lxp_byte_span *receipts, *events;
+    size_t receipt_count, event_count, i, kind, mark;
+    uint8_t root[32];
+    lxp_result status;
+    if (bundle == NULL || header == NULL || arena == NULL || body == NULL ||
+        bundle->batch_number != header->batch_number)
+        return LXP_ERR_NON_CANONICAL;
+    mark = lxp_arena_mark(arena);
+    status = lxp_da_bundle_root(bundle, arena, root);
+    if (status == LXP_OK && lxp_ct_memcmp(root, header->data_availability_root, 32U) != 0)
+        status = LXP_ERR_ROOT_MISMATCH;
+    for (kind = 1U; status == LXP_OK && kind <= LXP_DA_CLASS_COUNT; ++kind) {
+        size_t length = 0U, offset = 0U;
+        bool present = false;
+        void *memory = NULL;
+        for (i = 0U; i < bundle->chunk_count; ++i) {
+            const lxp_da_chunk *chunk = &bundle->chunks[i];
+            if ((size_t)chunk->availability_class != kind) continue;
+            if (chunk->class_offset != length || chunk->length > LXP_MAX_BATCH_BODY_BYTES - length) {
+                status = LXP_ERR_DA_MISSING;
+                break;
+            }
+            length += chunk->length;
+            present = true;
+        }
+        if (status == LXP_OK && !present) status = LXP_ERR_DA_MISSING;
+        if (status == LXP_OK && length != 0U)
+            status = lxp_arena_alloc(arena, length, 1U, &memory);
+        if (status != LXP_OK) break;
+        for (i = 0U; i < bundle->chunk_count; ++i) {
+            const lxp_da_chunk *chunk = &bundle->chunks[i];
+            if ((size_t)chunk->availability_class != kind) continue;
+            if (chunk->length != 0U)
+                (void)memcpy((uint8_t *)memory + offset, chunk->bytes.bytes, chunk->length);
+            offset += chunk->length;
+        }
+        classes[kind - 1U] = (lxp_byte_span){memory, length};
+    }
+    built.header = *header;
+    built.activities = classes[0];
+    built.receipts = classes[1];
+    built.oracle_inputs = classes[2];
+    built.state_diff = classes[3];
+    built.recovery_metadata = classes[4];
+    if (status == LXP_OK)
+        status = lxp_da_receipt_section_decode(built.receipts, arena,
+            &receipts, &receipt_count, &events, &event_count);
+    if (status == LXP_OK)
+        status = lxp_replay_section_encode(events, event_count, arena, &built.events);
+    if (status == LXP_OK)
+        status = lxp_batch_availability_root(&built, arena, root);
+    if (status == LXP_OK && lxp_ct_memcmp(root, header->data_availability_root, 32U) != 0)
+        status = LXP_ERR_ROOT_MISMATCH;
+    if (status != LXP_OK) {
+        (void)lxp_arena_reset(arena, mark);
+        return status;
+    }
+    *body = built;
+    return LXP_OK;
 }

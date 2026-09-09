@@ -2,6 +2,7 @@
 
 #include "layerx/lxp_activity.h"
 #include "layerx/lxp_batch.h"
+#include "layerx/lxp_da.h"
 #include "layerx/lxp_history.h"
 #include "layerx/lxp_receipt.h"
 
@@ -105,7 +106,6 @@ int main(void)
     lxp_byte_span receipt_span;
     lxp_byte_span event_span = { event, sizeof(event) };
     lxp_byte_span oracle_span = { oracle, sizeof(oracle) };
-    lxp_byte_span availability[4];
     lxp_history history;
     lxp_history_query_spec query;
     lxp_history_result result;
@@ -158,13 +158,9 @@ int main(void)
         encoded.length > sizeof(receipt_storage)) goto cleanup_log;
     receipt_span = (lxp_byte_span){ receipt_storage, encoded.length };
     (void)memcpy(receipt_storage, encoded.bytes, encoded.length);
-    availability[0] = activity_span;
-    availability[1] = receipt_span;
-    availability[2] = event_span;
-    availability[3] = oracle_span;
     root_inputs = (lxp_batch_root_inputs){
         &activity_span, 1U, &receipt_span, 1U, &event_span, 1U,
-        &oracle_span, 1U, availability, 4U
+        &oracle_span, 1U, NULL, 0U
     };
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
         lxp_batch_roots_compute(&root_inputs, &arena, &roots) != LXP_OK)
@@ -181,13 +177,13 @@ int main(void)
                  roots.receipt_merkle_root, 32U);
     (void)memcpy(batch.header.event_merkle_root, roots.event_merkle_root, 32U);
     (void)memcpy(batch.header.oracle_root, roots.oracle_root, 32U);
-    (void)memcpy(batch.header.data_availability_root,
-                 roots.data_availability_root, 32U);
     batch.sequencer_signature[0] = 8U;
     batch.activities = activity_span;
     batch.receipts = receipt_span;
     batch.events = event_span;
     batch.oracle_inputs = oracle_span;
+    if (lxp_batch_availability_root(&batch, &arena,
+            batch.header.data_availability_root) != LXP_OK) goto cleanup_log;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
         lxp_batch_body_encode(&batch, &arena, &encoded) != LXP_OK ||
         encoded.length > sizeof(batch_storage)) goto cleanup_log;
@@ -290,16 +286,13 @@ int main(void)
     receipt_span = served_batch.receipts;
     event_span = served_batch.events;
     oracle_span = served_batch.oracle_inputs;
-    availability[0] = activity_span;
-    availability[1] = receipt_span;
-    availability[2] = event_span;
-    availability[3] = oracle_span;
     root_inputs = (lxp_batch_root_inputs){
         &activity_span, 1U, &receipt_span, 1U, &event_span, 1U,
-        &oracle_span, 1U, availability, 4U
+        &oracle_span, 1U, NULL, 0U
     };
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
         lxp_batch_roots_compute(&root_inputs, &arena, &roots) != LXP_OK ||
+        lxp_batch_availability_root(&served_batch, &arena, roots.data_availability_root) != LXP_OK ||
         memcmp(roots.activity_merkle_root,
                batch.header.activity_merkle_root, 32U) != 0 ||
         memcmp(roots.receipt_merkle_root,

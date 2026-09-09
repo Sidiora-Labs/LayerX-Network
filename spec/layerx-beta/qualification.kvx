@@ -4990,3 +4990,171 @@ symbol = "restarting_server_reobserves_instead_of_serving_archived_finality"
 observed = "After rebasing onto main the package suite passes fmt and clippy; the parallel test run on the shared workstation (load average 5 to 11 during concurrent image builds) fails this one test with Error Unavailable while the same binary passes serially (--test-threads=1) and alone, and an idle 64-core server passed 103 consecutive parallel runs of the unchanged suite (qual-logs/hm5-rebase/test-full-env.log, test-serial.log, test-rerun-1..3.log). The test listener uses a 100 ms deadline and 50 ms request timeout."
 assumption = "The failure is deadline expiry under host load, not a rebase regression or shared test state; no deadline, assertion, retry or ignore was changed. A less load-sensitive proof of the restart behaviour is left to the movement provider owner."
 severity = "note"
+
+[observation.6.1.18]
+task = "6.1"
+file = "src/replica/lxp_replay.c src/guarantor/lxp_guarantor.c src/sequencer/lxp_batch_roots.c src/network/lxp_da_bundle.c"
+symbol = "replay_batch lxp_guarantor_recompute_roots lxp_batch_roots_compute lxp_da_bundle_root"
+observed = "formerly observation.6.1.da_commitment_conflict. Publication replay computes the empty DA root using NULL/0 inputs; guarantor replay computes ordinary Merkle leaves over five complete sections; DA bundle verification computes domain-separated metadata-bound chunk digests. These are different commitments. Publishing the DA chunk root does not satisfy the existing publication and guarantor replay root assertions. Raw source evidence: qual-logs/dan1/source-blockers.log. No qualification gate ran."
+assumption = "The replay and guarantor owners must supply a common canonical commitment path while preserving root assertions before daemon DA publication can be qualified."
+severity = "blocker"
+
+[observation.6.1.19]
+task = "6.1"
+file = "include/layerx/lxp_guarantor.h src/paxeer/lxp_checkpoint_cert.c cmd/layerxd/lxp_daemon_evidence.c agent/schema/lni/README.md agent/crates/layerx-client/tests/lni_schema.rs"
+symbol = "lxp_checkpoint_certificate lxp_checkpoint_certificate_hash lni_schema_and_document_cover_every_declared_message"
+observed = "formerly observation.6.1.da_candidate_interface. The checkpoint certificate type and hash bind one header plus supplied proof bytes; the daemon evidence path receives finalized certificate material rather than producing an unfinalized checkpoint range, guarantor-set identity and validity proof. Adding a candidate message also requires its name in the schema README because the existing Rust schema test checks every message against that document, outside the permitted edit paths. Raw source evidence: qual-logs/dan1/source-blockers.log."
+assumption = "Checkpoint production must expose authoritative candidate/range material and the schema documentation owner must append the additive message entry without weakening the existing checks."
+severity = "blocker"
+
+[observation.6.1.20]
+task = "6.1"
+file = "include/layerx/lxp_da.h src/network/lxp_da_bundle.c cmd/layerxd/lxp_daemon_process.c src/replica/lxp_replay.c src/guarantor/lxp_guarantor.c"
+symbol = "lxp_batch_availability_root"
+observed = "formerly observation.6.1.da_canonical_commitment_decision. Owner-directed D1 redefines sealed data_availability_root as the Merkle root of lxp_da_bundle_build at LXP_DA_MAX_CHUNK_BYTES, 65536 bytes. Existing daemon publication and publication replay use empty availability inputs; guarantor replay uses whole-section leaves. These commitments drift from the metadata-bound DA chunk root verified by native possession and Rust availability proofs. An additive canonical root helper is written; producer and verifier integration is incomplete and no qualification gate ran."
+assumption = "Every header comparison must remain a comparison against an independently recomputed canonical bundle root; oracle commitments remain unchanged. D5 supersedes the candidate-interface observation: no new candidate tag is required and beta validity proof bytes are empty."
+severity = "blocker"
+
+[observation.6.1.21]
+task = "6.1"
+file = "src/protocol/lxp_kernel.c include/layerx/lxp_kernel.h cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_batch_wal.c"
+symbol = "lxp_kernel_prepared_batch commit_prepared_batch_wal"
+observed = "formerly observation.6.1.da_prepared_state_access. The signed WAL header is constructed before prepared-batch commit. The prepared base and settled kernels are private struct members in src/protocol/lxp_kernel.c, outside the permitted edit paths. Public prepared-batch accessors expose roots and receipt/event bytes but not account leaves or module state. D2 state diff and recovery metadata cannot be constructed from the settled state through that public API before WAL signing. Exact accessor request is in untracked NEEDS.md; source excerpts are in qual-logs/dan1/prepared-state-source.log."
+assumption = "Expose read-only base and settled kernel accessors or an equivalent canonical encoding API in the kernel owner file. Preserve WAL-before-commit ordering and do not encode the live pre-batch state as the settled state. Full implementation is incomplete, so phase-separated qualification has not started."
+severity = "blocker"
+
+[observation.6.1.22]
+task = "6.1"
+file = "src/protocol/lxp_kernel.c include/layerx/lxp_kernel.h src/network/lxp_da_bundle.c cmd/layerxd/lxp_daemon_lni.c"
+symbol = "lxp_kernel_prepared_batch_base_kernel lxp_kernel_prepared_batch_settled_kernel"
+observed = "formerly observation.6.1.da_prepared_state_access_resolved. The granted additive accessors return the prepared base and settled kernels as const borrowed pointers and return NULL for NULL. Their lifetime ends at prepared-batch destruction. Generic replay, guarantor and served-byte root verification now call lxp_batch_availability_root while retaining header comparisons. Tagged receipt encoding, kernel recovery metadata encoding and the tag 18 handler are written but not integrated into durable daemon publication. The prior prepared-state path restriction is resolved."
+assumption = "The implementation stage remains incomplete. No formatting, build, test or runtime qualification result is asserted. The availability capability remains disabled until a verified retained store is bound."
+severity = "note"
+
+[observation.6.1.23]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_batch_wal.c src/storage/lxp_da_verified.c src/network/lxp_da_bundle.c include/layerx/lxp_replica.h src/replica/lxp_replay.c agent/crates/layerx-client/src/availability.rs"
+symbol = "lxp_da_body_from_kernels lxp_daemon_batch_wal_body lxp_da_log_store_body lxp_replay_engine_bind_kernel"
+observed = "formerly observation.6.1.da_body_durability. Canonical bodies derive account diffs from the actual base and settled account registries and recovery metadata from the settled kernel. Prepared WAL encoding carries those sections in version 4 under the existing byte bound. A separate da-bodies.log preserves canonical bodies for independent evidence reconstruction without modifying the header-only batch log contract. Served files reside in da under the checkpoint directory. The retention parameter defaults to 100000 and rejects values below 1024; pruning preserves the newest finalized checkpoint. Generic replay requires an explicitly bound real kernel and compares its actual roots and recomputed account diff. Rust activity and oracle sections consume the canonical sequence count; receipt sections reject reordered tags."
+assumption = "Replay-engine consumers and canonical fixtures require migration to real kernel state and canonical sections before qualification. Startup, crash recovery, retention boundaries, selector refusals and real-daemon Rust retrieval require executed integration evidence. No gate result is asserted."
+severity = "note"
+
+[observation.6.1.24]
+task = "6.1"
+file = "src/network/lxp_da_bundle.c src/replica/lxp_replay.c cmd/layerxd/lxp_daemon_process.c tests/state/lxp_test_state_diff.c tests/support/lxp_real_replay.h"
+symbol = "lxp_da_recovery_verify_kernel lxp_real_replay_transition"
+observed = "formerly observation.6.1.da_recovery_recomputation. Replay and settled WAL recovery now compare canonical recovery bytes with a fresh encoding of the actual kernel module roots, account frontier, sequence and watermarks. Mutation, truncation, trailing-byte, account-state and watermark refusal cases are written. Replica, retrieval, tool and guarantor replay fixtures use signed SEND activities through the asset module and kernel; occupancy fixtures derive expected bodies by finalizing an independent state snapshot. Qualification has not started."
+assumption = "Real-daemon Rust availability coverage and remaining fixture migration must be complete before phase-separated gates run. Existing WAL schema recovery assertions still require version 1 and 2 records while availability-bearing records use version 4; backward-schema coverage must be retained without relaxing those assertions."
+severity = "note"
+
+[observation.6.1.25]
+task = "6.1"
+file = "agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/program-admission.sh tests/daemon/lxp_test_program_admission.c Makefile cmd/layerxd/lxp_daemon_process.c"
+symbol = "real_daemon_availability_refusals availability_batches availability_verify_retained availability_prune"
+observed = "formerly observation.6.1.da_native_refusal_harness. The Rust integration harness launches the native sequencer and replica through the existing bootstrap harness, submits nine signed deployments, retrieves and signature-verifies headers through tag 12, and asserts typed unknown-batch, unfinalized-batch and over-eight-batch range refusals. It truncates a retained bundle, restarts the sequencer and asserts availability_fetch is withheld while signed header reads still work. Startup now checks all retained batches when no finalized checkpoint permits pruning; pruning runs for both single-activity and prepared publication. These paths are written but have not run."
+assumption = "D6 successful fetches by batch, activity and within-batch sequence require the remaining real settlement registration harness and Rust chunk verification coverage. No gate is reported as passed; implementation and qualification remain incomplete."
+severity = "note"
+
+[observation.6.1.26]
+task = "6.1"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "make beta-ledger-check"
+observed = "formerly observation.6.1.18. The ledger gate exits 2 because eight appended observation keys use descriptive final segments rather than numeric segments. Evidence: qual-logs/dan1/beta-ledger-check.log and qual-logs/dan1/beta-ledger-check.exit. The malformed keys range from observation.6.1.da_commitment_conflict through observation.6.1.da_native_refusal_harness."
+assumption = "Renaming existing observation keys requires authority to modify prior entries; the current ledger scope is append-only. Existing observations and the validation rule remain intact."
+severity = "blocker"
+
+[observation.6.1.27]
+task = "6.1"
+file = "tests/storage/lxp_test_batch_wal_recovery.c cmd/layerxd/lxp_daemon_batch_wal.c"
+symbol = "recover_both_schemas encode_record"
+observed = "formerly observation.6.1.19. make test-batch-wal-recovery exits 2. The recovery fixture now carries canonical state diff and recovery metadata, selecting availability WAL version 4. recover_both_schemas still asserts version 1 has NULL artifact arrays and that encoded versions are 1 and 2; version 4 preserves canonical body sections and includes artifact arrays. Diagnostic evidence: qual-logs/dan1/recovery-diagnostic.log, check at line 459."
+assumption = "The existing assertions and canonical WAL encoding remain unchanged. The legacy-schema test contract must be reconciled with mandatory canonical-body validation without relaxing version or root checks."
+severity = "blocker"
+
+[observation.6.1.28]
+task = "6.1"
+file = "tests/test_da_unavailable.c src/network/lxp_da_bundle.c"
+symbol = "lxp_da_bundle_root lxp_da_withhold_sim"
+observed = "formerly observation.6.1.20. make test-da-unavailable exits 2. The test requires root computation to succeed for a bundle with an entire availability class removed. Canonical bundle root validation requires all five ordered classes and refuses that incomplete bundle. Diagnostic evidence: qual-logs/dan1/recovery-diagnostic.log, check at line 96."
+assumption = "The existing success assertion and the canonical completeness check remain intact under the no-weakening rule. The incomplete-bundle root test contract requires reconciliation before this gate can pass."
+severity = "blocker"
+
+[observation.6.1.29]
+task = "6.1"
+file = "platform/Cargo.lock tests/daemon/bootstrap-send.sh"
+symbol = "make test-daemon-finality-authority"
+observed = "formerly observation.6.1.21. The finality JSON grammar test and real-chain registered checkpoint, wrong-chain, wrong-settlement, wrong-checkpoint, wrong-block, invalid-signature, wrong-registry, reverted-transaction and unreachable-chain checks pass. The aggregate daemon target then exits 2 because bootstrap-send invokes a locked platform Cargo build whose lockfile requires an update. Evidence: qual-logs/dan1/test-daemon-finality-authority.log and qual-logs/dan1/test-daemon-finality-authority.exit."
+assumption = "The platform workspace owner must reconcile its lockfile. Platform files are outside this change scope; locked dependency enforcement remains enabled."
+severity = "blocker"
+
+[observation.6.1.30]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_lni.c tests/daemon/program-admission.sh agent/crates/layerx-client/tests/availability_daemon.rs tests/support/lxp_real_replay.h"
+symbol = "send_availability real_daemon_availability_refusals"
+observed = "formerly observation.6.1.22. make test-daemon-availability passes real settlement registration, signed header retrieval, verified batch/activity/sequence/checkpoint fetches, unknown and over-limit refusals, and corrupt-store restart capability withholding. make -k test, make build, the focused state-diff/store/replay/retrieval/guarantor/tools targets, occupancy replay, build-asan/build-ubsan/build-tsan, test-asan/test-ubsan/test-tsan and test-crypto-sanitizers pass. All daemon targets except the platform-lockfile-blocked finality aggregate pass, including the full maintenance crash matrix. Client/proof cargo fmt --check, locked clippy with -D warnings and locked cargo test pass. Exact commands and exit files are in STATUS.md and qual-logs/dan1; native fetch evidence is qual-logs/dan1/daemon-availability-fourth.log, Rust aggregate evidence is qual-logs/dan1/cargo-test.log and crash evidence is qual-logs/dan1/test-daemon-maintenance-crash.log."
+assumption = "These executed gates establish focused and real-daemon evidence, not complete qualification. Observations 6.1.18 through 6.1.21 retain the ledger, WAL, incomplete-bundle and platform-lockfile conflicts. No assertion or locked dependency gate was relaxed."
+severity = "blocker"
+
+[observation.6.1.31]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_batch_wal.c cmd/layerxd/lxp_daemon_process.c tests/storage/lxp_test_batch_wal_recovery.c"
+symbol = "recover_both_schemas validate_input encode_record recover_prepared_batch_wal recover_ranged_batch_authority"
+observed = "Legacy WAL records retain signature, canonical item, publication digest and historical empty availability root validation. Version 4 still requires canonical body and recomputed root validation; all new writes use version 4. Legacy transitions preserve the original durable record until guarded retirement, so interrupted recovery remains repeatable without writing obsolete versions. Recovery publishes legacy receipt evidence without inventing a body; absent bundles fail retained-store verification and withhold availability_fetch. The schema fixture materializes legacy wire layouts from signed records while preserving the version and artifact assertions. Coverage checks absent canonical body fields, body refusal, missing verified bundles and transitions without version rewriting. make test-batch-wal-recovery build/bin/layerxd exits 0; evidence: qual-logs/dan1f/item1-final.log and qual-logs/dan1f/item1-final.exit."
+assumption = "Legacy compatibility resolves observation 6.1.27. Aggregate and real-daemon reruns remain pending."
+severity = "note"
+
+[observation.6.1.32]
+task = "6.1"
+file = "tests/test_da_unavailable.c"
+symbol = "main lxp_da_withhold_sim"
+observed = "The unavailable fixture builds all five classes with LXP_DA_CANONICAL_CHUNK_BYTES and computes the complete canonical root before removing a class from the served copy. It no longer requests a root for an incomplete bundle, whose root is undefined under the canonical commitment contract. The checkpoint retains the complete root. All availability-mask, storage refusal, possession refusal, finalisation blocking, emergency-mode and error-code assertions remain intact. make test-da-unavailable exits 0 across all five withheld classes; evidence: qual-logs/dan1f/item2.log and qual-logs/dan1f/item2.exit."
+assumption = "This fixture migration resolves observation 6.1.28 without changing canonical completeness validation."
+severity = "note"
+
+[observation.6.1.33]
+task = "6.1"
+file = "tests/storage/lxp_test_batch_wal_recovery.c cmd/layerxd/lxp_daemon_process.c tests/daemon/bootstrap-send.sh"
+symbol = "retire_legacy_records recover_ranged_batch_authority make test-daemon-finality-authority"
+observed = "Legacy retirement qualification covers versions 1 and 2 at base and settled boundaries, reload after an in-memory terminal transition, recovery classification from the unchanged prepared record and guarded retirement. Body-less inputs are refused by the version-4 writer. make -k test-batch-wal-recovery test-da-unavailable and make -k test exit 0 on the final source; logs: qual-logs/dan1f/focused-final.log and aggregate-final.log. make test-daemon-finality-authority initially exits 2 because its offline bootstrap build lacks webpki-root-certs 1.0.9. cargo fetch --locked --manifest-path platform/Cargo.toml exits 0 without lockfile changes; the unchanged finality target then exits 0, including the platform bootstrap authority test. Logs: qual-logs/dan1f/finality.log, platform-fetch.log and finality-retry.log. make test-daemon-availability exits 0; log: qual-logs/dan1f/availability.log. Client/proof cargo fmt --check, locked clippy with --all-targets and -D warnings, and locked cargo test exit 0; logs: qual-logs/dan1f/rust-fmt.log, rust-clippy.log and rust-test.log. Each gate has a sibling exit file."
+assumption = "The offline dependency miss is resolved. These are executed local gates; unavailable image and cluster gates remain unrun. Canonical root and refusal assertions remain enforced."
+severity = "note"
+
+[observation.6.1.34]
+task = "6.1"
+file = "spec/layerx-beta/qualification.kvx tests/storage/lxp_test_batch_wal_recovery.c tests/test_da_unavailable.c"
+symbol = "make beta-ledger-check recover_both_schemas"
+observed = "The final local gate table and reproducible guarantor harness commands are recorded in untracked STATUS.md, with exact command, exit and qual-logs/dan1f log paths. NEEDS.md has no outstanding continuation requests. The ledger check passes after numeric-key reconciliation; evidence: qual-logs/dan1f/ledger-final.log. Decoded-value and artifact assertions in recover_both_schemas and the unavailable fixture's storage, possession, finality and error-code assertions are preserved byte for byte; evidence: qual-logs/dan1f/assertion-preservation.log."
+assumption = "The requested local continuation gates pass. Prior sanitizer and maintenance-crash results are historical, and image and cluster gates were not run. Legacy-specific coverage is WAL decoding, unavailable storage, write refusal and retirement; native integration covers corrupt-store capability withholding."
+severity = "note"
+
+[observation.6.1.35]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/src/availability.rs agent/crates/layerx-client/tests/availability_daemon.rs agent/schema/lni/v1.kvx agent/schema/lni/README.md docs/wiki/DataAvailability.md"
+symbol = "send_availability fetch_sealed_candidate candidate_fetch"
+observed = "The D4 contract extension adds tag-18 selector 05 followed by batch u64be for one durable sealed signed candidate regardless of finalized head. It uses the same connection UID/GID authorization as tag 28, verified retained header scan and complete canonical bundle verification, ordered tag-19 proof stream and empty tag-20 END. Selectors 01-04 retain their finalized-head refusal. The client entry point shares chunk and record verification and rejects nonempty END proof material. Real-daemon coverage fetches batch 1 against its verified tag-12 header while the checkpoint identifier is zero and before releasing the header to certificate preparation, then fetches batch 9 above finalized batch 1. Existing finalized selectors and -804 assertions remain intact; candidate zero, unknown, unsealed-next-number and corrupt-store requests are refused. make build/bin/layerxd, make test-daemon-availability, make test-daemon-finality-authority, make -k test, cargo fmt --check --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof, cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof --all-targets -- -D warnings, cargo test --locked --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof and make beta-ledger-check exit 0. Logs and sibling exit files: qual-logs/dan1g/build, availability, finality, aggregate, rust-fmt, rust-clippy, rust-test and ledger."
+assumption = "Candidate retrieval neither attests nor registers or finalizes a batch. Both candidate fetches require no certificate for their selected batch; guarantor replay and attestation remain separate responsibilities. Codify context commands could not run because cg is absent. Image and cluster gates were not run."
+severity = "note"
+
+[observation.6.1.36]
+task = "6.1"
+file = "agent/crates/layerx-agentd/src/export.rs agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-agentd/tests/budget_unknown.rs agent/crates/layerx-agentd/tests/operator.rs"
+symbol = "cargo fmt"
+observed = "cargo fmt --check --manifest-path agent/Cargo.toml -p layerx-client -p layerx-agentd exits 1 with inherited formatting differences in these four untouched files. rustfmt --check --edition 2021 agent/crates/layerx-client/src/availability.rs agent/crates/layerx-agentd/tests/availability.rs exits 0. Evidence: qual-logs/dan2/fmt.log, fmt.exit, fmt-touched.log and fmt-touched.exit."
+assumption = "The formatting differences require the owning scope to repair; touched-file formatting passes without modifying unrelated files."
+severity = "blocker"
+
+[observation.6.1.37]
+task = "6.1"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs agent/crates/layerx-agentd/tests/budget_create.rs build/bin/layerxd"
+symbol = "fixture failed_creation_leaves_no_daemon_budget_record"
+observed = "cargo test --locked --manifest-path agent/Cargo.toml -p layerx-client -p layerx-agentd exits 101 at budget_create because build/bin/layerxd is absent. Four further failures report the poisoned real-authority fixture lock. The shared /root/lx-lanes/native-bin directory is also absent. The aggregate stops before completing all package targets. Evidence: qual-logs/dan2/test.log and test.exit."
+assumption = "Provide real native layerxd, layerx-genesis-build and required companion binaries through LAYERX_TEST_NATIVE_BIN_DIR, then rerun the unchanged aggregate gate. No native implementation or test assertion was changed. Image and cluster gates were not run."
+severity = "blocker"
+
+[observation.6.1.38]
+task = "6.1"
+file = "agent/crates/layerx-client/src/availability.rs agent/crates/layerx-agentd/tests/availability.rs"
+symbol = "Sections::from_chunks decode_records class_presence_precedes_decoding_and_complete_chunks_require_order"
+observed = "The availability fixture uses layerx_wire::encode::Encoder for count-prefixed activity/oracle sequences and tagged length-prefixed receipts, matching src/replica/lxp_replay_section.c and src/network/lxp_da_bundle.c. Class presence is checked before record decoding so a withheld oracle section reports MissingClass rather than treating absent bytes as malformed framing. Complete responses retain record decoding, chunk ordering and root verification. Both original daemon assertions remain unchanged. Regression coverage pins empty and withheld responses, missing classes with reordered chunks, complete reordered refusal, successful canonical retrieval, omitted and incorrect sequence counts, and reversed receipt/event tags. Touched-file rustfmt check, locked all-target clippy with -D warnings, daemon availability tests (3), client availability tests (4), and the focused decoder test (1) exit 0. Evidence: qual-logs/dan2/fmt-touched.log, clippy.log, focused.log, client-availability.log and decoder.log with sibling exit files."
+assumption = "Focused qualification passes. Full qualification remains blocked by the inherited formatting differences and absent native binaries recorded separately. The canonical decoder and original assertions were not relaxed."
+severity = "note"

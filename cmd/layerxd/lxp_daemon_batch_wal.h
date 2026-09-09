@@ -50,7 +50,13 @@ typedef struct lxp_daemon_batch_wal_input {
     const lxp_merkle_proof *receipt_proofs;
     lxp_byte_span maintenance;
     lxp_merkle_proof maintenance_proof;
+    lxp_byte_span state_diff;
+    lxp_byte_span recovery_metadata;
 } lxp_daemon_batch_wal_input;
+
+lxp_result lxp_daemon_batch_wal_body(
+    const lxp_daemon_batch_wal_input *input, lxp_arena *arena,
+    lxp_batch_body *body);
 
 typedef struct lxp_daemon_batch_wal_record
     lxp_daemon_batch_wal_record;
