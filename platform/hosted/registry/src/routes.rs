@@ -106,6 +106,19 @@ impl Registrar {
             process_limit: config.build_process_limit,
             file_size_bytes: config.build_file_size_bytes,
         })?;
+        Self::open_with_builder(config, now, builder, false)
+    }
+
+    /// Opens durable and node state with the builder verified by the listener.
+    ///
+    /// # Errors
+    /// Refuses corrupt durable state or unavailable protocol authority.
+    pub fn open_with_builder(
+        config: &Config,
+        now: u64,
+        builder: HermeticBuilder,
+        health: bool,
+    ) -> Result<Self, String> {
         let verifier = SourceVerifier::new(builder, config.attempts)
             .map_err(|refused| format!("the build pipeline is not admissible: {refused}"))?;
         if config.staleness_ms == 0 {
@@ -142,6 +155,10 @@ impl Registrar {
             quarantined: Vec::new(),
         };
         registrar.rebuild()?;
+        if health {
+            registrar.node_state.current_head_or_pending(now)?;
+            return Ok(registrar);
+        }
         if registrar.awaits_first_protocol_head(now)? {
             return Ok(registrar);
         }
@@ -164,6 +181,12 @@ impl Registrar {
             return Ok(false);
         }
         Ok(self.node_state.current_head_or_pending(now)?.is_none())
+    }
+
+    /// Returns the startup-verified builder for the bounded worker pipe.
+    #[must_use]
+    pub fn verified_builder(&self) -> HermeticBuilder {
+        self.verifier.runner().clone()
     }
 
     /// Reports every incomplete deployment unit the journal quarantined when
