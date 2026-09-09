@@ -164,14 +164,27 @@ form (`platform/hosted/tests/beta-cluster.sh:903-908`). The
 same public key is the Paxeer guarantor signer input
 (`platform/hosted/tests/beta-cluster.sh:917-923`).
 
-The genesis request is LXGB v1, length `395`
-(`platform/hosted/node/bootstrap.sh:370-398`):
+The genesis request is LXGB v2. Its existing fixed body is 395 bytes;
+`--genesis-metadata FILE` supplies the required canonical metadata suffix:
 
-- magic `LXGB`, version `1`, protocol `3`
+- magic `LXGB`, version `2`, protocol `3`
 - network id, genesis timestamp milliseconds
 - one parameter `parameter-version` = `1`
 - one guarantor (id, compressed public key, bond `0`)
 - the genesis asset, fee coefficients, and demand coefficients
+- Asset record count u16, then each record's u16 byte length and canonical
+  version-3 bytes, followed by the named fee schedule's u16 byte length and
+  canonical version-2 bytes (all integers big-endian)
+
+Supply the authoritative Asset records, including issuer DID id32, original
+salt, cap, pause and supply. The fresh empty genesis builder requires zero
+circulating supply and custody issuer kind; it validates the records and
+schedule before signing. Do not invent salts for an existing asset. The
+metadata file must be kept outside a data directory discarded with `--force`.
+The same suffix is required by `prepare-beta.py --genesis-metadata FILE` and
+`tests/bridge/custody_genesis.py --genesis-metadata FILE`. Version-1 decoding
+remains available for existing signed artifacts; it cannot restore omitted
+metadata.
 
 `layerx-genesis-build` signs that request with the sequencer
 seed (`platform/hosted/node/bootstrap.sh:400-408`). LXRR bytes

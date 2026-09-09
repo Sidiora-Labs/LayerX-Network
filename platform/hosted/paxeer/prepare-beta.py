@@ -34,14 +34,14 @@ def keypair(directory, name):
     return address, '0x' + compressed.hex()
 
 
-def genesis_request(guarantors, network_id, asset_id, timestamp_ms):
+def genesis_request(guarantors, network_id, asset_id, timestamp_ms, metadata):
     if not 0 < network_id < 2**32 or not 0 < timestamp_ms < 2**64:
         raise ValueError('invalid genesis network or timestamp')
     asset = bytes.fromhex(asset_id.removeprefix('0x'))
     if len(asset) != 32 or not any(asset) or len(guarantors) != 3:
         raise ValueError('beta genesis requires one asset and three guarantors')
     be = lambda value, width: value.to_bytes(width, 'big')
-    request = bytearray(b'LXGB\x01' + be(BETA_PROTOCOL_VERSION, 2))
+    request = bytearray(b'LXGB\x02' + be(BETA_PROTOCOL_VERSION, 2))
     request += be(network_id, 4) + be(timestamp_ms, 8) + be(1, 2) + be(7, 2)
     request += b'parameter-version'.ljust(32, b'\x00') + be(1, 32)
     request += be(len(guarantors), 2)
@@ -61,6 +61,9 @@ def genesis_request(guarantors, network_id, asset_id, timestamp_ms):
         request += be(price, 8)
     for demand in (100, 1, 1, 10, 1, 1000):
         request += be(demand, 8)
+    if not 219 < len(metadata) <= 16384 - len(request):
+        raise ValueError("genesis metadata length is outside request bounds")
+    request += metadata
     return bytes(request)
 
 
@@ -69,8 +72,10 @@ def main():
     parser.add_argument('directory', type=Path)
     parser.add_argument('--network-id', type=int, default=402)
     parser.add_argument('--asset-id', default=BETA_ASSET_ID)
+    parser.add_argument('--genesis-metadata', type=Path, required=True)
     parser.add_argument('--timestamp-ms', type=int, default=int(time.time() * 1000))
     args = parser.parse_args()
+    metadata = args.genesis_metadata.read_bytes()
     os.umask(0o077)
     target = args.directory.resolve()
     target.mkdir(mode=0o700, parents=False, exist_ok=False)
@@ -93,7 +98,7 @@ def main():
     (target/'guarantors.json').write_text(json.dumps(guarantors, indent=2) + '\n')
     (target/'deployment-input.json').write_text(json.dumps(deployment, indent=2) + '\n')
     (target/'genesis-request.lxgb').write_bytes(genesis_request(
-        guarantors, args.network_id, args.asset_id, args.timestamp_ms))
+        guarantors, args.network_id, args.asset_id, args.timestamp_ms, metadata))
     (keys/'genesis-signer.key').write_bytes(secrets.token_bytes(32))
     print(target)
 

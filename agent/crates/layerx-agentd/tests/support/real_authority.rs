@@ -1,4 +1,7 @@
 use ed25519_dalek::{Signer as _, SigningKey};
+#[path = "../../../../../tests/support/lxgb_metadata.rs"]
+mod lxgb_metadata;
+
 use layerx_agentd::boot::{handshake_gate, Gate, GateError};
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::refusal::decode_core_refusal;
@@ -185,7 +188,7 @@ fn genesis_request(
 ) -> Vec<u8> {
     let mut request = Vec::with_capacity(512);
     request.extend_from_slice(b"LXGB");
-    request.push(1);
+    request.push(2);
     request.extend_from_slice(&scope.protocol_version.to_be_bytes());
     request.extend_from_slice(&scope.network_id.to_be_bytes());
     request.extend_from_slice(&clock.now_ms().to_be_bytes());
@@ -217,6 +220,8 @@ fn genesis_request(
     for value in [100_u64, 1, 1, 10, 1, 1000] {
         request.extend_from_slice(&value.to_be_bytes());
     }
+    let issuer = SigningKey::from_bytes(&random32());
+    lxgb_metadata::append(&mut request, asset, &issuer.verifying_key().to_bytes(), &random32());
     request
 }
 
