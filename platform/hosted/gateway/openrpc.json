@@ -1,7 +1,7 @@
 {
   "openrpc": "1.3.2",
   "info": {
-    "title": "LayerX public reads",
+    "title": "LayerX public JSON-RPC",
     "version": "0.1.0",
     "description": "Available read dispatcher methods. DID enumeration returns unavailable until the native listing capability is integrated."
   },
@@ -291,6 +291,40 @@
         }
       },
       "description": "Verified proof with canonical value and signed batch header. Account proofs export the exact verified native proof bytes without reconstruction."
+    },
+    {
+      "name": "lx_sendActivity",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "canonical_hex",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^([0-9a-fA-F]{2})+$",
+            "maxLength": 1048576
+          }
+        },
+        {
+          "name": "commitment",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "executed",
+              "batched",
+              "finalised"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "outcome",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Requires an activity:write gateway key and the existing route scope for Programs activities. Uses activity-ID outer deduplication and preserves signed protocol idempotency. Returns a verified receipt for executed, verified inclusion for batched, and an exact matching verified checkpoint header for finalised; returns pending when evidence is absent after the bounded wait. An admission acknowledgement never establishes execution."
     }
   ]
 }
