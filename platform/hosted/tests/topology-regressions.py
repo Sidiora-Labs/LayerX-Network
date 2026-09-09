@@ -30,7 +30,7 @@ try:
 except Exception as error:
     parity_failed = True
     print('FAIL full-manifest parser parity:', error)
-print('PASS PyYAML resolves the real manifests; only two Human edges fail')
+print('PASS baseline without the Human manifest leaves exactly two expected Human edges unresolved')
 
 for parser in ('load_pyyaml', 'load_builtin'):
     for change, expected in [

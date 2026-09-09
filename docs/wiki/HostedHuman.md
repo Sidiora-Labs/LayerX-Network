@@ -30,5 +30,5 @@ The owner agent consumes `LAYERX_AGENT_HUMAN_PEERS` from
 `layerx-human-agent-config`. Its encoding is comma-separated
 `uid=<u32>;tenant=<tenant>;principal=<principal>` entries. The component binding
 uses UID 4020 and the same tenant and DID as the authority principal policy.
-The material assembler still requires the positional encoding and must be
-updated before this configuration can be provisioned successfully.
+The material assembler validates that named-field encoding and refuses malformed,
+duplicate, additional or differently bound peer entries.
