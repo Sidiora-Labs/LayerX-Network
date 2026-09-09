@@ -5348,3 +5348,11 @@ symbol = "symbol_valid lx_asset_register_decode"
 observed = "The typed registration decoder and issuer_kind nonzero stored-record validation accept 1..16 ASCII bytes consistently. UTF-8 name, decimals, custody lengths, truncation and trailing-byte refusals pass in qual-logs/pay1/pay1e-item3.log. The legacy issuer_kind zero registry helper retains its uppercase/digit check."
 assumption = "Broadening the legacy helper check is not required for shared native activity encoding and would relax an existing check; it is left intact."
 severity = "note"
+
+[observation.3.7.40]
+task = "3.7"
+file = "include/layerx/lxp_receipt.h src/protocol/lxp_receipt.c src/protocol/lxp_receipt_verify.c"
+symbol = "lxp_receipt lxp_ledger_receipt_input"
+observed = "Canonical receipt structures still lack before/after total_units. The Asset requirement now mandates explicit versioned authenticated supply binding and rejects the earlier no-new-schema claim. Receipt structs, wire codecs and verification are outside owned paths."
+assumption = "Endpoint tamper tests do not qualify supply tamper refusal. A coordinated receipt interface and verifier change is required; the earlier resolution in observation.3.7.27 does not close this finding."
+severity = "blocker"
