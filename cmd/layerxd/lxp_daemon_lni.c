@@ -2769,7 +2769,7 @@ static lxp_result parse_account_read_request(
         return LXP_ERR_MALFORMED_ENVELOPE;
     cursor = 2U;
     *kind = request->payload[cursor++];
-    if (*kind != 1U && *kind != 2U) return LXP_ERR_MALFORMED_ENVELOPE;
+    if (*kind != 1U && *kind != 2U && *kind != 3U) return LXP_ERR_MALFORMED_ENVELOPE;
     if (cursor > request->payload_length - 32U)
         return LXP_ERR_MALFORMED_ENVELOPE;
     *account_id = request->payload + cursor;
@@ -2830,6 +2830,61 @@ static lxp_result account_value_asset_matches(
             LXP_OK : LXP_ERR_ASSET_MISMATCH;
 }
 
+static lxp_result send_did_accounts(
+    lxp_daemon_lni_server *server, int descriptor, const lni_envelope *request,
+    const uint8_t did_id[32], int64_t deadline)
+{
+    lx_account_registry *accounts = server->owner->kernel->state->accounts;
+    uint8_t ids[LX_ACCOUNT_REGISTRY_CAPACITY][32];
+    size_t account_count;
+    uint8_t *bytes;
+    size_t cursor = 4U;
+    uint16_t count = 0U;
+    size_t capacity = server->frame_bytes;
+    lxp_result status = lx_account_list_did(accounts, did_id, ids,
+        LX_ACCOUNT_REGISTRY_CAPACITY, &account_count);
+    if (status != LXP_OK || capacity < 4U)
+        return evidence_refusal(server, descriptor, request->correlation_id,
+            status != LXP_OK ? status : LXP_ERR_LENGTH_LIMIT, deadline);
+    bytes = (uint8_t *)malloc(capacity);
+    if (bytes == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    bytes[0] = 0U; bytes[1] = 1U;
+    for (size_t i = 0U; i < account_count && status == LXP_OK; ++i) {
+        const lx_account *account = NULL;
+        lxp_daemon_account_evidence evidence;
+        lxp_byte_span value;
+        lxp_byte_span proof;
+        for (size_t j = 0U; j < accounts->count; ++j)
+            if (memcmp(accounts->accounts[j].id, ids[i], 32U) == 0) account = &accounts->accounts[j];
+        if (account == NULL) { status = LXP_FATAL_INVARIANT; break; }
+        status = latest_account_evidence(server->owner, account->id,
+            account->has_asset ? account->asset_id : NULL, NULL, server->owner->scratch, &evidence);
+        if (status == LXP_OK) status = lxp_daemon_account_evidence_wire_encode(
+            server->owner->evidence_store, &evidence, server->owner->kernel,
+            server->owner->network_id, account->id, 1U, 0U, NULL,
+            server->owner->scratch, &value, &proof);
+        if (status != LXP_OK) break;
+        if (value.length > UINT32_MAX || proof.length > UINT32_MAX ||
+            cursor > capacity || capacity - cursor < 40U ||
+            value.length > capacity - cursor - 40U ||
+            proof.length > capacity - cursor - 40U - value.length) {
+            status = LXP_ERR_LENGTH_LIMIT; break;
+        }
+        (void)memcpy(bytes + cursor, account->id, 32U); cursor += 32U;
+        store_u32(bytes + cursor, (uint32_t)value.length); cursor += 4U;
+        (void)memcpy(bytes + cursor, value.bytes, value.length); cursor += value.length;
+        store_u32(bytes + cursor, (uint32_t)proof.length); cursor += 4U;
+        (void)memcpy(bytes + cursor, proof.bytes, proof.length); cursor += proof.length;
+        ++count;
+    }
+    bytes[2] = (uint8_t)(count >> 8U); bytes[3] = (uint8_t)count;
+    if (status == LXP_OK) status = send_envelope(descriptor, server->frame_bytes,
+        LNI_ACCOUNT_READ_RESPONSE, request->correlation_id, bytes, cursor, NULL, 0U, deadline);
+    else status = evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
+    free(bytes);
+    return status;
+}
+
 static lxp_result send_account_read(
     lxp_daemon_lni_server *server, int descriptor,
     const lni_envelope *request, int64_t deadline)
@@ -2868,6 +2923,13 @@ static lxp_result send_account_read(
                             LXP_ERR_MODULE_DISABLED, deadline);
     if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
     mark = lxp_arena_mark(server->owner->scratch);
+    if (kind == 3U) {
+        status = selector_kind == 1U ? send_did_accounts(server, descriptor, request, account_id, deadline) :
+            evidence_refusal(server, descriptor, request->correlation_id, LXP_ERR_MODULE_DISABLED, deadline);
+        (void)lxp_arena_reset(server->owner->scratch, mark);
+        if (pthread_mutex_unlock(&server->owner->mutex) != 0) return LXP_FATAL_INVARIANT;
+        return status;
+    }
     if (selector_kind == 1U)
         status = latest_account_evidence(
             server->owner, account_id, kind == 1U ? asset_id : NULL, NULL,
