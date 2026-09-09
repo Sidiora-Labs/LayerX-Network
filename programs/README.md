@@ -54,6 +54,13 @@ arithmetic are denied across the tree.
 | `tests` | Cross-implementation vectors, the hostile-program `gauntlet`, and calldata fixtures |
 | `vendor` | Vendored, pinned dependencies for a hermetic build |
 
+Cargo otherwise promotes path dependencies below the workspace root into workspace
+members. The workspace explicitly excludes the vendored `parity-wasm`,
+`wasm-instrument`, and `wasmi` packages so `--workspace` gates exercise every LayerX
+member without treating third-party unit and documentation tests as LayerX
+qualification. Vendored crates are still compiled through the real LayerX dependency
+graph and remain subject to `tools/dependency-policy.sh`.
+
 ### The three crates
 
 **`layerx-programs-runtime`** is the deterministic WASM foundation for guest programs.

@@ -18,6 +18,12 @@ members = [
     "sdk/rust/lint",
 ]
 exclude = [
+    # Vendored path dependencies compile through their LayerX dependants, but are not
+    # LayerX workspace packages and must not contribute third-party test targets. Cargo
+    # requires these implicit path-dependency members to be named explicitly here.
+    "vendor/parity-wasm",
+    "vendor/wasm-instrument",
+    "vendor/wasmi-0.31.2",
     "sdk/rust/examples/escrow",
     "sdk/rust/examples/vault",
     "sdk/rust/quickstart",
