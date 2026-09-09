@@ -31,7 +31,7 @@ fn native_generated_vectors_and_refusals() -> TestResult {
     let Some(Json::Array(vectors)) = document.member("vectors") else {
         return Err("missing vectors".into());
     };
-    assert_eq!(vectors.len(), 7);
+    assert_eq!(vectors.len(), 10);
     for vector in vectors {
         let wire = bytes(vector, "proof")?;
         let root: [u8; 32] = bytes(vector, "root")?

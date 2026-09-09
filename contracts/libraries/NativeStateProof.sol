@@ -13,7 +13,7 @@ library NativeStateProof {
     }
 
     function root(bytes calldata proof, uint16 expectedModule) internal pure returns (bytes32) {
-        if (proof.length < 26 || proof.length > 1050779) revert InvalidEncoding();
+        if (proof.length < 26 || proof.length > 1051812) revert InvalidEncoding();
         if (uint16(bytes2(proof[:2])) != 2) revert WrongVersion();
         uint16 moduleId = uint16(bytes2(proof[2:4]));
         if (moduleId > 9 || moduleId != expectedModule) revert WrongModule();
@@ -29,6 +29,10 @@ library NativeStateProof {
                 "LXP/v1/state-leaf\x00", keyLength, valueLength, proof[8:valueAt], proof[valueAt + 4:cursor]
             )
         );
+        if (moduleId == 0 && keyLength == 33 && proof[8] == 0x04) {
+            (node, cursor) = fold(proof, cursor + 8, node, number(proof, cursor), number(proof, cursor + 4));
+            node = sha256(abi.encodePacked("LXP/v1/state-leaf\x00", uint32(12), uint32(32), "account-tree", node));
+        }
         uint32 index = number(proof, cursor);
         uint32 count = number(proof, cursor + 4);
         (node, cursor) = fold(proof, cursor + 8, node, index, count);
