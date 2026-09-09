@@ -7388,6 +7388,7 @@ observed = "The initial platform-lint attempts stop because cfg_aliases 0.2.2 is
 assumption = "The dependency-policy owner must resolve the license-policy conflict. The allowlist, dependency graph, warning policy and checks remain unchanged; the aggregate platform-lint gate is not qualified."
 
 [observation.6.8.144]
+[observation.6.8.110]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/human/provision.sh platform/hosted/human/provision.py"
@@ -7396,6 +7397,7 @@ observed = "The full bash qual-logs/au39/run-gate-3.sh wrapper exits 2 on merged
 assumption = "The retained disposable cluster remains running. owner-registration.json, owner-request.json and recovery-policy.json are absent, and no admission/deployment journal pairs exist under its work directory. The protected evidence producers remain required. Human Job execution, material publication, runtime startup, hosted smoke and successful full-gate completion are not qualified."
 
 [observation.6.8.145]
+[observation.6.8.111]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/registry/tests/readiness.py platform/hosted/registry/README.md platform/hosted/tests/beta-cluster.sh"
