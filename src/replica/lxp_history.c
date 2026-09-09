@@ -83,11 +83,12 @@ static lxp_result receipt_transaction_id(const uint8_t *bytes, size_t length,
     lxp_byte_span identifier;
     uint16_t version;
     lxp_result status;
-    if (transaction_id == NULL) return LXP_ERR_NON_CANONICAL;
+    if (transaction_id == NULL || bytes == NULL || length < 4U) return LXP_ERR_NON_CANONICAL;
     status = lxp_codec_reader_init(&reader, bytes, length);
     if (status == LXP_OK)
         status = lxp_codec_read_struct_header(&reader,
-                                              LXP_RECEIPT_STRUCTURE_TAG);
+                                              bytes[2] == 0x52U && bytes[3] == 0x02U ?
+                                                  0x5202U : LXP_RECEIPT_STRUCTURE_TAG);
     if (status == LXP_OK) status = lxp_codec_read_u16(&reader, &version);
     if (status == LXP_OK && version == 0U) status = LXP_ERR_NON_CANONICAL;
     if (status == LXP_OK)

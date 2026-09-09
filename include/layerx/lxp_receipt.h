@@ -96,6 +96,9 @@ typedef struct lxp_receipt {
     uint8_t to[32];
     lxp_u128 to_balance_before;
     lxp_u128 to_balance_after;
+    uint16_t supply_binding_version;
+    lxp_u128 total_units_before;
+    lxp_u128 total_units_after;
     uint8_t transfer_set_root[32];
     uint8_t authorization_hash[32];
     uint8_t context_hash[32];
@@ -140,6 +143,9 @@ typedef struct lxp_ledger_receipt_input {
     uint8_t to[32];
     lxp_u128 to_balance_before;
     lxp_u128 to_balance_after;
+    uint16_t supply_binding_version;
+    lxp_u128 total_units_before;
+    lxp_u128 total_units_after;
     uint8_t transfer_set_root[32];
     uint8_t authorization_hash[32];
     uint8_t context_hash[32];
@@ -181,6 +187,7 @@ lxp_result lxp_program_outcome_validate(const lxp_program_outcome *outcome);
 lxp_result lxp_program_outcome_validate_for_protocol(
     const lxp_program_outcome *outcome, uint16_t protocol_version);
 bool lxp_program_metering_schedule_available(uint32_t schedule_version);
+lxp_result lxp_receipt_validate_supply(const lxp_receipt *receipt);
 lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
                               bool include_signature, lxp_arena *arena,
                               lxp_byte_span *encoded);

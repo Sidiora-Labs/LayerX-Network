@@ -1495,6 +1495,13 @@ static lxp_result receipt_bind_ledger_projection(
     lxp_result status;
     if (receipt == NULL || module_ctx == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (module_ctx->ledger_receipt.supply_binding_version != 0U) {
+        receipt->supply_binding_version = module_ctx->ledger_receipt.supply_binding_version;
+        receipt->total_units_before = module_ctx->ledger_receipt.total_units_before;
+        receipt->total_units_after = module_ctx->ledger_receipt.total_units_after;
+        receipt->operation = module_ctx->ledger_receipt.operation;
+        (void)memcpy(receipt->asset, module_ctx->ledger_receipt.asset, 32U);
+    }
     if (!module_ctx->ledger_receipt_present) {
         size_t index;
         if (module_ctx->effects == NULL) return LXP_FATAL_INVARIANT;
