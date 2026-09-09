@@ -8640,3 +8640,27 @@ symbol = "local_gateway_grant_draw_and_subscription_renewal_latency configured_m
 observed = "The source-only grant, draw and renewal harness cannot start without modifying or integrating its source checkout. Its build script resolves the core fixture from CARGO_MANIFEST_DIR and then requires /root/lx-lanes/pay6/build/tests/bridge/sign-credit, which is absent; the compatible helper exists only in this checkout. Evidence: qual-logs/pay4/l/pay6-402lxp-harness-online-attempt.log. The cluster registry source remains an unversioned interoperability example whose Asset declaration is ordinal 1 only, so it does not provision the hosted admission set. The full core run otherwise passes its unit tests and eleven boundary tests; the retained authenticated empty DID snapshot assertion expects unavailability, and the supervisor reset fixture retains native result -402 from the metadata-free hosted bootstrap. Evidence: qual-logs/pay4/l/core-all-tests.log."
 assumption = "Publish a version-2 cluster registry with Asset 1, 4, 5, 6, 7, 8, 10 and 11 and Programs 1, 2, 3, 5, 6 and 7 from the interoperability-owned configuration. Run the grant, draw and renewal harness from a checkout containing its required helper binaries or after its source is integrated. Retain the authenticated snapshot and bootstrap assertions until their owning contracts are reconciled."
 severity = "blocker"
+
+[observation.6.7.4038]
+task = "6.7"
+file = "platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/core/src/main.rs platform/hosted/gateway/src/rpc.rs docs/wiki/Quickstart.md docs/wiki/X402Transport.md spec/402lxp/protocol.md"
+symbol = "local_gateway_grant_draw_and_subscription_renewal_latency send_payment lx_sendActivity lx_getReceipt lx_getProof"
+observed = "The disposable hosted path funds both principals from real custody attestations, issues signed canonical Asset ordinal-7 grants, executes twenty ordinal-6 metered draws, and executes a recurring first draw and later-window renewal through authenticated gateway JSON-RPC. Every draw requires a successful sequencer-signed receipt; the renewal additionally requires and verifies receipt inclusion in an authorized signed batch header. Typed pending responses are recovered only by public receipt and proof reads for the exact activity, and ack is refused. The final post-Clippy twenty-draw submit-to-receipt samples measure p50 990202 us and p99 11801435 us. Evidence: qual-logs/pay6/pay6g-hosted-grant-draw-renewal-post-clippy.log."
+assumption = "This isolated end-to-end result qualifies the hosted source path and disposable custody setup. It does not establish a deployed endpoint, cluster or production certification."
+severity = "note"
+
+[observation.6.2.940]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs platform/hosted/core/src/public_reads.rs"
+symbol = "supervisor_reset_rebuilds_genesis_and_replays_once public_read_selectors_use_real_node_and_refuse_missing_evidence receipt_latency_and_public_proofs_use_real_committed_refusals lifecycle_routes_submit_real_signed_activities_and_verify_state_receipts"
+observed = "The core package unit and admission tests pass 9 of 9, while its aggregate boundary target passes 10 of 14. One fixture requires the unavailable socat executable. One assertion expects an authenticated DID-account read to be unavailable although the current source returns a verified empty account list. Two receipt tests require immediate HTTP 200 and fail on typed HTTP 202 pending results under the observed execution load. Both pending results retain the exact activity identifier. Evidence: qual-logs/pay6/pay6g-core-tests.log."
+assumption = "Host prerequisite installation, read-contract reconciliation and core boundary timing policy are outside the authorized payment extension paths. The assertions and typed pending behavior remain unchanged."
+severity = "blocker"
+
+[observation.6.2.941]
+task = "6.2"
+file = "platform/hosted/authority/tests/real_node.rs cmd/layerxd/lxp_daemon_lni.c"
+symbol = "real_node_authority_serves_verified_facts_and_reflects_replica_loss"
+observed = "Authority unit, TLS and maintenance targets pass 21 checks. Its real-node target passes the replica-refusal case, while the positive authority case fails because its generated sequencer fixture exits during bootstrap with native result -402. Evidence: qual-logs/pay6/pay6g-authority-tests.log."
+assumption = "The authority real-node bootstrap fixture requires reconciliation in its owning paths. No bootstrap check or positive authority assertion was weakened."
+severity = "blocker"

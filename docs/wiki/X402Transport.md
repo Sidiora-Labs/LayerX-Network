@@ -79,8 +79,11 @@ one renewal per period.
 The public transport is JSON-RPC 2.0 at gateway `POST /rpc`. Submit with
 `lx_sendActivity(canonical_hex, commitment)`. Recover an uncertain submission
 with `lx_getActivityStatus(activity_id)` and `lx_getReceipt(activity_id)` using
-the same activity; never create another debit to escape uncertainty. The
-gateway also exposes Asset/account reads and fee estimation through
+the same activity; verify its sequencer signature, successful result and exact
+activity binding. A recovered receipt establishes `executed`. To establish
+`batched`, obtain `lx_getProof("receipt", activity_id)`, require its canonical
+value to equal the receipt, and verify inclusion in the authorized signed batch
+header. Never create another debit to escape uncertainty. The gateway also exposes Asset/account reads and fee estimation through
 `lx_getAccount`, `lx_getBalance`, `lx_getBalances`, `lx_getSequence`,
 `lx_estimateFee`, `lx_listAssets` and `lx_getAsset`.
 
@@ -97,6 +100,16 @@ The Node codecs are exported from `@sidiora/layerx-sdk`; the Python codecs and
 payment helpers are exported from `layerx_sdk`. Runnable public-RPC and optional
 faucet examples are `platform/middleware/examples/public-rpc.mjs` and
 `platform/middleware/examples/public_rpc.py`.
+
+The maintained disposable-network qualification submitted a real canonical
+ordinal-7 grant and 20 ordinal-6 metered draws through the gateway at
+`executed`, followed by a recurring grant, first draw and new-period renewal.
+The renewal reached `batched` with a verified signed-header inclusion proof and
+settlement reference
+`lxp:21d0e81da67a7dac4d669d45b07f67b241c47285b120121e3d5700c8978233fd`.
+The 20 draw submit-to-receipt samples measured p50 990,202 microseconds and p99
+11,801,435 microseconds. These are qualification measurements, not a
+service-level target.
 
 ---
 

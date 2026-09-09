@@ -14,7 +14,7 @@ use layerx_types::intent::{
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::Domain;
 
-const RECIPIENT_FUNDING: &str = "1000000";
+const RECIPIENT_FUNDING: &str = "100000000000000";
 
 pub(super) struct Funding {
     nodes: Vec<Daemon>,
@@ -592,11 +592,13 @@ fn funded_genesis(
     let sequencer_key = SigningKey::from_bytes(sequencer_seed)
         .verifying_key()
         .to_bytes();
-    write(
-        &directory.join("request.lxgb"),
-        &genesis_request(&asset, &sequencer_key),
-        0o600,
-    );
+    let mut request = genesis_request(&asset, &sequencer_key);
+    let schedule = request.len() - 215;
+    request[schedule + 34..schedule + 50].copy_from_slice(&1_u128.to_be_bytes());
+    request[schedule + 119..schedule + 135].copy_from_slice(&4_u128.to_be_bytes());
+    request[schedule + 135..schedule + 151].copy_from_slice(&4_u128.to_be_bytes());
+    request[schedule + 151..schedule + 167].copy_from_slice(&4_u128.to_be_bytes());
+    write(&directory.join("request.lxgb"), &request, 0o600);
     write(&directory.join("signer.key"), sequencer_seed, 0o600);
     let artifacts = directory.join("artifacts");
     command(

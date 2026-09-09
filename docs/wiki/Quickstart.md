@@ -177,11 +177,23 @@ new period idempotency key.
 
 If submission is pending or its outcome is unknown, retain the exact signed
 activity and query `lx_getActivityStatus(activity_id)` and
-`lx_getReceipt(activity_id)`. Do not issue a replacement draw with a new key.
-Only a successful receipt that verifies at the challenged `executed`, `batched`
-or `finalised` level authorizes fulfillment. The settlement reference remains
+`lx_getReceipt(activity_id)`. Verify the returned sequencer signature, successful
+result and exact activity binding. For a `batched` challenge, also obtain
+`lx_getProof("receipt", activity_id)`, match its canonical value to that receipt,
+and verify inclusion in the authorized signed batch header. Do not issue a
+replacement draw with a new key. Only evidence that verifies at the challenged
+`executed`, `batched` or `finalised` level authorizes fulfillment. The settlement reference remains
 `lxp:<receipt_digest>`; an HTTP success, admission acknowledgement, queue state
 or faucet response is not payment evidence.
+
+The maintained disposable-network qualification exercises the same gateway
+path end to end: a canonical ordinal-7 grant, 20 ordinal-6 metered draws at
+`executed`, a recurring grant and first draw at `executed`, then a new-period
+renewal at `batched`. The verified draw submit-to-receipt measurements were
+p50 990,202 microseconds and p99 11,801,435 microseconds. The batched renewal's
+verified settlement reference was
+`lxp:21d0e81da67a7dac4d669d45b07f67b241c47285b120121e3d5700c8978233fd`.
+These measurements describe that qualification run, not a service-level target.
 
 Faucet funding is separate. Confirm the funded account with `lx_getAccount`,
 `lx_getBalance` or `lx_getBalances(did)` before preparing a draw, and obtain the
