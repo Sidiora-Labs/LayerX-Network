@@ -5480,3 +5480,11 @@ symbol = "client_identity"
 observed = "With /root mode 0711, PATH selecting qual-logs/set1/bin and qual-logs/set1/venv/bin, CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 make test-daemon-guarantor GUARANTOR_PYTHON=/root/lx/set1/qual-logs/set1/venv/bin/python exits 0. The distinct UID 4021 client connects; all nine batches replay with all three account witnesses and module witnesses verified, two mutually authenticated producers attest, one registers, and feedback and certificate verification succeed. Exact output and exit are qual-logs/set1/e-fixture-guarantor.log and e-fixture-guarantor.exit; permissions are in e-fixture-permissions.log."
 assumption = "This resolves the traversal failure in observation 6.1.59. It qualifies the existing real replay fixture, not the incomplete version-2 consumer publication rollout."
 severity = "note"
+
+[observation.6.1.62]
+task = "6.1"
+file = "src/protocol/lxp_module_ctx.c src/ledger/lxp_apply.c tools/lxp_check_sole_writer.sh"
+symbol = "ERR_BALANCE_BYPASS reserve->balance"
+observed = "git log and git blame attribute reserve->balance = next_reserve at src/protocol/lxp_module_ctx.c:1379 to db3e3e9b146120e6627dc5df9e2f8b246f6a4141. git merge-base --is-ancestor confirms that commit is an ancestor of local origin/main at 21c96f47. git diff origin/main HEAD for the writer and sole-writer assertion is empty. The unchanged sole-writer check exits 1 and reports both src/ledger/lxp_apply.c and src/protocol/lxp_module_ctx.c. Full provenance and check output are qual-logs/set1/e-writer-provenance.log and e-writer-summary.log. No remote update was performed."
+assumption = "The second writer pre-exists on the locally recorded origin/main and was not introduced by settlement witness work. The implementation and check remain intact as requested. The aggregate asset-transfer gate remains failed at this assertion."
+severity = "blocker"
