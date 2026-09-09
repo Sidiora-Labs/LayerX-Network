@@ -44,3 +44,22 @@ under `owner-native-run`. `human-owner.env` exports the exact produced
 `LAYERX_HUMAN_AGENT_ACTOR`, `_AUTHORITY`, `_OWNER_ACCOUNT`, `_RECOVERY_ROOT` and
 `_RECOVERY_THRESHOLD`. Never repeat an interrupted producer without reconciling
 `owner-native.started` and the retained execution evidence.
+
+Governance ordinal 5 now requires payload version 1: `71 05 01 03`, followed
+by a length-prefixed canonical session grant, big-endian `expiry_sequence`
+(u64), and a length-prefixed 32-byte `action_key`. Version 0 is refused.
+Expiry must be later than execution sequence and the action key must be nonzero.
+The canonical grant remains under key `05 || grant_id`; the committed `LXGS2`
+summary is stored under `15 || grant_id` and emitted as event `7145`. Its fields
+are grant ID, grantor DID hash, owner public key, action key, session key, expiry
+sequence, module mask, ordinal minimum/maximum, not-before/not-after milliseconds,
+and revocation sequence. Hashes and keys are 32 bytes; numbers are big-endian.
+
+The hosted capability route requires that summary, the native identity snapshot,
+a complete receipt suffix, and a node-verified guarantor checkpoint certificate.
+It refuses old shapes, expired grants, wrong action/authority/capability bindings,
+revoked or changed identity policy, and unsupported scope representations. The
+initial positive representation is restricted to the Asset module's ordinals,
+with empty counterparties/assets, zero amount ceiling and no claimed native
+capability enforcement dimensions. It does not authorize a spend or satisfy the
+Human capability install contract's required nonempty monetary bounds.

@@ -68,14 +68,14 @@ static lxp_result decode(lxp_module_ctx *ctx, uint16_t ordinal,
     void *memory = NULL;
     if (bytes == NULL || decoded == NULL || length < 4U || length > 1024U ||
         !lxp_governance_activity(0x00070000U | ordinal) || bytes[0] != 0x71U ||
-        bytes[1] != ordinal || bytes[2] != 0U)
+        bytes[1] != ordinal || bytes[2] != (ordinal == 5U ? 1U : 0U))
         return LXP_ERR_NON_CANONICAL;
     uint16_t fields = bytes[3];
     if ((ordinal == 1U && (fields != 2U || length != 68U)) ||
         (ordinal == 2U && (fields != 4U || length != 92U)) ||
         (ordinal == 3U && !((fields == 3U && length == 70U) ||
                             (fields == 5U && length == 86U))) ||
-        (ordinal == 5U && fields != 1U) ||
+        (ordinal == 5U && (fields != 3U || length < 52U)) ||
         (ordinal == 6U && (fields != 3U || length != 45U)))
         return LXP_ERR_NON_CANONICAL;
     lxp_result result = lxp_ctx_arena_alloc(ctx, sizeof(*p), _Alignof(governance_payload), &memory);
@@ -110,6 +110,9 @@ static lxp_result session(lxp_module_ctx *ctx, const governance_payload *p,
     lxp_byte_span body;
     lxp_byte_span span;
     lxp_authority_grant grant;
+    uint64_t expiry_sequence;
+    uint8_t action_key[32];
+    uint8_t summary[209] = {0};
     uint8_t tag;
     uint8_t key[33];
     const uint8_t *prior;
@@ -120,7 +123,11 @@ static lxp_result session(lxp_module_ctx *ctx, const governance_payload *p,
 #define FIXED(dst, n) do { READ(lxp_codec_read_bytes(&reader, &span, n)); if (span.length != n) return LXP_ERR_NON_CANONICAL; (void)memcpy(dst, span.bytes, n); } while (0)
     READ(lxp_codec_reader_init(&reader, p->bytes + 4U, p->length - 4U));
     READ(lxp_codec_read_bytes(&reader, &body, 1024U));
+    READ(lxp_codec_read_u64(&reader, &expiry_sequence));
+    FIXED(action_key, 32U);
     READ(lxp_codec_finish(&reader));
+    if (expiry_sequence <= lxp_ctx_global_sequence(ctx) || lxp_ct_is_zero(action_key, 32U))
+        return LXP_ERR_AUTH_SCOPE;
     READ(lxp_codec_reader_init(&reader, body.bytes, body.length));
     READ(lxp_codec_read_struct_header(&reader, 0x2001U));
     READ(lxp_codec_read_u8(&reader, &tag));
@@ -173,6 +180,24 @@ static lxp_result session(lxp_module_ctx *ctx, const governance_payload *p,
     status = lxp_ctx_kv_get(ctx, key, sizeof(key), &prior, &length);
     if (status != LXP_ERR_UNKNOWN_FIELD) return status == LXP_OK ? LXP_ERR_SEQUENCE_REUSED : status;
     READ(lxp_ctx_kv_put(ctx, key, sizeof(key), body.bytes, body.length));
+    (void)memcpy(summary, "LXGS2", 5U);
+    (void)memcpy(summary + 5U, canonical.grant_id, 32U);
+    (void)memcpy(summary + 37U, canonical.grantor, 32U);
+    (void)memcpy(summary + 69U, authority->verified_key, 32U);
+    (void)memcpy(summary + 101U, action_key, 32U);
+    (void)memcpy(summary + 133U, canonical.key, 32U);
+    write64(summary + 165U, expiry_sequence);
+    write64(summary + 173U, canonical.scope.module_mask);
+    summary[181] = (uint8_t)(canonical.scope.activity_ordinal_min >> 8U);
+    summary[182] = (uint8_t)canonical.scope.activity_ordinal_min;
+    summary[183] = (uint8_t)(canonical.scope.activity_ordinal_max >> 8U);
+    summary[184] = (uint8_t)canonical.scope.activity_ordinal_max;
+    write64(summary + 185U, canonical.not_before);
+    write64(summary + 193U, canonical.not_after);
+    write64(summary + 201U, canonical.grantor_revocation_sequence);
+    key[0] = 0x15U;
+    READ(lxp_ctx_kv_put(ctx, key, sizeof(key), summary, sizeof(summary)));
+    READ(lxp_ctx_emit_event(ctx, 0x7145U, summary, sizeof(summary)));
     READ(lxp_ctx_emit_event(ctx, 0x7105U, body.bytes, body.length < 256U ? body.length : 256U));
     if (body.length > 256U) READ(lxp_ctx_emit_event(ctx, 0x7125U, body.bytes + 256U, body.length - 256U));
 #undef FIXED
