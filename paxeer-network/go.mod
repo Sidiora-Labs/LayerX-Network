@@ -5,7 +5,7 @@ go 1.25.6
 require (
 	cosmossdk.io/errors v1.0.2
 	github.com/99designs/keyring v1.2.1
-	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c
+	github.com/BurntSushi/toml v1.5.0
 	github.com/adlio/schema v1.3.9
 	github.com/alitto/pond v1.8.3
 	github.com/armon/go-metrics v0.4.1
@@ -249,7 +249,7 @@ require (
 	github.com/tidwall/tinylru v1.1.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.15 // indirect
 	github.com/tklauser/numcpus v0.10.0 // indirect
-	github.com/urfave/cli/v2 v2.27.5
+	github.com/urfave/cli/v2 v2.27.7
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	github.com/zondax/golem v0.27.0 // indirect
