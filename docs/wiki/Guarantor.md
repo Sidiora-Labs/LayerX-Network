@@ -14,7 +14,7 @@ The producer pins the sequencer id, public key, network and batch range from
 bootstrap configuration. LNI tag 12 supplies the header and signature. Tag 18
 requests `05 || batch:u64be`; the selector is the single named constant
 `LXP_GUARANTOR_CANDIDATE_SELECTOR`. Selectors 01–04 remain finalized-only.
-The additive selector-05 daemon implementation is an external dependency.
+The daemon implements selector 05 for one durable sealed signed candidate.
 The producer does not register a fixture certificate to unlock retrieval.
 
 Every tag-19 response must match the request correlation, batch, global chunk
@@ -124,14 +124,14 @@ detection and unbonded/stale refusals.
 `make test-daemon-guarantor-integration` requires root to launch distinct
 LNI identities. It builds a real two-member genesis, deploys actual
 contracts, submits real activities, independently qualifies replay from the
-daemon's durable body log, and exercises selector 05. When that selector is
-available, the subsequent assertions require both producers to attest, one
-to register, the second to observe registration, tag-14 evidence equality
-and acceptance by the existing `lxp_verify_main` entry point. A refused
-candidate is an integration failure, not a skipped test or a passing gate.
+daemon's durable body log, and exercises selector 05. The subsequent
+assertions require both producers to attest, one to register, the second to
+observe registration, tag-14 evidence equality and acceptance by the existing
+`lxp_verify_main` entry point. A refused candidate is an integration failure,
+not a skipped test or a passing gate.
 
-Local evidence lives in untracked `qual-logs/gp1/` and `STATUS.md`. No image,
-cluster or chain-125 deployment qualification is claimed on the build server.
+Image, cluster and chain-125 deployment qualification are not claimed by
+these local producer gates.
 
 ## Checkpoint authority publication
 
@@ -149,6 +149,7 @@ Secret `layerx-guarantor-checkpoint-authority` in `TESTNET_NAMESPACE`, with
 `public.hex` containing `0x` followed by 64 lowercase hexadecimal characters.
 The Human movement policy must consume that public key in its namespace.
 The private key is never placed in a Kubernetes Secret or provisioning output.
-This provisions authority identity only: settlement witness and deposit-root
-publication remain blocked by the native composite-state versus settlement
-Merkle-proof contract recorded in the qualification ledger.
+This provisions authority identity only. Settlement witness and deposit-root
+publication still require independently delivered owner recipient bindings and
+the configured checkpoint-authority registration signature; the producer never
+acquires those signing keys.

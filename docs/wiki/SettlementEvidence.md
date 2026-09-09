@@ -54,21 +54,17 @@ The leaf hash is SHA256(`LXP/v1/state-leaf\0 || key_len:u32 || value_len:u32 || 
 `lxp_state_proof_build` composes the existing native subtree and root constructors and verifies the result before returning it. `lxp_state_proof_encode`, `lxp_state_proof_decode` and `lxp_state_proof_verify` share that representation. Allocate `lxp_state_witness` on the heap: it owns up to one MiB of blob value material. `gp_runtime_state_proof` exposes the same constructor over the guarantor's independently replayed kernel. Rust `state_proof::StateWitness` and Solidity `NativeStateProof` verify the identical bytes. `build/tests/lxp_test_state_proof --vectors` emits the shared fixtures under `contracts/config/native-state-proofs.json` and the paxeer-client test vectors directory.
 
 The account segment is present exactly when `module_id == 0`, `key_len == 33`
-and the first key byte is `04`. It proves the canonical account record into the
-account registry; layer A then proves the `account-tree` binding, and layer B
-proves the preserved module wrapper under the composite root. All other leaves
-omit that segment. The shared C vectors include three real account balances.
-
-For module zero and a 33-byte key beginning with `04`, version 2 carries the
-canonical account leaf from `lx_account_state_leaf_material`. Immediately after
-`value`, the encoding adds `account_index:u32 || account_count:u32 ||
-account_depth:u8 || account_siblings[32]*`. Other keys have no account segment.
-The account path hashes to the account registry root. That root is the value of
-`account-tree` (12 bytes), hashed with the native state-leaf domain and both
-lengths. Layer A proves this registry binding in module zero; the unchanged
-module wrapper and layer B then prove inclusion under the composite root.
-Balances, asset identity and account authority remain bound by the existing
-canonical account record; this extension does not change native root semantics.
+and the first key byte is `04`. Version 2 then carries the canonical account
+leaf from `lx_account_state_leaf_material`. Immediately after `value`, the
+encoding adds `account_index:u32 || account_count:u32 || account_depth:u8 ||
+account_siblings[32]*`. Other keys omit that segment. The account path hashes
+to the account registry root. That root is the value of `account-tree`
+(12 bytes), hashed with the native state-leaf domain and both lengths. Layer A
+proves this registry binding in module zero; the unchanged module wrapper and
+layer B then prove inclusion under the composite root. Balances, asset identity
+and account authority remain bound by the existing canonical account record;
+this extension does not change native root semantics. The shared C vectors
+include three real account balances.
 
 The native asset request stages an immutable withdrawal fact under
 `withdrawal:` (11 ASCII bytes) followed by its existing 32-byte nullifier.
