@@ -219,6 +219,7 @@ static lxp_result asset_execute_typed(lxp_module_ctx *ctx, const lxp_activity *a
         record.decimals = p->decimals;
         record.supply_cap = p->supply_cap;
         record.issuer_kind = p->issuer_kind;
+        (void)memcpy(record.salt, p->salt, 32U);
         (void)memcpy(record.issuer_did32, authority->actor, 32U);
         record.custody_kind = LX_ASSET_CUSTODY_PAXEER;
         record.custody_reference_length = p->custody_reference_length;

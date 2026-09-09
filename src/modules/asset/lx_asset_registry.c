@@ -615,10 +615,10 @@ lxp_result lx_asset_record_encode(const lx_asset_record *record,
         record->custody_reference_length > LX_ASSET_CUSTODY_REFERENCE_MAX)
         return LXP_ERR_NON_CANONICAL;
     required = 2U + 32U + 1U + record->symbol_length + 1U + 1U + 2U +
-               record->custody_reference_length + 1U + 1U + record->name_length + 65U;
+               record->custody_reference_length + 1U + 1U + record->name_length + 97U;
     if (required > capacity) return LXP_ERR_LENGTH_LIMIT;
     bytes[cursor++] = 0U;
-    bytes[cursor++] = 2U;
+    bytes[cursor++] = 3U;
     (void)memcpy(bytes + cursor, record->asset_id, 32U); cursor += 32U;
     bytes[cursor++] = record->symbol_length;
     (void)memcpy(bytes + cursor, record->symbol, record->symbol_length);
@@ -638,6 +638,7 @@ lxp_result lx_asset_record_encode(const lx_asset_record *record,
     (void)memcpy(bytes + cursor, record->issuer_did32, 32U); cursor += 32U;
     bytes[cursor++] = record->issuer_kind;
     (void)lxp_u128_to_be(record->total_units, bytes + cursor); cursor += 16U;
+    (void)memcpy(bytes + cursor, record->salt, 32U); cursor += 32U;
     *length = cursor;
     return LXP_OK;
 }
@@ -647,13 +648,13 @@ lxp_result lx_asset_record_decode(const uint8_t *bytes, size_t length,
 {
     size_t cursor = 2U;
     uint16_t reference_length;
-    if (bytes == NULL || record == NULL || length < 108U ||
-        bytes[0] != 0U || bytes[1] != 2U) return LXP_ERR_NON_CANONICAL;
+    if (bytes == NULL || record == NULL || length < 140U ||
+        bytes[0] != 0U || bytes[1] != 3U) return LXP_ERR_NON_CANONICAL;
     (void)memset(record, 0, sizeof(*record));
     (void)memcpy(record->asset_id, bytes + cursor, 32U); cursor += 32U;
     record->symbol_length = bytes[cursor++];
     if (record->symbol_length == 0U || record->symbol_length > LX_ASSET_SYMBOL_MAX ||
-        length - cursor < record->symbol_length + 71U) return LXP_ERR_NON_CANONICAL;
+        length - cursor < record->symbol_length + 103U) return LXP_ERR_NON_CANONICAL;
     (void)memcpy(record->symbol, bytes + cursor, record->symbol_length);
     cursor += record->symbol_length;
     record->decimals = bytes[cursor++];
@@ -661,7 +662,7 @@ lxp_result lx_asset_record_decode(const uint8_t *bytes, size_t length,
     reference_length = (uint16_t)((uint16_t)bytes[cursor] << 8U) | bytes[cursor + 1U];
     cursor += 2U;
     if (reference_length > LX_ASSET_CUSTODY_REFERENCE_MAX ||
-        length - cursor < reference_length + 67U) return LXP_ERR_NON_CANONICAL;
+        length - cursor < reference_length + 99U) return LXP_ERR_NON_CANONICAL;
     record->custody_reference_length = reference_length;
     (void)memcpy(record->custody_reference, bytes + cursor, reference_length);
     cursor += reference_length;
@@ -669,13 +670,14 @@ lxp_result lx_asset_record_decode(const uint8_t *bytes, size_t length,
     record->paused = bytes[cursor++] != 0U;
     record->name_length = bytes[cursor++];
     if (record->name_length > LX_ASSET_NAME_MAX ||
-        length - cursor != record->name_length + 65U) return LXP_ERR_NON_CANONICAL;
+        length - cursor != record->name_length + 97U) return LXP_ERR_NON_CANONICAL;
     (void)memcpy(record->name, bytes + cursor, record->name_length);
     cursor += record->name_length;
     (void)lxp_u128_from_be(bytes + cursor, &record->supply_cap); cursor += 16U;
     (void)memcpy(record->issuer_did32, bytes + cursor, 32U); cursor += 32U;
     record->issuer_kind = bytes[cursor++];
-    (void)lxp_u128_from_be(bytes + cursor, &record->total_units);
+    (void)lxp_u128_from_be(bytes + cursor, &record->total_units); cursor += 16U;
+    (void)memcpy(record->salt, bytes + cursor, 32U);
     if ((record->issuer_kind == 0U && record->custody_reference_length == 0U) ||
         (record->issuer_kind == 1U && record->custody_reference_length != 0U) ||
         (record->issuer_kind != 0U && (record->name_length == 0U ||

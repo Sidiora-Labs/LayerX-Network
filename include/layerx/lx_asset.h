@@ -87,6 +87,7 @@ typedef struct lx_asset_record {
     uint8_t name_length;
     lxp_u128 supply_cap;
     uint8_t issuer_did32[32];
+    uint8_t salt[32];
     uint8_t issuer_kind;
     uint8_t symbol_length;
     uint8_t decimals;
