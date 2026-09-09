@@ -47,16 +47,28 @@ static bool source_matches_actor(const lx_account *source,
         activity->actor_did.length == 0U ||
         activity->actor_did.length > LXP_MAX_DID_LENGTH)
         return false;
-    expected_length = sizeof(prefix) - 1U + activity->actor_did.length +
-                      sizeof(suffix) - 1U;
-    return source->name_length == expected_length &&
-           memcmp(source->name, prefix, sizeof(prefix) - 1U) == 0 &&
-           memcmp(source->name + sizeof(prefix) - 1U,
-                  activity->actor_did.bytes,
-                  activity->actor_did.length) == 0 &&
-           memcmp(source->name + sizeof(prefix) - 1U +
-                      activity->actor_did.length,
-                  suffix, sizeof(suffix) - 1U) == 0;
+    expected_length = sizeof(prefix) - 1U + activity->actor_did.length;
+    if (source->name_length < expected_length ||
+        memcmp(source->name, prefix, sizeof(prefix) - 1U) != 0 ||
+        memcmp(source->name + sizeof(prefix) - 1U,
+               activity->actor_did.bytes, activity->actor_did.length) != 0)
+        return false;
+    if (source->name_length == expected_length + sizeof(suffix) - 1U)
+        return memcmp(source->name + expected_length,
+                       suffix, sizeof(suffix) - 1U) == 0;
+    if (source->name_length == expected_length + 71U && source->has_asset &&
+        memcmp(source->name + expected_length, ":asset:", 7U) == 0) {
+        static const uint8_t hex[] = "0123456789abcdef";
+        size_t i;
+        for (i = 0U; i < 32U; ++i)
+            if (source->name[expected_length + 7U + i * 2U] !=
+                    hex[source->asset_id[i] >> 4U] ||
+                source->name[expected_length + 8U + i * 2U] !=
+                    hex[source->asset_id[i] & 15U])
+                return false;
+        return true;
+    }
+    return false;
 }
 
 static lxp_result send_context(const lxp_send *send, uint8_t context[32])

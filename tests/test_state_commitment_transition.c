@@ -54,10 +54,9 @@ static int sign_digest(const uint8_t digest[32], uint8_t signature[64],
     return ok ? 0 : 1;
 }
 
-static int prepare(fixture *f, uint16_t version, bool success)
+static int prepare_names(fixture *f, uint16_t version, bool success,
+                          const uint8_t *from_name, const uint8_t *to_name)
 {
-    static const uint8_t from_name[] = "agent:did:key:alice:main";
-    static const uint8_t to_name[] = "agent:did:key:bob:main";
     uint8_t digest[32] = {0};
     uint8_t material[144];
     uint8_t message[512];
@@ -79,8 +78,8 @@ static int prepare(fixture *f, uint16_t version, bool success)
     REQUIRE(lxp_kernel_register_module(&f->kernel, lx_asset_module_iface()) == LXP_OK);
     REQUIRE(lxp_identity_register(&f->identities, did, sizeof(did) - 1U,
                                   f->public_key, &identity) == LXP_OK);
-    REQUIRE(lx_account_id_from_string(from_name, sizeof(from_name) - 1U, send.from) == LXP_OK);
-    REQUIRE(lx_account_id_from_string(to_name, sizeof(to_name) - 1U, send.to) == LXP_OK);
+    REQUIRE(lx_account_id_from_string(from_name, strlen((const char *)from_name), send.from) == LXP_OK);
+    REQUIRE(lx_account_id_from_string(to_name, strlen((const char *)to_name), send.to) == LXP_OK);
     send.asset[0] = 3U;
     send.amount.lo = 1U;
     send.expires_at = 100U;
@@ -103,9 +102,9 @@ static int prepare(fixture *f, uint16_t version, bool success)
     REQUIRE(lxp_send_encode(&send, f->payload, sizeof(f->payload), &payload_length) == LXP_OK);
     if (success) {
         REQUIRE(lx_account_registry_init(&f->accounts) == LXP_OK);
-        REQUIRE(lx_account_open(&f->accounts, from_name, sizeof(from_name) - 1U,
+        REQUIRE(lx_account_open(&f->accounts, from_name, strlen((const char *)from_name),
                                 send.from, 1U, LX_ACCOUNT_OPEN_CREDIT, NULL, &from) == LXP_OK);
-        REQUIRE(lx_account_open(&f->accounts, to_name, sizeof(to_name) - 1U,
+        REQUIRE(lx_account_open(&f->accounts, to_name, strlen((const char *)to_name),
                                 send.to, 1U, LX_ACCOUNT_OPEN_CREDIT, NULL, &to) == LXP_OK);
         REQUIRE(lxp_ledger_bootstrap_balance(from, send.asset, (lxp_u128){0U, 10U}, 0U) == LXP_OK);
         REQUIRE(lxp_ledger_bootstrap_balance(to, send.asset, (lxp_u128){0U, 0U}, 0U) == LXP_OK);
@@ -154,6 +153,77 @@ static int prepare(fixture *f, uint16_t version, bool success)
     f->execution.sequencer_private_key = seed;
     f->execution.batch_id[0] = 5U;
     REQUIRE(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
+    return 0;
+}
+
+static int prepare(fixture *f, uint16_t version, bool success)
+{
+    return prepare_names(f, version, success,
+        (const uint8_t *)"agent:did:key:alice:main",
+        (const uint8_t *)"agent:did:key:bob:main");
+}
+
+static int asset_send(unsigned refusal)
+{
+    static const uint8_t from_name[] =
+        "agent:did:key:alice:asset:0300000000000000000000000000000000000000000000000000000000000000";
+    static const uint8_t to_name[] =
+        "agent:did:key:bob:asset:0300000000000000000000000000000000000000000000000000000000000000";
+    static const uint8_t foreign_name[] =
+        "agent:did:key:mallory:asset:0300000000000000000000000000000000000000000000000000000000000000";
+    fixture *f = (fixture *)calloc(1U, sizeof(*f));
+    lxp_result expected = LXP_OK;
+    lxp_u128 before_from;
+    lxp_u128 before_to;
+    uint8_t root[32];
+    REQUIRE(f != NULL);
+    REQUIRE(prepare_names(f, LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true,
+        refusal == 1U ? foreign_name : from_name, to_name) == 0);
+    if (refusal == 1U) expected = LXP_ERR_UNAUTHORIZED_DEBIT;
+    if (refusal == 2U) {
+        f->transfer_asset.paused = true;
+        expected = LXP_ERR_ASSET_PAUSED;
+    }
+    if (refusal == 3U) {
+        f->asset.asset_id[0] = 4U;
+        expected = LXP_ERR_UNAUTHORIZED_DEBIT;
+    }
+    if (refusal == 4U) {
+        REQUIRE(lxp_ledger_bootstrap_balance(&f->accounts.accounts[0],
+            f->asset.asset_id, (lxp_u128){0U, 0U}, 0U) == LXP_OK);
+        expected = LXP_ERR_INSUFFICIENT_BALANCE;
+    }
+    if (refusal == 5U) {
+        REQUIRE(lxp_ledger_bootstrap_balance(&f->accounts.accounts[1],
+            f->asset.asset_id, (lxp_u128){UINT64_MAX, UINT64_MAX}, 0U) == LXP_OK);
+        expected = LXP_ERR_OVERFLOW;
+    }
+    before_from = f->accounts.accounts[0].balance;
+    before_to = f->accounts.accounts[1].balance;
+    REQUIRE(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
+    REQUIRE(lxp_kernel_execute_activity(&f->kernel, &f->activity,
+        &f->execution, &f->receipt) == LXP_OK);
+    if (f->receipt.result_code != expected)
+        (void)fprintf(stderr, "asset send case %u: expected %d got %d\n",
+            refusal, (int)expected, (int)f->receipt.result_code);
+    REQUIRE(f->receipt.result_code == expected);
+    REQUIRE(lxp_receipt_verify(&f->receipt, f->public_key, &f->arena) == LXP_OK);
+    REQUIRE(lxp_state_root(&f->kernel, root) == LXP_OK);
+    REQUIRE(memcmp(root, f->receipt.resulting_state_root, 32U) == 0);
+    if (refusal == 0U) {
+        REQUIRE(f->accounts.accounts[0].balance.lo == 9U);
+        REQUIRE(f->accounts.accounts[1].balance.lo == 1U);
+        REQUIRE(f->receipt.from_balance_before.lo == 10U);
+        REQUIRE(f->receipt.from_balance_after.lo == 9U);
+        REQUIRE(f->receipt.to_balance_before.lo == 0U);
+        REQUIRE(f->receipt.to_balance_after.lo == 1U);
+        REQUIRE(f->receipt.asset[0] == 3U);
+    } else {
+        REQUIRE(lxp_u128_cmp(before_from, f->accounts.accounts[0].balance) == 0);
+        REQUIRE(lxp_u128_cmp(before_to, f->accounts.accounts[1].balance) == 0);
+    }
+    REQUIRE(lxp_state_store_destroy(&f->state) == LXP_OK);
+    free(f);
     return 0;
 }
 
@@ -384,6 +454,7 @@ int main(void)
     REQUIRE(refusal_with_accounts(false) == 0);
     REQUIRE(refusal_with_accounts(true) == 0);
     REQUIRE(preview_commit() == 0);
+    for (unsigned i = 0U; i < 6U; ++i) REQUIRE(asset_send(i) == 0);
     (void)puts("state commitment transition: legacy, version 3, preview, signatures and tampering passed");
     return 0;
 }

@@ -7220,6 +7220,12 @@ file = "platform/hosted/authority/src/human.rs"
 symbol = "policy_route"
 observed = "Identity, capability-scope and key-policy routes unconditionally return unavailable after receipt matching and freshness checks. Positive owner identity verification requires committed policy state verification in this file, outside the owner-registration owned paths. Native module registration is in cmd/layerxd/lxp_daemon_process.c and currently omits Governance. platform/hosted/human/provision.py and its claimed existing validate-owner-registration mode are absent in this checkout."
 assumption = "Real owner provisioning requires coordinated daemon registration and authenticated committed-state policy verification; unrelated authentic receipts cannot substitute for recovery state."
+[observation.3.7.24]
+task = "3.7"
+file = "src/ledger/lxp_journal.c"
+symbol = "lxp_conservation_check lxp_apply_transfer_set"
+observed = "Native mint and burn require a change in total account units, but the transfer set unconditionally rejects unequal per-asset debit and credit totals. The current balance primitive applies both endpoints. These checks are identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
+assumption = "An authenticated issuance and destruction invariant must be specified before altering the existing conservation check; a direct balance write or fabricated reserve does not satisfy the contract."
 severity = "blocker"
 
 [observation.3.7.25]
@@ -7469,3 +7475,16 @@ file = "platform/hosted/authority/src/main.rs tests/daemon/owner_checkpoint.py t
 symbol = "main hosted run"
 observed = "The unchanged full --checkpoint owner command reaches successful dual-guarantor replay and registration of all ten checkpoints, then fails after service.terminate() because layerx-receipt-authority remains in its blocking listener and exits from SIGTERM rather than returning status 0 as required by the retained service.wait(timeout=15) == 0 assertion. Raw output: qual-logs/set213/owner-native-checkpoint-fixed3.log."
 assumption = "Settlement qualification is isolated with --settlement-only; the default --checkpoint path and its hosted shutdown assertion remain intact. Graceful authority shutdown or a production shutdown control requires separate ownership and must preserve the existing zero-status assertion."
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "collect_assets verify replay admission"
+observed = "Daemon asset admission and replay allow only LX_ASSET_SEND. Runtime registry reconstruction collects asset ids from accounts without issuer, cap, name or pause metadata. The file is outside the permitted account-read changes and identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
+assumption = "Extend daemon admission and replay to the assigned asset ordinals and reconstruct the committed asset registry without synthesizing metadata from balances."
+severity = "blocker"
+
+[observation.3.7.26]
+task = "3.7"
+file = "include/layerx/lxp_receipt.h"
+symbol = "lxp_receipt lxp_ledger_receipt_input"
+observed = "The existing canonical ledger receipt fields have balances but no total_units before and after. The receipt schema and protocol codecs are outside the permitted asset dispatch paths and identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
+assumption = "Define and implement a versioned supply receipt binding across native encoding, decoding, signing and replay before qualifying native mint and burn."
+severity = "blocker"
