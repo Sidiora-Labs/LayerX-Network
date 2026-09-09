@@ -17,7 +17,7 @@ enum {
 };
 
 typedef enum lx_account_kind {
-    LX_ACCOUNT_AGENT_MAIN = 1,
+    LX_ACCOUNT_AGENT_MAIN = 1, /* agent:<did>:main and agent:<did>:asset:<hex64> */
     LX_ACCOUNT_AGENT_BUDGET = 2,
     LX_ACCOUNT_AGENT_ESCROW = 3,
     LX_ACCOUNT_AGENT_STREAM = 4,
@@ -314,6 +314,7 @@ lxp_result lxp_send_build_transfer_set(const lxp_send *send,
 lxp_result lxp_send_execute(const lxp_send *send,
                             lxp_send_environment *environment,
                             lxp_send_receipt_projection *receipt);
+/* Canonical grant_issue (asset ordinal 7) payload. */
 lxp_result lxp_payer_grant_encode(const lxp_payer_grant *grant,
                                   uint8_t *bytes, size_t capacity, size_t *length);
 lxp_result lxp_payer_grant_decode(const uint8_t *bytes, size_t length,

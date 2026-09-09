@@ -43,16 +43,18 @@ Locked funds are real accounts, not hidden columns:
 
 ```
 agent:<did>:main
+agent:<did>:asset:<lowercase hex64 asset_id>
 agent:<did>:budget:<id>
 agent:<did>:escrow:<id>
 agent:<did>:stream:<id>
 agent:<did>:margin:<position>
+asset:<lowercase hex64 asset_id>:issuance
 module:programs:value:<account-id>
 system:fees
 system:paxeer-reserve
 ```
 
-Opening a position is a transfer into a margin account. Capturing escrow is a transfer out of an escrow account. Ordinary modules do not mint and do not burn.
+Opening a position is a transfer into a margin account. Capturing escrow is a transfer out of an escrow account. Native issuance still compiles to `402LXP` legs against `asset:<id>:issuance`; modules do not assign balances. `agent:<did>:main` remains the native-asset account. Per-asset accounts use the existing `LX:ACCOUNT:v1` id rule. See `spec/layerx-protocol/spec.kvx` requirement 14.
 
 See Payments and Fees.
 
@@ -70,7 +72,7 @@ See Payments and Fees.
 
 ## What each module is for
 
-**asset.** SEND and RECEIVE compile to the same internal transfer. RECEIVE requires a payer grant: one recipient, one account, caps, purpose, expiry. No wildcards.
+**asset.** Declared ordinals are register (1), pause (2), unpause (3), account_open (4), send (5), receive (6), grant_issue (7), grant_revoke (8), mint (10) and burn (11). Ordinal 9 is reserved for withdraw and is not defined on this module. SEND compiles to a `402LXP` transfer and accepts both `agent:<did>:main` and `agent:<did>:asset:<hex64>` sources owned by the actor. RECEIVE requires a payer grant: one recipient, one account, caps, purpose, expiry. No wildcards. Register `issuer_kind` is `1` native and `2` `paxeer_custody`; that value is not `lx_asset_custody_kind` (`LX_ASSET_CUSTODY_PAXEER = 1`). Canonical payloads for register, account_open, receive, grant_issue, grant_revoke, mint and burn are decoded, and the daemon admits those ordinals plus SEND; module execute currently applies SEND and the pause/unpause event path only.
 
 **escrow.** Lock, capture, release. Terms are module state; money moves only as `402LXP` legs.
 
