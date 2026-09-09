@@ -208,12 +208,11 @@ fn ready<F: Future>(future: F) -> F::Output {
 }
 
 fn activity_type() -> ActivityType {
-    ActivityType::new(ModuleId::Bridge, 2)
-        .unwrap_or_else(|error| panic!("activity type: {error:?}"))
+    ActivityType::new(ModuleId::Asset, 9).unwrap_or_else(|error| panic!("activity type: {error:?}"))
 }
 
 fn registry() -> ModuleRegistry {
-    let registration = ModuleRegistration::new(ModuleId::Bridge, &[activity_type()])
+    let registration = ModuleRegistration::new(ModuleId::Asset, &[activity_type()])
         .unwrap_or_else(|error| panic!("module registration: {error:?}"));
     ModuleRegistry::new(&[registration])
         .unwrap_or_else(|error| panic!("module registry: {error:?}"))
@@ -719,6 +718,7 @@ impl Fixture {
         let agent_contract = AgentClient::daemon("/run/layerx-agentd.sock", schema.version)
             .unwrap_or_else(|error| panic!("agent SDK: {error:?}"));
         let plan = WithdrawalPlan {
+            request_anchor: layerx_types::ids::CheckpointId::new([18; 32]),
             layerx_protocol_version: 2,
             journey_id: JourneyId::new(format!("jrn_{label}"))
                 .unwrap_or_else(|error| panic!("journey id: {error}")),

@@ -58,6 +58,7 @@ pub enum RejectReason {
     Malformed(WireError),
     UnknownVersion(u16),
     UnknownKind(u16),
+    RetiredShape,
 }
 
 /// Zero-copy diagnostic record retaining the exact untrusted input.
@@ -94,7 +95,7 @@ pub fn inspect_intent(input: &[u8]) -> Result<IntentHeader, RejectedIntent<'_>> 
         input,
         reason: RejectReason::Malformed(error),
     })?;
-    if version != 1 {
+    if version != 1 && version != 2 {
         return Err(RejectedIntent {
             input,
             reason: RejectReason::UnknownVersion(version),
@@ -110,6 +111,18 @@ pub fn inspect_intent(input: &[u8]) -> Result<IntentHeader, RejectedIntent<'_>> 
             reason: RejectReason::UnknownKind(raw_kind),
         });
     };
+    if version == 2 && kind != IntentKindTag::BridgeWithdrawRequest {
+        return Err(RejectedIntent {
+            input,
+            reason: RejectReason::UnknownVersion(version),
+        });
+    }
+    if version == 1 && kind == IntentKindTag::BridgeWithdrawRequest {
+        return Err(RejectedIntent {
+            input,
+            reason: RejectReason::RetiredShape,
+        });
+    }
     Ok(IntentHeader { version, kind })
 }
 
@@ -137,9 +150,9 @@ mod tests {
     #[test]
     fn recognised_header_is_classification_not_execution() {
         assert_eq!(
-            inspect_intent(&[0, 1, 0, 12, 0xde, 0xad]),
+            inspect_intent(&[0, 2, 0, 12, 0xde, 0xad]),
             Ok(IntentHeader {
-                version: 1,
+                version: 2,
                 kind: IntentKindTag::BridgeWithdrawRequest,
             })
         );

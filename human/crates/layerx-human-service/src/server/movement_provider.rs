@@ -70,6 +70,7 @@ impl MovementProviderConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlanningContext {
+    pub request_anchor: [u8; 32],
     pub account: layerx_types::account::AccountId,
     pub reserve: layerx_types::account::AccountId,
     pub withdrawals_account: layerx_types::account::AccountId,
@@ -156,6 +157,8 @@ impl PlanningRequest {
             || context.not_before > now
             || context.not_after <= now
             || !matches!(context.protocol_version, 2 | 3)
+            || (operation == "withdraw.start"
+                && (context.request_anchor == [0; 32] || context.fee_limit > u128::from(u64::MAX)))
             || operation.is_empty()
             || operation.len() > 128
             || operation.chars().any(char::is_control)
@@ -789,6 +792,8 @@ impl MpWriter {
         Ok(())
     }
     fn planning_context(&mut self, v: &PlanningContext) -> Result<(), MovementProviderError> {
+        self.u8(2);
+        self.fixed(&v.request_anchor);
         self.text(v.account.canonical(), 512)?;
         self.text(v.reserve.canonical(), 512)?;
         self.text(v.withdrawals_account.canonical(), 512)?;
@@ -1062,7 +1067,11 @@ impl<'a> MpReader<'a> {
     }
 
     fn planning_context(&mut self) -> Result<PlanningContext, MovementProviderError> {
+        if self.u8()? != 2 {
+            return Err(MovementProviderError::ContractViolation);
+        }
         Ok(PlanningContext {
+            request_anchor: self.fixed()?,
             account: layerx_types::account::AccountId::parse(&self.text(512)?)
                 .map_err(|_| MovementProviderError::ContractViolation)?,
             reserve: layerx_types::account::AccountId::parse(&self.text(512)?)
@@ -1526,6 +1535,7 @@ impl UnixMovementProvider {
             MovementProviderResponse::WithdrawalPlan(value)
                 if value.idempotency_key == plan_id
                     && value.owner == context.account
+                    && value.request_anchor.bytes() == context.request_anchor
                     && value.withdrawals_account == context.withdrawals_account
                     && value.payout_address == context.wallet
                     && value.asset == context.asset
