@@ -465,6 +465,18 @@ pub trait ProgramResolver: fmt::Debug {
         Ok(())
     }
 
+    /// # Errors
+    /// Refuses calls that violate a deployment's published spend descriptor.
+    fn authorize_interface_call(
+        &self,
+        _program: ProgramId,
+        _entrypoint: &str,
+        _input: &[u8],
+        _capabilities: &crate::CapabilitySet,
+    ) -> Result<(), AbiError> {
+        Ok(())
+    }
+
     /// Returns the validated module deployed under a program identifier.
     fn program_module(&self, program: ProgramId) -> Option<&ValidatedModule>;
 }
@@ -961,6 +973,7 @@ fn execute_nested(
             abi.emitted_event_count(),
         )
     };
+    resolver.authorize_interface_call(callee, CALL_ENTRY_EXPORT, input, &capabilities)?;
     state
         .composition_mut()
         .ok_or(CompositionRefusal::NotComposable)?

@@ -403,6 +403,7 @@ const PROGRAM_REFUSED: i32 = -736;
 #[derive(Debug, Default)]
 struct CachedProgramResolver {
     modules: BTreeMap<ProgramId, Arc<CompiledModule>>,
+    interfaces: BTreeMap<ProgramId, Vec<u8>>,
 }
 
 impl CachedProgramResolver {
@@ -420,6 +421,21 @@ impl CachedProgramResolver {
 }
 
 impl ProgramResolver for CachedProgramResolver {
+    fn authorize_interface_call(
+        &self,
+        program: ProgramId,
+        entrypoint: &str,
+        input: &[u8],
+        capabilities: &CapabilitySet,
+    ) -> Result<(), AbiError> {
+        if let Some(encoding) = self.interfaces.get(&program) {
+            let grants = CapabilitySet::decode_v2_canonical(&capabilities.canonical_encoding())?;
+            crate::ffi_interface::authorize_call(encoding, program, entrypoint, input, &grants)
+                .map_err(|_| AbiError::InvalidCapability)?;
+        }
+        Ok(())
+    }
+
     fn program_module(&self, program: ProgramId) -> Option<&crate::ValidatedModule> {
         self.modules.get(&program).map(|module| module.validated())
     }
@@ -1107,6 +1123,8 @@ unsafe extern "C" {
     ) -> i32;
     fn layerx_programs_call_event_byte(token: u64, section: u16, offset: u32, byte: u8) -> i32;
     fn layerx_programs_call_event_emit(token: u64) -> i32;
+    fn layerx_programs_call_catalog_interface_length(token: u64, index: u32) -> i32;
+    fn layerx_programs_call_catalog_interface_byte(token: u64, index: u32, offset: u32) -> i32;
     fn layerx_programs_call_transfer_begin(token: u64, legs: u16) -> i32;
     fn layerx_programs_call_transfer_leg(
         token: u64,
@@ -2634,6 +2652,15 @@ pub extern "C" fn layerx_programs_call_begin(
                 .map_err(|_| NON_CANONICAL)?,
                 &wasm,
             )?;
+            let interface_length =
+                c_count(unsafe { layerx_programs_call_catalog_interface_length(token, index) })?;
+            if interface_length > 0 {
+                let encoding = scalar_bytes(interface_length as usize, |offset| unsafe {
+                    layerx_programs_call_catalog_interface_byte(token, index, offset)
+                })?;
+                crate::ffi_interface::validate_binding(&encoding, hash, catalog_abi)?;
+                catalog.interfaces.insert(entry_program, encoding);
+            }
             let root_candidate = if entry_program == program {
                 Some(Arc::clone(&module))
             } else {
@@ -2667,6 +2694,9 @@ pub extern "C" fn layerx_programs_call_begin(
         }
         .map_err(|_| NON_CANONICAL)?;
         let capabilities = CapabilitySet::new(grants).map_err(|_| NON_CANONICAL)?;
+        catalog
+            .authorize_interface_call(program, &entrypoint, &calldata, &capabilities)
+            .map_err(|_| NON_CANONICAL)?;
         if sandbox && capabilities.has_program_spend() {
             return Err(NON_CANONICAL);
         }
