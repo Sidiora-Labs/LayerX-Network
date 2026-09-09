@@ -8496,6 +8496,7 @@ file = "agent/sdk/typescript/src/index.ts agent/sdk/python/layerx_sdk/__init__.p
 symbol = "package exports 402LXP quickstart"
 observed = "Built TypeScript and installed Python package entry points do not export the x402 receive, register, supply or commitment helpers. The package import probes exit 1 with the expected missing-export errors. The wiki module page describes typed Asset ordinals but still says module execution applies only SEND and the pause/unpause event path; the quickstart and x402 transport pages do not document the maintained challenge, payer grant, receipt settlement and recurring renewal flow through lx_sendActivity and receipt recovery. Evidence: qual-logs/pay6/pay6d-typescript-package-import.log and pay6d-python-package-import.log."
 assumption = "These package-root and wiki paths are outside the lane ownership contract. Their owners must export the already qualified codecs and helpers, test installed imports, reconcile Asset execution wording and document the public JSON-RPC flow without presenting unqualified deployment as live."
+severity = "blocker"
 [observation.6.11.134]
 task = "6.11"
 file = "src/state/lxp_identity.c agent/crates/layerx-types/src/account.rs agent/crates/layerx-wire/src/hash.rs agent/crates/layerx-sdk/src/rpc.rs"
@@ -8550,4 +8551,36 @@ file = "agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-mcp/sr
 symbol = "EvaluationInput Operation::Wait execute_payment wait"
 observed = "activity.wait remains bound to Operation::Wait and the tenant write:activity:wait alias. Direct exported payment and wait refusal cases and the existing submit/track evidence assertions are retained. Both EvaluationInput constructors still initialize the private cumulative_count to None, and validate_context requires authenticated cumulative use and verified protocol budget evidence."
 assumption = "Positive MCP payment and evidence completion require the canonical cumulative-use and budget evidence producer. Supplying invented usage, bypassing policy, returning an acknowledgement as a receipt, removing signature verification or conflating account and identity sequences would weaken existing checks and is rejected."
+severity = "blocker"
+
+[observation.6.7.4031]
+task = "6.7"
+file = "agent/crates/layerx-crypto/src/payments.rs agent/crates/layerx-crypto/src/disclosure.rs agent/crates/layerx-crypto/tests/payments.rs agent/crates/layerx-crypto/tests/native_payment_vectors.c"
+symbol = "Payment::decode bind native_generated_receive_and_grant_are_byte_identical"
+observed = "Signer disclosure now accepts and re-encodes the native ten-field 733-byte Asset receive and its embedded 346-byte payer grant. Native regeneration leaves both committed fixtures byte-identical. Seven payment disclosure tests pass, including every-byte receive and grant mutation refusal, independent receiver source-sequence disclosure and exact native fixture reproduction. Evidence: qual-logs/pay6/pay6e-signer-native-generate.log, pay6e-signer-native-diff.log and pay6e-signer-payments.log."
+assumption = "Signer byte identity and refusal coverage qualify the signing boundary codec. They do not establish a funded gateway draw, grant-state transition or hosted renewal."
+severity = "note"
+
+[observation.6.7.4032]
+task = "6.7"
+file = "agent/sdk/typescript/src/index.ts agent/sdk/python/layerx_sdk/__init__.py agent/sdk/python/layerx_sdk/__init__.pyi docs/wiki/Modules.md docs/wiki/Quickstart.md docs/wiki/X402Transport.md"
+symbol = "402LXP package exports and public payment flow"
+observed = "The supported Node package root exports the receive, asset, grant, activity and persistent-draw helpers. The supported Python package root and type stub export the corresponding receive, Asset, grant, draw, RPC, HTTP and commitment surfaces. A built Node package import and a freshly installed Python wheel import pass. TypeScript SDK tests, Python SDK tests, all five middleware builds, 21 TypeScript payment tests, 42 Python payment tests, Python format and Ruff checks pass. The wiki identifies typed Asset execution and documents challenge, payer grant, verified settlement and recurring renewal over the public RPC without treating pending or acknowledgement as success. Evidence: qual-logs/pay6/pay6e-typescript-package-import.log, pay6e-python-package-import.log, pay6e-sdk-typescript-rerun.log, pay6e-sdk-python.log, pay6e-middleware-build.log, pay6e-payments-typescript.log, pay6e-payments-python.log, pay6e-python-format.log and pay6e-python-lint.log."
+assumption = "Package availability and documentation do not establish a deployed public endpoint or funded Asset activity. Runtime claims remain bounded to executed gates."
+severity = "note"
+
+[observation.6.7.4033]
+task = "6.7"
+file = "platform/middleware/conformance/src/receipts.ts platform/middleware/conformance/src/scenarios.ts platform/middleware/conformance/service.mjs platform/middleware/merchant/src/index.ts platform/examples/support/merchant-app.mjs platform/examples/agent-spend/index.mjs agent/sdk/typescript/src/verifier.ts"
+symbol = "MerchantSettlementWebhooks runMerchantServiceScenarios runAgentServiceScenarios"
+observed = "Aggregate middleware conformance exits 1 with the same 25 of 29 result reproduced on the recorded base. The merchant webhook event supplies the complete-receipt Merkle-leaf digest while MerchantSettlementWebhooks compares it to ReceiptVerification.receiptDigest, which is the unsigned-receipt signing-domain digest. Both merchant service failures assert body.kind even though the maintained HTTP example emits body.state for payment-required and paid outcomes. The agent service asserts the complete-receipt Merkle-leaf digest while the maintained example emits ReceiptVerification.receiptDigest. Evidence: qual-logs/pay6/pay6e-conformance.log and observation.6.7.4025."
+assumption = "All four failures are inherited contract and fixture contradictions. Assertions, example output, webhook binding and digest definitions remain unchanged pending their owning contract resolution."
+severity = "blocker"
+
+[observation.6.7.4034]
+task = "6.7"
+file = "platform/Cargo.lock platform/hosted/gateway/tests/local/Cargo.lock platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/gateway/deployment.yaml"
+symbol = "local_gateway_rpc start_local_redis"
+observed = "The current-source local gateway RPC and gateway package commands both exit 101 under --locked because their committed unowned Cargo.lock files require dependency reconciliation after the signer merge. The hosted lifecycle requires a TLS-enabled executable specifically at /usr/bin/redis-server; it is absent, redis-server is absent from PATH, and repository tooling contains no executable Redis binary. Hosted manifests reference Redis images, but no container or cluster gate is available on this host. The existing local RPC harness exercises signed Programs and SEND activities and contains no funded grant-issue, metered receive or later-period renewal case. Evidence: qual-logs/pay6/pay6e-hosted-rpc.log, pay6e-gateway-unit.log and pay6e-redis-prerequisite.log."
+assumption = "Updating either unowned lockfile, substituting a fake Redis process or claiming SEND coverage as a payer-grant draw would violate the qualification boundary. A real hosted metered draw and renewal remain unrun."
 severity = "blocker"

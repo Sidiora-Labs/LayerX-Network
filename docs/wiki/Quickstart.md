@@ -155,6 +155,44 @@ and `reset_schedule` (`platform/hosted/testnet/src/main.rs:1155-1163`;
 
 ---
 
+## 2.1. Run a 402LXP payment through public RPC
+
+The maintained 402LXP client path uses JSON-RPC 2.0 at gateway `POST /rpc` and
+WebSocket subscriptions at `GET /rpc/ws`. The Node and Python examples accept
+the gateway and faucet origins explicitly:
+
+```sh
+node platform/middleware/examples/public-rpc.mjs --help
+PYTHONPATH=agent/sdk/python python3 platform/middleware/examples/public_rpc.py --help
+```
+
+The payment sequence is challenge, payer grant, settlement receipt, then
+renewal. A metered or subscription `PAYMENT-REQUIRED` challenge fixes the
+registered asset, amount, recipient, payer, purpose and required commitment.
+The payer signs and issues the canonical ordinal-7 grant. The receiver submits
+the canonical signed ordinal-6 receive activity with
+`lx_sendActivity(canonical_hex, commitment)`. A subscription renewal is a new
+receive activity under the same recurring grant, with current sequences and a
+new period idempotency key.
+
+If submission is pending or its outcome is unknown, retain the exact signed
+activity and query `lx_getActivityStatus(activity_id)` and
+`lx_getReceipt(activity_id)`. Do not issue a replacement draw with a new key.
+Only a successful receipt that verifies at the challenged `executed`, `batched`
+or `finalised` level authorizes fulfillment. The settlement reference remains
+`lxp:<receipt_digest>`; an HTTP success, admission acknowledgement, queue state
+or faucet response is not payment evidence.
+
+Faucet funding is separate. Confirm the funded account with `lx_getAccount`,
+`lx_getBalance` or `lx_getBalances(did)` before preparing a draw, and obtain the
+current identity sequence through `lx_getSequence`. The examples read
+`LAYERX_RPC_URL`, `LAYERX_FAUCET_URL` and `LAYERX_DID`; authentication uses
+`LAYERX_RPC_TOKEN` and `LAYERX_FAUCET_TOKEN`. See
+[402LXP transport](X402Transport.md) for the offer, grant and commitment
+contracts.
+
+---
+
 ## 3. Create a credential
 
 For hosts without an OS Secret Service, first follow the
