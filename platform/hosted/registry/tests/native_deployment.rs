@@ -961,23 +961,7 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
     use layerx_platform_registry::FileDeploymentJournal;
     use layerx_programs::ProtocolDeploymentVerifier;
     let (cluster, proof) = executed_deployment();
-    let header = must(
-        layerx_wire::receipt::decode_batch_header(&proof.state.header),
-        "header",
-    );
-    let mut history = b"LayerX/sequencer-trust-history/v1\0".to_vec();
-    history.extend_from_slice(&1_u16.to_be_bytes());
-    history.extend_from_slice(&0_u16.to_be_bytes());
-    history.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
-    history.extend_from_slice(&NETWORK_ID.to_be_bytes());
-    history.extend_from_slice(&header.epoch().to_be_bytes());
-    history.extend_from_slice(&cluster.sequencer_id);
-    history.extend_from_slice(&cluster.sequencer_key);
-    history.extend_from_slice(&1_u64.to_be_bytes());
-    history.extend_from_slice(&LAST_BATCH.to_be_bytes());
-    history.extend_from_slice(&[0; 9]);
-    let path = cluster.root.join("trust-history");
-    write(&path, &history, 0o600);
+    let path = deployment_history(&cluster, &proof);
     let verifier = must(
         ProtocolDeploymentVerifier::from_protected_history(&path, 60_000),
         "protocol-3 trust history",
@@ -993,7 +977,12 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
         ),
         evidence
     );
-    assert_deployment_refusals(&cluster, &proof, &history, &verifier);
+    assert_deployment_refusals(
+        &cluster,
+        &proof,
+        &must(fs::read(&path), "trust history"),
+        &verifier,
+    );
     assert_independent_deployment(&cluster, &proof, &path);
     let journal = must(
         FileDeploymentJournal::open(cluster.root.join("journal")),
@@ -1016,6 +1005,54 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
         );
     }
     assert_human_materialization(&cluster);
+}
+
+fn deployment_history(cluster: &Cluster, proof: &layerx_programs::DeploymentProof) -> PathBuf {
+    let header = must(
+        layerx_wire::receipt::decode_batch_header(&proof.state.header),
+        "header",
+    );
+    let mut history = b"LayerX/sequencer-trust-history/v1\0".to_vec();
+    history.extend_from_slice(&1_u16.to_be_bytes());
+    history.extend_from_slice(&0_u16.to_be_bytes());
+    history.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    history.extend_from_slice(&NETWORK_ID.to_be_bytes());
+    history.extend_from_slice(&header.epoch().to_be_bytes());
+    history.extend_from_slice(&cluster.sequencer_id);
+    history.extend_from_slice(&cluster.sequencer_key);
+    history.extend_from_slice(&1_u64.to_be_bytes());
+    history.extend_from_slice(&LAST_BATCH.to_be_bytes());
+    history.extend_from_slice(&[0; 9]);
+    let path = cluster.root.join("trust-history");
+    write(&path, &history, 0o600);
+    path
+}
+
+#[test]
+fn native_maintenance_head_verifies_and_refuses_mutations() {
+    let (cluster, proof) = executed_deployment();
+    let path = deployment_history(&cluster, &proof);
+    let maintenance = proof
+        .maintenance
+        .as_ref()
+        .unwrap_or_else(|| panic!("native maintenance required"));
+    let record = must(
+        layerx_wire::maintenance::decode_occupancy_maintenance(&maintenance.receipt),
+        "native maintenance record",
+    );
+    let header = must(
+        layerx_wire::receipt::decode_batch_header(&proof.state.header),
+        "native header",
+    );
+    let expected = layerx_programs::AccountStateHead {
+        receipt_digest: Sha256::digest(&maintenance.receipt).into(),
+        state_root: record.resulting_state_root,
+        freshness: layerx_programs::ReadFreshness {
+            observed_sequence: record.global_sequence,
+            observed_at: header.timestamp_ms(),
+        },
+    };
+    assert_maintenance_head_verification(&proof, &path, &expected);
 }
 
 fn assert_independent_deployment(
@@ -1071,6 +1108,18 @@ fn assert_independent_deployment(
         source.verify_deployment_authority(proof),
         "native authority proof codec",
     );
+    let head = must(
+        source.current_head(now_ms()),
+        "verified maintenance current head",
+    );
+    assert_eq!(
+        must(
+            source.receipt_head(head.receipt_digest),
+            "verified historical head"
+        ),
+        head
+    );
+    assert_maintenance_head_verification(proof, history, &head);
     let mut changed = proof.clone();
     changed.state.header_signature[0] ^= 1;
     assert!(source.verify_deployment_authority(&changed).is_err());
@@ -1088,6 +1137,139 @@ fn assert_independent_deployment(
         "changed inclusion index",
     );
     assert!(source.verify_deployment_authority(&changed).is_err());
+}
+
+fn assert_maintenance_head_verification(
+    proof: &layerx_programs::DeploymentProof,
+    history: &Path,
+    head: &layerx_programs::AccountStateHead,
+) {
+    let verifier = must(
+        layerx_programs::ProtocolDeploymentVerifier::from_protected_history(history, 60_000),
+        "maintenance trust",
+    );
+    let maintenance = proof
+        .maintenance
+        .as_ref()
+        .unwrap_or_else(|| panic!("native maintenance evidence required"));
+    let verify = |receipt: &[u8],
+                  inclusion: &layerx_proof::merkle::Proof,
+                  header: &[u8],
+                  signature: &[u8; 64],
+                  time: u64| {
+        verifier.verify_current_maintenance_head(receipt, inclusion, header, signature, time)
+    };
+    let state = &proof.state;
+    let (claims, _) = must(
+        verify(
+            &maintenance.receipt,
+            &maintenance.receipt_proof,
+            &state.header,
+            &state.header_signature,
+            now_ms(),
+        ),
+        "canonical native maintenance",
+    );
+    assert_eq!(&claims, head);
+    assert_eq!(
+        must(
+            verifier.verify_historical_maintenance_head(
+                &maintenance.receipt,
+                &maintenance.receipt_proof,
+                &state.header,
+                &state.header_signature
+            ),
+            "historical native maintenance"
+        )
+        .0,
+        claims
+    );
+    for time in [
+        0,
+        claims.freshness.observed_at - 1,
+        claims.freshness.observed_at + 60_001,
+    ] {
+        assert!(verify(
+            &maintenance.receipt,
+            &maintenance.receipt_proof,
+            &state.header,
+            &state.header_signature,
+            time
+        )
+        .is_err());
+    }
+    assert_maintenance_mutations(proof, &verifier);
+}
+
+fn assert_maintenance_mutations(
+    proof: &layerx_programs::DeploymentProof,
+    verifier: &layerx_programs::ProtocolDeploymentVerifier,
+) {
+    let maintenance = proof
+        .maintenance
+        .as_ref()
+        .unwrap_or_else(|| panic!("native maintenance evidence required"));
+    let state = &proof.state;
+    let verify = |receipt: &[u8],
+                  inclusion: &layerx_proof::merkle::Proof,
+                  header: &[u8],
+                  signature: &[u8; 64],
+                  time: u64| {
+        verifier.verify_current_maintenance_head(receipt, inclusion, header, signature, time)
+    };
+    for index in 0..maintenance.receipt.len() {
+        let mut changed = maintenance.receipt.clone();
+        changed[index] ^= 1;
+        assert!(verify(
+            &changed,
+            &maintenance.receipt_proof,
+            &state.header,
+            &state.header_signature,
+            now_ms()
+        )
+        .is_err());
+    }
+    for index in 0..state.header.len() {
+        let mut changed = state.header.clone();
+        changed[index] ^= 1;
+        assert!(verify(
+            &maintenance.receipt,
+            &maintenance.receipt_proof,
+            &changed,
+            &state.header_signature,
+            now_ms()
+        )
+        .is_err());
+    }
+    for index in 0..state.header_signature.len() {
+        let mut changed = state.header_signature;
+        changed[index] ^= 1;
+        assert!(verify(
+            &maintenance.receipt,
+            &maintenance.receipt_proof,
+            &state.header,
+            &changed,
+            now_ms()
+        )
+        .is_err());
+    }
+    let original = &maintenance.receipt_proof;
+    let changed = must(
+        layerx_proof::merkle::Proof::new(
+            original.leaf_index() - 1,
+            original.leaf_count(),
+            original.siblings().to_vec(),
+        ),
+        "wrong maintenance position",
+    );
+    assert!(verify(
+        &maintenance.receipt,
+        &changed,
+        &state.header,
+        &state.header_signature,
+        now_ms()
+    )
+    .is_err());
 }
 
 fn assert_human_materialization(cluster: &Cluster) {
