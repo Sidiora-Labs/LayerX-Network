@@ -64,6 +64,55 @@ PY
     done
 )
 
+human_journal_materialize() (
+    set -euo pipefail
+    umask 077
+    local stage pod manifest
+    stage=$(mktemp -d "$WORK_DIR/.journal-export-XXXXXXXX")
+    pod="human-journal-${stage##*-}"
+    pod=${pod,,}
+    manifest="$stage/pod.json"
+    trap 'rm -rf "$stage"' EXIT
+    kube -n "$TESTNET_NAMESPACE" get pod layerx-program-registry-0 -o json > "$stage/registry.json"
+    python3 - "$stage/registry.json" "$manifest" "$pod" <<'PYJOURNAL'
+import json
+import sys
+source = json.load(open(sys.argv[1]))
+spec = source['spec']
+registry = next(c for c in spec['containers'] if c['name'] == 'registry')
+path = next(e['value'] for e in registry['env'] if e['name'] == 'LAYERX_REGISTRY_JOURNAL')
+mount = next(m for m in registry['volumeMounts'] if m['mountPath'] == path)
+volume = next(v for v in spec['volumes'] if v['name'] == mount['name'])
+if (path != '/var/lib/layerx-registry-journal' or mount.get('subPath') != 'journal'
+        or volume['persistentVolumeClaim']['claimName'] != 'layerx-registry-journal'
+        or not spec.get('nodeName')):
+    raise SystemExit('registry journal PVC binding refused')
+value = {'apiVersion': 'v1', 'kind': 'Pod',
+    'metadata': {'name': sys.argv[3], 'namespace': source['metadata']['namespace']},
+    'spec': {'nodeName': spec['nodeName'], 'restartPolicy': 'Never',
+        'automountServiceAccountToken': False, 'activeDeadlineSeconds': 300,
+        'securityContext': {'runAsNonRoot': True, 'runAsUser': 4030, 'runAsGroup': 4030},
+        'containers': [{'name': 'journal', 'image': registry['image'],
+            'imagePullPolicy': registry['imagePullPolicy'], 'command': ['sleep', '300'],
+            'securityContext': {'allowPrivilegeEscalation': False, 'readOnlyRootFilesystem': True,
+                'capabilities': {'drop': ['ALL']}, 'seccompProfile': {'type': 'RuntimeDefault'}},
+            'resources': {'requests': {'cpu': '10m', 'memory': '16Mi'},
+                'limits': {'cpu': '100m', 'memory': '64Mi'}},
+            'volumeMounts': [dict(mount, readOnly=True)]}],
+        'volumes': [{'name': volume['name'], 'persistentVolumeClaim':
+            dict(volume['persistentVolumeClaim'], readOnly=True)}]}}
+with open(sys.argv[2], 'x') as output:
+    json.dump(value, output)
+PYJOURNAL
+    kube create -f "$manifest" > /dev/null
+    trap 'kube -n "$TESTNET_NAMESPACE" delete pod "$pod" --wait=false > /dev/null; rm -rf "$stage"' EXIT
+    kube -n "$TESTNET_NAMESPACE" wait --for=condition=Ready "pod/$pod" --timeout=120s > /dev/null
+    mkdir -m 0700 "$stage/journal"
+    kube -n "$TESTNET_NAMESPACE" cp -c journal "$pod:/var/lib/layerx-registry-journal/." "$stage/journal"
+    python3 "$REPO_ROOT/platform/hosted/human/provision.py" --materialize-journal \
+        --work-dir "$WORK_DIR" --journal "$stage/journal"
+)
+
 human_evidence_provision() (
     set -euo pipefail
     umask 077
@@ -71,9 +120,9 @@ human_evidence_provision() (
     local provision="$REPO_ROOT/platform/hosted/human/provision.py"
     python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
     python3 "$provision" --validate-job-input --work-dir "$WORK_DIR"
-    [ -n "${LAYERX_REGISTRY_JOURNAL:-}" ] || fail 'LAYERX_REGISTRY_JOURNAL: required directory of <program-id>.admission and <program-id>.deployment files is not configured'
+    human_journal_materialize
     python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
-        --registry "$SECRETS_DIR/module-registry.json" --journal "$LAYERX_REGISTRY_JOURNAL"
+        --registry "$SECRETS_DIR/module-registry.json" --journal "$WORK_DIR/registry-journal"
     kube -n "$TESTNET_NAMESPACE" get secret layerx-guarantor-checkpoint-authority \
         -o 'jsonpath={.data.public\.hex}' > "$input/checkpoint-public.base64" \
         || fail 'Secret layerx-guarantor-checkpoint-authority/public.hex: checkpoint producer output required'
@@ -99,5 +148,5 @@ PYHEAD
     human_owner_provision
     python3 "$provision" --assemble --work-dir "$WORK_DIR" \
         --registry "$SECRETS_DIR/module-registry.json" --asset "$NODE_ASSET_ID" \
-        --journal "$LAYERX_REGISTRY_JOURNAL"
+        --journal "$WORK_DIR/registry-journal"
 )

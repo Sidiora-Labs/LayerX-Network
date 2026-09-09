@@ -1014,8 +1014,63 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
             0o600
         );
     }
+    assert_human_materialization(&cluster);
+}
+
+fn assert_human_materialization(cluster: &Cluster) {
     let consumer = Command::new("python3")
-        .args(["-c", "import importlib.util, pathlib, sys; spec = importlib.util.spec_from_file_location('provision', sys.argv[1]); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); root = pathlib.Path(sys.argv[2]); records = module.journal_records(root); assert len(records) == 2; assert all(data == (root / name).read_bytes() for name, data in records.items())"])
+        .args([
+            "-c",
+            r"
+import importlib.util, os, pathlib, shutil, sys, tempfile
+spec = importlib.util.spec_from_file_location('provision', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+root = pathlib.Path(sys.argv[2])
+records = module.journal_records(root)
+assert len(records) == 2
+assert all(data == (root / name).read_bytes() for name, data in records.items())
+with tempfile.TemporaryDirectory(dir=root.parent) as directory:
+    work = pathlib.Path(directory)
+    module.materialize_journal(work, root)
+    destination = work / 'registry-journal'
+    assert module.journal_records(destination) == records
+    assert destination.stat().st_mode & 0o777 == 0o700
+    try:
+        module.materialize_journal(work, root)
+    except module.Refused:
+        pass
+    else:
+        raise AssertionError('existing export accepted')
+    assert module.journal_records(destination) == records
+for mutation in ('missing', 'mode', 'symlink', 'hardlink', 'empty'):
+    with tempfile.TemporaryDirectory(dir=root.parent) as directory:
+        work = pathlib.Path(directory)
+        source = work / 'source'
+        shutil.copytree(root, source)
+        record = next(source.glob('*.deployment'))
+        if mutation == 'missing':
+            record.unlink()
+        elif mutation == 'mode':
+            record.chmod(0o644)
+        elif mutation == 'symlink':
+            record.unlink()
+            record.symlink_to(root / record.name)
+        elif mutation == 'hardlink':
+            record.unlink()
+            os.link(root / record.name, record)
+        elif mutation == 'empty':
+            record.write_bytes(b'')
+        try:
+            module.materialize_journal(work, source)
+        except module.Refused:
+            pass
+        else:
+            raise AssertionError(mutation + ' accepted')
+        assert not (work / 'registry-journal').exists()
+        assert not (work / '.registry-journal-publish').exists()
+",
+        ])
         .arg(repository_root().join("platform/hosted/human/provision.py"))
         .arg(cluster.root.join("journal/pairs"))
         .output();
