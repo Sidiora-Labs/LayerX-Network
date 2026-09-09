@@ -270,3 +270,145 @@ lxp_result lxp_genesis_build_fresh_custody(
     return build_fresh(draft, asset_id, metering, fees, profile, signer_private_key,
                         arena, signed_manifest, snapshot_manifest, encoded_manifest, snapshot);
 }
+
+lxp_result lxp_genesis_build_snapshot_migration(
+    const lxp_genesis_manifest *genesis,
+    const lxp_snapshot_manifest_record *source_manifest,
+    const uint8_t *source_snapshot, size_t source_snapshot_length,
+    const uint8_t signer_private_key[32], lxp_arena *arena,
+    lxp_snapshot_manifest_record *target_manifest,
+    lxp_byte_span *target_snapshot)
+{
+    lxp_state_store *state = NULL;
+    lxp_state_journal *journal = NULL;
+    lxp_kernel *kernel = NULL;
+    lx_account_registry *accounts = NULL;
+    uint8_t signer[32];
+    uint8_t authorization[LXP_SNAPSHOT_MIGRATION_AUTHORIZATION_BYTES];
+    size_t authorization_length = 0U;
+    size_t renamed = 0U;
+    bool state_open = false;
+    lxp_result status;
+    if (genesis == NULL || source_manifest == NULL ||
+        source_snapshot == NULL || source_snapshot_length == 0U ||
+        signer_private_key == NULL || arena == NULL ||
+        target_manifest == NULL || target_snapshot == NULL ||
+        source_manifest->global_sequence == 0U ||
+        source_manifest->migration.present)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memset(target_manifest, 0, sizeof(*target_manifest));
+    *target_snapshot = (lxp_byte_span){NULL, 0U};
+    status = lxp_genesis_verify_signature(genesis, arena);
+    if (status == LXP_OK) status = signer_public_key(signer_private_key, signer);
+    if (status == LXP_OK && lxp_ct_memcmp(
+            signer, genesis->signer_public_key, 32U) != 0)
+        status = LXP_ERR_BAD_SIGNATURE;
+    state = (lxp_state_store *)malloc(sizeof(*state));
+    journal = (lxp_state_journal *)calloc(1U, sizeof(*journal));
+    kernel = (lxp_kernel *)malloc(sizeof(*kernel));
+    accounts = (lx_account_registry *)malloc(sizeof(*accounts));
+    if (status == LXP_OK &&
+        (state == NULL || journal == NULL || kernel == NULL ||
+         accounts == NULL))
+        status = LXP_ERR_IO;
+    if (status == LXP_OK) status = lx_account_registry_init(accounts);
+    if (status == LXP_OK) {
+        status = lxp_state_store_init(state, 1U);
+        state_open = status == LXP_OK;
+    }
+    if (status == LXP_OK)
+        status = lxp_state_store_bind_accounts(state, accounts);
+    if (status == LXP_OK)
+        status = lxp_kernel_create(kernel, state, journal, genesis, 1U);
+    if (status == LXP_OK)
+        status = lxp_kernel_register_module(
+            kernel, programs_module_registration_v4());
+    if (status == LXP_OK &&
+        genesis->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_kernel_register_module(kernel, lx_asset_module_iface());
+    if (status == LXP_OK) {
+        lxp_bridge_profile bridge;
+        bool present = false;
+        status = lxp_bridge_genesis_profile(genesis, &bridge, &present);
+        if (status == LXP_OK && present)
+            status = lxp_kernel_register_module(
+                kernel, lxp_bridge_module_iface());
+    }
+    if (status == LXP_OK)
+        status = lxp_snapshot_load_retired_issuance(
+            source_snapshot, source_snapshot_length, source_manifest, kernel,
+            &renamed);
+    if (status == LXP_OK && (renamed == 0U || renamed > UINT16_MAX))
+        status = LXP_ERR_LENGTH_LIMIT;
+    if (status == LXP_OK)
+        status = lxp_state_root(kernel, target_manifest->canonical_state_root);
+    if (status == LXP_OK)
+        status = lxp_snapshot_migration_receipt_root(
+            genesis->network_id, source_manifest->global_sequence,
+            source_manifest->canonical_state_root,
+            source_manifest->receipt_state_root,
+            target_manifest->canonical_state_root,
+            target_manifest->receipt_state_root);
+    if (status == LXP_OK) {
+        target_manifest->global_sequence = source_manifest->global_sequence;
+        (void)memcpy(kernel->current_state_root,
+                     target_manifest->receipt_state_root, 32U);
+        status = lxp_snapshot_write(
+            kernel, target_manifest->global_sequence, arena, target_snapshot);
+    }
+    if (status == LXP_OK) {
+        uint8_t canonical[32];
+        uint8_t receipt[32];
+        (void)memcpy(canonical, target_manifest->canonical_state_root, 32U);
+        (void)memcpy(receipt, target_manifest->receipt_state_root, 32U);
+        status = lxp_snapshot_manifest_build(
+            target_snapshot->bytes, target_snapshot->length,
+            source_manifest->global_sequence, canonical, receipt,
+            target_manifest);
+    }
+    if (status == LXP_OK) {
+        lxp_snapshot_migration_authorization *migration =
+            &target_manifest->migration;
+        migration->present = true;
+        migration->network_id = genesis->network_id;
+        migration->renamed_account_count = (uint16_t)renamed;
+        migration->source_global_sequence = source_manifest->global_sequence;
+        (void)memcpy(migration->source_canonical_state_root,
+                     source_manifest->canonical_state_root, 32U);
+        (void)memcpy(migration->source_receipt_state_root,
+                     source_manifest->receipt_state_root, 32U);
+        (void)memcpy(migration->source_snapshot_digest,
+                     source_manifest->snapshot_digest, 32U);
+        (void)memcpy(migration->signer_public_key, signer, 32U);
+        status = lxp_snapshot_migration_authorization_encode(
+            target_manifest, false, authorization, &authorization_length);
+    }
+    if (status == LXP_OK)
+        status = sign_manifest(
+            signer_private_key, authorization, authorization_length,
+            target_manifest->migration.signature);
+    if (status == LXP_OK)
+        status = lxp_snapshot_migration_authorization_verify(
+            target_manifest, genesis->network_id,
+            genesis->signer_public_key);
+    while (kernel != NULL && kernel->blob_count != 0U)
+        free(kernel->blobs[--kernel->blob_count].bytes);
+    if (state_open) {
+        lxp_result close_status = lxp_state_store_destroy(state);
+        if (status == LXP_OK && close_status != LXP_OK) status = close_status;
+    }
+    lxp_secure_zero(signer, sizeof(signer));
+    lxp_secure_zero(authorization, sizeof(authorization));
+    if (accounts != NULL) lxp_secure_zero(accounts, sizeof(*accounts));
+    if (kernel != NULL) lxp_secure_zero(kernel, sizeof(*kernel));
+    if (journal != NULL) lxp_secure_zero(journal, sizeof(*journal));
+    free(accounts);
+    free(kernel);
+    free(journal);
+    free(state);
+    if (status != LXP_OK) {
+        (void)memset(target_manifest, 0, sizeof(*target_manifest));
+        *target_snapshot = (lxp_byte_span){NULL, 0U};
+    }
+    return status;
+}

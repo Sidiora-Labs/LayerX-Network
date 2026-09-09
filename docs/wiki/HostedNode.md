@@ -194,6 +194,25 @@ bytes are `LAYERX_NODE_GENESIS_RECEIPT_STATE_ROOT`
 custody profile, LXGR anchors both registration roots to the
 receipt state root (`platform/hosted/node/bootstrap.sh:420-432`).
 
+To migrate a post-genesis checkpoint containing the retired
+`asset:<asset-id>:issuance` account name, stop the node and run:
+
+```sh
+layerx-genesis-build --migrate-snapshot-issuance \
+  SOURCE.lxs genesis/genesis.manifest SEQUENCER.key MIGRATED-CHECKPOINTS
+```
+
+`MIGRATED-CHECKPOINTS` must not exist. The command verifies the signed genesis
+manifest and requires its Ed25519 signer key, verifies the source snapshot and
+its legacy state root, renames only retired issuance accounts while preserving
+their account ids and all other state, and writes a same-sequence LXS3
+checkpoint. Its authorization binds both snapshot digests, both canonical
+roots, the prior receipt root, the newly derived receipt root, network id and
+rename count. On restore, `layerxd` accepts LXS3 only when that authorization
+verifies against the signer in `genesis.manifest`. Preserve and deploy the
+matching `.lxi` identity sidecar beside the migrated `.lxs`; the migration
+command does not rewrite identity history.
+
 Sequencer and treasury seeds are 32 raw bytes or 64 hex
 characters and must yield distinct public keys
 (`platform/hosted/node/bootstrap.sh:283-315`). Sequencer id is

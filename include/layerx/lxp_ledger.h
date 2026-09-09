@@ -271,6 +271,8 @@ lxp_result lx_account_registry_snapshot(lx_account_registry *source,
                                         lx_account_registry *snapshot);
 lxp_result lx_account_registry_root(const lx_account_registry *registry,
                                     uint8_t root[32]);
+lxp_result lx_account_registry_retired_issuance_root(
+    const lx_account_registry *registry, uint8_t root[32]);
 lxp_result lx_account_state_leaf_material(
     const lx_account *account,
     uint8_t key[LX_ACCOUNT_STATE_LEAF_KEY_BYTES],
@@ -293,6 +295,8 @@ lxp_result lx_account_open(lx_account_registry *registry,
 enum { LX_ASSET_ISSUANCE_NAME_BYTES = 83 };
 lxp_result lx_asset_issuance_name(const uint8_t asset_id[32],
     uint8_t name[LX_ASSET_ISSUANCE_NAME_BYTES], uint8_t account_id[32]);
+lxp_result lx_account_migrate_retired_issuance(lx_account *account,
+                                                bool *renamed);
 lxp_result lx_account_module_value_prepare(
     lx_account_registry *registry, const uint8_t *module_name,
     size_t module_name_length, const uint8_t account_id[LX_ACCOUNT_ID_BYTES],

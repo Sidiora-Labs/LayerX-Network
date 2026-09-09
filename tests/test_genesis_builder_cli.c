@@ -124,6 +124,131 @@ static int read_file(const char *path, uint8_t *bytes, size_t capacity,
     return 0;
 }
 
+static int contains_bytes(const uint8_t *bytes, size_t length,
+                          const uint8_t *needle, size_t needle_length)
+{
+    size_t offset;
+    if (bytes == NULL || needle == NULL || needle_length == 0U ||
+        needle_length > length)
+        return 0;
+    for (offset = 0U; offset <= length - needle_length; ++offset)
+        if (memcmp(bytes + offset, needle, needle_length) == 0) return 1;
+    return 0;
+}
+
+static int signed_snapshot_migration_fixture(const char *base)
+{
+    static const char fixture_manifest[] =
+        "tests/fixtures/pay1-retired-genesis.manifest";
+    static const char fixture_snapshot[] =
+        "tests/fixtures/pay1-retired-issuance.lxs";
+    static const uint8_t retired_suffix[] = ":issuance";
+    static const uint8_t current_prefix[] = "module:asset:value:";
+    static uint8_t arena_bytes[4U * 1024U * 1024U];
+    static lxp_genesis_manifest genesis;
+    uint8_t manifest_bytes[LXP_GENESIS_MAX_ENCODED_BYTES];
+    uint8_t signer_key[32];
+    uint8_t wrong_key[32];
+    size_t manifest_length = 0U;
+    lxp_snapshot_manifest_record source_manifest;
+    lxp_snapshot_manifest_record target_manifest;
+    lxp_snapshot_manifest_record forged;
+    lxp_byte_span source_snapshot;
+    lxp_byte_span target_snapshot;
+    lxp_arena arena;
+    char signer_path[192];
+    char wrong_signer_path[192];
+    char output_directory[192];
+    char rejected_directory[192];
+    char output_path[224];
+    char *migration_argv[6];
+    char *rejected_argv[6];
+    (void)memset(signer_key, 0x22, sizeof(signer_key));
+    (void)memset(wrong_key, 0x23, sizeof(wrong_key));
+    if (snprintf(signer_path, sizeof(signer_path), "%s/migration.key", base) < 0 ||
+        snprintf(wrong_signer_path, sizeof(wrong_signer_path),
+                 "%s/wrong-migration.key", base) < 0 ||
+        snprintf(output_directory, sizeof(output_directory),
+                 "%s/migrated", base) < 0 ||
+        snprintf(rejected_directory, sizeof(rejected_directory),
+                 "%s/rejected-migration", base) < 0 ||
+        write_file(signer_path, signer_key, sizeof(signer_key), 0600) != 0 ||
+        write_file(wrong_signer_path, wrong_key, sizeof(wrong_key), 0600) != 0 ||
+        read_file(fixture_manifest, manifest_bytes, sizeof(manifest_bytes),
+                  &manifest_length) != 0 ||
+        lxp_genesis_parse(manifest_bytes, manifest_length,
+                          LXP_GENESIS_INPUT_MANIFEST, &genesis) != LXP_OK ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_genesis_verify_signature(&genesis, &arena) != LXP_OK ||
+        lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_snapshot_store_read(fixture_snapshot, &arena, &source_manifest,
+                                &source_snapshot) != LXP_OK ||
+        source_manifest.global_sequence == 0U ||
+        !contains_bytes(source_snapshot.bytes, source_snapshot.length,
+                        retired_suffix, sizeof(retired_suffix) - 1U) ||
+        contains_bytes(source_snapshot.bytes, source_snapshot.length,
+                       current_prefix, sizeof(current_prefix) - 1U))
+        return 1;
+    migration_argv[0] = (char *)"layerx-genesis-build";
+    migration_argv[1] = (char *)"--migrate-snapshot-issuance";
+    migration_argv[2] = (char *)fixture_snapshot;
+    migration_argv[3] = (char *)fixture_manifest;
+    migration_argv[4] = signer_path;
+    migration_argv[5] = output_directory;
+    rejected_argv[0] = migration_argv[0];
+    rejected_argv[1] = migration_argv[1];
+    rejected_argv[2] = migration_argv[2];
+    rejected_argv[3] = migration_argv[3];
+    rejected_argv[4] = wrong_signer_path;
+    rejected_argv[5] = rejected_directory;
+    if (lxp_genesis_builder_cli_main(6, rejected_argv) == 0 ||
+        access(rejected_directory, F_OK) == 0 ||
+        lxp_genesis_builder_cli_main(6, migration_argv) != 0 ||
+        snprintf(output_path, sizeof(output_path), "%s/%020llu.lxs",
+                 output_directory,
+                 (unsigned long long)source_manifest.global_sequence) < 0 ||
+        lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_snapshot_store_read(output_path, &arena, &target_manifest,
+                                &target_snapshot) != LXP_OK ||
+        !target_manifest.migration.present ||
+        target_manifest.migration.network_id != genesis.network_id ||
+        target_manifest.migration.renamed_account_count != 1U ||
+        target_manifest.global_sequence != source_manifest.global_sequence ||
+        memcmp(target_manifest.migration.source_canonical_state_root,
+               source_manifest.canonical_state_root, 32U) != 0 ||
+        memcmp(target_manifest.migration.source_receipt_state_root,
+               source_manifest.receipt_state_root, 32U) != 0 ||
+        memcmp(target_manifest.migration.source_snapshot_digest,
+               source_manifest.snapshot_digest, 32U) != 0 ||
+        memcmp(target_manifest.migration.signer_public_key,
+               genesis.signer_public_key, 32U) != 0 ||
+        memcmp(target_manifest.canonical_state_root,
+               source_manifest.canonical_state_root, 32U) == 0 ||
+        !contains_bytes(target_snapshot.bytes, target_snapshot.length,
+                        current_prefix, sizeof(current_prefix) - 1U) ||
+        contains_bytes(target_snapshot.bytes, target_snapshot.length,
+                       retired_suffix, sizeof(retired_suffix) - 1U) ||
+        lxp_snapshot_migration_authorization_verify(
+            &target_manifest, genesis.network_id,
+            genesis.signer_public_key) != LXP_OK)
+        return 1;
+    forged = target_manifest;
+    forged.migration.signature[0] ^= 1U;
+    if (lxp_snapshot_migration_authorization_verify(
+            &forged, genesis.network_id, genesis.signer_public_key) == LXP_OK)
+        return 1;
+    forged = target_manifest;
+    ++forged.migration.renamed_account_count;
+    if (lxp_snapshot_migration_authorization_verify(
+            &forged, genesis.network_id, genesis.signer_public_key) == LXP_OK ||
+        unlink(output_path) != 0 || rmdir(output_directory) != 0 ||
+        unlink(wrong_signer_path) != 0 || unlink(signer_path) != 0)
+        return 1;
+    lxp_secure_zero(signer_key, sizeof(signer_key));
+    lxp_secure_zero(wrong_key, sizeof(wrong_key));
+    return 0;
+}
+
 int main(void)
 {
     static uint8_t arena_bytes[4 * 1024 * 1024];
@@ -268,6 +393,7 @@ int main(void)
         }
         if (rmdir(v2_output) != 0 || unlink(v2_request) != 0) return 1;
     }
+    if (signed_snapshot_migration_fixture(base) != 0) return 1;
     if (unlink(deployment_descriptor_path) != 0 ||
         unlink(registration_request_path) != 0 || unlink(snapshot_path) != 0 ||
         unlink(manifest_path) != 0 || rmdir(output_path) != 0 ||

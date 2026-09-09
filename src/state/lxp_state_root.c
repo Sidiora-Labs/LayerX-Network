@@ -1,6 +1,7 @@
 #include "layerx/lxp_kernel.h"
 
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_crypto.h"
 #include "lxp_state_internal.h"
 
 #include <string.h>
@@ -215,12 +216,14 @@ static void account_write_u64(uint8_t bytes[8], uint64_t value)
         bytes[i] = (uint8_t)(value >> (56U - 8U * i));
 }
 
-lxp_result lx_account_state_leaf_material(
+static lxp_result account_state_leaf_material(
     const lx_account *account,
     uint8_t key[LX_ACCOUNT_STATE_LEAF_KEY_BYTES],
     uint8_t value[LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES],
-    size_t *value_length)
+    size_t *value_length, bool allow_retired_issuance)
 {
+    lx_account migrated;
+    bool renamed = false;
     size_t offset = 0U;
     lxp_result status;
     if (account == NULL || key == NULL || value == NULL ||
@@ -228,6 +231,11 @@ lxp_result lx_account_state_leaf_material(
         account->name_length > LX_ACCOUNT_NAME_MAX)
         return LXP_ERR_NON_CANONICAL;
     status = lx_account_validate_canonical(account);
+    if (status != LXP_OK && allow_retired_issuance) {
+        migrated = *account;
+        status = lx_account_migrate_retired_issuance(&migrated, &renamed);
+        if (status == LXP_OK && !renamed) status = LXP_ERR_NON_CANONICAL;
+    }
     if (status != LXP_OK) return status;
     key[0] = 4U;
     (void)memcpy(key + 1U, account->id, 32U);
@@ -255,8 +263,19 @@ lxp_result lx_account_state_leaf_material(
     return LXP_OK;
 }
 
-lxp_result lx_account_registry_root(const lx_account_registry *registry,
-                                    uint8_t root[32])
+lxp_result lx_account_state_leaf_material(
+    const lx_account *account,
+    uint8_t key[LX_ACCOUNT_STATE_LEAF_KEY_BYTES],
+    uint8_t value[LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES],
+    size_t *value_length)
+{
+    return account_state_leaf_material(account, key, value, value_length,
+                                       false);
+}
+
+static lxp_result account_registry_root(const lx_account_registry *registry,
+                                        uint8_t root[32],
+                                        bool allow_retired_issuance)
 {
     state_leaf leaves[LX_ACCOUNT_REGISTRY_CAPACITY];
     size_t count;
@@ -275,14 +294,27 @@ lxp_result lx_account_registry_root(const lx_account_registry *registry,
             if (memcmp(registry->accounts[j].id,
                        registry->accounts[i].id, 32U) == 0)
                 return LXP_ERR_NON_CANONICAL;
-        status = lx_account_state_leaf_material(
-            &registry->accounts[i], key, value, &value_length);
+        status = account_state_leaf_material(
+            &registry->accounts[i], key, value, &value_length,
+            allow_retired_issuance);
         if (status == LXP_OK)
             status = leaf_set(&leaves[i], key, sizeof(key), value,
                               value_length);
         if (status != LXP_OK) return status;
     }
     return leaves_root(leaves, count, root);
+}
+
+lxp_result lx_account_registry_root(const lx_account_registry *registry,
+                                    uint8_t root[32])
+{
+    return account_registry_root(registry, root, false);
+}
+
+lxp_result lx_account_registry_retired_issuance_root(
+    const lx_account_registry *registry, uint8_t root[32])
+{
+    return account_registry_root(registry, root, true);
 }
 
 lxp_result lx_account_registry_proof(
@@ -353,6 +385,7 @@ static lxp_result leaf_set(state_leaf *leaf, const uint8_t *key,
 }
 
 static lxp_result universal_leaves(const lxp_kernel *kernel,
+                                   const uint8_t account_root_override[32],
                                    state_leaf *leaves, size_t *count)
 {
     size_t i;
@@ -433,8 +466,15 @@ static lxp_result universal_leaves(const lxp_kernel *kernel,
         uint8_t account_root[32];
         static const uint8_t account_key[] = "account-tree";
         if (kernel->state->accounts == NULL) return LXP_FATAL_INVARIANT;
-        status = lx_account_registry_root(kernel->state->accounts,
-                                          account_root);
+        if (account_root_override == NULL)
+            status = lx_account_registry_root(kernel->state->accounts,
+                                              account_root);
+        else {
+            if (lxp_ct_is_zero(account_root_override, 32U))
+                return LXP_ERR_NON_CANONICAL;
+            (void)memcpy(account_root, account_root_override, 32U);
+            status = LXP_OK;
+        }
         if (status != LXP_OK) return status;
         status = leaf_set(&leaves[(*count)++], account_key,
                           sizeof(account_key) - 1U, account_root,
@@ -453,8 +493,9 @@ static lxp_result universal_leaves(const lxp_kernel *kernel,
                     value, 8U);
 }
 
-lxp_result lxp_state_subtree_root(const lxp_kernel *kernel,
-                                  uint16_t module_id, uint8_t root[32])
+static lxp_result state_subtree_root(
+    const lxp_kernel *kernel, uint16_t module_id,
+    const uint8_t account_root_override[32], uint8_t root[32])
 {
     state_leaf leaves[LXP_STATE_MAX_LEAVES];
     size_t count = 0U;
@@ -465,7 +506,8 @@ lxp_result lxp_state_subtree_root(const lxp_kernel *kernel,
     status = kernel_state_validate(kernel);
     if (status != LXP_OK) return status;
     if (module_id == 0U) {
-        status = universal_leaves(kernel, leaves, &count);
+        status = universal_leaves(
+            kernel, account_root_override, leaves, &count);
         return status == LXP_OK ? leaves_root(leaves, count, root) : status;
     }
     for (i = 0U; i < kernel->module_kv_count; ++i) {
@@ -488,6 +530,21 @@ lxp_result lxp_state_subtree_root(const lxp_kernel *kernel,
     return leaves_root(leaves, count, root);
 }
 
+lxp_result lxp_state_subtree_root(const lxp_kernel *kernel,
+                                  uint16_t module_id, uint8_t root[32])
+{
+    return state_subtree_root(kernel, module_id, NULL, root);
+}
+
+lxp_result lxp_state_subtree_root_with_account_override(
+    const lxp_kernel *kernel, uint16_t module_id,
+    const uint8_t account_root[32], uint8_t root[32])
+{
+    if (account_root == NULL || module_id != 0U)
+        return LXP_ERR_NON_CANONICAL;
+    return state_subtree_root(kernel, module_id, account_root, root);
+}
+
 lxp_result lxp_state_subtree_proof(
     const lxp_kernel *kernel, uint16_t module_id, const uint8_t *key,
     size_t key_length, uint8_t root[32], lxp_state_proof *proof)
@@ -502,7 +559,7 @@ lxp_result lxp_state_subtree_proof(
     status = kernel_state_validate(kernel);
     if (status != LXP_OK) return status;
     if (module_id == 0U) {
-        status = universal_leaves(kernel, leaves, &count);
+        status = universal_leaves(kernel, NULL, leaves, &count);
         return status == LXP_OK ?
             leaves_proof(leaves, count, key, key_length, root, proof) : status;
     }
@@ -536,7 +593,9 @@ lxp_result lxp_state_supply_check(const lxp_kernel *kernel)
     return status == LXP_OK ? LXP_OK : LXP_FATAL_SUPPLY_MISMATCH;
 }
 
-lxp_result lxp_state_root(const lxp_kernel *kernel, uint8_t root[32])
+static lxp_result state_root(const lxp_kernel *kernel,
+                             const uint8_t account_root_override[32],
+                             uint8_t root[32])
 {
     state_leaf leaves[LXP_MODULE_RESERVED_COUNT + 1U];
     size_t module_id;
@@ -553,7 +612,9 @@ lxp_result lxp_state_root(const lxp_kernel *kernel, uint8_t root[32])
     if (status != LXP_OK) return status;
     for (module_id = 0U; module_id < module_root_count; ++module_id) {
         uint8_t subtree[32];
-        status = lxp_state_subtree_root(kernel, (uint16_t)module_id, subtree);
+        status = state_subtree_root(
+            kernel, (uint16_t)module_id,
+            module_id == 0U ? account_root_override : NULL, subtree);
         if (status != LXP_OK) return status;
         key[0] = (uint8_t)(module_id >> 8U);
         key[1] = (uint8_t)module_id;
@@ -561,6 +622,19 @@ lxp_result lxp_state_root(const lxp_kernel *kernel, uint8_t root[32])
         if (status != LXP_OK) return status;
     }
     return leaves_root(leaves, count, root);
+}
+
+lxp_result lxp_state_root(const lxp_kernel *kernel, uint8_t root[32])
+{
+    return state_root(kernel, NULL, root);
+}
+
+lxp_result lxp_state_root_with_account_override(
+    const lxp_kernel *kernel, const uint8_t account_root[32],
+    uint8_t root[32])
+{
+    if (account_root == NULL) return LXP_ERR_NON_CANONICAL;
+    return state_root(kernel, account_root, root);
 }
 
 lxp_result lxp_state_root_proof(const lxp_kernel *kernel, uint16_t module_id,

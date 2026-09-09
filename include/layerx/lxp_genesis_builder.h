@@ -39,6 +39,13 @@ lxp_result lxp_genesis_deployment_descriptor_encode(
 lxp_result lxp_genesis_build_artifacts(
     const char *request_path, const char *signer_key_path,
     const char *output_directory);
+lxp_result lxp_genesis_build_snapshot_migration(
+    const lxp_genesis_manifest *genesis,
+    const lxp_snapshot_manifest_record *source_manifest,
+    const uint8_t *source_snapshot, size_t source_snapshot_length,
+    const uint8_t signer_private_key[32], lxp_arena *arena,
+    lxp_snapshot_manifest_record *target_manifest,
+    lxp_byte_span *target_snapshot);
 int lxp_genesis_builder_cli_main(int argc, char **argv);
 
 #endif

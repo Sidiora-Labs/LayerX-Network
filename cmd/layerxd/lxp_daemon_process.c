@@ -3788,6 +3788,42 @@ static lxp_result verify_bootstrap_genesis(
     return status;
 }
 
+static lxp_result verify_snapshot_migration(
+    lxp_daemon_process *process,
+    const lxp_snapshot_manifest_record *snapshot)
+{
+    const char *path = required_environment("LAYERX_NODE_GENESIS_MANIFEST");
+    lxp_genesis_manifest *genesis = NULL;
+    uint8_t *bytes = NULL;
+    size_t length = 0U;
+    size_t mark;
+    lxp_result status;
+    if (process == NULL || snapshot == NULL ||
+        !snapshot->migration.present || path == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    mark = lxp_arena_mark(&process->owner_scratch);
+    status = lxp_daemon_artifact_read(
+        path, LXP_GENESIS_MAX_ENCODED_BYTES, 0U, &bytes, &length);
+    if (status == LXP_OK)
+        genesis = (lxp_genesis_manifest *)malloc(sizeof(*genesis));
+    if (status == LXP_OK && genesis == NULL) status = LXP_ERR_IO;
+    if (status == LXP_OK)
+        status = lxp_genesis_parse(
+            bytes, length, LXP_GENESIS_INPUT_MANIFEST, genesis);
+    if (status == LXP_OK)
+        status = lxp_genesis_verify_signature(
+            genesis, &process->owner_scratch);
+    if (status == LXP_OK)
+        status = lxp_snapshot_migration_authorization_verify(
+            snapshot, process->network_id, genesis->signer_public_key);
+    if (bytes != NULL) lxp_secure_zero(bytes, length);
+    if (genesis != NULL) lxp_secure_zero(genesis, sizeof(*genesis));
+    free(bytes);
+    free(genesis);
+    (void)lxp_arena_reset(&process->owner_scratch, mark);
+    return status;
+}
+
 static lxp_result load_genesis_settlement_anchor(
     lxp_daemon_process *process, uint8_t settlement_anchor[32])
 {
@@ -3968,6 +4004,9 @@ static lxp_result open_process(lxp_daemon_process *process,
     if (status == LXP_OK)
         status = lxp_snapshot_store_read(snapshot_path, &snapshot_arena,
                                          &manifest, &snapshot);
+    if (status == LXP_OK && checkpoint_selected &&
+        manifest.migration.present)
+        status = verify_snapshot_migration(process, &manifest);
     if (status == LXP_OK)
         status = lxp_snapshot_load(snapshot.bytes, snapshot.length,
                                    &manifest, &process->kernel);

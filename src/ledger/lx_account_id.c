@@ -240,3 +240,36 @@ lxp_result lx_asset_issuance_name(const uint8_t asset_id[32],
     }
     return LXP_OK;
 }
+
+lxp_result lx_account_migrate_retired_issuance(lx_account *account,
+                                                bool *renamed)
+{
+    static const uint8_t hex[] = "0123456789abcdef";
+    uint8_t name[LX_ASSET_ISSUANCE_NAME_BYTES];
+    uint8_t account_id[32];
+    lxp_result status;
+    if (account == NULL || renamed == NULL) return LXP_ERR_NON_CANONICAL;
+    *renamed = false;
+    status = lx_account_validate_canonical(account);
+    if (status == LXP_OK) return LXP_OK;
+    if (account->kind != LX_ACCOUNT_MODULE_VALUE || !account->has_asset ||
+        account->name_length != 79U ||
+        memcmp(account->name, "asset:", 6U) != 0 ||
+        memcmp(account->name + 70U, ":issuance", 9U) != 0)
+        return status;
+    for (size_t i = 0U; i < 32U; ++i)
+        if (account->name[6U + i * 2U] != hex[account->asset_id[i] >> 4U] ||
+            account->name[7U + i * 2U] !=
+                hex[account->asset_id[i] & 15U])
+            return LXP_ERR_ASSET_MISMATCH;
+    status = lx_asset_issuance_name(account->asset_id, name, account_id);
+    if (status != LXP_OK) return status;
+    if (memcmp(account->id, account_id, sizeof(account_id)) != 0)
+        return LXP_ERR_ACCOUNT_ID_MISMATCH;
+    (void)memset(account->name, 0, sizeof(account->name));
+    (void)memcpy(account->name, name, sizeof(name));
+    account->name_length = (uint16_t)sizeof(name);
+    status = lx_account_validate_canonical(account);
+    if (status == LXP_OK) *renamed = true;
+    return status;
+}

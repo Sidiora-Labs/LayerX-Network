@@ -571,10 +571,118 @@ static lxp_result migrate_asset_v2(const char *input_path, const char *salt_path
     return status;
 }
 
+static lxp_result migrate_snapshot_issuance(
+    const char *snapshot_path, const char *manifest_path,
+    const char *signer_key_path, const char *directory)
+{
+    uint8_t *manifest_bytes = NULL;
+    uint8_t *signer_key = NULL;
+    uint8_t *source_arena_bytes = NULL;
+    uint8_t *target_arena_bytes = NULL;
+    size_t manifest_length = 0U;
+    size_t signer_key_length = 0U;
+    lxp_genesis_manifest *genesis = NULL;
+    lxp_snapshot_manifest_record source_manifest;
+    lxp_snapshot_manifest_record target_manifest;
+    lxp_byte_span source_snapshot;
+    lxp_byte_span target_snapshot;
+    lxp_arena source_arena;
+    lxp_arena target_arena;
+    char output_path[4096];
+    char temporary_path[4096];
+    bool created = false;
+    lxp_result status;
+    if (snapshot_path == NULL || manifest_path == NULL ||
+        signer_key_path == NULL || directory == NULL ||
+        directory[0] == '\0')
+        return LXP_ERR_NON_CANONICAL;
+    status = read_regular_file(
+        manifest_path, LXP_GENESIS_MAX_ENCODED_BYTES, false,
+        &manifest_bytes, &manifest_length);
+    if (status == LXP_OK)
+        status = read_regular_file(
+            signer_key_path, 32U, true, &signer_key, &signer_key_length);
+    if (status == LXP_OK && signer_key_length != 32U)
+        status = LXP_ERR_NON_CANONICAL;
+    genesis = (lxp_genesis_manifest *)malloc(sizeof(*genesis));
+    source_arena_bytes = (uint8_t *)malloc(GENESIS_BUILD_ARENA_BYTES);
+    target_arena_bytes = (uint8_t *)malloc(GENESIS_BUILD_ARENA_BYTES);
+    if (status == LXP_OK &&
+        (genesis == NULL || source_arena_bytes == NULL ||
+         target_arena_bytes == NULL))
+        status = LXP_ERR_IO;
+    if (status == LXP_OK)
+        status = lxp_genesis_parse(
+            manifest_bytes, manifest_length, LXP_GENESIS_INPUT_MANIFEST,
+            genesis);
+    if (status == LXP_OK)
+        status = lxp_arena_init(
+            &source_arena, source_arena_bytes, GENESIS_BUILD_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_arena_init(
+            &target_arena, target_arena_bytes, GENESIS_BUILD_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_snapshot_store_read(
+            snapshot_path, &source_arena, &source_manifest,
+            &source_snapshot);
+    if (status == LXP_OK)
+        status = lxp_genesis_build_snapshot_migration(
+            genesis, &source_manifest, source_snapshot.bytes,
+            source_snapshot.length, signer_key, &target_arena,
+            &target_manifest, &target_snapshot);
+    if (status == LXP_OK) {
+        int length = snprintf(
+            output_path, sizeof(output_path), "%s/%020llu.lxs", directory,
+            (unsigned long long)target_manifest.global_sequence);
+        if (length < 0 || (size_t)length >= sizeof(output_path))
+            status = LXP_ERR_LENGTH_LIMIT;
+    }
+    if (status == LXP_OK) {
+        int length = snprintf(
+            temporary_path, sizeof(temporary_path), "%s.tmp", output_path);
+        if (length < 0 || (size_t)length >= sizeof(temporary_path))
+            status = LXP_ERR_LENGTH_LIMIT;
+    }
+    if (status == LXP_OK) {
+        if (mkdir(directory, 0700) != 0) status = LXP_ERR_IO;
+        else created = true;
+    }
+    if (status == LXP_OK)
+        status = lxp_snapshot_store_write(
+            directory, &target_manifest, target_snapshot.bytes,
+            target_snapshot.length);
+    if (status != LXP_OK && created) {
+        (void)unlink(temporary_path);
+        (void)unlink(output_path);
+        (void)rmdir(directory);
+    }
+    if (signer_key != NULL) {
+        lxp_secure_zero(signer_key, signer_key_length);
+        free(signer_key);
+    }
+    if (manifest_bytes != NULL) {
+        lxp_secure_zero(manifest_bytes, manifest_length);
+        free(manifest_bytes);
+    }
+    if (genesis != NULL) lxp_secure_zero(genesis, sizeof(*genesis));
+    if (source_arena_bytes != NULL)
+        lxp_secure_zero(source_arena_bytes, GENESIS_BUILD_ARENA_BYTES);
+    if (target_arena_bytes != NULL)
+        lxp_secure_zero(target_arena_bytes, GENESIS_BUILD_ARENA_BYTES);
+    free(genesis);
+    free(source_arena_bytes);
+    free(target_arena_bytes);
+    return status;
+}
+
 int lxp_genesis_builder_cli_main(int argc, char **argv)
 {
     if (argv != NULL && argc == 6 && strcmp(argv[1], "--migrate-asset-v2") == 0)
         return migrate_asset_v2(argv[2], argv[3], argv[4], argv[5]) == LXP_OK ? 0 : 1;
+    if (argv != NULL && argc == 6 &&
+        strcmp(argv[1], "--migrate-snapshot-issuance") == 0)
+        return migrate_snapshot_issuance(
+            argv[2], argv[3], argv[4], argv[5]) == LXP_OK ? 0 : 1;
     if (argv == NULL || (argc != 4 && argc != 6) ||
         (argc == 6 && strcmp(argv[4], "--custody-profile") != 0))
         return 2;

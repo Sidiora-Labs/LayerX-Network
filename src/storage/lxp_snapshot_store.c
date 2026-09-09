@@ -11,7 +11,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-enum { LXP_SNAPSHOT_STORE_HEADER_BYTES = 116 };
+enum {
+    LXP_SNAPSHOT_STORE_HEADER_BYTES = 116,
+    LXP_SNAPSHOT_MIGRATION_STORE_HEADER_BYTES =
+        LXP_SNAPSHOT_STORE_HEADER_BYTES +
+        LXP_SNAPSHOT_MIGRATION_AUTHORIZATION_BYTES
+};
 
 static void put_u64(uint8_t out[8], uint64_t value)
 {
@@ -57,7 +62,9 @@ lxp_result lxp_snapshot_store_write(const char *directory,
                                     const uint8_t *snapshot,
                                     size_t snapshot_length)
 {
-    uint8_t header[LXP_SNAPSHOT_STORE_HEADER_BYTES] = {'L','X','S','2'};
+    uint8_t header[LXP_SNAPSHOT_MIGRATION_STORE_HEADER_BYTES] = {0};
+    size_t header_length = LXP_SNAPSHOT_STORE_HEADER_BYTES;
+    size_t migration_length = 0U;
     lxp_snapshot_manifest_record expected;
     char temporary[4096];
     char final[4096];
@@ -75,6 +82,22 @@ lxp_result lxp_snapshot_store_write(const char *directory,
     if (status != LXP_OK) return status;
     if (memcmp(expected.snapshot_digest, manifest->snapshot_digest, 32U) != 0)
         return LXP_ERR_SNAPSHOT_MISMATCH;
+    if (manifest->migration.present) {
+        status = lxp_snapshot_migration_authorization_verify(
+            manifest, manifest->migration.network_id,
+            manifest->migration.signer_public_key);
+        if (status != LXP_OK) return status;
+        header_length = LXP_SNAPSHOT_MIGRATION_STORE_HEADER_BYTES;
+        status = lxp_snapshot_migration_authorization_encode(
+            manifest, true, header + LXP_SNAPSHOT_STORE_HEADER_BYTES,
+            &migration_length);
+        if (status != LXP_OK ||
+            migration_length != LXP_SNAPSHOT_MIGRATION_AUTHORIZATION_BYTES)
+            return status != LXP_OK ? status : LXP_FATAL_INVARIANT;
+        (void)memcpy(header, "LXS3", 4U);
+    } else {
+        (void)memcpy(header, "LXS2", 4U);
+    }
     length = snprintf(final, sizeof(final), "%s/%020llu.lxs", directory,
                       (unsigned long long)manifest->global_sequence);
     if (length < 0 || (size_t)length >= sizeof(final))
@@ -90,7 +113,7 @@ lxp_result lxp_snapshot_store_write(const char *directory,
     descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
                       0600);
     if (descriptor < 0) return LXP_ERR_IO;
-    status = write_all(descriptor, header, sizeof(header));
+    status = write_all(descriptor, header, header_length);
     if (status == LXP_OK)
         lxp_fault_inject_point(LXP_FAULT_CHECKPOINT_HEADER_WRITTEN);
     if (status == LXP_OK) {
@@ -124,10 +147,11 @@ lxp_result lxp_snapshot_store_read(const char *path, lxp_arena *arena,
                                    lxp_snapshot_manifest_record *manifest,
                                    lxp_byte_span *snapshot)
 {
-    uint8_t header[LXP_SNAPSHOT_STORE_HEADER_BYTES];
+    uint8_t header[LXP_SNAPSHOT_MIGRATION_STORE_HEADER_BYTES] = {0};
     struct stat information;
     void *memory;
     uint64_t length;
+    size_t header_length = 0U;
     int descriptor;
     lxp_result status;
     if (path == NULL || arena == NULL || manifest == NULL || snapshot == NULL)
@@ -138,12 +162,21 @@ lxp_result lxp_snapshot_store_read(const char *path, lxp_arena *arena,
         if (descriptor >= 0) (void)close(descriptor);
         return LXP_ERR_IO;
     }
-    status = read_all(descriptor, header, sizeof(header));
+    status = read_all(descriptor, header, 4U);
+    if (status == LXP_OK) {
+        if (memcmp(header, "LXS2", 4U) == 0)
+            header_length = LXP_SNAPSHOT_STORE_HEADER_BYTES;
+        else if (memcmp(header, "LXS3", 4U) == 0)
+            header_length = LXP_SNAPSHOT_MIGRATION_STORE_HEADER_BYTES;
+        else
+            status = LXP_ERR_SNAPSHOT_MISMATCH;
+    }
+    if (status == LXP_OK)
+        status = read_all(descriptor, header + 4U, header_length - 4U);
     length = status == LXP_OK ? get_u64(header + 108U) : 0U;
-    if (status == LXP_OK && (memcmp(header, "LXS2", 4U) != 0 ||
-        length > SIZE_MAX ||
-        length > UINT64_MAX - sizeof(header) || information.st_size < 0 ||
-        (uint64_t)information.st_size != sizeof(header) + length))
+    if (status == LXP_OK && (length > SIZE_MAX ||
+        length > UINT64_MAX - header_length || information.st_size < 0 ||
+        (uint64_t)information.st_size != header_length + length))
         status = LXP_ERR_SNAPSHOT_MISMATCH;
     if (status == LXP_OK)
         status = lxp_arena_alloc(arena, (size_t)length, 1U, &memory);
@@ -155,6 +188,7 @@ lxp_result lxp_snapshot_store_read(const char *path, lxp_arena *arena,
     (void)memcpy(manifest->canonical_state_root, header + 12U, 32U);
     (void)memcpy(manifest->receipt_state_root, header + 44U, 32U);
     (void)memcpy(manifest->snapshot_digest, header + 76U, 32U);
+    (void)memset(&manifest->migration, 0, sizeof(manifest->migration));
     snapshot->bytes = (const uint8_t *)memory;
     snapshot->length = (size_t)length;
     {
@@ -164,7 +198,19 @@ lxp_result lxp_snapshot_store_read(const char *path, lxp_arena *arena,
             manifest->canonical_state_root, manifest->receipt_state_root,
             &expected);
         if (status != LXP_OK) return status;
-        return memcmp(expected.snapshot_digest, manifest->snapshot_digest,
-                      32U) == 0 ? LXP_OK : LXP_ERR_SNAPSHOT_MISMATCH;
+        if (memcmp(expected.snapshot_digest, manifest->snapshot_digest,
+                   32U) != 0)
+            return LXP_ERR_SNAPSHOT_MISMATCH;
+        if (header_length == LXP_SNAPSHOT_MIGRATION_STORE_HEADER_BYTES) {
+            status = lxp_snapshot_migration_authorization_decode(
+                header + LXP_SNAPSHOT_STORE_HEADER_BYTES,
+                LXP_SNAPSHOT_MIGRATION_AUTHORIZATION_BYTES, manifest);
+            if (status == LXP_OK)
+                status = lxp_snapshot_migration_authorization_verify(
+                    manifest, manifest->migration.network_id,
+                    manifest->migration.signer_public_key);
+            return status;
+        }
+        return LXP_OK;
     }
 }
