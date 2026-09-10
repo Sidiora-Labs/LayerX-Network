@@ -52,12 +52,16 @@ fn secret(root: &Path, name: &str, value: &str) -> PathBuf {
     path
 }
 
+type Mutation<'a> = &'a dyn Fn(&mut serde_json::Map<String, Value>);
+
 fn hex(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(bytes.len().saturating_mul(2));
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
-        text.push_str(&format!("{byte:02x}"));
+        output.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
-    text
+    output
 }
 
 struct BoundaryIdentity(CoreIdentity);
@@ -398,11 +402,10 @@ fn a_binding_document_is_closed_complete_and_narrowable() {
             panic!("a mutated binding document was accepted");
         })
     };
-    for change in [
+    let changes: [Mutation; 6] = [
         &|fields: &mut serde_json::Map<String, Value>| {
             fields.insert("unexpected".to_owned(), json!("1"));
-        }
-            as &dyn Fn(&mut serde_json::Map<String, Value>),
+        },
         &|fields: &mut serde_json::Map<String, Value>| {
             fields.remove("capability_id");
         },
@@ -418,7 +421,8 @@ fn a_binding_document_is_closed_complete_and_narrowable() {
         &|fields: &mut serde_json::Map<String, Value>| {
             fields.insert("session_id".to_owned(), json!("07"));
         },
-    ] {
+    ];
+    for change in changes {
         let refusal = mutate(change);
         assert!(matches!(refusal, BindingError::Malformed(_)));
         assert!(!refusal.detail().is_empty());
@@ -426,6 +430,100 @@ fn a_binding_document_is_closed_complete_and_narrowable() {
     assert!(Binding::parse("[]").is_err());
     assert!(Binding::open(Path::new("relative.json")).is_err());
     let _ = fs::remove_dir_all(root);
+}
+
+fn assert_daemon_handshake(initialize: &Value, listed: &Value) {
+    assert_eq!(
+        initialize
+            .pointer("/result/_meta/layerx~1binding")
+            .and_then(Value::as_str),
+        Some("agent-daemon")
+    );
+    assert_eq!(
+        initialize
+            .pointer("/result/_meta/layerx~1deployment_mode")
+            .and_then(Value::as_str),
+        Some("full")
+    );
+    let reads = initialize
+        .pointer("/result/_meta/layerx~1read_tools")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let writes = initialize
+        .pointer("/result/_meta/layerx~1write_tools")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    assert_eq!(reads.saturating_add(writes), 20);
+    let tools = listed
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("tools absent"));
+    assert_eq!(tools.len(), 20);
+}
+
+fn assert_daemon_read(read: &Value, program: &str) {
+    assert_eq!(read.pointer("/id").and_then(Value::as_u64), Some(3));
+    assert_eq!(
+        read.pointer("/result/isError").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        read.pointer("/result/structuredContent/result/program")
+            .and_then(Value::as_str),
+        Some(program)
+    );
+    assert_eq!(
+        read.pointer("/result/structuredContent/result/lifecycle")
+            .and_then(Value::as_str),
+        Some("active")
+    );
+    assert_eq!(
+        read.pointer("/result/structuredContent/result/freshness/observed_sequence")
+            .and_then(Value::as_u64),
+        Some(OBSERVED_SEQUENCE)
+    );
+    assert_eq!(
+        read.pointer("/result/structuredContent/result/balances/0/amount")
+            .and_then(Value::as_str),
+        Some("7")
+    );
+}
+
+fn assert_refused_shapes(responses: &[Value]) {
+    let refused_arguments = &responses[0];
+    assert_eq!(
+        refused_arguments
+            .pointer("/result/isError")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        refused_arguments
+            .pointer("/result/structuredContent/stage")
+            .and_then(Value::as_str),
+        Some("arguments")
+    );
+    let unserved = &responses[1];
+    assert_eq!(
+        unserved.pointer("/result/isError").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        unserved
+            .pointer("/result/structuredContent/stage")
+            .and_then(Value::as_str),
+        Some("daemon")
+    );
+    assert_eq!(
+        unserved
+            .pointer("/result/structuredContent/state")
+            .and_then(Value::as_str),
+        Some("refused")
+    );
+    assert_eq!(
+        responses[2].pointer("/error/code").and_then(Value::as_i64),
+        Some(-32602)
+    );
 }
 
 #[test]
@@ -472,99 +570,9 @@ fn the_stdio_transport_serves_the_daemon_catalogue_without_a_seed_or_a_gateway()
         ],
     );
     assert_eq!(responses.len(), 6);
-
-    let initialize = &responses[0];
-    assert_eq!(
-        initialize
-            .pointer("/result/_meta/layerx~1binding")
-            .and_then(Value::as_str),
-        Some("agent-daemon")
-    );
-    assert_eq!(
-        initialize
-            .pointer("/result/_meta/layerx~1deployment_mode")
-            .and_then(Value::as_str),
-        Some("full")
-    );
-    let reads = initialize
-        .pointer("/result/_meta/layerx~1read_tools")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let writes = initialize
-        .pointer("/result/_meta/layerx~1write_tools")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    assert_eq!(reads.saturating_add(writes), 20);
-
-    let listed = responses[1]
-        .pointer("/result/tools")
-        .and_then(Value::as_array)
-        .unwrap_or_else(|| panic!("tools absent"));
-    assert_eq!(listed.len(), 20);
-
-    let read = &responses[2];
-    assert_eq!(read.pointer("/id").and_then(Value::as_u64), Some(3));
-    assert_eq!(
-        read.pointer("/result/isError").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        read.pointer("/result/structuredContent/result/program")
-            .and_then(Value::as_str),
-        Some(program.as_str())
-    );
-    assert_eq!(
-        read.pointer("/result/structuredContent/result/lifecycle")
-            .and_then(Value::as_str),
-        Some("active")
-    );
-    assert_eq!(
-        read.pointer("/result/structuredContent/result/freshness/observed_sequence")
-            .and_then(Value::as_u64),
-        Some(OBSERVED_SEQUENCE)
-    );
-    assert_eq!(
-        read.pointer("/result/structuredContent/result/balances/0/amount")
-            .and_then(Value::as_str),
-        Some("7")
-    );
-
-    let refused_arguments = &responses[3];
-    assert_eq!(
-        refused_arguments
-            .pointer("/result/isError")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        refused_arguments
-            .pointer("/result/structuredContent/stage")
-            .and_then(Value::as_str),
-        Some("arguments")
-    );
-
-    let unserved = &responses[4];
-    assert_eq!(
-        unserved.pointer("/result/isError").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        unserved
-            .pointer("/result/structuredContent/stage")
-            .and_then(Value::as_str),
-        Some("daemon")
-    );
-    assert_eq!(
-        unserved
-            .pointer("/result/structuredContent/state")
-            .and_then(Value::as_str),
-        Some("refused")
-    );
-
-    assert_eq!(
-        responses[5].pointer("/error/code").and_then(Value::as_i64),
-        Some(-32602)
-    );
+    assert_daemon_handshake(&responses[0], &responses[1]);
+    assert_daemon_read(&responses[2], &program);
+    assert_refused_shapes(&responses[3..]);
     let _ = fs::remove_dir_all(root);
 }
 

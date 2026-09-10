@@ -122,7 +122,7 @@ fn digest<const N: usize>(
     field: &str,
 ) -> Result<[u8; N], BindingError> {
     let value = text(parent, field)?;
-    let expected = N.checked_mul(2).unwrap_or(usize::MAX);
+    let expected = N.saturating_mul(2);
     if value.len() != expected {
         return Err(malformed(format!(
             "field {field} must be {N} hexadecimal bytes"

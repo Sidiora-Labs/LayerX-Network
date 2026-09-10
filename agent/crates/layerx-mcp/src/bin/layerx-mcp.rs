@@ -1,4 +1,4 @@
-//! Daemon-bound model context protocol server for the LayerX agent plane.
+//! Daemon-bound model context protocol server for the `LayerX` agent plane.
 
 use std::env;
 use std::path::PathBuf;

@@ -1360,7 +1360,10 @@ dependencies = [
  "layerx-crypto",
  "layerx-sdk",
  "layerx-types",
+ "rustix",
+ "serde_json",
  "sha2",
+ "zeroize",
 ]
 
 [[package]]

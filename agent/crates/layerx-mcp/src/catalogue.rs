@@ -85,99 +85,100 @@ impl ArgumentError {
     }
 }
 
+const fn required(name: &'static str, shape: Shape) -> Field {
+    Field {
+        name,
+        shape,
+        required: true,
+    }
+}
+const fn optional(name: &'static str, shape: Shape) -> Field {
+    Field {
+        name,
+        shape,
+        required: false,
+    }
+}
+const BALANCE_GET: [Field; 3] = [
+    required("program", Shape::Hex32),
+    optional("account", Shape::Hex32),
+    optional("asset", Shape::Hex32),
+];
+const HISTORY_LIST: [Field; 3] = [
+    required("account", Shape::Hex32),
+    required("limit", Shape::Bounded(MAX_PAGE_ITEMS)),
+    optional("cursor", Shape::Hex32),
+];
+const RECEIPT_GET: [Field; 1] = [required("activity_id", Shape::Hex32)];
+const CHECKPOINT_GET: [Field; 1] = [required("sequence", Shape::Unsigned)];
+const PROOF_GET: [Field; 1] = [required("activity_id", Shape::Hex32)];
+const AVAILABILITY_GET: [Field; 1] = [required("batch", Shape::Hex32)];
+const WALLET_ACCOUNTS: [Field; 1] = [required("program", Shape::Hex32)];
+const WALLET_BALANCE: [Field; 3] = [
+    required("program", Shape::Hex32),
+    required("account", Shape::Hex32),
+    required("asset", Shape::Hex32),
+];
+const ACTIVITY_PREPARE: [Field; 7] = [
+    required("activity_type", Shape::Unsigned),
+    required("payload", Shape::Bytes),
+    required("account_sequence", Shape::Unsigned),
+    required("not_before_ms", Shape::Unsigned),
+    required("expires_at_ms", Shape::Unsigned),
+    required("fee_limit", Shape::Unsigned),
+    required("idempotency_key", Shape::Hex32),
+];
+const ACTIVITY_DISCLOSE: [Field; 1] = [required("canonical_bytes", Shape::Bytes)];
+const ACTIVITY_SIGN: [Field; 1] = [required("preparation_ref", Shape::Reference)];
+const ACTIVITY_SUBMIT: [Field; 3] = [
+    required("preparation_ref", Shape::Reference),
+    required("signature", Shape::Hex64),
+    required("signer_public_key", Shape::Hex32),
+];
+const ACTIVITY_TRACK: [Field; 1] = [required("submission_ref", Shape::Reference)];
+const ACTIVITY_WAIT: [Field; 2] = [
+    required("submission_ref", Shape::Reference),
+    required("timeout_ms", Shape::Bounded(MAX_WAIT_MS)),
+];
+const WALLET_SEND: [Field; 4] = [
+    required("destination", Shape::Hex32),
+    required("asset", Shape::Hex32),
+    required("amount", Shape::Unsigned),
+    required("idempotency_key", Shape::Hex32),
+];
+const TOKEN_CREATE: [Field; 4] = [
+    required("symbol", Shape::Symbol),
+    required("decimals", Shape::Decimals),
+    required("supply", Shape::Unsigned),
+    required("idempotency_key", Shape::Hex32),
+];
+const TOKEN_MINT: [Field; 4] = [
+    required("asset", Shape::Hex32),
+    required("destination", Shape::Hex32),
+    required("amount", Shape::Unsigned),
+    required("idempotency_key", Shape::Hex32),
+];
+const TOKEN_TRANSFER: [Field; 4] = [
+    required("asset", Shape::Hex32),
+    required("destination", Shape::Hex32),
+    required("amount", Shape::Unsigned),
+    required("idempotency_key", Shape::Hex32),
+];
+const GRANT_ISSUE: [Field; 5] = [
+    required("beneficiary", Shape::Hex32),
+    required("asset", Shape::Hex32),
+    required("amount", Shape::Unsigned),
+    required("expires_at_ms", Shape::Unsigned),
+    required("idempotency_key", Shape::Hex32),
+];
+const GRANT_DRAW: [Field; 3] = [
+    required("grant_id", Shape::Hex32),
+    required("amount", Shape::Unsigned),
+    required("idempotency_key", Shape::Hex32),
+];
+const NONE: [Field; 0] = [];
+
 fn fields(name: &str) -> &'static [Field] {
-    const fn required(name: &'static str, shape: Shape) -> Field {
-        Field {
-            name,
-            shape,
-            required: true,
-        }
-    }
-    const fn optional(name: &'static str, shape: Shape) -> Field {
-        Field {
-            name,
-            shape,
-            required: false,
-        }
-    }
-    const BALANCE_GET: [Field; 3] = [
-        required("program", Shape::Hex32),
-        optional("account", Shape::Hex32),
-        optional("asset", Shape::Hex32),
-    ];
-    const HISTORY_LIST: [Field; 3] = [
-        required("account", Shape::Hex32),
-        required("limit", Shape::Bounded(MAX_PAGE_ITEMS)),
-        optional("cursor", Shape::Hex32),
-    ];
-    const RECEIPT_GET: [Field; 1] = [required("activity_id", Shape::Hex32)];
-    const CHECKPOINT_GET: [Field; 1] = [required("sequence", Shape::Unsigned)];
-    const PROOF_GET: [Field; 1] = [required("activity_id", Shape::Hex32)];
-    const AVAILABILITY_GET: [Field; 1] = [required("batch", Shape::Hex32)];
-    const WALLET_ACCOUNTS: [Field; 1] = [required("program", Shape::Hex32)];
-    const WALLET_BALANCE: [Field; 3] = [
-        required("program", Shape::Hex32),
-        required("account", Shape::Hex32),
-        required("asset", Shape::Hex32),
-    ];
-    const ACTIVITY_PREPARE: [Field; 7] = [
-        required("activity_type", Shape::Unsigned),
-        required("payload", Shape::Bytes),
-        required("account_sequence", Shape::Unsigned),
-        required("not_before_ms", Shape::Unsigned),
-        required("expires_at_ms", Shape::Unsigned),
-        required("fee_limit", Shape::Unsigned),
-        required("idempotency_key", Shape::Hex32),
-    ];
-    const ACTIVITY_DISCLOSE: [Field; 1] = [required("canonical_bytes", Shape::Bytes)];
-    const ACTIVITY_SIGN: [Field; 1] = [required("preparation_ref", Shape::Reference)];
-    const ACTIVITY_SUBMIT: [Field; 3] = [
-        required("preparation_ref", Shape::Reference),
-        required("signature", Shape::Hex64),
-        required("signer_public_key", Shape::Hex32),
-    ];
-    const ACTIVITY_TRACK: [Field; 1] = [required("submission_ref", Shape::Reference)];
-    const ACTIVITY_WAIT: [Field; 2] = [
-        required("submission_ref", Shape::Reference),
-        required("timeout_ms", Shape::Bounded(MAX_WAIT_MS)),
-    ];
-    const WALLET_SEND: [Field; 4] = [
-        required("destination", Shape::Hex32),
-        required("asset", Shape::Hex32),
-        required("amount", Shape::Unsigned),
-        required("idempotency_key", Shape::Hex32),
-    ];
-    const TOKEN_CREATE: [Field; 4] = [
-        required("symbol", Shape::Symbol),
-        required("decimals", Shape::Decimals),
-        required("supply", Shape::Unsigned),
-        required("idempotency_key", Shape::Hex32),
-    ];
-    const TOKEN_MINT: [Field; 4] = [
-        required("asset", Shape::Hex32),
-        required("destination", Shape::Hex32),
-        required("amount", Shape::Unsigned),
-        required("idempotency_key", Shape::Hex32),
-    ];
-    const TOKEN_TRANSFER: [Field; 4] = [
-        required("asset", Shape::Hex32),
-        required("destination", Shape::Hex32),
-        required("amount", Shape::Unsigned),
-        required("idempotency_key", Shape::Hex32),
-    ];
-    const GRANT_ISSUE: [Field; 5] = [
-        required("beneficiary", Shape::Hex32),
-        required("asset", Shape::Hex32),
-        required("amount", Shape::Unsigned),
-        required("expires_at_ms", Shape::Unsigned),
-        required("idempotency_key", Shape::Hex32),
-    ];
-    const GRANT_DRAW: [Field; 3] = [
-        required("grant_id", Shape::Hex32),
-        required("amount", Shape::Unsigned),
-        required("idempotency_key", Shape::Hex32),
-    ];
-    const NONE: [Field; 0] = [];
     match name.as_bytes() {
         b"balance.get" => &BALANCE_GET,
         b"history.list" => &HISTORY_LIST,
@@ -322,7 +323,7 @@ fn check(field: &Field, text: &str) -> Result<(), ArgumentError> {
     }
     match field.shape {
         Shape::Hex32 | Shape::Hex64 | Shape::Bytes => {
-            if !text.bytes().all(|byte| byte.is_ascii_hexdigit()) || text.len() % 2 != 0 {
+            if !text.bytes().all(|byte| byte.is_ascii_hexdigit()) || !text.len().is_multiple_of(2) {
                 return Err(ArgumentError::Malformed(field.name));
             }
         }
