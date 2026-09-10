@@ -633,7 +633,34 @@ impl RpcClient {
         topic: SubscriptionTopic,
         account: Option<[u8; 32]>,
     ) -> Result<RpcSubscription, RpcError> {
-        crate::rpc_subscription::connect(&self.endpoint, self.credential.as_ref(), topic, account)
+        crate::rpc_subscription::connect(
+            &self.endpoint,
+            self.credential.as_ref(),
+            topic,
+            account,
+            None,
+        )
+    }
+
+    /// Reopens a subscription from the cursor of the last notification the caller observed.
+    /// The server replays the topic from that position before delivering live notifications and
+    /// refuses cursors outside its resume window, which the caller reconciles through reads.
+    /// # Errors
+    /// Refuses invalid topic selectors, refused resumes, transport failures and mismatched
+    /// acknowledgements.
+    pub fn subscribe_from(
+        &self,
+        topic: SubscriptionTopic,
+        account: Option<[u8; 32]>,
+        cursor: u64,
+    ) -> Result<RpcSubscription, RpcError> {
+        crate::rpc_subscription::connect(
+            &self.endpoint,
+            self.credential.as_ref(),
+            topic,
+            account,
+            Some(cursor),
+        )
     }
 
     /// # Errors

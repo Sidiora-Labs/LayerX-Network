@@ -135,7 +135,7 @@ pub(super) fn dispatch(config: &Config, request: &IncomingRequest, value: &Value
         let result = send(config, request, &id, value.get("params"));
         return value.get("id").map(|_| result);
     }
-    if method == "lx_subscribe" {
+    if matches!(method, "lx_subscribe" | "lx_unsubscribe") {
         return value
             .get("id")
             .map(|_| error(&id, -32004, "WebSocket required"));
@@ -599,7 +599,7 @@ mod tests {
         let methods = schema["methods"]
             .as_array()
             .unwrap_or_else(|| panic!("methods missing"));
-        for name in [
+        let published = [
             "lx_register",
             "lx_requestFunds",
             "lx_getAccount",
@@ -617,7 +617,9 @@ mod tests {
             "lx_getAsset",
             "lx_getNodeInfo",
             "lx_subscribe",
-        ] {
+            "lx_unsubscribe",
+        ];
+        for name in published {
             assert_eq!(
                 methods
                     .iter()
@@ -627,7 +629,7 @@ mod tests {
                 "{name}"
             );
         }
-        assert_eq!(methods.len(), 17);
+        assert_eq!(methods.len(), published.len());
     }
 
     #[test]

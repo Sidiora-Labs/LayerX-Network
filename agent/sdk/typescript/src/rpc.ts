@@ -1,5 +1,5 @@
-import { subscribeRpc, type SubscriptionTopic } from "./rpc-subscription.js";
-export type { SubscriptionTopic } from "./rpc-subscription.js";
+import { subscribeRpc, type SubscriptionEvent, type SubscriptionTopic } from "./rpc-subscription.js";
+export type { SubscriptionEvent, SubscriptionTopic } from "./rpc-subscription.js";
 import { createHash } from "node:crypto";
 import * as http from "node:http";
 import * as https from "node:https";
@@ -55,10 +55,16 @@ export class JsonRpcClient {
     accounts: (did: string): Promise<Record<string, unknown>> => this.getBalances(did),
     balance: (did: string, asset: string): Promise<Record<string, unknown>> => this.getBalance(walletAccount(did, asset, nativeAsset)),
   }; }
-  public subscribe(topic: SubscriptionTopic, account?: string, signal?: AbortSignal): AsyncGenerator<Record<string, unknown>> {
+  public subscribe(topic: SubscriptionTopic, account?: string, signal?: AbortSignal): AsyncGenerator<SubscriptionEvent> {
+    return this.#subscribe(topic, account, undefined, signal);
+  }
+  public subscribeFrom(topic: SubscriptionTopic, cursor: bigint, account?: string, signal?: AbortSignal): AsyncGenerator<SubscriptionEvent> {
+    return this.#subscribe(topic, account, cursor, signal);
+  }
+  #subscribe(topic: SubscriptionTopic, account: string | undefined, cursor: bigint | undefined, signal: AbortSignal | undefined): AsyncGenerator<SubscriptionEvent> {
     let authorization: string | undefined;
     this.credential?.use(value => { authorization = value; });
-    return subscribeRpc(this.#endpoint, authorization, (++this.#id).toString(), topic, account, signal);
+    return subscribeRpc(this.#endpoint, authorization, (++this.#id).toString(), topic, account, cursor, signal);
   }
   public getAccount(account: string): Promise<Record<string, unknown>> { return this.call("lx_getAccount", [account]); }
   public getBalance(account: string): Promise<Record<string, unknown>> { return this.call("lx_getBalance", [account]); }
