@@ -420,8 +420,8 @@ Subject to, without exception:
 q > 0
 balance[x] >= q
 authorization controls x
-sequence is exactly next_sequence[actor]
-asset[x] == asset[z]
+sequence is exactly next_sequence[sequence account]      (§8.2)
+asset[x] == asset[z] == the one asset each record carries (§8.2)
 no integer overflow
 sum(all balance changes) == 0
 ```
@@ -583,10 +583,11 @@ deterministic, not merely the failure:
  1  1 <= leg_count <= LXP_MAX_LEGS
  2  every leg amount is non-zero                      (q > 0)
  3  every leg asset exists in the registry and is not paused
- 4  account_asset(from) == leg.asset == account_asset(to)
+ 4  account_asset(from) == leg.asset, and account_asset(to) == leg.asset
+    unless `to` is still unbound, in which case the credit binds it (§8.2)
  5  neither endpoint frozen
  6  authority covers every debited account in the set
- 7  actor_sequence == next_sequence[initiator]
+ 7  actor_sequence == next_sequence[sequence account]    (§8.2)
  8  idempotency_key unseen for initiator
  9  batch_timestamp_ms <= expires_at_ms
 10  net debit per (account, asset) <= balance         (no negative, ever)
@@ -606,30 +607,44 @@ The protocol represents locked funds as **real accounts**, not hidden balance
 columns. That is what makes every unit traceable through one ledger.
 
 ```text
-agent:<did>:main                    system:liquidity:<market>
-agent:<did>:budget:<id>             system:funding:<market>:long
-agent:<did>:escrow:<id>             system:funding:<market>:short
-agent:<did>:stream:<id>             system:insurance
-agent:<did>:margin:<position>       system:fees
-                                    system:paxeer-reserve
-                                    system:paxeer-withdrawals
+agent:<did>:main                            system:liquidity:<market>
+agent:<did>:asset:<lowercase hex64 asset>   system:funding:<market>:long
+agent:<did>:budget:<id>                     system:funding:<market>:short
+agent:<did>:escrow:<id>                     system:insurance
+agent:<did>:stream:<id>                     system:fees
+agent:<did>:margin:<position>               system:paxeer-reserve
+module:<module>:value:<lowercase hex64 id>  system:paxeer-withdrawals
 ```
 
 The canonical account string is ASCII, lowercase, colon-delimited, no empty
 segments. The on-wire identifier is its domain-separated hash.
 
 ```c
-/* account_id = SHA256("LX:ACCOUNT:v1" || u32_be(len) || canonical_string) */
+/* account_id = SHA256("LX:ACCOUNT:v1" || u32_be(len) || canonical_string),
+   except module:<module>:value:<hex64>, whose id IS the decoded hex tail —
+   the module chooses the id and the name carries it verbatim.
+   src/ledger/lx_account_id.c:182-212. */
 lx_result lx_account_id_from_string(const char *s, size_t len,
                                     lx_account_id *out);
+/* include/layerx/lxp_ledger.h:19-33 — the byte committed by every account
+   leaf (§8.3), so these numbers are consensus-visible. */
 enum lx_account_kind {
-    LX_ACCT_AGENT_MAIN = 1, LX_ACCT_AGENT_BUDGET = 2, LX_ACCT_AGENT_ESCROW = 3,
-    LX_ACCT_AGENT_STREAM = 4, LX_ACCT_AGENT_MARGIN = 5,
-    LX_ACCT_SYS_LIQUIDITY = 6, LX_ACCT_SYS_FUNDING = 7,
-    LX_ACCT_SYS_INSURANCE = 8, LX_ACCT_SYS_FEES = 9,
-    LX_ACCT_SYS_RESERVE = 10, LX_ACCT_SYS_WITHDRAW = 11
+    LX_ACCOUNT_AGENT_MAIN = 1,   /* agent:<did>:main AND agent:<did>:asset:<hex64> */
+    LX_ACCOUNT_AGENT_BUDGET = 2, LX_ACCOUNT_AGENT_ESCROW = 3,
+    LX_ACCOUNT_AGENT_STREAM = 4, LX_ACCOUNT_AGENT_MARGIN = 5,
+    LX_ACCOUNT_SYSTEM_LIQUIDITY = 6,
+    LX_ACCOUNT_SYSTEM_FUNDING_LONG = 7, LX_ACCOUNT_SYSTEM_FUNDING_SHORT = 8,
+    LX_ACCOUNT_SYSTEM_INSURANCE = 9, LX_ACCOUNT_SYSTEM_FEES = 10,
+    LX_ACCOUNT_SYSTEM_PAXEER_RESERVE = 11,
+    LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS = 12,
+    LX_ACCOUNT_MODULE_VALUE = 13
 };
 ```
+
+A per-asset agent account is not a distinct kind: `agent:<did>:asset:<hex64>`
+parses to `LX_ACCOUNT_AGENT_MAIN`, exactly as `agent:<did>:main` does
+(`src/ledger/lx_account_id.c:149-153`). The two are told apart by the asset each
+record carries, not by kind.
 
 Opening a position does not set `reserved_margin = 100`. It performs a real
 transfer: `agent:alice:main → agent:alice:margin:position-42`, 100 USDX.
@@ -663,6 +678,130 @@ as rows here does not ship.
 
 Orders, service agreements and positions still carry non-monetary state. None of
 them can create a financial effect except through an authenticated transfer.
+
+### 8.2 One record per (account, asset)
+
+There is no balance table keyed by `(account_id, asset_id)`. The account
+registry **is** the balance state: one `lx_account` record carries one account
+id, one asset id and one `lx_u128` balance
+(`include/layerx/lxp_ledger.h:47-61`). A holding is therefore addressed by the
+account id alone, and a DID that touches two assets owns two records:
+`agent:<did>:main` for the native asset and one
+`agent:<did>:asset:<lowercase hex64 asset_id>` per non-native asset. A DID's
+records are enumerated by scanning the registry and deriving the owner from the
+DID segment of each canonical name (`src/ledger/lx_account_read.c:6-59`).
+
+Asset binding is one-way:
+
+- `has_asset == false` means the record is unbound; canonicality then requires a
+  zero balance and a zeroed asset id
+  (`src/ledger/lx_account_registry.c:119-123`).
+- A debit requires `has_asset` and an exact match against the leg's asset;
+  otherwise the leg is refused `ERR_ASSET_MISMATCH`
+  (`src/ledger/lxp_apply.c:171-175`).
+- A credit into an unbound record binds it to the leg's asset as the balance
+  moves (`src/ledger/lxp_apply.c:245-248`). After that the record answers for
+  that asset only — reading it for any other asset returns `ERR_ASSET_MISMATCH`
+  (`src/ledger/lxp_apply.c:138-148`) — and nothing rebinds it.
+- `asset.account_open` stages the per-asset record explicitly: kind
+  `LX_ACCOUNT_AGENT_MAIN`, zero balance, the asset bound up front, sequence
+  zero, and an authority key
+  (`src/ledger/lx_account_registry.c:340-368`,
+  `src/protocol/lxp_module_ctx.c:155-163`). The hex in the name and the record's
+  `asset_id` must agree byte for byte or the record is not canonical
+  (`src/ledger/lx_account_registry.c:131-142`).
+
+**Two sequence counters, at two different layers.** They are not the same
+number and they do not advance together:
+
+| Counter | Keyed by | Checked | Advanced |
+|---|---|---|---|
+| `lxp_identity.next_sequence` | DID | envelope `account_sequence` must equal it exactly (§3); below it is `ERR_SEQUENCE_REUSED`, above it is `ERR_SEQUENCE_GAP` (`src/state/lxp_identity.c:117-131`) | once per admitted activity — the snapshot-execution path consumes it on a cloned snapshot (`src/protocol/lxp_kernel.c:2622-2630`), the committing path at commit, restoring it if the commit does not stand (`:4613-4643`) |
+| `lx_account.next_sequence` | account record, hence per `(DID, asset)` | `actor_sequence` must equal the transfer set's **sequence account** exactly, same two refusals (`src/ledger/lxp_apply.c:203-210`) | once per applied transfer set — not once per leg — on the sequence account (`src/ledger/lxp_apply.c:292-295`, `src/ledger/lxp_journal.c:256-259`) |
+
+The sequence account defaults to the debited account of the first leg; a module
+may name a different record instead:
+
+| Activity | Sequence account |
+|---|---|
+| `402LXP` SEND, `asset.send` | the debited account — `agent:<did>:main` or the per-asset record (`src/ledger/lxp_send.c:343`, `src/modules/asset/lx_asset_registry.c:428`) |
+| `402LXP` RECEIVE, `asset.receive` | the **recipient**, who draws against a payer grant (`src/ledger/lxp_receive.c:452`, `src/modules/asset/lx_asset_execution.h:356-357`) |
+| `asset.mint` | the issuance account; `asset.burn` the holder account (`src/modules/asset/lx_asset_execution.h:294-297`) |
+| `asset.withdraw` | the debited account (`src/modules/asset/lx_asset_registry.c:238`) |
+| `escrow.timeout` | the escrow subaccount (`src/modules/escrow/lx_escrow_timeout.c:159`) |
+| programs transfer, call, wind-down | the authorising principal's main account (`src/modules/programs/transfer.c:168`, `call.c:1700`, `winddown.c:760`) |
+| programs protocol fee | the fee treasury, so the fee does not consume the payer's account sequence (`src/modules/programs/fee.c:78`) |
+
+Legs applied under the protocol-module capability skip the `actor_sequence`
+equality check, and a leg charged under `LXP_AUTH_OCCUPANCY_RESPONSIBILITY`
+advances no account sequence at all (`src/ledger/lxp_apply.c:203-210`,
+`292-295`).
+
+The consequence for an agent: paying once in the native asset and once in a
+registered asset consumes two identity sequences and advances two independent
+account sequences. A freshly opened per-asset account starts at zero regardless
+of how far its owner's `:main` account has advanced.
+
+### 8.3 Account leaves in the state root
+
+Accounts commit through their own Merkle subtree, and that subtree's root is a
+single leaf of the universal state (`src/state/lxp_state_root.c`).
+
+Every record in the registry contributes exactly one leaf. The key is 33 bytes —
+a one-byte category tag and the account id — and the value is the record in
+fixed field order:
+
+```text
+key   = 0x04 || account_id[32]                       (LX_ACCOUNT_STATE_LEAF_KEY_BYTES = 33)
+
+value = u16_be(name_length) || name[name_length]     (name_length <= 512)
+     || u8(kind)                                     (enum lx_account_kind, §8)
+     || u128_be(balance)
+     || asset_id[32] || u8(has_asset)
+     || u64_be(next_sequence)
+     || u64_be(created_at_sequence)
+     || u8(frozen) || u8(has_open_reference)
+     || authority_key[32] || u8(has_authority_key)
+                                                     (615 bytes at most)
+```
+
+Nothing else is committed: the asset a record answers for and the sequence it
+has reached are part of the leaf, so a proof against the state root proves both
+alongside the balance. Every record must be canonical before it is hashed —
+name, kind and id must re-derive, and a duplicate account id anywhere in the
+registry is refused `ERR_NON_CANONICAL` rather than committed
+(`src/state/lxp_state_root.c:220-307`).
+
+The leaf hash and the tree above it are domain-separated:
+
+```text
+leaf   = SHA256("LXP/v1/state-leaf\0"  || u32_be(key_len) || u32_be(value_len)
+                                       || key || value)
+node   = SHA256("LXP/v1/state-node\0"  || left || right)   /* odd node duplicated */
+empty  = SHA256("LXP/v1/state-leaf\0")
+```
+
+Leaves are sorted by key before pairing, so the account root depends on the set
+of records, never on the order in which they were opened
+(`src/state/lxp_state_root.c:114-162`).
+
+That root then enters the universal leaf set — module subtree `0` — under a
+literal ASCII key, beside the other categories, and the top-level state root is
+the tree over one leaf per module subtree keyed `u16_be(module_id)`:
+
+| Universal leaf key | Value |
+|---|---|
+| `0x01 \|\| cell_key[32]` | `u128_be` state cell |
+| `0x02 \|\| idempotency_key_hash[32]` | committed receipt bytes |
+| `0x03 \|\| u16_be(module_id) \|\| u32_be(abi_version)` | module registration body |
+| `"account-tree"` (12 ASCII bytes) | the account subtree root above, present when the kernel requires an account root |
+| `"sequence"` (8 ASCII bytes) | `u64_be(next global sequence)` |
+
+A snapshot that still carries the retired `asset:<hex64>:issuance` name for an
+issuance account is loaded through
+`lx_account_registry_retired_issuance_root`, which admits the retired name and
+commits it as stored, reproducing the recorded root before the record is renamed
+to its module-value name (`src/state/lxp_snapshot.c:998-1078`).
 
 ---
 
@@ -864,8 +1003,11 @@ attached by the kernel and is omitted from the tables below.
 
 ### 12.1 `asset` (module 1)
 
-**State.** Asset registry (`lx_asset`), account registry (`lx_account`), and the
-balance tree keyed by `(account_id, asset_id)`. Each registered asset records
+**State.** Asset registry (`lx_asset`) and account registry (`lx_account`).
+There is no third structure holding balances: each account record carries one
+asset and one balance, so the registry indexed by account id already is the
+per-`(account, asset)` balance state — see §8.2 for the model and §8.3 for what
+each record commits to the state root. Each registered asset records
 id, symbol, name, decimals, supply cap, issuer identity, issuer kind, pause
 state and, for Paxeer-custody assets, the custody reference. Native asset ids
 are `SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`; Paxeer-custody assets
@@ -875,8 +1017,14 @@ keep their existing ids. Register `issuer_kind` is `1` native and `2`
 
 Per-asset agent accounts use `agent:<DID>:asset:<lowercase hex64 asset_id>`
 and the existing `LX:ACCOUNT:v1` id rule; `agent:<DID>:main` remains the
-native-asset account. Registration also creates
-`asset:<lowercase hex64 asset_id>:issuance` as a module-value account.
+native-asset account. Registration also creates the issuance account, a
+module-value record named `module:asset:value:<lowercase hex64 account_id>`
+whose id is the `LX:ACCOUNT:v1` hash of the string
+`asset:<lowercase hex64 asset_id>:issuance`, opened holding the full initial
+issuance (`src/ledger/lx_account_id.c:214-242`,
+`src/protocol/lxp_module_ctx.c:468-495`). A record still carrying that string as
+its name is legacy and is renamed to the module-value name on load
+(`lx_account_migrate_retired_issuance`, §8.3).
 Paxeer-custody circulating supply stays reserve-reconciled. Native circulating
 supply is initial issuance units minus the current issuance balance.
 
