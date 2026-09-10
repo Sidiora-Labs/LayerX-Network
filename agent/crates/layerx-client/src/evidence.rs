@@ -12,10 +12,11 @@ use layerx_proof::inclusion::{
 use layerx_proof::merkle::{MerkleError, Proof, MAX_DEPTH};
 use layerx_proof::receipt::verify_sequencer_signature;
 use layerx_proof::state::{
-    verify_nested_account, verify_nested_account_maintenance, AccountProofError,
+    verify_nested_account, verify_nested_account_maintenance, AccountProofError, CanonicalAccount,
     NestedAccountProof, VerifiedAccountState, VerifiedMaintenanceAccountState,
 };
 use layerx_types::payload::ModuleRegistry;
+use layerx_types::verify::VerificationLevel;
 use layerx_wire::activity::{decode_signed, encode_signed};
 use layerx_wire::hash::activity_id;
 use layerx_wire::maintenance::decode_occupancy_maintenance;
@@ -740,6 +741,162 @@ fn account_proof_bundle(
         proof_material: response.proof,
         activity_id: target_activity_id,
         verified: Box::new(verified),
+        signed_header: decoded.signed_header,
+    })
+}
+
+/// Returns the public-read label naming the level a proof established, and
+/// `None` for any level below `STATE_PROVEN`, which no state proof reaches.
+#[must_use]
+pub const fn verification_label(level: VerificationLevel) -> Option<&'static str> {
+    match level.wire_rank() {
+        3 => Some("state_proven"),
+        4 => Some("checkpoint_finalised"),
+        5 => Some("settlement_anchored"),
+        _ => None,
+    }
+}
+
+/// Trusted coordinates for verifying exported account-state evidence outside a
+/// live point read: the pinned sequencer key and the domain the value binds to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AccountEvidencePolicy {
+    pub expected_protocol_version: u16,
+    pub expected_network_id: u32,
+    pub handshake_sequencer_key: [u8; 32],
+    pub root_selector: RootSelector,
+}
+
+/// An account value whose nested state proof, signed batch header and
+/// sequencer authority verified locally from exported bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedAccountEvidence {
+    account: CanonicalAccount,
+    level: VerificationLevel,
+    observed_sequence: u64,
+    batch_number: u64,
+    state_root: [u8; 32],
+    signed_header: SignedHeader,
+}
+
+impl VerifiedAccountEvidence {
+    /// Borrows the canonical account committed by the proven state root.
+    #[must_use]
+    pub const fn account(&self) -> &CanonicalAccount {
+        &self.account
+    }
+
+    /// Returns the level this verification actually established.
+    #[must_use]
+    pub const fn level(&self) -> VerificationLevel {
+        self.level
+    }
+
+    /// Returns the global sequence the proven value was observed at.
+    #[must_use]
+    pub const fn observed_sequence(&self) -> u64 {
+        self.observed_sequence
+    }
+
+    /// Returns the batch number of the signed header carrying the state root.
+    #[must_use]
+    pub const fn batch_number(&self) -> u64 {
+        self.batch_number
+    }
+
+    /// Returns the proven resulting state root.
+    #[must_use]
+    pub const fn state_root(&self) -> [u8; 32] {
+        self.state_root
+    }
+
+    /// Borrows the signed header the proof chain terminated in.
+    #[must_use]
+    pub const fn signed_header(&self) -> &SignedHeader {
+        &self.signed_header
+    }
+}
+
+/// Verifies exported account-state bytes against their nested proof material
+/// without a live connection, so a value served over a public interface stays
+/// checkable by whoever received it.
+///
+/// # Errors
+///
+/// Refuses malformed evidence, a root-selector or account substitution, a
+/// header outside the pinned handshake key, and every nested proof, receipt,
+/// header and maintenance-settlement failure.
+pub fn verify_account_evidence(
+    canonical_value: &[u8],
+    proof_material: &[u8],
+    account: [u8; 32],
+    asset: Option<[u8; 32]>,
+    policy: AccountEvidencePolicy,
+) -> Result<VerifiedAccountEvidence, EvidenceError> {
+    let decoded = decode_nested_evidence(
+        proof_material,
+        policy.expected_protocol_version,
+        policy.expected_network_id,
+    )?;
+    if decoded.selector != policy.root_selector || decoded.proof.account_id != account {
+        return Err(EvidenceError::SelectorMismatch);
+    }
+    let authorization = decoded.signed_header.pinned_key_authorization(
+        policy.handshake_sequencer_key,
+        policy.expected_protocol_version,
+        policy.expected_network_id,
+    )?;
+    let (value, observed_sequence, batch_number) = match decoded.kind {
+        AccountEvidenceKind::Activity => {
+            let verified = verify_nested_account(
+                canonical_value,
+                account,
+                asset,
+                &decoded.proof,
+                &authorization,
+            )
+            .map_err(EvidenceError::Account)?;
+            (
+                verified.account().clone(),
+                verified.observed_sequence(),
+                verified.header().header().batch_number(),
+            )
+        }
+        AccountEvidenceKind::Maintenance { parameter_version } => {
+            let activity_count = decoded
+                .proof
+                .receipt_proof
+                .leaf_count()
+                .checked_sub(1)
+                .ok_or(EvidenceError::Malformed)?;
+            let verified = verify_nested_account_maintenance(
+                canonical_value,
+                account,
+                asset,
+                &decoded.proof,
+                &authorization,
+                activity_count,
+                parameter_version,
+            )
+            .map_err(EvidenceError::Account)?;
+            (
+                verified.account().clone(),
+                verified.header().header().last_sequence(),
+                verified.header().header().batch_number(),
+            )
+        }
+    };
+    Ok(VerifiedAccountEvidence {
+        account: value,
+        level: decoded
+            .checkpoint
+            .as_ref()
+            .map_or(VerificationLevel::STATE_PROVEN, |checkpoint| {
+                checkpoint.report().level()
+            }),
+        observed_sequence,
+        batch_number,
+        state_root: decoded.proof.resulting_state_root,
         signed_header: decoded.signed_header,
     })
 }

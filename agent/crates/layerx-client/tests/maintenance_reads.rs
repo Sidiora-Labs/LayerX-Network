@@ -6,7 +6,9 @@ use std::thread;
 use std::time::Duration;
 
 use ed25519_dalek::{Signer as _, SigningKey};
-use layerx_client::evidence::{EvidenceError, RootSelector};
+use layerx_client::evidence::{
+    verification_label, verify_account_evidence, AccountEvidencePolicy, EvidenceError, RootSelector,
+};
 use layerx_client::head::Head;
 use layerx_client::lni::framing::{read_frame, write_frame};
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
@@ -489,6 +491,82 @@ fn read_evidence(
     assert!(server.join().is_ok(), "response writer panicked");
     fs::remove_file(path).unwrap_or_else(|error| panic!("remove socket: {error}"));
     result
+}
+
+#[test]
+fn exported_account_evidence_verifies_offline_and_refuses_substitution() {
+    for maintenance in [false, true] {
+        let (proof, authorization, value) = fixture(maintenance);
+        let wire = evidence(if maintenance { 2 } else { 1 }, &proof);
+        let policy = AccountEvidencePolicy {
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: 42,
+            handshake_sequencer_key: authorization.public_key(),
+            root_selector: RootSelector::Latest,
+        };
+        let verified = verify_account_evidence(&value, &wire, proof.account_id, None, policy)
+            .unwrap_or_else(|error| panic!("offline account evidence: {error:?}"));
+        assert_eq!(verified.level(), VerificationLevel::STATE_PROVEN);
+        assert_eq!(verification_label(verified.level()), Some("state_proven"));
+        assert_eq!(verified.observed_sequence(), 10);
+        assert_eq!(verified.batch_number(), 7);
+        assert_eq!(verified.state_root(), proof.resulting_state_root);
+        assert_eq!(verified.account().account_id, proof.account_id);
+        assert_eq!(
+            verified.signed_header().public_key,
+            authorization.public_key()
+        );
+        assert_eq!(
+            verify_account_evidence(&value, &wire, [0x99; 32], None, policy),
+            Err(EvidenceError::SelectorMismatch),
+            "account substitution {maintenance}"
+        );
+        let asset = program_account_vectors().1;
+        assert_eq!(verified.account().asset_id(), asset);
+        assert!(
+            verify_account_evidence(&value, &wire, proof.account_id, Some(asset), policy).is_ok(),
+            "held asset {maintenance}"
+        );
+        assert_eq!(
+            verify_account_evidence(&value, &wire, proof.account_id, Some([0x55; 32]), policy),
+            Err(EvidenceError::Account(AccountProofError::AssetIdentity)),
+            "asset substitution {maintenance}"
+        );
+        let foreign_key = AccountEvidencePolicy {
+            handshake_sequencer_key: [0x7a; 32],
+            ..policy
+        };
+        assert_eq!(
+            verify_account_evidence(&value, &wire, proof.account_id, None, foreign_key),
+            Err(EvidenceError::SequencerMismatch),
+            "sequencer substitution {maintenance}"
+        );
+        let foreign_network = AccountEvidencePolicy {
+            expected_network_id: policy.expected_network_id + 1,
+            ..policy
+        };
+        assert!(
+            verify_account_evidence(&value, &wire, proof.account_id, None, foreign_network)
+                .is_err(),
+            "network substitution {maintenance}"
+        );
+        let checkpoint_root = AccountEvidencePolicy {
+            root_selector: RootSelector::Checkpoint([0x11; 32]),
+            ..policy
+        };
+        assert_eq!(
+            verify_account_evidence(&value, &wire, proof.account_id, None, checkpoint_root),
+            Err(EvidenceError::SelectorMismatch),
+            "root selector substitution {maintenance}"
+        );
+        let mut changed = value.clone();
+        let last = changed.len() - 1;
+        changed[last] ^= 1;
+        assert!(
+            verify_account_evidence(&changed, &wire, proof.account_id, None, policy).is_err(),
+            "value mutation {maintenance}"
+        );
+    }
 }
 
 #[test]
