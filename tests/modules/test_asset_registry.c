@@ -57,10 +57,10 @@ int main(void)
             LXP_OK || memcmp(decoded.asset_id, record.asset_id, 32U) != 0 ||
         strcmp(decoded.symbol, "USDC") != 0 ||
         decoded.custody_reference_length != 11U) return 1;
-    encoded[encoded_length - 17U] = 0U;
+    encoded[encoded_length - 49U] = 0U;
     if (lx_asset_record_decode(encoded, encoded_length, &decoded) !=
         LXP_ERR_NON_CANONICAL) return 1;
-    encoded[encoded_length - 17U] = 2U;
+    encoded[encoded_length - 49U] = 2U;
     record.issuer_kind = 0U;
     if (lx_asset_record_encode(&record, encoded, sizeof(encoded),
                                &encoded_length) != LXP_ERR_NON_CANONICAL)
