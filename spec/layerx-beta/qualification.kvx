@@ -7220,7 +7220,9 @@ file = "platform/hosted/authority/src/human.rs"
 symbol = "policy_route"
 observed = "Identity, capability-scope and key-policy routes unconditionally return unavailable after receipt matching and freshness checks. Positive owner identity verification requires committed policy state verification in this file, outside the owner-registration owned paths. Native module registration is in cmd/layerxd/lxp_daemon_process.c and currently omits Governance. platform/hosted/human/provision.py and its claimed existing validate-owner-registration mode are absent in this checkout."
 assumption = "Real owner provisioning requires coordinated daemon registration and authenticated committed-state policy verification; unrelated authentic receipts cannot substitute for recovery state."
-[observation.3.7.24]
+severity = "blocker"
+
+[observation.3.7.77]
 task = "3.7"
 file = "src/ledger/lxp_journal.c"
 symbol = "lxp_conservation_check lxp_apply_transfer_set"
@@ -7475,13 +7477,15 @@ file = "platform/hosted/authority/src/main.rs tests/daemon/owner_checkpoint.py t
 symbol = "main hosted run"
 observed = "The unchanged full --checkpoint owner command reaches successful dual-guarantor replay and registration of all ten checkpoints, then fails after service.terminate() because layerx-receipt-authority remains in its blocking listener and exits from SIGTERM rather than returning status 0 as required by the retained service.wait(timeout=15) == 0 assertion. Raw output: qual-logs/set213/owner-native-checkpoint-fixed3.log."
 assumption = "Settlement qualification is isolated with --settlement-only; the default --checkpoint path and its hosted shutdown assertion remain intact. Graceful authority shutdown or a production shutdown control requires separate ownership and must preserve the existing zero-status assertion."
+[observation.3.7.100]
+task = "3.7"
 file = "cmd/layerxd/lxp_daemon_process.c"
 symbol = "collect_assets verify replay admission"
 observed = "Daemon asset admission and replay allow only LX_ASSET_SEND. Runtime registry reconstruction collects asset ids from accounts without issuer, cap, name or pause metadata. The file is outside the permitted account-read changes and identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
 assumption = "Extend daemon admission and replay to the assigned asset ordinals and reconstruct the committed asset registry without synthesizing metadata from balances."
 severity = "blocker"
 
-[observation.3.7.26]
+[observation.3.7.78]
 task = "3.7"
 file = "include/layerx/lxp_receipt.h"
 symbol = "lxp_receipt lxp_ledger_receipt_input"
@@ -7489,7 +7493,7 @@ observed = "The existing canonical ledger receipt fields have balances but no to
 assumption = "Define and implement a versioned supply receipt binding across native encoding, decoding, signing and replay before qualifying native mint and burn."
 severity = "blocker"
 
-[observation.3.7.27]
+[observation.3.7.79]
 task = "3.7"
 file = "src/protocol/lxp_module_ctx.c include/layerx/lxp_module.h src/ledger/lx_account_registry.c"
 symbol = "lxp_ctx_bind_ledger_receipt commit_account lxp_ctx_account_stage_module_value"
@@ -7497,7 +7501,7 @@ observed = "The approved issuance account model preserves per-asset conservation
 assumption = "Asset register, account_open, receive, mint and burn require scoped module-context staging, commit/import/export and receipt-operation integration while preserving generic registration, conserved transfer, balance, authorization and receipt checks. These paths are outside the granted daemon and asset-dispatch ownership. The typed activities remain refused until execution is implemented; registry reconstruction and full new-ordinal execution qualification remain incomplete."
 severity = "blocker"
 
-[observation.3.7.28]
+[observation.3.7.80]
 task = "3.7"
 file = "src/protocol/lxp_fee.c src/protocol/lxp_fee_policy.c include/layerx/lxp_fee.h cmd/layerx-genesis/lxp_genesis_builder.c"
 symbol = "lxp_fee_compute materialize_snapshot"
@@ -7505,7 +7509,7 @@ observed = "The current fee representation multiplies per_activity_type_unit by 
 assumption = "A separately configured per-ordinal price schedule requires a canonical parameter representation and ownership of the fee calculator and parameter codec paths. Account enumeration, persisted registry reconstruction and complete new-ordinal replay remain unimplemented; existing genesis and account-read regression gates do not qualify those absent behaviors."
 severity = "blocker"
 
-[observation.3.7.29]
+[observation.3.7.81]
 task = "3.7"
 file = "include/layerx/lx_asset.h src/modules/asset/lx_asset_decode.c src/modules/asset/lx_asset_registry.c src/ledger/lxp_receive.c cmd/layerxd/lxp_daemon_process.c tests/modules/test_asset_payloads.h"
 symbol = "module_decode asset_activity_supported"
@@ -7513,7 +7517,7 @@ observed = "make -j16; make test-asset-registry test-asset-balance test-asset-tr
 assumption = "These gates qualify the canonical decoders and existing regression paths, not missing registry, issuance, receive/grant execution or account enumeration. Daemon admission and replay now share the explicit Asset allowlist and constrain Asset owner scopes to the submitted ordinal; successful execution and persisted registry replay remain unqualified. Codify gates were not run because cg is unavailable. Cluster and image gates were not run because this host has no cluster or image tooling. No inherited executed failure is asserted."
 severity = "blocker"
 
-[observation.3.7.30]
+[observation.3.7.82]
 task = "3.7"
 file = "src/protocol/lxp_fee.c include/layerx/lxp_fee.h src/modules/governance/lxp_fee_params.c src/protocol/lxp_fee_policy.c"
 symbol = "lxp_fee_compute lxp_fee_params"
@@ -7521,7 +7525,7 @@ observed = "Version-1 fee parameters contain per_activity_type_unit, which lxp_f
 assumption = "A separately configured ordinal table requires an explicit canonical representation and version/migration contract plus ownership of the calculator, parameter declaration and governance/genesis serialization consumers. Those paths are outside the fee-policy grant. Existing fee calculation and assertions remain intact; no unused parallel price table is introduced."
 severity = "blocker"
 
-[observation.3.7.31]
+[observation.3.7.83]
 task = "3.7"
 file = "src/modules/asset/lx_asset_execution.h src/protocol/lxp_module_ctx.c src/modules/asset/lx_asset_state.c tests/test_state_commitment_transition.c cmd/layerxd/lxp_daemon_lni.c cmd/layerxd/lxp_daemon_process.c"
 symbol = "asset_execute_typed lxp_ctx_asset_account_stage lxp_ctx_asset_issuance_stage lxp_ctx_bind_ledger_receipt lx_account_list_did collect_assets"
@@ -7529,7 +7533,7 @@ observed = "make -j16; make test-asset-registry test-asset-balance test-asset-tr
 assumption = "These gates do not establish exhaustive new-ordinal refusal coverage or process-level replay/restart and wire enumeration qualification for every new activity. Existing genesis registration and account-evidence gates pass. The configurable ordinal fee representation remains the scope boundary in observation.3.7.30. Task-scoped regressions in cached supply-root derivation, bootstrap pause checking and a sanitizer link dependency were repaired without weakening assertions; earlier attempt logs remain under qual-logs/pay1. No executed failure is classified as inherited. Codify gates were not run because cg is unavailable; cluster and image gates were not run on this host."
 severity = "blocker"
 
-[observation.3.7.32]
+[observation.3.7.84]
 task = "3.7"
 file = "spec/layerx-protocol/spec.kvx agent/schema/lni/v1.kvx tests/test_fees.c tests/test_genesis_manifest.c tests/test_guarantor_duties.c tests/support/lxp_pay1_replay.h"
 symbol = "lxp_fee_compute materialize_snapshot lxp_guarantor_recompute_roots send_did_accounts"
@@ -7537,7 +7541,7 @@ observed = "Asset ordinals 1, 4, 6, 7, 8, 10 and 11 retain fee-parameter version
 assumption = "The fee representation boundary in observations 3.7.28 and 3.7.30 is resolved by retaining version 1. A separate per-ordinal schedule is a governance follow-up outside this branch. Genesis materialization already registers the expanded Asset module; guarantor replay already dispatches the registered kernel implementation and needs no separate ordinal table."
 severity = "note"
 
-[observation.3.7.33]
+[observation.3.7.85]
 task = "3.7"
 file = "tests/test_state_commitment_transition.c tests/modules/test_asset_payloads.h tests/support/lxp_pay1_replay.h"
 symbol = "pay1_submit_bytes pay1_receive_grant pay1_issuance pay1_snapshot_roundtrip pay1_malformed"
@@ -7545,7 +7549,7 @@ observed = "Signed kernel tests cover the seven new ordinals, replay, exact iden
 assumption = "Snapshot account ordering is canonical rather than insertion order; round-trip equality is checked by canonical account identity. Existing checks and protocol bounds remain unchanged."
 severity = "note"
 
-[observation.3.7.34]
+[observation.3.7.86]
 task = "3.7"
 file = "tests/test_state_commitment_transition.c tests/test_fees.c tests/test_genesis_manifest.c tests/test_guarantor_duties.c agent/schema/lni/v1.kvx"
 symbol = "pay1_snapshot_roundtrip pay1_guarantor_replay lxp_fee_compute"
@@ -7553,7 +7557,7 @@ observed = "make -j16 exits 0; make test-asset-registry test-asset-balance test-
 assumption = "No executed failure is classified as inherited. Codify gates were not run because cg is unavailable. Cluster and image gates were not run on this server. The evidence establishes native build and test qualification; it does not establish deployment or live cluster certification."
 severity = "note"
 
-[observation.3.7.35]
+[observation.3.7.87]
 task = "3.7"
 file = "include/layerx/lx_asset.h src/modules/asset/lx_asset_registry.c src/modules/asset/lx_asset_execution.h tests/modules/test_asset_state.c tests/test_state_commitment_transition.c"
 symbol = "lx_asset_record_encode lx_asset_record_decode asset_execute_typed lx_asset_state_root"
@@ -7561,7 +7565,7 @@ observed = "Committed Asset record encoding version 3 persists salt32 alongside 
 assumption = "Stored record version 2 lacks salt and is deliberately not silently upgraded. Existing snapshots containing version 2 asset records require an explicit migration before replay through this decoder. Activity ordinal 1 remains version 1 and has a separate codec."
 severity = "note"
 
-[observation.3.7.45]
+[observation.3.7.96]
 task = "3.7"
 file = "tests/test_state_commitment_transition.c tests/support/lxp_pay1_replay.h"
 symbol = "pay1_snapshot_roundtrip"
@@ -7569,7 +7573,7 @@ observed = "Snapshot qualification now compares every restored module KV key/val
 assumption = "Actual process restart coverage for all new ordinals and explicit receipt supply tampering remain incomplete pending the daemon and receipt interfaces. This is partial qualification, not closure of the complete test request."
 severity = "blocker"
 
-[observation.3.7.36]
+[observation.3.7.88]
 task = "3.7"
 file = "src/modules/asset/lx_asset_execution.h"
 symbol = "asset_execute_typed"
@@ -7577,7 +7581,7 @@ observed = "The seven typed ordinals already execute through asset_execute_typed
 assumption = "Execution exists; receipt supply schema, fees and daemon reconstruction remain separate unresolved findings."
 severity = "note"
 
-[observation.3.7.37]
+[observation.3.7.89]
 task = "3.7"
 file = "src/modules/asset/lx_asset_execution.h"
 symbol = "asset_execute_typed"
@@ -7585,7 +7589,7 @@ observed = "Native registration recomputes SHA-256 over LX:ASSET:v1, resolved ac
 assumption = "No encoding or derivation change is needed."
 severity = "note"
 
-[observation.3.7.39]
+[observation.3.7.90]
 task = "3.7"
 file = "src/modules/asset/lx_asset_registry.c src/modules/asset/lx_asset_decode.c"
 symbol = "symbol_valid lx_asset_register_decode"
@@ -7593,7 +7597,7 @@ observed = "The typed registration decoder and issuer_kind nonzero stored-record
 assumption = "Broadening the legacy helper check is not required for shared native activity encoding and would relax an existing check; it is left intact."
 severity = "note"
 
-[observation.3.7.40]
+[observation.3.7.91]
 task = "3.7"
 file = "include/layerx/lxp_receipt.h src/protocol/lxp_receipt.c src/protocol/lxp_receipt_verify.c"
 symbol = "lxp_receipt lxp_ledger_receipt_input"
@@ -7601,7 +7605,7 @@ observed = "Canonical receipt structures still lack before/after total_units. Th
 assumption = "Endpoint tamper tests do not qualify supply tamper refusal. A coordinated receipt interface and verifier change is required; the earlier resolution in observation.3.7.27 does not close this finding."
 severity = "blocker"
 
-[observation.3.7.41]
+[observation.3.7.92]
 task = "3.7"
 file = "cmd/layerxd/lxp_daemon_process.c"
 symbol = "collect_assets"
@@ -7609,7 +7613,7 @@ observed = "Committed Asset records are decoded and overlaid with cap/supply con
 assumption = "Remove synthesis through an authoritative bootstrap and persisted registry interface, then qualify actual daemon restart metadata and root equality. Snapshot equality alone does not establish this."
 severity = "blocker"
 
-[observation.3.7.42]
+[observation.3.7.93]
 task = "3.7"
 file = "src/protocol/lxp_module_ctx.c src/modules/asset/lx_asset_execution.h src/ledger/lx_account_id.c"
 symbol = "lxp_ctx_asset_issuance_stage issuance_find"
@@ -7617,7 +7621,7 @@ observed = "Current issuance staging, prepared-account commit validation and rep
 assumption = "Module context and daemon replay changes are outside owned paths. Updating only owned lookup/parser code would split producers and consumers. Observation.3.7.24 is an accounting integration issue, not authority to weaken conservation."
 severity = "blocker"
 
-[observation.3.7.43]
+[observation.3.7.94]
 task = "3.7"
 file = "src/protocol/lxp_fee.c include/layerx/lxp_fee.h src/protocol/lxp_fee_policy.c"
 symbol = "lxp_fee_compute"
@@ -7625,7 +7629,7 @@ observed = "The fee calculator still multiplies per_activity_type_unit by the fu
 assumption = "Pricing types, calculation, canonical parameters and replay must change together outside the owned policy path. Existing exact-fee assertions are retained. Prior fee tests establish only current formula behavior."
 severity = "blocker"
 
-[observation.3.7.44]
+[observation.3.7.95]
 task = "3.7"
 file = "cmd/layerxd/lxp_daemon_process.c src/modules/asset/lx_asset_registry.c spec/layerx-protocol/spec.kvx"
 symbol = "asset_activity_supported module_execute"
@@ -7633,7 +7637,7 @@ observed = "Pause/unpause are explicitly excluded from supported authenticated A
 assumption = "No new ordinal 2/3 encoding or authority rule is introduced. Paused-state refusal checks remain required and unchanged."
 severity = "note"
 
-[observation.3.7.46]
+[observation.3.7.97]
 task = "3.7"
 file = "spec/layerx-protocol/docs/activity-types.md docs/wiki/Modules.md spec/layerx-protocol/design.body.md"
 symbol = "activity_type"
@@ -7641,7 +7645,7 @@ observed = "The documentation still assigns ASSET_SEND to 0x0101. Current SEND i
 assumption = "The documentation owner must retire the old table, retain Asset 9 reservation, correct issuance and qualification claims and regenerate projections. No generated file was hand-edited."
 severity = "blocker"
 
-[observation.3.7.47]
+[observation.3.7.98]
 task = "3.7"
 file = "cmd/layerxd/lxp_daemon_lni.c platform/hosted/core/src/public_reads.rs platform/hosted/gateway/src/rpc.rs"
 symbol = "send_did_accounts"
@@ -7649,7 +7653,7 @@ observed = "Native DID enumeration exists as tag 7 kind 3 and tag 8 sorted canon
 assumption = "Public RPC ownership must integrate committed Asset metadata, enumeration and canonical fee reads; method presence and decoders must not be reported as executed activities."
 severity = "blocker"
 
-[observation.3.7.48]
+[observation.3.7.99]
 task = "3.7"
 file = "include/layerx/lx_asset.h"
 symbol = "lx_asset_register_decode"
@@ -7657,7 +7661,7 @@ observed = "The merged payload comments used dotted numeric ranges that matched 
 assumption = "This is a merge-introduced comment failure, not an inherited implementation failure. No test, scanner rule or protocol check was weakened."
 severity = "note"
 
-[observation.3.7.54]
+[observation.3.7.71]
 task = "3.7"
 file = "spec/layerx-protocol/docs/activity-types.md"
 symbol = "activity_type"
@@ -7665,7 +7669,7 @@ observed = "The obsolete byte-pair catalogue is retired as a native wire authori
 assumption = "The retained non-Asset sketches are explicitly historical and do not redefine the native module registry or envelope."
 severity = "note"
 
-[observation.3.7.50]
+[observation.3.7.73]
 task = "3.7"
 file = "src/ledger/lx_account_id.c src/modules/asset/lx_asset_execution.h src/protocol/lxp_module_ctx.c cmd/layerxd/lxp_daemon_process.c"
 symbol = "lx_asset_issuance_name"
@@ -7673,7 +7677,7 @@ observed = "New issuance staging, lookup, commit validation, supply summation an
 assumption = "Existing snapshots with the retired account name require an explicit operator migration and a newly authorized root; rewriting a name in an already signed snapshot is invalid."
 severity = "note"
 
-[observation.3.7.52]
+[observation.3.7.74]
 task = "3.7"
 file = "include/layerx/lxp_fee.h src/protocol/lxp_fee.c src/modules/governance/lxp_fee_params.c"
 symbol = "lxp_fee_schedule lxp_fee_compute lxp_fee_params_decode"
@@ -7681,7 +7685,7 @@ observed = "Fee parameter encoding 2 carries exactly eight named Asset prices or
 assumption = "Committed fee.schedule records carry the canonical encoding. An absent committed schedule is accepted only for the existing parameter-version-1 zero-fee replay representation. New bootstrap inputs provide the explicit encoding-2 schedule."
 severity = "note"
 
-[observation.3.7.51]
+[observation.3.7.75]
 task = "3.7"
 file = "src/modules/asset/lx_asset_registry.c cmd/layerx-genesis/lxp_genesis_build_cli.c"
 symbol = "lx_asset_record_migrate_v2 migrate_asset_v2"
@@ -7689,7 +7693,7 @@ observed = "The operator command layerx-genesis-build --migrate-asset-v2 input-r
 assumption = "The command migrates record artifacts, not signed snapshot manifests, historical roots or settlement anchors. Snapshot incorporation requires an independently authorized migration boundary."
 severity = "note"
 
-[observation.3.7.49]
+[observation.3.7.76]
 task = "3.7"
 file = "include/layerx/lxp_receipt.h src/protocol/lxp_receipt.c src/protocol/lxp_module_ctx.c agent/crates/layerx-wire/src/receipt.rs"
 symbol = "lxp_receipt_validate_supply lxp_ctx_bind_asset_supply"
@@ -7697,7 +7701,7 @@ observed = "Receipt structure tag 0x5202 authenticates total_units_before and to
 assumption = "Consumers of the new receipt structure must retain the supply bytes in digest and signature verification. Existing receipt fixtures retain their legacy structure; the native fixture generator accepts --supply for the new structure."
 severity = "note"
 
-[observation.3.7.53]
+[observation.3.7.70]
 task = "3.7"
 file = "src/modules/asset/lx_asset_registry.c cmd/layerxd/lxp_daemon_process.c cmd/layerx-genesis/lxp_genesis_build_cli.c cmd/layerx-genesis/lxp_genesis_builder.c"
 symbol = "lx_asset_committed_records collect_assets parse_request"
@@ -7705,7 +7709,7 @@ observed = "Daemon reconstruction requires committed Asset records and refuses a
 assumption = "Existing external bootstrap request generators must provide the new metadata and schedule. The actual daemon restart matrix for funded native register/open/mint/burn/grants remains unqualified."
 severity = "note"
 
-[observation.3.7.55]
+[observation.3.7.72]
 task = "3.7"
 file = "agent/schema/lni/v1.kvx agent/schema/lni/README.md agent/crates/layerx-client/tests/lni_schema.rs cmd/layerxd/lxp_daemon_lni.c"
 symbol = "send_asset_read send_fee_estimate lni_schema_and_document_cover_every_declared_message"
