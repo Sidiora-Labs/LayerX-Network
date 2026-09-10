@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import ssl
 import stat
@@ -12,6 +13,9 @@ import urllib.request
 import urllib.parse
 
 from provision import Refused, fields, h32, protected_bytes, protected_json, require, uint, write_json
+
+GUARDIAN_ROLES = ('guarantor-1', 'guarantor-2', 'sequencer')
+GUARDIAN_EPOCH_MAXIMUM = 64
 
 
 def digest(domain, data):
@@ -148,6 +152,95 @@ def receipt_fields(data, public_key, path):
                 timestamp=timestamp, effects=effects)
 
 
+def guardian_binding_message(role, identity, epoch, public_key):
+    return (b'LX:HUMAN:GUARDIAN:BINDING:v1\0' + struct.pack('>HH', epoch, len(role))
+            + role.encode('ascii') + bytes.fromhex(identity) + public_key)
+
+
+def guardian_rotation_message(role, identity, epoch, predecessor, successor):
+    return (b'LX:HUMAN:GUARDIAN:ROTATION:v1\0' + struct.pack('>HH', epoch, len(role))
+            + role.encode('ascii') + bytes.fromhex(identity) + predecessor + successor)
+
+
+def guardian_commitment(threshold, keys):
+    return hashlib.sha256(b'LX:HUMAN:RECOVERY:v1\0' + struct.pack('>HH', threshold, len(keys)) + b''.join(keys)).digest()
+
+
+def guardian_signature(value, path, field):
+    require(type(value) is str and re.fullmatch('[0-9a-f]{128}', value) is not None
+            and int(value, 16) != 0, path, field)
+    return bytes.fromhex(value)
+
+
+def guardian_verified(public_key, signature, message, path, field):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    try:
+        Ed25519PublicKey.from_public_bytes(public_key).verify(signature, message)
+    except Exception as error:
+        raise Refused(f'{path}: invalid {field}') from error
+
+
+def guardian_enrollment_key(value, path):
+    fields(value, 'role identity public_key epoch custody signature', path, 'guardian enrollment')
+    require(value['role'] in GUARDIAN_ROLES, path, 'guardian role')
+    h32(value['identity'], path, 'guardian operator identity')
+    h32(value['public_key'], path, 'guardian public key')
+    uint(value['epoch'], 16, path, 'guardian epoch', 1)
+    require(value['epoch'] <= GUARDIAN_EPOCH_MAXIMUM, path, 'guardian epoch bound')
+    require(type(value['custody']) is str and value['custody'].startswith('/'), path, 'guardian custody directory')
+    custody = Path(value['custody'])
+    require(custody.name == value['role'] + '-e' + str(value['epoch'])
+            and custody.parent.name == 'human-guardians', path, 'guardian custody directory')
+    public = bytes.fromhex(value['public_key'])
+    guardian_verified(public, guardian_signature(value['signature'], path, 'guardian binding signature'),
+                      guardian_binding_message(value['role'], value['identity'], value['epoch'], public),
+                      path, 'guardian binding signature')
+    return public
+
+
+def guardian_member_key(member, path):
+    fields(member, 'role identity public_key epoch custody signature rotation', path, 'guardian binding')
+    public = guardian_enrollment_key({name: member[name] for name in member if name != 'rotation'}, path)
+    rotation = member['rotation']
+    if member['epoch'] == 1:
+        require(rotation is None, path, 'genesis guardian rotation')
+        return public
+    fields(rotation, 'predecessor signature', path, 'guardian rotation')
+    predecessor = rotation['predecessor']
+    previous = guardian_member_key(predecessor, path)
+    require(predecessor['role'] == member['role'] and predecessor['identity'] == member['identity']
+            and predecessor['epoch'] == member['epoch'] - 1 and previous != public
+            and predecessor['custody'] != member['custody'], path, 'guardian rotation chain')
+    guardian_verified(previous, guardian_signature(rotation['signature'], path, 'guardian rotation signature'),
+                      guardian_rotation_message(member['role'], member['identity'], member['epoch'], previous, public),
+                      path, 'guardian rotation signature')
+    return public
+
+
+def guardian_set(document, path, threshold):
+    fields(document, 'version threshold public_keys members', path, 'guardian set')
+    uint(document['version'], 16, path, 'guardian set version', 1)
+    require(document['threshold'] == threshold, path, 'guardian threshold binding')
+    members, published = document['members'], document['public_keys']
+    require(type(members) is list and type(published) is list and len(published) == len(members)
+            and 0 < threshold <= len(members) <= len(GUARDIAN_ROLES), path, 'guardian threshold')
+    keys, roles, identities, custody = [], set(), set(), set()
+    for member in members:
+        keys.append(guardian_member_key(member, path))
+        roles.add(member['role'])
+        identities.add(member['identity'])
+        custody.add(member['custody'])
+        require(member['epoch'] <= document['version'], path, 'guardian set version')
+    require(len(roles) == len(identities) == len(custody) == len(set(keys)) == len(members),
+            path, 'separately enrolled guardians')
+    require(document['version'] == max(member['epoch'] for member in members), path, 'guardian set version')
+    for key in published:
+        h32(key, path, 'guardian public key')
+    keys = sorted(keys)
+    require(sorted(bytes.fromhex(key) for key in published) == keys, path, 'guardian public key manifest')
+    return keys
+
+
 def _produce(work_dir):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -192,15 +285,8 @@ def _produce(work_dir):
     require(owner['recovery_root'] == policy['root'] and owner['recovery_threshold'] == policy['threshold']
             and owner['recovery_delay_seconds'] == policy['delay_seconds'], owner_path, 'recovery binding')
     guardians_path = root / 'recovery-guardians.json'
-    guardians = protected_json(guardians_path)
-    fields(guardians, 'public_keys', guardians_path, 'guardian set')
-    require(type(guardians['public_keys']) is list and 0 < policy['threshold'] <= len(guardians['public_keys']) <= 256,
-            guardians_path, 'guardian threshold')
-    for key in guardians['public_keys']:
-        h32(key, guardians_path, 'guardian public key')
-    keys = sorted(bytes.fromhex(key) for key in guardians['public_keys'])
-    require(len(set(keys)) == len(keys), guardians_path, 'unique guardians')
-    commitment = hashlib.sha256(b'LX:HUMAN:RECOVERY:v1\0' + struct.pack('>HH', policy['threshold'], len(keys)) + b''.join(keys)).digest()
+    keys = guardian_set(protected_json(guardians_path), guardians_path, policy['threshold'])
+    commitment = guardian_commitment(policy['threshold'], keys)
     require(list(commitment) == policy['root'], policy_path, 'guardian commitment')
     credit_path = root / 'custody-credit.bin'
     credit = protected_bytes(credit_path, 427)

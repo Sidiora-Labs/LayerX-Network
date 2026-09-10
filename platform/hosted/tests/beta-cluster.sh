@@ -1858,14 +1858,18 @@ beta_cluster_up() {
         (umask 077; mkdir -p "$WORK_DIR/human-evidence-input")
         python3 "$REPO_ROOT/platform/hosted/human/provision.py" --prepare-owner-request \
             --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
-        python3 "$REPO_ROOT/platform/hosted/human/guardians.py" \
-            --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR" \
-            --identity "$NODE_GUARANTOR_ID" --identity "$NODE_SECOND_GUARANTOR_ID" \
-            --identity "$NODE_SEQUENCER_ID"
+        local guardians="$REPO_ROOT/platform/hosted/human/guardians.py"
+        python3 "$guardians" enroll --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR" \
+            --role guarantor-1 --identity "$NODE_GUARANTOR_ID"
+        python3 "$guardians" enroll --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR" \
+            --role guarantor-2 --identity "$NODE_SECOND_GUARANTOR_ID"
+        python3 "$guardians" enroll --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR" \
+            --role sequencer --identity "$NODE_SEQUENCER_ID"
+        python3 "$guardians" assemble --work-dir "$WORK_DIR"
         local guardian
         for guardian in guarantor-1 guarantor-2 sequencer; do
             apply_secret "$TESTNET_NAMESPACE" "layerx-human-guardian-$guardian" \
-                --from-file=seed="$SECRETS_DIR/human-guardians/$guardian.seed"
+                --from-file=seed="$SECRETS_DIR/human-guardians/$guardian-e1/seed"
         done
         apply_configmap "$TESTNET_NAMESPACE" layerx-human-guardian-bindings \
             --from-file=bindings.json="$WORK_DIR/human-evidence-input/recovery-guardian-bindings.json"
