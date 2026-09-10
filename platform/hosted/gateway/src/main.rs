@@ -2,6 +2,7 @@ mod native_call;
 mod program_lifecycle;
 mod public_reads;
 mod rpc;
+mod rpc_register;
 mod ws;
 mod ws_wire;
 
@@ -57,6 +58,7 @@ struct Config {
     authority_token: Zeroizing<String>,
     identity: Endpoint,
     identity_token: Zeroizing<String>,
+    registration_token: Option<Zeroizing<String>>,
     registry: Endpoint,
     registry_token: Zeroizing<String>,
     store: RedisStore,
@@ -576,6 +578,7 @@ fn config() -> Result<Config, String> {
                 .map_err(|_| "gateway identity URL is required")?,
         )?,
         identity_token: read_secret("LAYERX_GATEWAY_IDENTITY_TOKEN_FILE")?,
+        registration_token: rpc_register::configured_token()?,
         registry: Endpoint::parse(
             &env::var("LAYERX_GATEWAY_PROGRAM_REGISTRY_URL")
                 .map_err(|_| "gateway program registry URL is required")?,

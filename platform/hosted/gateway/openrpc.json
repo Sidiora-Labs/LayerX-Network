@@ -7,6 +7,51 @@
   },
   "methods": [
     {
+      "name": "lx_register",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "signer_public_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "registration_signature",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Creates one self-service identity principal in the beta tenant. Both arguments are lowercase hexadecimal: a 32-byte Ed25519 signer public key and its 64-byte signature over SHA-256(len-prefixed \"layerx-register-binding-v1\", tenant, signer_public_key). The subject is derived as beta.<first 16 bytes of SHA-256(len-prefixed \"layerx-register-subject-v1\", tenant, signer_public_key)>, so registration is idempotent and cannot name another key holder's principal. The result is the identity principal record: tenant, sub, allowed_signer_public_keys, account and audiences. Malformed arguments are -32602; a signature that does not prove possession of the named key is -32002; the per-minute self-registration budget is -32005; an unconfigured or unavailable identity service is -32001 with a machine-readable data.code.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32002,
+          "message": "Registration refused"
+        },
+        {
+          "code": -32001,
+          "message": "Registration unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Registration unavailable"
+        }
+      ]
+    },
+    {
       "name": "lx_getAccount",
       "paramStructure": "by-position",
       "params": [

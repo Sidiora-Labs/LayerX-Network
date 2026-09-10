@@ -19,6 +19,7 @@ mod output;
 mod payment;
 mod programs;
 mod receipt;
+mod register;
 mod scaffold;
 mod toolset;
 mod workspace;
@@ -58,6 +59,8 @@ enum Command {
     /// Create or inspect a developer account.
     #[command(subcommand)]
     Account(AccountCommand),
+    /// Register a self-service identity principal for one local signing key.
+    Register(register::RegisterArgs),
     /// Quote and commit a real test payment through the active endpoint.
     #[command(subcommand)]
     Payment(PaymentCommand),
@@ -503,6 +506,7 @@ fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String>
         Command::Key(command) => key(command).map(Some),
         Command::Auth(command) => auth(command).map(Some),
         Command::Account(command) => account(command).map(Some),
+        Command::Register(arguments) => register::run(&arguments).map(Some),
         Command::Payment(command) => payment(command).map(Some),
         Command::Receipt(command) => receipt(command).map(Some),
         Command::Program(command) => program(command).map(Some),
