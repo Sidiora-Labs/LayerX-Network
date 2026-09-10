@@ -1114,14 +1114,53 @@ lxp_result lxp_kernel_set_capabilities(
     return LXP_OK;
 }
 
+/* Resolves the single source authority covering one leg. The ledger requires
+ * exactly one authority per debited account, so anything else is a refusal
+ * rather than a choice between candidates. */
+static lxp_result program_spend_leg_authority(
+    const lxp_transfer_set *set, const lxp_transfer_leg *leg,
+    const lxp_transfer_source_authority **resolved)
+{
+    size_t authority_index;
+    size_t matches = 0U;
+    if (set == NULL || leg == NULL || resolved == NULL ||
+        leg->from == NULL || leg->to == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *resolved = NULL;
+    for (authority_index = 0U;
+         authority_index < set->context.source_authority_count;
+         ++authority_index) {
+        const lxp_transfer_source_authority *authority =
+            &set->context.source_authorities[authority_index];
+        if (lxp_ct_memcmp(authority->authorized_from, leg->from->id,
+                          32U) != 0)
+            continue;
+        ++matches;
+        *resolved = authority;
+    }
+    if (matches != 1U) {
+        *resolved = NULL;
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    }
+    return LXP_OK;
+}
+
+/* Converts a Programs transfer set that debits program-owned accounts into an
+ * ordinary owner-authorized set, but only after the Programs transfer law has
+ * redeemed one capability-checked permit for every program-owned leg. Each
+ * permit is bound to that leg's exact source, destination, asset, amount,
+ * reason, supply mode and to the transfer-set root the ledger is about to
+ * apply, so no leg can borrow another leg's authorization and no set can reuse
+ * a permit issued for a different set. The permit issuer independently refuses
+ * the settlement unless every permit it issued was redeemed here. */
 static lxp_result program_spend_authorized_set(
     const lxp_transfer_set *set, lxp_transfer_set *authorized,
     lxp_transfer_source_authority
         authorities[LXP_MAX_TRANSFER_SET_LEGS])
 {
-    const lxp_transfer_leg *leg = NULL;
     size_t authority_index;
-    size_t program_spend_count = 0U;
+    size_t leg_index;
+    size_t program_spend_legs = 0U;
     uint8_t root[32];
     lxp_result status;
     if (set == NULL || authorized == NULL || authorities == NULL ||
@@ -1132,15 +1171,16 @@ static lxp_result program_spend_authorized_set(
         set->context.source_authority_count > set->leg_count ||
         set->context.source_authority_count > LXP_MAX_TRANSFER_SET_LEGS)
         return LXP_ERR_NON_CANONICAL;
+    if (set->context.origin_module_id != LXP_MODULE_PROGRAMS ||
+        set->context.program_spend_token == 0U)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
     *authorized = *set;
     for (authority_index = 0U;
          authority_index < set->context.source_authority_count;
          ++authority_index) {
         const lxp_transfer_source_authority *authority =
             &set->context.source_authorities[authority_index];
-        const lxp_transfer_leg *matching_leg = NULL;
         size_t matching_leg_count = 0U;
-        size_t leg_index;
         size_t prior_authority_index;
         for (prior_authority_index = 0U;
              prior_authority_index < authority_index;
@@ -1154,33 +1194,42 @@ static lxp_result program_spend_authorized_set(
         for (leg_index = 0U; leg_index < set->leg_count; ++leg_index)
             if (set->legs[leg_index].from != NULL &&
                 lxp_ct_memcmp(authority->authorized_from,
-                              set->legs[leg_index].from->id, 32U) == 0) {
+                              set->legs[leg_index].from->id, 32U) == 0)
                 ++matching_leg_count;
-                matching_leg = &set->legs[leg_index];
-            }
-        if (matching_leg_count != 1U)
+        if (matching_leg_count == 0U)
             return LXP_ERR_UNAUTHORIZED_DEBIT;
+    }
+    /* A zero-amount leg would be dropped by the ordinary ledger and the root
+     * computed here would no longer be the root it applies, so the set is
+     * refused before any permit is redeemed. */
+    for (leg_index = 0U; leg_index < set->leg_count; ++leg_index) {
+        const lxp_transfer_leg *leg = &set->legs[leg_index];
+        const lxp_transfer_source_authority *authority;
+        if (leg->from == NULL || leg->to == NULL)
+            return LXP_ERR_NON_CANONICAL;
+        if (lxp_u128_is_zero(leg->amount)) return LXP_ERR_ZERO_AMOUNT;
+        status = program_spend_leg_authority(set, leg, &authority);
+        if (status != LXP_OK) return status;
+        if (authority->debit_authority_kind == LXP_AUTH_PROGRAM_SPEND)
+            ++program_spend_legs;
+    }
+    if (program_spend_legs == 0U) return LXP_ERR_UNAUTHORIZED_DEBIT;
+    status = lxp_transfer_set_root(set->legs, set->leg_count, root);
+    if (status != LXP_OK) return status;
+    for (leg_index = 0U; leg_index < set->leg_count; ++leg_index) {
+        const lxp_transfer_leg *leg = &set->legs[leg_index];
+        const lxp_transfer_source_authority *authority;
+        status = program_spend_leg_authority(set, leg, &authority);
+        if (status != LXP_OK) return status;
         if (authority->debit_authority_kind != LXP_AUTH_PROGRAM_SPEND)
             continue;
-        ++program_spend_count;
-        leg = matching_leg;
-    }
-    if (program_spend_count == 0U)
-        return set->context.program_spend_token == 0U ?
-                   LXP_ERR_UNKNOWN_FIELD : LXP_ERR_UNAUTHORIZED_DEBIT;
-    if (program_spend_count != 1U || leg == NULL ||
-        set->context.origin_module_id != LXP_MODULE_PROGRAMS ||
-        set->context.program_spend_token == 0U ||
-        set->context.source_authorities == NULL)
-        return LXP_ERR_UNAUTHORIZED_DEBIT;
-    status = lxp_transfer_set_root(set->legs, set->leg_count, root);
-    if (status == LXP_OK)
         status = layerx_programs_consume_program_spend_authorization(
             set->context.program_spend_token,
             set->context.origin_module_id, leg->from->id, leg->to->id,
             leg->asset_id, leg->amount.hi, leg->amount.lo, leg->reason,
             leg->supply_mode, root);
-    if (status != LXP_OK) return LXP_ERR_UNAUTHORIZED_DEBIT;
+        if (status != LXP_OK) return LXP_ERR_UNAUTHORIZED_DEBIT;
+    }
     authorized->context.program_spend_token = 0U;
     authorized->context.debit_authority_kind = LXP_AUTH_OWNER;
     (void)memcpy(authorities, set->context.source_authorities,

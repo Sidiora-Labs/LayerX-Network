@@ -2593,6 +2593,552 @@ static int stored_historical_receipt(const char *path, uint16_t protocol_version
     return 0;
 }
 
+enum {
+    PROGRAM_SPEND_SEED_BYTES = 13,
+    PROGRAM_SPEND_CAPABILITY_BYTES = 2 + 1 + 32 + 2 +
+                                     PROGRAM_SPEND_SEED_BYTES + 32 + 32 + 32 +
+                                     16,
+    PROGRAM_SPEND_WASM_BYTES = 512,
+    PROGRAM_SPEND_AMOUNT = 5,
+    PROGRAM_SPEND_SOURCE_BALANCE = 40,
+    PROGRAM_SPEND_GRANT_CEILING = 9
+};
+
+static int program_spend_failure(int line)
+{
+    (void)fprintf(stderr, "Program-owned spend failed at line=%d\n", line);
+    return 1;
+}
+
+static lx_account *program_spend_account(lx_account_registry *accounts,
+                                         const uint8_t account_id[32])
+{
+    size_t index;
+    if (accounts == NULL) return NULL;
+    for (index = 0U; index < accounts->count; ++index)
+        if (memcmp(accounts->accounts[index].id, account_id, 32U) == 0)
+            return &accounts->accounts[index];
+    return NULL;
+}
+
+/* Canonical ABI-v2 capability list carrying the one program-owned spend the
+ * account owner authorized for this call, bounded by `maximum_amount`. */
+static size_t program_spend_capabilities(
+    uint8_t out[PROGRAM_SPEND_CAPABILITY_BYTES],
+    const uint8_t owner_program[32], const uint8_t *seed, size_t seed_length,
+    const uint8_t source[32], const uint8_t asset[32], const uint8_t to[32],
+    uint64_t maximum_amount)
+{
+    size_t cursor = 0U;
+    write_u16(out + cursor, 1U);
+    cursor += 2U;
+    out[cursor++] = 9U;
+    (void)memcpy(out + cursor, owner_program, 32U);
+    cursor += 32U;
+    write_u16(out + cursor, (uint16_t)seed_length);
+    cursor += 2U;
+    (void)memcpy(out + cursor, seed, seed_length);
+    cursor += seed_length;
+    (void)memcpy(out + cursor, source, 32U);
+    cursor += 32U;
+    (void)memcpy(out + cursor, asset, 32U);
+    cursor += 32U;
+    (void)memcpy(out + cursor, to, 32U);
+    cursor += 32U;
+    (void)memset(out + cursor, 0, 16U);
+    write_u64(out + cursor + 8U, maximum_amount);
+    return cursor + 16U;
+}
+
+static size_t program_spend_deploy_payload(
+    uint8_t *out, const uint8_t program_id[32], const uint8_t authority[32],
+    const uint8_t *wasm, size_t wasm_length, uint8_t code_hash[32])
+{
+    (void)lxp_hash_sha256(wasm, wasm_length, code_hash);
+    (void)memcpy(out, program_id, 32U);
+    write_u16(out + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+    out[34] = 1U;
+    out[35] = 0U;
+    (void)memcpy(out + 36U, authority, 32U);
+    (void)memcpy(out + 68U, code_hash, 32U);
+    write_u32(out + 100U, (uint32_t)wasm_length);
+    (void)memcpy(out + 104U, wasm, wasm_length);
+    return 104U + wasm_length;
+}
+
+/* ABI-v2 guest that spends PROGRAM_SPEND_AMOUNT out of the program-derived
+ * account named by `seed` and returns the host status, so a refused spend
+ * refuses the call instead of completing silently. */
+static size_t program_spend_module(uint8_t *out, const uint8_t *seed,
+                                   size_t seed_length,
+                                   const uint8_t source[32],
+                                   const uint8_t asset[32],
+                                   const uint8_t destination[32])
+{
+    static const uint8_t header[] = {0U, 0x61U, 0x73U, 0x6dU, 1U, 0U, 0U, 0U};
+    static const uint8_t types[] = {
+        3U,
+        0x60U, 10U, 0x7eU, 0x7eU, 0x7fU, 0x7fU, 0x7fU, 0x7fU, 0x7fU, 0x7fU,
+        0x7fU, 0x7fU, 1U, 0x7fU,
+        0x60U, 1U, 0x7fU, 1U, 0x7fU,
+        0x60U, 2U, 0x7fU, 0x7fU, 1U, 0x7fU
+    };
+    static const uint8_t functions[] = {2U, 1U, 2U};
+    static const uint8_t memory[] = {1U, 1U, 1U, 1U};
+    uint8_t section[256];
+    uint8_t body[64];
+    size_t cursor = 0U;
+    size_t length = 0U;
+    size_t body_length = 0U;
+    append_bytes(out, &cursor, header, sizeof(header));
+    append_section(out, &cursor, 1U, types, sizeof(types));
+    section[length++] = 1U;
+    append_name(section, &length, "layerx_v2");
+    append_name(section, &length, "transfer_program_402");
+    section[length++] = 0U;
+    section[length++] = 0U;
+    append_section(out, &cursor, 2U, section, length);
+    append_section(out, &cursor, 3U, functions, sizeof(functions));
+    append_section(out, &cursor, 5U, memory, sizeof(memory));
+    length = 0U;
+    section[length++] = 3U;
+    append_name(section, &length, "layerx_reserve");
+    section[length++] = 0U; section[length++] = 1U;
+    append_name(section, &length, "layerx_call");
+    section[length++] = 0U; section[length++] = 2U;
+    append_name(section, &length, "memory");
+    section[length++] = 2U; section[length++] = 0U;
+    append_section(out, &cursor, 7U, section, length);
+    body[body_length++] = 0U;
+    body[body_length++] = 0x42U; body[body_length++] = 0U;
+    body[body_length++] = 0x42U;
+    body[body_length++] = (uint8_t)PROGRAM_SPEND_AMOUNT;
+    body[body_length++] = 0x41U; body[body_length++] = 0U;
+    body[body_length++] = 0x41U; body[body_length++] = (uint8_t)seed_length;
+    body[body_length++] = 0x41U; body[body_length++] = 0x80U;
+    body[body_length++] = 1U;
+    body[body_length++] = 0x41U; body[body_length++] = 32U;
+    body[body_length++] = 0x41U; body[body_length++] = 0xa0U;
+    body[body_length++] = 1U;
+    body[body_length++] = 0x41U; body[body_length++] = 32U;
+    body[body_length++] = 0x41U; body[body_length++] = 0xc0U;
+    body[body_length++] = 1U;
+    body[body_length++] = 0x41U; body[body_length++] = 32U;
+    body[body_length++] = 0x10U; body[body_length++] = 0U;
+    body[body_length++] = 0x0bU;
+    length = 0U;
+    section[length++] = 2U;
+    section[length++] = 4U;
+    section[length++] = 0U; section[length++] = 0x41U;
+    section[length++] = 0U; section[length++] = 0x0bU;
+    append_u32_leb(section, &length, (uint32_t)body_length);
+    append_bytes(section, &length, body, body_length);
+    append_section(out, &cursor, 10U, section, length);
+    length = 0U;
+    section[length++] = 4U;
+    section[length++] = 0U;
+    section[length++] = 0x41U; section[length++] = 0U;
+    section[length++] = 0x0bU;
+    append_u32_leb(section, &length, (uint32_t)seed_length);
+    append_bytes(section, &length, seed, seed_length);
+    section[length++] = 0U;
+    section[length++] = 0x41U; section[length++] = 0x80U;
+    section[length++] = 1U; section[length++] = 0x0bU;
+    section[length++] = 32U;
+    append_bytes(section, &length, source, 32U);
+    section[length++] = 0U;
+    section[length++] = 0x41U; section[length++] = 0xa0U;
+    section[length++] = 1U; section[length++] = 0x0bU;
+    section[length++] = 32U;
+    append_bytes(section, &length, asset, 32U);
+    section[length++] = 0U;
+    section[length++] = 0x41U; section[length++] = 0xc0U;
+    section[length++] = 1U; section[length++] = 0x0bU;
+    section[length++] = 32U;
+    append_bytes(section, &length, destination, 32U);
+    append_section(out, &cursor, 11U, section, length);
+    return cursor;
+}
+
+/* End to end through the programs runtime: an ordinary program call debits a
+ * program-derived account only under the explicit, per-call capability the
+ * account owner granted, and the same call is refused with no balance movement
+ * when the grant is absent or bounded below the requested amount. */
+/* Direct refusals at the only module-to-ledger entry. Each set below reaches
+ * lxp_kernel_apply_transfer_set the way a module would, and every one of them
+ * must be refused before the ledger applier is entered, so no balance moves. */
+static int program_spend_kernel_refusals(lxp_kernel *kernel, lx_account *source,
+                                         lx_account *payee,
+                                         const uint8_t asset_id[32])
+{
+    lxp_transfer_source_authority authorities[2];
+    lxp_transfer_set set;
+    lxp_receipt receipt;
+    lxp_u128 source_before = source->balance;
+    lxp_u128 payee_before = payee->balance;
+    (void)memset(&set, 0, sizeof(set));
+    (void)memset(authorities, 0, sizeof(authorities));
+    (void)memset(&receipt, 0, sizeof(receipt));
+    set.leg_count = 1U;
+    set.legs[0].from = source;
+    set.legs[0].to = payee;
+    (void)memcpy(set.legs[0].asset_id, asset_id, 32U);
+    set.legs[0].amount = (lxp_u128){0U, PROGRAM_SPEND_AMOUNT};
+    set.legs[0].reason = LXP_REASON_PAYMENT;
+    set.legs[0].supply_mode = LXP_TRANSFER_CONSERVED;
+    (void)memcpy(authorities[0].authorized_from, source->id, 32U);
+    authorities[0].debit_authority_kind = LXP_AUTH_PROGRAM_SPEND;
+    set.context.source_authorities = authorities;
+    set.context.source_authority_count = 1U;
+    set.context.origin_module_id = LXP_MODULE_PROGRAMS;
+    set.context.debit_authority_kind = LXP_AUTH_PROGRAM_SPEND;
+    (void)memcpy(set.context.authorized_from, source->id, 32U);
+    set.context.sequence_account = source;
+    set.context.actor_sequence = source->next_sequence;
+    /* No permit was ever issued, so the set carries no token. */
+    set.context.program_spend_token = 0U;
+    if (lxp_kernel_apply_transfer_set(kernel, &set, &receipt) !=
+        LXP_ERR_UNAUTHORIZED_DEBIT)
+        return program_spend_failure(__LINE__);
+    /* A token issued for one module cannot debit through another. */
+    set.context.program_spend_token = 1U;
+    set.context.origin_module_id = LXP_MODULE_ASSET;
+    if (lxp_kernel_apply_transfer_set(kernel, &set, &receipt) !=
+        LXP_ERR_UNAUTHORIZED_DEBIT)
+        return program_spend_failure(__LINE__);
+    set.context.origin_module_id = LXP_MODULE_PROGRAMS;
+    /* An authority that names a different account leaves the leg uncovered. */
+    (void)memcpy(authorities[0].authorized_from, payee->id, 32U);
+    if (lxp_kernel_apply_transfer_set(kernel, &set, &receipt) !=
+        LXP_ERR_UNAUTHORIZED_DEBIT)
+        return program_spend_failure(__LINE__);
+    /* Two authorities for the same account are ambiguous, not permissive. */
+    (void)memcpy(authorities[0].authorized_from, source->id, 32U);
+    authorities[1] = authorities[0];
+    set.context.source_authority_count = 2U;
+    set.leg_count = 2U;
+    set.legs[1] = set.legs[0];
+    if (lxp_kernel_apply_transfer_set(kernel, &set, &receipt) !=
+        LXP_ERR_UNAUTHORIZED_DEBIT)
+        return program_spend_failure(__LINE__);
+    set.context.source_authority_count = 1U;
+    set.leg_count = 1U;
+    (void)memset(&set.legs[1], 0, sizeof(set.legs[1]));
+    /* A zero-amount leg would be compacted away by the ledger, so the root the
+     * permits are bound to would not be the root applied. */
+    set.legs[0].amount = (lxp_u128){0U, 0U};
+    if (lxp_kernel_apply_transfer_set(kernel, &set, &receipt) !=
+        LXP_ERR_ZERO_AMOUNT)
+        return program_spend_failure(__LINE__);
+    /* Well formed and program-owned, but no permit answers for this leg. */
+    set.legs[0].amount = (lxp_u128){0U, PROGRAM_SPEND_AMOUNT};
+    if (lxp_kernel_apply_transfer_set(kernel, &set, &receipt) !=
+        LXP_ERR_UNAUTHORIZED_DEBIT)
+        return program_spend_failure(__LINE__);
+    /* An owner-authorized set may not carry a program-spend token at all. */
+    authorities[0].debit_authority_kind = LXP_AUTH_OWNER;
+    set.context.debit_authority_kind = LXP_AUTH_OWNER;
+    if (lxp_kernel_apply_transfer_set(kernel, &set, &receipt) !=
+        LXP_ERR_UNAUTHORIZED_DEBIT)
+        return program_spend_failure(__LINE__);
+    if (lxp_u128_cmp(source->balance, source_before) != 0 ||
+        lxp_u128_cmp(payee->balance, payee_before) != 0)
+        return program_spend_failure(__LINE__);
+    return 0;
+}
+
+static int program_owned_spend_case(void)
+{
+    static const uint8_t did[] = "did:lxp:program-spend";
+    static const uint8_t actor_name[] = "agent:did:lxp:program-spend:main";
+    static const uint8_t treasury_name[] = "system:fees";
+    static const uint8_t payee_name[] = "agent:program-spend-payee:main";
+    static const uint8_t spend_seed[PROGRAM_SPEND_SEED_BYTES] = {
+        'v', 'a', 'u', 'l', 't', '/', 'p', 'r', 'i', 'm', 'a', 'r', 'y'
+    };
+    static const uint8_t actor_seed[32] = {0x33U};
+    static const uint8_t grant_id[32] = {0};
+    lxp_authority_scope spend_scope = {0};
+    uint8_t program_id[32];
+    uint8_t primary_key[32] = {0};
+    uint8_t actor_id[32];
+    uint8_t treasury_id[32];
+    uint8_t payee_id[32];
+    uint8_t fee_asset[32] = {9U};
+    uint8_t source_id[32];
+    uint8_t code_hash[32];
+    uint8_t wasm[PROGRAM_SPEND_WASM_BYTES];
+    uint8_t capabilities[PROGRAM_SPEND_CAPABILITY_BYTES];
+    static uint8_t payload[104U + PROGRAM_SPEND_WASM_BYTES];
+    static uint8_t call[CALL_FIXED_BYTES + 64U +
+                        PROGRAM_SPEND_CAPABILITY_BYTES + 64U];
+    static uint8_t arena_bytes[2U * LXP_MAX_ACTIVITY_BYTES + 4096U];
+    static uint8_t register_arena_bytes[65536];
+    lxp_arena arena;
+    lxp_arena register_arena;
+    lxp_state_store state;
+    lxp_state_journal journal;
+    lxp_kernel kernel;
+    lxp_module_ctx register_ctx;
+    lxp_effect_buffer register_effects;
+    lxp_identity_store identities = {0};
+    lxp_identity *identity;
+    lxp_authority_resolved authority;
+    lxp_kernel_execution execution;
+    lxp_fee_params fees = {0};
+    lx_account_registry accounts;
+    lx_account *actor;
+    lx_account *treasury;
+    lx_account *payee;
+    lx_account *source;
+    lxp_transfer_asset_state fee_asset_state;
+    lx_programs_transfer_runtime runtime;
+    lxp_activity activity;
+    lxp_receipt receipt;
+    uint64_t parameters = 1U;
+    uint64_t identity_sequence = 0U;
+    bool created = false;
+    size_t payload_length;
+    size_t wasm_length;
+    lxp_u128 source_before;
+    lxp_u128 payee_before;
+    (void)memset(program_id, 0x37, sizeof(program_id));
+    (void)memset(&authority, 0, sizeof(authority));
+    if (executed_public_key(actor_seed, primary_key) != 0)
+        return program_spend_failure(__LINE__);
+    if (lx_account_registry_init(&accounts) != LXP_OK ||
+        lx_account_id_from_string(actor_name, sizeof(actor_name) - 1U,
+                                  actor_id) != LXP_OK ||
+        lx_account_id_from_string(treasury_name, sizeof(treasury_name) - 1U,
+                                  treasury_id) != LXP_OK ||
+        lx_account_id_from_string(payee_name, sizeof(payee_name) - 1U,
+                                  payee_id) != LXP_OK ||
+        lx_account_open(&accounts, actor_name, sizeof(actor_name) - 1U,
+                        actor_id, 1U, LX_ACCOUNT_OPEN_GENESIS, NULL,
+                        &actor) != LXP_OK ||
+        lx_account_open(&accounts, treasury_name, sizeof(treasury_name) - 1U,
+                        treasury_id, 2U, LX_ACCOUNT_OPEN_GENESIS, NULL,
+                        &treasury) != LXP_OK ||
+        lx_account_open(&accounts, payee_name, sizeof(payee_name) - 1U,
+                        payee_id, 1U, LX_ACCOUNT_OPEN_GENESIS, NULL,
+                        &payee) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(actor, fee_asset,
+                                     (lxp_u128){0U, UINT64_MAX}, 1U) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(treasury, fee_asset,
+                                     (lxp_u128){0U, 0U}, 0U) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(payee, fee_asset,
+                                     (lxp_u128){0U, 0U}, 0U) != LXP_OK ||
+        lxp_programs_account_derive(program_id, spend_seed,
+                                    sizeof(spend_seed), source_id) != LXP_OK)
+        return program_spend_failure(__LINE__);
+    /* A Programs activity at the state-commitment version binds its authority to
+     * the signer identity: principal and actor are the DID identifier and the
+     * verified key is the key the activity is signed with. */
+    if (lxp_did_id_derive(did, sizeof(did) - 1U, authority.principal) != LXP_OK)
+        return program_spend_failure(__LINE__);
+    (void)memcpy(authority.actor, authority.principal, 32U);
+    (void)memcpy(authority.verified_key, primary_key, 32U);
+    authority.kind = LXP_AUTHORITY_OWNER;
+    spend_scope.module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
+    spend_scope.activity_ordinal_min = 1U;
+    spend_scope.activity_ordinal_max = 7U;
+    spend_scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
+    spend_scope.maximum_total = spend_scope.maximum_per_activity;
+    spend_scope.maximum_per_period = spend_scope.maximum_per_activity;
+    authority.scope = &spend_scope;
+    if (lxp_authority_hash(authority.kind, grant_id, primary_key,
+                           authority.authority_hash) != LXP_OK)
+        return program_spend_failure(__LINE__);
+    (void)memset(&fee_asset_state, 0, sizeof(fee_asset_state));
+    (void)memcpy(fee_asset_state.asset_id, fee_asset, sizeof(fee_asset));
+    fee_asset_state.registered = true;
+    (void)memset(&runtime, 0, sizeof(runtime));
+    runtime.accounts = &accounts;
+    runtime.assets = &fee_asset_state;
+    runtime.asset_count = 1U;
+    runtime.fee_schedule = (lx_programs_fee_schedule){
+        1U, 1U, 1U, 2U, 4U, 1U, 1U, 1U
+    };
+    runtime.resolve_metering_schedule = lxp_programs_metering_resolve_runtime;
+    runtime.metering_schedule_context = &kernel;
+    (void)memcpy(runtime.occupancy_asset_id, fee_asset, 32U);
+    runtime.resolve_occupancy_parameters = occupancy_parameters;
+    runtime.occupancy_parameter_context = &runtime;
+    wasm_length = program_spend_module(wasm, spend_seed, sizeof(spend_seed),
+                                       source_id, fee_asset, payee_id);
+    payload_length = program_spend_deploy_payload(
+        payload, program_id, authority.principal, wasm, wasm_length,
+        code_hash);
+    fees.version = 1U;
+    fees.multiplier_basis_points = 10000U;
+    if (lxp_state_store_init(&state, 1U) != LXP_OK ||
+        lxp_identity_register(&identities, did, sizeof(did) - 1U,
+                              primary_key, &identity) != LXP_OK ||
+        lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        install_metering_v1(&kernel) != LXP_OK ||
+        lxp_kernel_register_module(&kernel,
+                                   programs_module_registration_v4()) != LXP_OK ||
+        lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS,
+                                       &runtime) != LXP_OK ||
+        lxp_programs_bind_fee_transaction(&kernel) != LXP_OK ||
+        lxp_kernel_set_capabilities(&kernel, NULL,
+                                    lxp_kernel_canonical_ledger_apply) != LXP_OK ||
+        lxp_state_root(&kernel, kernel.current_state_root) != LXP_OK ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK)
+        return program_spend_failure(__LINE__);
+    (void)memset(&execution, 0, sizeof(execution));
+    execution.network_id = 7U;
+    execution.batch_number = 1U;
+    execution.batch_timestamp_ms = 10U;
+    execution.maximum_timestamp_window = 100U;
+    execution.recorded_module_version = LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION;
+    execution.parameter_version = 1U;
+    execution.signature_valid = true;
+    execution.identities = &identities;
+    execution.authority = &authority;
+    execution.fee_parameters = &fees;
+    execution.gas_limit = 1000000U;
+    execution.arena = &arena;
+    fill_activity(&activity, LX_PROGRAMS_DEPLOY, payload, payload_length,
+                  did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    activity.account_sequence = identity_sequence;
+    activity.idempotency_key[31] = 0x31U;
+    execution.global_sequence = state.next_sequence;
+    if (execute_artifact_fixture_activity(&kernel, &activity, &execution,
+                                          &receipt) != LXP_OK ||
+        receipt.result_code != LXP_OK ||
+        identity->next_sequence != ++identity_sequence)
+        return program_spend_failure(__LINE__);
+    /* The account owner opens the program-derived value account; only then can
+     * a grant name it as a spend source. */
+    if (lxp_state_journal_open(&state, state.next_sequence,
+                               &journal) != LXP_OK ||
+        lxp_arena_init(&register_arena, register_arena_bytes,
+                       sizeof(register_arena_bytes)) != LXP_OK ||
+        lxp_module_ctx_init(&register_ctx, &kernel, LXP_MODULE_PROGRAMS, 10U,
+                            0U, state.next_sequence, 100000U, &register_arena,
+                            true) != LXP_OK)
+        return program_spend_failure(__LINE__);
+    register_ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    if (lxp_effect_buffer_init(&register_effects) != LXP_OK ||
+        lxp_module_ctx_bind_effects(&register_ctx,
+                                    &register_effects) != LXP_OK ||
+        lxp_programs_account_register(&register_ctx, program_id, spend_seed,
+                                      sizeof(spend_seed), fee_asset, &source,
+                                      &created) != LXP_OK ||
+        !created || source == NULL || register_effects.count != 1U ||
+        register_effects.effects[0].event_type !=
+            LX_PROGRAMS_EVENT_ACCOUNT_REGISTERED ||
+        lxp_module_ctx_prepare_commit(&register_ctx) != LXP_OK ||
+        lxp_state_journal_commit(&journal) != LXP_OK ||
+        lxp_module_ctx_commit(&register_ctx) != LXP_OK)
+        return program_spend_failure(__LINE__);
+    source = program_spend_account(&accounts, source_id);
+    if (source == NULL || source->kind != LX_ACCOUNT_MODULE_VALUE ||
+        lxp_ledger_bootstrap_balance(
+            source, fee_asset,
+            (lxp_u128){0U, PROGRAM_SPEND_SOURCE_BALANCE}, 0U) != LXP_OK ||
+        lxp_state_root(&kernel, kernel.current_state_root) != LXP_OK)
+        return program_spend_failure(__LINE__);
+    /* Granted: the capability authorizes exactly this debit and the balances
+     * move through the ordinary call path. */
+    payload_length = call_payload_with_capabilities(
+        call, program_id, capabilities,
+        program_spend_capabilities(capabilities, program_id, spend_seed,
+                                   sizeof(spend_seed), source_id, fee_asset,
+                                   payee_id, PROGRAM_SPEND_GRANT_CEILING));
+    write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+    fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
+                  did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    activity.account_sequence = identity_sequence;
+    activity.idempotency_key[31] = 0x33U;
+    activity.fee_limit = (lxp_u128){0U, 67108864U};
+    execution.fee_balance = actor->balance;
+    execution.global_sequence = state.next_sequence;
+    source_before = source->balance;
+    payee_before = payee->balance;
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        execute_artifact_fixture_activity(&kernel, &activity, &execution,
+                                          &receipt) != LXP_OK ||
+        receipt.result_code != LXP_OK ||
+        identity->next_sequence != ++identity_sequence ||
+        source->balance.hi != source_before.hi ||
+        source->balance.lo != source_before.lo - PROGRAM_SPEND_AMOUNT ||
+        payee->balance.hi != payee_before.hi ||
+        payee->balance.lo != payee_before.lo + PROGRAM_SPEND_AMOUNT ||
+        lxp_ct_is_zero(receipt.program_outcome.transfer_root, 32U) ||
+        memcmp(receipt.transfer_set_root,
+               receipt.program_outcome.transfer_root, 32U) != 0)
+        return program_spend_failure(__LINE__);
+    /* Ungranted: the identical call carrying no capability is refused before
+     * any leg reaches the ledger. An activity-level host request that the
+     * capability set does not admit is recorded as an authority refusal
+     * (host/mod.rs with_abi), which aborts the call; no balance moves. */
+    source_before = source->balance;
+    payee_before = payee->balance;
+    {
+        static const uint8_t no_capabilities[] = {0U, 0U};
+        payload_length = call_payload_with_capabilities(
+            call, program_id, no_capabilities, sizeof(no_capabilities));
+    }
+    write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+    fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
+                  did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    activity.account_sequence = identity_sequence;
+    activity.idempotency_key[31] = 0x34U;
+    activity.fee_limit = (lxp_u128){0U, 67108864U};
+    execution.fee_balance = actor->balance;
+    execution.global_sequence = state.next_sequence;
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        execute_artifact_fixture_activity(&kernel, &activity, &execution,
+                                          &receipt) != LXP_OK ||
+        receipt.result_code != LXP_ERR_NON_CANONICAL ||
+        !receipt.program_outcome.present ||
+        receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_FAILURE ||
+        receipt.program_outcome.result_code != LXP_ERR_NON_CANONICAL ||
+        !lxp_ct_is_zero(receipt.program_outcome.transfer_root, 32U) ||
+        identity->next_sequence != ++identity_sequence ||
+        lxp_u128_cmp(source->balance, source_before) != 0 ||
+        lxp_u128_cmp(payee->balance, payee_before) != 0)
+        return program_spend_failure(__LINE__);
+    /* Bounded: a grant whose ceiling is below the requested amount is refused
+     * on the same path; the ceiling binds the call, not only the account. */
+    payload_length = call_payload_with_capabilities(
+        call, program_id, capabilities,
+        program_spend_capabilities(capabilities, program_id, spend_seed,
+                                   sizeof(spend_seed), source_id, fee_asset,
+                                   payee_id, PROGRAM_SPEND_AMOUNT - 1U));
+    write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+    fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
+                  did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    activity.account_sequence = identity_sequence;
+    activity.idempotency_key[31] = 0x35U;
+    activity.fee_limit = (lxp_u128){0U, 67108864U};
+    execution.fee_balance = actor->balance;
+    execution.global_sequence = state.next_sequence;
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        execute_artifact_fixture_activity(&kernel, &activity, &execution,
+                                          &receipt) != LXP_OK ||
+        receipt.result_code != LXP_ERR_NON_CANONICAL ||
+        !receipt.program_outcome.present ||
+        receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_FAILURE ||
+        receipt.program_outcome.result_code != LXP_ERR_NON_CANONICAL ||
+        !lxp_ct_is_zero(receipt.program_outcome.transfer_root, 32U) ||
+        identity->next_sequence != ++identity_sequence ||
+        lxp_u128_cmp(source->balance, source_before) != 0 ||
+        lxp_u128_cmp(payee->balance, payee_before) != 0)
+        return program_spend_failure(__LINE__);
+    if (program_spend_kernel_refusals(&kernel, source, payee, fee_asset) != 0)
+        return 1;
+    while (kernel.blob_count != 0U)
+        free(kernel.blobs[--kernel.blob_count].bytes);
+    return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
     if (stored_fixture_hex_nesting_case() != 0) return 1;
@@ -2645,6 +3191,7 @@ int main(int argc, char **argv)
     if (deploy_and_upgrade_persist_exact_artifacts() != 0) return 1;
     if (deploy_and_upgrade_persist_exact_artifacts_version(
             LXP_PROTOCOL_VERSION_STATE_COMMITMENT) != 0) return 1;
+    if (program_owned_spend_case() != 0) return 1;
     if (argc == 1) return 0;
     if (argc != 4) return 1;
     if (qualify_porting_reference(argv[1], 0x41U) != 0) {
