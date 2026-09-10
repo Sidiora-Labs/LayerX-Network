@@ -20,14 +20,23 @@ const TRANSFER_CONSERVED: u8 = 0;
 
 static NEXT_PROGRAM_SPEND_TOKEN: AtomicU64 = AtomicU64::new(1);
 
+/// Mirrors `LXP_MAX_TRANSFER_SET_LEGS`: an authorized set never carries more
+/// program-owned debit legs than the kernel transfer set can hold.
+const MAX_PROGRAM_SPEND_PERMITS: usize = 256;
+
+/// One program-owned debit the Rust transfer law has authorized and that the
+/// ordinary C ledger must consume verbatim before it may move the balance.
 struct ActiveProgramSpend {
-    token: u64,
     owner_program: ProgramId,
     seed: Vec<u8>,
     source: [u8; 32],
     staging_program: ProgramId,
     frame_path: [u8; 8],
     frame_depth: u8,
+    /// Wind-down settlement spends only from the owner program's root frame.
+    /// An ordinary program call spends from the frame that holds the grant,
+    /// which the capability check has already bound and which may be nested.
+    owner_root_frame: bool,
     destination: [u8; 32],
     asset: [u8; 32],
     amount: u128,
@@ -35,11 +44,21 @@ struct ActiveProgramSpend {
     consumed: bool,
 }
 
-std::thread_local! {
-    static ACTIVE_PROGRAM_SPEND: RefCell<Option<ActiveProgramSpend>> = const { RefCell::new(None) };
+/// Every program-owned debit of one authorized transfer set. The permits share
+/// the set root, so the ledger cannot satisfy them from a different set, and
+/// the issuer requires all of them to be consumed before it accepts the
+/// settlement.
+struct ActiveProgramSpendBatch {
+    token: u64,
+    permits: Vec<ActiveProgramSpend>,
 }
 
-struct ActiveProgramSpendGuard {
+std::thread_local! {
+    static ACTIVE_PROGRAM_SPEND: RefCell<Option<ActiveProgramSpendBatch>> =
+        const { RefCell::new(None) };
+}
+
+pub(crate) struct ActiveProgramSpendGuard {
     token: u64,
 }
 
@@ -47,10 +66,7 @@ impl Drop for ActiveProgramSpendGuard {
     fn drop(&mut self) {
         ACTIVE_PROGRAM_SPEND.with(|active| {
             let mut active = active.borrow_mut();
-            if active
-                .as_ref()
-                .is_some_and(|permit| permit.token == self.token)
-            {
+            if active.as_ref().is_some_and(|batch| batch.token == self.token) {
                 *active = None;
             }
         });
@@ -58,15 +74,18 @@ impl Drop for ActiveProgramSpendGuard {
 }
 
 fn issue_program_spend(
-    permit: ActiveProgramSpend,
+    token: u64,
+    permits: Vec<ActiveProgramSpend>,
 ) -> Result<ActiveProgramSpendGuard, TransferLawError> {
-    let token = permit.token;
+    if token == 0 || permits.is_empty() || permits.len() > MAX_PROGRAM_SPEND_PERMITS {
+        return Err(TransferLawError::InvalidTransferSet);
+    }
     ACTIVE_PROGRAM_SPEND.with(|active| {
         let mut active = active.borrow_mut();
         if active.is_some() {
             return Err(TransferLawError::KernelRefused);
         }
-        *active = Some(permit);
+        *active = Some(ActiveProgramSpendBatch { token, permits });
         Ok(ActiveProgramSpendGuard { token })
     })
 }
@@ -80,12 +99,56 @@ fn next_program_spend_token() -> u64 {
     }
 }
 
-fn program_spend_consumed(token: u64) -> bool {
+/// Issues one permit for every program-owned debit leg of `transfers`, all
+/// bound to the authorized set root. The token is what the C ledger presents
+/// back through `layerx_programs_consume_program_spend_authorization`; a set
+/// that debits no program-owned account authorizes no program spend and yields
+/// the reserved token 0.
+pub(crate) fn issue_program_spend_for_set(
+    transfers: &AtomicTransferSet,
+    owner_root_frame: bool,
+) -> Result<(u64, Option<ActiveProgramSpendGuard>), TransferLawError> {
+    let transfer_set_root = transfers.kernel_root();
+    let mut permits = Vec::new();
+    for leg in transfers.legs() {
+        let TransferSource::Program(authority) = &leg.source else {
+            continue;
+        };
+        if authority.seed().len() > MAX_PROGRAM_ACCOUNT_SEED_BYTES {
+            return Err(TransferLawError::InvalidProgramAuthority);
+        }
+        let (frame_path, frame_depth) = leg.frame.canonical_bytes();
+        permits.push(ActiveProgramSpend {
+            owner_program: authority.owner_program(),
+            seed: authority.seed().to_vec(),
+            source: authority.source_account(),
+            staging_program: leg.program,
+            frame_path,
+            frame_depth,
+            owner_root_frame,
+            destination: leg.to,
+            asset: leg.asset,
+            amount: leg.amount,
+            transfer_set_root,
+            consumed: false,
+        });
+    }
+    if permits.is_empty() {
+        return Ok((0, None));
+    }
+    let token = next_program_spend_token();
+    let guard = issue_program_spend(token, permits)?;
+    Ok((token, Some(guard)))
+}
+
+/// Reports whether the ordinary ledger consumed every permit the batch issued.
+/// A partially consumed batch means the ledger moved fewer program-owned legs
+/// than the transfer law authorized, and the settlement is refused.
+pub(crate) fn program_spend_consumed(token: u64) -> bool {
     ACTIVE_PROGRAM_SPEND.with(|active| {
-        active
-            .borrow()
-            .as_ref()
-            .is_some_and(|permit| permit.token == token && permit.consumed)
+        active.borrow().as_ref().is_some_and(|batch| {
+            batch.token == token && batch.permits.iter().all(|permit| permit.consumed)
+        })
     })
 }
 
@@ -251,22 +314,10 @@ impl KernelTransferPrimitive for WindDownKernel {
                 .try_into()
                 .map_err(|_| TransferLawError::InvalidTransferSet)?,
         );
-        let transfer_set_root = transfers.kernel_root();
-        let program_spend_token = next_program_spend_token();
-        let _permit = issue_program_spend(ActiveProgramSpend {
-            token: program_spend_token,
-            owner_program: authority.owner_program(),
-            seed: authority.seed().to_vec(),
-            source: authority.source_account(),
-            staging_program: leg.program,
-            frame_path,
-            frame_depth,
-            destination: leg.to,
-            asset: leg.asset,
-            amount: leg.amount,
-            transfer_set_root,
-            consumed: false,
-        })?;
+        let (program_spend_token, _permit) = issue_program_spend_for_set(transfers, true)?;
+        if program_spend_token == 0 {
+            return Err(TransferLawError::InvalidProgramAuthority);
+        }
         c_ok(unsafe {
             layerx_programs_wind_down_transfer_begin(
                 self.token,
@@ -337,8 +388,11 @@ impl KernelTransferPrimitive for WindDownKernel {
     }
 }
 
-/// Consumes the one Programs spend permit issued for the exact authorized
-/// transfer set currently entering the ordinary C ledger.
+/// Consumes one Programs spend permit from the batch issued for the exact
+/// authorized transfer set currently entering the ordinary C ledger. Each leg
+/// of the set consumes its own permit, and a permit is spent at most once, so
+/// the debits the ledger performs are exactly the debits the Rust transfer law
+/// authorized against an owner-granted capability.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn layerx_programs_consume_program_spend_authorization(
@@ -355,6 +409,8 @@ pub unsafe extern "C" fn layerx_programs_consume_program_spend_authorization(
 ) -> i32 {
     if token == 0
         || origin_module_id != MODULE_PROGRAMS
+        || reason != REASON_PAYMENT
+        || supply_mode != TRANSFER_CONSERVED
         || from.is_null()
         || to.is_null()
         || asset.is_null()
@@ -369,26 +425,27 @@ pub unsafe extern "C" fn layerx_programs_consume_program_spend_authorization(
     let amount = (u128::from(amount_hi) << 64) | u128::from(amount_lo);
     ACTIVE_PROGRAM_SPEND.with(|active| {
         let mut active = active.borrow_mut();
-        let Some(permit) = active.as_mut() else {
+        let Some(batch) = active.as_mut() else {
             return RESULT_NON_CANONICAL;
         };
-        if permit.token != token
-            || permit.consumed
-            || permit.owner_program.bytes() == [0; 32]
-            || permit.seed.len() > MAX_PROGRAM_ACCOUNT_SEED_BYTES
-            || permit.source.as_slice() != from
-            || permit.staging_program != permit.owner_program
-            || permit.frame_path != [0; 8]
-            || permit.frame_depth != 0
-            || permit.destination.as_slice() != to
-            || permit.asset.as_slice() != asset
-            || permit.amount != amount
-            || reason != REASON_PAYMENT
-            || supply_mode != TRANSFER_CONSERVED
-            || permit.transfer_set_root.as_slice() != transfer_set_root
-        {
+        if batch.token != token {
             return RESULT_NON_CANONICAL;
         }
+        let Some(permit) = batch.permits.iter_mut().find(|permit| {
+            !permit.consumed
+                && permit.owner_program.bytes() != [0; 32]
+                && permit.seed.len() <= MAX_PROGRAM_ACCOUNT_SEED_BYTES
+                && permit.source.as_slice() == from
+                && permit.staging_program == permit.owner_program
+                && (!permit.owner_root_frame
+                    || (permit.frame_path == [0; 8] && permit.frame_depth == 0))
+                && permit.destination.as_slice() == to
+                && permit.asset.as_slice() == asset
+                && permit.amount == amount
+                && permit.transfer_set_root.as_slice() == transfer_set_root
+        }) else {
+            return RESULT_NON_CANONICAL;
+        };
         permit.consumed = true;
         RESULT_OK
     })
@@ -501,23 +558,24 @@ pub unsafe extern "C" fn layerx_programs_settle_wind_down_402lxp_leg(
 mod tests {
     use super::{
         issue_program_spend, layerx_programs_consume_program_spend_authorization,
-        program_spend_consumed, ActiveProgramSpend, ProgramId, TransferLawError, MODULE_PROGRAMS,
-        REASON_PAYMENT, RESULT_NON_CANONICAL, RESULT_OK, TRANSFER_CONSERVED,
+        program_spend_consumed, ActiveProgramSpend, ProgramId, TransferLawError,
+        MAX_PROGRAM_SPEND_PERMITS, MODULE_PROGRAMS, REASON_PAYMENT, RESULT_NON_CANONICAL,
+        RESULT_OK, TRANSFER_CONSERVED,
     };
 
     fn program(byte: u8) -> ProgramId {
         ProgramId::new([byte; 32]).unwrap_or_else(|_| panic!("nonzero fixture is canonical"))
     }
 
-    fn permit(token: u64) -> ActiveProgramSpend {
+    fn permit() -> ActiveProgramSpend {
         ActiveProgramSpend {
-            token,
             owner_program: program(1),
             seed: b"escrow/primary".to_vec(),
             source: [2; 32],
             staging_program: program(1),
             frame_path: [0; 8],
             frame_depth: 0,
+            owner_root_frame: true,
             destination: [3; 32],
             asset: [4; 32],
             amount: 9,
@@ -526,16 +584,22 @@ mod tests {
         }
     }
 
-    unsafe fn consume(token: u64, source: &[u8; 32], root: &[u8; 32]) -> i32 {
+    unsafe fn consume_leg(
+        token: u64,
+        source: &[u8; 32],
+        destination: &[u8; 32],
+        amount_lo: u64,
+        root: &[u8; 32],
+    ) -> i32 {
         unsafe {
             layerx_programs_consume_program_spend_authorization(
                 token,
                 MODULE_PROGRAMS,
                 source.as_ptr(),
-                [3; 32].as_ptr(),
+                destination.as_ptr(),
                 [4; 32].as_ptr(),
                 0,
-                9,
+                amount_lo,
                 REASON_PAYMENT,
                 TRANSFER_CONSERVED,
                 root.as_ptr(),
@@ -543,13 +607,17 @@ mod tests {
         }
     }
 
+    unsafe fn consume(token: u64, source: &[u8; 32], root: &[u8; 32]) -> i32 {
+        unsafe { consume_leg(token, source, &[3; 32], 9, root) }
+    }
+
     #[test]
     fn program_spend_permit_is_exact_one_shot_and_cannot_nest() {
         let token = 71;
-        let guard = issue_program_spend(permit(token))
+        let guard = issue_program_spend(token, vec![permit()])
             .unwrap_or_else(|_| panic!("first permit occupies the runtime slot"));
         assert_eq!(
-            issue_program_spend(permit(token + 1)).err(),
+            issue_program_spend(token + 1, vec![permit()]).err(),
             Some(TransferLawError::KernelRefused)
         );
         assert_eq!(
@@ -576,9 +644,9 @@ mod tests {
     #[test]
     fn program_spend_permit_refuses_non_owner_frame() {
         let token = 72;
-        let mut wrong_staging = permit(token);
+        let mut wrong_staging = permit();
         wrong_staging.staging_program = program(7);
-        let guard = issue_program_spend(wrong_staging)
+        let guard = issue_program_spend(token, vec![wrong_staging])
             .unwrap_or_else(|_| panic!("first permit occupies the runtime slot"));
         assert_eq!(
             unsafe { consume(token, &[2; 32], &[5; 32]) },
@@ -587,10 +655,10 @@ mod tests {
         assert!(!program_spend_consumed(token));
         drop(guard);
 
-        let mut wrong_frame = permit(token + 1);
+        let mut wrong_frame = permit();
         wrong_frame.frame_depth = 1;
         wrong_frame.frame_path[7] = 1;
-        let guard = issue_program_spend(wrong_frame)
+        let guard = issue_program_spend(token + 1, vec![wrong_frame])
             .unwrap_or_else(|_| panic!("released slot accepts the next permit"));
         assert_eq!(
             unsafe { consume(token + 1, &[2; 32], &[5; 32]) },
@@ -598,5 +666,72 @@ mod tests {
         );
         assert!(!program_spend_consumed(token + 1));
         drop(guard);
+    }
+
+    #[test]
+    fn program_spend_permit_admits_a_nested_call_frame_the_issuer_allowed() {
+        let token = 73;
+        let mut nested = permit();
+        nested.owner_root_frame = false;
+        nested.frame_depth = 1;
+        nested.frame_path[0] = 1;
+        let guard = issue_program_spend(token, vec![nested])
+            .unwrap_or_else(|_| panic!("call permit occupies the runtime slot"));
+        assert_eq!(unsafe { consume(token, &[2; 32], &[5; 32]) }, RESULT_OK);
+        assert!(program_spend_consumed(token));
+        drop(guard);
+    }
+
+    #[test]
+    fn program_spend_batch_requires_every_authorized_leg_to_be_consumed() {
+        let token = 74;
+        let mut second = permit();
+        second.destination = [8; 32];
+        second.amount = 11;
+        let guard = issue_program_spend(token, vec![permit(), second])
+            .unwrap_or_else(|_| panic!("batch occupies the runtime slot"));
+        assert_eq!(
+            unsafe { consume_leg(token, &[2; 32], &[3; 32], 9, &[5; 32]) },
+            RESULT_OK
+        );
+        assert!(!program_spend_consumed(token));
+        assert_eq!(
+            unsafe { consume_leg(token, &[2; 32], &[8; 32], 12, &[5; 32]) },
+            RESULT_NON_CANONICAL
+        );
+        assert!(!program_spend_consumed(token));
+        assert_eq!(
+            unsafe { consume_leg(token, &[2; 32], &[8; 32], 11, &[5; 32]) },
+            RESULT_OK
+        );
+        assert!(program_spend_consumed(token));
+        assert_eq!(
+            unsafe { consume_leg(token, &[2; 32], &[3; 32], 9, &[5; 32]) },
+            RESULT_NON_CANONICAL
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn program_spend_batch_refuses_an_absent_token_or_an_unbounded_grant() {
+        assert_eq!(
+            issue_program_spend(0, vec![permit()]).err(),
+            Some(TransferLawError::InvalidTransferSet)
+        );
+        assert_eq!(
+            issue_program_spend(75, Vec::new()).err(),
+            Some(TransferLawError::InvalidTransferSet)
+        );
+        let oversized = (0..=MAX_PROGRAM_SPEND_PERMITS)
+            .map(|_| permit())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            issue_program_spend(75, oversized).err(),
+            Some(TransferLawError::InvalidTransferSet)
+        );
+        assert_eq!(
+            unsafe { consume(75, &[2; 32], &[5; 32]) },
+            RESULT_NON_CANONICAL
+        );
     }
 }

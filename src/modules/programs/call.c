@@ -75,6 +75,7 @@ struct lxp_programs_call_activity {
     lxp_transfer_set *transfer_set;
     lxp_programs_call_transfer_source *transfer_sources;
     lxp_transfer_source_authority *transfer_source_authorities;
+    uint64_t transfer_program_spend_token;
     lxp_receipt transfer_receipt;
     lxp_programs_occupancy_bridge *occupancy;
     uint8_t transfer_leg_written[LXP_MAX_TRANSFER_SET_LEGS];
@@ -1478,6 +1479,7 @@ lxp_result layerx_programs_call_activity_byte(uint64_t token, uint16_t section,
 }
 
 lxp_result layerx_programs_call_transfer_begin(uint64_t token,
+                                               uint64_t program_spend_token,
                                                uint16_t leg_count)
 {
     lxp_programs_call_activity *value =
@@ -1514,6 +1516,7 @@ lxp_result layerx_programs_call_transfer_begin(uint64_t token,
                  sizeof(value->transfer_leg_written));
     value->transfer_leg_count = 0U;
     value->transfer_applied = false;
+    value->transfer_program_spend_token = program_spend_token;
     value->transfer_set->leg_count = leg_count;
     (void)memset(&value->transfer_receipt, 0, sizeof(value->transfer_receipt));
     return LXP_OK;
@@ -1760,10 +1763,13 @@ static lxp_result transfer_source_validate(
 
 static lxp_result transfer_source_authority_add(
     lxp_programs_call_activity *value, const lxp_transfer_leg *leg,
-    size_t *authority_count)
+    uint8_t source_kind, size_t *authority_count)
 {
     size_t index;
     lxp_transfer_source_authority *authority;
+    lxp_authorization_kind kind =
+        source_kind == PROGRAM_TRANSFER_SOURCE_PROGRAM ?
+            LXP_AUTH_PROGRAM_SPEND : LXP_AUTH_OWNER;
     if (value == NULL || leg == NULL || leg->from == NULL ||
         authority_count == NULL || value->transfer_source_authorities == NULL)
         return LXP_ERR_NON_CANONICAL;
@@ -1771,12 +1777,14 @@ static lxp_result transfer_source_authority_add(
         if (lxp_ct_memcmp(
                 value->transfer_source_authorities[index].authorized_from,
                 leg->from->id, 32U) == 0)
-            return LXP_OK;
+            return value->transfer_source_authorities[index]
+                               .debit_authority_kind == kind ?
+                       LXP_OK : LXP_ERR_AUTH_SCOPE;
     if (*authority_count >= value->transfer_set->leg_count)
         return LXP_ERR_LENGTH_LIMIT;
     authority = &value->transfer_source_authorities[*authority_count];
     (void)memcpy(authority->authorized_from, leg->from->id, 32U);
-    authority->debit_authority_kind = LXP_AUTH_OWNER;
+    authority->debit_authority_kind = kind;
     authority->protocol_system_capability = false;
     *authority_count += 1U;
     return LXP_OK;
@@ -1791,6 +1799,7 @@ lxp_result layerx_programs_call_transfer_apply(uint64_t token)
     lx_account *sequence_account;
     lx_account *payment_account = NULL;
     size_t authority_count = 0U;
+    size_t program_spend_legs = 0U;
     size_t index;
     if (value == NULL || value->ctx == NULL || value->authority == NULL ||
         value->transfer_set == NULL || value->transfer_sources == NULL ||
@@ -1811,9 +1820,20 @@ lxp_result layerx_programs_call_transfer_apply(uint64_t token)
         lxp_result status = transfer_source_validate(value, (uint16_t)index);
         if (status == LXP_OK)
             status = transfer_source_authority_add(
-                value, &set->legs[index], &authority_count);
+                value, &set->legs[index], value->transfer_sources[index].kind,
+                &authority_count);
         if (status != LXP_OK) return status;
+        if (value->transfer_sources[index].kind ==
+            PROGRAM_TRANSFER_SOURCE_PROGRAM)
+            ++program_spend_legs;
     }
+    /* A program-owned debit is authorized only by the Programs transfer law,
+     * which issues the one-shot token the kernel redeems leg by leg. A token
+     * without such a leg, or such a leg without a token, is refused here
+     * rather than reaching the ledger. */
+    if ((program_spend_legs == 0U) !=
+        (value->transfer_program_spend_token == 0U))
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
     set->context.assets = runtime->assets;
     set->context.asset_count = runtime->asset_count;
     (void)memcpy(set->context.authorized_from, sequence_account->id, 32U);
@@ -1842,6 +1862,7 @@ lxp_result layerx_programs_call_transfer_apply(uint64_t token)
     set->context.batch_timestamp = lxp_ctx_batch_timestamp_ms(value->ctx);
     set->context.sequence_account = sequence_account;
     set->context.debit_authority_kind = LXP_AUTH_OWNER;
+    set->context.program_spend_token = value->transfer_program_spend_token;
     set->context.source_authorities = value->transfer_source_authorities;
     set->context.source_authority_count = authority_count;
     {

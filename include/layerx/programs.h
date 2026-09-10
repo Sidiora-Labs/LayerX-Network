@@ -608,6 +608,7 @@ lxp_result layerx_programs_call_event_byte(uint64_t token, uint16_t section,
 lxp_result layerx_programs_call_event_emit(uint64_t token);
 
 lxp_result layerx_programs_call_transfer_begin(uint64_t token,
+                                               uint64_t program_spend_token,
                                                uint16_t leg_count);
 lxp_result layerx_programs_call_transfer_leg(
     uint64_t token, uint16_t index, uint8_t source_kind,
