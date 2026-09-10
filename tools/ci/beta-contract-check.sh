@@ -6,9 +6,11 @@ usage() {
 usage: tools/ci/beta-contract-check.sh [--contract PATH] [--yaml-parser auto|pyyaml|builtin]
 
 Checks the canonical beta contract (platform/docs/content/beta.md by default)
-against the sources it governs and fails on any disagreement. Every violation
-is listed on stderr; the exit status is 1 when at least one violation exists,
-2 on usage or environment errors, 0 otherwise.
+against the sources it governs and fails on any disagreement, then runs
+tools/ci/beta-report.sh --check against the same contract so the contract and
+the rendered go/no-go report are checked together. Every violation is listed on
+stderr; the exit status is 1 when at least one violation exists here or in the
+report check, 2 on usage or environment errors, 0 otherwise.
 
 Contract format. The contract carries the line "<!-- id: beta_contract -->"
 and fixed H2 headings, each holding pipe-delimited markdown tables whose
@@ -118,11 +120,20 @@ protocol_network_id, placeholder_hostname, testnet_gateway_url_port,
 install_package_unlisted) with their divergent values; and readiness_claim
 must be false while any contradiction exists or any surface is below its
 required rung.
+
+The report check then runs as tools/ci/beta-report.sh --check --contract with
+this contract: it fails when spec/layerx-beta/report.md on disk is not the
+report the evidence ledger renders, when this contract states a reached rung
+the evidence does not support, when the Artifact set report_path, report_status
+or report_generator rows disagree with the rendered report, or when readiness
+is claimed with a surface below its required rung or against a no-go decision.
+Both checks always run; the exit status is the contract status when it is
+non-zero and the report status otherwise.
 EOF
 }
 
 beta_contract_check() {
-    local root contract="" yaml_parser="auto"
+    local root contract="" yaml_parser="auto" contract_arg status=0 report_status=0
     root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
     while [ "$#" -gt 0 ]; do
         case $1 in
@@ -156,7 +167,16 @@ beta_contract_check() {
     contract=${contract:-$root/platform/docs/content/beta.md}
     [ -f "$contract" ] || { echo "beta-contract-check: contract not found: $contract" >&2; return 2; }
     command -v python3 >/dev/null 2>&1 || { echo "beta-contract-check: python3 is required" >&2; return 2; }
-    python3 - "$root" "$contract" "$yaml_parser" <<'PY'
+    contract=$(CDPATH= cd -- "$(dirname -- "$contract")" && pwd)/$(basename -- "$contract")
+    case $contract in
+    "$root"/*) contract_arg=${contract#"$root"/} ;;
+    *) contract_arg=$contract ;;
+    esac
+    [ -x "$root/tools/ci/beta-report.sh" ] || {
+        echo "beta-contract-check: tools/ci/beta-report.sh is required" >&2
+        return 2
+    }
+    python3 - "$root" "$contract" "$yaml_parser" <<'PY' || status=$?
 import importlib.util
 import json
 import os
@@ -1123,6 +1143,11 @@ print(
     f"{len(computed_contradictions)} contradictions listed, readiness_claim={readiness})"
 )
 PY
+    "$root/tools/ci/beta-report.sh" --check --contract "$contract_arg" || report_status=$?
+    if [ "$status" -ne 0 ]; then
+        return "$status"
+    fi
+    return "$report_status"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

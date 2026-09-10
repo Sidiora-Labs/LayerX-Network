@@ -3220,14 +3220,17 @@ programs-sdk-assemblyscript:
 programs-quickstart:
 	sh programs/sdk/rust/quickstart/build.sh all
 
-# LayerX beta: canonical contract and executed-evidence ledger checks
-.PHONY: beta-ledger-check beta-contract-check
+# LayerX beta: canonical contract, executed-evidence ledger and go/no-go report
+.PHONY: beta-ledger-check beta-contract-check beta-report
 
 beta-ledger-check:
 	tools/ci/beta-ledger-check.sh
 
 beta-contract-check:
 	tools/ci/beta-contract-check.sh
+
+beta-report:
+	tools/ci/beta-report.sh
 
 # LayerX beta: qualification runner gate and in-repository driver
 .PHONY: beta-qualify beta-driver-test

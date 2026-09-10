@@ -3,7 +3,7 @@
 
 # LayerX Network beta contract
 
-This is the canonical LayerX Network beta contract. It is the only statement of the surfaces and journeys the beta supports, the beta endpoints and hostnames, the network id, the wire protocol version, the beta CA, the artifact set, the evidence rung each surface must reach and has reached, the unknown-state behaviour, the external dependencies with their beta counterparts and the beta-versus-production differences. `tools/ci/beta-contract-check.sh` checks the install docs, the hosted manifests, the release manifest, the release workflow, the hosted status surface and the docs content index against this document; any disagreement fails the build.
+This is the canonical LayerX Network beta contract. It is the only statement of the surfaces and journeys the beta supports, the beta endpoints and hostnames, the network id, the wire protocol version, the beta CA, the artifact set, the evidence rung each surface must reach and has reached, the unknown-state behaviour, the external dependencies with their beta counterparts and the beta-versus-production differences. `tools/ci/beta-contract-check.sh` checks the install docs, the hosted manifests, the release manifest, the release workflow, the hosted status surface and the docs content index against this document, and then runs `tools/ci/beta-report.sh --check` so the rendered go/no-go report is checked against it too; any disagreement fails the build.
 
 **This beta is not ready.** The readiness claim below is `false` and stays `false` until every surface has reached its required rung through an executed gate recorded in `spec/layerx-beta/qualification.kvx` and every contradiction listed here has been resolved in its source.
 
@@ -65,6 +65,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | hosted-core | core boundary: layerx-pending-core and layerx-pending-core-admin over the node LNI socket | hosted | deployment_proven | source_present | platform/hosted/core |
 | hosted-authority | independent receipt authority replica: layerx-receipt-authority | hosted | deployment_proven | source_present | platform/hosted/authority |
 | hosted-agent-boundary | agent boundary: layerx-agent-boundary LNI submissions for the gateway and the registry | hosted | deployment_proven | source_present | platform/hosted/agent-boundary |
+| hosted-agentd | layerx-agentd Service on the node: the agentd loopback health surface published through a mutually authenticated TLS boundary that answers only for an internal-CA client certificate carrying the agent program bearer | hosted | deployment_proven | source_present | platform/hosted/agentd |
 | hosted-identity | identity service: principals, sessions, introspection and service tokens | hosted | deployment_proven | source_present | platform/hosted/identity |
 | hosted-paxeer | Paxeer chain 125 node with its JSON-RPC boundary, chain initialisation and settlement contract deployment | hosted | deployment_proven | source_present | platform/hosted/paxeer |
 | hosted-human | Human HTTPS API and privileged components; readiness requires the production providers | hosted | deployment_proven | source_present | platform/hosted/human |
@@ -74,6 +75,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | middleware-seller | @sidiora/layerx-seller-middleware | functional | runtime_proven | source_present | platform/middleware/seller |
 | middleware-merchant | @sidiora/layerx-merchant-middleware | functional | runtime_proven | source_present | platform/middleware/merchant |
 | middleware-agent | @sidiora/layerx-agent-middleware | functional | runtime_proven | source_present | platform/middleware/agent |
+| middleware-examples | runnable seller-middleware and Python SDK examples: public RPC sequence read, faucet claim and signed-payment verification against executed or batched commitment | functional | runtime_proven | source_present | platform/middleware/examples |
 | docs-site | documentation site and its executable samples | functional | runtime_proven | source_present | platform/docs |
 | reference-app-buyer-agent | @sidiora/layerx-example-buyer-agent | functional | runtime_proven | source_present | platform/examples/buyer-agent |
 | reference-app-paid-api | @sidiora/layerx-example-paid-api | functional | runtime_proven | source_present | platform/examples/paid-api |
