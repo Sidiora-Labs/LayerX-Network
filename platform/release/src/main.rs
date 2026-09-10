@@ -58,6 +58,22 @@ const PACKAGES_ENV: &str = "LAYERX_RELEASE_PACKAGES";
 const DIGEST_RECOGNISER: &str = "sha256sum";
 const SBOM_RECOGNISERS: [&str; 2] = ["syft scan", "npm sbom"];
 const ATTESTATION_ACTION: &str = "actions/attest-build-provenance";
+const IMAGE_BUNDLE_PREFIX: &str = "release-image-";
+const IMAGES_RECORD: &str = "images.kvx";
+const GHCR_DISTRIBUTION: &str = "ghcr.io/sidiora-labs";
+const IMAGE_SBOM_FORMATS: [&str; 2] = ["spdx-json", "cyclonedx-json"];
+const IMAGE_REFERENCE_SCHEMES: [&str; 2] = ["oci-referrer", "sigstore-bundle"];
+const IMAGE_KEYS: [&str; 9] = [
+    "name",
+    "tag",
+    "digest",
+    "platform",
+    "signature",
+    "sbom",
+    "sbom_digest",
+    "attestation",
+    "attestation_digest",
+];
 
 const REGISTRIES: [&str; 7] = [
     "crates-io",
@@ -75,6 +91,19 @@ const REGISTRY_KEYS: [&str; 7] = [
     "distribution",
     "signing",
     "provenance",
+    "verification",
+    "status",
+];
+
+const IMAGE_REGISTRIES: [&str; 1] = ["ghcr"];
+
+const IMAGE_REGISTRY_KEYS: [&str; 8] = [
+    "ecosystem",
+    "artifact",
+    "distribution",
+    "signing",
+    "provenance",
+    "sbom",
     "verification",
     "status",
 ];
@@ -179,11 +208,20 @@ pub struct Registry {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImageRegistry {
+    pub name: String,
+    pub declarations: Vec<(String, String)>,
+    pub platforms: Vec<String>,
+    pub images: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegistriesDeclarations {
     pub tag_format: String,
     pub source_digest: String,
     pub reference_applications: Vec<String>,
     pub registries: Vec<Registry>,
+    pub image_registries: Vec<ImageRegistry>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -237,6 +275,30 @@ pub struct ArtifactManifestEntry {
     pub install_check: bool,
 }
 
+/// One published container image bound to the source revision it was built
+/// from and pinned by its registry manifest digest.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ImageManifestEntry {
+    pub name: String,
+    pub version: String,
+    pub registry: String,
+    pub distribution: String,
+    pub repository: String,
+    pub tag: String,
+    pub reference: String,
+    pub digest: String,
+    pub platform: String,
+    pub signature: String,
+    pub sbom: String,
+    pub sbom_digest: String,
+    pub attestation: String,
+    pub attestation_digest: String,
+    pub source_revision: String,
+    pub rollback_version: Option<String>,
+    pub published: bool,
+    pub pull_check: bool,
+}
+
 /// The source-bound artifact manifest of one release.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ArtifactManifest {
@@ -247,6 +309,7 @@ pub struct ArtifactManifest {
     pub source_digest: String,
     pub rollback_version: Option<String>,
     pub artifacts: Vec<ArtifactManifestEntry>,
+    pub images: Vec<ImageManifestEntry>,
 }
 
 /// Where `release_pipeline_verify` obtains the published bytes.
@@ -268,12 +331,29 @@ pub struct VerifiedArtifact {
     pub digest: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedImage {
+    pub name: String,
+    pub version: String,
+    pub registry: String,
+    pub reference: String,
+}
+
+/// Everything one release manifest binds: the published package artifacts and
+/// the published container images.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedRelease {
+    pub artifacts: Vec<VerifiedArtifact>,
+    pub images: Vec<VerifiedImage>,
+}
+
 /// Parses and validates the release registry manifest.
 ///
 /// # Errors
 ///
-/// Fails unless every mandated registry is declared exactly once with every
-/// required declaration, a known status and its published package identities.
+/// Fails unless every mandated package registry and every mandated container
+/// image registry is declared exactly once with every required declaration, a
+/// known status and its published package or image identities.
 pub fn registries_declarations(source: &str) -> Result<RegistriesDeclarations, String> {
     let document = layerx_platform_kvx::parse(source)?;
     let declared = layerx_platform_kvx::string_list(document.required("release", "registries")?)?;
@@ -285,10 +365,21 @@ pub fn registries_declarations(source: &str) -> Result<RegistriesDeclarations, S
     for (key, _) in document.section_entries("release") {
         if !matches!(
             key,
-            "registries" | "tag_format" | "source_digest" | "reference_applications"
+            "registries"
+                | "image_registries"
+                | "tag_format"
+                | "source_digest"
+                | "reference_applications"
         ) {
             return Err(format!("unknown declaration release.{key}"));
         }
+    }
+    let declared_images =
+        layerx_platform_kvx::string_list(document.required("release", "image_registries")?)?;
+    if declared_images != IMAGE_REGISTRIES {
+        return Err(format!(
+            "release.image_registries must list exactly the mandated container registries {IMAGE_REGISTRIES:?}, got {declared_images:?}"
+        ));
     }
     let tag_format = layerx_platform_kvx::unquote(document.required("release", "tag_format")?)?;
     if !tag_format.contains("{version}") {
@@ -310,6 +401,12 @@ pub fn registries_declarations(source: &str) -> Result<RegistriesDeclarations, S
         if section == "release" {
             continue;
         }
+        if let Some(name) = section.strip_prefix("image_registry.") {
+            if !IMAGE_REGISTRIES.contains(&name) {
+                return Err(format!("unknown image registry {name}"));
+            }
+            continue;
+        }
         let Some(name) = section.strip_prefix("registry.") else {
             return Err(format!("unknown section {section}"));
         };
@@ -321,12 +418,117 @@ pub fn registries_declarations(source: &str) -> Result<RegistriesDeclarations, S
         .iter()
         .map(|name| registry_declarations(&document, name))
         .collect::<Result<Vec<_>, _>>()?;
+    let image_registries = IMAGE_REGISTRIES
+        .iter()
+        .map(|name| image_registry_declarations(&document, name))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(RegistriesDeclarations {
         tag_format,
         source_digest,
         reference_applications,
         registries,
+        image_registries,
     })
+}
+
+fn sorted_identities(section: &str, key: &str, value: &str) -> Result<Vec<String>, String> {
+    let items = layerx_platform_kvx::string_list(value)?;
+    if items.is_empty()
+        || items.iter().any(String::is_empty)
+        || items.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err(format!(
+            "{section}.{key} must be a non-empty, sorted, duplicate-free string list"
+        ));
+    }
+    Ok(items)
+}
+
+fn image_registry_declarations(
+    document: &layerx_platform_kvx::Document,
+    name: &str,
+) -> Result<ImageRegistry, String> {
+    let section = format!("image_registry.{name}");
+    let entries = document.section_entries(&section);
+    if entries.is_empty() {
+        return Err(format!("image registry {name} is not declared"));
+    }
+    let mut declarations = Vec::new();
+    let mut platforms = Vec::new();
+    let mut images = Vec::new();
+    for (key, value) in &entries {
+        match *key {
+            "platforms" => platforms = sorted_identities(&section, key, value)?,
+            "images" => images = sorted_identities(&section, key, value)?,
+            key if IMAGE_REGISTRY_KEYS.contains(&key) => {
+                let value = layerx_platform_kvx::unquote(value)?;
+                if value.is_empty() {
+                    return Err(format!("empty declaration {section}.{key}"));
+                }
+                declarations.push((key.to_owned(), value));
+            }
+            key => return Err(format!("unknown declaration {section}.{key}")),
+        }
+    }
+    for key in IMAGE_REGISTRY_KEYS {
+        if !declarations.iter().any(|(declared, _)| declared == key) {
+            return Err(format!("missing declaration {section}.{key}"));
+        }
+    }
+    if platforms.is_empty() {
+        return Err(format!("missing declaration {section}.platforms"));
+    }
+    if images.is_empty() {
+        return Err(format!("missing declaration {section}.images"));
+    }
+    let registry = ImageRegistry {
+        name: name.to_owned(),
+        declarations,
+        platforms,
+        images,
+    };
+    checked_image_registry(&section, &registry)?;
+    Ok(registry)
+}
+
+fn checked_image_registry(section: &str, registry: &ImageRegistry) -> Result<(), String> {
+    let status = image_declaration(registry, "status")?;
+    if !STATUSES.contains(&status) {
+        return Err(format!(
+            "image registry {} has unknown status {status}; expected one of {STATUSES:?}",
+            registry.name
+        ));
+    }
+    let distribution = image_declaration(registry, "distribution")?;
+    if registry.name == "ghcr" && distribution != GHCR_DISTRIBUTION {
+        return Err(format!(
+            "{section}.distribution is {distribution}, not the canonical container registry {GHCR_DISTRIBUTION}"
+        ));
+    }
+    signing_recogniser(image_declaration(registry, "signing")?)?;
+    provenance_recogniser(image_declaration(registry, "provenance")?)?;
+    let sbom = image_declaration(registry, "sbom")?;
+    if !IMAGE_SBOM_FORMATS.contains(&sbom) {
+        return Err(format!(
+            "{section}.sbom is {sbom}; expected one of {IMAGE_SBOM_FORMATS:?}"
+        ));
+    }
+    for platform in &registry.platforms {
+        let parts = platform.split('/').collect::<Vec<_>>();
+        if parts.len() != 2 || parts.iter().any(|part| part.is_empty()) {
+            return Err(format!(
+                "{section}.platforms carries {platform}; expected <os>/<architecture>"
+            ));
+        }
+    }
+    for image in &registry.images {
+        if image.contains('/') || image.contains(':') || image.contains('@') {
+            return Err(format!(
+                "{section}.images carries {image}; expected a bare image name published under {distribution}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn registry_declarations(
@@ -418,6 +620,15 @@ fn registry_specific_keys(name: &str) -> &'static [&'static str] {
     } else {
         &[]
     }
+}
+
+fn image_declaration<'a>(registry: &'a ImageRegistry, key: &str) -> Result<&'a str, String> {
+    registry
+        .declarations
+        .iter()
+        .find(|(declared, _)| declared == key)
+        .map(|(_, value)| value.as_str())
+        .ok_or_else(|| format!("image registry {} lost {key}", registry.name))
 }
 
 fn declaration<'a>(registry: &'a Registry, key: &str) -> Result<&'a str, String> {
@@ -983,24 +1194,30 @@ fn publication_record(source: &str, record: &str) -> Result<PublicationRecord, S
     })
 }
 
-fn artifact_records(source: &str, record: &str) -> Result<Vec<Vec<(String, String)>>, String> {
+fn kvx_records(
+    source: &str,
+    record: &str,
+    prefix: &str,
+    keys: &[&str],
+    noun: &str,
+) -> Result<Vec<Vec<(String, String)>>, String> {
     let document =
         layerx_platform_kvx::parse(source).map_err(|error| format!("{record}: {error}"))?;
     let mut records = Vec::new();
     for section in document.sections() {
-        if !section.starts_with("artifact.") {
+        if !section.starts_with(prefix) {
             return Err(format!("{record}: unknown section {section}"));
         }
         let mut values = Vec::new();
         for (key, value) in document.section_entries(section) {
-            if !ARTIFACT_KEYS.contains(&key) {
+            if !keys.contains(&key) {
                 return Err(format!("{record}: unknown declaration {section}.{key}"));
             }
             let value = layerx_platform_kvx::unquote(value)
                 .map_err(|error| format!("{record}: {section}.{key}: {error}"))?;
             values.push((key.to_owned(), value));
         }
-        for key in ARTIFACT_KEYS {
+        for key in keys {
             if !values.iter().any(|(existing, _)| existing == key) {
                 return Err(format!("{record}: missing declaration {section}.{key}"));
             }
@@ -1008,9 +1225,13 @@ fn artifact_records(source: &str, record: &str) -> Result<Vec<Vec<(String, Strin
         records.push(values);
     }
     if records.is_empty() {
-        return Err(format!("{record} lists no artifacts"));
+        return Err(format!("{record} lists no {noun}"));
     }
     Ok(records)
+}
+
+fn artifact_records(source: &str, record: &str) -> Result<Vec<Vec<(String, String)>>, String> {
+    kvx_records(source, record, "artifact.", &ARTIFACT_KEYS, "artifacts")
 }
 
 fn relative_file(bundle: &Path, value: &str, what: &str) -> Result<PathBuf, String> {
@@ -1094,15 +1315,22 @@ fn checked_version(value: &str, what: &str) -> Result<String, String> {
 /// The bundle holds `release-pipeline/{version.txt,source-digest.txt}` and,
 /// for every declared registry, `release-<registry>/publication.txt` and
 /// `release-<registry>/artifacts.kvx` next to the retained artifacts, as the
-/// release workflow uploads them.
+/// release workflow uploads them. Every declared container registry adds
+/// `release-image-<registry>/publication.txt` and
+/// `release-image-<registry>/images.kvx`, which name each published image, the
+/// registry manifest digest it is pinned by and the SBOM and attestation
+/// artefacts recorded for that digest.
 ///
 /// # Errors
 ///
 /// Fails when a registry's publication record disagrees with the manifest or
 /// the pipeline version, an artifact is not a declared package, a declared
 /// package has no artifact, a retained artifact's bytes do not hash to its
-/// recorded digest, or a published artifact lacks its signature, SBOM,
-/// attestation or registry location.
+/// recorded digest, a published artifact lacks its signature, SBOM,
+/// attestation or registry location, an image is not a declared image, a
+/// declared image has no record, an image is not pinned by a well-formed
+/// registry digest, or a retained image SBOM or attestation does not hash to
+/// the digest its record lists.
 pub fn artifact_manifest(
     pipeline: &ReleasePipeline,
     release_dir: &Path,
@@ -1145,16 +1373,7 @@ pub fn artifact_manifest(
             &publication_name,
             &version,
         )?;
-        match &source_revision {
-            None => source_revision = Some(record.revision.clone()),
-            Some(revision) if *revision == record.revision => {}
-            Some(revision) => {
-                return Err(format!(
-                    "{publication_name} records revision {}, but {revision} published the other registries",
-                    record.revision
-                ))
-            }
-        }
+        agreed_revision(&mut source_revision, &record.revision, &publication_name)?;
         let scope = ArtifactScope {
             publication,
             distribution,
@@ -1166,6 +1385,13 @@ pub fn artifact_manifest(
         };
         artifacts.extend(registry_artifacts(&scope)?);
     }
+    let images = manifest_images(
+        pipeline,
+        release_dir,
+        &version,
+        rollback_version.as_deref(),
+        &mut source_revision,
+    )?;
     let source_revision =
         source_revision.ok_or_else(|| "the release published no registries".to_owned())?;
     Ok(ArtifactManifest {
@@ -1176,7 +1402,61 @@ pub fn artifact_manifest(
         source_digest,
         rollback_version,
         artifacts,
+        images,
     })
+}
+
+fn agreed_revision(
+    source_revision: &mut Option<String>,
+    revision: &str,
+    record: &str,
+) -> Result<(), String> {
+    match source_revision {
+        None => {
+            *source_revision = Some(revision.to_owned());
+            Ok(())
+        }
+        Some(agreed) if agreed == revision => Ok(()),
+        Some(agreed) => Err(format!(
+            "{record} records revision {revision}, but {agreed} published the other registries"
+        )),
+    }
+}
+
+fn manifest_images(
+    pipeline: &ReleasePipeline,
+    release_dir: &Path,
+    version: &str,
+    rollback_version: Option<&str>,
+    source_revision: &mut Option<String>,
+) -> Result<Vec<ImageManifestEntry>, String> {
+    let mut images = Vec::new();
+    for registry in &pipeline.declarations.image_registries {
+        if image_declaration(registry, "status")? != "active" {
+            return Err(format!(
+                "image registry {} is declared but its manifest status is not active",
+                registry.name
+            ));
+        }
+        let distribution = image_declaration(registry, "distribution")?;
+        let bundle_name = format!("{IMAGE_BUNDLE_PREFIX}{}", registry.name);
+        let bundle = release_dir.join(&bundle_name);
+        let publication_name = format!("{bundle_name}/{PUBLICATION_RECORD}");
+        let record =
+            checked_image_publication(registry, distribution, &bundle, &publication_name, version)?;
+        agreed_revision(source_revision, &record.revision, &publication_name)?;
+        let scope = ImageScope {
+            registry,
+            distribution,
+            bundle: &bundle,
+            bundle_name: &bundle_name,
+            record: &record,
+            version,
+            rollback_version,
+        };
+        images.extend(registry_images(&scope)?);
+    }
+    Ok(images)
 }
 
 fn release_header(release_dir: &Path) -> Result<(String, String), String> {
@@ -1365,6 +1645,314 @@ fn artifact_entry(
     })
 }
 
+struct ImagePublicationRecord {
+    registry: String,
+    version: String,
+    distribution: String,
+    images: Vec<String>,
+    revision: String,
+    published: bool,
+    pull_check: bool,
+}
+
+fn image_publication_record(source: &str, record: &str) -> Result<ImagePublicationRecord, String> {
+    let values = record_values(source, record)?;
+    let mut images = record_value(&values, "images", record)?
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    images.sort();
+    images.dedup();
+    let flag = |key: &str, truth: &str| {
+        values
+            .iter()
+            .any(|(existing, value)| existing == key && value == truth)
+    };
+    Ok(ImagePublicationRecord {
+        registry: record_value(&values, "registry", record)?.to_owned(),
+        version: record_value(&values, "version", record)?.to_owned(),
+        distribution: record_value(&values, "distribution", record)?.to_owned(),
+        images,
+        revision: record_value(&values, "revision", record)?.to_owned(),
+        published: flag("published", "true"),
+        pull_check: flag("pull_check", "pass"),
+    })
+}
+
+fn checked_image_publication(
+    registry: &ImageRegistry,
+    distribution: &str,
+    bundle: &Path,
+    publication_name: &str,
+    version: &str,
+) -> Result<ImagePublicationRecord, String> {
+    let record =
+        image_publication_record(&read(&bundle.join(PUBLICATION_RECORD))?, publication_name)?;
+    if record.registry != registry.name {
+        return Err(format!(
+            "{publication_name} records registry {}, expected {}",
+            record.registry, registry.name
+        ));
+    }
+    if record.version != version {
+        return Err(format!(
+            "{publication_name} records version {}, but the pipeline released {version}",
+            record.version
+        ));
+    }
+    if record.distribution != distribution {
+        return Err(format!(
+            "{publication_name} records distribution {}, but the manifest declares {distribution}",
+            record.distribution
+        ));
+    }
+    if record.images != registry.images {
+        return Err(format!(
+            "{publication_name} records images {:?}, but the manifest declares {:?}",
+            record.images, registry.images
+        ));
+    }
+    if !is_hex(&record.revision, 40) {
+        return Err(format!(
+            "{publication_name} records revision {:?}, expected a 40-hex commit",
+            record.revision
+        ));
+    }
+    Ok(record)
+}
+
+struct ImageScope<'a> {
+    registry: &'a ImageRegistry,
+    distribution: &'a str,
+    bundle: &'a Path,
+    bundle_name: &'a str,
+    record: &'a ImagePublicationRecord,
+    version: &'a str,
+    rollback_version: Option<&'a str>,
+}
+
+fn registry_images(scope: &ImageScope<'_>) -> Result<Vec<ImageManifestEntry>, String> {
+    let images_name = format!("{}/{IMAGES_RECORD}", scope.bundle_name);
+    let mut entries: Vec<ImageManifestEntry> = Vec::new();
+    for values in kvx_records(
+        &read(&scope.bundle.join(IMAGES_RECORD))?,
+        &images_name,
+        "image.",
+        &IMAGE_KEYS,
+        "images",
+    )? {
+        let entry = image_entry(scope, &values, &images_name)?;
+        if entries.iter().any(|existing| existing.name == entry.name) {
+            return Err(format!(
+                "{images_name} lists the image {} twice",
+                entry.name
+            ));
+        }
+        entries.push(entry);
+    }
+    for image in &scope.registry.images {
+        if !entries.iter().any(|entry| entry.name == *image) {
+            return Err(format!(
+                "{images_name} lists no record for the declared image {image}"
+            ));
+        }
+    }
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(entries)
+}
+
+fn checked_image_tag(value: &str, what: &str) -> Result<String, String> {
+    let first_is_tag_start = value
+        .bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+    if !first_is_tag_start
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(format!(
+            "{what} must be an OCI tag of at most 128 characters from [A-Za-z0-9._-] starting with a letter, digit or underscore, got {value:?}"
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn image_external_reference(value: &str) -> bool {
+    value.split_once(':').is_some_and(|(scheme, locator)| {
+        IMAGE_REFERENCE_SCHEMES.contains(&scheme) && !locator.is_empty()
+    })
+}
+
+fn checked_image_reference(
+    bundle: &Path,
+    value: &str,
+    required: bool,
+    what: &str,
+) -> Result<String, String> {
+    if value.is_empty() {
+        return Err(format!("{what} is empty"));
+    }
+    if image_external_reference(value) {
+        return Ok(value.to_owned());
+    }
+    if let Some((scheme, _)) = value.split_once(':') {
+        if !scheme.contains('/') && !scheme.contains('.') {
+            return Err(format!(
+                "{what} uses the unknown reference scheme {scheme}; expected a retained file or one of {IMAGE_REFERENCE_SCHEMES:?}"
+            ));
+        }
+    }
+    if required {
+        relative_file(bundle, value, what)?;
+    }
+    Ok(value.to_owned())
+}
+
+fn checked_image_evidence(
+    bundle: &Path,
+    reference: &str,
+    digest: &str,
+    what: &str,
+) -> Result<(String, String), String> {
+    let digest = checked_digest(digest, &format!("{what} digest"))?;
+    let reference = checked_image_reference(bundle, reference, true, what)?;
+    if !image_external_reference(&reference) {
+        let actual = file_digest(&relative_file(bundle, &reference, what)?)?;
+        if actual != digest {
+            return Err(format!(
+                "retained {what} ({reference}) hashes to {actual}, but its record lists {digest}"
+            ));
+        }
+    }
+    Ok((reference, digest))
+}
+
+fn image_entry(
+    scope: &ImageScope<'_>,
+    values: &[(String, String)],
+    images_name: &str,
+) -> Result<ImageManifestEntry, String> {
+    let registry = &scope.registry.name;
+    let value = |key: &str| record_value(values, key, images_name);
+    let name = value("name")?;
+    if !scope.registry.images.iter().any(|image| image == name) {
+        return Err(format!(
+            "{images_name} lists {name}, which the manifest does not declare for {registry}"
+        ));
+    }
+    let what = |field: &str| format!("{images_name} {name} {field}");
+    let tag = checked_image_tag(value("tag")?, &what("tag"))?;
+    let digest = checked_digest(value("digest")?, &what("digest"))?;
+    let platform = value("platform")?;
+    if !scope
+        .registry
+        .platforms
+        .iter()
+        .any(|declared| declared == platform)
+    {
+        return Err(format!(
+            "{} is {platform}; expected one of {:?}",
+            what("platform"),
+            scope.registry.platforms
+        ));
+    }
+    let repository = format!("{}/{name}", scope.distribution);
+    let published = scope.record.published;
+    let (sbom, sbom_digest) = checked_image_evidence(
+        scope.bundle,
+        value("sbom")?,
+        value("sbom_digest")?,
+        &what("sbom"),
+    )?;
+    let (attestation, attestation_digest) = checked_image_evidence(
+        scope.bundle,
+        value("attestation")?,
+        value("attestation_digest")?,
+        &what("attestation"),
+    )?;
+    Ok(ImageManifestEntry {
+        reference: format!("{repository}@{digest}"),
+        signature: checked_image_reference(
+            scope.bundle,
+            value("signature")?,
+            published,
+            &what("signature"),
+        )?,
+        name: name.to_owned(),
+        version: scope.version.to_owned(),
+        registry: registry.clone(),
+        distribution: scope.distribution.to_owned(),
+        repository,
+        tag,
+        digest,
+        platform: platform.to_owned(),
+        sbom,
+        sbom_digest,
+        attestation,
+        attestation_digest,
+        source_revision: scope.record.revision.clone(),
+        rollback_version: scope.rollback_version.map(str::to_owned),
+        published,
+        pull_check: scope.record.pull_check,
+    })
+}
+
+fn checked_image_manifest_entry(entry: &ImageManifestEntry, revision: &str) -> Result<(), String> {
+    let what = |field: &str| {
+        format!(
+            "artifact manifest image {}@{} {field}",
+            entry.name, entry.version
+        )
+    };
+    if entry.name.is_empty() || entry.name.contains('/') || entry.name.contains(':') {
+        return Err(format!(
+            "artifact manifest names the image {:?}",
+            entry.name
+        ));
+    }
+    checked_digest(&entry.digest, &what("digest"))?;
+    checked_digest(&entry.sbom_digest, &what("sbom digest"))?;
+    checked_digest(&entry.attestation_digest, &what("attestation digest"))?;
+    checked_image_tag(&entry.tag, &what("tag"))?;
+    let repository = format!("{}/{}", entry.distribution, entry.name);
+    if entry.repository != repository {
+        return Err(format!(
+            "{} is {}, expected {repository}",
+            what("repository"),
+            entry.repository
+        ));
+    }
+    let reference = format!("{repository}@{}", entry.digest);
+    if entry.reference != reference {
+        return Err(format!(
+            "{} is {}, expected the digest-pinned {reference}",
+            what("reference"),
+            entry.reference
+        ));
+    }
+    for (field, value) in [
+        ("registry", &entry.registry),
+        ("platform", &entry.platform),
+        ("signature", &entry.signature),
+        ("sbom", &entry.sbom),
+        ("attestation", &entry.attestation),
+    ] {
+        if value.is_empty() {
+            return Err(format!("{} is empty", what(field)));
+        }
+    }
+    if entry.source_revision != revision {
+        return Err(format!(
+            "{} is {}, but the manifest binds revision {revision}",
+            what("source_revision"),
+            entry.source_revision
+        ));
+    }
+    Ok(())
+}
+
 /// Renders the artifact manifest as its canonical JSON document.
 ///
 /// # Errors
@@ -1380,8 +1968,9 @@ pub fn render_artifact_manifest(manifest: &ArtifactManifest) -> Result<String, S
 ///
 /// # Errors
 ///
-/// Fails on malformed JSON, an unknown schema, an empty artifact list or a
-/// malformed digest.
+/// Fails on malformed JSON, an unknown schema, an empty artifact or image
+/// list, a malformed digest, an image that is not pinned by its registry
+/// digest or an image bound to another source revision.
 pub fn parse_artifact_manifest(source: &str) -> Result<ArtifactManifest, String> {
     let manifest: ArtifactManifest =
         serde_json::from_str(source).map_err(|error| format!("artifact manifest: {error}"))?;
@@ -1393,6 +1982,9 @@ pub fn parse_artifact_manifest(source: &str) -> Result<ArtifactManifest, String>
     }
     if manifest.artifacts.is_empty() {
         return Err("artifact manifest lists no artifacts".to_owned());
+    }
+    if manifest.images.is_empty() {
+        return Err("artifact manifest lists no images".to_owned());
     }
     checked_digest(&manifest.source_digest, "artifact manifest source_digest")?;
     if !is_hex(&manifest.source_revision, 40) {
@@ -1413,6 +2005,9 @@ pub fn parse_artifact_manifest(source: &str) -> Result<ArtifactManifest, String>
             ));
         }
     }
+    for entry in &manifest.images {
+        checked_image_manifest_entry(entry, &manifest.source_revision)?;
+    }
     Ok(manifest)
 }
 
@@ -1423,60 +2018,17 @@ fn artifact_failure(entry: &ArtifactManifestEntry, reason: &str) -> String {
     )
 }
 
-fn published_bytes(
-    entry: &ArtifactManifestEntry,
-    source: ArtifactSource<'_>,
-) -> Result<(PathBuf, String), String> {
-    let (path, origin) = match source {
-        ArtifactSource::Directory(directory) => (
-            directory.join(&entry.registry).join(&entry.artifact),
-            "the downloaded".to_owned(),
-        ),
-        ArtifactSource::Registries { into } => {
-            let path = into.join(&entry.registry).join(&entry.artifact);
-            fetch::fetch(entry, &path)?;
-            (path, format!("the bytes {} served as", entry.location))
-        }
-    };
-    if !path.is_file() {
-        return Err(format!("{} is not present at {}", origin, path.display()));
-    }
-    Ok((path, origin))
+fn image_failure(entry: &ImageManifestEntry, reason: &str) -> String {
+    format!(
+        "{}@{} from {} ({reason})",
+        entry.name, entry.version, entry.registry
+    )
 }
 
-/// Verifies every published artifact's bytes against the manifest and halts
-/// the release, naming each failing artifact, when any disagree.
-///
-/// # Errors
-///
-/// Fails, naming every failing artifact, when the manifest is bound to a
-/// different source revision, an artifact was not published or did not pass
-/// its install check, its digest is not of registry bytes, its bytes cannot be
-/// obtained, or its bytes do not hash to the manifest digest.
-pub fn release_pipeline_verify(
+fn verified_artifacts(
     manifest: &ArtifactManifest,
     source: ArtifactSource<'_>,
-    source_revision: Option<&str>,
-) -> Result<Vec<VerifiedArtifact>, String> {
-    if manifest.schema != ARTIFACT_MANIFEST_SCHEMA {
-        return Err(format!(
-            "release halted before promotion: artifact manifest schema is {}, expected {ARTIFACT_MANIFEST_SCHEMA}",
-            manifest.schema
-        ));
-    }
-    if let Some(revision) = source_revision {
-        if revision != manifest.source_revision {
-            return Err(format!(
-                "release halted before promotion: the artifact manifest binds revision {}, not the release revision {revision}",
-                manifest.source_revision
-            ));
-        }
-    }
-    if manifest.artifacts.is_empty() {
-        return Err(
-            "release halted before promotion: the artifact manifest lists no artifacts".to_owned(),
-        );
-    }
+) -> (Vec<VerifiedArtifact>, Vec<String>) {
     let mut verified = Vec::new();
     let mut failures = Vec::new();
     for entry in &manifest.artifacts {
@@ -1539,14 +2091,135 @@ pub fn release_pipeline_verify(
             digest: entry.digest.clone(),
         });
     }
-    if failures.is_empty() {
-        Ok(verified)
-    } else {
-        Err(format!(
-            "release halted before promotion: {} of {} artifacts failed verification: {}",
+    (verified, failures)
+}
+
+fn verified_images(manifest: &ArtifactManifest) -> (Vec<VerifiedImage>, Vec<String>) {
+    let mut verified = Vec::new();
+    let mut failures = Vec::new();
+    for entry in &manifest.images {
+        if !entry.published {
+            failures.push(image_failure(entry, "was not published"));
+            continue;
+        }
+        if !entry.pull_check {
+            failures.push(image_failure(
+                entry,
+                "pull check from the registry did not pass",
+            ));
+            continue;
+        }
+        if let Err(error) = checked_image_manifest_entry(entry, &manifest.source_revision) {
+            failures.push(image_failure(entry, &error));
+            continue;
+        }
+        verified.push(VerifiedImage {
+            name: entry.name.clone(),
+            version: entry.version.clone(),
+            registry: entry.registry.clone(),
+            reference: entry.reference.clone(),
+        });
+    }
+    (verified, failures)
+}
+
+fn published_bytes(
+    entry: &ArtifactManifestEntry,
+    source: ArtifactSource<'_>,
+) -> Result<(PathBuf, String), String> {
+    let (path, origin) = match source {
+        ArtifactSource::Directory(directory) => (
+            directory.join(&entry.registry).join(&entry.artifact),
+            "the downloaded".to_owned(),
+        ),
+        ArtifactSource::Registries { into } => {
+            let path = into.join(&entry.registry).join(&entry.artifact);
+            fetch::fetch(entry, &path)?;
+            (path, format!("the bytes {} served as", entry.location))
+        }
+    };
+    if !path.is_file() {
+        return Err(format!("{} is not present at {}", origin, path.display()));
+    }
+    Ok((path, origin))
+}
+
+/// Verifies every published artifact's bytes and every published image's
+/// registry pin against the manifest and halts the release, naming each
+/// failing artifact and image, when any disagree.
+///
+/// Package artifacts are verified by hashing the bytes the registry serves.
+/// Container images are content-addressed by the registry manifest digest the
+/// publication recorded, so an image is verified by that digest pin, its
+/// publication and pull check, its SBOM and attestation references and its
+/// binding to the release revision; its bytes are not fetched again.
+///
+/// # Errors
+///
+/// Fails, naming every failing artifact and image, when the manifest is bound
+/// to a different source revision, an artifact was not published or did not
+/// pass its install check, its digest is not of registry bytes, its bytes
+/// cannot be obtained, or its bytes do not hash to the manifest digest; and
+/// when an image was not published or did not pass its pull check, is not
+/// pinned by a well-formed registry digest, lacks its signature, SBOM or
+/// attestation reference, or is bound to another source revision.
+pub fn release_pipeline_verify(
+    manifest: &ArtifactManifest,
+    source: ArtifactSource<'_>,
+    source_revision: Option<&str>,
+) -> Result<VerifiedRelease, String> {
+    if manifest.schema != ARTIFACT_MANIFEST_SCHEMA {
+        return Err(format!(
+            "release halted before promotion: artifact manifest schema is {}, expected {ARTIFACT_MANIFEST_SCHEMA}",
+            manifest.schema
+        ));
+    }
+    if let Some(revision) = source_revision {
+        if revision != manifest.source_revision {
+            return Err(format!(
+                "release halted before promotion: the artifact manifest binds revision {}, not the release revision {revision}",
+                manifest.source_revision
+            ));
+        }
+    }
+    if manifest.artifacts.is_empty() {
+        return Err(
+            "release halted before promotion: the artifact manifest lists no artifacts".to_owned(),
+        );
+    }
+    if manifest.images.is_empty() {
+        return Err(
+            "release halted before promotion: the artifact manifest lists no images".to_owned(),
+        );
+    }
+    let (verified, failures) = verified_artifacts(manifest, source);
+    let (images, image_failures) = verified_images(manifest);
+    let mut halted = Vec::new();
+    if !failures.is_empty() {
+        halted.push(format!(
+            "{} of {} artifacts failed verification: {}",
             failures.len(),
             manifest.artifacts.len(),
             failures.join("; ")
+        ));
+    }
+    if !image_failures.is_empty() {
+        halted.push(format!(
+            "{} of {} images failed verification: {}",
+            image_failures.len(),
+            manifest.images.len(),
+            image_failures.join("; ")
+        ));
+    }
+    if halted.is_empty() {
+        Ok(VerifiedRelease {
+            artifacts: verified,
+            images,
+        })
+    } else {
+        Err(format!(
+            "release halted before promotion: {}",
+            halted.join("; ")
         ))
     }
 }
@@ -1584,6 +2257,14 @@ pub fn plan(pipeline: &ReleasePipeline) -> Result<String, String> {
             .ok_or_else(|| format!("registry {} lost its publication job", registry.name))?;
         write!(text, " packages={}", publication.packages.join(",")).map_err(fail)?;
         writeln!(text, " publication_job={}", publication.job).map_err(fail)?;
+    }
+    for registry in &declarations.image_registries {
+        write!(text, "image_registry={}", registry.name).map_err(fail)?;
+        for key in IMAGE_REGISTRY_KEYS {
+            write!(text, " {key}={}", image_declaration(registry, key)?).map_err(fail)?;
+        }
+        write!(text, " platforms={}", registry.platforms.join(",")).map_err(fail)?;
+        writeln!(text, " images={}", registry.images.join(",")).map_err(fail)?;
     }
     for gate in &pipeline.gates {
         write!(text, "gate={} command={}", gate.job, gate.command).map_err(fail)?;
@@ -1687,8 +2368,9 @@ fn run_manifest(arguments: &[String]) -> Result<(), String> {
     }
     fs::write(&output, rendered).map_err(|error| format!("write {}: {error}", output.display()))?;
     println!(
-        "artifact manifest: {} artifacts of {} ({}) bound to revision {} written to {}",
+        "artifact manifest: {} artifacts and {} images of {} ({}) bound to revision {} written to {}",
         manifest.artifacts.len(),
+        manifest.images.len(),
         manifest.version,
         manifest.tag,
         manifest.source_revision,
@@ -1717,15 +2399,27 @@ fn run_verify(arguments: &[String]) -> Result<(), String> {
     };
     let verified =
         release_pipeline_verify(&manifest, source, option(&values, "--source-revision"))?;
-    for artifact in &verified {
+    for artifact in &verified.artifacts {
         println!(
             "verified {}@{} from {} {}",
             artifact.name, artifact.version, artifact.registry, artifact.digest
         );
     }
+    for image in &verified.images {
+        println!(
+            "pinned {}@{} from {} {}",
+            image.name, image.version, image.registry, image.reference
+        );
+    }
     println!(
         "release verification: {} artifacts of {} match the manifest bound to revision {}",
-        verified.len(),
+        verified.artifacts.len(),
+        manifest.version,
+        manifest.source_revision
+    );
+    println!(
+        "release verification: {} images of {} are pinned by their registry digest in the manifest bound to revision {}",
+        verified.images.len(),
         manifest.version,
         manifest.source_revision
     );

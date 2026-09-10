@@ -83,8 +83,9 @@ Sources and extraction rules:
     "cargo publish", pypi "twine upload" or "pypi-publish", maven-central
     "mvn deploy" or "gradle publish", nuget "dotnet nuget push", go-modules
     and swiftpm "git tag" or "git push --tags".
-  * platform/release/registries.kvx: [release] registries, tag_format and
-    source_digest; [registry.<id>] distribution and packages.
+  * platform/release/registries.kvx: [release] registries, image_registries,
+    tag_format and source_digest; [registry.<id>] distribution and packages;
+    [image_registry.<id>] distribution and images.
   * platform/docs/site.kvx: every [page.<id>] section is a docs journey.
   * platform/examples/reference-apps.json, platform/hosted/*,
     platform/middleware/* (except conformance), platform/integrations/*,
@@ -112,8 +113,14 @@ manifest file exists, every install coordinate must match a manifest entry
 (name, ecosystem and, when the coordinate carries one, version), the
 manifest must list every declared package and nothing undeclared, and the
 manifest file absent while the contract does not state not_emitted makes
-every install coordinate an unlisted violation; the differences key set is
-closed; the
+every install coordinate an unlisted violation; every container registry
+named by [release] image_registries must be declared with a distribution and
+a non-empty image list, and once the manifest file exists it must list every
+declared image and nothing undeclared, each carrying its published
+distribution and repository <distribution>/<name>, a reference pinned as
+<repository>@<digest> by a sha256 registry manifest digest, its 40-hex source
+revision and its signature, SBOM and attestation references with sha256
+digests; the differences key set is closed; the
 Contradictions table lists exactly the cross-source disagreements the check
 computes (gateway_hostname, faucet_hostname, docs_wire_protocol_version,
 protocol_network_id, placeholder_hostname, testnet_gateway_url_port,
@@ -917,6 +924,26 @@ declared_by_registry = {}
 for ecosystem in registry_ids:
     declared = registries.get(f"registry.{ecosystem}", {}).get("packages", [])
     declared_by_registry[ecosystem] = list(declared) if isinstance(declared, list) else [declared]
+image_registry_ids = release.get("image_registries", [])
+if not isinstance(image_registry_ids, list) or not image_registry_ids:
+    violation("platform/release/registries.kvx: [release] image_registries is missing")
+    image_registry_ids = []
+declared_images = {}
+image_distribution = {}
+for container in image_registry_ids:
+    declared = registries.get(f"image_registry.{container}")
+    if declared is None:
+        violation(f"platform/release/registries.kvx: [image_registry.{container}] is missing")
+        continue
+    names = declared.get("images", [])
+    names = list(names) if isinstance(names, list) else [names]
+    if not names:
+        violation(f"platform/release/registries.kvx: [image_registry.{container}] declares no images")
+    declared_images[container] = names
+    distribution = declared.get("distribution", "")
+    if not distribution:
+        violation(f"platform/release/registries.kvx: [image_registry.{container}] declares no distribution")
+    image_distribution[container] = distribution
 
 
 def load_artifact_manifest(relative):
@@ -956,7 +983,46 @@ def load_artifact_manifest(relative):
         for package in packages:
             if not any(entry["registry"] == ecosystem and entry["name"] == package for entry in listed):
                 violation(f"{relative}: declared package {package} from {ecosystem} is not listed")
+    check_manifest_images(relative, document.get("images"))
     return listed
+
+
+def check_manifest_images(relative, images):
+    required = ("name", "version", "registry", "distribution", "repository", "tag", "reference", "digest", "platform", "signature", "sbom", "sbom_digest", "attestation", "attestation_digest", "source_revision", "published", "pull_check")
+    if not isinstance(images, list) or not images:
+        violation(f"{relative}: images list is missing or empty")
+        return
+    listed = []
+    for index, entry in enumerate(images):
+        if not isinstance(entry, dict) or any(field not in entry for field in required):
+            violation(f"{relative}: images[{index}] lacks one of {', '.join(required)}")
+            continue
+        container = entry["registry"]
+        identity = f"{entry['name']}@{entry['version']}"
+        if container not in declared_images:
+            violation(f"{relative}: image {identity} names unknown container registry {container!r}")
+            continue
+        if entry["name"] not in declared_images[container]:
+            violation(f"{relative}: image {identity} from {container} is not declared in platform/release/registries.kvx")
+            continue
+        for field in ("digest", "sbom_digest", "attestation_digest"):
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(entry[field])):
+                violation(f"{relative}: image {identity} {field} {entry[field]!r} is not sha256:<64 hex>")
+        repository = f"{image_distribution.get(container, '')}/{entry['name']}"
+        if entry["distribution"] != image_distribution.get(container) or entry["repository"] != repository:
+            violation(f"{relative}: image {identity} is published as {entry['repository']!r}, not {repository!r}")
+        elif entry["reference"] != f"{repository}@{entry['digest']}":
+            violation(f"{relative}: image {identity} reference {entry['reference']!r} is not pinned by its registry manifest digest")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(entry["source_revision"])):
+            violation(f"{relative}: image {identity} source_revision {entry['source_revision']!r} is not a 40-hex commit")
+        for field in ("tag", "platform", "signature", "sbom", "attestation"):
+            if not str(entry[field]).strip():
+                violation(f"{relative}: image {identity} carries no {field}")
+        listed.append(entry)
+    for container, names in declared_images.items():
+        for name in names:
+            if not any(entry["registry"] == container and entry["name"] == name for entry in listed):
+                violation(f"{relative}: declared image {name} from {container} is not listed")
 
 
 if not manifest_path:

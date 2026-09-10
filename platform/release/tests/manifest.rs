@@ -9,8 +9,8 @@ use std::process::Command;
 
 use release::{
     artifact_manifest, parse_artifact_manifest, plan, release_pipeline, release_pipeline_verify,
-    render_artifact_manifest, sha256_digest, ArtifactManifest, ArtifactSource, PublicationJob,
-    ReleasePipeline,
+    render_artifact_manifest, sha256_digest, ArtifactManifest, ArtifactSource, ImageRegistry,
+    PublicationJob, ReleasePipeline,
 };
 
 const VERSION: &str = "0.1.0";
@@ -19,6 +19,9 @@ const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 const OTHER_REVISION: &str = "fedcba9876543210fedcba9876543210fedcba98";
 const SOURCE_DIGEST: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 const ARTIFACT_COUNT: usize = 28;
+const IMAGE_COUNT: usize = 17;
+const IMAGE_TAG: &str = "sdk-v0.1.0";
+const IMAGE_PLATFORM: &str = "linux/amd64";
 
 fn read(relative: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative);
@@ -219,6 +222,88 @@ fn write_publication(pipeline: &ReleasePipeline, publication: &PublicationJob, b
     );
 }
 
+fn image_declaration(registry: &ImageRegistry, key: &str) -> String {
+    registry
+        .declarations
+        .iter()
+        .find(|(declared, _)| declared == key)
+        .map_or_else(
+            || panic!("image registry {} has no {key}", registry.name),
+            |(_, value)| value.clone(),
+        )
+}
+
+struct ImageRecord {
+    name: String,
+    digest: String,
+    signature: String,
+    sbom: String,
+    sbom_digest: String,
+    attestation: String,
+    attestation_digest: String,
+}
+
+fn image_records(registry: &ImageRegistry, bundle: &Path) -> Vec<ImageRecord> {
+    registry
+        .images
+        .iter()
+        .map(|name| {
+            let signature = format!("signatures/{name}.sigstore.json");
+            let sbom = format!("sbom/{name}.spdx.json");
+            let attestation = format!("attestations/{name}.provenance.json");
+            let sbom_bytes = format!("{{\"spdxVersion\": \"SPDX-2.3\", \"name\": \"{name}\"}}\n");
+            let attestation_bytes =
+                format!("{{\"predicateType\": \"slsaprovenance\", \"image\": \"{name}\"}}\n");
+            write(
+                &bundle.join(&signature),
+                format!("signature of {name}\n").as_bytes(),
+            );
+            write(&bundle.join(&sbom), sbom_bytes.as_bytes());
+            write(&bundle.join(&attestation), attestation_bytes.as_bytes());
+            ImageRecord {
+                digest: sha256_digest(format!("{name} image manifest\n").as_bytes()),
+                signature,
+                sbom,
+                sbom_digest: sha256_digest(sbom_bytes.as_bytes()),
+                attestation,
+                attestation_digest: sha256_digest(attestation_bytes.as_bytes()),
+                name: name.clone(),
+            }
+        })
+        .collect()
+}
+
+fn write_image_bundle(registry: &ImageRegistry, release_dir: &Path) {
+    let bundle = release_dir.join(format!("release-image-{}", registry.name));
+    let distribution = image_declaration(registry, "distribution");
+    write(
+        &bundle.join("publication.txt"),
+        format!(
+            "registry={}\nversion={VERSION}\ndistribution={distribution}\nimages={}\nrevision={REVISION}\npublished=true\npull_check=pass\n",
+            registry.name,
+            registry.images.join(" ")
+        )
+        .as_bytes(),
+    );
+    let mut images = String::new();
+    for record in image_records(registry, &bundle) {
+        write!(
+            images,
+            "[image.{}]\nname = \"{}\"\ntag = \"{IMAGE_TAG}\"\ndigest = \"{}\"\nplatform = \"{IMAGE_PLATFORM}\"\nsignature = \"{}\"\nsbom = \"{}\"\nsbom_digest = \"{}\"\nattestation = \"{}\"\nattestation_digest = \"{}\"\n\n",
+            record.name,
+            record.name,
+            record.digest,
+            record.signature,
+            record.sbom,
+            record.sbom_digest,
+            record.attestation,
+            record.attestation_digest
+        )
+        .unwrap_or_else(|error| panic!("write image record: {error}"));
+    }
+    write(&bundle.join("images.kvx"), images.as_bytes());
+}
+
 impl Fixture {
     fn build(name: &str, pipeline: &ReleasePipeline) -> Self {
         let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
@@ -296,6 +381,9 @@ impl Fixture {
                 .unwrap_or_else(|error| panic!("write artifact record: {error}"));
             }
             write(&bundle.join("artifacts.kvx"), artifacts.as_bytes());
+        }
+        for registry in &pipeline.declarations.image_registries {
+            write_image_bundle(registry, &release_dir);
         }
         Self {
             release_dir,
@@ -396,10 +484,15 @@ fn matching_published_bytes_pass_verification() {
         Some(REVISION),
     )
     .unwrap_or_else(|error| panic!("verification refused matching bytes: {error}"));
-    assert_eq!(verified.len(), ARTIFACT_COUNT);
+    assert_eq!(verified.artifacts.len(), ARTIFACT_COUNT);
     assert!(verified
+        .artifacts
         .iter()
         .any(|artifact| artifact.name == "layerx-sdk" && artifact.registry == "crates-io"));
+    assert_eq!(verified.images.len(), IMAGE_COUNT);
+    assert!(verified.images.iter().all(|image| image
+        .reference
+        .starts_with(&format!("ghcr.io/sidiora-labs/{}@sha256:", image.name))));
 }
 
 #[test]
@@ -620,6 +713,237 @@ fn plan_binds_the_verification_job_and_the_retained_manifest() {
     assert!(text.lines().any(|line| line == "verification_job=release-verification manifest=artifact-manifest.json workflow_artifact=release-artifact-manifest"), "{text}");
 }
 
+#[test]
+fn manifest_lists_every_declared_image_pinned_by_its_registry_digest() {
+    let pipeline = committed_pipeline();
+    let fixture = Fixture::build("images", &pipeline);
+    let manifest = fixture.manifest(&pipeline);
+    assert_eq!(manifest.images.len(), IMAGE_COUNT);
+    for registry in &pipeline.declarations.image_registries {
+        let distribution = image_declaration(registry, "distribution");
+        assert_eq!(distribution, "ghcr.io/sidiora-labs");
+        for image in &registry.images {
+            let entry = manifest
+                .images
+                .iter()
+                .find(|entry| entry.name == *image && entry.registry == registry.name)
+                .unwrap_or_else(|| panic!("manifest lost the image {image}"));
+            assert_eq!(entry.version, VERSION);
+            assert_eq!(entry.source_revision, REVISION);
+            assert_eq!(entry.rollback_version.as_deref(), Some(ROLLBACK));
+            assert_eq!(entry.distribution, distribution);
+            assert_eq!(entry.repository, format!("{distribution}/{image}"));
+            assert_eq!(
+                entry.reference,
+                format!("{}@{}", entry.repository, entry.digest)
+            );
+            assert_eq!(entry.tag, IMAGE_TAG);
+            assert_eq!(entry.platform, IMAGE_PLATFORM);
+            assert!(entry.digest.starts_with("sha256:") && entry.digest.len() == 71);
+            assert!(entry.sbom_digest.starts_with("sha256:") && entry.sbom_digest.len() == 71);
+            assert!(
+                entry.attestation_digest.starts_with("sha256:")
+                    && entry.attestation_digest.len() == 71
+            );
+            assert_eq!(entry.sbom, format!("sbom/{image}.spdx.json"));
+            assert_eq!(
+                entry.attestation,
+                format!("attestations/{image}.provenance.json")
+            );
+            assert!(!entry.signature.is_empty());
+            assert!(entry.published && entry.pull_check);
+        }
+    }
+    let mut names = manifest
+        .images
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect::<Vec<_>>();
+    let sorted = names.clone();
+    names.sort();
+    names.dedup();
+    assert_eq!(names, sorted, "images are neither sorted nor unique");
+}
+
+#[test]
+fn image_sbom_that_does_not_hash_to_its_record_is_refused_at_emission() {
+    let pipeline = committed_pipeline();
+    let fixture = Fixture::build("image-sbom", &pipeline);
+    write(
+        &fixture
+            .release_dir
+            .join("release-image-ghcr/sbom/layerx-gateway.spdx.json"),
+        b"{\"spdxVersion\": \"SPDX-2.3\", \"name\": \"replaced\"}\n",
+    );
+    let error = artifact_manifest(&pipeline, &fixture.release_dir, Some(ROLLBACK))
+        .err()
+        .unwrap_or_else(|| panic!("replaced image SBOM produced a manifest"));
+    assert!(
+        error.starts_with("retained release-image-ghcr/images.kvx layerx-gateway sbom (sbom/layerx-gateway.spdx.json) hashes to sha256:"),
+        "{error}"
+    );
+    assert!(error.contains("but its record lists sha256:"), "{error}");
+}
+
+#[test]
+fn image_that_is_not_declared_is_refused_at_emission() {
+    let pipeline = committed_pipeline();
+    let fixture = Fixture::build("image-undeclared", &pipeline);
+    let record = fixture.release_dir.join("release-image-ghcr/images.kvx");
+    let source = fs::read_to_string(&record)
+        .unwrap_or_else(|error| panic!("read {}: {error}", record.display()));
+    write(
+        &record,
+        source
+            .replace("name = \"layerx-faucet\"", "name = \"layerx-mint\"")
+            .as_bytes(),
+    );
+    let error = artifact_manifest(&pipeline, &fixture.release_dir, Some(ROLLBACK))
+        .err()
+        .unwrap_or_else(|| panic!("undeclared image produced a manifest"));
+    assert_eq!(
+        error,
+        "release-image-ghcr/images.kvx lists layerx-mint, which the manifest does not declare for ghcr"
+    );
+}
+
+#[test]
+fn declared_image_without_a_record_is_refused_at_emission() {
+    let pipeline = committed_pipeline();
+    let fixture = Fixture::build("image-missing", &pipeline);
+    let record = fixture.release_dir.join("release-image-ghcr/images.kvx");
+    let source = fs::read_to_string(&record)
+        .unwrap_or_else(|error| panic!("read {}: {error}", record.display()));
+    let start = source
+        .find("[image.paxd]")
+        .unwrap_or_else(|| panic!("fixture lost the paxd image record"));
+    let end = source
+        .find("[image.paxd-node]")
+        .unwrap_or_else(|| panic!("fixture lost the paxd-node image record"));
+    write(
+        &record,
+        format!("{}{}", &source[..start], &source[end..]).as_bytes(),
+    );
+    let error = artifact_manifest(&pipeline, &fixture.release_dir, Some(ROLLBACK))
+        .err()
+        .unwrap_or_else(|| panic!("missing image record produced a manifest"));
+    assert_eq!(
+        error,
+        "release-image-ghcr/images.kvx lists no record for the declared image paxd"
+    );
+}
+
+#[test]
+fn image_published_from_another_revision_is_refused_at_emission() {
+    let pipeline = committed_pipeline();
+    let fixture = Fixture::build("image-revision", &pipeline);
+    let record = fixture
+        .release_dir
+        .join("release-image-ghcr/publication.txt");
+    let source = fs::read_to_string(&record)
+        .unwrap_or_else(|error| panic!("read {}: {error}", record.display()));
+    write(&record, source.replace(REVISION, OTHER_REVISION).as_bytes());
+    let error = artifact_manifest(&pipeline, &fixture.release_dir, Some(ROLLBACK))
+        .err()
+        .unwrap_or_else(|| panic!("split image revision produced a manifest"));
+    assert_eq!(error, format!("release-image-ghcr/publication.txt records revision {OTHER_REVISION}, but {REVISION} published the other registries"));
+}
+
+#[test]
+fn unpublished_image_halts_the_release() {
+    let pipeline = committed_pipeline();
+    let fixture = Fixture::build("image-unpublished", &pipeline);
+    let record = fixture
+        .release_dir
+        .join("release-image-ghcr/publication.txt");
+    let source = fs::read_to_string(&record)
+        .unwrap_or_else(|error| panic!("read {}: {error}", record.display()));
+    write(&record, source.replace("published=true\n", "").as_bytes());
+    let manifest = fixture.manifest(&pipeline);
+    assert!(manifest.images.iter().all(|entry| !entry.published));
+    let error = release_pipeline_verify(
+        &manifest,
+        ArtifactSource::Directory(&fixture.downloads),
+        Some(REVISION),
+    )
+    .err()
+    .unwrap_or_else(|| panic!("unpublished images passed verification"));
+    assert!(
+        error.contains(&format!(
+            "{IMAGE_COUNT} of {IMAGE_COUNT} images failed verification"
+        )),
+        "{error}"
+    );
+    assert!(
+        error.contains(&format!(
+            "layerx-node@{VERSION} from ghcr (was not published)"
+        )),
+        "{error}"
+    );
+}
+
+#[test]
+fn image_reference_moved_off_its_digest_halts_the_release() {
+    let pipeline = committed_pipeline();
+    let fixture = Fixture::build("image-moved", &pipeline);
+    let manifest = fixture.manifest(&pipeline);
+    let mut moved = manifest.clone();
+    let entry = moved
+        .images
+        .iter_mut()
+        .find(|entry| entry.name == "layerx-core-boundary")
+        .unwrap_or_else(|| panic!("manifest lost the core boundary image"));
+    entry.reference = format!("{}:{IMAGE_TAG}", entry.repository);
+    let error = release_pipeline_verify(
+        &moved,
+        ArtifactSource::Directory(&fixture.downloads),
+        Some(REVISION),
+    )
+    .err()
+    .unwrap_or_else(|| panic!("tag-pinned image reference passed verification"));
+    assert!(
+        error.contains("1 of 17 images failed verification"),
+        "{error}"
+    );
+    assert!(
+        error.contains(&format!(
+            "layerx-core-boundary@{VERSION} from ghcr (artifact manifest image layerx-core-boundary@{VERSION} reference is ghcr.io/sidiora-labs/layerx-core-boundary:{IMAGE_TAG}, expected the digest-pinned ghcr.io/sidiora-labs/layerx-core-boundary@sha256:"
+        )),
+        "{error}"
+    );
+    let rendered =
+        render_artifact_manifest(&moved).unwrap_or_else(|error| panic!("render: {error}"));
+    let refused = parse_artifact_manifest(&rendered)
+        .err()
+        .unwrap_or_else(|| panic!("tag-pinned image reference parsed"));
+    assert!(refused.contains("expected the digest-pinned"), "{refused}");
+}
+
+#[test]
+fn manifest_without_images_is_refused_by_the_validator() {
+    let pipeline = committed_pipeline();
+    let fixture = Fixture::build("image-empty", &pipeline);
+    let mut manifest = fixture.manifest(&pipeline);
+    manifest.images.clear();
+    let rendered =
+        render_artifact_manifest(&manifest).unwrap_or_else(|error| panic!("render: {error}"));
+    let error = parse_artifact_manifest(&rendered)
+        .err()
+        .unwrap_or_else(|| panic!("manifest without images parsed"));
+    assert_eq!(error, "artifact manifest lists no images");
+    let halted = release_pipeline_verify(
+        &manifest,
+        ArtifactSource::Directory(&fixture.downloads),
+        Some(REVISION),
+    )
+    .err()
+    .unwrap_or_else(|| panic!("manifest without images passed verification"));
+    assert_eq!(
+        halted,
+        "release halted before promotion: the artifact manifest lists no images"
+    );
+}
+
 fn tool() -> Command {
     Command::new(env!("CARGO_BIN_EXE_layerx-platform-release"))
 }
@@ -647,7 +971,7 @@ fn command_line_emits_the_manifest_and_verifies_downloaded_artifacts() {
         String::from_utf8_lossy(&emitted.stderr)
     );
     let stdout = String::from_utf8_lossy(&emitted.stdout);
-    assert!(stdout.contains(&format!("artifact manifest: {ARTIFACT_COUNT} artifacts of {VERSION} (sdk-v{VERSION}) bound to revision {REVISION}")), "{stdout}");
+    assert!(stdout.contains(&format!("artifact manifest: {ARTIFACT_COUNT} artifacts and {IMAGE_COUNT} images of {VERSION} (sdk-v{VERSION}) bound to revision {REVISION}")), "{stdout}");
     let manifest = parse_artifact_manifest(
         &fs::read_to_string(&output)
             .unwrap_or_else(|error| panic!("read {}: {error}", output.display())),
@@ -676,6 +1000,13 @@ fn command_line_emits_the_manifest_and_verifies_downloaded_artifacts() {
         "{stdout}"
     );
     assert!(stdout.contains(&format!("release verification: {ARTIFACT_COUNT} artifacts of {VERSION} match the manifest bound to revision {REVISION}")), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "pinned layerx-gateway@{VERSION} from ghcr ghcr.io/sidiora-labs/layerx-gateway@sha256:"
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains(&format!("release verification: {IMAGE_COUNT} images of {VERSION} are pinned by their registry digest in the manifest bound to revision {REVISION}")), "{stdout}");
     write(
         &fixture
             .downloads
