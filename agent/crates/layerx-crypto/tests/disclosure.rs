@@ -248,7 +248,7 @@ fn native_withdrawal_refuses_old_unknown_truncated_extended_and_invalid_fields()
         let (bytes, registry) = native_withdraw(&malformed, 9);
         assert!(bind(&bytes, &registry).is_err());
     }
-    let (bytes, registry) = native_withdraw(&payload, 10);
+    let (bytes, registry) = native_withdraw(&payload, 12);
     assert!(matches!(
         bind(&bytes, &registry),
         Err(DisclosureError::UnsupportedActivity(_))
