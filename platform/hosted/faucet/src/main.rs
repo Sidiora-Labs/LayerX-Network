@@ -81,6 +81,7 @@ struct Config {
     outbound_ca: Certificate,
     identity: Endpoint,
     identity_service_token: Zeroizing<String>,
+    service_claim_token: Option<Zeroizing<String>>,
     funding: Endpoint,
     funding_admin_token: Zeroizing<String>,
     redis: Endpoint,
@@ -99,6 +100,14 @@ struct Config {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ClaimRequest {
+    did: String,
+    public_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServiceClaimRequest {
+    principal: String,
     did: String,
     public_key: String,
 }
@@ -206,6 +215,13 @@ fn read_secret(path_variable: &str) -> Result<Zeroizing<String>, String> {
     Ok(Zeroizing::new(value))
 }
 
+fn read_optional_secret(path_variable: &str) -> Result<Option<Zeroizing<String>>, String> {
+    if env::var_os(path_variable).is_none() {
+        return Ok(None);
+    }
+    read_secret(path_variable).map(Some)
+}
+
 fn parse_u64(name: &str, default: u64) -> Result<u64, String> {
     env::var(name).map_or(Ok(default), |value| {
         value
@@ -264,6 +280,7 @@ fn config() -> Result<Config, String> {
             "https",
         )?,
         identity_service_token: read_secret("LAYERX_IDENTITY_SERVICE_TOKEN_FILE")?,
+        service_claim_token: read_optional_secret("LAYERX_FAUCET_SERVICE_CLAIM_TOKEN_FILE")?,
         funding: Endpoint::parse(
             &env::var("LAYERX_TESTNET_FUNDING_URL")
                 .map_err(|_| "LAYERX_TESTNET_FUNDING_URL is required")?,
@@ -899,6 +916,97 @@ fn fund(config: &Config, claim: &ClaimRequest, funding_id: &str) -> FundingResul
     FundingResult::Funded(response_body.to_string())
 }
 
+fn preflight<'a>(
+    config: &Config,
+    request: &'a Request,
+    peer: IpAddr,
+) -> Result<&'a String, Response> {
+    if request.headers.get("content-type").map(String::as_str) != Some("application/json") {
+        return Err(refusal(400, "content_type_required", None));
+    }
+    if request.headers.contains_key("forwarded")
+        || request.headers.contains_key("x-forwarded-for")
+        || request.headers.contains_key("x-real-ip")
+        || request.headers.contains_key("x-layerx-client-ip")
+        || request.headers.contains_key("x-layerx-principal")
+    {
+        return Err(refusal(400, "untrusted_identity_header", None));
+    }
+    match admit_network(config, peer) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(refusal(
+                429,
+                "network_request_rate",
+                Some(config.network_request_window_seconds),
+            ))
+        }
+        Err(_) => return Err(refusal(503, "persistence_unavailable", Some(10))),
+    }
+    let Some(idempotency) = request.headers.get("idempotency-key") else {
+        return Err(refusal(400, "idempotency_key_required", None));
+    };
+    if !valid_identifier(idempotency, 128) {
+        return Err(refusal(400, "invalid_idempotency_key", None));
+    }
+    Ok(idempotency)
+}
+
+fn service_scope(principal: &str) -> String {
+    format!("service:{principal}")
+}
+
+fn service_token_admits(expected: &str, presented: Option<&str>) -> bool {
+    let Some(presented) = presented else {
+        return false;
+    };
+    presented.len() == expected.len()
+        && presented.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1
+}
+
+fn service_claim_fields(body: &[u8]) -> Option<ServiceClaimRequest> {
+    let document = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    if !document.is_object() {
+        return None;
+    }
+    let claim: ServiceClaimRequest = serde_json::from_value(document).ok()?;
+    (valid_identifier(&claim.principal, 512)
+        && valid_did(&claim.did)
+        && valid_hex32(&claim.public_key))
+    .then_some(claim)
+}
+
+fn service_claim(config: &Config, request: &Request, peer: IpAddr) -> Response {
+    let Some(expected) = &config.service_claim_token else {
+        return refusal(404, "not_found", None);
+    };
+    let idempotency = match preflight(config, request, peer) {
+        Ok(idempotency) => idempotency,
+        Err(response) => return response,
+    };
+    let presented = request
+        .headers
+        .get("authorization")
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if !service_token_admits(expected.as_str(), presented) {
+        return refusal(401, "service_token_required", None);
+    }
+    let Some(claim) = service_claim_fields(&request.body) else {
+        return refusal(400, "invalid_argument", None);
+    };
+    let scope = service_scope(&claim.principal);
+    settle(
+        config,
+        idempotency,
+        &claim.principal,
+        &scope,
+        &ClaimRequest {
+            did: claim.did,
+            public_key: claim.public_key,
+        },
+    )
+}
+
 fn route(config: &Config, request: &Request, peer: IpAddr) -> Response {
     if request.method == "GET" && request.path == "/livez" {
         return ok("{\"status\":\"live\",\"service\":\"faucet\"}".to_owned());
@@ -911,37 +1019,16 @@ fn route(config: &Config, request: &Request, peer: IpAddr) -> Response {
             _ => refusal(503, "dependency_unavailable", Some(10)),
         };
     }
+    if request.method == "POST" && request.path == "/v1/faucet/service-claims" {
+        return service_claim(config, request, peer);
+    }
     if request.method != "POST" || request.path != "/v1/faucet/claims" {
         return refusal(404, "not_found", None);
     }
-    if request.headers.get("content-type").map(String::as_str) != Some("application/json") {
-        return refusal(400, "content_type_required", None);
-    }
-    if request.headers.contains_key("forwarded")
-        || request.headers.contains_key("x-forwarded-for")
-        || request.headers.contains_key("x-real-ip")
-        || request.headers.contains_key("x-layerx-client-ip")
-        || request.headers.contains_key("x-layerx-principal")
-    {
-        return refusal(400, "untrusted_identity_header", None);
-    }
-    match admit_network(config, peer) {
-        Ok(true) => {}
-        Ok(false) => {
-            return refusal(
-                429,
-                "network_request_rate",
-                Some(config.network_request_window_seconds),
-            )
-        }
-        Err(_) => return refusal(503, "persistence_unavailable", Some(10)),
-    }
-    let Some(idempotency) = request.headers.get("idempotency-key") else {
-        return refusal(400, "idempotency_key_required", None);
+    let idempotency = match preflight(config, request, peer) {
+        Ok(idempotency) => idempotency,
+        Err(response) => return response,
     };
-    if !valid_identifier(idempotency, 128) {
-        return refusal(400, "invalid_idempotency_key", None);
-    }
     let identity = match authenticate(config, request) {
         Ok(identity) => identity,
         Err(response) => return response,
@@ -953,8 +1040,18 @@ fn route(config: &Config, request: &Request, peer: IpAddr) -> Response {
     if !valid_did(&claim.did) || !valid_hex32(&claim.public_key) {
         return refusal(400, "invalid_argument", None);
     }
+    settle(config, idempotency, &identity, &peer.to_string(), &claim)
+}
+
+fn settle(
+    config: &Config,
+    idempotency: &str,
+    identity: &str,
+    network: &str,
+    claim: &ClaimRequest,
+) -> Response {
     let digest = sha256(&[
-        &identity,
+        identity,
         &claim.did,
         &claim.public_key,
         &config.amount.to_string(),
@@ -963,16 +1060,16 @@ fn route(config: &Config, request: &Request, peer: IpAddr) -> Response {
         config,
         idempotency,
         &digest,
-        &identity,
+        identity,
         &claim.public_key,
-        &peer.to_string(),
+        network,
     ) else {
         return refusal(503, "persistence_unavailable", Some(10));
     };
     match reservation {
         Reservation::Funded { body } => ok(body),
         Reservation::Pending { funding_id } | Reservation::Reserved { funding_id } => {
-            match fund(config, &claim, &funding_id) {
+            match fund(config, claim, &funding_id) {
                 FundingResult::Funded(body) => {
                     if complete(config, idempotency, &digest, &funding_id, &body).is_ok() {
                         ok(body)
@@ -1127,5 +1224,123 @@ fn main() {
     if let Err(error) = config().and_then(platform_faucet) {
         eprintln!("layerx-faucet: {error}");
         std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(principal: &str, did: &str, public_key: &str) -> Vec<u8> {
+        serde_json::json!({
+            "principal": principal,
+            "did": did,
+            "public_key": public_key,
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn only_the_exact_service_token_is_admitted() {
+        let expected = "faucet-service-token-0123456789";
+        assert!(service_token_admits(expected, Some(expected)));
+        for presented in [
+            None,
+            Some(""),
+            Some("faucet-service-token-012345678"),
+            Some("faucet-service-token-01234567890"),
+            Some("faucet-service-token-0123456788"),
+            Some("Faucet-service-token-0123456789"),
+        ] {
+            assert!(
+                !service_token_admits(expected, presented),
+                "{presented:?} was admitted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_service_claim_names_a_principal_a_did_and_a_signer_key() {
+        let principal = "beta.7399f031b011aa1198718d62c3f79984";
+        let did = "did:layerx:alice";
+        let public_key = "ab".repeat(32);
+        let claim = service_claim_fields(&body(principal, did, &public_key))
+            .unwrap_or_else(|| panic!("a well-formed service claim was refused"));
+        assert_eq!(claim.principal, principal);
+        assert_eq!(claim.did, did);
+        assert_eq!(claim.public_key, public_key);
+
+        for refused in [
+            body("", did, &public_key),
+            body(principal, "layerx:alice", &public_key),
+            body(principal, did, &"ab".repeat(31)),
+            body(principal, did, &"zz".repeat(32)),
+            body(&"a".repeat(513), did, &public_key),
+            body(
+                principal,
+                &format!("did:layerx:{}", "a".repeat(512)),
+                &public_key,
+            ),
+            body(principal, "did:layerx:alice/../bob", &public_key),
+            serde_json::json!({"principal": principal, "did": did})
+                .to_string()
+                .into_bytes(),
+            serde_json::json!({
+                "principal": principal, "did": did, "public_key": public_key, "amount": "1"
+            })
+            .to_string()
+            .into_bytes(),
+            serde_json::json!([principal, did, public_key])
+                .to_string()
+                .into_bytes(),
+            b"not json".to_vec(),
+            Vec::new(),
+        ] {
+            assert!(
+                service_claim_fields(&refused).is_none(),
+                "{} was accepted",
+                String::from_utf8_lossy(&refused)
+            );
+        }
+    }
+
+    #[test]
+    fn the_service_network_bucket_is_scoped_to_the_principal() {
+        let principal = "beta.7399f031b011aa1198718d62c3f79984";
+        let scope = service_scope(principal);
+        assert_eq!(scope, format!("service:{principal}"));
+        assert_ne!(scope, principal);
+        assert_ne!(scope, service_scope("beta.0000000000000000000000000000000"));
+        assert!(
+            valid_identifier(&scope, 520),
+            "the scope keys a durable quota bucket"
+        );
+        assert_eq!(
+            sha256(&[scope.as_str()]),
+            sha256(&[service_scope(principal).as_str()]),
+            "the bucket key is deterministic across replicas"
+        );
+        assert_ne!(sha256(&[scope.as_str()]), sha256(&[principal]));
+    }
+
+    #[test]
+    fn refusals_carry_a_machine_readable_code_and_honest_retry_advice() {
+        let refused = refusal(401, "service_token_required", None);
+        assert_eq!(refused.status, 401);
+        assert_eq!(refused.retry_after, None);
+        let document: serde_json::Value =
+            serde_json::from_str(&refused.body).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(document["error"]["code"], "service_token_required");
+        assert_eq!(document["error"]["retry"], "never");
+        assert!(document["error"].get("retry_after_seconds").is_none());
+
+        let throttled = refusal(429, "identity_quota", Some(3600));
+        assert_eq!(throttled.status, 429);
+        assert_eq!(throttled.retry_after, Some(3600));
+        let document: serde_json::Value =
+            serde_json::from_str(&throttled.body).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(document["error"]["retry"], "after");
+        assert_eq!(document["error"]["retry_after_seconds"], 3600);
     }
 }

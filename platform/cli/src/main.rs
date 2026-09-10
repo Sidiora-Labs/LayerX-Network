@@ -11,6 +11,7 @@ mod config;
 mod credential;
 mod emulator;
 mod encoding;
+mod faucet;
 mod file_store;
 mod http;
 mod install;
@@ -61,6 +62,8 @@ enum Command {
     Account(AccountCommand),
     /// Register a self-service identity principal for one local signing key.
     Register(register::RegisterArgs),
+    /// Claim one testnet faucet grant for the active identity and local key.
+    Faucet(faucet::FaucetArgs),
     /// Quote and commit a real test payment through the active endpoint.
     #[command(subcommand)]
     Payment(PaymentCommand),
@@ -507,6 +510,7 @@ fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String>
         Command::Auth(command) => auth(command).map(Some),
         Command::Account(command) => account(command).map(Some),
         Command::Register(arguments) => register::run(&arguments).map(Some),
+        Command::Faucet(arguments) => faucet::run(&arguments).map(Some),
         Command::Payment(command) => payment(command).map(Some),
         Command::Receipt(command) => receipt(command).map(Some),
         Command::Program(command) => program(command).map(Some),

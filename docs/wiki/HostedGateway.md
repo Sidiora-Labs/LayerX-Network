@@ -51,19 +51,19 @@ result shapes, and WebSocket behavior are in [Public JSON-RPC](PublicRpc.md).
 Inbound TLS is rustls with no client authentication. The certificate
 is `LAYERX_GATEWAY_TLS_CERT_DER`; the PKCS#8 key is
 `LAYERX_GATEWAY_TLS_KEY_DER`
-(`platform/hosted/gateway/src/main.rs:459-478`). Each accepted TCP
+(`platform/hosted/gateway/src/main.rs:461-480`). Each accepted TCP
 connection becomes a rustls `ServerConnection`
-(`platform/hosted/gateway/src/main.rs:1797-1808`). At most 256
+(`platform/hosted/gateway/src/main.rs:1817-1828`). At most 256
 connections are live; further accepts are shut down
-(`platform/hosted/gateway/src/main.rs:40`;
-`platform/hosted/gateway/src/main.rs:1816-1819`). Request bodies are
-bounded at 8 MiB (`platform/hosted/gateway/src/main.rs:39`;
-`platform/hosted/gateway/src/main.rs:1805-1806`).
+(`platform/hosted/gateway/src/main.rs:41`;
+`platform/hosted/gateway/src/main.rs:1836-1839`). Request bodies are
+bounded at 8 MiB (`platform/hosted/gateway/src/main.rs:40`;
+`platform/hosted/gateway/src/main.rs:1825-1826`).
 
 Outbound HTTPS uses `native_tls` `TlsConnector` with
 `LAYERX_GATEWAY_OUTBOUND_CA_DER`, a PKCS#12 client identity, and a
 minimum protocol of TLS 1.2
-(`platform/hosted/gateway/src/main.rs:484-501`;
+(`platform/hosted/gateway/src/main.rs:486-503`;
 `platform/hosted/gateway/src/http.rs:161-165`). Endpoints must be
 `https://` with a DNS host, not a literal IP
 (`platform/hosted/gateway/src/http.rs:23-26`;
@@ -94,14 +94,14 @@ Bearer as the upstream `Authorization` value.
 
 | Credential | Accepted from | Used as | Never |
 | --- | --- | --- | --- |
-| `LayerX-Key {id}:{secret}` | Production `/v1` routes and `GET /internal/v1/principal` (`platform/hosted/gateway/src/main.rs:1142-1153`; `platform/hosted/gateway/src/main.rs:1706-1718`; `platform/hosted/gateway/src/main.rs:1748`) | Local digest check against Redis (`platform/hosted/gateway/src/lib.rs:45-75`) | Sent to component, authority, identity, or registry. `Client::request` always prefixes its argument with `Bearer ` (`platform/hosted/gateway/src/http.rs:90-104`) |
-| `Bearer` session | `/v1/keys` only (`platform/hosted/gateway/src/main.rs:952-961`; `platform/hosted/gateway/src/main.rs:1081-1088`) | JSON body `{"token": …}` to identity `POST /v1/sessions/introspect` (`platform/hosted/gateway/src/main.rs:962-973`) | Upstream `Authorization`. That header carries `LAYERX_GATEWAY_IDENTITY_TOKEN_FILE` |
-| Component token | File `LAYERX_GATEWAY_COMPONENT_TOKEN_FILE` (`platform/hosted/gateway/src/main.rs:542`) | `Authorization: Bearer` to the agent-boundary URL | Presented by humans |
-| Authority token | File `LAYERX_GATEWAY_AUTHORITY_TOKEN_FILE` (`platform/hosted/gateway/src/main.rs:547`) | `Authorization: Bearer` to the receipt-authority URL | Presented by humans |
-| Identity token | File `LAYERX_GATEWAY_IDENTITY_TOKEN_FILE` (`platform/hosted/gateway/src/main.rs:552`) | `Authorization: Bearer` to the identity URL | Presented by humans |
-| Registry token | File `LAYERX_GATEWAY_PROGRAM_REGISTRY_TOKEN_FILE` (`platform/hosted/gateway/src/main.rs:557`) | `Authorization: Bearer` to the program-registry URL | Presented by humans |
-| Redis username and password | `LAYERX_GATEWAY_REDIS_USERNAME_FILE`, `LAYERX_GATEWAY_REDIS_PASSWORD_FILE` (`platform/hosted/gateway/src/main.rs:564-565`) | Redis `AUTH` (`platform/hosted/gateway/src/store.rs:761-767`) | HTTP |
-| PKCS#12 client identity | `LAYERX_GATEWAY_CLIENT_IDENTITY_PKCS12` plus password file (`platform/hosted/gateway/src/main.rs:492-500`) | Outbound HTTPS mTLS | Inbound TLS (`with_no_client_auth` at `platform/hosted/gateway/src/main.rs:477`) |
+| `LayerX-Key {id}:{secret}` | Production `/v1` routes and `GET /internal/v1/principal` (`platform/hosted/gateway/src/main.rs:1162-1173`; `platform/hosted/gateway/src/main.rs:1726-1738`; `platform/hosted/gateway/src/main.rs:1768`) | Local digest check against Redis (`platform/hosted/gateway/src/lib.rs:45-75`) | Sent to component, authority, identity, or registry. `Client::request` always prefixes its argument with `Bearer ` (`platform/hosted/gateway/src/http.rs:90-104`) |
+| `Bearer` session | `/v1/keys` only (`platform/hosted/gateway/src/main.rs:972-981`; `platform/hosted/gateway/src/main.rs:1101-1108`) | JSON body `{"token": …}` to identity `POST /v1/sessions/introspect` (`platform/hosted/gateway/src/main.rs:982-993`) | Upstream `Authorization`. That header carries `LAYERX_GATEWAY_IDENTITY_TOKEN_FILE` |
+| Component token | File `LAYERX_GATEWAY_COMPONENT_TOKEN_FILE` (`platform/hosted/gateway/src/main.rs:516`) | `Authorization: Bearer` to the agent-boundary URL | Presented by humans |
+| Authority token | File `LAYERX_GATEWAY_AUTHORITY_TOKEN_FILE` (`platform/hosted/gateway/src/main.rs:521`) | `Authorization: Bearer` to the receipt-authority URL | Presented by humans |
+| Identity token | File `LAYERX_GATEWAY_IDENTITY_TOKEN_FILE` (`platform/hosted/gateway/src/main.rs:526`) | `Authorization: Bearer` to the identity URL | Presented by humans |
+| Registry token | File `LAYERX_GATEWAY_PROGRAM_REGISTRY_TOKEN_FILE` (`platform/hosted/gateway/src/main.rs:576`) | `Authorization: Bearer` to the program-registry URL | Presented by humans |
+| Redis username and password | `LAYERX_GATEWAY_REDIS_USERNAME_FILE`, `LAYERX_GATEWAY_REDIS_PASSWORD_FILE` (`platform/hosted/gateway/src/main.rs:583-584`) | Redis `AUTH` (`platform/hosted/gateway/src/store.rs:761-767`) | HTTP |
+| PKCS#12 client identity | `LAYERX_GATEWAY_CLIENT_IDENTITY_PKCS12` plus password file (`platform/hosted/gateway/src/main.rs:494-502`) | Outbound HTTPS mTLS | Inbound TLS (`with_no_client_auth` at `platform/hosted/gateway/src/main.rs:479`) |
 
 `authenticate_gateway_key` requires prefix `LayerX-Key `, an id of at
 most 64 `[A-Za-z0-9_-]` characters, and a secret `lxp_live_` plus 64
@@ -110,7 +110,7 @@ hex characters (`platform/hosted/gateway/src/lib.rs:25-26`;
 `platform/hosted/gateway/src/lib.rs:111-117`). The store digest is
 SHA-256 over length-prefixed `gateway-key-v1`, salt, and secret
 (`platform/hosted/gateway/src/lib.rs:64`;
-`platform/hosted/gateway/src/main.rs:1006-1014`). A disabled key or
+`platform/hosted/gateway/src/main.rs:1026-1034`). A disabled key or
 digest mismatch is `AccessError::Unauthenticated`; a store error is
 `AccessError::PersistenceUnavailable`
 (`platform/hosted/gateway/src/lib.rs:33-36`;
@@ -124,27 +124,27 @@ deliberately not an authentication refusal
 
 Headers `x-layerx-principal` and `x-layerx-api-key` are refused as
 `400 untrusted_identity_header` before authentication
-(`platform/hosted/gateway/src/main.rs:1696-1704`;
+(`platform/hosted/gateway/src/main.rs:1716-1724`;
 `platform/hosted/gateway/tests/hosted-boundary.sh:44`). Incoming
 headers and bodies are zeroized on drop
 (`platform/hosted/gateway/src/http.rs:215-221`). Audit events hash
 principal digest, action, subject, and outcome; payloads and
 credentials never enter the audit stream
 (`platform/hosted/gateway/src/lib.rs:90-92`;
-`platform/hosted/gateway/src/main.rs:1070-1078`).
+`platform/hosted/gateway/src/main.rs:1090-1098`).
 
 `Client::request_authorized` exists so another hosted ingress can
 present an already validated `LayerX-Key` value to this gateway
 (`platform/hosted/gateway/src/http.rs:107-120`). The gateway binary
 itself calls `Client::request` with the four service tokens
-(`platform/hosted/gateway/src/main.rs:927-949`).
+(`platform/hosted/gateway/src/main.rs:947-969`).
 
 ---
 
 ## Scopes
 
 Issued keys carry a sorted, non-empty list of at most six scopes
-(`platform/hosted/gateway/src/main.rs:1025-1045`):
+(`platform/hosted/gateway/src/main.rs:1045-1065`):
 
 | Scope | Routes |
 | --- | --- |
@@ -156,8 +156,8 @@ Issued keys carry a sorted, non-empty list of at most six scopes
 | `state:read` | `GET /v1/state` |
 
 `permits` is exact string match on the comma-joined record
-(`platform/hosted/gateway/src/main.rs:1052-1068`). Missing scope is
-`403 insufficient_scope` (`platform/hosted/gateway/src/main.rs:1758-1764`).
+(`platform/hosted/gateway/src/main.rs:1072-1088`). Missing scope is
+`403 insufficient_scope` (`platform/hosted/gateway/src/main.rs:1778-1784`).
 
 Quota is a finite fixed window: requests `1..=1_000_000`, window
 `1..=2_592_000` seconds (`platform/hosted/gateway/src/lib.rs:164-171`).
@@ -177,33 +177,33 @@ allows any ASCII hex digit, including `A-F`
 alphabets differ.
 
 Unauthenticated and key-management routes are dispatched before
-`production_route` (`platform/hosted/gateway/src/main.rs:1693-1739`).
+`production_route` (`platform/hosted/gateway/src/main.rs:1713-1759`).
 
 | Method and path | Inputs | Upstream |
 | --- | --- | --- |
-| `GET /livez` | none | none. Body `status=live`, `service=layerx-gateway`, `package_semver` (`platform/hosted/gateway/src/main.rs:1721-1729`) |
-| `GET /readyz` | none | Redis `PING`; component, authority `GET /readyz`; registry `GET /healthz` (`platform/hosted/gateway/src/main.rs:1640-1691`; `platform/hosted/gateway/src/main.rs:2779-2811`) |
-| `GET /v1/status` | none | same Redis/component/authority probes, no registry (`platform/hosted/gateway/src/main.rs:2814-2841`) |
-| `POST /v1/keys` | `Authorization: Bearer`, `Idempotency-Key`, JSON `signer_public_key`, `scopes`, `quota_requests`, `quota_window_seconds` (`platform/hosted/gateway/src/main.rs:76-82`; `platform/hosted/gateway/src/main.rs:2274-2300`) | identity `POST /v1/sessions/introspect`; Redis `issue_key`. Secret is derived, not stored (`platform/hosted/gateway/src/lib.rs:220-228`; `platform/hosted/gateway/src/main.rs:2301-2348`) |
-| `GET /v1/keys` | Bearer session | identity introspect; Redis `list_keys` (`platform/hosted/gateway/src/main.rs:1090-1091`; `platform/hosted/gateway/src/main.rs:2351-2382`) |
-| `DELETE /v1/keys/{id}` | Bearer session | identity introspect; Redis `revoke_key` (`platform/hosted/gateway/src/main.rs:1114-1126`) |
-| `POST /v1/keys/{id}/rotate` | Bearer session, `Idempotency-Key` | identity introspect; Redis `rotate_key` (`platform/hosted/gateway/src/main.rs:1128-1137`; `platform/hosted/gateway/src/main.rs:2385-2454`) |
+| `GET /livez` | none | none. Body `status=live`, `service=layerx-gateway`, `package_semver` (`platform/hosted/gateway/src/main.rs:1741-1749`) |
+| `GET /readyz` | none | Redis `PING`; component, authority `GET /readyz`; registry `GET /healthz` (`platform/hosted/gateway/src/main.rs:1660-1711`; `platform/hosted/gateway/src/main.rs:2799-2831`) |
+| `GET /v1/status` | none | same Redis/component/authority probes, no registry (`platform/hosted/gateway/src/main.rs:2834-2861`) |
+| `POST /v1/keys` | `Authorization: Bearer`, `Idempotency-Key`, JSON `signer_public_key`, `scopes`, `quota_requests`, `quota_window_seconds` (`platform/hosted/gateway/src/main.rs:78-84`; `platform/hosted/gateway/src/main.rs:2294-2320`) | identity `POST /v1/sessions/introspect`; Redis `issue_key`. Secret is derived, not stored (`platform/hosted/gateway/src/lib.rs:220-228`; `platform/hosted/gateway/src/main.rs:2321-2368`) |
+| `GET /v1/keys` | Bearer session | identity introspect; Redis `list_keys` (`platform/hosted/gateway/src/main.rs:1110-1111`; `platform/hosted/gateway/src/main.rs:2371-2402`) |
+| `DELETE /v1/keys/{id}` | Bearer session | identity introspect; Redis `revoke_key` (`platform/hosted/gateway/src/main.rs:1134-1146`) |
+| `POST /v1/keys/{id}/rotate` | Bearer session, `Idempotency-Key` | identity introspect; Redis `rotate_key` (`platform/hosted/gateway/src/main.rs:1148-1157`; `platform/hosted/gateway/src/main.rs:2405-2474`) |
 | `POST /rpc` | JSON-RPC 2.0; reads are unauthenticated, submission requires `LayerX-Key` | public-core reads or the existing authenticated activity/Programs routes |
 | `GET /rpc/schema` | none | embedded `openrpc.json` |
 | `GET /rpc/ws` | WebSocket upgrade and `LayerX-Key`; `receipt:read` or `state:read` by topic | live authenticated receipt/account/checkpoint wakes |
-| `GET /internal/v1/principal` | `LayerX-Key` | Redis key lookup. Body `principal_digest` only (`platform/hosted/gateway/src/main.rs:1706-1718`) |
-| `POST /v1/activities` | `LayerX-Key`, `Idempotency-Key`, `application/json` `{activity}` or `application/octet-stream` signed bytes (`platform/hosted/gateway/src/main.rs:3068-3117`) | agent-boundary `POST /v1/activities` as `application/octet-stream` with the component token and protocol idempotency key (`platform/hosted/gateway/src/main.rs:3193-3206`). Then authority `GET /v1/authorized-batches/by-activity/{id}` (`platform/hosted/gateway/src/main.rs:1156-1186`) |
-| `GET /v1/state` | `LayerX-Key` and `state:read` | none. Always `503 principal_state_proof_unavailable` before quota (`platform/hosted/gateway/src/main.rs:1572-1573`; `platform/hosted/gateway/src/main.rs:1611`) |
-| `GET /v1/receipts/{id}` | `LayerX-Key`, `receipt:read` | Redis `activity_owner`; agent-boundary `GET /v1/receipts/{id}`; authority by-activity (`platform/hosted/gateway/src/main.rs:2457-2513`) |
-| `POST /v1/programs/call` | `LayerX-Key`, `program:call`, `Idempotency-Key` hex32, JSON or octet-stream Programs CALL (`platform/hosted/gateway/src/main.rs:303-390`; `platform/hosted/gateway/src/main.rs:1766-1771`) | registry `GET /v1/programs/registry/{program}`; agent-boundary `POST /v1/programs/call`; authority by-activity |
-| `POST /v1/programs/simulate` | same call body, `program:simulate` | registry head; agent-boundary `POST /v1/programs/simulate` (`platform/hosted/gateway/src/main.rs:1250-1329`) |
-| `POST /v1/programs/deploy` | `program:call`, octet-stream only, Programs ordinal 1 (`platform/hosted/gateway/src/program_lifecycle.rs:7-13`; `platform/hosted/gateway/src/main.rs:3084-3101`) | agent-boundary `POST /v1/programs/deploy`; authority by-activity |
+| `GET /internal/v1/principal` | `LayerX-Key` | Redis key lookup. Body `principal_digest` only (`platform/hosted/gateway/src/main.rs:1726-1738`) |
+| `POST /v1/activities` | `LayerX-Key`, `Idempotency-Key`, `application/json` `{activity}` or `application/octet-stream` signed bytes (`platform/hosted/gateway/src/main.rs:3088-3137`) | agent-boundary `POST /v1/activities` as `application/octet-stream` with the component token and protocol idempotency key (`platform/hosted/gateway/src/main.rs:3213-3226`). Then authority `GET /v1/authorized-batches/by-activity/{id}` (`platform/hosted/gateway/src/main.rs:1176-1206`) |
+| `GET /v1/state` | `LayerX-Key` and `state:read` | none. Always `503 principal_state_proof_unavailable` before quota (`platform/hosted/gateway/src/main.rs:1592-1593`; `platform/hosted/gateway/src/main.rs:1631`) |
+| `GET /v1/receipts/{id}` | `LayerX-Key`, `receipt:read` | Redis `activity_owner`; agent-boundary `GET /v1/receipts/{id}`; authority by-activity (`platform/hosted/gateway/src/main.rs:2477-2533`) |
+| `POST /v1/programs/call` | `LayerX-Key`, `program:call`, `Idempotency-Key` hex32, JSON or octet-stream Programs CALL (`platform/hosted/gateway/src/main.rs:305-392`; `platform/hosted/gateway/src/main.rs:1786-1791`) | registry `GET /v1/programs/registry/{program}`; agent-boundary `POST /v1/programs/call`; authority by-activity |
+| `POST /v1/programs/simulate` | same call body, `program:simulate` | registry head; agent-boundary `POST /v1/programs/simulate` (`platform/hosted/gateway/src/main.rs:1270-1349`) |
+| `POST /v1/programs/deploy` | `program:call`, octet-stream only, Programs ordinal 1 (`platform/hosted/gateway/src/program_lifecycle.rs:7-13`; `platform/hosted/gateway/src/main.rs:3104-3121`) | agent-boundary `POST /v1/programs/deploy`; authority by-activity |
 | `POST /v1/programs/upgrade` | ordinal 2, octet-stream | agent-boundary `POST /v1/programs/upgrade`; authority |
 | `POST /v1/programs/wind-down` | ordinal 7, octet-stream | agent-boundary `POST /v1/programs/wind-down`; authority |
-| `GET /v1/programs/registry/{id}` | `program:read`, JSON selector `program_id` plus `requested_verification_level=sequencer-signed` (`platform/hosted/gateway/src/main.rs:847-861`) | registry `GET /v1/programs/registry/{id}` (`platform/hosted/gateway/src/main.rs:393-429`; `platform/hosted/gateway/src/main.rs:2516-2548`) |
-| `GET /v1/programs/registry/{id}/interface` | same selector | registry head and `GET …/interface` (`platform/hosted/gateway/src/main.rs:2551-2581`) |
-| `GET /v1/programs/activities/{id}` | JSON selector `activity_id` plus `sequencer-signed` (`platform/hosted/gateway/src/main.rs:886-901`) | Redis owner and operation; pending calls agent-boundary `GET /v1/programs/activities/{id}` (`platform/hosted/gateway/src/main.rs:2638-2688`; `platform/hosted/gateway/src/main.rs:3568-3572`) |
-| `GET /v1/programs/receipts/by-idempotency/{key}` | JSON selector `idempotency_key`, `expected_activity_id`, `sequencer-signed` (`platform/hosted/gateway/src/main.rs:864-883`) | Redis operation; pending lifecycle uses agent-boundary `GET /v1/programs/receipts/by-idempotency/{key}` (`platform/hosted/gateway/src/main.rs:1460-1467`; `platform/hosted/gateway/src/main.rs:2584-2635`) |
+| `GET /v1/programs/registry/{id}` | `program:read`, JSON selector `program_id` plus `requested_verification_level=sequencer-signed` (`platform/hosted/gateway/src/main.rs:867-881`) | registry `GET /v1/programs/registry/{id}` (`platform/hosted/gateway/src/main.rs:395-431`; `platform/hosted/gateway/src/main.rs:2536-2568`) |
+| `GET /v1/programs/registry/{id}/interface` | same selector | registry head and `GET …/interface` (`platform/hosted/gateway/src/main.rs:2571-2601`) |
+| `GET /v1/programs/activities/{id}` | JSON selector `activity_id` plus `sequencer-signed` (`platform/hosted/gateway/src/main.rs:906-921`) | Redis owner and operation; pending calls agent-boundary `GET /v1/programs/activities/{id}` (`platform/hosted/gateway/src/main.rs:2658-2708`; `platform/hosted/gateway/src/main.rs:3588-3592`) |
+| `GET /v1/programs/receipts/by-idempotency/{key}` | JSON selector `idempotency_key`, `expected_activity_id`, `sequencer-signed` (`platform/hosted/gateway/src/main.rs:884-903`) | Redis operation; pending lifecycle uses agent-boundary `GET /v1/programs/receipts/by-idempotency/{key}` (`platform/hosted/gateway/src/main.rs:1480-1487`; `platform/hosted/gateway/src/main.rs:2604-2655`) |
 
 The component URL in the hosted manifest is the agent boundary, not
 the core Service (`platform/hosted/gateway/deployment.yaml:78`):
@@ -218,18 +218,18 @@ Authority is
 `https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420`
 (`platform/hosted/gateway/deployment.yaml:84`). Readiness labels the
 component probe `core_agent_boundary`
-(`platform/hosted/gateway/src/main.rs:2805`).
+(`platform/hosted/gateway/src/main.rs:2825`).
 `LAYERX_GATEWAY_PUBLIC_CORE_URL` is the separate authenticated source for
 public account, proof, Asset, fee, and node-info reads. Activity submission
 continues to use the agent-boundary path.
 
 Program GET/simulate/error responses are wrapped in the agent envelope
 unless the request is a successful `POST` call or lifecycle mutation
-(`platform/hosted/gateway/src/main.rs:749-825`;
-`platform/hosted/gateway/src/main.rs:1777-1785`).
+(`platform/hosted/gateway/src/main.rs:769-845`;
+`platform/hosted/gateway/src/main.rs:1797-1805`).
 
 Unknown `production_route` values are `404 not_found`
-(`platform/hosted/gateway/src/main.rs:1740-1746`).
+(`platform/hosted/gateway/src/main.rs:1760-1766`).
 `GET /__emulator/reset` is 404
 (`platform/hosted/gateway/tests/hosted-boundary.sh:36`).
 
@@ -239,7 +239,7 @@ Unknown `production_route` values are `404 not_found`
 
 | Key | Role |
 | --- | --- |
-| `LAYERX_GATEWAY_LISTEN` | Bind address; default `0.0.0.0:9443` (`platform/hosted/gateway/src/main.rs:532-535`; `platform/hosted/gateway/deployment.yaml:72`) |
+| `LAYERX_GATEWAY_LISTEN` | Bind address; default `0.0.0.0:9443` (`platform/hosted/gateway/src/main.rs:567-570`; `platform/hosted/gateway/deployment.yaml:72`) |
 | `LAYERX_GATEWAY_TLS_CERT_DER` | Inbound server certificate DER |
 | `LAYERX_GATEWAY_TLS_KEY_DER` | Inbound PKCS#8 key DER |
 | `LAYERX_GATEWAY_PUBLIC_CORE_URL` | HTTPS source for public committed reads; testnet uses `layerx-pending-core` |
@@ -257,13 +257,13 @@ Unknown `production_route` values are `404 not_found`
 | `LAYERX_GATEWAY_REDIS_URL` | `rediss://` origin |
 | `LAYERX_GATEWAY_REDIS_USERNAME_FILE` | Redis ACL user |
 | `LAYERX_GATEWAY_REDIS_PASSWORD_FILE` | Redis ACL password |
-| `LAYERX_GATEWAY_SEQUENCER_PUBLIC_KEY_FILE` | Pinned 32-byte hex sequencer key (`platform/hosted/gateway/src/main.rs:502-503`) |
-| `LAYERX_GATEWAY_KEY_PROVISIONING_KEY_FILE` | 32-byte hex used to derive issued secrets (`platform/hosted/gateway/src/main.rs:504-505`; `platform/hosted/gateway/src/lib.rs:220-228`) |
-| `LAYERX_GATEWAY_NETWORK_ID` | Hosted network identifier; must match authority facts (`platform/hosted/gateway/src/main.rs:513-518`; `platform/hosted/gateway/src/main.rs:1171-1175`) |
-| `LAYERX_GATEWAY_LXP_WIRE_VERSION` | Numeric wire version; must equal `STATE_COMMITMENT_PROTOCOL_VERSION` (`platform/hosted/gateway/src/main.rs:515-524`) |
-| `LAYERX_GATEWAY_PROTOCOL_NETWORK_ID` | `u32` checked on signed activities (`platform/hosted/gateway/src/main.rs:526-529`) |
-| `LAYERX_GATEWAY_MODULE_REGISTRY_FILE` | JSON module ordinals (`platform/hosted/gateway/src/main.rs:2231-2271`) |
-| `LAYERX_GATEWAY_IDEMPOTENCY_SECONDS` | Retention `3600..=2592000`; default `604800` (`platform/hosted/gateway/src/main.rs:41`; `platform/hosted/gateway/src/main.rs:506-511`; `platform/hosted/gateway/deployment.yaml:95`) |
+| `LAYERX_GATEWAY_SEQUENCER_PUBLIC_KEY_FILE` | Pinned 32-byte hex sequencer key (`platform/hosted/gateway/src/main.rs:504-505`) |
+| `LAYERX_GATEWAY_KEY_PROVISIONING_KEY_FILE` | 32-byte hex used to derive issued secrets (`platform/hosted/gateway/src/main.rs:539-540`; `platform/hosted/gateway/src/lib.rs:220-228`) |
+| `LAYERX_GATEWAY_NETWORK_ID` | Hosted network identifier; must match authority facts (`platform/hosted/gateway/src/main.rs:548-553`; `platform/hosted/gateway/src/main.rs:1191-1195`) |
+| `LAYERX_GATEWAY_LXP_WIRE_VERSION` | Numeric wire version; must equal `STATE_COMMITMENT_PROTOCOL_VERSION` (`platform/hosted/gateway/src/main.rs:550-559`) |
+| `LAYERX_GATEWAY_PROTOCOL_NETWORK_ID` | `u32` checked on signed activities (`platform/hosted/gateway/src/main.rs:561-564`) |
+| `LAYERX_GATEWAY_MODULE_REGISTRY_FILE` | JSON module ordinals (`platform/hosted/gateway/src/main.rs:2251-2291`) |
+| `LAYERX_GATEWAY_IDEMPOTENCY_SECONDS` | Retention `3600..=2592000`; default `604800` (`platform/hosted/gateway/src/main.rs:42`; `platform/hosted/gateway/src/main.rs:541-546`; `platform/hosted/gateway/deployment.yaml:95`) |
 
 The public registry admits Asset register (1), account_open (4), send (5),
 receive (6), grant_issue (7), grant_revoke (8), mint (10), and burn (11), plus
@@ -334,71 +334,71 @@ TCP 9443 from namespace `ingress-nginx` or from pods
 ## Typed refusals
 
 HTTP refusals use `{"ok": false, "error": {"code": …}}`
-(`platform/hosted/gateway/src/main.rs:578-585`). Library errors are
+(`platform/hosted/gateway/src/main.rs:597-605`). Library errors are
 `GatewayError` and `AccessError`.
 
 | HTTP | Code | Condition |
 | --- | --- | --- |
-| 400 | `untrusted_identity_header` | `x-layerx-principal` or `x-layerx-api-key` present (`platform/hosted/gateway/src/main.rs:1696-1699`) |
-| 400 | `invalid_http_request` | Request framing failed (`platform/hosted/gateway/src/main.rs:1805-1806`) |
-| 400 | `idempotency_key_required` | Missing or malformed `Idempotency-Key` on key issue, rotation, or activity (`platform/hosted/gateway/src/main.rs:2281-2284`; `platform/hosted/gateway/src/main.rs:3068-3078`) |
-| 400 | `invalid_key_request` | `IssueRequest` JSON rejected (`platform/hosted/gateway/src/main.rs:2285-2286`) |
-| 400 | `invalid_quota` | `Quota::new` rejected (`platform/hosted/gateway/src/main.rs:2295-2296`) |
-| 400 | `invalid_scopes` | Empty, unsorted, unknown, or more than six scopes (`platform/hosted/gateway/src/main.rs:2298-2299`; `platform/hosted/gateway/src/main.rs:1025-1045`) |
-| 400 | `invalid_activity` | JSON activity hex failed (`platform/hosted/gateway/src/main.rs:3111-3116`) |
-| 400 | `invalid_program_call` | Program call body or signed CALL failed (`platform/hosted/gateway/src/main.rs:1256-1257`; `platform/hosted/gateway/src/main.rs:3103-3106`) |
-| 400 | `invalid_program_lifecycle` | Lifecycle validate failed (`platform/hosted/gateway/src/main.rs:3099-3100`) |
-| 400 | `invalid_program_selector` | Discovery GET body failed (`platform/hosted/gateway/src/main.rs:1577-1578`) |
-| 400 | `invalid_program_receipt_selector` | Receipt GET body failed (`platform/hosted/gateway/src/main.rs:1584-1585`) |
-| 400 | `invalid_program_activity_selector` | Activity GET body failed (`platform/hosted/gateway/src/main.rs:1589-1590`) |
-| 400 | `invalid_program_id` | Path program id is not 32-byte hex (`platform/hosted/gateway/src/main.rs:2517-2518`) |
-| 401 | `session_required` | Missing/inactive Bearer session or identity non-200 (`platform/hosted/gateway/src/main.rs:961`; `platform/hosted/gateway/src/main.rs:975-989`) |
-| 401 | `api_key_required` | Missing `LayerX-Key`, format failure, digest mismatch, disabled key, or Redis `Reservation::Revoked` (`platform/hosted/gateway/src/main.rs:1148-1152`; `platform/hosted/gateway/src/main.rs:3276`) |
-| 403 | `insufficient_scope` | Authenticated key lacks the route scope (`platform/hosted/gateway/src/main.rs:1758-1759`) |
-| 403 | `signer_not_owned` | Issue/rotate signer is not in the session allow-list (`platform/hosted/gateway/src/main.rs:2288-2293`; `platform/hosted/gateway/src/main.rs:2394-2399`) |
-| 403 | `activity_authorization_refused` | `verify_submission` failed (`platform/hosted/gateway/src/main.rs:1262-1269`; `platform/hosted/gateway/src/main.rs:3123-3130`) |
-| 404 | `not_found` | Unknown path, unknown key id for this principal, or write route reached via `read_route` (`platform/hosted/gateway/src/main.rs:1094`; `platform/hosted/gateway/src/main.rs:1631-1636`; `platform/hosted/gateway/src/main.rs:1740-1741`) |
-| 404 | `receipt_not_found` | No owner, owner mismatch, or component 404 (`platform/hosted/gateway/src/main.rs:2467-2493`) |
-| 404 | `unknown_program` | Registry 404 (`platform/hosted/gateway/src/main.rs:412-413`) |
-| 404 | `program_interface_absent` | Registry interface 404 (`platform/hosted/gateway/src/main.rs:2572-2573`) |
-| 404 | `program_receipt_not_found` | No matching idempotency operation for this principal (`platform/hosted/gateway/src/main.rs:2604-2608`) |
-| 404 | `program_activity_not_found` | No owner or operation for this principal (`platform/hosted/gateway/src/main.rs:2646-2661`) |
-| 409 | `idempotency_conflict` | Same idempotency, different request digest, or key-issue collision (`platform/hosted/gateway/src/main.rs:2328-2330`; `platform/hosted/gateway/src/main.rs:3286-3292`) |
-| 409 | `rotation_conflict` | Rotate neither wrote nor replayed (`platform/hosted/gateway/src/main.rs:2452-2453`) |
-| 409 | `protocol_idempotency_mismatch` | Header key ≠ signed activity idempotency (`platform/hosted/gateway/src/main.rs:3132-3133`) |
-| 409 | `program_not_active` | Registry lifecycle is not `active` (`platform/hosted/gateway/src/main.rs:1275-1276`; `platform/hosted/gateway/src/main.rs:3137-3138`) |
-| 409 | `program_receipt_selector_mismatch` | Selector `expected_activity_id` ≠ stored activity (`platform/hosted/gateway/src/main.rs:2610-2611`) |
-| 409 | `program_call_refused` | Stored operation state is not `pending` or `completed` (`platform/hosted/gateway/src/main.rs:2616-2617`; `platform/hosted/gateway/src/main.rs:2676-2677`) |
-| 409 | `activity_refused` | Non-program activity verified with `result_code != 0` (`platform/hosted/gateway/src/main.rs:3485-3498`) |
-| 415 | `activity_content_type_required` | Missing/unsupported type or empty body (`platform/hosted/gateway/src/main.rs:3095-3096`) |
-| 429 | `quota_exceeded` | Redis `rate_limited` (`platform/hosted/gateway/src/main.rs:1294`; `platform/hosted/gateway/src/main.rs:1607`; `platform/hosted/gateway/src/main.rs:3277-3279`) |
-| 502 | `lifecycle_binding_invalid` | Pending lifecycle continuation does not re-verify (`platform/hosted/gateway/src/main.rs:1458`; `platform/hosted/gateway/src/main.rs:1487-1488`; `platform/hosted/gateway/src/main.rs:1556-1557`) |
-| 502 | `receipt_verification_failed` | Lifecycle receipt/authority mismatch (`platform/hosted/gateway/src/main.rs:1497-1501`; `platform/hosted/gateway/src/main.rs:3427-3441`) |
-| 502 | `component_invalid` | Pending lifecycle component status/body invalid (`platform/hosted/gateway/src/main.rs:1479-1483`) |
-| 503 | `persistence_unavailable` | Redis error (`platform/hosted/gateway/src/main.rs:1152`; `platform/hosted/gateway/src/main.rs:1608`) |
-| 503 | `identity_unavailable` | Introspect encode/decode failure (`platform/hosted/gateway/src/main.rs:964`; `platform/hosted/gateway/src/main.rs:978`) |
-| 503 | `component_unavailable` | Outbound request to the agent boundary failed (`platform/hosted/gateway/src/main.rs:949`; `platform/hosted/gateway/src/main.rs:1307-1308`) |
-| 503 | `component_invalid` | Component status/body/activity mismatch (`platform/hosted/gateway/src/main.rs:1310-1314`; `platform/hosted/gateway/src/main.rs:3361-3376`) |
-| 503 | `authority_unavailable` | Authority non-200 (`platform/hosted/gateway/src/main.rs:1166-1167`) |
-| 503 | `authority_invalid` | Authority JSON/hex failed (`platform/hosted/gateway/src/main.rs:1169-1185`) |
-| 503 | `authority_mismatch` | Activity id, network id, or wire version mismatch (`platform/hosted/gateway/src/main.rs:1171-1175`) |
-| 503 | `receipt_verification_failed` | `verify_activity_operation` failed (`platform/hosted/gateway/src/main.rs:1199-1205`) |
-| 503 | `program_receipt_verification_failed` | `verify_program_operation` failed (`platform/hosted/gateway/src/main.rs:1231-1242`) |
-| 503 | `program_simulation_unverified` | Simulation receipt or evidence failed (`platform/hosted/gateway/src/main.rs:2907-2908`; `platform/hosted/gateway/src/main.rs:2927-3001`) |
-| 503 | `program_registry_unavailable` | Registry transport failed (`platform/hosted/gateway/src/main.rs:411`; `platform/hosted/gateway/src/main.rs:2569-2570`) |
-| 503 | `program_registry_invalid` | Registry JSON/head failed (`platform/hosted/gateway/src/main.rs:415-418`; `platform/hosted/gateway/src/main.rs:2149-2187`) |
-| 503 | `program_registry_unverified` | Missing `receipt-verified` or interface digest mismatch (`platform/hosted/gateway/src/main.rs:421-427`; `platform/hosted/gateway/src/main.rs:2729-2753`) |
-| 503 | `program_state_unverified` | Head clock/state fields missing or stale (`platform/hosted/gateway/src/main.rs:2206-2215`) |
-| 503 | `program_simulation_head_unavailable` | Active program lacks state root/sequence (`platform/hosted/gateway/src/main.rs:1278-1281`) |
-| 503 | `principal_state_proof_unavailable` | `GET /v1/state` (`platform/hosted/gateway/src/main.rs:1572-1573`) |
-| 503 | `operation_state_unknown` | Existing reservation state is not pending/completed/refused_* (`platform/hosted/gateway/src/main.rs:3324-3325`) |
-| 503 | `receipt_encoding_failed` | Verified JSON could not be stored (`platform/hosted/gateway/src/main.rs:3523-3533`) |
+| 400 | `untrusted_identity_header` | `x-layerx-principal` or `x-layerx-api-key` present (`platform/hosted/gateway/src/main.rs:1716-1719`) |
+| 400 | `invalid_http_request` | Request framing failed (`platform/hosted/gateway/src/main.rs:1825-1826`) |
+| 400 | `idempotency_key_required` | Missing or malformed `Idempotency-Key` on key issue, rotation, or activity (`platform/hosted/gateway/src/main.rs:2301-2304`; `platform/hosted/gateway/src/main.rs:3088-3098`) |
+| 400 | `invalid_key_request` | `IssueRequest` JSON rejected (`platform/hosted/gateway/src/main.rs:2305-2306`) |
+| 400 | `invalid_quota` | `Quota::new` rejected (`platform/hosted/gateway/src/main.rs:2315-2316`) |
+| 400 | `invalid_scopes` | Empty, unsorted, unknown, or more than six scopes (`platform/hosted/gateway/src/main.rs:2318-2319`; `platform/hosted/gateway/src/main.rs:1045-1065`) |
+| 400 | `invalid_activity` | JSON activity hex failed (`platform/hosted/gateway/src/main.rs:3131-3136`) |
+| 400 | `invalid_program_call` | Program call body or signed CALL failed (`platform/hosted/gateway/src/main.rs:1276-1277`; `platform/hosted/gateway/src/main.rs:3123-3126`) |
+| 400 | `invalid_program_lifecycle` | Lifecycle validate failed (`platform/hosted/gateway/src/main.rs:3119-3120`) |
+| 400 | `invalid_program_selector` | Discovery GET body failed (`platform/hosted/gateway/src/main.rs:1597-1598`) |
+| 400 | `invalid_program_receipt_selector` | Receipt GET body failed (`platform/hosted/gateway/src/main.rs:1604-1605`) |
+| 400 | `invalid_program_activity_selector` | Activity GET body failed (`platform/hosted/gateway/src/main.rs:1609-1610`) |
+| 400 | `invalid_program_id` | Path program id is not 32-byte hex (`platform/hosted/gateway/src/main.rs:2537-2538`) |
+| 401 | `session_required` | Missing/inactive Bearer session or identity non-200 (`platform/hosted/gateway/src/main.rs:981`; `platform/hosted/gateway/src/main.rs:995-1009`) |
+| 401 | `api_key_required` | Missing `LayerX-Key`, format failure, digest mismatch, disabled key, or Redis `Reservation::Revoked` (`platform/hosted/gateway/src/main.rs:1168-1172`; `platform/hosted/gateway/src/main.rs:3296`) |
+| 403 | `insufficient_scope` | Authenticated key lacks the route scope (`platform/hosted/gateway/src/main.rs:1778-1779`) |
+| 403 | `signer_not_owned` | Issue/rotate signer is not in the session allow-list (`platform/hosted/gateway/src/main.rs:2308-2313`; `platform/hosted/gateway/src/main.rs:2414-2419`) |
+| 403 | `activity_authorization_refused` | `verify_submission` failed (`platform/hosted/gateway/src/main.rs:1282-1289`; `platform/hosted/gateway/src/main.rs:3143-3150`) |
+| 404 | `not_found` | Unknown path, unknown key id for this principal, or write route reached via `read_route` (`platform/hosted/gateway/src/main.rs:1114`; `platform/hosted/gateway/src/main.rs:1651-1656`; `platform/hosted/gateway/src/main.rs:1760-1761`) |
+| 404 | `receipt_not_found` | No owner, owner mismatch, or component 404 (`platform/hosted/gateway/src/main.rs:2487-2513`) |
+| 404 | `unknown_program` | Registry 404 (`platform/hosted/gateway/src/main.rs:414-415`) |
+| 404 | `program_interface_absent` | Registry interface 404 (`platform/hosted/gateway/src/main.rs:2592-2593`) |
+| 404 | `program_receipt_not_found` | No matching idempotency operation for this principal (`platform/hosted/gateway/src/main.rs:2624-2628`) |
+| 404 | `program_activity_not_found` | No owner or operation for this principal (`platform/hosted/gateway/src/main.rs:2666-2681`) |
+| 409 | `idempotency_conflict` | Same idempotency, different request digest, or key-issue collision (`platform/hosted/gateway/src/main.rs:2348-2350`; `platform/hosted/gateway/src/main.rs:3306-3312`) |
+| 409 | `rotation_conflict` | Rotate neither wrote nor replayed (`platform/hosted/gateway/src/main.rs:2472-2473`) |
+| 409 | `protocol_idempotency_mismatch` | Header key ≠ signed activity idempotency (`platform/hosted/gateway/src/main.rs:3152-3153`) |
+| 409 | `program_not_active` | Registry lifecycle is not `active` (`platform/hosted/gateway/src/main.rs:1295-1296`; `platform/hosted/gateway/src/main.rs:3157-3158`) |
+| 409 | `program_receipt_selector_mismatch` | Selector `expected_activity_id` ≠ stored activity (`platform/hosted/gateway/src/main.rs:2630-2631`) |
+| 409 | `program_call_refused` | Stored operation state is not `pending` or `completed` (`platform/hosted/gateway/src/main.rs:2636-2637`; `platform/hosted/gateway/src/main.rs:2696-2697`) |
+| 409 | `activity_refused` | Non-program activity verified with `result_code != 0` (`platform/hosted/gateway/src/main.rs:3505-3518`) |
+| 415 | `activity_content_type_required` | Missing/unsupported type or empty body (`platform/hosted/gateway/src/main.rs:3115-3116`) |
+| 429 | `quota_exceeded` | Redis `rate_limited` (`platform/hosted/gateway/src/main.rs:1314`; `platform/hosted/gateway/src/main.rs:1627`; `platform/hosted/gateway/src/main.rs:3297-3299`) |
+| 502 | `lifecycle_binding_invalid` | Pending lifecycle continuation does not re-verify (`platform/hosted/gateway/src/main.rs:1478`; `platform/hosted/gateway/src/main.rs:1507-1508`; `platform/hosted/gateway/src/main.rs:1576-1577`) |
+| 502 | `receipt_verification_failed` | Lifecycle receipt/authority mismatch (`platform/hosted/gateway/src/main.rs:1517-1521`; `platform/hosted/gateway/src/main.rs:3447-3461`) |
+| 502 | `component_invalid` | Pending lifecycle component status/body invalid (`platform/hosted/gateway/src/main.rs:1499-1503`) |
+| 503 | `persistence_unavailable` | Redis error (`platform/hosted/gateway/src/main.rs:1172`; `platform/hosted/gateway/src/main.rs:1628`) |
+| 503 | `identity_unavailable` | Introspect encode/decode failure (`platform/hosted/gateway/src/main.rs:984`; `platform/hosted/gateway/src/main.rs:998`) |
+| 503 | `component_unavailable` | Outbound request to the agent boundary failed (`platform/hosted/gateway/src/main.rs:969`; `platform/hosted/gateway/src/main.rs:1327-1328`) |
+| 503 | `component_invalid` | Component status/body/activity mismatch (`platform/hosted/gateway/src/main.rs:1330-1334`; `platform/hosted/gateway/src/main.rs:3381-3396`) |
+| 503 | `authority_unavailable` | Authority non-200 (`platform/hosted/gateway/src/main.rs:1186-1187`) |
+| 503 | `authority_invalid` | Authority JSON/hex failed (`platform/hosted/gateway/src/main.rs:1189-1205`) |
+| 503 | `authority_mismatch` | Activity id, network id, or wire version mismatch (`platform/hosted/gateway/src/main.rs:1191-1195`) |
+| 503 | `receipt_verification_failed` | `verify_activity_operation` failed (`platform/hosted/gateway/src/main.rs:1219-1225`) |
+| 503 | `program_receipt_verification_failed` | `verify_program_operation` failed (`platform/hosted/gateway/src/main.rs:1251-1262`) |
+| 503 | `program_simulation_unverified` | Simulation receipt or evidence failed (`platform/hosted/gateway/src/main.rs:2927-2928`; `platform/hosted/gateway/src/main.rs:2947-3021`) |
+| 503 | `program_registry_unavailable` | Registry transport failed (`platform/hosted/gateway/src/main.rs:413`; `platform/hosted/gateway/src/main.rs:2589-2590`) |
+| 503 | `program_registry_invalid` | Registry JSON/head failed (`platform/hosted/gateway/src/main.rs:417-420`; `platform/hosted/gateway/src/main.rs:2169-2207`) |
+| 503 | `program_registry_unverified` | Missing `receipt-verified` or interface digest mismatch (`platform/hosted/gateway/src/main.rs:423-429`; `platform/hosted/gateway/src/main.rs:2749-2773`) |
+| 503 | `program_state_unverified` | Head clock/state fields missing or stale (`platform/hosted/gateway/src/main.rs:2226-2235`) |
+| 503 | `program_simulation_head_unavailable` | Active program lacks state root/sequence (`platform/hosted/gateway/src/main.rs:1298-1301`) |
+| 503 | `principal_state_proof_unavailable` | `GET /v1/state` (`platform/hosted/gateway/src/main.rs:1592-1593`) |
+| 503 | `operation_state_unknown` | Existing reservation state is not pending/completed/refused_* (`platform/hosted/gateway/src/main.rs:3344-3345`) |
+| 503 | `receipt_encoding_failed` | Verified JSON could not be stored (`platform/hosted/gateway/src/main.rs:3543-3553`) |
 
 `502 receipt_verification_failed` (lifecycle) and
 `503 receipt_verification_failed` (ordinary activity) are different
 status codes for the same code string
-(`platform/hosted/gateway/src/main.rs:1205`;
-`platform/hosted/gateway/src/main.rs:3435`).
+(`platform/hosted/gateway/src/main.rs:1225`;
+`platform/hosted/gateway/src/main.rs:3455`).
 
 Library `GatewayError` (`platform/hosted/gateway/src/lib.rs:921-935`):
 
@@ -421,7 +421,7 @@ Library `GatewayError` (`platform/hosted/gateway/src/lib.rs:921-935`):
 `InvalidRequest` for wire/protocol failures
 (`platform/hosted/gateway/src/lib.rs:424-456`). HTTP maps both to
 `403 activity_authorization_refused`
-(`platform/hosted/gateway/src/main.rs:3123-3130`).
+(`platform/hosted/gateway/src/main.rs:3143-3150`).
 
 ---
 
@@ -437,35 +437,35 @@ Ordinary activities: decode receipt hex, load `AuthorityFacts` from
 authority, require the authority sequencer key to match
 `LAYERX_GATEWAY_SEQUENCER_PUBLIC_KEY_FILE`, run `verify_outcome` on
 the authorized batch, require the receipt activity id, then complete
-Redis as `receipt_verified` (`platform/hosted/gateway/src/main.rs:1189-1210`;
+Redis as `receipt_verified` (`platform/hosted/gateway/src/main.rs:1209-1230`;
 `platform/hosted/gateway/src/lib.rs:512-555`;
-`platform/hosted/gateway/src/main.rs:3535-3554`). Non-zero
+`platform/hosted/gateway/src/main.rs:3555-3574`). Non-zero
 `result_code` on a non-program activity is stored as `refused_409`
 with the verified receipt still present
-(`platform/hosted/gateway/src/main.rs:3485-3520`).
+(`platform/hosted/gateway/src/main.rs:3505-3540`).
 
 Program CALL: `verify_program_operation` checks authorized program
 execution against the registry head's program id and guest ABI, plus
 terminal payload and call graph
 (`platform/hosted/gateway/src/lib.rs:572-613`;
-`platform/hosted/gateway/src/main.rs:1213-1247`).
+`platform/hosted/gateway/src/main.rs:1233-1267`).
 
 Program simulation: `verify_program_simulation_operation` against the
 pinned previous state root, then Ed25519 over
 `LayerX/agent/program-simulation-evidence/v1` with
 `committed: false` (`platform/hosted/gateway/src/lib.rs:623-657`;
-`platform/hosted/gateway/src/main.rs:2896-3001`).
+`platform/hosted/gateway/src/main.rs:2916-3021`).
 
 Lifecycle deploy/upgrade/wind-down: `program_lifecycle::verify_receipt`
 checks sequencer signature, protocol 3, module 9, module version 4,
 operation 0, absent program outcome, and on `result_code == 0` a
 program state proof (`platform/hosted/gateway/src/program_lifecycle.rs:69-94`;
-`platform/hosted/gateway/src/main.rs:3423-3435`).
+`platform/hosted/gateway/src/main.rs:3443-3455`).
 
 Component HTTP 202 or transport failure returns `202` with
 `state: unknown` and `retained_signed_activity`; that is not a
-verified success (`platform/hosted/gateway/src/main.rs:1383-1401`;
-`platform/hosted/gateway/src/main.rs:3207-3221`).
+verified success (`platform/hosted/gateway/src/main.rs:1403-1421`;
+`platform/hosted/gateway/src/main.rs:3227-3241`).
 
 ---
 
@@ -477,10 +477,10 @@ agent-boundary `/readyz` is 200 JSON with `ready`, matching
 `state_snapshot`, the authority `/readyz` is 200 JSON with `ready` and
 matching network/wire (route flags not required), and registry
 `GET /healthz` is 200 JSON `status=ready`, `service=program-registry`
-(`platform/hosted/gateway/src/main.rs:1640-1691`;
-`platform/hosted/gateway/src/main.rs:2779-2811`). Identity is not a
+(`platform/hosted/gateway/src/main.rs:1660-1711`;
+`platform/hosted/gateway/src/main.rs:2799-2831`). Identity is not a
 `/readyz` component. `principal_state_boundary` is always the string
-`unavailable` (`platform/hosted/gateway/src/main.rs:2808`).
+`unavailable` (`platform/hosted/gateway/src/main.rs:2828`).
 
 Probes: Deployment `readinessProbe` HTTPS `/readyz` every 5s,
 `livenessProbe` HTTPS `/livez` every 15s
@@ -494,7 +494,7 @@ inspection, and programs journeys list `Dependency::Gateway`
 
 `GET /v1/status` reports `hosted_gateway` as `degraded` when Redis is
 ready and `unavailable` when it is not; it never reports
-`available` for that field (`platform/hosted/gateway/src/main.rs:2814-2835`).
+`available` for that field (`platform/hosted/gateway/src/main.rs:2834-2855`).
 Testnet public status names the gateway as one of four components
 `testnet`, `gateway`, `core`, `paxeer`
 (`platform/hosted/testnet/src/main.rs:1647`). Those two status shapes
@@ -511,9 +511,9 @@ Portable crate tests (no cluster):
 | `issued_key_debug_redacts_the_credential` | `IssuedKey` debug prints `[REDACTED]`, not the secret (`platform/hosted/gateway/src/lib.rs:962-969`) |
 | `production_program_routes_are_exact_and_bounded` | Exact nine program routes; uppercase and `..` path ids are `InvalidRoute` (`platform/hosted/gateway/src/lib.rs:972-1033`) |
 | `continuation_tests` | 2 MiB activity hex chunks and rejects one extra byte (`platform/hosted/gateway/src/store.rs:1211-1232`) |
-| `agent_program_error_envelope_is_exact` | `409 idempotency_conflict` → class `IdempotencyConflict`, `retriability=Terminal` (`platform/hosted/gateway/src/main.rs:2037-2053`) |
-| `program_error_classes_are_stable_for_provider_parity` | `quota_exceeded`→`RateLimit`; `activity_authorization_refused`→`PolicyRefusal`; `program_receipt_verification_failed`→`VerificationFailure`; `404 program_interface_absent`→`UnavailableCapability`; `LXP_ERR_*`→`CoreRejection`; 503→`TransportFailure` (`platform/hosted/gateway/src/main.rs:2056-2074`; `platform/hosted/gateway/src/main.rs:611-642`) |
-| `program_get_selectors_bind_every_identity_field` | Selector identity fields are exact (`platform/hosted/gateway/src/main.rs:2106-2141`) |
+| `agent_program_error_envelope_is_exact` | `409 idempotency_conflict` → class `IdempotencyConflict`, `retriability=Terminal` (`platform/hosted/gateway/src/main.rs:2057-2073`) |
+| `program_error_classes_are_stable_for_provider_parity` | `quota_exceeded`→`RateLimit`; `activity_authorization_refused`→`PolicyRefusal`; `program_receipt_verification_failed`→`VerificationFailure`; `404 program_interface_absent`→`UnavailableCapability`; `LXP_ERR_*`→`CoreRejection`; 503→`TransportFailure` (`platform/hosted/gateway/src/main.rs:2076-2094`; `platform/hosted/gateway/src/main.rs:631-662`) |
+| `program_get_selectors_bind_every_identity_field` | Selector identity fields are exact (`platform/hosted/gateway/src/main.rs:2126-2161`) |
 | `exact_native_json_and_scope_bindings` | Native JSON must match the signed payload field-for-field (`platform/hosted/gateway/src/native_call.rs:153-187`) |
 | `lifecycle_signed_activity_binds_exact_route_protocol_and_payload` | Wrong signer, network, ordinal, hash, or trailing byte is refused (`platform/hosted/gateway/src/program_lifecycle.rs:150-204`) |
 | `exact_pending_retry_survives_reconstruction_but_altered_nonce_reuse_is_replay` | Real Redis TAP nonce: identical retry is `AlreadyConsumed`; altered operation/path is `Replay` (`platform/hosted/gateway/tests/tap_nonce.rs:159-247`) |

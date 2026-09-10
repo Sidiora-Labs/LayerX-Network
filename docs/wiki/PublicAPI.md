@@ -70,10 +70,10 @@ parameters are `-32602`; unknown methods are `-32601`; authentication or scope
 refusals are `-32002`; read/submission unavailability is `-32001`; rate or
 capacity refusal is `-32005`; invalid upstream data is `-32603`. Proxied
 failures also retain the typed upstream body in `error.data`
-(`platform/hosted/gateway/src/rpc.rs:148-181, 242-257`). If the requested
+(`platform/hosted/gateway/src/rpc.rs:153-186, 242-257`). If the requested
 commitment is not yet available, `-32001` carries `data.state: "pending"`, the
 `requested_commitment`, and the evidence or upstream pending body
-(`platform/hosted/gateway/src/rpc.rs:214-220, 334-357`). A DID account-listing
+(`platform/hosted/gateway/src/rpc.rs:219-225, 334-357`). A DID account-listing
 failure is `-32001` with
 `error.data.error.code: "did_account_listing_unavailable"`; it is not a partial
 account list.

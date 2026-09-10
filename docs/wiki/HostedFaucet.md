@@ -5,12 +5,21 @@ An exact successful claim and the resulting JSON-RPC payment flow are in
 
 `layerx-faucet` is the public claim surface for hosted testnet funds
 (`platform/hosted/faucet/Cargo.toml:8-10`;
-`platform/hosted/faucet/src/main.rs:914`). The crate is
+`platform/hosted/faucet/src/main.rs:1025`). The crate is
 `layerx-platform-faucet`; the binary path is `src/main.rs`. A
 developer or agent with a hosted session Bearer posts
 `POST /v1/faucet/claims` and receives either a funded body or a typed
-refusal. There is no `layerx faucet` command
-(`platform/cli/src/main.rs:43-81`; `docs/wiki/Quickstart.md`).
+refusal.
+
+The same grant is also reachable without curl. `POST
+/v1/faucet/service-claims` is a service route the public gateway proxies
+as the JSON-RPC method `lx_requestFunds`
+(`platform/hosted/gateway/src/rpc_faucet.rs`), and that method backs the
+`layerx faucet` command (`platform/cli/src/main.rs:66`;
+`platform/cli/src/faucet.rs`), the SDK call `RpcClient::request_funds`
+(`agent/crates/layerx-sdk/src/rpc.rs`), and the served MCP tool
+`faucet.request` (`platform/cli/src/toolset.rs:38-44`). See
+[Public JSON-RPC](PublicRpc.md) and [CLI](Cli.md).
 
 The image is `ghcr.io/sidiora-labs/layerx-faucet:0.1.0`, user
 `4020:4020`, entrypoint `/usr/local/bin/layerx-faucet`
@@ -59,31 +68,31 @@ on [Hosted identity](HostedIdentity.md).
 Inbound TLS is rustls with no client authentication. The certificate
 is `LAYERX_FAUCET_TLS_CERT_DER`; the PKCS#8 key is
 `LAYERX_FAUCET_TLS_KEY_DER`
-(`platform/hosted/faucet/src/main.rs:217-233`). Each accepted TCP
+(`platform/hosted/faucet/src/main.rs:233-249`). Each accepted TCP
 connection becomes a rustls `ServerConnection`
-(`platform/hosted/faucet/src/main.rs:1067-1068`). At most 128
+(`platform/hosted/faucet/src/main.rs:1164-1165`). At most 128
 connections are live; further accepts are dropped without a response
 (`platform/hosted/faucet/src/main.rs:23`;
-`platform/hosted/faucet/src/main.rs:1102-1104`). Request bodies are
+`platform/hosted/faucet/src/main.rs:1199-1201`). Request bodies are
 bounded at 16 KiB (`platform/hosted/faucet/src/main.rs:18`;
-`platform/hosted/faucet/src/main.rs:429-430`). Query strings,
+`platform/hosted/faucet/src/main.rs:446-447`). Query strings,
 `Transfer-Encoding`, duplicate headers, and a missing `Host` are
-refused (`platform/hosted/faucet/src/main.rs:400-403`;
-`platform/hosted/faucet/src/main.rs:444-449`).
+refused (`platform/hosted/faucet/src/main.rs:417-420`;
+`platform/hosted/faucet/src/main.rs:461-466`).
 
 Outbound HTTPS uses `native_tls` `TlsConnector` with
 `LAYERX_OUTBOUND_CA_DER` and a minimum protocol of TLS 1.2
-(`platform/hosted/faucet/src/main.rs:327-330`). Endpoints must be
+(`platform/hosted/faucet/src/main.rs:344-347`). Endpoints must be
 `https://` or `rediss://` with a DNS host, not a literal IP
 (`platform/hosted/faucet/src/main.rs:34-65`). The client writes
 `Authorization: Bearer`, `Content-Type: application/json`, and
 optional `Idempotency-Key`
-(`platform/hosted/faucet/src/main.rs:336-344`). Connect timeout is 3s;
+(`platform/hosted/faucet/src/main.rs:353-361`). Connect timeout is 3s;
 I/O timeout is 8s (`platform/hosted/faucet/src/main.rs:20-21`).
 
 Redis is `rediss://` only, TLS 1.2, the same outbound CA, then `AUTH`
-username and password (`platform/hosted/faucet/src/main.rs:273-279`;
-`platform/hosted/faucet/src/main.rs:497-517`). The Redis server
+username and password (`platform/hosted/faucet/src/main.rs:290-296`;
+`platform/hosted/faucet/src/main.rs:514-534`). The Redis server
 manifest sets `tls-auth-clients no`
 (`platform/hosted/testnet/deployment.yaml:24`). HTTPS upstreams do not
 present a client certificate.
@@ -98,21 +107,21 @@ It never forwards a caller session Bearer as the upstream
 
 | Credential | Accepted from | Used as | Never |
 | --- | --- | --- | --- |
-| `Bearer` session | `POST /v1/faucet/claims` (`platform/hosted/faucet/src/main.rs:453-487`) | JSON body `{"token": …}` to identity `POST` at `LAYERX_IDENTITY_INTROSPECTION_URL` (`platform/hosted/faucet/src/main.rs:464-476`) | Upstream `Authorization`. That header carries `LAYERX_IDENTITY_SERVICE_TOKEN_FILE` |
-| Identity service token | File `LAYERX_IDENTITY_SERVICE_TOKEN_FILE` (`platform/hosted/faucet/src/main.rs:266`; `platform/hosted/testnet/deployment.yaml:146`) | `Authorization: Bearer` to identity introspect | Presented by humans |
-| Testnet-control admin token | File `LAYERX_TESTNET_ADMIN_TOKEN_FILE` (`platform/hosted/faucet/src/main.rs:272`; `platform/hosted/testnet/deployment.yaml:148`) | `Authorization: Bearer` to `LAYERX_TESTNET_FUNDING_URL` | Presented by humans |
-| Redis username and password | `LAYERX_FAUCET_REDIS_USERNAME_FILE`, `LAYERX_FAUCET_REDIS_PASSWORD_FILE` (`platform/hosted/faucet/src/main.rs:278-279`) | Redis `AUTH` (`platform/hosted/faucet/src/main.rs:507-513`) | HTTP |
+| `Bearer` session | `POST /v1/faucet/claims` (`platform/hosted/faucet/src/main.rs:470-504`) | JSON body `{"token": …}` to identity `POST` at `LAYERX_IDENTITY_INTROSPECTION_URL` (`platform/hosted/faucet/src/main.rs:481-493`) | Upstream `Authorization`. That header carries `LAYERX_IDENTITY_SERVICE_TOKEN_FILE` |
+| Identity service token | File `LAYERX_IDENTITY_SERVICE_TOKEN_FILE` (`platform/hosted/faucet/src/main.rs:282`; `platform/hosted/testnet/deployment.yaml:146`) | `Authorization: Bearer` to identity introspect | Presented by humans |
+| Testnet-control admin token | File `LAYERX_TESTNET_ADMIN_TOKEN_FILE` (`platform/hosted/faucet/src/main.rs:289`; `platform/hosted/testnet/deployment.yaml:148`) | `Authorization: Bearer` to `LAYERX_TESTNET_FUNDING_URL` | Presented by humans |
+| Redis username and password | `LAYERX_FAUCET_REDIS_USERNAME_FILE`, `LAYERX_FAUCET_REDIS_PASSWORD_FILE` (`platform/hosted/faucet/src/main.rs:295-296`) | Redis `AUTH` (`platform/hosted/faucet/src/main.rs:524-530`) | HTTP |
 
 `authenticate` requires prefix `Bearer `, a non-empty token of at most
 4096 bytes, identity HTTP 200, JSON `active: true`, and `sub` a
 1..=512 identifier of alnum/`-`/`_`/`.`/`:`
-(`platform/hosted/faucet/src/main.rs:180-186`;
-`platform/hosted/faucet/src/main.rs:453-487`). Identity non-200 or an
+(`platform/hosted/faucet/src/main.rs:189-195`;
+`platform/hosted/faucet/src/main.rs:470-504`). Identity non-200 or an
 inactive/`sub` miss is `401 identity_required`. Transport or JSON
 failure is `503 identity_unavailable`
-(`platform/hosted/faucet/src/main.rs:466-483`). Incoming headers and
+(`platform/hosted/faucet/src/main.rs:483-500`). Incoming headers and
 bodies are zeroized on drop
-(`platform/hosted/faucet/src/main.rs:135-141`).
+(`platform/hosted/faucet/src/main.rs:144-150`).
 
 The hosted identity path for this caller is `/v1/introspect`, not
 `/v1/sessions/introspect`
@@ -122,7 +131,7 @@ The hosted identity path for this caller is `/v1/introspect`, not
 `SubjectShape` `active` plus `sub`
 (`platform/hosted/identity/src/main.rs:131-134`;
 `platform/hosted/identity/src/main.rs:637-650`;
-`platform/hosted/faucet/src/main.rs:106-110`). Bring-up copies
+`platform/hosted/faucet/src/main.rs:115-119`). Bring-up copies
 `identity-client.token` to `identity-tokens/faucet`
 (`platform/hosted/tests/beta-cluster.sh:528`).
 
@@ -131,35 +140,56 @@ The hosted identity path for this caller is `/v1/introspect`, not
 ## Public routes
 
 Unauthenticated probes are dispatched before the claim route
-(`platform/hosted/faucet/src/main.rs:902-915`). HTTP/1.1 only.
+(`platform/hosted/faucet/src/main.rs:1010-1026`). HTTP/1.1 only.
 
 | Method and path | Inputs | Result |
 | --- | --- | --- |
-| `GET /livez` | none | `200` `{"status":"live","service":"faucet"}` (`platform/hosted/faucet/src/main.rs:903-904`) |
-| `GET /readyz` | none | Redis `PING` `PONG` → `200` `{"status":"ready","service":"faucet"}`; else `503 dependency_unavailable` (`platform/hosted/faucet/src/main.rs:906-912`) |
-| `POST /v1/faucet/claims` | `Authorization: Bearer`, `Idempotency-Key`, `Content-Type: application/json`, JSON `did` and `public_key` only (`platform/hosted/faucet/src/main.rs:99-104`; `platform/hosted/faucet/src/main.rs:914-954`) | `200` funded body, `202` `still_checking`, or a typed refusal |
+| `GET /livez` | none | `200` `{"status":"live","service":"faucet"}` (`platform/hosted/faucet/src/main.rs:1011-1012`) |
+| `GET /readyz` | none | Redis `PING` `PONG` → `200` `{"status":"ready","service":"faucet"}`; else `503 dependency_unavailable` (`platform/hosted/faucet/src/main.rs:1014-1020`) |
+| `POST /v1/faucet/claims` | `Authorization: Bearer`, `Idempotency-Key`, `Content-Type: application/json`, JSON `did` and `public_key` only (`platform/hosted/faucet/src/main.rs:100-105`; `platform/hosted/faucet/src/main.rs:1025-1041`) | `200` funded body, `202` `still_checking`, or a typed refusal |
+| `POST /v1/faucet/service-claims` | `Authorization: Bearer <service token>`, `Idempotency-Key`, `Content-Type: application/json`, JSON `principal`, `did` and `public_key` only (`platform/hosted/faucet/src/main.rs:107-113`; `platform/hosted/faucet/src/main.rs:979-1008`) | `200` funded body, `202` `still_checking`, or a typed refusal |
 
 Unknown method or path is `404 not_found`
-(`platform/hosted/faucet/src/main.rs:914-915`). Probe JSON does not
+(`platform/hosted/faucet/src/main.rs:1025-1026`). Probe JSON does not
 wrap `ok`. Claim success is not an `{"ok": true, …}` envelope.
 
+`/v1/faucet/service-claims` exists only when
+`LAYERX_FAUCET_SERVICE_CLAIM_TOKEN_FILE` is configured; without it the
+route answers `404 not_found` and no service claim is possible
+(`platform/hosted/faucet/src/main.rs:980-982`). The presented Bearer is
+compared against that secret in constant time and only at equal length
+(`platform/hosted/faucet/src/main.rs:959-965`). The preflight the public
+claim route uses runs first, so content type, forwarded-identity headers,
+network admission, and the idempotency key are enforced identically
+(`platform/hosted/faucet/src/main.rs:919-953`). The body must parse as a JSON
+object before it is deserialised, so a positional array is refused;
+`ServiceClaimRequest` then denies unknown fields and requires `principal`
+to be an identifier at max 512, `did` to be a DID, and `public_key` to be
+64 hex digits (`platform/hosted/faucet/src/main.rs:107-113`;
+`platform/hosted/faucet/src/main.rs:967-977`). The caller-supplied
+`principal` becomes the identity quota key, so a principal shares one
+identity window with its own direct `POST /v1/faucet/claims`; only the
+network bucket is scoped `service:<principal>` instead of the calling
+service's peer address (`platform/hosted/faucet/src/main.rs:955-957`;
+`platform/hosted/faucet/src/main.rs:997-1007`).
+
 `ClaimRequest` denies unknown fields
-(`platform/hosted/faucet/src/main.rs:99-104`). `did` must start with
+(`platform/hosted/faucet/src/main.rs:100-105`). `did` must start with
 `did:` and pass `valid_identifier` at max 512
-(`platform/hosted/faucet/src/main.rs:188-190`). `public_key` is 64
-ASCII hex digits (`platform/hosted/faucet/src/main.rs:192-194`;
-`platform/hosted/faucet/src/main.rs:953-954`). `Idempotency-Key` is
-1–128 alnum/`-`/`_`/`.`/`:` (`platform/hosted/faucet/src/main.rs:180-186`;
-`platform/hosted/faucet/src/main.rs:939-943`). Those claim fields
+(`platform/hosted/faucet/src/main.rs:197-199`). `public_key` is 64
+ASCII hex digits (`platform/hosted/faucet/src/main.rs:201-203`;
+`platform/hosted/faucet/src/main.rs:1040-1041`). `Idempotency-Key` is
+1–128 alnum/`-`/`_`/`.`/`:` (`platform/hosted/faucet/src/main.rs:189-195`;
+`platform/hosted/faucet/src/main.rs:946-950`). Those claim fields
 match [Testnet quickstart](Quickstart.md).
 
 Headers `forwarded`, `x-forwarded-for`, `x-real-ip`,
 `x-layerx-client-ip`, and `x-layerx-principal` are refused as
 `400 untrusted_identity_header` before admission
-(`platform/hosted/faucet/src/main.rs:920-926`). Network admission
+(`platform/hosted/faucet/src/main.rs:927-933`). Network admission
 uses the TCP peer address, not a forwarded header
-(`platform/hosted/faucet/src/main.rs:625-646`;
-`platform/hosted/faucet/src/main.rs:1071`).
+(`platform/hosted/faucet/src/main.rs:642-663`;
+`platform/hosted/faucet/src/main.rs:1168`).
 
 Hosted smoke:
 
@@ -183,50 +213,50 @@ curl --fail --silent --show-error --max-time 30 --cacert "$LAYERX_TEST_CA_FILE" 
 ## Claim reservation and funding
 
 Quota and idempotency are one Redis `EVAL` (`RESERVE_SCRIPT`)
-(`platform/hosted/faucet/src/main.rs:649-676`;
-`platform/hosted/faucet/src/main.rs:678-768`). The request digest is
+(`platform/hosted/faucet/src/main.rs:666-693`;
+`platform/hosted/faucet/src/main.rs:695-785`). The request digest is
 SHA-256 over `identity`, `did`, `public_key`, and the configured
 amount, each part followed by a 0 byte
-(`platform/hosted/faucet/src/main.rs:171-178`;
-`platform/hosted/faucet/src/main.rs:956-961`). `funding_id` is
+(`platform/hosted/faucet/src/main.rs:180-187`;
+`platform/hosted/faucet/src/main.rs:1053-1058`). `funding_id` is
 SHA-256 over the idempotency key and that digest
-(`platform/hosted/faucet/src/main.rs:693`).
+(`platform/hosted/faucet/src/main.rs:710`).
 
 | Reservation | HTTP |
 | --- | --- |
-| `Reserved` (fresh) or `Pending` (same digest, not yet `funded`) | `fund` then complete or pending (`platform/hosted/faucet/src/main.rs:974-991`) |
-| `Funded` same digest | `200` with the stored response body (`platform/hosted/faucet/src/main.rs:756-758`; `platform/hosted/faucet/src/main.rs:973`) |
-| Different digest under the same idempotency key | `409 idempotency_conflict` (`platform/hosted/faucet/src/main.rs:747-753`; `platform/hosted/faucet/src/main.rs:993`) |
-| Identity, address, or network window exceeded | `429` with code `identity_quota`, `address_quota`, or `network_quota` (`platform/hosted/faucet/src/main.rs:736-743`; `platform/hosted/faucet/src/main.rs:994-1000`) |
+| `Reserved` (fresh) or `Pending` (same digest, not yet `funded`) | `fund` then complete or pending (`platform/hosted/faucet/src/main.rs:1071-1088`) |
+| `Funded` same digest | `200` with the stored response body (`platform/hosted/faucet/src/main.rs:773-775`; `platform/hosted/faucet/src/main.rs:1070`) |
+| Different digest under the same idempotency key | `409 idempotency_conflict` (`platform/hosted/faucet/src/main.rs:764-770`; `platform/hosted/faucet/src/main.rs:1090`) |
+| Identity, address, or network window exceeded | `429` with code `identity_quota`, `address_quota`, or `network_quota` (`platform/hosted/faucet/src/main.rs:753-760`; `platform/hosted/faucet/src/main.rs:1091-1097`) |
 
 `fund` POSTs JSON `funding_id`, `did`, `public_key`, `amount` to
 `LAYERX_TESTNET_FUNDING_URL` with the control-admin token and
 `Idempotency-Key` equal to `funding_id`
-(`platform/hosted/faucet/src/main.rs:112-118`;
-`platform/hosted/faucet/src/main.rs:861-876`;
+(`platform/hosted/faucet/src/main.rs:121-127`;
+`platform/hosted/faucet/src/main.rs:878-893`;
 `platform/hosted/testnet/deployment.yaml:147`). Upstream HTTP 400–499
 is `FundingResult::Rejected`: Redis rollback, then
-`503 funding_rejected` (`platform/hosted/faucet/src/main.rs:880-881`;
-`platform/hosted/faucet/src/main.rs:983-988`). HTTP 200 with matching
+`503 funding_rejected` (`platform/hosted/faucet/src/main.rs:897-898`;
+`platform/hosted/faucet/src/main.rs:1080-1085`). HTTP 200 with matching
 `funding_id` and `state == "funded"` becomes the public body
-(`platform/hosted/faucet/src/main.rs:889-898`). Any other status,
+(`platform/hosted/faucet/src/main.rs:906-915`). Any other status,
 transport failure, or JSON miss is `FundingResult::Unknown` → `202`
-(`platform/hosted/faucet/src/main.rs:877-884`;
-`platform/hosted/faucet/src/main.rs:990`). Complete-script failure
+(`platform/hosted/faucet/src/main.rs:894-901`;
+`platform/hosted/faucet/src/main.rs:1087`). Complete-script failure
 after a funded upstream is also `202`
-(`platform/hosted/faucet/src/main.rs:976-980`).
+(`platform/hosted/faucet/src/main.rs:1073-1077`).
 
 A 200 claim body is `funded` `true`, `funding_id`, optional
 `transaction_id`, `amount` as a decimal string of
 `LAYERX_FAUCET_CLAIM_AMOUNT` (default `1000000`), and `network`
-`layerx-testnet` (`platform/hosted/faucet/src/main.rs:239`;
-`platform/hosted/faucet/src/main.rs:892-898`). A 202 body is `state`
+`layerx-testnet` (`platform/hosted/faucet/src/main.rs:255`;
+`platform/hosted/faucet/src/main.rs:909-915`). A 202 body is `state`
 `still_checking`, `retry` `after`, `retry_after_seconds` `10`
-(`platform/hosted/faucet/src/main.rs:1012-1018`). Retrying an
+(`platform/hosted/faucet/src/main.rs:1109-1115`). Retrying an
 indeterminate result repeats the same `funding_id`. A definite
 upstream 4xx releases the quota reservation
-(`platform/hosted/faucet/src/main.rs:778-790`;
-`platform/hosted/faucet/src/main.rs:983-985`).
+(`platform/hosted/faucet/src/main.rs:795-807`;
+`platform/hosted/faucet/src/main.rs:1080-1082`).
 
 Faucet `did` is any `did:` identifier. Testnet-control admin requires
 the same prefix and a 64-hex `public_key`
@@ -258,28 +288,29 @@ The in-cluster funding URL is
 
 | Key | Role |
 | --- | --- |
-| `LAYERX_FAUCET_LISTEN` | Bind address; default `0.0.0.0:9443` (`platform/hosted/faucet/src/main.rs:246-248`; `platform/hosted/testnet/deployment.yaml:141`) |
+| `LAYERX_FAUCET_LISTEN` | Bind address; default `0.0.0.0:9443` (`platform/hosted/faucet/src/main.rs:262-264`; `platform/hosted/testnet/deployment.yaml:141`) |
 | `LAYERX_FAUCET_TLS_CERT_DER` | Inbound server certificate DER; mounted `/run/layerx/tls/server.crt.der` |
 | `LAYERX_FAUCET_TLS_KEY_DER` | Inbound PKCS#8 key DER; mounted `/run/layerx/tls/server.key.der` |
 | `LAYERX_OUTBOUND_CA_DER` | Trust bundle for HTTPS and Redis; mounted `/run/layerx/tls/ca.crt.der` |
 | `LAYERX_IDENTITY_INTROSPECTION_URL` | Identity HTTPS origin including introspect path |
 | `LAYERX_IDENTITY_SERVICE_TOKEN_FILE` | Bearer to identity; mounted `/run/layerx/identity/token` |
+| `LAYERX_FAUCET_SERVICE_CLAIM_TOKEN_FILE` | Optional shared secret admitting `POST /v1/faucet/service-claims`; absent means that route is `404 not_found` (`platform/hosted/faucet/src/main.rs:218-223`; `platform/hosted/faucet/src/main.rs:285`). The Deployment does not set this key |
 | `LAYERX_TESTNET_FUNDING_URL` | Testnet-control admin fund origin including path |
 | `LAYERX_TESTNET_ADMIN_TOKEN_FILE` | Bearer to testnet-control; mounted `/run/layerx/control-admin/token` |
 | `LAYERX_FAUCET_REDIS_URL` | `rediss://` origin |
 | `LAYERX_FAUCET_REDIS_USERNAME_FILE` | Redis ACL user; mounted `/run/layerx/redis-auth/username` |
 | `LAYERX_FAUCET_REDIS_PASSWORD_FILE` | Redis ACL password; mounted `/run/layerx/redis-auth/password` |
-| `LAYERX_FAUCET_IDENTITY_LIMIT` | Identity window cap; default `10000000` (`platform/hosted/faucet/src/main.rs:280`; `platform/hosted/testnet/deployment.yaml:152`) |
+| `LAYERX_FAUCET_IDENTITY_LIMIT` | Identity window cap; default `10000000` (`platform/hosted/faucet/src/main.rs:297`; `platform/hosted/testnet/deployment.yaml:152`) |
 | `LAYERX_FAUCET_ADDRESS_LIMIT` | Address window cap; default `10000000` |
 | `LAYERX_FAUCET_NETWORK_LIMIT` | Peer window cap; default `50000000` |
 | `LAYERX_FAUCET_NETWORK_REQUEST_LIMIT` | Admission count; default `60` |
 | `LAYERX_FAUCET_NETWORK_REQUEST_WINDOW_SECONDS` | Admission window; default `60` |
-| `LAYERX_FAUCET_WINDOW_SECONDS` | Quota window; default `86400` (`platform/hosted/faucet/src/main.rs:237`). The Deployment does not set this key |
-| `LAYERX_FAUCET_IDEMPOTENCY_SECONDS` | Idempotency TTL; default `604800`; must be ≥ the quota window (`platform/hosted/faucet/src/main.rs:238-244`; `platform/hosted/testnet/deployment.yaml:157`) |
-| `LAYERX_FAUCET_CLAIM_AMOUNT` | Funded amount; default `1000000`; must be positive (`platform/hosted/faucet/src/main.rs:239-244`). The Deployment does not set this key |
+| `LAYERX_FAUCET_WINDOW_SECONDS` | Quota window; default `86400` (`platform/hosted/faucet/src/main.rs:253`). The Deployment does not set this key |
+| `LAYERX_FAUCET_IDEMPOTENCY_SECONDS` | Idempotency TTL; default `604800`; must be ≥ the quota window (`platform/hosted/faucet/src/main.rs:254-260`; `platform/hosted/testnet/deployment.yaml:157`) |
+| `LAYERX_FAUCET_CLAIM_AMOUNT` | Funded amount; default `1000000`; must be positive (`platform/hosted/faucet/src/main.rs:255-260`). The Deployment does not set this key |
 
 Secret files are read, trailing CR/LF stripped, and refused when empty
-or longer than 4096 bytes (`platform/hosted/faucet/src/main.rs:196-206`).
+or longer than 4096 bytes (`platform/hosted/faucet/src/main.rs:205-215`).
 Volume mounts are TLS Secret `layerx-faucet-tls` at `/run/layerx/tls`,
 `layerx-testnet-identity-client` at `/run/layerx/identity`,
 `layerx-testnet-control-admin` at `/run/layerx/control-admin`, and
@@ -309,16 +340,16 @@ Cluster bring-up writes ACL `user default off` and one enabled user
 
 | Key | Contents |
 | --- | --- |
-| `faucet:admission:{window}:{digest}` | INCR count with EXPIRE window seconds; digest is SHA-256 of the peer (`platform/hosted/faucet/src/main.rs:618-641`) |
-| `faucet:quota:{window}:identity:{digest}` | INCRBY claim amount, EXPIRE remaining window (`platform/hosted/faucet/src/main.rs:689`; `platform/hosted/faucet/src/main.rs:668`) |
-| `faucet:quota:{window}:address:{digest}` | Same for destination public key (`platform/hosted/faucet/src/main.rs:690`) |
-| `faucet:quota:{window}:network:{digest}` | Same for TCP peer (`platform/hosted/faucet/src/main.rs:691`) |
-| `faucet:idem:{digest}` | Hash: `digest`, `state`, `funding_id`, `identity_key`, `address_key`, `network_key`, `amount`, later `response` (`platform/hosted/faucet/src/main.rs:671`; `platform/hosted/faucet/src/main.rs:773`) |
-| `faucet:audit` / `faucet:audit:head` | Hash-chained `XADD` stream (`platform/hosted/faucet/src/main.rs:664-674`; `platform/hosted/faucet/src/main.rs:696-703`) |
+| `faucet:admission:{window}:{digest}` | INCR count with EXPIRE window seconds; digest is SHA-256 of the peer (`platform/hosted/faucet/src/main.rs:635-658`) |
+| `faucet:quota:{window}:identity:{digest}` | INCRBY claim amount, EXPIRE remaining window (`platform/hosted/faucet/src/main.rs:706`; `platform/hosted/faucet/src/main.rs:685`) |
+| `faucet:quota:{window}:address:{digest}` | Same for destination public key (`platform/hosted/faucet/src/main.rs:707`) |
+| `faucet:quota:{window}:network:{digest}` | Same for TCP peer (`platform/hosted/faucet/src/main.rs:708`) |
+| `faucet:idem:{digest}` | Hash: `digest`, `state`, `funding_id`, `identity_key`, `address_key`, `network_key`, `amount`, later `response` (`platform/hosted/faucet/src/main.rs:688`; `platform/hosted/faucet/src/main.rs:790`) |
+| `faucet:audit` / `faucet:audit:head` | Hash-chained `XADD` stream (`platform/hosted/faucet/src/main.rs:681-691`; `platform/hosted/faucet/src/main.rs:713-720`) |
 
 Audit fields are `event`, `result`, optional `funding_id`, and
 `chain`. Authentication values do not enter the stream
-(`platform/hosted/faucet/src/main.rs:664-673`).
+(`platform/hosted/faucet/src/main.rs:681-690`).
 
 ---
 
@@ -347,7 +378,7 @@ Probes: Deployment `readinessProbe` HTTPS `/readyz` every 5s,
 `livenessProbe` HTTPS `/livez` every 15s
 (`platform/hosted/testnet/deployment.yaml:159-160`). Readiness is
 Redis `PING` only. Identity and testnet-control are not `/readyz`
-components (`platform/hosted/faucet/src/main.rs:906-912`).
+components (`platform/hosted/faucet/src/main.rs:1014-1020`).
 
 ---
 
@@ -355,41 +386,46 @@ components (`platform/hosted/faucet/src/main.rs:906-912`).
 
 HTTP refusals use `{"error":{"code":…,"retry":…}}` and optional
 `retry_after_seconds`. `Retry-After` is set when a retry delay is
-present (`platform/hosted/faucet/src/main.rs:1021-1035`;
-`platform/hosted/faucet/src/main.rs:1049-1050`). Success and `202`
+present (`platform/hosted/faucet/src/main.rs:1118-1132`;
+`platform/hosted/faucet/src/main.rs:1146-1147`). Success and `202`
 bodies are not that envelope.
 
 | HTTP | Code | Condition |
 | --- | --- | --- |
-| 400 | `invalid_request` | Request framing failed (`platform/hosted/faucet/src/main.rs:1069-1070`) |
-| 400 | `content_type_required` | Claim `Content-Type` is not `application/json` (`platform/hosted/faucet/src/main.rs:917-918`) |
-| 400 | `untrusted_identity_header` | Forwarded IP or `x-layerx-principal` present (`platform/hosted/faucet/src/main.rs:920-926`) |
-| 400 | `idempotency_key_required` | Missing `Idempotency-Key` (`platform/hosted/faucet/src/main.rs:939-940`) |
-| 400 | `invalid_idempotency_key` | Key fails `valid_identifier` max 128 (`platform/hosted/faucet/src/main.rs:942-943`) |
-| 400 | `invalid_argument` | JSON/`did`/`public_key` rejected (`platform/hosted/faucet/src/main.rs:949-954`) |
-| 401 | `identity_required` | Missing/empty Bearer, identity non-200, inactive session, or invalid `sub` (`platform/hosted/faucet/src/main.rs:458-485`) |
-| 404 | `not_found` | Method/path is not a listed route (`platform/hosted/faucet/src/main.rs:914-915`) |
-| 409 | `idempotency_conflict` | Same key, different request digest (`platform/hosted/faucet/src/main.rs:993`) |
-| 429 | `network_request_rate` | Admission INCR exceeded (`platform/hosted/faucet/src/main.rs:930-935`) |
-| 429 | `identity_quota` | Identity window cap (`platform/hosted/faucet/src/main.rs:736-739`) |
+| 400 | `invalid_request` | Request framing failed (`platform/hosted/faucet/src/main.rs:1166-1167`) |
+| 400 | `content_type_required` | Claim `Content-Type` is not `application/json` (`platform/hosted/faucet/src/main.rs:924-925`) |
+| 400 | `untrusted_identity_header` | Forwarded IP or `x-layerx-principal` present (`platform/hosted/faucet/src/main.rs:927-933`) |
+| 400 | `idempotency_key_required` | Missing `Idempotency-Key` (`platform/hosted/faucet/src/main.rs:946-947`) |
+| 400 | `invalid_idempotency_key` | Key fails `valid_identifier` max 128 (`platform/hosted/faucet/src/main.rs:949-950`) |
+| 400 | `invalid_argument` | JSON/`did`/`public_key` rejected (`platform/hosted/faucet/src/main.rs:1036-1041`) |
+| 401 | `service_token_required` | Service claim Bearer missing, malformed, or not the configured secret (`platform/hosted/faucet/src/main.rs:987-993`) |
+| 401 | `identity_required` | Missing/empty Bearer, identity non-200, inactive session, or invalid `sub` (`platform/hosted/faucet/src/main.rs:475-502`) |
+| 404 | `not_found` | Method/path is not a listed route (`platform/hosted/faucet/src/main.rs:1025-1026`) |
+| 409 | `idempotency_conflict` | Same key, different request digest (`platform/hosted/faucet/src/main.rs:1090`) |
+| 429 | `network_request_rate` | Admission INCR exceeded (`platform/hosted/faucet/src/main.rs:937-942`) |
+| 429 | `identity_quota` | Identity window cap (`platform/hosted/faucet/src/main.rs:753-756`) |
 | 429 | `address_quota` | Address window cap |
 | 429 | `network_quota` | Peer window cap |
-| 503 | `dependency_unavailable` | `/readyz` Redis miss (`platform/hosted/faucet/src/main.rs:911`) |
-| 503 | `persistence_unavailable` | Admission or reserve Redis error (`platform/hosted/faucet/src/main.rs:937`; `platform/hosted/faucet/src/main.rs:969-970`) |
-| 503 | `identity_unavailable` | Introspect encode/transport/JSON failed (`platform/hosted/faucet/src/main.rs:466-483`) |
-| 503 | `funding_rejected` | Upstream 4xx and rollback succeeded (`platform/hosted/faucet/src/main.rs:983-985`) |
+| 503 | `dependency_unavailable` | `/readyz` Redis miss (`platform/hosted/faucet/src/main.rs:1019`) |
+| 503 | `persistence_unavailable` | Admission or reserve Redis error (`platform/hosted/faucet/src/main.rs:944`; `platform/hosted/faucet/src/main.rs:1066-1067`) |
+| 503 | `identity_unavailable` | Introspect encode/transport/JSON failed (`platform/hosted/faucet/src/main.rs:483-500`) |
+| 503 | `funding_rejected` | Upstream 4xx and rollback succeeded (`platform/hosted/faucet/src/main.rs:1080-1082`) |
 
 `202` is not a refusal. It is `still_checking` with `Retry-After: 10`
-(`platform/hosted/faucet/src/main.rs:1012-1018`). Reason phrase for
+(`platform/hosted/faucet/src/main.rs:1109-1115`). Reason phrase for
 any unlisted status is `Service Unavailable`
-(`platform/hosted/faucet/src/main.rs:1039-1047`).
+(`platform/hosted/faucet/src/main.rs:1136-1144`).
 
 ---
 
 ## Tests
 
-The faucet crate has no `#[cfg(test)]` module
-(`platform/hosted/faucet/src/main.rs`). `platform-test-tooling` still
+The faucet crate carries a `#[cfg(test)]` module over service-claim
+admission and refusal shape: only the exact service token is admitted, a
+service claim must name a principal, a DID, and a signer key, the network
+bucket is scoped to the principal and is identical across replicas, and
+refusals carry a machine-readable code with honest retry advice
+(`platform/hosted/faucet/src/main.rs:1230-1346`). `platform-test-tooling`
 runs `cargo test -p layerx-platform-faucet`
 (`platform/Makefile.inc:118`).
 

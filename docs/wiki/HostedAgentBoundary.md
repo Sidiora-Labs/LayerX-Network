@@ -392,7 +392,7 @@ The gateway `/readyz` component probe labels this surface
 `core_agent_boundary` and requires this JSON plus matching
 `network_id` and `wire_version`
 ([Hosted gateway](HostedGateway.md);
-`platform/hosted/gateway/src/main.rs:2805`).
+`platform/hosted/gateway/src/main.rs:2825`).
 
 ---
 
