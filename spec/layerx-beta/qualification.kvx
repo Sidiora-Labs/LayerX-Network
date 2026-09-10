@@ -9165,3 +9165,59 @@ symbol = "beta-report beta-contract-check"
 observed = "Task 5.4 asks for a beta-report make target beside the other beta checks and for the contract check to fail when the contract and the report disagree. The check itself is implemented and runs: tools/ci/beta-report.sh --check re-renders the report from the ledger and the contract and exits 1 when the report on disk differs from what that evidence renders, when a Surfaces and journeys row states a reached rung the report does not record, when the contract keys report_path or report_status disagree with the report, or when readiness_claim is true while any surface is below its required rung or the decision is not go. Both failure paths were exercised in this lane: editing the decision line of spec/layerx-beta/report.md produced exit 1 with 'is not the report this evidence renders', and a copy of the contract with the reached rung of native-core raised to runtime_proven produced exit 1 with 'states reached rung runtime_proven but the report records source_present'. The wiring is what is missing: the .PHONY line that declares beta-ledger-check and beta-contract-check in Makefile declares no beta-report target and no such target exists, and tools/ci/beta-contract-check.sh does not invoke tools/ci/beta-report.sh --check, so nothing runs the agreement check automatically."
 assumption = "Makefile and tools/ci/beta-contract-check.sh are outside the paths this change owns, and other work is in flight on both, so the two hunks are recorded as a request rather than applied here: a beta-report target running tools/ci/beta-report.sh next to the two existing check targets and added to their .PHONY line, and a tools/ci/beta-report.sh --check invocation at the end of tools/ci/beta-contract-check.sh whose exit status is propagated. Until they are applied the agreement check must be invoked explicitly, and task 5.4's verify_cmd make beta-report beta-ledger-check beta-contract-check cannot run as written."
 severity = "note"
+
+[observation.6.1.2900]
+task = "6.1"
+file = "src/modules/budget/lx_budget_spend.c src/modules/budget/lx_budget_create.c src/modules/budget/lx_budget_close.c src/protocol/lxp_kernel.c src/ledger/lxp_journal.c"
+symbol = "lx_budget_bind_source_authority lxp_kernel_apply_transfer_set source_authorities_check"
+observed = "Before this change four of the five budget targets exited non-zero on an unmodified checkout: test_budget_create, test_budget_spend, test_budget_delegate and test_budget_close each returned 1 while test_budget_period returned 0. Every budget transfer emission built an lxp_transfer_context with source_authorities NULL and source_authority_count zero, and lxp_kernel_apply_transfer_set at src/protocol/lxp_kernel.c refuses any set without a source authority table with LXP_ERR_NON_CANONICAL, so no budget transfer could reach source_authorities_check at src/ledger/lxp_journal.c:69. Evidence: qual-logs/baseline-budget.log."
+assumption = "The kernel refusal is the canonical rule and was left exactly as written; the budget module now supplies the one-entry source authority table that the rule requires, through lx_budget_bind_source_authority, from every emission site in the module."
+severity = "note"
+
+[observation.6.1.2901]
+task = "6.1"
+file = "src/modules/budget/lx_budget_spend.c src/modules/budget/lx_budget_period.c include/layerx/lxp_module.h"
+symbol = "lx_budget_spend_prepare lx_budget_rollover lx_budget_epoch_begin LXP_MODULE_MAX_STAGED_WRITES"
+observed = "Budget records held in canonical module key-value state roll their period lazily: lx_budget_spend_prepare calls lx_budget_rollover on the record it is about to charge, so a record is advanced when it is next touched rather than at the epoch boundary. lx_budget_epoch_begin keeps its existing bulk behaviour over the runtime store. A bulk rollover of key-value records would have to stage one write per record inside a single module context, and LXP_MODULE_MAX_STAGED_WRITES caps a context at 64 staged writes, so the bulk form cannot cover a store larger than that cap."
+assumption = "Lazy rollover and bulk rollover agree on the resulting record for every record that is read or charged, because both call the same lx_budget_rollover with the same batch timestamp; a record that is never touched is never observed in a stale period. The staged write cap was left as written."
+severity = "note"
+
+[observation.6.1.2902]
+task = "6.1"
+file = "tests/modules/test_budget_create.c tests/modules/test_budget_close.c tests/modules/test_budget_delegate.c src/protocol/lxp_module_ctx.c"
+symbol = "emit_transfer_set lxp_module_ctx_init transfer_applied"
+observed = "emit_transfer_set at src/protocol/lxp_module_ctx.c refuses a second transfer set on the same module context with LXP_ERR_BALANCE_BYPASS unless the module is Programs, and only lxp_module_ctx_commit clears transfer_applied. Three of the store-path budget tests drove several value-moving calls through one context that was initialised once, so every emission after the first was refused. Each of those tests now initialises a fresh module context before each further emission, which is the lifecycle the kernel gives one activity, and matches what tests/modules/test_budget_spend.c already did."
+assumption = "Every existing assertion in those tests was preserved verbatim, including the transfer_calls counts in tests/modules/test_budget_close.c; only context initialisation was added."
+severity = "note"
+
+[observation.6.1.2903]
+task = "6.1"
+file = "tests/modules/test_budget_create.c Makefile"
+symbol = "test-budget-create dispatch_path store_path"
+observed = "The full seven-ordinal dispatch suite for the budget module is hosted inside tests/modules/test_budget_create.c alongside the pre-existing store-path coverage, rather than in a new test file. A new test binary requires its own rule in the Makefile and an entry in the aggregate list, and the Makefile is outside this change set."
+assumption = "Both halves run under the existing test-budget-create target, which also runs tools/lxp_check_sole_writer.sh, so no gate coverage is lost by combining them."
+severity = "note"
+
+[observation.6.1.2904]
+task = "6.1"
+file = "src/modules/budget/lx_budget_module.c include/layerx/lxp_module.h src/modules/asset/lx_asset_registry.c"
+symbol = "budget_authorized_signer LX_BUDGET_AMEND LX_BUDGET_DELEGATE_ADD LX_BUDGET_DELEGATE_REMOVE"
+observed = "The amend and the two delegate ordinals change record state without moving value, so they emit no transfer set, and only lxp_apply_transfer_set advances an account next_sequence. There is no module context interface that advances a signer sequence for a non-monetary activity, so two distinct signed activities of those ordinals can carry the same account_sequence. The asset module has the same shape for its registration ordinal. Within one budget record the effect is bounded: a repeated delegate add is refused with LXP_ERR_SEQUENCE_REUSED and a repeated delegate remove with LXP_ERR_UNAUTHORIZED_DELEGATE, and budget_authorized_signer now requires account_sequence to equal the signer next_sequence exactly, refusing a lower value with LXP_ERR_SEQUENCE_REUSED and a higher one with LXP_ERR_SEQUENCE_GAP."
+assumption = "Adding a sequence-advancing interface to lxp_module_ctx would change a protocol surface shared by every module, so it is recorded rather than introduced here. Idempotency keys and the activity identifier remain the deduplication surface above the module."
+severity = "note"
+
+[observation.6.1.2905]
+task = "6.1"
+file = "src/modules/budget/lx_budget_close.c src/modules/budget/lx_budget_create.c"
+symbol = "drain lx_budget_record_validate lx_budget_record_encode"
+observed = "The store-path drain in src/modules/budget/lx_budget_close.c sets per_period_limit to spent_this_period when a budget is drained, which yields a zero limit whenever the current period has no spend. lx_budget_record_validate refuses a zero per_period_limit and lx_budget_record_encode validates before encoding, so a record reduced that way cannot be written back to canonical key-value state. The dispatch close path therefore leaves the limit as configured and relies on the closed flag, which already refuses fund, amend, delegate, spend and close."
+assumption = "The store-path behaviour and the validation rule disagree, and both were left exactly as written: the existing store-path assertions in tests/modules/test_budget_close.c depend on the reduced limit and the validation rule is the canonical encoding contract."
+severity = "note"
+
+[observation.6.1.2906]
+task = "6.1"
+file = "src/protocol/lxp_genesis.c"
+symbol = "module_table module_table_validate LXP_GENESIS_MODULE_GATE_ENABLE_FLAG"
+observed = "The genesis module table already carries the budget row with LXP_GENESIS_MODULE_GATE_ENABLE_FLAG and enabled false, and module_table_validate refuses a duplicate module identifier, so no registration row was added by this change. The enable flag was not flipped: flipping it changes the genesis state root and every snapshot fixture derived from it."
+assumption = "The dispatch, canonical key-value state, events and refusals are exercised at module level against a kernel that registers the module directly, so the coverage does not depend on the genesis gate. Enabling the module in genesis and regenerating the affected fixtures is left as one coordinated change across all gated modules."
+severity = "note"

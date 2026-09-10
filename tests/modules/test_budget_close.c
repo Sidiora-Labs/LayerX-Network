@@ -122,7 +122,9 @@ int main(void)
     close_request.context.actor_sequence = budget_account.next_sequence;
     (void)memcpy(close_request.context.authorized_from,
                  budget_account.id, 32U);
-    if (lx_budget_defund_execute(&ctx, &close_request, &receipt) != LXP_OK ||
+    if (lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_BUDGET, 100U, 0U, 2U,
+                            1000U, &arena, true) != LXP_OK ||
+        lx_budget_defund_execute(&ctx, &close_request, &receipt) != LXP_OK ||
         budget_account.balance.lo != 50U || owner.balance.lo != 30U ||
         store.records[0].per_period_limit.lo != 70U)
         return 1;
@@ -131,7 +133,9 @@ int main(void)
     if (lx_budget_revoke_execute(&ctx, &close_request, &receipt) !=
         LXP_ERR_STALE_REVOCATION) return 1;
     close_request.revocation_sequence = 2U;
-    if (lx_budget_revoke_execute(&ctx, &close_request, &receipt) != LXP_OK ||
+    if (lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_BUDGET, 100U, 0U, 3U,
+                            1000U, &arena, true) != LXP_OK ||
+        lx_budget_revoke_execute(&ctx, &close_request, &receipt) != LXP_OK ||
         budget_account.balance.lo != 0U || owner.balance.lo != 80U ||
         !store.records[0].revoked || transfer_calls != 3U)
         return 1;
