@@ -180,7 +180,7 @@ fn start_local_identity(cluster: &Cluster, certificates: &Certificates) -> Local
         &identity_http,
         "/v1/principals",
         &provisioning,
-        &serde_json::json!({"sub":cluster.treasury_did,"allowed_signer_public_keys":[signer],"account":format!("agent:{}:main",cluster.treasury_did),"audiences":[]}),
+        &serde_json::json!({"tenant":"beta","sub":cluster.treasury_did,"allowed_signer_public_keys":[signer],"account":format!("agent:{}:main",cluster.treasury_did),"audiences":[]}),
         200,
     );
     let session = local_json(
@@ -569,7 +569,7 @@ fn issue_recipient_scoped_key(
         "/v1/principals",
         &provisioning,
         "pay6-recipient-principal",
-        &serde_json::json!({"sub":funding.recipient_did,"allowed_signer_public_keys":[signer],"account":format!("agent:{}:main",funding.recipient_did),"audiences":[]}),
+        &serde_json::json!({"tenant":"beta","sub":funding.recipient_did,"allowed_signer_public_keys":[signer],"account":format!("agent:{}:main",funding.recipient_did),"audiences":[]}),
         200,
     );
     let session = local_json_with_idempotency(
