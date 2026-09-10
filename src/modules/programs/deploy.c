@@ -454,11 +454,11 @@ static lxp_result upgrade_policy_authorized(
             lxp_ctx_module_runtime(ctx);
         if (runtime == NULL || runtime->accounts == NULL)
             return LXP_ERR_MODULE_DISABLED;
-        accounts = calloc(LX_ACCOUNT_REGISTRY_CAPACITY, sizeof(*accounts));
+        accounts = calloc(runtime->accounts->count + 1U, sizeof(*accounts));
         if (accounts == NULL) return LXP_ERR_ARENA_EXHAUSTED;
         status = lx_account_list_did(
             runtime->accounts, authority->principal, accounts,
-            LX_ACCOUNT_REGISTRY_CAPACITY, &account_count);
+            runtime->accounts->count, &account_count);
     }
     for (size_t index = 0U; status == LXP_OK && index < account_count; ++index)
         if (lxp_ct_memcmp(policy, accounts[index], 32U) == 0) {

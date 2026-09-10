@@ -3088,19 +3088,24 @@ static lxp_result send_did_accounts(
     const uint8_t did_id[32], int64_t deadline)
 {
     lx_account_registry *accounts = server->owner->kernel->state->accounts;
-    uint8_t ids[LX_ACCOUNT_REGISTRY_CAPACITY][32];
+    uint8_t (*ids)[32];
     size_t account_count;
     uint8_t *bytes;
     size_t cursor = 4U;
     uint16_t count = 0U;
     size_t capacity = server->frame_bytes;
-    lxp_result status = lx_account_list_did(accounts, did_id, ids,
-        LX_ACCOUNT_REGISTRY_CAPACITY, &account_count);
-    if (status != LXP_OK || capacity < 4U)
+    lxp_result status;
+    ids = (uint8_t (*)[32])calloc(accounts->count + 1U, 32U);
+    if (ids == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    status = lx_account_list_did(accounts, did_id, ids, accounts->count,
+                                 &account_count);
+    if (status != LXP_OK || capacity < 4U) {
+        free(ids);
         return evidence_refusal(server, descriptor, request->correlation_id,
             status != LXP_OK ? status : LXP_ERR_LENGTH_LIMIT, deadline);
+    }
     bytes = (uint8_t *)malloc(capacity);
-    if (bytes == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    if (bytes == NULL) { free(ids); return LXP_ERR_ARENA_EXHAUSTED; }
     bytes[0] = 0U; bytes[1] = 1U;
     for (size_t i = 0U; i < account_count && status == LXP_OK; ++i) {
         const lx_account *account = NULL;
@@ -3135,6 +3140,7 @@ static lxp_result send_did_accounts(
         LNI_ACCOUNT_READ_RESPONSE, request->correlation_id, bytes, cursor, NULL, 0U, deadline);
     else status = evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
     free(bytes);
+    free(ids);
     return status;
 }
 

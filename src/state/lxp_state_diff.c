@@ -7,22 +7,36 @@ static lxp_result sorted_accounts(const lx_account_registry *registry,
                                   const lx_account **sorted)
 {
     size_t i;
+    lxp_result status;
     if (registry == NULL || registry->count > LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
+    status = lx_account_registry_index_validate(registry);
+    if (status != LXP_OK) return status;
     for (i = 0U; i < registry->count; ++i) {
-        size_t at = i;
-        const lx_account *account = &registry->accounts[i];
-        lxp_result status = lx_account_validate_canonical(account);
+        size_t slot = 0U;
+        status = lx_account_registry_index_slot(registry, i, &slot);
         if (status != LXP_OK) return status;
-        while (at != 0U && memcmp(sorted[at - 1U]->id, account->id, 32U) > 0) {
-            sorted[at] = sorted[at - 1U];
-            --at;
-        }
-        sorted[at] = account;
+        sorted[i] = &registry->accounts[slot];
+        status = lx_account_validate_canonical(sorted[i]);
+        if (status != LXP_OK) return status;
     }
     for (i = 1U; i < registry->count; ++i)
-        if (memcmp(sorted[i - 1U]->id, sorted[i]->id, 32U) == 0)
+        if (memcmp(sorted[i - 1U]->id, sorted[i]->id, 32U) >= 0)
             return LXP_ERR_UNSORTED_SEQUENCE;
+    return LXP_OK;
+}
+
+static lxp_result account_view(lxp_arena *arena, size_t count,
+                               const lx_account ***view)
+{
+    void *memory;
+    lxp_result status;
+    *view = NULL;
+    if (count == 0U) return LXP_OK;
+    status = lxp_arena_alloc(arena, count * sizeof(**view),
+                             _Alignof(const lx_account *), &memory);
+    if (status != LXP_OK) return status;
+    *view = (const lx_account **)memory;
     return LXP_OK;
 }
 
@@ -30,8 +44,8 @@ lxp_result lxp_state_diff_encode(const lx_account_registry *before,
                                  const lx_account_registry *after,
                                  lxp_arena *arena, lxp_byte_span *encoded)
 {
-    const lx_account *old[LX_ACCOUNT_REGISTRY_CAPACITY];
-    const lx_account *current[LX_ACCOUNT_REGISTRY_CAPACITY];
+    const lx_account **old = NULL;
+    const lx_account **current = NULL;
     uint8_t old_value[LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES];
     uint8_t value[LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES];
     uint8_t key[LX_ACCOUNT_STATE_LEAF_KEY_BYTES];
@@ -39,12 +53,18 @@ lxp_result lxp_state_diff_encode(const lx_account_registry *before,
     size_t i, previous = 0U, mark;
     uint32_t count = 0U;
     lxp_result status;
-    if (arena == NULL || encoded == NULL) return LXP_ERR_NON_CANONICAL;
+    if (arena == NULL || encoded == NULL || before == NULL || after == NULL)
+        return LXP_ERR_NON_CANONICAL;
     *encoded = (lxp_byte_span){NULL, 0U};
-    status = sorted_accounts(before, old);
-    if (status == LXP_OK) status = sorted_accounts(after, current);
-    if (status != LXP_OK) return status;
     mark = lxp_arena_mark(arena);
+    status = account_view(arena, before->count, &old);
+    if (status == LXP_OK) status = account_view(arena, after->count, &current);
+    if (status == LXP_OK) status = sorted_accounts(before, old);
+    if (status == LXP_OK) status = sorted_accounts(after, current);
+    if (status != LXP_OK) {
+        (void)lxp_arena_reset(arena, mark);
+        return status;
+    }
     status = lxp_codec_writer_init(&writer, arena,
         4U + after->count * (40U + LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES));
     if (status == LXP_OK) status = lxp_codec_write_seq(&writer, 0U,

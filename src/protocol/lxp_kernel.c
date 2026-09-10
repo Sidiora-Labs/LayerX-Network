@@ -102,10 +102,10 @@ lxp_result lxp_kernel_program_payment_account(
             }
         return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
     }
-    ids = calloc(LX_ACCOUNT_REGISTRY_CAPACITY, sizeof(*ids));
+    ids = calloc(accounts->count + 1U, sizeof(*ids));
     if (ids == NULL) return LXP_ERR_ARENA_EXHAUSTED;
     status = lx_account_list_did(accounts, principal, ids,
-                                 LX_ACCOUNT_REGISTRY_CAPACITY, &count);
+                                 accounts->count, &count);
     for (size_t i = 0U; status == LXP_OK && i < count; ++i)
         for (size_t j = 0U; j < accounts->count; ++j) {
             lx_account *candidate = &accounts->accounts[j];

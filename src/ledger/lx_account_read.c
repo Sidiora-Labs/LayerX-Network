@@ -8,13 +8,20 @@ lxp_result lx_account_list_did(const lx_account_registry *registry,
     size_t *count)
 {
     size_t found = 0U;
+    lxp_result index_status;
     if (registry == NULL || did_id == NULL || account_ids == NULL || count == NULL ||
         registry->count > LX_ACCOUNT_REGISTRY_CAPACITY) return LXP_ERR_NON_CANONICAL;
-    for (size_t i = 0U; i < registry->count; ++i) {
-        const lx_account *account = &registry->accounts[i];
+    index_status = lx_account_registry_index_validate(registry);
+    if (index_status != LXP_OK) return index_status;
+    for (size_t position = 0U; position < registry->count; ++position) {
+        const lx_account *account;
         uint8_t owner[32];
         size_t length;
+        size_t i = 0U;
         lxp_result status;
+        status = lx_account_registry_index_slot(registry, position, &i);
+        if (status != LXP_OK) return status;
+        account = &registry->accounts[i];
         if ((account->kind < LX_ACCOUNT_AGENT_MAIN ||
              account->kind > LX_ACCOUNT_AGENT_MARGIN) &&
             account->kind != LX_ACCOUNT_AGENT_ASSET) continue;

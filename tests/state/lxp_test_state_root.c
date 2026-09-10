@@ -172,11 +172,10 @@ int main(void)
         };
         lx_account_registry *accounts =
             (lx_account_registry *)calloc(1U, sizeof(*accounts));
-        lxp_state_proof *proofs = (lxp_state_proof *)calloc(
-            LX_ACCOUNT_REGISTRY_CAPACITY, sizeof(*proofs));
+        lxp_state_proof *proofs = NULL;
         uint8_t root[32];
         size_t index;
-        if (accounts == NULL || proofs == NULL ||
+        if (accounts == NULL ||
             lx_account_registry_init(accounts) != LXP_OK)
             return 1;
         for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
@@ -191,7 +190,10 @@ int main(void)
                     LXP_OK)
                 return 1;
         }
-        if (lx_account_registry_proofs(accounts, root, proofs) != LXP_OK)
+        proofs = (lxp_state_proof *)calloc(accounts->count, sizeof(*proofs));
+        if (proofs == NULL ||
+            accounts->count != sizeof(names) / sizeof(names[0]) ||
+            lx_account_registry_proofs(accounts, root, proofs) != LXP_OK)
             return 1;
         for (index = 0U; index < accounts->count; ++index) {
             uint8_t single_root[32];
@@ -204,6 +206,7 @@ int main(void)
                 return 1;
         }
         free(proofs);
+        lx_account_registry_release(accounts);
         free(accounts);
     }
     supply_bad = true;

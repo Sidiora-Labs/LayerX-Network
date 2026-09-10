@@ -824,9 +824,9 @@ fn shared_c_rust_state_vectors_freeze_leaf_order_odd_duplication_and_bounds() {
         vector_bytes("ordered_first_seed"),
         vector_bytes("order_b_seed")
     );
-    assert_eq!(vector("max_program_accounts"), "512");
-    assert_eq!(MAX_PROGRAM_VALUE_ACCOUNTS, 512);
-    assert_eq!(vector("refused_program_accounts"), "513");
+    assert_eq!(vector("max_program_accounts"), "1048576");
+    assert_eq!(MAX_PROGRAM_VALUE_ACCOUNTS, 1_048_576);
+    assert_eq!(vector("refused_program_accounts"), "1048577");
     canonical_account_and_tree_vectors();
     canonical_proof_bound_vectors();
 }

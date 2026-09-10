@@ -3,6 +3,7 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_merkle.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct state_entry {
@@ -13,6 +14,16 @@ typedef struct state_entry {
 
 enum { LX_ASSET_STATE_MAX_ENTRIES = LX_ASSET_REGISTRY_CAPACITY +
                                      LX_ACCOUNT_REGISTRY_CAPACITY };
+
+static int entry_order(const void *left, const void *right)
+{
+    const state_entry *const *a = (const state_entry *const *)left;
+    const state_entry *const *b = (const state_entry *const *)right;
+    int order = memcmp((*a)->key, (*b)->key, 64U);
+    if (order != 0) return order;
+    if (*a < *b) return -1;
+    return *a > *b ? 1 : 0;
+}
 
 lxp_result lx_asset_balance_get(const lx_account_registry *accounts,
                                 const uint8_t account_id[32],
@@ -101,27 +112,14 @@ lxp_result lx_asset_total_units(lx_asset_registry *assets,
     return status;
 }
 
-static void sort_entries(state_entry *entries, size_t count)
-{
-    size_t i;
-    for (i = 1U; i < count; ++i) {
-        state_entry value = entries[i];
-        size_t position = i;
-        while (position != 0U &&
-               memcmp(entries[position - 1U].key, value.key, 64U) > 0) {
-            entries[position] = entries[position - 1U];
-            --position;
-        }
-        entries[position] = value;
-    }
-}
-
 lxp_result lx_asset_state_root(const lx_asset_registry *assets,
                                const lx_account_registry *accounts,
                                uint8_t root[32])
 {
-    state_entry entries[LX_ASSET_STATE_MAX_ENTRIES];
-    uint8_t hashes[LX_ASSET_STATE_MAX_ENTRIES][32];
+    state_entry *entries = NULL;
+    const state_entry **order = NULL;
+    uint8_t (*hashes)[32] = NULL;
+    size_t capacity;
     size_t count = 0U;
     size_t i;
     lxp_result status = LXP_OK;
@@ -129,13 +127,24 @@ lxp_result lx_asset_state_root(const lx_asset_registry *assets,
         assets->count > LX_ASSET_REGISTRY_CAPACITY ||
         accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
-    (void)memset(entries, 0, sizeof(entries));
-    for (i = 0U; i < assets->count; ++i) {
+    capacity = assets->count + accounts->count;
+    if (capacity > (size_t)LX_ASSET_STATE_MAX_ENTRIES)
+        return LXP_ERR_LENGTH_LIMIT;
+    if (capacity == 0U)
+        return lxp_hash_domain(LXP_DOMAIN_STATE_LEAF, NULL, 0U, root);
+    entries = (state_entry *)calloc(capacity, sizeof(*entries));
+    order = (const state_entry **)calloc(capacity, sizeof(*order));
+    hashes = (uint8_t (*)[32])calloc(capacity, sizeof(*hashes));
+    if (entries == NULL || order == NULL || hashes == NULL) {
+        free(entries); free(order); free(hashes);
+        return LXP_ERR_ARENA_EXHAUSTED;
+    }
+    for (i = 0U; status == LXP_OK && i < assets->count; ++i) {
         lxp_u128 total;
-        size_t encoded_length;
+        size_t encoded_length = 0U;
         uint8_t total_bytes[16];
-        (void)memcpy(entries[count].key, assets->assets[i].asset_id, 32U);
         lx_asset_record record = assets->assets[i];
+        (void)memcpy(entries[count].key, assets->assets[i].asset_id, 32U);
         status = sum_units(accounts, record.asset_id, &total);
         if (status == LXP_OK) {
             record.total_units = total;
@@ -144,43 +153,48 @@ lxp_result lx_asset_state_root(const lx_asset_registry *assets,
                                             &encoded_length);
         }
         if (status == LXP_OK) status = lxp_u128_to_be(total, total_bytes);
-        if (status != LXP_OK) return status;
+        if (status != LXP_OK) break;
         (void)memcpy(entries[count].value + encoded_length, total_bytes, 16U);
         entries[count].value_length = encoded_length + 16U;
         ++count;
     }
-    for (i = 0U; i < accounts->count; ++i) {
+    for (i = 0U; status == LXP_OK && i < accounts->count; ++i) {
         uint8_t balance[16];
         if (!accounts->accounts[i].has_asset) continue;
         (void)memcpy(entries[count].key, accounts->accounts[i].asset_id, 32U);
         (void)memcpy(entries[count].key + 32U, accounts->accounts[i].id, 32U);
         status = lxp_u128_to_be(accounts->accounts[i].balance, balance);
-        if (status != LXP_OK) return status;
+        if (status != LXP_OK) break;
         (void)memcpy(entries[count].value, balance, sizeof(balance));
         entries[count].value_length = sizeof(balance);
         ++count;
     }
-    sort_entries(entries, count);
-    for (i = 0U; i < count; ++i) {
-        uint8_t leaf[64U + 384U];
-        (void)memcpy(leaf, entries[i].key, 64U);
-        (void)memcpy(leaf + 64U, entries[i].value, entries[i].value_length);
-        status = lxp_hash_domain(LXP_DOMAIN_STATE_LEAF, leaf,
-                                 64U + entries[i].value_length, hashes[i]);
-        if (status != LXP_OK) return status;
+    if (status == LXP_OK && count == 0U)
+        status = lxp_hash_domain(LXP_DOMAIN_STATE_LEAF, NULL, 0U, root);
+    if (status != LXP_OK || count == 0U) {
+        free(entries); free(order); free(hashes);
+        return status;
     }
-    if (count == 0U)
-        return lxp_hash_domain(LXP_DOMAIN_STATE_LEAF, NULL, 0U, root);
-    while (count > 1U) {
+    for (i = 0U; i < count; ++i) order[i] = &entries[i];
+    qsort(order, count, sizeof(*order), entry_order);
+    for (i = 0U; status == LXP_OK && i < count; ++i) {
+        uint8_t leaf[64U + 384U];
+        (void)memcpy(leaf, order[i]->key, 64U);
+        (void)memcpy(leaf + 64U, order[i]->value, order[i]->value_length);
+        status = lxp_hash_domain(LXP_DOMAIN_STATE_LEAF, leaf,
+                                 64U + order[i]->value_length, hashes[i]);
+    }
+    while (status == LXP_OK && count > 1U) {
         size_t next = (count + 1U) / 2U;
-        for (i = 0U; i < next; ++i) {
+        for (i = 0U; status == LXP_OK && i < next; ++i) {
             size_t right = i * 2U + 1U;
             if (right >= count) right = i * 2U;
-            status = lxp_merkle_node_hash(hashes[i * 2U], hashes[right], hashes[i]);
-            if (status != LXP_OK) return status;
+            status = lxp_merkle_node_hash(hashes[i * 2U], hashes[right],
+                                          hashes[i]);
         }
         count = next;
     }
-    (void)memcpy(root, hashes[0], 32U);
-    return LXP_OK;
+    if (status == LXP_OK) (void)memcpy(root, hashes[0], 32U);
+    free(entries); free(order); free(hashes);
+    return status;
 }

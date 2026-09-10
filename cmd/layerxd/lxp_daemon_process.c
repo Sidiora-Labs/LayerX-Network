@@ -54,7 +54,7 @@ typedef struct lxp_daemon_process {
     uint16_t protocol_version;
     bool custody_credit_enabled;
     lx_account_registry accounts;
-    lxp_transfer_asset_state assets[LX_ACCOUNT_REGISTRY_CAPACITY];
+    lxp_transfer_asset_state assets[LX_ASSET_REGISTRY_CAPACITY];
     lx_asset_record send_assets[LX_ASSET_REGISTRY_CAPACITY];
     lx_asset_runtime asset_runtime;
     size_t asset_count;
@@ -1065,6 +1065,7 @@ done:
         lxp_result close_status = lxp_state_store_destroy(state);
         if (status == LXP_OK && close_status != LXP_OK) status = close_status;
     }
+    lx_account_registry_release(accounts);
     if (accounts != NULL) lxp_secure_zero(accounts, sizeof(*accounts));
     if (kernel != NULL) lxp_secure_zero(kernel, sizeof(*kernel));
     if (journal != NULL) lxp_secure_zero(journal, sizeof(*journal));
@@ -2995,6 +2996,11 @@ static lxp_result apply_canonical_activity(
         if (status == LXP_OK) {
             base_accounts = malloc(sizeof(*base_accounts));
             if (base_accounts == NULL) status = LXP_ERR_IO;
+            else {
+                (void)memset(base_accounts, 0, sizeof(*base_accounts));
+                status = lx_account_registry_copy(&process->accounts,
+                                                  base_accounts);
+            }
         }
         if (status != LXP_OK) {
             status = refusal;
@@ -3017,7 +3023,6 @@ static lxp_result apply_canonical_activity(
         execution.arena = &process->execution_arena;
         execution.sequencer_private_key = process->sequencer_private_key;
         execution.verified_receipts = &process->verified_receipts;
-        *base_accounts = process->accounts;
         base_state = process->state;
         base_state.accounts = base_accounts;
         base_kernel = process->kernel;
@@ -3078,7 +3083,9 @@ static lxp_result apply_canonical_activity(
     (void)memset(&receipt, 0, sizeof(receipt));
     base_accounts = malloc(sizeof(*base_accounts));
     if (base_accounts == NULL) { status = LXP_ERR_IO; goto finish; }
-    *base_accounts = process->accounts;
+    (void)memset(base_accounts, 0, sizeof(*base_accounts));
+    status = lx_account_registry_copy(&process->accounts, base_accounts);
+    if (status != LXP_OK) goto finish;
     base_state = process->state;
     base_state.accounts = base_accounts;
     base_kernel = process->kernel;
@@ -3119,6 +3126,7 @@ publish:
         }
     }
 finish:
+    lx_account_registry_release(base_accounts);
     free(base_accounts);
     if (status != LXP_OK)
         (void)fprintf(stderr, "layerxd: activity %s failed with result %d\n", stage, (int)status);
@@ -4921,6 +4929,7 @@ static void close_process(lxp_daemon_process *process)
     if (process->canonical_open) (void)lxp_log_close(&process->canonical_log);
     if (process->feed_open) (void)lxp_log_close(&process->feed_log);
     if (process->state_open) (void)lxp_state_store_destroy(&process->state);
+    lx_account_registry_release(&process->accounts);
     lxp_secure_zero(process->sequencer_private_key, 32U);
     lxp_secure_zero(process->authority_replica_token,
                     sizeof(process->authority_replica_token));

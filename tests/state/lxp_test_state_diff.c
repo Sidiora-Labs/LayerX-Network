@@ -73,12 +73,17 @@ int main(void)
         &decoded_events, &event_count) == LXP_ERR_NON_CANONICAL);
     REQUIRE(lx_account_registry_init(&before) == LXP_OK);
     REQUIRE(lx_account_registry_init(&after) == LXP_OK);
-    after.count = 1U;
-    (void)memcpy(after.accounts[0].id, account_id, 32U);
-    (void)memcpy(after.accounts[0].name, "system:fees", 11U);
-    after.accounts[0].name_length = 11U;
-    after.accounts[0].kind = LX_ACCOUNT_SYSTEM_FEES;
-    after.accounts[0].created_at_sequence = 7U;
+    {
+        lx_account seed;
+        (void)memset(&seed, 0, sizeof(seed));
+        (void)memcpy(seed.id, account_id, 32U);
+        (void)memcpy(seed.name, "system:fees", 11U);
+        seed.name_length = 11U;
+        seed.kind = LX_ACCOUNT_SYSTEM_FEES;
+        seed.created_at_sequence = 7U;
+        REQUIRE(lx_account_registry_slot_insert(&after, &seed, NULL) ==
+                LXP_OK);
+    }
     expected[3] = 1U;
     expected[7] = 32U;
     (void)memcpy(expected + 8U, account_id, 32U);
@@ -109,8 +114,8 @@ int main(void)
     REQUIRE(lxp_state_diff_encode(&after, &after, &arena, &encoded) == LXP_OK);
     REQUIRE(encoded.length == 4U && memcmp(encoded.bytes, "\0\0\0\0", 4U) == 0);
     REQUIRE(lxp_state_diff_encode(&after, &before, &arena, &encoded) == LXP_FATAL_REPLAY_DIVERGENCE);
-    before.count = 1U;
-    before.accounts[0] = after.accounts[0];
+    REQUIRE(lx_account_registry_slot_insert(&before, &after.accounts[0],
+                                            NULL) == LXP_OK);
     after.accounts[0].next_sequence = 1U;
     REQUIRE(lxp_state_diff_encode(&before, &after, &arena, &encoded) == LXP_OK);
     REQUIRE(encoded.length == sizeof(expected));
@@ -182,5 +187,7 @@ int main(void)
         REQUIRE(lxp_da_recovery_verify_kernel(&kernel, 8U, 9U, recovery, &arena) == LXP_ERR_NON_CANONICAL);
         REQUIRE(lxp_state_store_destroy(&state) == LXP_OK);
     }
+    lx_account_registry_release(&before);
+    lx_account_registry_release(&after);
     return 0;
 }

@@ -554,7 +554,7 @@ static int pay1_submit_bytes(fixture *f, uint16_t ordinal, const uint8_t *payloa
     size_t before_kv_count = f->kernel.module_kv_count;
     void *before_kv = malloc(sizeof(f->kernel.module_kv));
     REQUIRE(before_accounts != NULL && before_kv != NULL);
-    *before_accounts = f->accounts;
+    REQUIRE(lx_account_registry_copy(&f->accounts, before_accounts) == LXP_OK);
     memcpy(before_kv, f->kernel.module_kv, sizeof(f->kernel.module_kv));
     uint64_t before_sequence = actor_identity->next_sequence;
     lxp_result result = lxp_kernel_execute_activity(&f->kernel, &f->activity, &f->execution, &f->receipt);
@@ -566,7 +566,9 @@ static int pay1_submit_bytes(fixture *f, uint16_t ordinal, const uint8_t *payloa
         REQUIRE(f->kernel.module_kv_count == before_kv_count);
         REQUIRE(memcmp(before_kv, f->kernel.module_kv, before_kv_count * sizeof(f->kernel.module_kv[0])) == 0);
     }
-    free(before_kv); free(before_accounts);
+    free(before_kv);
+    lx_account_registry_release(before_accounts);
+    free(before_accounts);
     if (result != LXP_OK || f->receipt.result_code != expected)
         (void)fprintf(stderr, "PAY1 ordinal %u kernel %d receipt %d expected %d\n",
                       ordinal, result, f->receipt.result_code, expected);
@@ -807,10 +809,8 @@ static int pay1_prepared_account(unsigned mode)
         REQUIRE(f->accounts.count == 2U &&
                 memcmp(f->accounts.accounts[0].id,
                        f->authority.principal, 32U) == 0);
-        f->accounts.accounts[0] = f->accounts.accounts[1];
-        (void)memset(&f->accounts.accounts[1], 0,
-                     sizeof(f->accounts.accounts[1]));
-        f->accounts.count = 1U;
+        REQUIRE(lx_account_registry_slot_remove(&f->accounts, 0U) == LXP_OK);
+        REQUIRE(f->accounts.count == 1U);
     }
     f->activity.activity_type = LX_ASSET_ACCOUNT_OPEN;
     f->payload[0] = 0U; f->payload[1] = 1U;

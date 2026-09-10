@@ -2099,7 +2099,7 @@ static lxp_result account_evidence_publish_batch(
         accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_PROJECTION_STALE;
     account_proofs = (lxp_state_proof *)calloc(
-        LX_ACCOUNT_REGISTRY_CAPACITY, sizeof(*account_proofs));
+        accounts->count, sizeof(*account_proofs));
     if (account_proofs == NULL) return LXP_ERR_IO;
     mark = lxp_arena_mark(arena);
     status = lxp_batch_header_decode(canonical_header.bytes,

@@ -4,6 +4,7 @@
 #include "layerx/lxp_crypto.h"
 #include "lxp_state_internal.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -274,36 +275,52 @@ lxp_result lx_account_state_leaf_material(
                                        false);
 }
 
+static lxp_result account_leaves_allocate(size_t count, state_leaf **leaves)
+{
+    if (count == 0U) {
+        *leaves = NULL;
+        return LXP_OK;
+    }
+    if (count > SIZE_MAX / sizeof(**leaves)) return LXP_ERR_LENGTH_LIMIT;
+    *leaves = (state_leaf *)calloc(count, sizeof(**leaves));
+    return *leaves == NULL ? LXP_ERR_ARENA_EXHAUSTED : LXP_OK;
+}
+
 static lxp_result account_registry_root(const lx_account_registry *registry,
                                         uint8_t root[32],
                                         bool allow_retired_issuance)
 {
-    state_leaf leaves[LX_ACCOUNT_REGISTRY_CAPACITY];
+    state_leaf *leaves = NULL;
     size_t count;
-    size_t i;
-    size_t j;
+    size_t position;
     lxp_result status;
     if (registry == NULL || root == NULL) return LXP_ERR_NON_CANONICAL;
-    if (registry->count > LX_ACCOUNT_REGISTRY_CAPACITY)
-        return LXP_ERR_LENGTH_LIMIT;
+    status = lx_account_registry_index_validate(registry);
+    if (status != LXP_OK) return status;
     count = registry->count;
-    for (i = 0U; i < count; ++i) {
+    status = account_leaves_allocate(count, &leaves);
+    if (status != LXP_OK) return status;
+    for (position = 0U; position < count; ++position) {
         uint8_t key[33];
         uint8_t value[615];
         size_t value_length;
-        for (j = 0U; j < i; ++j)
-            if (memcmp(registry->accounts[j].id,
-                       registry->accounts[i].id, 32U) == 0)
-                return LXP_ERR_NON_CANONICAL;
-        status = account_state_leaf_material(
-            &registry->accounts[i], key, value, &value_length,
-            allow_retired_issuance);
+        size_t slot = 0U;
+        status = lx_account_registry_index_slot(registry, position, &slot);
         if (status == LXP_OK)
-            status = leaf_set(&leaves[i], key, sizeof(key), value,
+            status = account_state_leaf_material(
+                &registry->accounts[slot], key, value, &value_length,
+                allow_retired_issuance);
+        if (status == LXP_OK)
+            status = leaf_set(&leaves[position], key, sizeof(key), value,
                               value_length);
-        if (status != LXP_OK) return status;
+        if (status != LXP_OK) {
+            free(leaves);
+            return status;
+        }
     }
-    return leaves_root(leaves, count, root);
+    status = leaves_root(leaves, count, root);
+    free(leaves);
+    return status;
 }
 
 lxp_result lx_account_registry_root(const lx_account_registry *registry,
@@ -322,91 +339,114 @@ lxp_result lx_account_registry_proof(
     const lx_account_registry *registry, const uint8_t account_id[32],
     uint8_t root[32], lxp_state_proof *proof)
 {
-    state_leaf leaves[LX_ACCOUNT_REGISTRY_CAPACITY];
+    state_leaf *leaves = NULL;
     uint8_t target[33];
     size_t count;
-    size_t index;
-    size_t prior;
+    size_t position;
     lxp_result status;
     if (registry == NULL || account_id == NULL || root == NULL || proof == NULL)
         return LXP_ERR_NON_CANONICAL;
-    if (registry->count > LX_ACCOUNT_REGISTRY_CAPACITY)
-        return LXP_ERR_LENGTH_LIMIT;
+    status = lx_account_registry_index_validate(registry);
+    if (status != LXP_OK) return status;
     count = registry->count;
-    for (index = 0U; index < count; ++index) {
+    status = account_leaves_allocate(count, &leaves);
+    if (status != LXP_OK) return status;
+    for (position = 0U; position < count; ++position) {
         uint8_t key[33];
         uint8_t value[615];
         size_t value_length;
-        for (prior = 0U; prior < index; ++prior)
-            if (memcmp(registry->accounts[prior].id,
-                       registry->accounts[index].id, 32U) == 0)
-                return LXP_ERR_NON_CANONICAL;
-        status = lx_account_state_leaf_material(
-            &registry->accounts[index], key, value, &value_length);
+        size_t slot = 0U;
+        status = lx_account_registry_index_slot(registry, position, &slot);
         if (status == LXP_OK)
-            status = leaf_set(&leaves[index], key, sizeof(key), value,
+            status = lx_account_state_leaf_material(
+                &registry->accounts[slot], key, value, &value_length);
+        if (status == LXP_OK)
+            status = leaf_set(&leaves[position], key, sizeof(key), value,
                               value_length);
-        if (status != LXP_OK) return status;
+        if (status != LXP_OK) {
+            free(leaves);
+            return status;
+        }
     }
     target[0] = 4U;
     (void)memcpy(target + 1U, account_id, 32U);
-    return leaves_proof(leaves, count, target, sizeof(target), root, proof);
+    status = leaves_proof(leaves, count, target, sizeof(target), root, proof);
+    free(leaves);
+    return status;
 }
 
 lxp_result lx_account_registry_proofs(
     const lx_account_registry *registry, uint8_t root[32],
-    lxp_state_proof proofs[LX_ACCOUNT_REGISTRY_CAPACITY])
+    lxp_state_proof *proofs)
 {
-    state_leaf leaves[LX_ACCOUNT_REGISTRY_CAPACITY];
-    uint8_t levels[LXP_STATE_PROOF_MAX_DEPTH + 1U]
-                  [LX_ACCOUNT_REGISTRY_CAPACITY][32];
+    state_leaf *leaves = NULL;
+    uint8_t *levels[LXP_STATE_PROOF_MAX_DEPTH + 1U] = {0};
     size_t level_counts[LXP_STATE_PROOF_MAX_DEPTH + 1U] = {0};
     size_t count;
     size_t index;
-    size_t prior;
     size_t depth = 0U;
     lxp_result status;
     if (registry == NULL || root == NULL || proofs == NULL)
         return LXP_ERR_NON_CANONICAL;
-    if (registry->count == 0U ||
-        registry->count > LX_ACCOUNT_REGISTRY_CAPACITY)
-        return LXP_ERR_LENGTH_LIMIT;
+    status = lx_account_registry_index_validate(registry);
+    if (status != LXP_OK) return status;
+    if (registry->count == 0U) return LXP_ERR_LENGTH_LIMIT;
     count = registry->count;
+    status = account_leaves_allocate(count, &leaves);
+    if (status != LXP_OK) return status;
     for (index = 0U; index < count; ++index) {
         uint8_t key[LX_ACCOUNT_STATE_LEAF_KEY_BYTES];
         uint8_t value[LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES];
         size_t value_length;
-        for (prior = 0U; prior < index; ++prior)
-            if (memcmp(registry->accounts[prior].id,
-                       registry->accounts[index].id, 32U) == 0)
-                return LXP_ERR_NON_CANONICAL;
         status = lx_account_state_leaf_material(
             &registry->accounts[index], key, value, &value_length);
         if (status == LXP_OK)
             status = leaf_set(&leaves[index], key, sizeof(key), value,
                               value_length);
-        if (status != LXP_OK) return status;
+        if (status != LXP_OK) {
+            free(leaves);
+            return status;
+        }
         leaves[index].original_index = index;
     }
     leaves_sort(leaves, count);
     level_counts[0] = count;
+    levels[0] = (uint8_t *)calloc(count, 32U);
+    if (levels[0] == NULL) {
+        free(leaves);
+        return LXP_ERR_ARENA_EXHAUSTED;
+    }
     for (index = 0U; index < count; ++index)
-        (void)memcpy(levels[0][index], leaves[index].hash, 32U);
-    while (level_counts[depth] > 1U) {
+        (void)memcpy(levels[0] + index * 32U, leaves[index].hash, 32U);
+    while (status == LXP_OK && level_counts[depth] > 1U) {
         size_t next_count = (level_counts[depth] + 1U) / 2U;
-        if (depth == LXP_STATE_PROOF_MAX_DEPTH)
-            return LXP_ERR_LENGTH_LIMIT;
+        if (depth == LXP_STATE_PROOF_MAX_DEPTH) {
+            status = LXP_ERR_LENGTH_LIMIT;
+            break;
+        }
+        levels[depth + 1U] = (uint8_t *)calloc(next_count, 32U);
+        if (levels[depth + 1U] == NULL) {
+            status = LXP_ERR_ARENA_EXHAUSTED;
+            break;
+        }
         for (index = 0U; index < next_count; ++index) {
             size_t right = index * 2U + 1U;
             if (right >= level_counts[depth]) right = index * 2U;
-            status = state_node_hash(levels[depth][index * 2U],
-                                     levels[depth][right],
-                                     levels[depth + 1U][index]);
-            if (status != LXP_OK) return status;
+            status = state_node_hash(levels[depth] + index * 64U,
+                                     levels[depth] + right * 32U,
+                                     levels[depth + 1U] + index * 32U);
+            if (status != LXP_OK) break;
         }
+        if (status != LXP_OK) break;
         level_counts[++depth] = next_count;
     }
-    (void)memcpy(root, levels[depth][0], 32U);
+    if (status != LXP_OK) {
+        for (index = 0U; index <= (size_t)LXP_STATE_PROOF_MAX_DEPTH; ++index)
+            free(levels[index]);
+        free(leaves);
+        return status;
+    }
+    (void)memcpy(root, levels[depth], 32U);
     for (index = 0U; index < count; ++index) {
         size_t at = index;
         size_t level;
@@ -418,10 +458,14 @@ lxp_result lx_account_registry_proofs(
         for (level = 0U; level < depth; ++level) {
             size_t sibling = at ^ 1U;
             if (sibling >= level_counts[level]) sibling = at;
-            (void)memcpy(proof->siblings[level], levels[level][sibling], 32U);
+            (void)memcpy(proof->siblings[level],
+                         levels[level] + sibling * 32U, 32U);
             at /= 2U;
         }
     }
+    for (index = 0U; index <= (size_t)LXP_STATE_PROOF_MAX_DEPTH; ++index)
+        free(levels[index]);
+    free(leaves);
     return LXP_OK;
 }
 

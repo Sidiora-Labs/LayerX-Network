@@ -344,22 +344,17 @@ static bool module_registered(const lxp_kernel *kernel, uint16_t module_id)
     return false;
 }
 
-static void sort_accounts(const lx_account_registry *accounts,
-                          size_t *indices)
+static lxp_result sort_accounts(const lx_account_registry *accounts,
+                                size_t *indices)
 {
     size_t i;
-    for (i = 0U; i < accounts->count; ++i) indices[i] = i;
-    for (i = 1U; i < accounts->count; ++i) {
-        size_t value = indices[i];
-        size_t at = i;
-        while (at != 0U && memcmp(
-            accounts->accounts[indices[at - 1U]].id,
-            accounts->accounts[value].id, 32U) > 0) {
-            indices[at] = indices[at - 1U];
-            --at;
-        }
-        indices[at] = value;
+    lxp_result status = lx_account_registry_index_validate(accounts);
+    if (status != LXP_OK) return status;
+    for (i = 0U; i < accounts->count; ++i) {
+        status = lx_account_registry_index_slot(accounts, i, &indices[i]);
+        if (status != LXP_OK) return status;
     }
+    return LXP_OK;
 }
 
 static lxp_result snapshot_size(const lxp_kernel *kernel,
@@ -537,8 +532,10 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
     sort_idempotency(kernel->state, idem_order);
     sort_kv(kernel, kv_indices);
     sort_blobs(kernel, blob_indices);
-    if (include_accounts)
-        sort_accounts(kernel->state->accounts, account_indices);
+    if (include_accounts) {
+        status = sort_accounts(kernel->state->accounts, account_indices);
+        if (status != LXP_OK) return status;
+    }
     status = lxp_codec_writer_init(&writer, arena, capacity);
     if (status == LXP_OK)
         status = lxp_codec_write_struct_header_version(
@@ -995,6 +992,13 @@ static lxp_result snapshot_load(
         snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY &&
         count > LX_ACCOUNT_REGISTRY_CAPACITY)
         status = LXP_ERR_LENGTH_LIMIT;
+    if (status == LXP_OK &&
+        snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY &&
+        count != 0U) {
+        status = lx_account_registry_reserve(accounts, count);
+        if (status == LXP_OK && source_accounts != NULL)
+            status = lx_account_registry_reserve(source_accounts, count);
+    }
     for (i = 0U; status == LXP_OK &&
          snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY &&
          i < count; ++i) {
@@ -1020,6 +1024,10 @@ static lxp_result snapshot_load(
         accounts->count = status == LXP_OK ? count : 0U;
     if (source_accounts != NULL)
         source_accounts->count = status == LXP_OK ? count : 0U;
+    if (status == LXP_OK && accounts != NULL)
+        status = lx_account_registry_index_rebuild(accounts);
+    if (status == LXP_OK && source_accounts != NULL)
+        status = lx_account_registry_index_rebuild(source_accounts);
     if (status == LXP_OK &&
         snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
         uint8_t recorded[32];
@@ -1077,6 +1085,9 @@ static lxp_result snapshot_load(
         if (status == LXP_OK && *renamed_account_count == 0U)
             status = LXP_ERR_UNKNOWN_FIELD;
     }
+    if (status == LXP_OK && live_accounts != NULL &&
+        snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY)
+        status = lx_account_registry_reserve(live_accounts, accounts->count);
     if (status == LXP_OK) {
         for (i = 0U; i < kernel->blob_count; ++i)
             free(kernel->blobs[i].bytes);
@@ -1085,11 +1096,18 @@ static lxp_result snapshot_load(
         kernel->blob_total_bytes = candidate->blob_total_bytes;
         if (snapshot_version ==
                 (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
+            if (live_accounts->count != 0U)
+                (void)memset(live_accounts->accounts, 0,
+                             live_accounts->count *
+                                 sizeof(live_accounts->accounts[0]));
             live_accounts->count = accounts->count;
-            (void)memset(live_accounts->accounts, 0,
-                         sizeof(live_accounts->accounts));
-            (void)memcpy(live_accounts->accounts, accounts->accounts,
-                         accounts->count * sizeof(accounts->accounts[0]));
+            if (accounts->count != 0U) {
+                (void)memcpy(live_accounts->accounts, accounts->accounts,
+                             accounts->count *
+                                 sizeof(accounts->accounts[0]));
+                (void)memcpy(live_accounts->index, accounts->index,
+                             accounts->count * sizeof(accounts->index[0]));
+            }
             kernel->state->account_root_required = true;
         }
         kernel->state->count = state->count;
@@ -1111,6 +1129,8 @@ static lxp_result snapshot_load(
     if (status != LXP_OK)
         for (i = 0U; i < candidate->blob_count; ++i)
             free(candidate->blobs[i].bytes);
+    lx_account_registry_release(accounts);
+    lx_account_registry_release(source_accounts);
     free(accounts);
     free(source_accounts);
     free(state);

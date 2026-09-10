@@ -113,6 +113,7 @@ done:
         lxp_result close_status = lxp_state_store_destroy(state);
         if (status == LXP_OK && close_status != LXP_OK) status = close_status;
     }
+    lx_account_registry_release(accounts);
     if (accounts != NULL) lxp_secure_zero(accounts, sizeof(*accounts));
     if (kernel != NULL) lxp_secure_zero(kernel, sizeof(*kernel));
     if (journal != NULL) lxp_secure_zero(journal, sizeof(*journal));
@@ -388,6 +389,7 @@ lxp_result lxp_genesis_build_snapshot_migration(
     }
     lxp_secure_zero(signer, sizeof(signer));
     lxp_secure_zero(authorization, sizeof(authorization));
+    lx_account_registry_release(accounts);
     if (accounts != NULL) lxp_secure_zero(accounts, sizeof(*accounts));
     if (kernel != NULL) lxp_secure_zero(kernel, sizeof(*kernel));
     if (journal != NULL) lxp_secure_zero(journal, sizeof(*journal));

@@ -13,7 +13,8 @@
 enum {
     LX_ACCOUNT_ID_BYTES = 32,
     LX_ACCOUNT_NAME_MAX = 512,
-    LX_ACCOUNT_REGISTRY_CAPACITY = 512
+    LX_ACCOUNT_REGISTRY_INITIAL_SLOTS = 512,
+    LX_ACCOUNT_REGISTRY_CAPACITY = 1048576
 };
 
 typedef enum lx_account_kind {
@@ -248,9 +249,18 @@ typedef struct lxp_receive_environment {
     uint16_t protocol_version;
 } lxp_receive_environment;
 
+typedef struct lx_account_index_entry {
+    uint8_t id[LX_ACCOUNT_ID_BYTES];
+    size_t slot;
+} lx_account_index_entry;
+
 struct lx_account_registry {
-    lx_account accounts[LX_ACCOUNT_REGISTRY_CAPACITY];
+    lx_account *accounts;
     size_t count;
+    size_t capacity;
+    lx_account_index_entry *index;
+    size_t index_capacity;
+    bool borrowed;
     _Atomic(struct lxp_gateway_invoice_registry *) gateway_owner;
     atomic_size_t gateway_acquirers;
     atomic_bool gateway_transition;
@@ -275,6 +285,29 @@ lxp_result lx_account_kind_of(const uint8_t *name, size_t name_length,
 lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
                                      uint8_t account_id[LX_ACCOUNT_ID_BYTES]);
 lxp_result lx_account_registry_init(lx_account_registry *registry);
+lxp_result lx_account_registry_reserve(lx_account_registry *registry,
+                                       size_t slots);
+void lx_account_registry_release(lx_account_registry *registry);
+lxp_result lx_account_registry_index_lookup(
+    const lx_account_registry *registry,
+    const uint8_t account_id[LX_ACCOUNT_ID_BYTES], size_t *slot);
+lxp_result lx_account_registry_index_slot(const lx_account_registry *registry,
+                                          size_t position, size_t *slot);
+lxp_result lx_account_registry_index_validate(
+    const lx_account_registry *registry);
+lxp_result lx_account_registry_index_rebuild(lx_account_registry *registry);
+lxp_result lx_account_registry_slot_insert(lx_account_registry *registry,
+                                           const lx_account *account,
+                                           size_t *slot);
+lxp_result lx_account_registry_slot_remove(lx_account_registry *registry,
+                                           size_t slot);
+lxp_result lx_account_registry_copy(const lx_account_registry *source,
+                                    lx_account_registry *target);
+lxp_result lx_account_registry_borrow(const lx_account_registry *source,
+                                      lx_account *slots,
+                                      lx_account_index_entry *index,
+                                      size_t capacity,
+                                      lx_account_registry *target);
 lxp_result lx_account_list_did(const lx_account_registry *registry,
     const uint8_t did_id[32], uint8_t (*account_ids)[32], size_t capacity,
     size_t *count);
@@ -297,7 +330,7 @@ lxp_result lx_account_registry_proof(
     lxp_state_proof *proof);
 lxp_result lx_account_registry_proofs(
     const lx_account_registry *registry, uint8_t root[32],
-    lxp_state_proof proofs[LX_ACCOUNT_REGISTRY_CAPACITY]);
+    lxp_state_proof *proofs);
 lxp_result lx_account_lookup(lx_account_registry *registry,
                              const uint8_t *name, size_t name_length,
                              const uint8_t presented_id[LX_ACCOUNT_ID_BYTES],

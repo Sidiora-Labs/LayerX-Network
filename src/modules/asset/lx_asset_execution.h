@@ -341,11 +341,9 @@ static lxp_result asset_execute_typed(lxp_module_ctx *ctx, const lxp_activity *a
             free(preview); free(store); free(idempotency);
             return LXP_ERR_ARENA_EXHAUSTED;
         }
-        status = lx_account_registry_init(preview);
+        status = lx_account_registry_copy(ctx->kernel->state->accounts,
+                                          preview);
         if (status == LXP_OK) {
-            preview->count = ctx->kernel->state->accounts->count;
-            (void)memcpy(preview->accounts, ctx->kernel->state->accounts->accounts,
-                         preview->count * sizeof(preview->accounts[0]));
             store->count = 1U;
             store->grants[0] = grant;
             (void)memset(&environment, 0, sizeof(environment));
@@ -362,6 +360,7 @@ static lxp_result asset_execute_typed(lxp_module_ctx *ctx, const lxp_activity *a
             status = lxp_receive_execute(p, &environment, &projection);
             if (status == LXP_OK) grant = store->grants[0];
         }
+        lx_account_registry_release(preview);
         free(preview); free(store); free(idempotency);
         if (status != LXP_OK) return status;
         status = lxp_receive_authorization_message(p, message, sizeof(message), &message_length);
