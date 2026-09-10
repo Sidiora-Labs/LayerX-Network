@@ -14,9 +14,9 @@ of a `layerx` subcommand (`platform/cli/src/main.rs:42-80`).
 This is the second developer path after the testnet quickstart. It
 does not document emulator administration. MCP and A2A installation
 refuse the emulator
-(`platform/cli/src/install/mod.rs:573-577`). The expanded wallet, token, and
-payment-agent surfaces are on the testnet branch; see
-[Payments developer path](PaymentsQuickstart.md).
+(`platform/cli/src/install/mod.rs:573-577`). The wallet, token, and
+payment-agent surfaces are covered by the
+[payments developer path](PaymentsQuickstart.md).
 
 Two MCP surfaces exist and do not share a tool catalogue or a
 transport to core:
@@ -24,7 +24,7 @@ transport to core:
 | Surface | Process | Tools | Authority |
 | --- | --- | --- | --- |
 | CLI install / `layerx mcp serve` | `layerx` stdio MCP (`platform/cli/src/mcp.rs:13-56`; `platform/cli/src/main.rs:439-455, 527-545`) | `receipt.get`, `activity.submit` (`platform/cli/src/toolset.rs:23-38, 104-116`) | Hosted gateway `Authorization: LayerX-Key` (`platform/cli/src/http.rs:50-64, 229-231`; `platform/cli/src/toolset.rs:95`) |
-| `layerx-mcp` crate | `Server::bind` / `ReadOnly::bind` (`agent/crates/layerx-mcp/src/server.rs:397-412`; `agent/crates/layerx-mcp/src/readonly.rs:25-40`) | Eighteen tools in `TOOL_CATALOGUE` (`agent/crates/layerx-mcp/src/server.rs:51-178`) | One daemon session and one capability (`agent/crates/layerx-mcp/README.md:3-6`; `agent/crates/layerx-mcp/src/server.rs:187-194, 397`) |
+| `layerx-mcp` crate | `Server::bind` / `ReadOnly::bind` (`agent/crates/layerx-mcp/src/server.rs:403-426`; `agent/crates/layerx-mcp/src/readonly.rs:19-41`) | Twenty tools in `TOOL_CATALOGUE` (`agent/crates/layerx-mcp/src/server.rs:51-192`) | One daemon session and one capability (`agent/crates/layerx-mcp/README.md:3-6`; `agent/crates/layerx-mcp/src/server.rs:199-208, 411`) |
 
 `layerx-mcp` has no binary (`agent/crates/layerx-mcp/Cargo.toml:1-19`).
 Every crate tool call routes through `layerx-agentd`; there is no
@@ -359,14 +359,14 @@ CLI MCP read tool: `receipt.get` with argument `activity_id`
 Daemon MCP read tools `balance.get`, `wallet.balance`, `wallet.accounts`,
 `history.list`, `receipt.get`, `checkpoint.get`, `proof.get`,
 `availability.get` are catalogue entries authorized through the daemon
-(`agent/crates/layerx-mcp/src/server.rs:51-141, 673-676`). Helpers
+(`agent/crates/layerx-mcp/src/server.rs:51-192, 687-704`). Helpers
 `balance`, `history`, `receipt`, `checkpoint`, `proof`, and
 `availability` return `VerifiedToolResult` with `value`,
 `verification_level`, `freshness`, `page`
-(`agent/crates/layerx-mcp/src/tools/read.rs:101-108`). Read-only
+(`agent/crates/layerx-mcp/src/tools/read.rs:103-108`). Read-only
 deployment omits write tools
-(`agent/crates/layerx-mcp/src/server.rs:29-32, 414-449`;
-`agent/crates/layerx-mcp/README.md:41`).
+(`agent/crates/layerx-mcp/src/server.rs:28-32, 454-464`;
+`agent/crates/layerx-mcp/README.md:43`).
 
 The TypeScript and Python payment examples call `client.call("submit",
 request)` and require `VerificationLevel.SequencerSigned` /
@@ -561,14 +561,16 @@ There is no CLI command that registers that endpoint.
 | `token.create` | `write:token:create` | write |
 | `token.mint` | `write:token:mint` | write |
 | `token.transfer` | `write:token:transfer` | write |
+| `grant.issue` | `write:grant:issue` | write |
+| `grant.draw` | `write:grant:draw` | write |
 | `activity.track` | `write:track` | write |
 | `activity.wait` | `write:activity:wait` | write |
 
-(`agent/crates/layerx-mcp/src/server.rs:51-178`;
-`agent/crates/layerx-mcp/README.md:16-40`). Mapped daemon operations:
+(`agent/crates/layerx-mcp/src/server.rs:51-192`;
+`agent/crates/layerx-mcp/README.md:20-41`). Mapped daemon operations:
 `ReadBalance`, `ReadAccount`, `ReadHistory`, `ProgramReceipt`,
 `ReadCheckpoint`, `ReadProofBundle`, `AvailabilityFetch`, `Prepare`,
-`Sign`, `Submit`, `Track`, `Wait` (`agent/crates/layerx-mcp/src/server.rs:673-688`).
+`Sign`, `Submit`, `Track`, `Wait` (`agent/crates/layerx-mcp/src/server.rs:687-704`).
 Wallet, token, and grant writes alias `Submit`; `activity.wait` uses `Wait`.
 
 ---

@@ -15,8 +15,8 @@ core plane uses no client authentication
 loads `LAYERX_CORE_ADMIN_TLS_CERT_DER` and
 `LAYERX_CORE_ADMIN_TLS_KEY_DER` and always uses no client authentication
 (`platform/hosted/core/src/main.rs:286-290`). Core routes run on the core port.
-Admin routes run on the admin port. The testnet branch's public JSON-RPC method
-and payment transcript are documented in [Public payment API](PublicAPI.md).
+Admin routes run on the admin port. The public JSON-RPC method list and payment
+transcript are documented in [Public payment API](PublicAPI.md).
 
 The image is `layerx-core-boundary` from `platform/hosted/core/Dockerfile`. The build produces `/usr/local/bin/layerx-core-boundary` and the runtime image sets `ENTRYPOINT` to that binary (`platform/hosted/core/Dockerfile:5`, `platform/hosted/core/Dockerfile:9-11`). The Dockerfile creates user `4020:4020` and `USER 4020:4020` (`platform/hosted/core/Dockerfile:8-10`). The node StatefulSet runs the same binary as container `core-boundary` with `runAsUser: 4021` and `runAsGroup: 4020` (`platform/hosted/node/deployment.yaml:106-119`). Those two identities differ.
 
@@ -200,53 +200,43 @@ These paths are not relayed. They return `503 capability_unavailable` with `retr
 
 ## Admin treasury SEND
 
-The sequence separation and disclosure-aware signing path below are on the
-testnet branch.
-
-Library path: `build_send_with_identity_sequence` compiles an owner-authorised
-Asset SEND (ordinal 5) with `layerx-intents`, puts the independent identity
-sequence in the envelope, puts the source-account sequence in the SEND payload,
-binds the canonical disclosure, signs through `LocalSigner`, verifies the
-signature, and returns canonical bytes
-(`platform/hosted/core/src/lib.rs:119-219`,
-`platform/hosted/core/src/lib.rs:221-239`). `build_send` remains a wrapper that
-uses the source-account sequence for both positions
-(`platform/hosted/core/src/lib.rs:110-112`). Source and destination accounts are
+Library path: `build_send` compiles an owner-authorised Asset SEND (ordinal 5)
+with `layerx-intents`, signs the envelope, and returns canonical bytes
+(`platform/hosted/core/src/lib.rs:110-206`). Source and destination accounts are
 `agent:<did>:main` (`platform/hosted/core/src/lib.rs:53-61`). The treasury DID is
-`did:layerx:<public key hex>`. Amount 0 and expiry not after `not_before` are
-construction errors (`platform/hosted/core/src/lib.rs:124-129`).
+`did:layerx:<public key hex>` (`platform/hosted/core/src/lib.rs:296-301`). Amount
+0 and expiry not after `not_before` are construction errors
+(`platform/hosted/core/src/lib.rs:111-116`). The envelope and the SEND payload
+both carry `SendRequest::account_sequence`
+(`platform/hosted/core/src/lib.rs:24-35`).
 
-HTTP path `fund` / `fund_send` (`platform/hosted/core/src/main.rs:1705-1816`):
+HTTP path `fund` / `fund_send` (`platform/hosted/core/src/main.rs:1705-1806`):
 
 1. JSON `FundingCommand`: `funding_id`, `did`, `public_key`, `amount` (`platform/hosted/core/src/main.rs:107-114`). Parse failure is `400 invalid_argument`.
 2. Validation: `funding_id` matches `valid_key`; `did` starts with `did:` and length ≤ 512; `public_key` is 64 hex chars; `did` equals `did:layerx:` plus lowercase public key; `amount != 0`; `did` is not the treasury DID; `main_account` succeeds. Failure is `400 invalid_argument` (`platform/hosted/core/src/main.rs:1709-1719`).
 3. LNI connect; failure `503 node_unavailable` retry 5
-   (`platform/hosted/core/src/main.rs:1725-1729`).
-4. `preparation_state` reads the treasury DID's independent identity sequence.
-   Failure is `503 treasury_identity_unavailable` retry 5
-   (`platform/hosted/core/src/main.rs:1731-1739`).
-5. `treasury_sequence` separately reads and decodes the treasury main account
-   and requires `treasury_asset` balance ≥ amount
-   (`platform/hosted/core/src/main.rs:1669-1702`). A native refusal or decode
+   (`platform/hosted/core/src/main.rs:1726-1729`).
+4. `treasury_sequence` reads and decodes the treasury main account at
+   `VerificationLevel::UNVERIFIED` and requires `treasury_asset` balance ≥ amount
+   (`platform/hosted/core/src/main.rs:1669-1703`). A native refusal or decode
    failure is `422 treasury_account_unavailable` retry 60; unavailable capability
    is `503 capability_unavailable` retry 30; insufficient balance is
    `422 insufficient_treasury_balance` retry 60; account derivation failure is
    `503 treasury_unavailable` retry 60.
-6. `build_send_with_identity_sequence` uses those two sequences, an
-   idempotency key equal to SHA-256 of `layerx-core-fund\0` plus the HTTP key, a
-   validity interval from one second before `now` through 60 seconds after it,
-   and the configured fee limit
-   (`platform/hosted/core/src/main.rs:1662-1667`,
-   `platform/hosted/core/src/main.rs:1740-1757`). Construction failure is
+5. `build_send` uses that account sequence, an idempotency key equal to SHA-256
+   of `layerx-core-fund\0` plus the HTTP key, a validity interval from 60
+   seconds before `now` through 300 seconds after it, and the configured fee
+   limit (`platform/hosted/core/src/main.rs:1662-1667`,
+   `platform/hosted/core/src/main.rs:1733-1747`). Construction failure is
    `422 send_unbuildable`.
-7. `submit_signed` uses the treasury public key
-   (`platform/hosted/core/src/main.rs:1762-1780`). Same submission mapping as
+6. `submit_signed` uses the treasury public key
+   (`platform/hosted/core/src/main.rs:1753-1769`). Same submission mapping as
    public activities, except other errors are `422 send_unbuildable`.
-8. Receipt: result 0 → `200` `state: funded`; non-zero → `422 send_refused`;
+7. Receipt: result 0 → `200` `state: funded`; non-zero → `422 send_refused`;
    timeout → `202` `state: pending`; lookup error → `503 receipt_unavailable`
-   (`platform/hosted/core/src/main.rs:1782-1815`).
+   (`platform/hosted/core/src/main.rs:1776-1805`).
 
-Durable idempotency is the on-disk journal under `LAYERX_CORE_STATE_DIR/journal`. The file name is SHA-256 of `scope`, a 0 byte, and the idempotency key (`platform/hosted/core/src/main.rs:1267-1276`). The request digest is SHA-256 of method, path, and body (`platform/hosted/core/src/main.rs:1278-1285`). Writes use a `0o600` temp file, `sync_all`, `rename`, then directory `sync_all` (`platform/hosted/core/src/main.rs:1298-1316`). Same digest replays the stored status and body. A different digest for the same key is `409 idempotency_conflict` (`platform/hosted/core/src/main.rs:1340-1365`). Journal lock poison or I/O is `503 journal_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1335-1336`, `platform/hosted/core/src/main.rs:1367-1369`, `platform/hosted/core/src/main.rs:1390-1391`, `platform/hosted/core/src/main.rs:1403-1404`). Scope `fund` and `reset` first persist `409 outcome_unknown` then overwrite with the real outcome (`platform/hosted/core/src/main.rs:1372-1406`). Admin work also takes `admin_lock`; poison is `503 admin_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1678-1679`).
+Durable idempotency is the on-disk journal under `LAYERX_CORE_STATE_DIR/journal`. The file name is SHA-256 of `scope`, a 0 byte, and the idempotency key (`platform/hosted/core/src/main.rs:1267-1276`). The request digest is SHA-256 of method, path, and body (`platform/hosted/core/src/main.rs:1278-1285`). Writes use a `0o600` temp file, `sync_all`, `rename`, then directory `sync_all` (`platform/hosted/core/src/main.rs:1298-1316`). Same digest replays the stored status and body. A different digest for the same key is `409 idempotency_conflict` (`platform/hosted/core/src/main.rs:1340-1365`). Journal lock poison or I/O is `503 journal_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1335-1336`, `platform/hosted/core/src/main.rs:1367-1369`, `platform/hosted/core/src/main.rs:1390-1391`, `platform/hosted/core/src/main.rs:1403-1404`). Scope `fund` and `reset` first persist `409 outcome_unknown` then overwrite with the real outcome (`platform/hosted/core/src/main.rs:1372-1406`). Admin work also takes `admin_lock`; poison is `503 admin_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1912-1915`).
 
 Reset writes `reset\n` on the supervisor Unix socket and parses JSON (`platform/hosted/core/src/main.rs:1590-1639`). Connect/I/O failure is `503 supervisor_unavailable` retry 30. A `state: reset` reply with `reset_id` is `200`. A typed supervisor `error` is `503` with that code. Any other reply is `503 reset_failed` retry 30.
 
@@ -319,10 +309,9 @@ That test then posts `/admin/v1/testnet/fund` against a fresh genesis. The statu
 
 `lifecycle_routes_submit_real_signed_activities_and_verify_state_receipts` submits deploy, upgrade, and wind-down over the real node, verifies state receipts, and replays idempotent 200 bodies (`platform/hosted/core/tests/boundary.rs:375-472`, `platform/hosted/core/tests/boundary.rs:475-544`).
 
-`platform/hosted/core/tests/send.rs` asserts
-`build_send_with_identity_sequence` embeds native `agent:<did>:main` account ids
-in the payload and authorization, keeps identity sequence `11` distinct from
-payload account sequence `0`, and produces a signed envelope beginning with
-protocol bytes `[0, 3]` (`platform/hosted/core/tests/send.rs:5-36`).
+`platform/hosted/core/tests/send.rs` asserts `build_send` embeds native
+`agent:<did>:main` account ids in the payload and authorization and that the
+signed envelope starts with protocol bytes `[0, 3]`
+(`platform/hosted/core/tests/send.rs:1-33`).
 
 [Home](Home.md)

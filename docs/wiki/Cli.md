@@ -16,10 +16,11 @@ not document SDK clients; those live under `platform/docs/content/`. It does
 not document portable receipt JSON; see
 [Portable receipt verifier](PortableVerifier.md).
 
-Wallet and token commands are on the testnet branch. Their public-write path
-uses independent identity/source sequences, structured disclosure, native
-debit signing, and verified commitment evidence. Wallet, faucet, send, token,
-program, and 402 steps: [Payments developer path](PaymentsQuickstart.md).
+The `layerx wallet` and `layerx token` command groups are not in this tree:
+`platform/cli/src/main.rs` declares no such variants, and the tables below that
+describe them are forward-looking. Every command in the tables that follow this
+section is implemented and cited. Wallet, faucet, send, token, program, and 402
+steps: [Payments developer path](PaymentsQuickstart.md).
 
 ---
 
@@ -42,7 +43,7 @@ that the binary implements are listed; unimplemented flags are omitted.
 | `layerx environment current` | Show the active endpoint profile (`platform/cli/src/main.rs:94-95, 704-710`) | none |
 | `layerx environment use <name>` | Select a profile, configuring its endpoint when first used (`platform/cli/src/main.rs:96-107, 712-776`) | `name` must be `emulator`, `testnet`, or `production` (`platform/cli/src/config.rs:121-126`). `--endpoint`, `--network-id`, and one of `--sequencer-trust-anchor` / `--sequencer-trust-anchor-file` must be supplied together or omitted together (`platform/cli/src/emulator.rs:751-791`) |
 | `layerx key create <name>` | Generate an Ed25519 seed from OS randomness and store it (`platform/cli/src/main.rs:111-117, 784-790`; `platform/cli/src/credential.rs:83-96`) | `name` (1–128 ASCII alnum/`-`/`_`; `platform/cli/src/credential.rs:294-303`). `--did` optional |
-| `layerx key import <name>` | Import a 32-byte hexadecimal Ed25519 seed from stdin (`platform/cli/src/main.rs:118-123, 792-798`; `platform/cli/src/credential.rs:98-111`) | `name`; seed on stdin |
+| `layerx key import <name>` | Import a 32-byte hexadecimal Ed25519 seed from stdin (`platform/cli/src/main.rs:118-123, 792-798`; `platform/cli/src/credential.rs:142-155`) | `name`; seed on stdin. `--did` optional (`platform/cli/src/main.rs:120-124`) |
 | `layerx key list` | List public key metadata without opening secret material (`platform/cli/src/main.rs:124-125, 800-817`) | none |
 | `layerx key show <name>` | Show public metadata for one key (`platform/cli/src/main.rs:126-127, 819-834`) | `name` |
 | `layerx key default <name>` | Select the default key used by account commands (`platform/cli/src/main.rs:128-129, 836-842`) | `name` |
@@ -80,7 +81,9 @@ that the binary implements are listed; unimplemented flags are omitted.
 | `layerx a2a stop` | Stop the installed managed A2A runtime (`platform/cli/src/main.rs:481-482, 578-582`; `platform/cli/src/a2a.rs:750-770`) | none |
 | `layerx a2a status` | Report the installed managed A2A runtime state (`platform/cli/src/main.rs:483-484, 583-587`; `platform/cli/src/a2a.rs:772-781`) | none |
 
-The testnet branch adds these command groups:
+These command groups are not implemented in this tree. The flags, refusals, and
+RPC calls named in this section have no counterpart in `platform/cli/src/`; they
+describe the intended surface, not the shipped one:
 
 | Command | Purpose and important inputs |
 | --- | --- |
@@ -101,13 +104,16 @@ The testnet branch adds these command groups:
 | `layerx token info <asset_id>` | Call `lx_getAsset` |
 | `layerx token list` | Call `lx_listAssets` |
 
-Public writes require global `--rpc` and `--gateway-credential`, plus an
-independently supplied `--receipt-policy` and a `--fee-limit`. Remote RPC URLs
-must use HTTPS and end in `/rpc`. Wallet send and token transfer fetch the
-identity and source-account sequences independently, sign the debit
-authorization, then sign the outer activity. `--timeout-seconds` is 1–300 and
-defaults to 60. A pending result retains the activity id; rerun receipt lookup
-instead of creating a second payment.
+Those public writes are intended to require an RPC endpoint and gateway
+credential, an independently supplied receipt policy, and a fee limit, with
+remote RPC URLs restricted to HTTPS and a `/rpc` path. None of those flags
+exists in this tree; the only globally applied argument the binary declares is
+`--json` (`platform/cli/src/main.rs:33-38`), the per-command
+`--gateway-credential` belongs to `mcp serve` and `a2a serve`
+(`platform/cli/src/main.rs:448-449, 467-468`), and `--fee-limit` is optional
+with default `0` (`platform/cli/src/main.rs:294-295, 1109-1110`). A pending
+result retains the activity id; rerun receipt lookup instead of creating a
+second payment.
 
 Lifecycle flags shared by deploy, upgrade, and wind-down
 (`platform/cli/src/main.rs:279-297, 1409-1475`): `--program-id`,

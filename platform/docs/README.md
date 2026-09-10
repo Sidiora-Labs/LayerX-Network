@@ -19,8 +19,8 @@ Every other page under `content/` is written by hand and must carry an `Enforced
 
 Public wiki pages for payments (wallet, faucet, send, token, 402), the
 OpenRPC method list, Asset encodings, and commitment levels live under
-[`docs/wiki/`](../../docs/wiki/Home.md). Unmerged payment surfaces are marked
-"on the testnet branch" there.
+[`docs/wiki/`](../../docs/wiki/Home.md). Payment surfaces that are not in this
+tree yet are named there.
 
 ## Samples
 

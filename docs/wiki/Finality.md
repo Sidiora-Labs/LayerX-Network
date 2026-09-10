@@ -62,9 +62,9 @@ This ladder is how LayerX qualifies a checkpoint onto Paxeer. It is not "final o
 
 ---
 
-Public submit and 402 offers on the payment lanes name three evidence
-levels — `executed`, `batched`, `finalised` — rather than L0–L4. That
-vocabulary is on the testnet branch; see [Commitment levels](CommitmentLevels.md).
+Public submit and 402 offers name three evidence levels — `executed`,
+`batched`, `finalised` — rather than L0–L4. See
+[Commitment levels](CommitmentLevels.md).
 
 ## Start here
 

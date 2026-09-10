@@ -108,9 +108,8 @@ Per activity the kernel, in fixed order:
 
 Receipts are evidence produced by the protocol. No receipt field is supplied by a client. A `layerx-receipt-proof-v1` object is verified against independently trusted batch facts without a node; see [Portable receipt verifier](PortableVerifier.md). Interop adapters translate foreign payment protocols into that receipt evidence without writing balances; x402 v2 over HTTP, MCP, and A2A is in [x402 transport](X402Transport.md). The non-authoritative agent daemon consumes those receipts as protocol evidence and never mints balances or budgets from local state; see [Agentd](Agentd.md).
 
-Fees are deterministic inputs to execution. On the testnet branch, the
-committed fee schedule prices canonical bytes and the supported Asset and
-Programs activity ordinals; estimation fails closed when required execution or
+Fees are deterministic inputs to execution. The committed fee schedule prices
+canonical bytes and the supported Asset and Programs activity ordinals; estimation fails closed when required execution or
 storage inputs are unavailable. See [Assets](Assets.md#named-fee-schedule).
 
 ---

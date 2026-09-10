@@ -5,8 +5,8 @@ available only with an explicitly signed custody genesis profile. Ordinary
 genesis still reconstructs Programs 4 and Asset 1, with unchanged encoding and
 zero balances. A custody genesis adds Bridge 1; it does not preallocate value.
 Natively issued tokens and per-asset accounts are a separate surface on
-[Assets](Assets.md) (on the testnet branch). Paxeer-custody asset ids stay
-their existing registered values.
+[Assets](Assets.md). Paxeer-custody asset ids stay their existing registered
+values.
 An existing deployment cannot acquire this profile through an environment
 variable, snapshot substitution, or a new manifest with different roots.
 
