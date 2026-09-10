@@ -48,13 +48,17 @@ agent:<did>:budget:<id>
 agent:<did>:escrow:<id>
 agent:<did>:stream:<id>
 agent:<did>:margin:<position>
-asset:<lowercase hex64 asset_id>:issuance
+module:asset:value:<lowercase hex64 account-id>      (an asset's issuance account)
 module:programs:value:<account-id>
 system:fees
 system:paxeer-reserve
 ```
 
-Opening a position is a transfer into a margin account. Capturing escrow is a transfer out of an escrow account. Native issuance still compiles to `402LXP` legs against `asset:<id>:issuance`; modules do not assign balances. `agent:<did>:main` remains the native-asset account. Per-asset accounts use the existing `LX:ACCOUNT:v1` id rule. See `spec/layerx-protocol/spec.kvx` requirement 14.
+Opening a position is a transfer into a margin account. Capturing escrow is a transfer out of an escrow account. Native issuance still compiles to `402LXP` legs against the issuance account; modules do not assign balances. `agent:<did>:main` remains the native-asset account. Per-asset accounts use the existing `LX:ACCOUNT:v1` id rule. An issuance account's id is that rule applied to the string `asset:<lowercase hex64 asset_id>:issuance`, while the name it is stored under is the `module:asset:value:` form above; records still carrying the older string as their name are renamed on load. See `spec/layerx-protocol/spec.kvx` requirement 14.
+
+**One record per (account, asset).** There is no balance table beside the account registry. An `lx_account` record holds one account id, one asset id and one balance, so a DID that touches two assets owns two records - `agent:<did>:main` for the native asset and one `agent:<did>:asset:<hex64>` per other asset - and a per-asset account is kind `LX_ACCOUNT_AGENT_MAIN`, told apart from `:main` by the asset it carries, not by kind. A record's asset is bound when it is opened or by its first credit, and never rebinds; a debit against the wrong asset is refused, not coerced.
+
+Sequences follow the same split. The activity envelope's `account_sequence` is checked against the DID's identity counter, while the transfer set's `actor_sequence` is checked against the sequence account's own counter - by default the debited record, so per `(DID, asset)`. `asset.receive` advances the recipient's counter instead, `asset.mint` the issuance account's, and the protocol fee leg the treasury's. A newly opened per-asset account starts at zero however far its owner's `:main` account has run. Full rules, refusal codes and the account state-root leaf shape are in `spec/layerx-protocol/design.md` §8.2 and §8.3.
 
 See Payments and Fees.
 
