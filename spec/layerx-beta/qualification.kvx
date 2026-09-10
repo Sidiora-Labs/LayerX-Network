@@ -3279,6 +3279,38 @@ observed = "formerly observation.6.3.owner-decision-1. Owner decision (decider: 
 assumption = "Files changed: spec/layerx-beta/spec.kvx and spec/layerx-beta/qualification.kvx. This record applies the decision only to the named contract or Make recipe."
 severity = "note"
 
+[observation.6.3.3400]
+task = "6.3"
+file = "src/replica/lxp_replica_ingest.c include/layerx/lxp_replica.h"
+symbol = "lxp_replica_ingest_batch lxp_replica_bind_execution lxp_replay_batch_publication"
+observed = "Before this change lxp_replica_ingest_batch decoded a body, checked the header chain link and appended a durable acknowledgement without ever executing the body or recomputing any root, and no production caller existed: lxp_replay_batch_publication (src/replica/lxp_replay.c:275) and lxp_replay_verify_roots (line 284) were reached only from cmd/layerx-guarantor/producer.c and from tests, and lxp_replica_ack was likewise test-only. Ingest now refuses with LXP_ERR_MODULE_DISABLED unless an execution engine is bound (line 121), runs lxp_replay_batch_publication against the decoded body (line 150) and only then appends the body record, advances the head and acknowledges (lines 173-176). Because replay_batch requires engine->kernel->current_state_root to equal the starting root and mutates the kernel in place with no rollback, any non-OK replay result halts the replica (line 154) instead of leaving it able to ingest the next batch on a diverged kernel. The former genesis rule (first batch must be number 0, first sequence 0 and a zero previous state root) is replaced by an explicit bound bootstrap position taken by lxp_replica_bind_execution (line 22), which refuses unless the engine kernel root already equals the declared starting root; binding at a zero root with 0/0 reproduces the old rule exactly, and binding at any other verified position pins the exact expected previous root, so no check is loosened and a snapshot-bootstrapped replica becomes expressible."
+assumption = "The row default execute before acknowledge is taken: an acknowledgement is a statement that this replica reproduced the batch, so it may only follow a successful replay and root verification. Halting on any replay failure is the conservative reading of replay_batch's in-place mutation; a replica that could continue would need a kernel snapshot mechanism that does not exist."
+severity = "note"
+
+[observation.6.3.3401]
+task = "6.3"
+file = "cmd/layerxd/lxp_daemon_replica.c Makefile"
+symbol = "lxp_daemon_replica_serve gp_runtime_open gp_runtime_prepare LAYERXD_SOURCES"
+observed = "The replica daemon mode needs a real replay engine over a real kernel. Rather than add a fifth site that synthesises execution authority, lxp_daemon_replica_serve reuses the guarantor's existing independent replay node: gp_runtime_open, gp_runtime_engine and gp_runtime_prepare from cmd/layerx-guarantor/runtime.c (lines 251, 254 and 301 of the new file). That required moving cmd/layerx-guarantor/runtime.c from GUARANTOR_SOURCES into LAYERXD_SOURCES in the Makefile and dropping the now duplicate explicit runtime.o prerequisite from the lxp_test_guarantor_runtime rule; the guarantor binary and lxp_test_guarantor_integration already link LAYERXD_OBJECTS, so the object still appears exactly once in every link. runtime.c has no openssl/ssl or sqlite3 reference, and producer.c has no gp_runtime reference, so lxp_test_guarantor_core is unaffected. Three header declarations also had to be added outside the row's owned paths: the replica struct and bind API in include/layerx/lxp_replica.h, lxp_batch_eligibility_reset in include/layerx/lxp_batch.h and lxp_daemon_replica_serve in include/layerx/lxp_daemon.h."
+assumption = "Reusing the existing replay node is preferred to duplicating replay_execute_activity, which would multiply the sites that must be corrected together. The header and Makefile edits are the minimum surface needed to expose the new entry points and are recorded as out-of-path changes rather than avoided, because the row cannot be delivered without them."
+severity = "note"
+
+[observation.6.3.3402]
+task = "6.3"
+file = "cmd/layerx-guarantor/runtime.c cmd/layerxd/lxp_daemon_lni.c platform/emulator/core/emulator_core.c"
+symbol = "replay_execute_activity lxp_authority_resolve_activity grant_id"
+observed = "The replica ingest path inherits whatever authority the replay node it is bound to resolves, so a replica reproduces the sequencer's execution only where both sides resolve the same authority. When this row was written replay_execute_activity synthesised a zero grant identity; after rebasing onto the revision that resolves activity authority from persisted grants, both of the reused node's execution entries (cmd/layerx-guarantor/runtime.c:339 and 998) go through lxp_authority_resolve_activity, and the daemon replica mode picks that up unchanged. Two sites still declare a zero grant identity outside the replayed path: cmd/layerxd/lxp_daemon_lni.c:2758 and platform/emulator/core/emulator_core.c:767. Because lxp_replay_verify_roots compares recomputed roots and the receipt and event section bytes, any future divergence between the authority a sequencer resolves and the one a replica resolves surfaces as LXP_FATAL_REPLAY_DIVERGENCE at the replica rather than as a silent acknowledgement."
+assumption = "Authority resolution is outside this row and its replayed paths are now resolved rather than synthesised, so the remaining declarations are recorded for their owners; the replica ingest gates were re-run on the rebased tip so the executed and acknowledged behaviour is qualified against the resolved authority."
+severity = "note"
+
+[observation.6.3.3403]
+task = "6.3"
+file = "tests/daemon/guarantor-settlement.py platform/hosted/node/bootstrap.sh"
+symbol = "test-daemon-guarantor-unit test-daemon-guarantor-integration eth_keys genesis-metadata"
+observed = "Moving cmd/layerx-guarantor/runtime.c from GUARANTOR_SOURCES into LAYERXD_SOURCES was verified by building and running every target that links either group. layerx-guarantor, lxp_test_guarantor_integration, lxp_test_guarantor_runtime, lxp_test_guarantor_core, lxp_test_guarantor_exchange and test_layerxd all build and link with runtime.o appearing exactly once, and lxp_test_guarantor_core and the mTLS exchange suite pass. Two targets beyond the row's gate set still refuse for reasons that precede this change: test-daemon-guarantor-unit stops in tests/daemon/guarantor-settlement.py at `from eth_keys.exceptions import BadSignature` with ModuleNotFoundError because eth_keys is not installed in this environment, and test-daemon-guarantor-integration stops in platform/hosted/node/bootstrap.sh with `bootstrap: --genesis-metadata requires an authoritative LXGB v2 metadata file`, before layerxd is started at all. Evidence: qual-logs/test-waves-daemon.log and qual-logs/gp1/guarantor-daemon-27ce0ewk/bootstrap.log. make CC=gcc test, test-wave-10, test-wave-11 and test-layerxd all pass on this branch."
+assumption = "Neither refusal can be produced by a link-group move or by a new daemon mode: the first is a missing local Python dependency and the second is an argument refusal raised before any binary from this branch runs. Both are recorded rather than repaired because the bootstrap metadata contract and the settlement test's dependencies belong to other tasks."
+severity = "note"
+
 [observation.6.2.7]
 task = "6.2"
 file = "spec/layerx-beta/spec.kvx"

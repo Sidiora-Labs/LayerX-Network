@@ -584,6 +584,7 @@ lxp_result lxp_daemon_submit(
 lxp_result lxp_daemon_shutdown(lxp_daemon *daemon);
 lxp_result lxp_daemon_main(int argc, char **argv);
 lxp_result lxp_daemon_serve(const char *configuration_path);
+lxp_result lxp_daemon_replica_serve(const char *configuration_path);
 lxp_result lxp_daemon_authority_replica_serve(
     const char *configuration_path);
 lxp_result lxp_daemon_authority_replica_publish(

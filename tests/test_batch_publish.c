@@ -50,6 +50,8 @@ int main(void)
     size_t canonical_length;
     lxp_arena arena;
     lxp_log log;
+    lxp_log_record_header record;
+    uint8_t acknowledged_id[32];
     sink output;
     bool eligible = true;
     char directory[] = "/tmp/lxp-batch-publish-XXXXXX";
@@ -106,7 +108,35 @@ int main(void)
         lxp_replica_ack(&eligibility, replica_ids[1], &log) != LXP_OK ||
         lxp_batch_eligibility(&eligibility, &eligible) != LXP_OK || !eligible)
         return 15;
+    if (lxp_log_read(&log, 0U, &record, acknowledged_id,
+                     sizeof(acknowledged_id)) != LXP_OK ||
+        record.record_kind != (uint8_t)LXP_LOG_REPLICA_ACK ||
+        record.global_sequence != 14U || record.body_length != 32U ||
+        memcmp(acknowledged_id, replica_ids[0], 32U) != 0)
+        return 16;
+    if (lxp_batch_eligibility_reset(&eligibility, 13U) !=
+            LXP_ERR_BATCH_GAP ||
+        lxp_batch_eligibility_reset(&eligibility, 14U) != LXP_OK ||
+        eligibility.acknowledgement_count != 2U ||
+        lxp_batch_eligibility(&eligibility, &eligible) != LXP_OK ||
+        !eligible ||
+        lxp_batch_eligibility_reset(&eligibility, 15U) != LXP_OK ||
+        eligibility.batch_number != 15U ||
+        eligibility.acknowledgement_count != 0U ||
+        eligibility.replica_count != 3U || eligibility.threshold != 2U ||
+        lxp_batch_eligibility(&eligibility, &eligible) !=
+            LXP_ERR_ATTESTATION_THRESHOLD || eligible)
+        return 17;
+    if (lxp_replica_ack(&eligibility, replica_ids[2], &log) != LXP_OK ||
+        lxp_replica_ack(&eligibility, replica_ids[2], &log) != LXP_OK ||
+        eligibility.acknowledgement_count != 1U ||
+        lxp_batch_eligibility(&eligibility, &eligible) !=
+            LXP_ERR_ATTESTATION_THRESHOLD || eligible ||
+        lxp_replica_ack(&eligibility, replica_ids[0], &log) != LXP_OK ||
+        eligibility.acknowledgement_count != 2U ||
+        lxp_batch_eligibility(&eligibility, &eligible) != LXP_OK || !eligible)
+        return 18;
     if (lxp_log_close(&log) != LXP_OK || unlink(path) != 0 ||
-        rmdir(directory) != 0) return 16;
+        rmdir(directory) != 0) return 19;
     return 0;
 }
