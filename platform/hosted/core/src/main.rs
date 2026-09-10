@@ -711,7 +711,7 @@ fn signer_key(authority: &[u8]) -> Option<[u8; 32]> {
     }
 }
 
-const ASSET_SUBMISSION_ORDINALS: [u16; 8] = [1, 4, 5, 6, 7, 8, 10, 11];
+const ASSET_SUBMISSION_ORDINALS: [u16; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11];
 const PROGRAM_SUBMISSION_ORDINALS: [u16; 6] = [1, 2, 3, 5, 6, 7];
 
 fn registry_with_asset_ordinals(asset_ordinals: &[u16]) -> Result<ModuleRegistry, String> {
@@ -2149,7 +2149,7 @@ mod admission_tests {
         for ordinal in PROGRAM_SUBMISSION_ORDINALS {
             assert!(registry.declares(required(ActivityType::new(ModuleId::Programs, ordinal))));
         }
-        for ordinal in [2, 3, 9, 12] {
+        for ordinal in [9, 12] {
             assert!(!registry.declares(required(ActivityType::new(ModuleId::Asset, ordinal))));
         }
     }
@@ -2202,6 +2202,50 @@ mod admission_tests {
             validate(&malformed),
             Err(SubmissionValidationError::InvalidAssetActivity)
         );
+    }
+
+    #[test]
+    fn asset_pause_and_unpause_are_admitted_and_malformed_bodies_are_refused() {
+        let registry = required(submission_registry());
+        let mut payload = vec![0x00, 0x01];
+        payload.extend_from_slice(&[7; 32]);
+        for ordinal in [2u16, 3u16] {
+            assert!(registry.declares(required(ActivityType::new(ModuleId::Asset, ordinal))));
+            assert_eq!(
+                validate(&signed(ModuleId::Asset, ordinal, &payload, ACTOR)),
+                Ok(()),
+                "Asset ordinal {ordinal}"
+            );
+            assert_eq!(
+                validate(&signed(
+                    ModuleId::Asset,
+                    ordinal,
+                    &payload[..payload.len() - 1],
+                    ACTOR,
+                )),
+                Err(SubmissionValidationError::InvalidAssetActivity),
+                "Asset ordinal {ordinal} truncated body"
+            );
+            let mut unsupported_version = payload.clone();
+            unsupported_version[1] = 2;
+            assert_eq!(
+                validate(&signed(
+                    ModuleId::Asset,
+                    ordinal,
+                    &unsupported_version,
+                    ACTOR
+                )),
+                Err(SubmissionValidationError::InvalidAssetActivity),
+                "Asset ordinal {ordinal} unsupported payload version"
+            );
+            let mut zero_asset = payload.clone();
+            zero_asset[2..].fill(0);
+            assert_eq!(
+                validate(&signed(ModuleId::Asset, ordinal, &zero_asset, ACTOR)),
+                Err(SubmissionValidationError::InvalidAssetActivity),
+                "Asset ordinal {ordinal} zero asset id"
+            );
+        }
     }
 
     #[test]

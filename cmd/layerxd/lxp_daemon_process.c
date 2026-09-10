@@ -571,6 +571,8 @@ static bool asset_activity_supported(uint32_t activity_type)
 {
     switch (activity_type) {
     case LX_ASSET_REGISTER:
+    case LX_ASSET_PAUSE:
+    case LX_ASSET_UNPAUSE:
     case LX_ASSET_ACCOUNT_OPEN:
     case LX_ASSET_SEND:
     case LX_ASSET_RECEIVE:

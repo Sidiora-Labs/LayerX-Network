@@ -589,7 +589,10 @@ fn payment_monetary_fields(
             disclose_amount(&mut amounts, AmountRole::SupplyCap, registration.supply_cap);
             registration.asset
         }
-        Payment::OpenAccount { asset } | Payment::ProgramAccount { asset, .. } => *asset,
+        Payment::OpenAccount { asset }
+        | Payment::Pause { asset }
+        | Payment::Unpause { asset }
+        | Payment::ProgramAccount { asset, .. } => *asset,
         Payment::Receive {
             from,
             to,
@@ -731,7 +734,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
     );
     if matches!(
         kind,
-        (ModuleId::Asset, 1 | 4 | 6 | 7 | 8 | 10 | 11) | (ModuleId::Programs, 5 | 6)
+        (ModuleId::Asset, 1 | 2 | 3 | 4 | 6 | 7 | 8 | 10 | 11) | (ModuleId::Programs, 5 | 6)
     ) {
         return payment_fields(activity);
     }
