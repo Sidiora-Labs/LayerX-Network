@@ -1,3 +1,4 @@
+use layerx_client::evidence::verification_label;
 use sha2::{Digest, Sha256};
 
 use super::{
@@ -18,8 +19,15 @@ pub(super) fn account(config: &Config, id: &str) -> Response {
         1,
         u64::MAX,
     );
-    let Ok(value) = client.account(account_id, VerificationLevel::UNVERIFIED, 1, authorization)
-    else {
+    let Ok(value) = client.account(
+        account_id,
+        VerificationLevel::STATE_PROVEN,
+        1,
+        authorization,
+    ) else {
+        return refusal(503, "account_evidence_unavailable", Some(5));
+    };
+    let Some(verification) = verification_label(value.achieved()) else {
         return refusal(503, "account_evidence_unavailable", Some(5));
     };
     let Ok(account) = decode_account_value(account_id, value.canonical_bytes()) else {
@@ -38,7 +46,8 @@ pub(super) fn account(config: &Config, id: &str) -> Response {
         "canonical_value": hex_encode(value.canonical_bytes()),
         "proof_material": hex_encode(value.proof_material()),
         "observed_head_sequence": value.freshness().observed_head_sequence.to_string(),
-        "batch_number": value.freshness().batch_number.to_string()
+        "batch_number": value.freshness().batch_number.to_string(),
+        "verification": verification
     }))
 }
 

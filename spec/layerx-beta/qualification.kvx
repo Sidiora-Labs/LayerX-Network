@@ -8894,3 +8894,51 @@ symbol = "lxp_authority_envelope_declare lxp_governance_activity"
 observed = "A governance activity submitted to a node running a protocol version below the state commitment version reaches the authority resolution with no governance module registered: cmd/layerxd/lxp_daemon_process.c:4810 registers lxp_governance_module_iface only at LXP_PROTOCOL_VERSION_STATE_COMMITMENT while the per-activity type filter admits lxp_governance_activity at every version. The declared envelope therefore omits the governance module bit and lxp_authority_check_scope refuses with LXP_ERR_AUTH_SCOPE before execution, where the previous synthesis carried the activity into lxp_kernel_execute_activity and recorded an unknown-module refusal in a receipt."
 assumption = "Both outcomes refuse the activity, and the surrounding block already treats an authority failure as a hard error rather than a refusal receipt, so the resolution joins an existing class rather than creating one. Widening the activity type filter to follow the registered module set belongs to the filter's owner."
 severity = "note"
+
+[observation.6.2.4100]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs agent/crates/layerx-client/src/read.rs agent/crates/layerx-client/src/client.rs cmd/layerxd/lxp_daemon_lni.c"
+symbol = "account verify_state_value require_account_read_capabilities send_account_read"
+observed = "The core public account read asked layerx_client::Client::account for VerificationLevel::UNVERIFIED, so /v1/accounts/{id} and /v1/accounts/{id}/balance, the sources of lx_getAccount and lx_getBalance, served a value and its proof material while naming no level, and a node answering with no proof material at all was served as a 200 that no receiver could check. read.rs verify_state_value verifies every non-empty proof material identically whatever level was requested, and only its empty-evidence branch consults the requested level, so raising the request to STATE_PROVEN changes exactly one served outcome: an empty-evidence response is now the typed MissingEvidence refusal answered as 503 account_evidence_unavailable. The request keeps RootSelector::Latest because read_context selects a checkpoint root only from CHECKPOINT_FINALISED, and require_account_read_capabilities demands HistoricalProofs only when requires_historical_account_proofs holds, which is also only from CHECKPOINT_FINALISED, so no additional node capability is required. cmd/layerxd answers an ACCOUNT_READ_REQUEST with proof material on success or a typed refusal, so no successful read loses its evidence. The served object gained a verification member naming the level the proof actually established: state_proven, or checkpoint_finalised and settlement_anchored when the evidence carries a checkpoint report."
+assumption = "Refusing an unverifiable account read is the honest public contract and matches the proof-gated receipt and proof routes on the same boundary, so the row's default of proving at the core was taken rather than serving an unverified value with a lower label. Evidence: qual-logs/platform-tests.log, where account_proof_export_preserves_exact_native_verified_bytes now verifies the served proof material offline against the cluster sequencer key, and qual-logs/agent-tests.log."
+severity = "note"
+
+[observation.6.2.4101]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs platform/hosted/gateway/src/rpc.rs"
+symbol = "did_accounts lx_getBalances authenticated_node_snapshot"
+observed = "did_accounts still reads at VerificationLevel::UNVERIFIED and labels its answer authenticated_node_snapshot, so /v1/dids/{did}/accounts and the lx_getBalances method that resolves to it remain the one public account-shaped read whose values carry no state proof. The enumeration is a DID-scoped listing rather than a point read, so it has no single nested account proof to verify and cannot reuse the account read's evidence path unchanged, and the same route is the subject of the unresolved read contract recorded at observation 6.2.940 and observation 6.11.161."
+assumption = "The DID listing contract is owned elsewhere and its refusal shape is still contested, so the route was left exactly as written rather than given a label the evidence does not support."
+severity = "note"
+
+[observation.6.2.4102]
+task = "6.2"
+file = "agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/program-admission.sh"
+symbol = "real_daemon_availability_refusals bootstrap"
+observed = "cargo test -p layerx-sdk -p layerx-client exits 101 on one target: real_daemon_availability_refusals drives tests/daemon/program-admission.sh build --availability-batches with the native binaries built from this worktree, and the harness exits 1 during bootstrap with 'bootstrap: genesis request has an unexpected length' before any account read runs. Every other target passes, including the account read coverage this row added. No C source, harness script or genesis path is modified on this branch, so the harness refusal is reproducible from an unmodified checkout. Evidence: qual-logs/agent-tests.log and qual-logs/availability-harness.log."
+assumption = "The genesis request length disagreement lies in the native bootstrap path, outside this row's owned files, so it is recorded for its owning lane rather than repaired here."
+severity = "blocker"
+
+[observation.6.2.4103]
+task = "6.2"
+file = "agent/crates/layerx-client/tests/supply_receipt.rs"
+symbol = "canonical_native_supply_receipt_round_trips expect_used"
+observed = "cargo clippy -p layerx-sdk -p layerx-client --all-targets exits 101 before reaching any file this row touches: supply_receipt.rs calls expect() twice, at lines 32 and 33, and the agent workspace denies clippy::expect_used. The two lints are the only clippy failures in either crate; clippy over the crate libraries and over both tests this row owns exits 0. Evidence: qual-logs/agent-clippy.log and qual-logs/agent-clippy-owned.log."
+assumption = "The file belongs to another lane's payment work and rewriting its panics would edit code outside this row, so both calls were left exactly as written."
+severity = "blocker"
+
+[observation.6.2.4104]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs platform/hosted/node/bootstrap.sh platform/hosted/core/src/public_reads.rs"
+symbol = "supervisor_reset_rebuilds_genesis_and_replays_once public_read_selectors_use_real_node_and_refuse_missing_evidence did_accounts"
+observed = "cargo test -p layerx-platform-core reproduces the two boundary failures already recorded at observation 6.11.160 and observation 6.11.161, twelve of fourteen tests passing. supervisor_reset_rebuilds_genesis_and_replays_once still fails inside the copied bootstrap script, which cannot find contracts/config/checkpoint-settlement.json from the disposable test root and refuses the certificate threshold, and public_read_selectors_use_real_node_and_refuse_missing_evidence still fails on the DID listing assertion, receiving 200 with an empty account list and authenticated_node_snapshot where 503 did_account_listing_unavailable is required. Both failures precede any account read assertion and neither route is changed by this row; account_proof_export_preserves_exact_native_verified_bytes, proof_and_sequence_reads_refuse_invalid_or_absent_real_node_evidence and the remaining ten tests pass. Evidence: qual-logs/platform-tests.log."
+assumption = "Both failures are the ones already recorded against their owning tasks and both lie outside this row's files, so the harness, the bootstrap script and the DID handler were left exactly as written."
+severity = "blocker"
+
+[observation.6.2.4105]
+task = "6.2"
+file = "agent/crates/layerx-client/src/read.rs agent/crates/layerx-client/src/evidence.rs"
+symbol = "verify_state_value verify_account_evidence"
+observed = "read.rs verify_state_value and the evidence.rs verify_account_evidence this row added now perform the same nested account verification: decode the evidence, bind the root selector and account, pin the sequencer key, and run verify_nested_account or verify_nested_account_maintenance. They are not interchangeable, because verify_state_value additionally requires the signed header's response authorization to equal the live handshake authorization and a Latest selector to name the currently sealed batch, neither of which an offline receiver of exported bytes can evaluate. Routing the live read through the shared verifier would need those two live checks factored out of the shared body."
+assumption = "read.rs is outside this row's owned files and the duplication is exact rather than divergent, so the live read path was left unchanged and the consolidation is recorded for the owner of the point-read path."
+severity = "note"

@@ -5,6 +5,9 @@
 mod lxgb_metadata;
 
 use ed25519_dalek::{Signer, SigningKey};
+use layerx_client::evidence::{
+    verification_label, verify_account_evidence, AccountEvidencePolicy, EvidenceError, RootSelector,
+};
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::preparation::{preparation_state, PreparationStateContext};
 use layerx_client::lni::schema::Version;
@@ -12,7 +15,9 @@ use layerx_client::lni::simulate::{
     simulation_boundary_id, simulation_evidence_digest, SimulationEvidence,
 };
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
-use layerx_platform_core::{build_send, hex_encode, treasury_did, SendRequest};
+use layerx_platform_core::{
+    build_send, fixed_hex, hex_decode, hex_encode, treasury_did, SendRequest,
+};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
@@ -843,7 +848,12 @@ fn genesis_request(asset: &[u8; 32], sequencer_key: &[u8; 32]) -> Vec<u8> {
     }
     assert_eq!(request.len(), 395, "LXGB request length");
     let issuer = SigningKey::from_bytes(&random32());
-    lxgb_metadata::append(&mut request, asset, &issuer.verifying_key().to_bytes(), &random32());
+    lxgb_metadata::append(
+        &mut request,
+        asset,
+        &issuer.verifying_key().to_bytes(),
+        &random32(),
+    );
     request
 }
 
@@ -2234,7 +2244,9 @@ fn start_supervised_cluster() -> Cluster {
     lxgb_metadata::append(
         &mut metadata,
         &asset,
-        &SigningKey::from_bytes(&treasury_seed).verifying_key().to_bytes(),
+        &SigningKey::from_bytes(&treasury_seed)
+            .verifying_key()
+            .to_bytes(),
         &random32(),
     );
     write(&root.join("bootstrap-metadata.lxgb"), &metadata, 0o644);
@@ -2257,7 +2269,10 @@ fn start_supervised_cluster() -> Cluster {
             text(&root.join("bootstrap-sequencer.key")),
         ),
         ("--treasury-key", text(&root.join("bootstrap-treasury.key"))),
-        ("--genesis-metadata", text(&root.join("bootstrap-metadata.lxgb"))),
+        (
+            "--genesis-metadata",
+            text(&root.join("bootstrap-metadata.lxgb")),
+        ),
         (
             "--program-token-file",
             text(&root.join("bootstrap-program.token")),
@@ -2828,6 +2843,63 @@ fn account_proof_export_preserves_exact_native_verified_bytes() {
         json(&value)["result"]["proof_material"]
     );
     assert_eq!(exported["result"]["account_id"], account);
+
+    let body = json(&value);
+    let served = &body["result"];
+    assert_eq!(served["verification"], "state_proven");
+    let field = |name: &str| {
+        served[name]
+            .as_str()
+            .unwrap_or_else(|| panic!("{name} missing from {}", value.body))
+            .to_owned()
+    };
+    let verified = must(
+        verify_account_evidence(
+            &must(hex_decode(&field("canonical_value")), "canonical value"),
+            &must(hex_decode(&field("proof_material")), "proof material"),
+            must(fixed_hex("account_id", &account), "account id"),
+            None,
+            AccountEvidencePolicy {
+                expected_protocol_version: PROTOCOL_VERSION,
+                expected_network_id: NETWORK_ID,
+                handshake_sequencer_key: cluster.sequencer_key,
+                root_selector: RootSelector::Latest,
+            },
+        ),
+        "served account evidence",
+    );
+    assert_eq!(
+        verification_label(verified.level()),
+        Some(field("verification").as_str())
+    );
+    let proven = verified.account();
+    assert_eq!(field("name").as_bytes(), proven.name.as_slice());
+    assert_eq!(field("asset_id"), hex_encode(&proven.asset_id()));
+    assert_eq!(field("balance"), proven.balance().to_string());
+    assert_eq!(field("next_sequence"), proven.next_sequence.to_string());
+    assert_eq!(served["frozen"], proven.frozen);
+    assert_eq!(field("batch_number"), verified.batch_number().to_string());
+    assert_eq!(
+        verified.signed_header().public_key,
+        cluster.sequencer_key,
+        "the served proof must terminate in the cluster sequencer"
+    );
+    assert!(matches!(
+        verify_account_evidence(
+            &must(hex_decode(&field("canonical_value")), "canonical value"),
+            &must(hex_decode(&field("proof_material")), "proof material"),
+            must(fixed_hex("account_id", &account), "account id"),
+            None,
+            AccountEvidencePolicy {
+                expected_protocol_version: PROTOCOL_VERSION,
+                expected_network_id: NETWORK_ID,
+                handshake_sequencer_key: [0x5c; 32],
+                root_selector: RootSelector::Latest,
+            },
+        ),
+        Err(EvidenceError::SequencerMismatch)
+    ));
+
     for account in ["invalid".to_owned(), "00".repeat(32)] {
         assert_refusal(
             &boundary

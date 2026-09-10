@@ -1,5 +1,9 @@
 use std::time::{Duration, Instant};
 
+use layerx_client::evidence::{
+    verification_label, verify_account_evidence, AccountEvidencePolicy, RootSelector,
+    VerifiedAccountEvidence,
+};
 use layerx_proof::inclusion::{verify_receipt, SequencerAuthorization};
 use layerx_proof::merkle::Proof;
 use layerx_wire::receipt::{decode_batch_header, Receipt};
@@ -7,6 +11,9 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use crate::rpc::{Commitment, RpcClient, RpcError};
+
+const MAX_ACCOUNT_VALUE_BYTES: usize = 4_096;
+const MAX_ACCOUNT_PROOF_BYTES: usize = 1_048_576;
 
 pub struct ReceiptPolicy {
     pub protocol_version: u16,
@@ -78,7 +85,139 @@ impl VerifiedBatchEvidence {
     }
 }
 
+/// Trust pinned by a caller for a public account read: the domain the value
+/// must bind to and the node's authorised sequencer key.
+pub struct AccountPolicy {
+    pub protocol_version: u16,
+    pub network_id: u32,
+    pub sequencer_key: [u8; 32],
+}
+
+/// An `lx_getAccount` or `lx_getBalance` result whose served fields were
+/// reproduced from proof material this client verified itself.
+pub struct VerifiedRpcAccount {
+    evidence: VerifiedAccountEvidence,
+    canonical: Vec<u8>,
+    proof_material: Vec<u8>,
+}
+
+impl VerifiedRpcAccount {
+    /// Borrows the account, level, batch number and state root established by
+    /// local verification.
+    #[must_use]
+    pub const fn evidence(&self) -> &VerifiedAccountEvidence {
+        &self.evidence
+    }
+
+    /// Returns the exact canonical account bytes the proof committed to.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical
+    }
+
+    /// Returns the exact proof bytes this client verified.
+    #[must_use]
+    pub fn proof_material(&self) -> &[u8] {
+        &self.proof_material
+    }
+
+    /// Verifies one served account read against its own proof material and
+    /// refuses every served field the proof does not reproduce.
+    ///
+    /// # Errors
+    /// Returns `InvalidResponse` for a malformed result and `Verification`
+    /// when the evidence, the achieved level, the served label or any served
+    /// field disagrees with the verified account.
+    pub fn from_rpc_result(
+        result: &Value,
+        account: [u8; 32],
+        policy: &AccountPolicy,
+    ) -> Result<Self, RpcError> {
+        if hex_field(result, "account_id", 32)? != account {
+            return Err(RpcError::Verification);
+        }
+        let canonical = hex_field(result, "canonical_value", MAX_ACCOUNT_VALUE_BYTES)?;
+        let proof_material = hex_field(result, "proof_material", MAX_ACCOUNT_PROOF_BYTES)?;
+        let evidence = verify_account_evidence(
+            &canonical,
+            &proof_material,
+            account,
+            None,
+            AccountEvidencePolicy {
+                expected_protocol_version: policy.protocol_version,
+                expected_network_id: policy.network_id,
+                handshake_sequencer_key: policy.sequencer_key,
+                root_selector: RootSelector::Latest,
+            },
+        )
+        .map_err(|_| RpcError::Verification)?;
+        let proven = evidence.account();
+        if result.get("verification").and_then(Value::as_str)
+            != verification_label(evidence.level())
+            || result
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::as_bytes)
+                != Some(proven.name.as_slice())
+            || hex_field(result, "asset_id", 32)? != proven.asset_id()
+            || decimal_field(result, "balance")? != proven.balance()
+            || decimal_field(result, "next_sequence")? != u128::from(proven.next_sequence)
+            || result.get("frozen").and_then(Value::as_bool) != Some(proven.frozen)
+            || decimal_field(result, "batch_number")? != u128::from(evidence.batch_number())
+        {
+            return Err(RpcError::Verification);
+        }
+        Ok(Self {
+            evidence,
+            canonical,
+            proof_material,
+        })
+    }
+}
+
+fn decimal_field(value: &Value, name: &str) -> Result<u128, RpcError> {
+    let text = value
+        .get(name)
+        .and_then(Value::as_str)
+        .ok_or(RpcError::InvalidResponse)?;
+    let parsed: u128 = text.parse().map_err(|_| RpcError::InvalidResponse)?;
+    if parsed.to_string() != text {
+        return Err(RpcError::InvalidResponse);
+    }
+    Ok(parsed)
+}
+
 impl RpcClient {
+    /// Reads an account through `lx_getAccount` and verifies the served value
+    /// against its own proof material before returning it.
+    ///
+    /// # Errors
+    /// Preserves RPC refusals and returns `Verification` for any result the
+    /// proof material does not establish at `STATE_PROVEN` or above.
+    pub fn verified_account(
+        &self,
+        account: [u8; 32],
+        policy: &AccountPolicy,
+    ) -> Result<VerifiedRpcAccount, RpcError> {
+        let result = self.get_account(&super::rpc::encode_hex(&account))?;
+        VerifiedRpcAccount::from_rpc_result(&result, account, policy)
+    }
+
+    /// Reads a balance through `lx_getBalance` under the same verification as
+    /// `verified_account`.
+    ///
+    /// # Errors
+    /// Preserves RPC refusals and returns `Verification` for any result the
+    /// proof material does not establish at `STATE_PROVEN` or above.
+    pub fn verified_balance(
+        &self,
+        account: [u8; 32],
+        policy: &AccountPolicy,
+    ) -> Result<VerifiedRpcAccount, RpcError> {
+        let result = self.get_balance(&super::rpc::encode_hex(&account))?;
+        VerifiedRpcAccount::from_rpc_result(&result, account, policy)
+    }
+
     /// # Errors
     /// Returns pending on deadline, RPC errors, or an exact verification refusal.
     pub fn wait_for(
