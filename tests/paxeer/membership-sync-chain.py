@@ -28,9 +28,9 @@ s = load('settlement', ROOT / 'cmd/layerx-guarantor/settlement.py')
 
 def expected_commitment(chain_id, contract, epoch, policy, members):
     preimage = TAG + struct.pack('>Q', chain_id) + s.raw(contract, 20)
-    preimage += struct.pack('>QQ', policy['version'], epoch)
+    preimage += struct.pack('>QQQ', policy['version'], epoch, policy['block_number'])
     preimage += policy['minimum_bond'].to_bytes(16, 'big')
-    preimage += struct.pack('>QI', 0, len(policy['members']))
+    preimage += struct.pack('>QI', policy['governance_sequence'], len(policy['members']))
     for entry, member in zip(policy['members'], members):
         public_key = s.raw(member['public_key'], 33)
         preimage += s.raw(entry['guarantor_id'], 32) + public_key
@@ -42,10 +42,13 @@ def expected_commitment(chain_id, contract, epoch, policy, members):
     return hashlib.sha256(preimage).digest()
 
 
-def drive(binary, env, state_dir, epoch, custodied, bps, protocol, chain=None, network=None):
+def drive(binary, env, state_dir, epoch, custodied, bps, protocol, chain=None, network=None,
+          deposit=None):
     command = [str(binary), str(state_dir), str(epoch), str(custodied), str(bps), str(protocol)]
     if chain is not None:
         command += [str(chain), str(network)]
+    if deposit is not None:
+        env = env | {'LAYERX_TEST_BOND_DEPOSIT': deposit}
     finished = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True,
                               timeout=300)
     fields = {}
@@ -173,6 +176,10 @@ def main():
             policy = s.membership(rpc, request)
             assert policy['minimum_bond'] == 100, policy
             assert policy['version'] == 5, policy
+            assert policy['governance_sequence'] == 2, policy
+            assert policy['custodied_value'] == 1000, policy
+            assert policy['minimum_bond_bps'] == 1000, policy
+            assert policy['block_number'] > 0, policy
             code, fields, errors = drive(binary, env, state_dir, epoch, 1000, 1000, 2)
             assert code == 0, (code, fields, errors)
             assert fields['stage'] == 'complete' and fields['status'] == '0', fields
@@ -188,6 +195,10 @@ def main():
             assert fields['member_count'] == '2', fields
             assert int(fields['minimum_bond'], 16) == 100, fields
             assert int(fields['custodied_value'], 16) == 1000, fields
+            assert fields['observed_block_number'] == str(policy['block_number']), fields
+            assert fields['governance_sequence'] == '2', fields
+            assert fields['minimum_bond_bps'] == '1000', fields
+            assert fields['binding_present'] == '0', fields
             bound = expected_commitment(31337, bond, epoch, policy, members)
             assert fields['commitment'] == '0x' + bound.hex(), (fields['commitment'], bound.hex())
             for index, member in enumerate(members):
@@ -224,10 +235,50 @@ def main():
             assert code == 0 and fields['availability'] == '2', (code, fields, errors)
             assert fields['membership_version'] == '6', fields
             assert int(fields['member1_bond'], 16) == 1700, fields
+            assert fields['binding_present'] == '1', fields
             rebound = expected_commitment(31337, bond, epoch, advanced, members)
             assert fields['commitment'] == '0x' + rebound.hex(), (fields['commitment'], rebound.hex())
             assert rebound != bound
+
+            receipt = chain.send(bond, 'depositBond(bytes32,uint256)', members[0]['guarantor_id'],
+                                 '300')
+            funding = receipt['transactionHash']
+            settled = s.membership(rpc, request)
+            assert settled['version'] == 7, settled
+            selector = members[0]['guarantor_id'][2:] + '-' + funding[2:]
+            code, fields, errors = drive(binary, env, state_dir, epoch, 1000, 1000, 2,
+                                         deposit=selector)
+            assert code == 0, (code, fields, errors)
+            assert fields['availability'] == '2' and fields['membership_version'] == '7', fields
+            assert fields['binding_present'] == '1', fields
+            assert fields['deposit_status'] == '0', fields
+            assert fields['deposit_availability'] == '2', fields
+            assert fields['deposit_rebound_availability'] == '2', fields
+            assert fields['deposit_count'] == '1', fields
+            assert fields['deposit_replay_status'] == '-302', fields
+            assert fields['deposit_transaction'] == funding, fields
+            assert fields['deposit_guarantor'] == members[0]['guarantor_id'], fields
+            assert int(fields['deposit_amount'], 16) == 300, fields
+            assert int(fields['deposit_total_bond'], 16) == 1300, fields
+            assert int(fields['member0_bond'], 16) == 1300, fields
+            deposit_block = int(fields['deposit_block'])
+            assert deposit_block == int(receipt['blockNumber'], 16), (fields, receipt)
+            assert int(fields['deposit_membership_version']) == 7, fields
+            assert int(fields['deposit_observed_at_ms']) > 0, fields
+
+            code, fields, errors = drive(binary, env, state_dir, epoch, 1000, 1000, 2)
+            assert code == 0, (code, fields, errors)
+            assert fields['binding_present'] == '1', fields
+            assert fields['availability'] == '2', fields
+            code, fields, errors = drive(binary, env, state_dir, epoch, 1000, 1000, 2,
+                                         deposit='0' * 64 + '-' + '0' * 64)
+            assert code == 1 and fields['stage'] == 'deposit', (code, fields, errors)
             print(json.dumps({'bound_membership_version': 5, 'rebound_membership_version': 6,
+                              'deposit_membership_version': 7,
+                              'deposit_receipt_bound_to_bond_state': True,
+                              'deposit_replay_refused': -302,
+                              'deposit_block_number': deposit_block,
+                              'binding_restored_across_restart': True,
                               'commitment_recomputed_independently': True,
                               'foreign_chain_id_refused': -204, 'foreign_network_id_refused': -204,
                               'foreign_bond_contract_refused': -213,

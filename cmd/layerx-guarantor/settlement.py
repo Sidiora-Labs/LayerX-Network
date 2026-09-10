@@ -23,6 +23,7 @@ ATTESTATION_TYPES = ['uint16', 'uint32', 'uint64', 'address', 'uint64'] + ['byte
 HEADER = '(' + ','.join(HEADER_TYPES) + ')'
 ATTESTATION = '(' + ','.join(ATTESTATION_TYPES) + ')'
 EVENT = '0x' + keccak(text='CheckpointRegistered(bytes32,uint64,uint64,uint64,uint64,bytes32,bytes32,bytes32,uint64)').hex()
+DEPOSIT_EVENT = '0x' + keccak(text='BondDeposited(bytes32,address,uint256,uint256)').hex()
 
 
 def require(condition, message):
@@ -103,6 +104,8 @@ class RPC:
 def membership(rpc, request, block='latest'):
     if block == 'latest':
         block = rpc.call('eth_blockNumber', [])
+    block_number = int(block, 16)
+    require(block_number > 0, 'membership block number invalid')
     chain = int(rpc.call('eth_chainId', []), 16)
     require(chain == request['chain_id'], 'chain id mismatch')
     bond, registry = request['settlement_contract'], request['checkpoint_registry']
@@ -111,6 +114,11 @@ def membership(rpc, request, block='latest'):
     require(rpc.view(registry, 'guarantorEligibility()', outputs=('address',), block=block)[0].lower() == bond.lower(), 'registry settlement binding mismatch')
     minimum_bond = rpc.view(bond, 'minimumBond()', block=block)[0]
     require(minimum_bond < 2 ** 128, 'minimum bond exceeds native uint128')
+    custodied_value = rpc.view(bond, 'custodiedValue()', block=block)[0]
+    require(0 < custodied_value < 2 ** 128, 'custodied value exceeds native uint128')
+    minimum_bond_bps = rpc.view(bond, 'minimumBondBps()', outputs=('uint32',), block=block)[0]
+    require(0 < minimum_bond_bps <= 10_000, 'minimum bond basis points out of range')
+    governance_sequence = rpc.view(bond, 'lastGovernanceSequence()', outputs=('uint64',), block=block)[0]
     members = []
     for member in request['guarantors']:
         active = rpc.view(bond, 'bondedActive(bytes32,address,uint64)', ('bytes32', 'address', 'uint64'), (raw(member['guarantor_id'], 32), member['signer'], request['epoch']), ('bool',), block)[0]
@@ -121,7 +129,9 @@ def membership(rpc, request, block='latest'):
         require(record[2] < 2 ** 128, 'bond amount exceeds native uint128')
         require(authorization[0] == record[3] and authorization[1] == 0, 'rotated signer requires complete authority history')
         members.append(dict(member, bonded_active=active, bond_amount=record[2], joined_epoch=record[3], authorization_version=authorization[2]))
-    return {'minimum_bond': minimum_bond, 'version': rpc.view(bond, 'membershipVersion()', block=block)[0], 'threshold': rpc.view(registry, 'threshold()', block=block)[0], 'maximum_attestation_delay_ms': rpc.view(registry, 'maximumAttestationDelayMilliseconds()', block=block)[0], 'members': members}
+    version = rpc.view(bond, 'membershipVersion()', block=block)[0]
+    require(governance_sequence <= version, 'governance sequence exceeds membership version')
+    return {'minimum_bond': minimum_bond, 'version': version, 'threshold': rpc.view(registry, 'threshold()', block=block)[0], 'maximum_attestation_delay_ms': rpc.view(registry, 'maximumAttestationDelayMilliseconds()', block=block)[0], 'block_number': block_number, 'governance_sequence': governance_sequence, 'custodied_value': custodied_value, 'minimum_bond_bps': minimum_bond_bps, 'members': members}
 
 
 def validate_receipt(receipt, registry, transaction, digest, header, version):
@@ -197,6 +207,42 @@ def register(rpc, request):
     return {'already_registered': registered, 'checkpoint_id': '0x' + digest.hex(), 'transaction_id': transaction, 'observed_block_number': block, 'paxeer_chain_id': request['chain_id'], 'settlement_contract': request['settlement_contract'], 'set_version': version, 'observed_at_ms': observed_at_ms, 'members': state['members']}
 
 
+def deposit(rpc, request):
+    chain = int(rpc.call('eth_chainId', []), 16)
+    require(chain == request['chain_id'], 'chain id mismatch')
+    bond = request['settlement_contract']
+    raw(bond, 20)
+    identity = raw(request['guarantor_id'], 32)
+    transaction = request['transaction_id']
+    raw(transaction, 32)
+    receipt = rpc.call('eth_getTransactionReceipt', [transaction])
+    require(receipt and int(receipt['status'], 16) == 1, 'bond deposit transaction failed')
+    require(raw(receipt['transactionHash'], 32) == raw(transaction, 32) and receipt['to'].lower() == bond.lower(), 'bond deposit receipt mismatch')
+    block = int(receipt['blockNumber'], 16)
+    block_hash = raw(receipt['blockHash'], 32)
+    require(block > 0 and any(block_hash), 'bond deposit block invalid')
+    topics = [DEPOSIT_EVENT, '0x' + identity.hex()]
+    matches = []
+    for log in receipt['logs']:
+        if log['address'].lower() == bond.lower() and log['topics'][:2] == topics:
+            require(log['removed'] is False and len(log['topics']) == 3, 'bond deposit event content mismatch')
+            require(raw(log['transactionHash'], 32) == raw(transaction, 32) and raw(log['blockHash'], 32) == block_hash and int(log['blockNumber'], 16) == block, 'bond deposit event receipt mismatch')
+            matches.append(log)
+    require(len(matches) == 1, 'bond deposit event count mismatch')
+    amount, total_bond = decode(['uint256', 'uint256'], raw(matches[0]['data']))
+    require(0 < amount < 2 ** 128 and amount <= total_bond < 2 ** 128, 'bond deposit amount exceeds native uint128')
+    chain_block = rpc.call('eth_getBlockByNumber', [hex(block), False])
+    require(chain_block and raw(chain_block['hash'], 32) == block_hash, 'bond deposit block is not canonical')
+    observed_at_ms = int(chain_block['timestamp'], 16) * 1000
+    require(observed_at_ms > 0, 'bond deposit block timestamp invalid')
+    record = rpc.view(bond, 'bondRecord(bytes32)', ('bytes32',), (identity,), ('(address,address,uint256,uint64,uint64,uint64,uint64,uint256,bool,bool)',), hex(block))[0]
+    require(int(record[0], 16) != 0 and record[4] == 0 and record[5] == 0, 'bond record is not an active guarantor')
+    require(record[2] == total_bond, 'bond record total differs from deposit event')
+    version = rpc.view(bond, 'membershipVersion()', block=hex(block))[0]
+    require(version > 0, 'bond deposit membership version invalid')
+    return {'guarantor_id': '0x' + identity.hex(), 'transaction_id': transaction, 'observed_block_number': block, 'observed_at_ms': observed_at_ms, 'membership_version': version, 'amount': amount, 'total_bond': total_bond, 'paxeer_chain_id': request['chain_id'], 'settlement_contract': bond}
+
+
 def publish_native(rpc, request):
     module_spec = importlib.util.spec_from_file_location('guarantor_publication', Path(__file__).with_name('publication.py'))
     module = importlib.util.module_from_spec(module_spec)
@@ -213,7 +259,9 @@ def wire_encode(mode, result):
         return output
     if mode == 'register':
         return bytes([int(result['already_registered'])]) + raw(result['transaction_id'], 32) + struct.pack('>QQQ', result['observed_block_number'], result['observed_at_ms'], result['set_version'])
-    output = struct.pack('>QIQI', result['version'], result['threshold'], result['maximum_attestation_delay_ms'], len(result['members'])) + result['minimum_bond'].to_bytes(16, 'big')
+    if mode == 'deposit':
+        return raw(result['guarantor_id'], 32) + raw(result['transaction_id'], 32) + struct.pack('>QQQ', result['observed_block_number'], result['observed_at_ms'], result['membership_version']) + result['amount'].to_bytes(16, 'big') + result['total_bond'].to_bytes(16, 'big')
+    output = struct.pack('>QIQI', result['version'], result['threshold'], result['maximum_attestation_delay_ms'], len(result['members'])) + result['minimum_bond'].to_bytes(16, 'big') + struct.pack('>QQ', result['block_number'], result['governance_sequence']) + result['custodied_value'].to_bytes(16, 'big') + struct.pack('>I', result['minimum_bond_bps'])
     for member in result['members']:
         output += raw(member['guarantor_id'], 32) + raw(member['signer'], 20) + bytes([int(member['bonded_active'])]) + member['bond_amount'].to_bytes(16, 'big') + struct.pack('>QQ', member['joined_epoch'], member['authorization_version'])
     return output
@@ -250,12 +298,14 @@ def configuration(request):
 
 
 def main():
-    require(len(sys.argv) == 4 and sys.argv[1] in ('membership', 'register', 'config'), 'usage: settlement.py config|membership|register INPUT.json OUTPUT.json')
+    require(len(sys.argv) == 4 and sys.argv[1] in ('membership', 'register', 'config', 'deposit'), 'usage: settlement.py config|membership|register|deposit INPUT.json OUTPUT.json')
     request = json.loads(Path(sys.argv[2]).read_text())
     if sys.argv[1] == 'config':
         result = configuration(request)
     elif sys.argv[1] == 'membership':
         result = membership(RPC(request['rpc_url']), request)
+    elif sys.argv[1] == 'deposit':
+        result = deposit(RPC(request['rpc_url']), request)
     else:
         lock_path = request.get('submitter_lock_file', request['submitter_key_file'] + '.lock')
         lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o660)

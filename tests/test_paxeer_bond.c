@@ -59,6 +59,8 @@ int main(void)
     lxp_byte_span encoded;
     lxp_byte_span foreign_encoded;
     lxp_paxeer_bond_state bonds;
+    lxp_paxeer_membership_observation mirror;
+    lxp_paxeer_bond_deposit_evidence funding;
     lxp_paxeer_membership_sync_availability membership_sync;
     lxp_guarantor_bond_state governed_bond;
     lxp_guarantor_bond_state governed_other;
@@ -72,9 +74,19 @@ int main(void)
                              (lxp_u128){0U, 10000U}, 100U) != LXP_OK ||
         lxp_paxeer_membership_sync_status(&bonds, &membership_sync) !=
             LXP_OK ||
-        membership_sync != LXP_PAXEER_MEMBERSHIP_SYNC_UNAVAILABLE ||
-        lxp_paxeer_bond_deposit(&bonds, other_id, (lxp_u128){0U, 99U}) !=
-            LXP_ERR_AUTH_SCOPE)
+        membership_sync != LXP_PAXEER_MEMBERSHIP_SYNC_UNAVAILABLE)
+        return 1;
+    (void)memset(&funding, 0, sizeof(funding));
+    funding.paxeer_chain_id = 31337U;
+    (void)memcpy(funding.guarantor_bond_contract, paxeer_contract, 20U);
+    (void)memcpy(funding.guarantor_id, other_id, 32U);
+    funding.transaction_id[31] = 0xb1U;
+    funding.observed_block_number = 4100U;
+    funding.observed_at_ms = 1700000000000ULL;
+    funding.membership_version = 3U;
+    funding.amount = (lxp_u128){0U, 99U};
+    funding.total_bond = (lxp_u128){0U, 99U};
+    if (lxp_paxeer_bond_deposit(&bonds, &funding) != LXP_ERR_CONTEXT_MISMATCH)
         return 1;
     (void)memset(&guarantor, 0, sizeof(guarantor));
     guarantor.guarantor_id[0] = 7U;
@@ -99,11 +111,13 @@ int main(void)
     (void)memcpy(governed_bond.guarantor_id, guarantor.guarantor_id, 32U);
     (void)memcpy(governed_bond.public_key, public_key, 33U);
     governed_bond.joined_epoch = 1U;
+    governed_bond.bond_amount = (lxp_u128){0U, 100U};
     governed_bond.active = true;
     (void)memset(&governed_other, 0, sizeof(governed_other));
     (void)memcpy(governed_other.guarantor_id, other_id, 32U);
     (void)memcpy(governed_other.public_key, other_key, 33U);
     governed_other.joined_epoch = 1U;
+    governed_other.bond_amount = (lxp_u128){0U, 99U};
     governed_other.active = true;
     if (lxp_guarantor_attest(&guarantor, &first_checkpoint, true, true, 100U,
                              &arena, &first) != LXP_OK ||
@@ -115,11 +129,33 @@ int main(void)
         lxp_guarantor_set_apply(&bonds.guarantors, 1U, true,
                                 &governed_bond) != LXP_OK ||
         lxp_guarantor_set_apply(&bonds.guarantors, 2U, true,
-                                &governed_other) != LXP_OK ||
-        lxp_paxeer_bond_deposit(&bonds, guarantor.guarantor_id,
-                                (lxp_u128){0U, 100U}) != LXP_OK ||
-        lxp_paxeer_bond_deposit(&bonds, other_id,
-                                (lxp_u128){0U, 99U}) != LXP_OK ||
+                                &governed_other) != LXP_OK)
+        return 1;
+    (void)memset(&mirror, 0, sizeof(mirror));
+    mirror.paxeer_chain_id = 31337U;
+    (void)memcpy(mirror.guarantor_bond_contract, paxeer_contract, 20U);
+    mirror.membership_version = bonds.guarantors.version;
+    mirror.observed_epoch = 4U;
+    mirror.observed_block_number = 4096U;
+    mirror.minimum_bond = bonds.minimum_bond;
+    mirror.members = bonds.guarantors;
+    if (lxp_paxeer_membership_sync(&bonds, &mirror, &membership_sync) !=
+            LXP_OK ||
+        membership_sync != LXP_PAXEER_MEMBERSHIP_SYNC_BOUND)
+        return 1;
+    funding.membership_version = bonds.guarantors.version;
+    funding.observed_block_number = 4096U;
+    (void)memcpy(funding.guarantor_id, guarantor.guarantor_id, 32U);
+    funding.amount = (lxp_u128){0U, 100U};
+    funding.total_bond = (lxp_u128){0U, 100U};
+    if (lxp_paxeer_bond_deposit(&bonds, &funding) != LXP_OK)
+        return 1;
+    funding.transaction_id[31] = 0xb2U;
+    (void)memcpy(funding.guarantor_id, other_id, 32U);
+    funding.amount = (lxp_u128){0U, 99U};
+    funding.total_bond = (lxp_u128){0U, 99U};
+    if (lxp_paxeer_bond_deposit(&bonds, &funding) != LXP_OK ||
+        bonds.deposit_count != 2U || bonds.mirror_version != 2U ||
         bonds.guarantors.version != 2U ||
         lxp_guarantor_set_rotate_signer(
             &bonds.guarantors, 3U, true, guarantor.guarantor_id,
