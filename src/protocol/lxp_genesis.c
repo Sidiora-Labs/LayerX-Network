@@ -3,6 +3,11 @@
 
 #include "layerx/programs.h"
 #include "layerx/lx_asset.h"
+#include "layerx/lx_budget.h"
+#include "layerx/lx_escrow.h"
+#include "layerx/lx_perps.h"
+#include "layerx/lx_service.h"
+#include "layerx/lx_stream.h"
 #include "layerx/lxp_bridge_credit.h"
 
 #include "layerx/lxp_crypto.h"
@@ -23,6 +28,289 @@ static const uint8_t parameter_version_key[32] = {
 };
 
 static const uint8_t genesis_manifest_key[] = "genesis/manifest/v1";
+
+static const uint8_t module_enable_prefix[LXP_GENESIS_MODULE_ENABLE_PREFIX_BYTES] =
+    "module-enable:";
+
+/* The single genesis module registration table.  Every genesis consumer - the
+ * protocol state root, the genesis builder, the daemon, the guarantor runtime
+ * and the module registry - registers exactly these modules in this order, so
+ * adding a module is one row here. */
+static const lxp_genesis_module_entry module_table[] = {
+    {LXP_MODULE_PROGRAMS, LXP_GENESIS_MODULE_GATE_ALWAYS, true,
+     programs_module_registration_v4},
+    {LXP_MODULE_ASSET, LXP_GENESIS_MODULE_GATE_STATE_COMMITMENT, true,
+     lx_asset_module_iface},
+    {LXP_MODULE_GOVERNANCE, LXP_GENESIS_MODULE_GATE_STATE_COMMITMENT, true,
+     lxp_governance_module_iface},
+    {LXP_MODULE_BRIDGE, LXP_GENESIS_MODULE_GATE_CUSTODY_PROFILE, true,
+     lxp_bridge_module_iface},
+    {LXP_MODULE_ESCROW, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
+     lx_escrow_module_iface},
+    {LXP_MODULE_BUDGET, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
+     lx_budget_module_iface},
+    {LXP_MODULE_STREAM, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
+     lx_stream_module_iface},
+    {LXP_MODULE_SERVICE, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
+     lx_service_module_iface},
+    {LXP_MODULE_PERPS, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
+     lx_perps_module_iface}
+};
+
+const lxp_genesis_module_entry *lxp_genesis_module_table(size_t *count)
+{
+    if (count == NULL) return NULL;
+    *count = sizeof(module_table) / sizeof(module_table[0]);
+    return module_table;
+}
+
+static lxp_result module_table_entry_valid(const lxp_genesis_module_entry *entry,
+                                           const lxp_module_iface **iface)
+{
+    const lxp_module_iface *resolved;
+    size_t name_length;
+    if (entry == NULL || iface == NULL || entry->iface == NULL ||
+        entry->module_id == 0U ||
+        entry->module_id > LXP_MODULE_RESERVED_COUNT ||
+        (entry->gate != LXP_GENESIS_MODULE_GATE_ALWAYS &&
+         entry->gate != LXP_GENESIS_MODULE_GATE_STATE_COMMITMENT &&
+         entry->gate != LXP_GENESIS_MODULE_GATE_CUSTODY_PROFILE &&
+         entry->gate != LXP_GENESIS_MODULE_GATE_ENABLE_FLAG))
+        return LXP_ERR_UNKNOWN_MODULE;
+    resolved = entry->iface();
+    if (resolved == NULL || resolved->module_id != entry->module_id ||
+        resolved->name == NULL || resolved->activity_types == NULL ||
+        resolved->activity_type_count == 0U ||
+        resolved->activity_type_count > LXP_MODULE_MAX_ACTIVITY_TYPES)
+        return LXP_ERR_UNKNOWN_MODULE;
+    name_length = strlen(resolved->name);
+    if (name_length == 0U ||
+        name_length > 32U - LXP_GENESIS_MODULE_ENABLE_PREFIX_BYTES)
+        return LXP_ERR_UNKNOWN_MODULE;
+    *iface = resolved;
+    return LXP_OK;
+}
+
+static lxp_result module_table_validate(void)
+{
+    size_t count = sizeof(module_table) / sizeof(module_table[0]);
+    size_t index;
+    size_t other;
+    if (count == 0U || count > LXP_GENESIS_MODULE_TABLE_MAX)
+        return LXP_ERR_UNKNOWN_MODULE;
+    for (index = 0U; index < count; ++index) {
+        const lxp_module_iface *iface = NULL;
+        lxp_result status = module_table_entry_valid(&module_table[index],
+                                                     &iface);
+        if (status != LXP_OK) return status;
+        for (other = 0U; other < index; ++other)
+            if (module_table[other].module_id == module_table[index].module_id)
+                return LXP_ERR_SEQUENCE_REUSED;
+    }
+    return LXP_OK;
+}
+
+lxp_result lxp_genesis_module_enable_key(uint16_t module_id, uint8_t key[32])
+{
+    size_t count = sizeof(module_table) / sizeof(module_table[0]);
+    size_t index;
+    if (key == NULL) return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; index < count; ++index) {
+        const lxp_module_iface *iface = NULL;
+        lxp_result status;
+        if (module_table[index].module_id != module_id) continue;
+        status = module_table_entry_valid(&module_table[index], &iface);
+        if (status != LXP_OK) return status;
+        if (module_table[index].gate != LXP_GENESIS_MODULE_GATE_ENABLE_FLAG)
+            return LXP_ERR_UNKNOWN_FIELD;
+        (void)memset(key, 0, 32U);
+        (void)memcpy(key, module_enable_prefix,
+                     LXP_GENESIS_MODULE_ENABLE_PREFIX_BYTES);
+        (void)memcpy(key + LXP_GENESIS_MODULE_ENABLE_PREFIX_BYTES,
+                     iface->name, strlen(iface->name));
+        return LXP_OK;
+    }
+    return LXP_ERR_UNKNOWN_MODULE;
+}
+
+static lxp_result module_enable_flag(const lxp_genesis_manifest *manifest,
+                                     uint16_t module_id, bool *present,
+                                     bool *enabled)
+{
+    uint8_t key[32];
+    size_t index;
+    lxp_result status = lxp_genesis_module_enable_key(module_id, key);
+    if (status != LXP_OK) return status;
+    *present = false;
+    *enabled = false;
+    for (index = 0U; index < manifest->parameter_count; ++index) {
+        const lxp_genesis_parameter *parameter = &manifest->parameters[index];
+        if (parameter->module_id != LXP_MODULE_GOVERNANCE ||
+            memcmp(parameter->key, key, 32U) != 0)
+            continue;
+        if (*present) return LXP_ERR_SEQUENCE_REUSED;
+        if (!lxp_ct_is_zero(parameter->value, 31U) || parameter->value[31] > 1U)
+            return LXP_ERR_NON_CANONICAL;
+        *present = true;
+        *enabled = parameter->value[31] == 1U;
+    }
+    return LXP_OK;
+}
+
+static lxp_result module_enable_flags_known(
+    const lxp_genesis_manifest *manifest)
+{
+    size_t count = sizeof(module_table) / sizeof(module_table[0]);
+    size_t index;
+    for (index = 0U; index < manifest->parameter_count; ++index) {
+        const lxp_genesis_parameter *parameter = &manifest->parameters[index];
+        size_t entry;
+        bool known = false;
+        if (parameter->module_id != LXP_MODULE_GOVERNANCE ||
+            memcmp(parameter->key, module_enable_prefix,
+                   LXP_GENESIS_MODULE_ENABLE_PREFIX_BYTES) != 0)
+            continue;
+        for (entry = 0U; entry < count && !known; ++entry) {
+            uint8_t key[32];
+            if (module_table[entry].gate !=
+                LXP_GENESIS_MODULE_GATE_ENABLE_FLAG)
+                continue;
+            if (lxp_genesis_module_enable_key(module_table[entry].module_id,
+                                              key) != LXP_OK)
+                return LXP_ERR_UNKNOWN_MODULE;
+            known = memcmp(parameter->key, key, 32U) == 0;
+        }
+        if (!known) return LXP_ERR_UNKNOWN_MODULE;
+    }
+    return LXP_OK;
+}
+
+lxp_result lxp_genesis_module_plan_default(
+    uint16_t protocol_version, bool custody_credit_enabled,
+    lxp_genesis_module_plan *plan)
+{
+    size_t count = sizeof(module_table) / sizeof(module_table[0]);
+    size_t index;
+    lxp_result status;
+    if (plan == NULL || !lxp_protocol_version_supported(protocol_version))
+        return LXP_ERR_NON_CANONICAL;
+    status = module_table_validate();
+    if (status != LXP_OK) return status;
+    (void)memset(plan, 0, sizeof(*plan));
+    for (index = 0U; index < count; ++index) {
+        const lxp_genesis_module_entry *entry = &module_table[index];
+        const lxp_module_iface *iface = NULL;
+        bool selected;
+        status = module_table_entry_valid(entry, &iface);
+        if (status != LXP_OK) return status;
+        switch (entry->gate) {
+        case LXP_GENESIS_MODULE_GATE_ALWAYS:
+            selected = true;
+            break;
+        case LXP_GENESIS_MODULE_GATE_STATE_COMMITMENT:
+            selected = protocol_version ==
+                LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+            break;
+        case LXP_GENESIS_MODULE_GATE_CUSTODY_PROFILE:
+            selected = custody_credit_enabled;
+            break;
+        case LXP_GENESIS_MODULE_GATE_ENABLE_FLAG:
+            selected = entry->default_enabled;
+            break;
+        default:
+            return LXP_ERR_UNKNOWN_MODULE;
+        }
+        if (selected) plan->modules[plan->count++] = iface;
+    }
+    return plan->count == 0U ? LXP_ERR_UNKNOWN_MODULE : LXP_OK;
+}
+
+lxp_result lxp_genesis_module_plan_resolve(
+    const lxp_genesis_manifest *manifest, lxp_genesis_module_plan *plan)
+{
+    lxp_bridge_profile bridge;
+    bool bridge_present = false;
+    size_t count = sizeof(module_table) / sizeof(module_table[0]);
+    size_t index;
+    size_t position = 0U;
+    lxp_result status;
+    if (manifest == NULL || plan == NULL ||
+        !lxp_protocol_version_supported(manifest->protocol_version))
+        return LXP_ERR_NON_CANONICAL;
+    status = module_table_validate();
+    if (status == LXP_OK)
+        status = lxp_bridge_genesis_profile(manifest, &bridge, &bridge_present);
+    if (status == LXP_OK) status = module_enable_flags_known(manifest);
+    if (status != LXP_OK) return status;
+    (void)memset(plan, 0, sizeof(*plan));
+    for (index = 0U; index < count; ++index) {
+        const lxp_genesis_module_entry *entry = &module_table[index];
+        const lxp_module_iface *iface = NULL;
+        bool selected;
+        status = module_table_entry_valid(entry, &iface);
+        if (status != LXP_OK) return status;
+        switch (entry->gate) {
+        case LXP_GENESIS_MODULE_GATE_ALWAYS:
+            selected = true;
+            break;
+        case LXP_GENESIS_MODULE_GATE_STATE_COMMITMENT:
+            selected = manifest->protocol_version ==
+                LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+            break;
+        case LXP_GENESIS_MODULE_GATE_CUSTODY_PROFILE:
+            selected = bridge_present;
+            break;
+        case LXP_GENESIS_MODULE_GATE_ENABLE_FLAG: {
+            bool present = false;
+            bool enabled = false;
+            status = module_enable_flag(manifest, entry->module_id, &present,
+                                        &enabled);
+            if (status != LXP_OK) return status;
+            selected = present ? enabled : entry->default_enabled;
+            break;
+        }
+        default:
+            return LXP_ERR_UNKNOWN_MODULE;
+        }
+        if (selected) plan->modules[position++] = iface;
+    }
+    plan->count = position;
+    return plan->count == 0U ? LXP_ERR_UNKNOWN_MODULE : LXP_OK;
+}
+
+lxp_result lxp_genesis_module_plan_register(
+    const lxp_genesis_module_plan *plan, lxp_kernel *kernel)
+{
+    size_t index;
+    if (plan == NULL || kernel == NULL || plan->count == 0U ||
+        plan->count > LXP_GENESIS_MODULE_TABLE_MAX)
+        return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; index < plan->count; ++index) {
+        lxp_result status;
+        if (plan->modules[index] == NULL) return LXP_ERR_UNKNOWN_MODULE;
+        status = lxp_kernel_register_module(kernel, plan->modules[index]);
+        if (status != LXP_OK) return status;
+    }
+    return LXP_OK;
+}
+
+lxp_result lxp_genesis_module_plan_matches(
+    const lxp_genesis_module_plan *plan, const lxp_kernel *kernel)
+{
+    size_t index;
+    if (plan == NULL || kernel == NULL || plan->count == 0U ||
+        plan->count > LXP_GENESIS_MODULE_TABLE_MAX ||
+        kernel->module_count != plan->count)
+        return LXP_ERR_UNKNOWN_MODULE;
+    for (index = 0U; index < plan->count; ++index) {
+        const lxp_module_iface *iface = plan->modules[index];
+        if (iface == NULL ||
+            kernel->modules[index].module_id != iface->module_id ||
+            kernel->modules[index].abi_version != iface->abi_version)
+            return LXP_ERR_UNKNOWN_MODULE;
+    }
+    return LXP_OK;
+}
 
 static const char *fresh_system_name(uint16_t kind)
 {
@@ -498,6 +786,7 @@ lxp_result lxp_genesis_materialize(const lxp_genesis_manifest *manifest,
 {
     lxp_bridge_profile bridge;
     bool bridge_present = false;
+    lxp_genesis_module_plan plan;
     lx_account_registry *accounts;
     uint8_t commitment[32];
     uint32_t parameter_version;
@@ -505,20 +794,11 @@ lxp_result lxp_genesis_materialize(const lxp_genesis_manifest *manifest,
     lxp_result status = validate(manifest);
     if (status == LXP_OK)
         status = lxp_bridge_genesis_profile(manifest, &bridge, &bridge_present);
+    if (status == LXP_OK)
+        status = lxp_genesis_module_plan_resolve(manifest, &plan);
     if (status != LXP_OK || arena == NULL || kernel == NULL ||
         kernel->state == NULL || kernel->journal == NULL ||
-        kernel->module_count != (manifest->protocol_version ==
-            LXP_PROTOCOL_VERSION_STATE_COMMITMENT ? (bridge_present ? 4U : 3U) : 1U) ||
-        kernel->modules[0].module_id != LXP_MODULE_PROGRAMS ||
-        kernel->modules[0].abi_version != programs_module_registration_v4()->abi_version ||
-        (manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
-         (kernel->modules[1].module_id != LXP_MODULE_ASSET ||
-          kernel->modules[1].abi_version != lx_asset_module_iface()->abi_version)) ||
-        (manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
-         (kernel->modules[2].module_id != LXP_MODULE_GOVERNANCE ||
-          kernel->modules[2].abi_version != lxp_governance_module_iface()->abi_version)) ||
-        (bridge_present && (kernel->modules[3].module_id != LXP_MODULE_BRIDGE ||
-                            kernel->modules[3].abi_version != lxp_bridge_module_iface()->abi_version)) ||
+        lxp_genesis_module_plan_matches(&plan, kernel) != LXP_OK ||
         kernel->state->count != 0U || kernel->state->idempotency_count != 0U ||
         kernel->state->next_sequence != 1U ||
         kernel->module_kv_count != 0U || kernel->blob_count != 0U ||
@@ -574,6 +854,7 @@ lxp_result lxp_genesis_state_root(
     lxp_state_journal *journal;
     lxp_kernel *kernel;
     lx_account_registry *accounts;
+    lxp_genesis_module_plan plan;
     bool state_open = false;
     lxp_result status;
     if (manifest == NULL || arena == NULL || state_root == NULL)
@@ -595,21 +876,9 @@ lxp_result lxp_genesis_state_root(
     if (status == LXP_OK)
         status = lxp_kernel_create(kernel, state, journal, manifest, 1U);
     if (status == LXP_OK)
-        status = lxp_kernel_register_module(kernel,
-                                            programs_module_registration_v4());
-    if (status == LXP_OK &&
-        manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
-        status = lxp_kernel_register_module(kernel, lx_asset_module_iface());
-    if (status == LXP_OK &&
-        manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
-        status = lxp_kernel_register_module(kernel, lxp_governance_module_iface());
-    if (status == LXP_OK) {
-        lxp_bridge_profile bridge;
-        bool present = false;
-        status = lxp_bridge_genesis_profile(manifest, &bridge, &present);
-        if (status == LXP_OK && present)
-            status = lxp_kernel_register_module(kernel, lxp_bridge_module_iface());
-    }
+        status = lxp_genesis_module_plan_resolve(manifest, &plan);
+    if (status == LXP_OK)
+        status = lxp_genesis_module_plan_register(&plan, kernel);
     if (status == LXP_OK) status = lxp_genesis_materialize(manifest, arena, kernel);
     if (status == LXP_OK) status = lxp_state_root(kernel, state_root);
     if (state_open) {

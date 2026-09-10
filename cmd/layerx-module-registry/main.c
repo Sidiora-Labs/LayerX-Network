@@ -1,9 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
-#include "layerx/lx_asset.h"
 #include "layerx/lxp_bridge_credit.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_genesis.h"
 #include "layerx/lxp_kernel.h"
-#include "layerx/programs.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -132,11 +131,24 @@ int main(int argc, char **argv)
             if (memcmp(hex, asset + i * 2U, 2U) != 0) goto refused;
         }
     }
-    const lxp_module_iface *modules[3];
-    size_t count = 0U;
-    modules[count++] = lx_asset_module_iface();
-    if (profile_path != NULL) modules[count++] = lxp_bridge_module_iface();
-    modules[count++] = programs_module_registration_v4();
+    lxp_genesis_module_plan plan;
+    const lxp_module_iface *modules[LXP_GENESIS_MODULE_TABLE_MAX];
+    size_t count;
+    if (lxp_genesis_module_plan_default((uint16_t)protocol,
+                                        profile_path != NULL, &plan) != LXP_OK)
+        goto refused;
+    count = plan.count;
+    for (size_t i = 0U; i < count; ++i) modules[i] = plan.modules[i];
+    for (size_t i = 1U; i < count; ++i) {
+        const lxp_module_iface *value = modules[i];
+        size_t position = i;
+        while (position != 0U &&
+               modules[position - 1U]->module_id > value->module_id) {
+            modules[position] = modules[position - 1U];
+            --position;
+        }
+        modules[position] = value;
+    }
     for (size_t i = 0U; i < count; ++i)
         if (module_valid(modules[i]) ||
             (i > 0U && modules[i - 1U]->module_id >= modules[i]->module_id)) goto refused;

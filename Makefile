@@ -1307,6 +1307,18 @@ $(BUILD_DIR)/tests/test_genesis_manifest: tests/test_genesis_manifest.c \
 		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -ldl -lm -o $@
 
+$(BUILD_DIR)/tests/test_genesis_module_table: \
+		tests/test_genesis_module_table.c \
+		cmd/layerx-genesis/lxp_genesis_build_cli.c \
+		cmd/layerx-genesis/lxp_genesis_builder.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_genesis_module_table.c \
+		cmd/layerx-genesis/lxp_genesis_build_cli.c \
+		cmd/layerx-genesis/lxp_genesis_builder.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
 $(BUILD_DIR)/tests/test_genesis_builder_cli: \
 		tests/test_genesis_builder_cli.c \
 		cmd/layerx-genesis/lxp_genesis_build_cli.c \
@@ -1328,9 +1340,11 @@ $(BUILD_DIR)/tests/test_daemon_bootstrap_artifact: \
 		$(EXTRA_LDFLAGS) -o $@
 
 test-genesis-bootstrap: $(BUILD_DIR)/tests/test_genesis_manifest \
+		$(BUILD_DIR)/tests/test_genesis_module_table \
 		$(BUILD_DIR)/tests/test_genesis_builder_cli \
 		$(BUILD_DIR)/tests/test_daemon_bootstrap_artifact
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_genesis_manifest
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_genesis_module_table
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_genesis_builder_cli
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_daemon_bootstrap_artifact
 

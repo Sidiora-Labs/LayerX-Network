@@ -22,6 +22,7 @@ def run(args, success=True):
 expected = {'schema_version': 2, 'assets': [{'asset': asset, 'symbol': 'LXT',
              'currency': 'LXT', 'decimals': 18}], 'modules': [
              {'module': 1, 'ordinals': list(range(1, 10))},
+             {'module': 7, 'ordinals': [1, 2, 3, 5, 6]},
              {'module': 9, 'ordinals': list(range(1, 11))}]}
 assert json.loads(run(base)) == expected
 assert run(base) == run(base)
@@ -59,7 +60,7 @@ with tempfile.TemporaryDirectory() as directory:
     path = root / 'profile'
     path.write_bytes(profile)
     args = base + ['--custody-profile', str(path)]
-    expected['modules'].insert(1, {'module': 8, 'ordinals': [1]})
+    expected['modules'].insert(2, {'module': 8, 'ordinals': [1]})
     assert json.loads(run(args)) == expected
     for bad in (profile[:-1], profile + b'\0', bytes(207),
                 profile[:201] + (2).to_bytes(4, 'big') + profile[205:],
