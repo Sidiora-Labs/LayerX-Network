@@ -564,6 +564,8 @@ static lxp_result admit_provisioned_identities(lxp_daemon_process *process)
 finish:
     if (pthread_mutex_unlock(&process->owner.mutex) != 0) status = LXP_ERR_IO;
     return status;
+}
+
 static bool asset_activity_supported(uint32_t activity_type)
 {
     switch (activity_type) {
