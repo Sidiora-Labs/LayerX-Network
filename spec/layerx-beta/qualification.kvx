@@ -9221,3 +9221,51 @@ symbol = "module_table module_table_validate LXP_GENESIS_MODULE_GATE_ENABLE_FLAG
 observed = "The genesis module table already carries the budget row with LXP_GENESIS_MODULE_GATE_ENABLE_FLAG and enabled false, and module_table_validate refuses a duplicate module identifier, so no registration row was added by this change. The enable flag was not flipped: flipping it changes the genesis state root and every snapshot fixture derived from it."
 assumption = "The dispatch, canonical key-value state, events and refusals are exercised at module level against a kernel that registers the module directly, so the coverage does not depend on the genesis gate. Enabling the module in genesis and regenerating the affected fixtures is left as one coordinated change across all gated modules."
 severity = "note"
+
+[observation.6.11.2800]
+task = "6.11"
+file = "Makefile"
+symbol = "test_escrow_dispute test_stream_lifecycle TEST_LIBRARY PROGRAMS_RUNTIME_LIB"
+observed = "The link rule for build/tests/test_escrow_dispute at Makefile lines 493 to 497 names only $(TEST_LIBRARY): it carries no $(PROGRAMS_RUNTIME_LIB), no programs-build order-only prerequisite and no -ldl -lm, so the link fails on the layerx_programs_sandbox_* symbols that src/modules/programs/sandbox.c references from the archive it does link. The rule for build/tests/test_stream_lifecycle at lines 609 to 613 has the same shape. Both were written by 0c9c3ded1 and are byte-identical on main bae8bf98e, so make CC=gcc test-escrow-dispute cannot link on an unmodified checkout either. Running the target through the Makefile's own hook, make CC=gcc EXTRA_LDFLAGS=\"programs/target/debug/liblayerx_programs_sandbox.a -ldl -lm\" test-escrow-dispute, links and the rewritten dispute test passes, which places the defect in the rule rather than in the test or the module."
+assumption = "The Makefile is outside this row's owned paths, so both rules were left exactly as written and the supplementary dispute gate was run through EXTRA_LDFLAGS instead. Repairing them means adding $(PROGRAMS_RUNTIME_LIB), the programs-build prerequisite and -ldl -lm to the two rules, matching the four escrow rules beside them."
+severity = "blocker"
+
+[observation.6.11.2801]
+task = "6.11"
+file = "tests/modules/test_service_dispute.c include/layerx/lx_escrow.h"
+symbol = "service_to_escrow lx_escrow_store lx_escrow_state_put"
+observed = "Escrow hold state moved from a caller-owned lx_escrow_store array into module-scoped kernel KV, so the lx_escrow_store type and the store pointer on every escrow request no longer exist. tests/modules/test_service_dispute.c is the only file outside src/modules/escrow and tests/modules/test_escrow*.c that referred to them: it declares lx_escrow_store escrow at line 147, zeroes it at line 170, seeds a hold with lx_escrow_state_put(&escrow, &escrow_record) at line 300 and sets capture_request.store at line 305. The file no longer compiles, so make CC=gcc test-service-dispute and make CC=gcc core-test-all cannot build it; the gate set of this row (make CC=gcc test, make beta-ledger-check) does not reach it. The adaptation is mechanical: delete the declaration, the memset and the store assignment, and swap the order of the remaining two calls at lines 300 to 303 so lxp_module_ctx_init for LXP_MODULE_ESCROW runs first and the seed becomes lx_escrow_state_put(&ctx, &escrow_record), which is what the escrow tests do."
+assumption = "tests/modules/test_service*.c is owned by the service-module row, which is rewriting the same file, so the four lines were left exactly as written and the request is recorded here and in the lane's NEEDS.md rather than applied across the ownership boundary."
+severity = "blocker"
+
+[observation.6.11.2802]
+task = "6.11"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_protocol.c cmd/layerx-guarantor/runtime.c"
+symbol = "lxp_kernel_bind_module_runtime lx_escrow_runtime LXP_MODULE_ESCROW"
+observed = "Escrow dispatch resolves the account registry and the asset registry through the module runtime that lxp_kernel_bind_module_runtime installs, exactly as the asset and programs modules do, and refuses with LXP_ERR_MODULE_DISABLED when no runtime is bound. No production process binds one: layerxd binds LXP_MODULE_ASSET at cmd/layerxd/lxp_daemon_process.c line 4957 and LXP_MODULE_PROGRAMS at cmd/layerxd/lxp_daemon_protocol.c line 665, and the guarantor binds the same two at cmd/layerx-guarantor/runtime.c lines 873 and 943. Until one of those call sites also builds an lx_escrow_runtime over the process account and asset registries, every escrow activity submitted to a node is refused before it reaches the module, whatever the genesis enable flag says."
+assumption = "cmd/layerxd and cmd/layerx-guarantor are outside this row's owned paths, so the binder was not added here; the module was qualified at module level with the runtime bound in the tests. The binding is a one-site change per process, mirroring the asset runtime already assembled beside it."
+severity = "blocker"
+
+[observation.6.11.2803]
+task = "6.11"
+file = "src/protocol/lxp_genesis.c"
+symbol = "module_table LXP_GENESIS_MODULE_GATE_ENABLE_FLAG"
+observed = "The row that registers this module in the genesis module table is supplied by the table row of the genesis-table change and carries the enable flag clear, so a genesis built from the default table still materialises without the escrow module. No second row was appended here because module_table_validate refuses a duplicate module id, and the flag was not flipped because flipping it changes the genesis state root and every snapshot fixture that pins it."
+assumption = "The escrow module stays default-disabled in genesis, and one later change flips the flags of all the new modules together and regenerates the fixtures in a single revision. The dispatch, the KV state and the events are therefore qualified at module level, with the kernel registration and the module runtime built directly in the tests."
+severity = "note"
+
+[observation.6.11.2804]
+task = "6.11"
+file = "src/modules/escrow/lx_escrow_capture.c src/modules/escrow/lx_escrow_timeout.c src/protocol/lxp_module_ctx.c"
+symbol = "lx_escrow_capture_execute lx_escrow_epoch_begin lxp_effect_buffer_add lxp_ctx_emit_transfer_set"
+observed = "Three decisions were taken inside this row's default. First, a capture or release against a hold whose expiry has passed is refused with LXP_ERR_HOLD_EXPIRED before any hold state, ledger balance or idempotency record is touched, so the epoch sweep in lx_escrow_epoch_begin stays the only writer of the timed-out transition and a refused activity leaves no trace. Second, the sweep collects at most LX_ESCROW_SWEEP_CAPACITY holds per epoch and refuses the whole epoch with LXP_ERR_ARENA_EXHAUSTED rather than settling a prefix, because a partial sweep would move funds for some holds and silently defer others. Third, the kernel allows one transfer set per module context (lxp_ctx_emit_transfer_set sets ctx->transfer_applied, cleared only by lxp_module_ctx_commit) and lxp_effect_buffer_add refuses a non-increasing (module_id, ordinal) pair with LXP_ERR_UNSORTED_SEQUENCE while lxp_module_ctx_init resets ctx->next_effect_ordinal to zero, so a caller that re-initialises a context must re-initialise its effect buffer as well; the escrow tests do both between economic operations."
+assumption = "These follow the row's default of implementing fully rather than deferring, and none of them relaxes an existing check. The effect-buffer coupling is a property of the kernel, not of this module, and is recorded so the next module lane that re-initialises a context does not read the refusal as a module defect."
+severity = "note"
+
+[observation.6.11.2805]
+task = "6.11"
+file = "tests/test_genesis_manifest.c src/modules/asset/lx_asset_registry.c include/layerx/lx_asset.h"
+symbol = "check_version lxp_kernel_module_for_activity activity_types LX_ASSET_WITHDRAW"
+observed = "make CC=gcc test-genesis-bootstrap exits 1 on the state-commitment protocol version: tests/test_genesis_manifest.c line 203 requires lxp_kernel_module_for_activity to refuse the asset activity whose ordinal is 9, and it resolves. LX_ASSET_WITHDRAW is 0x00010009 (include/layerx/lx_asset.h line 29) and the asset module advertises it in activity_types at src/modules/asset/lx_asset_registry.c lines 11 to 16, so the sorted lookup finds it and answers LXP_OK. The refusal the test asserts and the advertised ordinal contradict each other in the tree as published. The same target fails identically on an unmodified checkout of main 055ec44d7, built from a tree with no escrow change in it, so the contradiction is independent of this branch; evidence qual-logs/genesis-tests-mainref.log beside this branch's qual-logs/genesis-tests.log. The target is not reachable from the make test target and is not in this row's gate set."
+assumption = "Neither the assertion nor the advertised ordinal was touched: one of them is wrong and deciding which belongs to the asset-module and genesis-table owners, not to this row. The escrow row of the genesis module table is gated by its enable flag and defaults to disabled, so no escrow module is registered on the path this test walks."
+severity = "blocker"
