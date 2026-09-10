@@ -3434,3 +3434,26 @@ $(BUILD_DIR)/bin/layerx-module-registry: cmd/layerx-module-registry/main.c cmd/l
 test-module-registry: layerx-module-registry
 	python3 cmd/layerx-module-registry/test_registry.py $(BUILD_DIR)/bin/layerx-module-registry
 	bash platform/hosted/tests/beta-cluster.sh test-retained-material
+
+.PHONY: test-paxeer-membership-sync test-paxeer-membership-chain
+$(BUILD_DIR)/tests/test_paxeer_membership_sync: tests/paxeer/test_membership_sync.c $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -o $@
+
+test-paxeer-membership-sync: $(BUILD_DIR)/tests/test_paxeer_membership_sync
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_paxeer_membership_sync
+
+test: test-paxeer-membership-sync
+
+$(BUILD_DIR)/tests/lxp_test_paxeer_membership_sync: tests/paxeer/membership_sync_driver.c \
+		$(filter-out $(BUILD_DIR)/obj/cmd/layerx-guarantor/main.o,$(GUARANTOR_OBJECTS)) \
+		$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lssl -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+test-paxeer-membership-chain: $(BUILD_DIR)/tests/lxp_test_paxeer_membership_sync
+	$(GUARANTOR_PYTHON) tests/paxeer/membership-sync-chain.py \
+		$(BUILD_DIR)/tests/lxp_test_paxeer_membership_sync

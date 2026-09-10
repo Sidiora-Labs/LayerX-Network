@@ -68,6 +68,25 @@ typedef struct lxp_checkpoint_registration {
     uint64_t batch_number;
 } lxp_checkpoint_registration;
 
+typedef struct lxp_paxeer_membership_binding {
+    uint64_t paxeer_chain_id;
+    uint8_t guarantor_bond_contract[20];
+    uint64_t membership_version;
+    uint64_t observed_epoch;
+    uint8_t commitment[32];
+} lxp_paxeer_membership_binding;
+#define lxp_paxeer_membership_binding lxp_paxeer_membership_binding
+
+typedef struct lxp_paxeer_membership_observation {
+    uint64_t paxeer_chain_id;
+    uint8_t guarantor_bond_contract[20];
+    uint64_t membership_version;
+    uint64_t observed_epoch;
+    lxp_u128 minimum_bond;
+    lxp_guarantor_set members;
+} lxp_paxeer_membership_observation;
+#define lxp_paxeer_membership_observation lxp_paxeer_membership_observation
+
 typedef struct lxp_paxeer_bond_state {
     lxp_guarantor_set guarantors;
     uint16_t protocol_version;
@@ -78,11 +97,15 @@ typedef struct lxp_paxeer_bond_state {
     lxp_u128 minimum_bond;
     uint32_t minimum_bond_bps;
     uint64_t mirror_version;
+    lxp_paxeer_membership_binding membership;
 } lxp_paxeer_bond_state;
 #define lxp_paxeer_bond_state lxp_paxeer_bond_state
 
 typedef enum lxp_paxeer_membership_sync_availability {
-    LXP_PAXEER_MEMBERSHIP_SYNC_UNAVAILABLE = 1
+    LXP_PAXEER_MEMBERSHIP_SYNC_UNAVAILABLE = 1,
+    LXP_PAXEER_MEMBERSHIP_SYNC_BOUND = 2,
+    LXP_PAXEER_MEMBERSHIP_SYNC_STALE = 3,
+    LXP_PAXEER_MEMBERSHIP_SYNC_DIVERGED = 4
 } lxp_paxeer_membership_sync_availability;
 
 lxp_result lxp_paxeer_custody_abi_init(lxp_paxeer_custody_abi *abi);
@@ -108,6 +131,13 @@ lxp_result lxp_paxeer_bond_init(lxp_paxeer_bond_state *state,
                                  const uint8_t paxeer_contract[20],
                                  lxp_u128 custodied_value,
                                  uint32_t minimum_bond_bps);
+lxp_result lxp_paxeer_membership_commitment(
+    const lxp_paxeer_membership_observation *observation,
+    uint8_t commitment[32]);
+lxp_result lxp_paxeer_membership_sync(
+    lxp_paxeer_bond_state *state,
+    const lxp_paxeer_membership_observation *observation,
+    lxp_paxeer_membership_sync_availability *availability);
 lxp_result lxp_paxeer_membership_sync_status(
     const lxp_paxeer_bond_state *state,
     lxp_paxeer_membership_sync_availability *availability);
