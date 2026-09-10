@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
 from hashlib import sha256
-import struct
+
 from .program_wire import DecodedSignedProgramCall, bind_signed_program_lifecycle
 
 

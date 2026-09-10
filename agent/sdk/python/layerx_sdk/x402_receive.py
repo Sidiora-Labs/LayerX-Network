@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Mapping
+from collections.abc import Mapping
 
 _CORE = (
     ("from", "hex", 32),

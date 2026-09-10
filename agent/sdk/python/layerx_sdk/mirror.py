@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from .generated.mirror import MIRROR_MAX_SOURCES, MirrorErrorCode
@@ -88,7 +88,7 @@ class MirrorVerifier:
         try:
             response = json.loads(result.stdout)
             if not isinstance(response, dict):
-                raise ValueError("response is not an object")
+                raise TypeError("response is not an object")
             if not response.get("ok"):
                 raise MirrorVerificationError(str(response.get("error", "unavailable")))
             value = response["verification"]
@@ -119,7 +119,7 @@ def _optional_decimal(value: object) -> int | None:
 
 def _digest(value: object) -> bytes:
     if not isinstance(value, str):
-        raise ValueError("digest is not text")
+        raise TypeError("digest is not text")
     result = bytes.fromhex(value)
     if len(result) != 32 or value != result.hex():
         raise ValueError("digest is not canonical")

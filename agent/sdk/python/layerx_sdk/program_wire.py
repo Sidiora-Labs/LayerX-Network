@@ -1,12 +1,16 @@
 from __future__ import annotations
-from .native_capabilities import decode_native_capability_set, NativeProgramSpend, NativeBalanceView
 
-from .native_program_call import encode_native_program_call
-
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Literal, Mapping, cast
+from typing import Literal, cast
 
+from .native_capabilities import (
+    NativeBalanceView,
+    NativeProgramSpend,
+    decode_native_capability_set,
+)
+from .native_program_call import encode_native_program_call
 from .verifier import ProgramReceiptOutcome
 
 _ACTIVITY_DOMAIN = b"LXP/v1/activity-id\0"
@@ -82,7 +86,11 @@ def bind_signed_program_lifecycle(canonical: bytes, payload: bytes | None, ordin
     _field(reader, 11); retained_payload = reader.sized_u32(524_288)
     _field(reader, 12); reader.sized_u32(128); reader.end()
     if payload is None:
-        from .program_lifecycle import NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown
+        from .program_lifecycle import (
+            NativeProgramDeploy,
+            NativeProgramUpgrade,
+            NativeProgramWindDown,
+        )
         decoders = {1: NativeProgramDeploy.decode, 2: NativeProgramUpgrade.decode, 7: NativeProgramWindDown.decode}
         payload = decoders[ordinal](retained_payload).encode()
     if (not_after < not_before or retained_payload != payload or digest != sha256(_PAYLOAD_DOMAIN + payload).digest()
@@ -92,7 +100,7 @@ def bind_signed_program_lifecycle(canonical: bytes, payload: bytes | None, ordin
 
 
 def decode_signed_program_call(call: object, expected_idempotency_key: str | None = None) -> DecodedSignedProgramCall:
-    canonical = bytes(getattr(call, "signed_activity"))
+    canonical = bytes(call.signed_activity)
     reader = _Reader(canonical)
     envelope_version = reader.u16()
     if envelope_version not in (1, 2, 3) or reader.u16() != 0x1001 or reader.byte() != 12:
@@ -104,15 +112,15 @@ def decode_signed_program_call(call: object, expected_idempotency_key: str | Non
     _field(reader, 3)
     if reader.u32() != 0x0009_0003:
         _fail("signed activity type")
-    _field(reader, 4); actor = reader.sized_u32(255)
-    _field(reader, 5); authority = reader.sized_u32(524_288)
+    _field(reader, 4); reader.sized_u32(255)
+    _field(reader, 5); reader.sized_u32(524_288)
     _field(reader, 6); reader.u64()
     _field(reader, 7); not_before = reader.u64(); not_after = reader.u64()
     _field(reader, 8); idempotency = reader.sized_u32(32, 32)
     _field(reader, 9); envelope_fee_limit = reader.u128()
     _field(reader, 10); payload_hash = reader.sized_u32(32, 32)
     _field(reader, 11); payload = reader.sized_u32(524_288)
-    _field(reader, 12); signature = reader.sized_u32(128)
+    _field(reader, 12); reader.sized_u32(128)
     reader.end()
     if not_after < not_before:
         _fail("signed activity bounds")
@@ -120,9 +128,9 @@ def decode_signed_program_call(call: object, expected_idempotency_key: str | Non
         _fail("signed activity payload hash")
     native = getattr(call, "native_call", None)
     if native is not None:
-        if (envelope_version != 3 or envelope_fee_limit != getattr(call, "fee_limit")
-                or native.program_id.hex() != getattr(call, "program_id") or native.calldata != getattr(call, "calldata")
-                or native.resources[0] != getattr(call, "fuel") or getattr(call, "capabilities")
+        if (envelope_version != 3 or envelope_fee_limit != call.fee_limit
+                or native.program_id.hex() != call.program_id or native.calldata != call.calldata
+                or native.resources[0] != call.fuel or call.capabilities
                 or payload != encode_native_program_call(native)):
             _fail("native signed activity binding")
     else:
@@ -200,13 +208,13 @@ def decode_and_verify_program_terminal(
         inner = wrapper.sized_u32(1_048_576)
         occupancy = wrapper.sized_u32(65_536)
         wrapper.end()
-    if inner.startswith(_AUTHORITY) or inner.startswith(_OCCUPANCY):
+    if inner.startswith((_AUTHORITY, _OCCUPANCY)):
         _fail("program terminal wrapper order")
 
     usage: Mapping[str, object] | None = None
     candidate = False
     successful = False
-    if inner.startswith(_EXECUTION_V2) or inner.startswith(_EXECUTION_V3):
+    if inner.startswith((_EXECUTION_V2, _EXECUTION_V3)):
         if receipt.terminal_kind != 1 or receipt.abi_version != 1:
             _fail("legacy terminal kind")
         traced = inner.startswith(_EXECUTION_V3)
@@ -302,9 +310,9 @@ def _decode_call_payload(payload: bytes, call: object) -> None:
     reader = _Reader(payload)
     if reader.fixed(len(_CALL_DOMAIN)) != _CALL_DOMAIN:
         _fail("program call domain")
-    if reader.fixed(32).hex() != getattr(call, "program_id") or reader.u64() != getattr(call, "fuel") or reader.u128() != getattr(call, "fee_limit"):
+    if reader.fixed(32).hex() != call.program_id or reader.u64() != call.fuel or reader.u128() != call.fee_limit:
         _fail("program call budget")
-    capabilities = getattr(call, "capabilities")
+    capabilities = call.capabilities
     count = reader.u16()
     if count != len(capabilities) or count > 5:
         _fail("program call capabilities")
@@ -314,7 +322,7 @@ def _decode_call_payload(payload: bytes, call: object) -> None:
         if tag != _CAPABILITIES.get(capability) or tag <= prior:
             _fail("program call capability tag")
         prior = tag
-    if reader.sized_u32(1_048_576) != getattr(call, "calldata"):
+    if reader.sized_u32(1_048_576) != call.calldata:
         _fail("program call calldata")
     reader.end()
 
@@ -466,7 +474,7 @@ def _decode_program_failure(encoded: bytes) -> None:
 
 def _decode_resource(reader: _Reader, candidate: bool, usage: Mapping[str, object] | None = None) -> None:
     tag = reader.byte(); resource = reader.byte()
-    if (candidate and resource not in range(0, 7)) or (not candidate and resource not in range(1, 8)):
+    if (candidate and resource not in range(7)) or (not candidate and resource not in range(1, 8)):
         _fail("resource kind")
     if tag == (0 if candidate else 1):
         limit = reader.u64(); attempted = reader.u64()
@@ -620,7 +628,7 @@ def _decode_capability_set(encoded: bytes, v2: bool) -> None:
 def _decode_occupancy_settlement(encoded: bytes) -> Mapping[str, object]:
     if len(encoded) > 65_536:
         _fail("occupancy evidence length")
-    if encoded.startswith(_OCCUPANCY_V1) or encoded.startswith(_OCCUPANCY_V2):
+    if encoded.startswith((_OCCUPANCY_V1, _OCCUPANCY_V2)):
         return _decode_legacy_occupancy(encoded)
     reader = _Reader(encoded)
     if reader.fixed(len(_OCCUPANCY_V3)) != _OCCUPANCY_V3:
@@ -774,7 +782,7 @@ def _fail(boundary: str) -> Literal[False]:
 
 
 class _Reader:
-    __slots__ = ("_value", "_offset")
+    __slots__ = ("_offset", "_value")
 
     def __init__(self, value: bytes) -> None:
         self._value = value

@@ -3,7 +3,11 @@ import time
 
 from .x402_activity import bind_receive_activity
 from .x402_grant import validate_grant_draw
-from .x402_rpc import rpc_hex, verify_rpc_payment, PaymentRpcError
+from .x402_rpc import PaymentRpcError, rpc_hex, verify_rpc_payment
+
+
+class _DrawUnresolved(Exception):
+    __slots__ = ()
 
 
 class PreparedGrantDraws:
@@ -48,6 +52,18 @@ class PreparedGrantDraws:
                 ),
             )
 
+    def _resolve(self, claimed, row, offer):
+        try:
+            if claimed:
+                return self.rpc.send(
+                    row["canonical"].hex(), offer["extra"]["layerx"]["commitment"]
+                )
+            return self.rpc.receipt(row["activity_id"])
+        except PaymentRpcError:
+            raise
+        except Exception as unresolved:
+            raise _DrawUnresolved from unresolved
+
     def __call__(self, principal, request_digest, body, offer):
         key = body["idempotencyKey"]
         with sqlite3.connect(self.path, timeout=30) as db:
@@ -79,16 +95,8 @@ class PreparedGrantDraws:
                 (int(time.time()), key),
             ).rowcount
         try:
-            result = (
-                self.rpc.send(
-                    row["canonical"].hex(), offer["extra"]["layerx"]["commitment"]
-                )
-                if claimed
-                else self.rpc.receipt(row["activity_id"])
-            )
-        except PaymentRpcError:
-            raise
-        except Exception:
+            result = self._resolve(claimed, row, offer)
+        except _DrawUnresolved:
             return None
         if result.get("activity_id") != row["activity_id"]:
             raise ValueError("draw-activity-mismatch")

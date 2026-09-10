@@ -1,10 +1,14 @@
-from dataclasses import replace
 import json
-from pathlib import Path
 import unittest
-from layerx_sdk.native_program_call import decode_native_program_call, encode_native_program_call
-from layerx_sdk.programs import NativeProgramRequest, _wire
+from dataclasses import replace
+from pathlib import Path
+
+from layerx_sdk.native_program_call import (
+    decode_native_program_call,
+    encode_native_program_call,
+)
 from layerx_sdk.program_wire import decode_signed_program_call
+from layerx_sdk.programs import NativeProgramRequest, _wire
 
 
 class NativeProgramBindingTest(unittest.TestCase):

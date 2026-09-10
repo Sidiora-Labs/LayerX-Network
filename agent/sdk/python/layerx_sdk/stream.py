@@ -2,36 +2,36 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Generic, TypeVar, cast
+from typing import Generic, Self, TypeVar, cast
 
 from .production import PlatformSdkError, SdkErrorCode
 
-T = TypeVar("T")
+_T = TypeVar("_T")
 
 
 class StreamCursor(str):
-    def __new__(cls, value: str) -> StreamCursor:
+    def __new__(cls, value: str) -> Self:
         if not value or len(value) > 512 or "\0" in value:
             raise PlatformSdkError(SdkErrorCode.INVALID_ARGUMENT, "never")
-        return cast(StreamCursor, str.__new__(cls, value))
+        return cast(Self, str.__new__(cls, value))
 
 
 @dataclass(frozen=True)
-class StreamEvent(Generic[T]):
+class StreamEvent(Generic[_T]):
     event_id: str
     previous_cursor: StreamCursor
     cursor: StreamCursor
-    value: T
+    value: _T
 
 
 @dataclass(frozen=True)
-class StreamPage(Generic[T]):
+class StreamPage(Generic[_T]):
     requested_cursor: StreamCursor
-    events: tuple[StreamEvent[T], ...]
+    events: tuple[StreamEvent[_T], ...]
     next_cursor: StreamCursor
 
 
-class ResumableStream(Generic[T]):
+class ResumableStream(Generic[_T]):
     def __init__(self, cursor: StreamCursor) -> None:
         self._cursor = cursor
         self._seen: set[str] = set()
@@ -40,11 +40,11 @@ class ResumableStream(Generic[T]):
     def cursor(self) -> StreamCursor:
         return self._cursor
 
-    def accept(self, page: StreamPage[T]) -> tuple[StreamEvent[T], ...]:
+    def accept(self, page: StreamPage[_T]) -> tuple[StreamEvent[_T], ...]:
         if page.requested_cursor != self._cursor:
             raise PlatformSdkError(SdkErrorCode.DECODE_FAILURE, "never")
         expected = self._cursor
-        accepted: list[StreamEvent[T]] = []
+        accepted: list[StreamEvent[_T]] = []
         page_event_ids: set[str] = set()
         for event in page.events:
             if (
@@ -63,6 +63,6 @@ class ResumableStream(Generic[T]):
         self._cursor = page.next_cursor
         return tuple(accepted)
 
-    def events(self, source: Callable[[StreamCursor], StreamPage[T]]) -> Iterator[StreamEvent[T]]:
+    def events(self, source: Callable[[StreamCursor], StreamPage[_T]]) -> Iterator[StreamEvent[_T]]:
         while True:
             yield from self.accept(source(self._cursor))

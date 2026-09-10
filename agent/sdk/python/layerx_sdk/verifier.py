@@ -4,12 +4,13 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Literal, Protocol, cast
 
-from .production import PlatformSdkError, SdkErrorCode
 from .generated.receipt import (
     PROGRAM_OUTCOME_TAGS,
     PROGRAMS_MODULE_ID,
     ReceiptFailureCode,
 )
+from .production import PlatformSdkError, SdkErrorCode
+
 
 def programs_module_version_for_protocol(protocol: object, module: object, account_state: bool = False) -> bool:
     if type(protocol) is not int or type(module) is not int or type(account_state) is not bool or protocol not in (2, 3):

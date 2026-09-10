@@ -1,9 +1,10 @@
 # Generated from the LayerX Agent API schema. Do not hand-edit.
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import IntEnum
 from types import MappingProxyType
-from typing import Generic, Literal, Mapping, Protocol, TypeAlias, TypeVar, cast
+from typing import Generic, Literal, Protocol, TypeAlias, TypeVar, cast
 
 _PACKAGE_METADATA: Mapping[str, str | int] = MappingProxyType({
     "name": "layerx-sdk",
@@ -24,19 +25,19 @@ Operation = Literal[{{OPERATIONS}}]
 
 {{APPROVAL}}
 
-T = TypeVar("T")
-R = TypeVar("R")
+_T = TypeVar("_T")
+_R = TypeVar("_R")
 
 @dataclass(frozen=True)
-class VerifiedRead(Generic[R]):
-    value: R
+class VerifiedRead(Generic[_R]):
+    value: _R
     achieved_verification_level: VerificationLevel
     chain_head: int
     latest_batch: str
     latest_checkpoint: str
     value_sequence: int
 
-def require_verified(requested: VerificationLevel, read: VerifiedRead[R]) -> VerifiedRead[R]:
+def require_verified(requested: VerificationLevel, read: VerifiedRead[_R]) -> VerifiedRead[_R]:
     if read.achieved_verification_level == VerificationLevel.UNVERIFIED:
         raise ValueError("unverified_read")
     if read.achieved_verification_level < requested:
@@ -69,11 +70,11 @@ SubmissionState: TypeAlias = (
 )
 
 @dataclass(frozen=True)
-class IdempotentMutation(Generic[T]):
+class IdempotentMutation(Generic[_T]):
     request_id: int
     key: bytes
     body_digest: bytes
-    operation: T
+    operation: _T
 
 @dataclass(frozen=True)
 class ApiError(Exception):

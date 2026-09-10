@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.request
 import urllib.parse
-from typing import Mapping
+import urllib.request
+from collections.abc import Mapping
 
-from .x402 import verify_payment_receipt
 from .production import PlatformSdkError
+from .x402 import verify_payment_receipt
 
 
 def rpc_hex(value: object, size: int | None = None) -> bytes:
@@ -89,9 +89,10 @@ class PaymentRpc:
             ):
                 raise ValueError("invalid-rpc-error")
             raise PaymentRpcError(error["code"], error.get("data"))
-        if not isinstance(body["result"], dict):
-            raise ValueError("invalid-rpc-result")
-        return body["result"]
+        result = body["result"]
+        if isinstance(result, dict):
+            return result
+        raise ValueError("invalid-rpc-result")
 
     def send(self, canonical_hex: str, commitment: str) -> dict:
         rpc_hex(canonical_hex)
@@ -158,8 +159,8 @@ def verify_rpc_payment(
 
 
 def rpc_batch_evidence(result, activity_id, receipt, network_id, authorization):
-    from .x402 import PaymentCommitmentEvidence
     from .verifier import MerkleProof
+    from .x402 import PaymentCommitmentEvidence
 
     bundle = result["batch_evidence"]
     signed = bundle["signed_header"]
