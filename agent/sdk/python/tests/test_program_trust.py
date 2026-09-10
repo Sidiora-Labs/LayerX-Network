@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from hashlib import sha256
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
-from pathlib import Path
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from layerx_sdk import AgentHttpTransport, ProductionClient
 from layerx_sdk.program_wire import (
@@ -14,7 +15,6 @@ from layerx_sdk.program_wire import (
     decode_signed_program_call,
 )
 from layerx_sdk.programs import ProgramCall, ProgramOperations, ProgramTrustContext
-
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _SIGNATURES_PATH = (
@@ -151,9 +151,8 @@ class ProgramTrustTests(unittest.TestCase):
             (15, 14, 10),
             (15, 21, 5),
         ):
-            with self.subTest(observed_at=observed_at, now=now, maximum_age=maximum_age):
-                with self.assertRaises(ValueError):
-                    assert_fresh_simulation_observation(observed_at, binding, now, maximum_age)
+            with self.subTest(observed_at=observed_at, now=now, maximum_age=maximum_age), self.assertRaises(ValueError):
+                assert_fresh_simulation_observation(observed_at, binding, now, maximum_age)
         self.assertEqual(
             ProgramTrustContext(SEQUENCER_KEY).maximum_simulation_age_milliseconds,
             300_000,
@@ -260,23 +259,16 @@ class ProgramTrustTests(unittest.TestCase):
                 ProgramTrustContext(SEQUENCER_KEY, lambda: 15, 5),
             )
             programs.discover(PROGRAM_ID)
-            failure: list[BaseException] = []
-
-            def simulate() -> None:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                simulation = pool.submit(programs.simulate, call(10, 20))
                 try:
-                    programs.simulate(call(10, 20))
-                except BaseException as error:
-                    failure.append(error)
-
-            simulation_thread = threading.Thread(target=simulate)
-            simulation_thread.start()
-            self.assertTrue(simulation_entered.wait(5), "simulation did not reach the HTTP boundary")
-            programs.discover(PROGRAM_ID)
-            release_simulation.set()
-            simulation_thread.join(5)
-            self.assertFalse(simulation_thread.is_alive(), "simulation thread did not finish")
-            self.assertEqual(len(failure), 1)
-            self.assertRegex(str(failure[0]), "head changed during simulation")
+                    self.assertTrue(simulation_entered.wait(5), "simulation did not reach the HTTP boundary")
+                    programs.discover(PROGRAM_ID)
+                finally:
+                    release_simulation.set()
+                failure = simulation.exception(5)
+            self.assertIsNotNone(failure, "simulation did not refuse the changed head")
+            self.assertRegex(str(failure), "head changed during simulation")
         finally:
             release_simulation.set()
             server.shutdown()

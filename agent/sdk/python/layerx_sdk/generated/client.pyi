@@ -1,7 +1,8 @@
 # Generated from the LayerX Agent API schema. Do not hand-edit.
 
+from collections.abc import Mapping
 from enum import IntEnum
-from typing import Generic, Literal, Mapping, Protocol, TypeAlias, TypeVar
+from typing import Generic, Literal, Protocol, TypeAlias, TypeVar
 
 def layerx_sdk_py_package() -> Mapping[str, str | int]: ...
 
@@ -111,11 +112,11 @@ class ApprovalLifecycleEvent:
     at: TimestampSeconds
     record_digest: str
 
-T = TypeVar("T")
-R = TypeVar("R")
+_T = TypeVar("_T")
+_R = TypeVar("_R")
 
-class VerifiedRead(Generic[R]):
-    value: R
+class VerifiedRead(Generic[_R]):
+    value: _R
     achieved_verification_level: VerificationLevel
     chain_head: int
     latest_batch: str
@@ -123,7 +124,7 @@ class VerifiedRead(Generic[R]):
     value_sequence: int
     def __init__(
         self,
-        value: R,
+        value: _R,
         achieved_verification_level: VerificationLevel,
         chain_head: int,
         latest_batch: str,
@@ -131,7 +132,7 @@ class VerifiedRead(Generic[R]):
         value_sequence: int,
     ) -> None: ...
 
-def require_verified(requested: VerificationLevel, read: VerifiedRead[R]) -> VerifiedRead[R]: ...
+def require_verified(requested: VerificationLevel, read: VerifiedRead[_R]) -> VerifiedRead[_R]: ...
 
 class SubmissionUnknown:
     kind: Literal["Unknown"]
@@ -154,12 +155,12 @@ class SubmissionPending:
 
 SubmissionState: TypeAlias = SubmissionUnknown | SubmissionExecuted | SubmissionFailed | SubmissionPending
 
-class IdempotentMutation(Generic[T]):
+class IdempotentMutation(Generic[_T]):
     request_id: int
     key: bytes
     body_digest: bytes
-    operation: T
-    def __init__(self, request_id: int, key: bytes, body_digest: bytes, operation: T) -> None: ...
+    operation: _T
+    def __init__(self, request_id: int, key: bytes, body_digest: bytes, operation: _T) -> None: ...
 
 class ApiError(Exception):
     error_class: ErrorClass

@@ -1,6 +1,6 @@
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
-from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class MirrorCandidate:

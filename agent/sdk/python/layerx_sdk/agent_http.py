@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass
 from http.client import HTTPException
-from typing import Mapping, cast
+from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse, urlunparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-from .program_wire import bind_signed_program_lifecycle
 
 from .production import (
     IdempotencyKey,
@@ -17,6 +17,7 @@ from .production import (
     SdkErrorCode,
     SecretBytes,
 )
+from .program_wire import bind_signed_program_lifecycle
 
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
@@ -89,7 +90,7 @@ class LayerXKeyCredential:
 
 
 class AgentHttpTransport(ProductionTransport):
-    __slots__ = ("_endpoint", "_credential", "_timeout", "_maximum_response_bytes", "_opener")
+    __slots__ = ("_credential", "_endpoint", "_maximum_response_bytes", "_opener", "_timeout")
 
     def __init__(
         self,
@@ -348,7 +349,6 @@ def _valid_request_id(value: object) -> bool:
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, request: Request, file_pointer: object, code: int, message: str, headers: object, new_url: str) -> None:
         del request, file_pointer, code, message, headers, new_url
-        return None
 
 
 def _transport_failure(operation: str) -> PlatformSdkError:

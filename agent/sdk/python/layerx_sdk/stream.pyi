@@ -1,27 +1,27 @@
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, Self, TypeVar
 
-T = TypeVar("T")
+_T = TypeVar("_T")
 class StreamCursor(str):
-    def __new__(cls, value: str) -> StreamCursor: ...
+    def __new__(cls, value: str) -> Self: ...
 
 @dataclass(frozen=True)
-class StreamEvent(Generic[T]):
+class StreamEvent(Generic[_T]):
     event_id: str
     previous_cursor: StreamCursor
     cursor: StreamCursor
-    value: T
+    value: _T
 
 @dataclass(frozen=True)
-class StreamPage(Generic[T]):
+class StreamPage(Generic[_T]):
     requested_cursor: StreamCursor
-    events: tuple[StreamEvent[T], ...]
+    events: tuple[StreamEvent[_T], ...]
     next_cursor: StreamCursor
 
-class ResumableStream(Generic[T]):
+class ResumableStream(Generic[_T]):
     def __init__(self, cursor: StreamCursor) -> None: ...
     @property
     def cursor(self) -> StreamCursor: ...
-    def accept(self, page: StreamPage[T]) -> tuple[StreamEvent[T], ...]: ...
-    def events(self, source: Callable[[StreamCursor], StreamPage[T]]) -> Iterator[StreamEvent[T]]: ...
+    def accept(self, page: StreamPage[_T]) -> tuple[StreamEvent[_T], ...]: ...
+    def events(self, source: Callable[[StreamCursor], StreamPage[_T]]) -> Iterator[StreamEvent[_T]]: ...

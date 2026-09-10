@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Literal, Mapping, Protocol, TypeVar, cast
+from typing import Literal, Protocol, Self, TypeVar, cast
 
 from .generated.client import Operation
 
@@ -93,7 +93,7 @@ _SAFE_MESSAGES: Mapping[SdkErrorCode, str] = MappingProxyType({
 
 
 class PlatformSdkError(Exception):
-    __slots__ = ("code", "retry", "request_id", "protocol_result_code", "retry_after_ms")
+    __slots__ = ("code", "protocol_result_code", "request_id", "retry", "retry_after_ms")
 
     def __init__(
         self,
@@ -123,14 +123,14 @@ class PlatformSdkError(Exception):
 
 
 class IdempotencyKey(str):
-    def __new__(cls, value: str) -> IdempotencyKey:
+    def __new__(cls, value: str) -> Self:
         if not value or len(value) > 255 or "\0" in value:
             raise PlatformSdkError(SdkErrorCode.INVALID_ARGUMENT, "never")
-        return cast(IdempotencyKey, str.__new__(cls, value))
+        return cast(Self, str.__new__(cls, value))
 
 
 class ProtocolAmount(int):
-    def __new__(cls, value: int | str) -> ProtocolAmount:
+    def __new__(cls, value: int | str) -> Self:
         if isinstance(value, bool):
             raise PlatformSdkError(SdkErrorCode.INVALID_ARGUMENT, "never")
         if isinstance(value, str):
@@ -141,11 +141,11 @@ class ProtocolAmount(int):
             parsed = value
         if parsed < 0 or parsed > 340282366920938463463374607431768211455:
             raise PlatformSdkError(SdkErrorCode.INVALID_ARGUMENT, "never")
-        return cast(ProtocolAmount, int.__new__(cls, parsed))
+        return cast(Self, int.__new__(cls, parsed))
 
 
 class SecretBytes:
-    __slots__ = ("_value", "_destroyed")
+    __slots__ = ("_destroyed", "_value")
 
     def __init__(self, value: bytes | bytearray) -> None:
         if not value:
@@ -153,7 +153,7 @@ class SecretBytes:
         self._value = bytearray(value)
         self._destroyed = False
 
-    def use(self, consumer: Callable[[memoryview], T]) -> T:
+    def use(self, consumer: Callable[[memoryview], _T]) -> _T:
         if self._destroyed:
             raise PlatformSdkError(SdkErrorCode.INVALID_ARGUMENT, "never")
         return consumer(memoryview(self._value))
@@ -178,9 +178,9 @@ class SecretBytes:
             self.destroy()
 
 
-TRequest = TypeVar("TRequest")
-TResponse = TypeVar("TResponse")
-T = TypeVar("T")
+_TRequest = TypeVar("_TRequest")
+_TResponse = TypeVar("_TResponse")
+_T = TypeVar("_T")
 
 
 class ProductionTransport(Protocol):
@@ -219,6 +219,10 @@ _HUMAN_IDEMPOTENT = frozenset({
 })
 
 
+class _TransportBoundaryFailure(Exception):
+    __slots__ = ()
+
+
 class ProductionClient:
     def __init__(self, transport: ProductionTransport, telemetry: SdkTelemetry | None = None) -> None:
         self._transport = transport
@@ -227,45 +231,59 @@ class ProductionClient:
     def agent(
         self,
         operation: Operation,
-        request: TRequest,
+        request: _TRequest,
         *,
         idempotency_key: IdempotencyKey | None = None,
-    ) -> TResponse:
+    ) -> _TResponse:
         return self._execute("agent", operation, request, idempotency_key)
 
     def human(
         self,
         operation: HumanOperation,
-        request: TRequest,
+        request: _TRequest,
         *,
         idempotency_key: IdempotencyKey | None = None,
-    ) -> TResponse:
+    ) -> _TResponse:
         return self._execute("human", operation, request, idempotency_key)
+
+    def _dispatch(
+        self,
+        plane: PlatformPlane,
+        operation: Operation | HumanOperation,
+        request: _TRequest,
+        idempotency_key: IdempotencyKey | None,
+    ) -> object:
+        try:
+            return self._transport.call(plane, operation, request, idempotency_key)
+        except PlatformSdkError:
+            raise
+        except Exception as failure:
+            raise _TransportBoundaryFailure from failure
 
     def _execute(
         self,
         plane: PlatformPlane,
         operation: Operation | HumanOperation,
-        request: TRequest,
+        request: _TRequest,
         idempotency_key: IdempotencyKey | None,
-    ) -> TResponse:
+    ) -> _TResponse:
         required = operation in (_AGENT_IDEMPOTENT if plane == "agent" else _HUMAN_IDEMPOTENT)
         if required and idempotency_key is None:
             raise PlatformSdkError(SdkErrorCode.IDEMPOTENCY_REQUIRED, "never")
         try:
-            response = self._transport.call(plane, operation, request, idempotency_key)
+            response = self._dispatch(plane, operation, request, idempotency_key)
         except PlatformSdkError as error:
             if self._telemetry is not None:
                 self._telemetry(plane, operation, "refused", error.code)
             raise
-        except Exception:
+        except _TransportBoundaryFailure:
             error = PlatformSdkError(SdkErrorCode.TRANSPORT_FAILURE, "safe")
             if self._telemetry is not None:
                 self._telemetry(plane, operation, "refused", error.code)
             raise error from None
         if self._telemetry is not None:
             self._telemetry(plane, operation, "completed", None)
-        return cast(TResponse, response)
+        return cast(_TResponse, response)
 
 
 _PACKAGE_METADATA = MappingProxyType({

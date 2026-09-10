@@ -4,8 +4,8 @@ import base64
 import csv
 import hashlib
 import io
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 NAME = "layerx_sdk"
 VERSION = "0.1.0"
@@ -28,12 +28,12 @@ def _metadata() -> bytes:
 
 def _wheel() -> bytes:
     return (
-        "Wheel-Version: 1.0\n"
-        "Generator: layerx-sdk deterministic backend 1\n"
-        "Root-Is-Purelib: true\n"
-        "Tag: py3-none-any\n"
-        "\n"
-    ).encode()
+        b"Wheel-Version: 1.0\n"
+        b"Generator: layerx-sdk deterministic backend 1\n"
+        b"Root-Is-Purelib: true\n"
+        b"Tag: py3-none-any\n"
+        b"\n"
+    )
 
 
 def _source_files(root: Path) -> dict[str, bytes]:

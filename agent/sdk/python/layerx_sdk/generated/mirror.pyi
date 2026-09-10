@@ -1,4 +1,5 @@
 from enum import Enum
+
 MIRROR_SCHEMA_VERSION: int
 MIRROR_ARCHIVE_MAGIC: bytes
 MIRROR_MAX_ARCHIVE_BYTES: int

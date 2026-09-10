@@ -1,14 +1,28 @@
-from pathlib import Path
+import importlib.util
 import json
 import unittest
-import importlib.util
 from hashlib import sha256
+from pathlib import Path
 
-from layerx_sdk.program_lifecycle import NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, NativeProgramLifecycleRequest
-from layerx_sdk.agent_http import _encode_program_mutation_body, _decode_program_boundary_error, _decode_envelope, ProgramBoundaryError
+from layerx_sdk.agent_http import (
+    ProgramBoundaryError,
+    _decode_envelope,
+    _decode_program_boundary_error,
+    _encode_program_mutation_body,
+)
 from layerx_sdk.production import PlatformSdkError
+from layerx_sdk.program_lifecycle import (
+    NativeProgramDeploy,
+    NativeProgramLifecycleRequest,
+    NativeProgramUpgrade,
+    NativeProgramWindDown,
+)
 from layerx_sdk.program_wire import bind_signed_program_lifecycle
-from layerx_sdk.programs import verify_lifecycle_recovery, resolve_lifecycle_response, resolve_lifecycle_failure
+from layerx_sdk.programs import (
+    resolve_lifecycle_failure,
+    resolve_lifecycle_response,
+    verify_lifecycle_recovery,
+)
 
 
 class ProgramLifecycleTest(unittest.TestCase):

@@ -1,12 +1,17 @@
+from collections.abc import Callable, Mapping
+from typing import Literal, TypeAlias
+
 from .native_program_call import NativeProgramCall
-from typing import Callable, Literal, Mapping
-
 from .production import IdempotencyKey, ProductionClient
-from .verifier import AuthorizedReceiptBatch, LocalSignatureVerifier, ReceiptVerification
+from .verifier import (
+    AuthorizedReceiptBatch,
+    LocalSignatureVerifier,
+    ReceiptVerification,
+)
 
-ProgramCapability = Literal["storage_read", "storage_write", "transfer", "emit_event", "compose"]
-ProgramLifecycle = Literal["active", "deprecated", "tombstoned"]
-ProgramSourceStatus = Literal["unpublished", "verified", "mismatch"]
+ProgramCapability: TypeAlias = Literal["storage_read", "storage_write", "transfer", "emit_event", "compose"]
+ProgramLifecycle: TypeAlias = Literal["active", "deprecated", "tombstoned"]
+ProgramSourceStatus: TypeAlias = Literal["unpublished", "verified", "mismatch"]
 
 class ProgramCall:
     program_id: str

@@ -5,10 +5,11 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 from urllib.parse import urlsplit
 
+from .production import PlatformSdkError
 from .x402 import (
     payment_commitment,
     payment_payer,
@@ -16,13 +17,12 @@ from .x402 import (
     verify_payment_receipt,
 )
 from .x402_rpc import rpc_hex, verify_rpc_payment
-from .production import PlatformSdkError
 
 
 def _object(value):
-    if not isinstance(value, dict):
-        raise ValueError("invalid-payment-object")
-    return value
+    if isinstance(value, dict):
+        return value
+    raise ValueError("invalid-payment-object")
 
 
 def _keys(value, required, optional=()):
@@ -411,8 +411,9 @@ class BuyerMiddleware:
         headers=None,
         expected_activity=None,
     ):
-        import urllib.request
         import urllib.error
+        import urllib.request
+
         from .x402_rpc import _NoRedirect
 
         _url(url)

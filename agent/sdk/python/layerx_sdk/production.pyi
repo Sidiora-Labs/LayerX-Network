@@ -1,11 +1,12 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import StrEnum
-from typing import Literal, Mapping, Protocol, TypeVar
+from typing import Literal, Protocol, Self, TypeAlias, TypeVar
+
 from .generated.client import Operation
 
 AGENT_OPERATIONS: tuple[Operation, ...]
 HUMAN_OPERATIONS: tuple[str, ...]
-HumanOperation = Literal[
+HumanOperation: TypeAlias = Literal[
     "account.create", "activity.entry", "activity.export.evidence", "activity.export.statement",
     "activity.query", "agent.archive", "agent.create", "agent.get", "agent.limit", "agent.list",
     "agent.pause", "agent.reclaim", "agent.recover", "agent.resume", "agent.rotate",
@@ -19,8 +20,8 @@ HumanOperation = Literal[
     "session.revoke-all", "stepup.begin", "stepup.finish", "stream.next", "stream.open", "version",
     "withdraw.claim", "withdraw.start",
 ]
-PlatformPlane = Literal["agent", "human"]
-RetryClass = Literal["never", "safe", "after", "unknown-outcome"]
+PlatformPlane: TypeAlias = Literal["agent", "human"]
+RetryClass: TypeAlias = Literal["never", "safe", "after", "unknown-outcome"]
 
 class SdkErrorCode(StrEnum):
     INVALID_ARGUMENT: SdkErrorCode
@@ -50,15 +51,15 @@ class PlatformSdkError(Exception):
     def to_dict(self) -> dict[str, str | int]: ...
 
 class IdempotencyKey(str):
-    def __new__(cls, value: str) -> IdempotencyKey: ...
+    def __new__(cls, value: str) -> Self: ...
 
 class ProtocolAmount(int):
-    def __new__(cls, value: int | str) -> ProtocolAmount: ...
+    def __new__(cls, value: int | str) -> Self: ...
 
-T = TypeVar("T")
+_T = TypeVar("_T")
 class SecretBytes:
     def __init__(self, value: bytes | bytearray) -> None: ...
-    def use(self, consumer: Callable[[memoryview], T]) -> T: ...
+    def use(self, consumer: Callable[[memoryview], _T]) -> _T: ...
     def destroy(self) -> None: ...
 
 class ProductionTransport(Protocol):
@@ -66,11 +67,11 @@ class ProductionTransport(Protocol):
 
 class SdkTelemetry(Protocol): ...
 
-TRequest = TypeVar("TRequest")
-TResponse = TypeVar("TResponse")
+_TRequest = TypeVar("_TRequest")
+_TResponse = TypeVar("_TResponse")
 class ProductionClient:
     def __init__(self, transport: ProductionTransport, telemetry: SdkTelemetry | None = ...) -> None: ...
-    def agent(self, operation: Operation, request: TRequest, *, idempotency_key: IdempotencyKey | None = ...) -> TResponse: ...
-    def human(self, operation: HumanOperation, request: TRequest, *, idempotency_key: IdempotencyKey | None = ...) -> TResponse: ...
+    def agent(self, operation: Operation, request: _TRequest, *, idempotency_key: IdempotencyKey | None = ...) -> _TResponse: ...
+    def human(self, operation: HumanOperation, request: _TRequest, *, idempotency_key: IdempotencyKey | None = ...) -> _TResponse: ...
 
 def platform_sdk_python() -> Mapping[str, str | int]: ...

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Sequence
+from itertools import pairwise
 
 MAX_NATIVE_CAPABILITIES = 238
 MAX_NATIVE_BALANCE_VIEWS = 32
@@ -126,7 +127,7 @@ def encode_native_capability_set(grants: Sequence[NativeCapability]) -> bytes:
         raise ValueError("native capability count")
     encoded = [(_key(grant), _encode_grant(grant)) for grant in grants]
     encoded.sort(key=lambda entry: entry[0])
-    if any(left[0] == right[0] for left, right in zip(encoded, encoded[1:])):
+    if any(left[0] == right[0] for left, right in pairwise(encoded)):
         raise ValueError("duplicate native capability key")
     result = len(encoded).to_bytes(2, "big") + b"".join(value for _, value in encoded)
     if len(result) > MAX_NATIVE_CAPABILITY_BYTES:
@@ -187,10 +188,10 @@ def narrow_native_capability_set(parent: Sequence[NativeCapability], requested: 
     for child in children:
         ancestor = parents.get(_key(child))
         if ancestor is None: raise ValueError("missing native capability authority")
-        if isinstance(child, (NativeTransfer402, NativeProgramSpend)):
-            if not isinstance(ancestor, type(child)) or child.maximum_amount > ancestor.maximum_amount:
-                raise ValueError("increased native capability amount")
-        if isinstance(child, NativeBalanceView):
-            if not isinstance(ancestor, NativeBalanceView) or child.receipt_digest != ancestor.receipt_digest:
-                raise ValueError("changed native capability receipt")
+        if isinstance(child, (NativeTransfer402, NativeProgramSpend)) and (
+                not isinstance(ancestor, type(child)) or child.maximum_amount > ancestor.maximum_amount):
+            raise ValueError("increased native capability amount")
+        if isinstance(child, NativeBalanceView) and (
+                not isinstance(ancestor, NativeBalanceView) or child.receipt_digest != ancestor.receipt_digest):
+            raise ValueError("changed native capability receipt")
     return children

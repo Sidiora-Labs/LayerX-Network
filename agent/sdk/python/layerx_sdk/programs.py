@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 from threading import RLock
 from time import time_ns
-from typing import Callable, Literal, Mapping, cast
+from typing import Literal, cast
 
 from .native_program_call import NativeProgramCall, encode_native_program_call
-from .program_lifecycle import NativeProgramLifecycleRequest
 from .production import IdempotencyKey, PlatformSdkError, ProductionClient, SdkErrorCode
+from .program_lifecycle import NativeProgramLifecycleRequest
 from .program_wire import (
     DecodedSignedProgramCall,
     assert_fresh_simulation_observation,
     decode_and_verify_program_terminal,
     decode_signed_program_call,
 )
-from .verifier import AuthorizedReceiptBatch, LocalSignatureVerifier, ReceiptVerification, verify_receipt_outcome, verify_program_lifecycle_receipt, programs_module_version_for_protocol
+from .verifier import (
+    AuthorizedReceiptBatch,
+    LocalSignatureVerifier,
+    ReceiptVerification,
+    programs_module_version_for_protocol,
+    verify_program_lifecycle_receipt,
+    verify_receipt_outcome,
+)
 
 ProgramCapability = Literal["storage_read", "storage_write", "transfer", "emit_event", "compose"]
 _CAPABILITY_ORDER: Mapping[str, int] = {"storage_read": 1, "storage_write": 2, "transfer": 3, "emit_event": 4, "compose": 5}
@@ -633,7 +641,7 @@ def _program_failure(value: object) -> Mapping[str, object]:
 def _signed_decimal(value: str) -> bool:
     if not value.isascii() or not value:
         return False
-    digits = value[1:] if value.startswith("-") else value
+    digits = value.removeprefix("-")
     return bool(digits) and digits.isdigit() and (digits == "0" or not digits.startswith("0")) and value != "-0"
 
 

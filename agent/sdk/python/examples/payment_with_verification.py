@@ -17,6 +17,6 @@ def payment_with_verification(
     if not isinstance(result, VerifiedRead):
         raise TypeError("invalid_submit_response")
     verified = require_verified(VerificationLevel.SEQUENCER_SIGNED, result)
-    if not isinstance(verified.value, SubmissionExecuted):
-        raise RuntimeError(f"payment_not_executed:{verified.value.kind}")
-    return verified
+    if isinstance(verified.value, SubmissionExecuted):
+        return verified
+    raise RuntimeError(f"payment_not_executed:{verified.value.kind}")

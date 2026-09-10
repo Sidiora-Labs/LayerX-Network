@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeAlias
+
 from .generated.receipt import ReceiptFailureCode
 from .production import PlatformSdkError
 
@@ -124,7 +125,7 @@ class SequencerAuthorization:
     first_batch_number: int
     last_batch_number: int
 
-InclusionKind = Literal["activity", "receipt", "event", "state"]
+InclusionKind: TypeAlias = Literal["activity", "receipt", "event", "state"]
 @dataclass(frozen=True)
 class InclusionVerification:
     level: Literal["batch-included", "state-proven"]
