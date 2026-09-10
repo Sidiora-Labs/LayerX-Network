@@ -8,7 +8,14 @@
 #include <stdint.h>
 
 enum {
-    LXP_PAXEER_CUSTODY_INPUT_COUNT = 6
+    LXP_PAXEER_CUSTODY_INPUT_COUNT = 6,
+    LXP_PAXEER_BOND_DEPOSIT_ENCODED_SIZE = 120,
+    LXP_PAXEER_BOND_BINDING_PREFIX_SIZE = 146,
+    LXP_PAXEER_BOND_BINDING_MAX_SIZE =
+        LXP_PAXEER_BOND_BINDING_PREFIX_SIZE +
+        LXP_PAXEER_BOND_DEPOSIT_ENCODED_SIZE *
+            LXP_MAX_GUARANTOR_ATTESTATIONS +
+        32
 };
 
 typedef enum lxp_paxeer_custody_input_kind {
@@ -73,6 +80,8 @@ typedef struct lxp_paxeer_membership_binding {
     uint8_t guarantor_bond_contract[20];
     uint64_t membership_version;
     uint64_t observed_epoch;
+    uint64_t observed_block_number;
+    uint64_t last_governance_sequence;
     uint8_t commitment[32];
 } lxp_paxeer_membership_binding;
 #define lxp_paxeer_membership_binding lxp_paxeer_membership_binding
@@ -82,10 +91,35 @@ typedef struct lxp_paxeer_membership_observation {
     uint8_t guarantor_bond_contract[20];
     uint64_t membership_version;
     uint64_t observed_epoch;
+    uint64_t observed_block_number;
     lxp_u128 minimum_bond;
     lxp_guarantor_set members;
 } lxp_paxeer_membership_observation;
 #define lxp_paxeer_membership_observation lxp_paxeer_membership_observation
+
+typedef struct lxp_paxeer_bond_deposit_evidence {
+    uint64_t paxeer_chain_id;
+    uint8_t guarantor_bond_contract[20];
+    uint8_t guarantor_id[32];
+    uint8_t transaction_id[32];
+    uint64_t observed_block_number;
+    uint64_t observed_at_ms;
+    uint64_t membership_version;
+    lxp_u128 amount;
+    lxp_u128 total_bond;
+} lxp_paxeer_bond_deposit_evidence;
+#define lxp_paxeer_bond_deposit_evidence lxp_paxeer_bond_deposit_evidence
+
+typedef struct lxp_paxeer_bond_deposit_record {
+    uint8_t guarantor_id[32];
+    uint8_t transaction_id[32];
+    uint64_t observed_block_number;
+    uint64_t observed_at_ms;
+    uint64_t membership_version;
+    lxp_u128 amount;
+    lxp_u128 total_bond;
+} lxp_paxeer_bond_deposit_record;
+#define lxp_paxeer_bond_deposit_record lxp_paxeer_bond_deposit_record
 
 typedef struct lxp_paxeer_bond_state {
     lxp_guarantor_set guarantors;
@@ -98,8 +132,23 @@ typedef struct lxp_paxeer_bond_state {
     uint32_t minimum_bond_bps;
     uint64_t mirror_version;
     lxp_paxeer_membership_binding membership;
+    lxp_paxeer_bond_deposit_record deposits[LXP_MAX_GUARANTOR_ATTESTATIONS];
+    size_t deposit_count;
 } lxp_paxeer_bond_state;
 #define lxp_paxeer_bond_state lxp_paxeer_bond_state
+
+typedef struct lxp_paxeer_bond_binding {
+    uint16_t protocol_version;
+    uint32_t network_id;
+    uint32_t minimum_bond_bps;
+    uint64_t mirror_version;
+    lxp_u128 custodied_value;
+    lxp_u128 minimum_bond;
+    lxp_paxeer_membership_binding membership;
+    lxp_paxeer_bond_deposit_record deposits[LXP_MAX_GUARANTOR_ATTESTATIONS];
+    size_t deposit_count;
+} lxp_paxeer_bond_binding;
+#define lxp_paxeer_bond_binding lxp_paxeer_bond_binding
 
 typedef enum lxp_paxeer_membership_sync_availability {
     LXP_PAXEER_MEMBERSHIP_SYNC_UNAVAILABLE = 1,
@@ -142,8 +191,18 @@ lxp_result lxp_paxeer_membership_sync_status(
     const lxp_paxeer_bond_state *state,
     lxp_paxeer_membership_sync_availability *availability);
 lxp_result lxp_paxeer_bond_deposit(
-    lxp_paxeer_bond_state *state, const uint8_t guarantor_id[32],
-    lxp_u128 amount);
+    lxp_paxeer_bond_state *state,
+    const lxp_paxeer_bond_deposit_evidence *evidence);
+lxp_result lxp_paxeer_bond_deposit_proof(
+    const lxp_paxeer_bond_state *state, const uint8_t transaction_id[32],
+    lxp_paxeer_bond_deposit_record *record);
+lxp_result lxp_paxeer_bond_binding_encode(
+    const lxp_paxeer_bond_state *state, uint8_t *bytes, size_t capacity,
+    size_t *length);
+lxp_result lxp_paxeer_bond_binding_decode(
+    const uint8_t *bytes, size_t length, lxp_paxeer_bond_binding *binding);
+lxp_result lxp_paxeer_bond_binding_adopt(
+    lxp_paxeer_bond_state *state, const lxp_paxeer_bond_binding *previous);
 lxp_result lxp_paxeer_bond_state_read(
     const lxp_paxeer_bond_state *state, const uint8_t guarantor_id[32],
     lxp_guarantor_bond_state *bond, bool *threshold_eligible);

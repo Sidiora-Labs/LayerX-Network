@@ -83,9 +83,19 @@ static lxp_result verify_certificate(lxp_guarantor_lni *client, const lxp_da_bun
     if (!same_file(paths[2], served) || !same_file(paths[3], proof))
         return LXP_ERR_CONTEXT_MISMATCH;
     status = gp_settlement_config_from_env(&config, state);
-    if (status == LXP_OK)
-        status = gp_settlement_membership(&config, body->header.epoch, &set, &threshold, &delay,
-                                          &minimum_bond);
+    if (status == LXP_OK) {
+        gp_settlement_membership_view *view = calloc(1U, sizeof(*view));
+        if (view == NULL)
+            return LXP_ERR_IO;
+        status = gp_settlement_membership(&config, body->header.epoch, view);
+        if (status == LXP_OK) {
+            set = view->set;
+            threshold = view->threshold;
+            delay = view->maximum_delay;
+            minimum_bond = view->minimum_bond;
+        }
+        free(view);
+    }
     if (status != LXP_OK)
         return status;
     if (threshold != 2U || set.count != 2U ||

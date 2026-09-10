@@ -7,6 +7,7 @@
 #include "producer.h"
 #include "runtime.h"
 #include "settlement.h"
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -28,12 +29,13 @@ struct producer {
     lxp_guarantor_attestation attestations[LXP_MAX_GUARANTOR_ATTESTATIONS];
     size_t count;
     gp_settlement_config settlement;
-    lxp_guarantor_set set;
+    lxp_paxeer_bond_state bonds;
+    lxp_paxeer_membership_sync_availability availability;
     size_t threshold;
     uint64_t delay;
-    lxp_u128 minimum_bond;
     lxp_sequencer_authorization authority;
     bool prepared;
+    bool bound;
     char evidence[4096];
     const char *state;
 };
@@ -160,16 +162,17 @@ static int historical(struct producer *p, const uint8_t id[32], uint8_t *out, si
 {
     uint8_t header_bytes[LXP_BATCH_HEADER_ENCODED_SIZE + 64U], digest[32];
     uint8_t *memory = malloc(1024U * 1024U);
+    lxp_paxeer_bond_state *bonds = calloc(1U, sizeof(*bonds));
+    gp_settlement_membership_view *view = calloc(1U, sizeof(*view));
+    lxp_paxeer_membership_sync_availability availability =
+        LXP_PAXEER_MEMBERSHIP_SYNC_UNAVAILABLE;
     lxp_arena arena;
     lxp_checkpoint_certificate checkpoint = {0};
-    lxp_guarantor_set set;
-    size_t threshold, size;
-    uint64_t delay;
-    lxp_u128 minimum;
+    size_t size;
     char path[4096];
     lxp_result status = LXP_ERR_IO;
-    if (memory == NULL)
-        return -1;
+    if (memory == NULL || bonds == NULL || view == NULL)
+        goto finish;
     if (id_path(path, p->state, id, "header") != 0 ||
         read_bytes(path, header_bytes, sizeof(header_bytes), &size) != 0 ||
         size != sizeof(header_bytes))
@@ -187,8 +190,11 @@ static int historical(struct producer *p, const uint8_t id[32], uint8_t *out, si
     if (status == LXP_OK && memcmp(digest, id, 32U) != 0)
         status = LXP_ERR_CONTEXT_MISMATCH;
     if (status == LXP_OK)
-        status = gp_settlement_membership(&p->settlement, checkpoint.header.epoch, &set, &threshold,
-                                          &delay, &minimum);
+        status = gp_settlement_bond_bind(&p->settlement, checkpoint.header.epoch,
+                                         checkpoint.header.protocol_version, bonds, view,
+                                         &availability);
+    if (status == LXP_OK && availability != LXP_PAXEER_MEMBERSHIP_SYNC_BOUND)
+        status = LXP_ERR_ATTESTATION_THRESHOLD;
     if (status != LXP_OK)
         goto finish;
     if (id_path(path, p->state, id, "attestations") != 0 ||
@@ -202,10 +208,12 @@ static int historical(struct producer *p, const uint8_t id[32], uint8_t *out, si
         status = gp_attestation_decode(out + i, GP_ATTESTATION_BYTES, &a);
         if (status == LXP_OK)
             status = gp_attestation_accept(&checkpoint, p->settlement.chain_id,
-                                           p->settlement.settlement_contract, &set, &a, NULL, 0U,
-                                           p->evidence, &arena);
+                                           p->settlement.settlement_contract, &bonds->guarantors,
+                                           &a, NULL, 0U, p->evidence, &arena);
     }
 finish:
+    free(view);
+    free(bonds);
     free(memory);
     return status == LXP_OK ? 0 : -1;
 }
@@ -214,26 +222,37 @@ static int receive_attestation(void *context, const uint8_t *bytes, size_t lengt
     struct producer *p = context;
     lxp_guarantor_attestation a;
     uint8_t *memory = malloc(1024U * 1024U);
+    gp_settlement_membership_view *view = calloc(1U, sizeof(*view));
     lxp_arena arena;
     lxp_result status = gp_attestation_decode(bytes, length, &a);
     char path[4096];
-    if (memory == NULL)
+    if (memory == NULL || view == NULL) {
+        free(view);
+        free(memory);
         return -1;
+    }
     if (status == LXP_OK)
         status = lxp_arena_init(&arena, memory, 1024U * 1024U);
     if (pthread_mutex_lock(&p->mutex) != 0) {
+        free(view);
         free(memory);
         return -1;
     }
     if (status == LXP_OK && !p->prepared)
         status = LXP_ERR_DA_MISSING;
     if (status == LXP_OK)
-        status = gp_settlement_membership(&p->settlement, p->checkpoint.header.epoch, &p->set,
-                                          &p->threshold, &p->delay, &p->minimum_bond);
-    if (status == LXP_OK)
+        status = gp_settlement_bond_bind(&p->settlement, p->checkpoint.header.epoch,
+                                         p->checkpoint.header.protocol_version, &p->bonds, view,
+                                         &p->availability);
+    if (status == LXP_OK && p->availability != LXP_PAXEER_MEMBERSHIP_SYNC_BOUND)
+        status = LXP_ERR_ATTESTATION_THRESHOLD;
+    if (status == LXP_OK) {
+        p->threshold = view->threshold;
+        p->delay = view->maximum_delay;
         status = gp_attestation_accept(&p->checkpoint, p->settlement.chain_id,
-                                       p->settlement.settlement_contract, &p->set, &a,
+                                       p->settlement.settlement_contract, &p->bonds.guarantors, &a,
                                        p->attestations, p->count, p->evidence, &arena);
+    }
     if (status == LXP_OK) {
         size_t i;
         for (i = 0U; i < p->count; ++i)
@@ -265,6 +284,7 @@ static int receive_attestation(void *context, const uint8_t *bytes, size_t lengt
             status = gp_file_write(path, all, p->count * GP_ATTESTATION_BYTES);
     }
     (void)pthread_mutex_unlock(&p->mutex);
+    free(view);
     free(memory);
     if (status != LXP_OK)
         fprintf(stderr, "peer attestation refused: %d\n", (int)status);
@@ -291,6 +311,81 @@ static int get_attestations(void *context, const uint8_t id[32], uint8_t *out, s
         result = historical(p, id, out, capacity, length);
     (void)pthread_mutex_unlock(&p->mutex);
     return result;
+}
+static lxp_result binding_path(char out[4096], const char *state)
+{
+    int n = snprintf(out, 4096U, "%s/paxeer-bond.binding", state);
+    return n >= 0 && n < 4096 ? LXP_OK : LXP_ERR_LENGTH_LIMIT;
+}
+static lxp_result binding_store(const struct producer *p, const char *state)
+{
+    uint8_t bytes[LXP_PAXEER_BOND_BINDING_MAX_SIZE];
+    char path[4096];
+    size_t length = 0U;
+    lxp_result status = binding_path(path, state);
+    if (status == LXP_OK)
+        status = lxp_paxeer_bond_binding_encode(&p->bonds, bytes, sizeof(bytes), &length);
+    if (status == LXP_OK)
+        status = gp_file_write(path, bytes, length);
+    return status;
+}
+static lxp_result binding_restore(struct producer *p, const char *state)
+{
+    uint8_t bytes[LXP_PAXEER_BOND_BINDING_MAX_SIZE];
+    lxp_paxeer_bond_binding previous;
+    char path[4096];
+    size_t length = 0U;
+    lxp_result status = binding_path(path, state);
+    if (status != LXP_OK)
+        return status;
+    if (access(path, F_OK) != 0)
+        return errno == ENOENT ? LXP_OK : LXP_ERR_IO;
+    if (read_bytes(path, bytes, sizeof(bytes), &length) != 0)
+        return LXP_ERR_IO;
+    status = lxp_paxeer_bond_binding_decode(bytes, length, &previous);
+    if (status != LXP_OK)
+        return status;
+    return lxp_paxeer_bond_binding_adopt(&p->bonds, &previous);
+}
+static lxp_result deposits_ingest(struct producer *p, const char *state)
+{
+    char directory[4096];
+    struct dirent *entry;
+    DIR *handle;
+    lxp_result status = LXP_OK;
+    int n = snprintf(directory, sizeof(directory), "%s/bond-deposits", state);
+    if (n < 0 || (size_t)n >= sizeof(directory))
+        return LXP_ERR_LENGTH_LIMIT;
+    handle = opendir(directory);
+    if (handle == NULL)
+        return errno == ENOENT ? LXP_OK : LXP_ERR_IO;
+    while (status == LXP_OK && (entry = readdir(handle)) != NULL) {
+        uint8_t guarantor_id[32], transaction_id[32];
+        lxp_paxeer_bond_deposit_record record;
+        char identity[65], transaction[65];
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+        if (strlen(entry->d_name) != 129U || entry->d_name[64] != '-') {
+            status = LXP_ERR_NON_CANONICAL;
+            break;
+        }
+        memcpy(identity, entry->d_name, 64U);
+        identity[64] = '\0';
+        memcpy(transaction, entry->d_name + 65U, 64U);
+        transaction[64] = '\0';
+        if (unhex(identity, guarantor_id, 32U) != 0 ||
+            unhex(transaction, transaction_id, 32U) != 0) {
+            status = LXP_ERR_NON_CANONICAL;
+            break;
+        }
+        if (lxp_paxeer_bond_deposit_proof(&p->bonds, transaction_id, &record) == LXP_OK)
+            continue;
+        status = gp_settlement_bond_deposit(&p->settlement, guarantor_id, transaction_id,
+                                            &p->bonds, &record);
+    }
+    if (closedir(handle) != 0 && status == LXP_OK)
+        status = LXP_ERR_IO;
+    return status;
 }
 static void *serve(void *context)
 {
@@ -338,9 +433,10 @@ static lxp_result feedback(lxp_guarantor_lni *client, struct producer *p,
         return LXP_ERR_BATCH_GAP;
     lxp_result status =
         gp_checkpoint_requirements(&certificate->checkpoint.header, registration->observed_at_ms,
-                                   p->threshold, p->minimum_bond, &requirements);
+                                   p->threshold, p->bonds.minimum_bond, &requirements);
     if (status == LXP_OK)
-        status = lxp_daemon_finality_evidence_encode(certificate, &p->set, &requirements,
+        status = lxp_daemon_finality_evidence_encode(certificate, &p->bonds.guarantors,
+                                                     &requirements,
                                                      certificate->checkpoint.header.batch_number -
                                                          p->authority.first_batch_number,
                                                      registration, arena, &payload, &proof);
@@ -373,6 +469,7 @@ static lxp_result feedback(lxp_guarantor_lni *client, struct producer *p,
 int main(int argc, char **argv)
 {
     struct producer *p = calloc(1U, sizeof(*p));
+    gp_settlement_membership_view *view = calloc(1U, sizeof(*view));
     gp_runtime *runtime = NULL;
     lxp_guarantor_ctx ctx = {0};
     lxp_sequencer_authorization authority = {0};
@@ -390,7 +487,8 @@ int main(int argc, char **argv)
     int lock_fd = -1;
     bool once = argc == 2 && strcmp(argv[1], "--once") == 0;
     bool fetch_only = argc == 2 && strcmp(argv[1], "--fetch-only") == 0;
-    if (argc > 2 || (argc == 2 && !once && !fetch_only) || p == NULL || memory == NULL)
+    if (argc > 2 || (argc == 2 && !once && !fetch_only) || p == NULL || view == NULL ||
+        memory == NULL)
         goto done;
     (void)signal(SIGPIPE, SIG_IGN);
     (void)signal(SIGTERM, stop);
@@ -508,16 +606,35 @@ int main(int argc, char **argv)
         field = "bonded membership";
         (void)pthread_mutex_lock(&p->mutex);
         p->prepared = false;
-        status = gp_settlement_membership(&p->settlement, header.epoch, &p->set, &p->threshold,
-                                          &p->delay, &p->minimum_bond);
+        status = gp_settlement_bond_bind(&p->settlement, header.epoch, header.protocol_version,
+                                         &p->bonds, view, &p->availability);
+        if (status == LXP_OK && p->availability == LXP_PAXEER_MEMBERSHIP_SYNC_BOUND) {
+            if (!p->bound) {
+                status = binding_restore(p, state);
+                if (status == LXP_OK)
+                    p->bound = true;
+            }
+            if (status == LXP_OK)
+                status = deposits_ingest(p, state);
+            if (status == LXP_OK)
+                status = binding_store(p, state);
+        }
+        if (status == LXP_OK) {
+            p->threshold = view->threshold;
+            p->delay = view->maximum_delay;
+        }
         (void)pthread_mutex_unlock(&p->mutex);
         if (status != LXP_OK)
             goto batch_failed;
+        if (p->availability != LXP_PAXEER_MEMBERSHIP_SYNC_BOUND) {
+            status = LXP_ERR_ATTESTATION_THRESHOLD;
+            goto batch_failed;
+        }
         ctx.bond_view.bonded = false;
-        for (size_t i = 0U; i < p->set.count; ++i)
-            if (memcmp(p->set.records[i].guarantor_id, ctx.guarantor_id, 32U) == 0 &&
-                memcmp(p->set.records[i].public_key, ctx.paxeer_public_key, 33U) == 0)
-                ctx.bond_view.bonded = p->set.records[i].active;
+        for (size_t i = 0U; i < p->bonds.guarantors.count; ++i)
+            if (memcmp(p->bonds.guarantors.records[i].guarantor_id, ctx.guarantor_id, 32U) == 0 &&
+                memcmp(p->bonds.guarantors.records[i].public_key, ctx.paxeer_public_key, 33U) == 0)
+                ctx.bond_view.bonded = p->bonds.guarantors.records[i].active;
         if (!ctx.bond_view.bonded || p->delay != lxp_checkpoint_maximum_attestation_delay_ms()) {
             status = LXP_ERR_ATTESTATION_THRESHOLD;
             goto batch_failed;
@@ -605,7 +722,7 @@ int main(int argc, char **argv)
                     (void)pthread_mutex_unlock(&p->mutex);
                     goto batch_failed;
                 }
-                if (registered_version != p->set.version) {
+                if (registered_version != p->bonds.guarantors.version) {
                     status = LXP_ERR_CONTEXT_MISMATCH;
                     (void)pthread_mutex_unlock(&p->mutex);
                     goto batch_failed;
@@ -658,6 +775,7 @@ done:
         (void)close(lock_fd);
     lxp_secure_zero(ctx.paxeer_private_key, 32U);
     free(memory);
+    free(view);
     free(p);
     if (status != LXP_OK)
         fprintf(stderr, "layerx-guarantor: %s refused (%d)\n", field, (int)status);

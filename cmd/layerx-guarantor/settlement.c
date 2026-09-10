@@ -14,8 +14,9 @@
 enum {
     GP_SETTLEMENT_PATH = 4096,
     GP_MEMBERSHIP_RECORD = 85,
-    GP_MEMBERSHIP_PREFIX = 40,
-    GP_REGISTRATION_WIRE = 57
+    GP_MEMBERSHIP_PREFIX = 76,
+    GP_REGISTRATION_WIRE = 57,
+    GP_DEPOSIT_WIRE = 120
 };
 typedef struct gp_files {
     char directory[GP_SETTLEMENT_PATH];
@@ -180,18 +181,18 @@ static lxp_result execute(const gp_settlement_config *config, const char *mode, 
     return LXP_OK;
 }
 lxp_result gp_settlement_membership(const gp_settlement_config *config, uint64_t epoch,
-                                    lxp_guarantor_set *set, size_t *threshold,
-                                    uint64_t *maximum_delay, lxp_u128 *minimum_bond)
+                                    gp_settlement_membership_view *view)
 {
     gp_files files;
     FILE *input;
     uint8_t wire[GP_MEMBERSHIP_PREFIX + GP_MEMBERSHIP_RECORD * LXP_MAX_GUARANTOR_ATTESTATIONS];
     size_t i, length;
     lxp_guarantor_set result;
-    lxp_u128 minimum;
+    lxp_u128 minimum, custodied;
+    uint64_t observed_block, governance_sequence;
+    uint32_t bond_bps;
     lxp_result status;
-    if (epoch == 0U || set == NULL || threshold == NULL || maximum_delay == NULL ||
-        minimum_bond == NULL)
+    if (epoch == 0U || view == NULL)
         return LXP_ERR_NON_CANONICAL;
     status = begin(config, &files, &input);
     if (status != LXP_OK)
@@ -220,8 +221,15 @@ lxp_result gp_settlement_membership(const gp_settlement_config *config, uint64_t
         read32(wire + 20U) != config->member_count || read64(wire) == 0U ||
         read32(wire + 8U) == 0U || read32(wire + 8U) > config->member_count)
         return LXP_ERR_CONTEXT_MISMATCH;
+    observed_block = read64(wire + 40U);
+    governance_sequence = read64(wire + 48U);
+    bond_bps = read32(wire + 72U);
+    if (observed_block == 0U || governance_sequence > read64(wire) || bond_bps == 0U ||
+        bond_bps > LXP_BASIS_POINTS_ONE)
+        return LXP_ERR_CONTEXT_MISMATCH;
     (void)memset(&result, 0, sizeof(result));
     result.version = read64(wire);
+    result.last_governance_sequence = governance_sequence;
     result.count = config->member_count;
     for (i = 0U; i < result.count; ++i) {
         const uint8_t *record = wire + GP_MEMBERSHIP_PREFIX + GP_MEMBERSHIP_RECORD * i;
@@ -247,41 +255,134 @@ lxp_result gp_settlement_membership(const gp_settlement_config *config, uint64_t
     if (status != LXP_OK)
         return status;
     status = lxp_u128_from_be(wire + 24U, &minimum);
+    if (status == LXP_OK)
+        status = lxp_u128_from_be(wire + 56U, &custodied);
     if (status != LXP_OK)
         return status;
-    *set = result;
-    *threshold = read32(wire + 8U);
-    *maximum_delay = read64(wire + 12U);
-    *minimum_bond = minimum;
+    if (lxp_u128_is_zero(custodied))
+        return LXP_ERR_CONTEXT_MISMATCH;
+    (void)memset(view, 0, sizeof(*view));
+    view->set = result;
+    view->threshold = read32(wire + 8U);
+    view->maximum_delay = read64(wire + 12U);
+    view->observed_block_number = observed_block;
+    view->minimum_bond = minimum;
+    view->custodied_value = custodied;
+    view->minimum_bond_bps = bond_bps;
     return LXP_OK;
+}
+static lxp_result sync_from_view(const gp_settlement_config *config, uint64_t epoch,
+                                 const gp_settlement_membership_view *view,
+                                 lxp_paxeer_bond_state *state,
+                                 lxp_paxeer_membership_sync_availability *availability)
+{
+    lxp_paxeer_membership_observation observation;
+    (void)memset(&observation, 0, sizeof(observation));
+    observation.paxeer_chain_id = config->chain_id;
+    (void)memcpy(observation.guarantor_bond_contract, config->settlement_contract, 20U);
+    observation.membership_version = view->set.version;
+    observation.observed_epoch = epoch;
+    observation.observed_block_number = view->observed_block_number;
+    observation.minimum_bond = view->minimum_bond;
+    observation.members = view->set;
+    return lxp_paxeer_membership_sync(state, &observation, availability);
 }
 lxp_result gp_settlement_membership_sync(const gp_settlement_config *config, uint64_t epoch,
                                          lxp_paxeer_bond_state *state,
                                          lxp_paxeer_membership_sync_availability *availability)
 {
-    lxp_paxeer_membership_observation observation;
-    lxp_guarantor_set set;
-    size_t threshold = 0U;
-    uint64_t maximum_delay = 0U;
-    lxp_u128 minimum_bond;
+    gp_settlement_membership_view view;
     lxp_result status;
     if (!valid_config(config) || state == NULL || availability == NULL || epoch == 0U)
         return LXP_ERR_NON_CANONICAL;
     if (config->chain_id != state->paxeer_chain_id || config->network_id != state->network_id ||
         memcmp(config->settlement_contract, state->paxeer_settlement_contract, 20U) != 0)
         return LXP_ERR_AUTH_SCOPE;
-    status = gp_settlement_membership(config, epoch, &set, &threshold, &maximum_delay,
-                                      &minimum_bond);
+    status = gp_settlement_membership(config, epoch, &view);
     if (status != LXP_OK)
         return status;
-    (void)memset(&observation, 0, sizeof(observation));
-    observation.paxeer_chain_id = config->chain_id;
-    (void)memcpy(observation.guarantor_bond_contract, config->settlement_contract, 20U);
-    observation.membership_version = set.version;
-    observation.observed_epoch = epoch;
-    observation.minimum_bond = minimum_bond;
-    observation.members = set;
-    return lxp_paxeer_membership_sync(state, &observation, availability);
+    if (state->minimum_bond_bps != view.minimum_bond_bps ||
+        lxp_u128_cmp(state->custodied_value, view.custodied_value) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    return sync_from_view(config, epoch, &view, state, availability);
+}
+lxp_result gp_settlement_bond_bind(const gp_settlement_config *config, uint64_t epoch,
+                                   uint16_t protocol_version, lxp_paxeer_bond_state *state,
+                                   gp_settlement_membership_view *view,
+                                   lxp_paxeer_membership_sync_availability *availability)
+{
+    lxp_result status;
+    if (!valid_config(config) || state == NULL || view == NULL || availability == NULL ||
+        epoch == 0U || !lxp_protocol_version_supported(protocol_version))
+        return LXP_ERR_NON_CANONICAL;
+    if (state->protocol_version != 0U &&
+        (state->protocol_version != protocol_version ||
+         config->chain_id != state->paxeer_chain_id ||
+         config->network_id != state->network_id ||
+         memcmp(config->settlement_contract, state->paxeer_settlement_contract, 20U) != 0))
+        return LXP_ERR_AUTH_SCOPE;
+    status = gp_settlement_membership(config, epoch, view);
+    if (status != LXP_OK)
+        return status;
+    if (state->protocol_version == 0U)
+        status = lxp_paxeer_bond_init(state, protocol_version, config->network_id,
+                                      config->chain_id, config->settlement_contract,
+                                      view->custodied_value, view->minimum_bond_bps);
+    else if (state->minimum_bond_bps != view->minimum_bond_bps ||
+             lxp_u128_cmp(state->custodied_value, view->custodied_value) != 0)
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status != LXP_OK)
+        return status;
+    return sync_from_view(config, epoch, view, state, availability);
+}
+lxp_result gp_settlement_bond_deposit(const gp_settlement_config *config,
+                                      const uint8_t *guarantor_id, const uint8_t *transaction_id,
+                                      lxp_paxeer_bond_state *state,
+                                      lxp_paxeer_bond_deposit_record *record)
+{
+    gp_files files;
+    FILE *input;
+    uint8_t wire[GP_DEPOSIT_WIRE];
+    size_t length;
+    lxp_paxeer_bond_deposit_evidence evidence;
+    lxp_result status;
+    if (!valid_config(config) || guarantor_id == NULL || transaction_id == NULL || state == NULL ||
+        record == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    if (config->chain_id != state->paxeer_chain_id || config->network_id != state->network_id ||
+        memcmp(config->settlement_contract, state->paxeer_settlement_contract, 20U) != 0)
+        return LXP_ERR_AUTH_SCOPE;
+    status = begin(config, &files, &input);
+    if (status != LXP_OK)
+        return status;
+    (void)fputs(",\"guarantor_id\":", input);
+    hex(input, guarantor_id, 32U);
+    (void)fputs(",\"transaction_id\":", input);
+    hex(input, transaction_id, 32U);
+    status = execute(config, "deposit", &files, input, wire, sizeof(wire), &length);
+    cleanup(&files);
+    if (status != LXP_OK)
+        return status;
+    if (length != GP_DEPOSIT_WIRE || memcmp(wire, guarantor_id, 32U) != 0 ||
+        memcmp(wire + 32U, transaction_id, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    (void)memset(&evidence, 0, sizeof(evidence));
+    evidence.paxeer_chain_id = config->chain_id;
+    (void)memcpy(evidence.guarantor_bond_contract, config->settlement_contract, 20U);
+    (void)memcpy(evidence.guarantor_id, guarantor_id, 32U);
+    (void)memcpy(evidence.transaction_id, transaction_id, 32U);
+    evidence.observed_block_number = read64(wire + 64U);
+    evidence.observed_at_ms = read64(wire + 72U);
+    evidence.membership_version = read64(wire + 80U);
+    status = lxp_u128_from_be(wire + 88U, &evidence.amount);
+    if (status == LXP_OK)
+        status = lxp_u128_from_be(wire + 104U, &evidence.total_bond);
+    if (status != LXP_OK)
+        return status;
+    status = lxp_paxeer_bond_deposit(state, &evidence);
+    if (status != LXP_OK)
+        return status;
+    return lxp_paxeer_bond_deposit_proof(state, transaction_id, record);
 }
 static void header_json(FILE *file, const lxp_batch_header *h)
 {

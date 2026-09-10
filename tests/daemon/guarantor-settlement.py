@@ -73,15 +73,25 @@ class SettlementTests(unittest.TestCase):
 
     def test_wire_membership_and_registration(self):
         member = {'guarantor_id': '0x' + self.attestations[0][7].hex(), 'signer': self.attestations[0][14], 'bonded_active': True, 'bond_amount': 1000, 'joined_epoch': 1, 'authorization_version': 2}
-        wire = s.wire_encode('membership', {'version': 4, 'threshold': 2, 'maximum_attestation_delay_ms': 3600000, 'minimum_bond': 100, 'members': [member]})
-        self.assertEqual(len(wire), 125)
+        wire = s.wire_encode('membership', {'version': 4, 'threshold': 2, 'maximum_attestation_delay_ms': 3600000, 'minimum_bond': 100, 'block_number': 4096, 'governance_sequence': 3, 'custodied_value': 10000, 'minimum_bond_bps': 100, 'members': [member]})
+        self.assertEqual(len(wire), 161)
         self.assertEqual(struct.unpack('>QIQI', wire[:24]), (4, 2, 3600000, 1))
         self.assertEqual(int.from_bytes(wire[24:40], 'big'), 100)
-        self.assertEqual(wire[40:72], self.attestations[0][7])
-        self.assertEqual(int.from_bytes(wire[93:109], 'big'), 1000)
+        self.assertEqual(struct.unpack('>QQ', wire[40:56]), (4096, 3))
+        self.assertEqual(int.from_bytes(wire[56:72], 'big'), 10000)
+        self.assertEqual(struct.unpack('>I', wire[72:76])[0], 100)
+        self.assertEqual(wire[76:108], self.attestations[0][7])
+        self.assertEqual(int.from_bytes(wire[129:145], 'big'), 1000)
         registration = s.wire_encode('register', {'already_registered': True, 'transaction_id': '0x' + '12' * 32, 'observed_block_number': 5, 'observed_at_ms': 1000000, 'set_version': 4})
         self.assertEqual(len(registration), 57)
         self.assertEqual(struct.unpack('>QQQ', registration[33:]), (5, 1000000, 4))
+        funding = s.wire_encode('deposit', {'guarantor_id': '0x' + self.attestations[0][7].hex(), 'transaction_id': '0x' + '34' * 32, 'observed_block_number': 4097, 'observed_at_ms': 1700000000000, 'membership_version': 5, 'amount': 250, 'total_bond': 1250})
+        self.assertEqual(len(funding), 120)
+        self.assertEqual(funding[:32], self.attestations[0][7])
+        self.assertEqual(funding[32:64], bytes.fromhex('34' * 32))
+        self.assertEqual(struct.unpack('>QQQ', funding[64:88]), (4097, 1700000000000, 5))
+        self.assertEqual(int.from_bytes(funding[88:104], 'big'), 250)
+        self.assertEqual(int.from_bytes(funding[104:120], 'big'), 1250)
 
     def test_configuration_real_vector_public_keys_and_environment(self):
         document = json.loads((ROOT / 'contracts/config/checkpoint-settlement.json').read_text())
