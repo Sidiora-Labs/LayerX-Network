@@ -370,6 +370,28 @@ spec:
             - {name: gateway-component, mountPath: /run/layerx/gateway-component, readOnly: true}
             - {name: webhooks-component, mountPath: /run/layerx/webhooks-component, readOnly: true}
             - {name: registry-component, mountPath: /run/layerx/registry-component, readOnly: true}
+        - name: agentd-boundary
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              : "${LAYERX_AGENTD_BOUNDARY_PORT:?agentd boundary port is required}"
+              : "${LAYERX_AGENTD_HEALTH_PORT:?agentd health port is required}"
+              while ! socat -T 2 /dev/null "TCP:127.0.0.1:${LAYERX_AGENTD_HEALTH_PORT}" > /dev/null 2>&1; do sleep 1; done
+              exec socat -T 30 \
+                "OPENSSL-LISTEN:${LAYERX_AGENTD_BOUNDARY_PORT},bind=0.0.0.0,reuseaddr,fork,cert=/run/layerx/agentd-tls/tls.crt,key=/run/layerx/agentd-tls/tls.key,cafile=/run/layerx/trust/ca.crt,verify=1" \
+                "TCP:127.0.0.1:${LAYERX_AGENTD_HEALTH_PORT}"
+          env:
+            - {name: LAYERX_AGENTD_BOUNDARY_PORT, value: "9454"}
+            - {name: LAYERX_AGENTD_HEALTH_PORT, value: "9453"}
+          ports: [{name: agentd-tls, containerPort: 9454}]
+          readinessProbe: {tcpSocket: {port: agentd-tls}, periodSeconds: 10, timeoutSeconds: 5}
+          resources: {requests: {cpu: 50m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: agentd-tls, mountPath: /run/layerx/agentd-tls, readOnly: true}
+            - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
         - name: human
           image: ghcr.io/sidiora-labs/layerx-human:0.1.0
           imagePullPolicy: Always
@@ -734,7 +756,7 @@ spec:
               command:
                 - /bin/sh
                 - -ec
-                - exec curl --fail --silent --show-error --max-time 5 --config /run/human-private/agent/probe.conf http://127.0.0.1:9451/healthz
+                - exec curl --fail --silent --show-error --max-time 5 --config /run/human-private/agent/probe.conf http://127.0.0.1:9453/healthz
             timeoutSeconds: 6
             periodSeconds: 10
       volumes:
@@ -762,6 +784,7 @@ spec:
         - {name: core-admin-tls, secret: {secretName: layerx-pending-core-admin-tls}}
         - {name: authority-tls, secret: {secretName: layerx-receipt-authority-tls}}
         - {name: agent-tls, secret: {secretName: layerx-agent-boundary-tls}}
+        - {name: agentd-tls, secret: {secretName: layerx-agentd-tls, defaultMode: 0440}}
         - {name: gateway-authority, secret: {secretName: layerx-gateway-authority-client}}
         - {name: registry-authority, secret: {secretName: layerx-program-registry-authority-client}}
         - {name: webhooks-authority, secret: {secretName: layerx-webhooks-authority-client}}
@@ -873,3 +896,8 @@ spec:
       ports: [{protocol: TCP, port: 9444}]
     - to: [{podSelector: {matchLabels: {app: layerx-node}}}]
       ports: [{protocol: TCP, port: 9445}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-agentd, namespace: layerx-testnet}
+spec: {type: ClusterIP, selector: {app: layerx-node}, ports: [{name: https, port: 9443, targetPort: agentd-tls}]}

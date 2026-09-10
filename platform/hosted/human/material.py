@@ -123,7 +123,7 @@ def main():
         'HUMAN_RECONNECT_JITTER_PERCENT': 10,
         'HUMAN_AUTHORITY_ENDPOINT': 'https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443',
         'HUMAN_AUTHORITY_MAX_BYTES': 1048576,
-        'PROGRAM_LISTEN': '127.0.0.1:9451', 'PROGRAM_MAX_STALENESS_MS': 60000,
+        'PROGRAM_LISTEN': '127.0.0.1:9453', 'PROGRAM_MAX_STALENESS_MS': 60000,
         'NODE_ENDPOINT': 'http://127.0.0.1:9401',
         'AUTHORITY_ENDPOINT': 'https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443',
         'AUTHORITY_REPLICA_ID': (root.parent / 'receipt-authority-replica-id').read_text().strip(),

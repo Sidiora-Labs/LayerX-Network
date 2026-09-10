@@ -8942,3 +8942,59 @@ symbol = "verify_state_value verify_account_evidence"
 observed = "read.rs verify_state_value and the evidence.rs verify_account_evidence this row added now perform the same nested account verification: decode the evidence, bind the root selector and account, pin the sequencer key, and run verify_nested_account or verify_nested_account_maintenance. They are not interchangeable, because verify_state_value additionally requires the signed header's response authorization to equal the live handshake authorization and a Latest selector to name the currently sealed batch, neither of which an offline receiver of exported bytes can evaluate. Routing the live read through the shared verifier would need those two live checks factored out of the shared body."
 assumption = "read.rs is outside this row's owned files and the duplication is exact rather than divergent, so the live read path was left unchanged and the consolidation is recorded for the owner of the point-read path."
 severity = "note"
+
+[observation.3.7.4400]
+task = "3.7"
+file = "platform/hosted/human/material.py platform/hosted/node/deployment.yaml cmd/layerx-guarantor/exchange.c cmd/layerx-guarantor/main.c"
+symbol = "PROGRAM_LISTEN LAYERX_AGENT_PROGRAM_LISTEN guarantor-1 lxp_guarantor_exchange_listen"
+observed = "The node pod placed two unrelated listeners on the same loopback port. platform/hosted/human/material.py wrote LAYERX_AGENT_PROGRAM_LISTEN as 127.0.0.1:9451 into the layerx-human-agent-config secret, and the human-owner container's readiness probe in platform/hosted/node/deployment.yaml queried http://127.0.0.1:9451/healthz, while the guarantor-1 container of the same pod declares containerPort 9451 and cmd/layerx-guarantor/exchange.c binds htonl(INADDR_LOOPBACK) on the port named by LAYERX_GUARANTOR_LISTEN_PORT, opened unconditionally from cmd/layerx-guarantor/main.c. Containers of one pod share a network namespace, so whichever of the two started second could not bind and the pod could never satisfy wait_for_pod_ready app=layerx-node."
+assumption = "The guarantor exchange port is protocol surface fixed by the two guarantor identities, their peer URLs and the topology check, while the agent program listener is a private readiness surface named only by the generated agent configuration and its own probe. The listener was therefore moved to 127.0.0.1:9453 in material.py and in the human-owner readiness probe; no guarantor value, assertion or port was touched, and platform/hosted/agentd/manifest_check.py now proves every loopback port of the pod is claimed by exactly the containers entitled to it."
+severity = "note"
+
+[observation.3.7.4401]
+task = "3.7"
+file = "platform/hosted/node/deployment.yaml platform/hosted/human/material.py platform/hosted/human/entrypoint.sh"
+symbol = "human-owner human-entrypoint LAYERX_AGENT_MODE"
+observed = "The hosted stack was recorded as carrying no agentd. The daemon is in fact deployed: the human-owner container of the layerx-node StatefulSet runs /usr/local/bin/human-entrypoint agent, platform/hosted/human/entrypoint.sh execs layerx-agentd with the material it installs, and platform/hosted/human/material.py sets LAYERX_AGENT_MODE to human-owner. What was absent is publication and proof: no Service selected the daemon, nothing outside the pod could reach it, and platform/hosted/tests/beta-cluster.sh recorded the absence in place of the qualification agent URL rather than checking anything."
+assumption = "The deployed daemon is the real agentd, so the work is to publish and prove the surface it already serves rather than to add a second copy of it. A layerx-agentd Service, a mutually authenticated boundary container, a manifest gate and a cluster probe were added; the daemon, its mode and its entry point are unchanged."
+severity = "note"
+
+[observation.3.7.4402]
+task = "3.7"
+file = "agent/crates/layerx-agentd/src/main.rs agent/crates/layerx-agentd/src/human_owner_mode.rs platform/hosted/node/deployment.yaml"
+symbol = "config serve_human_owner LAYERX_AGENT_PROGRAM_LISTEN LAYERX_AGENT_HUMAN_NODE_LNI agentd-boundary"
+observed = "agentd cannot be published as a workload of its own. Its configuration refuses to start unless LAYERX_AGENT_PROGRAM_LISTEN begins with 127.0.0.1:, and its human-owner mode requires the node's LNI unix socket and an owner socket guarded by SO_PEERCRED, all of which exist only inside the node pod. A Service can therefore reach the daemon only through a process that shares that network namespace."
+assumption = "Rather than relax the loopback refusal or duplicate the daemon, the deployment publishes the surface through an agentd-boundary container in the same pod that terminates TLS with the layerx-agentd-tls identity, requires a client certificate the internal CA issued, and forwards to 127.0.0.1 alone. Only the readiness surface is published: the bearer that GET /healthz demands is still enforced inside the daemon, the owner unix socket and its peer-credential check are never relayed, the boundary mounts nothing but its own identity and the trust root, and the existing layerx-node ingress policy leaves the boundary port closed to every cluster workload, so the surface is reachable only through the API server."
+severity = "assumption"
+
+[observation.3.7.4403]
+task = "3.7"
+file = "platform/hosted/node/deployment.yaml platform/hosted/human/material.py"
+symbol = "agentd-boundary layerx-agentd PROGRAM_LISTEN"
+observed = "Two changes fall outside the shape this work was scoped to. The Service is appended at the end of platform/hosted/node/deployment.yaml as scoped, but the boundary container and its volume must sit inside the StatefulSet, so two hunks land in the middle of that file; the container is placed immediately after agent-boundary, away from the daemon containers and from the end of the container list. The port repair also touches platform/hosted/human/material.py, which is the only source of the agent program listener value."
+assumption = "A boundary that shares the pod network namespace is the only way to publish a loopback-only listener, and a Service that resolves to a colliding, never-ready pod would be evidence of nothing, so both changes are required for the published surface to be real. The mid-file hunks are as far from the container list boundaries as the pod layout allows."
+severity = "note"
+
+[observation.3.7.4404]
+task = "3.7"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/agentd/probe.sh platform/hosted/agentd/manifest_check.py"
+symbol = "agentd_check qualification_url beta_cluster_up"
+observed = "beta-cluster.sh now issues the layerx-agentd server and client identities, applies the layerx-agentd-tls secret, forwards the Service, calls agentd_check once the node pod reports ready, and passes the real address to the qualification driver in place of the record of absence. The bring-up itself could not be executed here: kind and kubectl are absent from this environment, so no cluster exists to stand up."
+assumption = "The cluster path is exercised only by its own gates: the shell parses, and platform/hosted/agentd/manifest_check.py loads the manifest and proves the boundary, the Service, the port disjointness of the pod and the ingress closure, together with thirteen mutations that must be refused. The probe asserts the three properties a ready deployment must show, and it is wired into the bring-up so that a cluster that does not show them fails the bring-up rather than being recorded as unavailable."
+severity = "note"
+
+[observation.3.7.4405]
+task = "3.7"
+file = "platform/hosted/tests/topology-regressions.py platform/hosted/tests/topology-check.sh platform/Makefile.inc"
+symbol = "baseline platform-hosted-topology-check"
+observed = "make platform-hosted-topology-check exits 2 on an unmodified tree. platform/hosted/tests/topology-check.sh resolves every edge of the nine hosted manifests with no failure under both parsers, and platform/hosted/tests/topology_check.py passes with its seven refusals, but platform/hosted/tests/topology-regressions.py:26 asserts the baseline without the Human manifest holds exactly forty resolved edges and the tree holds forty one, and line 88 asserts the complete topology holds forty two where the tree holds forty three. Both parsers report the same forty four edges, one external and zero failed, before and after the agentd Service is added, so the counts those assertions pin moved when hosted edges were added by other work and the failure reproduces on an unmodified checkout of the branch point."
+assumption = "The assertion is a real regression fence over a count that other lanes changed, so raising the number here would weaken a check that belongs to the topology owner and would hide whichever addition moved it. Both literals were left exactly as written; the agentd Service adds no edge and no failure to either parser."
+severity = "blocker"
+
+[observation.3.7.4406]
+task = "3.7"
+file = "platform/hosted/tests/beta-cluster.sh"
+symbol = "beta_cluster_render secrets_generate module_registry_generate"
+observed = "beta-cluster.sh render, the one cluster path that needs no cluster, cannot run in this environment either: secrets_generate calls module_registry_generate, which runs the layerx-node image through docker to produce the module registry, and the beta image tags name a local build that does not exist, so docker refuses the pull and the render exits before ca_generate reaches the new agentd identities or manifests_render reaches the boundary container."
+assumption = "Building the beta images is the images subcommand of the same script and is not part of this work, so the render was left as it is. The manifest that render would emit is checked directly instead: platform/hosted/agentd/manifest_check.py loads platform/hosted/node/deployment.yaml, and the certificate and secret hunks are covered by the shell parse."
+severity = "note"
