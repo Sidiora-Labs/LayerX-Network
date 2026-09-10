@@ -843,7 +843,12 @@ fn genesis_request(asset: &[u8; 32], sequencer_key: &[u8; 32]) -> Vec<u8> {
     }
     assert_eq!(request.len(), 395, "LXGB request length");
     let issuer = SigningKey::from_bytes(&random32());
-    lxgb_metadata::append(&mut request, asset, &issuer.verifying_key().to_bytes(), &random32());
+    lxgb_metadata::append(
+        &mut request,
+        asset,
+        &issuer.verifying_key().to_bytes(),
+        &random32(),
+    );
     request
 }
 
@@ -2234,7 +2239,9 @@ fn start_supervised_cluster() -> Cluster {
     lxgb_metadata::append(
         &mut metadata,
         &asset,
-        &SigningKey::from_bytes(&treasury_seed).verifying_key().to_bytes(),
+        &SigningKey::from_bytes(&treasury_seed)
+            .verifying_key()
+            .to_bytes(),
         &random32(),
     );
     write(&root.join("bootstrap-metadata.lxgb"), &metadata, 0o644);
@@ -2257,7 +2264,10 @@ fn start_supervised_cluster() -> Cluster {
             text(&root.join("bootstrap-sequencer.key")),
         ),
         ("--treasury-key", text(&root.join("bootstrap-treasury.key"))),
-        ("--genesis-metadata", text(&root.join("bootstrap-metadata.lxgb"))),
+        (
+            "--genesis-metadata",
+            text(&root.join("bootstrap-metadata.lxgb")),
+        ),
         (
             "--program-token-file",
             text(&root.join("bootstrap-program.token")),
