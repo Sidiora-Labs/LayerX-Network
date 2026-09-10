@@ -148,6 +148,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-gateway \
 	test-gateway-send \
 	test-gateway-receive \
+	test-gateway-kv \
 	test-receipt-offline \
 	test-layerxd test-daemon-lni-admission \
 	test-tools \
@@ -1194,6 +1195,16 @@ $(BUILD_DIR)/tests/test_gateway_receive: tests/test_gateway_receive.c \
 
 test-gateway-receive: $(BUILD_DIR)/tests/test_gateway_receive
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_gateway_receive
+
+$(BUILD_DIR)/tests/test_gateway_kv: tests/network/test_gateway_kv.c \
+		$(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-gateway-kv: $(BUILD_DIR)/tests/test_gateway_kv
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_gateway_kv
 
 $(BUILD_DIR)/tests/test_receipt_offline: tests/test_receipt_offline.c \
 		cmd/layerx-verify/lxp_verify_receipt.c $(LIBRARY)
@@ -2869,6 +2880,7 @@ core-test-all: test test-kernel test-module-ctx test-dispatch test-receipts \
 	test-wave-8 test-wave-9 test-wave-10 test-wave-11 test-wave-12 test-paxeer \
 	test-paxeer-bond test-bridge-deposit test-bridge-withdraw test-emergency-exit \
 	test-reserve test-gateway test-gateway-send test-gateway-receive \
+	test-gateway-kv \
 	test-receipt-offline test-layerxd test-tools test-genesis test-genesis-import \
 	test-genesis-reconcile test-legacy-readonly test-shadow \
 	test-replay-golden-local test-contracts qualify-faults qualify-arith \
