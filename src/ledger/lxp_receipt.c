@@ -1,9 +1,13 @@
 #include "layerx/lxp_receipt.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_module.h"
 #include "layerx/lxp_storage.h"
 
 #include <string.h>
+
+_Static_assert((int)LXP_LEDGER_RECEIPT_MODULE_ID == (int)LXP_MODULE_ASSET,
+               "ledger receipts are asset module receipts");
 
 lxp_result lxp_balance_writer_guard(bool through_ledger_primitive)
 {
@@ -33,6 +37,8 @@ lxp_result lxp_ledger_receipt_build(lxp_receipt *receipt,
     (void)memcpy(receipt->activity_id, input->transaction_id, 32U);
     receipt->global_sequence = input->global_sequence;
     receipt->result_code = LXP_OK;
+    receipt->module_id = (uint16_t)LXP_LEDGER_RECEIPT_MODULE_ID;
+    receipt->module_version = (uint32_t)LXP_LEDGER_RECEIPT_MODULE_VERSION;
     receipt->operation = input->operation;
     (void)memcpy(receipt->asset, input->asset, 32U);
     receipt->amount = input->amount;

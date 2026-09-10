@@ -391,10 +391,12 @@ $(BUILD_DIR)/tests/test_receive: tests/ledger/test_receive.c \
 test-ledger-receive: $(BUILD_DIR)/tests/test_receive
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_receive
 
-$(BUILD_DIR)/tests/test_receipt: tests/ledger/test_receipt.c $(LIBRARY)
+$(BUILD_DIR)/tests/test_receipt: tests/ledger/test_receipt.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-ledger-receipt: $(BUILD_DIR)/tests/test_receipt
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_receipt
