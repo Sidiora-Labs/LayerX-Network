@@ -1762,6 +1762,7 @@ fn local_gateway_successful_send_latency() {
             hex_encode(&signed.activity_id)
         );
         verify_funded_receipt(&result, &cluster, &signed);
+        println!("successful_send_sample index={index} elapsed_us={elapsed}");
         samples.push(elapsed);
         last_signed = Some(signed);
     }
@@ -1811,6 +1812,11 @@ fn verify_funded_receipt(
     let receipt = receipt.protocol().required("protocol SEND");
     assert_eq!(receipt.result_code(), 0);
     assert_eq!(receipt.activity_id(), signed.activity_id);
+    println!(
+        "successful_send_meter canonical_bytes={} fee_charged={}",
+        signed.canonical.len(),
+        receipt.fee_charged()
+    );
 }
 
 fn assert_funded_commitments(
