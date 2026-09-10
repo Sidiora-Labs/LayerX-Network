@@ -269,10 +269,12 @@ HTTP `429` and `Retry-After: 1`, never as a JSON-RPC error.
 
 For proxied calls, upstream HTTP `400`/`415` maps to `-32602`, `401`/`403`
 to `-32002`, `429` to `-32005`, and other non-success status to `-32001`.
-The upstream body is retained in `error.data`. Every proxied read carries the
-message `Read unavailable` and every proxied submission `Submission
-unavailable`, whichever of the four codes applies; gateway-side refusals carry
-distinct messages such as `Insufficient scope`, `Invalid params`, and
+The upstream body is retained in `error.data`. A proxied read carries the
+message that belongs to its code: `Invalid params` for `-32602`,
+`Insufficient scope` for `-32002`, and `Read unavailable` for `-32005` and
+`-32001`. Every proxied submission carries `Submission unavailable`,
+whichever of the four codes applies; gateway-side refusals carry distinct
+messages such as `Insufficient scope`, `Invalid params`, and
 `Missing verified receipt`.
 
 The public read limiter admits 120 requests per second process-wide across all
