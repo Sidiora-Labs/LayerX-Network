@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_mcp::catalogue;
 use layerx_mcp::server::{DeploymentMode, ToolDefinition, ToolKind};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
@@ -146,6 +147,32 @@ pub const fn kind_name(kind: ToolKind) -> &'static str {
         ToolKind::Read => "read",
         ToolKind::Write => "write",
     }
+}
+
+/// Returns the daemon-bound catalogue `layerx mcp serve` serves in one deployment mode.
+pub fn daemon_surface(mode: DeploymentMode) -> Result<Vec<ToolDefinition>, String> {
+    let tools = catalogue::surface(mode);
+    if tools.is_empty() {
+        return Err("the selected deployment mode would serve no daemon-bound tool".into());
+    }
+    Ok(tools)
+}
+
+/// Describes one daemon-bound catalogue tool for an installation record.
+pub fn daemon_descriptor(tool: ToolDefinition) -> Result<Value, String> {
+    let description = catalogue::description(tool.name)
+        .ok_or_else(|| format!("tool {} carries no catalogue description", tool.name))?;
+    let arguments = catalogue::input_schema(tool.name)
+        .ok_or_else(|| format!("tool {} carries no catalogue argument schema", tool.name))?;
+    Ok(json!({
+        "name": tool.name,
+        "kind": kind_name(tool.kind),
+        "scope": tool.required_scope,
+        "mutation": tool.mutation,
+        "evidence": tool.evidence,
+        "description": description,
+        "arguments": arguments,
+    }))
 }
 
 pub fn descriptor(tool: ToolDefinition) -> Value {

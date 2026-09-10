@@ -40,7 +40,7 @@ Read tools are absent from the list when the bound scope does not include them. 
 | `activity.track` | write | `write:track` | `Track` |
 | `activity.wait` | write | `write:activity:wait` | `Wait` |
 
-Write tools follow the ordinary daemon path: prepare, disclose, sign, submit, track. Outcomes are evidence-shaped (`Executed` + receipt, `Unknown`, or `Failed`). Read-only deployment omits write tools entirely. This catalogue is not the CLI `layerx mcp serve` surface (`receipt.get` / `activity.submit` only).
+Write tools follow the ordinary daemon path: prepare, disclose, sign, submit, track. Outcomes are evidence-shaped (`Executed` + receipt, `Unknown`, or `Failed`). Read-only deployment omits write tools entirely. This catalogue is exactly what `layerx mcp serve` and the `layerx-mcp` binary serve: both bind one daemon session through `src/binding.rs` and route every call through `src/stdio.rs`, so no signing seed and no gateway credential is read on the served path.
 
 The wallet and token tools (`wallet.accounts`, `wallet.balance`, `wallet.send`, `token.create`, `token.mint`, `token.transfer`) are registered in `src/server.rs` and implemented in `src/tools/wallet.rs` and `src/tools/write.rs`. Payment walkthrough: [`docs/wiki/PaymentsQuickstart.md`](../../../docs/wiki/PaymentsQuickstart.md).
 
@@ -55,4 +55,45 @@ From the monorepo root:
 make agent-test
 ```
 
-Crate tests include `scope`, `read`, `write`, `approval`, `readonly`, and `injection` (`agent/tests/mcp/injection.rs`).
+Crate tests include `scope`, `read`, `write`, `approval`, `readonly`, `daemon_bound`, and `injection` (`agent/tests/mcp/injection.rs`).
+
+## Serving
+
+The crate ships one binary. `layerx-mcp <absolute path to a binding document>` binds the daemon session the document names and serves the catalogue on a peer-credential admitted Unix socket. The developer CLI serves the same session on standard input and output with `layerx mcp serve --daemon-binding <path>`. The document is a closed JSON object:
+
+```json
+{
+  "mode": "full",
+  "tenant": "beta",
+  "store": "/var/lib/layerx/agentd/store",
+  "audit_root": "/var/lib/layerx/agentd/audit",
+  "session_id": "<32 hex bytes>",
+  "session_token_file": "/etc/layerx/mcp-session-token",
+  "session_generation": 1,
+  "capability_id": "<32 hex bytes>",
+  "core_sequence": 120,
+  "deadline_ms": 10000,
+  "agent": {
+    "endpoint": "127.0.0.1:9440",
+    "bearer_file": "/etc/layerx/agentd-bearer",
+    "probe_program": "<32 hex bytes>"
+  },
+  "limit": {
+    "id": "<16 hex bytes>",
+    "name": "mcp",
+    "scope": "tenant",
+    "scope_id": "<32 hex bytes>",
+    "ceiling": "1000",
+    "consumed": "0"
+  },
+  "listener": {
+    "socket": "/run/layerx/mcp.sock",
+    "owner_uid": 0,
+    "owner_gid": 0,
+    "mode": "660",
+    "admitted_uids": [0]
+  }
+}
+```
+
+`listener` is required by the binary and ignored by the CLI transport. Both secret files are read through the daemon's protected-source boundary: absolute, owner-only, and never copied into the document.

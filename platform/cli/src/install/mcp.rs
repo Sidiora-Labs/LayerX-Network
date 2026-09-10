@@ -1,6 +1,7 @@
 use layerx_mcp::server::DeploymentMode;
 use serde_json::{json, Value};
 
+use crate::config;
 use crate::config::Configuration;
 use crate::encoding::fixed_hex;
 use crate::toolset;
@@ -20,7 +21,7 @@ pub struct Request {
     pub asset: Option<String>,
 }
 
-/// Installs and registers a payment-capable `LayerX` model context protocol server.
+/// Installs and registers the daemon-bound `LayerX` model context protocol server.
 pub fn platform_install_mcp(
     configuration: &mut Configuration,
     request: &Request,
@@ -31,7 +32,8 @@ pub fn platform_install_mcp(
     } else {
         DeploymentMode::Full
     };
-    let tools = toolset::surface(mode)?;
+    let tools = toolset::daemon_surface(mode)?;
+    let daemon_binding = daemon_binding_path()?;
     let command = executable()?;
     let mut variables = variables()?;
     let selected_hosts = hosts(&request.hosts)?;
@@ -54,14 +56,12 @@ pub fn platform_install_mcp(
         "LAYERX_GATEWAY_KEY_ID".to_owned(),
         selection.gateway_key_id.clone(),
     );
-    let arguments = launch_arguments(
-        &selection.environment,
-        &selection.key,
-        &selection.gateway_alias,
-        payment.as_ref(),
-        request.read_only,
-    );
-    let descriptors: Vec<Value> = tools.iter().copied().map(toolset::descriptor).collect();
+    let arguments = launch_arguments(&daemon_binding, request.read_only);
+    let descriptors = tools
+        .iter()
+        .copied()
+        .map(toolset::daemon_descriptor)
+        .collect::<Result<Vec<Value>, String>>()?;
     let mut pending = Vec::new();
     for host in selected_hosts {
         let path = host.path()?;
@@ -83,6 +83,10 @@ pub fn platform_install_mcp(
         "endpoint": selection.endpoint,
         "network_id": selection.network_id,
         "deployment_mode": toolset::mode_name(mode),
+        "daemon_binding": daemon_binding,
+        "account_binding": payment
+            .as_ref()
+            .map(|(source, asset)| json!({"source_account": source, "asset": asset})),
         "server": {
             "name": SERVER_NAME,
             "command": command,
@@ -160,31 +164,27 @@ pub(super) fn payment_binding(request: &Request) -> Result<Option<(String, Strin
     )))
 }
 
-fn launch_arguments(
-    environment: &str,
-    key: &str,
-    gateway_alias: &str,
-    payment: Option<&(String, String)>,
-    read_only: bool,
-) -> Vec<String> {
+/// Resolves the daemon binding document the served path reads, beside the CLI configuration.
+fn daemon_binding_path() -> Result<String, String> {
+    let configuration = config::path()?;
+    let directory = configuration
+        .parent()
+        .ok_or_else(|| "the CLI configuration path has no parent directory".to_owned())?;
+    directory
+        .join("mcp")
+        .join("binding.json")
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "the daemon binding path is not valid UTF-8".to_owned())
+}
+
+fn launch_arguments(daemon_binding: &str, read_only: bool) -> Vec<String> {
     let mut arguments = vec![
         "mcp".to_owned(),
         "serve".to_owned(),
-        "--environment".to_owned(),
-        environment.to_owned(),
-        "--key".to_owned(),
-        key.to_owned(),
-        "--gateway-credential".to_owned(),
-        gateway_alias.to_owned(),
+        "--daemon-binding".to_owned(),
+        daemon_binding.to_owned(),
     ];
-    if let Some((source, asset)) = payment {
-        arguments.extend([
-            "--source-account".to_owned(),
-            source.clone(),
-            "--asset".to_owned(),
-            asset.clone(),
-        ]);
-    }
     if read_only {
         arguments.push("--read-only".to_owned());
     }
