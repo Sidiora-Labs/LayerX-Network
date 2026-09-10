@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -257,6 +258,98 @@ fn probe(socket: &Path, stage: &str) {
     }
 }
 
+/// Fixed bytes an LXGB v2 genesis request carries before the guarantor array:
+/// the magic and envelope version, the protocol version, the network identifier,
+/// the genesis timestamp, the single genesis parameter and the guarantor count.
+const REQUEST_PREFIX_BYTES: usize = 89;
+/// One guarantor record: a 32-byte identifier, a 33-byte compressed secp256k1
+/// public key and a 16-byte bond.
+const GUARANTOR_RECORD_BYTES: usize = 81;
+/// Fixed bytes the request carries after the guarantor array: the asset
+/// identifier, the programs metering schedule and the fee genesis parameters.
+const REQUEST_SUFFIX_BYTES: usize = 225;
+
+fn certificate_threshold(repository: &Path) -> usize {
+    let document = repository.join("contracts/config/checkpoint-settlement.json");
+    let text = fs::read_to_string(&document)
+        .unwrap_or_else(|error| panic!("settlement document {}: {error}", document.display()));
+    let key = "\"certificate_threshold\"";
+    let start = text
+        .find(key)
+        .unwrap_or_else(|| panic!("settlement document has no certificate_threshold"));
+    let value = text[start + key.len()..]
+        .strip_prefix(|character: char| character.is_ascii_whitespace() || character == ':')
+        .unwrap_or_else(|| panic!("certificate_threshold is not a member"));
+    let digits: String = value
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    let threshold: usize = digits
+        .parse()
+        .unwrap_or_else(|error| panic!("certificate_threshold {digits:?}: {error}"));
+    assert!(
+        (1..=32).contains(&threshold),
+        "certificate_threshold out of the genesis guarantor range: {threshold}"
+    );
+    threshold
+}
+
+/// The bootstrap builds one guarantor record per configured certificate
+/// threshold, so the length it accepts has to follow that threshold instead of
+/// describing a single-guarantor request.
+fn assert_genesis_request(work: &Path, threshold: usize) {
+    let request = fs::read(work.join("data/work/genesis-request.lxgb"))
+        .unwrap_or_else(|error| panic!("bootstrap genesis request: {error}"));
+    let metadata = fs::read(work.join("metadata"))
+        .unwrap_or_else(|error| panic!("bootstrap genesis metadata: {error}"));
+    assert!(request.len() > REQUEST_PREFIX_BYTES, "truncated request");
+    assert_eq!(&request[..4], b"LXGB");
+    assert_eq!(request[4], 2, "LXGB envelope version");
+    assert_eq!(
+        u16::from_be_bytes([request[19], request[20]]),
+        1,
+        "genesis parameter count"
+    );
+    let count = usize::from(u16::from_be_bytes([request[87], request[88]]));
+    assert_eq!(count, threshold, "genesis guarantor count");
+    assert_eq!(
+        request.len(),
+        REQUEST_PREFIX_BYTES
+            + GUARANTOR_RECORD_BYTES * count
+            + REQUEST_SUFFIX_BYTES
+            + metadata.len(),
+        "LXGB request length"
+    );
+    let mut previous = [0_u8; 32];
+    for index in 0..count {
+        let start = REQUEST_PREFIX_BYTES + index * GUARANTOR_RECORD_BYTES;
+        let record = &request[start..start + GUARANTOR_RECORD_BYTES];
+        assert!(record[0..32] > previous[..], "guarantor identifier order");
+        previous.copy_from_slice(&record[0..32]);
+        assert!(
+            record[32] == 2 || record[32] == 3,
+            "compressed guarantor public key prefix"
+        );
+        assert_eq!(&record[65..], [0_u8; 16], "genesis guarantor bond");
+    }
+    let mut keys = 0;
+    for entry in fs::read_dir(work.join("data/secrets"))
+        .unwrap_or_else(|error| panic!("bootstrap secrets directory: {error}"))
+    {
+        let entry = entry.unwrap_or_else(|error| panic!("bootstrap secret entry: {error}"));
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("guarantor-key") && name.ends_with(".pem") {
+            keys += 1;
+        }
+    }
+    assert_eq!(
+        keys, count,
+        "guarantor private keys written by the bootstrap"
+    );
+}
+
 #[test]
 fn real_daemon_availability_refusals() {
     if let Some(socket) = std::env::var_os("LAYERX_TEST_AVAILABILITY_SOCKET") {
@@ -282,16 +375,41 @@ fn real_daemon_availability_refusals() {
         .is_file());
     let executable = std::env::current_exe()
         .unwrap_or_else(|error| panic!("Rust integration executable: {error}"));
+    let evidence =
+        std::env::temp_dir().join(format!("lxp-availability-evidence-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&evidence);
+    fs::create_dir(&evidence).unwrap_or_else(|error| panic!("harness evidence directory: {error}"));
+    fs::set_permissions(&evidence, fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|error| panic!("harness evidence permissions: {error}"));
     let status = Command::new("bash")
         .arg(repository.join("tests/daemon/program-admission.sh"))
         .arg("build")
         .arg("--availability-batches")
         .arg(executable)
         .env("LAYERX_TEST_NATIVE_BIN_DIR", binaries)
+        .env("LAYERX_TEST_ADMISSION_LOG_DIR", &evidence)
         .env("CARGO_BUILD_JOBS", "16")
         .env("MAKEFLAGS", "-j16")
         .current_dir(&repository)
         .status()
         .unwrap_or_else(|error| panic!("real daemon harness: {error}"));
     assert!(status.success(), "real daemon harness exit: {status}");
+    let mut works: Vec<PathBuf> = fs::read_dir(&evidence)
+        .unwrap_or_else(|error| panic!("harness evidence listing: {error}"))
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| panic!("harness evidence entry: {error}"))
+                .path()
+        })
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("lxp-program-admission-"))
+        })
+        .collect();
+    works.sort();
+    assert_eq!(works.len(), 1, "harness work directories: {works:?}");
+    assert_genesis_request(&works[0], certificate_threshold(&repository));
+    fs::remove_dir_all(&evidence)
+        .unwrap_or_else(|error| panic!("harness evidence removal: {error}"));
 }

@@ -447,7 +447,7 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     for demand in 100 1 1 10 1 1000; do hex_to_bin "$(be_hex "$demand" 8)"; done
     cat "$GENESIS_METADATA"
 } > "$REQUEST"
-[ "$(stat -c %s "$REQUEST")" -eq "$((395 + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
+[ "$(stat -c %s "$REQUEST")" -eq "$((314 + 81 * GUARANTOR_COUNT + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
 
 SIGNER_KEY="$DATA_DIR/work/genesis-signer.key"
 hex_to_bin "$SEQUENCER_PRIVATE" > "$SIGNER_KEY"
