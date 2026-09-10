@@ -1,6 +1,7 @@
 #ifndef LAYERX_LXP_AUTHORITY_H
 #define LAYERX_LXP_AUTHORITY_H
 
+#include "layerx/lxp_activity.h"
 #include "layerx/lxp_codec.h"
 #include "layerx/lxp_u128.h"
 
@@ -71,6 +72,49 @@ typedef struct lxp_authority_resolved {
 } lxp_authority_resolved;
 #define lxp_authority_resolved lxp_authority_resolved
 
+/* The activity envelope an executing node declares from its registered module
+ * set. Every resolved grant scope must fall inside it. */
+typedef struct lxp_authority_envelope {
+    uint64_t module_mask;
+    uint16_t activity_ordinal_min;
+    uint16_t activity_ordinal_max;
+} lxp_authority_envelope;
+#define lxp_authority_envelope lxp_authority_envelope
+
+struct lxp_kernel;
+struct lxp_identity;
+
+lxp_result lxp_grant_decode(const uint8_t *bytes, size_t length,
+                            lxp_authority_grant *grant);
+lxp_result lxp_authority_envelope_declare(const struct lxp_kernel *kernel,
+                                          uint64_t epoch,
+                                          lxp_authority_envelope *envelope);
+/* Owner authority is bounded by the account balance and by the signed activity
+ * window, never by an allowance: an owner scope carries no spend caps. */
+lxp_result lxp_authority_owner_grant(const struct lxp_identity *identity,
+                                     const uint8_t verified_key[32],
+                                     const lxp_authority_envelope *envelope,
+                                     uint64_t not_before, uint64_t not_after,
+                                     lxp_authority_grant *grant);
+/* Loads the persisted grant the governance module wrote for verified_key,
+ * applying its persisted revocation record. */
+lxp_result lxp_authority_grant_lookup(const struct lxp_kernel *kernel,
+                                      const uint8_t grantor[32],
+                                      const uint8_t verified_key[32],
+                                      lxp_authority_grant *grant);
+/* The single authority entry every executing node uses. The resolved scope
+ * points into grant, which the caller must keep alive for the execution. */
+lxp_result lxp_authority_resolve_activity(const struct lxp_kernel *kernel,
+                                          const struct lxp_identity *identity,
+                                          const lxp_activity *activity,
+                                          bool owner_key_valid,
+                                          bool signature_valid,
+                                          uint64_t batch_timestamp,
+                                          uint64_t maximum_timestamp_window,
+                                          uint64_t global_sequence,
+                                          lxp_authority_grant *grant,
+                                          lxp_authority_resolved *resolved);
+
 lxp_result lxp_authority_hash(lxp_authority_kind kind,
                               const uint8_t grant_id[32],
                               const uint8_t verified_key[32],
@@ -105,7 +149,6 @@ lxp_result lxp_authority_is_live(const lxp_authority_grant *grant,
                                  uint64_t batch_timestamp,
                                  uint64_t global_sequence);
 
-struct lxp_identity;
 lxp_result lxp_identity_bump_revocation_sequence(struct lxp_identity *identity,
                                                  uint64_t new_sequence);
 

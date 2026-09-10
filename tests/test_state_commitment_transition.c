@@ -1151,6 +1151,133 @@ static int pay1_malformed(void)
 }
 
 
+/* Authority is resolved from persisted grant state instead of being synthesized
+ * at the call site: the receipt hash is bound to a real grant identifier, a
+ * session grant stays a session grant through execution, and a revoked grant
+ * never resolves. */
+static int authority_case(unsigned mode)
+{
+    fixture *f = (fixture *)calloc(1U, sizeof(*f));
+    lxp_identity *identity = NULL;
+    lxp_authority_envelope envelope;
+    lxp_authority_grant grant;
+    lxp_authority_grant session;
+    lxp_authority_resolved resolved;
+    lxp_authority_resolved owner;
+    lxp_byte_span encoded;
+    uint8_t account_principal[32];
+    uint8_t synthesized[32];
+    uint8_t expected[32];
+    uint8_t revocation[41];
+    uint8_t zero_grant_id[32] = {0};
+    uint8_t root[32];
+    size_t index;
+    REQUIRE(f != NULL);
+    REQUIRE(prepare(f, LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true) == 0);
+    REQUIRE(lxp_identity_resolve(&f->identities, did, sizeof(did) - 1U,
+                                 &identity) == LXP_OK);
+    (void)memcpy(account_principal, f->authority.principal, 32U);
+    REQUIRE(lxp_authority_envelope_declare(&f->kernel, f->kernel.epoch,
+                                           &envelope) == LXP_OK);
+    REQUIRE(envelope.module_mask == (UINT64_C(1) << LXP_MODULE_ASSET));
+    REQUIRE(lxp_authority_resolve_activity(&f->kernel, identity, &f->activity,
+        true, true, f->execution.batch_timestamp_ms,
+        f->execution.maximum_timestamp_window, f->execution.global_sequence,
+        &grant, &owner) == LXP_OK);
+    REQUIRE(!lxp_ct_is_zero(grant.grant_id, 32U));
+    REQUIRE(owner.kind == LXP_AUTHORITY_OWNER);
+    REQUIRE(grant.scope.module_mask == envelope.module_mask);
+    REQUIRE(lxp_u128_is_zero(grant.scope.maximum_per_activity));
+    REQUIRE(lxp_authority_hash(LXP_AUTHORITY_OWNER, grant.grant_id,
+                               f->public_key, expected) == LXP_OK);
+    REQUIRE(memcmp(owner.authority_hash, expected, 32U) == 0);
+    REQUIRE(lxp_authority_hash(LXP_AUTHORITY_OWNER, zero_grant_id,
+                               f->public_key, synthesized) == LXP_OK);
+    REQUIRE(memcmp(owner.authority_hash, synthesized, 32U) != 0);
+    if (mode != 0U) {
+        lxp_module_kv_entry *entry;
+        REQUIRE(lxp_session_key_bind(&session, identity->did_id, f->public_key,
+            envelope.module_mask, envelope.activity_ordinal_min,
+            envelope.activity_ordinal_max,
+            f->activity.timestamp_bound.not_before,
+            f->activity.timestamp_bound.not_after + 1U,
+            identity->revocation_sequence) == LXP_OK);
+        REQUIRE(lxp_grant_encode(&session, &f->arena, &encoded) == LXP_OK);
+        entry = &f->kernel.module_kv[f->kernel.module_kv_count++];
+        (void)memset(entry, 0, sizeof(*entry));
+        entry->module_id = LXP_MODULE_GOVERNANCE;
+        entry->key_length = 33U;
+        entry->key[0] = 5U;
+        (void)memcpy(entry->key + 1U, session.grant_id, 32U);
+        entry->value_length = (uint32_t)encoded.length;
+        (void)memcpy(entry->value, encoded.bytes, encoded.length);
+    }
+    if (mode == 2U) {
+        lxp_module_kv_entry *entry;
+        (void)memset(revocation, 0, sizeof(revocation));
+        (void)memcpy(revocation, session.grant_id, 32U);
+        revocation[32] = 1U;
+        for (index = 0U; index < 8U; ++index)
+            revocation[33U + index] =
+                (uint8_t)(f->execution.global_sequence >> (56U - 8U * index));
+        entry = &f->kernel.module_kv[f->kernel.module_kv_count++];
+        (void)memset(entry, 0, sizeof(*entry));
+        entry->module_id = LXP_MODULE_GOVERNANCE;
+        entry->key_length = 33U;
+        entry->key[0] = 6U;
+        (void)memcpy(entry->key + 1U, session.grant_id, 32U);
+        entry->value_length = (uint32_t)sizeof(revocation);
+        (void)memcpy(entry->value, revocation, sizeof(revocation));
+    }
+    if (mode == 3U) identity->revocation_sequence += 1U;
+    if (mode == 2U || mode == 3U) {
+        REQUIRE(lxp_authority_resolve_activity(&f->kernel, identity, &f->activity,
+            false, true, f->execution.batch_timestamp_ms,
+            f->execution.maximum_timestamp_window, f->execution.global_sequence,
+            &grant, &resolved) == LXP_ERR_AUTH_REVOKED);
+        REQUIRE(lxp_state_store_destroy(&f->state) == LXP_OK);
+        free(f);
+        return 0;
+    }
+    if (mode == 1U) {
+        REQUIRE(lxp_authority_resolve_activity(&f->kernel, identity, &f->activity,
+            false, true, f->execution.batch_timestamp_ms,
+            f->execution.maximum_timestamp_window, f->execution.global_sequence,
+            &grant, &resolved) == LXP_OK);
+        REQUIRE(resolved.kind == LXP_AUTHORITY_SESSION_KEY);
+        REQUIRE(memcmp(grant.grant_id, session.grant_id, 32U) == 0);
+        REQUIRE(lxp_authority_hash(LXP_AUTHORITY_SESSION_KEY, session.grant_id,
+                                   f->public_key, expected) == LXP_OK);
+        REQUIRE(memcmp(resolved.authority_hash, expected, 32U) == 0);
+        REQUIRE(memcmp(resolved.authority_hash, owner.authority_hash, 32U) != 0);
+    } else {
+        resolved = owner;
+    }
+    (void)memcpy(resolved.principal, account_principal, 32U);
+    f->authority = resolved;
+    f->execution.authority = &f->authority;
+    REQUIRE(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
+    REQUIRE(lxp_kernel_execute_activity(&f->kernel, &f->activity, &f->execution,
+                                        &f->receipt) == LXP_OK);
+    /* An owner-only asset send refuses a session grant instead of silently
+     * treating it as owner authority. */
+    REQUIRE(f->receipt.result_code ==
+            (mode == 1U ? LXP_ERR_UNAUTHORIZED_DEBIT : LXP_OK));
+    REQUIRE(lxp_receipt_verify(&f->receipt, f->public_key, &f->arena) == LXP_OK);
+    REQUIRE(lxp_state_root(&f->kernel, root) == LXP_OK);
+    REQUIRE(memcmp(root, f->receipt.resulting_state_root, 32U) == 0);
+    if (mode == 0U) {
+        REQUIRE(f->accounts.accounts[0].balance.lo == 9U);
+        REQUIRE(f->accounts.accounts[1].balance.lo == 1U);
+    } else {
+        REQUIRE(f->accounts.accounts[0].balance.lo == 10U);
+        REQUIRE(f->accounts.accounts[1].balance.lo == 0U);
+    }
+    REQUIRE(lxp_state_store_destroy(&f->state) == LXP_OK);
+    free(f);
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(LXP_PROTOCOL_VERSION == LXP_PROTOCOL_VERSION_OCCUPANCY);
@@ -1178,6 +1305,7 @@ int main(void)
     REQUIRE(pay1_prepared_account(2U) == 0);
     REQUIRE(pay1_prepared_account(3U) == 0);
     for (unsigned i = 0U; i < 6U; ++i) REQUIRE(asset_send(i) == 0);
+    for (unsigned i = 0U; i < 4U; ++i) REQUIRE(authority_case(i) == 0);
     (void)puts("state commitment transition: legacy, version 3, preview, signatures and tampering passed");
     return 0;
 }
