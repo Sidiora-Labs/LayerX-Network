@@ -45,11 +45,13 @@ static lxp_result emit_margin(lxp_module_ctx *ctx, lx_account *from,
                               uint16_t reason, lxp_receipt *receipt)
 {
     lxp_transfer_set set;
+    lxp_transfer_source_authority source;
     if (ctx == NULL || from == NULL || to == NULL || asset == NULL ||
         receipt == NULL || lxp_u128_is_zero(amount) || !asset->registered ||
         asset->paused)
         return LXP_ERR_NON_CANONICAL;
     (void)memset(&set, 0, sizeof(set));
+    (void)memset(&source, 0, sizeof(source));
     set.leg_count = 1U;
     set.legs[0].from = from;
     set.legs[0].to = to;
@@ -60,6 +62,14 @@ static lxp_result emit_margin(lxp_module_ctx *ctx, lx_account *from,
     set.context = context;
     set.context.assets = asset;
     set.context.asset_count = 1U;
+    if (memcmp(set.context.authorized_from, from->id, 32U) != 0)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    (void)memcpy(source.authorized_from, from->id, 32U);
+    source.debit_authority_kind = set.context.debit_authority_kind;
+    source.protocol_system_capability =
+        set.context.protocol_system_capability;
+    set.context.source_authorities = &source;
+    set.context.source_authority_count = 1U;
     return lxp_ctx_emit_transfer_set(ctx, &set, receipt);
 }
 
@@ -77,6 +87,7 @@ lxp_result lx_perps_margin_post(lxp_module_ctx *ctx,
         return LXP_ERR_NON_CANONICAL;
     context.debit_authority_kind = context.debit_authority_kind == 0 ?
         LXP_AUTH_OWNER : context.debit_authority_kind;
+    (void)memcpy(context.authorized_from, owner_main->id, 32U);
     return emit_margin(ctx, owner_main, margin_account, asset, amount, context,
                        LXP_REASON_MARGIN_POST, receipt);
 }
