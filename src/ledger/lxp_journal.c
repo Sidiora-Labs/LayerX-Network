@@ -254,9 +254,18 @@ lxp_result lxp_apply_transfer_set(lxp_transfer_leg *legs, size_t leg_count,
         }
     }
     if (context->debit_authority_kind !=
-            LXP_AUTH_OCCUPANCY_RESPONSIBILITY)
+            LXP_AUTH_OCCUPANCY_RESPONSIBILITY) {
+        status = lxp_sequence_terminal_check(context, &compact[0]);
+        if (status != LXP_OK) {
+            (void)lxp_journal_rollback(&journal);
+            result->failed_leg = original_index[0];
+            result->failure = status;
+            result->leg_count = 0U;
+            return status;
+        }
         ++(context->sequence_account != NULL ? context->sequence_account :
                                               compact[0].from)->next_sequence;
+    }
     status = lxp_journal_commit(&journal);
     if (status != LXP_OK) return status;
     result->leg_count = compact_count;

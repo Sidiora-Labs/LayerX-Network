@@ -4,5 +4,7 @@
 #include "layerx/lxp_transfer.h"
 
 lxp_result lxp_balance_restore_snapshot(lxp_ledger_journal *journal);
+lxp_result lxp_sequence_terminal_check(const lxp_transfer_context *context,
+                                       const lxp_transfer_leg *leg);
 
 #endif

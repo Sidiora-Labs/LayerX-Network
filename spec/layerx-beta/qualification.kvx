@@ -10276,3 +10276,51 @@ symbol = "test-daemon-guarantor-integration test-daemon-guarantor-settlement"
 observed = "make CC=gcc test-daemon-guarantor-integration exits 2 before any guarantor code runs: tests/daemon/guarantor-integration.py:118 invokes platform/hosted/node/bootstrap.sh, which refuses with 'bootstrap: --genesis-metadata requires an authoritative LXGB v2 metadata file'. make CC=gcc test-daemon-guarantor-settlement exits 2 after tests/daemon/guarantor-settlement-chain.py has already printed its own success record, when tests/daemon/withdraw-custody.py reaches tests/daemon/guarantor-publication-chain.py:158 and cargo build --locked --manifest-path human/Cargo.toml -p layerx-paxeer-client exits 101 with 'the lock file human/Cargo.lock needs to be updated but --locked was passed'. Neither path is touched by this change: git diff origin/main HEAD -- platform/hosted/node/bootstrap.sh tests/daemon/guarantor-integration.py human/ is empty. The bootstrap refusal is the metadata argument recorded for the hosted node harness and the lock staleness is the same human workspace lock already recorded against the Human image build."
 assumption = "Both failures are reproduced by files this change does not touch and occur before the guarantor binds any membership, so they are pre-existing and are recorded rather than repaired here. make CC=gcc test-daemon-guarantor-unit, which runs the guarantor core, the mTLS exchange and tests/daemon/guarantor-settlement.py, exits 0."
 severity = "blocker"
+
+[observation.6.11.2400]
+task = "6.11"
+file = "include/layerx/lxp_result.h"
+symbol = "LXP_ERR_SEQUENCE_EXHAUSTED LXP_RESULT_CODES"
+observed = "The refusal for a terminal account sequence needs a result code of its own so a caller can tell an exhausted sequence apart from a mismatched one. There is no include/layerx/lxp_errors.h in the tree; every consensus result code is declared by the LXP_RESULT_CODES X-macro table in include/layerx/lxp_result.h, so LXP_ERR_SEQUENCE_EXHAUSTED was appended there at line 74 as -307, the next free value in the sequencing domain after LXP_ERR_CONDITION_UNMET at -306. No existing value was renumbered. Because lxp_terminal_rejection_applies at src/protocol/lxp_kernel.c:4682 classifies by lxp_result_domain and returns true for LXP_RESULT_DOMAIN_SEQUENCING, the new code is published as a terminal rejection with no change to that function, and tests/protocol/lxp_test_result.c covers its name, domain, fatality and uniqueness through the same table."
+assumption = "Appending a value at the end of the sequencing domain adds a code that no released receipt can already carry, so it is additive rather than a renumbering; a code that shares -305 with LXP_ERR_SEQUENCE_MISMATCH would have made a permanently unusable account indistinguishable from a caller that simply guessed the wrong sequence."
+severity = "note"
+
+[observation.6.11.2401]
+task = "6.11"
+file = "src/ledger/lxp_ledger_internal.h src/ledger/lxp_apply.c src/ledger/lxp_journal.c"
+symbol = "lxp_sequence_terminal_check lxp_balance_restore_snapshot"
+observed = "Both account sequence increments live in different translation units: src/ledger/lxp_apply.c:325 in lxp_apply_transfer and src/ledger/lxp_journal.c in lxp_apply_transfer_set. The predicate that refuses a terminal sequence is defined once in src/ledger/lxp_apply.c:71 and has to be visible to lxp_journal.c. Declaring it in the public include/layerx/lxp_transfer.h would widen the ledger surface that tools/ci/symbol-allowlist.sh polices, so the declaration was added to the private src/ledger/lxp_ledger_internal.h, which is included by src/ledger/lxp_journal.c alone and already carries exactly this pattern for lxp_balance_restore_snapshot, also defined in lxp_apply.c."
+assumption = "Duplicating the predicate as a static helper in each file would let the two increment sites drift apart, which is the failure this row exists to close, so one definition with a private declaration was preferred over two copies."
+severity = "note"
+
+[observation.6.11.2402]
+task = "6.11"
+file = "agent/crates/layerx-types/src/result.rs"
+symbol = "KnownResult SequenceExhausted"
+observed = "agent/crates/layerx-types/src/result.rs mirrors the C result table by hand, listing SequenceMismatch = -305, Retriable and ConditionUnmet = -306, Terminal at lines 119 and 120 and then jumping to InsufficientBalance = -400. The new LXP_ERR_SEQUENCE_EXHAUSTED = -307 has no Rust counterpart, so a Rust client decoding a receipt that carries -307 cannot name it or classify it as terminal. Nothing in the build reads include/layerx/lxp_result.h to check the two tables against each other, so the omission does not fail any gate."
+assumption = "agent/crates/layerx-types is outside this row's owned paths and adding a variant to a public enum is an API change for that crate, so the C side is left authoritative and the missing mirror is recorded rather than added. The absence of an automated parity check between the C table and the Rust enum is the underlying gap and it predates this change."
+severity = "suspect"
+
+[observation.6.11.2403]
+task = "6.11"
+file = "Makefile"
+symbol = "test_escrow_dispute test_stream_lifecycle PROGRAMS_RUNTIME_LIB"
+observed = "The link rules for build/tests/test_escrow_dispute at Makefile:496 and build/tests/test_stream_lifecycle at Makefile:612 name only $(TEST_LIBRARY), while every neighbouring module test rule also names $(PROGRAMS_RUNTIME_LIB) and depends on the programs-build order-only prerequisite. Both targets therefore fail to link with undefined references to the Rust programs-sandbox entry points the testing library calls, among them layerx_programs_interface_validate, layerx_programs_consume_program_spend_authorization, layerx_programs_schedule_plan, layerx_programs_call_begin and layerx_programs_occupancy_finalize_rust. The failure is a property of those two link lines alone: this row adds no symbol to either binary and changes no Makefile rule, and the same two link failures were reproduced on an unmodified checkout of revision 7e0cd0c86 built in a separate worktree."
+assumption = "Adding $(PROGRAMS_RUNTIME_LIB) to those two rules would change how the whole test matrix links and belongs to whoever owns the build description, so the defect is recorded rather than repaired here."
+severity = "suspect"
+
+[observation.6.11.2405]
+task = "6.11"
+file = "src/ledger/lxp_apply.c src/ledger/lxp_journal.c src/ledger/lxp_send.c src/ledger/lxp_receive.c"
+symbol = "lxp_sequence_terminal_check lxp_precondition_check lxp_send_validate verify_receiver"
+observed = "An account whose next_sequence has reached UINT64_MAX cannot advance again: one more increment wraps it to zero and every sequence it already consumed becomes replayable. The refusal is placed so that the terminal value is unusable rather than wrapped. lxp_sequence_terminal_check refuses when either the debit source leg->from or the account named by context->sequence_account stands at UINT64_MAX, and it is called from lxp_precondition_check before any balance moves, again in lxp_apply_transfer before lxp_balance_apply_leg, and in lxp_apply_transfer_set immediately before the increment, where a refusal rolls the journal back and reports failed_leg with leg_count zero. lxp_send_validate at src/ledger/lxp_send.c:263 and verify_receiver at src/ledger/lxp_receive.c:350 answer LXP_ERR_SEQUENCE_EXHAUSTED before the mismatch comparison, so an exhausted account is never reported as a sequence guess. The check is deliberately not gated on protocol_system_capability, and the existing occupancy carve-out is preserved: a leg whose debit_authority_kind is LXP_AUTH_OCCUPANCY_RESPONSIBILITY consumes no sequence and is unaffected. A terminal account keeps its balance and can still be credited as the recipient of a leg, because only the debit source and the sequence account are examined."
+assumption = "The default chosen for this row is that the terminal value is unusable: the account keeps its funds and can still receive, but cannot debit. No recovery or rotation path is introduced, because reassigning or resetting a consumed sequence space is an account-lifecycle change beyond this row."
+severity = "note"
+
+[observation.6.11.2406]
+task = "6.11"
+file = "Makefile tests/modules/test_escrow_dispute.c tests/modules/test_stream_lifecycle.c"
+symbol = "test-escrow-dispute test-stream-lifecycle test-escrow-open test-budget-create test-stream-settle test-service-dispute test-perps-margin"
+observed = "The seventeen ledger-consumer targets that this change could plausibly disturb - test-escrow-open, test-escrow-capture, test-escrow-timeout, test-escrow-invariants, test-escrow-dispute, test-budget-create, test-budget-spend, test-budget-delegate, test-budget-revoke, test-stream-open, test-stream-settle, test-stream-lifecycle, test-service-dispute, test-perps-margin, test-perps-funding, test-perps-liquidation and test-perps-insurance - were run together with make -k on this revision. The batch exits 2 with exactly two failures, both at link time: build/tests/test_escrow_dispute and build/tests/test_stream_lifecycle, the two rules recorded in observation 6.11.2403. Every one of the other fifteen builds and passes. On revision 7e0cd0c86, the revision this change was first written against, the same batch failed all seventeen, and an unmodified checkout of that revision in a separate worktree failed exactly the same seventeen names; the fifteen runtime failures were resolved on main between that revision and this one, and the two link failures survive because no rule was touched."
+assumption = "The two remaining failures cannot be caused by this change: they are link errors for undefined Rust programs-sandbox symbols in two rules that omit the runtime library, and this change adds no symbol to either binary. make CC=gcc test, which is this row's gate, contains none of the seventeen and passes."
+severity = "note"

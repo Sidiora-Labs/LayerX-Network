@@ -179,5 +179,28 @@ int main(void)
             LXP_OK || recurring.drawn_total.lo != 60U ||
         recurring.drawn_this_period.lo != 30U || recurring.window_start != 20U)
         return 1;
+    grants.grants[0].invoice_settled = false;
+    grants.grants[0].revoked = false;
+    environment.global_sequence = 1U;
+    if (lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 30U },
+                                     UINT64_MAX) != LXP_OK) return 1;
+    receive.receiver_sequence = UINT64_MAX;
+    receive.idempotency_key[0] = 3U;
+    if (sign_receive(&receive, receiver_seed) != 0 ||
+        lxp_receive_execute(&receive, &environment, &receipt) !=
+            LXP_ERR_SEQUENCE_EXHAUSTED || from->balance.lo != 70U ||
+        to->balance.lo != 30U || to->next_sequence != UINT64_MAX ||
+        grants.grants[0].drawn_total.lo != 30U ||
+        grants.grants[0].invoice_settled) return 1;
+    if (lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 30U }, 1U) !=
+        LXP_OK) return 1;
+    receive.receiver_sequence = 1U;
+    receive.amount = (lxp_u128){ 0U, 20U };
+    receive.idempotency_key[0] = 4U;
+    if (sign_receive(&receive, receiver_seed) != 0 ||
+        lxp_receive_execute(&receive, &environment, &receipt) != LXP_OK ||
+        from->balance.lo != 50U || to->balance.lo != 50U ||
+        to->next_sequence != 2U || grants.grants[0].drawn_total.lo != 50U ||
+        !grants.grants[0].invoice_settled) return 1;
     return 0;
 }

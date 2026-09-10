@@ -57,6 +57,31 @@ static lxp_result custody_spend_check(const lxp_transfer_leg *leg,
                                     leg->reason);
 }
 
+static lx_account *sequence_account_of(const lxp_transfer_context *context,
+                                      const lxp_transfer_leg *leg)
+{
+    if (context->sequence_account != NULL) return context->sequence_account;
+    return leg == NULL ? NULL : leg->from;
+}
+
+/* The debit source and the account whose sequence the activity consumes both
+ * have to hold a sequence that can still advance. UINT64_MAX is terminal: one
+ * more increment would wrap the account back to zero and every consumed
+ * sequence would become replayable. */
+lxp_result lxp_sequence_terminal_check(const lxp_transfer_context *context,
+                                       const lxp_transfer_leg *leg)
+{
+    const lx_account *sequence_account;
+    if (context == NULL || leg == NULL || leg->from == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    sequence_account = sequence_account_of(context, leg);
+    if (sequence_account == NULL) return LXP_ERR_NON_CANONICAL;
+    if (leg->from->next_sequence == UINT64_MAX ||
+        sequence_account->next_sequence == UINT64_MAX)
+        return LXP_ERR_SEQUENCE_EXHAUSTED;
+    return LXP_OK;
+}
+
 static lxp_result source_authority(
     const lxp_transfer_leg *leg, const lxp_transfer_context *context,
     const uint8_t **authorized_from, lxp_authorization_kind *authority_kind,
@@ -200,6 +225,10 @@ lxp_result lxp_precondition_check(const lxp_transfer_leg *legs,
             occupancy_mandate)) &&
          memcmp(authorized_from, leg->from->id, 32U) != 0))
         return LXP_ERR_UNAUTHORIZED_DEBIT;
+    {
+        lxp_result terminal_status = lxp_sequence_terminal_check(context, leg);
+        if (terminal_status != LXP_OK) return terminal_status;
+    }
     if (!protocol_system_capability && context->actor_sequence <
         (context->sequence_account != NULL ? context->sequence_account->next_sequence :
                                              leg->from->next_sequence))
@@ -288,10 +317,11 @@ lxp_result lxp_apply_transfer(lxp_transfer_leg *leg,
         return LXP_ERR_CONSERVATION;
     status = lxp_precondition_check(leg, 1U, context);
     if (status != LXP_OK) return status;
+    status = lxp_sequence_terminal_check(context, leg);
+    if (status != LXP_OK) return status;
     status = lxp_balance_apply_leg(leg, result);
     if (status == LXP_OK && context->debit_authority_kind !=
                             LXP_AUTH_OCCUPANCY_RESPONSIBILITY)
-        ++(context->sequence_account != NULL ? context->sequence_account :
-                                              leg->from)->next_sequence;
+        ++sequence_account_of(context, leg)->next_sequence;
     return status;
 }

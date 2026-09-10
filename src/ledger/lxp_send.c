@@ -260,6 +260,7 @@ lxp_result lxp_send_validate(const lxp_send *send,
         send->authorization.network_id != environment->network_id ||
         send->authorization.protocol_version != environment->protocol_version)
         return LXP_ERR_UNAUTHORIZED_DEBIT;
+    if (from->next_sequence == UINT64_MAX) return LXP_ERR_SEQUENCE_EXHAUSTED;
     if (send->sequence != from->next_sequence) return LXP_ERR_SEQUENCE_MISMATCH;
     if (environment->batch_timestamp > send->expires_at) return LXP_ERR_EXPIRED;
     for (i = 0U; i < send->condition_count; ++i) {

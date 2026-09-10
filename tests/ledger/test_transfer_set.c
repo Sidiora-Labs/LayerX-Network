@@ -99,5 +99,34 @@ int main(void)
         if (lxp_transfer_set_root(swapped, 4U, swapped_root) != LXP_OK ||
             memcmp(first_root, swapped_root, 32U) == 0) return 1;
     }
+    if (lxp_ledger_bootstrap_balance(accounts[3], asset_id,
+                                     (lxp_u128){ 0U, 100U },
+                                     UINT64_MAX) != LXP_OK) return 1;
+    if (lxp_apply_transfer_set(legs, 4U, &context, &result) !=
+            LXP_ERR_SEQUENCE_EXHAUSTED ||
+        result.failure != LXP_ERR_SEQUENCE_EXHAUSTED ||
+        result.failed_leg != 3U || result.leg_count != 3U ||
+        result.receipt_emitted || !balances(accounts, 100U, 100U, 100U, 100U) ||
+        accounts[0]->next_sequence != 0U ||
+        accounts[3]->next_sequence != UINT64_MAX) return 1;
+    if (lxp_ledger_bootstrap_balance(accounts[3], asset_id,
+                                     (lxp_u128){ 0U, 100U }, 0U) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(accounts[0], asset_id,
+                                     (lxp_u128){ 0U, 100U },
+                                     UINT64_MAX) != LXP_OK) return 1;
+    if (lxp_apply_transfer_set(legs, 4U, &context, &result) !=
+            LXP_ERR_SEQUENCE_EXHAUSTED ||
+        result.failure != LXP_ERR_SEQUENCE_EXHAUSTED ||
+        result.failed_leg != 0U || result.leg_count != 0U ||
+        result.receipt_emitted || !balances(accounts, 100U, 100U, 100U, 100U) ||
+        accounts[0]->next_sequence != UINT64_MAX) return 1;
+    if (lxp_ledger_bootstrap_balance(accounts[0], asset_id,
+                                     (lxp_u128){ 0U, 100U }, 0U) != LXP_OK)
+        return 1;
+    if (lxp_apply_transfer_set(legs, 4U, &context, &result) != LXP_OK ||
+        !result.receipt_emitted || result.leg_count != 4U ||
+        !balances(accounts, 130U, 90U, 90U, 90U) ||
+        accounts[0]->next_sequence != 1U ||
+        accounts[3]->next_sequence != 0U) return 1;
     return 0;
 }
