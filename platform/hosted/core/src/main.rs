@@ -1328,11 +1328,6 @@ fn protocol_route(config: &Config, request: &Request) -> Response {
     if request.query.is_some() {
         return refusal(400, "invalid_request", None);
     }
-    if method == "GET" {
-        if let Some(rest) = path.strip_prefix("/v1/accounts/") {
-            return public_reads::account(config, rest.strip_suffix("/balance").unwrap_or(rest));
-        }
-    }
     match (method, path) {
         ("GET", "/livez") => json_response(200, &serde_json::json!({ "live": true })),
         ("GET", "/readyz") => readiness(config),

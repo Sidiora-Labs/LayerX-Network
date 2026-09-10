@@ -516,7 +516,7 @@ fn submit_credit(cluster: &Cluster, signed: &[u8], seed: &[u8; 32]) {
     };
     let mut selector = vec![1];
     selector.extend_from_slice(&ack.activity_id());
-    selector.extend_from_slice(&3000_u32.to_be_bytes());
+    selector.push(1);
     drop(transport);
     thread::sleep(Duration::from_millis(100));
     let deadline = Instant::now() + Duration::from_secs(30);

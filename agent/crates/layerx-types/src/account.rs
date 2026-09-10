@@ -7,6 +7,7 @@ use crate::limits::{MAX_ACCOUNT_NAME_BYTES, MAX_DID_BYTES};
 pub enum AccountNamespace {
     /// `agent:<did>:main`.
     AgentMain,
+    /// `agent:<did>:asset:<lowercase hex64>`.
     AgentAsset,
     /// `agent:<did>:budget:<id>`.
     AgentBudget,

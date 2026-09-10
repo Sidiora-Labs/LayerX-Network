@@ -225,6 +225,9 @@ fn spawn(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(must(fs::File::create(&stderr), "stderr file")));
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        command.env("LAYERX_PAY_TIMING", "1");
+    }
     if daemon_identity {
         command.uid(DAEMON_UID).gid(DAEMON_GID);
     }
@@ -283,7 +286,7 @@ fn lni_limits() -> Limits {
 
 fn handshake_config() -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_4,
+        built_interface_version: Version::V1_5,
         expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: NETWORK_ID,
     }

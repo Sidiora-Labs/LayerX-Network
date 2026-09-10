@@ -41,13 +41,13 @@ that the binary implements are listed; unimplemented flags are omitted.
 | `layerx wallet import <name>` | Import a 32-byte hexadecimal Ed25519 seed from stdin without registration (`platform/cli/src/wallet.rs:22-27, 266-273`) | `name`; seed on stdin. `--did` optional |
 | `layerx wallet list` | List local wallet public metadata (`platform/cli/src/wallet.rs:29, 265`) | none |
 | `layerx wallet balance` | Read accounts of the selected DID (`platform/cli/src/wallet.rs:30-36, 277-305`) | `--did` and `--asset` optional. Native asset id `01` plus 62 zero hex digits maps to `agent:<DID>:main` |
-| `layerx wallet send` | Validate a transfer; refuses before signing (`platform/cli/src/wallet.rs:37-38, 457-477`) | `--to`, `--asset`, `--amount`. `--key` optional. `--wait` default `executed` (`executed`/`batched`/`finalised`). Exits `identity_sequence_unavailable`; does not sign or submit |
+| `layerx wallet send` | Validate a transfer; refuses before signing until the shared debit-authorization signing API is available | `--to`, `--asset`, `--amount`; optional `--key`, `--wait` |
 | `layerx wallet history` | Report that DID activity history is unpublished (`platform/cli/src/wallet.rs:39-43, 340-343`) | `--did` optional. Always exits `wallet_history_unavailable` |
-| `layerx wallet receipt <activity_id>` | Verify an executed receipt against the configured sequencer key (`platform/cli/src/wallet.rs:44-45, 306-339`) | `activity_id` (64 hex). Reports `executed` only; does not assert batch inclusion or finality |
-| `layerx wallet open-account` | Validate an asset-account open; refuses before signing (`platform/cli/src/wallet.rs:46-52, 347-355`) | `--asset`. `--key` optional. Exits `identity_sequence_unavailable` |
-| `layerx token create` | Validate a native token registration; refuses before signing (`platform/cli/src/wallet.rs:78-92, 376-398`) | `--symbol`, `--name`, `--decimals`, `--salt`. `--supply-cap` default `0`. `--key` optional. Exits `identity_sequence_unavailable` |
-| `layerx token mint` | Validate a mint payload; refuses before signing (`platform/cli/src/wallet.rs:93-103, 399-416`) | `--asset`, `--to`, `--amount`. `--key` optional. Exits `identity_sequence_unavailable` |
-| `layerx token burn` | Validate a burn payload; refuses before signing (`platform/cli/src/wallet.rs:104-112, 417-429`) | `--asset`, `--amount`. `--key` optional. Exits `identity_sequence_unavailable` |
+| `layerx wallet receipt <activity_id>` | Verify executed, batched or finalised RPC evidence using an independently supplied `--receipt-policy`; REST verifies execution only | `activity_id`, optional `--wait` |
+| `layerx wallet open-account` | Disclose, sign, submit and verify native asset account opening through the SDK | `--asset`, `--receipt-policy`, `--fee-limit`; optional `--key`, `--wait` |
+| `layerx token create` | Disclose, sign, submit and verify native token registration through the SDK | `--symbol`, `--name`, `--decimals`, `--salt`, `--receipt-policy`, `--fee-limit`; optional `--supply-cap`, `--key`, `--wait` |
+| `layerx token mint` | Disclose, sign, submit and verify minting through the SDK | `--asset`, `--to`, `--amount`, `--receipt-policy`, `--fee-limit`; optional `--key`, `--wait` |
+| `layerx token burn` | Disclose, sign, submit and verify burning through the SDK | `--asset`, `--amount`, `--receipt-policy`, `--fee-limit`; optional `--key`, `--wait` |
 | `layerx token transfer` | Validate a token transfer; refuses before signing (`platform/cli/src/wallet.rs:113-114, 373-375`) | same as `wallet send` |
 | `layerx token info <asset>` | Read token metadata through public RPC (`platform/cli/src/wallet.rs:115-116, 366-369`) | `asset` (64 hex). Without `--rpc`, or when the method is unpublished, exits `rpc_method_unavailable` |
 | `layerx token list` | List registered tokens through public RPC (`platform/cli/src/wallet.rs:117-118, 370-372`) | none. Same unpublished-method refusal as `token info` |
@@ -318,7 +318,7 @@ the detail string is `code: …` (`platform/cli/src/output.rs:62-75`;
 | `MCP and A2A installation require a configured hosted testnet or production gateway…` (`command_failed`) | install against emulator (`platform/cli/src/install/mod.rs:573-577`; `platform/cli/tests/install.rs:35-52`) |
 | `wallet_registration_unavailable` | `wallet create` on a non-emulator environment; no key is generated (`platform/cli/src/wallet.rs:230-232`) |
 | `wallet_history_unavailable` | `wallet history`; no DID activity-history method or REST route is published (`platform/cli/src/wallet.rs:340-343`) |
-| `identity_sequence_unavailable` | `wallet send`, `wallet open-account`, and token writes; the gateway has no `identity.next_sequence` read. No activity is signed or submitted (`platform/cli/src/wallet.rs:447-455, 476`) |
+| `identity_sequence_unavailable` | Authenticated identity state is unavailable; token writes refuse before signing. Send additionally requires the shared debit-authorization signing API |
 | `rpc_method_unavailable` | `token info` / `token list` without `--rpc`, or an RPC method absent from the published contract (`platform/cli/src/wallet.rs:433-445`; `platform/cli/src/rpc.rs:100-104`) |
 
 ---
@@ -373,7 +373,7 @@ which declares `mod credential_environment;`
 | `platform/cli/tests/emulator.rs` | Live emulator: environment bind, account prefund, payment quote/commit, identity mismatches (`platform/cli/tests/emulator.rs:1-6`) |
 | `platform/cli/tests/install.rs` | Install refusals; this file **removes** `LAYERX_CREDENTIAL_STORE` (`platform/cli/tests/install.rs:22`) so it does not use the mock |
 | `platform/cli/tests/workspace.rs` | Workspace module inventory against `LAYERX_REPO_ROOT` |
-| `platform/cli/tests/wallet_commands.rs` | Emulator wallet create/list/balance, send refusal `identity_sequence_unavailable`, import without leaking the seed, unpublished `token list` (`platform/cli/tests/wallet_commands.rs:6-96`) |
+| `platform/cli/tests/wallet_commands.rs` | Real emulator create/list/balance, typed Send refusal, import secret protection and unavailable reads |
 | `platform/cli/tests/wallet_encoding.rs` | CLI-local native asset register/open/revoke/mint/burn bytes against `wallet-assets-v1.json` (`platform/cli/tests/wallet_encoding.rs:29-77`) |
 | `platform/cli/tests/wallet_send.rs` | CLI-local Send payload and authorization-message bytes versus compiled `lxp_send.c` (`platform/cli/tests/wallet_send.rs:29-66`) |
 | `platform/cli/tests/clean-bootstrap.sh` | Published `install.md` bootstrap sequence in a clean `HOME` against a real binary (`platform/cli/tests/clean-bootstrap.sh:53-115`) |

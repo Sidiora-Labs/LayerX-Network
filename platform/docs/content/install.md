@@ -64,8 +64,9 @@ That performs a real quote and a real commit against the active endpoint and pri
 
 Native `layerx wallet` and `layerx token` commands are a separate surface,
 documented in the [CLI wallet quickstart](../../cli/README.md#wallet-quickstart).
-Wallet creation on the emulator registers a local DID; transfers and token
-writes currently refuse before signing because identity sequence is unpublished.
+Wallet creation on the emulator registers a local DID. Token writes require
+authenticated identity reads and verified receipts; Send awaits the shared
+debit-authorization signing API. Hosted wallet creation remains unavailable.
 
 ## Five-minute agent-runtime installation
 

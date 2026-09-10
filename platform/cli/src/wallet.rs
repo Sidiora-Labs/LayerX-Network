@@ -11,7 +11,7 @@ use crate::output::CommandOutput;
 
 #[derive(Subcommand)]
 pub enum WalletCommand {
-    /// Generate a key and, on the emulator only, register its identity and main account.
+    /// Generate a key, register its identity, and open its main account.
     Create {
         name: String,
         #[arg(long)]
@@ -32,9 +32,10 @@ pub enum WalletCommand {
         #[arg(long)]
         asset: Option<String>,
     },
-    /// Validate a transfer; refuses before signing because identity sequence is unpublished.
+    /// Submit a transfer with independent identity and source sequences.
     Send(TransferArgs),
-    /// Report that DID activity history is unpublished.
+    /// Unavailable: no authenticated DID activity-history backend is published.
+    #[command(hide = true)]
     History {
         #[arg(long)]
         did: Option<String>,
@@ -123,7 +124,7 @@ pub struct WriteOptions {
 
 #[derive(Subcommand)]
 pub enum TokenCommand {
-    /// Validate a native token registration; refuses before signing because identity sequence is unpublished.
+    /// Register a natively issued token.
     Create {
         #[arg(long)]
         symbol: String,
@@ -140,7 +141,7 @@ pub enum TokenCommand {
         #[command(flatten)]
         write: WriteOptions,
     },
-    /// Validate a mint payload; refuses before signing because identity sequence is unpublished.
+    /// Mint units to an existing asset account.
     Mint {
         #[arg(long)]
         asset: String,
@@ -153,7 +154,7 @@ pub enum TokenCommand {
         #[command(flatten)]
         write: WriteOptions,
     },
-    /// Validate a burn payload; refuses before signing because identity sequence is unpublished.
+    /// Burn units from the selected wallet's asset account.
     Burn {
         #[arg(long)]
         asset: String,
@@ -164,11 +165,11 @@ pub enum TokenCommand {
         #[command(flatten)]
         write: WriteOptions,
     },
-    /// Validate a token transfer; refuses before signing because identity sequence is unpublished.
+    /// Transfer token units.
     Transfer(TransferArgs),
-    /// Read token metadata through public RPC; refuses when the method is unpublished.
+    /// Read token metadata.
     Info { asset: String },
-    /// List registered tokens through public RPC; refuses when the method is unpublished.
+    /// List registered tokens.
     List,
 }
 
