@@ -1979,6 +1979,18 @@ fn ws_receive(stream: &mut impl Read) -> serde_json::Value {
     serde_json::from_slice(&body).required("WS JSON")
 }
 
+impl Http {
+    fn upgrade_request(&self, target: &str, headers: &[(&str, &str)]) -> HttpAnswer {
+        let mut request =
+            format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: Upgrade\r\n");
+        for (name, value) in headers {
+            must(write!(request, "{name}: {value}\r\n"), "format header");
+        }
+        request.push_str("\r\n");
+        must(self.raw(&request, &[]), "tls request")
+    }
+}
+
 #[test]
 fn local_gateway_websocket_receipt_wake() {
     let cluster = start_cluster(true);
@@ -2013,11 +2025,10 @@ fn local_gateway_websocket_receipt_wake() {
     };
     let upgrade = [
         ("Upgrade", "websocket"),
-        ("Connection", "Upgrade"),
         ("Sec-WebSocket-Version", "13"),
         ("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="),
     ];
-    assert_eq!(http.request("GET", "/rpc/ws", &upgrade, &[]).status, 401);
+    assert_eq!(http.upgrade_request("/rpc/ws", &upgrade).status, 401);
     let mut stream = ws_connect(&certificates, gateway.port, &authorization);
     for (id, params) in [
         (1, serde_json::json!(["receipts"])),
