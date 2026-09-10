@@ -274,7 +274,16 @@ test: test-state-diff test-da-verified test-result test-protocol test-state-comm
 	test-activity-codec test-envelope test-verify-pool test-admission \
 	test-idempotency test-fee-gate test-identity test-grants \
 	test-authority-resolve test-allowance test-revocation test-rotation \
-	test-terminal-rejection
+	test-terminal-rejection \
+	test-escrow-open test-escrow-capture test-escrow-timeout \
+	test-escrow-dispute test-escrow-invariants \
+	test-budget-create test-budget-period test-budget-spend \
+	test-budget-delegate test-budget-revoke \
+	test-stream-open test-stream-accrual test-stream-meter \
+	test-stream-settle test-stream-lifecycle \
+	test-service-offer test-service-commit test-service-attest \
+	test-service-deliver test-service-acceptance test-service-dispute \
+	test-wave-9
 
 $(BUILD_DIR)/tests/lxp_test_kernel: tests/protocol/lxp_test_kernel.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -494,10 +503,11 @@ test-escrow-timeout: $(BUILD_DIR)/tests/test_escrow_timeout
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_escrow_dispute: tests/modules/test_escrow_dispute.c \
-		$(TEST_LIBRARY)
+		$(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-escrow-dispute: $(BUILD_DIR)/tests/test_escrow_dispute
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_escrow_dispute
@@ -610,16 +620,19 @@ test-stream-settle: $(BUILD_DIR)/tests/test_stream_settle
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_stream_lifecycle: \
-		tests/modules/test_stream_lifecycle.c $(TEST_LIBRARY)
+		tests/modules/test_stream_lifecycle.c $(TEST_LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-stream-lifecycle: $(BUILD_DIR)/tests/test_stream_lifecycle
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_stream_lifecycle
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_service_offer: tests/modules/test_service_offer.c \
+		tests/modules/test_service_helpers.h \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
@@ -631,6 +644,7 @@ test-service-offer: $(BUILD_DIR)/tests/test_service_offer
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_service_commit: tests/modules/test_service_commit.c \
+		tests/modules/test_service_helpers.h \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
@@ -642,6 +656,7 @@ test-service-commit: $(BUILD_DIR)/tests/test_service_commit
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_service_attest: tests/modules/test_service_attest.c \
+		tests/modules/test_service_helpers.h \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
@@ -653,6 +668,7 @@ test-service-attest: $(BUILD_DIR)/tests/test_service_attest
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_service_deliver: tests/modules/test_service_deliver.c \
+		tests/modules/test_service_helpers.h \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
@@ -664,7 +680,8 @@ test-service-deliver: $(BUILD_DIR)/tests/test_service_deliver
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_service_acceptance: \
-		tests/modules/test_service_acceptance.c $(LIBRARY) \
+		tests/modules/test_service_acceptance.c \
+		tests/modules/test_service_helpers.h $(LIBRARY) \
 		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
@@ -676,7 +693,8 @@ test-service-acceptance: $(BUILD_DIR)/tests/test_service_acceptance
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_service_dispute: \
-		tests/modules/test_service_dispute.c $(LIBRARY) \
+		tests/modules/test_service_dispute.c \
+		tests/modules/test_service_helpers.h $(LIBRARY) \
 		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \

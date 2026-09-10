@@ -10491,3 +10491,51 @@ symbol = "genesis metadata length is outside request bounds GENESIS_BUILD_REQUES
 observed = "platform/hosted/node/bootstrap.sh:202 bounds the genesis metadata above by 15989 bytes, which is the builder limit GENESIS_BUILD_REQUEST_MAX_BYTES of 16384 at cmd/layerx-genesis/lxp_genesis_build_cli.c:18 minus 395, the fixed size of a single-guarantor request. With the certificate threshold at its maximum of 32 the fixed part is 2906 bytes, so metadata that the script admits can still carry the request past the builder limit and be refused by read_regular_file with LXP_ERR_IO rather than by a bootstrap message. The shipped threshold of 2 and the 375-byte metadata the harnesses produce are far inside both bounds, so nothing fails today. The check runs during argument validation, before the settlement document is read at line 279 and the guarantor count is known at line 287, so making it follow the threshold means moving the settlement document read ahead of it, which is a restructuring of the argument-handling section rather than a change to the request assembly."
 assumption = "The upper bound is a latent single-guarantor constant with no current failure, and correcting it requires reordering a section of the script that other work also touches, so only the request length assertion was changed here."
 severity = "note"
+
+[observation.3.3.8000]
+task = "3.3"
+file = "Makefile tests/modules/test_service_helpers.h"
+symbol = "test test-escrow-open test-budget-create test-stream-open test-service-offer test-wave-9"
+observed = "Supersedes observation 3.3.3104. The aggregate make test target, at Makefile:269 on 88f0268fb, ended at test-terminal-rejection and named no module test target, so every escrow, budget, stream, service and perpetuals suite was reachable only individually or through a wave aggregate that make test does not invoke. The target now also depends on the five escrow targets, the five budget targets, the five stream targets, the six service targets and test-wave-9, so a regression in any of those modules fails the aggregate gate. The six service tests each carried their own copy of the kernel bring-up, the big-endian payload builders, the identifier and open_ctx helpers, the dispatch wrapper and the event and record assertions; those helpers now live once in tests/modules/test_service_helpers.h as static inline functions, which gcc does not warn about when a translation unit leaves one unused, and the six files fell from 2757 to 2205 lines against a 140-line header with no assertion changed. The header is the second prerequisite of each of the six link rules so the recipes keep $< as the .c file. Evidence: qual-logs/test-aggregate.log and qual-logs/module-target-sweep.log, where all twenty-two module targets report exit 0."
+assumption = "The Makefile hunks are confined to the aggregate test prerequisite list and the module test link rules, because other lanes are adding rules elsewhere in the same file. The asset targets are deliberately not added here: they belong to the lanes rewriting src/modules/asset and adding them from this lane would collide with that work."
+severity = "note"
+
+[observation.6.11.8001]
+task = "6.11"
+file = "Makefile"
+symbol = "test_escrow_dispute test_stream_lifecycle TEST_LIBRARY PROGRAMS_RUNTIME_LIB programs-build"
+observed = "Supersedes observation 6.11.2800 and confirms it on 88f0268fb, where the two rules are unchanged at Makefile:496-500 and Makefile:612-616. Both linked only $(TEST_LIBRARY) with no $(PROGRAMS_RUNTIME_LIB), no programs-build order-only prerequisite and no -ldl -lm, and both failed on the layerx_programs_sandbox_*, layerx_programs_authorize_402lxp_leg, layerx_programs_module_cache_invalidate_upgrade, layerx_programs_migration_execute_activity and layerx_programs_interface_validate symbols that sandbox.c, transfer.c and deploy.c reference from the archive the rules do link; the baseline link failure is recorded in qual-logs/baseline-link.log with ld exit 1. Both rules now match the four escrow rules beside them: $(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) as prerequisites, | programs-build as an order-only prerequisite, and $(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(TEST_LIBRARY) -lcrypto -pthread -ldl -lm on the link line. make CC=gcc test-escrow-dispute test-stream-lifecycle test-service-dispute exits 0 in qual-logs/test-modules.log."
+assumption = "The repeated $(TEST_LIBRARY) after $(PROGRAMS_RUNTIME_LIB) is the shape the working escrow rules already use and is required because the sandbox archive resolves back into the testing archive; it is not a workaround introduced here."
+severity = "note"
+
+[observation.6.11.8002]
+task = "6.11"
+file = "tests/modules/test_service_dispute.c"
+symbol = "escrow_hold_seed escrow_hold_unchanged lx_escrow_state_put lx_escrow_lookup lx_escrow_module_iface state_root"
+observed = "Supersedes observation 6.11.2801, which is already answered on 88f0268fb: test_service_dispute.c uses the context-based escrow key-value API and names no lx_escrow_store, so the file compiles and the target now links and passes. The dispute test additionally proves the cross-module property that a service dispute moves no escrow value. It registers lx_escrow_module_iface() beside lx_service_module_iface(), seeds one open escrow hold whose agreement reference is the disputed agreement through lx_escrow_state_put on an escrow module context, records the hold record and the escrow subtree root from lx_escrow_module_iface()->state_root, runs the dispute, and then re-reads both: the subtree root is byte-identical and lx_escrow_lookup returns the same state, locked_amount, captured_amount, owner, escrow_account, beneficiary, asset_id and agreement reference. Evidence: qual-logs/test-modules.log, make CC=gcc test-service-dispute exit 0."
+assumption = "The hold is seeded and read through the module interface rather than the store so the assertion covers the same path the kernel uses; the pre-existing dispute assertions on transfer_calls, event_effects and the applier pointer are unchanged."
+severity = "note"
+
+[observation.6.11.8003]
+task = "6.11"
+file = "Makefile"
+symbol = "test test-wave-9 test-perps-market test-perps-book test-perps-margin test-perps-funding test-perps-liquidation test-perps-insurance"
+observed = "Supersedes observation 6.11.3209. test-wave-9, which groups the six perpetuals suites at Makefile:822-823, is now a prerequisite of the aggregate make test target, so a perpetuals regression fails make CC=gcc test instead of being reachable only through core-test-all at Makefile:2905, which make test does not invoke. Evidence: qual-logs/module-target-sweep.log records test-wave-9 exit 0 and qual-logs/test-aggregate.log records the aggregate run that now reaches it."
+assumption = "test-wave-9 is added as a single prerequisite rather than the six perpetuals targets individually, so the wave grouping stays the one place the perpetuals suite list is maintained."
+severity = "note"
+
+[observation.6.11.8004]
+task = "6.11"
+file = "src/protocol/lxp_module_ctx.c tests/modules/test_service_dispute.c"
+symbol = "lxp_module_ctx_commit staged_count escrow_hold_seed"
+observed = "Observation 6.11.3210 still holds on 88f0268fb: lxp_module_ctx_commit at src/protocol/lxp_module_ctx.c:651 flushes the staged writes into the store without resetting ctx->staged_count, while lxp_module_ctx_rollback at :1003 does reset it. This was checked against the cross-module escrow assertion added to the service dispute test and it does affect it: reading lx_escrow_module_iface()->state_root from the same context that committed the seeded hold would observe the staged residue. The test therefore opens a fresh escrow module context after each commit before reading the subtree root or looking the hold up, and the reason is stated in the file so the pattern is not later simplified away. No change was made to lxp_module_ctx_commit here."
+assumption = "src/protocol is outside this row's owned paths and the row instructs that this be recorded rather than fixed, so the residue is worked around in the test only. Clearing staged_count in commit is the fix and would let a committed context be reused directly."
+severity = "suspect"
+
+[observation.6.11.8005]
+task = "6.11"
+file = "tests/modules/test_escrow_capture.c tests/modules/test_escrow_dispute.c src/modules/asset/lx_asset_registry.c"
+symbol = "lx_asset_register issuer_valid issuer_kind custody_kind name_length issuer_did32"
+observed = "Repairing the two link rules made two escrow suites executable for the first time and both then failed at setup, exit 1 before any escrow assertion. issuer_valid at src/modules/asset/lx_asset_registry.c:561-597 requires issuer_kind in {1,2}, custody_kind equal to issuer_kind, a name_length in 1..LX_ASSET_NAME_MAX and a non-zero issuer_did32, and lx_asset_register returns LXP_ERR_NON_CANONICAL otherwise. The asset fixtures in test_escrow_capture.c and test_escrow_dispute.c set none of those fields, so the registration that seeds the escrow asset was refused. The fixtures had gone stale because the two suites could not link and so never ran while the registry validation was tightened. Both now set symbol_length, name, name_length, issuer_kind, issuer_did32 and custody_kind exactly as the already-passing tests/modules/test_escrow_open.c:129-140 and tests/modules/test_escrow_timeout.c:70-82 do, and both suites pass in qual-logs/escrow-repaired.log."
+assumption = "The fixtures were brought in line with the registry's existing rules; no registry check was relaxed and no escrow assertion was changed. This is the concrete cost of a test target that cannot link: the suite drifts silently out of date behind the link failure."
+severity = "note"
