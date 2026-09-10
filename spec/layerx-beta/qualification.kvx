@@ -10164,3 +10164,19 @@ symbol = "lx_escrow_open_execute lx_escrow_epoch_begin lxp_kernel_apply_transfer
 observed = "The focused test-escrow-open target exits 1 because its owner-to-escrow transfer reaches lxp_kernel_apply_transfer_set with source_authorities unset and receives LXP_ERR_NON_CANONICAL before the configured ledger capability runs. The escrow epoch timeout path constructs the same zero-source-authority transfer context."
 assumption = "The kernel requires one or more explicit source authorities at src/protocol/lxp_kernel.c. Repairing the escrow transfer and source-authority path is outside the enumerated PAY5 review defects; the metadata-only asset fixture update does not alter this transfer assertion. The kernel requirement and assertion remain unchanged."
 severity = "blocker"
+
+[observation.6.11.6552]
+task = "6.11"
+file = "Makefile programs/sdk/assemblyscript/package.json"
+symbol = "programs-sdk-assemblyscript programs-test"
+observed = "make CC=gcc programs-test exits 2 on a clean checkout because the programs-sdk-assemblyscript recipe (Makefile:3204-3206) runs npm --prefix programs/sdk/assemblyscript run test:source without first installing that package, and test:source invokes asc, which lives only in its assemblyscript devDependency. The sibling programs-sdk-rust recipe does run npm ci before its build scripts. The failure is sh: 1: asc: not found followed by make: *** [Makefile:3205: programs-sdk-assemblyscript] Error 127, and it reproduces at the merge base with no branch change to Makefile:3204-3206 or to programs/sdk/assemblyscript."
+assumption = "The recipe is missing an install step rather than the checkout being wrong. The gate was run after installing programs/sdk/assemblyscript with npm ci out of band, which is recorded with the gate; the Makefile recipe is outside the LXT-20 and program-payment paths this branch owns and was left exactly as written."
+severity = "blocker"
+
+[observation.6.11.6553]
+task = "6.11"
+file = "docs/wiki/PaymentsQuickstart.md docs/wiki/Cli.md docs/wiki/Porting.md docs/wiki/Programs.md"
+symbol = "payments documentation absence notes"
+observed = "The payments documentation now on the base branch states that the paths this branch adds are absent from the tree: docs/wiki/Porting.md:179 names programs/sdk/rust/src/lxt20.rs, docs/wiki/Programs.md:144 names programs/fixtures/pay5, docs/wiki/Programs.md:281 and docs/wiki/PaymentsQuickstart.md:205 repeat the claim, and docs/wiki/Cli.md:19 says the layerx wallet and token command groups are absent. This branch adds programs/sdk/rust/src/lxt20.rs, programs/sdk/rust/src/payments.rs, programs/sdk/rust/examples/token-lxt20, programs/sdk/rust/examples/payments-merchant and programs/fixtures/pay5, so those sentences become false once it merges."
+assumption = "The wiki pages belong to the payments documentation change and not to this branch, so only programs/README.md, which this branch already edits, was corrected. The wiki correction is recorded as a needed follow-up rather than made here."
+severity = "note"
