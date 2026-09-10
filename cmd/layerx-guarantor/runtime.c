@@ -204,6 +204,7 @@ static lxp_result occupancy_parameters(void *context, uint32_t recorded_fee_sche
 }
 
 static lxp_result principal_authority(gp_runtime *process, const lxp_activity *activity,
+                                      const uint8_t account_key[32],
                                       uint8_t principal_id[32], lxp_u128 *fee_balance)
 {
     static const uint8_t prefix[] = "agent:";
@@ -212,7 +213,8 @@ static lxp_result principal_authority(gp_runtime *process, const lxp_activity *a
     size_t length;
     size_t index;
     lxp_result status;
-    if (process == NULL || activity == NULL || principal_id == NULL || fee_balance == NULL ||
+    if (process == NULL || activity == NULL || account_key == NULL ||
+        principal_id == NULL || fee_balance == NULL ||
         activity->actor_did.bytes == NULL || activity->actor_did.length == 0U ||
         activity->authority.length != 32U ||
         activity->actor_did.length > sizeof(name) - sizeof(prefix) - sizeof(suffix) + 2U)
@@ -232,7 +234,7 @@ static lxp_result principal_authority(gp_runtime *process, const lxp_activity *a
         if (lxp_ct_memcmp(account->id, principal_id, 32U) != 0)
             continue;
         if (account->kind != LX_ACCOUNT_AGENT_MAIN || !account->has_authority_key ||
-            lxp_ct_memcmp(account->authority_key, activity->authority.bytes, 32U) != 0)
+            lxp_ct_memcmp(account->authority_key, account_key, 32U) != 0)
             return LXP_ERR_BAD_SIGNATURE;
         *fee_balance = account->balance;
         return LXP_OK;
@@ -281,13 +283,12 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     lxp_identity *identity;
     uint8_t principal_id[32];
     lxp_u128 principal_balance = {0U, 0U};
-    lxp_authority_scope scope;
+    lxp_authority_grant grant;
     lxp_authority_resolved authority;
     lxp_kernel_execution execution;
     lxp_byte_span encoded_receipt;
     uint8_t batch_preimage[32U + 32U + 8U + 8U];
     uint8_t activity_id[32];
-    uint8_t grant_id[32] = {0};
     lxp_result status;
     if (process == NULL || canonical_activity == NULL || canonical_receipt == NULL ||
         activity == NULL || receipt == NULL || expected == NULL || activity_length == 0U ||
@@ -332,36 +333,23 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
                                       activity->actor_did.length, &identity);
     if (status == LXP_OK)
         status = lxp_governance_identity_refresh(&process->kernel, identity);
-    if (status == LXP_OK &&
-        (activity->authority.length != 32U ||
-         !lxp_identity_key_valid(identity, activity->authority.bytes, timestamp, global_sequence)))
+    if (status == LXP_OK && activity->authority.length != 32U)
         status = LXP_ERR_BAD_SIGNATURE;
     if (status == LXP_OK)
-        status = principal_authority(process, activity, principal_id, &principal_balance);
+        status = lxp_authority_resolve_activity(
+            &process->kernel, identity, activity,
+            lxp_identity_key_valid(identity, activity->authority.bytes, timestamp,
+                                   global_sequence),
+            true, timestamp, UINT64_C(300000), global_sequence, &grant, &authority);
+    if (status == LXP_OK)
+        status = principal_authority(process, activity,
+            grant.kind == LXP_AUTHORITY_OWNER ? grant.key : identity->primary_key,
+            principal_id, &principal_balance);
     if (status == LXP_OK)
         status = lxp_activity_id(canonical_activity, activity_length, activity_id);
     if (status != LXP_OK)
         return status;
-    (void)memset(&scope, 0, sizeof(scope));
-    scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity->activity_type);
-    scope.activity_ordinal_min = (activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ? lxp_activity_type_ordinal(activity->activity_type) : 1U;
-    scope.activity_ordinal_max = (activity->activity_type == LXP_BRIDGE_CREDIT ||
-                                  lxp_governance_activity(activity->activity_type))
-                                     ? 1U
-                                     : ((activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ? lxp_activity_type_ordinal(activity->activity_type) : 10U);
-    scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
-    scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
-    scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
-    (void)memset(&authority, 0, sizeof(authority));
-    (void)memcpy(authority.actor, identity->did_id, 32U);
     (void)memcpy(authority.principal, principal_id, 32U);
-    authority.kind = LXP_AUTHORITY_OWNER;
-    (void)memcpy(authority.verified_key, activity->authority.bytes, 32U);
-    authority.scope = &scope;
-    status = lxp_authority_hash(authority.kind, grant_id, authority.verified_key,
-                                authority.authority_hash);
-    if (status != LXP_OK)
-        return status;
     (void)memcpy(batch_preimage, process->kernel.current_state_root, 32U);
     (void)memcpy(batch_preimage + 32U, activity_id, 32U);
     write_u64_be(batch_preimage + 64U, global_sequence);
@@ -974,9 +962,13 @@ lxp_result gp_runtime_authority(void *context, const lxp_activity *activity,
 {
     gp_runtime *runtime = context;
     lxp_identity *identity = NULL;
+    lxp_authority_grant grant;
+    lxp_authority_resolved authority;
     uint8_t principal[32];
+    uint8_t expected_authority_hash[32];
     lxp_u128 balance;
     size_t index;
+    uint64_t sequence;
     lxp_result status;
     if (!runtime || !activity || !verdict || runtime->poisoned || !runtime->prepared_batch)
         return LXP_ERR_NON_CANONICAL;
@@ -999,18 +991,35 @@ lxp_result gp_runtime_authority(void *context, const lxp_activity *activity,
                                       activity->actor_did.length, &identity);
     if (status == LXP_OK)
         status = lxp_governance_identity_refresh(&runtime->kernel, identity);
-    if (status == LXP_OK &&
-        (activity->authority.length != 32U ||
-         !lxp_identity_key_valid(identity, activity->authority.bytes, runtime->prepared_timestamp,
-                                 runtime->prepared_first_sequence + index)))
+    if (status == LXP_OK && activity->authority.length != 32U)
         status = LXP_ERR_BAD_SIGNATURE;
+    sequence = runtime->prepared_first_sequence + index;
     if (status == LXP_OK)
-        status = principal_authority(runtime, activity, principal, &balance);
+        status = lxp_authority_resolve_activity(
+            &runtime->kernel, identity, activity,
+            lxp_identity_key_valid(identity, activity->authority.bytes,
+                                   runtime->prepared_timestamp, sequence),
+            true, runtime->prepared_timestamp, UINT64_C(300000), sequence, &grant,
+            &authority);
+    if (status == LXP_OK)
+        status = principal_authority(runtime, activity,
+            grant.kind == LXP_AUTHORITY_OWNER ? grant.key : identity->primary_key,
+            principal, &balance);
+    if (status == LXP_OK)
+        status = lxp_authority_hash(authority.kind, grant.grant_id, grant.key,
+                                    expected_authority_hash);
     if (status == LXP_OK) {
-        verdict->actor_signature = true;
-        verdict->session_key = true;
-        verdict->capability_grant = true;
-        verdict->delegated_authority = true;
+        verdict->actor_signature =
+            lxp_ct_memcmp(authority.verified_key, activity->authority.bytes, 32U) == 0 &&
+            lxp_ct_memcmp(authority.actor, identity->did_id, 32U) == 0;
+        verdict->session_key =
+            lxp_authority_is_live(&grant, identity->revocation_sequence,
+                                  runtime->prepared_timestamp, sequence) == LXP_OK;
+        verdict->capability_grant =
+            lxp_ct_memcmp(authority.authority_hash, expected_authority_hash, 32U) == 0;
+        verdict->delegated_authority =
+            lxp_ct_memcmp(authority.actor, grant.grantee, 32U) == 0 &&
+            lxp_ct_memcmp(grant.grantor, identity->did_id, 32U) == 0;
     }
     return status;
 }
