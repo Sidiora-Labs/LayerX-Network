@@ -1,5 +1,8 @@
 # Hosted faucet
 
+An exact successful claim and the resulting JSON-RPC payment flow are in
+[Public payment API](PublicAPI.md).
+
 `layerx-faucet` is the public claim surface for hosted testnet funds
 (`platform/hosted/faucet/Cargo.toml:8-10`;
 `platform/hosted/faucet/src/main.rs:914`). The crate is
@@ -39,6 +42,9 @@ port-forwards `19445:443` and exports `LAYERX_FAUCET_URL`
 (`platform/hosted/testnet/src/lib.rs:77`). The source Deployment has
 no Ingress object; the cluster apply path adds one. Those two
 manifests differ.
+
+The developer payments path that starts with this claim is
+[Payments developer path](PaymentsQuickstart.md).
 
 This page covers that binary, its Redis, and the claim path through
 testnet-control. It does not document treasury SEND construction.

@@ -23,6 +23,11 @@ no floating-point path (`interop/crates/layerx-x402/src/model.rs:1-3,
 This page covers that crate, the gateway routes that mount it, and the
 local conformance matrix. It does not cover AP2, UCP, Visa TAP, or fiat.
 
+Offers may carry `extra.layerx.commitment`
+(`executed`, `batched`, or `finalised`), and metered/subscription payloads
+carry a canonical Asset receive. See [Commitment levels](CommitmentLevels.md)
+and [Payments developer path](PaymentsQuickstart.md).
+
 ---
 
 ## Payment-required flow
@@ -110,6 +115,62 @@ settlement reference
 The 20 draw submit-to-receipt samples measured p50 990,202 microseconds and p99
 11,801,435 microseconds. These are qualification measurements, not a
 service-level target.
+
+### Offer and payload contract
+
+The accepted scheme set is `exact`, `metered`, and `subscription`
+(`platform/middleware/seller/src/index.ts`). Every requirement contains
+`network`, a positive decimal-string `amount`, 32-byte hexadecimal `asset` and `payTo`, and a positive
+`maxTimeoutSeconds`.
+
+`extra.layerx.commitment` is one of `executed`, `batched`, or `finalised`.
+For metered and subscription offers, `extra.layerx` also requires a nonzero
+64-hex `payer` and `purposeHash`. Subscription requires a positive decimal
+`windowSeconds` below `2^64`; metered forbids it. An exact offer may omit the
+LayerX extra, in which case its commitment is `executed`.
+
+Exact payment carries the verified canonical receipt, its receipt digest, and
+`verificationLevel: "sequencer-signed"`. The seller recomputes the digest,
+resolves authority from configured trust, verifies the receipt and commitment,
+and binds payer, payee, Asset, and amount before fulfillment.
+
+Metered and subscription payment instead carries:
+
+```json
+{
+  "receive": "<733-byte canonical receive as hex>",
+  "idempotencyKey": "<64-hex key>"
+}
+```
+
+The receive embeds the payer's 346-byte ordinal-7 grant and the receiver's
+authorization. Validation requires the offered payer, recipient, Asset,
+amount, purpose, idempotency key, grant id, allowance, per-draw maximum,
+expiry, controller, signed context, and network to match exactly. References
+are not admitted on this draw path. Metered grants are non-recurring with a
+zero window. Subscription grants are recurring and bind the offered window.
+
+Each draw is pre-registered durably by idempotency key with its principal,
+request digest, exact canonical activity, receive bytes, and activity id. A
+conflicting registration is refused. The first attempt submits the stored
+activity through `lx_sendActivity`; later attempts recover its receipt by the
+same activity id. Only JSON-RPC `-32001` with object `data` whose `state` is
+`pending`, or a result whose `state` is `pending`, remains retryable and maps to
+HTTP 202. Other RPC, HTTP, parse, or protocol failures remain errors; they do
+not fulfill the resource and are not relabeled as pending
+(`agent/sdk/python/layerx_sdk/x402_draw.py:81-100`;
+`agent/sdk/typescript/src/x402/draw.ts:33-42, 55-60`).
+
+Every subscription period uses a distinct period key and a newly signed
+receive with current sequences. The recurring grant is reused within its
+bounds, but the grant alone does not prove one charge per period.
+
+After verification, fulfillment is recorded against both the request identity
+and the unique receipt digest. Replaying a receipt for another request or
+changing the request under an existing identity is refused. The successful
+`PAYMENT-RESPONSE` contains `transaction: "lxp:<receipt_digest>"`, the network,
+amount, payer, canonical receipt, digest, verification label, and purpose hash
+for grant draws.
 
 ---
 

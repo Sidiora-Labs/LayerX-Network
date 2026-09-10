@@ -1,10 +1,3 @@
-<!--
-Draft copy for the GitHub wiki page "Modules".
-The wiki has no PR flow, so this file is the reviewable source. After this PR
-merges, paste the body below (everything under the first `# Modules`) into the
-wiki page. Do not commit this note to the wiki.
--->
-
 # Modules
 
 Eight economic modules (`0x01`–`0x08`) plus Programs (`0x09`) on a kernel that owns identity and authority.
@@ -54,12 +47,13 @@ system:fees
 system:paxeer-reserve
 ```
 
-Opening a position is a transfer into a margin account. Capturing escrow is a transfer out of an escrow account. Native issuance still compiles to `402LXP` legs against the issuance account; modules do not assign balances. `agent:<did>:main` remains the native-asset account. Per-asset accounts use the existing `LX:ACCOUNT:v1` id rule. An issuance account's id is that rule applied to the string `asset:<lowercase hex64 asset_id>:issuance`, while the name it is stored under is the `module:asset:value:` form above; records still carrying the older string as their name are renamed on load. See `spec/layerx-protocol/spec.kvx` requirement 14.
+`agent:<did>:asset:…` and `asset:<id>:issuance` parse alongside `agent:<did>:main` and the budget / escrow / stream / margin forms (`src/ledger/lx_account_id.c`). The issuance-account id remains the named-account hash of the `asset:<id>:issuance` seed, while its stored canonical name is the `module:asset:value:<issuance-account-id>` form (`lx_asset_issuance_name`). Their encodings are on [Assets](Assets.md).
+
+Opening a position is a transfer into a margin account. Capturing escrow is a transfer out of an escrow account. Native issuance still compiles to `402LXP` legs against the issuance account; modules do not assign balances and ordinary modules do not mint and do not burn. `agent:<did>:main` remains the native-asset account. Per-asset accounts use the existing `LX:ACCOUNT:v1` id rule. An issuance account's id is that rule applied to the string `asset:<lowercase hex64 asset_id>:issuance`, while the name it is stored under is the `module:asset:value:` form above; records still carrying the older string as their name are renamed on load. See `spec/layerx-protocol/spec.kvx` requirement 14.
 
 **One record per (account, asset).** There is no balance table beside the account registry. An `lx_account` record holds one account id, one asset id and one balance, so a DID that touches two assets owns two records - `agent:<did>:main` for the native asset and one `agent:<did>:asset:<hex64>` per other asset - and a per-asset account is kind `LX_ACCOUNT_AGENT_MAIN`, told apart from `:main` by the asset it carries, not by kind. A record's asset is bound when it is opened or by its first credit, and never rebinds; a debit against the wrong asset is refused, not coerced.
 
 Sequences follow the same split. The activity envelope's `account_sequence` is checked against the DID's identity counter, while the transfer set's `actor_sequence` is checked against the sequence account's own counter - by default the debited record, so per `(DID, asset)`. `asset.receive` advances the recipient's counter instead, `asset.mint` the issuance account's, and the protocol fee leg the treasury's. A newly opened per-asset account starts at zero however far its owner's `:main` account has run. Full rules, refusal codes and the account state-root leaf shape are in `spec/layerx-protocol/design.md` §8.2 and §8.3.
-
 See Payments and Fees.
 
 ---
@@ -76,7 +70,7 @@ See Payments and Fees.
 
 ## What each module is for
 
-**asset.** Declared ordinals are register (1), pause (2), unpause (3), account_open (4), send (5), receive (6), grant_issue (7), grant_revoke (8), mint (10) and burn (11). Ordinal 9 is reserved for withdraw and is not defined on this module. SEND compiles to a `402LXP` transfer and accepts both `agent:<did>:main` and `agent:<did>:asset:<hex64>` sources owned by the actor. RECEIVE requires a payer grant: one recipient, one account, caps, purpose, expiry. No wildcards. Register `issuer_kind` is `1` native and `2` `paxeer_custody`; that value is not `lx_asset_custody_kind` (`LX_ASSET_CUSTODY_PAXEER = 1`). The authenticated native and hosted submission paths strictly decode and admit register, account_open, send, receive, grant_issue, grant_revoke, mint and burn. Pause/unpause remain excluded from authenticated activity admission, and ordinal 9 returns a reserved-operation refusal.
+**asset.** Declared ordinals are register (1), pause (2), unpause (3), account_open (4), send (5), receive (6), grant_issue (7), grant_revoke (8), mint (10) and burn (11). Ordinal 9 is reserved for withdraw and is not defined on this module. SEND compiles to a `402LXP` transfer and accepts both `agent:<did>:main` and `agent:<did>:asset:<hex64>` sources owned by the actor. RECEIVE requires a payer grant: one recipient, one account, caps, purpose, expiry. No wildcards. Register `issuer_kind` is `1` native and `2` `paxeer_custody`; that value is not `lx_asset_custody_kind` (`LX_ASSET_CUSTODY_PAXEER = 1`). The authenticated native and hosted submission paths strictly decode and admit register, account_open, send, receive, grant_issue, grant_revoke, mint and burn. Pause/unpause remain excluded from authenticated activity admission, and ordinal 9 returns a reserved-operation refusal. Register, per-asset account_open, mint, and burn encodings are on [Assets](Assets.md).
 
 **escrow.** Lock, capture, release. Terms are module state; money moves only as `402LXP` legs.
 
@@ -124,4 +118,5 @@ Each module implements `genesis`, `decode`, `validate` (read-only), `execute` (e
 - [Protocol](Protocol.md): LXC envelope, protocol 3, and the three rules
 - [Programs](Programs.md): module `0x09`, CALL vs simulate, guest ABI 2
 - [Finality](Finality.md): L0 → L4
+- [Assets](Assets.md): per-asset accounts and token ordinals
 - Design § modules

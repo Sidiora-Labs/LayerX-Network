@@ -51,7 +51,14 @@ Write and check behaviour (`programs/tools/generate-abi-vectors.py:101-114`):
 
 ## Dependency policy
 
-`make programs-lint` depends on `programs-module-boundaries`, then runs Clippy, `sh programs/tools/dependency-policy.sh`, `cargo deny check advisories sources`, and `cargo deny check bans --exclude-dev` (`Makefile:2878-2882`). `programs/deny.toml` is the cargo-deny config the last two commands consume (`programs/deny.toml:1-57`). The shell script requires that file to be readable before it prints success (`programs/tools/dependency-policy.sh:163-164`).
+`make programs-lint` depends on `programs-module-boundaries`, then runs Clippy,
+`sh programs/tools/dependency-policy.sh`,
+`cd programs && cargo deny check advisories sources`, and
+`cd programs && cargo deny --exclude-dev check bans`
+(`Makefile:2970-2974`). `programs/deny.toml` is the cargo-deny config the last
+two commands consume (`programs/deny.toml:1-57`). The shell script requires
+that file to be readable before it prints success
+(`programs/tools/dependency-policy.sh:163-164`).
 
 ### Banned crates (graph-wide, including dev)
 
@@ -61,7 +68,7 @@ Write and check behaviour (`programs/tools/generate-abi-vectors.py:101-114`):
 
 The name check reads every `.packages[].name` and does not filter on dependency kind (`programs/tools/dependency-policy.sh:15`).
 
-`programs/deny.toml` `[bans].deny` lists the same sixteen crate names (`programs/deny.toml:32-49`). `[graph] all-features = true` (`programs/deny.toml:1-2`). The Makefile bans check passes `--exclude-dev` (`Makefile:2882`), so cargo-deny bans omit dev-only packages. The shell script does not omit them.
+`programs/deny.toml` `[bans].deny` lists the same sixteen crate names (`programs/deny.toml:32-49`). `[graph] all-features = true` (`programs/deny.toml:1-2`). The Makefile bans check passes `--exclude-dev` before `check bans` (`Makefile:2974`), so cargo-deny bans omit dev-only packages. The shell script does not omit them.
 
 `rand_core` is not in the banned-name list. If any `rand_core` node in `resolve.nodes` enables feature `getrandom` or `std`, the script prints `programs dependency policy: rand_core entropy features are forbidden` and exits `1` (`programs/tools/dependency-policy.sh:19-28`).
 

@@ -16,6 +16,12 @@ not document SDK clients; those live under `platform/docs/content/`. It does
 not document portable receipt JSON; see
 [Portable receipt verifier](PortableVerifier.md).
 
+The `layerx wallet` and `layerx token` command groups are not in this tree:
+`platform/cli/src/main.rs` declares no such variants, and the tables below that
+describe them are forward-looking. Every command in the tables that follow this
+section is implemented and cited. Wallet, faucet, send, token, program, and 402
+steps: [Payments developer path](PaymentsQuickstart.md).
+
 ---
 
 ## Commands
@@ -37,7 +43,7 @@ that the binary implements are listed; unimplemented flags are omitted.
 | `layerx environment current` | Show the active endpoint profile (`platform/cli/src/main.rs:94-95, 704-710`) | none |
 | `layerx environment use <name>` | Select a profile, configuring its endpoint when first used (`platform/cli/src/main.rs:96-107, 712-776`) | `name` must be `emulator`, `testnet`, or `production` (`platform/cli/src/config.rs:121-126`). `--endpoint`, `--network-id`, and one of `--sequencer-trust-anchor` / `--sequencer-trust-anchor-file` must be supplied together or omitted together (`platform/cli/src/emulator.rs:751-791`) |
 | `layerx key create <name>` | Generate an Ed25519 seed from OS randomness and store it (`platform/cli/src/main.rs:111-117, 784-790`; `platform/cli/src/credential.rs:83-96`) | `name` (1–128 ASCII alnum/`-`/`_`; `platform/cli/src/credential.rs:294-303`). `--did` optional |
-| `layerx key import <name>` | Import a 32-byte hexadecimal Ed25519 seed from stdin (`platform/cli/src/main.rs:118-123, 792-798`; `platform/cli/src/credential.rs:98-111`) | `name`; seed on stdin |
+| `layerx key import <name>` | Import a 32-byte hexadecimal Ed25519 seed from stdin (`platform/cli/src/main.rs:118-123, 792-798`; `platform/cli/src/credential.rs:142-155`) | `name`; seed on stdin. `--did` optional (`platform/cli/src/main.rs:120-124`) |
 | `layerx key list` | List public key metadata without opening secret material (`platform/cli/src/main.rs:124-125, 800-817`) | none |
 | `layerx key show <name>` | Show public metadata for one key (`platform/cli/src/main.rs:126-127, 819-834`) | `name` |
 | `layerx key default <name>` | Select the default key used by account commands (`platform/cli/src/main.rs:128-129, 836-842`) | `name` |
@@ -74,6 +80,40 @@ that the binary implements are listed; unimplemented flags are omitted.
 | `layerx a2a start` | Start the installed managed A2A runtime (`platform/cli/src/main.rs:479-480, 574-577`; `platform/cli/src/a2a.rs:710-748`) | none (reads `a2a/runtime.json`) |
 | `layerx a2a stop` | Stop the installed managed A2A runtime (`platform/cli/src/main.rs:481-482, 578-582`; `platform/cli/src/a2a.rs:750-770`) | none |
 | `layerx a2a status` | Report the installed managed A2A runtime state (`platform/cli/src/main.rs:483-484, 583-587`; `platform/cli/src/a2a.rs:772-781`) | none |
+
+These command groups are not implemented in this tree. The flags, refusals, and
+RPC calls named in this section have no counterpart in `platform/cli/src/`; they
+describe the intended surface, not the shipped one:
+
+| Command | Purpose and important inputs |
+| --- | --- |
+| `layerx wallet create <name>` | Emulator only: create a private wallet, register its DID, and open its main account; public use returns `wallet_registration_unavailable` before generating a key |
+| `layerx wallet import <name>` | Import a 32-byte hexadecimal seed from stdin; does not register or fund |
+| `layerx wallet list` | List public wallet metadata without exposing seeds |
+| `layerx wallet balance` | Read one DID or Asset balance through public RPC |
+| `layerx wallet history` | Read history where the public surface supports it; DID history otherwise returns unavailable |
+| `layerx wallet receipt <activity_id>` | Retrieve and verify a receipt; `--wait` selects commitment |
+| `layerx wallet send` | Sign native debit and envelope; requires `--to`, `--asset`, `--amount`, receipt policy, and fee limit |
+| `layerx wallet open-account` | Open the selected wallet's per-Asset account |
+| `layerx wallet estimate-fee <canonical_hex>` | Estimate from the committed native fee schedule |
+| `layerx wallet watch` | Receive one live `receipts`, `checkpoints`, or `account` notification, then reconcile |
+| `layerx token create` | Register a native Asset from symbol, name, decimals, cap, and salt |
+| `layerx token mint` | Move issuance units to an existing per-Asset account |
+| `layerx token burn` | Return selected-wallet units to issuance |
+| `layerx token transfer` | Transfer from the selected wallet's per-Asset account |
+| `layerx token info <asset_id>` | Call `lx_getAsset` |
+| `layerx token list` | Call `lx_listAssets` |
+
+Those public writes are intended to require an RPC endpoint and gateway
+credential, an independently supplied receipt policy, and a fee limit, with
+remote RPC URLs restricted to HTTPS and a `/rpc` path. None of those flags
+exists in this tree; the only globally applied argument the binary declares is
+`--json` (`platform/cli/src/main.rs:33-38`), the per-command
+`--gateway-credential` belongs to `mcp serve` and `a2a serve`
+(`platform/cli/src/main.rs:448-449, 467-468`), and `--fee-limit` is optional
+with default `0` (`platform/cli/src/main.rs:294-295, 1109-1110`). A pending
+result retains the activity id; rerun receipt lookup instead of creating a
+second payment.
 
 Lifecycle flags shared by deploy, upgrade, and wind-down
 (`platform/cli/src/main.rs:279-297, 1409-1475`): `--program-id`,
@@ -186,6 +226,7 @@ whether a seed may be typed; the import command exists.
 | `LAYERX_INSTALL_ROOT` | install host path resolution (`platform/cli/src/install/mod.rs:1119-1130`) | Replaces `HOME` for host config discovery |
 | `LAYERX_REPO_ROOT` | workspace (`platform/cli/src/workspace.rs:1098`) | Repository root for workspace commands |
 | `LAYERX_PROGRAM_SDK` | scaffold (`platform/cli/src/scaffold.rs:65-68`) | Path written into a new program `Cargo.toml` |
+| `LAYERX_CREDENTIAL_PASSPHRASE` | `file_store::Entry::from_environment` (`platform/cli/src/file_store.rs:36-42`) | Required by the `file` store; 12-16384 bytes, otherwise the command refuses |
 | `CARGO` | `program build` (`platform/cli/src/programs.rs:181`) | Cargo executable for the Rust WASM toolchain |
 
 Workspace child processes receive `LAYERX_ENVIRONMENT`, `LAYERX_ENDPOINT`,
@@ -284,15 +325,20 @@ verification is `receipt verify` after fetching bytes.
 
 ## Test suite
 
-There is no `platform/cli/tests/common/credential_environment.rs`. Isolation
-for the command suite lives in `platform/cli/tests/common/mod.rs`.
+Isolation for the command suite lives in `platform/cli/tests/common/mod.rs`,
+which declares `mod credential_environment;`
+(`platform/cli/tests/common/mod.rs:7`) and builds one
+`CredentialEnvironment` per `Cli` fixture
+(`platform/cli/tests/common/mod.rs:45-51`).
 
 | Gate | What it drives |
 | --- | --- |
 | `make platform-test` | `cargo test` of the platform workspace with `--features layerx-platform-cli/test-credential-store` (`platform/Makefile.inc:112-113`). CI `build-lint-test` runs this (`.github/workflows/platform.yml:53-54`) |
 | `make platform-test-cli-production-credential-refusal` | `bash platform/cli/tests/production-credential-refusal.sh` (`platform/Makefile.inc:134-135`): builds `--no-default-features`, sets `LAYERX_CREDENTIAL_STORE=mock`, requires refusal and no config file |
 | `make platform-test-tooling` | production-credential-refusal, then `cargo test -p layerx-platform-cli --features test-credential-store`, emulator/faucet/testnet crate tests, script syntax, `cargo build -p layerx-platform-cli`, `clean-bootstrap.sh` (`platform/Makefile.inc:115-132`). CI names this “Exercise the developer CLI end to end against the emulator” (`.github/workflows/platform.yml:57-58`) |
-| `platform/cli/tests/common/mod.rs` | Real `layerx` child process, isolated `LAYERX_CONFIG`, `LAYERX_CREDENTIAL_STORE=mock` so tests do not touch a developer keychain (`platform/cli/tests/common/mod.rs:1-6, 34-38, 61-67`). `Emulator::start` spawns `layerx emulator up` on an ephemeral loopback port and waits for `/healthz` `"status":"ready"` (`platform/cli/tests/common/mod.rs:136-200`) |
+| `platform/cli/tests/common/mod.rs` | Real `layerx` child process against an isolated `LAYERX_CONFIG` and `LAYERX_REPO_ROOT` (`platform/cli/tests/common/mod.rs:1-6, 64-67`). `Emulator::start` spawns `layerx emulator up` on an ephemeral loopback port and waits for `/healthz` `"status":"ready"` (`platform/cli/tests/common/mod.rs:136-200`) |
+| `platform/cli/tests/common/credential_environment.rs` | A private Secret Service for each fixture: an isolated XDG root, a `dbus-daemon` started from a generated `bus.conf` (`platform/cli/tests/common/credential_environment.rs:36-58`) and a `gnome-keyring-daemon --components=secrets` unlocked on stdin (`platform/cli/tests/common/credential_environment.rs:71-82`) |
+| `platform/cli/tests/file_store.rs` | Encrypted file store: `LAYERX_CREDENTIAL_PASSPHRASE` handling and the 12-16384 byte bound (`platform/cli/src/file_store.rs:36-42`) |
 | `platform/cli/tests/credential.rs` | Key/token commands: seeds and tokens accepted by the store never appear in config or stdout |
 | `platform/cli/tests/commands.rs` | Envelope coverage and malformed-input refusals without emulator gateway routes (`platform/cli/tests/commands.rs:1-6`) |
 | `platform/cli/tests/emulator.rs` | Live emulator: environment bind, account prefund, payment quote/commit, identity mismatches (`platform/cli/tests/emulator.rs:1-6`) |
@@ -301,15 +347,19 @@ for the command suite lives in `platform/cli/tests/common/mod.rs`.
 | `platform/cli/tests/clean-bootstrap.sh` | Published `install.md` bootstrap sequence in a clean `HOME` against a real binary (`platform/cli/tests/clean-bootstrap.sh:53-115`) |
 | `make platform-test-agent-install` | `install-journey.sh` against a hosted gateway (`platform/Makefile.inc:190-201`). Scheduled/dispatch CI installs `dbus-x11` and `gnome-keyring` and runs that journey under `dbus-run-session` / `gnome-keyring-daemon` (`.github/workflows/platform.yml:1458-1510`) |
 
-The cargo command suite therefore exercises a **real emulator** and an
-**in-memory mock credential store**, not Secret Service
-(`platform/cli/tests/common/mod.rs:3-5, 61-67`;
-`platform/cli/src/credential.rs:14-19, 34-41`). Secret Service is the
-production Unix path (`platform/cli/src/credential.rs:23-26`). The
-production-credential-refusal script proves a release-shaped binary will
-not admit the mock. The scheduled hosted journey is the gate that provisions
-a real keyring (`.github/workflows/platform.yml:1458-1510`). Those sources
-disagree if “the CLI test suite” is taken to mean only `cargo test -p
-layerx-platform-cli`.
+The cargo command suite therefore exercises a **real emulator** and a **real
+Secret Service**: each fixture starts its own `dbus-daemon` and
+`gnome-keyring-daemon`, so the production Unix credential path
+(`platform/cli/src/credential.rs:23-26`) is the path under test and no
+developer keychain is touched
+(`platform/cli/tests/common/mod.rs:3-5`;
+`platform/cli/tests/common/credential_environment.rs:36-82`). The mock store
+is a build-time feature, not the harness default
+(`platform/cli/src/credential.rs:14-19, 34-45`); the
+production-credential-refusal script proves a release-shaped binary will not
+admit it. `platform/cli/tests/install.rs` removes `LAYERX_CREDENTIAL_STORE`
+outright (`platform/cli/tests/install.rs:22`). The scheduled hosted journey
+adds a keyring provisioned by CI rather than by the fixture
+(`.github/workflows/platform.yml:1458-1510`).
 
 [Home](Home.md)

@@ -1,3 +1,8 @@
+# Hosted gateway
+
+Receipt-verifying public ingress. Routes, scopes, and TLS are on
+[`docs/wiki/HostedGateway.md`](../../../docs/wiki/HostedGateway.md).
+
 # Public JSON-RPC
 
 `POST /rpc` is JSON-RPC 2.0. `GET /rpc/schema` serves
@@ -9,6 +14,7 @@ URL (`LAYERX_GATEWAY_PUBLIC_CORE_URL`). Native DID enumeration, asset
 listing/detail, and canonical fee estimation use authenticated core reads and
 return explicit JSON-RPC unavailability when evidence is absent, never
 fabricated results.
+The public gateway origin is `https://api.testnet.layerx.network`.
 See [Hosted gateway](../../../docs/wiki/HostedGateway.md).
 
 `lx_sendActivity` accepts the strictly decoded native Asset operations register
@@ -20,6 +26,17 @@ Programs deploy (1), upgrade (2), call (3), transfer (5), account registration
 and prices their canonical envelope bytes against the authenticated committed
 schedule; it fails closed if the schedule requires execution or storage units
 that the request cannot supply.
+
+Method list: [`docs/wiki/PublicRpc.md`](../../../docs/wiki/PublicRpc.md).
+Commitment parameter: [`docs/wiki/CommitmentLevels.md`](../../../docs/wiki/CommitmentLevels.md).
+Exact real-process request and response pairs:
+[`docs/wiki/PublicAPI.md`](../../../docs/wiki/PublicAPI.md).
+
+Reads are unauthenticated. `lx_sendActivity` requires a `LayerX-Key` with
+`activity:write` and the route scope for Programs operations. It admits Asset
+ordinals `1`, `4`, `5`, `6`, `7`, `8`, `10`, `11` and Programs ordinals `1`,
+`2`, `3`, `5`, `6`, `7`. It returns success only with a verified receipt and
+the exact requested `executed`, `batched`, or `finalised` evidence.
 
 # Canonical module registry
 

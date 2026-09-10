@@ -14,6 +14,13 @@ cited to the tree. Related pages: [CLI](Cli.md), [Beta cluster](BetaCluster.md),
 [Hosted gateway](HostedGateway.md), [Hosted identity](HostedIdentity.md),
 [Programs](Programs.md), [Finality](Finality.md).
 
+Faucet, send, Asset, program, and 402 surfaces are on
+[Payments developer path](PaymentsQuickstart.md). The public endpoint
+checklist is [Getting started on testnet](Getting-Started-Testnet.md).
+Asset encodings: [Assets](Assets.md). Public `POST /rpc`: [Public JSON-RPC](PublicRpc.md).
+`executed` / `batched` / `finalised`:
+[Commitment levels](CommitmentLevels.md).
+
 ---
 
 ## 1. Bring the beta cluster up
@@ -203,6 +210,12 @@ current identity sequence through `lx_getSequence`. The examples read
 [402LXP transport](X402Transport.md) for the offer, grant and commitment
 contracts.
 
+The public hosted equivalents are `https://api.testnet.layerx.network/rpc` and
+`wss://api.testnet.layerx.network/rpc/ws`; the faucet origin is
+`https://faucet.testnet.layerx.network`. See
+[Getting started on testnet](Getting-Started-Testnet.md) for the public
+checklist and [Public JSON-RPC](PublicRpc.md) for every method and typed error.
+
 ---
 
 ## 3. Create a credential
@@ -315,6 +328,12 @@ A 200 body has `funded` `true`, `funding_id`, optional `transaction_id`,
 (`platform/hosted/testnet/tests/hosted-smoke.sh:110`). A 202 body is
 `state` `still_checking`, `retry` `after`, `retry_after_seconds` `10`
 (`platform/hosted/faucet/src/main.rs:1028-1034`).
+
+For a complete request and response copied from a real faucet, hosted gateway,
+and native-node run, continue with
+[Public payment API](PublicAPI.md). The transcript covers asset registration,
+account opening, mint, SEND, balances, asset metadata, and receipt calls without
+shortening canonical bytes.
 
 Testnet control admits the funding journey at `GET /v1/journeys/funding`
 (`platform/hosted/testnet/src/main.rs:229, 1165-1171`). Smoke requires
@@ -436,22 +455,26 @@ reads `quote_id` from `/result/quote_id` (`platform/cli/src/payment.rs:24-27`).
 `--json` `kind` is `payment.started`; `data` has `quote`, `journey`,
 `idempotency_key` (`platform/cli/src/main.rs:946-949`;
 `platform/cli/src/payment.rs:33-37`). It does not run `verify_outcome`
-(`platform/cli/src/payment.rs:5-37`).
+(`platform/cli/src/payment.rs:5-37`). These two routes are Human-plane
+operations (`human/schema/human-api/movement.kvx:116-131`). The emulator serves
+that Human contract directly (`platform/emulator/src/main.rs:2667-2668`).
 
-Hosted smoke posts the same two gateway paths with the session Bearer and
-reads `.result.quote_id` then `.result.receipt_id`
-(`platform/hosted/testnet/tests/hosted-smoke.sh:113-132`).
-
-Hosted gateway `production_route` accepts `POST /v1/activities`, program
-call/deploy/upgrade/wind-down/simulate, `GET /v1/state`, `GET /v1/receipts/{id}`,
-and program registry/interface/activity/receipt reads. It does not accept
-`/v1/moves` or `/v1/moves/quote` (`platform/hosted/gateway/src/lib.rs:809-881`).
-Unknown production routes are `404 not_found`
+The hosted smoke harness also posts the Human-plane `/v1/moves/quote` and
+`/v1/moves` contract with the session Bearer, then reads `.result.quote_id` and
+`.result.receipt_id` (`platform/hosted/testnet/tests/hosted-smoke.sh:113-132`).
+Those paths are not part of the hosted gateway's production route parser.
+`production_route` accepts `POST /v1/activities`,
+program call/deploy/upgrade/wind-down/simulate, `GET /v1/state`,
+`GET /v1/receipts/{id}`, and program registry/interface/activity/receipt reads
+(`platform/hosted/gateway/src/lib.rs:802-890`). Unknown production routes are
+`404 not_found`
 (`platform/hosted/gateway/src/main.rs:1740-1746`). Production routes
 authenticate `LayerX-Key`, not Bearer (`platform/hosted/gateway/src/main.rs:1142-1153,
 1748`). Bearer on those routes is `401 api_key_required`. Bearer is the
 session scheme for `/v1/keys` (`platform/hosted/gateway/src/main.rs:952-961,
-1081-1088`). Those sources disagree on how a payment reaches the gateway.
+1081-1088`). Therefore `layerx payment test` is an emulator/Human-plane client
+path, not a hosted production-gateway payment command. Use the
+`lx_sendActivity` public RPC path for hosted canonical payment activities.
 
 There is no `layerx activity` command (`platform/cli/src/main.rs:43-81`).
 MCP/A2A `activity.submit` POSTs JSON `{"activity": <hex>}` to

@@ -14,7 +14,9 @@ swift, conformance, generators). CALL receipt terminal verification for
 those clients is on [SdkTerminalVerification](SdkTerminalVerification.md).
 
 This page is a read of those sources. Where they disagree, both sides are
-cited.
+cited. LXT-20 request codecs and the payments-merchant example are not in this
+tree; see
+[Payments developer path](PaymentsQuickstart.md) and [Assets](Assets.md).
 
 Sources:
 
@@ -121,9 +123,8 @@ simulation evidence, then `lxp_kernel_prepared_batch_destroy` and
 `lxp_arena_reset`. The durable log, sequence, and occupancy ledger are not
 committed.
 
-Hosted routes `POST /v1/programs/call` vs `POST /v1/programs/simulate`
-(`spec/layerx-beta/spec.kvx` `[req.14]` ac_2, ac_5) are the same CALL bytes
-over LNI; only simulate uses the non-committing path.
+Hosted routes `POST /v1/programs/call` and `POST /v1/programs/simulate` carry
+the same CALL bytes over LNI; only simulate uses the non-committing path.
 
 Sources:
 
@@ -134,7 +135,150 @@ Sources:
 - `src/modules/programs/call.c` (`lxp_programs_call_decode`, `lxp_programs_call_validate`, `lxp_programs_call_execute`)
 - `cmd/layerxd/lxp_daemon_lni.c` (`lxp_daemon_lni_simulate`, `send_simulate`)
 - `agent/schema/lni/README.md` (LNI 1.4 `simulate`)
-- `spec/layerx-beta/spec.kvx` `[req.14]`
+
+---
+
+## LXT-20
+
+`programs/sdk/rust/src/lxt20.rs`, `programs/sdk/rust/examples/token-lxt20`, and
+`programs/fixtures/pay5` are not in this tree; the contract below is the
+reference the Programs ABI admits, not a path that can be built here.
+
+The Rust guest SDK's LXT-20 example is an ABI-v2 state machine backed by one
+native Asset. Token balances and allowances are program storage; the backing
+units move only through `402LXP`. The reference program fixes its Asset,
+supply, and ceiling at build time. It has no mint, burn, permit, or nested-call
+surface.
+
+### Interface and calldata
+
+The native Programs interface publishes eight entries:
+
+| Method | Selector | Payload |
+| --- | --- | --- |
+| `initialize` | `4c 58 14 00` | empty |
+| `transfer` | `4c 58 14 01` | recipient id32, amount `u128` |
+| `approve` | `4c 58 14 02` | spender id32, amount `u128` |
+| `transfer_from` | `4c 58 14 03` | owner id32, recipient id32, amount `u128` |
+| `balance_of` | `4c 58 14 04` | owner id32 |
+| `allowance` | `4c 58 14 05` | owner id32, spender id32 |
+| `total_supply` | `4c 58 14 06` | empty |
+| `metadata` | `4c 58 14 07` | empty |
+
+Canonical requests are:
+
+```text
+selector4 || [version=1, width=0x20] || payload_length:u32_be || payload
+```
+
+The exact payload lengths are 48 for `transfer`/`approve`, 80 for
+`transfer_from`, 32 for `balance_of`, 64 for `allowance`, and zero for
+`initialize`, `total_supply`, and `metadata`. Transfer amounts are positive;
+approval of zero is valid and revokes the allowance. The total request is at
+most 90 bytes.
+
+Responses are `[1,0x20] || payload_length:u32_be || payload`. Balance,
+allowance, and total supply return one `u128`; mutation calls return an empty
+payload; metadata is the fixed configured value. `transfer_from` always
+subtracts the exact amount, including when the allowance is the maximum
+`u128`.
+
+### Account and deployment preparation
+
+`PreparedProgramAccount` derives an account from:
+
+```text
+SHA-256("LayerX/programs/program-account/v1\\0"
+       || program_id32 || seed_length:u32_be || seed)
+```
+
+Its native account-registration payload is:
+
+```text
+program_id32 || "LXPA1" || asset_id32 || seed_length:u32_be || seed
+```
+
+Register the program account for the chosen Asset before funding it. Funding
+uses an ordinary principal-funded `Transfer402` grant; spending uses the
+separate bounded `ProgramSpend` capability. Derivation is not registration,
+funding, or debit authority.
+
+Deploy with ABI version 2 and include the generated interface that binds all
+eight selectors, input/output bounds, and transfer capability offsets. Because
+`transfer` and `transfer_from` carry `CallerAuthorizedSpend`, the canonical
+interface uses `LayerX/program-interface/v2\0`; the v1 interface encoding and
+guest ABI 1 refuse that descriptor
+(`programs/crates/layerx-programs-registry/src/interface.rs:13-14, 306-320,
+820-835`).
+
+The reference descriptor binds the backing Asset and per-call ceiling, with
+recipient/amount offsets `10`/`42` for `transfer` and `42`/`74` for
+`transfer_from`
+(`programs/crates/layerx-programs-registry/src/lxt20.rs:68-70, 89-100`). It
+does not grant spending authority. Admission extracts the recipient and u128
+amount from canonical calldata, refuses zero or over-ceiling values, and
+requires a matching caller `ProgramSpend` grant bound to this program, its
+derived source account, Asset, recipient, and amount
+(`programs/crates/layerx-programs-runtime/src/dynamic_spend.rs:11-47`). A
+registry source/state record alone is not proof that the native deploy
+activity executed; require its verified receipt.
+
+The initialization request is:
+
+```text
+4c581400012000000000
+```
+
+Initialization atomically stages the full fixed supply from the configured
+issuer to the registered program account. A recipient must call `approve`,
+including zero, at least once so its derived program-account storage exists
+before a transfer credits it.
+
+### Calls and receipt reads
+
+Build the reference guest with:
+
+```sh
+cargo build \
+  --manifest-path programs/sdk/rust/examples/payments-merchant/Cargo.toml \
+  --target wasm32-unknown-unknown --release
+```
+
+Submit deploy and call activities through the native Programs routes or
+`lx_sendActivity`, retain the activity id, and require the requested commitment
+evidence. A call's transfer grants must match the generated interface and the
+registered program account; any capability widening or unmatched dynamic
+spend is refused atomically.
+
+Guest `receipt_read` does not expose raw kernel state. The host writes exactly
+116 bytes for an explicitly granted digest:
+
+```text
+receipt_digest32
+|| result_code:i32_be
+|| asset_id32
+|| amount:u128_be
+|| state_root32
+```
+
+The SDK refuses any other length, malformed field, or digest different from
+the requested receipt. The merchant example therefore consumes verified,
+explicitly granted payment evidence rather than trusting a caller-supplied
+receipt description.
+
+When a principal or program-funding leg resolves a named native account, the
+runtime wraps the original transfer authorization with
+`LayerX/programs/402LXP/account-bound-set/v1\0`, the u32 length and bytes of
+that authorization, then one u16-length-prefixed account name per leg. Program
+spend legs require an empty name; principal and funding legs recompute the
+source account from the supplied canonical name. The resulting 115-byte kernel
+legs and transfer root therefore commit the actual account endpoints while the
+original authorization retains the signer principal and invocation authority
+(`programs/crates/layerx-programs-runtime/src/transfer.rs:882-918, 921-955`).
+Nested wrappers, trailing data, forged names, or a recomputed root mismatch are
+refused. The positive native per-Asset evidence and negative vectors for that
+refusal live in `programs/fixtures/pay5/account-authorization-vectors.json`,
+which is not in this tree.
 
 ---
 
@@ -184,7 +328,8 @@ is 2. Hosted testnet pins wire protocol 3
 builder accepts protocol 2 or 3 and registers Asset v1 when protocol is 3
 (`cmd/layerx-genesis/lxp_genesis_builder.c:88,152`). Bridge credit
 `validate_credit` requires `activity->protocol_version != 3U` to fail.
-`[req.14]` returns `wire_version` from `/readyz`; it does not select protocol 3.
+The hosted readiness response reports its `wire_version`; it does not select
+the protocol used by genesis.
 
 Protocol 3 receipt encoding carries occupancy fields on program outcomes with
 `encoding_version >= 2`. `layerx_programs_call_terminal_publish` writes
@@ -226,9 +371,9 @@ Key prefix `"program\0"` plus 32-byte program id (40 bytes). Value is 71 bytes:
 Interface records, when present, use prefix `"interface\0"` plus program id.
 
 WASM bytes are blobs addressed by `(program_id, code_hash)`
-(`lxp_programs_artifact_store` / `lxp_programs_artifact_open`). Beta
-`[req.2]` requires those blobs in the snapshot kernel-blob section so restore
-reproduces the Programs subtree root and a post-restore CALL still hashes.
+(`lxp_programs_artifact_store` / `lxp_programs_artifact_open`). Snapshots carry
+those blobs in the kernel-blob section so restore reproduces the Programs
+subtree root and a post-restore CALL resolves the same artifact.
 
 ### Wind-down states
 
@@ -252,7 +397,6 @@ Sources:
 - `src/modules/programs/call.c:1751-1757`
 - `programs/crates/layerx-programs-registry/src/lib.rs` (exports)
 - `programs/crates/layerx-programs-runtime/src/lifecycle.rs` (`UpgradePolicy`, `Deploy`, `Upgrade`)
-- `spec/layerx-beta/spec.kvx` `[req.2]`
 
 ---
 
@@ -448,51 +592,5 @@ Sources:
 - `Makefile` (`programs-abi-drift`, `programs-test`)
 
 ---
-
-## Spec notes and disagreements
-
-`spec/layerx-beta/spec.kvx` has `[req.1]`–`[req.14]` only. There is no beta
-`[req.28]`. Programs-related beta requirements are:
-
-- `[req.2]` snapshot blobs and post-restore CALL
-- `[req.8]` ac_5 aggregate Programs acceptance on the release revision
-- `[req.12]` ac_4 Programs tests in the required beta gates
-- `[req.14]` hosted `program call` and `simulate` over LNI, never in-process
-
-`spec/layerx-protocol/spec.kvx` `[req.28]` is the protocol qualification bar
-(replay identity, fault injection, fuzz, sanitizers). It does not define
-Programs activity encoding.
-
-Disagreements left intact:
-
-1. C `lxp_programs_abi_transition_validate` admits guest ABI 1, 2, and 3.
-   Rust `admit_abi_version`, CALL decode, and `abi-frozen.sha256` admit 1 and
-   2 only.
-2. `include/layerx/lxp_protocol.h` default `LXP_PROTOCOL_VERSION` is 2.
-   Hosted testnet pins wire protocol 3
-   (`platform/hosted/testnet/deployment.yaml:10`), beta-cluster genesis uses
-   `protocol_version: 3` (`platform/hosted/tests/beta-cluster.sh:794`), and
-   genesis builder accepts protocol 3
-   (`cmd/layerx-genesis/lxp_genesis_builder.c:88,152`). `[req.14]` returns
-   `wire_version` from `/readyz`; it does not select protocol 3.
-3. `spec/layerx-beta/spec.kvx:57` (decision `checkpoint_v2`) says the hosted
-   testnet pins wire protocol version 2.
-   `platform/hosted/testnet/deployment.yaml:10` pins
-   `lxp-wire-protocol-version: "3"`.
-4. Wiki text treated Programs as “not module ID 0x09”. The kernel
-   registers `LXP_MODULE_PROGRAMS = 9` and encodes types as `0x0009xxxx`.
-   It is not a ninth `402LXP` writer.
-
-Sources:
-
-- `spec/layerx-beta/spec.kvx` `[req.2]`, `[req.8]`, `[req.12]`, `[req.14]`, decision `checkpoint_v2` (line 57)
-- `platform/hosted/testnet/deployment.yaml:10`
-- `platform/hosted/tests/beta-cluster.sh:794`
-- `cmd/layerx-genesis/lxp_genesis_builder.c:88,152`
-- `spec/layerx-protocol/spec.kvx` `[req.28]`
-- `src/modules/programs/deploy.c:84-96`
-- `programs/crates/layerx-programs-runtime/src/abi_policy.rs:31-36`
-- `include/layerx/lxp_module.h:22`
-- `include/layerx/lxp_protocol.h:12`
 
 [Home](Home.md)

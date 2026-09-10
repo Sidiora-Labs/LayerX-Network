@@ -1,13 +1,6 @@
-<!--
-Draft copy for the GitHub wiki page "Finality".
-The wiki has no PR flow, so this file is the reviewable source. After this PR
-merges, paste the body below (everything under the first `# Finality`) into the
-wiki page. Do not commit this note to the wiki.
--->
-
 # Finality
 
-Ordered instantly in-channel. Anchored to Paxeer on the L0 → L4 ladder.
+Ordered in-channel. Anchored to Paxeer on the L0 → L4 ladder.
 
 An activity is not final all at once. Each step names who is on the hook if the claim turns out to be wrong. The guarantee behind a batch is not a validity proof. It is bonded re-execution, a challenge window, and withdrawal limits.
 
@@ -69,9 +62,14 @@ This ladder is how LayerX qualifies a checkpoint onto Paxeer. It is not "final o
 
 ---
 
+Public submit and 402 offers name three evidence levels — `executed`,
+`batched`, `finalised` — rather than L0–L4. See
+[Commitment levels](CommitmentLevels.md).
+
 ## Start here
 
 - [Home](Home.md)
 - [Protocol](Protocol.md): LXC envelope and the three rules
 - [Modules](Modules.md): the eight economic modules and the programs surface
+- [Commitment levels](CommitmentLevels.md): `executed`, `batched`, `finalised`
 - Security

@@ -9389,3 +9389,43 @@ symbol = "specgen render"
 observed = "Running the spec render at bae8bf98e5159986569235e7993b3895c997391e rewrote four files. One, spec/layerx-protocol/design.md, is this change's own regenerated output. The other three were already stale against their kvx sources before this change and none of them is rendered from a file this change touched: spec/layerx-beta/requirements.md acceptance criteria 3 and 4 of the trusted-boundary requirement, spec/layerx-beta/tasks.md tasks 6.1 to 6.3, and spec/layerx-protocol/requirements.md acceptance criteria 12 to 14 of the asset requirement, whose rendered text carries the module-value issuance account and the pause/unpause admission exclusion that the checked-in markdown still omits."
 assumption = "The drift belongs to the lanes that edited those spec.kvx sections without re-rendering, so the three files were restored to their committed state and only the regenerated design.md is carried here. Renderer output for spec/layerx-protocol/design.md is byte-identical to the two-line generation banner followed by design.body.md, which was verified before and after the edit."
 severity = "note"
+
+[observation.5.4.6800]
+task = "5.4"
+file = "platform/hosted/gateway/openrpc.json platform/hosted/gateway/src/rpc.rs"
+symbol = "lx_sendActivity -32005 lx_getReceipt"
+observed = "The two ground-truth files for the public method contract disagree in two places. openrpc.json declares the -32005 message for lx_sendActivity as \"Read unavailable\" while rpc.rs emits \"Submission unavailable\" for every code on the submit path. openrpc.json also states that a successful lx_getReceipt result includes receipt bytes and a result_code, while the core route that serves it returns exactly activity_id and receipt; the repository's own gateway local-harness test decodes the code out of the receipt bytes instead of reading a field. The public documentation was written against the route, not against the schema."
+assumption = "Neither file was edited from this row. The schema and the route are owned by the gateway lane; documenting the route's actual shape does not settle which of the two should change."
+severity = "suspect"
+
+[observation.5.4.6801]
+task = "5.4"
+file = "platform/hosted/core/src/main.rs platform/hosted/gateway/src/ws.rs"
+symbol = "receipt route identifier case"
+observed = "Identifier case is handled inconsistently across the public surface. The gateway selector parses either case, and the WebSocket account topic silently lowercases the account id it is given, but the core receipt route refuses any activity id containing an uppercase hexadecimal digit with HTTP 400, which the gateway maps to JSON-RPC -32602. The same identifier therefore succeeds on one public method and is refused as malformed on another."
+assumption = "The refusal is the stricter behaviour and was not relaxed. The documentation now states the asymmetry rather than the previous claim that identifiers may be either case everywhere."
+severity = "note"
+
+[observation.5.4.6802]
+task = "5.4"
+file = "docs/wiki/Cli.md platform/cli/src/credential.rs"
+symbol = "credential.rs line anchors"
+observed = "The CLI page carries roughly fourteen line-number citations into platform/cli/src/credential.rs that predate a revision which removed about forty-five lines from that file. The anchors corrected here are the ones whose surrounding claim was also wrong; the remainder still name the right symbol but point a few lines off. Line anchors into that file will keep drifting until the page cites symbols instead of ranges."
+assumption = "Only anchors attached to a claim that was independently checked were moved, so no citation was silently re-pointed at text that does not support it."
+severity = "note"
+
+[observation.5.4.6803]
+task = "5.4"
+file = "programs/sdk/rust/src/lxt20.rs programs/fixtures/pay5 programs/sdk/rust/examples"
+symbol = "LXT-20 account-bound-set/v1"
+observed = "Several published pages describe an LXT-20 reference program, its request codecs, a payments-merchant example, a programs/fixtures/pay5 fixture directory with a native round-trip replay, and a LayerX/programs/402LXP/account-bound-set/v1 transfer-authority wrapper accepted by the Go, JVM, Swift and .NET SDKs. None of those paths and no occurrence of that wrapper tag exist in this tree. The two porting migration guides are 363 and 328 lines here and carry no LXT-20 section, so the citations into lines beyond those bounds resolve to nothing."
+assumption = "The material was kept and relabelled as absent from this tree rather than deleted, because it describes a contract that a later revision is expected to land; the line-range citations that could not resolve were replaced with section names."
+severity = "note"
+
+[observation.5.4.6804]
+task = "5.4"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "documentation source assertions"
+observed = "The source assertions this documentation lane originally recorded pinned three lane heads that are no longer reachable from any remote ref; their common ancestor with the current lane heads is roughly nine hundred commits back on each side, so the pinned reads now return entirely different trees. The claims were therefore re-verified against the merged working tree instead, and the schema-contract check was moved from a piped git show onto the tracked openrpc.json."
+assumption = "Re-verifying against the merged tree is strictly stronger than re-reading an orphaned revision, so no assertion was dropped in the exchange."
+severity = "note"

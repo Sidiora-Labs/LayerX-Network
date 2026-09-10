@@ -92,10 +92,8 @@ the hosted read surfaces without granting any write authority.
 
 ## Protocol surfaces
 
-Four surfaces landed with and around the monorepo integration. Each is described here as
-it is actually implemented; the authoritative source is the code and
-[`spec/layerx-platform`](../spec/layerx-platform) (requirement `37`, tasks `30.1`–`30.5`,
-and requirement `36.5` for occupancy).
+The surfaces below are described as implemented; the authoritative source is
+the code and [`spec/layerx-platform`](../spec/layerx-platform).
 
 ### Program-owned accounts
 
@@ -206,6 +204,21 @@ The Rust SDK ships `escrow` and `vault` examples; the C and AssemblyScript SDKs
 ship `paid-counter` examples. ProgramSpend (tag 9) and BalanceView (tag 10) are
 part of frozen ABI 2; the runtime crate defines their canonical encoding and
 amount-monotone narrowing rules. ABI 1 does not admit these grants.
+
+`sdk/rust` is documented as also shipping `lxt20` request codecs, `payments`
+program-account preparation, and `examples/payments-merchant`. None of those
+paths are in this tree. See
+[`docs/wiki/PaymentsQuickstart.md`](../docs/wiki/PaymentsQuickstart.md)
+and [`docs/wiki/Assets.md`](../docs/wiki/Assets.md).
+
+LXT20 is ABI-v2 guest state backed by one native Asset. Its interface has
+`initialize`, `transfer`, `approve`, `transfer_from`, `balance_of`,
+`allowance`, `total_supply`, and `metadata`. Request bytes are
+`[0x4c,0x58,0x14,method] || [1,0x20] || payload_len:u32_be || payload`.
+Recipients approve once, including zero, to register their derived account
+storage. The reference program has fixed supply and no mint, burn, permit, or
+nested-call surface. Program receipt reads consume the exact 116-byte frozen
+record: digest, signed result code, Asset, amount, and state root.
 
 The porting kits map familiar contract vocabularies onto the programs ABI and are explicit
 about what does not carry over:

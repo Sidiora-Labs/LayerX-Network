@@ -1,5 +1,9 @@
 # Hosted gateway
 
+Exact public JSON-RPC requests and responses captured from the real hosted
+services and a disposable native node are in
+[Public payment API](PublicAPI.md).
+
 `layerx-gateway` is the receipt-verifying public ingress for hosted
 LayerX Network (`platform/hosted/gateway/src/lib.rs:1`;
 `platform/hosted/gateway/Cargo.toml:8-10`;
@@ -35,6 +39,10 @@ This page covers that binary, its Redis, and the tests in
 administration surface. `production_route` never accepts emulator
 paths (`platform/hosted/gateway/src/lib.rs:804-808`;
 `platform/hosted/gateway/src/lib.rs:880-881`).
+
+The gateway serves public JSON-RPC at `POST /rpc`, `GET /rpc/schema`, and
+`GET /rpc/ws`. The exact 15-method contract, authenticated submission rules,
+result shapes, and WebSocket behavior are in [Public JSON-RPC](PublicRpc.md).
 
 ---
 
@@ -180,6 +188,9 @@ Unauthenticated and key-management routes are dispatched before
 | `GET /v1/keys` | Bearer session | identity introspect; Redis `list_keys` (`platform/hosted/gateway/src/main.rs:1090-1091`; `platform/hosted/gateway/src/main.rs:2351-2382`) |
 | `DELETE /v1/keys/{id}` | Bearer session | identity introspect; Redis `revoke_key` (`platform/hosted/gateway/src/main.rs:1114-1126`) |
 | `POST /v1/keys/{id}/rotate` | Bearer session, `Idempotency-Key` | identity introspect; Redis `rotate_key` (`platform/hosted/gateway/src/main.rs:1128-1137`; `platform/hosted/gateway/src/main.rs:2385-2454`) |
+| `POST /rpc` | JSON-RPC 2.0; reads are unauthenticated, submission requires `LayerX-Key` | public-core reads or the existing authenticated activity/Programs routes |
+| `GET /rpc/schema` | none | embedded `openrpc.json` |
+| `GET /rpc/ws` | WebSocket upgrade and `LayerX-Key`; `receipt:read` or `state:read` by topic | live authenticated receipt/account/checkpoint wakes |
 | `GET /internal/v1/principal` | `LayerX-Key` | Redis key lookup. Body `principal_digest` only (`platform/hosted/gateway/src/main.rs:1706-1718`) |
 | `POST /v1/activities` | `LayerX-Key`, `Idempotency-Key`, `application/json` `{activity}` or `application/octet-stream` signed bytes (`platform/hosted/gateway/src/main.rs:3068-3117`) | agent-boundary `POST /v1/activities` as `application/octet-stream` with the component token and protocol idempotency key (`platform/hosted/gateway/src/main.rs:3193-3206`). Then authority `GET /v1/authorized-batches/by-activity/{id}` (`platform/hosted/gateway/src/main.rs:1156-1186`) |
 | `GET /v1/state` | `LayerX-Key` and `state:read` | none. Always `503 principal_state_proof_unavailable` before quota (`platform/hosted/gateway/src/main.rs:1572-1573`; `platform/hosted/gateway/src/main.rs:1611`) |
@@ -207,8 +218,10 @@ Authority is
 `https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420`
 (`platform/hosted/gateway/deployment.yaml:84`). Readiness labels the
 component probe `core_agent_boundary`
-(`platform/hosted/gateway/src/main.rs:2805`). The gateway has no core
-URL of its own.
+(`platform/hosted/gateway/src/main.rs:2805`).
+`LAYERX_GATEWAY_PUBLIC_CORE_URL` is the separate authenticated source for
+public account, proof, Asset, fee, and node-info reads. Activity submission
+continues to use the agent-boundary path.
 
 Program GET/simulate/error responses are wrapped in the agent envelope
 unless the request is a successful `POST` call or lifecycle mutation
@@ -229,6 +242,7 @@ Unknown `production_route` values are `404 not_found`
 | `LAYERX_GATEWAY_LISTEN` | Bind address; default `0.0.0.0:9443` (`platform/hosted/gateway/src/main.rs:532-535`; `platform/hosted/gateway/deployment.yaml:72`) |
 | `LAYERX_GATEWAY_TLS_CERT_DER` | Inbound server certificate DER |
 | `LAYERX_GATEWAY_TLS_KEY_DER` | Inbound PKCS#8 key DER |
+| `LAYERX_GATEWAY_PUBLIC_CORE_URL` | HTTPS source for public committed reads; testnet uses `layerx-pending-core` |
 | `LAYERX_GATEWAY_OUTBOUND_CA_DER` | Trust bundle for HTTPS and Redis |
 | `LAYERX_GATEWAY_CLIENT_IDENTITY_PKCS12` | Outbound client identity |
 | `LAYERX_GATEWAY_CLIENT_IDENTITY_PASSWORD_FILE` | PKCS#12 password |
@@ -556,6 +570,10 @@ inputs appear here:
 | `platform-hosted-smoke` | requires `LAYERX_GATEWAY_URL` (`platform/Makefile.inc:161-173`) |
 | `platform-hosted-topology-check` | `topology-check.sh`, default manifests include the gateway (`platform/Makefile.inc:177-178`; `platform/hosted/tests/topology-check.sh:22`) |
 | `platform-test-agent-install` | requires `LAYERX_GATEWAY_URL` (`platform/Makefile.inc:190-201`) |
+
+The gateway also serves `/rpc` as documented on
+[Public JSON-RPC](PublicRpc.md). Commitment names for
+`lx_sendActivity` are on [Commitment levels](CommitmentLevels.md).
 
 [Home](Home.md)
 

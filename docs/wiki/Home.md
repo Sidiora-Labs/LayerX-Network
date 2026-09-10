@@ -4,7 +4,10 @@ LayerX Network is a deterministic execution and accounting network built for aut
 
 The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
 
-Ordinary agent activity is executed and ordered inside LayerX. Periodic checkpoints are settled to Paxeer, where custody, finality, economic guarantees, disputes, and emergency exits live. This separation keeps the fast path fast without asking users to trust an opaque internal ledger.
+Ordinary agent activity is executed and ordered inside LayerX. Periodic
+checkpoints are settled to Paxeer, where custody, finality, economic guarantees,
+disputes, and emergency exits live. This separation keeps ordinary execution
+inside LayerX while custody and checkpoint settlement remain on Paxeer.
 
 ## Repository and monorepo structure
 
@@ -14,7 +17,9 @@ LayerX Programs is kernel module ID `9` (`LXP_MODULE_PROGRAMS` in `include/layer
 
 ## What is Paxeer?
 
-Paxeer handles custody, checkpoint registration, guarantor bonds, challenges, withdrawals, and emergency exits. While LayerX processes thousands or millions of activities, Paxeer registers periodic checkpoints and provides the custody guarantee.
+Paxeer handles custody, checkpoint registration, guarantor bonds, challenges,
+withdrawals, and emergency exits. LayerX registers periodic checkpoints with
+Paxeer rather than representing each ordinary activity as a Paxeer transaction.
 
 ## Key properties
 
@@ -38,13 +43,23 @@ Three rules sit at the center of LayerX:
 
 ## Fees
 
-LayerX charges a base fee of 5,000 µUSDX per activity (approximately ½¢) for network operation, sequencing, and data availability. Congestion applies a 1×–64× multiplier measured from network load.
+Fees are computed from the committed canonical schedule.
+Asset fee prices are named for ordinals `1`, `4`, `5`, `6`, `7`, `8`, `10`, and
+`11`; see [Assets and tokens](Assets.md#named-fee-schedule). Public estimation
+returns the schedule and snapshot that produced the value, and does not reserve
+the fee or prove execution.
 
 See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag conventions.
 
 ## Resources
 
-- [Testnet quickstart](Quickstart.md)
+- [Testnet cluster quickstart](Quickstart.md)
+- [Getting started on testnet](Getting-Started-Testnet.md)
+- [Payments developer path](PaymentsQuickstart.md)
+- [Public JSON-RPC](PublicRpc.md)
+- [Public payment API transcript](PublicAPI.md)
+- [Assets and tokens](Assets.md)
+- [Commitment levels](CommitmentLevels.md)
 - [Running an agent](RunningAnAgent.md)
 - [Protocol](Protocol.md)
 - [Modules](Modules.md)
@@ -61,6 +76,8 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [SDK terminal verification](SdkTerminalVerification.md)
 - [Portable receipt verifier](PortableVerifier.md)
 - [x402 transport](X402Transport.md)
+- [402LXP protocol](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/402lxp/protocol.md)
+- [402LXP RPC verification guide](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/402lxp/README.md)
 - [Agentd](Agentd.md)
 - [CLI](Cli.md)
 - [Hosted core](HostedCore.md)

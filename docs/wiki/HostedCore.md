@@ -1,6 +1,22 @@
 # Hosted core
 
-`layerx-platform-core` is the crate; `layerx-core-boundary` is the binary (`platform/hosted/core/Cargo.toml:2`, `platform/hosted/core/Cargo.toml:8-14`). It is the TLS HTTP boundary in front of `layerxd`. It binds two listeners, one core plane and one admin plane (`platform/hosted/core/src/main.rs:57-61`, `platform/hosted/core/src/main.rs:1764-1771`). The core listener default is `0.0.0.0:9443`; the admin listener default is `0.0.0.0:9444` (`platform/hosted/core/src/main.rs:266-267`). Both planes speak TLS. The core plane loads `LAYERX_CORE_TLS_CERT_DER` and `LAYERX_CORE_TLS_KEY_DER`. When `LAYERX_CORE_CLIENT_CA_DER` is set, that plane installs a client-certificate verifier that also `allow_unauthenticated`; when the variable is unset, the core plane uses no client authentication (`platform/hosted/core/src/main.rs:180-209`, `platform/hosted/core/src/main.rs:236-238`, `platform/hosted/core/src/main.rs:268-272`). The admin plane loads `LAYERX_CORE_ADMIN_TLS_CERT_DER` and `LAYERX_CORE_ADMIN_TLS_KEY_DER` and always uses no client authentication (`platform/hosted/core/src/main.rs:273-277`). Core routes run on the core port. Admin routes run on the admin port.
+`layerx-platform-core` is the crate; `layerx-core-boundary` is the binary
+(`platform/hosted/core/Cargo.toml:2`,
+`platform/hosted/core/Cargo.toml:8-14`). It is the TLS HTTP boundary in front
+of `layerxd`. `platform_core` binds the core and admin listeners separately
+(`platform/hosted/core/src/main.rs:2025-2032`). `config` parses their defaults
+as `0.0.0.0:9443` and `0.0.0.0:9444`
+(`platform/hosted/core/src/main.rs:279-280`). Both planes speak TLS. The core
+plane loads `LAYERX_CORE_TLS_CERT_DER` and `LAYERX_CORE_TLS_KEY_DER`. When
+`LAYERX_CORE_CLIENT_CA_DER` is set, that plane installs a client-certificate
+verifier that also `allow_unauthenticated`; when the variable is unset, the
+core plane uses no client authentication
+(`platform/hosted/core/src/main.rs:193-222, 248-252, 281-285`). The admin plane
+loads `LAYERX_CORE_ADMIN_TLS_CERT_DER` and
+`LAYERX_CORE_ADMIN_TLS_KEY_DER` and always uses no client authentication
+(`platform/hosted/core/src/main.rs:286-290`). Core routes run on the core port.
+Admin routes run on the admin port. The public JSON-RPC method list and payment
+transcript are documented in [Public payment API](PublicAPI.md).
 
 The image is `layerx-core-boundary` from `platform/hosted/core/Dockerfile`. The build produces `/usr/local/bin/layerx-core-boundary` and the runtime image sets `ENTRYPOINT` to that binary (`platform/hosted/core/Dockerfile:5`, `platform/hosted/core/Dockerfile:9-11`). The Dockerfile creates user `4020:4020` and `USER 4020:4020` (`platform/hosted/core/Dockerfile:8-10`). The node StatefulSet runs the same binary as container `core-boundary` with `runAsUser: 4021` and `runAsGroup: 4020` (`platform/hosted/node/deployment.yaml:106-119`). Those two identities differ.
 
@@ -16,29 +32,29 @@ The hosted testnet treats core as dependency `Core` and the admin listener as `C
 
 | Variable | Role |
 | --- | --- |
-| `LAYERX_CORE_LISTEN` | Core TLS bind; default `0.0.0.0:9443` (`platform/hosted/core/src/main.rs:266`) |
-| `LAYERX_CORE_ADMIN_LISTEN` | Admin TLS bind; default `0.0.0.0:9444` (`platform/hosted/core/src/main.rs:267`) |
-| `LAYERX_CORE_TLS_CERT_DER` | Core server certificate DER (`platform/hosted/core/src/main.rs:268-270`) |
-| `LAYERX_CORE_TLS_KEY_DER` | Core PKCS#8 key DER (`platform/hosted/core/src/main.rs:268-270`) |
-| `LAYERX_CORE_ADMIN_TLS_CERT_DER` | Admin server certificate DER (`platform/hosted/core/src/main.rs:273-275`) |
-| `LAYERX_CORE_ADMIN_TLS_KEY_DER` | Admin PKCS#8 key DER (`platform/hosted/core/src/main.rs:273-275`) |
-| `LAYERX_CORE_CLIENT_CA_DER` | Optional core client CA DER; unset means no client authentication (`platform/hosted/core/src/main.rs:236-238`, `platform/hosted/core/src/main.rs:193-205`) |
-| `LAYERX_CORE_NETWORK_ID` | Required non-zero `u32` (`platform/hosted/core/src/main.rs:240-245`) |
-| `LAYERX_CORE_LNI_SOCKET` | Unix socket to `layerxd` LNI (`platform/hosted/core/src/main.rs:278`) |
-| `LAYERX_CORE_NODE_URL` | Loopback `http://` host:port with no path (`platform/hosted/core/src/main.rs:212-232`, `platform/hosted/core/src/main.rs:280`) |
-| `LAYERX_CORE_NODE_BEARER_TOKEN_FILE` | Bearer secret for node HTTP (`platform/hosted/core/src/main.rs:281`) |
-| `LAYERX_CORE_REPLICA_URL` | Parsed by the same `parse_node_url` as the node URL; the error strings in that function name `LAYERX_CORE_NODE_URL` (`platform/hosted/core/src/main.rs:212-232`, `platform/hosted/core/src/main.rs:282`) |
-| `LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE` | Bearer secret for replica HTTP (`platform/hosted/core/src/main.rs:283`) |
-| `LAYERX_CORE_ADMIN_TOKEN_FILE` | Admin `Authorization: Bearer` secret (`platform/hosted/core/src/main.rs:284`) |
-| `LAYERX_CORE_TREASURY_KEY_FILE` | 32-byte hex Ed25519 seed (`platform/hosted/core/src/main.rs:246-247`, `platform/hosted/core/src/lib.rs:292-294`) |
-| `LAYERX_CORE_TREASURY_ASSET` | Non-zero 32-byte hex asset id (`platform/hosted/core/src/main.rs:248-254`) |
-| `LAYERX_CORE_SEQUENCER_ID` | 32-byte hex sequencer id (`platform/hosted/core/src/main.rs:255-258`) |
-| `LAYERX_CORE_SUPERVISOR_SOCKET` | Unix socket for admin reset (`platform/hosted/core/src/main.rs:289`) |
-| `LAYERX_CORE_STATE_DIR` | Creates `journal/` mode `0o700` (`platform/hosted/core/src/main.rs:259-264`) |
-| `LAYERX_CORE_FEE_LIMIT` | SEND fee limit; default `1000` (`platform/hosted/core/src/main.rs:291`) |
-| `LAYERX_CORE_RECEIPT_DEADLINE_MS` | Receipt poll deadline; default `15000` (`platform/hosted/core/src/main.rs:292-295`) |
+| `LAYERX_CORE_LISTEN` | Core TLS bind; default `0.0.0.0:9443` (`platform/hosted/core/src/main.rs:169-174, 279`) |
+| `LAYERX_CORE_ADMIN_LISTEN` | Admin TLS bind; default `0.0.0.0:9444` (`platform/hosted/core/src/main.rs:169-174, 280`) |
+| `LAYERX_CORE_TLS_CERT_DER` | Core server certificate DER (`platform/hosted/core/src/main.rs:193-222, 281-285`) |
+| `LAYERX_CORE_TLS_KEY_DER` | Core PKCS#8 key DER (`platform/hosted/core/src/main.rs:193-222, 281-285`) |
+| `LAYERX_CORE_ADMIN_TLS_CERT_DER` | Admin server certificate DER (`platform/hosted/core/src/main.rs:286-290`) |
+| `LAYERX_CORE_ADMIN_TLS_KEY_DER` | Admin PKCS#8 key DER (`platform/hosted/core/src/main.rs:286-290`) |
+| `LAYERX_CORE_CLIENT_CA_DER` | Optional core client CA DER; unset means no client authentication (`platform/hosted/core/src/main.rs:193-219, 248-252`) |
+| `LAYERX_CORE_NETWORK_ID` | Required non-zero `u32` (`platform/hosted/core/src/main.rs:253-257`) |
+| `LAYERX_CORE_LNI_SOCKET` | Unix socket to `layerxd` LNI (`platform/hosted/core/src/main.rs:291`) |
+| `LAYERX_CORE_NODE_URL` | Loopback `http://` host:port with no path (`platform/hosted/core/src/main.rs:225-245, 293`) |
+| `LAYERX_CORE_NODE_BEARER_TOKEN_FILE` | Bearer secret for node HTTP (`platform/hosted/core/src/main.rs:294`) |
+| `LAYERX_CORE_REPLICA_URL` | Parsed by the same `parse_node_url` as the node URL; the error strings in that function name `LAYERX_CORE_NODE_URL` (`platform/hosted/core/src/main.rs:225-245, 298`) |
+| `LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE` | Bearer secret for replica HTTP (`platform/hosted/core/src/main.rs:299`) |
+| `LAYERX_CORE_ADMIN_TOKEN_FILE` | Admin `Authorization: Bearer` secret (`platform/hosted/core/src/main.rs:300`) |
+| `LAYERX_CORE_TREASURY_KEY_FILE` | 32-byte hex Ed25519 seed (`platform/hosted/core/src/main.rs:259-260`) |
+| `LAYERX_CORE_TREASURY_ASSET` | Non-zero 32-byte hex asset id (`platform/hosted/core/src/main.rs:261-267`) |
+| `LAYERX_CORE_SEQUENCER_ID` | 32-byte hex sequencer id (`platform/hosted/core/src/main.rs:268-271`) |
+| `LAYERX_CORE_SUPERVISOR_SOCKET` | Unix socket for admin reset (`platform/hosted/core/src/main.rs:305`) |
+| `LAYERX_CORE_STATE_DIR` | Creates `journal/` mode `0o700` (`platform/hosted/core/src/main.rs:272-277, 306`) |
+| `LAYERX_CORE_FEE_LIMIT` | SEND fee limit; default `1000` (`platform/hosted/core/src/main.rs:307`) |
+| `LAYERX_CORE_RECEIPT_DEADLINE_MS` | Receipt poll deadline; default `15000` (`platform/hosted/core/src/main.rs:308-311`) |
 
-Secret files are read, trailing CR/LF stripped, and refused when empty or longer than 4096 bytes (`platform/hosted/core/src/main.rs:139-149`). Node and replica URLs must be plaintext `http://` on `127.0.0.1` or `localhost` with a port and no path (`platform/hosted/core/src/main.rs:212-232`).
+Secret files are read, trailing CR/LF stripped, and refused when empty or longer than 4096 bytes (`platform/hosted/core/src/main.rs:152-162`). Node and replica URLs must be plaintext `http://` on `127.0.0.1` or `localhost` with a port and no path (`platform/hosted/core/src/main.rs:225-245`).
 
 ---
 
@@ -58,6 +74,16 @@ Served on the core plane (`platform/hosted/core/src/main.rs:1158-1256`). Query s
 | `POST` | `/v1/programs/wind-down` | same as deploy | Programs ordinal `7` (`platform/hosted/core/src/program_lifecycle.rs:11`, `platform/hosted/core/src/main.rs:1194-1222`) |
 | `POST` | `/v1/programs/simulate` | octet-stream or JSON `{"activity":"<hex>"}` | simulation document; `committed` is `false` (`platform/hosted/core/src/main.rs:829-848`, `platform/hosted/core/src/main.rs:1228`, `platform/hosted/core/src/main.rs:804-826`) |
 | `GET` | `/v1/state` | none | wrapped relay of `/v1/protocol/account-state/head` (`platform/hosted/core/src/main.rs:1229-1238`) |
+| `GET` | `/v1/accounts/{id}` or `/balance` | nonzero 32-byte hex account id | account snapshot with canonical value and native proof material |
+| `GET` | `/v1/dids/{did}/sequence` | valid DID | authenticated identity sequence snapshot |
+| `GET` | `/v1/dids/{did}/accounts` | valid DID | complete bounded LNI minor-5 account enumeration |
+| `GET` | `/v1/assets` or `/v1/assets/{id}` | no selector or one nonzero Asset id | complete bounded list or one version-3 record |
+| `POST` | `/v1/fees/estimate` | JSON `canonical_hex` | committed-schedule estimate or typed unavailable refusal |
+| `GET` | `/v1/node-info` | none | protocol/network handshake and current heads |
+| `GET` | `/v1/batches/{number}` | canonical nonzero decimal batch number | signed batch header |
+| `GET` | `/v1/checkpoints/{id}` | nonzero 32-byte hex checkpoint id | checkpoint evidence |
+| `GET` | `/v1/proofs/{activity|receipt}/{id}` | nonzero activity id | canonical value, proof, and signed header |
+| `GET` | `/v1/proofs/account/{activity}/{account}` | two nonzero 32-byte hex ids | exact verified native account proof |
 | `GET` | `/v1/receipts/<hex>` | 32-byte lowercase hex activity id | `{"activity_id","receipt"}` (`platform/hosted/core/src/main.rs:895-915`, `platform/hosted/core/src/main.rs:1239-1240`) |
 | `GET` | `/v1/programs/receipts/by-idempotency/<key>` | 64 lowercase hex chars | node lookup then sequencer-signature check (`platform/hosted/core/src/main.rs:918-971`, `platform/hosted/core/src/main.rs:1161-1168`) |
 | `GET` | `/v1/protocol/account-state/head` | optional query | node HTTP relay (`platform/hosted/core/src/main.rs:1139-1147`, `platform/hosted/core/src/main.rs:1092-1120`) |
@@ -168,25 +194,49 @@ These paths are not relayed. They return `503 capability_unavailable` with `retr
 | `/v1/accounts`, `/v1/programs/registry`, `/v1/programs/registry/*`, `/v1/programs/activities/*` | `capability_unavailable` | 503 | 3600 (`platform/hosted/core/src/main.rs:1170-1171`) |
 | `SubmitError::UnavailableCapability` | `capability_unavailable` | 503 | 30 (`platform/hosted/core/src/main.rs:706`) |
 | `SimulateError::UnavailableCapability`, `InterfaceVersion`, or `CoreRefusal` class 3 | `capability_unavailable` | 503 | 30 (`platform/hosted/core/src/main.rs:769-776`) |
-| `ReadError::UnavailableCapability` on treasury account | `capability_unavailable` | 503 before admin remap | 30 (`platform/hosted/core/src/main.rs:1454`) |
+| `ReadError::UnavailableCapability` on treasury account | `capability_unavailable` | 503 before admin remap | 30 (`platform/hosted/core/src/main.rs:1688`) |
 
 ---
 
 ## Admin treasury SEND
 
-Library path: `build_send` compiles an owner-authorised Asset SEND (ordinal 5) with `layerx-intents`, signs the envelope, and returns canonical bytes (`platform/hosted/core/src/lib.rs:1-3`, `platform/hosted/core/src/lib.rs:19-20`, `platform/hosted/core/src/lib.rs:110-206`). Source and destination accounts are `agent:<did>:main` (`platform/hosted/core/src/lib.rs:53-61`). The treasury DID is `did:layerx:<public key hex>` (`platform/hosted/core/src/lib.rs:296-301`). Amount 0 and expiry not after `not_before` are construction errors (`platform/hosted/core/src/lib.rs:111-116`).
+Library path: `build_send` compiles an owner-authorised Asset SEND (ordinal 5)
+with `layerx-intents`, signs the envelope, and returns canonical bytes
+(`platform/hosted/core/src/lib.rs:110-206`). Source and destination accounts are
+`agent:<did>:main` (`platform/hosted/core/src/lib.rs:53-61`). The treasury DID is
+`did:layerx:<public key hex>` (`platform/hosted/core/src/lib.rs:296-301`). Amount
+0 and expiry not after `not_before` are construction errors
+(`platform/hosted/core/src/lib.rs:111-116`). The envelope and the SEND payload
+both carry `SendRequest::account_sequence`
+(`platform/hosted/core/src/lib.rs:24-35`).
 
-HTTP path `fund` / `fund_send` (`platform/hosted/core/src/main.rs:1471-1571`):
+HTTP path `fund` / `fund_send` (`platform/hosted/core/src/main.rs:1705-1806`):
 
 1. JSON `FundingCommand`: `funding_id`, `did`, `public_key`, `amount` (`platform/hosted/core/src/main.rs:107-114`). Parse failure is `400 invalid_argument`.
-2. Validation: `funding_id` matches `valid_key`; `did` starts with `did:` and length ≤ 512; `public_key` is 64 hex chars; `did` equals `did:layerx:` plus lowercase public key; `amount != 0`; `did` is not the treasury DID; `main_account` succeeds. Failure is `400 invalid_argument` (`platform/hosted/core/src/main.rs:1475-1484`).
-3. LNI connect; failure `503 node_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1492-1495`).
-4. `treasury_sequence` reads the treasury main account at `VerificationLevel::UNVERIFIED`, decodes it, and requires `treasury_asset` balance ≥ amount (`platform/hosted/core/src/main.rs:1435-1468`). `ReadError::CoreRefusal` and decode failure are `422 treasury_account_unavailable` retry 60. `UnavailableCapability` is `503 capability_unavailable` retry 30. Missing balance is `422 insufficient_treasury_balance` retry 60. `main_account` failure is `503 treasury_unavailable` retry 60 (`platform/hosted/core/src/main.rs:1436-1437`).
-5. `build_send` with `account_sequence` from that read, `idempotency_key` SHA-256 of `layerx-core-fund\0` plus the HTTP idempotency key, `not_before_ms` now−60s, `expires_at_ms` now+300s, and `fee_limit` (`platform/hosted/core/src/main.rs:1428-1433`, `platform/hosted/core/src/main.rs:1498-1512`). Construction failure is `422 send_unbuildable`.
-6. `submit_signed` with the treasury public key (`platform/hosted/core/src/main.rs:1520-1536`). Same submission mapping as public activities, except other errors are `422 send_unbuildable`.
-7. Receipt: result 0 → `200` `state: funded`; non-zero → `422 send_refused`; timeout → `202` `state: pending`; lookup error → `503 receipt_unavailable` (`platform/hosted/core/src/main.rs:1543-1570`).
+2. Validation: `funding_id` matches `valid_key`; `did` starts with `did:` and length ≤ 512; `public_key` is 64 hex chars; `did` equals `did:layerx:` plus lowercase public key; `amount != 0`; `did` is not the treasury DID; `main_account` succeeds. Failure is `400 invalid_argument` (`platform/hosted/core/src/main.rs:1709-1719`).
+3. LNI connect; failure `503 node_unavailable` retry 5
+   (`platform/hosted/core/src/main.rs:1726-1729`).
+4. `treasury_sequence` reads and decodes the treasury main account at
+   `VerificationLevel::UNVERIFIED` and requires `treasury_asset` balance ≥ amount
+   (`platform/hosted/core/src/main.rs:1669-1703`). A native refusal or decode
+   failure is `422 treasury_account_unavailable` retry 60; unavailable capability
+   is `503 capability_unavailable` retry 30; insufficient balance is
+   `422 insufficient_treasury_balance` retry 60; account derivation failure is
+   `503 treasury_unavailable` retry 60.
+5. `build_send` uses that account sequence, an idempotency key equal to SHA-256
+   of `layerx-core-fund\0` plus the HTTP key, a validity interval from 60
+   seconds before `now` through 300 seconds after it, and the configured fee
+   limit (`platform/hosted/core/src/main.rs:1662-1667`,
+   `platform/hosted/core/src/main.rs:1733-1747`). Construction failure is
+   `422 send_unbuildable`.
+6. `submit_signed` uses the treasury public key
+   (`platform/hosted/core/src/main.rs:1753-1769`). Same submission mapping as
+   public activities, except other errors are `422 send_unbuildable`.
+7. Receipt: result 0 → `200` `state: funded`; non-zero → `422 send_refused`;
+   timeout → `202` `state: pending`; lookup error → `503 receipt_unavailable`
+   (`platform/hosted/core/src/main.rs:1776-1805`).
 
-Durable idempotency is the on-disk journal under `LAYERX_CORE_STATE_DIR/journal`. The file name is SHA-256 of `scope`, a 0 byte, and the idempotency key (`platform/hosted/core/src/main.rs:1267-1276`). The request digest is SHA-256 of method, path, and body (`platform/hosted/core/src/main.rs:1278-1285`). Writes use a `0o600` temp file, `sync_all`, `rename`, then directory `sync_all` (`platform/hosted/core/src/main.rs:1298-1316`). Same digest replays the stored status and body. A different digest for the same key is `409 idempotency_conflict` (`platform/hosted/core/src/main.rs:1340-1365`). Journal lock poison or I/O is `503 journal_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1335-1336`, `platform/hosted/core/src/main.rs:1367-1369`, `platform/hosted/core/src/main.rs:1390-1391`, `platform/hosted/core/src/main.rs:1403-1404`). Scope `fund` and `reset` first persist `409 outcome_unknown` then overwrite with the real outcome (`platform/hosted/core/src/main.rs:1372-1406`). Admin work also takes `admin_lock`; poison is `503 admin_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1678-1679`).
+Durable idempotency is the on-disk journal under `LAYERX_CORE_STATE_DIR/journal`. The file name is SHA-256 of `scope`, a 0 byte, and the idempotency key (`platform/hosted/core/src/main.rs:1267-1276`). The request digest is SHA-256 of method, path, and body (`platform/hosted/core/src/main.rs:1278-1285`). Writes use a `0o600` temp file, `sync_all`, `rename`, then directory `sync_all` (`platform/hosted/core/src/main.rs:1298-1316`). Same digest replays the stored status and body. A different digest for the same key is `409 idempotency_conflict` (`platform/hosted/core/src/main.rs:1340-1365`). Journal lock poison or I/O is `503 journal_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1335-1336`, `platform/hosted/core/src/main.rs:1367-1369`, `platform/hosted/core/src/main.rs:1390-1391`, `platform/hosted/core/src/main.rs:1403-1404`). Scope `fund` and `reset` first persist `409 outcome_unknown` then overwrite with the real outcome (`platform/hosted/core/src/main.rs:1372-1406`). Admin work also takes `admin_lock`; poison is `503 admin_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1912-1915`).
 
 Reset writes `reset\n` on the supervisor Unix socket and parses JSON (`platform/hosted/core/src/main.rs:1590-1639`). Connect/I/O failure is `503 supervisor_unavailable` retry 30. A `state: reset` reply with `reset_id` is `200`. A typed supervisor `error` is `503` with that code. Any other reply is `503 reset_failed` retry 30.
 
@@ -259,6 +309,9 @@ That test then posts `/admin/v1/testnet/fund` against a fresh genesis. The statu
 
 `lifecycle_routes_submit_real_signed_activities_and_verify_state_receipts` submits deploy, upgrade, and wind-down over the real node, verifies state receipts, and replays idempotent 200 bodies (`platform/hosted/core/tests/boundary.rs:375-472`, `platform/hosted/core/tests/boundary.rs:475-544`).
 
-`platform/hosted/core/tests/send.rs` asserts `build_send` embeds native `agent:<did>:main` account ids in the payload and authorization and that the signed envelope starts with protocol bytes `[0, 3]` (`platform/hosted/core/tests/send.rs:3-32`).
+`platform/hosted/core/tests/send.rs` asserts `build_send` embeds native
+`agent:<did>:main` account ids in the payload and authorization and that the
+signed envelope starts with protocol bytes `[0, 3]`
+(`platform/hosted/core/tests/send.rs:1-33`).
 
 [Home](Home.md)

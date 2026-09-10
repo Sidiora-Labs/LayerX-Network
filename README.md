@@ -21,7 +21,20 @@ This repository is the Sidiora Labs monorepo for LayerX Network and the Paxeer N
 
 ## Try the testnet
 
-The full path is [`docs/wiki/Quickstart.md`](docs/wiki/Quickstart.md): install the `layerx` CLI from `platform/cli`, bring up the cluster, source `build/beta-cluster/env`, then create a credential, claim from the faucet, submit an activity, verify the receipt, and deploy a program.
+The cluster path is [`docs/wiki/Quickstart.md`](docs/wiki/Quickstart.md): install the `layerx` CLI from `platform/cli`, bring up the cluster, source `build/beta-cluster/env`, then create a credential, claim from the faucet, submit an activity, verify the receipt, and deploy a program.
+
+The public endpoint checklist is
+[`docs/wiki/Getting-Started-Testnet.md`](docs/wiki/Getting-Started-Testnet.md).
+The complete wallet, faucet, Asset, Programs, and HTTP 402 path is
+[`docs/wiki/PaymentsQuickstart.md`](docs/wiki/PaymentsQuickstart.md). Native
+Asset issuance, public `POST /rpc`, and 402 commitment extras are served by
+this tree; the `layerx wallet` / `layerx token` command line and the LXT-20
+program token interface are not in it yet. Encodings:
+[`docs/wiki/Assets.md`](docs/wiki/Assets.md). RPC methods:
+[`docs/wiki/PublicRpc.md`](docs/wiki/PublicRpc.md). Evidence levels:
+[`docs/wiki/CommitmentLevels.md`](docs/wiki/CommitmentLevels.md).
+An exact real-process transcript of the public payment flow is
+[`docs/wiki/PublicAPI.md`](docs/wiki/PublicAPI.md).
 
 ```sh
 layerx key create quickstart
@@ -111,6 +124,11 @@ make paxeer-ci
 ## Documentation
 
 - Wiki index: [`docs/wiki/Home.md`](docs/wiki/Home.md)
+- Getting started on testnet: [`docs/wiki/Getting-Started-Testnet.md`](docs/wiki/Getting-Started-Testnet.md)
+- Payments developer path: [`docs/wiki/PaymentsQuickstart.md`](docs/wiki/PaymentsQuickstart.md)
+- Public JSON-RPC: [`docs/wiki/PublicRpc.md`](docs/wiki/PublicRpc.md)
+- Assets and tokens: [`docs/wiki/Assets.md`](docs/wiki/Assets.md)
+- Commitment levels: [`docs/wiki/CommitmentLevels.md`](docs/wiki/CommitmentLevels.md)
 - Monorepo layout and release tags: [`docs/MONOREPO.md`](docs/MONOREPO.md)
 - Qualification gates: [`docs/QUALIFICATION.md`](docs/QUALIFICATION.md)
 - Specifications: [`spec/`](spec/)

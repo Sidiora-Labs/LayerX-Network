@@ -1,5 +1,24 @@
 # LayerX developer CLI
 
+Binary `layerx` (`platform/cli`). The complete payment path is
+[`docs/wiki/PaymentsQuickstart.md`](../../docs/wiki/PaymentsQuickstart.md).
+
+The command groups in this tree are `new`, `workspace`, `environment`, `key`,
+`auth`, `account`, `payment`, `receipt`, `program`, `emulator`, `install`,
+`mcp`, and `a2a` (`platform/cli/src/main.rs:43-81`). There is no `wallet` or
+`token` group here; wallet-shaped operations run through `account` and
+`payment`.
+
+`--json` is the one global flag (`platform/cli/src/main.rs:33-38`).
+`--gateway-credential` is per command on the paths that reach a hosted gateway
+(`platform/cli/src/main.rs:448-449, 467-468`), and `payment commit` takes
+`--fee-limit`, defaulting to `0` (`platform/cli/src/main.rs:294-295,
+1109-1110`).
+
+`payment quote` and `payment commit` read the account sequence, sign the
+canonical activity, and record the activity id so an uncertain outcome can be
+recovered rather than retried blindly (`platform/cli/src/payment.rs:5-37`).
+
 ## Headless credential storage
 
 The OS keyring is the default. On a headless Linux server, container, or CI

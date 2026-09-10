@@ -1,10 +1,3 @@
-<!--
-Draft copy for the GitHub wiki page "Protocol".
-The wiki has no PR flow, so this file is the reviewable source. After this PR
-merges, paste the body below (everything under the first `# Protocol`) into the
-wiki page. Do not commit this note to the wiki.
--->
-
 # Protocol
 
 One signed record per action. One doorway for money. One result anyone can replay.
@@ -31,7 +24,8 @@ Normative behavior lives in `spec/` (KVX first). This page is the human read of 
 | Deterministic state execution, receipts, replay | Final settlement to external assets |
 | Data availability and reconstruction | |
 
-Thousands of LayerX activities can collapse into one periodic checkpoint. Custody never leaves Paxeer.
+LayerX commits ordered activity into periodic checkpoints. Custody remains on
+Paxeer.
 
 ---
 
@@ -114,7 +108,9 @@ Per activity the kernel, in fixed order:
 
 Receipts are evidence produced by the protocol. No receipt field is supplied by a client. A `layerx-receipt-proof-v1` object is verified against independently trusted batch facts without a node; see [Portable receipt verifier](PortableVerifier.md). Interop adapters translate foreign payment protocols into that receipt evidence without writing balances; x402 v2 over HTTP, MCP, and A2A is in [x402 transport](X402Transport.md). The non-authoritative agent daemon consumes those receipts as protocol evidence and never mints balances or budgets from local state; see [Agentd](Agentd.md).
 
-You pay for the work an activity does - bytes, signatures, state - not a zero-fee line. The specified base fee is 5,000 µUSDX per activity (about half a cent). See Payments and Fees.
+Fees are deterministic inputs to execution. The committed fee schedule prices
+canonical bytes and the supported Asset and Programs activity ordinals; estimation fails closed when required execution or
+storage inputs are unavailable. See [Assets](Assets.md#named-fee-schedule).
 
 ---
 
@@ -127,7 +123,10 @@ The public testnet exposes a gateway API and a faucet. There is no LayerX mainne
 ## Start here
 
 - [Home](Home.md)
+- [Getting started on testnet](Getting-Started-Testnet.md)
 - [Modules](Modules.md): `0x01`–`0x08` economic modules and Programs `0x09`
 - [Programs](Programs.md): DEPLOY / UPGRADE / CALL, simulate, guest ABI 2, occupancy
+- [Assets](Assets.md): per-asset accounts, issuance, register / mint / burn encodings
 - [Finality](Finality.md): L0 → L4
+- [Commitment levels](CommitmentLevels.md): `executed`, `batched`, `finalised`
 - Design § protocol
