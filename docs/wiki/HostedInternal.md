@@ -276,8 +276,8 @@ Human `GET /internal/v1/principal` is the session cookie
 `human/crates/layerx-human-service/src/server/http.rs:644-654`).
 Gateway `GET /internal/v1/principal` is `Authorization: LayerX-Key`
 and returns `result.principal_digest`
-(`platform/hosted/gateway/src/main.rs:1706-1718`;
-`platform/hosted/gateway/src/main.rs:1142-1153`).
+(`platform/hosted/gateway/src/main.rs:1726-1738`;
+`platform/hosted/gateway/src/main.rs:1162-1173`).
 
 Derived facts, after requiring `result.{identity} == resource`:
 
@@ -295,10 +295,10 @@ requires `approval_id`, `agent_id`, `state`, `created_at` among other
 fields (`human/schema/human-api/baseline.kvx:222`;
 `human/schema/human-api/agents.kvx:203-208`). Gateway receipt `result`
 is `activity_id` and hex `receipt`
-(`platform/hosted/gateway/src/main.rs:2506-2512`). Gateway program
+(`platform/hosted/gateway/src/main.rs:2526-2532`). Gateway program
 registry `result` includes `program_id`, `lifecycle`, `version`,
 `code_hash`, and `receipt_digest`
-(`platform/hosted/gateway/src/main.rs:2529-2539`).
+(`platform/hosted/gateway/src/main.rs:2549-2559`).
 
 `Record.id` is SHA-256 hex of the JSON encoding of
 `(principal, resource, snapshot)`

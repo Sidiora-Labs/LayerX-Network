@@ -59,7 +59,7 @@ A faucet refusal is an HTTP 4xx/5xx body shaped as
 `{"error":{"code":"<typed-code>","retry":"after|never"}}`; when retry is
 `after`, `retry_after_seconds` is present. The source refuses missing or invalid
 idempotency, authentication, malformed DID/key input, quota, persistence, and
-funding independently (`platform/hosted/faucet/src/main.rs:914-1001,
+funding independently (`platform/hosted/faucet/src/main.rs:1025-1098,
 1012-1035`).
 
 ## Run the register, open, mint, send flow
@@ -199,12 +199,12 @@ failure envelope is:
 Invalid params are `-32602`; missing/invalid authorization or scope is
 `-32002`; an unavailable read or submission is `-32001`; rate/capacity refusal
 is `-32005`; invalid upstream data is `-32603`. Proxied typed failures are kept
-under `error.data` (`platform/hosted/gateway/src/rpc.rs:148-179, 242-256`).
+under `error.data` (`platform/hosted/gateway/src/rpc.rs:153-184, 242-256`).
 
 For a requested `executed`, `batched`, or `finalised` level that is not yet
 available, the response is `-32001` and `error.data` includes
 `state: "pending"`, `requested_commitment`, and either current `evidence` or
-the upstream pending body (`platform/hosted/gateway/src/rpc.rs:214-219,
+the upstream pending body (`platform/hosted/gateway/src/rpc.rs:219-224,
 334-357`). Retain the exact signed activity and recover by activity id with
 `lx_getActivityStatus`, `lx_getReceipt`, and the required `lx_getProof` reads.
 Never replace an uncertain payment with a newly signed debit.

@@ -9,7 +9,7 @@ and the JSON fields that tool returns. Daemon session credentials,
 MCP crate write stages, protocol budget objects, Human-plane
 approvals, and session revocation are library or Unix-peer
 operations. Those steps name the function or opcode and the absence
-of a `layerx` subcommand (`platform/cli/src/main.rs:42-80`).
+of a `layerx` subcommand (`platform/cli/src/main.rs:43-83`).
 
 This is the second developer path after the testnet quickstart. It
 does not document emulator administration. MCP and A2A installation
@@ -23,7 +23,7 @@ transport to core:
 
 | Surface | Process | Tools | Authority |
 | --- | --- | --- | --- |
-| CLI install / `layerx mcp serve` | `layerx` stdio MCP (`platform/cli/src/mcp.rs:13-56`; `platform/cli/src/main.rs:439-455, 527-545`) | `receipt.get`, `activity.submit` (`platform/cli/src/toolset.rs:23-38, 104-116`) | Hosted gateway `Authorization: LayerX-Key` (`platform/cli/src/http.rs:50-64, 229-231`; `platform/cli/src/toolset.rs:95`) |
+| CLI install / `layerx mcp serve` | `layerx` stdio MCP (`platform/cli/src/mcp.rs:13-56`; `platform/cli/src/main.rs:442-458, 527-545`) | `receipt.get`, `activity.submit`, `faucet.request` (`platform/cli/src/toolset.rs:23-45, 219-224, 231-253`) | Hosted gateway `Authorization: LayerX-Key` (`platform/cli/src/http.rs:50-64, 229-231`; `platform/cli/src/toolset.rs:104`) |
 | `layerx-mcp` crate | `Server::bind` / `ReadOnly::bind` (`agent/crates/layerx-mcp/src/server.rs:403-426`; `agent/crates/layerx-mcp/src/readonly.rs:19-41`) | Twenty tools in `TOOL_CATALOGUE` (`agent/crates/layerx-mcp/src/server.rs:51-192`) | One daemon session and one capability (`agent/crates/layerx-mcp/README.md:3-6`; `agent/crates/layerx-mcp/src/server.rs:199-208, 411`) |
 
 `layerx-mcp` has no binary (`agent/crates/layerx-mcp/Cargo.toml:1-19`).
@@ -31,7 +31,7 @@ Every crate tool call routes through `layerx-agentd`; there is no
 MCP-only write path (`agent/crates/layerx-mcp/README.md:5-6`;
 `agent/README.md:12-13`). The CLI server does not open that crate
 server. It signs locally and posts JSON to `/v1/activities`
-(`platform/cli/src/toolset.rs:190-204, 288-291`).
+(`platform/cli/src/toolset.rs:213-228, 288-291`).
 
 `layerx-agentd` is a library plus a binary
 (`agent/crates/layerx-agentd/src/lib.rs:1`;
@@ -54,11 +54,11 @@ layerx environment use testnet --endpoint <url> --network-id <id> \
 
 or `--sequencer-trust-anchor-file` in place of
 `--sequencer-trust-anchor`
-(`platform/cli/src/main.rs:96-107, 712-776`). The three bound
+(`platform/cli/src/main.rs:99-110, 712-776`). The three bound
 inputs must be supplied together or omitted together
 (`platform/cli/src/emulator.rs:751-791`). Omitting them selects an
 already-configured `testnet` profile
-(`platform/cli/src/main.rs:741-760`). The name must be `emulator`,
+(`platform/cli/src/main.rs:745-764`). The name must be `emulator`,
 `testnet`, or `production`
 (`platform/cli/src/config.rs:121-126`).
 
@@ -70,11 +70,11 @@ does not default that URL.
 
 Success envelope kind `environment.selected`. Printed `data` fields:
 `name`, `endpoint`, `network_id`, `sequencer_trust_anchor`
-(`platform/cli/src/main.rs:768-775`). `--json` wraps
+(`platform/cli/src/main.rs:772-779`). `--json` wraps
 `{ok, kind, message, data}` (`platform/cli/src/output.rs:18-30`).
 
 There is no `layerx` subcommand that starts `layerx-agentd`
-(`platform/cli/src/main.rs:42-80`). The binary reads
+(`platform/cli/src/main.rs:43-83`). The binary reads
 `LAYERX_AGENT_*` environment keys and binds a loopback
 program-balance listener plus a Human Unix owner
 (`agent/crates/layerx-agentd/src/main.rs:50-54, 293-327, 498-558`).
@@ -95,11 +95,11 @@ printf '%s\n' "<identity-session>" | layerx auth set --environment testnet
 ```
 
 `key create` stores a 32-byte OS-random Ed25519 seed under keyring
-service `dev.layerx.cli` (`platform/cli/src/main.rs:111-117, 784-790`;
+service `dev.layerx.cli` (`platform/cli/src/main.rs:114-120, 784-790`;
 `platform/cli/src/credential.rs:11, 83-96`). Printed `data` fields:
-`name`, `did`, `public_key` (`platform/cli/src/main.rs:786-789`).
+`name`, `did`, `public_key` (`platform/cli/src/main.rs:790-793`).
 `auth set` reads an API token from stdin
-(`platform/cli/src/main.rs:135-140, 858-865`).
+(`platform/cli/src/main.rs:138-143, 858-865`).
 
 `layerx install mcp` then provisions `/v1/keys` (or
 `/v1/keys/{id}/rotate`)
@@ -123,13 +123,13 @@ storage; pipe one in with --token-stdin or run layerx auth set
 
 Hosted `layerx account create` requires `--email`,
 `--display-name`, `--idempotency-key`; `--initial-amount` must be
-`0` (`platform/cli/src/main.rs:154-167`;
+`0` (`platform/cli/src/main.rs:157-170`;
 `platform/cli/src/account.rs:42-54`).
 
 ### Daemon session (no CLI command)
 
 There is no `layerx` command that opens an agentd session
-(`platform/cli/src/main.rs:42-80`). `session::open` records
+(`platform/cli/src/main.rs:43-83`). `session::open` records
 `OpenRequest` with `tenant`, `agent`, `authority`,
 `permitted_activity_types`, `scopes`, `expiry_sequence`
 (`agent/crates/layerx-agentd/src/session.rs:110-123, 515-539`).
@@ -143,7 +143,7 @@ The Human Unix owner can install that pair as opcode `OWNER_INSTALL`
 (`23`) with `HumanOwnerInstall.scopes` and
 `permitted_activity_types` (`agent/crates/layerx-agentd/src/human.rs:23, 124-144, 273`).
 There is no `layerx` subcommand that speaks that socket
-(`platform/cli/src/main.rs:42-80`).
+(`platform/cli/src/main.rs:43-83`).
 
 ---
 
@@ -158,7 +158,7 @@ layerx install mcp --environment testnet --host <runtime> --key <name> \
 
 Flags: `--environment`, repeatable `--host`, `--key`, `--read-only`,
 `--token-stdin`, `--rotate`, `--source-account`, `--asset`
-(`platform/cli/src/main.rs:397-415, 596-612`). `--host` values:
+(`platform/cli/src/main.rs:400-418, 596-612`). `--host` values:
 `layerx`, `claude-code`, `claude-desktop`, `cursor`, `vscode`
 (`platform/cli/src/install/mod.rs:53-64`). Empty `--host` selects
 `layerx` plus every other host whose marker directory or config path
@@ -176,10 +176,10 @@ layerx mcp serve --environment testnet --key <name> \
 
 `--gateway-credential` is required. `--environment`, `--key`,
 `--source-account`, `--asset`, `--read-only` are optional
-(`platform/cli/src/main.rs:439-455, 527-545`).
+(`platform/cli/src/main.rs:442-458, 527-545`).
 
 Install success kind `install.mcp`
-(`platform/cli/src/main.rs:607-612`). Human mode prints the message
+(`platform/cli/src/main.rs:611-616`). Human mode prints the message
 then pretty `data` (`platform/cli/src/output.rs:31-39`). `data` is
 this object (`platform/cli/src/install/mcp.rs:79-98`):
 
@@ -223,7 +223,7 @@ this object (`platform/cli/src/install/mcp.rs:79-98`):
 ```
 
 `deployment_mode` is `toolset::mode_name`
-(`platform/cli/src/toolset.rs:126-130`). `server.name` is
+(`platform/cli/src/toolset.rs:137-141`). `server.name` is
 `SERVER_NAME` `"layerx"` (`platform/cli/src/install/mod.rs:20`;
 `platform/cli/src/install/mcp.rs:87`).
 `command` is `env::current_exe` canonicalized
@@ -233,7 +233,7 @@ this object (`platform/cli/src/install/mcp.rs:79-98`):
 `platform/cli/src/install/mcp.rs:53-56`). `credentials` is
 `Selection::credentials` (`platform/cli/src/install/mod.rs:503-517`).
 Each tool descriptor
-(`platform/cli/src/toolset.rs:140-149`):
+(`platform/cli/src/toolset.rs:151-160`):
 
 ```
 {
@@ -317,7 +317,7 @@ it in-process with `Server::bind` or `ReadOnly::bind`
 
 ## Grant a budget
 
-There is no `layerx budget` command (`platform/cli/src/main.rs:42-80`).
+There is no `layerx budget` command (`platform/cli/src/main.rs:43-83`).
 
 `LocalLimit::new` constructs a daemon-only limit labelled
 `daemon-enforced` with bypass statement `daemon-enforced only;
@@ -354,7 +354,7 @@ CLI MCP read tool: `receipt.get` with argument `activity_id`
 (`platform/cli/src/toolset.rs:25-30, 161-168, 190-198`).
 
 `layerx receipt get <id>` is the same HTTP fetch outside MCP
-(`platform/cli/src/main.rs:194-195, 956-964`).
+(`platform/cli/src/main.rs:197-198, 956-964`).
 
 Daemon MCP read tools `balance.get`, `wallet.balance`, `wallet.accounts`,
 `history.list`, `receipt.get`, `checkpoint.get`, `proof.get`,
@@ -384,15 +384,15 @@ Offline receipt verification is `verifyReceipt` /
 CLI write tool `activity.submit` required arguments:
 `destination`, `amount`, `account_sequence`, `not_before_ms`,
 `expires_at_ms`, `fee_limit`, `idempotency_key`
-(`platform/cli/src/toolset.rs:169-185`). It builds a canonical Asset
+(`platform/cli/src/toolset.rs:183-199`). It builds a canonical Asset
 SEND (`SEND_ACTIVITY` `5`), signs it, and `POST`s
 `{"activity": <hex>}` to `/v1/activities`
 (`platform/cli/src/toolset.rs:22, 207-298`). Validity window must be
 non-empty and ≤ `300_000` ms
 (`platform/cli/src/toolset.rs:21, 222-226`). Amount must be greater
-than zero (`platform/cli/src/toolset.rs:216-218`).
+than zero (`platform/cli/src/toolset.rs:269-271`).
 
-Tool result fields (`platform/cli/src/toolset.rs:293-298`):
+Tool result fields (`platform/cli/src/toolset.rs:346-351`):
 
 ```
 {
@@ -415,7 +415,7 @@ HTTP 4xx decode: `state` `"refused"`; other non-2xx: `state`
 A `202` gateway body uses `ok`, `result.state` `"unknown"`,
 `result.activity_id`, `result.idempotency_key`,
 `result.retained_signed_activity`, `trace`
-(`platform/hosted/gateway/src/main.rs:1987-2004`).
+(`platform/hosted/gateway/src/main.rs:2007-2024`).
 
 Daemon writes follow `ORDINARY_WRITE_STAGES`: Prepare, Disclose,
 Policy, Sign, Submit, Track
@@ -443,8 +443,8 @@ Human opcodes `PREPARE` `1`, `SUBMIT` `2`, `TRACK` `3`
 ## Approve
 
 The CLI MCP `activity.submit` path does not call the daemon approval
-registry (`platform/cli/src/toolset.rs:190-204, 207-298`). There is
-no `layerx approval` command (`platform/cli/src/main.rs:42-80`).
+registry (`platform/cli/src/toolset.rs:213-228, 207-298`). There is
+no `layerx approval` command (`platform/cli/src/main.rs:43-83`).
 
 `layerx-mcp::approval::require` holds the prepared disclosure when
 the summed amount exceeds `ApprovalPolicy.amount_threshold`
@@ -467,10 +467,10 @@ fields: `approval_id`, `held_digest`, `idempotency_key`,
 ## Observe the receipt
 
 CLI: `receipt.get` as above, or `layerx receipt get <id>`
-(`platform/cli/src/main.rs:194-195, 956-964`). Independent local
+(`platform/cli/src/main.rs:197-198, 956-964`). Independent local
 verify: `layerx receipt verify` with `--receipt`, `--batch-id`,
 `--asset`, `--previous-state-root`, `--resulting-state-root`,
-`--sequencer-public-key` (`platform/cli/src/main.rs:196-214, 966-978`).
+`--sequencer-public-key` (`platform/cli/src/main.rs:199-217, 966-978`).
 It reports `verified: true` only after `verify_outcome` succeeds
 (`platform/cli/src/receipt.rs:18-52`).
 
@@ -493,7 +493,7 @@ Human opcode `RECEIPT_LOOKUP` `4` carries `idempotency_key` and
 ## Observe revocation
 
 There is no `layerx` command that revokes a session or prints a
-revocation report (`platform/cli/src/main.rs:42-80`).
+revocation report (`platform/cli/src/main.rs:43-83`).
 
 `session::close` advances generation and sets `open: false`
 (`agent/crates/layerx-agentd/src/session.rs:549-569`).
@@ -516,7 +516,7 @@ write transcript (`agent/crates/layerx-mcp/src/server.rs:729-745`;
 `agent/crates/layerx-mcp/tests/write.rs:276-325`).
 
 Hosted gateway key revocation response fields: `ok`, `id`, `state`
-`"revoked"` (`platform/hosted/gateway/src/main.rs:1124`). That is a
+`"revoked"` (`platform/hosted/gateway/src/main.rs:1144`). That is a
 gateway key, not an agentd session.
 
 Daemon event delivery to a local consumer is Unix frames `LXOW` /
@@ -537,9 +537,9 @@ There is no CLI command that registers that endpoint.
 | `receipt.get` | `receipt:read` | read |
 | `activity.submit` | `activity:write` | write |
 
-(`platform/cli/src/toolset.rs:23-38, 104-116`). Read-only mode drops
+(`platform/cli/src/toolset.rs:23-45, 104-116`). Read-only mode drops
 `activity.submit`. An empty surface is refused
-(`platform/cli/src/toolset.rs:107-114`).
+(`platform/cli/src/toolset.rs:118-125`).
 
 ### `layerx-mcp` crate
 
@@ -653,13 +653,13 @@ Missing required values print `{name} is required`
 | `-32600` `the message did not name a method` | Missing `method` (`platform/cli/src/mcp.rs:72-77`) |
 | `-32601` `method {method} is not implemented` | Unknown method (`platform/cli/src/mcp.rs:88-92`) |
 | `-32602` `the call did not name a tool` | `tools/call` without `name` (`platform/cli/src/mcp.rs:141-143`) |
-| `-32602` `tool {name} is not served by this deployment` | Name outside the bound surface (`platform/cli/src/mcp.rs:145-149`; `platform/cli/src/toolset.rs:200-203`) |
+| `-32602` `tool {name} is not served by this deployment` | Name outside the bound surface (`platform/cli/src/mcp.rs:145-149`; `platform/cli/src/toolset.rs:224-227`) |
 | `structuredContent.refusal` plus `tool`, `isError` true | `toolset::invoke` `Err` (`platform/cli/src/mcp.rs:157-160, 172-178`) |
 | `isError` true on a `result` | `/gateway/state` or `/gateway/result/state` is `"refused"` (`platform/cli/src/mcp.rs:154-155, 164-169`) |
-| `amount must be greater than zero` | Zero `amount` (`platform/cli/src/toolset.rs:216-218`) |
+| `amount must be greater than zero` | Zero `amount` (`platform/cli/src/toolset.rs:269-271`) |
 | `payment validity must be non-empty and no wider than 300000 milliseconds` | `expires_at_ms` window (`platform/cli/src/toolset.rs:21, 222-226`) |
-| `the runtime has no payment source binding` / `asset binding` | Full mode missing install binding (`platform/cli/src/toolset.rs:208-213`) |
-| `gateway credential alias … is absent; rerun layerx install for this runtime` | Missing stored gateway secret (`platform/cli/src/toolset.rs:58-61`) |
+| `the runtime has no payment source binding` / `asset binding` | Full mode missing install binding (`platform/cli/src/toolset.rs:261-266`) |
+| `gateway credential alias … is absent; rerun layerx install for this runtime` | Missing stored gateway secret (`platform/cli/src/toolset.rs:67-70`) |
 
 ### `layerx-mcp` crate
 

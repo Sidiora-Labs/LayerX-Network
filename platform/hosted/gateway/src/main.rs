@@ -2,6 +2,7 @@ mod native_call;
 mod program_lifecycle;
 mod public_reads;
 mod rpc;
+mod rpc_faucet;
 mod rpc_register;
 mod ws;
 mod ws_wire;
@@ -59,6 +60,7 @@ struct Config {
     identity: Endpoint,
     identity_token: Zeroizing<String>,
     registration_token: Option<Zeroizing<String>>,
+    faucet: Option<rpc_faucet::Faucet>,
     registry: Endpoint,
     registry_token: Zeroizing<String>,
     store: RedisStore,
@@ -501,6 +503,39 @@ fn tls_config() -> Result<Arc<ServerConfig>, String> {
         .map_err(|error| error.to_string())
 }
 
+struct ProtocolConfig {
+    network_id: String,
+    wire_version: String,
+    protocol_version: u16,
+    protocol_network_id: u32,
+}
+
+fn configured_protocol() -> Result<ProtocolConfig, String> {
+    let network_id = env::var("LAYERX_GATEWAY_NETWORK_ID")
+        .map_err(|_| "gateway network identifier is required")?;
+    let wire_version = env::var("LAYERX_GATEWAY_LXP_WIRE_VERSION")
+        .map_err(|_| "gateway LXP wire version is required")?;
+    if !valid_identifier(&network_id, 64) || !valid_identifier(&wire_version, 32) {
+        return Err("gateway network or wire version is invalid".to_owned());
+    }
+    let protocol_version = wire_version
+        .parse::<u16>()
+        .map_err(|_| "gateway LXP wire version must be numeric".to_owned())?;
+    if protocol_version != layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION {
+        return Err("gateway LXP wire version is not the current beta protocol".to_owned());
+    }
+    let protocol_network_id = env::var("LAYERX_GATEWAY_PROTOCOL_NETWORK_ID")
+        .map_err(|_| "gateway protocol network identifier is required")?
+        .parse::<u32>()
+        .map_err(|_| "gateway protocol network identifier is invalid".to_owned())?;
+    Ok(ProtocolConfig {
+        network_id,
+        wire_version,
+        protocol_version,
+        protocol_network_id,
+    })
+}
+
 fn config() -> Result<Config, String> {
     let ca = Certificate::from_der(
         &fs::read(
@@ -537,23 +572,7 @@ fn config() -> Result<Config, String> {
     if !(3600..=MAX_IDEMPOTENCY_SECONDS).contains(&idempotency_seconds) {
         return Err("gateway idempotency retention is outside its bound".to_owned());
     }
-    let network_id = env::var("LAYERX_GATEWAY_NETWORK_ID")
-        .map_err(|_| "gateway network identifier is required")?;
-    let wire_version = env::var("LAYERX_GATEWAY_LXP_WIRE_VERSION")
-        .map_err(|_| "gateway LXP wire version is required")?;
-    if !valid_identifier(&network_id, 64) || !valid_identifier(&wire_version, 32) {
-        return Err("gateway network or wire version is invalid".to_owned());
-    }
-    let protocol_version = wire_version
-        .parse::<u16>()
-        .map_err(|_| "gateway LXP wire version must be numeric".to_owned())?;
-    if protocol_version != layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION {
-        return Err("gateway LXP wire version is not the current beta protocol".to_owned());
-    }
-    let protocol_network_id = env::var("LAYERX_GATEWAY_PROTOCOL_NETWORK_ID")
-        .map_err(|_| "gateway protocol network identifier is required")?
-        .parse::<u32>()
-        .map_err(|_| "gateway protocol network identifier is invalid".to_owned())?;
+    let protocol = configured_protocol()?;
     let modules = configured_modules()?;
     Ok(Config {
         listen: env::var("LAYERX_GATEWAY_LISTEN")
@@ -579,6 +598,7 @@ fn config() -> Result<Config, String> {
         )?,
         identity_token: read_secret("LAYERX_GATEWAY_IDENTITY_TOKEN_FILE")?,
         registration_token: rpc_register::configured_token()?,
+        faucet: rpc_faucet::configured()?,
         registry: Endpoint::parse(
             &env::var("LAYERX_GATEWAY_PROGRAM_REGISTRY_URL")
                 .map_err(|_| "gateway program registry URL is required")?,
@@ -595,10 +615,10 @@ fn config() -> Result<Config, String> {
         ),
         sequencer_authorization,
         key_provisioning_key,
-        network_id,
-        wire_version,
-        protocol_version,
-        protocol_network_id,
+        network_id: protocol.network_id,
+        wire_version: protocol.wire_version,
+        protocol_version: protocol.protocol_version,
+        protocol_network_id: protocol.protocol_network_id,
         modules,
         idempotency_seconds,
     })

@@ -273,7 +273,7 @@ differ.
 ## Treasury SEND funding path
 
 The faucet does not submit a SEND. It posts the funding command to
-testnet-control admin (`platform/hosted/faucet/src/main.rs:861-876`;
+testnet-control admin (`platform/hosted/faucet/src/main.rs:878-893`;
 `platform/hosted/testnet/deployment.yaml:147`). Testnet-control
 authenticates the control-admin token, validates the command, requires
 the funding journey, and POSTs the same JSON to
@@ -296,8 +296,8 @@ LNI, and waits for a receipt
 `funded`, `transaction_id`. A 202 core body is `state` `pending`.
 The faucet accepts only `state == "funded"` as
 `FundingResult::Funded`; `pending` is `Unknown` → `202 still_checking`
-(`platform/hosted/faucet/src/main.rs:889-890`;
-`platform/hosted/faucet/src/main.rs:990`).
+(`platform/hosted/faucet/src/main.rs:906-907`;
+`platform/hosted/faucet/src/main.rs:1087`).
 
 Core additionally requires `did == did:layerx:` plus the lowercase
 public key and refuses the treasury DID

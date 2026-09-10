@@ -128,6 +128,88 @@ pub struct IdentitySequenceSnapshot {
     pub state_root: [u8; 32],
 }
 
+/// One faucet grant the gateway confirmed as funded for the requesting DID.
+///
+/// Only a complete grant becomes a value: an unfunded, pending or incomplete
+/// faucet document is an [`RpcError::InvalidResponse`], never a zero amount.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FaucetGrant {
+    pub funding_id: String,
+    pub transaction_id: String,
+    pub amount: u128,
+    pub network: String,
+    raw: serde_json::Map<String, Value>,
+}
+
+impl FaucetGrant {
+    #[must_use]
+    pub const fn unverified_fields(&self) -> &serde_json::Map<String, Value> {
+        &self.raw
+    }
+
+    #[must_use]
+    pub fn into_value(self) -> Value {
+        Value::Object(self.raw)
+    }
+}
+
+impl TryFrom<Value> for FaucetGrant {
+    type Error = RpcError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let fields = object(&value)?;
+        if fields.get("funded") != Some(&Value::Bool(true)) {
+            return Err(RpcError::InvalidResponse);
+        }
+        let funding_id = text_field(fields, "funding_id")?;
+        if funding_id.is_empty()
+            || funding_id.len() > 128
+            || !funding_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(RpcError::InvalidResponse);
+        }
+        let transaction_id = text_field(fields, "transaction_id")?;
+        if transaction_id.is_empty() || transaction_id.len() > 128 {
+            return Err(RpcError::InvalidResponse);
+        }
+        let network = text_field(fields, "network")?;
+        if network.is_empty() || network.len() > 64 {
+            return Err(RpcError::InvalidResponse);
+        }
+        let amount = decimal_u128_field(fields, "amount")?;
+        if amount == 0 {
+            return Err(RpcError::InvalidResponse);
+        }
+        let grant = Self {
+            funding_id: funding_id.to_owned(),
+            transaction_id: transaction_id.to_owned(),
+            amount,
+            network: network.to_owned(),
+            raw: fields.clone(),
+        };
+        Ok(grant)
+    }
+}
+
+fn method_and_identifier(did: &str) -> Option<(&str, &str)> {
+    let (method, identifier) = did.strip_prefix("did:")?.split_once(':')?;
+    (!method.is_empty() && !identifier.is_empty()).then_some((method, identifier))
+}
+
+fn faucet_selector(did: &str, signer_public_key: &[u8; 32]) -> Result<Value, RpcError> {
+    layerx_types::ids::Did::new(did.as_bytes()).map_err(|_| RpcError::InvalidRequest)?;
+    if method_and_identifier(did).is_none()
+        || did.len() > 512
+        || did
+            .bytes()
+            .any(|byte| !byte.is_ascii_alphanumeric() && !b"-._:".contains(&byte))
+        || signer_public_key == &[0_u8; 32]
+    {
+        return Err(RpcError::InvalidRequest);
+    }
+    Ok(json!([did, encode_hex(signer_public_key)]))
+}
+
 fn object(value: &Value) -> Result<&serde_json::Map<String, Value>, RpcError> {
     value.as_object().ok_or(RpcError::InvalidResponse)
 }
@@ -505,6 +587,24 @@ impl RpcClient {
         crate::register::decode(signer_public_key, self.call("lx_register", &params)?)
     }
 
+    /// Claims one testnet faucet grant for the authenticated identity principal.
+    ///
+    /// `signer_public_key` must be a key the calling session authorises; the
+    /// gateway derives the faucet idempotency key from the principal, the DID
+    /// and the key, so a repeated request returns the same grant.
+    ///
+    /// # Errors
+    /// Rejects malformed DIDs and the all-zero key before transport, preserves
+    /// faucet refusals, and refuses any grant that is not confirmed as funded.
+    pub fn request_funds(
+        &self,
+        did: &str,
+        signer_public_key: &[u8; 32],
+    ) -> Result<FaucetGrant, RpcError> {
+        let params = faucet_selector(did, signer_public_key)?;
+        self.call("lx_requestFunds", &params)?.try_into()
+    }
+
     /// Reads the authenticated identity sequence used by the activity envelope.
     /// # Errors
     /// Rejects malformed DIDs and any mismatched or malformed snapshot.
@@ -741,6 +841,78 @@ mod tests {
             Some(json!({"state":"pending"}))
         );
     }
+    #[test]
+    fn a_faucet_request_names_a_did_and_a_real_signer_key() {
+        let key = [0xab_u8; 32];
+        assert_eq!(
+            faucet_selector("did:layerx:alice", &key).ok(),
+            Some(json!(["did:layerx:alice", encode_hex(&key)]))
+        );
+        for (did, key) in [
+            ("did:layerx:alice", [0_u8; 32]),
+            ("layerx:alice", key),
+            ("did::alice", key),
+            ("did:layerx:a b", key),
+            ("did:layerx:../bob", key),
+            ("", key),
+        ] {
+            assert!(
+                matches!(
+                    faucet_selector(did, &key),
+                    Err(RpcError::InvalidRequest | RpcError::InvalidResponse)
+                ),
+                "{did} accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_confirmed_funded_grant_becomes_a_faucet_value() {
+        let document = json!({
+            "funded": true,
+            "funding_id": "ef".repeat(32),
+            "transaction_id": "cd".repeat(32),
+            "amount": "1000000",
+            "network": "layerx-testnet",
+        });
+        let grant =
+            FaucetGrant::try_from(document.clone()).unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(grant.funding_id, "ef".repeat(32));
+        assert_eq!(grant.transaction_id, "cd".repeat(32));
+        assert_eq!(grant.amount, 1_000_000);
+        assert_eq!(grant.network, "layerx-testnet");
+        assert_eq!(
+            grant.unverified_fields().get("funded"),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(grant.into_value(), document);
+
+        for incomplete in [
+            json!({"funded": false, "funding_id": "ef", "transaction_id": "cd", "amount": "1", "network": "n"}),
+            json!({"funded": "true", "funding_id": "ef", "transaction_id": "cd", "amount": "1", "network": "n"}),
+            json!({"funding_id": "ef", "transaction_id": "cd", "amount": "1", "network": "n"}),
+            json!({"funded": true, "transaction_id": "cd", "amount": "1", "network": "n"}),
+            json!({"funded": true, "funding_id": "zz", "transaction_id": "cd", "amount": "1", "network": "n"}),
+            json!({"funded": true, "funding_id": "ef", "amount": "1", "network": "n"}),
+            json!({"funded": true, "funding_id": "ef", "transaction_id": "cd", "network": "n"}),
+            json!({"funded": true, "funding_id": "ef", "transaction_id": "cd", "amount": "0", "network": "n"}),
+            json!({"funded": true, "funding_id": "ef", "transaction_id": "cd", "amount": "01", "network": "n"}),
+            json!({"funded": true, "funding_id": "ef", "transaction_id": "cd", "amount": 1, "network": "n"}),
+            json!({"funded": true, "funding_id": "ef", "transaction_id": "cd", "amount": "1", "network": ""}),
+            json!({"funded": true, "funding_id": "ef", "transaction_id": "cd", "amount": "1"}),
+            json!([]),
+            Value::Null,
+        ] {
+            assert!(
+                matches!(
+                    FaucetGrant::try_from(incomplete.clone()),
+                    Err(RpcError::InvalidResponse)
+                ),
+                "{incomplete}"
+            );
+        }
+    }
+
     #[test]
     fn fee_estimation_refuses_invalid_lengths_before_transport() {
         let rpc =

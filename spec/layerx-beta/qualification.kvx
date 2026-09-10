@@ -10618,3 +10618,67 @@ symbol = "gateway_receipt_record_write gateway_receipt_record_read lxp_receipt_e
 observed = "The gateway invoice store encodes settled receipts with its own record format because ledger receipts could not be decoded back by the protocol codec, as observation 3.1.3601 recorded. With the module identity now stamped by lxp_ledger_receipt_build, a settled gateway receipt round-trips through lxp_receipt_encode and lxp_receipt_decode, so the bespoke gateway record encoder and its decode-and-compare are no longer forced by the codec. Replacing it would change the persisted invoice record bytes and therefore the gateway key/value state root, which is a src/network change this issue is explicitly barred from making."
 assumption = "The gateway record format is a src/network concern owned elsewhere, and the reason it exists has been removed rather than the format itself, so the duplication is recorded and not collapsed."
 severity = "note"
+
+[observation.3.6.4300]
+task = "3.6"
+file = "agent/crates/layerx-mcp/src/server.rs agent/crates/layerx-agentd/src/tenant.rs platform/cli/src/toolset.rs"
+symbol = "TOOL_CATALOGUE tool_operation authorize_tool SERVED faucet.request"
+observed = "The faucet MCP tool was added to platform/cli/src/toolset.rs SERVED rather than to agent/crates/layerx-mcp/src/server.rs TOOL_CATALOGUE. Two MCP surfaces exist and they do not share a catalogue. The layerx-mcp crate routes every call through layerx-agentd: authorize_tool at agent/crates/layerx-mcp/src/server.rs:666 resolves the tool name through tool_operation at line 687 and returns ServerError::InvalidInvocation for any name that has no Operation, and the Operation enum plus the scope aliases that admit it live in layerx-agentd, outside this row's owned paths. Adding faucet.request to TOOL_CATALOGUE without a matching Operation variant and an agentd scope alias would produce a tool that is advertised and always refuses, which is a placeholder. The surface layerx mcp serve actually serves is toolset.rs SERVED, which reaches the hosted gateway directly, so faucet.request was placed there and reaches the same lx_requestFunds method the CLI and SDK use."
+assumption = "The daemon-routed catalogue is the right long-term home once agentd carries a faucet Operation and its scope alias. Recorded because the row named agent/crates/layerx-mcp/src/server.rs and this implementation deliberately did not touch it."
+severity = "note"
+
+[observation.3.6.4301]
+task = "3.6"
+file = "platform/hosted/testnet/deployment.yaml platform/hosted/gateway/deployment.yaml platform/hosted/tests/beta-cluster.sh"
+symbol = "LAYERX_GATEWAY_FAUCET_URL LAYERX_GATEWAY_FAUCET_SERVICE_TOKEN_FILE LAYERX_FAUCET_SERVICE_CLAIM_TOKEN_FILE"
+observed = "lx_requestFunds proxies to the faucet over a new service route, POST /v1/faucet/service-claims, that is admitted only by a shared secret the faucet reads from LAYERX_FAUCET_SERVICE_CLAIM_TOKEN_FILE (platform/hosted/faucet/src/main.rs:218-223 and 285). No hosted manifest sets that key, sets the gateway's LAYERX_GATEWAY_FAUCET_URL or LAYERX_GATEWAY_FAUCET_SERVICE_TOKEN_FILE, mounts a secret holding the shared token into either pod, or admits app=layerx-gateway in the faucet NetworkPolicy ingress. Both ends are therefore unconfigured on the beta cluster: the faucet answers 404 not_found for the service route (platform/hosted/faucet/src/main.rs:976-978) and the gateway answers -32001 with data.code faucet_not_configured rather than pretending to claim. Until the manifests carry the secret, the two variables and the gateway-to-faucet edge, the public faucet method refuses on the cluster while POST /v1/faucet/claims keeps working unchanged."
+assumption = "platform/hosted/testnet/deployment.yaml, platform/hosted/gateway/deployment.yaml and platform/hosted/tests/beta-cluster.sh are outside this row's owned paths, so the wiring was not added here and is recorded in the lane's NEEDS.md as well. It mirrors the identity-client mount beside it: one secret, two mountPaths, three environment variables and one NetworkPolicy ingress rule."
+severity = "blocker"
+
+[observation.3.6.4302]
+task = "3.6"
+file = "platform/hosted/faucet/src/main.rs platform/hosted/gateway/src/rpc_faucet.rs"
+symbol = "service_claim settle service_scope idempotency"
+observed = "A service claim keys the identity quota bucket on the principal the caller names, not on the calling service, so a principal that claims through lx_requestFunds shares one identity window with its own direct POST /v1/faucet/claims (platform/hosted/faucet/src/main.rs:993-1003). Only the network bucket is scoped, as service:<principal>, so one gateway pod's peer address cannot become a single global choke point for every principal behind it. The gateway additionally derives the faucet idempotency key deterministically from the principal, the DID and the signer key (platform/hosted/gateway/src/rpc_faucet.rs), so a repeated request settles onto the same reservation instead of consuming a second grant. Two consequences follow: the calling service is trusted to name the principal honestly, which is what the shared service token establishes, and the per-window bound in the row's default holds across both entry points rather than per entry point."
+assumption = "This is the row's DEFAULT decision. Keying the identity window on the bare principal is the only construction that closes the double-claim window between the two routes; scoping the network bucket per principal is the only one that keeps a shared proxy from exhausting the peer bucket for everyone."
+severity = "note"
+
+[observation.3.6.4303]
+task = "3.6"
+file = "docs/wiki/PublicRpc.md docs/wiki/Cli.md"
+symbol = "lx_register layerx register"
+observed = "docs/wiki/PublicRpc.md stated that the gateway provides 15 lx_* methods and its Methods table omitted lx_register, which had already been added to platform/hosted/gateway/openrpc.json and dispatched from platform/hosted/gateway/src/rpc.rs before this row started; docs/wiki/Cli.md documents no layerx register command although platform/cli/src/main.rs:64 declares it. Adding lx_requestFunds made the count 17. The count and the lx_requestFunds row were corrected here, and lx_register was added to the same table because leaving one of the two onboarding methods undocumented beside the other would be misleading. The layerx register row in the Cli.md command table was not added, because that table belongs to the command's own row."
+assumption = "The onboarding pair is documented together in PublicRpc.md; the missing Cli.md row for layerx register is left for whoever owns that command."
+severity = "note"
+
+[observation.3.6.4304]
+task = "3.6"
+file = "docs/wiki"
+symbol = "path:line citations"
+observed = "Thirteen wiki pages cite platform/cli/src/main.rs, platform/cli/src/toolset.rs, platform/hosted/faucet/src/main.rs, platform/hosted/gateway/src/main.rs and platform/hosted/gateway/src/rpc.rs by line number, and more than four hundred of those citations moved when this row inserted code into those five files. They were remapped from the exact diff hunk arithmetic, except where code was lifted into a new function: the faucet route, where preflight and settle were extracted out of route, and the gateway config(), where the protocol reads were extracted into configured_protocol(). Hunk arithmetic maps a citation in those regions into the extracted helper rather than the code it named, so they were remapped by following the moved lines, and one citation that straddled a split was repointed by symbol. A separate check found that several of the gateway environment-variable citations in HostedGateway.md and HostedRegistry.md already named the wrong lines before this row started, so remapping preserves their existing drift rather than correcting it. Nothing in the tree verifies these citations, so any future edit to a cited file silently rots every page that points into it."
+assumption = "A checker that resolves each path:line citation and fails when the cited range no longer contains what the sentence claims would make the wiki verifiable, but it is a new tool outside this row. Recorded so the next editor of these files knows the citations must be remapped rather than left alone."
+severity = "suspect"
+
+[observation.3.6.4305]
+task = "3.6"
+file = "platform/emulator/build.rs Makefile"
+symbol = "build.rs make build programs cargo build CARGO_TARGET_DIR"
+observed = "platform/emulator/build.rs:28-30 runs make build in the repository root, and that target runs cd programs && cargo build --locked --workspace --features layerx-programs-sandbox/host-ffi. The inner cargo inherits CARGO_TARGET_DIR from the environment, so any outer invocation of the form CARGO_TARGET_DIR=<dir> cargo test -p layerx-platform-cli deadlocks: the inner cargo blocks on the build-directory lock the outer cargo already holds, and the outer cargo waits for it forever. Nothing times out and no error is printed; the outer process simply parks with no compiler children and keeps the target directory locked against every other consumer. Invoking the outer build as cargo test --target-dir <dir> instead does not reproduce it, because the flag is not exported and the nested programs build takes the worktree-local programs/target lock."
+assumption = "Makefile:3032 already exposes PROGRAMS_CARGO, which lets a caller hand the nested programs build its own CARGO_TARGET_DIR, but it defaults to plain cargo, so inheriting the outer target directory is the out-of-the-box behaviour. Making that default safe is a Makefile and build-script change outside this row's owned paths, so it was not made here; the gates in this row were run with --target-dir and with PROGRAMS_CARGO pointed at the worktree-local programs target."
+severity = "suspect"
+
+[observation.3.6.4306]
+task = "3.6"
+file = "platform/hosted/faucet/src/main.rs"
+symbol = "route ClaimRequest service_claim_fields"
+observed = "platform/hosted/faucet/src/main.rs:1036 deserialises the POST /v1/faucet/claims body straight into ClaimRequest with serde_json::from_slice. Serde admits a JSON array wherever a struct is expected as long as the element order matches the field order, so a body of [\"did:layerx:alice\", \"<64 hex>\"] is accepted as a claim even though the documented request shape is an object and ClaimRequest carries deny_unknown_fields. The service-claim route added by this row refuses that shape: service_claim_fields at 967-977 parses the body as a serde_json::Value and requires it to be an object before deserialising it."
+assumption = "The public claim route should require an object as well, so the two faucet entry points agree on what a claim looks like on the wire. That route is outside this row's issue, so only the new one was tightened."
+severity = "note"
+
+[observation.3.6.4307]
+task = "3.6"
+file = "platform/hosted/gateway/src/main.rs"
+symbol = "config configured_protocol"
+observed = "Adding one field to the Config literal in config() took that function to 101 lines and clippy::too_many_lines, denied by the workspace lint table, refused the build. The bound cannot be met by the faucet line alone, so the network identifier, LXP wire version and protocol network identifier reads and their three validity checks were lifted out of config() into configured_protocol() returning a ProtocolConfig. config() is the only caller and its behaviour and error strings are unchanged; the extraction is what made room for the field, not a cosmetic tidy."
+assumption = "config() is at the lint bound, so the next field added to Config will force another extraction. Splitting it by concern (outbound identity, secrets, protocol, endpoints) would give it room, but that is a wider refactor than this row owns."
+severity = "note"

@@ -45,10 +45,10 @@ names that start with `..`, which are skipped
 
 | Caller | Token file name | Identity route | Response shape |
 | --- | --- | --- | --- |
-| Gateway | `gateway` | `POST /v1/sessions/introspect` (`platform/hosted/gateway/src/main.rs:966-973`) | `GatewayShape`: `active`, `sub`, `allowed_signer_public_keys` (`platform/hosted/identity/src/main.rs:117-121`; `platform/hosted/identity/src/main.rs:604-620`) |
+| Gateway | `gateway` | `POST /v1/sessions/introspect` (`platform/hosted/gateway/src/main.rs:986-993`) | `GatewayShape`: `active`, `sub`, `allowed_signer_public_keys` (`platform/hosted/identity/src/main.rs:117-121`; `platform/hosted/identity/src/main.rs:604-620`) |
 | Webhooks | `webhooks` | `POST /v1/sessions/introspect` (`platform/hosted/webhooks/src/trusted.rs:393-399`) | `DeveloperShape`: `active`, `sub`, `csrf_token` (`platform/hosted/identity/src/main.rs:124-128`; `platform/hosted/identity/src/main.rs:621-636`) |
 | Dashboard | `dashboard` | `POST /v1/sessions/introspect` via the same `DeveloperIdentity::authenticate` (`platform/hosted/webhooks/src/trusted.rs:337-363`; `platform/hosted/webhooks/src/trusted.rs:398`) | same `DeveloperShape` (`platform/hosted/identity/src/main.rs:621`) |
-| Faucet | `faucet` | `POST` to the path in `LAYERX_IDENTITY_INTROSPECTION_URL` (`platform/hosted/faucet/src/main.rs:261-266`; `platform/hosted/faucet/src/main.rs:469-476`; `platform/hosted/testnet/deployment.yaml:145`) | `SubjectShape`: `active`, `sub` (`platform/hosted/identity/src/main.rs:131-134`; `platform/hosted/identity/src/main.rs:637-650`) |
+| Faucet | `faucet` | `POST` to the path in `LAYERX_IDENTITY_INTROSPECTION_URL` (`platform/hosted/faucet/src/main.rs:277-282`; `platform/hosted/faucet/src/main.rs:486-493`; `platform/hosted/testnet/deployment.yaml:145`) | `SubjectShape`: `active`, `sub` (`platform/hosted/identity/src/main.rs:131-134`; `platform/hosted/identity/src/main.rs:637-650`) |
 | Testnet control | `testnet` | `GET /readyz` only (`platform/hosted/testnet/src/main.rs:823-826`; `platform/hosted/testnet/src/main.rs:1097`; `platform/hosted/testnet/src/main.rs:1032-1034`) | readiness JSON, not an introspection shape |
 | Ramp | `ramp` | `POST /v1/introspect` with `audience` (`platform/hosted/identity/src/main.rs:580-582`; `platform/hosted/identity/src/main.rs:651-681`) | `RampShape`: `active`, `principal_id`, `account`, `audience`, `expires_at` (`platform/hosted/identity/src/main.rs:137-143`) |
 | Provisioning | `provisioning` | `POST /v1/principals`, `POST /v1/sessions`, `DELETE /v1/sessions/{id}` (`platform/hosted/identity/src/main.rs:869-886`; `platform/hosted/tests/beta-cluster.sh:1000-1026`) | `PrincipalResponse`, `SessionResponse`, `RevocationResponse` (`platform/hosted/identity/src/main.rs:146-167`) |
@@ -150,7 +150,7 @@ must chain to it; when unset, the server uses no client authentication
 not set `LAYERX_IDENTITY_CLIENT_CA_DER`
 (`platform/hosted/identity/deployment.yaml:22-29`). Gateway and
 webhooks still present a PKCS#12 client identity on outbound HTTPS
-(`platform/hosted/gateway/src/main.rs:492-500`;
+(`platform/hosted/gateway/src/main.rs:494-502`;
 `platform/hosted/webhooks/src/trusted.rs:315-326`;
 `platform/hosted/webhooks/src/trusted.rs:346-357`). Those two TLS
 client-auth settings differ.
@@ -195,7 +195,7 @@ with origin
 `https://layerx-identity.layerx-testnet.svc.cluster.local:9443` and
 posts `/v1/sessions/introspect`
 (`platform/hosted/gateway/deployment.yaml:82`;
-`platform/hosted/gateway/src/main.rs:971`). Webhooks and dashboard use
+`platform/hosted/gateway/src/main.rs:991`). Webhooks and dashboard use
 origin `https://identity.layerx-internal.svc` and post
 `/v1/sessions/introspect`
 (`platform/hosted/webhooks/deployment.yaml:9`;
@@ -302,7 +302,7 @@ probes identity with unauthenticated `GET /readyz` and requires HTTP
 200 (`platform/hosted/testnet/src/main.rs:1032-1034`;
 `platform/hosted/testnet/src/main.rs:1097`). Gateway `/readyz` probes
 store, agent-boundary, authority, and registry; identity is not among
-those components (`platform/hosted/gateway/src/main.rs:2779-2808`).
+those components (`platform/hosted/gateway/src/main.rs:2799-2828`).
 
 ---
 

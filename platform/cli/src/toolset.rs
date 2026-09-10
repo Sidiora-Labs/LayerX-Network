@@ -20,7 +20,7 @@ use crate::http::{validate_resource_id, Client};
 const MAX_ARGUMENT_BYTES: usize = 256;
 const MAX_PAYMENT_WINDOW_MS: u64 = 300_000;
 const SEND_ACTIVITY: u16 = 5;
-const SERVED: [ToolDefinition; 2] = [
+const SERVED: [ToolDefinition; 3] = [
     ToolDefinition {
         name: "receipt.get",
         kind: ToolKind::Read,
@@ -35,6 +35,13 @@ const SERVED: [ToolDefinition; 2] = [
         mutation: "canonical Asset SEND through the hosted gateway",
         evidence: "verified receipt or an honest pending, unknown, or refused state",
     },
+    ToolDefinition {
+        name: "faucet.request",
+        kind: ToolKind::Write,
+        required_scope: "faucet:claim",
+        mutation: "one bounded testnet faucet grant through the hosted gateway",
+        evidence: "the faucet claim the gateway confirmed as funded, or an honest refusal",
+    },
 ];
 
 pub struct Runtime {
@@ -43,6 +50,8 @@ pub struct Runtime {
     key: String,
     source: Option<[u8; 32]>,
     asset: Option<[u8; 32]>,
+    environment: String,
+    endpoint: String,
 }
 
 impl Runtime {
@@ -54,7 +63,7 @@ impl Runtime {
         asset: Option<&str>,
         mode: DeploymentMode,
     ) -> Result<Self, String> {
-        let (_, environment) = configuration.active_environment()?;
+        let (environment_name, environment) = configuration.active_environment()?;
         let credential = credential::gateway(gateway_credential)?.ok_or_else(|| {
             format!(
                 "gateway credential alias {gateway_credential} is absent; rerun layerx install for this runtime"
@@ -97,6 +106,8 @@ impl Runtime {
             key: key.to_owned(),
             source,
             asset,
+            environment: environment_name.to_owned(),
+            endpoint: environment.endpoint.clone(),
         })
     }
 }
@@ -154,6 +165,9 @@ pub fn description(name: &str) -> &'static str {
         "activity.submit" => {
             "Sign and submit a canonical payment from the installation-bound account and asset."
         }
+        "faucet.request" => {
+            "Claim one bounded testnet faucet grant for the stored identity session, the named DID, and the named signer key."
+        }
         _ => "This tool is not served by this deployment.",
     }
 }
@@ -183,6 +197,15 @@ pub fn schema(name: &str) -> Value {
             ],
             "additionalProperties": false,
         }),
+        "faucet.request" => json!({
+            "type": "object",
+            "properties": {
+                "did": {"type": "string", "pattern": "^did:[0-9A-Za-z._:-]+$", "maxLength": 256},
+                "public_key": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"}
+            },
+            "required": ["did", "public_key"],
+            "additionalProperties": false,
+        }),
         _ => json!({"type": "object", "additionalProperties": false}),
     }
 }
@@ -197,11 +220,41 @@ pub fn invoke(runtime: &Runtime, tool: ToolDefinition, arguments: &Value) -> Res
                 .get(&format!("/v1/receipts/{}", activity.to_ascii_lowercase()))
         }
         "activity.submit" => submit(runtime, arguments),
+        "faucet.request" => claim_faucet(runtime, arguments),
         _ => Err(format!(
             "tool {} is not served by this deployment",
             tool.name
         )),
     }
+}
+
+fn claim_faucet(runtime: &Runtime, arguments: &Value) -> Result<Value, String> {
+    let did = text(arguments, "did")?;
+    if did
+        .strip_prefix("did:")
+        .and_then(|rest| rest.split_once(':'))
+        .is_none_or(|(method, identifier)| method.is_empty() || identifier.is_empty())
+    {
+        return Err("argument did must be a LayerX decentralised identifier".into());
+    }
+    validate_resource_id(&did, "did")?;
+    let public_key = text(arguments, "public_key")?;
+    validate_hex32(&public_key, "public key")?;
+    let public_key = public_key.to_ascii_lowercase();
+    let token = credential::token(&runtime.environment)?.ok_or_else(|| {
+        format!(
+            "no identity session is stored for {}; run layerx auth set --environment {} before claiming faucet funds",
+            runtime.environment, runtime.environment
+        )
+    })?;
+    let client = Client::new(&runtime.endpoint, Some(token))?;
+    let response = client.post("/rpc", &crate::faucet::request(&did, &public_key), None)?;
+    let claim = crate::faucet::decode(&response)?;
+    Ok(json!({
+        "did": did,
+        "public_key": public_key,
+        "claim": claim,
+    }))
 }
 
 fn submit(runtime: &Runtime, arguments: &Value) -> Result<Value, String> {

@@ -272,6 +272,6 @@ The payment MCP catalogue has 20 tools
 and `grant.draw`; they use the daemon's ordinary prepare, disclose, sign,
 submit, and track stages. Burn, account-open, Asset info/list, fee estimate,
 receipt wait, and live watch are not in the catalogue and are not CLI commands
-in this tree either (`platform/cli/src/main.rs:43-81`).
+in this tree either (`platform/cli/src/main.rs:44-84`).
 
 [Home](Home.md)

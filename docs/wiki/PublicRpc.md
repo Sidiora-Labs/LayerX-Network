@@ -1,8 +1,9 @@
 # Public JSON-RPC
 
-The public JSON-RPC gateway provides 15
-`lx_*` methods: authenticated canonical submission, unauthenticated committed
-reads, fee estimation, and scoped live subscriptions. The source contract is
+The public JSON-RPC gateway provides 17
+`lx_*` methods: self-service onboarding, authenticated canonical submission,
+unauthenticated committed reads, fee estimation, and scoped live
+subscriptions. The source contract is
 the embedded OpenRPC 1.3.2 document plus the gateway dispatch and public-core
 read implementations.
 
@@ -28,6 +29,8 @@ limit enforced by the gateway is 8 MiB. Parameters are positional.
 
 | Method | Positional parameters | Result |
 | --- | --- | --- |
+| `lx_register` | `[signer_public_key, registration_signature]` | Identity principal record for a self-registered signer |
+| `lx_requestFunds` | `[did, signer_public_key]` | One bounded testnet faucet grant the faucet confirmed as funded |
 | `lx_getAccount` | `[account_id]` | Authenticated account snapshot |
 | `lx_getBalance` | `[account_id]` | The same account object; use its `balance` and `asset_id` |
 | `lx_getBalances` | `[did]` | Complete bounded DID account list |
@@ -48,7 +51,22 @@ limit enforced by the gateway is 8 MiB. Parameters are positional.
 | `lx_estimateFee` | `[canonical_hex]` | Committed-schedule estimate |
 
 Although `lx_getSequence` has two parameter forms, it is one method; the table
-therefore describes all 15 method names.
+therefore describes all 17 method names.
+
+`lx_register` and `lx_requestFunds` are the onboarding pair. `lx_register`
+takes a lowercase-hex 32-byte Ed25519 public key and its 64-byte signature over
+the registration binding and returns the principal record; the subject is
+derived from the key, so it is idempotent and cannot name another holder's
+principal. `lx_requestFunds` claims one faucet grant for the authenticated
+principal and requires that the named signer key be one the session authorises
+(`platform/hosted/gateway/src/rpc_register.rs`;
+`platform/hosted/gateway/src/rpc_faucet.rs`). The gateway derives the faucet
+idempotency key from the principal, DID, and signer key, so a repeated request
+returns the same grant rather than a second one, and a claim whose funded
+evidence is incomplete is `-32603` rather than a reported success. Both are
+optional upstreams: when the identity or faucet upstream is not configured the
+method answers `-32001` with `data.code` `registration_not_configured` or
+`faucet_not_configured`. See [Hosted faucet](HostedFaucet.md).
 
 Identifiers are nonzero hexadecimal strings encoding 32 bytes. The gateway
 selector accepts either case, but the receipt route refuses any uppercase
@@ -150,7 +168,15 @@ number), `result_code`, `state_root`, `receipt`, `idempotency_key`, and
 
 ## Authentication and scopes
 
-Read methods require no credential. `lx_sendActivity` requires:
+Read methods require no credential. `lx_register` requires no credential; it
+proves possession of the named signer key by signature. `lx_requestFunds`
+requires a hosted identity session, not a gateway key:
+
+```text
+Authorization: Bearer <identity session token>
+```
+
+`lx_sendActivity` requires:
 
 ```text
 Authorization: LayerX-Key <key-id>:lxp_live_<64-hex-secret>
