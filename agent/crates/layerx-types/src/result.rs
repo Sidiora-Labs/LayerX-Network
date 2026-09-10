@@ -1,4 +1,7 @@
 //! Exact protocol result codes derived from `include/layerx/lxp_result.h`.
+//!
+//! `build.rs` refuses to build this crate when the table below drifts from the
+//! normative `LXP_RESULT_CODE_LIST` macro in that header.
 
 /// Protocol result-code domain. Numeric ranges match the C17 core.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,6 +121,7 @@ protocol_result_codes! {
     NotYetValid = -304, Retriable;
     SequenceMismatch = -305, Retriable;
     ConditionUnmet = -306, Terminal;
+    SequenceExhausted = -307, Terminal;
     InsufficientBalance = -400, Terminal;
     ZeroAmount = -401, Terminal;
     AssetMismatch = -402, Terminal;
@@ -180,6 +184,7 @@ protocol_result_codes! {
     MarketAlreadyExists = -733, Terminal;
     ParameterBounds = -734, Terminal;
     PausedScope = -735, Retriable;
+    ProgramRefused = -736, Terminal;
     BatchGap = -800, Retriable;
     RootMismatch = -801, Terminal;
     TimestampRegression = -802, Terminal;

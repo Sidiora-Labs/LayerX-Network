@@ -387,7 +387,7 @@ lxp_result lxp_receive_execute(const lxp_receive *receive,
     uint8_t encoded[1024];
     uint8_t activity_hash[32];
     size_t encoded_length;
-    size_t i;
+    lxp_send_store_record record;
     lx_account *from;
     lx_account *to;
     lxp_grant_state *state;
@@ -403,18 +403,12 @@ lxp_result lxp_receive_execute(const lxp_receive *receive,
     if (status == LXP_OK)
         status = lxp_hash_activity_id(encoded, encoded_length, activity_hash);
     if (status != LXP_OK) return status;
-    for (i = 0U; i < environment->idempotency->count; ++i) {
-        if (memcmp(environment->idempotency->records[i].activity_hash,
-                   activity_hash, 32U) == 0) return LXP_ERR_SEQUENCE_REUSED;
-        if (memcmp(environment->idempotency->records[i].idempotency_key,
-                   receive->idempotency_key, 32U) == 0) {
-            *receipt = environment->idempotency->records[i].receipt;
-            receipt->replayed = true;
-            return LXP_ERR_IDEMPOTENT_REPLAY;
-        }
-    }
-    if (environment->idempotency->count == LXP_SEND_STORE_CAPACITY)
-        return LXP_ERR_ARENA_EXHAUSTED;
+    status = lxp_send_store_lookup(environment->idempotency,
+                                   receive->idempotency_key, activity_hash,
+                                   receipt);
+    if (status != LXP_OK) return status;
+    status = lxp_send_store_admit(environment->idempotency);
+    if (status != LXP_OK) return status;
     from = find_account(environment->accounts, receive->from);
     to = find_account(environment->accounts, receive->to);
     state = find_grant(environment->grants, receive->grant_id);
@@ -464,12 +458,9 @@ lxp_result lxp_receive_execute(const lxp_receive *receive,
     receipt->to_before = set_result.legs[0].to_balance_before;
     receipt->to_after = set_result.legs[0].to_balance_after;
     (void)memcpy(receipt->transfer_set_root, set_result.transfer_set_root, 32U);
-    (void)memcpy(environment->idempotency->records[environment->idempotency->count].activity_hash,
-                 activity_hash, 32U);
-    (void)memcpy(environment->idempotency->records[environment->idempotency->count].idempotency_key,
-                 receive->idempotency_key, 32U);
-    environment->idempotency->records[environment->idempotency->count].receipt =
-        *receipt;
-    ++environment->idempotency->count;
-    return LXP_OK;
+    (void)memset(&record, 0, sizeof(record));
+    (void)memcpy(record.activity_hash, activity_hash, 32U);
+    (void)memcpy(record.idempotency_key, receive->idempotency_key, 32U);
+    record.receipt = *receipt;
+    return lxp_send_store_append(environment->idempotency, &record);
 }
