@@ -3050,6 +3050,8 @@ interop-lint:
 	cargo deny --manifest-path $(INTEROP_MANIFEST) check advisories bans sources
 
 PROGRAMS_CARGO ?= cargo
+PROGRAMS_TARGET_DIR := $(CURDIR)/programs/target
+PROGRAMS_WORKSPACE_CARGO = env CARGO_TARGET_DIR='$(PROGRAMS_TARGET_DIR)' $(PROGRAMS_CARGO)
 PROGRAMS_RUNTIME_LIB := programs/target/debug/liblayerx_programs_sandbox.a
 
 .PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-conservation programs-qualify programs-module-boundaries programs-abi-drift programs-porting-v2-references \
@@ -3061,10 +3063,10 @@ programs-js-install:
 	npm --prefix programs/sdk/assemblyscript/examples/paid-counter ci --ignore-scripts --no-audit --no-fund
 
 $(PROGRAMS_RUNTIME_LIB):
-	cd programs && $(PROGRAMS_CARGO) build --locked --workspace --features layerx-programs-sandbox/host-ffi
+	cd programs && $(PROGRAMS_WORKSPACE_CARGO) build --locked --workspace --features layerx-programs-sandbox/host-ffi
 
 programs-build:
-	cd programs && $(PROGRAMS_CARGO) build --locked --workspace --features layerx-programs-sandbox/host-ffi
+	cd programs && $(PROGRAMS_WORKSPACE_CARGO) build --locked --workspace --features layerx-programs-sandbox/host-ffi
 
 programs-lint: programs-module-boundaries
 	cd programs && $(PROGRAMS_CARGO) clippy --locked --workspace --all-targets --features layerx-programs-sandbox/host-ffi -- -D warnings
