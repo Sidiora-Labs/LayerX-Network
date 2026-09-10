@@ -378,6 +378,22 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
     lxp_kernel *kernel, const lxp_activity *activity,
     const lxp_kernel_execution *execution, lxp_kernel_prepared_batch **batch_out);
 
+/* A terminal rejection is the canonical outcome of an admitted activity whose
+ * application refuses before publication.  It consumes the offered global
+ * sequence, records the refusal receipt under the activity's idempotency key,
+ * advances the receipt state root and notifies the commit observer.  It never
+ * applies module effects, charges a fee, or consumes the actor's account
+ * sequence. */
+bool lxp_terminal_rejection_applies(lxp_result refusal);
+lxp_result lxp_kernel_terminal_rejection(
+    lxp_kernel *kernel, const lxp_activity *activity,
+    const lxp_kernel_execution *execution, lxp_result refusal,
+    lxp_receipt *receipt);
+lxp_result lxp_kernel_prepare_terminal_rejection(
+    lxp_kernel *kernel, const lxp_activity *activity,
+    const lxp_kernel_execution *execution, lxp_result refusal,
+    lxp_kernel_prepared_batch **batch_out);
+
 lxp_result lxp_kernel_prepare_activity_batch(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_kernel_execution *executions, size_t offered_count,

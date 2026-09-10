@@ -1067,6 +1067,26 @@ done:
     return status;
 }
 
+static bool terminal_rejection_module_supported(
+    const lxp_daemon_process *process, uint32_t activity_type)
+{
+    uint16_t module_id = lxp_activity_module_id(activity_type);
+    return module_id == LXP_MODULE_PROGRAMS ||
+           module_id == LXP_MODULE_ASSET ||
+           module_id == LXP_MODULE_GOVERNANCE ||
+           (process->custody_credit_enabled &&
+            module_id == LXP_MODULE_BRIDGE);
+}
+
+static uint16_t recorded_module_version_for(uint32_t activity_type)
+{
+    return (uint16_t)((activity_type == LXP_BRIDGE_CREDIT ||
+                       lxp_governance_activity(activity_type)) ? 1U :
+                      (asset_activity_supported(activity_type) ?
+                       lx_asset_module_iface()->abi_version :
+                       LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION));
+}
+
 static lxp_result persist_prepared_batch_checkpoint(
     void *context, const lxp_kernel_batch_boundary *settled)
 {
@@ -1105,6 +1125,7 @@ static lxp_result replay_execute_activity(
     lxp_byte_span encoded_receipt;
     uint8_t batch_preimage[32U + 32U + 8U + 8U];
     uint8_t activity_id[32];
+    bool decoded = false;
     lxp_result status;
     if (process == NULL || canonical_activity == NULL ||
         canonical_receipt == NULL || activity == NULL || receipt == NULL ||
@@ -1130,6 +1151,7 @@ static lxp_result replay_execute_activity(
     if (status == LXP_OK &&
         activity->protocol_version != process->protocol_version)
         status = LXP_ERR_VERSION_UNSUPPORTED;
+    if (status == LXP_OK) decoded = true;
     if (status == LXP_OK)
         status = lxp_activity_check_envelope(activity, process->network_id);
     if (status == LXP_OK) status = lxp_activity_verify_payload_hash(activity);
@@ -1167,7 +1189,71 @@ static lxp_result replay_execute_activity(
     if (status == LXP_OK)
         status = lxp_activity_id(canonical_activity, activity_length,
                                  activity_id);
-    if (status != LXP_OK) return status;
+    if (status != LXP_OK) {
+        lxp_result refusal = status;
+        lxp_byte_span offered = {canonical_activity, activity_length};
+        lxp_batch_roots bound_roots;
+        uint8_t bound_batch_id[32];
+        if (!decoded || !lxp_terminal_rejection_applies(refusal) ||
+            !terminal_rejection_module_supported(process,
+                                                 activity->activity_type) ||
+            expected->result_code != refusal ||
+            expected->timestamp != timestamp ||
+            expected->module_id !=
+                lxp_activity_module_id(activity->activity_type) ||
+            expected->module_version !=
+                recorded_module_version_for(activity->activity_type) ||
+            expected->program_outcome.present)
+            return refusal;
+        status = lxp_activity_id(canonical_activity, activity_length,
+                                 activity_id);
+        if (status != LXP_OK) return refusal;
+        (void)memset(&execution, 0, sizeof(execution));
+        if (lxp_protocol_version_uses_occupancy(process->protocol_version))
+            status = lxp_daemon_batch_bind_prefix(
+                &offered, 1U, process->kernel.current_state_root,
+                global_sequence, batch_number, &process->execution_arena,
+                &execution, &bound_roots, bound_batch_id);
+        else {
+            (void)memcpy(batch_preimage,
+                         process->kernel.current_state_root, 32U);
+            (void)memcpy(batch_preimage + 32U, activity_id, 32U);
+            write_u64_be(batch_preimage + 64U, global_sequence);
+            write_u64_be(batch_preimage + 72U, batch_number);
+            status = lxp_hash_context_value(batch_preimage,
+                                            sizeof(batch_preimage),
+                                            execution.batch_id);
+        }
+        if (status != LXP_OK) return status;
+        execution.network_id = process->network_id;
+        execution.batch_number = batch_number;
+        execution.batch_timestamp_ms = timestamp;
+        execution.maximum_timestamp_window = UINT64_C(300000);
+        execution.epoch = process->kernel.epoch;
+        execution.global_sequence = global_sequence;
+        execution.recorded_module_version = expected->module_version;
+        execution.parameter_version = expected->parameter_version;
+        execution.signature_valid = true;
+        execution.identities = &process->identities;
+        execution.fee_parameters = &process->fees;
+        execution.gas_limit = UINT64_MAX;
+        execution.arena = &process->execution_arena;
+        execution.sequencer_private_key = process->sequencer_private_key;
+        execution.verified_receipts = &process->verified_receipts;
+        (void)memset(receipt, 0, sizeof(*receipt));
+        status = lxp_kernel_terminal_rejection(&process->kernel, activity,
+                                               &execution, refusal, receipt);
+        if (status == LXP_OK)
+            status = lxp_receipt_encode(receipt, true,
+                                        &process->execution_arena,
+                                        &encoded_receipt);
+        if (status == LXP_OK &&
+            (encoded_receipt.length != receipt_length ||
+             lxp_ct_memcmp(encoded_receipt.bytes, canonical_receipt,
+                           receipt_length) != 0))
+            status = LXP_FATAL_REPLAY_DIVERGENCE;
+        return status;
+    }
     (void)memcpy(authority.principal, principal_id, 32U);
     (void)memcpy(batch_preimage, process->kernel.current_state_root, 32U);
     (void)memcpy(batch_preimage + 32U, activity_id, 32U);
@@ -2824,6 +2910,7 @@ static lxp_result apply_canonical_activity(
     uint8_t activity_id[32];
     uint64_t timestamp;
     size_t mark;
+    bool decoded = false;
     const char *stage = "authorization";
     lxp_result status;
     if (process == NULL || canonical_activity == NULL ||
@@ -2841,6 +2928,7 @@ static lxp_result apply_canonical_activity(
     if (status == LXP_OK &&
         activity.protocol_version != process->protocol_version)
         status = LXP_ERR_VERSION_UNSUPPORTED;
+    if (status == LXP_OK) decoded = true;
     if (status == LXP_OK)
         status = lxp_activity_check_envelope(&activity, process->network_id);
     if (status == LXP_OK) status = lxp_activity_verify_payload_hash(&activity);
@@ -2873,7 +2961,82 @@ static lxp_result apply_canonical_activity(
     if (status == LXP_OK)
         status = lxp_activity_id(canonical_activity, activity_length,
                                  activity_id);
-    if (status != LXP_OK) goto finish;
+    if (status != LXP_OK) {
+        lxp_result refusal = status;
+        if (!decoded || !lxp_terminal_rejection_applies(refusal) ||
+            !terminal_rejection_module_supported(process,
+                                                 activity.activity_type)) {
+            status = refusal;
+            goto finish;
+        }
+        stage = "terminal rejection";
+        status = lxp_activity_id(canonical_activity, activity_length,
+                                 activity_id);
+        if (status == LXP_OK) status = current_time_ms(&timestamp);
+        if (status == LXP_OK) {
+            (void)memcpy(batch_preimage,
+                         process->kernel.current_state_root, 32U);
+            (void)memcpy(batch_preimage + 32U, activity_id, 32U);
+            write_u64_be(batch_preimage + 64U, global_sequence);
+            write_u64_be(batch_preimage + 72U, process->next_batch);
+            (void)memset(&execution, 0, sizeof(execution));
+            status = lxp_hash_context_value(batch_preimage,
+                                            sizeof(batch_preimage),
+                                            execution.batch_id);
+        }
+        if (status == LXP_OK) {
+            base_accounts = malloc(sizeof(*base_accounts));
+            if (base_accounts == NULL) status = LXP_ERR_IO;
+        }
+        if (status != LXP_OK) {
+            status = refusal;
+            goto finish;
+        }
+        execution.network_id = process->network_id;
+        execution.batch_number = process->next_batch;
+        execution.batch_timestamp_ms = timestamp;
+        execution.maximum_timestamp_window = UINT64_C(300000);
+        execution.epoch = process->kernel.epoch;
+        execution.global_sequence = global_sequence;
+        execution.recorded_module_version =
+            recorded_module_version_for(activity.activity_type);
+        execution.recorded_fee_schedule_version = 0U;
+        execution.parameter_version = process->parameter_version;
+        execution.signature_valid = true;
+        execution.identities = &process->identities;
+        execution.fee_parameters = &process->fees;
+        execution.gas_limit = UINT64_MAX;
+        execution.arena = &process->execution_arena;
+        execution.sequencer_private_key = process->sequencer_private_key;
+        execution.verified_receipts = &process->verified_receipts;
+        *base_accounts = process->accounts;
+        base_state = process->state;
+        base_state.accounts = base_accounts;
+        base_kernel = process->kernel;
+        base_kernel.state = &base_state;
+        (void)memset(&receipt, 0, sizeof(receipt));
+        status = lxp_kernel_terminal_rejection(&process->kernel, &activity,
+                                               &execution, refusal, &receipt);
+        if (status != LXP_OK) {
+            (void)fprintf(stderr,
+                "layerxd: terminal rejection unavailable at sequence %llu for result %d with result %d\n",
+                (unsigned long long)global_sequence, (int)refusal,
+                (int)status);
+            status = refusal;
+            goto finish;
+        }
+        stage = "receipt encoding";
+        status = lxp_receipt_encode(&receipt, true,
+                                    &process->execution_arena,
+                                    &canonical_receipt);
+        if (status == LXP_OK) {
+            stage = "event projection";
+            status = lxp_programs_project_receipt_events(
+                &receipt, &process->execution_arena, &canonical_events);
+        }
+        if (status != LXP_OK) goto finish;
+        goto publish;
+    }
     (void)memcpy(authority.principal, principal_id, 32U);
     (void)memcpy(batch_preimage, process->kernel.current_state_root, 32U);
     (void)memcpy(batch_preimage + 32U, activity_id, 32U);
@@ -2927,6 +3090,7 @@ static lxp_result apply_canonical_activity(
     status = lxp_programs_project_receipt_events(
         &receipt, &process->execution_arena, &canonical_events);
     if (status != LXP_OK) goto finish;
+publish:
     activities[0] = (lxp_byte_span){canonical_activity, activity_length};
     receipts[0] = canonical_receipt;
     stage = "batch publication";
@@ -3163,6 +3327,8 @@ static lxp_result apply_canonical_batch(
     size_t count = 0U;
     size_t retry_prefix_count = 0U;
     size_t kernel_consumed = 0U;
+    size_t checked_count = 0U;
+    bool timestamped = false;
     size_t mark;
     size_t i;
     uint32_t maximum_workers;
@@ -3235,6 +3401,7 @@ static lxp_result apply_canonical_batch(
     process->state.writer = pthread_self();
     mark = lxp_arena_mark(&process->execution_arena);
     status = current_time_ms(&timestamp);
+    if (status == LXP_OK) timestamped = true;
     for (i = 0U; status == LXP_OK && i < count; ++i) {
         lxp_identity *identity;
         uint8_t principal_id[32];
@@ -3297,6 +3464,7 @@ static lxp_result apply_canonical_batch(
         executions[i].sequencer_private_key =
             process->sequencer_private_key;
         executions[i].verified_receipts = &process->verified_receipts;
+        ++checked_count;
     }
     if (status == LXP_OK)
         status = lxp_daemon_batch_bind_prefix(
@@ -3331,6 +3499,31 @@ static lxp_result apply_canonical_batch(
             first_global_sequence, process->next_batch,
             &process->execution_arena, executions,
             &scheduling_roots, batch_id);
+    }
+    if (status != LXP_OK && prepared_batch == NULL && timestamped &&
+        (checked_count == 0U || (checked_count == count && count == 1U)) &&
+        lxp_terminal_rejection_applies(status) &&
+        terminal_rejection_module_supported(process,
+                                            activities[0].activity_type)) {
+        lxp_result refusal = status;
+        count = 1U;
+        status = lxp_daemon_batch_bind_prefix(
+            canonical_activities, count,
+            process->kernel.current_state_root,
+            first_global_sequence, process->next_batch,
+            &process->execution_arena, executions,
+            &scheduling_roots, batch_id);
+        if (status == LXP_OK)
+            status = lxp_kernel_prepare_terminal_rejection(
+                &process->kernel, &activities[0], &executions[0], refusal,
+                &prepared_batch);
+        if (status != LXP_OK) {
+            (void)fprintf(stderr,
+                "layerxd: terminal rejection unavailable at sequence %llu for result %d with result %d\n",
+                (unsigned long long)first_global_sequence, (int)refusal,
+                (int)status);
+            status = refusal;
+        }
     }
     if (status == LXP_OK && lxp_protocol_version_uses_occupancy(process->protocol_version))
         status = lxp_kernel_prepare_batch_maintenance(prepared_batch, activities, executions);
