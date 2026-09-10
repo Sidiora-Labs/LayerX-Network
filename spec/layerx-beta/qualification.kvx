@@ -9508,3 +9508,67 @@ symbol = "test_real_owner_output_is_not_a_protocol_registration test_generated_c
 observed = "pytest platform/hosted/human exits 1 with three failures and thirty-six passes. All three require human/target/debug/layerx-human-identity-provider, which no target in this tree builds, and they fail identically on the unmodified base revision before any change in this branch; neither test file is touched here. The guardian and native producer files that are touched pass in full: pytest platform/hosted/human/test_guardians.py platform/hosted/human/test_owner_native.py exits 0 with nineteen passes."
 assumption = "The failures are a missing debug build artifact of the human workspace rather than a defect, and building it was not attempted because a cold debug build of that workspace would consume a shared cargo target directory on a filesystem already at ninety-five percent. Neither test was weakened, skipped or changed."
 severity = "blocker"
+
+[observation.6.11.3000]
+task = "6.11"
+file = "Makefile tests/modules/test_stream_lifecycle.c tests/modules/test_escrow_dispute.c"
+symbol = "test-stream-lifecycle test-escrow-dispute PROGRAMS_RUNTIME_LIB"
+observed = "make CC=gcc test-stream-lifecycle exits 2 at the link step, not at any assertion. The recipe at Makefile:612-616 links tests/modules/test_stream_lifecycle.c against $(TEST_LIBRARY) alone with -lcrypto -pthread, while build/liblayerx-testing.a contains src/protocol/lxp_kernel.o, whose closure references the Rust staticlib symbols layerx_programs_call_begin, layerx_programs_occupancy_finalize_rust, layerx_programs_sandbox_admit_host, layerx_programs_sandbox_cancel_host, layerx_programs_sandbox_lifecycle_validate, layerx_programs_sandbox_destroy_host, layerx_programs_sandbox_destroy_terminal, layerx_programs_settle_wind_down_402lxp_leg, layerx_programs_authorize_402lxp_leg, layerx_programs_module_cache_invalidate_upgrade, layerx_programs_migration_execute_activity and layerx_programs_interface_validate; the link ends with make: *** [Makefile:615: build/tests/test_stream_lifecycle] Error 1. Every other kernel-linked test names $(PROGRAMS_RUNTIME_LIB) between two copies of the library and adds -ldl -lm, the precedent being Makefile:356-361, and the two stream tests that do reach the kernel, Makefile:572-577 and Makefile:601-606, already do. The escrow dispute recipe at Makefile:496-500 carries the identical omission. The failure predates this branch and reproduces on an unmodified tree. Linking the same translation unit by hand with the missing archive and libraries, gcc -Iinclude -Ibuild/generated -DLXP_TESTING with the repository CFLAGS over tests/modules/test_stream_lifecycle.c build/liblayerx-testing.a programs/target/debug/liblayerx_programs_sandbox.a build/liblayerx-testing.a -lcrypto -pthread -ldl -lm, produces a binary that runs the whole lifecycle suite and exits 0."
+assumption = "Makefile is outside this issue's owned paths, so the recipe was left exactly as written and the suite was proven through the equivalent manual link instead. The repair is to add $(PROGRAMS_RUNTIME_LIB) and -ldl -lm to both recipes with programs-build as an order-only prerequisite, exactly as Makefile:356-361 does. No assertion in tests/modules/test_stream_lifecycle.c was altered to reach a link."
+severity = "blocker"
+
+[observation.6.11.3001]
+task = "6.11"
+file = "src/modules/stream/lx_stream_open.c src/modules/stream/lx_stream_settle.c src/modules/stream/lx_stream_lifecycle.c"
+symbol = "fund_context lx_stream_draw_context lxp_kernel_apply_transfer_set"
+observed = "make CC=gcc test-stream-open and make CC=gcc test-stream-settle both exited 1 on an unmodified tree before this branch. Every stream transfer context was built without source authorities, and lxp_kernel_apply_transfer_set refuses a set whose source_authorities is NULL or whose source_authority_count is zero with LXP_ERR_NON_CANONICAL, so no stream leg could ever be applied and funding, drawing and refunding were all unreachable. The funding context now names the payer under LXP_AUTH_OWNER, and the draw and refund contexts name the stream account under LXP_AUTH_PROTOCOL_MODULE, which is the only authorization lx_stream_authority_check accepts for a stream-kind account, alongside reasons LXP_REASON_STREAM_DRAW and LXP_REASON_STREAM_REFUND."
+assumption = "The refusal in lxp_kernel_apply_transfer_set and the custody check in lx_stream_authority_check are both correct and unchanged; the missing source authority was the module's own defect and is repaired inside this issue's owned paths."
+severity = "note"
+
+[observation.6.11.3002]
+task = "6.11"
+file = "include/layerx/lx_stream.h src/modules/stream/lx_stream_execution.h cmd/layerxd platform/emulator"
+symbol = "lx_stream_runtime lxp_ctx_module_runtime lxp_kernel_bind_module_runtime"
+observed = "A stream may only fund, draw or refund an asset whose lxp_transfer_asset_state the host has published, and the stream module cannot read the asset module's key-value state from its own context. It therefore reads the permitted asset states from lxp_ctx_module_runtime, the shape lx_asset_runtime already uses, through the new lx_stream_runtime struct. No host binds a runtime at LXP_MODULE_STREAM: neither cmd/layerxd nor platform/emulator calls lxp_kernel_bind_module_runtime for that module id, so until one does, every LX_STREAM_OPEN and LX_STREAM_TOP_UP dispatch refuses with LXP_ERR_ASSET_MISMATCH instead of moving value. The refusal is deliberate and is asserted in tests/modules/test_stream_open.c before the fixture binds its own runtime."
+assumption = "Refusing an unknown asset is the safe direction and no silent fallback was added. Binding the runtime belongs to the daemon and the emulator, which are outside this issue's owned paths."
+severity = "blocker"
+
+[observation.6.11.3003]
+task = "6.11"
+file = "src/protocol/lxp_kernel.c tests/modules/test_stream_open.c"
+symbol = "lxp_kernel_bind_module_runtime"
+observed = "lxp_kernel_bind_module_runtime refuses a NULL runtime with LXP_ERR_NON_CANONICAL at src/protocol/lxp_kernel.c:938-940, so a host that has installed a module runtime can never take it away and the binding is monotonic for the life of the kernel. The stream dispatch test asserts that refusal directly rather than assuming a bind and unbind cycle."
+assumption = "The refusal is intentional: the argument is a raw void pointer, so a NULL bind would be indistinguishable from a module that was never bound. It is recorded because the property is stated nowhere else and because it means a host cannot use this entry point to revoke a published asset permission set."
+severity = "note"
+
+[observation.6.11.3004]
+task = "6.11"
+file = "src/modules/stream/lx_stream_state.c src/modules/stream/lx_stream_record.c src/protocol/lxp_genesis.c"
+symbol = "lx_stream_state_key lx_stream_result_key lx_stream_record_encode lx_stream_result_save"
+observed = "Stream state is now canonical module key-value state. Each stream is one 541-byte record under the key prefix stream: followed by its 32-byte identifier, and each settled or closed economic outcome is one 67-byte record under the prefix result: followed by its 32-byte idempotency key, carrying the transfer set root, the paid and refunded amounts, the ordinal and the leg count, so replaying a key reproduces the original receipt byte for byte. Both key forms are 39 bytes. This changes the module state root wherever the stream module is live. The genesis module table row for the stream module keeps LXP_GENESIS_MODULE_GATE_ENABLE_FLAG with enabled false, so no genesis snapshot, manifest or state-root fixture changes on this branch."
+assumption = "Canonical key-value state is the only state the kernel commits and the only state a snapshot restores, so a module that keeps records anywhere else cannot survive a restart. Enabling the module at genesis and regenerating the affected fixtures is a separate change that must move every module row at once."
+severity = "note"
+
+[observation.6.11.3005]
+task = "6.11"
+file = "Makefile src/modules/stream/lx_stream_record.c src/modules/stream/lx_stream_meter.c"
+symbol = "test-stream-accrual test-stream-meter LIBRARY"
+observed = "Makefile:583-587 and Makefile:592-596 link test_stream_accrue and test_stream_meter against $(LIBRARY) alone with no Rust staticlib, so any symbol either test reaches must have a link closure that never touches src/protocol/lxp_kernel.o. The record codec and the accrual and meter arithmetic therefore live in context-free translation units: the 541-byte record codec and its validation moved into the new src/modules/stream/lx_stream_record.c, and src/modules/stream/lx_stream_meter.c keeps only the pure meter arithmetic, with the key-value write that a meter attestation performs done by the dispatch layer in src/modules/stream/lx_stream_execution.h. The split is imposed by the link topology of those two recipes, not by the module design."
+assumption = "The two recipes are outside this issue's owned paths and were left as written. Keeping the arithmetic and the codec free of the module context is a real constraint that also keeps those two suites independent of the programs runtime."
+severity = "note"
+
+[observation.6.11.3006]
+task = "6.11"
+file = "Makefile"
+symbol = "test core-test-all test-stream-open test-stream-accrual test-stream-meter test-stream-settle test-stream-lifecycle"
+observed = "The make test target at Makefile:269-277 names no stream target. The five stream targets are reachable only through core-test-all at Makefile:2878-2879, which make test does not invoke, so a regression in the stream module cannot fail the aggregate gate. The five targets were therefore run individually and their logs recorded beside the aggregate run."
+assumption = "Adding the stream targets to make test is a Makefile change outside this issue's owned paths, so the coverage was proven by running each target instead."
+severity = "suspect"
+
+[observation.6.11.3007]
+task = "6.11"
+file = "spec/layerx-beta/report.md tools/ci/beta-report.sh spec/layerx-beta/qualification.kvx"
+symbol = "beta-report"
+observed = "spec/layerx-beta/report.md is generated from the ledger and the contract by tools/ci/beta-report.sh and is committed in the same change as the ledger append that produced it. Because every branch that appends an observation regenerates the whole file, its counts and its per-task tables differ on every such branch, so any two concurrently open branches conflict on it even when their ledger appends merge cleanly. This branch was rebased onto a moving main six times; report.md conflicted on every one of them and qualification.kvx raised a conflict marker on none. The resolution for the report is mechanical and identical each time: take main's report.md, re-run tools/ci/beta-report.sh, and continue, after which tools/ci/beta-report.sh --check exits 0. The silent side is the ledger: on two of those rebases the marker-free merge consumed the closing severity line of main's final block, observation 5.4.7800 on one and observation 6.6.3704 on the other, together with the blank line separating it from the first block appended here, so that block would have reached main without its severity key and the ledger check would have refused the result. git diff reported no deleted line for it. The block-by-block comparison of main's ledger against this one caught both, and the file was rebuilt as main's content followed by the blocks appended here before the push."
+assumption = "Committing the rendered report keeps the published evidence in step with the ledger, which is the reason the file is tracked, so it was regenerated rather than dropped from any commit. The conflict is inherent to tracking a whole-file rendering of an append-only record; resolving it by re-rendering never loses a ledger block, and the two ledger integrity checks confirmed after each rebase that every block main holds is present here byte for byte."
+severity = "note"
