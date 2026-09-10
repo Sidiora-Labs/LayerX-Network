@@ -228,7 +228,12 @@ fn genesis_request(asset: &[u8; 32], guarantor_key: &[u8; 33]) -> Vec<u8> {
         request.extend_from_slice(&value.to_be_bytes());
     }
     let issuer = SigningKey::from_bytes(&random32());
-    lxgb_metadata::append(&mut request, asset, &issuer.verifying_key().to_bytes(), &random32());
+    lxgb_metadata::append(
+        &mut request,
+        asset,
+        &issuer.verifying_key().to_bytes(),
+        &random32(),
+    );
     request
 }
 
