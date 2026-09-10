@@ -75,6 +75,12 @@ pub enum Payment {
     OpenAccount {
         asset: Id,
     },
+    Pause {
+        asset: Id,
+    },
+    Unpause {
+        asset: Id,
+    },
     Receive {
         from: Id,
         to: Id,
@@ -159,6 +165,8 @@ impl Payment {
         match self {
             Self::Register(_) => (ModuleId::Asset, 1),
             Self::OpenAccount { .. } => (ModuleId::Asset, 4),
+            Self::Pause { .. } => (ModuleId::Asset, 2),
+            Self::Unpause { .. } => (ModuleId::Asset, 3),
             Self::Receive { .. } => (ModuleId::Asset, 6),
             Self::IssueGrant(_) => (ModuleId::Asset, 7),
             Self::RevokeGrant { .. } => (ModuleId::Asset, 8),
@@ -211,6 +219,11 @@ impl Payment {
                 seed,
             } => {
                 if *program == [0; 32] || *asset == [0; 32] || seed.len() > 128 {
+                    return bad();
+                }
+            }
+            Self::Pause { asset } | Self::Unpause { asset } => {
+                if *asset == [0; 32] {
                     return bad();
                 }
             }
@@ -302,7 +315,7 @@ impl Payment {
                 e.u8(r.issuer_kind)?;
                 put_short(&mut e, &r.custody_ref)?;
             }
-            Self::OpenAccount { asset } => {
+            Self::OpenAccount { asset } | Self::Pause { asset } | Self::Unpause { asset } => {
                 e.u16(1)?;
                 e.fixed(asset)?;
             }
@@ -394,7 +407,10 @@ impl Payment {
         actor: &[u8],
     ) -> Result<Self, DisclosureError> {
         let mut d = Decoder::new(payload, 0);
-        if module == ModuleId::Asset && matches!(ordinal, 1 | 4 | 8 | 10 | 11) && d.u16()? != 1 {
+        if module == ModuleId::Asset
+            && matches!(ordinal, 1 | 2 | 3 | 4 | 8 | 10 | 11)
+            && d.u16()? != 1
+        {
             return bad();
         }
         let result = match (module, ordinal) {
@@ -410,6 +426,12 @@ impl Payment {
                 issuer_kind: d.u8()?,
                 custody_ref: short(&mut d)?,
             }),
+            (ModuleId::Asset, 2) => Self::Pause {
+                asset: fixed(&mut d)?,
+            },
+            (ModuleId::Asset, 3) => Self::Unpause {
+                asset: fixed(&mut d)?,
+            },
             (ModuleId::Asset, 4) => Self::OpenAccount {
                 asset: fixed(&mut d)?,
             },

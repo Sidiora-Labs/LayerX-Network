@@ -138,10 +138,18 @@ static int test_asset_payloads(lxp_kernel *kernel)
     bytes[1] = 1U;
     bytes[2] = 7U;
     PAYLOAD_CHECK(decode_prefixes(ctx, 4U, bytes, 34U) == 0);
+    PAYLOAD_CHECK(decode_prefixes(ctx, 2U, bytes, 34U) == 0);
+    PAYLOAD_CHECK(decode_prefixes(ctx, 3U, bytes, 34U) == 0);
     PAYLOAD_CHECK(lx_asset_account_open_decode(bytes, 34U, &account) == LXP_OK &&
                   account.asset_id[0] == 7U);
     bytes[1] = 2U;
     PAYLOAD_CHECK(lx_asset_account_open_decode(bytes, 34U, &account) != LXP_OK);
+    PAYLOAD_CHECK(lxp_arena_reset(ctx->arena, 0U) == LXP_OK);
+    PAYLOAD_CHECK(iface->decode(ctx, 2U, bytes, 34U, &decoded) ==
+                  LXP_ERR_NON_CANONICAL);
+    PAYLOAD_CHECK(lxp_arena_reset(ctx->arena, 0U) == LXP_OK);
+    PAYLOAD_CHECK(iface->decode(ctx, 3U, bytes, 34U, &decoded) ==
+                  LXP_ERR_NON_CANONICAL);
     bytes[1] = 1U;
     bytes[34] = 1U;
     bytes[41] = 9U;

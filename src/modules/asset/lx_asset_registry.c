@@ -15,14 +15,29 @@ static const uint32_t activity_types[] = {
     LX_ASSET_MINT, LX_ASSET_BURN
 };
 
+typedef struct asset_pause_payload {
+    uint8_t asset_id[32];
+} asset_pause_payload;
+
 typedef union asset_typed_payload {
     lx_asset_register_payload registration;
     lx_asset_account_open_payload account_open;
+    asset_pause_payload pause;
     lx_asset_supply_payload supply;
     lx_asset_grant_revoke_payload revocation;
     lxp_receive receive;
     lxp_payer_grant grant;
 } asset_typed_payload;
+
+/* version:u16=1 || asset_id32 */
+static lxp_result asset_pause_decode(const uint8_t *bytes, size_t length,
+                                     asset_pause_payload *payload)
+{
+    if (bytes == NULL || payload == NULL || length != 34U ||
+        bytes[0] != 0U || bytes[1] != 1U) return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(payload->asset_id, bytes + 2U, 32U);
+    return LXP_OK;
+}
 
 typedef struct asset_decoded {
     uint16_t ordinal;
@@ -138,6 +153,7 @@ static lxp_result validate_send(lxp_module_ctx *ctx,
         lxp_ct_memcmp(send->from, send->to, 32U) == 0 ||
         asset_load(ctx, send->asset, &record) != LXP_OK)
         return LXP_ERR_UNAUTHORIZED_DEBIT;
+    if (record.paused) return LXP_ERR_ASSET_PAUSED;
     (void)memset(&environment, 0, sizeof(environment));
     environment.accounts = runtime->accounts;
     (void)lx_asset_transfer_state(&record, &transfer_asset);
@@ -310,7 +326,7 @@ static lxp_result module_decode(lxp_module_ctx *ctx, uint16_t ordinal,
         if (status != LXP_OK) return status;
         value->send_present = true;
     }
-    if (ordinal != 2U && ordinal != 3U && ordinal != 5U) {
+    if (ordinal != 5U) {
         status = lxp_ctx_arena_alloc(ctx, sizeof(*value->typed),
                                      _Alignof(asset_typed_payload), &memory);
         if (status != LXP_OK) return status;
@@ -320,6 +336,11 @@ static lxp_result module_decode(lxp_module_ctx *ctx, uint16_t ordinal,
     case 1U:
         status = lx_asset_register_decode(payload, payload_length,
                                           &value->typed->registration);
+        break;
+    case 2U:
+    case 3U:
+        status = asset_pause_decode(payload, payload_length,
+                                    &value->typed->pause);
         break;
     case 4U:
         status = lx_asset_account_open_decode(payload, payload_length,
@@ -397,11 +418,8 @@ static lxp_result module_execute_impl(lxp_module_ctx *ctx,
     if (ctx == NULL || value == NULL) return LXP_ERR_UNKNOWN_ACTIVITY;
     if (value->ordinal == lxp_activity_type_ordinal(LX_ASSET_WITHDRAW))
         return execute_withdrawal(ctx, activity, authority, value);
-    if (!value->send_present && value->ordinal != 2U && value->ordinal != 3U)
-        return asset_execute_typed(ctx, activity, authority, value);
     if (!value->send_present)
-        return lxp_ctx_emit_event(ctx, value->ordinal, value->payload,
-                                  value->payload_length);
+        return asset_execute_typed(ctx, activity, authority, value);
     status = validate_send(ctx, activity, authority, &value->send);
     runtime = (lx_asset_runtime *)lxp_ctx_module_runtime(ctx);
     if (status == LXP_OK) status = asset_load(ctx, value->send.asset, &record);

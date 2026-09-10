@@ -232,6 +232,20 @@ static lxp_result asset_execute_typed(lxp_module_ctx *ctx, const lxp_activity *a
         if (status == LXP_OK) status = lxp_ctx_asset_issuance_stage(ctx, activity, authority, &issuance);
         return status == LXP_OK ? lxp_ctx_emit_event(ctx, 1U, p->asset_id, 32U) : status;
     }
+    if (value->ordinal == 2U || value->ordinal == 3U) {
+        const asset_pause_payload *p = &value->typed->pause;
+        const bool paused = value->ordinal == 2U;
+        status = asset_load(ctx, p->asset_id, &record);
+        if (status != LXP_OK) return status;
+        if (lxp_ct_is_zero(record.issuer_did32, 32U) ||
+            memcmp(record.issuer_did32, authority->actor, 32U) != 0)
+            return LXP_ERR_UNAUTHORIZED_DEBIT;
+        if (record.paused == paused) return LXP_ERR_PAUSED_SCOPE;
+        record.paused = paused;
+        status = asset_save(ctx, &record);
+        return status == LXP_OK ?
+            lxp_ctx_emit_event(ctx, value->ordinal, p->asset_id, 32U) : status;
+    }
     if (value->ordinal == 4U) {
         status = asset_load(ctx, value->typed->account_open.asset_id, &record);
         if (status != LXP_OK) return status;

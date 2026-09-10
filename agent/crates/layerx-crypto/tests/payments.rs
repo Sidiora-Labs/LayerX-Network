@@ -219,7 +219,10 @@ fn invalid_shapes_are_refused() -> Result<(), Box<dyn std::error::Error>> {
             Payment::IssueGrant(g) => g.per_draw_maximum = 0,
             Payment::ProgramTransfer { legs, .. } => legs.clear(),
             Payment::ProgramAccount { seed, .. } => *seed = vec![0; 129],
-            Payment::OpenAccount { .. } | Payment::RevokeGrant { .. } => continue,
+            Payment::OpenAccount { .. }
+            | Payment::Pause { .. }
+            | Payment::Unpause { .. }
+            | Payment::RevokeGrant { .. } => continue,
         }
         assert!(p.encode(ACTOR).is_err());
     }
