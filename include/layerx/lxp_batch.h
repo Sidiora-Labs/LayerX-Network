@@ -157,6 +157,8 @@ lxp_result lxp_batch_publish(const lxp_batch_body *body,
 lxp_result lxp_batch_eligibility_init(
     lxp_batch_eligibility_state *state, uint64_t batch_number,
     const uint8_t (*replica_ids)[32], size_t replica_count, size_t threshold);
+lxp_result lxp_batch_eligibility_reset(lxp_batch_eligibility_state *state,
+                                       uint64_t batch_number);
 lxp_result lxp_replica_ack(lxp_batch_eligibility_state *state,
                            const uint8_t replica_id[32], lxp_log *log);
 lxp_result lxp_batch_eligibility(const lxp_batch_eligibility_state *state,

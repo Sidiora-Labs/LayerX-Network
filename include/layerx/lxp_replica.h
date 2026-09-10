@@ -7,10 +7,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct lxp_replay_engine;
+
 typedef struct lxp_replica {
     lxp_log *log;
+    struct lxp_replay_engine *engine;
     lxp_batch_header head;
+    lxp_batch_eligibility_state eligibility;
     uint64_t durable_batch_count;
+    uint64_t executed_batch_count;
+    uint64_t acknowledged_batch_count;
+    uint64_t next_batch_number;
+    uint64_t next_sequence;
+    uint8_t state_root[32];
+    uint8_t replica_id[32];
+    bool has_execution;
+    bool has_eligibility;
     bool has_head;
     bool halted;
     bool execution_enabled;
@@ -103,6 +115,18 @@ typedef struct lxp_replay_batch_result {
 } lxp_replay_batch_result;
 
 lxp_result lxp_replica_init(lxp_replica *replica, lxp_log *log);
+lxp_result lxp_replica_bind_execution(lxp_replica *replica,
+                                      lxp_replay_engine *engine,
+                                      const uint8_t starting_state_root[32],
+                                      uint64_t next_batch_number,
+                                      uint64_t next_sequence);
+lxp_result lxp_replica_bind_eligibility(lxp_replica *replica,
+                                        const uint8_t replica_id[32],
+                                        const uint8_t (*replica_ids)[32],
+                                        size_t replica_count,
+                                        size_t threshold);
+lxp_result lxp_replica_batch_eligible(const lxp_replica *replica,
+                                      bool *eligible);
 lxp_result lxp_replica_validate_header(
     const lxp_batch_body *body, uint32_t configured_network_id,
     const lxp_sequencer_authorization *authorization, lxp_arena *arena);

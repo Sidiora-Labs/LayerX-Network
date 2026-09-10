@@ -26,6 +26,23 @@ lxp_result lxp_batch_eligibility_init(
     return LXP_OK;
 }
 
+lxp_result lxp_batch_eligibility_reset(lxp_batch_eligibility_state *state,
+                                       uint64_t batch_number)
+{
+    size_t i;
+    if (state == NULL || state->replica_count == 0U ||
+        state->replica_count > LXP_MAX_BATCH_REPLICAS ||
+        state->threshold == 0U || state->threshold > state->replica_count ||
+        state->acknowledgement_count > state->replica_count)
+        return LXP_ERR_NON_CANONICAL;
+    if (batch_number < state->batch_number) return LXP_ERR_BATCH_GAP;
+    if (batch_number == state->batch_number) return LXP_OK;
+    for (i = 0U; i < LXP_MAX_BATCH_REPLICAS; ++i) state->acknowledged[i] = 0U;
+    state->acknowledgement_count = 0U;
+    state->batch_number = batch_number;
+    return LXP_OK;
+}
+
 lxp_result lxp_replica_ack(lxp_batch_eligibility_state *state,
                            const uint8_t replica_id[32], lxp_log *log)
 {

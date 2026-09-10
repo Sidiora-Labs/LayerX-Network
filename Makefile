@@ -871,10 +871,13 @@ test-sequencer-recovery: $(BUILD_DIR)/tests/test_sequencer_recovery
 test-wave-10: test-batch test-sequencer test-batch-time test-batch-seal \
 		test-batch-distribute test-sequencer-recovery
 
-$(BUILD_DIR)/tests/test_replica_ingest: tests/test_replica_ingest.c $(LIBRARY)
+$(BUILD_DIR)/tests/test_replica_ingest: tests/test_replica_ingest.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) tests/support/lxp_real_replay.h \
+		| programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -o $@
+	$(CC) $(CPPFLAGS) -Itests $(CFLAGS) $< $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-replica: $(BUILD_DIR)/tests/test_replica_ingest
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_replica_ingest
@@ -1219,7 +1222,9 @@ LAYERXD_SOURCES = \
 	cmd/layerxd/lxp_daemon_artifact.c \
 	cmd/layerxd/lxp_daemon_process.c \
 	cmd/layerxd/lxp_daemon_authority_replica.c \
-	cmd/layerxd/lxp_daemon_cli.c
+	cmd/layerxd/lxp_daemon_replica.c \
+	cmd/layerxd/lxp_daemon_cli.c \
+	cmd/layerx-guarantor/runtime.c
 
 LAYERXD_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/obj/%.o,cmd/layerxd/main.c $(LAYERXD_SOURCES))
 -include $(LAYERXD_OBJECTS:.o=.d)
@@ -3297,7 +3302,7 @@ test-daemon-availability: $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority 
 
 GUARANTOR_SOURCES = cmd/layerx-guarantor/main.c cmd/layerx-guarantor/lni.c \
 	cmd/layerx-guarantor/producer.c cmd/layerx-guarantor/exchange.c \
-	cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.c
+	cmd/layerx-guarantor/settlement.c
 GUARANTOR_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(GUARANTOR_SOURCES))
 -include $(GUARANTOR_OBJECTS:.o=.d)
 GUARANTOR_PYTHON ?= python3
@@ -3352,7 +3357,6 @@ test-daemon-guarantor-settlement:
 	$(GUARANTOR_PYTHON) tests/daemon/guarantor-settlement-chain.py
 test-daemon-guarantor: test-daemon-guarantor-settlement
 $(BUILD_DIR)/tests/lxp_test_guarantor_runtime: tests/daemon/guarantor-runtime.c \
-	$(BUILD_DIR)/obj/cmd/layerx-guarantor/runtime.o \
 	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) \
 	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
