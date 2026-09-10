@@ -508,7 +508,8 @@ static lxp_result store_begin(void *context, const lxp_activity *activity,
     if (status == LXP_OK)
         status = lxp_log_write_boundary(store->canonical_log);
     (void)lxp_arena_reset(store->scratch, mark);
-    if (status == LXP_OK)
+    if (status == LXP_OK &&
+        !lxp_durability_group_contains(store->canonical_log))
         status = lxp_history_index_rebuild(store->history);
     return status;
 }

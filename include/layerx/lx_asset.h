@@ -9,10 +9,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+lxp_result lxp_ctx_bind_asset_supply(lxp_module_ctx *ctx,
+    const uint8_t asset_id[32], lxp_u128 before, lxp_u128 after);
+
 enum {
     LX_ASSET_REGISTRY_CAPACITY = 64,
     LX_ASSET_RESERVE_LINE_CAPACITY = 128,
     LX_ASSET_SYMBOL_MAX = 16,
+    LX_ASSET_NAME_MAX = 32,
     LX_ASSET_CUSTODY_REFERENCE_MAX = 128,
     LX_ASSET_REGISTER = 0x00010001,
     LX_ASSET_PAUSE = 0x00010002,
@@ -22,9 +26,59 @@ enum {
     LX_ASSET_RECEIVE = 0x00010006,
     LX_ASSET_GRANT_ISSUE = 0x00010007,
     LX_ASSET_GRANT_REVOKE = 0x00010008,
-    LX_ASSET_WITHDRAW = 0x00010009
+    LX_ASSET_WITHDRAW = 0x00010009,
+    LX_ASSET_MINT = 0x0001000a,
+    LX_ASSET_BURN = 0x0001000b
 };
 
+/* Register issuer_kind is 1=native, 2=paxeer_custody. That numbering is not
+ * lx_asset_custody_kind (PAXEER=1) and must not be stored as custody_kind. */
+typedef struct lx_asset_register_payload {
+    uint8_t asset_id[32];
+    uint8_t salt[32];
+    uint8_t symbol_length;
+    uint8_t symbol[LX_ASSET_SYMBOL_MAX];
+    uint8_t name_length;
+    uint8_t name[LX_ASSET_NAME_MAX];
+    uint8_t decimals;
+    lxp_u128 supply_cap;
+    uint8_t issuer_kind;
+    uint8_t custody_reference_length;
+    uint8_t custody_reference[LX_ASSET_CUSTODY_REFERENCE_MAX];
+} lx_asset_register_payload;
+
+typedef struct lx_asset_account_open_payload {
+    uint8_t asset_id[32];
+} lx_asset_account_open_payload;
+
+/* Mint: account_id is to_account32. Burn: account_id is from_account32. */
+typedef struct lx_asset_supply_payload {
+    uint8_t asset_id[32];
+    uint8_t account_id[32];
+    lxp_u128 amount;
+} lx_asset_supply_payload;
+
+typedef struct lx_asset_grant_revoke_payload {
+    uint8_t grant_id[32];
+    uint64_t revocation_sequence;
+} lx_asset_grant_revoke_payload;
+
+/* version:u16=1 || asset_id32 || salt32 || symbol_len:u8 || symbol(1 to 16 ASCII)
+ * || name_len:u8 || name(1 to 32 UTF-8) || decimals:u8<=38 || supply_cap:u128
+ * || issuer_kind:u8 || custody_ref_len:u8 || custody_ref. Integers big-endian. */
+lxp_result lx_asset_register_decode(const uint8_t *bytes, size_t length,
+                                    lx_asset_register_payload *payload);
+/* version:u16=1 || asset_id32 */
+lxp_result lx_asset_account_open_decode(const uint8_t *bytes, size_t length,
+                                        lx_asset_account_open_payload *payload);
+/* version:u16=1 || asset_id32 || account_id32 || amount:u128 (amount > 0) */
+lxp_result lx_asset_supply_decode(const uint8_t *bytes, size_t length,
+                                  lx_asset_supply_payload *payload);
+/* version:u16=1 || grant_id32 || revocation_sequence:u64 */
+lxp_result lx_asset_grant_revoke_decode(const uint8_t *bytes, size_t length,
+                                        lx_asset_grant_revoke_payload *payload);
+
+/* Persisted registry custody kind. Distinct from register issuer_kind. */
 typedef enum lx_asset_custody_kind {
     LX_ASSET_CUSTODY_PAXEER = 1
 } lx_asset_custody_kind;
@@ -32,6 +86,12 @@ typedef enum lx_asset_custody_kind {
 typedef struct lx_asset_record {
     uint8_t asset_id[32];
     char symbol[LX_ASSET_SYMBOL_MAX + 1U];
+    uint8_t name[LX_ASSET_NAME_MAX];
+    uint8_t name_length;
+    lxp_u128 supply_cap;
+    uint8_t issuer_did32[32];
+    uint8_t salt[32];
+    uint8_t issuer_kind;
     uint8_t symbol_length;
     uint8_t decimals;
     lx_asset_custody_kind custody_kind;
@@ -190,6 +250,11 @@ lxp_result lx_asset_amount_decode(const uint8_t *bytes, size_t length,
 lxp_result lx_asset_record_encode(const lx_asset_record *record,
                                   uint8_t *bytes, size_t capacity,
                                   size_t *length);
+struct lxp_kernel;
+lxp_result lx_asset_committed_records(const struct lxp_kernel *kernel,
+    lx_asset_record *records, size_t capacity, size_t *count);
+lxp_result lx_asset_record_migrate_v2(const uint8_t *bytes, size_t length,
+    const uint8_t salt[32], uint8_t *output, size_t capacity, size_t *output_length);
 lxp_result lx_asset_record_decode(const uint8_t *bytes, size_t length,
                                   lx_asset_record *record);
 lxp_result lx_asset_transfer_state(const lx_asset_record *record,

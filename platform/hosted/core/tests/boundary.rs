@@ -1,6 +1,9 @@
 //! Drives the core boundary over TLS against a real `layerxd` sequencer and
 //! authority replica started from `build/bin`.
 
+#[path = "../../../../tests/support/lxgb_metadata.rs"]
+mod lxgb_metadata;
+
 use ed25519_dalek::{Signer, SigningKey};
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::preparation::{preparation_state, PreparationStateContext};
@@ -804,7 +807,7 @@ struct Genesis {
 fn genesis_request(asset: &[u8; 32], sequencer_key: &[u8; 32]) -> Vec<u8> {
     let mut request = Vec::with_capacity(512);
     request.extend_from_slice(b"LXGB");
-    request.push(1);
+    request.push(2);
     request.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
     request.extend_from_slice(&NETWORK_ID.to_be_bytes());
     request.extend_from_slice(&now_ms().to_be_bytes());
@@ -839,6 +842,8 @@ fn genesis_request(asset: &[u8; 32], sequencer_key: &[u8; 32]) -> Vec<u8> {
         request.extend_from_slice(&value.to_be_bytes());
     }
     assert_eq!(request.len(), 395, "LXGB request length");
+    let issuer = SigningKey::from_bytes(&random32());
+    lxgb_metadata::append(&mut request, asset, &issuer.verifying_key().to_bytes(), &random32());
     request
 }
 
@@ -2214,6 +2219,14 @@ fn start_supervised_cluster() -> Cluster {
         [&sequencer_seed, &treasury_seed],
         [&program_token, &replica_token],
     );
+    let mut metadata = Vec::new();
+    lxgb_metadata::append(
+        &mut metadata,
+        &asset,
+        &SigningKey::from_bytes(&treasury_seed).verifying_key().to_bytes(),
+        &random32(),
+    );
+    write(&root.join("bootstrap-metadata.lxgb"), &metadata, 0o644);
     let mut environment = BTreeMap::new();
     finality_environment(&mut environment);
     let replica_args = supervisor_arguments(&root, "replica");
@@ -2233,6 +2246,7 @@ fn start_supervised_cluster() -> Cluster {
             text(&root.join("bootstrap-sequencer.key")),
         ),
         ("--treasury-key", text(&root.join("bootstrap-treasury.key"))),
+        ("--genesis-metadata", text(&root.join("bootstrap-metadata.lxgb"))),
         (
             "--program-token-file",
             text(&root.join("bootstrap-program.token")),

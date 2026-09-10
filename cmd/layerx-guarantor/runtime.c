@@ -267,9 +267,8 @@ static lxp_result load_schedule(gp_runtime *process)
     if (parameter_version == 0U || parameter_version > UINT16_MAX)
         return LXP_ERR_VERSION_UNSUPPORTED;
     process->parameter_version = parameter_version;
-    process->fees = (lxp_fee_params){
-        (uint16_t)parameter_version, {0U, 0U}, {0U, 0U}, {0U, 0U}, {0U, 0U}, {0U, 0U}, 10000U};
-    return LXP_OK;
+    return lxp_fee_committed_schedule(&process->kernel, parameter_version,
+                                      &process->fees);
 }
 
 static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_sequence,

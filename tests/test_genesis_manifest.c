@@ -10,8 +10,9 @@
 
 #include <openssl/evp.h>
 #include <string.h>
+#include <stdio.h>
 
-#define REQUIRE(condition) do { if (!(condition)) return 1; } while (0)
+#define REQUIRE(condition) do { if (!(condition)) { fprintf(stderr, "genesis line %d: %s\n", __LINE__, #condition); return 1; } } while (0)
 
 static int public_key_for(
     const uint8_t private_key[32], uint8_t public_key[32])
@@ -184,6 +185,17 @@ static int check_version(uint16_t protocol_version)
     }
     REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
                               &snapshot_manifest, &kernel) == LXP_OK);
+    if (protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        static const uint16_t ordinals[] = {1U, 4U, 6U, 7U, 8U, 10U, 11U};
+        const lxp_module_registration *entry;
+        for (size_t i = 0U; i < sizeof(ordinals) / sizeof(ordinals[0]); ++i) {
+            REQUIRE(lxp_kernel_module_for_activity(&kernel,
+                ((uint32_t)LXP_MODULE_ASSET << 16U) | ordinals[i], kernel.epoch, &entry) == LXP_OK);
+            REQUIRE(entry != NULL);
+        }
+        REQUIRE(lxp_kernel_module_for_activity(&kernel,
+            ((uint32_t)LXP_MODULE_ASSET << 16U) | 9U, kernel.epoch, &entry) != LXP_OK);
+    }
     REQUIRE(accounts.count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT);
     REQUIRE(memcmp(kernel.current_state_root,
                    snapshot_manifest.receipt_state_root, 32U) == 0);

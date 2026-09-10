@@ -121,7 +121,10 @@ pub fn lookup(
     selector: ReceiptSelector,
     context: LookupContext,
 ) -> Result<Lookup, ReceiptError> {
-    let selector_bytes = selector.encode();
+    let mut selector_bytes = selector.encode();
+    if context.interface_version.minor >= 5 {
+        selector_bytes.push(1);
+    }
     let request = encode_envelope(Envelope {
         version: context.interface_version,
         message_tag: RECEIPT_LOOKUP_REQUEST_TAG,
@@ -203,6 +206,18 @@ pub fn resolve_unknown(
         idempotency_key: unknown.idempotency_key(),
         expected_activity_id: unknown.activity_id(),
     };
+    if context.interface_version.minor >= 5 {
+        if policy.maximum_attempts == 0 {
+            return Ok(Resolution::Unknown(unknown.after_resolution_attempts(0)));
+        }
+        return match lookup(transport, selector, context) {
+            Ok(Lookup::Verified(receipt)) => Ok(Resolution::Resolved(receipt)),
+            Ok(Lookup::Absent) | Err(ReceiptError::Transport(_)) => {
+                Ok(Resolution::Unknown(unknown.after_resolution_attempts(1)))
+            }
+            Err(error) => Err(error),
+        };
+    }
     let base_correlation_id = context.correlation_id;
     let mut attempts = 0_u32;
     for attempt in 0..policy.maximum_attempts {

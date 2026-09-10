@@ -25,6 +25,9 @@ trap cleanup EXIT
 chmod 0755 "$work"
 python3 - "$work" <<'PY'
 import os, pathlib, socket, sys
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+sys.path.insert(0, "tests/support")
+from lxgb_metadata import metadata
 root = pathlib.Path(sys.argv[1])
 for name, value in [('sequencer', 0x22), ('treasury', 0x11)]:
     path = root / name
@@ -38,6 +41,8 @@ for _ in range(3):
     sockets.append(sock)
     ports.append(str(sock.getsockname()[1]))
 (root / 'ports').write_text(' '.join(ports) + '\n')
+issuer = Ed25519PrivateKey.from_private_bytes(bytes([0x11]) * 32).public_key().public_bytes_raw()
+(root / 'metadata').write_bytes(metadata(bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'), issuer, os.urandom(32)))
 PY
 read -r program_port replica_port rpc_port < "$work/ports"
 mkfifo "$work/replica-ready"
@@ -56,7 +61,7 @@ LAYERX_NODE_SETTLEMENT_CONTRACT=0x1111111111111111111111111111111111111111 \
 LAYERX_NODE_CHECKPOINT_REGISTRY=0x2222222222222222222222222222222222222222 \
 LAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1 LAYERX_NODE_PAXEER_RPC_PORT="$rpc_port" \
 bash platform/hosted/node/bootstrap.sh --data-dir "$work/data" --run-dir "$runtime" \
-    --network-id 77 --sequencer-key "$work/sequencer" --treasury-key "$work/treasury" \
+    --network-id 77 --genesis-metadata "$work/metadata" --sequencer-key "$work/sequencer" --treasury-key "$work/treasury" \
     --lni-uid 4021 --lni-gid 4021 --program-port "$program_port" --replica-port "$replica_port" \
     --layerxd "$native_bin/layerxd" --genesis-build "$native_bin/layerx-genesis-build" "${bootstrap_extra[@]}" \
     > "$work/bootstrap.log" 2>&1

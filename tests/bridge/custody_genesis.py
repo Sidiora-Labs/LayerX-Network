@@ -14,6 +14,7 @@ def main():
     parser.add_argument('--profile', required=True)
     parser.add_argument('--output', required=True)
     parser.add_argument('--builder', required=True)
+    parser.add_argument('--genesis-metadata', type=Path, required=True)
     parser.add_argument('--rpc')
     parser.add_argument('--ca-bundle')
     parser.add_argument('--disposable-identity')
@@ -36,7 +37,7 @@ def main():
     public = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     write_new(directory / 'sequencer.key', key.private_bytes_raw())
     write_new(directory / 'sequencer.pub', public)
-    request = (b'LXGB\x01' + big(3, 2) + profile[201:205] + big(int(time.time() * 1000), 8)
+    request = (b'LXGB\x02' + big(3, 2) + profile[201:205] + big(int(time.time() * 1000), 8)
                + big(1, 2) + big(7, 2) + b'parameter-version'.ljust(32, b'\0') + big(1, 32)
                + big(1, 2) + sha(b'layerx-beta-guarantor:' + public.hex().encode())
                + b'\x02' + public + big(0, 16) + profile[97:129] + big(1, 4))
@@ -44,6 +45,9 @@ def main():
     request += big(1, 8) + b'\x01' + big(1, 4)
     request += b''.join(big(value, 8) for value in (1, 1, 2, 4, 1, 1, 100, 100, 1, 1, 10, 1, 1000))
     require(len(request) == 395, 'genesis request length')
+    metadata = args.genesis_metadata.read_bytes()
+    require(219 < len(metadata) <= 16384 - len(request), 'genesis metadata bounds')
+    request += metadata
     write_new(directory / 'request.lxgb', request)
     command(args.builder, str(directory / 'request.lxgb'), str(directory / 'sequencer.key'),
             str(directory / 'artifacts'), '--custody-profile', str(Path(args.profile).resolve()))

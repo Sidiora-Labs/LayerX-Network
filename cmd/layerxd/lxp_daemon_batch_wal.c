@@ -24,6 +24,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/file.h>
+#include <time.h>
 #include <unistd.h>
 #include <pthread.h>
 
@@ -47,6 +48,18 @@ static const uint8_t wal_domain[24] = {
 static pthread_mutex_t wal_replace_mutex=PTHREAD_MUTEX_INITIALIZER;
 static uint64_t wal_temporary_counter;
 
+static uint64_t wal_timing_us(void)
+{
+    struct timespec now;
+    return clock_gettime(CLOCK_MONOTONIC,&now)==0 ?
+        (uint64_t)now.tv_sec*1000000U+(uint64_t)now.tv_nsec/1000U : 0U;
+}
+
+static const char *const wal_group_names[2] = {
+    "prepared-batch.group-0.lxw",
+    "prepared-batch.group-1.lxw"
+};
+
 struct lxp_daemon_batch_wal_record {
     lxp_daemon_batch_wal_state state;
     lxp_daemon_batch_wal_input view;
@@ -58,7 +71,19 @@ struct lxp_daemon_batch_wal_record {
     lxp_merkle_proof proofs[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     uint8_t *owned;
     size_t owned_length;
+    bool grouped;
+    uint8_t group_slot;
 };
+
+static lxp_result read_record(const char *directory,
+                              const char *record_name,
+                              uint8_t **bytes, size_t *length,
+                              bool *present, bool sweep);
+static lxp_result decode_record(
+    uint8_t *bytes, size_t length,
+    const lxp_sequencer_authorization *authorization,
+    bool grouped, uint8_t slot, bool input_validated,
+    lxp_daemon_batch_wal_record **out);
 
 static void put_u64(uint8_t *p, uint64_t v)
 {
@@ -646,6 +671,129 @@ static lxp_result paths(const char *directory, char final[4096])
     return n<0 || n>=4096 ? LXP_ERR_LENGTH_LIMIT : LXP_OK;
 }
 
+static lxp_result group_path(const char *directory, uint8_t slot,
+                             char final[4096])
+{
+    int n;
+    if (directory == NULL || directory[0] == '\0' || slot > 1U)
+        return LXP_ERR_NON_CANONICAL;
+    n = snprintf(final, 4096, "%s/%s", directory, wal_group_names[slot]);
+    return n < 0 || n >= 4096 ? LXP_ERR_LENGTH_LIMIT : LXP_OK;
+}
+
+lxp_result lxp_daemon_batch_wal_initialize(const char *directory)
+{
+    int dfd = -1;
+    bool locked = false;
+    bool created = false;
+    uint8_t slot;
+    lxp_result status = LXP_OK;
+    if (directory == NULL || directory[0] == '\0')
+        return LXP_ERR_NON_CANONICAL;
+    if (pthread_mutex_lock(&wal_replace_mutex) != 0)
+        return LXP_ERR_IO;
+    locked = true;
+    dfd = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (dfd < 0 || flock(dfd, LOCK_EX) != 0) status = LXP_ERR_IO;
+    for (slot = 0U; status == LXP_OK && slot < 2U; ++slot) {
+        struct stat information;
+        int descriptor = openat(dfd, wal_group_names[slot],
+            O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+        if (descriptor >= 0) {
+            created = true;
+        } else if (errno == EEXIST) {
+            descriptor = openat(dfd, wal_group_names[slot],
+                O_RDWR | O_CLOEXEC | O_NOFOLLOW);
+        }
+        if (descriptor < 0 || fstat(descriptor, &information) != 0 ||
+            !S_ISREG(information.st_mode) || information.st_nlink != 1U ||
+            (information.st_mode & 0777U) != 0600U)
+            status = LXP_ERR_IO;
+        if (descriptor >= 0 && close(descriptor) != 0 && status == LXP_OK)
+            status = LXP_ERR_IO;
+    }
+    if (status == LXP_OK && created && fsync(dfd) != 0)
+        status = LXP_ERR_IO;
+    if (dfd >= 0) (void)close(dfd);
+    if (locked && pthread_mutex_unlock(&wal_replace_mutex) != 0 &&
+        status == LXP_OK)
+        status = LXP_ERR_IO;
+    return status;
+}
+
+static lxp_result group_slots_ready(const char *directory, bool *ready)
+{
+    uint8_t slot;
+    if (directory == NULL || ready == NULL) return LXP_ERR_NON_CANONICAL;
+    *ready = false;
+    for (slot = 0U; slot < 2U; ++slot) {
+        char path[4096];
+        struct stat information;
+        lxp_result status = group_path(directory, slot, path);
+        if (status != LXP_OK) return status;
+        if (lstat(path, &information) != 0) {
+            if (errno == ENOENT) return LXP_OK;
+            return LXP_ERR_IO;
+        }
+        if (!S_ISREG(information.st_mode) || information.st_nlink != 1U ||
+            (information.st_mode & 0777U) != 0600U)
+            return LXP_ERR_IO;
+    }
+    *ready = true;
+    return LXP_OK;
+}
+
+static lxp_result durable_group_write(const char *directory, uint8_t slot,
+                                      const uint8_t *bytes, size_t length)
+{
+    size_t offset = 0U;
+    int descriptor = -1;
+    int dfd = -1;
+    bool locked = false;
+    struct stat information;
+    lxp_result status = LXP_OK;
+    if (directory == NULL || bytes == NULL || length == 0U || slot > 1U)
+        return LXP_ERR_NON_CANONICAL;
+    if (pthread_mutex_lock(&wal_replace_mutex) != 0)
+        return LXP_ERR_IO;
+    locked = true;
+    dfd = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (dfd < 0 || flock(dfd, LOCK_EX) != 0) status = LXP_ERR_IO;
+    if (status == LXP_OK)
+        descriptor = openat(dfd, wal_group_names[slot],
+            O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (status == LXP_OK &&
+        (descriptor < 0 || fstat(descriptor, &information) != 0 ||
+         !S_ISREG(information.st_mode) || information.st_nlink != 1U ||
+         (information.st_mode & 0777U) != 0600U))
+        status = LXP_ERR_IO;
+    if (status == LXP_OK && ftruncate(descriptor, 0) != 0)
+        status = LXP_ERR_IO;
+    while (status == LXP_OK && offset < length) {
+        ssize_t written = write(descriptor, bytes + offset, length - offset);
+        if (written > 0) offset += (size_t)written;
+        else if (written < 0 && errno == EINTR) continue;
+        else status = LXP_ERR_IO;
+    }
+    if (status == LXP_OK)
+        lxp_fault_inject_point(LXP_FAULT_BATCH_WAL_WRITTEN);
+    if (status == LXP_OK && fdatasync(descriptor) != 0)
+        status = LXP_ERR_IO;
+    if (status == LXP_OK)
+        lxp_fault_inject_point(LXP_FAULT_BATCH_WAL_SYNCED);
+    if (descriptor >= 0 && close(descriptor) != 0 && status == LXP_OK)
+        status = LXP_ERR_IO;
+    if (status == LXP_OK)
+        lxp_fault_inject_point(LXP_FAULT_BATCH_WAL_NAMED);
+    if (status == LXP_OK)
+        lxp_fault_inject_point(LXP_FAULT_BATCH_WAL_DIRECTORY_SYNCED);
+    if (dfd >= 0) (void)close(dfd);
+    if (locked && pthread_mutex_unlock(&wal_replace_mutex) != 0 &&
+        status == LXP_OK)
+        status = LXP_ERR_IO;
+    return status;
+}
+
 static lxp_result durable_replace(const char *directory,const uint8_t *bytes,
                                   size_t length,bool require_absent,
                                   const uint8_t *expected_current,
@@ -753,42 +901,135 @@ static lxp_result durable_replace(const char *directory,const uint8_t *bytes,
 lxp_result lxp_daemon_batch_wal_write_prepared(const char *directory,
  const lxp_daemon_batch_wal_input *input,uint8_t digest[32])
 {
-    uint8_t *bytes=NULL; size_t length=0U; lxp_result status;
+    uint8_t *bytes=NULL; size_t length=0U; bool grouped=false;
+    lxp_result status;
     if(digest==NULL)return LXP_ERR_NON_CANONICAL;
     status=encode_record(input,LXP_DAEMON_BATCH_WAL_PREPARED,&bytes,&length);
-    if(status==LXP_OK)status=durable_replace(
-        directory,bytes,length,true,NULL,0U);
+    if(status==LXP_OK)status=group_slots_ready(directory,&grouped);
+    if(status==LXP_OK && grouped)
+        status=durable_group_write(directory,
+            (uint8_t)((input->batch_number - 1U) & 1U),bytes,length);
+    else if(status==LXP_OK)
+        status=durable_replace(directory,bytes,length,true,NULL,0U);
     if(status==LXP_OK)(void)memcpy(digest,input->publication_digest,32U);
     if(bytes!=NULL){lxp_secure_zero(bytes,length);free(bytes);} return status;
 }
 
-lxp_result lxp_daemon_batch_wal_commit_kernel(
+static lxp_result write_prepared_record(
+    const char *directory, const lxp_daemon_batch_wal_input *input,
+    uint8_t digest[32], lxp_daemon_batch_wal_record **record)
+{
+    uint8_t *encoded = NULL;
+    uint8_t *persisted = NULL;
+    size_t encoded_length = 0U;
+    size_t persisted_length = 0U;
+    bool grouped = false;
+    bool present = false;
+    uint8_t slot = 0U;
+    const char *name = "prepared-batch.lxw";
+    lxp_result status;
+    if (digest == NULL || record == NULL) return LXP_ERR_NON_CANONICAL;
+    *record = NULL;
+    status = encode_record(input, LXP_DAEMON_BATCH_WAL_PREPARED,
+                           &encoded, &encoded_length);
+    if (status == LXP_OK) status = group_slots_ready(directory, &grouped);
+    if (status == LXP_OK && grouped) {
+        slot = (uint8_t)((input->batch_number - 1U) & 1U);
+        name = wal_group_names[slot];
+        status = durable_group_write(directory, slot, encoded,
+                                     encoded_length);
+    } else if (status == LXP_OK) {
+        status = durable_replace(directory, encoded, encoded_length,
+                                 true, NULL, 0U);
+    }
+    if (status == LXP_OK)
+        status = read_record(directory, name, &persisted,
+                             &persisted_length, &present, !grouped);
+    if (status == LXP_OK &&
+        (!present || persisted_length != encoded_length))
+        status = LXP_ERR_LOG_TRUNCATED;
+    if (status == LXP_OK &&
+        lxp_ct_memcmp(persisted, encoded, encoded_length) != 0)
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+    if (status == LXP_OK) {
+        status = decode_record(persisted, persisted_length,
+                               &input->authorization, grouped, slot,
+                               true, record);
+        persisted = NULL;
+    }
+    if (status == LXP_OK)
+        (void)memcpy(digest, input->publication_digest, 32U);
+    if (persisted != NULL) {
+        lxp_secure_zero(persisted, persisted_length);
+        free(persisted);
+    }
+    if (encoded != NULL) {
+        lxp_secure_zero(encoded, encoded_length);
+        free(encoded);
+    }
+    return status;
+}
+
+typedef struct wal_checkpoint_job {
+    lxp_daemon_batch_wal_checkpoint_fn checkpoint;
+    void *context;
+    const lxp_kernel_batch_boundary *settled;
+    lxp_result status;
+    uint64_t started_us;
+    uint64_t finished_us;
+} wal_checkpoint_job;
+
+static void *wal_checkpoint_worker(void *context)
+{
+    wal_checkpoint_job *job=(wal_checkpoint_job *)context;
+    job->started_us=wal_timing_us();
+    job->status=job->checkpoint(job->context,job->settled);
+    job->finished_us=wal_timing_us();
+    return NULL;
+}
+
+lxp_result lxp_daemon_batch_wal_commit_kernel_deferred(
  const char *directory,const lxp_daemon_batch_wal_input *input,
  lxp_kernel *kernel,lxp_identity_store *identities,
- const lxp_activity *activities,lxp_kernel_prepared_batch *prepared,
- lxp_daemon_batch_wal_checkpoint_fn checkpoint,void *checkpoint_context,
- lxp_daemon_batch_wal_record **record)
+ lxp_kernel_prepared_batch *prepared,
+ lxp_daemon_batch_wal_record **record,lxp_daemon_batch_wal_timing *timing)
 {
     lxp_daemon_batch_wal_record *loaded=NULL;
     lxp_daemon_batch_wal_record *preexisting=NULL;
     lxp_daemon_batch_wal_recovery recovery;
     lxp_kernel_batch_boundary live;
     uint8_t fsynced_digest[32];
-    bool present=false,preexisting_present=false,live_committed=false;
+    uint64_t started_us=wal_timing_us();
+    uint64_t sync_started_us=0U,synced_us=0U,verified_us=0U;
+    uint64_t kernel_committed_us=0U;
+    bool preexisting_present=false;
     lxp_result status;
-    if(input==NULL || kernel==NULL || identities==NULL || activities==NULL ||
-       prepared==NULL || checkpoint==NULL || record==NULL)
+    if(input==NULL || kernel==NULL || identities==NULL ||
+       prepared==NULL || record==NULL || timing==NULL)
         return LXP_ERR_NON_CANONICAL;
     *record=NULL;
+    (void)memset(timing,0,sizeof(*timing));
     status=lxp_daemon_batch_wal_load(directory,&input->authorization,
                                      &preexisting,&preexisting_present);
-    if(status==LXP_OK && preexisting_present)status=LXP_ERR_CONTEXT_MISMATCH;
+    if(status==LXP_OK && preexisting_present) {
+        const lxp_daemon_batch_wal_input *previous=
+            lxp_daemon_batch_wal_view(preexisting);
+        status=lxp_kernel_batch_boundary_read(kernel,&live);
+        if(status==LXP_OK)status=lxp_daemon_batch_wal_classify(
+            preexisting,&live,&recovery);
+        if(status==LXP_OK &&
+           (!preexisting->grouped || previous==NULL ||
+            previous->batch_number==UINT64_MAX ||
+            previous->batch_number+1U!=input->batch_number ||
+            (recovery!=LXP_DAEMON_BATCH_WAL_FINALIZE_SETTLED &&
+             recovery!=LXP_DAEMON_BATCH_WAL_ALREADY_COMMITTED)))
+            status=LXP_ERR_CONTEXT_MISMATCH;
+    }
     lxp_daemon_batch_wal_destroy(preexisting);
-    if(status==LXP_OK)status=lxp_daemon_batch_wal_write_prepared(
-        directory,input,fsynced_digest);
-    if(status==LXP_OK)status=lxp_daemon_batch_wal_load(
-        directory,&input->authorization,&loaded,&present);
-    if(status==LXP_OK && !present)status=LXP_ERR_LOG_TRUNCATED;
+    sync_started_us=wal_timing_us();
+    if(status==LXP_OK)status=write_prepared_record(
+        directory,input,fsynced_digest,&loaded);
+    synced_us=wal_timing_us();
     if(status==LXP_OK &&
        lxp_ct_memcmp(lxp_daemon_batch_wal_view(loaded)->publication_digest,
                      fsynced_digest,32U)!=0)
@@ -798,31 +1039,86 @@ lxp_result lxp_daemon_batch_wal_commit_kernel(
         loaded,&live,&recovery);
     if(status==LXP_OK && recovery!=LXP_DAEMON_BATCH_WAL_DISCARD_BASE)
         status=LXP_FATAL_REPLAY_DIVERGENCE;
+    verified_us=wal_timing_us();
     if(status==LXP_OK)status=lxp_kernel_commit_prepared_batch(
         kernel,identities,prepared,fsynced_digest);
-    if(status==LXP_OK)live_committed=true;
-    if(status==LXP_OK)status=checkpoint(
-        checkpoint_context,&loaded->view.settled);
-    if(status==LXP_OK)status=lxp_kernel_finalize_prepared_batch_publication(
-        kernel,activities,prepared,fsynced_digest);
-    if(status!=LXP_OK && live_committed)status=LXP_FATAL_INVARIANT;
+    kernel_committed_us=wal_timing_us();
     if(status==LXP_OK){*record=loaded;loaded=NULL;}
     lxp_secure_zero(fsynced_digest,sizeof(fsynced_digest));
     lxp_daemon_batch_wal_destroy(loaded);
+    timing->pre_sync_us=sync_started_us-started_us;
+    timing->sync_us=synced_us-sync_started_us;
+    timing->verify_us=verified_us-synced_us;
+    timing->kernel_commit_us=kernel_committed_us-verified_us;
+    timing->total_us=wal_timing_us()-started_us;
     return status;
 }
 
-static lxp_result read_record(const char *directory,uint8_t **bytes,size_t *length,bool *present)
+lxp_result lxp_daemon_batch_wal_commit_kernel(
+ const char *directory,const lxp_daemon_batch_wal_input *input,
+ lxp_kernel *kernel,lxp_identity_store *identities,
+ const lxp_activity *activities,lxp_kernel_prepared_batch *prepared,
+ lxp_daemon_batch_wal_checkpoint_fn checkpoint,void *checkpoint_context,
+ lxp_daemon_batch_wal_record **record)
 {
-    char final[4096]; struct stat st; size_t offset=0U; int fd=-1,dfd=-1;
+    lxp_daemon_batch_wal_timing timing;
+    wal_checkpoint_job checkpoint_job;
+    pthread_t checkpoint_thread;
+    uint64_t observer_started_us=0U,observer_finished_us=0U;
+    bool checkpoint_started=false;
+    lxp_result status;
+    if(activities==NULL || checkpoint==NULL)return LXP_ERR_NON_CANONICAL;
+    status=lxp_daemon_batch_wal_commit_kernel_deferred(
+        directory,input,kernel,identities,prepared,record,&timing);
+    checkpoint_job=(wal_checkpoint_job){checkpoint,checkpoint_context,
+        status==LXP_OK ? &(*record)->view.settled : NULL,LXP_OK,0U,0U};
+    if(status==LXP_OK && pthread_create(&checkpoint_thread,NULL,
+        wal_checkpoint_worker,&checkpoint_job)==0)
+        checkpoint_started=true;
+    else if(status==LXP_OK)
+        (void)wal_checkpoint_worker(&checkpoint_job);
+    observer_started_us=wal_timing_us();
+    if(status==LXP_OK && (checkpoint_started || checkpoint_job.status==LXP_OK))
+        status=lxp_kernel_finalize_prepared_batch_publication(
+            kernel,activities,prepared,(*record)->view.publication_digest);
+    observer_finished_us=wal_timing_us();
+    if(checkpoint_started && pthread_join(checkpoint_thread,NULL)!=0 &&
+       status==LXP_OK)
+        status=LXP_ERR_IO;
+    if(status==LXP_OK && checkpoint_job.status!=LXP_OK)
+        status=checkpoint_job.status;
+    if(status!=LXP_OK && *record!=NULL)status=LXP_FATAL_INVARIANT;
+    if(getenv("LAYERX_PAY_TIMING")!=NULL)
+        (void)fprintf(stderr,"pay-native-wal batch=%llu pre_sync_us=%llu sync_us=%llu verify_us=%llu kernel_commit_us=%llu checkpoint_us=%llu observer_us=%llu total_us=%llu result=%d\n",
+            (unsigned long long)input->batch_number,
+            (unsigned long long)timing.pre_sync_us,
+            (unsigned long long)timing.sync_us,
+            (unsigned long long)timing.verify_us,
+            (unsigned long long)timing.kernel_commit_us,
+            (unsigned long long)(checkpoint_job.finished_us-
+                                 checkpoint_job.started_us),
+            (unsigned long long)(observer_finished_us-observer_started_us),
+            (unsigned long long)(timing.total_us+
+                observer_finished_us-observer_started_us+
+                (checkpoint_job.finished_us-checkpoint_job.started_us)),
+            (int)status);
+    return status;
+}
+
+static lxp_result read_record(const char *directory,const char *record_name,
+ uint8_t **bytes,size_t *length,bool *present,bool sweep)
+{
+    struct stat st; size_t offset=0U; int fd=-1,dfd=-1;
     DIR *stream=NULL;
     bool swept=false;
-    lxp_result status=paths(directory,final); (void)final;
-    if(status!=LXP_OK)return status;
+    lxp_result status;
+    if(directory==NULL || record_name==NULL || bytes==NULL || length==NULL ||
+       present==NULL)return LXP_ERR_NON_CANONICAL;
+    *bytes=NULL;*length=0U;*present=false;status=LXP_OK;
     dfd=open(directory,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
     if(dfd<0)return LXP_ERR_IO;
     if(flock(dfd,LOCK_EX)!=0){(void)close(dfd);return LXP_ERR_IO;}
-    {
+    if(sweep) {
         int scan_fd=dup(dfd);
         if(scan_fd<0)status=LXP_ERR_IO;
         else {
@@ -830,7 +1126,7 @@ static lxp_result read_record(const char *directory,uint8_t **bytes,size_t *leng
             if(stream==NULL){(void)close(scan_fd);status=LXP_ERR_IO;}
         }
     }
-    if(status==LXP_OK) {
+    if(status==LXP_OK && sweep) {
         struct dirent *entry;
         for(;;) {
             errno=0;
@@ -877,9 +1173,16 @@ static lxp_result read_record(const char *directory,uint8_t **bytes,size_t *leng
         status=LXP_ERR_IO;
     if(status==LXP_OK && swept && fsync(dfd)!=0)status=LXP_ERR_IO;
     if(status!=LXP_OK){(void)close(dfd);return status;}
-    fd=openat(dfd,"prepared-batch.lxw",O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+    fd=openat(dfd,record_name,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
     if(fd<0){int saved=errno;(void)close(dfd);if(saved==ENOENT){*present=false;return LXP_OK;}return LXP_ERR_IO;}
-    if(fstat(fd,&st)!=0 || st.st_size<(off_t)(WAL_FIXED_BYTES+WAL_DIGEST_BYTES) ||
+    if(fstat(fd,&st)!=0 || !S_ISREG(st.st_mode) || st.st_nlink!=1U ||
+       (st.st_mode&0777U)!=0600U) {
+        (void)close(fd);(void)close(dfd);return LXP_ERR_IO;
+    }
+    if(st.st_size==0) {
+        (void)close(fd);(void)close(dfd);return LXP_OK;
+    }
+    if(st.st_size<(off_t)(WAL_FIXED_BYTES+WAL_DIGEST_BYTES) ||
        st.st_size>(off_t)WAL_MAX_BYTES){(void)close(fd);(void)close(dfd);return LXP_ERR_LOG_CORRUPT;}
     *length=(size_t)st.st_size; *bytes=(uint8_t *)malloc(*length);
     if(*bytes==NULL){(void)close(fd);(void)close(dfd);return LXP_ERR_IO;}
@@ -890,22 +1193,23 @@ static lxp_result read_record(const char *directory,uint8_t **bytes,size_t *leng
     *present=true; return LXP_OK;
 }
 
-lxp_result lxp_daemon_batch_wal_load(const char *directory,
- const lxp_sequencer_authorization *authorization,
- lxp_daemon_batch_wal_record **out,bool *present)
+static lxp_result decode_record(uint8_t *bytes,size_t length,
+ const lxp_sequencer_authorization *authorization,bool grouped,uint8_t slot,
+ bool input_validated,lxp_daemon_batch_wal_record **out)
 {
-    lxp_daemon_batch_wal_record *r=NULL; uint8_t *bytes=NULL,digest[32];
-    size_t length=0U,offset=0U,i,j; lxp_result status;
-    if(authorization==NULL||out==NULL||present==NULL)return LXP_ERR_NON_CANONICAL;
-    *out=NULL; *present=false; status=read_record(directory,&bytes,&length,present);
-    if(status!=LXP_OK||!*present)return status;
+    lxp_daemon_batch_wal_record *r=NULL; uint8_t digest[32];
+    size_t offset=0U,i,j; lxp_result status=LXP_OK;
+    if(bytes==NULL||authorization==NULL||out==NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *out=NULL;
     if(memcmp(bytes,wal_magic,8U)!=0 || (get_u16(bytes+8U)!=1U && get_u16(bytes+8U)!=WAL_VERSION && get_u16(bytes+8U)!=WAL_MAINTENANCE_VERSION && get_u16(bytes+8U)!=WAL_AVAILABILITY_VERSION) ||
        bytes[11U]!=0U ||
        get_u64(bytes+12U)!=(uint64_t)length ||
        wal_digest(bytes,length-32U,digest)!=LXP_OK ||
        lxp_ct_memcmp(digest,bytes+length-32U,32U)!=0){status=LXP_ERR_LOG_CORRUPT;goto fail;}
     r=(lxp_daemon_batch_wal_record *)calloc(1U,sizeof(*r)); if(r==NULL){status=LXP_ERR_IO;goto fail;}
-    r->owned=bytes;r->owned_length=length;bytes=NULL; offset=10U;
+    r->owned=bytes;r->owned_length=length;r->grouped=grouped;
+    r->group_slot=slot;bytes=NULL; offset=10U;
     r->state=(lxp_daemon_batch_wal_state)r->owned[offset++]; offset++;
     offset+=8U; r->view.protocol_version=get_u16(r->owned+offset);offset+=2U;
     r->view.network_id=get_u32(r->owned+offset);offset+=4U;
@@ -1011,10 +1315,70 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
         r->view.terminal_payloads = r->terminal_payloads;
         r->view.call_graphs = r->call_graphs;
     }
-    status=validate_input(&r->view, get_u16(r->owned + 8U) < WAL_AVAILABILITY_VERSION);if(status!=LXP_OK)goto fail;*out=r;return LXP_OK;
+    if (!input_validated)
+        status=validate_input(&r->view, get_u16(r->owned + 8U) < WAL_AVAILABILITY_VERSION);
+    if(status!=LXP_OK)goto fail;
+    *out=r;
+    return LXP_OK;
 fail:
     if(r!=NULL)lxp_daemon_batch_wal_destroy(r);
-    if(bytes!=NULL){lxp_secure_zero(bytes,length);free(bytes);} *present=false;return status;
+    if(bytes!=NULL){lxp_secure_zero(bytes,length);free(bytes);} return status;
+}
+
+lxp_result lxp_daemon_batch_wal_load(const char *directory,
+ const lxp_sequencer_authorization *authorization,
+ lxp_daemon_batch_wal_record **out,bool *present)
+{
+    lxp_daemon_batch_wal_record *selected=NULL;
+    uint8_t candidate;
+    lxp_result first_group_error=LXP_OK;
+    if(authorization==NULL||out==NULL||present==NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *out=NULL;*present=false;
+    for(candidate=0U;candidate<3U;++candidate) {
+        const char *name=candidate==0U ? "prepared-batch.lxw" :
+            wal_group_names[candidate-1U];
+        uint8_t *bytes=NULL;
+        size_t length=0U;
+        bool found=false;
+        lxp_daemon_batch_wal_record *decoded=NULL;
+        lxp_result status=read_record(directory,name,&bytes,&length,&found,
+                                      candidate==0U);
+        if(status!=LXP_OK) {
+            if(candidate==0U) {
+                lxp_daemon_batch_wal_destroy(selected);
+                return status;
+            }
+            if(first_group_error==LXP_OK)first_group_error=status;
+            continue;
+        }
+        if(!found)continue;
+        status=decode_record(bytes,length,authorization,candidate!=0U,
+            candidate==0U ? 0U : (uint8_t)(candidate-1U),false,&decoded);
+        if(status!=LXP_OK) {
+            if(candidate==0U) {
+                lxp_daemon_batch_wal_destroy(selected);
+                return status;
+            }
+            if(first_group_error==LXP_OK)first_group_error=status;
+            continue;
+        }
+        if(selected==NULL || decoded->view.batch_number>
+                                selected->view.batch_number) {
+            lxp_daemon_batch_wal_destroy(selected);
+            selected=decoded;
+        } else if(decoded->view.batch_number==selected->view.batch_number &&
+                  lxp_ct_memcmp(decoded->view.publication_digest,
+                      selected->view.publication_digest,32U)!=0) {
+            lxp_daemon_batch_wal_destroy(decoded);
+            lxp_daemon_batch_wal_destroy(selected);
+            return LXP_FATAL_REPLAY_DIVERGENCE;
+        } else {
+            lxp_daemon_batch_wal_destroy(decoded);
+        }
+    }
+    if(selected==NULL)return first_group_error;
+    *out=selected;*present=true;return LXP_OK;
 }
 
 lxp_result lxp_daemon_batch_wal_classify(const lxp_daemon_batch_wal_record *r,
@@ -1057,6 +1421,10 @@ lxp_result lxp_daemon_batch_wal_transition(const char *directory,
        (state==LXP_DAEMON_BATCH_WAL_COMMITTED &&
         !boundary_equal(live,&record->view.settled)))
         return LXP_FATAL_REPLAY_DIVERGENCE;
+    if(record->grouped) {
+        record->state=state;
+        return LXP_OK;
+    }
     if (record->owned != NULL && get_u16(record->owned + 8U) < WAL_AVAILABILITY_VERSION) {
         record->state = state;
         return LXP_OK;
@@ -1085,6 +1453,57 @@ lxp_result lxp_daemon_batch_wal_retire(const char *directory,
         (record->state!=LXP_DAEMON_BATCH_WAL_COMMITTED ||
          !boundary_equal(live,&record->view.settled)))
         return LXP_FATAL_REPLAY_DIVERGENCE;
+    if(record->grouped) {
+        bool grouped_locked=false;
+        lxp_result grouped_status=LXP_OK;
+        size_t grouped_offset=0U;
+        if(pthread_mutex_lock(&wal_replace_mutex)!=0)return LXP_ERR_IO;
+        grouped_locked=true;
+        dfd=open(directory,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
+        if(dfd<0 || flock(dfd,LOCK_EX)!=0)grouped_status=LXP_ERR_IO;
+        if(grouped_status==LXP_OK &&
+           record->state==LXP_DAEMON_BATCH_WAL_COMMITTED) {
+            fd=openat(dfd,wal_group_names[record->group_slot],
+                O_RDWR|O_CLOEXEC|O_NOFOLLOW);
+            if(fd<0 || fstat(fd,&information)!=0 ||
+               !S_ISREG(information.st_mode) || information.st_nlink!=1U ||
+               information.st_size<0 ||
+               (size_t)information.st_size!=record->owned_length)
+                grouped_status=LXP_ERR_IO;
+            actual=grouped_status==LXP_OK ?
+                (uint8_t *)malloc(record->owned_length) : NULL;
+            if(grouped_status==LXP_OK && actual==NULL)
+                grouped_status=LXP_ERR_IO;
+            while(grouped_status==LXP_OK &&
+                  grouped_offset<record->owned_length) {
+                ssize_t count=pread(fd,actual+grouped_offset,
+                    record->owned_length-grouped_offset,
+                    (off_t)grouped_offset);
+                if(count>0)grouped_offset+=(size_t)count;
+                else if(count<0 && errno==EINTR)continue;
+                else grouped_status=LXP_ERR_IO;
+            }
+            if(grouped_status==LXP_OK && lxp_ct_memcmp(
+                actual,record->owned,record->owned_length)!=0)
+                grouped_status=LXP_FATAL_REPLAY_DIVERGENCE;
+            if(grouped_status==LXP_OK && ftruncate(fd,0)!=0)
+                grouped_status=LXP_ERR_IO;
+            if(fd>=0 && close(fd)!=0 && grouped_status==LXP_OK)
+                grouped_status=LXP_ERR_IO;
+            if(actual!=NULL)lxp_secure_zero(actual,record->owned_length);
+            free(actual);
+            actual=NULL;
+        } else if(grouped_status==LXP_OK) {
+            if(unlinkat(dfd,wal_group_names[record->group_slot],0)!=0 &&
+               errno!=ENOENT)grouped_status=LXP_ERR_IO;
+            if(grouped_status==LXP_OK && fsync(dfd)!=0)
+                grouped_status=LXP_ERR_IO;
+        }
+        if(dfd>=0)(void)close(dfd);
+        if(grouped_locked && pthread_mutex_unlock(&wal_replace_mutex)!=0 &&
+           grouped_status==LXP_OK)grouped_status=LXP_ERR_IO;
+        return grouped_status;
+    }
     if (record->owned != NULL && get_u16(record->owned + 8U) < WAL_AVAILABILITY_VERSION) {
         expected_length = record->owned_length;
         expected = malloc(expected_length);

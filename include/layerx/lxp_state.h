@@ -123,6 +123,12 @@ struct lxp_kernel;
 lxp_result lxp_state_subtree_root(const struct lxp_kernel *kernel,
                                   uint16_t module_id, uint8_t root[32]);
 lxp_result lxp_state_root(const struct lxp_kernel *kernel, uint8_t root[32]);
+lxp_result lxp_state_subtree_root_with_account_override(
+    const struct lxp_kernel *kernel, uint16_t module_id,
+    const uint8_t account_root[32], uint8_t root[32]);
+lxp_result lxp_state_root_with_account_override(
+    const struct lxp_kernel *kernel, const uint8_t account_root[32],
+    uint8_t root[32]);
 lxp_result lxp_state_root_chain(const uint8_t previous_root[32],
                                 const uint8_t state_root[32],
                                 uint64_t global_sequence, uint8_t root[32]);

@@ -44,8 +44,29 @@ typedef struct lxp_log {
     uint64_t durable_previous_record_offset;
     uint64_t durable_next_sequence;
     uint64_t durable_generation;
+    uint64_t fallback_durable_offset;
+    uint64_t fallback_durable_previous_record_offset;
+    uint64_t fallback_durable_next_sequence;
+    uint64_t fallback_durable_generation;
     bool has_durable_marker;
+    bool has_fallback_durable_marker;
+    bool allow_fallback_durable_marker;
 } lxp_log;
+
+enum {
+    LXP_DURABILITY_GROUP_MAX_LOGS = 16,
+    LXP_DURABILITY_GROUP_MAX_DESCRIPTORS = 32
+};
+
+typedef struct lxp_durability_group {
+    lxp_log *logs[LXP_DURABILITY_GROUP_MAX_LOGS];
+    uint32_t fault_points[LXP_DURABILITY_GROUP_MAX_LOGS];
+    int descriptors[LXP_DURABILITY_GROUP_MAX_DESCRIPTORS];
+    size_t log_count;
+    size_t fault_point_count;
+    size_t descriptor_count;
+    bool active;
+} lxp_durability_group;
 
 uint32_t lxp_log_crc32c(const void *bytes, size_t length);
 lxp_result lxp_log_segment_create(lxp_log *log, const char *directory,
@@ -63,6 +84,13 @@ lxp_result lxp_log_read(const lxp_log *log, uint64_t record_offset,
 lxp_result lxp_log_close(lxp_log *log);
 lxp_result lxp_log_sync(lxp_log *log);
 lxp_result lxp_log_write_boundary(lxp_log *log);
+lxp_result lxp_durability_group_begin(lxp_durability_group *group);
+bool lxp_durability_group_defer_descriptor(int descriptor);
+bool lxp_durability_group_defer_fault(uint32_t fault_point);
+bool lxp_durability_group_contains(const lxp_log *log);
+lxp_result lxp_durability_group_commit(lxp_durability_group *group);
+void lxp_durability_group_abort(lxp_durability_group *group);
+void lxp_log_set_prepared_recovery(bool allowed);
 lxp_result lxp_log_durable_head(const lxp_log *log, uint64_t *global_sequence);
 bool lxp_log_fault_point(uint32_t boundary, uint32_t abort_boundary);
 

@@ -12,6 +12,205 @@ static void snapshot_put_u64(uint8_t out[8], uint64_t value)
         out[7U - i] = (uint8_t)(value >> (i * 8U));
 }
 
+static void snapshot_put_u32(uint8_t out[4], uint32_t value)
+{
+    out[0] = (uint8_t)(value >> 24U);
+    out[1] = (uint8_t)(value >> 16U);
+    out[2] = (uint8_t)(value >> 8U);
+    out[3] = (uint8_t)value;
+}
+
+static uint32_t snapshot_get_u32(const uint8_t in[4])
+{
+    return ((uint32_t)in[0] << 24U) | ((uint32_t)in[1] << 16U) |
+           ((uint32_t)in[2] << 8U) | in[3];
+}
+
+static uint64_t snapshot_get_u64(const uint8_t in[8])
+{
+    uint64_t value = 0U;
+    for (size_t i = 0U; i < 8U; ++i) value = (value << 8U) | in[i];
+    return value;
+}
+
+lxp_result lxp_snapshot_migration_receipt_root(
+    uint32_t network_id, uint64_t global_sequence,
+    const uint8_t source_canonical_state_root[32],
+    const uint8_t source_receipt_state_root[32],
+    const uint8_t target_canonical_state_root[32],
+    uint8_t target_receipt_state_root[32])
+{
+    static const uint8_t domain[] =
+        "LXP/snapshot-issuance-migration/v1";
+    uint8_t fields[108];
+    lxp_hash_context hash;
+    lxp_result status;
+    if (network_id == 0U || global_sequence == 0U ||
+        source_canonical_state_root == NULL ||
+        source_receipt_state_root == NULL ||
+        target_canonical_state_root == NULL ||
+        target_receipt_state_root == NULL ||
+        lxp_ct_is_zero(source_canonical_state_root, 32U) ||
+        lxp_ct_is_zero(source_receipt_state_root, 32U) ||
+        lxp_ct_is_zero(target_canonical_state_root, 32U) ||
+        lxp_ct_memcmp(source_canonical_state_root,
+                      target_canonical_state_root, 32U) == 0)
+        return LXP_ERR_NON_CANONICAL;
+    snapshot_put_u32(fields, network_id);
+    snapshot_put_u64(fields + 4U, global_sequence);
+    (void)memcpy(fields + 12U, source_canonical_state_root, 32U);
+    (void)memcpy(fields + 44U, source_receipt_state_root, 32U);
+    (void)memcpy(fields + 76U, target_canonical_state_root, 32U);
+    lxp_hash_init(&hash);
+    status = lxp_hash_update(&hash, domain, sizeof(domain) - 1U);
+    if (status == LXP_OK)
+        status = lxp_hash_update(&hash, fields, sizeof(fields));
+    return status == LXP_OK ?
+        lxp_hash_final(&hash, target_receipt_state_root) : status;
+}
+
+lxp_result lxp_snapshot_migration_authorization_encode(
+    const lxp_snapshot_manifest_record *target, bool include_signature,
+    uint8_t encoded[LXP_SNAPSHOT_MIGRATION_AUTHORIZATION_BYTES],
+    size_t *encoded_length)
+{
+    const lxp_snapshot_migration_authorization *migration;
+    size_t offset = 0U;
+    if (target == NULL || encoded == NULL || encoded_length == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    migration = &target->migration;
+    if (!migration->present || migration->network_id == 0U ||
+        migration->renamed_account_count == 0U ||
+        migration->source_global_sequence != target->global_sequence ||
+        lxp_ct_is_zero(migration->source_canonical_state_root, 32U) ||
+        lxp_ct_is_zero(migration->source_receipt_state_root, 32U) ||
+        lxp_ct_is_zero(migration->source_snapshot_digest, 32U) ||
+        lxp_ct_is_zero(target->canonical_state_root, 32U) ||
+        lxp_ct_is_zero(target->receipt_state_root, 32U) ||
+        lxp_ct_is_zero(target->snapshot_digest, 32U) ||
+        lxp_ct_is_zero(migration->signer_public_key, 32U) ||
+        (include_signature && lxp_ct_is_zero(migration->signature, 64U)))
+        return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(encoded + offset, "LXSM", 4U); offset += 4U;
+    encoded[offset++] = 1U;
+    snapshot_put_u32(encoded + offset, migration->network_id); offset += 4U;
+    snapshot_put_u64(encoded + offset, migration->source_global_sequence);
+    offset += 8U;
+    encoded[offset++] = (uint8_t)(migration->renamed_account_count >> 8U);
+    encoded[offset++] = (uint8_t)migration->renamed_account_count;
+    (void)memcpy(encoded + offset,
+                 migration->source_canonical_state_root, 32U); offset += 32U;
+    (void)memcpy(encoded + offset,
+                 migration->source_receipt_state_root, 32U); offset += 32U;
+    (void)memcpy(encoded + offset,
+                 migration->source_snapshot_digest, 32U); offset += 32U;
+    snapshot_put_u64(encoded + offset, target->global_sequence); offset += 8U;
+    (void)memcpy(encoded + offset, target->canonical_state_root, 32U);
+    offset += 32U;
+    (void)memcpy(encoded + offset, target->receipt_state_root, 32U);
+    offset += 32U;
+    (void)memcpy(encoded + offset, target->snapshot_digest, 32U);
+    offset += 32U;
+    (void)memcpy(encoded + offset, migration->signer_public_key, 32U);
+    offset += 32U;
+    if (include_signature) {
+        (void)memcpy(encoded + offset, migration->signature, 64U);
+        offset += 64U;
+    }
+    *encoded_length = offset;
+    return offset == (include_signature ?
+            LXP_SNAPSHOT_MIGRATION_AUTHORIZATION_BYTES :
+            LXP_SNAPSHOT_MIGRATION_AUTHORIZATION_BYTES - 64U) ?
+        LXP_OK : LXP_FATAL_INVARIANT;
+}
+
+lxp_result lxp_snapshot_migration_authorization_decode(
+    const uint8_t *encoded, size_t encoded_length,
+    lxp_snapshot_manifest_record *target)
+{
+    lxp_snapshot_migration_authorization migration;
+    size_t offset = 0U;
+    if (encoded == NULL || target == NULL ||
+        encoded_length != LXP_SNAPSHOT_MIGRATION_AUTHORIZATION_BYTES)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memset(&migration, 0, sizeof(migration));
+    if (memcmp(encoded, "LXSM", 4U) != 0 || encoded[4] != 1U)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    offset = 5U;
+    migration.present = true;
+    migration.network_id = snapshot_get_u32(encoded + offset); offset += 4U;
+    migration.source_global_sequence = snapshot_get_u64(encoded + offset);
+    offset += 8U;
+    migration.renamed_account_count =
+        (uint16_t)(((uint16_t)encoded[offset] << 8U) | encoded[offset + 1U]);
+    offset += 2U;
+    (void)memcpy(migration.source_canonical_state_root,
+                 encoded + offset, 32U); offset += 32U;
+    (void)memcpy(migration.source_receipt_state_root,
+                 encoded + offset, 32U); offset += 32U;
+    (void)memcpy(migration.source_snapshot_digest,
+                 encoded + offset, 32U); offset += 32U;
+    if (snapshot_get_u64(encoded + offset) != target->global_sequence)
+        return LXP_ERR_SNAPSHOT_MISMATCH;
+    offset += 8U;
+    if (lxp_ct_memcmp(encoded + offset,
+                      target->canonical_state_root, 32U) != 0)
+        return LXP_ERR_SNAPSHOT_MISMATCH;
+    offset += 32U;
+    if (lxp_ct_memcmp(encoded + offset,
+                      target->receipt_state_root, 32U) != 0)
+        return LXP_ERR_SNAPSHOT_MISMATCH;
+    offset += 32U;
+    if (lxp_ct_memcmp(encoded + offset,
+                      target->snapshot_digest, 32U) != 0)
+        return LXP_ERR_SNAPSHOT_MISMATCH;
+    offset += 32U;
+    (void)memcpy(migration.signer_public_key, encoded + offset, 32U);
+    offset += 32U;
+    (void)memcpy(migration.signature, encoded + offset, 64U); offset += 64U;
+    if (offset != encoded_length) return LXP_FATAL_INVARIANT;
+    target->migration = migration;
+    return LXP_OK;
+}
+
+lxp_result lxp_snapshot_migration_authorization_verify(
+    const lxp_snapshot_manifest_record *target, uint32_t expected_network_id,
+    const uint8_t expected_signer_public_key[32])
+{
+    uint8_t expected_receipt_root[32];
+    uint8_t encoded[LXP_SNAPSHOT_MIGRATION_AUTHORIZATION_BYTES];
+    size_t length;
+    lxp_result status;
+    if (target == NULL || expected_signer_public_key == NULL ||
+        expected_network_id == 0U ||
+        target->migration.network_id != expected_network_id ||
+        lxp_ct_memcmp(target->migration.signer_public_key,
+                      expected_signer_public_key, 32U) != 0 ||
+        target->migration.source_global_sequence != target->global_sequence ||
+        lxp_ct_memcmp(target->migration.source_canonical_state_root,
+                      target->canonical_state_root, 32U) == 0 ||
+        lxp_ct_memcmp(target->migration.source_snapshot_digest,
+                      target->snapshot_digest, 32U) == 0)
+        return LXP_ERR_ROOT_MISMATCH;
+    status = lxp_snapshot_migration_receipt_root(
+        expected_network_id, target->global_sequence,
+        target->migration.source_canonical_state_root,
+        target->migration.source_receipt_state_root,
+        target->canonical_state_root, expected_receipt_root);
+    if (status == LXP_OK && lxp_ct_memcmp(
+            expected_receipt_root, target->receipt_state_root, 32U) != 0)
+        status = LXP_ERR_ROOT_MISMATCH;
+    if (status == LXP_OK)
+        status = lxp_snapshot_migration_authorization_encode(
+            target, false, encoded, &length);
+    if (status == LXP_OK)
+        status = lxp_ed25519_verify_raw(
+            expected_signer_public_key, target->migration.signature,
+            encoded, length);
+    lxp_secure_zero(encoded, sizeof(encoded));
+    return status;
+}
+
 static lxp_result snapshot_digest(const uint8_t *snapshot,
                                   size_t snapshot_length,
                                   uint64_t global_sequence,
@@ -458,6 +657,7 @@ lxp_result lxp_snapshot_manifest_build(const uint8_t *snapshot,
     if ((snapshot == NULL && snapshot_length != 0U) ||
         canonical_state_root == NULL || receipt_state_root == NULL ||
         manifest == NULL) return LXP_ERR_NON_CANONICAL;
+    (void)memset(manifest, 0, sizeof(*manifest));
     manifest->global_sequence = global_sequence;
     (void)memcpy(manifest->canonical_state_root, canonical_state_root, 32U);
     (void)memcpy(manifest->receipt_state_root, receipt_state_root, 32U);
@@ -552,13 +752,15 @@ static lxp_result read_account(lxp_codec_reader *reader, lx_account *account)
     return status;
 }
 
-lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
-                             const lxp_snapshot_manifest_record *manifest,
-                             lxp_kernel *kernel)
+static lxp_result snapshot_load(
+    const uint8_t *snapshot, size_t snapshot_length,
+    const lxp_snapshot_manifest_record *manifest, lxp_kernel *kernel,
+    bool migrate_retired_issuance, size_t *renamed_account_count)
 {
     lxp_kernel *candidate;
     lxp_state_store *state;
     lx_account_registry *accounts = NULL;
+    lx_account_registry *source_accounts = NULL;
     lx_account_registry *live_accounts;
     lxp_codec_reader reader;
     uint8_t digest[32];
@@ -570,8 +772,10 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     size_t i;
     lxp_result status;
     if ((snapshot == NULL && snapshot_length != 0U) || manifest == NULL ||
-        kernel == NULL || kernel->state == NULL)
+        kernel == NULL || kernel->state == NULL ||
+        (migrate_retired_issuance && renamed_account_count == NULL))
         return LXP_ERR_NON_CANONICAL;
+    if (renamed_account_count != NULL) *renamed_account_count = 0U;
     if (kernel->blob_count > LXP_KERNEL_MAX_BLOBS) return LXP_FATAL_INVARIANT;
     live_accounts = kernel->state->accounts;
     status = snapshot_digest(snapshot, snapshot_length,
@@ -626,9 +830,15 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     if (status == LXP_OK &&
         snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
         accounts = malloc(sizeof(*accounts));
-        if (accounts == NULL) status = LXP_ERR_IO;
+        if (migrate_retired_issuance)
+            source_accounts = malloc(sizeof(*source_accounts));
+        if (accounts == NULL ||
+            (migrate_retired_issuance && source_accounts == NULL))
+            status = LXP_ERR_IO;
         else {
             status = lx_account_registry_init(accounts);
+            if (status == LXP_OK && source_accounts != NULL)
+                status = lx_account_registry_init(source_accounts);
             state->accounts = accounts;
             state->account_root_required = true;
         }
@@ -789,6 +999,18 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
          snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY &&
          i < count; ++i) {
         status = read_account(&reader, &accounts->accounts[i]);
+        if (status == LXP_OK && source_accounts != NULL) {
+            bool renamed = false;
+            source_accounts->accounts[i] = accounts->accounts[i];
+            status = lx_account_migrate_retired_issuance(
+                &accounts->accounts[i], &renamed);
+            if (status == LXP_OK && renamed) {
+                if (*renamed_account_count == SIZE_MAX)
+                    status = LXP_ERR_OVERFLOW;
+                else
+                    ++*renamed_account_count;
+            }
+        }
         if (status == LXP_OK && i != 0U &&
             memcmp(accounts->accounts[i - 1U].id,
                    accounts->accounts[i].id, 32U) >= 0)
@@ -796,13 +1018,18 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     }
     if (accounts != NULL)
         accounts->count = status == LXP_OK ? count : 0U;
+    if (source_accounts != NULL)
+        source_accounts->count = status == LXP_OK ? count : 0U;
     if (status == LXP_OK &&
         snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
         uint8_t recorded[32];
         uint8_t computed[32];
         status = read_fixed(&reader, recorded, 32U);
-        if (status == LXP_OK)
+        if (status == LXP_OK && source_accounts == NULL)
             status = lx_account_registry_root(accounts, computed);
+        if (status == LXP_OK && source_accounts != NULL)
+            status = lx_account_registry_retired_issuance_root(
+                source_accounts, computed);
         if (status == LXP_OK &&
             lxp_ct_memcmp(recorded, computed, 32U) != 0)
             status = LXP_ERR_SNAPSHOT_MISMATCH;
@@ -821,14 +1048,35 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
         uint8_t recorded[32];
         uint8_t computed[32];
         status = read_fixed(&reader, recorded, 32U);
-        if (status == LXP_OK)
+        if (status == LXP_OK && source_accounts != NULL && i == 0U) {
+            uint8_t source_account_root[32];
+            status = lx_account_registry_retired_issuance_root(
+                source_accounts, source_account_root);
+            if (status == LXP_OK)
+                status = lxp_state_subtree_root_with_account_override(
+                    candidate, 0U, source_account_root, computed);
+        } else if (status == LXP_OK)
             status = lxp_state_subtree_root(candidate, (uint16_t)i, computed);
         if (status == LXP_OK && lxp_ct_memcmp(recorded, computed, 32U) != 0)
             status = LXP_ERR_SNAPSHOT_MISMATCH;
     }
     if (status == LXP_OK) status = lxp_codec_finish(&reader);
-    if (status == LXP_OK)
+    if (status == LXP_OK && source_accounts == NULL)
         status = lxp_snapshot_verify_root(candidate, manifest);
+    if (status == LXP_OK && source_accounts != NULL) {
+        uint8_t source_account_root[32];
+        uint8_t computed[32];
+        status = lx_account_registry_retired_issuance_root(
+            source_accounts, source_account_root);
+        if (status == LXP_OK)
+            status = lxp_state_root_with_account_override(
+                candidate, source_account_root, computed);
+        if (status == LXP_OK && lxp_ct_memcmp(
+                computed, manifest->canonical_state_root, 32U) != 0)
+            status = LXP_ERR_SNAPSHOT_MISMATCH;
+        if (status == LXP_OK && *renamed_account_count == 0U)
+            status = LXP_ERR_UNKNOWN_FIELD;
+    }
     if (status == LXP_OK) {
         for (i = 0U; i < kernel->blob_count; ++i)
             free(kernel->blobs[i].bytes);
@@ -864,7 +1112,25 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
         for (i = 0U; i < candidate->blob_count; ++i)
             free(candidate->blobs[i].bytes);
     free(accounts);
+    free(source_accounts);
     free(state);
     free(candidate);
     return status;
+}
+
+lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
+                             const lxp_snapshot_manifest_record *manifest,
+                             lxp_kernel *kernel)
+{
+    return snapshot_load(snapshot, snapshot_length, manifest, kernel, false,
+                         NULL);
+}
+
+lxp_result lxp_snapshot_load_retired_issuance(
+    const uint8_t *snapshot, size_t snapshot_length,
+    const lxp_snapshot_manifest_record *manifest, lxp_kernel *kernel,
+    size_t *renamed_account_count)
+{
+    return snapshot_load(snapshot, snapshot_length, manifest, kernel, true,
+                         renamed_account_count);
 }

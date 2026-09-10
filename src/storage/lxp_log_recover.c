@@ -229,9 +229,23 @@ static lxp_result recover(lxp_log *log, lxp_log_replay_fn replay,
     uint64_t recovered_next;
     lxp_result status;
     if (log == NULL) return LXP_ERR_NON_CANONICAL;
+retry_durable_marker:
     status = scan_tail_to(
         log, log->has_durable_marker ? log->durable_offset : log->capacity,
         &valid_end, &last, &scanned_next);
+    if (log->has_durable_marker && log->has_fallback_durable_marker &&
+        log->allow_fallback_durable_marker &&
+        (status != LXP_OK || valid_end != log->durable_offset ||
+         last != log->durable_previous_record_offset ||
+         scanned_next != log->durable_next_sequence)) {
+        log->durable_offset = log->fallback_durable_offset;
+        log->durable_previous_record_offset =
+            log->fallback_durable_previous_record_offset;
+        log->durable_next_sequence = log->fallback_durable_next_sequence;
+        log->durable_generation = log->fallback_durable_generation;
+        log->has_fallback_durable_marker = false;
+        goto retry_durable_marker;
+    }
     if (status == LXP_ERR_LOG_TRUNCATED && !log->has_durable_marker) {
         status = lxp_log_truncate_partial(log, valid_end);
         if (status != LXP_OK) return status;

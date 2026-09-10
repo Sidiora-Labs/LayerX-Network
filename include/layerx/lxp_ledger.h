@@ -17,7 +17,7 @@ enum {
 };
 
 typedef enum lx_account_kind {
-    LX_ACCOUNT_AGENT_MAIN = 1,
+    LX_ACCOUNT_AGENT_MAIN = 1, /* agent:<did>:main and agent:<did>:asset:<hex64> */
     LX_ACCOUNT_AGENT_BUDGET = 2,
     LX_ACCOUNT_AGENT_ESCROW = 3,
     LX_ACCOUNT_AGENT_STREAM = 4,
@@ -262,11 +262,17 @@ lxp_result lx_account_kind_of(const uint8_t *name, size_t name_length,
 lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
                                      uint8_t account_id[LX_ACCOUNT_ID_BYTES]);
 lxp_result lx_account_registry_init(lx_account_registry *registry);
+lxp_result lx_account_list_did(const lx_account_registry *registry,
+    const uint8_t did_id[32], uint8_t (*account_ids)[32], size_t capacity,
+    size_t *count);
+
 lxp_result lx_account_validate_canonical(const lx_account *account);
 lxp_result lx_account_registry_snapshot(lx_account_registry *source,
                                         lx_account_registry *snapshot);
 lxp_result lx_account_registry_root(const lx_account_registry *registry,
                                     uint8_t root[32]);
+lxp_result lx_account_registry_retired_issuance_root(
+    const lx_account_registry *registry, uint8_t root[32]);
 lxp_result lx_account_state_leaf_material(
     const lx_account *account,
     uint8_t key[LX_ACCOUNT_STATE_LEAF_KEY_BYTES],
@@ -276,6 +282,9 @@ lxp_result lx_account_registry_proof(
     const lx_account_registry *registry,
     const uint8_t account_id[LX_ACCOUNT_ID_BYTES], uint8_t root[32],
     lxp_state_proof *proof);
+lxp_result lx_account_registry_proofs(
+    const lx_account_registry *registry, uint8_t root[32],
+    lxp_state_proof proofs[LX_ACCOUNT_REGISTRY_CAPACITY]);
 lxp_result lx_account_lookup(lx_account_registry *registry,
                              const uint8_t *name, size_t name_length,
                              const uint8_t presented_id[LX_ACCOUNT_ID_BYTES],
@@ -286,6 +295,11 @@ lxp_result lx_account_open(lx_account_registry *registry,
                            uint64_t global_sequence,
                            lx_account_open_authority authority,
                            lxp_log *activity_log, lx_account **account);
+enum { LX_ASSET_ISSUANCE_NAME_BYTES = 83 };
+lxp_result lx_asset_issuance_name(const uint8_t asset_id[32],
+    uint8_t name[LX_ASSET_ISSUANCE_NAME_BYTES], uint8_t account_id[32]);
+lxp_result lx_account_migrate_retired_issuance(lx_account *account,
+                                                bool *renamed);
 lxp_result lx_account_module_value_prepare(
     lx_account_registry *registry, const uint8_t *module_name,
     size_t module_name_length, const uint8_t account_id[LX_ACCOUNT_ID_BYTES],
@@ -310,6 +324,11 @@ lxp_result lxp_send_build_transfer_set(const lxp_send *send,
 lxp_result lxp_send_execute(const lxp_send *send,
                             lxp_send_environment *environment,
                             lxp_send_receipt_projection *receipt);
+/* Canonical grant_issue (asset ordinal 7) payload. */
+lxp_result lxp_payer_grant_encode(const lxp_payer_grant *grant,
+                                  uint8_t *bytes, size_t capacity, size_t *length);
+lxp_result lxp_payer_grant_decode(const uint8_t *bytes, size_t length,
+                                  lxp_payer_grant *grant);
 lxp_result lxp_grant_authorization_message(const lxp_payer_grant *grant,
                                            uint8_t *bytes, size_t capacity,
                                            size_t *length);

@@ -1,5 +1,6 @@
 #include "layerx/lxp_kernel.h"
 
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -163,6 +164,48 @@ int main(void)
     if (lxp_state_root(&first, chained) != LXP_FATAL_INVARIANT) return 1;
     first.blob_count = 0U;
     first.blob_total_bytes = 0U;
+    {
+        static const char *const names[] = {
+            "agent:did:key:proof-a:main",
+            "agent:did:key:proof-b:main",
+            "agent:did:key:proof-c:main"
+        };
+        lx_account_registry *accounts =
+            (lx_account_registry *)calloc(1U, sizeof(*accounts));
+        lxp_state_proof *proofs = (lxp_state_proof *)calloc(
+            LX_ACCOUNT_REGISTRY_CAPACITY, sizeof(*proofs));
+        uint8_t root[32];
+        size_t index;
+        if (accounts == NULL || proofs == NULL ||
+            lx_account_registry_init(accounts) != LXP_OK)
+            return 1;
+        for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+            uint8_t id[32];
+            lx_account *account;
+            if (lx_account_id_from_string(
+                    (const uint8_t *)names[index], strlen(names[index]), id) !=
+                    LXP_OK ||
+                lx_account_open(accounts, (const uint8_t *)names[index],
+                                strlen(names[index]), id, index + 1U,
+                                LX_ACCOUNT_OPEN_CREDIT, NULL, &account) !=
+                    LXP_OK)
+                return 1;
+        }
+        if (lx_account_registry_proofs(accounts, root, proofs) != LXP_OK)
+            return 1;
+        for (index = 0U; index < accounts->count; ++index) {
+            uint8_t single_root[32];
+            lxp_state_proof single;
+            if (lx_account_registry_proof(
+                    accounts, accounts->accounts[index].id,
+                    single_root, &single) != LXP_OK ||
+                memcmp(root, single_root, 32U) != 0 ||
+                memcmp(&proofs[index], &single, sizeof(single)) != 0)
+                return 1;
+        }
+        free(proofs);
+        free(accounts);
+    }
     supply_bad = true;
     if (lxp_state_root(&first, chained) != LXP_FATAL_SUPPLY_MISMATCH ||
         lxp_state_store_destroy(&first_store) != LXP_OK ||

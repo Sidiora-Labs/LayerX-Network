@@ -2,6 +2,7 @@
 #include "layerx/lxp_kernel.h"
 
 #include <string.h>
+#include "test_asset_payloads.h"
 
 int main(void)
 {
@@ -61,7 +62,7 @@ int main(void)
         lx_asset_amount_decode((const uint8_t *)"01", 2U, &amount) !=
             LXP_ERR_INVALID_AMOUNT) return 1;
     if (iface == NULL || iface->module_id != LXP_MODULE_ASSET ||
-        iface->activity_type_count != 9U ||
+        iface->activity_type_count != 11U ||
         lxp_state_store_init(&state, 0U) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
         lxp_kernel_register_module(&kernel, iface) != LXP_OK ||
@@ -69,7 +70,8 @@ int main(void)
                                        &registration) != LXP_OK ||
         lxp_kernel_module_for_activity(&kernel, LX_ASSET_WITHDRAW, 0U,
                                        &registration) != LXP_OK ||
-        registration->activity_type_count != 9U) return 1;
+        registration->activity_type_count != 11U) return 1;
+    if (test_asset_payloads(&kernel) != 0) return 1;
     if (lx_account_registry_init(&accounts) != LXP_OK ||
         lx_account_id_from_string((const uint8_t *)from_name, strlen(from_name),
                                   from_id) != LXP_OK ||

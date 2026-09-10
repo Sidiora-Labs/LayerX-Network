@@ -36,9 +36,16 @@
 #include <time.h>
 #include <unistd.h>
 
+static uint64_t pay_timing_us(void)
+{
+    struct timespec now;
+    return clock_gettime(CLOCK_MONOTONIC, &now) == 0 ?
+        (uint64_t)now.tv_sec * 1000000U + (uint64_t)now.tv_nsec / 1000U : 0U;
+}
+
 enum {
     LNI_VERSION_MAJOR = 1,
-    LNI_VERSION_MINOR = 4,
+    LNI_VERSION_MINOR = 5,
     LNI_NODE_INFO_REQUEST = 1,
     LNI_NODE_INFO_RESPONSE = 2,
     LNI_SUBMIT_REQUEST = 3,
@@ -63,6 +70,10 @@ enum {
     LNI_FINALITY_EVIDENCE_REGISTER_RESPONSE = 29,
     LNI_SIMULATE_REQUEST = 30,
     LNI_SIMULATE_RESPONSE = 31,
+    LNI_ASSET_READ_REQUEST = 32,
+    LNI_ASSET_READ_RESPONSE = 33,
+    LNI_FEE_ESTIMATE_REQUEST = 34,
+    LNI_FEE_ESTIMATE_RESPONSE = 35,
     LNI_ENVELOPE_FIXED_BYTES = 22,
     LNI_NODE_INFO_FIXED_BYTES = 93,
     LNI_PREPARATION_STATE_MAX_BYTES = 4096,
@@ -1317,26 +1328,26 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                  int64_t deadline)
 {
     static const char *sequencer_capabilities[] = {
-        "authenticated_durable_submit", "batch_header", "node_info",
+        "asset_read", "authenticated_durable_submit", "batch_header", "fee_estimate", "node_info",
         "preparation_state",
         "receipt_lookup", "submit"
     };
     static const char *evidence_capabilities[] = {
-        "account_read", "authenticated_durable_submit", "batch_header",
-        "checkpoint", "historical_proofs", "node_info",
+        "account_read", "asset_read", "authenticated_durable_submit", "batch_header",
+        "checkpoint", "fee_estimate", "historical_proofs", "node_info",
         "preparation_state", "proof_bundle", "receipt_lookup", "submit"
     };
     static const char *finalizer_capabilities[] = {
-        "account_read", "authenticated_durable_submit", "batch_header",
-        "checkpoint", "finality_evidence_register", "historical_proofs",
+        "account_read", "asset_read", "authenticated_durable_submit", "batch_header",
+        "checkpoint", "fee_estimate", "finality_evidence_register", "historical_proofs",
         "node_info", "preparation_state", "proof_bundle", "receipt_lookup",
         "submit"
     };
     static const char *reader_capabilities[] = {
-        "batch_header", "node_info", "receipt_lookup"
+        "asset_read", "batch_header", "fee_estimate", "node_info", "receipt_lookup"
     };
     static const char *evidence_reader_capabilities[] = {
-        "account_read", "batch_header", "checkpoint", "historical_proofs",
+        "account_read", "asset_read", "batch_header", "checkpoint", "fee_estimate", "historical_proofs",
         "node_info", "proof_bundle", "receipt_lookup"
     };
     static const char simulate_capability[] = "simulate";
@@ -2058,9 +2069,43 @@ static lxp_result receipt_refusal(int descriptor, uint32_t maximum,
                         public_result, deadline);
 }
 
+static lxp_result pending_receipt_lookup(
+    const lxp_daemon_protocol_owner *owner,
+    const lxp_receipt_query *query, lxp_arena *arena,
+    lxp_byte_span *receipt)
+{
+    size_t index;
+    if (owner == NULL || query == NULL || arena == NULL || receipt == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; index < owner->pending_receipt_count; ++index) {
+        const lxp_daemon_pending_receipt *entry =
+            &owner->pending_receipts[index];
+        bool match = query->kind == LXP_RECEIPT_BY_GLOBAL_SEQUENCE ?
+            query->global_sequence == entry->global_sequence :
+            lxp_ct_memcmp(query->identifier,
+                query->kind == LXP_RECEIPT_BY_TRANSACTION_ID ?
+                    entry->activity_id : entry->idempotency_key,
+                32U) == 0;
+        if (match) {
+            void *bytes = NULL;
+            lxp_result status;
+            if (entry->length == 0U ||
+                entry->length > query->maximum_response_bytes)
+                return LXP_ERR_LENGTH_LIMIT;
+            status = lxp_arena_alloc(arena, entry->length, 1U, &bytes);
+            if (status != LXP_OK) return status;
+            (void)memcpy(bytes, entry->bytes, entry->length);
+            *receipt = (lxp_byte_span){bytes, entry->length};
+            return LXP_OK;
+        }
+    }
+    return LXP_ERR_UNKNOWN_ACTIVITY;
+}
+
 static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
                                const lni_envelope *request, int64_t deadline)
 {
+    uint64_t started_us = pay_timing_us();
     lxp_receipt_query query;
     lxp_byte_span receipt;
     lxp_log published_log;
@@ -2068,18 +2113,25 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     lxp_arena arena;
     uint8_t *storage;
     lxp_result status;
+    size_t selector_length = request->payload_length;
+    bool wait_publication = false;
+    if (request->minor >= 5U && (selector_length == 34U || selector_length == 10U) &&
+        request->payload[selector_length - 1U] == 1U) {
+        wait_publication = true;
+        --selector_length;
+    }
     (void)memset(&query, 0, sizeof(query));
     if (request->proof_length != 0U || request->payload_length < 1U)
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 1U,
                             LXP_ERR_MALFORMED_ENVELOPE, deadline);
-    if (request->payload[0] == 1U && request->payload_length == 33U) {
+    if (request->payload[0] == 1U && selector_length == 33U) {
         query.kind = LXP_RECEIPT_BY_TRANSACTION_ID;
         (void)memcpy(query.identifier, request->payload + 1U, 32U);
-    } else if (request->payload[0] == 2U && request->payload_length == 33U) {
+    } else if (request->payload[0] == 2U && selector_length == 33U) {
         query.kind = LXP_RECEIPT_BY_IDEMPOTENCY_KEY;
         (void)memcpy(query.identifier, request->payload + 1U, 32U);
-    } else if (request->payload[0] == 3U && request->payload_length == 9U) {
+    } else if (request->payload[0] == 3U && selector_length == 9U) {
         query.kind = LXP_RECEIPT_BY_GLOBAL_SEQUENCE;
         query.global_sequence = load_u64(request->payload + 1U);
     } else {
@@ -2089,16 +2141,44 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     }
     query.maximum_response_bytes = server->frame_bytes -
         LNI_ENVELOPE_FIXED_BYTES;
-    if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) return LXP_ERR_IO;
-    published_log = server->owner->published_receipt_log;
-    if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0)
-        return LXP_FATAL_INVARIANT;
-    history.log = &published_log;
     storage = malloc(query.maximum_response_bytes);
     if (storage == NULL) return LXP_ERR_IO;
     status = lxp_arena_init(&arena, storage, query.maximum_response_bytes);
-    if (status == LXP_OK)
-        status = lxp_receipt_lookup(&history, &query, &arena, &receipt);
+    if (status == LXP_OK && pthread_mutex_lock(&server->daemon->mutex) != 0) status = LXP_ERR_IO;
+    if (status == LXP_OK) {
+        for (;;) {
+            status = lxp_arena_reset(&arena, 0U);
+            if (status != LXP_OK) break;
+            if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) { status = LXP_ERR_IO; break; }
+            status = pending_receipt_lookup(
+                server->owner, &query, &arena, &receipt);
+            if (status == LXP_ERR_UNKNOWN_ACTIVITY)
+                published_log = server->owner->published_receipt_log;
+            if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0) { status = LXP_FATAL_INVARIANT; break; }
+            if (status == LXP_ERR_UNKNOWN_ACTIVITY) {
+                history.log = &published_log;
+                status = lxp_receipt_lookup(
+                    &history, &query, &arena, &receipt);
+            }
+            if (status != LXP_ERR_UNKNOWN_ACTIVITY || !wait_publication ||
+                server->daemon->queue_count == 0U || server->daemon->stop_requested ||
+                server->daemon->failure != LXP_OK) break;
+            int64_t now;
+            struct timespec until;
+            if (monotonic_milliseconds(&now) != LXP_OK || clock_gettime(CLOCK_REALTIME, &until) != 0) {
+                status = LXP_ERR_IO; break;
+            }
+            if (now >= deadline) break;
+            int64_t remaining = deadline - now;
+            until.tv_sec += remaining / 1000;
+            until.tv_nsec += (long)(remaining % 1000) * 1000000L;
+            if (until.tv_nsec >= 1000000000L) { ++until.tv_sec; until.tv_nsec -= 1000000000L; }
+            int waited = pthread_cond_timedwait(&server->daemon->queue_changed, &server->daemon->mutex, &until);
+            if (waited == ETIMEDOUT) break;
+            if (waited != 0) { status = LXP_ERR_IO; break; }
+        }
+        if (pthread_mutex_unlock(&server->daemon->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    }
     if (status == LXP_ERR_UNKNOWN_ACTIVITY)
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_RECEIPT_LOOKUP_RESPONSE,
@@ -2113,7 +2193,62 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     else
         status = receipt_refusal(descriptor, server->frame_bytes,
                                  request->correlation_id, status, deadline);
+    if (getenv("LAYERX_PAY_TIMING") != NULL)
+        (void)fprintf(stderr, "pay-native history_us=%llu result=%d\n",
+            (unsigned long long)(pay_timing_us() - started_us), (int)status);
     free(storage);
+    return status;
+}
+
+static lxp_result evidence_refusal(lxp_daemon_lni_server *server, int descriptor,
+    uint64_t correlation_id, lxp_result status, int64_t deadline);
+
+static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    lx_asset_record records[LX_ASSET_REGISTRY_CAPACITY];
+    uint8_t *payload;
+    size_t count = 0U, cursor = 44U;
+    uint16_t returned = 0U;
+    lxp_result status;
+    if (request->minor < 5U || request->proof_length != 0U || request->correlation_id == 0U ||
+        request->payload_length < 3U || load_u16(request->payload) != 1U ||
+        !((request->payload[2] == 1U && request->payload_length == 3U) ||
+          (request->payload[2] == 2U && request->payload_length == 35U &&
+           !lxp_ct_is_zero(request->payload + 3U, 32U))))
+        return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+            1U, LXP_ERR_NON_CANONICAL, deadline);
+    payload = malloc(server->frame_bytes);
+    if (payload == NULL) return LXP_ERR_IO;
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) { free(payload); return LXP_ERR_IO; }
+    const lxp_kernel *kernel = server->owner->kernel;
+    status = lx_asset_committed_records(kernel, records, LX_ASSET_REGISTRY_CAPACITY, &count);
+    if (status == LXP_OK && server->frame_bytes < cursor + LNI_ENVELOPE_FIXED_BYTES) status = LXP_ERR_LENGTH_LIMIT;
+    if (status == LXP_OK) {
+        store_u16(payload, 1U);
+        store_u64(payload + 2U, kernel->state->next_sequence - 1U);
+        (void)memcpy(payload + 10U, kernel->current_state_root, 32U);
+        for (size_t i = 0U; i < count && status == LXP_OK; ++i) {
+            uint8_t encoded[384];
+            size_t length;
+            if (request->payload[2] == 2U && memcmp(request->payload + 3U, records[i].asset_id, 32U) != 0) continue;
+            status = lx_asset_record_encode(&records[i], encoded, sizeof(encoded), &length);
+            if (status == LXP_OK && (cursor + 2U + length + LNI_ENVELOPE_FIXED_BYTES > server->frame_bytes))
+                status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK) {
+                store_u16(payload + cursor, (uint16_t)length); cursor += 2U;
+                (void)memcpy(payload + cursor, encoded, length); cursor += length;
+                ++returned;
+            }
+        }
+        store_u16(payload + 42U, returned);
+        if (status == LXP_OK && request->payload[2] == 2U && returned != 1U) status = LXP_ERR_ASSET_MISMATCH;
+    }
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) status = send_envelope(descriptor, server->frame_bytes,
+        LNI_ASSET_READ_RESPONSE, request->correlation_id, payload, cursor, NULL, 0U, deadline);
+    else status = evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
+    free(payload);
     return status;
 }
 
@@ -2360,11 +2495,45 @@ static lxp_result simulation_schedule(const lxp_kernel *kernel,
     if (version == 0U || version > UINT16_MAX)
         return LXP_ERR_VERSION_UNSUPPORTED;
     *parameter_version = version;
-    *fees = (lxp_fee_params){
-        (uint16_t)version, {0U, 0U}, {0U, 0U}, {0U, 0U},
-        {0U, 0U}, {0U, 0U}, 10000U
-    };
-    return LXP_OK;
+    return lxp_fee_committed_schedule(kernel, version, fees);
+}
+
+static lxp_result send_fee_estimate(lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    lxp_fee_params fees;
+    lxp_fee_meter meter = {0};
+    lxp_u128 fee;
+    uint32_t version;
+    uint8_t payload[279];
+    size_t length;
+    lxp_result status;
+    if (request->minor < 5U || request->proof_length != 0U || request->correlation_id == 0U ||
+        request->payload_length != 30U || load_u16(request->payload) != 1U)
+        return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+            1U, LXP_ERR_NON_CANONICAL, deadline);
+    meter.canonical_encoded_bytes = load_u64(request->payload + 6U);
+    meter.execution_units = load_u64(request->payload + 14U);
+    meter.storage_units = load_u64(request->payload + 22U);
+    if (meter.canonical_encoded_bytes > LXP_MAX_ACTIVITY_BYTES)
+        return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+            1U, LXP_ERR_LENGTH_LIMIT, deadline);
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = simulation_schedule(server->owner->kernel, &version, &fees);
+    if (status == LXP_OK) status = lxp_fee_compute(&fees, load_u32(request->payload + 2U), meter, &fee);
+    if (status == LXP_OK) {
+        store_u16(payload, 1U);
+        store_u64(payload + 2U, server->owner->kernel->state->next_sequence - 1U);
+        (void)memcpy(payload + 10U, server->owner->kernel->current_state_root, 32U);
+        store_u32(payload + 42U, version);
+        (void)lxp_u128_to_be(fee, payload + 46U);
+        status = lxp_fee_params_encode(&fees, payload + 64U, sizeof(payload) - 64U, &length);
+        if (status == LXP_OK) store_u16(payload + 62U, (uint16_t)length);
+    }
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    return status == LXP_OK ? send_envelope(descriptor, server->frame_bytes,
+        LNI_FEE_ESTIMATE_RESPONSE, request->correlation_id, payload, 64U + length, NULL, 0U, deadline) :
+        evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
 }
 
 static lxp_result simulation_batch_number(
@@ -2794,7 +2963,7 @@ static lxp_result parse_account_read_request(
         return LXP_ERR_MALFORMED_ENVELOPE;
     cursor = 2U;
     *kind = request->payload[cursor++];
-    if (*kind != 1U && *kind != 2U) return LXP_ERR_MALFORMED_ENVELOPE;
+    if (*kind != 1U && *kind != 2U && *kind != 3U) return LXP_ERR_MALFORMED_ENVELOPE;
     if (cursor > request->payload_length - 32U)
         return LXP_ERR_MALFORMED_ENVELOPE;
     *account_id = request->payload + cursor;
@@ -2855,6 +3024,61 @@ static lxp_result account_value_asset_matches(
             LXP_OK : LXP_ERR_ASSET_MISMATCH;
 }
 
+static lxp_result send_did_accounts(
+    lxp_daemon_lni_server *server, int descriptor, const lni_envelope *request,
+    const uint8_t did_id[32], int64_t deadline)
+{
+    lx_account_registry *accounts = server->owner->kernel->state->accounts;
+    uint8_t ids[LX_ACCOUNT_REGISTRY_CAPACITY][32];
+    size_t account_count;
+    uint8_t *bytes;
+    size_t cursor = 4U;
+    uint16_t count = 0U;
+    size_t capacity = server->frame_bytes;
+    lxp_result status = lx_account_list_did(accounts, did_id, ids,
+        LX_ACCOUNT_REGISTRY_CAPACITY, &account_count);
+    if (status != LXP_OK || capacity < 4U)
+        return evidence_refusal(server, descriptor, request->correlation_id,
+            status != LXP_OK ? status : LXP_ERR_LENGTH_LIMIT, deadline);
+    bytes = (uint8_t *)malloc(capacity);
+    if (bytes == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    bytes[0] = 0U; bytes[1] = 1U;
+    for (size_t i = 0U; i < account_count && status == LXP_OK; ++i) {
+        const lx_account *account = NULL;
+        lxp_daemon_account_evidence evidence;
+        lxp_byte_span value;
+        lxp_byte_span proof;
+        for (size_t j = 0U; j < accounts->count; ++j)
+            if (memcmp(accounts->accounts[j].id, ids[i], 32U) == 0) account = &accounts->accounts[j];
+        if (account == NULL) { status = LXP_FATAL_INVARIANT; break; }
+        status = latest_account_evidence(server->owner, account->id,
+            account->has_asset ? account->asset_id : NULL, NULL, server->owner->scratch, &evidence);
+        if (status == LXP_OK) status = lxp_daemon_account_evidence_wire_encode(
+            server->owner->evidence_store, &evidence, server->owner->kernel,
+            server->owner->network_id, account->id, 1U, 0U, NULL,
+            server->owner->scratch, &value, &proof);
+        if (status != LXP_OK) break;
+        if (value.length > UINT32_MAX || proof.length > UINT32_MAX ||
+            cursor > capacity || capacity - cursor < 40U ||
+            value.length > capacity - cursor - 40U ||
+            proof.length > capacity - cursor - 40U - value.length) {
+            status = LXP_ERR_LENGTH_LIMIT; break;
+        }
+        (void)memcpy(bytes + cursor, account->id, 32U); cursor += 32U;
+        store_u32(bytes + cursor, (uint32_t)value.length); cursor += 4U;
+        (void)memcpy(bytes + cursor, value.bytes, value.length); cursor += value.length;
+        store_u32(bytes + cursor, (uint32_t)proof.length); cursor += 4U;
+        (void)memcpy(bytes + cursor, proof.bytes, proof.length); cursor += proof.length;
+        ++count;
+    }
+    bytes[2] = (uint8_t)(count >> 8U); bytes[3] = (uint8_t)count;
+    if (status == LXP_OK) status = send_envelope(descriptor, server->frame_bytes,
+        LNI_ACCOUNT_READ_RESPONSE, request->correlation_id, bytes, cursor, NULL, 0U, deadline);
+    else status = evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
+    free(bytes);
+    return status;
+}
+
 static lxp_result send_account_read(
     lxp_daemon_lni_server *server, int descriptor,
     const lni_envelope *request, int64_t deadline)
@@ -2893,6 +3117,13 @@ static lxp_result send_account_read(
                             LXP_ERR_MODULE_DISABLED, deadline);
     if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
     mark = lxp_arena_mark(server->owner->scratch);
+    if (kind == 3U) {
+        status = selector_kind == 1U ? send_did_accounts(server, descriptor, request, account_id, deadline) :
+            evidence_refusal(server, descriptor, request->correlation_id, LXP_ERR_MODULE_DISABLED, deadline);
+        (void)lxp_arena_reset(server->owner->scratch, mark);
+        if (pthread_mutex_unlock(&server->owner->mutex) != 0) return LXP_FATAL_INVARIANT;
+        return status;
+    }
     if (selector_kind == 1U)
         status = latest_account_evidence(
             server->owner, account_id, kind == 1U ? asset_id : NULL, NULL,
@@ -3300,6 +3531,10 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
                                  credential, deadline);
         } else if (request.tag == LNI_RECEIPT_LOOKUP_REQUEST) {
             status = send_receipt(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_ASSET_READ_REQUEST) {
+            status = send_asset_read(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_FEE_ESTIMATE_REQUEST) {
+            status = send_fee_estimate(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_ACCOUNT_READ_REQUEST) {
             status = send_account_read(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_AVAILABILITY_FETCH) {

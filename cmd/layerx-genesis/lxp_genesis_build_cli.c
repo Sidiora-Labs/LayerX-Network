@@ -3,6 +3,8 @@
 #include "layerx/lxp_genesis_builder.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/lx_asset.h"
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_protocol.h"
 
 #include <fcntl.h>
@@ -111,7 +113,7 @@ static lxp_result parse_request(
     if (status == LXP_OK && memcmp(magic, "LXGB", 4U) != 0)
         status = LXP_ERR_INVALID_TAG;
     if (status == LXP_OK) status = reader_u8(&reader, &version);
-    if (status == LXP_OK && version != 1U)
+    if (status == LXP_OK && version != 1U && version != 2U)
         status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK)
         status = reader_u16(&reader, &draft->protocol_version);
@@ -186,6 +188,45 @@ static lxp_result parse_request(
     if (status == LXP_OK)
         status = reader_u64(
             &reader, &fees->maximum_fee_units_per_occupancy_byte_batch);
+    if (status == LXP_OK && version == 2U) {
+        uint16_t records;
+        status = reader_u16(&reader, &records);
+        if (status == LXP_OK && (records == 0U || records > LX_ASSET_REGISTRY_CAPACITY))
+            status = LXP_ERR_LENGTH_LIMIT;
+        for (size_t i = 0U; status == LXP_OK && i < records; ++i) {
+            uint16_t record_length;
+            lx_asset_record record;
+            lxp_genesis_module_value *value = &draft->module_values[draft->module_value_count];
+            status = reader_u16(&reader, &record_length);
+            if (status == LXP_OK && record_length > sizeof(value->value)) status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK) status = reader_copy(&reader, value->value, record_length);
+            if (status == LXP_OK) status = lx_asset_record_decode(value->value, record_length, &record);
+            if (status == LXP_OK && (!lxp_u128_is_zero(record.total_units) || record.issuer_kind == 1U))
+                status = LXP_ERR_NON_CANONICAL;
+            if (status == LXP_OK) {
+                value->module_id = LXP_MODULE_ASSET;
+                value->value_length = record_length;
+                (void)memcpy(value->key, record.asset_id, 32U);
+                ++draft->module_value_count;
+            }
+        }
+        if (status == LXP_OK) {
+            uint16_t schedule_length;
+            lxp_fee_params schedule;
+            lxp_genesis_module_value *value = &draft->module_values[draft->module_value_count];
+            status = reader_u16(&reader, &schedule_length);
+            if (status == LXP_OK && schedule_length > sizeof(value->value)) status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK) status = reader_copy(&reader, value->value, schedule_length);
+            if (status == LXP_OK) status = lxp_fee_params_decode(value->value, schedule_length, &schedule);
+            if (status == LXP_OK && schedule.version != 2U) status = LXP_ERR_VERSION_UNSUPPORTED;
+            if (status == LXP_OK) {
+                value->module_id = LXP_MODULE_GOVERNANCE;
+                value->value_length = schedule_length;
+                (void)memcpy(value->key, "fee.schedule", 12U);
+                ++draft->module_value_count;
+            }
+        }
+    }
     if (status == LXP_OK && reader.offset != reader.length)
         status = LXP_ERR_TRAILING_BYTES;
     if (status == LXP_OK)
@@ -486,8 +527,162 @@ lxp_result lxp_genesis_build_artifacts(
     return build_artifacts(request_path, signer_key_path, output_directory, NULL);
 }
 
+static lxp_result migrate_asset_v2(const char *input_path, const char *salt_path,
+    const char *salt_source, const char *directory)
+{
+    uint8_t *input = NULL;
+    uint8_t *salt = NULL;
+    uint8_t output[384];
+    size_t input_length = 0U, salt_length = 0U, output_length = 0U;
+    char output_path[4096], source_path[4096];
+    bool created = false;
+    lxp_result status;
+    if (salt_source == NULL || strlen(salt_source) == 0U || strlen(salt_source) > 4096U)
+        return LXP_ERR_NON_CANONICAL;
+    status = read_regular_file(input_path, sizeof(output), false, &input, &input_length);
+    if (status == LXP_OK) status = read_regular_file(salt_path, 32U, false, &salt, &salt_length);
+    if (status == LXP_OK && salt_length != 32U) status = LXP_ERR_NON_CANONICAL;
+    if (status == LXP_OK) status = lx_asset_record_migrate_v2(input, input_length, salt,
+        output, sizeof(output), &output_length);
+    if (status == LXP_OK) status = join_path(output_path, sizeof(output_path), directory, "asset-v3.bin");
+    if (status == LXP_OK) status = join_path(source_path, sizeof(source_path), directory, "salt-source.txt");
+    if (status == LXP_OK) {
+        if (mkdir(directory, 0700) != 0) status = LXP_ERR_IO;
+        else created = true;
+    }
+    if (status == LXP_OK) status = write_exclusive(source_path,
+        (const uint8_t *)salt_source, strlen(salt_source));
+    if (status == LXP_OK) status = write_exclusive(output_path, output, output_length);
+    if (status == LXP_OK) {
+        int descriptor = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        if (descriptor < 0) status = LXP_ERR_IO;
+        else {
+            if (fsync(descriptor) != 0) status = LXP_ERR_IO;
+            if (close(descriptor) != 0) status = LXP_ERR_IO;
+        }
+    }
+    if (status != LXP_OK && created) {
+        (void)unlink(output_path);
+        (void)unlink(source_path);
+        (void)rmdir(directory);
+    }
+    free(input);
+    free(salt);
+    return status;
+}
+
+static lxp_result migrate_snapshot_issuance(
+    const char *snapshot_path, const char *manifest_path,
+    const char *signer_key_path, const char *directory)
+{
+    uint8_t *manifest_bytes = NULL;
+    uint8_t *signer_key = NULL;
+    uint8_t *source_arena_bytes = NULL;
+    uint8_t *target_arena_bytes = NULL;
+    size_t manifest_length = 0U;
+    size_t signer_key_length = 0U;
+    lxp_genesis_manifest *genesis = NULL;
+    lxp_snapshot_manifest_record source_manifest;
+    lxp_snapshot_manifest_record target_manifest;
+    lxp_byte_span source_snapshot;
+    lxp_byte_span target_snapshot;
+    lxp_arena source_arena;
+    lxp_arena target_arena;
+    char output_path[4096];
+    char temporary_path[4096];
+    bool created = false;
+    lxp_result status;
+    if (snapshot_path == NULL || manifest_path == NULL ||
+        signer_key_path == NULL || directory == NULL ||
+        directory[0] == '\0')
+        return LXP_ERR_NON_CANONICAL;
+    status = read_regular_file(
+        manifest_path, LXP_GENESIS_MAX_ENCODED_BYTES, false,
+        &manifest_bytes, &manifest_length);
+    if (status == LXP_OK)
+        status = read_regular_file(
+            signer_key_path, 32U, true, &signer_key, &signer_key_length);
+    if (status == LXP_OK && signer_key_length != 32U)
+        status = LXP_ERR_NON_CANONICAL;
+    genesis = (lxp_genesis_manifest *)malloc(sizeof(*genesis));
+    source_arena_bytes = (uint8_t *)malloc(GENESIS_BUILD_ARENA_BYTES);
+    target_arena_bytes = (uint8_t *)malloc(GENESIS_BUILD_ARENA_BYTES);
+    if (status == LXP_OK &&
+        (genesis == NULL || source_arena_bytes == NULL ||
+         target_arena_bytes == NULL))
+        status = LXP_ERR_IO;
+    if (status == LXP_OK)
+        status = lxp_genesis_parse(
+            manifest_bytes, manifest_length, LXP_GENESIS_INPUT_MANIFEST,
+            genesis);
+    if (status == LXP_OK)
+        status = lxp_arena_init(
+            &source_arena, source_arena_bytes, GENESIS_BUILD_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_arena_init(
+            &target_arena, target_arena_bytes, GENESIS_BUILD_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_snapshot_store_read(
+            snapshot_path, &source_arena, &source_manifest,
+            &source_snapshot);
+    if (status == LXP_OK)
+        status = lxp_genesis_build_snapshot_migration(
+            genesis, &source_manifest, source_snapshot.bytes,
+            source_snapshot.length, signer_key, &target_arena,
+            &target_manifest, &target_snapshot);
+    if (status == LXP_OK) {
+        int length = snprintf(
+            output_path, sizeof(output_path), "%s/%020llu.lxs", directory,
+            (unsigned long long)target_manifest.global_sequence);
+        if (length < 0 || (size_t)length >= sizeof(output_path))
+            status = LXP_ERR_LENGTH_LIMIT;
+    }
+    if (status == LXP_OK) {
+        int length = snprintf(
+            temporary_path, sizeof(temporary_path), "%s.tmp", output_path);
+        if (length < 0 || (size_t)length >= sizeof(temporary_path))
+            status = LXP_ERR_LENGTH_LIMIT;
+    }
+    if (status == LXP_OK) {
+        if (mkdir(directory, 0700) != 0) status = LXP_ERR_IO;
+        else created = true;
+    }
+    if (status == LXP_OK)
+        status = lxp_snapshot_store_write(
+            directory, &target_manifest, target_snapshot.bytes,
+            target_snapshot.length);
+    if (status != LXP_OK && created) {
+        (void)unlink(temporary_path);
+        (void)unlink(output_path);
+        (void)rmdir(directory);
+    }
+    if (signer_key != NULL) {
+        lxp_secure_zero(signer_key, signer_key_length);
+        free(signer_key);
+    }
+    if (manifest_bytes != NULL) {
+        lxp_secure_zero(manifest_bytes, manifest_length);
+        free(manifest_bytes);
+    }
+    if (genesis != NULL) lxp_secure_zero(genesis, sizeof(*genesis));
+    if (source_arena_bytes != NULL)
+        lxp_secure_zero(source_arena_bytes, GENESIS_BUILD_ARENA_BYTES);
+    if (target_arena_bytes != NULL)
+        lxp_secure_zero(target_arena_bytes, GENESIS_BUILD_ARENA_BYTES);
+    free(genesis);
+    free(source_arena_bytes);
+    free(target_arena_bytes);
+    return status;
+}
+
 int lxp_genesis_builder_cli_main(int argc, char **argv)
 {
+    if (argv != NULL && argc == 6 && strcmp(argv[1], "--migrate-asset-v2") == 0)
+        return migrate_asset_v2(argv[2], argv[3], argv[4], argv[5]) == LXP_OK ? 0 : 1;
+    if (argv != NULL && argc == 6 &&
+        strcmp(argv[1], "--migrate-snapshot-issuance") == 0)
+        return migrate_snapshot_issuance(
+            argv[2], argv[3], argv[4], argv[5]) == LXP_OK ? 0 : 1;
     if (argv == NULL || (argc != 4 && argc != 6) ||
         (argc == 6 && strcmp(argv[4], "--custody-profile") != 0))
         return 2;

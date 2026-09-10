@@ -167,6 +167,8 @@ lxp_result lxp_da_store_bundle(const lxp_da_store *store,
     (void)memcpy(header + 12U, root, 32U);
     put_u32(header + 44U, (uint32_t)bundle->chunk_count);
     put_u64(header + 48U, (uint64_t)bundle->total_bytes);
+    if (unlink(temporary) != 0 && errno != ENOENT)
+        return LXP_ERR_IO;
     descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
                       0600);
     if (descriptor < 0) return LXP_ERR_IO;
@@ -183,14 +185,20 @@ lxp_result lxp_da_store_bundle(const lxp_da_store *store,
             status = write_all(descriptor, chunk->bytes.bytes,
                                chunk->bytes.length);
     }
-    if (status == LXP_OK && fdatasync(descriptor) != 0) status = LXP_ERR_IO;
+    if (status == LXP_OK &&
+        !lxp_durability_group_defer_descriptor(descriptor) &&
+        fdatasync(descriptor) != 0)
+        status = LXP_ERR_IO;
     if (close(descriptor) != 0 && status == LXP_OK) status = LXP_ERR_IO;
     descriptor = -1;
     if (status == LXP_OK && rename(temporary, final) != 0) status = LXP_ERR_IO;
     directory_descriptor = status == LXP_OK ?
         open(store->directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC) : -1;
-    if (status == LXP_OK && (directory_descriptor < 0 ||
-        fsync(directory_descriptor) != 0)) status = LXP_ERR_IO;
+    if (status == LXP_OK &&
+        (directory_descriptor < 0 ||
+         (!lxp_durability_group_defer_descriptor(directory_descriptor) &&
+          fsync(directory_descriptor) != 0)))
+        status = LXP_ERR_IO;
     if (directory_descriptor >= 0) (void)close(directory_descriptor);
     if (status != LXP_OK) (void)unlink(temporary);
     return status;

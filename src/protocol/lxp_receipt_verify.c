@@ -17,7 +17,9 @@ lxp_result lxp_receipt_verify_offline(
         lxp_ct_is_zero(receipt->activity_id, 32U) ||
         lxp_ct_is_zero(receipt->sequencer_signature, 64U))
         return LXP_ERR_NON_CANONICAL;
-    return lxp_receipt_verify(receipt, sequencer_public_key, arena);
+    lxp_result status = lxp_receipt_validate_supply(receipt);
+    return status == LXP_OK ?
+        lxp_receipt_verify(receipt, sequencer_public_key, arena) : status;
 }
 
 lxp_result lxp_receipt_match_requirement(

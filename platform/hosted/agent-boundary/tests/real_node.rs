@@ -1,6 +1,9 @@
 //! Exercises the agent boundary against a real `layerxd` sequencer and a real
 //! `layerxd --authority-replica` started from `build/bin`.
 
+#[path = "../../../../tests/support/lxgb_metadata.rs"]
+mod lxgb_metadata;
+
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_proof::receipt::verify_sequencer_signature;
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
@@ -181,7 +184,7 @@ struct Genesis {
 fn genesis_request(asset: &[u8; 32], guarantor_key: &[u8; 33]) -> Vec<u8> {
     let mut request = Vec::with_capacity(512);
     request.extend_from_slice(b"LXGB");
-    request.push(1);
+    request.push(2);
     request.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
     request.extend_from_slice(&NETWORK_ID.to_be_bytes());
     request.extend_from_slice(&now_ms().to_be_bytes());
@@ -213,6 +216,8 @@ fn genesis_request(asset: &[u8; 32], guarantor_key: &[u8; 33]) -> Vec<u8> {
     for value in [100_u64, 1, 1, 10, 1, 1000] {
         request.extend_from_slice(&value.to_be_bytes());
     }
+    let issuer = SigningKey::from_bytes(&random32());
+    lxgb_metadata::append(&mut request, asset, &issuer.verifying_key().to_bytes(), &random32());
     request
 }
 
