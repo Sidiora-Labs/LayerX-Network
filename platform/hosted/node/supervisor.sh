@@ -27,6 +27,12 @@
 #   reset.<id>.stop-replica    sequencer side asks the replica side to stop
 #   reset.<id>.replica-stopped replica side has stopped its daemon
 #
+# When the bootstrap arguments carry --treasury-signer-socket PATH the
+# sequencer supervisor waits for PATH (logging every 30 seconds, up to
+# LAYERX_NODE_TREASURY_SIGNER_WAIT_SECONDS, default 600) before it bootstraps,
+# because the treasury signer owns the key the bootstrap binds, and publishes
+# PATH to the admin plane as LAYERX_CORE_TREASURY_SIGNER_SOCKET in core.env.
+#
 # When bootstrap.sh ran with --settlement-env FILE, sequencer.env names FILE
 # as LAYERX_NODE_SETTLEMENT_ENV; the sequencer supervisor waits for FILE
 # (logging every 30 seconds, up to LAYERX_NODE_SETTLEMENT_WAIT_SECONDS,
@@ -138,18 +144,23 @@ SOCAT=${SOCAT:-$(command -v socat || true)}
 [ -n "$SOCAT" ] && [ -x "$SOCAT" ] || fail "socat is required for daemon readiness and the supervisor socket"
 
 publish_core_environment() {
-    local sequencer_id asset_id lni_gid temporary
+    local sequencer_id asset_id lni_gid temporary signer_socket
     sequencer_id=$(sed -n 's/^LAYERX_NODE_SEQUENCER_ID=//p' "$DATA_DIR/node.env")
     asset_id=$(sed -n 's/^LAYERX_NODE_ASSET_ID=//p' "$DATA_DIR/node.env")
     [[ $sequencer_id =~ ^[0-9a-f]{64}$ ]] || fail "invalid generated sequencer identity"
     [[ $asset_id =~ ^[0-9a-f]{64}$ ]] || fail "invalid generated treasury asset"
     lni_gid=$(sed -n 's/^LAYERX_NODE_LNI_ALLOWED_GID=//p' "$DATA_DIR/sequencer.env")
     [[ $lni_gid =~ ^[0-9]+$ ]] || fail "invalid generated LNI group"
+    signer_socket=$(sed -n 's/^LAYERX_NODE_TREASURY_SIGNER_SOCKET=//p' "$DATA_DIR/node.env" | tail -n 1)
     chgrp "$lni_gid" "$RUN_DIR"
     chmod 0750 "$RUN_DIR"
     temporary="$RUN_DIR/core.env.$$"
     printf 'LAYERX_CORE_SEQUENCER_ID=%s\nLAYERX_CORE_TREASURY_ASSET=%s\n' \
         "$sequencer_id" "$asset_id" > "$temporary"
+    if [ -n "$signer_socket" ]; then
+        [[ $signer_socket = /* ]] || fail "invalid generated treasury signer socket"
+        printf 'LAYERX_CORE_TREASURY_SIGNER_SOCKET=%s\n' "$signer_socket" >> "$temporary"
+    fi
     chmod 0644 "$temporary"
     mv "$temporary" "$RUN_DIR/core.env"
 }
@@ -328,7 +339,37 @@ cleanup() {
 trap 'cleanup; exit 0' TERM INT
 trap cleanup EXIT
 
+treasury_signer_socket() {
+    local index
+    for ((index = 0; index + 1 < ${#BOOTSTRAP_ARGS[@]}; index++)); do
+        if [ "${BOOTSTRAP_ARGS[index]}" = --treasury-signer-socket ]; then
+            printf '%s' "${BOOTSTRAP_ARGS[index + 1]}"
+            return 0
+        fi
+    done
+}
+
+wait_for_treasury_signer() {
+    local socket waited=0 limit
+    socket=$(treasury_signer_socket)
+    [ -n "$socket" ] || return 0
+    limit=${LAYERX_NODE_TREASURY_SIGNER_WAIT_SECONDS:-600}
+    [[ $limit =~ ^[0-9]+$ ]] || fail "LAYERX_NODE_TREASURY_SIGNER_WAIT_SECONDS must be decimal"
+    while [ ! -S "$socket" ]; do
+        if [ "$waited" -ge "$limit" ]; then
+            fail "the treasury signer socket $socket did not appear within ${limit}s"
+        fi
+        if [ $((waited % 30)) -eq 0 ]; then
+            log "waiting for the treasury signer socket $socket"
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    log "treasury signer socket $socket available"
+}
+
 run_bootstrap() {
+    wait_for_treasury_signer
     "$SCRIPT_DIR/bootstrap.sh" --data-dir "$DATA_DIR" --run-dir "$RUN_DIR" --layerxd "$LAYERXD" "$@"
 }
 

@@ -1117,7 +1117,7 @@ registry_deployment_produce() (
     temporary=$(mktemp "$input/.program-deployment.XXXXXXXX")
     trap 'rm -f "$temporary"' EXIT
     producer=$(cat <<'PYREGDEPLOY'
-import hashlib, json, os, stat, struct, subprocess, sys, time
+import hashlib, json, os, socket, stat, struct, subprocess, sys, time
 from pathlib import Path
 
 def protected(path, mode=0o600):
@@ -1130,11 +1130,23 @@ def protected(path, mode=0o600):
         assert 0 < len(value) <= 65536
         return value
 
-def memory_file(name, value):
-    fd = os.memfd_create(name, 0)
-    os.write(fd, value)
-    os.lseek(fd, 0, os.SEEK_SET)
-    return fd
+def signer(path, request):
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.settimeout(30)
+    try:
+        connection.connect(path)
+        connection.sendall(request.encode('ascii') + b'\n')
+        buffered = b''
+        while b'\n' not in buffered and len(buffered) <= 4096:
+            chunk = connection.recv(4096)
+            if not chunk:
+                break
+            buffered += chunk
+    finally:
+        connection.close()
+    reply = json.loads(buffered.split(b'\n', 1)[0].decode())
+    assert 'error' not in reply, 'the treasury signer refused a deployment request'
+    return reply
 
 def run(args, descriptors=()):
     result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1145,49 +1157,43 @@ def run(args, descriptors=()):
 def blob(value):
     return struct.pack('>I', len(value)) + value
 
-node = dict(line.split('=', 1) for line in protected(sys.argv[1], 0o644).decode().splitlines())
+node = dict(line.split('=', 1) for line in protected(sys.argv[1], 0o600).decode().splitlines())
 network = int(sys.argv[2])
 assert network > 0
 wasm = sys.stdin.buffer.read(524289)
 assert wasm.startswith(b'\0asm\x01\0\0\0') and 0 < len(wasm) <= 524184
-seed = bytes.fromhex(protected(node['LAYERX_NODE_TREASURY_KEY_FILE']).decode())
-assert len(seed) == 32
-key = memory_file('deployment-signer', bytes.fromhex('302e020100300506032b657004220420') + seed)
-try:
-    public = run(['openssl', 'pkey', '-inform', 'DER', '-in', f'/proc/self/fd/{key}',
-                  '-pubout', '-outform', 'DER'], (key,))[-32:]
-    assert public.hex() == node['LAYERX_NODE_TREASURY_PUBLIC_KEY']
-    did = node['LAYERX_NODE_TREASURY_DID'].encode()
-    assert did == b'did:layerx:' + public.hex().encode()
-    state = json.loads(run([sys.argv[3], 'read-state', '--socket', node['LAYERX_NODE_LNI_SOCKET'],
-                           '--network-id', str(network), '--protocol-version', '3', '--actor', did.decode()]))
-    assert state['network_id'] == network and state['protocol_version'] == 3
-    assert state['evidence'] == 'authenticated_node_snapshot'
-    sequence = state['account_sequence']
-    assert type(sequence) is int and 0 <= sequence < 2**64
-    payload = (os.urandom(32) + struct.pack('>HBB', 2, 0, 0) + bytes(32)
-               + hashlib.sha256(wasm).digest() + blob(wasm))
-    now = time.time_ns() // 1000000
-    fields = (b'\x01' + struct.pack('>H', 3) + b'\x02' + struct.pack('>I', network)
-              + b'\x03' + struct.pack('>I', (9 << 16) | 1) + b'\x04' + blob(did)
-              + b'\x05' + blob(public) + b'\x06' + struct.pack('>Q', sequence)
-              + b'\x07' + struct.pack('>QQ', now - 30000, now + 120000)
-              + b'\x08' + blob(os.urandom(32)) + b'\x09' + bytes(16)
-              + b'\x0a' + blob(hashlib.sha256(b'LXP/v1/payload-hash\0' + payload).digest())
-              + b'\x0b' + blob(payload))
-    unsigned = struct.pack('>HHB', 3, 0x1001, 11) + fields
-    digest = memory_file('deployment-preimage', hashlib.sha256(b'LXP/v1/signature-preimage\0' + unsigned).digest())
-    try:
-        signature = run(['openssl', 'pkeyutl', '-sign', '-rawin', '-keyform', 'DER',
-                         '-inkey', f'/proc/self/fd/{key}', '-in', f'/proc/self/fd/{digest}'], (key, digest))
-    finally:
-        os.close(digest)
-    assert len(signature) == 64
-    signed = struct.pack('>HHB', 3, 0x1001, 12) + fields + b'\x0c' + blob(signature)
-    assert len(signed) <= 1048576
-    sys.stdout.buffer.write(signed)
-finally:
-    os.close(key)
+assert 'LAYERX_NODE_TREASURY_KEY_FILE' not in node, 'the node environment still names treasury key material'
+treasury = node['LAYERX_NODE_TREASURY_SIGNER_SOCKET']
+identity = signer(treasury, 'public-key')
+public = bytes.fromhex(identity['public_key'])
+assert len(public) == 32 and public.hex() == node['LAYERX_NODE_TREASURY_PUBLIC_KEY']
+did = node['LAYERX_NODE_TREASURY_DID'].encode()
+assert did == b'did:layerx:' + public.hex().encode() and identity['did'] == did.decode()
+state = json.loads(run([sys.argv[3], 'read-state', '--socket', node['LAYERX_NODE_LNI_SOCKET'],
+                       '--network-id', str(network), '--protocol-version', '3', '--actor', did.decode()]))
+assert state['network_id'] == network and state['protocol_version'] == 3
+assert state['evidence'] == 'authenticated_node_snapshot'
+sequence = state['account_sequence']
+assert type(sequence) is int and 0 <= sequence < 2**64
+payload = (os.urandom(32) + struct.pack('>HBB', 2, 0, 0) + bytes(32)
+           + hashlib.sha256(wasm).digest() + blob(wasm))
+now = time.time_ns() // 1000000
+fields = (b'\x01' + struct.pack('>H', 3) + b'\x02' + struct.pack('>I', network)
+          + b'\x03' + struct.pack('>I', (9 << 16) | 1) + b'\x04' + blob(did)
+          + b'\x05' + blob(public) + b'\x06' + struct.pack('>Q', sequence)
+          + b'\x07' + struct.pack('>QQ', now - 30000, now + 120000)
+          + b'\x08' + blob(os.urandom(32)) + b'\x09' + bytes(16)
+          + b'\x0a' + blob(hashlib.sha256(b'LXP/v1/payload-hash\0' + payload).digest())
+          + b'\x0b' + blob(payload))
+unsigned = struct.pack('>HHB', 3, 0x1001, 11) + fields
+preimage = hashlib.sha256(b'LXP/v1/signature-preimage\0' + unsigned).digest()
+signed_reply = signer(treasury, 'sign ' + preimage.hex())
+assert signed_reply['digest'] == preimage.hex() and signed_reply['public_key'] == public.hex()
+signature = bytes.fromhex(signed_reply['signature'])
+assert len(signature) == 64
+signed = struct.pack('>HHB', 3, 0x1001, 12) + fields + b'\x0c' + blob(signature)
+assert len(signed) <= 1048576
+sys.stdout.buffer.write(signed)
 PYREGDEPLOY
 )
     kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- \

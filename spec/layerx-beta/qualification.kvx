@@ -11201,3 +11201,83 @@ symbol = "local_gateway_websocket_receipt_wake"
 observed = "The cancellation and the resume contract are covered by the gateway crate's own tests (selector cursors, the resume window per topic, the live-cursor rule, the cancellation parameters and the identifier release) and by the two SDK suites, all of which run without a cluster. The one gate that exercises GET /rpc/ws against a real daemon, local_gateway_websocket_receipt_wake in the standalone harness at platform/hosted/gateway/tests/local, was not run on this revision: it needs the native daemon and four platform binaries built first and a serialized target directory, and both that target directory and the platform target were held by other qualification runs throughout this work. No claim is made here about the replay or the cancellation over a real socket."
 assumption = "A gate that did not run is recorded as not run rather than inferred from the unit coverage that did run. The harness assertions that touch the WebSocket path were left untouched, so the gate remains available to whichever revision runs it next."
 severity = "note"
+
+[observation.6.1.4800]
+task = "6.1"
+file = "cmd/layerxd platform/hosted/core/src/main.rs platform/hosted/core/src/lib.rs platform/hosted/node/deployment.yaml"
+symbol = "read_secret build_send send_authorization LAYERX_CORE_TREASURY_KEY_FILE LAYERX_CORE_TREASURY_SIGNER_SOCKET"
+observed = "The treasury signing client was expected in cmd/layerxd, but no file under cmd/layerxd names the treasury in any form: the daemon never holds or uses the treasury identity. The single component that signs with it is the hosted core, which reads the seed at platform/hosted/core/src/main.rs:259 through read_secret(\"LAYERX_CORE_TREASURY_KEY_FILE\") and signs 32-byte domain digests at platform/hosted/core/src/lib.rs in build_send and send_authorization. platform/hosted/core is outside this change's paths, so the bootstrap now publishes LAYERX_CORE_TREASURY_SIGNER_SOCKET into core.env alongside the existing environment and the deployment still projects the treasury material into the core boundary container, which continues to read it from a file."
+assumption = "Writing a signing client into cmd/layerxd would have added an unused code path, and rewriting the core custody path would have edited a crate owned elsewhere. The signer speaks a request-per-signature protocol over a unix socket, so the remaining core change is to replace the file read at main.rs:259 with a client over LAYERX_CORE_TREASURY_SIGNER_SOCKET and drop the treasury projection from the core boundary container."
+severity = "note"
+
+[observation.6.1.4801]
+task = "6.1"
+file = "platform/hosted/node/bootstrap.sh contracts/config/checkpoint-settlement.json"
+symbol = "GUARANTOR_COUNT GUARANTOR_ENTRIES certificate_threshold"
+observed = "platform/hosted/node/bootstrap.sh:485 requires the genesis request to be exactly 395 bytes plus the metadata length, but the request it builds at lines 459 to 484 carries one 81-byte guarantor entry per guarantor and its fixed prefix is 395 + 81 * (GUARANTOR_COUNT - 1) + metadata. GUARANTOR_COUNT comes from .finality_policy.certificate_threshold of the settlement document at line 307, and contracts/config/checkpoint-settlement.json carries certificate_threshold 2, so the script builds an 851-byte request against a 770-byte expectation and refuses with 'genesis request has an unexpected length'. The same refusal reproduces from an unmodified checkout with the repository settlement document, which makes the shipped configuration unbootstrappable and takes platform/hosted/core/tests/boundary.rs, tests/daemon/pay1.py and tests/daemon/program-admission.sh with it, none of which override the document."
+assumption = "The length assertion and the settlement document belong to the genesis request work, not to treasury custody, so both were left exactly as written. The treasury boundary tests in platform/hosted/node/tests/signer-test.py pass --settlement-document naming a copy of the repository document whose certificate threshold is one, which is inside the 1..32 range the script itself admits, so they exercise the real bootstrap end to end without touching either side of the conflict."
+severity = "blocker"
+
+[observation.6.1.4802]
+task = "6.1"
+file = "platform/hosted/node/tests/node-test.sh platform/hosted/node/tests/bootstrap-test.py platform/hosted/node/bootstrap.sh"
+symbol = "platform-test-node GENESIS_METADATA"
+observed = "platform/hosted/node/bootstrap.sh:211 requires --genesis-metadata to name an authoritative LXGB v2 metadata file, and neither platform/hosted/node/tests/node-test.sh at its supervisor invocation nor platform/hosted/node/tests/bootstrap-test.py:31 passes it, so both refuse before any node starts. platform/hosted/node/deployment.yaml also omits it from the layerxd arguments. This is independent of the length conflict recorded at 6.1.4801 and of the probe lock recorded at 6.1.4803; all three stand between make platform-test-node and a running node."
+assumption = "Generating LXGB v2 metadata inside the shell harness and inside the manifest is genesis request work rather than treasury custody, so the tests and the manifest were left as written and the treasury boundary was covered by platform/hosted/node/tests/signer-test.py, which builds the metadata through tests/support/lxgb_metadata.py and runs the real bootstrap."
+severity = "blocker"
+
+[observation.6.1.4803]
+task = "6.1"
+file = "platform/hosted/node/tests/probe/Cargo.lock platform/hosted/node/tests/node-test.sh platform/Makefile.inc"
+symbol = "layerx-node-probe platform-test-node"
+observed = "make CC=gcc platform-test-node exits 101 at its first step: node-test.sh builds platform/hosted/node/tests/probe with --locked and cargo refuses because the lock needs updating. cargo update --offline --dry-run in that directory reports nineteen packages to relock, adding chacha20, digest, rand, sha1, thiserror and tungstenite among others, so the probe lock predates dependency changes in the path crates it borrows from agent/crates and platform/hosted/core. The bash -n step of the same target passes over bootstrap.sh, supervisor.sh and node-test.sh."
+assumption = "The lock drift comes from crates outside this change and repairing it would not reach a running node while 6.1.4801 and 6.1.4802 stand, so it is recorded for the lane that moved those dependencies."
+severity = "blocker"
+
+[observation.6.1.4804]
+task = "6.1"
+file = "platform/hosted/registry/tests/native_deployment.rs cmd/layerxd"
+symbol = "start_cluster cluster_producer_signs_built_program_for_live_treasury real_deployment_produces_verified_canonical_journal_pair"
+observed = "The cluster deployment producer in platform/hosted/tests/beta-cluster.sh now asks the treasury signer for its public key and its signature instead of reading the seed, and platform/hosted/registry/tests/native_deployment.rs starts a real signer over the cluster treasury material and points the producer environment at its socket. The target compiles, but no test in it can run on this revision: start_cluster fails while spawning layerxd with 'bootstrap configuration failed with result -402'. real_deployment_produces_verified_canonical_journal_pair, which this change does not touch, fails identically, so the cluster fixture is refused before any producer code runs. A control run of the same command over origin/main 5e3417aa32df5699748f1ba69e7d104fd70884a5 copies of the six platform files this change touches, with the native binaries built from the same tree, fails on all three tests with the same result -402 at native_deployment.rs:371, so the refusal is present without any of this change."
+assumption = "The daemon refuses its own bootstrap configuration in a fixture this change does not touch, and the control run over origin/main copies of the touched files reproduces the refusal, so the producer path could not be executed against a live cluster here for reasons this change does not reach. The treasury request and reply contract the producer now depends on is covered directly by platform/hosted/node/tests/signer-test.py against the same signer program."
+severity = "blocker"
+
+[observation.6.1.4805]
+task = "6.1"
+file = "platform/hosted/node/Dockerfile platform/hosted/node/deployment.yaml"
+symbol = "treasury-signer treasury-material layerx-node-keys"
+observed = "The signer container runs /opt/layerx/signer/signer.py from the node image, so platform/hosted/node/Dockerfile copies platform/hosted/node/signer into /opt/layerx/signer next to the existing checkpoint authority; without that line the container block would name a program the image does not carry. In the manifest the layerx-node-keys secret is now projected twice: the keys volume selects sequencer.key alone and the layerxd container keeps it for --sequencer-key, while a treasury-material volume selects treasury.key alone and is mounted only by the signer container and by the core boundary, which still reads the seed from a file as recorded at 6.1.4800. The daemon container therefore no longer mounts the treasury seed."
+assumption = "The Dockerfile line is a deviation from the paths this change was scoped to, taken because the container block would otherwise be a manifest for a program the image does not contain. Removing the treasury projection from the core boundary as well would stop a component that has no signer client yet, so it was left mounted and recorded instead."
+severity = "note"
+
+[observation.6.1.4806]
+task = "6.1"
+file = "spec/layerx-beta/report.md tools/ci/beta-report.sh spec/layerx-beta/qualification.kvx"
+symbol = "ledger_digest observation_records beta-report"
+observed = "spec/layerx-beta/report.md is generated from the ledger and records ledger_digest as a sha256 over spec/layerx-beta/qualification.kvx together with per-severity and per-task record counts. Two branches that each append observations and regenerate the report produce different digests and different counts on the same lines, so the file cannot be content-merged: git merge-tree between this branch and main reports qualification.kvx auto-merging and spec/layerx-beta/report.md as the only conflict, and the conflict returns for every branch as soon as any other lane merges. The digest is a hash of the merged ledger, which no side of the merge holds, so no textual resolution is correct."
+assumption = "The resolution is to take either side and re-run tools/ci/beta-report.sh on the merged ledger, which is what the render step does; recording the property rather than changing the generator or removing the file from the commit, both of which are outside this row."
+severity = "note"
+
+[observation.6.1.4807]
+task = "6.1"
+file = "tests/support/lxgb_metadata.py tests/support/lxgb_metadata.rs src/modules/asset/lx_asset_registry.c cmd/layerx-genesis/lxp_genesis_build_cli.c"
+symbol = "metadata issuer_valid lx_asset_record_decode parse_request"
+observed = "issuer_valid at src/modules/asset/lx_asset_registry.c:561 now requires custody_kind to equal issuer_kind and requires a non-empty custody reference when issuer_kind is 2, and lx_asset_record_decode calls it. The shared genesis metadata fixture tests/support/lxgb_metadata.py and its Rust twin tests/support/lxgb_metadata.rs still emit custody_kind 1 with issuer_kind 2 and a zero-length custody reference, so lx_asset_record_decode refuses the record with LXP_ERR_NON_CANONICAL, parse_request in cmd/layerx-genesis/lxp_genesis_build_cli.c returns -3, and layerx-genesis-build refuses every request built from that fixture. The refusal is not specific to this change: origin/main 9b7ebfa3aa copy of platform/hosted/node/bootstrap.sh, run unmodified against the same fixture and the same native binaries, fails identically at the same step, and an instrumented copy of the builder reports after parse_request=-3. parse_request also refuses issuer_kind 1 outright, so raising custody_kind to 2 and giving the record a non-empty custody reference is the only shape both the ledger invariant and the genesis path admit; with that record origin/main bootstrap.sh completes and prints its genesis state root. Eleven consumers read this fixture, among them platform/hosted/core/tests/boundary.rs, platform/hosted/agent-boundary/tests/real_node.rs, platform/hosted/authority/tests/real_node.rs, agent/crates/layerx-agentd/tests/support/real_authority.rs, tests/daemon/pay1.py and platform/hosted/node/tests/signer-test.py, whose two bootstrap cases fail on this and this alone."
+assumption = "The fixture is shared repository test support rather than treasury custody, and correcting it moves the genesis asset record and therefore the genesis state root for every consumer that pins one, which cannot be qualified from this row. Both sides were left exactly as written: the ledger invariant that introduced the requirement and the fixture that no longer satisfies it. The twelve signer and provider cases in platform/hosted/node/tests/signer-test.py that do not build a genesis request continue to pass."
+severity = "blocker"
+
+[observation.6.1.4808]
+task = "6.1"
+file = "platform/hosted/node/tests/probe/Cargo.lock agent/crates/layerx-client/Cargo.toml platform/hosted/node/tests/node-test.sh platform/Makefile.inc"
+symbol = "layerx-node-probe layerx-client node-test"
+observed = "agent/crates/layerx-client/Cargo.toml:13 declares sha2 = \"=0.10.9\", but the checked-in lock of the standalone probe workspace, platform/hosted/node/tests/probe/Cargo.lock:644, still records layerx-client with the five dependencies layerx-crypto, layerx-proof, layerx-types, layerx-wire and rustls and no sha2. platform/hosted/node/tests/node-test.sh:36 builds that probe with --locked --offline, so cargo refuses with \"the lock file needs to be updated but --locked was passed\" before any node behaviour runs, and the platform-test-node target at platform/Makefile.inc:141 fails at its first probe step with exit 101. The probe is a private workspace outside the platform and agent workspaces, so nothing in the ordinary workspace gates updates its lock when a path dependency gains a crate."
+assumption = "The probe lock belongs to the node test harness rather than to the treasury signer boundary, and refreshing a Cargo.lock outside the crates this row owns is not this row's change; the failure precedes every node-test assertion, so it hides rather than reports node behaviour."
+severity = "blocker"
+
+[observation.6.1.4809]
+task = "6.1"
+file = "platform/hosted/node/bootstrap.sh platform/hosted/node/tests/signer-test.py contracts/config/checkpoint-settlement.json tests/support/lxgb_metadata.py"
+symbol = "GUARANTOR_COUNT settlement_document certificate_threshold metadata"
+observed = "Both refusals recorded against the treasury boundary tests are closed at this revision and the suite runs fourteen of fourteen cases green (qual-logs/signer-test.log). Observation 6.1.4801 recorded that the genesis request length assertion in platform/hosted/node/bootstrap.sh expected 395 bytes plus metadata while the script emits 81 bytes per guarantor, so the repository settlement document's certificate_threshold of 2 refused; that assertion now reads 314 + 81 * GUARANTOR_COUNT + metadata and the script generates one secp256k1 guarantor key per guarantor, so platform/hosted/node/tests/signer-test.py passes contracts/config/checkpoint-settlement.json unmodified and asserts the threshold it carries is above one. Observation 6.1.4807 recorded that tests/support/lxgb_metadata.py emitted an asset record with custody_kind 1 against issuer_kind 2 and no custody reference, which issuer_valid refuses, so layerx-genesis-build refused every request built from it and the two end-to-end bootstrap cases failed; the fixture now emits the accepted shape and both cases build genesis, register the treasury identity and prove no copy of the seed survives."
+assumption = "This supersedes observations 6.1.4801 and 6.1.4807. Neither bound nor fixture was changed from this row: both were corrected elsewhere on main and are byte-identical to origin/main on this branch. Before the fixture landed, the same result was obtained by correcting only the record shape in the working tree and restoring the file byte for byte (qual-logs/signer-test-with-g12-fixture.log); that probe is superseded by the run above against the shipped fixture."
+severity = "note"

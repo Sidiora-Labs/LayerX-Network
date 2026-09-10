@@ -14,6 +14,7 @@ use std::fmt::Debug;
 use std::fs;
 use std::io::Read as _;
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
@@ -23,6 +24,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static NEXT_CLUSTER: AtomicU64 = AtomicU64::new(0);
+static NEXT_SIGNER: AtomicU64 = AtomicU64::new(0);
 const NETWORK_ID: u32 = 7332;
 const PROTOCOL_VERSION: u16 = 3;
 const LAST_BATCH: u64 = u64::MAX;
@@ -1313,15 +1315,61 @@ fn assert_maintained_root(
     );
 }
 
+struct TreasurySigner {
+    process: Child,
+    socket: PathBuf,
+}
+
+impl TreasurySigner {
+    fn start(cluster: &Cluster) -> Self {
+        let ordinal = NEXT_SIGNER.fetch_add(1, Ordering::SeqCst);
+        let key = cluster.root.join(format!("treasury-{ordinal}.hex"));
+        write(&key, hex_encode(&cluster.treasury_seed).as_bytes(), 0o600);
+        let owner = must(fs::metadata(&key), "treasury material").uid();
+        let socket = cluster.root.join(format!("treasury-signer-{ordinal}.sock"));
+        let process = must(
+            Command::new("python3")
+                .arg(repository_root().join("platform/hosted/node/signer/signer.py"))
+                .arg("--socket")
+                .arg(&socket)
+                .arg("--allowed-uid")
+                .arg(owner.to_string())
+                .arg("--provider")
+                .arg("file")
+                .arg("--key-file")
+                .arg(&key)
+                .stdin(Stdio::null())
+                .spawn(),
+            "treasury signer",
+        );
+        let signer = Self { process, socket };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !signer.socket.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the treasury signer socket did not appear"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        signer
+    }
+}
+
+impl Drop for TreasurySigner {
+    fn drop(&mut self) {
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+    }
+}
+
 fn cluster_producer(cluster: &Cluster, artifact: &Path) -> std::process::Output {
-    let key = cluster.root.join("producer-treasury.hex");
-    write(&key, hex_encode(&cluster.treasury_seed).as_bytes(), 0o600);
+    let signer = TreasurySigner::start(cluster);
     let public = SigningKey::from_bytes(&cluster.treasury_seed).verifying_key();
     let environment = cluster.root.join("producer.env");
     write(&environment, format!(
-        "LAYERX_NODE_TREASURY_KEY_FILE={}\nLAYERX_NODE_TREASURY_PUBLIC_KEY={}\nLAYERX_NODE_TREASURY_DID={}\nLAYERX_NODE_LNI_SOCKET={}\n",
-        key.display(), hex_encode(public.as_bytes()), cluster.treasury_did, cluster.lni_socket.display()
-    ).as_bytes(), 0o644);
+        "LAYERX_NODE_TREASURY_SIGNER_SOCKET={}\nLAYERX_NODE_TREASURY_PUBLIC_KEY={}\nLAYERX_NODE_TREASURY_DID={}\nLAYERX_NODE_LNI_SOCKET={}\n",
+        signer.socket.display(), hex_encode(public.as_bytes()), cluster.treasury_did, cluster.lni_socket.display()
+    ).as_bytes(), 0o600);
     let script = must(
         fs::read_to_string(repository_root().join("platform/hosted/tests/beta-cluster.sh")),
         "cluster script",
