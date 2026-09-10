@@ -1,3 +1,4 @@
+#include "layerx/lxp_module.h"
 #include "layerx/lxp_transfer.h"
 
 #include <string.h>
@@ -97,5 +98,49 @@ int main(void)
         result.from_balance_after.lo != 0U || result.to_balance_before.lo != 0U ||
         result.to_balance_after.lo != 100U || from->next_sequence != 5U)
         return 1;
+    leg.reason = LXP_REASON_PAYMENT;
+    leg.supply_mode = LXP_TRANSFER_CONSERVED;
+    if (lxp_ledger_bootstrap_balance(from, asset_id, (lxp_u128){ 0U, 100U },
+                                     UINT64_MAX) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 40U }, 0U) !=
+            LXP_OK) return 1;
+    context.actor_sequence = UINT64_MAX;
+    leg.amount = (lxp_u128){ 0U, 10U };
+    if (lxp_apply_transfer(&leg, &context, &result) !=
+            LXP_ERR_SEQUENCE_EXHAUSTED || !unchanged(from, to, 100U, 40U) ||
+        from->next_sequence != UINT64_MAX || to->next_sequence != 0U) return 1;
+    leg.from = to;
+    leg.to = from;
+    (void)memcpy(context.authorized_from, to_id, 32U);
+    context.actor_sequence = 0U;
+    if (lxp_apply_transfer(&leg, &context, &result) != LXP_OK ||
+        !unchanged(to, from, 30U, 110U) || to->next_sequence != 1U ||
+        from->next_sequence != UINT64_MAX) return 1;
+    leg.from = from;
+    leg.to = to;
+    (void)memcpy(context.authorized_from, from_id, 32U);
+    if (lxp_ledger_bootstrap_balance(from, asset_id, (lxp_u128){ 0U, 110U },
+                                     3U) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 30U },
+                                     UINT64_MAX) != LXP_OK) return 1;
+    context.sequence_account = to;
+    context.actor_sequence = 3U;
+    if (lxp_apply_transfer(&leg, &context, &result) !=
+            LXP_ERR_SEQUENCE_EXHAUSTED || !unchanged(from, to, 110U, 30U) ||
+        from->next_sequence != 3U || to->next_sequence != UINT64_MAX) return 1;
+    context.sequence_account = NULL;
+    context.protocol_system_capability = true;
+    context.origin_module_id = LXP_MODULE_PROGRAMS;
+    context.debit_authority_kind = LXP_AUTH_OCCUPANCY_RESPONSIBILITY;
+    leg.reason = LXP_REASON_STORAGE_OCCUPANCY;
+    if (from->kind != LX_ACCOUNT_AGENT_MAIN ||
+        lxp_apply_transfer(&leg, &context, &result) != LXP_OK ||
+        !unchanged(from, to, 100U, 40U) || from->next_sequence != 3U ||
+        to->next_sequence != UINT64_MAX) return 1;
+    if (lxp_ledger_bootstrap_balance(from, asset_id, (lxp_u128){ 0U, 100U },
+                                     UINT64_MAX) != LXP_OK) return 1;
+    if (lxp_apply_transfer(&leg, &context, &result) !=
+            LXP_ERR_SEQUENCE_EXHAUSTED || !unchanged(from, to, 100U, 40U) ||
+        from->next_sequence != UINT64_MAX) return 1;
     return 0;
 }

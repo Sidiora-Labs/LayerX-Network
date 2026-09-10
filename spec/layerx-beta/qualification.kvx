@@ -9747,6 +9747,52 @@ file = "src/modules/perps/lx_perps_dispatch.c src/protocol/lxp_module_ctx.c"
 symbol = "emit_identifier_event lxp_ctx_emit_event"
 observed = "emit_identifier_event at src/modules/perps/lx_perps_dispatch.c:437 assembles every perpetuals event body as two 32-byte identifiers followed by an ordinal-specific tail and refuses a tail that would not fit its buffer with LXP_ERR_LENGTH_LIMIT. The buffer holds 128 bytes, which admits the longest tail any ordinal produces - the funding tick's two signed 17-byte encodings, and the auto-deleverage count plus 16-byte deficit amount - against the 256-byte body limit lxp_ctx_emit_event enforces. An earlier 96-byte buffer left only 32 bytes of tail and made the funding tick unreachable; the buffer was widened rather than the guard removed."
 assumption = "The guard is the load-bearing check and was left exactly as written; only the buffer it measures grew, and it still sits well inside the kernel's own 256-byte limit."
+[observation.6.11.2400]
+task = "6.11"
+file = "include/layerx/lxp_result.h"
+symbol = "LXP_ERR_SEQUENCE_EXHAUSTED LXP_RESULT_CODES"
+observed = "The refusal for a terminal account sequence needs a result code of its own so a caller can tell an exhausted sequence apart from a mismatched one. There is no include/layerx/lxp_errors.h in the tree; every consensus result code is declared by the LXP_RESULT_CODES X-macro table in include/layerx/lxp_result.h, so LXP_ERR_SEQUENCE_EXHAUSTED was appended there at line 74 as -307, the next free value in the sequencing domain after LXP_ERR_CONDITION_UNMET at -306. No existing value was renumbered. Because lxp_terminal_rejection_applies at src/protocol/lxp_kernel.c:4682 classifies by lxp_result_domain and returns true for LXP_RESULT_DOMAIN_SEQUENCING, the new code is published as a terminal rejection with no change to that function, and tests/protocol/lxp_test_result.c covers its name, domain, fatality and uniqueness through the same table."
+assumption = "Appending a value at the end of the sequencing domain adds a code that no released receipt can already carry, so it is additive rather than a renumbering; a code that shares -305 with LXP_ERR_SEQUENCE_MISMATCH would have made a permanently unusable account indistinguishable from a caller that simply guessed the wrong sequence."
+severity = "note"
+
+[observation.6.11.2401]
+task = "6.11"
+file = "src/ledger/lxp_ledger_internal.h src/ledger/lxp_apply.c src/ledger/lxp_journal.c"
+symbol = "lxp_sequence_terminal_check lxp_balance_restore_snapshot"
+observed = "Both account sequence increments live in different translation units: src/ledger/lxp_apply.c:325 in lxp_apply_transfer and src/ledger/lxp_journal.c in lxp_apply_transfer_set. The predicate that refuses a terminal sequence is defined once in src/ledger/lxp_apply.c:70 and has to be visible to lxp_journal.c. Declaring it in the public include/layerx/lxp_transfer.h would widen the ledger surface that tools/ci/symbol-allowlist.sh polices, so the declaration was added to the private src/ledger/lxp_ledger_internal.h, which is included by src/ledger/lxp_journal.c alone and already carries exactly this pattern for lxp_balance_restore_snapshot, also defined in lxp_apply.c."
+assumption = "Duplicating the predicate as a static helper in each file would let the two increment sites drift apart, which is the failure this row exists to close, so one definition with a private declaration was preferred over two copies."
+severity = "note"
+
+[observation.6.11.2402]
+task = "6.11"
+file = "agent/crates/layerx-types/src/result.rs"
+symbol = "KnownResult SequenceExhausted"
+observed = "agent/crates/layerx-types/src/result.rs mirrors the C result table by hand, listing SequenceMismatch = -305, Retriable and ConditionUnmet = -306, Terminal at lines 119 and 120 and then jumping to InsufficientBalance = -400. The new LXP_ERR_SEQUENCE_EXHAUSTED = -307 has no Rust counterpart, so a Rust client decoding a receipt that carries -307 cannot name it or classify it as terminal. Nothing in the build reads include/layerx/lxp_result.h to check the two tables against each other, so the omission does not fail any gate."
+assumption = "agent/crates/layerx-types is outside this row's owned paths and adding a variant to a public enum is an API change for that crate, so the C side is left authoritative and the missing mirror is recorded rather than added. The absence of an automated parity check between the C table and the Rust enum is the underlying gap and it predates this change."
+severity = "suspect"
+
+[observation.6.11.2403]
+task = "6.11"
+file = "Makefile"
+symbol = "test_escrow_dispute test_stream_lifecycle PROGRAMS_RUNTIME_LIB"
+observed = "The link rules for build/tests/test_escrow_dispute at Makefile:495 and build/tests/test_stream_lifecycle at Makefile:611 name only $(TEST_LIBRARY), while every neighbouring module test rule also names $(PROGRAMS_RUNTIME_LIB) and depends on the programs-build order-only prerequisite. Both targets therefore fail to link with undefined references to layerx_programs_sandbox_admit_host, layerx_programs_consume_program_spend_authorization and layerx_programs_interface_validate. The same failure reproduces with exit status 2 on an unmodified checkout of the base revision built in a separate worktree, and this row changes no Makefile rule."
+assumption = "Adding $(PROGRAMS_RUNTIME_LIB) to those two rules would change how the whole test matrix links and belongs to whoever owns the build description, so the defect is recorded rather than repaired here."
+severity = "suspect"
+
+[observation.6.11.2404]
+task = "6.11"
+file = "tests/modules/test_escrow_open.c src/protocol/lxp_kernel.c"
+symbol = "lx_escrow_open_execute lxp_kernel_apply_transfer_set source_authorities"
+observed = "build/tests/test_escrow_open exits 1 without reaching the ledger. lxp_kernel_apply_transfer_set at src/protocol/lxp_kernel.c:1150 refuses a set whose context leaves source_authorities NULL or source_authority_count zero with LXP_ERR_NON_CANONICAL, before it ever calls kernel->apply_transfer_set. The fixture at tests/modules/test_escrow_open.c:82 zeroes request.context and then sets only assets, asset_count, sequence_account and authorized_from, so lx_escrow_open_execute returns that refusal and the capability installed by the test is never entered. An instrumented copy of the fixture confirms the capability records zero legs. The same binary built from an unmodified checkout of the base revision in a separate worktree also exits 1, so the failure is present without this change and is unrelated to it: the refusal happens above the ledger apply path this row touches."
+assumption = "Populating the fixture's source authorities would change what the escrow module test asserts about module authority, which is outside this row, so the failure is recorded rather than repaired. make CC=gcc test does not include this target."
+severity = "suspect"
+
+[observation.6.11.2405]
+task = "6.11"
+file = "src/ledger/lxp_apply.c src/ledger/lxp_journal.c src/ledger/lxp_send.c src/ledger/lxp_receive.c"
+symbol = "lxp_sequence_terminal_check lxp_precondition_check lxp_send_validate verify_receiver"
+observed = "An account whose next_sequence has reached UINT64_MAX cannot advance again: one more increment wraps it to zero and every sequence it already consumed becomes replayable. The refusal is placed so that the terminal value is unusable rather than wrapped. lxp_sequence_terminal_check refuses when either the debit source leg->from or the account named by context->sequence_account stands at UINT64_MAX, and it is called from lxp_precondition_check before any balance moves, again in lxp_apply_transfer before lxp_balance_apply_leg, and in lxp_apply_transfer_set immediately before the increment, where a refusal rolls the journal back and reports failed_leg with leg_count zero. lxp_send_validate at src/ledger/lxp_send.c:263 and verify_receiver at src/ledger/lxp_receive.c:350 answer LXP_ERR_SEQUENCE_EXHAUSTED before the mismatch comparison, so an exhausted account is never reported as a sequence guess. The check is deliberately not gated on protocol_system_capability, and the existing occupancy carve-out is preserved: a leg whose debit_authority_kind is LXP_AUTH_OCCUPANCY_RESPONSIBILITY consumes no sequence and is unaffected. A terminal account keeps its balance and can still be credited as the recipient of a leg, because only the debit source and the sequence account are examined."
+assumption = "The default chosen for this row is that the terminal value is unusable: the account keeps its funds and can still receive, but cannot debit. No recovery or rotation path is introduced, because reassigning or resetting a consumed sequence space is an account-lifecycle change beyond this row."
 severity = "note"
 
 [observation.6.11.6500]

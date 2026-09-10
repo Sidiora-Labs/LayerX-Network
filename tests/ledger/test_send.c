@@ -134,5 +134,24 @@ int main(void)
     send.context_hash[0] ^= 1U;
     if (lxp_send_validate(&send, &environment) != LXP_ERR_CONTEXT_MISMATCH)
         return 1;
+    send.context_hash[0] ^= 1U;
+    if (lxp_ledger_bootstrap_balance(from, asset_id, (lxp_u128){ 0U, 75U },
+                                     UINT64_MAX) != LXP_OK) return 1;
+    send.sequence = UINT64_MAX;
+    send.idempotency_key[0] = 11U;
+    if (sign_send(&send, seed, public_key) != 0 ||
+        lxp_send_validate(&send, &environment) != LXP_ERR_SEQUENCE_EXHAUSTED ||
+        lxp_send_execute(&send, &environment, &receipt) !=
+            LXP_ERR_SEQUENCE_EXHAUSTED ||
+        from->balance.lo != 75U || to->balance.lo != 25U ||
+        from->next_sequence != UINT64_MAX || store.count != 1U) return 1;
+    if (lxp_ledger_bootstrap_balance(from, asset_id, (lxp_u128){ 0U, 75U },
+                                     1U) != LXP_OK) return 1;
+    send.sequence = 1U;
+    send.idempotency_key[0] = 12U;
+    if (sign_send(&send, seed, public_key) != 0 ||
+        lxp_send_execute(&send, &environment, &receipt) != LXP_OK ||
+        from->balance.lo != 65U || to->balance.lo != 35U ||
+        from->next_sequence != 2U) return 1;
     return 0;
 }

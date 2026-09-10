@@ -346,6 +346,8 @@ static lxp_result verify_receiver(const lxp_receive *receive,
         authorization->network_id != environment->network_id ||
         authorization->protocol_version != environment->protocol_version)
         return LXP_ERR_UNAUTHORIZED_DEBIT;
+    if (recipient->next_sequence == UINT64_MAX)
+        return LXP_ERR_SEQUENCE_EXHAUSTED;
     if (receive->receiver_sequence != recipient->next_sequence)
         return LXP_ERR_SEQUENCE_MISMATCH;
     if (memcmp(receive->context_hash, authorization->signed_context_hash, 32U) != 0)
