@@ -10324,3 +10324,35 @@ symbol = "test-escrow-dispute test-stream-lifecycle test-escrow-open test-budget
 observed = "The seventeen ledger-consumer targets that this change could plausibly disturb - test-escrow-open, test-escrow-capture, test-escrow-timeout, test-escrow-invariants, test-escrow-dispute, test-budget-create, test-budget-spend, test-budget-delegate, test-budget-revoke, test-stream-open, test-stream-settle, test-stream-lifecycle, test-service-dispute, test-perps-margin, test-perps-funding, test-perps-liquidation and test-perps-insurance - were run together with make -k on this revision. The batch exits 2 with exactly two failures, both at link time: build/tests/test_escrow_dispute and build/tests/test_stream_lifecycle, the two rules recorded in observation 6.11.2403. Every one of the other fifteen builds and passes. On revision 7e0cd0c86, the revision this change was first written against, the same batch failed all seventeen, and an unmodified checkout of that revision in a separate worktree failed exactly the same seventeen names; the fifteen runtime failures were resolved on main between that revision and this one, and the two link failures survive because no rule was touched."
 assumption = "The two remaining failures cannot be caused by this change: they are link errors for undefined Rust programs-sandbox symbols in two rules that omit the runtime library, and this change adds no symbol to either binary. make CC=gcc test, which is this row's gate, contains none of the seventeen and passes."
 severity = "note"
+
+[observation.2.3.4600]
+task = "2.3"
+file = "cmd/layerx-verify/lxp_verify_cli.h cmd/layerx-verify/lxp_verify_cli.c platform/hosted/node/bootstrap.sh"
+symbol = "lxp_verify_trust_root lxp_verify_trust_root_load"
+observed = "The standalone verifier needed a trust root and the deployed system has exactly one artifact that a relying party can pin without contacting the network: the signed genesis manifest. platform/hosted/node/bootstrap.sh:452-461 writes SEQUENCER_PRIVATE into the genesis signer key file and hands that file to layerx-genesis-build, so the manifest signer_public_key recorded in genesis.manifest is the same key that signs batch headers through lxp_batch_sign and receipts through lxp_receipt_sign. The manifest therefore carries the whole authority key set that offline verification needs: the signing authority for headers and receipts, the guarantor key records that carry checkpoint attestations, the network id and the genesis state root. lxp_verify_trust_root_load parses the manifest with lxp_genesis_parse in LXP_GENESIS_INPUT_MANIFEST mode, verifies its signature with lxp_genesis_verify_signature, bounds the network id, protocol version and guarantor count, computes the manifest commitment and copies the guarantor records out with bonded derived from the recorded bond."
+assumption = "Pinning the genesis manifest is the trust root a relying party can obtain once and keep, and it is the only trust root the deployment already publishes. The verifier never accepts a signing key offered by the responder; the pinned key is the only authority it will honour."
+severity = "note"
+
+[observation.2.3.4601]
+task = "2.3"
+file = "cmd/layerx-verify/lxp_verify_cli.c cmd/layerxd/lxp_daemon_process.c"
+symbol = "lxp_verify_bundle_offline protocol_version"
+observed = "The trust root records the network protocol version and cmd/layerxd/lxp_daemon_process.c:4880 sets the daemon's protocol version from the genesis manifest, but the batch header does not inherit that value: cmd/layerxd/lxp_daemon_process.c:1436 and :3190 set header.protocol_version from the submitted activity, and admission only requires lxp_protocol_version_supported. Requiring header.protocol_version to equal the genesis protocol version would therefore refuse evidence the daemon legitimately produces, so lxp_verify_bundle_offline requires only that the header version is supported and binds the header to the trust root through network id equality and the pinned signing key, which is the same binding cmd/layerxd/lxp_daemon_evidence.c:402 verify_signed_header applies."
+assumption = "The header's protocol version is a property of the activity that was sealed, not of the network the manifest pins, so it is not a trust-root binding. Network id equality plus the pinned authority key are the bindings that actually constrain which network and which sequencer the evidence came from."
+severity = "note"
+
+[observation.2.3.4602]
+task = "2.3"
+file = "cmd/layerx-verify/lxp_verify_cli.c cmd/layerx-verify/lxp_verify_main.c include/layerx/lxp_tools.h"
+symbol = "lxp_verify_cli_main lxp_verify_main"
+observed = "cmd/layerx-verify already held lxp_verify_main, a library entry point declared in include/layerx/lxp_tools.h that replays a checkpoint against a guarantor certificate and a data availability bundle and is linked into build/tests/test_tools and the guarantor integration test. It is not a program entry point and is not reachable from a shell. The new command line is added as lxp_verify_cli_main in a separate translation unit with cmd/layerx-verify/main.c as the only thin main, so the existing helper and its callers are untouched and the two names do not collide."
+assumption = "An existing library helper that tests link against must keep its name and its callers. Adding the program entry point beside it rather than renaming it keeps every existing link line valid."
+severity = "note"
+
+[observation.2.3.4603]
+task = "2.3"
+file = "cmd/layerxd/lxp_daemon_evidence.c cmd/layerx-verify/lxp_verify_cli.c tests/tools/test_verify_cli.c"
+symbol = "write_signed_header lxp_verify_bundle_offline"
+observed = "The proof material a responder returns carries the sequencer id, the signing public key, a first and last authorized batch number, the canonical batch header and the header signature, but only the canonical header and the signature are covered by a signature. Exercising every single-byte mutation of a real proof bundle against lxp_verify_bundle_offline shows that the eight bytes of the last authorized batch number are the only bytes a responder can change without the verifier noticing: widening the range still leaves the header's own batch number inside it. The verifier does not treat those bytes as authority. It pins the public key to the genesis manifest, rejects any other key with LXP_ERR_AUTH_SCOPE, and builds its own lxp_sequencer_authorization whose first and last batch numbers are both the batch the signed header names, so a widened range grants nothing; moving the range so that the header's batch falls outside it is still refused with LXP_ERR_AUTH_SCOPE. tests/tools/test_verify_cli.c asserts all three behaviours and skips exactly those eight bytes in the exhaustive mutation loop."
+assumption = "An unsigned field in responder-supplied material can only be used to narrow trust, never to establish it. Deriving the authorized batch range from the signed header rather than from the envelope removes the field from the trust decision entirely, which is why mutating it is harmless rather than a gap."
+severity = "note"
