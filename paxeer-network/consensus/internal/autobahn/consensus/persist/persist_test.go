@@ -359,3 +359,47 @@ func TestPersistFileFormat(t *testing.T) {
 	seq := binary.LittleEndian.Uint64(bz[crcSize : crcSize+seqSize])
 	require.Equal(t, uint64(1), seq)
 }
+
+// TestNewPersisterNoneDirIsNoOp pins the behaviour that makes an absent state
+// dir unsafe for a validator: NewPersister accepts None, every Persist call
+// reports success, nothing reaches the disk, and a restart loads no state at
+// all. Config validation refuses that combination outside an explicit
+// test-only opt-out; this test is the reason it must.
+func TestNewPersisterNoneDirIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+
+	w, loaded, err := NewPersister[*wrapperspb.StringValue](utils.None[string](), "test")
+	require.NoError(t, err)
+	require.False(t, loaded.IsPresent(), "no-op persister must load nothing")
+
+	require.NoError(t, w.Persist(wrapperspb.String("safety-state")))
+	require.NoError(t, w.Persist(wrapperspb.String("safety-state-2")))
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Empty(t, entries, "no-op persister must not write any file")
+
+	// A restart through the same code path recovers nothing, so the consensus
+	// state would come back with no memory of the votes it already cast.
+	_, reloaded, err := NewPersister[*wrapperspb.StringValue](utils.None[string](), "test")
+	require.NoError(t, err)
+	require.False(t, reloaded.IsPresent())
+}
+
+// TestNewPersisterSomeDirSurvivesRestart is the contrasting case: with a state
+// dir the persisted message is recovered by the next NewPersister call, which
+// is the property the config-level requirement protects.
+func TestNewPersisterSomeDirSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+
+	w, loaded, err := NewPersister[*wrapperspb.StringValue](utils.Some(dir), "test")
+	require.NoError(t, err)
+	require.False(t, loaded.IsPresent())
+	require.NoError(t, w.Persist(wrapperspb.String("safety-state")))
+
+	_, reloaded, err := NewPersister[*wrapperspb.StringValue](utils.Some(dir), "test")
+	require.NoError(t, err)
+	msg, ok := reloaded.Get()
+	require.True(t, ok)
+	require.Equal(t, "safety-state", msg.GetValue())
+}

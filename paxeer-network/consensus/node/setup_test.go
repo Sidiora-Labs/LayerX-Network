@@ -52,7 +52,11 @@ func writeAutobahnConfig(t *testing.T, fc *config.AutobahnFileConfig) string {
 	return path
 }
 
-func defaultFileConfig(validators []config.AutobahnValidator) *config.AutobahnFileConfig {
+// defaultFileConfig returns a config that persists consensus state to a
+// per-test directory, which is what an operator config must do: leaving
+// persistent_state_dir unset is refused unless the test-only opt-out is set.
+func defaultFileConfig(t *testing.T, validators []config.AutobahnValidator) *config.AutobahnFileConfig {
+	t.Helper()
 	return &config.AutobahnFileConfig{
 		Validators:         validators,
 		MaxTxsPerBlock:     5_000,
@@ -60,7 +64,7 @@ func defaultFileConfig(validators []config.AutobahnValidator) *config.AutobahnFi
 		AllowEmptyBlocks:   false,
 		BlockInterval:      utils.Duration(400 * time.Millisecond),
 		ViewTimeout:        utils.Duration(1500 * time.Millisecond),
-		PersistentStateDir: utils.None[string](),
+		PersistentStateDir: utils.Some(t.TempDir()),
 		DialInterval:       utils.Duration(10 * time.Second),
 	}
 }
@@ -145,7 +149,7 @@ func TestBuildGigaConfig_EnabledWithValidators(t *testing.T) {
 
 func TestBuildGigaConfig_NoneMaxTxsPerSecond(t *testing.T) {
 	v1 := makeValidator([]byte("val-seed"), []byte("node-seed"), "localhost:26660")
-	fc := defaultFileConfig([]config.AutobahnValidator{v1})
+	fc := defaultFileConfig(t, []config.AutobahnValidator{v1})
 	cfgFile := writeAutobahnConfig(t, fc)
 	nodeKey := makeTestNodeKey([]byte("node-seed"))
 	valKey := makeTestValidatorKey([]byte("val-seed"))
@@ -156,9 +160,26 @@ func TestBuildGigaConfig_NoneMaxTxsPerSecond(t *testing.T) {
 	assert.False(t, result.Producer.MaxTxsPerSecond.IsPresent())
 }
 
-func TestBuildGigaConfig_NonePersistentStateDir(t *testing.T) {
+func TestBuildGigaConfig_PersistentStateDirIsRequired(t *testing.T) {
 	v1 := makeValidator([]byte("val-seed"), []byte("node-seed"), "localhost:26660")
-	fc := defaultFileConfig([]config.AutobahnValidator{v1})
+	fc := defaultFileConfig(t, []config.AutobahnValidator{v1})
+	fc.PersistentStateDir = utils.None[string]()
+	cfgFile := writeAutobahnConfig(t, fc)
+	nodeKey := makeTestNodeKey([]byte("node-seed"))
+	valKey := makeTestValidatorKey([]byte("val-seed"))
+	txMempool, genDoc := makeTestGigaDeps()
+
+	// Omitting the state dir would hand the consensus state a no-op persister,
+	// so the node refuses to start rather than run without safety state.
+	_, err := buildGigaConfig(cfgFile, nodeKey, valKey, txMempool, genDoc)
+	assert.ErrorIs(t, err, config.ErrPersistentStateDirRequired)
+}
+
+func TestBuildGigaConfig_TestOnlyOptOutDisablesPersistence(t *testing.T) {
+	v1 := makeValidator([]byte("val-seed"), []byte("node-seed"), "localhost:26660")
+	fc := defaultFileConfig(t, []config.AutobahnValidator{v1})
+	fc.PersistentStateDir = utils.None[string]()
+	fc.UnsafeTestOnlyDisablePersistence = true
 	cfgFile := writeAutobahnConfig(t, fc)
 	nodeKey := makeTestNodeKey([]byte("node-seed"))
 	valKey := makeTestValidatorKey([]byte("val-seed"))
@@ -167,6 +188,51 @@ func TestBuildGigaConfig_NonePersistentStateDir(t *testing.T) {
 	result, err := buildGigaConfig(cfgFile, nodeKey, valKey, txMempool, genDoc)
 	require.NoError(t, err)
 	assert.False(t, result.Consensus.PersistentStateDir.IsPresent())
+}
+
+func TestBuildGigaConfig_OptOutConflictsWithStateDir(t *testing.T) {
+	v1 := makeValidator([]byte("val-seed"), []byte("node-seed"), "localhost:26660")
+	fc := defaultFileConfig(t, []config.AutobahnValidator{v1})
+	fc.UnsafeTestOnlyDisablePersistence = true
+	cfgFile := writeAutobahnConfig(t, fc)
+	nodeKey := makeTestNodeKey([]byte("node-seed"))
+	valKey := makeTestValidatorKey([]byte("val-seed"))
+	txMempool, genDoc := makeTestGigaDeps()
+
+	_, err := buildGigaConfig(cfgFile, nodeKey, valKey, txMempool, genDoc)
+	assert.ErrorIs(t, err, config.ErrPersistenceOptOutConflict)
+}
+
+func TestBuildGigaConfig_BlankPersistentStateDir(t *testing.T) {
+	v1 := makeValidator([]byte("val-seed"), []byte("node-seed"), "localhost:26660")
+	fc := defaultFileConfig(t, []config.AutobahnValidator{v1})
+	fc.PersistentStateDir = utils.Some("   ")
+	cfgFile := writeAutobahnConfig(t, fc)
+	nodeKey := makeTestNodeKey([]byte("node-seed"))
+	valKey := makeTestValidatorKey([]byte("val-seed"))
+	txMempool, genDoc := makeTestGigaDeps()
+
+	_, err := buildGigaConfig(cfgFile, nodeKey, valKey, txMempool, genDoc)
+	assert.ErrorIs(t, err, config.ErrPersistentStateDirBlank)
+}
+
+// TestBuildGigaConfig_StateDirReachesConsensusConfig pins that the dir the
+// operator configured is the dir the consensus persister will use.
+func TestBuildGigaConfig_StateDirReachesConsensusConfig(t *testing.T) {
+	v1 := makeValidator([]byte("val-seed"), []byte("node-seed"), "localhost:26660")
+	fc := defaultFileConfig(t, []config.AutobahnValidator{v1})
+	wantDir, ok := fc.PersistentStateDir.Get()
+	require.True(t, ok)
+	cfgFile := writeAutobahnConfig(t, fc)
+	nodeKey := makeTestNodeKey([]byte("node-seed"))
+	valKey := makeTestValidatorKey([]byte("val-seed"))
+	txMempool, genDoc := makeTestGigaDeps()
+
+	result, err := buildGigaConfig(cfgFile, nodeKey, valKey, txMempool, genDoc)
+	require.NoError(t, err)
+	gotDir, ok := result.Consensus.PersistentStateDir.Get()
+	require.True(t, ok)
+	assert.Equal(t, wantDir, gotDir)
 }
 
 func TestBuildGigaConfig_InvalidConfigFile(t *testing.T) {
@@ -187,7 +253,7 @@ func TestBuildGigaConfig_InvalidConfigFile(t *testing.T) {
 	})
 
 	t.Run("empty validators", func(t *testing.T) {
-		fc := defaultFileConfig([]config.AutobahnValidator{})
+		fc := defaultFileConfig(t, []config.AutobahnValidator{})
 		cfgFile := writeAutobahnConfig(t, fc)
 		_, err := buildGigaConfig(cfgFile, nodeKey, valKey, txMempool, genDoc)
 		assert.Error(t, err)
@@ -201,7 +267,7 @@ func TestBuildGigaConfig_GenesisMaxGas(t *testing.T) {
 	nodeKey := makeTestNodeKey([]byte("node-seed"))
 	valKey := makeTestValidatorKey([]byte("val-seed"))
 	v := makeValidator([]byte("val-seed"), []byte("node-seed"), "localhost:26660")
-	cfgFile := writeAutobahnConfig(t, defaultFileConfig([]config.AutobahnValidator{v}))
+	cfgFile := writeAutobahnConfig(t, defaultFileConfig(t, []config.AutobahnValidator{v}))
 
 	t.Run("nil ConsensusParams", func(t *testing.T) {
 		txMempool, genDoc := makeTestGigaDeps()
@@ -228,7 +294,7 @@ func TestBuildGigaConfig_GenesisMaxGas(t *testing.T) {
 func TestBuildGigaConfig_DuplicateValidatorKey(t *testing.T) {
 	v1 := makeValidator([]byte("val-seed"), []byte("node1"), "localhost:26660")
 	v1dup := makeValidator([]byte("val-seed"), []byte("node2"), "localhost:26661")
-	fc := defaultFileConfig([]config.AutobahnValidator{v1, v1dup})
+	fc := defaultFileConfig(t, []config.AutobahnValidator{v1, v1dup})
 	data, _ := json.Marshal(fc)
 	path := filepath.Join(t.TempDir(), "autobahn.json")
 	os.WriteFile(path, data, 0644)
@@ -244,7 +310,7 @@ func TestBuildGigaConfig_DuplicateValidatorKey(t *testing.T) {
 func TestBuildGigaConfig_DuplicateNodeKey(t *testing.T) {
 	v1 := makeValidator([]byte("val1"), []byte("same-node"), "localhost:26660")
 	v2 := makeValidator([]byte("val2"), []byte("same-node"), "localhost:26661")
-	fc := defaultFileConfig([]config.AutobahnValidator{v1, v2})
+	fc := defaultFileConfig(t, []config.AutobahnValidator{v1, v2})
 	data, _ := json.Marshal(fc)
 	path := filepath.Join(t.TempDir(), "autobahn.json")
 	os.WriteFile(path, data, 0644)
@@ -259,7 +325,7 @@ func TestBuildGigaConfig_DuplicateNodeKey(t *testing.T) {
 
 func TestBuildGigaConfig_SelfNotInValidators(t *testing.T) {
 	v1 := makeValidator([]byte("other-val"), []byte("other-node"), "localhost:26660")
-	cfgFile := writeAutobahnConfig(t, defaultFileConfig([]config.AutobahnValidator{v1}))
+	cfgFile := writeAutobahnConfig(t, defaultFileConfig(t, []config.AutobahnValidator{v1}))
 	nodeKey := makeTestNodeKey([]byte("my-node"))
 	valKey := makeTestValidatorKey([]byte("my-val"))
 	txMempool, genDoc := makeTestGigaDeps()
@@ -272,7 +338,7 @@ func TestBuildGigaConfig_SelfNotInValidators(t *testing.T) {
 func TestBuildGigaConfig_NodeKeyMismatch(t *testing.T) {
 	// Validator entry has the right val key but wrong node key.
 	v1 := makeValidator([]byte("my-val"), []byte("wrong-node"), "localhost:26660")
-	cfgFile := writeAutobahnConfig(t, defaultFileConfig([]config.AutobahnValidator{v1}))
+	cfgFile := writeAutobahnConfig(t, defaultFileConfig(t, []config.AutobahnValidator{v1}))
 	nodeKey := makeTestNodeKey([]byte("my-node"))
 	valKey := makeTestValidatorKey([]byte("my-val"))
 	txMempool, genDoc := makeTestGigaDeps()

@@ -206,6 +206,17 @@ func buildGigaConfig(
 		return nil, fmt.Errorf("loading autobahn config from %q: %w", autobahnConfigFile, err)
 	}
 
+	// The consensus state falls back to a no-op persister whenever it is handed
+	// no state dir, which silently discards the safety state that keeps a
+	// restarted validator from equivocating. Derive the dir through the checked
+	// accessor rather than reading the field, so this constructor refuses such a
+	// config here, at the point the consensus config is built, and not only in
+	// AutobahnFileConfig.Validate.
+	persistentStateDir, err := fc.ConsensusPersistentStateDir()
+	if err != nil {
+		return nil, fmt.Errorf("autobahn config %q: %w", autobahnConfigFile, err)
+	}
+
 	validatorAddrs := map[atypes.PublicKey]p2p.GigaNodeAddr{}
 	seenNodeKeys := map[p2p.NodePublicKey]bool{}
 
@@ -248,7 +259,7 @@ func buildGigaConfig(
 			ViewTimeout: func(atypes.View) time.Duration {
 				return time.Duration(fc.ViewTimeout)
 			},
-			PersistentStateDir: fc.PersistentStateDir,
+			PersistentStateDir: persistentStateDir,
 		},
 		Producer: &producer.Config{
 			App:                     app,
@@ -373,7 +384,9 @@ func createRouter(
 		// Resolve a relative persistent_state_dir against the node's --home dir,
 		// matching how other paths in the tendermint config are handled
 		// (config.go's rootify). Absolute paths pass through unchanged. None
-		// means the operator opted into in-memory-only mode and stays None.
+		// means the operator set unsafe_test_only_disable_persistence and stays
+		// None; buildGigaConfig has already refused every other way of reaching
+		// None here.
 		if dir, ok := gigaCfg.Consensus.PersistentStateDir.Get(); ok && !filepath.IsAbs(dir) {
 			gigaCfg.Consensus.PersistentStateDir = utils.Some(filepath.Join(cfg.RootDir, dir))
 		}
