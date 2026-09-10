@@ -1,13 +1,22 @@
 name: Publish beta images
 
+# The beta images are published from a release tag or from the named release
+# candidate only, never from an arbitrary push to a branch: the moving :beta tag
+# is repointed in the promote job after the published digest of every image has
+# been verified against its signature, its SBOM attestation and its build
+# provenance.
 on:
   push:
-    branches: [main]
+    tags: ["sdk-v*"]
   workflow_dispatch:
+    inputs:
+      release_candidate:
+        description: The 40-hex release-candidate commit on the default branch to publish
+        required: true
+        type: string
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: publish-beta-images
@@ -16,16 +25,69 @@ concurrency:
 env:
   CARGO_BUILD_JOBS: '4'
   MAKEFLAGS: -j4
+  LAYERX_PUBLISH_REVISION: ${{ github.event_name == 'workflow_dispatch' && inputs.release_candidate || github.sha }}
+  LAYERX_PUBLISH_RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+  LAYERX_PUBLISH_RELEASE_CANDIDATE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_candidate || '' }}
+  LAYERX_PUBLISH_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  LAYERX_PUBLISH_OUTPUT: build/beta-cluster/publication
 
 jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      revision: ${{ steps.revision.outputs.revision }}
+    steps:
+      - name: Check out the revision that is to be published
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.LAYERX_PUBLISH_REVISION }}
+          fetch-tags: true
+          persist-credentials: false
+      - name: Resolve and bind the published revision
+        id: revision
+        run: |
+          revision=$(git rev-parse HEAD)
+          test "$revision" = "$LAYERX_PUBLISH_REVISION"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - name: Install native dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          build-essential libssl-dev libsqlite3-dev ripgrep
+      - name: Build and test the native core the images carry
+        env:
+          CC: gcc
+        run: make build test scan-consensus
+      - name: Check the executed-evidence ledger
+        run: make beta-ledger-check
+      - name: Check the publisher and the shared image table
+        run: bash -n platform/hosted/tests/publish-images.sh platform/hosted/tests/beta-images.sh
+
   publish:
+    needs: [gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      images: ${{ steps.digests.outputs.images }}
+      published: ${{ steps.digests.outputs.published }}
+    env:
+      LAYERX_PUBLISH_GATE_REVISION: ${{ needs.gate.outputs.revision }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check out the revision that is to be published
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.gate.outputs.revision }}
+          fetch-tags: true
           persist-credentials: false
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Build all beta images using the shared cluster image table and contexts
         run: bash platform/hosted/tests/beta-cluster.sh images
       - name: Authenticate to GHCR
@@ -33,8 +95,103 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_ACTOR: ${{ github.actor }}
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_ACTOR" --password-stdin
-      - name: Publish SHA and beta tags and verify registry digests
-        run: bash platform/hosted/tests/beta-cluster.sh publish-images
+      - name: Push the immutable revision tag, generate the SBOM and sign every image
+        run: |
+          bash platform/hosted/tests/publish-images.sh --phase push \
+            ${LAYERX_PUBLISH_RELEASE_TAG:+--release-tag "$LAYERX_PUBLISH_RELEASE_TAG"} \
+            ${LAYERX_PUBLISH_RELEASE_CANDIDATE:+--release-candidate "$LAYERX_PUBLISH_RELEASE_CANDIDATE"} \
+            --output "$LAYERX_PUBLISH_OUTPUT"
+      - name: Publish the image set and the digests the attestation jobs bind to
+        id: digests
+        run: |
+          {
+            printf 'images=%s\n' "$(jq -R -s -c '[splits("\n") | select(length > 0) | split(" ")[0]]' \
+              < "$LAYERX_PUBLISH_OUTPUT/digests.txt")"
+            printf 'published=%s\n' "$(jq -R -s -c '
+              [splits("\n") | select(length > 0) | split(" ")]
+              | map({key: .[0], value: {name: .[1], digest: .[2]}}) | from_entries' \
+              < "$LAYERX_PUBLISH_OUTPUT/digests.txt")"
+          } >> "$GITHUB_OUTPUT"
+      - name: Retain the SBOMs, the digests and the publication record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: beta-image-publication
+          path: ${{ env.LAYERX_PUBLISH_OUTPUT }}
+          if-no-files-found: error
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io
+
+  attest:
+    needs: [publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      matrix:
+        image: ${{ fromJSON(needs.publish.outputs.images) }}
+    steps:
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_ACTOR" --password-stdin
+      - name: Attest the build provenance of the published image digest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ fromJSON(needs.publish.outputs.published)[matrix.image].name }}
+          subject-digest: ${{ fromJSON(needs.publish.outputs.published)[matrix.image].digest }}
+          push-to-registry: true
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io
+
+  promote:
+    needs: [gate, publish, attest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      attestations: read
+    env:
+      LAYERX_PUBLISH_GATE_REVISION: ${{ needs.gate.outputs.revision }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out the revision that is to be published
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.revision }}
+          fetch-tags: true
+          persist-credentials: false
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Restore the SBOMs, the digests and the publication record
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: beta-image-publication
+          path: ${{ env.LAYERX_PUBLISH_OUTPUT }}
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_ACTOR" --password-stdin
+      - name: Verify every published digest and only then repoint the release and beta tags
+        run: |
+          bash platform/hosted/tests/publish-images.sh --phase promote \
+            ${LAYERX_PUBLISH_RELEASE_TAG:+--release-tag "$LAYERX_PUBLISH_RELEASE_TAG"} \
+            ${LAYERX_PUBLISH_RELEASE_CANDIDATE:+--release-candidate "$LAYERX_PUBLISH_RELEASE_CANDIDATE"} \
+            --output "$LAYERX_PUBLISH_OUTPUT"
+      - name: Retain the verification evidence of the promotion
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: beta-image-verification
+          path: ${{ env.LAYERX_PUBLISH_OUTPUT }}
+          if-no-files-found: error
       - name: Log out of GHCR
         if: always()
         run: docker logout ghcr.io
