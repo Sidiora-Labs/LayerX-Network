@@ -130,6 +130,11 @@ typedef struct lxp_verified_receipt_index {
     void *fallback_context;
 } lxp_verified_receipt_index;
 
+enum {
+    LXP_LEDGER_RECEIPT_MODULE_ID = 1,
+    LXP_LEDGER_RECEIPT_MODULE_VERSION = 1
+};
+
 typedef struct lxp_ledger_receipt_input {
     uint8_t transaction_id[32];
     uint8_t operation;
