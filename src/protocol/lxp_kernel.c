@@ -4679,6 +4679,245 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     return LXP_OK;
 }
 
+bool lxp_terminal_rejection_applies(lxp_result refusal)
+{
+    if (refusal == LXP_OK || refusal == LXP_ERR_IDEMPOTENT_REPLAY ||
+        lxp_result_is_fatal(refusal))
+        return false;
+    switch (lxp_result_domain(refusal)) {
+    case LXP_RESULT_DOMAIN_CODEC:
+    case LXP_RESULT_DOMAIN_ENVELOPE:
+    case LXP_RESULT_DOMAIN_AUTHORITY:
+    case LXP_RESULT_DOMAIN_SEQUENCING:
+    case LXP_RESULT_DOMAIN_LEDGER:
+    case LXP_RESULT_DOMAIN_ARITHMETIC:
+    case LXP_RESULT_DOMAIN_METERING:
+    case LXP_RESULT_DOMAIN_MODULE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+lxp_result lxp_kernel_terminal_rejection(lxp_kernel *kernel,
+                                         const lxp_activity *activity,
+                                         const lxp_kernel_execution *execution,
+                                         lxp_result refusal,
+                                         lxp_receipt *receipt)
+{
+    lxp_effect_buffer effects;
+    lxp_byte_span encoded;
+    uint8_t canonical_activity_id[32];
+    uint8_t committed_root[32];
+    uint16_t module_id;
+    size_t arena_mark;
+    lxp_result status;
+    if (kernel == NULL || activity == NULL || execution == NULL ||
+        receipt == NULL || kernel->state == NULL || kernel->journal == NULL ||
+        execution->arena == NULL || execution->batch_number == 0U ||
+        execution->recorded_module_version == 0U ||
+        execution->global_sequence == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    if (!lxp_terminal_rejection_applies(refusal) ||
+        !lxp_protocol_version_supported(activity->protocol_version))
+        return LXP_ERR_NON_CANONICAL;
+    if (kernel->publication_poisoned || kernel->journal->open ||
+        execution->global_sequence != kernel->state->next_sequence)
+        return LXP_FATAL_INVARIANT;
+    module_id = lxp_activity_module_id(activity->activity_type);
+    if (module_id == 0U || module_id > LXP_MODULE_RESERVED_COUNT)
+        return LXP_ERR_UNKNOWN_MODULE;
+    if (activity->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        status = lxp_state_root(kernel, committed_root);
+        if (status != LXP_OK) return status;
+        if (lxp_ct_memcmp(committed_root, kernel->current_state_root, 32U) != 0)
+            return LXP_FATAL_INVARIANT;
+    }
+    arena_mark = lxp_arena_mark(execution->arena);
+    status = lxp_activity_encode(activity, execution->arena, &encoded);
+    if (status == LXP_OK)
+        status = lxp_activity_id(encoded.bytes, encoded.length,
+                                 canonical_activity_id);
+    if (lxp_arena_reset(execution->arena, arena_mark) != LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) status = lxp_effect_buffer_init(&effects);
+    if (status != LXP_OK) return status;
+    status = lxp_state_journal_open(kernel->state, execution->global_sequence,
+                                    kernel->journal);
+    if (status != LXP_OK) return status;
+    (void)memset(receipt, 0, sizeof(*receipt));
+    receipt->protocol_version = activity->protocol_version;
+    (void)memcpy(receipt->activity_id, canonical_activity_id, 32U);
+    receipt->global_sequence = execution->global_sequence;
+    (void)memcpy(receipt->previous_state_root, kernel->current_state_root, 32U);
+    receipt->result_code = refusal;
+    receipt->module_id = module_id;
+    receipt->module_version = execution->recorded_module_version;
+    receipt->parameter_version = execution->parameter_version;
+    (void)memcpy(receipt->batch_id, execution->batch_id, 32U);
+    (void)memcpy(receipt->activity_root, execution->activity_root, 32U);
+    if (receipt->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = receipt_state_root(kernel, NULL, activity, receipt,
+                                    execution->arena,
+                                    receipt->resulting_state_root);
+    if (status == LXP_OK)
+        status = lxp_receipt_build(
+            receipt, canonical_activity_id, execution->global_sequence,
+            receipt->previous_state_root, receipt->resulting_state_root,
+            execution->activity_root, refusal, &effects,
+            (lxp_u128){0U, 0U}, execution->batch_id, module_id,
+            execution->recorded_module_version, execution->parameter_version);
+    if (status == LXP_OK) receipt->timestamp = execution->batch_timestamp_ms;
+    if (status == LXP_OK)
+        status = receipt_bind_program_operation(activity, receipt);
+    if (status == LXP_OK)
+        status = receipt_bind_send_refusal(kernel, activity, receipt);
+    if (status == LXP_OK && receipt->protocol_version ==
+                                LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = receipt_state_root(kernel, NULL, activity, receipt,
+                                    execution->arena,
+                                    receipt->resulting_state_root);
+    if (status == LXP_OK && execution->sequencer_private_key != NULL)
+        status = lxp_receipt_sign(receipt, execution->sequencer_private_key,
+                                  execution->arena);
+    if (status == LXP_OK)
+        status = receipt_store(kernel->journal, activity, receipt);
+    if (status != LXP_OK) {
+        (void)lxp_state_journal_rollback(kernel->journal);
+        return status;
+    }
+    status = lxp_state_journal_commit(kernel->journal);
+    if (status != LXP_OK) {
+        if (kernel->journal->open)
+            (void)lxp_state_journal_rollback(kernel->journal);
+        return status;
+    }
+    status = receipt_committed_state_check(kernel, receipt);
+    if (status != LXP_OK) {
+        kernel->publication_poisoned = true;
+        kernel->poisoned_sequence = receipt->global_sequence;
+        (void)memcpy(kernel->poisoned_activity_id, receipt->activity_id, 32U);
+        (void)memcpy(kernel->poisoned_state_root,
+                     receipt->resulting_state_root, 32U);
+        return status;
+    }
+    (void)memcpy(kernel->current_state_root, receipt->resulting_state_root,
+                 32U);
+    if (kernel->observe_commit != NULL) {
+        status = kernel->observe_commit(kernel->commit_observer_context,
+                                        kernel, activity, receipt);
+        if (status != LXP_OK) {
+            kernel->publication_poisoned = true;
+            kernel->poisoned_sequence = receipt->global_sequence;
+            (void)memcpy(kernel->poisoned_activity_id,
+                         receipt->activity_id, 32U);
+            (void)memcpy(kernel->poisoned_state_root,
+                         receipt->resulting_state_root, 32U);
+            return LXP_FATAL_INVARIANT;
+        }
+    }
+    return LXP_OK;
+}
+
+lxp_result lxp_kernel_prepare_terminal_rejection(
+    lxp_kernel *kernel, const lxp_activity *activity,
+    const lxp_kernel_execution *execution, lxp_result refusal,
+    lxp_kernel_prepared_batch **batch_out)
+{
+    lxp_kernel_prepared_batch *batch = NULL;
+    lxp_kernel_execution private_execution;
+    kernel_staged_commit record;
+    const lx_programs_transfer_runtime *runtime;
+    uint8_t receipt_digest[32];
+    size_t mark;
+    uint8_t *storage = NULL;
+    lxp_arena arena;
+    lxp_result status;
+    if (kernel == NULL || activity == NULL || execution == NULL ||
+        batch_out == NULL || execution->identities == NULL ||
+        execution->arena == NULL ||
+        !lxp_terminal_rejection_applies(refusal))
+        return LXP_ERR_NON_CANONICAL;
+    *batch_out = NULL;
+    runtime = kernel->module_runtime[LXP_MODULE_PROGRAMS];
+    if (runtime == NULL) return LXP_ERR_MODULE_DISABLED;
+    batch = calloc(1U, sizeof(*batch));
+    storage = malloc(LXP_KERNEL_PREPARE_ARENA_BYTES);
+    if (batch == NULL || storage == NULL) {
+        status = LXP_ERR_ARENA_EXHAUSTED;
+        goto done;
+    }
+    batch->count = 1U;
+    batch->receipts = calloc(1U, sizeof(*batch->receipts));
+    batch->events = calloc(1U, sizeof(*batch->events));
+    batch->event_bytes = calloc(1U, sizeof(*batch->event_bytes));
+    batch->artifact_bytes = calloc(2U, sizeof(*batch->artifact_bytes));
+    if (batch->receipts == NULL || batch->events == NULL ||
+        batch->event_bytes == NULL || batch->artifact_bytes == NULL) {
+        status = LXP_ERR_ARENA_EXHAUSTED;
+        goto done;
+    }
+    status = lxp_arena_init(&arena, storage, LXP_KERNEL_PREPARE_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_create(kernel, execution->identities,
+            execution->verified_receipts, execution, &batch->base);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_clone(batch->base, &batch->settled);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_begin_level(batch->settled);
+    if (status != LXP_OK) goto done;
+    private_execution = *execution;
+    private_execution.arena = &arena;
+    private_execution.identities = &batch->settled->identities;
+    private_execution.verified_receipts = &batch->settled->verified_receipts;
+    private_execution.fee_parameters = &batch->settled->fee_parameters;
+    private_execution.canonical_events_out = NULL;
+    record = (kernel_staged_commit){execution->arena, {0},
+                                    execution->global_sequence, false};
+    batch->settled->programs_runtime.state_feed = runtime->state_feed;
+    batch->settled->kernel.observe_commit = kernel_stage_commit;
+    batch->settled->kernel.commit_observer_context = &record;
+    status = lxp_kernel_terminal_rejection(&batch->settled->kernel, activity,
+                                           &private_execution, refusal,
+                                           &batch->receipts[0]);
+    batch->settled->kernel.observe_commit = NULL;
+    batch->settled->kernel.commit_observer_context = NULL;
+    batch->settled->programs_runtime.state_feed = NULL;
+    mark = lxp_arena_mark(execution->arena);
+    if (status == LXP_OK)
+        status = lxp_receipt_digest(&batch->receipts[0], execution->arena,
+                                    receipt_digest);
+    if (lxp_arena_reset(execution->arena, mark) != LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK && (!record.present ||
+        lxp_ct_memcmp(record.receipt_digest, receipt_digest, 32U) != 0))
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = lxp_programs_project_receipt_events(&batch->receipts[0],
+                                                     &arena, &batch->events[0]);
+    if (status == LXP_OK && batch->events[0].length != 0U) {
+        batch->event_bytes[0] = malloc(batch->events[0].length);
+        if (batch->event_bytes[0] == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
+        else {
+            (void)memcpy(batch->event_bytes[0], batch->events[0].bytes,
+                         batch->events[0].length);
+            batch->events[0].bytes = batch->event_bytes[0];
+        }
+    }
+    if (status == LXP_OK)
+        status = lxp_state_snapshot_seal_level(batch->settled->state);
+    if (status == LXP_OK)
+        status = kernel_prepared_batch_digest(activity, execution, batch);
+    if (status == LXP_OK) {
+        *batch_out = batch;
+        batch = NULL;
+    }
+done:
+    lxp_kernel_prepared_batch_destroy(batch);
+    free(storage);
+    return status;
+}
+
 uint8_t lxp_kernel_step_order(size_t index)
 {
     static const uint8_t order[] = { 1U, 2U, 3U, 4U, 5U, 6U,

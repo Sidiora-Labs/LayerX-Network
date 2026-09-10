@@ -50,6 +50,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-arith-nofloat \
 	test-log test-log-durability test-recovery test-projection test-rebuild \
 	test-batch-wal-recovery test-finality-evidence test-storage-order test-storage \
+	test-terminal-rejection \
 	test-journal \
 	test-activity-codec test-envelope test-verify-pool test-admission \
 	test-idempotency \
@@ -271,7 +272,8 @@ test: test-state-diff test-da-verified test-result test-protocol test-state-comm
 	test-recovery test-projection test-rebuild test-journal \
 	test-activity-codec test-envelope test-verify-pool test-admission \
 	test-idempotency test-fee-gate test-identity test-grants \
-	test-authority-resolve test-allowance test-revocation test-rotation
+	test-authority-resolve test-allowance test-revocation test-rotation \
+	test-terminal-rejection
 
 $(BUILD_DIR)/tests/lxp_test_kernel: tests/protocol/lxp_test_kernel.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -1726,6 +1728,19 @@ $(BUILD_DIR)/tests/lxp_test_maintenance_publication: \
 
 test-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_maintenance_publication
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_maintenance_publication
+
+$(BUILD_DIR)/tests/lxp_test_terminal_rejection: \
+		tests/protocol/lxp_test_terminal_rejection.c \
+		tests/programs/test_call_activity.c cmd/layerxd/lxp_daemon_batch_wal.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
+		tests/protocol/lxp_test_terminal_rejection.c \
+		cmd/layerxd/lxp_daemon_batch_wal.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -lsqlite3 -ldl -lm -o $@
+
+test-terminal-rejection: $(BUILD_DIR)/tests/lxp_test_terminal_rejection
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_terminal_rejection
 
 test-batch-wal-recovery: $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery
