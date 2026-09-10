@@ -80,8 +80,11 @@ static lxp_result append_leg(lxp_transfer_set *set, lx_account *from,
 }
 
 lxp_result lx_perps_liquidation_legs_build(
-    const lx_perps_liquidation_request *request, lxp_transfer_set *set)
+    const lx_perps_liquidation_request *request, lxp_transfer_set *set,
+    lxp_transfer_source_authority *authorities, size_t capacity,
+    size_t *authority_count)
 {
+    size_t index;
     lxp_u128 notional;
     lxp_u128 total_fee;
     lxp_u128 loss_from_margin;
@@ -91,7 +94,9 @@ lxp_result lx_perps_liquidation_legs_build(
     lxp_u128 liquidator_fee;
     lxp_u128 insurance_fee;
     lxp_result status;
-    if (request == NULL || set == NULL || request->position == NULL ||
+    if (request == NULL || set == NULL || authorities == NULL ||
+        authority_count == NULL || capacity == 0U ||
+        request->position == NULL ||
         request->market == NULL || request->margin_account == NULL ||
         request->market_liquidity_account == NULL ||
         request->liquidator_main_account == NULL ||
@@ -157,6 +162,15 @@ lxp_result lx_perps_liquidation_legs_build(
     set->context.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
     (void)memcpy(set->context.authorized_from,
                  request->margin_account->id, 32U);
+    *authority_count = 0U;
+    for (index = 0U; index < set->leg_count; ++index) {
+        status = lx_perps_source_authority_add(
+            authorities, capacity, authority_count,
+            set->legs[index].from->id, LXP_AUTH_PROTOCOL_MODULE, true);
+        if (status != LXP_OK) return status;
+    }
+    set->context.source_authorities = authorities;
+    set->context.source_authority_count = *authority_count;
     return LXP_OK;
 }
 
@@ -165,6 +179,8 @@ lxp_result lx_perps_liquidate_execute(
     lxp_receipt *receipt)
 {
     lxp_transfer_set set;
+    lxp_transfer_source_authority authorities[LX_PERPS_LIQUIDATION_SOURCES];
+    size_t authority_count = 0U;
     bool liquidatable;
     lxp_result status;
     if (ctx == NULL || request == NULL || request->position == NULL ||
@@ -179,7 +195,9 @@ lxp_result lx_perps_liquidate_execute(
         &liquidatable);
     if (status != LXP_OK) return status;
     if (!liquidatable) return LXP_ERR_MARGIN_INSUFFICIENT;
-    status = lx_perps_liquidation_legs_build(request, &set);
+    status = lx_perps_liquidation_legs_build(request, &set, authorities,
+                                             LX_PERPS_LIQUIDATION_SOURCES,
+                                             &authority_count);
     if (status != LXP_OK) return status;
     status = lxp_ctx_emit_transfer_set(ctx, &set, receipt);
     if (status != LXP_OK) return status;

@@ -117,6 +117,7 @@ lxp_result lx_perps_funding_tick_execute(
     lxp_receipt *receipt)
 {
     lxp_transfer_set set;
+    lxp_transfer_source_authority source;
     lxp_u128 amount;
     lxp_i128 next_index;
     uint64_t timestamp;
@@ -156,6 +157,7 @@ lxp_result lx_perps_funding_tick_execute(
     if (status != LXP_OK) return LXP_ERR_OVERFLOW;
     if (lxp_u128_is_zero(amount)) return LXP_ERR_ZERO_AMOUNT;
     (void)memset(&set, 0, sizeof(set));
+    (void)memset(&source, 0, sizeof(source));
     set.leg_count = 1U;
     set.legs[0].from = request->funding_rate_bps.negative ?
         request->short_funding_account : request->long_funding_account;
@@ -171,10 +173,51 @@ lxp_result lx_perps_funding_tick_execute(
     set.context.protocol_system_capability = true;
     set.context.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
     (void)memcpy(set.context.authorized_from, set.legs[0].from->id, 32U);
+    (void)memcpy(source.authorized_from, set.legs[0].from->id, 32U);
+    source.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
+    source.protocol_system_capability = true;
+    set.context.source_authorities = &source;
+    set.context.source_authority_count = 1U;
     status = lxp_ctx_emit_transfer_set(ctx, &set, receipt);
     if (status != LXP_OK) return status;
     *request->funding_index = next_index;
     *request->last_funding_timestamp_ms +=
         intervals * request->market->funding_interval_ms;
+    return LXP_OK;
+}
+
+lxp_result lx_perps_funding_owed(const lx_perps_position *position,
+                                 lxp_i128 funding_index, lxp_i128 *owed)
+{
+    lxp_i128 delta;
+    lxp_u128 quotient;
+    lxp_u128 remainder;
+    bool trader_pays;
+    lxp_result status;
+    if (position == NULL || owed == NULL ||
+        (position->side != LX_PERPS_SIDE_BUY &&
+         position->side != LX_PERPS_SIDE_SELL) ||
+        lxp_u128_is_zero(position->entry_notional))
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_i128_sub(funding_index, position->funding_index_at_entry,
+                          &delta);
+    if (status != LXP_OK) return LXP_ERR_OVERFLOW;
+    if (lxp_u128_is_zero(delta.magnitude)) {
+        owed->negative = false;
+        owed->magnitude = (lxp_u128){ 0U, 0U };
+        return LXP_OK;
+    }
+    trader_pays = position->side == LX_PERPS_SIDE_BUY ? !delta.negative :
+                                                        delta.negative;
+    status = lxp_u128_mul_div_floor(position->entry_notional, delta.magnitude,
+                                    (lxp_u128){ 0U, LXP_BASIS_POINTS_ONE },
+                                    &quotient, &remainder);
+    if (status != LXP_OK) return LXP_ERR_OVERFLOW;
+    if (trader_pays && !lxp_u128_is_zero(remainder)) {
+        status = lxp_u128_add(quotient, (lxp_u128){ 0U, 1U }, &quotient);
+        if (status != LXP_OK) return LXP_ERR_OVERFLOW;
+    }
+    owed->magnitude = quotient;
+    owed->negative = !trader_pays && !lxp_u128_is_zero(quotient);
     return LXP_OK;
 }

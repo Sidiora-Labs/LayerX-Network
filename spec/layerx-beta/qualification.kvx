@@ -9652,3 +9652,99 @@ symbol = "TestGCRandom TestServeTLS TestReactorErrorsOnReceivingTooManyPeers Tes
 observed = "Three further failure shapes appear in the same aggregate run, none of them in a package that compiles against consensus/config or consensus/node. internal/libs/clist hangs in TestGCRandom until the ten minute test timeout in both runs of the suite. rpc/jsonrpc/server fails TestServeTLS, which calls ServeTLS with the fixture pair test.crt and test.key at http_server_test.go:93: test.crt is tracked, but test.key is matched by the *.key rule at .gitignore:64 and is therefore absent from every checkout, so the test cannot pass in a fresh clone; it surfaced as open test.key: no such file or directory in the second run and as a ten minute hang in the first, because the test only reads the ServeTLS error channel for 100 milliseconds before issuing the HTTPS request. internal/p2p/pex is flaky between the two runs: TestReactorErrorsOnReceivingTooManyPeers hung to the ten minute timeout in the first and the package passed in 0.721s in the second. Separately, three persist tests fail whenever the suite runs as uid 0: TestPersistWriteErrorReturnsError, TestPersistWriteErrorDoesNotAdvanceSeq and TestLoadPersistedOSErrorPropagates all revoke write permission on the state directory with chmod and then require an error, but the effective user bypasses Unix permission checks so every call succeeds. persist.go already documents that limitation for its own writability probe, saying that checking permission bits is not reliable because root bypasses permission checks on Unix, so the probe uses a temp file instead; the three tests still use the bit-based approach that comment rejects."
 assumption = "None of these tests is in this lane's issue and no assertion in them was touched. TestServeTLS needs its key fixture generated at test time or exempted from the *.key ignore rule; the three chmod tests need a mechanism that denies writes to the effective user regardless of privilege, or an explicit skip when the effective user can bypass permissions. Both belong with the owners of those test fixtures."
 severity = "blocker"
+
+[observation.6.11.3200]
+task = "6.11"
+file = "src/modules/perps/lx_perps_dispatch.c src/modules/perps/lx_perps_state.c include/layerx/lx_perps.h src/protocol/lxp_genesis.c"
+symbol = "lx_perps_module_iface activity_types module_decode module_validate module_execute"
+observed = "The perpetuals module now dispatches every ordinal it advertises. lx_perps_module_iface lists eleven ascending activity types 0x00060001 through 0x0006000b - market create, market halt, oracle push, order place, order cancel, position open, position increase, position close, funding tick, liquidate and auto-deleverage - and module_decode, module_validate and module_execute cover all eleven, where before only market create had a path. All module state is canonical key-value state under six prefixes: market: (39-byte key, 622-byte record), oracle: (39, 72), funding: (40, 57), deficit: (40, 56), order: (70, 170) and position: (73, 211), so every record survives a restart through the ordinary snapshot path and contributes to the module subtree root. The genesis module table row for the perpetuals module at src/protocol/lxp_genesis.c:55-56 keeps LXP_GENESIS_MODULE_GATE_ENABLE_FLAG with enabled false and was not touched, so no genesis snapshot, manifest or state-root fixture changes on this branch."
+assumption = "A module that keeps state outside the kernel key-value space cannot be replayed or snapshotted, so every ordinal writes canonical records only. Enabling the module at genesis and regenerating the affected fixtures is a separate change that must move every disabled module row at once."
+severity = "note"
+
+[observation.6.11.3201]
+task = "6.11"
+file = "src/protocol/lxp_module_ctx.c src/ledger/lxp_journal.c src/modules/perps/lx_perps_liquidate.c include/layerx/lx_perps.h"
+symbol = "emit_transfer_set transfer_applied lxp_apply_transfer_set lx_perps_liquidation_legs_build"
+observed = "A module context may emit at most one transfer set for the life of an activity: src/protocol/lxp_module_ctx.c:1333 refuses a second emission with LXP_ERR_BALANCE_BYPASS once ctx->transfer_applied is set at line 1394. Every perpetuals operation that moves value therefore builds one multi-leg set rather than a sequence of single-leg transfers, and because lxp_apply_transfer_set at src/ledger/lxp_journal.c:241-243 runs lxp_precondition_check per leg against the actual per-source authority table, each distinct debit source in a set needs its own lxp_transfer_source_authority entry. lx_perps_liquidation_legs_build gained the authorities, capacity and authority_count parameters for this reason, and lx_perps_source_authority_add was added so the liquidation and auto-deleverage builders can accumulate one entry per source without duplicates. The four perpetuals test binaries that moved value - position, funding, liquidate and insurance - exited 1 on the base commit bae8bf98e because their fixtures emitted several single-leg sets on one context and left context.source_authorities empty; the rewritten fixtures drive the kernel dispatch entry point instead and pass."
+assumption = "The one-set-per-activity rule and the per-source authority table are ledger invariants, not perpetuals policy, so the module was shaped around them rather than the other way round. Neither check was relaxed."
+severity = "note"
+
+[observation.6.11.3202]
+task = "6.11"
+file = "src/modules/perps/lx_perps_position.c src/ledger/lxp_journal.c src/modules/perps/lx_perps_dispatch.c"
+symbol = "lx_perps_authority_check execute_position_close lxp_apply_transfer_set"
+observed = "lx_perps_authority_check at src/modules/perps/lx_perps_position.c:8-23 permits a debit from an LX_ACCOUNT_AGENT_MARGIN account only for the reasons MARGIN_RELEASE, TRADING_LOSS, LIQUIDATION_FEE and ADL. FUNDING is not among them, so accrued funding can never be paid straight out of a margin account. Position close therefore emits one two-leg set: the margin balance is released to the owner main account with reason MARGIN_RELEASE under the module authority, and the funding settlement is the second leg - owner main to the side funding pool under the owner's own authority when the trader owes, or the side pool to owner main under the module authority when the trader is owed. This is only correct because lxp_apply_transfer_set interleaves lxp_precondition_check and lxp_balance_apply_leg per leg at src/ledger/lxp_journal.c:241-243, so the released margin is already credited to the main account before the funding debit is checked against it."
+assumption = "Widening lx_perps_authority_check to accept FUNDING from a margin account would remove the guarantee that a margin balance leaves only through a settlement reason, so the ordering was changed instead of the check. The dependency on per-leg interleaving is recorded because a future change to batch all precondition checks ahead of all applications would break close."
+severity = "suspect"
+
+[observation.6.11.3203]
+task = "6.11"
+file = "src/modules/perps/lx_perps_dispatch.c include/layerx/lx_perps.h"
+symbol = "execute_funding_tick book_mid_price lx_perps_funding_rate long_funding_account_id short_funding_account_id"
+observed = "The funding tick takes its mark from the resting order book mid and its index from the latest accepted oracle price, clamps the resulting rate to the market's maximum_funding_rate_bps, and moves the amount between the two system funding accounts named in the market record - a positive rate moves the long pool to the short pool. The amount is computed on matched open interest, the smaller of the long and short open notional held in the funding state record, so the two sides always fund each other and the pools are not drained by an unbalanced book. When the book has no two-sided quote, or matched open interest is zero, the rate is forced to zero and the tick only advances the funding index and last_funding_timestamp_ms. A tick before funding_interval_ms has elapsed is refused with LXP_ERR_NOT_YET_VALID. The two funding pool accounts must be capitalized before a market runs: the pool that pays is debited like any other account, so an empty pool refuses the tick with LXP_ERR_INSUFFICIENT_BALANCE."
+assumption = "This is the row's DEFAULT decision recorded as required. Funding on matched open interest with a book-mid mark is the conventional construction and the only one that keeps the pools conserved without an external subsidy; the capitalization requirement is a genesis or treasury concern outside this issue's owned paths and is recorded rather than solved here."
+severity = "note"
+
+[observation.6.11.3204]
+task = "6.11"
+file = "src/modules/perps/lx_oracle_checks.c src/modules/perps/lx_perps_dispatch.c"
+symbol = "lx_oracle_deviation_check maximum_deviation_basis_points"
+observed = "lx_oracle_deviation_check computes the allowed move as maximum_deviation_basis_points applied to the previously accepted price and refuses LXP_ERR_ORACLE_DEVIATION when the absolute difference exceeds it. The basis-point field is bounded at 10000, so a single accepted observation can at most double the price, and no configuration permits a larger single step. Any scenario that needs a fourfold price move - the liquidation and auto-deleverage fixtures do - has to push the price in successive observations. This is a real rate limit on how fast a market can reprice, not a fixture artifact: a genuine gap larger than the configured band cannot be admitted at all until enough observations have walked the price across it."
+assumption = "The ceiling is intentional protection against a single bad observation. It is recorded because it means an oracle outage spanning a large real move leaves the market unable to catch up in one observation, and liquidations during that window price off a stale-but-admitted price."
+severity = "suspect"
+
+[observation.6.11.3205]
+task = "6.11"
+file = "src/modules/perps/lx_oracle_checks.c src/modules/perps/lx_oracle_halt.c src/modules/perps/lx_perps_dispatch.c"
+symbol = "lx_oracle_key_set_check lx_oracle_staleness_check lx_oracle_bounds_check market_loaded"
+observed = "None of the oracle admission checks consults the halted flag: lx_oracle_key_set_check, lx_oracle_staleness_check, lx_oracle_deviation_check and lx_oracle_bounds_check all ignore it, and src/modules/perps/lx_oracle_halt.c only exposes the flag and a separate refusal helper. A halted market therefore still accepts oracle pushes and keeps its price current. Halting is enforced in dispatch instead, by market_loaded with refuse_halted set for the ordinals that move value or open risk - order place, position open, position increase, funding tick and liquidate - which return LXP_ERR_MARKET_HALTED. The market test proves the refusal through the funding tick rather than through an oracle push for this reason."
+assumption = "Continuing to accept observations while halted is the useful behaviour, because the price must be current again the moment the market resumes. It is recorded because a reader would reasonably expect a halt to stop every ordinal, and because the halt boundary lives entirely in dispatch and would be lost by any caller that reaches the oracle helpers directly."
+severity = "note"
+
+[observation.6.11.3206]
+task = "6.11"
+file = "src/modules/perps/lx_perps_dispatch.c src/modules/perps/lx_perps_liquidate.c"
+symbol = "execute_liquidate lx_perps_liquidate_execute deficit_accumulate lx_perps_liquidation_legs_build"
+observed = "Liquidation computes the trading loss at the current mark and then caps the amount it will actually settle at the margin balance plus the insurance balance, recording the uncovered residue as a deficit record under the deficit: prefix for the market. Without the cap lx_perps_liquidation_legs_build refuses the whole liquidation with LXP_ERR_INSUFFICIENT_BALANCE whenever the loss exceeds what the system holds, which would leave an underwater position open and unliquidatable. lx_perps_liquidate_execute additionally refuses with LXP_FATAL_INVARIANT unless the margin account is exactly zero after the emission, so a liquidation always drains the margin account completely: the trading loss leg takes what it can, the fee legs take from what is left, and the residual margin is released to the owner. The liquidator fee is split by liquidator_share_bps with the insurance share rounded up, and both fee legs are skipped when nothing remains."
+assumption = "This is the row's DEFAULT decision. Capping at available capacity and recording the shortfall is the only construction that both closes the position and keeps the ledger conserved; the alternative - refusing the liquidation - is strictly worse for solvency. The deficit record is what the auto-deleverage ordinal consumes."
+severity = "note"
+
+[observation.6.11.3207]
+task = "6.11"
+file = "src/modules/perps/lx_perps_dispatch.c src/modules/perps/lx_perps_insurance.c include/layerx/lx_perps.h"
+symbol = "execute_adl validate_adl lx_perps_adl_execute LX_PERPS_DISPATCH_MAX_ADL"
+observed = "Auto-deleverage consumes the deficit record a liquidation left behind. Each named position must be open and strictly profitable at the current mark - a non-positive unrealized result is refused with LXP_ERR_AGREEMENT_STATE - and each contributes at most the smaller of its unrealized profit and its margin balance. lx_perps_adl_execute sorts the candidates by position identifier so the set is order-independent, draws from them in that order until the deficit is covered, and refuses the whole activity with LXP_ERR_INSUFFICIENT_BALANCE when the named set cannot cover it, leaving the deficit record intact for another attempt with more counterparties. The deficit record is deleted only on full coverage. A position whose margin reaches zero is closed and its open interest removed. The command carries at most LX_PERPS_DISPATCH_MAX_ADL, sixteen, positions, which is the bound imposed by the maximum legs a single transfer set can hold."
+assumption = "This is the row's DEFAULT decision. Taking only from profitable counterparties, only up to their profit, is the standard socialized-loss rule and the only one that cannot take a counterparty below its own entry. The sixteen-position bound comes from the transfer set leg limit and is recorded because a deficit larger than sixteen counterparties can cover needs several activities."
+severity = "note"
+
+[observation.6.11.3208]
+task = "6.11"
+file = "src/modules/perps/lx_perps_dispatch.c include/layerx/lx_perps.h"
+symbol = "execute_order_place lx_perps_order_place_execute LX_PERPS_DISPATCH_MAX_FILLS"
+observed = "Order placement moves no value. lx_perps_order_place_execute always reports zero transfer legs; it checks the order's initial margin requirement, the ceiling of price times quantity times initial_margin_ratio_bps over 10000, against the balance of the named margin account that is not already committed to resting orders, refusing LXP_ERR_MARGIN_INSUFFICIENT otherwise, and that check runs before matching so a rejected order never partially fills. Matching is bounded at LX_PERPS_DISPATCH_MAX_FILLS, eight, resting orders per placement; the residue rests. Margin is only debited when a position is opened or increased, so a filled order does not by itself move a balance."
+assumption = "This is the row's DEFAULT decision: fills are book state, and the position ordinals are the only ones that move margin, which keeps the one-transfer-set-per-activity rule satisfiable for a placement that crosses several levels. The eight-fill bound is recorded because a placement that would cross more levels leaves the remainder resting rather than refusing."
+severity = "note"
+
+[observation.6.11.3209]
+task = "6.11"
+file = "Makefile"
+symbol = "test core-test-all test-wave-9 test-perps-market test-perps-book test-perps-margin test-perps-funding test-perps-liquidation test-perps-insurance"
+observed = "The make test target at Makefile:267-274 names no perpetuals target. The six perpetuals suites are grouped in test-wave-9 at Makefile:819-820 and are reachable only through core-test-all at Makefile:2827-2835, which make test does not invoke, so a regression in the perpetuals module cannot fail the aggregate gate. make CC=gcc test-wave-9 was therefore run explicitly beside the aggregate run and its log recorded."
+assumption = "Adding test-wave-9 to make test is a Makefile change outside this issue's owned paths, so the coverage was proven by running the wave target directly. The request is recorded for whoever owns the Makefile."
+severity = "suspect"
+
+[observation.6.11.3210]
+task = "6.11"
+file = "src/protocol/lxp_module_ctx.c tests/modules/test_perps_market.c"
+symbol = "lxp_module_ctx_commit staged"
+observed = "lxp_module_ctx_commit at src/protocol/lxp_module_ctx.c:651 flushes the staged key-value writes into the store but does not clear ctx->staged, so a context reused after a commit still carries the writes it already published. A key-value iteration on such a context visits every committed record a second time and any read-back count is doubled. Every read-back assertion in the six perpetuals fixtures therefore opens a fresh context first."
+assumption = "The kernel opens a new context per activity, so no production path reuses a committed context and the residue is harmless there. It is recorded because it is invisible at the call site and any test or tool that holds a context across a commit silently double-counts."
+severity = "suspect"
+
+[observation.6.11.3211]
+task = "6.11"
+file = "src/modules/perps/lx_perps_dispatch.c src/protocol/lxp_module_ctx.c"
+symbol = "emit_identifier_event lxp_ctx_emit_event"
+observed = "emit_identifier_event at src/modules/perps/lx_perps_dispatch.c:437 assembles every perpetuals event body as two 32-byte identifiers followed by an ordinal-specific tail and refuses a tail that would not fit its buffer with LXP_ERR_LENGTH_LIMIT. The buffer holds 128 bytes, which admits the longest tail any ordinal produces - the funding tick's two signed 17-byte encodings, and the auto-deleverage count plus 16-byte deficit amount - against the 256-byte body limit lxp_ctx_emit_event enforces. An earlier 96-byte buffer left only 32 bytes of tail and made the funding tick unreachable; the buffer was widened rather than the guard removed."
+assumption = "The guard is the load-bearing check and was left exactly as written; only the buffer it measures grew, and it still sits well inside the kernel's own 256-byte limit."
+severity = "note"

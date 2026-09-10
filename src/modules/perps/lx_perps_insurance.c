@@ -12,10 +12,12 @@ static lxp_result emit_cover(lxp_module_ctx *ctx, lx_account *from,
                              lxp_receipt *receipt)
 {
     lxp_transfer_set set;
+    lxp_transfer_source_authority source;
     if (ctx == NULL || from == NULL || to == NULL || asset == NULL ||
         receipt == NULL || lxp_u128_is_zero(amount))
         return LXP_ERR_NON_CANONICAL;
     (void)memset(&set, 0, sizeof(set));
+    (void)memset(&source, 0, sizeof(source));
     set.leg_count = 1U;
     set.legs[0].from = from;
     set.legs[0].to = to;
@@ -29,6 +31,11 @@ static lxp_result emit_cover(lxp_module_ctx *ctx, lx_account *from,
     set.context.protocol_system_capability = true;
     set.context.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
     (void)memcpy(set.context.authorized_from, from->id, 32U);
+    (void)memcpy(source.authorized_from, from->id, 32U);
+    source.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
+    source.protocol_system_capability = true;
+    set.context.source_authorities = &source;
+    set.context.source_authority_count = 1U;
     return lxp_ctx_emit_transfer_set(ctx, &set, receipt);
 }
 
@@ -116,6 +123,8 @@ lxp_result lx_perps_adl_execute(
 {
     lx_perps_adl_candidate ordered[LX_PERPS_ADL_CAPACITY];
     lxp_transfer_set set;
+    lxp_transfer_source_authority authorities[LX_PERPS_ADL_CAPACITY];
+    size_t authority_count = 0U;
     lxp_u128 remaining = deficit;
     size_t i;
     lxp_result status;
@@ -137,6 +146,7 @@ lxp_result lx_perps_adl_execute(
             return LXP_ERR_NON_CANONICAL;
     candidate_sort(ordered, candidate_count);
     (void)memset(&set, 0, sizeof(set));
+    (void)memset(authorities, 0, sizeof(authorities));
     for (i = 0U; i < candidate_count && !lxp_u128_is_zero(remaining); ++i) {
         lxp_u128 available = ordered[i].margin_account->balance;
         lxp_u128 contribution;
@@ -155,6 +165,10 @@ lxp_result lx_perps_adl_execute(
         leg->amount = contribution;
         leg->reason = LXP_REASON_ADL;
         leg->supply_mode = LXP_TRANSFER_CONSERVED;
+        status = lx_perps_source_authority_add(
+            authorities, LX_PERPS_ADL_CAPACITY, &authority_count,
+            leg->from->id, LXP_AUTH_PROTOCOL_MODULE, true);
+        if (status != LXP_OK) return status;
         status = lxp_u128_sub(remaining, contribution, &remaining);
         if (status != LXP_OK) return LXP_FATAL_INVARIANT;
     }
@@ -168,6 +182,8 @@ lxp_result lx_perps_adl_execute(
     set.context.protocol_system_capability = true;
     set.context.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
     (void)memcpy(set.context.authorized_from, set.legs[0].from->id, 32U);
+    set.context.source_authorities = authorities;
+    set.context.source_authority_count = authority_count;
     status = lxp_ctx_emit_transfer_set(ctx, &set, receipt);
     if (status != LXP_OK) {
         *remaining_deficit = deficit;

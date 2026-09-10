@@ -23,13 +23,48 @@ enum {
     LX_PERPS_ADL = 0x0006000b,
     LX_PERPS_MAX_ORACLE_KEYS = 8,
     LX_PERPS_MARKET_KEY_BYTES = 39,
-    LX_PERPS_MARKET_BYTES = 430,
+    LX_PERPS_MARKET_BYTES = 622,
     LX_PERPS_BOOK_CAPACITY = 256,
     LX_PERPS_FILL_CAPACITY = 256,
     LX_PERPS_POSITION_CAPACITY = 128,
     LX_PERPS_DEFICIT_CAPACITY = 128,
     LX_PERPS_ADL_CAPACITY = 128,
-    LX_PERPS_MARGIN_RATIO_MAX_BPS = 10000
+    LX_PERPS_MARGIN_RATIO_MAX_BPS = 10000,
+    LX_PERPS_LIQUIDATION_SOURCES = 2,
+    LX_PERPS_DISPATCH_MAX_FILLS = 8,
+    LX_PERPS_DISPATCH_MAX_ADL = 16,
+    LX_PERPS_ORACLE_KEY_BYTES = 39,
+    LX_PERPS_ORACLE_BYTES = 72,
+    LX_PERPS_FUNDING_KEY_BYTES = 40,
+    LX_PERPS_FUNDING_BYTES = 57,
+    LX_PERPS_DEFICIT_KEY_BYTES = 40,
+    LX_PERPS_DEFICIT_BYTES = 56,
+    LX_PERPS_ORDER_KEY_BYTES = 70,
+    LX_PERPS_ORDER_BYTES = 170,
+    LX_PERPS_POSITION_KEY_BYTES = 73,
+    LX_PERPS_POSITION_BYTES = 211,
+    LX_PERPS_HALT_PAYLOAD_BYTES = 33,
+    LX_PERPS_ORACLE_PAYLOAD_BYTES = 72,
+    LX_PERPS_ORDER_PAYLOAD_BYTES = 129,
+    LX_PERPS_CANCEL_PAYLOAD_BYTES = 64,
+    LX_PERPS_OPEN_PAYLOAD_BYTES = 145,
+    LX_PERPS_INCREASE_PAYLOAD_BYTES = 112,
+    LX_PERPS_CLOSE_PAYLOAD_BYTES = 64,
+    LX_PERPS_TICK_PAYLOAD_BYTES = 32,
+    LX_PERPS_LIQUIDATE_PAYLOAD_BYTES = 96,
+    LX_PERPS_ADL_PAYLOAD_MIN_BYTES = 33,
+    LX_PERPS_ADL_PAYLOAD_MAX_BYTES = 4129,
+    LX_PERPS_EVENT_MARKET_CREATED = 0x0601,
+    LX_PERPS_EVENT_MARKET_HALTED = 0x0602,
+    LX_PERPS_EVENT_ORACLE_ACCEPTED = 0x0603,
+    LX_PERPS_EVENT_ORDER_PLACED = 0x0604,
+    LX_PERPS_EVENT_ORDER_CANCELLED = 0x0605,
+    LX_PERPS_EVENT_POSITION_OPENED = 0x0606,
+    LX_PERPS_EVENT_POSITION_INCREASED = 0x0607,
+    LX_PERPS_EVENT_POSITION_CLOSED = 0x0608,
+    LX_PERPS_EVENT_FUNDING_SETTLED = 0x0609,
+    LX_PERPS_EVENT_LIQUIDATED = 0x060a,
+    LX_PERPS_EVENT_DELEVERAGED = 0x060b
 };
 
 typedef enum lx_perps_side {
@@ -100,11 +135,21 @@ typedef struct lx_perps_position_request {
 typedef struct lx_perps_market {
     uint8_t market_id[32];
     uint8_t quote_asset[32];
+    uint8_t administrator[32];
+    uint8_t liquidity_account_id[32];
+    uint8_t long_funding_account_id[32];
+    uint8_t short_funding_account_id[32];
+    uint8_t insurance_account_id[32];
     lxp_u128 contract_size;
     lxp_u128 tick_size;
     lxp_u128 lot_size;
+    lxp_u128 price_scale;
     uint32_t initial_margin_ratio_bps;
     uint32_t maintenance_margin_ratio_bps;
+    uint32_t liquidation_fee_bps;
+    uint32_t liquidator_share_bps;
+    uint32_t maximum_funding_rate_bps;
+    uint32_t maximum_deviation_basis_points;
     uint64_t funding_interval_ms;
     uint64_t maximum_oracle_staleness_ms;
     lxp_u128 minimum_price;
@@ -114,6 +159,23 @@ typedef struct lx_perps_market {
     uint32_t parameter_version;
     bool halted;
 } lx_perps_market;
+
+typedef struct lx_perps_oracle_state {
+    uint8_t market_id[32];
+    uint64_t observation_sequence;
+    lxp_u128 price;
+    uint64_t observed_at;
+    uint64_t source_identifier;
+    uint8_t oracle_public_key[32];
+} lx_perps_oracle_state;
+
+typedef struct lx_perps_funding_state {
+    uint8_t market_id[32];
+    lxp_i128 funding_index;
+    uint64_t last_funding_timestamp_ms;
+    lxp_u128 long_open_notional;
+    lxp_u128 short_open_notional;
+} lx_perps_funding_state;
 
 typedef struct lx_perps_funding_tick_request {
     const lx_perps_market *market;
@@ -162,8 +224,78 @@ typedef struct lx_perps_adl_candidate {
     lxp_u128 maximum_contribution;
 } lx_perps_adl_candidate;
 
+typedef struct lx_perps_halt_command {
+    uint8_t market_id[32];
+    bool halted;
+} lx_perps_halt_command;
+
+typedef struct lx_perps_oracle_command {
+    uint8_t market_id[32];
+    uint64_t observation_sequence;
+    lxp_u128 price;
+    uint64_t observed_at;
+    uint64_t source_identifier;
+    uint8_t oracle_public_key[32];
+    uint8_t signature[64];
+} lx_perps_oracle_command;
+
+typedef struct lx_perps_order_command {
+    uint8_t market_id[32];
+    uint8_t order_id[32];
+    uint8_t owner_account_id[32];
+    lx_perps_side side;
+    lxp_u128 price;
+    lxp_u128 quantity;
+} lx_perps_order_command;
+
+typedef struct lx_perps_cancel_command {
+    uint8_t market_id[32];
+    uint8_t order_id[32];
+} lx_perps_cancel_command;
+
+typedef struct lx_perps_open_command {
+    uint8_t market_id[32];
+    uint8_t position_id[32];
+    uint8_t margin_account_id[32];
+    lx_perps_side side;
+    lxp_u128 size;
+    lxp_u128 entry_notional;
+    lxp_u128 margin_amount;
+} lx_perps_open_command;
+
+typedef struct lx_perps_increase_command {
+    uint8_t market_id[32];
+    uint8_t position_id[32];
+    lxp_u128 size_delta;
+    lxp_u128 notional_delta;
+    lxp_u128 margin_amount;
+} lx_perps_increase_command;
+
+typedef struct lx_perps_close_command {
+    uint8_t market_id[32];
+    uint8_t position_id[32];
+} lx_perps_close_command;
+
+typedef struct lx_perps_tick_command {
+    uint8_t market_id[32];
+} lx_perps_tick_command;
+
+typedef struct lx_perps_liquidate_command {
+    uint8_t market_id[32];
+    uint8_t position_id[32];
+    uint8_t liquidator_account_id[32];
+} lx_perps_liquidate_command;
+
+typedef struct lx_perps_adl_command {
+    uint8_t market_id[32];
+    uint8_t position_ids[LX_PERPS_ADL_CAPACITY][32];
+    size_t position_count;
+} lx_perps_adl_command;
+
 typedef lxp_result (*lx_perps_market_visit_fn)(
     const lx_perps_market *market, void *user);
+typedef lxp_result (*lx_perps_position_visit_fn)(
+    const lx_perps_position *position, void *user);
 
 const lxp_module_iface *lx_perps_module_iface(void);
 lxp_result lx_perps_market_encode(const lx_perps_market *market,
@@ -180,6 +312,97 @@ lxp_result lx_perps_market_iter(lxp_module_ctx *ctx,
                                 lx_perps_market_visit_fn visit, void *user);
 lxp_result lx_perps_market_create_execute(lxp_module_ctx *ctx,
                                           const lx_perps_market *market);
+lxp_result lx_perps_oracle_state_put(lxp_module_ctx *ctx,
+                                     const lx_perps_oracle_state *state);
+lxp_result lx_perps_oracle_state_lookup(lxp_module_ctx *ctx,
+                                        const uint8_t market_id[32],
+                                        lx_perps_oracle_state *state);
+lxp_result lx_perps_funding_state_put(lxp_module_ctx *ctx,
+                                      const lx_perps_funding_state *state);
+lxp_result lx_perps_funding_state_lookup(lxp_module_ctx *ctx,
+                                         const uint8_t market_id[32],
+                                         lx_perps_funding_state *state);
+lxp_result lx_perps_order_put(lxp_module_ctx *ctx,
+                              const lx_perps_order *order);
+lxp_result lx_perps_order_lookup(lxp_module_ctx *ctx,
+                                 const uint8_t market_id[32],
+                                 const uint8_t order_id[32],
+                                 lx_perps_order *order);
+lxp_result lx_perps_order_delete(lxp_module_ctx *ctx,
+                                 const uint8_t market_id[32],
+                                 const uint8_t order_id[32]);
+lxp_result lx_perps_order_book_load(lxp_module_ctx *ctx,
+                                    const uint8_t market_id[32],
+                                    lx_perps_book *book);
+lxp_result lx_perps_position_put(lxp_module_ctx *ctx,
+                                 const lx_perps_position *position);
+lxp_result lx_perps_position_get(lxp_module_ctx *ctx,
+                                 const uint8_t market_id[32],
+                                 const uint8_t position_id[32],
+                                 lx_perps_position *position);
+lxp_result lx_perps_position_iter(lxp_module_ctx *ctx,
+                                  const uint8_t market_id[32],
+                                  lx_perps_position_visit_fn visit,
+                                  void *user);
+lxp_result lx_perps_deficit_put(lxp_module_ctx *ctx,
+                                const lx_perps_deficit *deficit);
+lxp_result lx_perps_deficit_lookup(lxp_module_ctx *ctx,
+                                   const uint8_t market_id[32],
+                                   lx_perps_deficit *deficit);
+lxp_result lx_perps_deficit_delete(lxp_module_ctx *ctx,
+                                   const uint8_t market_id[32]);
+lxp_result lx_perps_halt_command_encode(
+    const lx_perps_halt_command *command,
+    uint8_t bytes[LX_PERPS_HALT_PAYLOAD_BYTES]);
+lxp_result lx_perps_halt_command_decode(
+    const uint8_t *bytes, size_t length, lx_perps_halt_command *command);
+lxp_result lx_perps_oracle_command_encode(
+    const lx_perps_oracle_command *command,
+    uint8_t bytes[LX_PERPS_ORACLE_PAYLOAD_BYTES]);
+lxp_result lx_perps_oracle_command_decode(
+    const uint8_t *bytes, size_t length, lx_perps_oracle_command *command);
+lxp_result lx_perps_oracle_command_sign(lx_perps_oracle_command *command,
+                                        const uint8_t private_key[32]);
+lxp_result lx_perps_order_command_encode(
+    const lx_perps_order_command *command,
+    uint8_t bytes[LX_PERPS_ORDER_PAYLOAD_BYTES]);
+lxp_result lx_perps_order_command_decode(
+    const uint8_t *bytes, size_t length, lx_perps_order_command *command);
+lxp_result lx_perps_cancel_command_encode(
+    const lx_perps_cancel_command *command,
+    uint8_t bytes[LX_PERPS_CANCEL_PAYLOAD_BYTES]);
+lxp_result lx_perps_cancel_command_decode(
+    const uint8_t *bytes, size_t length, lx_perps_cancel_command *command);
+lxp_result lx_perps_open_command_encode(
+    const lx_perps_open_command *command,
+    uint8_t bytes[LX_PERPS_OPEN_PAYLOAD_BYTES]);
+lxp_result lx_perps_open_command_decode(
+    const uint8_t *bytes, size_t length, lx_perps_open_command *command);
+lxp_result lx_perps_increase_command_encode(
+    const lx_perps_increase_command *command,
+    uint8_t bytes[LX_PERPS_INCREASE_PAYLOAD_BYTES]);
+lxp_result lx_perps_increase_command_decode(
+    const uint8_t *bytes, size_t length, lx_perps_increase_command *command);
+lxp_result lx_perps_close_command_encode(
+    const lx_perps_close_command *command,
+    uint8_t bytes[LX_PERPS_CLOSE_PAYLOAD_BYTES]);
+lxp_result lx_perps_close_command_decode(
+    const uint8_t *bytes, size_t length, lx_perps_close_command *command);
+lxp_result lx_perps_tick_command_encode(
+    const lx_perps_tick_command *command,
+    uint8_t bytes[LX_PERPS_TICK_PAYLOAD_BYTES]);
+lxp_result lx_perps_tick_command_decode(
+    const uint8_t *bytes, size_t length, lx_perps_tick_command *command);
+lxp_result lx_perps_liquidate_command_encode(
+    const lx_perps_liquidate_command *command,
+    uint8_t bytes[LX_PERPS_LIQUIDATE_PAYLOAD_BYTES]);
+lxp_result lx_perps_liquidate_command_decode(
+    const uint8_t *bytes, size_t length, lx_perps_liquidate_command *command);
+lxp_result lx_perps_adl_command_encode(const lx_perps_adl_command *command,
+                                       uint8_t *bytes, size_t capacity,
+                                       size_t *length);
+lxp_result lx_perps_adl_command_decode(
+    const uint8_t *bytes, size_t length, lx_perps_adl_command *command);
 lxp_result lx_perps_book_init(lx_perps_book *book);
 lxp_result lx_perps_book_iter(const lx_perps_book *book,
                               lx_perps_order_visit_fn visit, void *user);
@@ -239,6 +462,9 @@ lxp_result lx_perps_funding_index_update(lxp_i128 current,
                                          lxp_i128 rate_bps,
                                          uint64_t elapsed_intervals,
                                          lxp_i128 *updated);
+lxp_result lx_perps_funding_owed(const lx_perps_position *position,
+                                 lxp_i128 funding_index,
+                                 lxp_i128 *owed);
 lxp_result lx_perps_funding_tick_execute(
     lxp_module_ctx *ctx, const lx_perps_funding_tick_request *request,
     lxp_receipt *receipt);
@@ -253,7 +479,9 @@ lxp_result lx_perps_liquidation_fee_split(lxp_u128 total_fee,
                                           lxp_u128 *liquidator_fee,
                                           lxp_u128 *insurance_fee);
 lxp_result lx_perps_liquidation_legs_build(
-    const lx_perps_liquidation_request *request, lxp_transfer_set *set);
+    const lx_perps_liquidation_request *request, lxp_transfer_set *set,
+    lxp_transfer_source_authority *authorities, size_t capacity,
+    size_t *authority_count);
 lxp_result lx_perps_liquidate_execute(
     lxp_module_ctx *ctx, const lx_perps_liquidation_request *request,
     lxp_receipt *receipt);
@@ -271,5 +499,9 @@ lxp_result lx_perps_adl_execute(
     const lxp_transfer_asset_state *asset, lxp_u128 deficit,
     lxp_transfer_context context, lxp_receipt *receipt,
     lxp_u128 *remaining_deficit);
+lxp_result lx_perps_source_authority_add(
+    lxp_transfer_source_authority *authorities, size_t capacity,
+    size_t *count, const uint8_t authorized_from[32],
+    lxp_authorization_kind kind, bool protocol_system_capability);
 
 #endif
