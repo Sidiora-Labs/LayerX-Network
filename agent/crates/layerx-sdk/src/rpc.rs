@@ -487,6 +487,24 @@ impl RpcClient {
         get_batch_header => "lx_getBatchHeader", get_checkpoint => "lx_getCheckpoint",
     }
 
+    /// Registers one self-service principal in the public beta tenant.
+    ///
+    /// `signature` must be this key's Ed25519 signature over
+    /// [`crate::register::binding`]; the returned principal is accepted only
+    /// when the gateway confirms the subject this key derives locally.
+    ///
+    /// # Errors
+    /// Preserves registration refusals and rejects a principal that names
+    /// another key or tenant.
+    pub fn register(
+        &self,
+        signer_public_key: [u8; 32],
+        signature: &[u8; 64],
+    ) -> Result<crate::register::Registration, RpcError> {
+        let params = json!([encode_hex(&signer_public_key), encode_hex(signature)]);
+        crate::register::decode(signer_public_key, self.call("lx_register", &params)?)
+    }
+
     /// Reads the authenticated identity sequence used by the activity envelope.
     /// # Errors
     /// Rejects malformed DIDs and any mismatched or malformed snapshot.

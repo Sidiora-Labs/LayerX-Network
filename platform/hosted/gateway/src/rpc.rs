@@ -123,6 +123,9 @@ pub(super) fn dispatch(config: &Config, request: &IncomingRequest, value: &Value
     }
     let id = value.get("id").cloned().unwrap_or(Value::Null);
     let method = value["method"].as_str()?;
+    if let Some(result) = crate::rpc_register::dispatch(config, method, &id, value.get("params")) {
+        return value.get("id").map(|_| result);
+    }
     if method == "lx_sendActivity" {
         let result = send(config, request, &id, value.get("params"));
         return value.get("id").map(|_| result);
@@ -592,6 +595,7 @@ mod tests {
             .as_array()
             .unwrap_or_else(|| panic!("methods missing"));
         for name in [
+            "lx_register",
             "lx_getAccount",
             "lx_getBalance",
             "lx_getBalances",
@@ -617,7 +621,7 @@ mod tests {
                 "{name}"
             );
         }
-        assert_eq!(methods.len(), 15);
+        assert_eq!(methods.len(), 16);
     }
 
     #[test]

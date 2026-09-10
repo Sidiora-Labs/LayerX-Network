@@ -37,6 +37,7 @@ pub mod production;
 pub mod program_lifecycle;
 pub mod programs;
 mod receipt_generated;
+pub mod register;
 pub mod rpc;
 pub mod rpc_verification;
 pub mod wallet;
