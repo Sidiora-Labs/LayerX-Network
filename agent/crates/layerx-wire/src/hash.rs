@@ -198,7 +198,7 @@ pub fn account_id_for_protocol(account: &AccountId, protocol: u16) -> Result<[u8
             });
             let valid_tail = if let Some(agent) = account.canonical().strip_prefix("agent:") {
                 agent.ends_with(":main")
-                    || agent.rsplit_once(":asset:").is_some_and(|(did, asset)| {
+                    || agent.split_once(":asset:").is_some_and(|(did, asset)| {
                         !did.is_empty()
                             && asset.len() == 64
                             && asset

@@ -3,12 +3,12 @@
 The developer CLI binary is `layerx` (`platform/cli/Cargo.toml:11-13`;
 `platform/cli/src/main.rs:30-31`). The crate is `layerx-platform-cli`. The
 stable graph anchor is `layerx-cli-v1`
-(`platform/cli/src/main.rs:503-507`). Global `--json` emits one JSON object
-instead of human presentation (`platform/cli/src/main.rs:34-39`). Global
+(`platform/cli/src/main.rs:506-509`). Global `--json` emits one JSON object
+instead of human presentation (`platform/cli/src/main.rs:35-40`). Global
 `--rpc` is a public gateway JSON-RPC URL that must end in `/rpc`; global
 `--gateway-credential` is a stored gateway alias
-(`platform/cli/src/main.rs:40-47`). Both apply only to `wallet` and `token`
-(`platform/cli/src/main.rs:509-519`). Success
+(`platform/cli/src/main.rs:41-48`). Both apply only to `wallet`, `token` and
+`program` (`platform/cli/src/main.rs:511-527`). Success
 envelopes are `{ok, kind, message, data}`; failures are `{ok: false, error:
 {code, detail}}` (`platform/cli/src/output.rs:18-59`). Typed machine codes
 are taken only from a leading `snake_case` token before `": "`; other
@@ -22,11 +22,11 @@ It does not document SDK clients; those live under `platform/docs/content/`.
 It does not document portable receipt JSON; see
 [Portable receipt verifier](PortableVerifier.md).
 
-The `layerx wallet` and `layerx token` command groups are not in this tree:
-`platform/cli/src/main.rs` declares no such variants, and the tables below that
-describe them are forward-looking. Every command in the tables that follow this
-section is implemented and cited. Wallet, faucet, send, token, program, and 402
-steps: [Payments developer path](PaymentsQuickstart.md).
+The `layerx wallet` and `layerx token` command groups are in this tree:
+`platform/cli/src/main.rs:57, 60, 538-539` declares both variants and routes
+them into `platform/cli/src/wallet.rs`. Every command in the tables that follow
+this section is implemented and cited. Wallet, faucet, send, token, program, and
+402 steps: [Payments developer path](PaymentsQuickstart.md).
 
 ---
 
@@ -37,21 +37,21 @@ that the binary implements are listed; unimplemented flags are omitted.
 
 | Command | Purpose | Required inputs |
 | --- | --- | --- |
-| `layerx wallet create <name>` | Generate a key and, on the emulator only, register its identity and main account (`platform/cli/src/wallet.rs:16-21, 222-256`) | `name`. `--did` optional. Non-emulator exits `wallet_registration_unavailable` and does not generate a key |
-| `layerx wallet import <name>` | Import a 32-byte hexadecimal Ed25519 seed from stdin without registration (`platform/cli/src/wallet.rs:22-27, 266-273`) | `name`; seed on stdin. `--did` optional |
-| `layerx wallet list` | List local wallet public metadata (`platform/cli/src/wallet.rs:29, 265`) | none |
-| `layerx wallet balance` | Read accounts of the selected DID (`platform/cli/src/wallet.rs:30-36, 277-305`) | `--did` and `--asset` optional. Native asset id `01` plus 62 zero hex digits maps to `agent:<DID>:main` |
+| `layerx wallet create <name>` | Generate a key and, on the emulator only, register its identity and main account (`platform/cli/src/wallet.rs:15-20, 384-386`) | `name`. `--did` optional. Non-emulator exits `wallet_registration_unavailable` and does not generate a key |
+| `layerx wallet import <name>` | Import a 32-byte hexadecimal Ed25519 seed from stdin without registration (`platform/cli/src/wallet.rs:21-26, 376-383`) | `name`; seed on stdin. `--did` optional |
+| `layerx wallet list` | List local wallet public metadata (`platform/cli/src/wallet.rs:27, 375`) | none |
+| `layerx wallet balance` | Read accounts of the selected DID (`platform/cli/src/wallet.rs:29-35, 387-426`) | `--did` and `--asset` optional. Native asset id `01` plus 62 zero hex digits maps to `agent:<DID>:main` |
 | `layerx wallet send` | Validate a transfer; refuses before signing until the shared debit-authorization signing API is available | `--to`, `--asset`, `--amount`; optional `--key`, `--wait` |
-| `layerx wallet history` | Report that DID activity history is unpublished (`platform/cli/src/wallet.rs:39-43, 340-343`) | `--did` optional. Always exits `wallet_history_unavailable` |
+| `layerx wallet history` | Report that DID activity history is unpublished (`platform/cli/src/wallet.rs:39-43, 439-442`) | `--did` optional. Always exits `wallet_history_unavailable` |
 | `layerx wallet receipt <activity_id>` | Verify executed, batched or finalised RPC evidence using an independently supplied `--receipt-policy`; REST verifies execution only | `activity_id`, optional `--wait` |
 | `layerx wallet open-account` | Disclose, sign, submit and verify native asset account opening through the SDK | `--asset`, `--receipt-policy`, `--fee-limit`; optional `--key`, `--wait` |
 | `layerx token create` | Disclose, sign, submit and verify native token registration through the SDK | `--symbol`, `--name`, `--decimals`, `--salt`, `--receipt-policy`, `--fee-limit`; optional `--supply-cap`, `--key`, `--wait` |
 | `layerx token mint` | Disclose, sign, submit and verify minting through the SDK | `--asset`, `--to`, `--amount`, `--receipt-policy`, `--fee-limit`; optional `--key`, `--wait` |
 | `layerx token burn` | Disclose, sign, submit and verify burning through the SDK | `--asset`, `--amount`, `--receipt-policy`, `--fee-limit`; optional `--key`, `--wait` |
-| `layerx token transfer` | Validate a token transfer; refuses before signing (`platform/cli/src/wallet.rs:113-114, 373-375`) | same as `wallet send` |
-| `layerx token info <asset>` | Read token metadata through public RPC (`platform/cli/src/wallet.rs:115-116, 366-369`) | `asset` (64 hex). Without `--rpc`, or when the method is unpublished, exits `rpc_method_unavailable` |
-| `layerx token list` | List registered tokens through public RPC (`platform/cli/src/wallet.rs:117-118, 370-372`) | none. Same unpublished-method refusal as `token info` |
-| `layerx new <name>` | Scaffold a deterministic Rust program project (`platform/cli/src/main.rs:60-61, 99-104`; `platform/cli/src/scaffold.rs:9-38`) | `name` (lowercase Cargo package name, 1–64, digits/`-`, not starting with `-`; `platform/cli/src/scaffold.rs:52-62`). `--directory` default `.` |
+| `layerx token transfer` | Validate a token transfer; refuses before signing (`platform/cli/src/wallet.rs:169, 529`) | same as `wallet send` |
+| `layerx token info <asset>` | Read token metadata through public RPC (`platform/cli/src/wallet.rs:171, 522-525`) | `asset` (64 hex). Without `--rpc`, or when the method is unpublished, exits `rpc_method_unavailable` |
+| `layerx token list` | List registered tokens through public RPC (`platform/cli/src/wallet.rs:173, 526-528`) | none. Same unpublished-method refusal as `token info` |
+| `layerx new <name>` | Scaffold a deterministic Rust program project (`platform/cli/src/main.rs:62, 540-545`; `platform/cli/src/scaffold.rs:9-38`) | `name` (lowercase Cargo package name, 1–64, digits/`-`, not starting with `-`; `platform/cli/src/scaffold.rs:52-62`). `--directory` default `.` |
 | `layerx workspace` | With no subcommand, open the visual workspace on a TTY (`platform/cli/src/workspace.rs:738-740, 750-752`) | TTY required for interactive mode; `--json` or a non-TTY stdin refuses |
 | `layerx workspace modules` | List every module the workspace CLI controls (`platform/cli/src/workspace.rs:21-23, 741`) | none |
 | `layerx workspace doctor` | Inspect tools and module readiness without changing anything (`platform/cli/src/workspace.rs:24-25, 742`) | `--module` repeatable/comma-separated; `--all`; `--environment` |
@@ -272,9 +272,9 @@ Default config when the file is absent: environment `emulator`, endpoint
 ## Emulator, hosted gateway, and node
 
 The CLI talks HTTP to the active environment endpoint
-(`platform/cli/src/main.rs:1381-1385`; `platform/cli/src/http.rs:24-50`).
+(`platform/cli/src/main.rs:1419`; `platform/cli/src/http.rs:24-52`).
 `layerx --rpc <url> wallet|token …` additionally POSTs JSON-RPC 2.0 to the
-gateway `/rpc` surface (`platform/cli/src/rpc.rs:23-26, 31-106`). That is
+gateway `/rpc` surface (`platform/cli/src/rpc.rs:14-15, 29-37`). That is
 the public gateway contract, not a `layerxd` node admin socket. Other
 commands do not open a node RPC.
 
@@ -316,10 +316,10 @@ the detail string is `code: …` (`platform/cli/src/output.rs:62-75`;
 | `sequencer_trust_anchor_mismatch` | supplied anchor disagrees with advertised sequencer identity (`platform/cli/src/emulator.rs:117, 878-884`) |
 | `sequencer_seed_exists` / `sequencer_trust_anchor_exists` | `emulator provision` without `--force` when those files exist (`platform/cli/src/emulator.rs:100-101, 126-135, 246-252`) |
 | `MCP and A2A installation require a configured hosted testnet or production gateway…` (`command_failed`) | install against emulator (`platform/cli/src/install/mod.rs:573-577`; `platform/cli/tests/install.rs:35-52`) |
-| `wallet_registration_unavailable` | `wallet create` on a non-emulator environment; no key is generated (`platform/cli/src/wallet.rs:230-232`) |
-| `wallet_history_unavailable` | `wallet history`; no DID activity-history method or REST route is published (`platform/cli/src/wallet.rs:340-343`) |
+| `wallet_registration_unavailable` | `wallet create` on a non-emulator environment; no key is generated (`platform/cli/src/wallet.rs:286`) |
+| `wallet_history_unavailable` | `wallet history`; no DID activity-history method or REST route is published (`platform/cli/src/wallet.rs:439-442`) |
 | `identity_sequence_unavailable` | Authenticated identity state is unavailable; token writes refuse before signing. Send additionally requires the shared debit-authorization signing API |
-| `rpc_method_unavailable` | `token info` / `token list` without `--rpc`, or an RPC method absent from the published contract (`platform/cli/src/wallet.rs:433-445`; `platform/cli/src/rpc.rs:100-104`) |
+| `rpc_method_unavailable` | `token info` / `token list` without `--rpc`, or an RPC method absent from the published contract (`platform/cli/src/wallet.rs:605-620`; `platform/cli/src/rpc.rs:138-143`) |
 
 ---
 

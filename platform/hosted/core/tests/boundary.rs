@@ -286,7 +286,7 @@ fn lni_limits() -> Limits {
 
 fn handshake_config() -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_5,
+        built_interface_version: Version::V1_4,
         expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: NETWORK_ID,
     }
