@@ -414,6 +414,9 @@ ca_generate() {
         "DNS:layerx-receipt-authority.$svc,DNS:layerx-receipt-authority.$TESTNET_NAMESPACE.svc,DNS:layerx-receipt-authority,DNS:authority.$internal,DNS:authority.$INTERNAL_NAMESPACE.svc"
     issue_cert agent-boundary layerx-agent-boundary serverAuth \
         "DNS:layerx-agent-boundary.$svc,DNS:layerx-agent-boundary.$TESTNET_NAMESPACE.svc,DNS:layerx-agent-boundary,DNS:component.$internal,DNS:component.$INTERNAL_NAMESPACE.svc,DNS:localhost,IP:127.0.0.1"
+    issue_cert agentd layerx-agentd serverAuth \
+        "DNS:layerx-agentd.$svc,DNS:layerx-agentd.$TESTNET_NAMESPACE.svc,DNS:layerx-agentd,DNS:localhost,IP:127.0.0.1"
+    issue_cert agentd-client layerx-agentd-client clientAuth ""
     issue_cert identity layerx-identity serverAuth \
         "DNS:layerx-identity.$svc,DNS:layerx-identity.$TESTNET_NAMESPACE.svc,DNS:layerx-identity,DNS:identity.$internal,DNS:identity.$INTERNAL_NAMESPACE.svc,DNS:localhost,IP:127.0.0.1"
     issue_cert paxeer-boundary paxeer-boundary serverAuth \
@@ -805,6 +808,7 @@ secrets_apply() {
     apply_secret "$ns" layerx-pending-core-admin-tls --from-file=server.crt.der="$c/pending-core-admin/cert.der" --from-file=server.key.der="$c/pending-core-admin/key.der"
     apply_secret "$ns" layerx-receipt-authority-tls --from-file=server.crt.der="$c/receipt-authority/cert.der" --from-file=server.key.der="$c/receipt-authority/key.der"
     apply_secret "$ns" layerx-agent-boundary-tls --from-file=server.crt.der="$c/agent-boundary/cert.der" --from-file=server.key.der="$c/agent-boundary/key.der"
+    apply_secret "$ns" layerx-agentd-tls --from-file=tls.crt="$c/agentd/cert.pem" --from-file=tls.key="$c/agentd/key.pem"
     apply_secret "$ns" layerx-webhooks-authority-client --from-file=token="$s/developer-authority.token"
     apply_secret "$ns" layerx-identity-server-tls --from-file=server.crt.der="$c/identity/cert.der" --from-file=server.key.der="$c/identity/key.der"
     apply_secret "$ns" layerx-identity-service-tokens --from-file="$s/identity-tokens"
@@ -1649,6 +1653,9 @@ env_write() {
         printf 'export LAYERX_GATEWAY_CA_FILE=%s\n' "$CA_DIR/ca.crt"
         printf 'export WEBHOOKS_URL=%s\n' "$DEVELOPER_URL"
         printf 'export LAYERX_AGENT_BOUNDARY_URL=%s\n' "$AGENT_URL"
+        printf 'export LAYERX_AGENTD_URL=%s\n' "$AGENTD_URL"
+        printf 'export LAYERX_AGENTD_CLIENT_CERT_FILE=%s\n' "$CA_DIR/agentd-client/cert.pem"
+        printf 'export LAYERX_AGENTD_CLIENT_KEY_FILE=%s\n' "$CA_DIR/agentd-client/key.pem"
         printf 'export LAYERX_IDENTITY_URL=%s\n' "$IDENTITY_URL"
         printf 'export LAYERX_PAXEER_BOUNDARY_URL=%s\n' "$PAXEER_URL"
         printf 'export LAYERX_PAXEER_SETTLEMENT_CONTRACT=%s\n' "$GUARANTOR_BOND"
@@ -1660,8 +1667,8 @@ env_write() {
     cat "$WORK_DIR/human-owner.env" >> "$ENV_FILE"
     qualification_url LAYERX_QUALIFICATION_NODE_URL LAYERX_BETA_QUALIFICATION_NODE_URL "$NODE_URL" \
         "beta_driver.py --node-url: the core boundary Service layerx-pending-core (node readiness, state and receipts)"
-    qualification_url LAYERX_QUALIFICATION_AGENT_URL LAYERX_BETA_QUALIFICATION_AGENT_URL "" \
-        "beta_driver.py --agentd-url requires agentd; no hosted agentd Service is declared"
+    qualification_url LAYERX_QUALIFICATION_AGENT_URL LAYERX_BETA_QUALIFICATION_AGENT_URL "$AGENTD_URL" \
+        "beta_driver.py --agentd-url: the agentd Service layerx-agentd (owner daemon readiness behind a mutually authenticated boundary)"
     qualification_url LAYERX_QUALIFICATION_HUMAN_URL LAYERX_BETA_QUALIFICATION_HUMAN_URL "$HUMAN_URL" \
         "beta_driver.py --human-service-url: layerx-human HTTPS API; /readyz verifies all production components"
     qualification_url LAYERX_QUALIFICATION_PAXEER_URL LAYERX_BETA_QUALIFICATION_PAXEER_URL "$PAXEER_URL" \
@@ -1706,6 +1713,17 @@ identity_write() {
     } > "$IDENTITY_FILE"
     printf 'beta-cluster: cluster identity\n' >&2
     sed 's/^/beta-cluster:   /' "$IDENTITY_FILE" >&2
+}
+
+agentd_check() {
+    log "agentd: probing the published owner daemon readiness surface at $AGENTD_URL"
+    sh "$REPO_ROOT/platform/hosted/agentd/probe.sh" \
+        --url "$AGENTD_URL" \
+        --ca "$CA_DIR/ca.crt" \
+        --client-cert "$CA_DIR/agentd-client/cert.pem" \
+        --client-key "$CA_DIR/agentd-client/key.pem" \
+        --bearer-file "$SECRETS_DIR/human/agent/program-token" \
+        || fail "the hosted agentd Service did not answer as a ready, mutually authenticated owner daemon"
 }
 
 boundary_checks() {
@@ -1816,6 +1834,7 @@ beta_cluster_up() {
     DEVELOPER_URL="https://localhost:19450"
     NODE_URL="https://localhost:19446"
     AGENT_URL="https://localhost:19447"
+    AGENTD_URL="https://localhost:19456"
     PAXEER_URL="https://localhost:19449"
     PAXEER_OBSERVER_URL="https://localhost:19452"
     IDENTITY_URL="https://localhost:$IDENTITY_PORT"
@@ -1869,7 +1888,9 @@ beta_cluster_up() {
     port_forward developer "$DEVELOPER_NAMESPACE" layerx-webhooks 19450 443
     port_forward pending-core "$TESTNET_NAMESPACE" layerx-pending-core 19446 9443
     port_forward agent-boundary "$TESTNET_NAMESPACE" layerx-agent-boundary 19447 9443
+    port_forward agentd "$TESTNET_NAMESPACE" layerx-agentd 19456 9443
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-node 600
+    agentd_check
     module_registry_verify
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then material_save; fi
     env_write
