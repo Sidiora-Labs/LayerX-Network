@@ -15,6 +15,10 @@ typedef struct send_transaction {
     size_t send_count;
     size_t invoice_count;
     size_t arena_mark;
+    size_t kv_mark;
+    lxp_meter_ctx meter_before;
+    bool meter_present;
+    lxp_send_store *window_backup;
 } send_transaction;
 
 enum {
@@ -77,28 +81,31 @@ static lxp_result send_transaction_abort(
     lxp_receipt *receipt, lxp_result failure)
 {
     lxp_result rollback = lxp_journal_rollback(&transaction->balances);
+    lxp_result kv_rollback = lxp_gateway_kv_rollback(
+        &context->invoices->kv, transaction->kv_mark);
     lxp_result arena_reset;
-    size_t send_end = context->send_environment->store->count <
+    size_t send_end;
+    if (transaction->window_backup != NULL) {
+        *context->send_environment->store = *transaction->window_backup;
+        free(transaction->window_backup);
+        transaction->window_backup = NULL;
+    }
+    send_end = context->send_environment->store->count <
             LXP_SEND_STORE_CAPACITY ? context->send_environment->store->count :
             LXP_SEND_STORE_CAPACITY;
-    size_t invoice_end = context->invoices->count <
-            LXP_GATEWAY_INVOICE_CAPACITY ? context->invoices->count :
-            LXP_GATEWAY_INVOICE_CAPACITY;
     if (send_end > transaction->send_count)
         (void)memset(&context->send_environment->store->records[
                          transaction->send_count], 0,
                      (send_end - transaction->send_count) *
                          sizeof(context->send_environment->store->records[0]));
     context->send_environment->store->count = transaction->send_count;
-    if (invoice_end > transaction->invoice_count)
-        (void)memset(&context->invoices->records[transaction->invoice_count],
-                     0, (invoice_end - transaction->invoice_count) *
-                         sizeof(context->invoices->records[0]));
     context->invoices->count = transaction->invoice_count;
+    if (transaction->meter_present && context->meter != NULL)
+        *context->meter = transaction->meter_before;
     arena_reset = lxp_arena_reset(context->arena, transaction->arena_mark);
     (void)memset(receipt, 0, sizeof(*receipt));
-    return rollback == LXP_OK && arena_reset == LXP_OK ? failure :
-           LXP_FATAL_INVARIANT;
+    return rollback == LXP_OK && kv_rollback == LXP_OK &&
+           arena_reset == LXP_OK ? failure : LXP_FATAL_INVARIANT;
 }
 
 lxp_result lxp_gateway_invoice_state_locked(
@@ -108,23 +115,12 @@ lxp_result lxp_gateway_invoice_state_locked(
     lxp_receipt *receipt,
     bool *settled)
 {
-    size_t i;
     if (registry == NULL || invoice_id == NULL || idempotency_key == NULL ||
         receipt == NULL || settled == NULL ||
-        registry->count > LXP_GATEWAY_INVOICE_CAPACITY)
+        registry->count > registry->kv.count)
         return LXP_ERR_NON_CANONICAL;
-    *settled = false;
-    for (i = 0U; i < registry->count; ++i) {
-        if (lxp_ct_memcmp(registry->records[i].invoice_id,
-                          invoice_id, 32U) == 0 &&
-            lxp_ct_memcmp(registry->records[i].idempotency_key,
-                          idempotency_key, 32U) == 0) {
-            *receipt = registry->records[i].receipt;
-            *settled = true;
-            return LXP_OK;
-        }
-    }
-    return LXP_OK;
+    return lxp_gateway_invoice_record_get(
+        &registry->kv, invoice_id, idempotency_key, receipt, settled);
 }
 
 lxp_gateway_invoice_registry *lxp_gateway_invoice_registry_create(
@@ -156,9 +152,24 @@ lxp_gateway_invoice_registry *lxp_gateway_invoice_registry_create(
         *status = LXP_ERR_ARENA_EXHAUSTED;
         return NULL;
     }
+    if (lxp_gateway_kv_init(&created->kv) != LXP_OK) {
+        free(created);
+        atomic_store(&owner_accounts->gateway_transition, false);
+        *status = LXP_FATAL_INVARIANT;
+        return NULL;
+    }
+    created->scratch = (lxp_receipt *)calloc(1U, sizeof(*created->scratch));
+    if (created->scratch == NULL) {
+        free(created->scratch);
+        free(created);
+        atomic_store(&owner_accounts->gateway_transition, false);
+        *status = LXP_ERR_ARENA_EXHAUSTED;
+        return NULL;
+    }
     atomic_init(&created->active_users, 0U);
     atomic_init(&created->lifecycle, LXP_GATEWAY_REGISTRY_ZERO);
     if (pthread_mutex_init(&created->coordination_mutex, NULL) != 0) {
+        free(created->scratch);
         free(created);
         atomic_store(&owner_accounts->gateway_transition, false);
         *status = LXP_ERR_IO;
@@ -167,6 +178,7 @@ lxp_gateway_invoice_registry *lxp_gateway_invoice_registry_create(
     if (!atomic_compare_exchange_strong(
             &owner_accounts->gateway_owner, &unowned, created)) {
         (void)pthread_mutex_destroy(&created->coordination_mutex);
+        free(created->scratch);
         free(created);
         atomic_store(&owner_accounts->gateway_transition, false);
         *status = LXP_ERR_SEQUENCE_REUSED;
@@ -222,7 +234,9 @@ lxp_result lxp_gateway_invoice_registry_destroy(
         atomic_store(&owner_accounts->gateway_transition, false);
         return LXP_ERR_IO;
     }
-    (void)memset(owned->records, 0, sizeof(owned->records));
+    lxp_gateway_kv_release(&owned->kv);
+    free(owned->scratch);
+    owned->scratch = NULL;
     owned->count = 0U;
     atomic_store(&owned->lifecycle, LXP_GATEWAY_REGISTRY_DESTROYED);
     free(owned);
@@ -305,6 +319,52 @@ lxp_result lxp_gateway_invoice_state(
         LXP_FATAL_INVARIANT;
 }
 
+lxp_result lxp_gateway_invoice_count(
+    lx_account_registry *owner_accounts,
+    lxp_gateway_invoice_registry *registry,
+    size_t *count)
+{
+    lxp_result status;
+    if (registry == NULL || owner_accounts == NULL || count == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_gateway_registry_enter(registry, owner_accounts);
+    if (status != LXP_OK) return status;
+    if (registry->count > registry->kv.count) status = LXP_ERR_NON_CANONICAL;
+    else *count = registry->count;
+    return lxp_gateway_registry_leave(registry) == LXP_OK ? status :
+        LXP_FATAL_INVARIANT;
+}
+
+lxp_result lxp_gateway_state_root(
+    lx_account_registry *owner_accounts,
+    lxp_gateway_invoice_registry *registry,
+    uint8_t root[32])
+{
+    lxp_result status;
+    if (registry == NULL || owner_accounts == NULL || root == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_gateway_registry_enter(registry, owner_accounts);
+    if (status != LXP_OK) return status;
+    status = lxp_gateway_kv_root(&registry->kv, root);
+    return lxp_gateway_registry_leave(registry) == LXP_OK ? status :
+        LXP_FATAL_INVARIANT;
+}
+
+lxp_result lxp_gateway_stored_bytes(
+    lx_account_registry *owner_accounts,
+    lxp_gateway_invoice_registry *registry,
+    uint64_t *bytes)
+{
+    lxp_result status;
+    if (registry == NULL || owner_accounts == NULL || bytes == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_gateway_registry_enter(registry, owner_accounts);
+    if (status != LXP_OK) return status;
+    *bytes = registry->kv.stored_bytes;
+    return lxp_gateway_registry_leave(registry) == LXP_OK ? status :
+        LXP_FATAL_INVARIANT;
+}
+
 static lxp_result requirement_matches_send(
     const lxp_payment_requirement *requirement,
     const lxp_send *send,
@@ -334,6 +394,16 @@ static lxp_result requirement_matches_send(
             return LXP_ERR_CONDITION_UNMET;
     }
     return LXP_OK;
+}
+
+static lxp_result send_activity_hash(const lxp_send *send, uint8_t out[32])
+{
+    uint8_t encoded[512];
+    size_t encoded_length = 0U;
+    lxp_result status = lxp_send_encode(
+        send, encoded, sizeof(encoded), &encoded_length);
+    if (status != LXP_OK) return status;
+    return lxp_hash_activity_id(encoded, encoded_length, out);
 }
 
 static lxp_result build_signed_receipt(
@@ -405,13 +475,14 @@ static lxp_result gateway_send_settle_locked(
     send_transaction transaction;
     uint8_t previous_state_root[32];
     uint8_t resulting_state_root[32];
+    uint8_t activity_hash[32];
     bool settled = false;
     lxp_result status;
     if (context->send_environment->accounts->count >
             LX_ACCOUNT_REGISTRY_CAPACITY ||
         (context->send_environment->store != NULL &&
          context->send_environment->store->count > LXP_SEND_STORE_CAPACITY) ||
-        context->invoices->count > LXP_GATEWAY_INVOICE_CAPACITY)
+        context->invoices->count > context->invoices->kv.count)
         return LXP_ERR_LENGTH_LIMIT;
     status = lxp_payment_requirement_verify(
         requirement, context->send_environment->network_id,
@@ -422,12 +493,12 @@ static lxp_result gateway_send_settle_locked(
         send->idempotency_key, receipt, &settled);
     if (status != LXP_OK) return status;
     if (settled) return LXP_ERR_IDEMPOTENT_REPLAY;
-    if (context->invoices->count >= LXP_GATEWAY_INVOICE_CAPACITY ||
-        context->send_environment->store == NULL ||
-        context->send_environment->store->count >= LXP_SEND_STORE_CAPACITY)
+    if (context->send_environment->store == NULL)
         return LXP_ERR_ARENA_EXHAUSTED;
     status = requirement_matches_send(
         requirement, send, context->send_environment);
+    if (status != LXP_OK) return status;
+    status = send_activity_hash(send, activity_hash);
     if (status != LXP_OK) return status;
     status = lx_asset_state_root(
         context->assets, context->send_environment->accounts,
@@ -440,8 +511,24 @@ static lxp_result gateway_send_settle_locked(
     transaction.send_count = context->send_environment->store->count;
     transaction.invoice_count = context->invoices->count;
     transaction.arena_mark = lxp_arena_mark(context->arena);
+    transaction.kv_mark = lxp_gateway_kv_mark(&context->invoices->kv);
+    if (context->meter != NULL) {
+        transaction.meter_before = *context->meter;
+        transaction.meter_present = true;
+    }
     status = lxp_journal_open(&leg, 1U, &transaction.balances);
     if (status != LXP_OK) return status;
+    status = lxp_gateway_idempotency_precheck(
+        &context->invoices->kv, LXP_GATEWAY_IDEMPOTENCY_DOMAIN_SEND,
+        send->idempotency_key, activity_hash, &projection);
+    if (status != LXP_OK)
+        return send_transaction_abort(context, &transaction, receipt, status);
+    status = lxp_gateway_window_reserve(
+        &context->invoices->kv, context->send_environment->store,
+        LXP_GATEWAY_IDEMPOTENCY_DOMAIN_SEND, context->meter,
+        &transaction.window_backup);
+    if (status != LXP_OK)
+        return send_transaction_abort(context, &transaction, receipt, status);
     status = lxp_send_execute(
         send, context->send_environment, &projection);
     if (status != LXP_OK)
@@ -450,6 +537,18 @@ static lxp_result gateway_send_settle_locked(
     status = transaction_boundary(LXP_GATEWAY_AFTER_BALANCE_WRITE);
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
+#endif
+    if (context->send_environment->store->count == 0U)
+        return send_transaction_abort(
+            context, &transaction, receipt, LXP_FATAL_INVARIANT);
+    status = lxp_gateway_idempotency_record_put(
+        &context->invoices->kv, LXP_GATEWAY_IDEMPOTENCY_DOMAIN_SEND,
+        &context->send_environment->store->records[
+            context->send_environment->store->count - 1U],
+        context->meter);
+    if (status != LXP_OK)
+        return send_transaction_abort(context, &transaction, receipt, status);
+#ifdef LXP_TESTING
     status = transaction_boundary(LXP_GATEWAY_AFTER_IDEMPOTENCY_WRITE);
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
@@ -474,13 +573,11 @@ static lxp_result gateway_send_settle_locked(
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
 #endif
-    (void)memcpy(
-        context->invoices->records[context->invoices->count].invoice_id,
-        requirement->invoice_id, 32U);
-    (void)memcpy(
-        context->invoices->records[context->invoices->count].idempotency_key,
-        send->idempotency_key, 32U);
-    context->invoices->records[context->invoices->count].receipt = *receipt;
+    status = lxp_gateway_invoice_record_put(
+        context->invoices, requirement->invoice_id, send->idempotency_key,
+        receipt, context->meter);
+    if (status != LXP_OK)
+        return send_transaction_abort(context, &transaction, receipt, status);
     ++context->invoices->count;
 #ifdef LXP_TESTING
     status = transaction_boundary(LXP_GATEWAY_AFTER_INVOICE_WRITE);
@@ -488,8 +585,13 @@ static lxp_result gateway_send_settle_locked(
         return send_transaction_abort(context, &transaction, receipt, status);
 #endif
     status = lxp_journal_commit(&transaction.balances);
-    return status == LXP_OK ? LXP_OK : send_transaction_abort(
-        context, &transaction, receipt, LXP_FATAL_INVARIANT);
+    if (status != LXP_OK)
+        return send_transaction_abort(
+            context, &transaction, receipt, LXP_FATAL_INVARIANT);
+    lxp_gateway_kv_commit(&context->invoices->kv, transaction.kv_mark);
+    free(transaction.window_backup);
+    transaction.window_backup = NULL;
+    return LXP_OK;
 }
 
 lxp_result lxp_gateway_send_settle(

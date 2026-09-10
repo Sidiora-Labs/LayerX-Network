@@ -207,6 +207,10 @@ int main(void)
     lxp_gateway_transaction_boundary boundary;
     lx_account payer_before;
     lx_account payee_before;
+    uint8_t empty_state_root[32];
+    uint8_t settled_state_root[32];
+    size_t settled_invoice_count = 0U;
+    uint64_t settled_stored_bytes = 0U;
 
     if (public_key_for(payer_private_key, payer_public_key) != 0 ||
         public_key_for(service_private_key, service_public_key) != 0 ||
@@ -334,8 +338,21 @@ int main(void)
                 &alternate_accounts, &alternate_invoices) != LXP_ERR_IO ||
             lxp_gateway_registry_leave(alternate_invoices) != LXP_OK)
             return 1;
-        alternate_invoices->records[0].receipt.sequencer_signature[0] = 0xa5U;
-        alternate_invoices->count = 1U;
+        {
+            uint8_t stored_key[LXP_GATEWAY_KV_INVOICE_KEY_BYTES];
+            uint8_t stored_value[128];
+            (void)memset(stored_value, 0xa5, sizeof(stored_value));
+            lxp_gateway_invoice_key(
+                stored_key, requirement.invoice_id, send.idempotency_key);
+            if (lxp_gateway_kv_put(
+                    &alternate_invoices->kv, stored_key, sizeof(stored_key),
+                    stored_value, sizeof(stored_value), NULL) != LXP_OK ||
+                alternate_invoices->kv.count != 1U ||
+                alternate_invoices->kv.stored_bytes !=
+                    (uint64_t)(sizeof(stored_key) + sizeof(stored_value)))
+                return 1;
+            alternate_invoices->count = 1U;
+        }
         if (lxp_gateway_invoice_registry_destroy(
                 &alternate_accounts, &alternate_invoices) != LXP_OK ||
                 alternate_invoices != NULL ||
@@ -352,16 +369,18 @@ int main(void)
     }
     payer_before = *gateway.payer;
     payee_before = *gateway.payee;
+    if (lxp_gateway_state_root(
+            &gateway.accounts, gateway.invoices, empty_state_root) != LXP_OK)
+        return 1;
     for (boundary = LXP_GATEWAY_AFTER_BALANCE_WRITE;
          boundary <= LXP_GATEWAY_AFTER_INVOICE_WRITE;
          boundary = (lxp_gateway_transaction_boundary)((unsigned)boundary + 1U)) {
         lxp_receipt zero_receipt;
         lxp_send_store_record zero_send;
-        lxp_gateway_invoice_record zero_invoice;
+        uint8_t rolled_back_root[32];
         size_t mark = lxp_arena_mark(&arena_a);
         (void)memset(&zero_receipt, 0, sizeof(zero_receipt));
         (void)memset(&zero_send, 0, sizeof(zero_send));
-        (void)memset(&zero_invoice, 0, sizeof(zero_invoice));
         (void)memset(&gateway_receipt, 0xa5, sizeof(gateway_receipt));
         lxp_gateway_send_test_fail_after(boundary);
         if (lxp_gateway_send_settle(
@@ -372,8 +391,12 @@ int main(void)
             gateway.sends.count != 0U || gateway.invoices->count != 0U ||
             memcmp(&gateway.sends.records[0], &zero_send,
                    sizeof(zero_send)) != 0 ||
-            memcmp(&gateway.invoices->records[0], &zero_invoice,
-                   sizeof(zero_invoice)) != 0 ||
+            gateway.invoices->kv.count != 0U ||
+            gateway.invoices->kv.stored_bytes != 0U ||
+            lxp_gateway_state_root(
+                &gateway.accounts, gateway.invoices,
+                rolled_back_root) != LXP_OK ||
+            memcmp(rolled_back_root, empty_state_root, 32U) != 0 ||
             lxp_arena_mark(&arena_a) != mark ||
             memcmp(&gateway_receipt, &zero_receipt,
                    sizeof(gateway_receipt)) != 0)
@@ -383,10 +406,9 @@ int main(void)
         size_t capacity = arena_a.capacity;
         lxp_receipt zero_receipt;
         lxp_send_store_record zero_send;
-        lxp_gateway_invoice_record zero_invoice;
+        uint8_t rolled_back_root[32];
         (void)memset(&zero_receipt, 0, sizeof(zero_receipt));
         (void)memset(&zero_send, 0, sizeof(zero_send));
-        (void)memset(&zero_invoice, 0, sizeof(zero_invoice));
         arena_a.capacity = arena_a.offset;
         if (lxp_gateway_send_settle(
                 &requirement, &send, &gateway.settlement,
@@ -396,12 +418,17 @@ int main(void)
             gateway.sends.count != 0U || gateway.invoices->count != 0U ||
             memcmp(&gateway.sends.records[0], &zero_send,
                    sizeof(zero_send)) != 0 ||
-            memcmp(&gateway.invoices->records[0], &zero_invoice,
-                   sizeof(zero_invoice)) != 0 ||
+            gateway.invoices->kv.count != 0U ||
+            gateway.invoices->kv.stored_bytes != 0U ||
             memcmp(&gateway_receipt, &zero_receipt,
                    sizeof(gateway_receipt)) != 0)
             return 1;
         arena_a.capacity = capacity;
+        if (lxp_gateway_state_root(
+                &gateway.accounts, gateway.invoices,
+                rolled_back_root) != LXP_OK ||
+            memcmp(rolled_back_root, empty_state_root, 32U) != 0)
+            return 1;
     }
     gateway_status = lxp_gateway_send_settle(
         &requirement, &send, &gateway.settlement, &gateway_receipt);
@@ -413,6 +440,20 @@ int main(void)
         direct.payer->balance.lo != 75U || direct.payee->balance.lo != 25U ||
         memcmp(&gateway_receipt, &direct_receipt,
                sizeof(gateway_receipt)) != 0)
+        return 1;
+    if (lxp_gateway_invoice_count(
+            &gateway.accounts, gateway.invoices,
+            &settled_invoice_count) != LXP_OK ||
+        settled_invoice_count != 1U ||
+        lxp_gateway_stored_bytes(
+            &gateway.accounts, gateway.invoices,
+            &settled_stored_bytes) != LXP_OK ||
+        settled_stored_bytes == 0U ||
+        gateway.invoices->kv.count != 2U ||
+        lxp_gateway_state_root(
+            &gateway.accounts, gateway.invoices,
+            settled_state_root) != LXP_OK ||
+        memcmp(settled_state_root, empty_state_root, 32U) == 0)
         return 1;
     {
         settlement_thread threads[2];
@@ -465,6 +506,14 @@ int main(void)
                sizeof(gateway_receipt)) != 0 ||
         gateway.payer->balance.lo != 75U || gateway.payee->balance.lo != 25U)
         return 1;
+    {
+        uint8_t replay_state_root[32];
+        if (lxp_gateway_state_root(
+                &gateway.accounts, gateway.invoices,
+                replay_state_root) != LXP_OK ||
+            memcmp(replay_state_root, settled_state_root, 32U) != 0)
+            return 1;
+    }
     direct.environment.batch_timestamp = 201U;
     decoded.sequence = 1U;
     decoded.idempotency_key[0] = 0x77U;

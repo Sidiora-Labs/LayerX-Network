@@ -9269,3 +9269,43 @@ symbol = "check_version lxp_kernel_module_for_activity activity_types LX_ASSET_W
 observed = "make CC=gcc test-genesis-bootstrap exits 1 on the state-commitment protocol version: tests/test_genesis_manifest.c line 203 requires lxp_kernel_module_for_activity to refuse the asset activity whose ordinal is 9, and it resolves. LX_ASSET_WITHDRAW is 0x00010009 (include/layerx/lx_asset.h line 29) and the asset module advertises it in activity_types at src/modules/asset/lx_asset_registry.c lines 11 to 16, so the sorted lookup finds it and answers LXP_OK. The refusal the test asserts and the advertised ordinal contradict each other in the tree as published. The same target fails identically on an unmodified checkout of main 055ec44d7, built from a tree with no escrow change in it, so the contradiction is independent of this branch; evidence qual-logs/genesis-tests-mainref.log beside this branch's qual-logs/genesis-tests.log. The target is not reachable from the make test target and is not in this row's gate set."
 assumption = "Neither the assertion nor the advertised ordinal was touched: one of them is wrong and deciding which belongs to the asset-module and genesis-table owners, not to this row. The escrow row of the genesis module table is gated by its enable flag and defaults to disabled, so no escrow module is registered on the path this test walks."
 severity = "blocker"
+
+[observation.3.1.3600]
+task = "3.1"
+file = "src/network/lxp_gateway_kv.c include/layerx/lxp_kernel.h src/network/lxp_gateway_internal.h"
+symbol = "lxp_gateway_kv lxp_gateway_kv_put LXP_KERNEL_MAX_MODULE_KV LXP_MODULE_MAX_VALUE_BYTES"
+observed = "The gateway settlement path holds no lxp_module_ctx and no lxp_kernel, and the kernel module key/value store it would have to borrow is itself fixed: include/layerx/lxp_kernel.h:17-20 caps a kernel at 512 module entries, 128 key bytes, 1024 value bytes and 64 staged writes per activity, while one persisted invoice record is 655 bytes for an effect-free receipt and grows with the receipt effect list. Routing invoice and idempotency state through lxp_ctx_kv_put would therefore have replaced the 256-entry invoice array with a 512-entry kernel-wide array and refused every record above 1024 bytes, so the bookkeeping was persisted in a growable canonical key/value store owned by the gateway, built on the same state commitment conventions as src/state/lxp_state_proof.c: LXP_DOMAIN_STATE_LEAF leaves over u32 big-endian key and value lengths, LXP_DOMAIN_STATE_NODE internal nodes, keys ordered by memcmp over the common prefix then shorter first, and the empty root defined as the leaf domain over no bytes. lxp_gateway_kv_put charges the net byte delta of every write to lxp_meter_charge_storage, so the only remaining limit on invoice and idempotency count is the storage ceiling of the settlement meter."
+assumption = "Canonical module key/value state means a deterministic commitment over sorted key/value pairs with metered growth, not the fixed kernel array, whose bounds are smaller than the state being persisted. The gateway store is confined to src/network and no kernel, module context or ledger file was changed to reach it."
+severity = "note"
+
+[observation.3.1.3601]
+task = "3.1"
+file = "src/ledger/lxp_receipt.c src/protocol/lxp_receipt.c src/network/lxp_gateway_kv.c"
+symbol = "lxp_ledger_receipt_build lxp_receipt_decode gateway_receipt_record_write gateway_receipt_record_read"
+observed = "lxp_ledger_receipt_build (src/ledger/lxp_receipt.c:13-57) never assigns module_id, module_version or parameter_version, so every receipt the gateway settles carries module_id 0 and module_version 0. lxp_receipt_encode accepts such a receipt and produces canonical bytes, but lxp_receipt_decode refuses them with LXP_ERR_NON_CANONICAL at src/protocol/lxp_receipt.c:792-795, which requires a non-zero module_id and module_version. A settled gateway receipt is therefore encodable and returnable over the wire but cannot be decoded back by the protocol codec, so the persisted invoice record uses an explicit gateway record encoding in the same style as lx_perps_market_encode: fixed big-endian fields, a length-prefixed effect list, refusal of any receipt carrying a program outcome, and a decode-and-compare of the encoded record against the original receipt before the write is admitted."
+assumption = "The missing module identity on ledger receipts belongs to the ledger receipt builder and its callers rather than to the gateway, and setting it inside src/network would change receipt bytes and signatures and break the equality tests/test_gateway_send.c asserts between the gateway receipt and the direct ledger receipt, so neither the builder nor the protocol codec was changed."
+severity = "blocker"
+
+[observation.3.1.3602]
+task = "3.1"
+file = "src/ledger/lxp_send.c src/ledger/lxp_receive.c include/layerx/lxp_ledger.h"
+symbol = "lxp_send_execute lxp_receive_execute LXP_SEND_STORE_CAPACITY"
+observed = "lxp_send_execute refuses with LXP_ERR_ARENA_EXHAUSTED once the store holds LXP_SEND_STORE_CAPACITY records (src/ledger/lxp_send.c:332) and lxp_receive_execute does the same for its idempotency window (src/ledger/lxp_receive.c:414), with the capacity fixed at 64 in include/layerx/lxp_ledger.h:76. The gateway now keeps the authoritative duplicate history in metered key/value state and treats lxp_send_store as a write-through window: it checks the persisted history immediately before delegating, and when the window is full it mirrors every record it holds into the store and empties it, so gateway settlement is no longer bounded at 64 keys. Both ledger refusals and the 64-entry array are untouched, so any caller that reaches lxp_send_execute or lxp_receive_execute without the gateway still refuses the sixty-fifth distinct idempotency key."
+assumption = "The ledger primitives and their capacity constant are outside the gateway paths this issue owns, so the bound was left in place and worked around rather than raised."
+severity = "note"
+
+[observation.3.1.3603]
+task = "3.1"
+file = "src/network/lxp_gateway_kv.c src/network/lxp_gateway_send.c src/network/lxp_gateway_receive.c"
+symbol = "lxp_gateway_window_reserve gateway_send_settle_locked gateway_receive_claim_locked"
+observed = "lxp_gateway_window_reserve mirrors every record of a full lxp_send_store into the persisted key/value history and then clears the array, including records a non-gateway writer placed in the same store. Duplicate detection for those records is preserved, because the gateway pre-check reads the persisted history for the same idempotency key before delegating, but a writer that reads lxp_send_store->records directly instead of calling lxp_send_execute would no longer see them. No such reader exists in this revision; the store is read only by lxp_send_execute, lxp_receive_execute and the gateway."
+assumption = "The store is a ledger-internal replay window rather than a public listing, so compacting it while preserving refusal behaviour is sound. If a future caller enumerates the array directly it must read the persisted history instead."
+severity = "note"
+
+[observation.3.1.3604]
+task = "3.1"
+file = "tests/test_gateway_send.c tests/test_gateway_receive.c tests/network/test_gateway_kv.c Makefile"
+symbol = "test-gateway-kv core-test-all"
+observed = "Removing the fixed invoice array required the two existing gateway tests to stop reaching into lxp_gateway_invoice_registry->records and to assert against the persisted state instead, and the new coverage that crosses both former limits needed a build rule, so tests/test_gateway_send.c, tests/test_gateway_receive.c, tests/network/test_gateway_kv.c and the Makefile were changed alongside the owned gateway sources. No assertion was relaxed: every previous check was replaced by an equal or stronger one over the key/value count, stored byte total and state root, and the new target was added to core-test-all rather than replacing an existing one. make CC=gcc test does not reach any gateway target, so the three gateway tests were run as a separate gate."
+assumption = "Tests that read a removed data structure cannot be left untouched, and a new test that is not wired into a target does not run, so both were treated as part of this change rather than as separate work."
+severity = "note"

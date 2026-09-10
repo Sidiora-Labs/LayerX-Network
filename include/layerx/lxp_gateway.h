@@ -1,6 +1,7 @@
 #ifndef LAYERX_LXP_GATEWAY_H
 #define LAYERX_LXP_GATEWAY_H
 
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_receipt.h"
 #include "layerx/lxp_transfer.h"
 #include "layerx/lx_asset.h"
@@ -13,10 +14,6 @@ enum {
     LXP_GATEWAY_HTTP_PAYMENT_REQUIRED = 402,
     LXP_PAYMENT_REQUIREMENT_PREIMAGE_SIZE = 160,
     LXP_PAYMENT_REQUIREMENT_ENCODED_SIZE = 224
-};
-
-enum {
-    LXP_GATEWAY_INVOICE_CAPACITY = 256
 };
 
 typedef struct lxp_payment_requirement {
@@ -32,12 +29,6 @@ typedef struct lxp_payment_requirement {
 } lxp_payment_requirement;
 #define lxp_payment_requirement lxp_payment_requirement
 
-typedef struct lxp_gateway_invoice_record {
-    uint8_t invoice_id[32];
-    uint8_t idempotency_key[32];
-    lxp_receipt receipt;
-} lxp_gateway_invoice_record;
-
 typedef struct lxp_gateway_invoice_registry lxp_gateway_invoice_registry;
 
 typedef struct lxp_gateway_settlement_context {
@@ -49,6 +40,7 @@ typedef struct lxp_gateway_settlement_context {
     uint64_t global_sequence;
     uint8_t batch_id[32];
     lxp_arena *arena;
+    lxp_meter_ctx *meter;
 } lxp_gateway_settlement_context;
 
 typedef struct lxp_gateway_receive_context {
@@ -60,6 +52,7 @@ typedef struct lxp_gateway_receive_context {
     uint64_t global_sequence;
     uint8_t batch_id[32];
     lxp_arena *arena;
+    lxp_meter_ctx *meter;
 } lxp_gateway_receive_context;
 
 lxp_gateway_invoice_registry *lxp_gateway_invoice_registry_create(
@@ -111,5 +104,17 @@ lxp_result lxp_gateway_receive_claim(
     const lxp_receive *receive,
     lxp_gateway_receive_context *context,
     lxp_receipt *receipt);
+lxp_result lxp_gateway_invoice_count(
+    lx_account_registry *owner_accounts,
+    lxp_gateway_invoice_registry *registry,
+    size_t *count);
+lxp_result lxp_gateway_state_root(
+    lx_account_registry *owner_accounts,
+    lxp_gateway_invoice_registry *registry,
+    uint8_t root[32]);
+lxp_result lxp_gateway_stored_bytes(
+    lx_account_registry *owner_accounts,
+    lxp_gateway_invoice_registry *registry,
+    uint64_t *bytes);
 
 #endif

@@ -192,12 +192,12 @@ static int world_init(
     };
     world->receive_context = (lxp_gateway_receive_context){
         &world->assets, &world->receive_environment, world->invoices,
-        service_public_key, sequencer_private_key, 7U, {0U}, arena
+        service_public_key, sequencer_private_key, 7U, {0U}, arena, NULL
     };
     world->receive_context.batch_id[0] = 0x88U;
     world->send_context = (lxp_gateway_settlement_context){
         &world->assets, &world->send_environment, world->invoices,
-        service_public_key, sequencer_private_key, 8U, {0U}, arena
+        service_public_key, sequencer_private_key, 8U, {0U}, arena, NULL
     };
     world->send_context.batch_id[0] = 0x89U;
     return 0;
@@ -230,6 +230,10 @@ int main(void)
     lxp_gateway_transaction_boundary boundary;
     lx_account payer_before;
     lx_account service_before;
+    uint8_t empty_state_root[32];
+    uint8_t settled_state_root[32];
+    size_t settled_invoice_count = 0U;
+    uint64_t settled_stored_bytes = 0U;
 
     if (public_key_for(payer_private_key, payer_public_key) != 0 ||
         public_key_for(service_private_key, service_public_key) != 0 ||
@@ -343,6 +347,9 @@ int main(void)
     if (sign_receive(service_private_key, &receive) != 0) return 1;
     payer_before = *world.payer;
     service_before = *world.service;
+    if (lxp_gateway_state_root(
+            &world.accounts, world.invoices, empty_state_root) != LXP_OK)
+        return 1;
     altered_receive = receive;
     altered_receive.amount.lo = 31U;
     if (lxp_gateway_receive_claim(
@@ -357,12 +364,11 @@ int main(void)
         lxp_receipt zero_receipt;
         lxp_grant_state zero_grant;
         lxp_send_store_record zero_idempotency;
-        lxp_gateway_invoice_record zero_invoice;
+        uint8_t rolled_back_root[32];
         size_t mark = lxp_arena_mark(&arena);
         (void)memset(&zero_receipt, 0, sizeof(zero_receipt));
         (void)memset(&zero_grant, 0, sizeof(zero_grant));
         (void)memset(&zero_idempotency, 0, sizeof(zero_idempotency));
-        (void)memset(&zero_invoice, 0, sizeof(zero_invoice));
         (void)memset(&receive_receipt, 0xa5, sizeof(receive_receipt));
         lxp_gateway_receive_test_fail_after(boundary);
         if (lxp_gateway_receive_claim(
@@ -377,8 +383,12 @@ int main(void)
                    sizeof(zero_grant)) != 0 ||
             memcmp(&world.receive_idempotency.records[0], &zero_idempotency,
                    sizeof(zero_idempotency)) != 0 ||
-            memcmp(&world.invoices->records[0], &zero_invoice,
-                   sizeof(zero_invoice)) != 0 ||
+            world.invoices->kv.count != 0U ||
+            world.invoices->kv.stored_bytes != 0U ||
+            lxp_gateway_state_root(
+                &world.accounts, world.invoices,
+                rolled_back_root) != LXP_OK ||
+            memcmp(rolled_back_root, empty_state_root, 32U) != 0 ||
             memcmp(&receive_receipt, &zero_receipt,
                    sizeof(receive_receipt)) != 0)
             return 1;
@@ -388,11 +398,10 @@ int main(void)
         lxp_receipt zero_receipt;
         lxp_grant_state zero_grant;
         lxp_send_store_record zero_idempotency;
-        lxp_gateway_invoice_record zero_invoice;
+        uint8_t rolled_back_root[32];
         (void)memset(&zero_receipt, 0, sizeof(zero_receipt));
         (void)memset(&zero_grant, 0, sizeof(zero_grant));
         (void)memset(&zero_idempotency, 0, sizeof(zero_idempotency));
-        (void)memset(&zero_invoice, 0, sizeof(zero_invoice));
         arena.capacity = arena.offset;
         if (lxp_gateway_receive_claim(
                 &requirement, &receive, &world.receive_context,
@@ -406,12 +415,17 @@ int main(void)
                    sizeof(zero_grant)) != 0 ||
             memcmp(&world.receive_idempotency.records[0], &zero_idempotency,
                    sizeof(zero_idempotency)) != 0 ||
-            memcmp(&world.invoices->records[0], &zero_invoice,
-                   sizeof(zero_invoice)) != 0 ||
+            world.invoices->kv.count != 0U ||
+            world.invoices->kv.stored_bytes != 0U ||
             memcmp(&receive_receipt, &zero_receipt,
                    sizeof(receive_receipt)) != 0)
             return 1;
         arena.capacity = capacity;
+        if (lxp_gateway_state_root(
+                &world.accounts, world.invoices,
+                rolled_back_root) != LXP_OK ||
+            memcmp(rolled_back_root, empty_state_root, 32U) != 0)
+            return 1;
     }
     status = lxp_gateway_receive_claim(
         &requirement, &receive, &world.receive_context, &receive_receipt);
@@ -426,6 +440,19 @@ int main(void)
         (void)fprintf(stderr, "initial claim failed: %d\n", (int)status);
         return 1;
     }
+    if (lxp_gateway_invoice_count(
+            &world.accounts, world.invoices,
+            &settled_invoice_count) != LXP_OK ||
+        settled_invoice_count != 1U ||
+        lxp_gateway_stored_bytes(
+            &world.accounts, world.invoices,
+            &settled_stored_bytes) != LXP_OK ||
+        settled_stored_bytes == 0U ||
+        world.invoices->kv.count != 2U ||
+        lxp_gateway_state_root(
+            &world.accounts, world.invoices, settled_state_root) != LXP_OK ||
+        memcmp(settled_state_root, empty_state_root, 32U) == 0)
+        return 1;
     if (lxp_gateway_receive_claim(
             &requirement, &receive, &world.receive_context,
             &replay_receipt) != LXP_ERR_IDEMPOTENT_REPLAY ||
@@ -435,6 +462,14 @@ int main(void)
         world.grants.grants[0].drawn_total.lo != 30U ||
         world.receive_idempotency.count != 1U || world.invoices->count != 1U)
         return 1;
+    {
+        uint8_t replay_state_root[32];
+        if (lxp_gateway_state_root(
+                &world.accounts, world.invoices,
+                replay_state_root) != LXP_OK ||
+            memcmp(replay_state_root, settled_state_root, 32U) != 0)
+            return 1;
+    }
     {
         lxp_grant_state existing = world.grants.grants[0];
         lxp_grant_state empty;
