@@ -3,100 +3,445 @@
 
 #include <string.h>
 
+enum { WORK_ARENA_BYTES = 16384, GAS_LIMIT = 100000 };
+
+static const uint8_t commitment_prefix[LX_SERVICE_KEY_PREFIX_BYTES] = {
+    'c', 'o', 'm', 'm', 'i', 't', ':', '1'
+};
+static const uint8_t progress_prefix[LX_SERVICE_KEY_PREFIX_BYTES] = {
+    'p', 'r', 'o', 'g', 'r', 's', ':', '1'
+};
+
+static lxp_state_store store_state;
+static lxp_state_journal state_journal;
+static lxp_kernel service_kernel;
+static lxp_effect_buffer event_buffer;
+static lxp_arena work_arena;
+static uint8_t work_bytes[WORK_ARENA_BYTES];
+static uint64_t parameter_set = 1U;
+
+static void be16(uint8_t *bytes, uint16_t value)
+{
+    bytes[0] = (uint8_t)(value >> 8);
+    bytes[1] = (uint8_t)value;
+}
+
+static void be32(uint8_t *bytes, uint32_t value)
+{
+    bytes[0] = (uint8_t)(value >> 24);
+    bytes[1] = (uint8_t)(value >> 16);
+    bytes[2] = (uint8_t)(value >> 8);
+    bytes[3] = (uint8_t)value;
+}
+
+static void be64(uint8_t *bytes, uint64_t value)
+{
+    size_t i;
+    for (i = 0U; i < 8U; ++i)
+        bytes[i] = (uint8_t)(value >> ((7U - i) * 8U));
+}
+
+static void id32(uint8_t out[32], uint8_t marker)
+{
+    (void)memset(out, 0, 32U);
+    out[0] = marker;
+}
+
+static size_t offer_payload(uint8_t *out, uint8_t offer_marker,
+                            uint8_t spec_marker, uint64_t expiry)
+{
+    size_t offset = 0U;
+    (void)memset(out, 0, (size_t)LX_SERVICE_OFFER_PUBLISH_PAYLOAD_BYTES);
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    id32(out + offset, offer_marker); offset += 32U;
+    id32(out + offset, 11U); offset += 32U;
+    be64(out + offset + 8U, 25U); offset += 16U;
+    id32(out + offset, 12U); offset += 32U;
+    id32(out + offset, spec_marker); offset += 32U;
+    be64(out + offset, 1000U); offset += 8U;
+    be64(out + offset, 200U); offset += 8U;
+    be64(out + offset, 300U); offset += 8U;
+    out[offset++] = (uint8_t)LX_SERVICE_DEFAULT_ACCEPT;
+    be64(out + offset, expiry); offset += 8U;
+    return offset;
+}
+
+static size_t identifier_payload(uint8_t *out, const uint8_t identifier[32])
+{
+    out[0] = 0U;
+    out[1] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + LX_SERVICE_PAYLOAD_VERSION_BYTES, identifier, 32U);
+    return (size_t)LX_SERVICE_IDENTIFIER_PAYLOAD_BYTES;
+}
+
+static size_t propose_payload(uint8_t *out, const uint8_t agreement_id[32],
+                              const uint8_t offer_id[32],
+                              const uint8_t terms_hash[32],
+                              const uint8_t escrow_id[32])
+{
+    size_t offset = 0U;
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + offset, agreement_id, 32U); offset += 32U;
+    (void)memcpy(out + offset, offer_id, 32U); offset += 32U;
+    (void)memcpy(out + offset, terms_hash, 32U); offset += 32U;
+    (void)memcpy(out + offset, escrow_id, 32U); offset += 32U;
+    return offset;
+}
+
+static size_t commit_payload(uint8_t *out, const uint8_t commitment_id[32],
+                             const uint8_t agreement_id[32],
+                             const uint8_t task_hash[32],
+                             const uint8_t escrow_id[32], uint64_t deadline,
+                             uint64_t resource_bound)
+{
+    size_t offset = 0U;
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + offset, commitment_id, 32U); offset += 32U;
+    (void)memcpy(out + offset, agreement_id, 32U); offset += 32U;
+    (void)memcpy(out + offset, task_hash, 32U); offset += 32U;
+    (void)memcpy(out + offset, escrow_id, 32U); offset += 32U;
+    be64(out + offset, deadline); offset += 8U;
+    be64(out + offset, resource_bound); offset += 8U;
+    return offset;
+}
+
+static size_t abandon_payload(uint8_t *out, const uint8_t commitment_id[32],
+                              uint16_t reason)
+{
+    out[0] = 0U;
+    out[1] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + LX_SERVICE_PAYLOAD_VERSION_BYTES, commitment_id, 32U);
+    be16(out + LX_SERVICE_PAYLOAD_VERSION_BYTES + 32U, reason);
+    return (size_t)LX_SERVICE_COMMIT_ABANDON_PAYLOAD_BYTES;
+}
+
+static size_t progress_payload(uint8_t *out, const uint8_t report_id[32],
+                               const uint8_t commitment_id[32],
+                               const uint8_t note_hash[32],
+                               const uint8_t availability[32], uint32_t bps)
+{
+    size_t offset = 0U;
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + offset, report_id, 32U); offset += 32U;
+    (void)memcpy(out + offset, commitment_id, 32U); offset += 32U;
+    (void)memcpy(out + offset, note_hash, 32U); offset += 32U;
+    (void)memcpy(out + offset, availability, 32U); offset += 32U;
+    be32(out + offset, bps); offset += 4U;
+    return offset;
+}
+
+static int open_ctx(lxp_module_ctx *ctx, uint64_t timestamp,
+                    uint64_t sequence)
+{
+    if (lxp_arena_init(&work_arena, work_bytes, sizeof(work_bytes)) !=
+            LXP_OK ||
+        lxp_effect_buffer_init(&event_buffer) != LXP_OK ||
+        lxp_module_ctx_init(ctx, &service_kernel, LXP_MODULE_SERVICE,
+                            timestamp, 0U, sequence, (uint64_t)GAS_LIMIT,
+                            &work_arena, true) != LXP_OK)
+        return 1;
+    return lxp_module_ctx_bind_effects(ctx, &event_buffer) == LXP_OK ? 0 : 1;
+}
+
+static lxp_result dispatch(uint32_t activity_type, const uint8_t *payload,
+                           size_t length,
+                           const lxp_authority_resolved *authority,
+                           uint64_t timestamp, uint64_t sequence,
+                           uint8_t activity_marker,
+                           lxp_result *module_result)
+{
+    const lxp_module_registration *registration = NULL;
+    lxp_activity activity;
+    lxp_module_ctx ctx;
+    lxp_result status;
+
+    *module_result = LXP_FATAL_INVARIANT;
+    status = lxp_kernel_module_for_activity(&service_kernel, activity_type,
+                                            0U, &registration);
+    if (status != LXP_OK) return status;
+    if (open_ctx(&ctx, timestamp, sequence) != 0) return LXP_FATAL_INVARIANT;
+    ctx.activity_id[0] = activity_marker;
+    (void)memset(&activity, 0, sizeof(activity));
+    activity.activity_type = activity_type;
+    activity.payload.bytes = payload;
+    activity.payload.length = length;
+    status = lxp_kernel_dispatch(registration, &ctx, &activity, authority,
+                                 &event_buffer, module_result);
+    if (status != LXP_OK) return status;
+    if (*module_result == LXP_OK) return lxp_module_ctx_commit(&ctx);
+    lxp_module_ctx_rollback(&ctx);
+    return LXP_OK;
+}
+
+static int event_is(uint16_t event_type, const uint8_t primary[32],
+                    const uint8_t secondary[32], uint8_t code,
+                    uint64_t sequence)
+{
+    uint8_t body[LX_SERVICE_EVENT_BODY_BYTES];
+    const lxp_effect *effect = &event_buffer.effects[0];
+    if (event_buffer.count != 1U || effect->kind != LXP_EFFECT_EVENT ||
+        effect->monetary || effect->module_id != LXP_MODULE_SERVICE ||
+        effect->event_type != event_type ||
+        effect->body_length != (uint16_t)LX_SERVICE_EVENT_BODY_BYTES)
+        return 1;
+    (void)memcpy(body, primary, 32U);
+    (void)memcpy(body + 32U, secondary, 32U);
+    body[64] = code;
+    be64(body + 65U, sequence);
+    return memcmp(effect->body, body, sizeof(body)) == 0 ? 0 : 1;
+}
+
+static int record_present(const uint8_t prefix[LX_SERVICE_KEY_PREFIX_BYTES],
+                          const uint8_t identifier[32], size_t expected)
+{
+    uint8_t key[LX_SERVICE_KEY_BYTES];
+    const uint8_t *value = NULL;
+    size_t length = 0U;
+    lxp_module_ctx ctx;
+    if (open_ctx(&ctx, 1U, 1U) != 0) return 1;
+    (void)memcpy(key, prefix, (size_t)LX_SERVICE_KEY_PREFIX_BYTES);
+    (void)memcpy(key + LX_SERVICE_KEY_PREFIX_BYTES, identifier, 32U);
+    if (lxp_ctx_kv_get(&ctx, key, sizeof(key), &value, &length) != LXP_OK)
+        return 1;
+    return length == expected ? 0 : 1;
+}
+
 int main(void)
 {
-    lx_service_store store;
-    lx_service_agreement *agreement;
-    lx_service_commit_request request;
-    lx_service_commitment first;
-    lx_service_commitment replayed;
+    uint8_t payload[LX_SERVICE_OFFER_PUBLISH_PAYLOAD_BYTES];
+    uint8_t record[LX_SERVICE_COMMITMENT_RECORD_BYTES];
+    uint8_t progress_record[LX_SERVICE_PROGRESS_RECORD_BYTES];
+    uint8_t offer_a[32];
+    uint8_t offer_b[32];
+    uint8_t formed[32];
+    uint8_t proposed[32];
+    uint8_t escrow_id[32];
+    uint8_t terms_hash[32];
+    uint8_t commitment_id[32];
+    uint8_t task_hash[32];
+    uint8_t report_one[32];
+    uint8_t report_two[32];
+    uint8_t report_three[32];
+    uint8_t note_hash[32];
+    uint8_t availability[32];
+    lx_service_commitment commitment;
+    lx_service_commitment decoded_commitment;
+    lx_service_agreement agreement;
+    lx_service_progress progress;
+    lx_service_progress decoded_progress;
     lxp_authority_resolved provider;
-    lxp_authority_resolved stranger;
-    lxp_effect_buffer effects;
-    lxp_receipt receipt;
-    lxp_state_store state;
-    lxp_state_journal journal;
-    lxp_kernel kernel;
+    lxp_authority_resolved buyer;
+    lxp_authority_resolved outsider;
     lxp_module_ctx ctx;
-    lxp_arena arena;
-    uint8_t arena_bytes[4096];
-    uint8_t activity_id[32] = { 1U };
-    uint8_t previous_root[32] = { 2U };
-    uint8_t resulting_root[32] = { 3U };
-    uint8_t activity_root[32] = { 4U };
-    uint8_t batch_id[32] = { 5U };
-    uint64_t parameters = 1U;
+    lxp_result outcome = LXP_OK;
+    uint32_t high_water = 0U;
+    size_t length;
 
-    (void)memset(&store, 0, sizeof(store));
-    store.delivery_count = LX_SERVICE_STORE_CAPACITY + 1U;
-    if (lx_service_store_validate(&store) != LXP_ERR_NON_CANONICAL)
-        return 1;
-    store.delivery_count = 0U;
     (void)memset(&provider, 0, sizeof(provider));
-    (void)memset(&stranger, 0, sizeof(stranger));
-    provider.principal[0] = 10U;
-    stranger.principal[0] = 11U;
-    store.agreement_count = 1U;
-    agreement = &store.agreements[0];
-    agreement->agreement_id[0] = 20U;
-    (void)memcpy(agreement->provider, provider.principal, 32U);
-    agreement->buyer[0] = 21U;
-    agreement->escrow_id[0] = 22U;
-    agreement->state = LX_SERVICE_AGREEMENT_FORMED;
-    if (lxp_state_store_init(&state, 0U) != LXP_OK ||
-        lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
-        lxp_kernel_register_module(&kernel, lx_service_module_iface()) != LXP_OK ||
-        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
-        lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_SERVICE, 100U, 0U, 50U,
-                            1000U, &arena, true) != LXP_OK)
+    (void)memset(&buyer, 0, sizeof(buyer));
+    (void)memset(&outsider, 0, sizeof(outsider));
+    provider.principal[0] = 1U;
+    buyer.principal[0] = 2U;
+    outsider.principal[0] = 3U;
+    id32(offer_a, 10U);
+    id32(offer_b, 20U);
+    id32(formed, 40U);
+    id32(proposed, 60U);
+    id32(escrow_id, 41U);
+    id32(terms_hash, 12U);
+    id32(commitment_id, 50U);
+    id32(task_hash, 51U);
+    id32(report_one, 70U);
+    id32(report_two, 71U);
+    id32(report_three, 72U);
+    id32(note_hash, 73U);
+    id32(availability, 74U);
+
+    if (lxp_state_store_init(&store_state, 0U) != LXP_OK ||
+        lxp_kernel_create(&service_kernel, &store_state, &state_journal,
+                          &parameter_set, 0U) != LXP_OK ||
+        lxp_kernel_register_module(&service_kernel,
+                                   lx_service_module_iface()) != LXP_OK)
         return 1;
-    (void)memset(&request, 0, sizeof(request));
-    request.store = &store;
-    request.authority = &stranger;
-    request.commitment.commitment_id[0] = 30U;
-    request.commitment.activity_id[0] = 31U;
-    (void)memcpy(request.commitment.provider, provider.principal, 32U);
-    (void)memcpy(request.commitment.agreement_id,
-                 agreement->agreement_id, 32U);
-    request.commitment.task_hash[0] = 32U;
-    request.commitment.deadline = 1000U;
-    request.commitment.resource_bound = 500U;
-    (void)memcpy(request.commitment.escrow_id, agreement->escrow_id, 32U);
-    store.commitment_count = LX_SERVICE_STORE_CAPACITY + 1U;
-    if (lx_service_commitment_put(&store, &request.commitment) !=
-        LXP_ERR_NON_CANONICAL)
+
+    length = offer_payload(payload, 10U, 13U, 900U);
+    if (dispatch(LX_SERVICE_OFFER_PUBLISH, payload, length, &provider, 100U,
+                 1U, 4U, &outcome) != LXP_OK || outcome != LXP_OK)
         return 1;
-    store.commitment_count = 0U;
-    if (lx_service_commit_task_execute(&ctx, &request, &first) !=
-            LXP_ERR_AGREEMENT_STATE || store.commitment_count != 0U)
+    length = offer_payload(payload, 20U, 13U, 900U);
+    if (dispatch(LX_SERVICE_OFFER_PUBLISH, payload, length, &provider, 100U,
+                 2U, 5U, &outcome) != LXP_OK || outcome != LXP_OK)
         return 1;
-    request.authority = &provider;
-    request.attempts_balance_mutation = true;
-    if (lx_service_commit_task_execute(&ctx, &request, &first) !=
-            LXP_ERR_MODULE_MAY_NOT_WRITE_BALANCE)
+    length = propose_payload(payload, formed, offer_a, terms_hash, escrow_id);
+    if (dispatch(LX_SERVICE_AGREEMENT_PROPOSE, payload, length, &buyer, 100U,
+                 3U, 6U, &outcome) != LXP_OK || outcome != LXP_OK)
         return 1;
-    request.attempts_balance_mutation = false;
-    if (lx_service_commit_task_execute(&ctx, &request, &first) != LXP_OK ||
-        store.commitment_count != 1U || first.global_sequence != 50U ||
-        agreement->state != LX_SERVICE_AGREEMENT_COMMITTED ||
-        lx_service_commit_task_execute(&ctx, &request, &replayed) != LXP_OK ||
-        memcmp(&first, &replayed, sizeof(first)) != 0 ||
-        store.commitment_count != 1U)
+    length = propose_payload(payload, proposed, offer_b, terms_hash,
+                             escrow_id);
+    if (dispatch(LX_SERVICE_AGREEMENT_PROPOSE, payload, length, &buyer, 100U,
+                 4U, 7U, &outcome) != LXP_OK || outcome != LXP_OK)
         return 1;
-    if (lxp_effect_buffer_init(&effects) != LXP_OK ||
-        lxp_receipt_build(&receipt, activity_id, 50U, previous_root,
-                          resulting_root, activity_root, LXP_OK, &effects,
-                          (lxp_u128){ 0U, 1U }, batch_id,
-                          LXP_MODULE_SERVICE, 1U, 1U) != LXP_OK ||
-        receipt.effects.count != 0U)
+    length = identifier_payload(payload, formed);
+    if (dispatch(LX_SERVICE_AGREEMENT_ACCEPT, payload, length, &provider,
+                 100U, 5U, 8U, &outcome) != LXP_OK || outcome != LXP_OK)
         return 1;
-    request.abandon_reason = 7U;
-    if (lx_service_commit_abandon_execute(&ctx, &request, &replayed) !=
-            LXP_OK || !replayed.abandoned || replayed.abandon_reason != 7U ||
-        agreement->state != LX_SERVICE_AGREEMENT_FORMED ||
-        lx_service_commit_abandon_execute(&ctx, &request, &first) != LXP_OK ||
-        memcmp(&first, &replayed, sizeof(first)) != 0 ||
-        lxp_state_store_destroy(&state) != LXP_OK)
+
+    length = commit_payload(payload, commitment_id, proposed, task_hash,
+                            escrow_id, 900U, 100U);
+    if (dispatch(LX_SERVICE_COMMIT_TASK, payload, length, &provider, 100U,
+                 6U, 9U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_AGREEMENT_STATE)
         return 1;
+    length = commit_payload(payload, commitment_id, formed, task_hash,
+                            escrow_id, 900U, 0U);
+    if (dispatch(LX_SERVICE_COMMIT_TASK, payload, length, &provider, 100U,
+                 6U, 9U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_NON_CANONICAL)
+        return 1;
+    length = commit_payload(payload, commitment_id, formed, task_hash,
+                            escrow_id, 900U, 100U);
+    if (dispatch(LX_SERVICE_COMMIT_TASK, payload, length, &outsider, 100U,
+                 6U, 9U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_AGREEMENT_STATE ||
+        dispatch(LX_SERVICE_COMMIT_TASK, payload, length, &provider, 100U,
+                 7U, 10U, &outcome) != LXP_OK || outcome != LXP_OK ||
+        event_is((uint16_t)LX_SERVICE_EVENT_TASK_COMMITTED, commitment_id,
+                 formed, 0U, 7U) != 0 ||
+        record_present(commitment_prefix, commitment_id,
+                       (size_t)LX_SERVICE_COMMITMENT_RECORD_BYTES) != 0 ||
+        dispatch(LX_SERVICE_COMMIT_TASK, payload, length, &provider, 100U,
+                 8U, 11U, &outcome) != LXP_OK || outcome != LXP_OK ||
+        event_is((uint16_t)LX_SERVICE_EVENT_TASK_COMMITTED, commitment_id,
+                 formed, 0U, 7U) != 0)
+        return 1;
+    if (open_ctx(&ctx, 100U, 9U) != 0 ||
+        lx_service_commitment_lookup(&ctx, commitment_id, &commitment) !=
+            LXP_OK ||
+        commitment.global_sequence != 7U || commitment.activity_id[0] != 10U ||
+        commitment.deadline != 900U || commitment.resource_bound != 100U ||
+        commitment.abandoned || commitment.abandon_reason != 0U ||
+        memcmp(commitment.provider, provider.principal, 32U) != 0 ||
+        memcmp(commitment.agreement_id, formed, 32U) != 0 ||
+        lx_service_agreement_lookup(&ctx, formed, &agreement) != LXP_OK ||
+        agreement.state != LX_SERVICE_AGREEMENT_COMMITTED)
+        return 1;
+    if (lx_service_commitment_encode(&commitment, record) != LXP_OK ||
+        lx_service_commitment_decode(record, sizeof(record),
+                                     &decoded_commitment) != LXP_OK ||
+        memcmp(&commitment, &decoded_commitment, sizeof(commitment)) != 0 ||
+        lx_service_commitment_decode(record, sizeof(record) - 1U,
+                                     &decoded_commitment) !=
+            LXP_ERR_NON_CANONICAL)
+        return 1;
+
+    length = progress_payload(payload, report_one, commitment_id, note_hash,
+                              availability, 0U);
+    if (dispatch(LX_SERVICE_PROGRESS_REPORT, payload, length, &provider,
+                 100U, 10U, 12U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_PARAMETER_BOUNDS)
+        return 1;
+    length = progress_payload(payload, report_one, commitment_id, note_hash,
+                              availability,
+                              (uint32_t)LX_SERVICE_PROGRESS_COMPLETE_BPS +
+                                  1U);
+    if (dispatch(LX_SERVICE_PROGRESS_REPORT, payload, length, &provider,
+                 100U, 10U, 12U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_PARAMETER_BOUNDS)
+        return 1;
+    length = progress_payload(payload, report_one, commitment_id, note_hash,
+                              availability, 2500U);
+    if (dispatch(LX_SERVICE_PROGRESS_REPORT, payload, length, &outsider,
+                 100U, 10U, 12U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_AGREEMENT_STATE ||
+        dispatch(LX_SERVICE_PROGRESS_REPORT, payload, length, &provider,
+                 100U, 11U, 13U, &outcome) != LXP_OK || outcome != LXP_OK ||
+        event_is((uint16_t)LX_SERVICE_EVENT_PROGRESS_REPORTED, report_one,
+                 commitment_id, 0U, 11U) != 0 ||
+        record_present(progress_prefix, report_one,
+                       (size_t)LX_SERVICE_PROGRESS_RECORD_BYTES) != 0 ||
+        dispatch(LX_SERVICE_PROGRESS_REPORT, payload, length, &provider,
+                 100U, 12U, 14U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_SEQUENCE_REUSED)
+        return 1;
+    length = progress_payload(payload, report_two, commitment_id, note_hash,
+                              availability, 2500U);
+    if (dispatch(LX_SERVICE_PROGRESS_REPORT, payload, length, &provider,
+                 100U, 13U, 15U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_METER_REGRESSION)
+        return 1;
+    length = progress_payload(payload, report_two, commitment_id, note_hash,
+                              availability, 1000U);
+    if (dispatch(LX_SERVICE_PROGRESS_REPORT, payload, length, &provider,
+                 100U, 14U, 16U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_METER_REGRESSION)
+        return 1;
+    length = progress_payload(payload, report_two, commitment_id, note_hash,
+                              availability,
+                              (uint32_t)LX_SERVICE_PROGRESS_COMPLETE_BPS);
+    if (dispatch(LX_SERVICE_PROGRESS_REPORT, payload, length, &provider,
+                 100U, 15U, 17U, &outcome) != LXP_OK || outcome != LXP_OK ||
+        event_is((uint16_t)LX_SERVICE_EVENT_PROGRESS_REPORTED, report_two,
+                 commitment_id, 1U, 15U) != 0)
+        return 1;
+    length = progress_payload(payload, report_three, commitment_id,
+                              note_hash, availability, 5000U);
+    if (dispatch(LX_SERVICE_PROGRESS_REPORT, payload, length, &provider,
+                 901U, 16U, 18U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_DELIVERY_DEADLINE_PASSED)
+        return 1;
+    if (open_ctx(&ctx, 100U, 17U) != 0 ||
+        lx_service_progress_high_water(&ctx, commitment_id, &high_water) !=
+            LXP_OK ||
+        high_water != (uint32_t)LX_SERVICE_PROGRESS_COMPLETE_BPS ||
+        lx_service_progress_lookup(&ctx, report_one, &progress) != LXP_OK ||
+        progress.progress_bps != 2500U || progress.reported_at != 100U ||
+        progress.global_sequence != 11U || progress.activity_id[0] != 13U ||
+        memcmp(progress.agreement_id, formed, 32U) != 0 ||
+        memcmp(progress.provider, provider.principal, 32U) != 0 ||
+        lx_service_progress_encode(&progress, progress_record) != LXP_OK ||
+        lx_service_progress_decode(progress_record, sizeof(progress_record),
+                                   &decoded_progress) != LXP_OK ||
+        memcmp(&progress, &decoded_progress, sizeof(progress)) != 0)
+        return 1;
+
+    length = abandon_payload(payload, commitment_id, 0U);
+    if (dispatch(LX_SERVICE_COMMIT_ABANDON, payload, length, &provider, 100U,
+                 18U, 19U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_NON_CANONICAL)
+        return 1;
+    length = abandon_payload(payload, commitment_id, 9U);
+    if (dispatch(LX_SERVICE_COMMIT_ABANDON, payload, length, &outsider, 100U,
+                 18U, 19U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_AGREEMENT_STATE ||
+        dispatch(LX_SERVICE_COMMIT_ABANDON, payload, length, &provider, 100U,
+                 19U, 20U, &outcome) != LXP_OK || outcome != LXP_OK ||
+        event_is((uint16_t)LX_SERVICE_EVENT_COMMIT_ABANDONED, commitment_id,
+                 formed, 1U, 19U) != 0 ||
+        dispatch(LX_SERVICE_COMMIT_ABANDON, payload, length, &provider, 100U,
+                 20U, 21U, &outcome) != LXP_OK || outcome != LXP_OK)
+        return 1;
+    if (open_ctx(&ctx, 100U, 21U) != 0 ||
+        lx_service_commitment_lookup(&ctx, commitment_id, &commitment) !=
+            LXP_OK ||
+        !commitment.abandoned || commitment.abandon_reason != 9U ||
+        lx_service_agreement_lookup(&ctx, formed, &agreement) != LXP_OK ||
+        agreement.state != LX_SERVICE_AGREEMENT_FORMED ||
+        lx_service_commitment_encode(&commitment, record) != LXP_OK ||
+        lx_service_commitment_decode(record, sizeof(record),
+                                     &decoded_commitment) != LXP_OK ||
+        memcmp(&commitment, &decoded_commitment, sizeof(commitment)) != 0)
+        return 1;
+    length = progress_payload(payload, report_three, commitment_id,
+                              note_hash, availability, 5000U);
+    if (dispatch(LX_SERVICE_PROGRESS_REPORT, payload, length, &provider,
+                 100U, 22U, 23U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_AGREEMENT_STATE)
+        return 1;
+
+    if (lxp_state_store_destroy(&store_state) != LXP_OK) return 1;
     return 0;
 }
