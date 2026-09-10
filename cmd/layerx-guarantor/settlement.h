@@ -3,6 +3,7 @@
 #include "layerx/lxp_daemon.h"
 #include "runtime.h"
 #include "layerx/lxp_guarantor.h"
+#include "layerx/lxp_paxeer.h"
 typedef struct gp_settlement_config {
     const char *python;
     const char *helper;
@@ -22,6 +23,9 @@ typedef struct gp_settlement_config {
 lxp_result gp_settlement_config_from_env(gp_settlement_config *, const char *);
 lxp_result gp_settlement_membership(const gp_settlement_config *, uint64_t, lxp_guarantor_set *,
                                     size_t *, uint64_t *, lxp_u128 *);
+lxp_result gp_settlement_membership_sync(const gp_settlement_config *, uint64_t,
+                                         lxp_paxeer_bond_state *,
+                                         lxp_paxeer_membership_sync_availability *);
 lxp_result gp_settlement_register(const gp_settlement_config *, const lxp_guarantor_cert *, gp_runtime *,
                                   lxp_daemon_settlement_registration_evidence *, bool *,
                                   uint64_t *);

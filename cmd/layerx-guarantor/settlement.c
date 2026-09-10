@@ -255,6 +255,34 @@ lxp_result gp_settlement_membership(const gp_settlement_config *config, uint64_t
     *minimum_bond = minimum;
     return LXP_OK;
 }
+lxp_result gp_settlement_membership_sync(const gp_settlement_config *config, uint64_t epoch,
+                                         lxp_paxeer_bond_state *state,
+                                         lxp_paxeer_membership_sync_availability *availability)
+{
+    lxp_paxeer_membership_observation observation;
+    lxp_guarantor_set set;
+    size_t threshold = 0U;
+    uint64_t maximum_delay = 0U;
+    lxp_u128 minimum_bond;
+    lxp_result status;
+    if (!valid_config(config) || state == NULL || availability == NULL || epoch == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    if (config->chain_id != state->paxeer_chain_id || config->network_id != state->network_id ||
+        memcmp(config->settlement_contract, state->paxeer_settlement_contract, 20U) != 0)
+        return LXP_ERR_AUTH_SCOPE;
+    status = gp_settlement_membership(config, epoch, &set, &threshold, &maximum_delay,
+                                      &minimum_bond);
+    if (status != LXP_OK)
+        return status;
+    (void)memset(&observation, 0, sizeof(observation));
+    observation.paxeer_chain_id = config->chain_id;
+    (void)memcpy(observation.guarantor_bond_contract, config->settlement_contract, 20U);
+    observation.membership_version = set.version;
+    observation.observed_epoch = epoch;
+    observation.minimum_bond = minimum_bond;
+    observation.members = set;
+    return lxp_paxeer_membership_sync(state, &observation, availability);
+}
 static void header_json(FILE *file, const lxp_batch_header *h)
 {
     const uint8_t *hashes[] = {h->previous_state_root,  h->resulting_state_root,
