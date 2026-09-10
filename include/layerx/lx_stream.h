@@ -11,9 +11,18 @@
 #include <stdint.h>
 
 enum {
-    LX_STREAM_STORE_CAPACITY = 128,
     LX_STREAM_MAX_METER_AUTHORITIES = 8,
-    LX_STREAM_IDEMPOTENCY_CAPACITY = 16,
+    LX_STREAM_PAYLOAD_VERSION = 1,
+    LX_STREAM_KEY_BYTES = 39,
+    LX_STREAM_RECORD_BYTES = 541,
+    LX_STREAM_RESULT_BYTES = 67,
+    LX_STREAM_OPEN_PAYLOAD_FIXED = 204,
+    LX_STREAM_OPEN_PAYLOAD_MAX =
+        LX_STREAM_OPEN_PAYLOAD_FIXED + LX_STREAM_MAX_METER_AUTHORITIES * 32,
+    LX_STREAM_TOP_UP_PAYLOAD_BYTES = 50,
+    LX_STREAM_METER_PAYLOAD_BYTES = 138,
+    LX_STREAM_KEYED_PAYLOAD_BYTES = 66,
+    LX_STREAM_ID_PAYLOAD_BYTES = 34,
     LX_STREAM_OPEN = 0x00040001,
     LX_STREAM_TOP_UP = 0x00040002,
     LX_STREAM_METER = 0x00040003,
@@ -52,21 +61,29 @@ typedef struct lx_stream_record {
     bool closed;
 } lx_stream_record;
 
-typedef struct lx_stream_store {
-    lx_stream_record records[LX_STREAM_STORE_CAPACITY];
-    size_t count;
-    struct {
-        uint8_t key[32];
-        lxp_receipt receipt;
-    } economic_results[LX_STREAM_IDEMPOTENCY_CAPACITY];
-    size_t economic_result_count;
-} lx_stream_store;
+/* Durable economic result of one settlement or closure. The ledger writes
+ * only the transfer set root into a receipt, so replaying an idempotency key
+ * reproduces the original receipt byte for byte from this record. */
+typedef struct lx_stream_economic_result {
+    uint8_t transfer_set_root[32];
+    lxp_u128 paid;
+    lxp_u128 refunded;
+    uint16_t ordinal;
+    uint8_t leg_count;
+} lx_stream_economic_result;
+
+/* Asset states the stream module is permitted to move. Bound by the host at
+ * LXP_MODULE_STREAM through lxp_kernel_bind_module_runtime; a stream may only
+ * fund, draw or refund an asset the host has published here. */
+typedef struct lx_stream_runtime {
+    const lxp_transfer_asset_state *assets;
+    size_t asset_count;
+} lx_stream_runtime;
 
 typedef struct lx_stream_fund_request {
-    lx_stream_store *store;
     lx_account *payer;
     lx_account *stream_account;
-    const lx_asset_record *asset;
+    uint8_t asset_id[32];
     lxp_u128 amount;
     lxp_transfer_context context;
     lx_stream_record record;
@@ -80,33 +97,111 @@ typedef struct lx_stream_meter_attestation {
 } lx_stream_meter_attestation;
 
 typedef struct lx_stream_settle_request {
-    lx_stream_store *store;
     const uint8_t *stream_id;
     lx_account *stream_account;
     lx_account *recipient;
-    const lx_asset_record *asset;
+    uint8_t asset_id[32];
     uint8_t idempotency_key[32];
     lxp_transfer_context context;
 } lx_stream_settle_request;
 
 typedef struct lx_stream_lifecycle_request {
-    lx_stream_store *store;
     const uint8_t *stream_id;
     lx_account *stream_account;
     lx_account *payer;
     lx_account *recipient;
-    const lx_asset_record *asset;
+    uint8_t asset_id[32];
     const lxp_authority_resolved *authority;
     uint8_t idempotency_key[32];
     lxp_transfer_context context;
 } lx_stream_lifecycle_request;
 
+typedef struct lx_stream_open_payload {
+    lx_stream_record record;
+    lxp_u128 initial_funding;
+} lx_stream_open_payload;
+
+typedef struct lx_stream_amount_payload {
+    uint8_t stream_id[32];
+    lxp_u128 amount;
+} lx_stream_amount_payload;
+
+typedef struct lx_stream_keyed_payload {
+    uint8_t stream_id[32];
+    uint8_t idempotency_key[32];
+} lx_stream_keyed_payload;
+
+typedef struct lx_stream_id_payload {
+    uint8_t stream_id[32];
+} lx_stream_id_payload;
+
+typedef lxp_result (*lx_stream_visit_fn)(const lx_stream_record *record,
+                                         void *user);
+
 const lxp_module_iface *lx_stream_module_iface(void);
-lxp_result lx_stream_lookup(lx_stream_store *store,
-                            const uint8_t stream_id[32],
-                            lx_stream_record **record);
-lxp_result lx_stream_state_put(lx_stream_store *store,
-                               const lx_stream_record *record);
+
+lxp_result lx_stream_record_validate(const lx_stream_record *record);
+lxp_result lx_stream_record_encode(const lx_stream_record *record,
+                                   uint8_t bytes[LX_STREAM_RECORD_BYTES]);
+lxp_result lx_stream_record_decode(const uint8_t *bytes, size_t length,
+                                   lx_stream_record *record);
+lxp_result lx_stream_state_key(const uint8_t stream_id[32],
+                               uint8_t key[LX_STREAM_KEY_BYTES]);
+lxp_result lx_stream_result_key(const uint8_t idempotency_key[32],
+                                uint8_t key[LX_STREAM_KEY_BYTES]);
+lxp_result lx_stream_load(lxp_module_ctx *ctx, const uint8_t stream_id[32],
+                          lx_stream_record *record);
+lxp_result lx_stream_save(lxp_module_ctx *ctx, const lx_stream_record *record);
+lxp_result lx_stream_iter(lxp_module_ctx *ctx, lx_stream_visit_fn visit,
+                          void *user);
+lxp_result lx_stream_result_load(lxp_module_ctx *ctx,
+                                 const uint8_t idempotency_key[32],
+                                 lx_stream_economic_result *result,
+                                 bool *found);
+lxp_result lx_stream_result_save(lxp_module_ctx *ctx,
+                                 const uint8_t idempotency_key[32],
+                                 const lx_stream_economic_result *result);
+lxp_result lx_stream_result_receipt(const lx_stream_economic_result *result,
+                                    lxp_receipt *receipt);
+lxp_result lx_stream_transfer_source(lxp_transfer_source_authority *source,
+                                     const lx_account *account,
+                                     lxp_authorization_kind kind);
+/* Builds the module-authorized debit context for a stream-account leg. The
+ * stream account is its own debit source under LXP_AUTH_PROTOCOL_MODULE, the
+ * only authorization lx_stream_authority_check accepts for that custody
+ * kind. */
+lxp_result lx_stream_draw_context(lxp_module_ctx *ctx,
+                                  lx_account *stream_account,
+                                  const lxp_transfer_context *caller,
+                                  lxp_transfer_source_authority *source,
+                                  lxp_transfer_context *context);
+
+lxp_result lx_stream_open_encode(const lx_stream_open_payload *payload,
+                                 uint8_t *bytes, size_t capacity,
+                                 size_t *length);
+lxp_result lx_stream_open_decode(const uint8_t *bytes, size_t length,
+                                 lx_stream_open_payload *payload);
+lxp_result lx_stream_amount_encode(const lx_stream_amount_payload *payload,
+                                   uint8_t *bytes, size_t capacity,
+                                   size_t *length);
+lxp_result lx_stream_amount_decode(const uint8_t *bytes, size_t length,
+                                   lx_stream_amount_payload *payload);
+lxp_result lx_stream_meter_encode(const lx_stream_meter_attestation *payload,
+                                  uint8_t *bytes, size_t capacity,
+                                  size_t *length);
+lxp_result lx_stream_meter_decode(const uint8_t *bytes, size_t length,
+                                  lx_stream_meter_attestation *payload);
+lxp_result lx_stream_keyed_encode(const lx_stream_keyed_payload *payload,
+                                  uint8_t *bytes, size_t capacity,
+                                  size_t *length);
+lxp_result lx_stream_keyed_decode(const uint8_t *bytes, size_t length,
+                                  lx_stream_keyed_payload *payload);
+lxp_result lx_stream_id_encode(const lx_stream_id_payload *payload,
+                               uint8_t *bytes, size_t capacity,
+                               size_t *length);
+lxp_result lx_stream_id_decode(const uint8_t *bytes, size_t length,
+                               lx_stream_id_payload *payload);
+
 lxp_result lx_stream_open_execute(lxp_module_ctx *ctx,
                                   const lx_stream_fund_request *request,
                                   lxp_receipt *receipt);
@@ -142,12 +237,6 @@ lxp_result lx_stream_mark_underfunded(lx_stream_record *record,
 lxp_result lx_stream_settle_execute(lxp_module_ctx *ctx,
                                     const lx_stream_settle_request *request,
                                     lxp_receipt *receipt);
-lxp_result lx_stream_receipt_replay(const lx_stream_store *store,
-                                    const uint8_t key[32],
-                                    lxp_receipt *receipt, bool *found);
-lxp_result lx_stream_receipt_record(lx_stream_store *store,
-                                    const uint8_t key[32],
-                                    const lxp_receipt *receipt);
 lxp_result lx_stream_pause_execute(
     lxp_module_ctx *ctx, const lx_stream_lifecycle_request *request);
 lxp_result lx_stream_resume_execute(
