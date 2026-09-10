@@ -829,14 +829,13 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
     if (status == LXP_OK)
         status = lxp_kernel_create(&runtime->kernel, &runtime->state, &runtime->journal,
                                    &runtime->configuration, 1U);
-    if (status == LXP_OK)
-        status = lxp_kernel_register_module(&runtime->kernel, programs_module_registration_v4());
-    if (status == LXP_OK && runtime->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
-        status = lxp_kernel_register_module(&runtime->kernel, lx_asset_module_iface());
-    if (status == LXP_OK && runtime->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
-        status = lxp_kernel_register_module(&runtime->kernel, lxp_governance_module_iface());
-    if (status == LXP_OK && runtime->custody_credit_enabled)
-        status = lxp_kernel_register_module(&runtime->kernel, lxp_bridge_module_iface());
+    if (status == LXP_OK) {
+        lxp_genesis_module_plan genesis_module_plan;
+        status = lxp_genesis_module_plan_resolve(genesis, &genesis_module_plan);
+        if (status == LXP_OK)
+            status = lxp_genesis_module_plan_register(&genesis_module_plan,
+                                                      &runtime->kernel);
+    }
     if (status == LXP_OK)
         status =
             lxp_kernel_set_capabilities(&runtime->kernel, NULL, lxp_kernel_canonical_ledger_apply);

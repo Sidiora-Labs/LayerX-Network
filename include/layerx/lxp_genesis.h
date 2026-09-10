@@ -2,6 +2,7 @@
 #define LAYERX_LXP_GENESIS_H
 
 #include "layerx/lxp_codec.h"
+#include "layerx/lxp_module.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -18,8 +19,31 @@ enum {
     LXP_IMPORT_MAX_ITEMS = 256,
     LXP_IMPORT_MAX_ASSET_TOTALS = 32,
     LXP_GENESIS_REGISTRATION_BYTES = 82,
-    LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT = 3
+    LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT = 3,
+    LXP_GENESIS_MODULE_TABLE_MAX = LXP_MODULE_RESERVED_COUNT,
+    LXP_GENESIS_MODULE_ENABLE_PREFIX_BYTES = 14
 };
+
+typedef enum lxp_genesis_module_gate {
+    LXP_GENESIS_MODULE_GATE_ALWAYS = 1,
+    LXP_GENESIS_MODULE_GATE_STATE_COMMITMENT = 2,
+    LXP_GENESIS_MODULE_GATE_CUSTODY_PROFILE = 3,
+    LXP_GENESIS_MODULE_GATE_ENABLE_FLAG = 4
+} lxp_genesis_module_gate;
+
+typedef const lxp_module_iface *(*lxp_genesis_module_iface_fn)(void);
+
+typedef struct lxp_genesis_module_entry {
+    uint16_t module_id;
+    lxp_genesis_module_gate gate;
+    bool default_enabled;
+    lxp_genesis_module_iface_fn iface;
+} lxp_genesis_module_entry;
+
+typedef struct lxp_genesis_module_plan {
+    const lxp_module_iface *modules[LXP_GENESIS_MODULE_TABLE_MAX];
+    size_t count;
+} lxp_genesis_module_plan;
 
 typedef enum lxp_import_section_kind {
     LXP_IMPORT_USDX_BALANCES = 1,
@@ -166,6 +190,18 @@ typedef struct lxp_genesis_bootstrap_registration {
 struct lxp_kernel;
 struct lxp_snapshot_manifest_record;
 
+const lxp_genesis_module_entry *lxp_genesis_module_table(size_t *count);
+lxp_result lxp_genesis_module_enable_key(uint16_t module_id,
+                                         uint8_t key[32]);
+lxp_result lxp_genesis_module_plan_default(
+    uint16_t protocol_version, bool custody_credit_enabled,
+    lxp_genesis_module_plan *plan);
+lxp_result lxp_genesis_module_plan_resolve(
+    const lxp_genesis_manifest *manifest, lxp_genesis_module_plan *plan);
+lxp_result lxp_genesis_module_plan_register(
+    const lxp_genesis_module_plan *plan, struct lxp_kernel *kernel);
+lxp_result lxp_genesis_module_plan_matches(
+    const lxp_genesis_module_plan *plan, const struct lxp_kernel *kernel);
 lxp_result lxp_genesis_encode(
     const lxp_genesis_manifest *manifest, bool include_signature,
     lxp_arena *arena, lxp_byte_span *encoded);

@@ -62,6 +62,7 @@ static lxp_result materialize_snapshot(
     lxp_state_journal *journal = NULL;
     lxp_kernel *kernel = NULL;
     lx_account_registry *accounts = NULL;
+    lxp_genesis_module_plan plan;
     uint8_t canonical_root[32];
     uint8_t receipt_root[32];
     bool state_open = false;
@@ -84,21 +85,9 @@ static lxp_result materialize_snapshot(
     if (status == LXP_OK)
         status = lxp_kernel_create(kernel, state, journal, manifest, 1U);
     if (status == LXP_OK)
-        status = lxp_kernel_register_module(
-            kernel, programs_module_registration_v4());
-    if (status == LXP_OK &&
-        manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
-        status = lxp_kernel_register_module(kernel, lx_asset_module_iface());
-    if (status == LXP_OK &&
-        manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
-        status = lxp_kernel_register_module(kernel, lxp_governance_module_iface());
-    if (status == LXP_OK) {
-        lxp_bridge_profile bridge;
-        bool present = false;
-        status = lxp_bridge_genesis_profile(manifest, &bridge, &present);
-        if (status == LXP_OK && present)
-            status = lxp_kernel_register_module(kernel, lxp_bridge_module_iface());
-    }
+        status = lxp_genesis_module_plan_resolve(manifest, &plan);
+    if (status == LXP_OK)
+        status = lxp_genesis_module_plan_register(&plan, kernel);
     if (status == LXP_OK)
         status = lxp_genesis_materialize(manifest, arena, kernel);
     if (status == LXP_OK) status = lxp_state_root(kernel, canonical_root);

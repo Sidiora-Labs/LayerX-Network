@@ -4636,7 +4636,8 @@ static lxp_result verify_snapshot_migration(
 }
 
 static lxp_result load_genesis_settlement_anchor(
-    lxp_daemon_process *process, uint8_t settlement_anchor[32])
+    lxp_daemon_process *process, uint8_t settlement_anchor[32],
+    lxp_genesis_module_plan *module_plan)
 {
     const char *path = required_environment("LAYERX_NODE_GENESIS_MANIFEST");
     lxp_genesis_manifest *genesis = NULL;
@@ -4645,7 +4646,8 @@ static lxp_result load_genesis_settlement_anchor(
     size_t length = 0U;
     size_t mark;
     lxp_result status;
-    if (process == NULL || settlement_anchor == NULL || path == NULL)
+    if (process == NULL || settlement_anchor == NULL || module_plan == NULL ||
+        path == NULL)
         return LXP_ERR_NON_CANONICAL;
     mark = lxp_arena_mark(&process->owner_scratch);
     status = lxp_daemon_artifact_read(
@@ -4680,6 +4682,8 @@ static lxp_result load_genesis_settlement_anchor(
         lxp_bridge_profile profile;
         status = lxp_bridge_genesis_profile(genesis, &profile,
                                              &process->custody_credit_enabled);
+        if (status == LXP_OK)
+            status = lxp_genesis_module_plan_resolve(genesis, module_plan);
         (void)memcpy(settlement_anchor,
                      genesis->genesis_receipt_state_root, 32U);
     }
@@ -4796,20 +4800,14 @@ static lxp_result open_process(lxp_daemon_process *process,
     if (status == LXP_OK)
         status = lxp_kernel_create(&process->kernel, &process->state,
                                    &process->journal, configuration, 1U);
-    if (status == LXP_OK)
-        status = load_genesis_settlement_anchor(process, genesis_settlement_anchor);
-    if (status == LXP_OK)
-        status = lxp_kernel_register_module(
-            &process->kernel, programs_module_registration_v4());
-    if (status == LXP_OK &&
-        process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
-        status = lxp_kernel_register_module(
-            &process->kernel, lx_asset_module_iface());
-    if (status == LXP_OK &&
-        process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
-        status = lxp_kernel_register_module(&process->kernel, lxp_governance_module_iface());
-    if (status == LXP_OK && process->custody_credit_enabled)
-        status = lxp_kernel_register_module(&process->kernel, lxp_bridge_module_iface());
+    if (status == LXP_OK) {
+        lxp_genesis_module_plan genesis_module_plan;
+        status = load_genesis_settlement_anchor(
+            process, genesis_settlement_anchor, &genesis_module_plan);
+        if (status == LXP_OK)
+            status = lxp_genesis_module_plan_register(&genesis_module_plan,
+                                                      &process->kernel);
+    }
     if (status == LXP_OK)
         status = lxp_kernel_set_capabilities(
             &process->kernel, NULL, lxp_kernel_canonical_ledger_apply);

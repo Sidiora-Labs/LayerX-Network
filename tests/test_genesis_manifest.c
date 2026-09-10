@@ -133,6 +133,7 @@ static int check_version(uint16_t protocol_version)
     lx_account_registry accounts;
     lxp_byte_span encoded_manifest;
     lxp_byte_span snapshot;
+    lxp_genesis_module_plan plan;
     lxp_arena arena;
     bool enabled = false;
 
@@ -173,16 +174,22 @@ static int check_version(uint16_t protocol_version)
     REQUIRE(lxp_state_store_bind_accounts(&state, &accounts) == LXP_OK);
     REQUIRE(lxp_kernel_create(&kernel, &state, &journal, &manifest, 1U) ==
             LXP_OK);
-    REQUIRE(lxp_kernel_register_module(
-        &kernel, programs_module_registration_v4()) == LXP_OK);
+    REQUIRE(lxp_genesis_module_plan_resolve(&manifest, &plan) == LXP_OK);
+    REQUIRE(plan.count == (protocol_version ==
+        LXP_PROTOCOL_VERSION_STATE_COMMITMENT ? 3U : 1U));
+    REQUIRE(plan.modules[0]->module_id == LXP_MODULE_PROGRAMS);
     if (protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
-        REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
-                                  &snapshot_manifest, &kernel) != LXP_OK);
-        REQUIRE(lxp_kernel_register_module(&kernel, lx_asset_module_iface()) == LXP_OK);
-        REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
-                                  &snapshot_manifest, &kernel) != LXP_OK);
-        REQUIRE(lxp_kernel_register_module(&kernel, lxp_governance_module_iface()) == LXP_OK);
+        REQUIRE(plan.modules[1]->module_id == LXP_MODULE_ASSET);
+        REQUIRE(plan.modules[2]->module_id == LXP_MODULE_GOVERNANCE);
     }
+    for (size_t i = 0U; i < plan.count; ++i) {
+        REQUIRE(lxp_kernel_register_module(&kernel, plan.modules[i]) ==
+                LXP_OK);
+        if (i + 1U < plan.count)
+            REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
+                                      &snapshot_manifest, &kernel) != LXP_OK);
+    }
+    REQUIRE(lxp_genesis_module_plan_matches(&plan, &kernel) == LXP_OK);
     REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
                               &snapshot_manifest, &kernel) == LXP_OK);
     if (protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
