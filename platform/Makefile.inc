@@ -12,7 +12,7 @@ PLATFORM_BETA_CLUSTER_ENV ?= build/beta-cluster/env
 	platform-test-android-artifact platform-test-ios-artifact \
 	platform-real-agent-integration \
 	platform-real-ios-integration platform-real-android-integration \
-	platform-test-docs platform-hosted-smoke platform-hosted-topology-check platform-beta-cluster-up platform-beta-cluster-down \
+	platform-test-docs platform-hosted-smoke platform-hosted-topology-check platform-hosted-agentd-check platform-beta-cluster-up platform-beta-cluster-down \
 	platform-test-agent-install \
 	platform-policy-install platform-sample-preflight platform-sample-install platform-sample-dependencies-ready \
 	platform-install-local-artifacts platform-dependencies-install platform-gradle-qualification
@@ -174,7 +174,11 @@ platform-hosted-smoke:
 
 PLATFORM_TOPOLOGY_CHECK_FLAGS ?=
 
-platform-hosted-topology-check:
+platform-hosted-agentd-check:
+	sh -n platform/hosted/agentd/probe.sh
+	python3 platform/hosted/agentd/manifest_check.py
+
+platform-hosted-topology-check: platform-hosted-agentd-check
 	bash platform/hosted/tests/topology-check.sh $(PLATFORM_TOPOLOGY_CHECK_FLAGS)
 
 ifneq ($(filter platform-beta-cluster-up platform-beta-cluster-down,$(MAKECMDGOALS)),)
