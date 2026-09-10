@@ -3,11 +3,32 @@ package config
 import (
 	"errors"
 	"net/url"
+	"strings"
 
 	atypes "github.com/sidiora-labs/paxeer-network/consensus/autobahn/types"
 	"github.com/sidiora-labs/paxeer-network/consensus/internal/p2p"
 	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils"
 	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils/tcp"
+)
+
+// Errors reported for the autobahn consensus persistence settings.
+//
+// Consensus safety state (the highest view entered and the votes cast in it)
+// only survives a restart when it is written to disk. A config that leaves it
+// in memory installs the no-op persister, so the node forgets what it already
+// voted for and can equivocate after a restart. Such a config is refused
+// unless the operator opted out explicitly for a throwaway test network.
+var (
+	// ErrPersistentStateDirRequired is returned when persistent_state_dir is
+	// absent and the test-only opt-out was not set.
+	ErrPersistentStateDirRequired = errors.New("persistent_state_dir must be set: without it the consensus safety state is discarded on restart, which risks equivocation and slashing; set unsafe_test_only_disable_persistence to run in-memory in a throwaway test network")
+	// ErrPersistentStateDirBlank is returned when persistent_state_dir is
+	// present but contains only whitespace.
+	ErrPersistentStateDirBlank = errors.New("persistent_state_dir must not be blank")
+	// ErrPersistenceOptOutConflict is returned when persistent_state_dir and
+	// unsafe_test_only_disable_persistence are both set, which states two
+	// contradictory intents about durability.
+	ErrPersistenceOptOutConflict = errors.New("persistent_state_dir must not be set together with unsafe_test_only_disable_persistence")
 )
 
 type URL struct{ *url.URL }
@@ -50,6 +71,46 @@ type AutobahnFileConfig struct {
 	ViewTimeout        utils.Duration       `json:"view_timeout"`
 	PersistentStateDir utils.Option[string] `json:"persistent_state_dir"`
 	DialInterval       utils.Duration       `json:"dial_interval"`
+	// UnsafeTestOnlyDisablePersistence runs the consensus and data layers fully
+	// in memory: the no-op persister is installed and no safety state survives a
+	// restart. It exists for throwaway test networks only, where a restarted node
+	// that equivocates costs nothing. It is mutually exclusive with
+	// PersistentStateDir, and it defaults to false so a config written before this
+	// field existed, and any config that simply forgets persistent_state_dir, is
+	// refused rather than silently running unsafe.
+	UnsafeTestOnlyDisablePersistence bool `json:"unsafe_test_only_disable_persistence"`
+}
+
+// validatePersistence enforces that the consensus safety state is durable,
+// unless the config explicitly opted out of persistence for tests.
+func (fc *AutobahnFileConfig) validatePersistence() error {
+	dir, ok := fc.PersistentStateDir.Get()
+	if !ok {
+		if fc.UnsafeTestOnlyDisablePersistence {
+			return nil
+		}
+		return ErrPersistentStateDirRequired
+	}
+	if fc.UnsafeTestOnlyDisablePersistence {
+		return ErrPersistenceOptOutConflict
+	}
+	if strings.TrimSpace(dir) == "" {
+		return ErrPersistentStateDirBlank
+	}
+	return nil
+}
+
+// ConsensusPersistentStateDir returns the directory that the consensus and data
+// layers must persist their state to. It returns None only when the config
+// explicitly opted out of persistence for tests, and an error whenever the
+// config would otherwise install the no-op persister. Callers that construct a
+// consensus config use this instead of reading PersistentStateDir directly, so
+// that no code path can turn durability off by accident.
+func (fc *AutobahnFileConfig) ConsensusPersistentStateDir() (utils.Option[string], error) {
+	if err := fc.validatePersistence(); err != nil {
+		return utils.None[string](), err
+	}
+	return fc.PersistentStateDir, nil
 }
 
 // Validate performs basic validation of the autobahn file config.
@@ -79,5 +140,5 @@ func (fc *AutobahnFileConfig) Validate() error {
 	if fc.DialInterval <= 0 {
 		return errors.New("dial_interval must be > 0")
 	}
-	return nil
+	return fc.validatePersistence()
 }
