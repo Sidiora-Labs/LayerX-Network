@@ -14,8 +14,8 @@ swift, conformance, generators). CALL receipt terminal verification for
 those clients is on [SdkTerminalVerification](SdkTerminalVerification.md).
 
 This page is a read of those sources. Where they disagree, both sides are
-cited. LXT-20 request codecs and the payments-merchant example are on the
-testnet branch; see
+cited. LXT-20 request codecs and the payments-merchant example are not in this
+tree; see
 [Payments developer path](PaymentsQuickstart.md) and [Assets](Assets.md).
 
 Sources:
@@ -138,7 +138,11 @@ Sources:
 
 ---
 
-## LXT-20 on the testnet branch
+## LXT-20
+
+`programs/sdk/rust/src/lxt20.rs`, `programs/sdk/rust/examples/token-lxt20`, and
+`programs/fixtures/pay5` are not in this tree; the contract below is the
+reference the Programs ABI admits, not a path that can be built here.
 
 The Rust guest SDK's LXT-20 example is an ABI-v2 state machine backed by one
 native Asset. Token balances and allowances are program storage; the backing
@@ -272,8 +276,9 @@ legs and transfer root therefore commit the actual account endpoints while the
 original authorization retains the signer principal and invocation authority
 (`programs/crates/layerx-programs-runtime/src/transfer.rs:882-918, 921-955`).
 Nested wrappers, trailing data, forged names, or a recomputed root mismatch are
-refused; the testnet branch carries positive native per-Asset evidence and
-negative vectors in `programs/fixtures/pay5/account-authorization-vectors.json`.
+refused. The positive native per-Asset evidence and negative vectors for that
+refusal live in `programs/fixtures/pay5/account-authorization-vectors.json`,
+which is not in this tree.
 
 ---
 

@@ -125,8 +125,9 @@ branch require encoding-4 authority bytes to start directly with
 `agent/sdk/typescript/src/program-wire.ts:18-19, 240-247`).
 `protocol_version` must be 1, 2, or 3 (`program_wire.py:283-284`).
 
-The runtime and the Go, JVM, Swift, and .NET SDKs on the testnet branch also
-accept `LayerX/programs/402LXP/account-bound-set/v1\0`. That wrapper contains
+The runtime and the Go, JVM, Swift, and .NET SDKs are documented as also
+accepting `LayerX/programs/402LXP/account-bound-set/v1\0`. That wrapper tag
+appears nowhere in this tree, so nothing here implements or rejects it yet. That wrapper contains
 the u32 length and bytes of the original transfer set, followed by one
 u16-length-prefixed canonical account name per leg. Verification refuses a
 nested wrapper or trailing bytes, recomputes principal/program-funding source
@@ -248,9 +249,10 @@ receipt; it loads `executed-v3` for the historical recorded path
 The Python/TypeScript conformance tests load
 `platform/sdk/conformance/fixtures/receipt-programs-{name}.json` for
 `executed-v4`, `principal-v4`, `mutated-leg-v4`, and `executed-v3`
-(`terminal-v4.test.py:18-21`). The Go, JVM, Swift, and .NET receipt tests on the
-testnet branch additionally load
-`programs/fixtures/pay5/receipt-account-bound-v4.json`. Each V4 file carries
+(`terminal-v4.test.py:18-21`). The Go, JVM, Swift, and .NET receipt tests are
+documented as additionally loading
+`programs/fixtures/pay5/receipt-account-bound-v4.json`, which is not in this
+tree. Each V4 file carries
 `canonical_receipt_hex`, `signed_activity_hex`, `program_id_hex`,
 `receipt_digest_hex`, `terminal_payload_hex`, `call_graph_hex`,
 `authorized_batch`, and `provenance`
@@ -305,10 +307,10 @@ Status strings match Go `ProgramTransfersReconstructed` /
 3. Python occupancy uses the `protocol_version` argument
    (`program_wire.py:169, 255`). Go occupancy uses
    `receipt.ProtocolVersion` (`programs.go:502`).
-4. Go, JVM, Swift, and .NET recognize the account-bound transfer-authority
-   wrapper on the testnet branch. Python and TypeScript still require direct
-   `transfer-set/v2` authority bytes, so the account-bound fixture is not in
-   their shared-vector loop.
+4. The account-bound transfer-authority wrapper is not recognized by any SDK
+   in this tree. Python and TypeScript require direct `transfer-set/v2`
+   authority bytes, and no account-bound fixture exists in the shared-vector
+   loop.
 
 Sources:
 

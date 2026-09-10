@@ -3,7 +3,8 @@
 The Asset module is the balance authority for LayerX payments. Amounts are
 unsigned integer counts of the smallest unit; `decimals` is display metadata.
 The native Asset activity, record-v3, genesis, account-enumeration, and fee
-surfaces described here are on the testnet branch.
+surfaces described here are served by the kernel Asset module
+(`src/modules/asset/`) and the public read path.
 
 See also [Payments developer path](PaymentsQuickstart.md),
 [Public JSON-RPC](PublicRpc.md), and [Programs](Programs.md).
@@ -200,7 +201,7 @@ storage units fails closed.
 
 ## Authenticated public reads
 
-The testnet branch's LNI minor-5 read contract provides:
+The LNI minor-5 read contract provides:
 
 - `AssetReadRequest` version 1: kind `1` lists the complete Asset registry;
   kind `2` gets one nonzero Asset id. The list is bounded to 64 records and is

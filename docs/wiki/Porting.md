@@ -19,9 +19,8 @@ builds the three `reference-v2` guests for `wasm32-unknown-unknown` release,
 runs `layerx-program-lint --abi-version 2` on each artifact, and passes the
 three `.wasm` paths to `programs_call_activity` (`Makefile:3091-3101`).
 
-On the testnet branch, the EVM and Solana migration guides describe how their
-account models map to registered native Asset accounts and program-derived
-accounts. See [Assets](Assets.md) and
+The EVM and Solana migration guides describe how their account models map to
+registered native Asset accounts and program-derived accounts. See [Assets](Assets.md) and
 [Payments developer path](PaymentsQuickstart.md).
 
 Sources:
@@ -174,11 +173,14 @@ Checks before a ported program is admitted:
 `PortRefusal` (`programs/porting/solana/src/shared_pool.rs:170-239`). No other
 `#[test]` in this crate asserts a `PortRefusal` variant.
 
-### SPL tokens, LXT-20, and native Assets on the testnet branch
+### SPL tokens, LXT-20, and native Assets
 
-The testnet branch's LXT-20 reference is an ABI-v2 WASM program with seven
-request methods. Its interface and registry inputs, plus signed native deploy
-and call receipts, are under `programs/fixtures/pay5`. The isolated replay is:
+The LXT-20 reference is an ABI-v2 WASM program with seven request methods. It
+is not in this tree: neither `programs/sdk/rust/src/lxt20.rs` nor
+`programs/fixtures/pay5` is present here, so the interface, registry inputs,
+and signed native deploy and call receipts described below cannot be replayed
+from this checkout. `programs/porting/solana/MIGRATION.md` is 363 lines here
+and carries no LXT-20 section. The replay, once those artifacts land, is:
 
 ```sh
 python3 programs/fixtures/pay5/run_native_roundtrip.py
@@ -186,7 +188,7 @@ python3 programs/fixtures/pay5/run_native_roundtrip.py
 
 That command compares the committed token and merchant artifacts byte for
 byte; it is not evidence of a live deployment
-(`programs/porting/solana/MIGRATION.md:365-374`).
+(`programs/porting/solana/MIGRATION.md`, LXT-20 section).
 
 | SPL flow | LayerX mapping |
 | --- | --- |
@@ -201,7 +203,7 @@ The four-byte LXT-20 selector is followed by LayerX convention `01`, bounded
 bytes tag `20`, a u32 big-endian payload length, and the declared fields. Borsh
 little-endian integers, Anchor discriminators, Solana pubkeys, and associated
 token-account derivations are not accepted unchanged
-(`programs/porting/solana/MIGRATION.md:376-389`).
+(`programs/porting/solana/MIGRATION.md`, LXT-20 section).
 
 Register the program-derived account under deployment authority before
 funding. `ProgramPaymentCapabilities` combines funding, spending, and ordinary
@@ -209,7 +211,7 @@ grants in canonical key order. The v2 interface's
 `CallerAuthorizedSpend` descriptors bind the backing Asset, ceiling, and
 recipient/amount calldata offsets; admission still requires the caller's
 matching grant on every call. Descriptors and token allowances grant no kernel
-debit authority (`programs/porting/solana/MIGRATION.md:391-406`).
+debit authority (`programs/porting/solana/MIGRATION.md`, LXT-20 section).
 
 Native Asset register, account-open, mint, and burn remain separate signed
 Asset activities. Per-Asset accounts use
@@ -217,10 +219,10 @@ Asset activities. Per-Asset accounts use
 use the program-account derivation. The envelope's signer/identity sequence is
 separate from the payment account and its sequence. Account-bound terminal
 evidence retains signer authorization while committing the resolved account
-endpoints (`programs/porting/solana/MIGRATION.md:408-417`). LXT-20 does not
+endpoints (`programs/porting/solana/MIGRATION.md`, LXT-20 section). LXT-20 does not
 provide SPL account closing/rent recovery, Token-2022 extensions, mint/freeze
 authority migration, multisig signer lists, or an enumerable Anchor account
-context (`programs/porting/solana/MIGRATION.md:419-421`).
+context (`programs/porting/solana/MIGRATION.md`, LXT-20 section).
 
 ---
 
@@ -325,15 +327,16 @@ Same pipeline shape as Solana, with EVM names
 `shared_supply` tests assert keys and capability sets; they do not assert a
 `PortRefusal` (`programs/porting/evm/src/shared_supply.rs:291-356`).
 
-### ERC-20, LXT-20, and native Assets on the testnet branch
+### ERC-20, LXT-20, and native Assets
 
-The testnet branch's `programs/sdk/rust/src/lxt20.rs` defines seven canonical
-request encodings, and `programs/sdk/rust/examples/token-lxt20` implements them
-over registered program-derived backing accounts. Runtime tests cover the
-methods, allowances, and refusal rollback. The same isolated native replay
+`programs/sdk/rust/src/lxt20.rs` defines seven canonical request encodings, and
+`programs/sdk/rust/examples/token-lxt20` implements them over registered
+program-derived backing accounts. Neither path is in this tree, and
+`programs/porting/evm/MIGRATION.md` is 328 lines here with no LXT-20 section.
+Runtime tests cover the methods, allowances, and refusal rollback. The same isolated native replay
 shown in the Solana section checks the committed token and merchant artifacts;
 it does not certify a live deployment
-(`programs/porting/evm/MIGRATION.md:330-339`).
+(`programs/porting/evm/MIGRATION.md`, LXT-20 section).
 
 | ERC-20 flow | LayerX mapping |
 | --- | --- |
@@ -350,14 +353,14 @@ selector come LayerX convention `01`, bytes tag `20`, a u32 big-endian payload
 length, and the declared fields. Identifiers are 32 bytes and amounts are
 16-byte big-endian integers. This is not Solidity ABI encoding and does not use
 ERC-20 Keccak selectors
-(`programs/porting/evm/MIGRATION.md:341-356`).
+(`programs/porting/evm/MIGRATION.md`, LXT-20 section).
 
 Recipients must have a registered program-derived backing account. They call
 `approve` at least once, including zero, to create the reference program's
 token storage. The configured issuer calls `initialize` once with a funding
 grant for the fixed supply. Transfers neither mint nor burn native units, and
 every `transfer_from` decrements the allowance, including `u128::MAX`
-(`programs/porting/evm/MIGRATION.md:358-363`).
+(`programs/porting/evm/MIGRATION.md`, LXT-20 section).
 
 Interface encoding v2 carries `CallerAuthorizedSpend` descriptors for the
 backing Asset, ceiling, recipient offset, and amount offset. Native admission
@@ -366,7 +369,7 @@ an LXT-20 allowance do not confer kernel debit authority over another DID's
 account. Infinite uint256 allowances, permits, rebasing, and transfer-tax
 semantics are not in this interface. Values above u128 must be refused, and
 Ethereum addresses require an explicit identity/account mapping
-(`programs/porting/evm/MIGRATION.md:365-377`).
+(`programs/porting/evm/MIGRATION.md`, LXT-20 section).
 
 Native Asset IDs use SHA-256 of `LX:ASSET:v1 || issuer_id32 || salt32`.
 Per-Asset, native-main, and program-derived accounts retain their distinct
@@ -374,7 +377,7 @@ derivations. Programs envelopes bind the signer DID and identity sequence;
 funding consumes the canonical backing-account sequence, and fees may use a
 different native account. Account-bound settlement evidence retains signer
 authorization and commits the resolved account endpoints
-(`programs/porting/evm/MIGRATION.md:379-388`).
+(`programs/porting/evm/MIGRATION.md`, LXT-20 section).
 
 ---
 

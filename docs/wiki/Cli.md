@@ -226,6 +226,7 @@ whether a seed may be typed; the import command exists.
 | `LAYERX_INSTALL_ROOT` | install host path resolution (`platform/cli/src/install/mod.rs:1119-1130`) | Replaces `HOME` for host config discovery |
 | `LAYERX_REPO_ROOT` | workspace (`platform/cli/src/workspace.rs:1098`) | Repository root for workspace commands |
 | `LAYERX_PROGRAM_SDK` | scaffold (`platform/cli/src/scaffold.rs:65-68`) | Path written into a new program `Cargo.toml` |
+| `LAYERX_CREDENTIAL_PASSPHRASE` | `file_store::Entry::from_environment` (`platform/cli/src/file_store.rs:36-42`) | Required by the `file` store; 12-16384 bytes, otherwise the command refuses |
 | `CARGO` | `program build` (`platform/cli/src/programs.rs:181`) | Cargo executable for the Rust WASM toolchain |
 
 Workspace child processes receive `LAYERX_ENVIRONMENT`, `LAYERX_ENDPOINT`,
@@ -324,15 +325,20 @@ verification is `receipt verify` after fetching bytes.
 
 ## Test suite
 
-There is no `platform/cli/tests/common/credential_environment.rs`. Isolation
-for the command suite lives in `platform/cli/tests/common/mod.rs`.
+Isolation for the command suite lives in `platform/cli/tests/common/mod.rs`,
+which declares `mod credential_environment;`
+(`platform/cli/tests/common/mod.rs:7`) and builds one
+`CredentialEnvironment` per `Cli` fixture
+(`platform/cli/tests/common/mod.rs:45-51`).
 
 | Gate | What it drives |
 | --- | --- |
 | `make platform-test` | `cargo test` of the platform workspace with `--features layerx-platform-cli/test-credential-store` (`platform/Makefile.inc:112-113`). CI `build-lint-test` runs this (`.github/workflows/platform.yml:53-54`) |
 | `make platform-test-cli-production-credential-refusal` | `bash platform/cli/tests/production-credential-refusal.sh` (`platform/Makefile.inc:134-135`): builds `--no-default-features`, sets `LAYERX_CREDENTIAL_STORE=mock`, requires refusal and no config file |
 | `make platform-test-tooling` | production-credential-refusal, then `cargo test -p layerx-platform-cli --features test-credential-store`, emulator/faucet/testnet crate tests, script syntax, `cargo build -p layerx-platform-cli`, `clean-bootstrap.sh` (`platform/Makefile.inc:115-132`). CI names this “Exercise the developer CLI end to end against the emulator” (`.github/workflows/platform.yml:57-58`) |
-| `platform/cli/tests/common/mod.rs` | Real `layerx` child process, isolated `LAYERX_CONFIG`, `LAYERX_CREDENTIAL_STORE=mock` so tests do not touch a developer keychain (`platform/cli/tests/common/mod.rs:1-6, 34-38, 61-67`). `Emulator::start` spawns `layerx emulator up` on an ephemeral loopback port and waits for `/healthz` `"status":"ready"` (`platform/cli/tests/common/mod.rs:136-200`) |
+| `platform/cli/tests/common/mod.rs` | Real `layerx` child process against an isolated `LAYERX_CONFIG` and `LAYERX_REPO_ROOT` (`platform/cli/tests/common/mod.rs:1-6, 64-67`). `Emulator::start` spawns `layerx emulator up` on an ephemeral loopback port and waits for `/healthz` `"status":"ready"` (`platform/cli/tests/common/mod.rs:136-200`) |
+| `platform/cli/tests/common/credential_environment.rs` | A private Secret Service for each fixture: an isolated XDG root, a `dbus-daemon` started from a generated `bus.conf` (`platform/cli/tests/common/credential_environment.rs:36-58`) and a `gnome-keyring-daemon --components=secrets` unlocked on stdin (`platform/cli/tests/common/credential_environment.rs:71-82`) |
+| `platform/cli/tests/file_store.rs` | Encrypted file store: `LAYERX_CREDENTIAL_PASSPHRASE` handling and the 12-16384 byte bound (`platform/cli/src/file_store.rs:36-42`) |
 | `platform/cli/tests/credential.rs` | Key/token commands: seeds and tokens accepted by the store never appear in config or stdout |
 | `platform/cli/tests/commands.rs` | Envelope coverage and malformed-input refusals without emulator gateway routes (`platform/cli/tests/commands.rs:1-6`) |
 | `platform/cli/tests/emulator.rs` | Live emulator: environment bind, account prefund, payment quote/commit, identity mismatches (`platform/cli/tests/emulator.rs:1-6`) |
@@ -341,15 +347,19 @@ for the command suite lives in `platform/cli/tests/common/mod.rs`.
 | `platform/cli/tests/clean-bootstrap.sh` | Published `install.md` bootstrap sequence in a clean `HOME` against a real binary (`platform/cli/tests/clean-bootstrap.sh:53-115`) |
 | `make platform-test-agent-install` | `install-journey.sh` against a hosted gateway (`platform/Makefile.inc:190-201`). Scheduled/dispatch CI installs `dbus-x11` and `gnome-keyring` and runs that journey under `dbus-run-session` / `gnome-keyring-daemon` (`.github/workflows/platform.yml:1458-1510`) |
 
-The cargo command suite therefore exercises a **real emulator** and an
-**in-memory mock credential store**, not Secret Service
-(`platform/cli/tests/common/mod.rs:3-5, 61-67`;
-`platform/cli/src/credential.rs:14-19, 34-41`). Secret Service is the
-production Unix path (`platform/cli/src/credential.rs:23-26`). The
-production-credential-refusal script proves a release-shaped binary will
-not admit the mock. The scheduled hosted journey is the gate that provisions
-a real keyring (`.github/workflows/platform.yml:1458-1510`). Those sources
-disagree if “the CLI test suite” is taken to mean only `cargo test -p
-layerx-platform-cli`.
+The cargo command suite therefore exercises a **real emulator** and a **real
+Secret Service**: each fixture starts its own `dbus-daemon` and
+`gnome-keyring-daemon`, so the production Unix credential path
+(`platform/cli/src/credential.rs:23-26`) is the path under test and no
+developer keychain is touched
+(`platform/cli/tests/common/mod.rs:3-5`;
+`platform/cli/tests/common/credential_environment.rs:36-82`). The mock store
+is a build-time feature, not the harness default
+(`platform/cli/src/credential.rs:14-19, 34-45`); the
+production-credential-refusal script proves a release-shaped binary will not
+admit it. `platform/cli/tests/install.rs` removes `LAYERX_CREDENTIAL_STORE`
+outright (`platform/cli/tests/install.rs:22`). The scheduled hosted journey
+adds a keyring provisioned by CI rather than by the fixture
+(`.github/workflows/platform.yml:1458-1510`).
 
 [Home](Home.md)

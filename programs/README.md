@@ -205,8 +205,9 @@ ship `paid-counter` examples. ProgramSpend (tag 9) and BalanceView (tag 10) are
 part of frozen ABI 2; the runtime crate defines their canonical encoding and
 amount-monotone narrowing rules. ABI 1 does not admit these grants.
 
-On the testnet branch, `sdk/rust` also ships `lxt20` request codecs,
-`payments` program-account preparation, and `examples/payments-merchant`. See
+`sdk/rust` is documented as also shipping `lxt20` request codecs, `payments`
+program-account preparation, and `examples/payments-merchant`. None of those
+paths are in this tree. See
 [`docs/wiki/PaymentsQuickstart.md`](../docs/wiki/PaymentsQuickstart.md)
 and [`docs/wiki/Assets.md`](../docs/wiki/Assets.md).
 

@@ -1,6 +1,6 @@
 # Public payment API
 
-On the testnet branch, the hosted faucet and gateway expose the public path for
+The hosted faucet and gateway expose the public path for
 funding an identity, registering an asset, opening its account, minting units,
 sending the network asset, and reading balances, assets, and receipts.
 
@@ -26,7 +26,7 @@ hexadecimal. Amounts and balances in read results are decimal strings.
 
 ## Complete published method set
 
-The testnet branch's embedded OpenRPC document publishes these 15 method
+The embedded OpenRPC document publishes these 15 method
 names. Parameters are positional; the alternatives shown for sequence, proof,
 and subscription are part of the same method contract
 (`platform/hosted/gateway/openrpc.json`;
@@ -37,13 +37,13 @@ and subscription are part of the same method contract
 | `lx_getAccount` | `[account_id]` | Authenticated account snapshot |
 | `lx_getBalance` | `[account_id]` | Same account object; read `balance` and `asset_id` |
 | `lx_getBalances` | `[did]` | Complete bounded DID account list |
-| `lx_getReceipt` | `[activity_id]` | Verified receipt and result code |
-| `lx_getActivityStatus` | `[activity_id]` | Completed/refused receipt state, or an unavailable error |
+| `lx_getReceipt` | `[activity_id]` | `activity_id` and verified `receipt` bytes; the result code is decoded from the receipt |
+| `lx_getActivityStatus` | `[activity_id]` | The same receipt read, or an unavailable error while no receipt exists |
 | `lx_getBatchHeader` | `[batch_number]` | Sequencer-signed batch header; number is a canonical nonzero decimal u64 string |
 | `lx_getCheckpoint` | `[checkpoint_id]` | Checkpoint evidence |
 | `lx_getNodeInfo` | `[]` or no `params` | Protocol/network handshake and current heads |
-| `lx_getSequence` | `[account_id]` | Account `next_sequence` |
-| `lx_getSequence` | `[did, "identity"]` | Independent identity `next_sequence` for envelope signing |
+| `lx_getSequence` | `[account_id]` | The account object; read its `next_sequence` |
+| `lx_getSequence` | `[did, "identity"]` | `did`, `next_sequence`, `observed_head_sequence`, `state_root`, and `verification: "authenticated_node_snapshot"` |
 | `lx_getProof` | `["activity", activity_id]` | Activity proof and signed header |
 | `lx_getProof` | `["receipt", activity_id]` | Receipt proof and signed header |
 | `lx_getProof` | `["account", activity_id, account_id]` | Exact verified native account-proof bytes |
@@ -70,22 +70,24 @@ parameters are `-32602`; unknown methods are `-32601`; authentication or scope
 refusals are `-32002`; read/submission unavailability is `-32001`; rate or
 capacity refusal is `-32005`; invalid upstream data is `-32603`. Proxied
 failures also retain the typed upstream body in `error.data`
-(`platform/hosted/gateway/src/rpc.rs:148-179, 242-256`). If the requested
+(`platform/hosted/gateway/src/rpc.rs:148-181, 242-257`). If the requested
 commitment is not yet available, `-32001` carries `data.state: "pending"`, the
 `requested_commitment`, and the evidence or upstream pending body
-(`platform/hosted/gateway/src/rpc.rs:214-219, 334-357`). A DID account-listing
+(`platform/hosted/gateway/src/rpc.rs:214-220, 334-357`). A DID account-listing
 failure is `-32001` with
 `error.data.error.code: "did_account_listing_unavailable"`; it is not a partial
 account list.
 
 ## Exact real-process transcript
 
-The values below are copied without shortening from one disposable native-node
-run of
-`local_gateway_public_api_documentation_flow`. The test started the real
-hosted core, identity, authority, Redis, gateway, and faucet binaries, submitted
-the canonical activities to a real native node, and verified every returned
-activity ID, receipt signature, and result code. The Bearer value is the only
+The values below are recorded from one disposable native-node run of the
+gateway local harness (`platform/hosted/gateway/tests/local/lifecycle.rs`),
+which starts the real hosted core, identity, authority, Redis, gateway, and
+faucet binaries, submits canonical activities to a real native node, and
+verifies every returned activity ID, receipt signature, and result code. The
+recorded account objects predate the `verification` field that
+`platform/hosted/core/src/public_reads.rs:50` now emits on every account read,
+so a current response carries one more key than the excerpts below. The Bearer value is the only
 sanitized field; the test never prints the gateway key. Identifiers and
 timestamps are run-specific, so applications must construct fresh canonical
 activities rather than replay these writes.

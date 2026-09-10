@@ -14,11 +14,11 @@ cited to the tree. Related pages: [CLI](Cli.md), [Beta cluster](BetaCluster.md),
 [Hosted gateway](HostedGateway.md), [Hosted identity](HostedIdentity.md),
 [Programs](Programs.md), [Finality](Finality.md).
 
-Wallet, faucet, send, token, program, and 402 surfaces on the testnet branch
-are on [Payments developer path](PaymentsQuickstart.md). The public endpoint
+Faucet, send, Asset, program, and 402 surfaces are on
+[Payments developer path](PaymentsQuickstart.md). The public endpoint
 checklist is [Getting started on testnet](Getting-Started-Testnet.md).
-Asset encodings: [Assets](Assets.md). Public `POST /rpc`: [Public JSON-RPC](PublicRpc.md)
-(on the testnet branch). `executed` / `batched` / `finalised`:
+Asset encodings: [Assets](Assets.md). Public `POST /rpc`: [Public JSON-RPC](PublicRpc.md).
+`executed` / `batched` / `finalised`:
 [Commitment levels](CommitmentLevels.md).
 
 ---
@@ -330,7 +330,7 @@ A 200 body has `funded` `true`, `funding_id`, optional `transaction_id`,
 (`platform/hosted/faucet/src/main.rs:1028-1034`).
 
 For a complete request and response copied from a real faucet, hosted gateway,
-and native-node run on the testnet branch, continue with
+and native-node run, continue with
 [Public payment API](PublicAPI.md). The transcript covers asset registration,
 account opening, mint, SEND, balances, asset metadata, and receipt calls without
 shortening canonical bytes.
@@ -473,7 +473,7 @@ authenticate `LayerX-Key`, not Bearer (`platform/hosted/gateway/src/main.rs:1142
 1748`). Bearer on those routes is `401 api_key_required`. Bearer is the
 session scheme for `/v1/keys` (`platform/hosted/gateway/src/main.rs:952-961,
 1081-1088`). Therefore `layerx payment test` is an emulator/Human-plane client
-path, not a hosted production-gateway payment command. Use the testnet branch's
+path, not a hosted production-gateway payment command. Use the
 `lx_sendActivity` public RPC path for hosted canonical payment activities.
 
 There is no `layerx activity` command (`platform/cli/src/main.rs:43-81`).

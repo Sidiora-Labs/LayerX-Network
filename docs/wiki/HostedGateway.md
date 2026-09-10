@@ -40,8 +40,8 @@ administration surface. `production_route` never accepts emulator
 paths (`platform/hosted/gateway/src/lib.rs:804-808`;
 `platform/hosted/gateway/src/lib.rs:880-881`).
 
-Public JSON-RPC `POST /rpc`, `GET /rpc/schema`, and `GET /rpc/ws` are on the
-testnet branch. The exact 15-method contract, authenticated submission rules,
+The gateway serves public JSON-RPC at `POST /rpc`, `GET /rpc/schema`, and
+`GET /rpc/ws`. The exact 15-method contract, authenticated submission rules,
 result shapes, and WebSocket behavior are in [Public JSON-RPC](PublicRpc.md).
 
 ---
@@ -218,7 +218,7 @@ Authority is
 `https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420`
 (`platform/hosted/gateway/deployment.yaml:84`). Readiness labels the
 component probe `core_agent_boundary`
-(`platform/hosted/gateway/src/main.rs:2805`). On the testnet branch,
+(`platform/hosted/gateway/src/main.rs:2805`).
 `LAYERX_GATEWAY_PUBLIC_CORE_URL` is the separate authenticated source for
 public account, proof, Asset, fee, and node-info reads. Activity submission
 continues to use the agent-boundary path.
@@ -571,7 +571,7 @@ inputs appear here:
 | `platform-hosted-topology-check` | `topology-check.sh`, default manifests include the gateway (`platform/Makefile.inc:177-178`; `platform/hosted/tests/topology-check.sh:22`) |
 | `platform-test-agent-install` | requires `LAYERX_GATEWAY_URL` (`platform/Makefile.inc:190-201`) |
 
-On the testnet branch the gateway also serves `/rpc` as documented on
+The gateway also serves `/rpc` as documented on
 [Public JSON-RPC](PublicRpc.md). Commitment names for
 `lx_sendActivity` are on [Commitment levels](CommitmentLevels.md).
 

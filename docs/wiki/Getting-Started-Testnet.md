@@ -1,7 +1,6 @@
 # Getting started on testnet
 
-The payment surfaces on this page are on the testnet branch. This checklist
-uses the public gateway and faucet contracts; access still requires credentials
+This checklist uses the public gateway and faucet contracts; access still requires credentials
 and independently supplied verification policy.
 
 ## Endpoints and trust
@@ -65,7 +64,7 @@ funding independently (`platform/hosted/faucet/src/main.rs:914-1001,
 
 ## Run the register, open, mint, send flow
 
-The testnet branch's tracked real-process flow performs these writes in order:
+The tracked real-process flow performs these writes in order:
 faucet claim, Asset register, per-Asset account open, mint, then native-Asset
 SEND. Register, open, mint, and SEND are four fresh signed canonical
 activities. Each is submitted through the same exact JSON-RPC method and waits

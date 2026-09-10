@@ -2,8 +2,9 @@
 
 This path covers a wallet, faucet funding, an Asset transfer, token issuance,
 an LXT20 program, and an HTTP 402 payment. The wallet/token CLI, native Asset
-execution, public RPC, payment signer, LXT20 example, and extended 402LXP flow
-described here are on the testnet branch.
+execution, public RPC, payment signer, and extended 402LXP flow described here
+are served by this tree. The LXT20 example is not: neither
+`programs/sdk/rust/examples` nor `programs/fixtures/pay5` is present here.
 
 For a shorter environment checklist, start with
 [Getting started on testnet](Getting-Started-Testnet.md). Wire details are in
@@ -200,8 +201,9 @@ or stream closure.
 
 ## 6. Build and deploy the LXT20 example
 
-The testnet branch's LXT20 example is a Programs ABI-v2 token backed by one
-native Asset. It is not a second ledger and does not mint native units.
+The LXT20 example is a Programs ABI-v2 token backed by one native Asset. It is
+not a second ledger and does not mint native units. It is not in this tree, so
+the build below has no manifest to read here.
 
 ```sh
 cargo build \
@@ -264,11 +266,12 @@ behavior.
 
 ## CLI and MCP boundaries
 
-The payment MCP catalogue on the testnet branch has 18 tools. Its payment
-writes are `wallet.send`, `token.create`, `token.mint`, and `token.transfer`;
-they use the daemon's ordinary prepare, disclose, sign, submit, and track
-stages. The CLI additionally exposes burn, account-open, Asset info/list, fee
-estimate, receipt wait, and live watch commands. Installing MCP does not add
-those CLI-only operations to the MCP catalogue.
+The payment MCP catalogue has 20 tools
+(`agent/crates/layerx-mcp/src/server.rs:51`). Its payment writes are
+`wallet.send`, `token.create`, `token.mint`, `token.transfer`, `grant.issue`,
+and `grant.draw`; they use the daemon's ordinary prepare, disclose, sign,
+submit, and track stages. Burn, account-open, Asset info/list, fee estimate,
+receipt wait, and live watch are not in the catalogue and are not CLI commands
+in this tree either (`platform/cli/src/main.rs:43-81`).
 
 [Home](Home.md)
