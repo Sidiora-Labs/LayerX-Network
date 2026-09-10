@@ -41,8 +41,10 @@ static lxp_result emit_return(lxp_module_ctx *ctx,
                               lxp_u128 amount, lxp_receipt *receipt)
 {
     lxp_transfer_set set;
+    lxp_transfer_source_authority source;
     if (lxp_u128_is_zero(amount)) return LXP_OK;
     (void)memset(&set, 0, sizeof(set));
+    (void)memset(&source, 0, sizeof(source));
     set.leg_count = 1U;
     set.legs[0].from = request->budget_account;
     set.legs[0].to = request->owner;
@@ -51,6 +53,9 @@ static lxp_result emit_return(lxp_module_ctx *ctx,
     set.legs[0].reason = LXP_REASON_BUDGET_DEFUND;
     set.context = request->context;
     set.context.debit_authority_kind = LXP_AUTH_BUDGET_ALLOWANCE;
+    (void)memcpy(set.context.authorized_from,
+                 request->budget_account->id, 32U);
+    lx_budget_bind_source_authority(&set, &source);
     return lxp_ctx_emit_transfer_set(ctx, &set, receipt);
 }
 

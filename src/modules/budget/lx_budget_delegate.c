@@ -16,6 +16,17 @@ static size_t delegate_position(const lx_budget_record *record,
     return position;
 }
 
+bool lx_budget_delegate_present(const lx_budget_record *record,
+                                const uint8_t delegate[32])
+{
+    bool found;
+    if (record == NULL || delegate == NULL ||
+        record->delegate_count > LX_BUDGET_MAX_DELEGATES)
+        return false;
+    (void)delegate_position(record, delegate, &found);
+    return found;
+}
+
 lxp_result lx_budget_delegate_add_execute(lx_budget_record *record,
                                           const uint8_t delegate[32])
 {

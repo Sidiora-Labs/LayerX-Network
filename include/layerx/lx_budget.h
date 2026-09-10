@@ -22,6 +22,19 @@ enum {
     LX_BUDGET_CLOSE = 0x00030007
 };
 
+enum {
+    LX_BUDGET_RECORD_FIXED_BYTES = 278,
+    LX_BUDGET_RECORD_MAX_BYTES =
+        LX_BUDGET_RECORD_FIXED_BYTES + LX_BUDGET_MAX_DELEGATES * 32,
+    LX_BUDGET_STATE_KEY_BYTES = 39,
+    LX_BUDGET_CREATE_PAYLOAD_BYTES = 211,
+    LX_BUDGET_FUND_PAYLOAD_BYTES = 50,
+    LX_BUDGET_AMEND_PAYLOAD_BYTES = 75,
+    LX_BUDGET_DELEGATE_PAYLOAD_BYTES = 66,
+    LX_BUDGET_SPEND_PAYLOAD_BYTES = 82,
+    LX_BUDGET_CLOSE_PAYLOAD_BYTES = 42
+};
+
 typedef enum lx_budget_rollover_policy {
     LX_BUDGET_ROLLOVER_NONE = 1,
     LX_BUDGET_ROLLOVER_CAPPED = 2
@@ -114,10 +127,76 @@ typedef struct lx_budget_close_request {
     lxp_transfer_context context;
 } lx_budget_close_request;
 
+typedef struct lx_budget_create_payload {
+    uint8_t budget_id[32];
+    uint8_t budget_account[32];
+    uint8_t asset_id[32];
+    uint8_t purpose_hash[32];
+    lxp_u128 per_period_limit;
+    lxp_u128 carry_cap;
+    lxp_u128 amount;
+    uint64_t period_length;
+    uint64_t period_start;
+    uint64_t expiry;
+    uint64_t revocation_sequence;
+    uint8_t rollover_policy;
+} lx_budget_create_payload;
+
+typedef struct lx_budget_amount_payload {
+    uint8_t budget_id[32];
+    lxp_u128 amount;
+} lx_budget_amount_payload;
+
+typedef struct lx_budget_amend_payload {
+    uint8_t budget_id[32];
+    lxp_u128 per_period_limit;
+    lxp_u128 carry_cap;
+    uint64_t expiry;
+    uint8_t rollover_policy;
+} lx_budget_amend_payload;
+
+typedef struct lx_budget_delegate_payload {
+    uint8_t budget_id[32];
+    uint8_t delegate[32];
+} lx_budget_delegate_payload;
+
+typedef struct lx_budget_spend_payload {
+    uint8_t budget_id[32];
+    uint8_t recipient[32];
+    lxp_u128 amount;
+} lx_budget_spend_payload;
+
+typedef struct lx_budget_close_payload {
+    uint8_t budget_id[32];
+    uint64_t revocation_sequence;
+} lx_budget_close_payload;
+
 const lxp_module_iface *lx_budget_module_iface(void);
 lxp_result lx_budget_lookup(lx_budget_store *store,
                             const uint8_t budget_id[32],
                             lx_budget_record **record);
+lxp_result lx_budget_record_validate(const lx_budget_record *record);
+lxp_result lx_budget_state_key(const uint8_t budget_id[32],
+                               uint8_t key[LX_BUDGET_STATE_KEY_BYTES]);
+lxp_result lx_budget_record_encode(const lx_budget_record *record,
+                                   uint8_t *bytes, size_t capacity,
+                                   size_t *length);
+lxp_result lx_budget_record_decode(const uint8_t *bytes, size_t length,
+                                   lx_budget_record *record);
+lxp_result lx_budget_create_decode(const uint8_t *bytes, size_t length,
+                                   lx_budget_create_payload *payload);
+lxp_result lx_budget_amount_decode(const uint8_t *bytes, size_t length,
+                                   lx_budget_amount_payload *payload);
+lxp_result lx_budget_amend_decode(const uint8_t *bytes, size_t length,
+                                  lx_budget_amend_payload *payload);
+lxp_result lx_budget_delegate_decode(const uint8_t *bytes, size_t length,
+                                     lx_budget_delegate_payload *payload);
+lxp_result lx_budget_spend_decode(const uint8_t *bytes, size_t length,
+                                  lx_budget_spend_payload *payload);
+lxp_result lx_budget_close_decode(const uint8_t *bytes, size_t length,
+                                  lx_budget_close_payload *payload);
+void lx_budget_bind_source_authority(lxp_transfer_set *set,
+                                     lxp_transfer_source_authority *source);
 lxp_result lx_budget_state_put(lx_budget_store *store,
                                const lx_budget_record *record);
 lxp_result lx_budget_create_execute(lxp_module_ctx *ctx,
@@ -138,6 +217,9 @@ lxp_result lx_budget_allowance_debit(lx_budget_record *record,
 lxp_result lx_budget_remaining(lx_budget_record *record,
                                const lx_account *budget_account,
                                lxp_u128 *remaining);
+lxp_result lx_budget_spend_prepare(lx_budget_record *record,
+                                   uint64_t batch_timestamp,
+                                   lxp_u128 balance, lxp_u128 amount);
 lxp_result lx_budget_spend_execute(lxp_module_ctx *ctx,
                                    const lx_budget_spend_request *request,
                                    lxp_receipt *receipt);
@@ -145,6 +227,8 @@ lxp_result lx_budget_delegate_add_execute(lx_budget_record *record,
                                           const uint8_t delegate[32]);
 lxp_result lx_budget_delegate_remove_execute(lx_budget_record *record,
                                              const uint8_t delegate[32]);
+bool lx_budget_delegate_present(const lx_budget_record *record,
+                                const uint8_t delegate[32]);
 lxp_result lx_budget_authorize_delegate(
     const lx_budget_record *record, const uint8_t submitter[32],
     lx_budget_delegate_capability *capability,

@@ -2,6 +2,17 @@
 
 #include <string.h>
 
+void lx_budget_bind_source_authority(lxp_transfer_set *set,
+                                     lxp_transfer_source_authority *source)
+{
+    if (set == NULL || source == NULL) return;
+    (void)memset(source, 0, sizeof(*source));
+    (void)memcpy(source->authorized_from, set->context.authorized_from, 32U);
+    source->debit_authority_kind = set->context.debit_authority_kind;
+    set->context.source_authorities = source;
+    set->context.source_authority_count = 1U;
+}
+
 lxp_result lx_budget_allowance_debit(lx_budget_record *record,
                                      lxp_u128 amount)
 {
@@ -40,6 +51,28 @@ lxp_result lx_budget_remaining(lx_budget_record *record,
     return LXP_OK;
 }
 
+lxp_result lx_budget_spend_prepare(lx_budget_record *record,
+                                   uint64_t batch_timestamp,
+                                   lxp_u128 balance, lxp_u128 amount)
+{
+    lxp_u128 allowance;
+    lxp_result status;
+    if (record == NULL) return LXP_ERR_NON_CANONICAL;
+    if (record->closed) return LXP_ERR_UNKNOWN_FIELD;
+    if (record->revoked) return LXP_ERR_BUDGET_REVOKED;
+    if (record->expiry <= batch_timestamp) return LXP_ERR_EXPIRED;
+    status = lx_budget_rollover(record, batch_timestamp);
+    if (status != LXP_OK) return status;
+    status = lxp_u128_sub(record->per_period_limit,
+                          record->spent_this_period, &allowance);
+    if (status != LXP_OK) return LXP_FATAL_INVARIANT;
+    if (lxp_u128_cmp(amount, allowance) > 0)
+        return LXP_ERR_BUDGET_ALLOWANCE_EXCEEDED;
+    if (lxp_u128_cmp(amount, balance) > 0)
+        return LXP_ERR_INSUFFICIENT_BUDGET_FUNDS;
+    return lx_budget_allowance_debit(record, amount);
+}
+
 lxp_result lx_budget_spend_execute(lxp_module_ctx *ctx,
                                    const lx_budget_spend_request *request,
                                    lxp_receipt *receipt)
@@ -47,7 +80,7 @@ lxp_result lx_budget_spend_execute(lxp_module_ctx *ctx,
     lx_budget_record *record;
     lx_budget_record updated;
     lxp_transfer_set set;
-    lxp_u128 allowance;
+    lxp_transfer_source_authority source;
     lxp_u128 balance;
     lxp_result status;
     if (ctx == NULL || request == NULL || request->store == NULL ||
@@ -66,21 +99,16 @@ lxp_result lx_budget_spend_execute(lxp_module_ctx *ctx,
         request->budget_account->kind != LX_ACCOUNT_AGENT_BUDGET ||
         request->recipient->kind != LX_ACCOUNT_AGENT_MAIN)
         return LXP_ERR_NON_CANONICAL;
-    status = lxp_u128_sub(record->per_period_limit,
-                          record->spent_this_period, &allowance);
-    if (status != LXP_OK) return LXP_FATAL_INVARIANT;
-    if (lxp_u128_cmp(request->amount, allowance) > 0)
-        return LXP_ERR_BUDGET_ALLOWANCE_EXCEEDED;
     status = lxp_state_balance_get(request->budget_account, record->asset_id,
                                    &balance);
     if (status != LXP_OK) return status;
-    if (lxp_u128_cmp(request->amount, balance) > 0)
-        return LXP_ERR_INSUFFICIENT_BUDGET_FUNDS;
     updated = *record;
-    status = lx_budget_allowance_debit(&updated, request->amount);
+    status = lx_budget_spend_prepare(&updated, lxp_ctx_batch_timestamp_ms(ctx),
+                                     balance, request->amount);
     if (status != LXP_OK) return status;
 
     (void)memset(&set, 0, sizeof(set));
+    (void)memset(&source, 0, sizeof(source));
     set.leg_count = 1U;
     set.legs[0].from = request->budget_account;
     set.legs[0].to = request->recipient;
@@ -89,6 +117,9 @@ lxp_result lx_budget_spend_execute(lxp_module_ctx *ctx,
     set.legs[0].reason = LXP_REASON_BUDGET_SPEND;
     set.context = request->context;
     set.context.debit_authority_kind = LXP_AUTH_BUDGET_ALLOWANCE;
+    (void)memcpy(set.context.authorized_from,
+                 request->budget_account->id, 32U);
+    lx_budget_bind_source_authority(&set, &source);
     status = lxp_ctx_emit_transfer_set(ctx, &set, receipt);
     if (status != LXP_OK) return status;
     *record = updated;

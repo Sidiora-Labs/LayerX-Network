@@ -188,7 +188,9 @@ int main(void)
     pull.spend.amount = (lxp_u128){ 0U, 10U };
     pull.grant = &grant;
     pull.grantor = &grantor;
-    if (lx_budget_pull_execute(&ctx, &pull, &receipt) != LXP_OK ||
+    if (lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_BUDGET, 100U, 0U, 2U,
+                            1000U, &arena, true) != LXP_OK ||
+        lx_budget_pull_execute(&ctx, &pull, &receipt) != LXP_OK ||
         budget_account.balance.lo != 70U || recipient.balance.lo != 30U)
         return 1;
     pull.spend.amount = (lxp_u128){ 0U, 11U };
