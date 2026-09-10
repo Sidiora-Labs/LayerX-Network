@@ -166,6 +166,9 @@ fn did_accounts(config: &Config, did: &str) -> Response {
     let Ok(values) = layerx_client::read::did_accounts(&mut transport, &did_value, context) else {
         return refusal(503, "did_account_listing_unavailable", Some(5));
     };
+    if values.is_empty() {
+        return refusal(503, "did_account_listing_unavailable", Some(5));
+    }
     let mut accounts = Vec::with_capacity(values.len());
     for value in values {
         let bytes = value.canonical_bytes();
