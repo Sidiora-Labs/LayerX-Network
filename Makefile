@@ -1312,6 +1312,39 @@ $(BUILD_DIR)/tests/test_tools: tests/test_tools.c $(TOOL_SOURCES) $(LIBRARY) $(P
 test-tools: $(BUILD_DIR)/tests/test_tools
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_tools
 
+.PHONY: layerx-verify test-verify-cli
+
+$(BUILD_DIR)/bin/layerx-verify: cmd/layerx-verify/main.c \
+		cmd/layerx-verify/lxp_verify_cli.c \
+		cmd/layerx-verify/lxp_verify_cli.h $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) cmd/layerx-verify/main.c \
+		cmd/layerx-verify/lxp_verify_cli.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+layerx-verify: $(BUILD_DIR)/bin/layerx-verify
+
+build: layerx-verify
+
+$(BUILD_DIR)/tests/test_verify_cli: tests/tools/test_verify_cli.c \
+		cmd/layerx-verify/lxp_verify_cli.c \
+		cmd/layerx-verify/lxp_verify_cli.h \
+		cmd/layerx-genesis/lxp_genesis_builder.c $(LAYERXD_SOURCES) \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerx-verify $(CFLAGS) \
+		tests/tools/test_verify_cli.c cmd/layerx-verify/lxp_verify_cli.c \
+		cmd/layerx-genesis/lxp_genesis_builder.c \
+		$(LAYERXD_SOURCES) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+test-verify-cli: $(BUILD_DIR)/tests/test_verify_cli
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_verify_cli
+
+test: test-verify-cli
+
 $(BUILD_DIR)/tests/test_genesis_manifest: tests/test_genesis_manifest.c \
 		cmd/layerx-genesis/lxp_genesis_main.c \
 		cmd/layerx-genesis/lxp_genesis_build_cli.c \
