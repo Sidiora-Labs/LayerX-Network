@@ -1355,9 +1355,10 @@ dependencies = [
 name = "layerx-mcp"
 version = "0.1.0"
 dependencies = [
- "layerx-sdk",
  "layerx-agent-api",
  "layerx-agentd",
+ "layerx-crypto",
+ "layerx-sdk",
  "layerx-types",
  "sha2",
 ]
