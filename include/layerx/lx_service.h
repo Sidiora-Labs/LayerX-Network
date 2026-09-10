@@ -10,7 +10,6 @@
 #include <stdint.h>
 
 enum {
-    LX_SERVICE_STORE_CAPACITY = 128,
     LX_SERVICE_MAX_DELIVERABLES = 16,
     LX_SERVICE_OFFER_PUBLISH = 0x00050001,
     LX_SERVICE_OFFER_WITHDRAW = 0x00050002,
@@ -27,6 +26,72 @@ enum {
     LX_SERVICE_DISPUTE_RESOLVE = 0x0005000d
 };
 
+/* Event types are the module-local ordinals carried by LXP_EFFECT_EVENT
+ * effects.  They mirror the activity ordinals so a consumer can pair an
+ * emitted event with the activity that produced it without a side table. */
+enum {
+    LX_SERVICE_EVENT_OFFER_PUBLISHED = 1,
+    LX_SERVICE_EVENT_OFFER_WITHDRAWN = 2,
+    LX_SERVICE_EVENT_AGREEMENT_PROPOSED = 3,
+    LX_SERVICE_EVENT_AGREEMENT_ACCEPTED = 4,
+    LX_SERVICE_EVENT_TASK_COMMITTED = 5,
+    LX_SERVICE_EVENT_COMMIT_ABANDONED = 6,
+    LX_SERVICE_EVENT_EXECUTION_ATTESTED = 7,
+    LX_SERVICE_EVENT_PROGRESS_REPORTED = 8,
+    LX_SERVICE_EVENT_DELIVERED = 9,
+    LX_SERVICE_EVENT_OUTCOME_ACCEPTED = 10,
+    LX_SERVICE_EVENT_OUTCOME_REJECTED = 11,
+    LX_SERVICE_EVENT_DISPUTE_OPENED = 12,
+    LX_SERVICE_EVENT_DISPUTE_RESOLVED = 13,
+    LX_SERVICE_EVENT_BODY_BYTES = 73
+};
+
+enum {
+    LX_SERVICE_RECORD_VERSION = 1,
+    LX_SERVICE_KEY_PREFIX_BYTES = 8,
+    LX_SERVICE_KEY_BYTES = LX_SERVICE_KEY_PREFIX_BYTES + 32,
+    LX_SERVICE_ITEM_KEY_BYTES = LX_SERVICE_KEY_BYTES + 1,
+    LX_SERVICE_OFFER_RECORD_BYTES = 252,
+    LX_SERVICE_AGREEMENT_FIXED_BYTES = 247,
+    LX_SERVICE_AGREEMENT_RECORD_BYTES =
+        LX_SERVICE_AGREEMENT_FIXED_BYTES + LX_SERVICE_MAX_DELIVERABLES * 32,
+    LX_SERVICE_COMMITMENT_RECORD_BYTES = 220,
+    LX_SERVICE_ATTESTATION_BYTES = 344,
+    LX_SERVICE_EXECUTION_BYTES = 416,
+    LX_SERVICE_EXECUTION_RECORD_BYTES = LX_SERVICE_EXECUTION_BYTES + 1,
+    LX_SERVICE_DELIVERY_RECORD_BYTES = 138,
+    LX_SERVICE_DELIVERABLE_RECORD_BYTES = 73,
+    LX_SERVICE_DISPUTE_FIXED_BYTES = 185,
+    LX_SERVICE_DISPUTE_RECORD_BYTES =
+        LX_SERVICE_DISPUTE_FIXED_BYTES + LX_SERVICE_MAX_DELIVERABLES * 32,
+    LX_SERVICE_PROGRESS_RECORD_BYTES = 245,
+    LX_SERVICE_PROGRESS_COMPLETE_BPS = 10000
+};
+
+enum {
+    LX_SERVICE_PAYLOAD_VERSION_BYTES = 2,
+    LX_SERVICE_OFFER_PUBLISH_PAYLOAD_BYTES = 179,
+    LX_SERVICE_IDENTIFIER_PAYLOAD_BYTES = 34,
+    LX_SERVICE_AGREEMENT_PROPOSE_PAYLOAD_BYTES = 130,
+    LX_SERVICE_COMMIT_TASK_PAYLOAD_BYTES = 146,
+    LX_SERVICE_COMMIT_ABANDON_PAYLOAD_BYTES = 36,
+    LX_SERVICE_PROGRESS_PAYLOAD_BYTES = 134,
+    LX_SERVICE_DELIVER_PAYLOAD_FIXED_BYTES = 67,
+    LX_SERVICE_DELIVER_PAYLOAD_ITEM_BYTES = 72,
+    LX_SERVICE_DELIVER_PAYLOAD_MAX_BYTES =
+        LX_SERVICE_DELIVER_PAYLOAD_FIXED_BYTES +
+        LX_SERVICE_MAX_DELIVERABLES * LX_SERVICE_DELIVER_PAYLOAD_ITEM_BYTES,
+    LX_SERVICE_REJECT_PAYLOAD_FIXED_BYTES = 37,
+    LX_SERVICE_REJECT_PAYLOAD_MAX_BYTES =
+        LX_SERVICE_REJECT_PAYLOAD_FIXED_BYTES +
+        LX_SERVICE_MAX_DELIVERABLES * 32,
+    LX_SERVICE_DISPUTE_OPEN_PAYLOAD_FIXED_BYTES = 67,
+    LX_SERVICE_DISPUTE_OPEN_PAYLOAD_MAX_BYTES =
+        LX_SERVICE_DISPUTE_OPEN_PAYLOAD_FIXED_BYTES +
+        LX_SERVICE_MAX_DELIVERABLES * 32,
+    LX_SERVICE_DISPUTE_RESOLVE_PAYLOAD_BYTES = 72
+};
+
 typedef enum lx_service_default_outcome {
     LX_SERVICE_DEFAULT_ACCEPT = 1,
     LX_SERVICE_DEFAULT_REJECT = 2
@@ -39,7 +104,8 @@ typedef enum lx_service_agreement_state {
     LX_SERVICE_AGREEMENT_ACCEPTED = 4,
     LX_SERVICE_AGREEMENT_REJECTED = 5,
     LX_SERVICE_AGREEMENT_DISPUTED = 6,
-    LX_SERVICE_AGREEMENT_RESOLVED = 7
+    LX_SERVICE_AGREEMENT_RESOLVED = 7,
+    LX_SERVICE_AGREEMENT_PROPOSED = 8
 } lx_service_agreement_state;
 
 typedef struct lx_service_offer {
@@ -141,6 +207,19 @@ typedef struct lx_service_delivery {
     uint64_t global_sequence;
 } lx_service_delivery;
 
+typedef struct lx_service_progress {
+    uint8_t report_id[32];
+    uint8_t activity_id[32];
+    uint8_t commitment_id[32];
+    uint8_t agreement_id[32];
+    uint8_t provider[32];
+    uint8_t note_hash[32];
+    uint8_t availability_reference[32];
+    uint32_t progress_bps;
+    uint64_t reported_at;
+    uint64_t global_sequence;
+} lx_service_progress;
+
 typedef struct lx_service_dispute {
     uint8_t dispute_id[32];
     uint8_t activity_id[32];
@@ -156,34 +235,15 @@ typedef struct lx_service_dispute {
     uint64_t resolution_sequence;
 } lx_service_dispute;
 
-typedef struct lx_service_store {
-    lx_service_offer offers[LX_SERVICE_STORE_CAPACITY];
-    size_t offer_count;
-    lx_service_agreement agreements[LX_SERVICE_STORE_CAPACITY];
-    size_t agreement_count;
-    lx_service_commitment commitments[LX_SERVICE_STORE_CAPACITY];
-    size_t commitment_count;
-    lx_service_execution executions[LX_SERVICE_STORE_CAPACITY];
-    size_t execution_count;
-    lx_service_delivery deliveries[LX_SERVICE_STORE_CAPACITY];
-    size_t delivery_count;
-    lx_service_dispute disputes[LX_SERVICE_STORE_CAPACITY];
-    size_t dispute_count;
-} lx_service_store;
-
-lxp_result lx_service_store_validate(const lx_service_store *store);
-
 typedef struct lx_service_offer_request {
-    lx_service_store *store;
     lx_service_offer offer;
     const lxp_authority_resolved *authority;
     bool attempts_balance_mutation;
 } lx_service_offer_request;
 
 typedef struct lx_service_agreement_request {
-    lx_service_store *store;
-    const uint8_t *offer_id;
     uint8_t agreement_id[32];
+    uint8_t offer_id[32];
     uint8_t buyer[32];
     uint8_t terms_hash[32];
     uint8_t escrow_id[32];
@@ -192,7 +252,6 @@ typedef struct lx_service_agreement_request {
 } lx_service_agreement_request;
 
 typedef struct lx_service_commit_request {
-    lx_service_store *store;
     lx_service_commitment commitment;
     const lxp_authority_resolved *authority;
     bool attempts_balance_mutation;
@@ -200,22 +259,25 @@ typedef struct lx_service_commit_request {
 } lx_service_commit_request;
 
 typedef struct lx_service_attest_request {
-    lx_service_store *store;
     lx_service_execution execution;
     const lx_service_attestor_grant *grant;
     bool attempts_balance_mutation;
 } lx_service_attest_request;
 
+typedef struct lx_service_progress_request {
+    lx_service_progress progress;
+    const lxp_authority_resolved *authority;
+    bool attempts_balance_mutation;
+} lx_service_progress_request;
+
 typedef struct lx_service_delivery_request {
-    lx_service_store *store;
     lx_service_delivery delivery;
     const lxp_authority_resolved *authority;
     bool attempts_balance_mutation;
 } lx_service_delivery_request;
 
 typedef struct lx_service_outcome_request {
-    lx_service_store *store;
-    const uint8_t *agreement_id;
+    uint8_t agreement_id[32];
     const lxp_authority_resolved *authority;
     uint16_t rejection_reason;
     uint8_t contested_hashes[LX_SERVICE_MAX_DELIVERABLES][32];
@@ -223,32 +285,98 @@ typedef struct lx_service_outcome_request {
     bool attempts_balance_mutation;
 } lx_service_outcome_request;
 
-typedef struct lx_service_runtime {
-    lx_service_store *store;
-} lx_service_runtime;
-
 typedef struct lx_service_dispute_request {
-    lx_service_store *store;
     lx_service_dispute dispute;
     const lxp_authority_resolved *authority;
     bool attempts_balance_mutation;
 } lx_service_dispute_request;
 
 const lxp_module_iface *lx_service_module_iface(void);
-lxp_result lx_service_offer_lookup(lx_service_store *store,
+
+lxp_result lx_service_offer_encode(const lx_service_offer *offer,
+                                   uint8_t bytes[LX_SERVICE_OFFER_RECORD_BYTES]);
+lxp_result lx_service_offer_decode(const uint8_t *bytes, size_t length,
+                                   lx_service_offer *offer);
+lxp_result lx_service_offer_put(lxp_module_ctx *ctx,
+                                const lx_service_offer *offer);
+lxp_result lx_service_offer_lookup(lxp_module_ctx *ctx,
                                    const uint8_t offer_id[32],
-                                   lx_service_offer **offer);
-lxp_result lx_service_agreement_lookup(lx_service_store *store,
+                                   lx_service_offer *offer);
+
+lxp_result lx_service_agreement_encode(
+    const lx_service_agreement *agreement,
+    uint8_t bytes[LX_SERVICE_AGREEMENT_RECORD_BYTES], size_t *length);
+lxp_result lx_service_agreement_decode(const uint8_t *bytes, size_t length,
+                                       lx_service_agreement *agreement);
+lxp_result lx_service_agreement_put(lxp_module_ctx *ctx,
+                                    const lx_service_agreement *agreement);
+lxp_result lx_service_agreement_lookup(lxp_module_ctx *ctx,
                                        const uint8_t agreement_id[32],
-                                       lx_service_agreement **agreement);
-lxp_result lx_service_offer_publish_execute(
-    lxp_module_ctx *ctx, const lx_service_offer_request *request);
-lxp_result lx_service_offer_withdraw_execute(
-    lxp_module_ctx *ctx, const lx_service_offer_request *request);
-lxp_result lx_service_agreement_accept_execute(
-    lxp_module_ctx *ctx, const lx_service_agreement_request *request);
-lxp_result lx_service_commitment_put(lx_service_store *store,
+                                       lx_service_agreement *agreement);
+
+lxp_result lx_service_commitment_encode(
+    const lx_service_commitment *commitment,
+    uint8_t bytes[LX_SERVICE_COMMITMENT_RECORD_BYTES]);
+lxp_result lx_service_commitment_decode(const uint8_t *bytes, size_t length,
+                                        lx_service_commitment *commitment);
+lxp_result lx_service_commitment_put(lxp_module_ctx *ctx,
                                      const lx_service_commitment *commitment);
+lxp_result lx_service_commitment_lookup(lxp_module_ctx *ctx,
+                                        const uint8_t commitment_id[32],
+                                        lx_service_commitment *commitment);
+
+lxp_result lx_service_execution_put(lxp_module_ctx *ctx,
+                                    const lx_service_execution *execution);
+lxp_result lx_service_execution_lookup(lxp_module_ctx *ctx,
+                                       const uint8_t attestation_id[32],
+                                       lx_service_execution *execution);
+
+lxp_result lx_service_delivery_put(lxp_module_ctx *ctx,
+                                   const lx_service_delivery *delivery);
+lxp_result lx_service_delivery_lookup(lxp_module_ctx *ctx,
+                                      const uint8_t delivery_id[32],
+                                      lx_service_delivery *delivery);
+lxp_result lx_service_delivery_latest(lxp_module_ctx *ctx,
+                                      const uint8_t agreement_id[32],
+                                      lx_service_delivery *delivery);
+
+lxp_result lx_service_progress_encode(
+    const lx_service_progress *progress,
+    uint8_t bytes[LX_SERVICE_PROGRESS_RECORD_BYTES]);
+lxp_result lx_service_progress_decode(const uint8_t *bytes, size_t length,
+                                      lx_service_progress *progress);
+lxp_result lx_service_progress_put(lxp_module_ctx *ctx,
+                                   const lx_service_progress *progress);
+lxp_result lx_service_progress_lookup(lxp_module_ctx *ctx,
+                                      const uint8_t report_id[32],
+                                      lx_service_progress *progress);
+lxp_result lx_service_progress_high_water(lxp_module_ctx *ctx,
+                                          const uint8_t commitment_id[32],
+                                          uint32_t *progress_bps);
+
+lxp_result lx_service_dispute_encode(
+    const lx_service_dispute *dispute,
+    uint8_t bytes[LX_SERVICE_DISPUTE_RECORD_BYTES], size_t *length);
+lxp_result lx_service_dispute_decode(const uint8_t *bytes, size_t length,
+                                     lx_service_dispute *dispute);
+lxp_result lx_service_dispute_put(lxp_module_ctx *ctx,
+                                  const lx_service_dispute *dispute);
+lxp_result lx_service_dispute_lookup(lxp_module_ctx *ctx,
+                                     const uint8_t dispute_id[32],
+                                     lx_service_dispute *dispute);
+
+lxp_result lx_service_offer_publish_execute(
+    lxp_module_ctx *ctx, const lx_service_offer_request *request,
+    lx_service_offer *result);
+lxp_result lx_service_offer_withdraw_execute(
+    lxp_module_ctx *ctx, const lx_service_offer_request *request,
+    lx_service_offer *result);
+lxp_result lx_service_agreement_propose_execute(
+    lxp_module_ctx *ctx, const lx_service_agreement_request *request,
+    lx_service_agreement *result);
+lxp_result lx_service_agreement_accept_execute(
+    lxp_module_ctx *ctx, const lx_service_agreement_request *request,
+    lx_service_agreement *result);
 lxp_result lx_service_commit_task_execute(
     lxp_module_ctx *ctx, const lx_service_commit_request *request,
     lx_service_commitment *result);
@@ -264,26 +392,27 @@ lxp_result lx_service_attestation_bytes(
     const lx_service_execution *execution, uint8_t *bytes, size_t capacity,
     size_t *length);
 lxp_result lx_service_attestor_verify(
-    const lx_service_store *store, const lx_service_execution *execution,
+    lxp_module_ctx *ctx, const lx_service_execution *execution,
     const lx_service_attestor_grant *grant, uint64_t batch_timestamp);
-lxp_result lx_service_execution_put(lx_service_store *store,
-                                    const lx_service_execution *execution);
 lxp_result lx_service_tool_exec_attest_execute(
     lxp_module_ctx *ctx, const lx_service_attest_request *request,
     lx_service_execution *result);
+lxp_result lx_service_progress_report_execute(
+    lxp_module_ctx *ctx, const lx_service_progress_request *request,
+    lx_service_progress *result);
 lxp_result lx_service_deliverable_check(
-    const lx_service_store *store, const lx_service_agreement *agreement,
+    lxp_module_ctx *ctx, const lx_service_agreement *agreement,
     const lx_service_delivery *delivery);
-lxp_result lx_service_delivery_put(lx_service_store *store,
-                                   const lx_service_delivery *delivery);
 lxp_result lx_service_deliver_execute(
     lxp_module_ctx *ctx, const lx_service_delivery_request *request,
     lx_service_delivery *result);
 lxp_result lx_service_accept_execute(
-    lxp_module_ctx *ctx, const lx_service_outcome_request *request);
+    lxp_module_ctx *ctx, const lx_service_outcome_request *request,
+    lx_service_agreement *result);
 lxp_result lx_service_reject_execute(
-    lxp_module_ctx *ctx, const lx_service_outcome_request *request);
-lxp_result lx_service_acceptance_default(lx_service_store *store,
+    lxp_module_ctx *ctx, const lx_service_outcome_request *request,
+    lx_service_agreement *result);
+lxp_result lx_service_acceptance_default(lxp_module_ctx *ctx,
                                          uint64_t batch_timestamp,
                                          uint64_t global_sequence);
 lxp_result lx_service_epoch_begin(lxp_module_ctx *ctx, uint64_t epoch,

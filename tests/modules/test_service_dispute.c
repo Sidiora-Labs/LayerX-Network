@@ -1,344 +1,519 @@
-#include "layerx/lx_escrow.h"
 #include "layerx/lx_service.h"
-#include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
 
-#include <openssl/evp.h>
 #include <string.h>
 
-static size_t transfer_calls;
+enum { WORK_ARENA_BYTES = 16384, GAS_LIMIT = 100000 };
 
-static lxp_result apply_capability(lxp_kernel *kernel,
+static lxp_state_store store_state;
+static lxp_state_journal state_journal;
+static lxp_kernel service_kernel;
+static lxp_effect_buffer event_buffer;
+static lxp_arena work_arena;
+static uint8_t work_bytes[WORK_ARENA_BYTES];
+static lxp_effect_buffer audit_buffer;
+static uint64_t parameter_set = 1U;
+static size_t transfer_calls;
+static size_t event_effects;
+
+static lxp_result counting_applier(lxp_kernel *kernel,
                                    const lxp_transfer_set *set,
                                    lxp_receipt *receipt)
 {
-    lxp_transfer_set_result result;
-    lxp_transfer_context context = set->context;
-    lxp_result status;
     (void)kernel;
-    status = lxp_apply_transfer_set((lxp_transfer_leg *)set->legs,
-                                    set->leg_count, &context, &result);
-    if (status == LXP_OK) {
-        ++transfer_calls;
-        (void)memcpy(receipt->transfer_set_root, result.transfer_set_root, 32U);
-    }
-    return status;
+    (void)set;
+    (void)receipt;
+    ++transfer_calls;
+    return LXP_FATAL_INVARIANT;
 }
 
-static int sign_execution(lx_service_execution *execution,
-                          lx_service_attestor_grant *grant,
-                          const uint8_t seed[32])
+static lxp_result counting_reader(const void *set, uint32_t parameter_id,
+                                  uint64_t *value)
 {
-    uint8_t message[384];
-    uint8_t digest[32];
-    size_t message_length;
-    size_t public_length = 32U;
-    size_t signature_length = 64U;
-    EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
-                                                  seed, 32U);
-    EVP_MD_CTX *context = EVP_MD_CTX_new();
-    int failed = key == NULL || context == NULL ||
-        EVP_PKEY_get_raw_public_key(key, execution->public_key,
-                                    &public_length) != 1;
-    if (!failed) {
-        (void)memcpy(grant->public_key, execution->public_key, 32U);
-        failed = lx_service_attestation_bytes(execution, message,
-                                               sizeof(message),
-                                               &message_length) != LXP_OK ||
-            lxp_hash_domain(LXP_DOMAIN_SIGNATURE_PREIMAGE, message,
-                            message_length, digest) != LXP_OK ||
-            EVP_DigestSignInit(context, NULL, NULL, NULL, key) != 1 ||
-            EVP_DigestSign(context, execution->signature, &signature_length,
-                           digest, sizeof(digest)) != 1 ||
-            signature_length != 64U;
-    }
-    EVP_MD_CTX_free(context);
-    EVP_PKEY_free(key);
-    return failed;
+    (void)set;
+    (void)parameter_id;
+    if (value == NULL) return LXP_ERR_NON_CANONICAL;
+    *value = 0U;
+    return LXP_OK;
 }
 
-static int dispute_checks(lxp_kernel *kernel, lxp_arena *arena)
+static void be16(uint8_t *bytes, uint16_t value)
 {
-    lx_service_store store;
-    lx_service_dispute_request request;
-    lx_service_dispute result;
+    bytes[0] = (uint8_t)(value >> 8);
+    bytes[1] = (uint8_t)value;
+}
+
+static void be32(uint8_t *bytes, uint32_t value)
+{
+    bytes[0] = (uint8_t)(value >> 24);
+    bytes[1] = (uint8_t)(value >> 16);
+    bytes[2] = (uint8_t)(value >> 8);
+    bytes[3] = (uint8_t)value;
+}
+
+static void be64(uint8_t *bytes, uint64_t value)
+{
+    size_t i;
+    for (i = 0U; i < 8U; ++i)
+        bytes[i] = (uint8_t)(value >> ((7U - i) * 8U));
+}
+
+static void id32(uint8_t out[32], uint8_t marker)
+{
+    (void)memset(out, 0, 32U);
+    out[0] = marker;
+}
+
+static size_t offer_payload(uint8_t *out, uint8_t offer_marker)
+{
+    size_t offset = 0U;
+    (void)memset(out, 0, (size_t)LX_SERVICE_OFFER_PUBLISH_PAYLOAD_BYTES);
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    id32(out + offset, offer_marker); offset += 32U;
+    id32(out + offset, 11U); offset += 32U;
+    be64(out + offset + 8U, 25U); offset += 16U;
+    id32(out + offset, 12U); offset += 32U;
+    id32(out + offset, 13U); offset += 32U;
+    be64(out + offset, 1000U); offset += 8U;
+    be64(out + offset, 200U); offset += 8U;
+    be64(out + offset, 300U); offset += 8U;
+    out[offset++] = (uint8_t)LX_SERVICE_DEFAULT_ACCEPT;
+    be64(out + offset, 900U); offset += 8U;
+    return offset;
+}
+
+static size_t identifier_payload(uint8_t *out, const uint8_t identifier[32])
+{
+    out[0] = 0U;
+    out[1] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + LX_SERVICE_PAYLOAD_VERSION_BYTES, identifier, 32U);
+    return (size_t)LX_SERVICE_IDENTIFIER_PAYLOAD_BYTES;
+}
+
+static size_t propose_payload(uint8_t *out, const uint8_t agreement_id[32],
+                              const uint8_t offer_id[32])
+{
+    size_t offset = 0U;
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + offset, agreement_id, 32U); offset += 32U;
+    (void)memcpy(out + offset, offer_id, 32U); offset += 32U;
+    id32(out + offset, 12U); offset += 32U;
+    id32(out + offset, 41U); offset += 32U;
+    return offset;
+}
+
+static size_t commit_payload(uint8_t *out, const uint8_t commitment_id[32],
+                             const uint8_t agreement_id[32])
+{
+    size_t offset = 0U;
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + offset, commitment_id, 32U); offset += 32U;
+    (void)memcpy(out + offset, agreement_id, 32U); offset += 32U;
+    id32(out + offset, 51U); offset += 32U;
+    id32(out + offset, 41U); offset += 32U;
+    be64(out + offset, 900U); offset += 8U;
+    be64(out + offset, 100U); offset += 8U;
+    return offset;
+}
+
+static size_t deliver_payload(uint8_t *out, const uint8_t delivery_id[32],
+                              const uint8_t agreement_id[32])
+{
+    size_t offset = 0U;
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + offset, delivery_id, 32U); offset += 32U;
+    (void)memcpy(out + offset, agreement_id, 32U); offset += 32U;
+    out[offset++] = 1U;
+    id32(out + offset, 13U); offset += 32U;
+    be64(out + offset, 4096U); offset += 8U;
+    id32(out + offset, 21U); offset += 32U;
+    return offset;
+}
+
+static size_t reject_payload(uint8_t *out, const uint8_t agreement_id[32])
+{
+    size_t offset = 0U;
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + offset, agreement_id, 32U); offset += 32U;
+    be16(out + offset, 5U); offset += 2U;
+    out[offset++] = 1U;
+    id32(out + offset, 13U); offset += 32U;
+    return offset;
+}
+
+static size_t dispute_open_payload(uint8_t *out, const uint8_t dispute_id[32],
+                                   const uint8_t agreement_id[32],
+                                   const uint8_t *markers, size_t count)
+{
+    size_t offset = 0U;
+    size_t i;
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + offset, dispute_id, 32U); offset += 32U;
+    (void)memcpy(out + offset, agreement_id, 32U); offset += 32U;
+    out[offset++] = (uint8_t)count;
+    for (i = 0U; i < count; ++i) {
+        id32(out + offset, markers[i]);
+        offset += 32U;
+    }
+    return offset;
+}
+
+static size_t dispute_resolve_payload(uint8_t *out,
+                                      const uint8_t dispute_id[32],
+                                      uint16_t ruling, uint32_t basis_points,
+                                      uint8_t resolution_marker)
+{
+    size_t offset = 0U;
+    out[offset++] = 0U;
+    out[offset++] = (uint8_t)LX_SERVICE_RECORD_VERSION;
+    (void)memcpy(out + offset, dispute_id, 32U); offset += 32U;
+    be16(out + offset, ruling); offset += 2U;
+    be32(out + offset, basis_points); offset += 4U;
+    id32(out + offset, resolution_marker); offset += 32U;
+    return offset;
+}
+
+static int open_ctx(lxp_module_ctx *ctx, uint64_t timestamp,
+                    uint64_t sequence)
+{
+    if (lxp_arena_init(&work_arena, work_bytes, sizeof(work_bytes)) !=
+            LXP_OK ||
+        lxp_effect_buffer_init(&event_buffer) != LXP_OK ||
+        lxp_module_ctx_init(ctx, &service_kernel, LXP_MODULE_SERVICE,
+                            timestamp, 0U, sequence, (uint64_t)GAS_LIMIT,
+                            &work_arena, true) != LXP_OK)
+        return 1;
+    return lxp_module_ctx_bind_effects(ctx, &event_buffer) == LXP_OK ? 0 : 1;
+}
+
+static int effects_are_events(void)
+{
+    size_t i;
+    for (i = 0U; i < event_buffer.count; ++i) {
+        const lxp_effect *effect = &event_buffer.effects[i];
+        if (effect->kind != LXP_EFFECT_EVENT || effect->monetary ||
+            effect->module_id != LXP_MODULE_SERVICE)
+            return 1;
+        ++event_effects;
+    }
+    return 0;
+}
+
+static lxp_result dispatch(uint32_t activity_type, const uint8_t *payload,
+                           size_t length,
+                           const lxp_authority_resolved *authority,
+                           uint64_t timestamp, uint64_t sequence,
+                           uint8_t activity_marker,
+                           lxp_result *module_result)
+{
+    const lxp_module_registration *registration = NULL;
+    lxp_activity activity;
+    lxp_module_ctx ctx;
+    lxp_result status;
+
+    *module_result = LXP_FATAL_INVARIANT;
+    status = lxp_kernel_module_for_activity(&service_kernel, activity_type,
+                                            0U, &registration);
+    if (status != LXP_OK) return status;
+    if (open_ctx(&ctx, timestamp, sequence) != 0) return LXP_FATAL_INVARIANT;
+    ctx.activity_id[0] = activity_marker;
+    (void)memset(&activity, 0, sizeof(activity));
+    activity.activity_type = activity_type;
+    activity.payload.bytes = payload;
+    activity.payload.length = length;
+    status = lxp_kernel_dispatch(registration, &ctx, &activity, authority,
+                                 &event_buffer, module_result);
+    if (status != LXP_OK) return status;
+    if (effects_are_events() != 0) return LXP_FATAL_INVARIANT;
+    if (*module_result == LXP_OK) return lxp_module_ctx_commit(&ctx);
+    lxp_module_ctx_rollback(&ctx);
+    return LXP_OK;
+}
+
+static int event_is(uint16_t event_type, const uint8_t primary[32],
+                    const uint8_t secondary[32], uint8_t code,
+                    uint64_t sequence)
+{
+    uint8_t body[LX_SERVICE_EVENT_BODY_BYTES];
+    const lxp_effect *effect = &event_buffer.effects[0];
+    if (event_buffer.count != 1U || effect->kind != LXP_EFFECT_EVENT ||
+        effect->monetary || effect->module_id != LXP_MODULE_SERVICE ||
+        effect->event_type != event_type ||
+        effect->body_length != (uint16_t)LX_SERVICE_EVENT_BODY_BYTES)
+        return 1;
+    (void)memcpy(body, primary, 32U);
+    (void)memcpy(body + 32U, secondary, 32U);
+    body[64] = code;
+    be64(body + 65U, sequence);
+    return memcmp(effect->body, body, sizeof(body)) == 0 ? 0 : 1;
+}
+
+static int rejected_agreement(uint8_t marker, uint8_t *agreement_id,
+                              const lxp_authority_resolved *provider,
+                              const lxp_authority_resolved *buyer,
+                              uint64_t *sequence)
+{
+    uint8_t payload[LX_SERVICE_DELIVER_PAYLOAD_MAX_BYTES];
+    uint8_t offer_id[32];
+    uint8_t commitment_id[32];
+    uint8_t delivery_id[32];
+    lxp_result status = LXP_OK;
+    size_t length;
+
+    id32(offer_id, marker);
+    id32(agreement_id, (uint8_t)(marker + 1U));
+    id32(commitment_id, (uint8_t)(marker + 2U));
+    id32(delivery_id, (uint8_t)(marker + 3U));
+    length = offer_payload(payload, marker);
+    if (dispatch(LX_SERVICE_OFFER_PUBLISH, payload, length, provider, 100U,
+                 ++(*sequence), marker, &status) != LXP_OK || status != LXP_OK)
+        return 1;
+    length = propose_payload(payload, agreement_id, offer_id);
+    if (dispatch(LX_SERVICE_AGREEMENT_PROPOSE, payload, length, buyer, 100U,
+                 ++(*sequence), marker, &status) != LXP_OK || status != LXP_OK)
+        return 1;
+    length = identifier_payload(payload, agreement_id);
+    if (dispatch(LX_SERVICE_AGREEMENT_ACCEPT, payload, length, provider, 100U,
+                 ++(*sequence), marker, &status) != LXP_OK || status != LXP_OK)
+        return 1;
+    length = commit_payload(payload, commitment_id, agreement_id);
+    if (dispatch(LX_SERVICE_COMMIT_TASK, payload, length, provider, 100U,
+                 ++(*sequence), marker, &status) != LXP_OK || status != LXP_OK)
+        return 1;
+    length = deliver_payload(payload, delivery_id, agreement_id);
+    if (dispatch(LX_SERVICE_DELIVER, payload, length, provider, 100U,
+                 ++(*sequence), marker, &status) != LXP_OK || status != LXP_OK)
+        return 1;
+    length = reject_payload(payload, agreement_id);
+    if (dispatch(LX_SERVICE_REJECT, payload, length, buyer, 100U,
+                 ++(*sequence), marker, &status) != LXP_OK || status != LXP_OK)
+        return 1;
+    return 0;
+}
+
+static int iface_shape(void)
+{
+    const lxp_module_iface *iface = lx_service_module_iface();
+    size_t i;
+    if (iface == NULL || iface->module_id != LXP_MODULE_SERVICE ||
+        iface->abi_version != 1U || iface->activity_type_count != 13U ||
+        strcmp(iface->name, "service") != 0 || iface->genesis == NULL ||
+        iface->decode == NULL || iface->validate == NULL ||
+        iface->execute == NULL || iface->epoch_begin == NULL ||
+        iface->epoch_end == NULL || iface->state_root == NULL)
+        return 1;
+    for (i = 0U; i < iface->activity_type_count; ++i) {
+        if (lxp_activity_module_id(iface->activity_types[i]) !=
+                LXP_MODULE_SERVICE ||
+            lxp_activity_type_ordinal(iface->activity_types[i]) !=
+                (uint16_t)(i + 1U))
+            return 1;
+        if (i != 0U && iface->activity_types[i] <= iface->activity_types[i - 1U])
+            return 1;
+    }
+    return 0;
+}
+
+static int audit_refusals(void)
+{
+    lxp_effect_buffer *buffer = &audit_buffer;
+    if (lx_service_effect_audit(LX_SERVICE_DISPUTE_OPEN, NULL) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_service_effect_audit(0x00060001U, &event_buffer) !=
+            LXP_ERR_UNKNOWN_ACTIVITY ||
+        lx_service_effect_audit(LX_SERVICE_DISPUTE_OPEN, &event_buffer) !=
+            LXP_OK)
+        return 1;
+    if (lxp_effect_buffer_init(buffer) != LXP_OK) return 1;
+    buffer->count = 1U;
+    buffer->effects[0].kind = LXP_EFFECT_TRANSFER;
+    if (lx_service_effect_audit(LX_SERVICE_DISPUTE_OPEN, buffer) !=
+        LXP_FATAL_INVARIANT)
+        return 1;
+    buffer->effects[0].kind = LXP_EFFECT_EVENT;
+    buffer->effects[0].monetary = true;
+    if (lx_service_effect_audit(LX_SERVICE_DISPUTE_OPEN, buffer) !=
+        LXP_FATAL_INVARIANT)
+        return 1;
+    buffer->effects[0].monetary = false;
+    buffer->count = (size_t)LXP_MAX_EFFECTS + 1U;
+    return lx_service_effect_audit(LX_SERVICE_DISPUTE_OPEN, buffer) ==
+           LXP_ERR_NON_CANONICAL ? 0 : 1;
+}
+
+int main(void)
+{
+    uint8_t payload[LX_SERVICE_DELIVER_PAYLOAD_MAX_BYTES];
+    uint8_t disputed_id[32];
+    uint8_t second_id[32];
+    uint8_t open_id[32];
+    uint8_t evidence[3];
+    uint8_t root_before[32];
+    uint8_t root_after[32];
+    lx_service_dispute dispute;
+    lx_service_agreement agreement;
     lxp_authority_resolved provider;
     lxp_authority_resolved buyer;
     lxp_authority_resolved outsider;
     lxp_module_ctx ctx;
-    lxp_effect_buffer effects;
-    lxp_effect monetary;
-    const lxp_module_iface *iface = lx_service_module_iface();
-    size_t i;
+    lxp_result outcome = LXP_OK;
+    uint64_t sequence = 0U;
+    size_t length;
 
-    (void)memset(&store, 0, sizeof(store));
     (void)memset(&provider, 0, sizeof(provider));
     (void)memset(&buyer, 0, sizeof(buyer));
     (void)memset(&outsider, 0, sizeof(outsider));
     provider.principal[0] = 1U;
     buyer.principal[0] = 2U;
     outsider.principal[0] = 3U;
-    store.agreement_count = 1U;
-    store.agreements[0].agreement_id[0] = 4U;
-    (void)memcpy(store.agreements[0].provider, provider.principal, 32U);
-    (void)memcpy(store.agreements[0].buyer, buyer.principal, 32U);
-    store.agreements[0].state = LX_SERVICE_AGREEMENT_REJECTED;
-    store.agreements[0].dispute_window_end = 1000U;
-    (void)memset(&request, 0, sizeof(request));
-    request.store = &store;
-    request.authority = &outsider;
-    request.dispute.dispute_id[0] = 5U;
-    request.dispute.activity_id[0] = 6U;
-    request.dispute.agreement_id[0] = 4U;
-    request.dispute.raiser[0] = 3U;
-    request.dispute.evidence_hash_count = 2U;
-    request.dispute.evidence_hashes[0][0] = 8U;
-    request.dispute.evidence_hashes[1][0] = 7U;
-    if (lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_SERVICE, 500U, 0U, 1U,
-                            1000U, arena, true) != LXP_OK ||
-        lx_service_dispute_open_execute(&ctx, &request, &result) !=
-            LXP_ERR_UNAUTHORIZED_DISPUTANT)
-        return 1;
-    request.authority = &buyer;
-    request.dispute.raiser[0] = 2U;
-    if (lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_SERVICE, 1001U, 0U, 2U,
-                            1000U, arena, true) != LXP_OK ||
-        lx_service_dispute_open_execute(&ctx, &request, &result) !=
-            LXP_ERR_DISPUTE_WINDOW_CLOSED ||
-        lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_SERVICE, 500U, 0U, 3U,
-                            1000U, arena, true) != LXP_OK ||
-        lx_service_dispute_open_execute(&ctx, &request, &result) != LXP_OK ||
-        result.global_sequence != 3U || result.evidence_hashes[0][0] != 7U ||
-        store.agreements[0].state != LX_SERVICE_AGREEMENT_DISPUTED)
-        return 1;
-    request.authority = &provider;
-    request.dispute.ruling = 9U;
-    request.dispute.provider_basis_points = 7000U;
-    request.dispute.escrow_resolution_id[0] = 10U;
-    if (lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_SERVICE, 600U, 0U, 4U,
-                            1000U, arena, true) != LXP_OK ||
-        lx_service_dispute_resolve_execute(&ctx, &request, &result) != LXP_OK ||
-        !result.resolved || result.provider_basis_points != 7000U ||
-        result.escrow_resolution_id[0] != 10U ||
-        store.agreements[0].state != LX_SERVICE_AGREEMENT_RESOLVED)
-        return 1;
-    if (lxp_effect_buffer_init(&effects) != LXP_OK) return 1;
-    for (i = 0U; i < iface->activity_type_count; ++i)
-        if (lx_service_effect_audit(iface->activity_types[i], &effects) !=
-            LXP_OK) return 1;
-    (void)memset(&monetary, 0, sizeof(monetary));
-    monetary.module_id = LXP_MODULE_SERVICE;
-    monetary.kind = LXP_EFFECT_TRANSFER;
-    monetary.monetary = true;
-    effects.effects[0] = monetary;
-    effects.count = 1U;
-    if (lx_service_effect_audit(LX_SERVICE_DELIVER, &effects) !=
-        LXP_FATAL_INVARIANT) return 1;
-    effects.count = LXP_MAX_EFFECTS + 1U;
-    if (lx_service_effect_audit(LX_SERVICE_DELIVER, &effects) !=
-        LXP_ERR_NON_CANONICAL) return 1;
-    return 0;
-}
+    id32(open_id, 99U);
+    evidence[0] = 55U;
+    evidence[1] = 33U;
+    evidence[2] = 44U;
 
-static int service_to_escrow(lxp_kernel *kernel, lxp_arena *arena)
-{
-    static const uint8_t seed[32] = { 11U };
-    lx_service_store service;
-    lx_escrow_store escrow;
-    lx_service_offer_request offer_request;
-    lx_service_agreement_request agreement_request;
-    lx_service_commit_request commit_request;
-    lx_service_commitment commitment;
-    lx_service_attestor_grant grant;
-    lx_service_attest_request attest_request;
-    lx_service_execution execution;
-    lx_service_delivery_request delivery_request;
-    lx_service_delivery delivery;
-    lx_service_outcome_request outcome_request;
-    lx_escrow_record escrow_record;
-    lx_escrow_capture_request capture_request;
-    lxp_authority_resolved provider;
-    lxp_authority_resolved buyer;
-    lx_account escrow_account;
-    lx_account provider_account;
-    lx_asset_record asset;
-    lxp_transfer_asset_state asset_state;
-    lxp_module_ctx ctx;
-    lxp_receipt receipt;
-
-    (void)memset(&service, 0, sizeof(service));
-    (void)memset(&escrow, 0, sizeof(escrow));
-    (void)memset(&provider, 0, sizeof(provider));
-    (void)memset(&buyer, 0, sizeof(buyer));
-    (void)memset(&escrow_account, 0, sizeof(escrow_account));
-    (void)memset(&provider_account, 0, sizeof(provider_account));
-    (void)memset(&asset, 0, sizeof(asset));
-    provider.principal[0] = 21U;
-    buyer.principal[0] = 22U;
-    escrow_account.id[0] = 23U;
-    escrow_account.kind = LX_ACCOUNT_AGENT_ESCROW;
-    (void)memcpy(provider_account.id, provider.principal, 32U);
-    provider_account.kind = LX_ACCOUNT_AGENT_MAIN;
-    asset.asset_id[0] = 24U;
-    if (lxp_ledger_bootstrap_balance(&escrow_account, asset.asset_id,
-                                     (lxp_u128){ 0U, 50U }, 0U) != LXP_OK ||
-        lxp_ledger_bootstrap_balance(&provider_account, asset.asset_id,
-                                     (lxp_u128){ 0U, 0U }, 0U) != LXP_OK ||
-        lx_asset_transfer_state(&asset, &asset_state) != LXP_OK ||
-        lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_SERVICE, 100U, 0U, 10U,
-                            1000U, arena, true) != LXP_OK)
+    if (lxp_state_store_init(&store_state, 0U) != LXP_OK ||
+        lxp_kernel_create(&service_kernel, &store_state, &state_journal,
+                          &parameter_set, 0U) != LXP_OK ||
+        lxp_kernel_set_capabilities(&service_kernel, counting_reader,
+                                    counting_applier) != LXP_OK ||
+        lxp_kernel_register_module(&service_kernel,
+                                   lx_service_module_iface()) != LXP_OK ||
+        iface_shape() != 0)
         return 1;
 
-    (void)memset(&offer_request, 0, sizeof(offer_request));
-    offer_request.store = &service;
-    offer_request.authority = &provider;
-    offer_request.offer.offer_id[0] = 25U;
-    offer_request.offer.activity_id[0] = 26U;
-    (void)memcpy(offer_request.offer.offering_agent,
-                 provider.principal, 32U);
-    (void)memcpy(offer_request.offer.asset_id, asset.asset_id, 32U);
-    offer_request.offer.price = (lxp_u128){ 0U, 50U };
-    offer_request.offer.terms_hash[0] = 27U;
-    offer_request.offer.deliverable_specification_hash[0] = 28U;
-    offer_request.offer.delivery_deadline = 1000U;
-    offer_request.offer.acceptance_window = 200U;
-    offer_request.offer.dispute_window = 300U;
-    offer_request.offer.default_outcome = LX_SERVICE_DEFAULT_ACCEPT;
-    offer_request.offer.offer_expiry = 500U;
-    if (lx_service_offer_publish_execute(&ctx, &offer_request) != LXP_OK)
-        return 1;
-    (void)memset(&agreement_request, 0, sizeof(agreement_request));
-    agreement_request.store = &service;
-    agreement_request.offer_id = offer_request.offer.offer_id;
-    agreement_request.agreement_id[0] = 29U;
-    (void)memcpy(agreement_request.buyer, buyer.principal, 32U);
-    (void)memcpy(agreement_request.terms_hash,
-                 offer_request.offer.terms_hash, 32U);
-    agreement_request.escrow_id[0] = 30U;
-    agreement_request.authority = &buyer;
-    if (lx_service_agreement_accept_execute(&ctx, &agreement_request) != LXP_OK)
-        return 1;
-    (void)memset(&commit_request, 0, sizeof(commit_request));
-    commit_request.store = &service;
-    commit_request.authority = &provider;
-    commit_request.commitment.commitment_id[0] = 31U;
-    commit_request.commitment.activity_id[0] = 32U;
-    (void)memcpy(commit_request.commitment.provider,
-                 provider.principal, 32U);
-    (void)memcpy(commit_request.commitment.agreement_id,
-                 agreement_request.agreement_id, 32U);
-    commit_request.commitment.task_hash[0] = 33U;
-    commit_request.commitment.deadline = 900U;
-    commit_request.commitment.resource_bound = 100U;
-    (void)memcpy(commit_request.commitment.escrow_id,
-                 agreement_request.escrow_id, 32U);
-    if (lx_service_commit_task_execute(&ctx, &commit_request,
-                                       &commitment) != LXP_OK)
+    if (rejected_agreement(60U, disputed_id, &provider, &buyer,
+                           &sequence) != 0 ||
+        rejected_agreement(70U, second_id, &provider, &buyer, &sequence) != 0)
         return 1;
 
-    (void)memset(&grant, 0, sizeof(grant));
-    (void)memset(&attest_request, 0, sizeof(attest_request));
-    grant.principal[0] = 21U;
-    grant.module_id = LXP_MODULE_SERVICE;
-    grant.activity_type = LX_SERVICE_TOOL_EXEC_ATTEST;
-    grant.not_before = 1U; grant.not_after = 500U;
-    attest_request.store = &service;
-    attest_request.grant = &grant;
-    attest_request.execution.attestation_id[0] = 34U;
-    attest_request.execution.activity_id[0] = 35U;
-    (void)memcpy(attest_request.execution.agreement_id,
-                 agreement_request.agreement_id, 32U);
-    (void)memcpy(attest_request.execution.commitment_id,
-                 commitment.commitment_id, 32U);
-    attest_request.execution.tool_id[0] = 36U;
-    attest_request.execution.input_commitment_hash[0] = 37U;
-    attest_request.execution.output_commitment_hash[0] = 38U;
-    attest_request.execution.execution_start = 10U;
-    attest_request.execution.execution_end = 90U;
-    attest_request.execution.resource_units = 80U;
-    (void)memcpy(attest_request.execution.attestor_identity,
-                 provider.principal, 32U);
-    attest_request.execution.availability_reference[0] = 39U;
-    if (sign_execution(&attest_request.execution, &grant, seed) != 0 ||
-        lx_service_tool_exec_attest_execute(&ctx, &attest_request,
-                                            &execution) != LXP_OK)
-        return 1;
-    (void)memset(&delivery_request, 0, sizeof(delivery_request));
-    delivery_request.store = &service;
-    delivery_request.authority = &provider;
-    delivery_request.delivery.delivery_id[0] = 40U;
-    delivery_request.delivery.activity_id[0] = 41U;
-    (void)memcpy(delivery_request.delivery.agreement_id,
-                 agreement_request.agreement_id, 32U);
-    (void)memcpy(delivery_request.delivery.provider,
-                 provider.principal, 32U);
-    delivery_request.delivery.deliverable_count = 1U;
-    delivery_request.delivery.deliverables[0].hash[0] = 28U;
-    delivery_request.delivery.deliverables[0].artifact_size = 1024U;
-    delivery_request.delivery.deliverables[0].availability_reference[0] = 42U;
-    if (lx_service_deliver_execute(&ctx, &delivery_request, &delivery) != LXP_OK)
-        return 1;
-    (void)memset(&outcome_request, 0, sizeof(outcome_request));
-    outcome_request.store = &service;
-    outcome_request.agreement_id = agreement_request.agreement_id;
-    outcome_request.authority = &buyer;
-    if (lx_service_accept_execute(&ctx, &outcome_request) != LXP_OK ||
-        escrow_account.balance.lo != 50U || provider_account.balance.lo != 0U ||
-        transfer_calls != 0U)
+    if (open_ctx(&ctx, 100U, 40U) != 0 ||
+        lx_service_module_iface()->state_root(&ctx, root_before) != LXP_OK)
         return 1;
 
-    (void)memset(&escrow_record, 0, sizeof(escrow_record));
-    escrow_record.escrow_id[0] = 30U;
-    (void)memcpy(escrow_record.owner, buyer.principal, 32U);
-    (void)memcpy(escrow_record.escrow_account, escrow_account.id, 32U);
-    (void)memcpy(escrow_record.beneficiary, provider_account.id, 32U);
-    (void)memcpy(escrow_record.asset_id, asset.asset_id, 32U);
-    escrow_record.locked_amount = (lxp_u128){ 0U, 50U };
-    escrow_record.state = LX_ESCROW_STATE_OPEN;
-    (void)memcpy(escrow_record.agreement_reference,
-                 agreement_request.agreement_id, 32U);
-    if (lx_escrow_state_put(&escrow, &escrow_record) != LXP_OK ||
-        lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_ESCROW, 100U, 0U, 20U,
-                            1000U, arena, true) != LXP_OK)
+    length = dispute_open_payload(payload, open_id, second_id, evidence, 3U);
+    if (dispatch(LX_SERVICE_DISPUTE_OPEN, payload, length, &outsider, 100U,
+                 40U, 40U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_UNAUTHORIZED_DISPUTANT ||
+        dispatch(LX_SERVICE_DISPUTE_OPEN, payload, length, &buyer, 1501U,
+                 40U, 40U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_DISPUTE_WINDOW_CLOSED)
         return 1;
-    (void)memset(&capture_request, 0, sizeof(capture_request));
-    capture_request.store = &escrow;
-    capture_request.escrow_id = escrow_record.escrow_id;
-    capture_request.escrow_account = &escrow_account;
-    capture_request.beneficiary_account = &provider_account;
-    capture_request.asset = &asset;
-    capture_request.authority = &provider;
-    capture_request.idempotency_key[0] = 1U;
-    capture_request.context.assets = &asset_state;
-    capture_request.context.asset_count = 1U;
-    capture_request.context.sequence_account = &escrow_account;
-    (void)memcpy(capture_request.context.authorized_from,
-                 escrow_account.id, 32U);
-    if (lx_escrow_capture_execute(&ctx, &capture_request, &receipt) != LXP_OK ||
-        transfer_calls != 1U || !lxp_u128_is_zero(escrow_account.balance) ||
-        provider_account.balance.lo != 50U)
+    payload[LX_SERVICE_DISPUTE_OPEN_PAYLOAD_FIXED_BYTES - 1U] = 0U;
+    if (dispatch(LX_SERVICE_DISPUTE_OPEN, payload, length, &buyer, 100U, 40U,
+                 40U, &outcome) != LXP_OK || outcome != LXP_ERR_LENGTH_LIMIT)
         return 1;
-    return 0;
-}
+    payload[LX_SERVICE_DISPUTE_OPEN_PAYLOAD_FIXED_BYTES - 1U] =
+        (uint8_t)(LX_SERVICE_MAX_DELIVERABLES + 1);
+    if (dispatch(LX_SERVICE_DISPUTE_OPEN, payload, length, &buyer, 100U, 40U,
+                 40U, &outcome) != LXP_OK || outcome != LXP_ERR_LENGTH_LIMIT)
+        return 1;
+    evidence[2] = 33U;
+    length = dispute_open_payload(payload, open_id, second_id, evidence, 3U);
+    if (dispatch(LX_SERVICE_DISPUTE_OPEN, payload, length, &buyer, 100U, 40U,
+                 40U, &outcome) != LXP_OK || outcome != LXP_ERR_NON_CANONICAL)
+        return 1;
+    evidence[2] = 44U;
 
-int main(void)
-{
-    lxp_state_store state;
-    lxp_state_journal journal;
-    lxp_kernel kernel;
-    lxp_arena arena;
-    uint8_t arena_bytes[4096];
-    uint64_t parameters = 1U;
-
-    if (lxp_state_store_init(&state, 0U) != LXP_OK ||
-        lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
-        lxp_kernel_register_module(&kernel, lx_service_module_iface()) != LXP_OK ||
-        lxp_kernel_register_module(&kernel, lx_escrow_module_iface()) != LXP_OK ||
-        lxp_kernel_set_capabilities(&kernel, NULL, apply_capability) != LXP_OK ||
-        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
-        dispute_checks(&kernel, &arena) != 0 ||
-        service_to_escrow(&kernel, &arena) != 0 ||
-        lxp_state_store_destroy(&state) != LXP_OK)
+    length = dispute_open_payload(payload, open_id, disputed_id, evidence,
+                                  3U);
+    if (dispatch(LX_SERVICE_DISPUTE_OPEN, payload, length, &buyer, 1500U,
+                 41U, 41U, &outcome) != LXP_OK || outcome != LXP_OK ||
+        event_is((uint16_t)LX_SERVICE_EVENT_DISPUTE_OPENED, open_id,
+                 disputed_id, 3U, 41U) != 0)
         return 1;
+    if (dispatch(LX_SERVICE_DISPUTE_OPEN, payload, length, &buyer, 100U, 42U,
+                 42U, &outcome) != LXP_OK || outcome != LXP_ERR_AGREEMENT_STATE)
+        return 1;
+    length = dispute_open_payload(payload, open_id, second_id, evidence, 3U);
+    if (dispatch(LX_SERVICE_DISPUTE_OPEN, payload, length, &provider, 100U,
+                 43U, 43U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_SEQUENCE_REUSED)
+        return 1;
+
+    if (open_ctx(&ctx, 100U, 44U) != 0 ||
+        lx_service_dispute_lookup(&ctx, open_id, &dispute) != LXP_OK ||
+        dispute.evidence_hash_count != 3U || dispute.resolved ||
+        dispute.ruling != 0U || dispute.provider_basis_points != 0U ||
+        dispute.resolution_sequence != 0U ||
+        dispute.global_sequence != 41U || dispute.activity_id[0] != 41U ||
+        memcmp(dispute.raiser, buyer.principal, 32U) != 0 ||
+        dispute.evidence_hashes[0][0] != 33U ||
+        dispute.evidence_hashes[1][0] != 44U ||
+        dispute.evidence_hashes[2][0] != 55U ||
+        lx_service_agreement_lookup(&ctx, disputed_id, &agreement) !=
+            LXP_OK ||
+        agreement.state != LX_SERVICE_AGREEMENT_DISPUTED ||
+        lx_service_dispute_lookup(&ctx, second_id, &dispute) !=
+            LXP_ERR_UNKNOWN_FIELD)
+        return 1;
+
+    length = dispute_resolve_payload(payload, open_id, 0U, 4000U, 77U);
+    if (dispatch(LX_SERVICE_DISPUTE_RESOLVE, payload, length, &buyer, 100U,
+                 45U, 45U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_PARAMETER_BOUNDS)
+        return 1;
+    length = dispute_resolve_payload(payload, open_id, 2U,
+                                     (uint32_t)LX_SERVICE_PROGRESS_COMPLETE_BPS
+                                         + 1U, 77U);
+    if (dispatch(LX_SERVICE_DISPUTE_RESOLVE, payload, length, &buyer, 100U,
+                 45U, 45U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_PARAMETER_BOUNDS)
+        return 1;
+    length = dispute_resolve_payload(payload, open_id, 2U, 4000U, 0U);
+    if (dispatch(LX_SERVICE_DISPUTE_RESOLVE, payload, length, &buyer, 100U,
+                 45U, 45U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_PARAMETER_BOUNDS)
+        return 1;
+    length = dispute_resolve_payload(payload, second_id, 2U, 4000U, 77U);
+    if (dispatch(LX_SERVICE_DISPUTE_RESOLVE, payload, length, &buyer, 100U,
+                 45U, 45U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_AGREEMENT_STATE)
+        return 1;
+    length = dispute_resolve_payload(payload, open_id, 2U, 4000U, 77U);
+    if (dispatch(LX_SERVICE_DISPUTE_RESOLVE, payload, length, &outsider,
+                 100U, 45U, 45U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_UNAUTHORIZED_DISPUTANT)
+        return 1;
+    if (dispatch(LX_SERVICE_DISPUTE_RESOLVE, payload, length, &provider,
+                 100U, 46U, 46U, &outcome) != LXP_OK || outcome != LXP_OK ||
+        event_is((uint16_t)LX_SERVICE_EVENT_DISPUTE_RESOLVED, open_id,
+                 disputed_id, 1U, 46U) != 0)
+        return 1;
+    if (dispatch(LX_SERVICE_DISPUTE_RESOLVE, payload, length, &provider,
+                 100U, 47U, 47U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_AGREEMENT_STATE)
+        return 1;
+
+    if (open_ctx(&ctx, 100U, 48U) != 0 ||
+        lx_service_dispute_lookup(&ctx, open_id, &dispute) != LXP_OK ||
+        !dispute.resolved || dispute.ruling != 2U ||
+        dispute.provider_basis_points != 4000U ||
+        dispute.escrow_resolution_id[0] != 77U ||
+        dispute.resolution_sequence != 46U ||
+        dispute.global_sequence != 41U ||
+        lx_service_agreement_lookup(&ctx, disputed_id, &agreement) !=
+            LXP_OK ||
+        agreement.state != LX_SERVICE_AGREEMENT_RESOLVED ||
+        lx_service_module_iface()->state_root(&ctx, root_after) != LXP_OK ||
+        memcmp(root_before, root_after, 32U) == 0 ||
+        lx_service_module_iface()->state_root(&ctx, NULL) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_service_module_iface()->epoch_end(&ctx, 0U, 100U) != LXP_OK ||
+        lx_service_module_iface()->epoch_end(NULL, 0U, 100U) !=
+            LXP_ERR_NON_CANONICAL)
+        return 1;
+
+    if (audit_refusals() != 0) return 1;
+    if (transfer_calls != 0U || event_effects == 0U ||
+        service_kernel.apply_transfer_set != counting_applier)
+        return 1;
+
+    if (lxp_state_store_destroy(&store_state) != LXP_OK) return 1;
     return 0;
 }
