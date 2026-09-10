@@ -3,6 +3,7 @@
 
 #include "lxp_daemon_batch_wal.h"
 
+#include "layerx/lxp_batch_identity.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_fault.h"
@@ -99,7 +100,7 @@ lxp_result lxp_daemon_batch_bind_prefix(
  uint8_t batch_id[32])
 {
     lxp_batch_roots computed;
-    uint8_t preimage[88],computed_batch_id[32];
+    uint8_t computed_batch_id[32];
     size_t index,total=0U;
     lxp_result status;
     if(canonical_activities==NULL || count==0U ||
@@ -121,15 +122,11 @@ lxp_result lxp_daemon_batch_bind_prefix(
     status=lxp_batch_roots_compute(
         &(lxp_batch_root_inputs){canonical_activities,count,NULL,0U,
                                  NULL,0U,NULL,0U,NULL,0U},arena,&computed);
-    if(status==LXP_OK) {
-        (void)memcpy(preimage,base_state_root,32U);
-        (void)memcpy(preimage+32U,computed.activity_merkle_root,32U);
-        put_u64(preimage+64U,first_sequence);
-        put_u64(preimage+72U,first_sequence+(uint64_t)count-1U);
-        put_u64(preimage+80U,batch_number);
-        status=lxp_hash_context_value(preimage,sizeof(preimage),
-                                      computed_batch_id);
-    }
+    if(status==LXP_OK)
+        status=lxp_batch_identity_committed(
+            base_state_root,computed.activity_merkle_root,first_sequence,
+            first_sequence+(uint64_t)count-1U,batch_number,
+            computed_batch_id);
     if(status==LXP_OK) {
         for(index=0U;index<count;++index) {
             (void)memcpy(executions[index].batch_id,computed_batch_id,32U);
@@ -140,7 +137,6 @@ lxp_result lxp_daemon_batch_bind_prefix(
         *roots=computed;
         (void)memcpy(batch_id,computed_batch_id,32U);
     }
-    lxp_secure_zero(preimage,sizeof(preimage));
     lxp_secure_zero(computed_batch_id,sizeof(computed_batch_id));
     return status;
 }
@@ -236,19 +232,22 @@ static lxp_result validate_canonical_items(
     const lxp_daemon_batch_wal_input *in, const lxp_batch_header *header)
 {
     uint8_t *scratch=(uint8_t *)malloc(WAL_MAX_BYTES);
-    uint8_t expected_batch_id[32],batch_preimage[88];
+    uint8_t expected_batch_id[32];
     uint8_t activity_id[32];
     lxp_receipt previous;
+    uint64_t committed_last_sequence=0U;
     size_t i;
     lxp_result status;
     if(scratch==NULL)return LXP_ERR_ARENA_EXHAUSTED;
-    (void)memcpy(batch_preimage,in->base.receipt_state_root,32U);
-    (void)memcpy(batch_preimage+32U,header->activity_merkle_root,32U);
-    put_u64(batch_preimage+64U,in->first_sequence);
-    put_u64(batch_preimage+72U,in->first_sequence + in->count - 1U);
-    put_u64(batch_preimage+80U,in->batch_number);
-    status=lxp_hash_context_value(batch_preimage,sizeof(batch_preimage),
-                                  expected_batch_id);
+    (void)memset(expected_batch_id,0,sizeof(expected_batch_id));
+    status=lxp_batch_identity_committed_last_sequence(
+        in->first_sequence,in->last_sequence,in->maintenance.length!=0U,
+        &committed_last_sequence);
+    if(status==LXP_OK)
+        status=lxp_batch_identity_committed(
+            in->base.receipt_state_root,header->activity_merkle_root,
+            in->first_sequence,committed_last_sequence,in->batch_number,
+            expected_batch_id);
     (void)memset(&previous,0,sizeof(previous));
     for(i=0U;status==LXP_OK && i<in->count;++i) {
         lxp_activity activity;
@@ -343,7 +342,6 @@ static lxp_result validate_canonical_items(
         status=LXP_FATAL_REPLAY_DIVERGENCE;
     lxp_secure_zero(activity_id,sizeof(activity_id));
     lxp_secure_zero(expected_batch_id,sizeof(expected_batch_id));
-    lxp_secure_zero(batch_preimage,sizeof(batch_preimage));
     lxp_secure_zero(&previous,sizeof(previous));
     lxp_secure_zero(scratch,WAL_MAX_BYTES);free(scratch);
     return status;

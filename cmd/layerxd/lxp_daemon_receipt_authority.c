@@ -1,5 +1,6 @@
 #include "layerx/lxp_daemon.h"
 
+#include "layerx/lxp_batch_identity.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/programs.h"
 #include "layerx/lxp_hash.h"
@@ -142,7 +143,8 @@ static lxp_result validate_publication(
     }
     if (format_version == 3U) {
         lxp_programs_occupancy_receipt maintenance;
-        uint8_t leaf[32], preimage[88];
+        uint8_t leaf[32];
+        uint64_t committed_last_sequence = 0U;
         if (store == NULL || proof == NULL || arena == NULL ||
             metadata == NULL || header == NULL || digest == NULL)
             return LXP_ERR_NON_CANONICAL;
@@ -172,13 +174,15 @@ static lxp_result validate_publication(
             status = lxp_hash_sha256(receipt_bytes, receipt_length, digest);
         if (status == LXP_OK) {
             metadata->global_sequence = maintenance.global_sequence;
-            (void)memcpy(preimage, header->previous_state_root, 32U);
-            (void)memcpy(preimage + 32U, header->activity_merkle_root, 32U);
-            write_u64(preimage + 64U, header->first_sequence);
-            write_u64(preimage + 72U, header->last_sequence - 1U);
-            write_u64(preimage + 80U, header->batch_number);
-            status = lxp_hash_context_value(preimage, sizeof(preimage), metadata->batch_id);
+            status = lxp_batch_identity_committed_last_sequence(
+                header->first_sequence, header->last_sequence, true,
+                &committed_last_sequence);
         }
+        if (status == LXP_OK)
+            status = lxp_batch_identity_committed(
+                header->previous_state_root, header->activity_merkle_root,
+                header->first_sequence, committed_last_sequence,
+                header->batch_number, metadata->batch_id);
         return status;
     }
     return LXP_ERR_VERSION_UNSUPPORTED;

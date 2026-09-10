@@ -125,6 +125,8 @@ fn verify_batch_identity(
         protocol.global_sequence() >= header.first_sequence()
             && protocol.global_sequence() <= header.last_sequence()
     );
+    let batch_id = evidence_batch_id(evidence, protocol, header, authorization);
+    assert_eq!(protocol.batch_id(), batch_id);
     let facts = layerx_platform_authority::authorized_batch_by_activity(
         protocol.activity_id(),
         bytes,
@@ -133,6 +135,7 @@ fn verify_batch_identity(
     )
     .required("maintained or historical execution batch identity");
     assert_eq!(protocol.batch_id(), facts.batch_id);
+    assert_eq!(facts.batch_id, batch_id);
     assert_eq!(facts.previous_state_root, header.previous_state_root());
     assert_eq!(facts.resulting_state_root, header.resulting_state_root());
     match &evidence.batch_identity {
@@ -262,6 +265,49 @@ fn verify_selected_program_state(
             .is_ok()
         }
     }
+}
+
+fn evidence_batch_id(
+    evidence: &layerx_platform_authority::BatchEvidence,
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+    header: &layerx_wire::receipt::BatchHeader,
+    authorization: &layerx_proof::inclusion::SequencerAuthorization,
+) -> [u8; 32] {
+    let maintenance = match &evidence.batch_identity {
+        layerx_platform_authority::BatchIdentityEvidence::Historical => None,
+        layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 {
+            receipt,
+            proof,
+        } => {
+            let maintenance_proof =
+                layerx_proof::merkle::decode_proof(proof).required("maintenance inclusion proof");
+            layerx_proof::inclusion::verify_receipt(
+                receipt,
+                &maintenance_proof,
+                &evidence.header,
+                &evidence.header_signature,
+                authorization,
+            )
+            .required("independent maintenance record inclusion");
+            let activity_count = header
+                .last_sequence()
+                .checked_sub(header.first_sequence())
+                .and_then(|count| u32::try_from(count).ok())
+                .required("maintained batch activity count");
+            assert_eq!(maintenance_proof.leaf_index(), activity_count);
+            assert_eq!(maintenance_proof.leaf_count(), activity_count + 1);
+            Some(
+                layerx_wire::maintenance::decode_occupancy_maintenance(receipt)
+                    .required("canonical occupancy maintenance record"),
+            )
+        }
+    };
+    layerx_wire::hash::receipt_execution_batch_id_for_evidence(
+        protocol,
+        header,
+        maintenance.as_ref(),
+    )
+    .required("header-derived execution batch identity")
 }
 
 fn independent_evidence(
