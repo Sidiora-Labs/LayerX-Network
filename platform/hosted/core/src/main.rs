@@ -11,8 +11,8 @@ use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds}
 use layerx_client::read::ReadError;
 use layerx_client::submit::{Submission, SubmitError};
 use layerx_platform_core::{
-    asset_registry, build_send, fixed_hex, hex_decode, hex_encode, main_account, parse_seed,
-    treasury_did, SendRequest,
+    asset_registry, build_send_with_identity_sequence, fixed_hex, hex_decode, hex_encode,
+    main_account, parse_seed, treasury_did, SendRequest,
 };
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
@@ -1676,7 +1676,7 @@ fn treasury_sequence(config: &Config, client: &mut Client, amount: u128) -> Resu
         u64::MAX,
     );
     let value = client
-        .account(treasury, VerificationLevel::UNVERIFIED, 2, authorization)
+        .account(treasury, VerificationLevel::STATE_PROVEN, 2, authorization)
         .map_err(|error| match error {
             ReadError::CoreRefusal { class, result } => {
                 eprintln!(
@@ -1728,10 +1728,20 @@ fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Res
         refusal(503, "node_unavailable", Some(5))
     })?;
     let amount = u128::from(command.amount);
+    let actor = layerx_types::ids::Did::new(config.treasury_did.as_bytes())
+        .map_err(|_| refusal(503, "treasury_unavailable", Some(60)))?;
+    let identity_sequence = client
+        .preparation_state(&actor, 3)
+        .map_err(|error| {
+            eprintln!("layerx-core-boundary: treasury preparation failed: {error:?}");
+            refusal(503, "treasury_identity_unavailable", Some(5))
+        })?
+        .account_sequence;
     let sequence = treasury_sequence(config, &mut client, amount)?;
     let now = now_ms();
-    let signed = build_send(
+    let signed = build_send_with_identity_sequence(
         &config.treasury_seed,
+        identity_sequence,
         &SendRequest {
             network_id: config.network_id,
             source_did: config.treasury_did.clone(),

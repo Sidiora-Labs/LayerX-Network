@@ -1,4 +1,6 @@
-use layerx_platform_core::{asset_registry, build_send, main_account, SendRequest};
+use layerx_platform_core::{
+    asset_registry, build_send_with_identity_sequence, main_account, SendRequest,
+};
 
 #[test]
 fn beta_send_uses_native_account_ids_in_signed_payload_and_authorization() {
@@ -6,8 +8,9 @@ fn beta_send_uses_native_account_ids_in_signed_payload_and_authorization() {
     let source = main_account("did:key:alice").unwrap_or_else(|error| panic!("{error}"));
     let encoded = layerx_platform_core::hex_encode(&source);
     assert_eq!(encoded, expected);
-    let signed = build_send(
+    let signed = build_send_with_identity_sequence(
         &[9; 32],
+        11,
         &SendRequest {
             network_id: 42,
             source_did: "did:key:alice".into(),
@@ -29,5 +32,6 @@ fn beta_send_uses_native_account_ids_in_signed_payload_and_authorization() {
     assert_eq!(&activity.payload()[4..36], source);
     assert_eq!(&activity.payload()[36..68], signed.destination_account);
     assert_eq!(&activity.payload()[198..230], source);
+    assert_eq!(activity.account_sequence(), 11);
     assert_eq!(&signed.canonical[..2], &[0, 3]);
 }

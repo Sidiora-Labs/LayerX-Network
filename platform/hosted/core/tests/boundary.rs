@@ -1236,6 +1236,16 @@ fn assert_refusal(answer: &HttpAnswer, status: u16, code: &str) {
     }
 }
 
+struct TestState {
+    root: PathBuf,
+}
+
+impl Drop for TestState {
+    fn drop(&mut self) {
+        remove_test_state(&self.root, "real-node");
+    }
+}
+
 struct Cluster {
     root: PathBuf,
     replica: Daemon,
@@ -1250,6 +1260,29 @@ struct Cluster {
     treasury_seed: [u8; 32],
     treasury_did: String,
     asset: [u8; 32],
+    _state: TestState,
+}
+
+fn retain_test_state() -> bool {
+    std::env::var_os("LAYERX_TEST_RETAIN_STATE").is_some()
+}
+
+fn remove_test_state(root: &Path, kind: &str) {
+    if retain_test_state() {
+        eprintln!("retained {kind} test state at {}", root.display());
+    } else if let Err(error) = fs::remove_dir_all(root) {
+        if thread::panicking() {
+            eprintln!(
+                "failed to remove {kind} test state {}: {error}",
+                root.display()
+            );
+        } else {
+            panic!(
+                "failed to remove {kind} test state {}: {error}",
+                root.display()
+            );
+        }
+    }
 }
 
 fn start_cluster(with_sequencer: bool) -> Cluster {
@@ -1258,7 +1291,8 @@ fn start_cluster(with_sequencer: bool) -> Cluster {
         0,
         "the real-node harness must run as root so layerxd can run under a distinct uid"
     );
-    let (root, layerxd, builder, migrations) = cluster_artifacts();
+    let (state, layerxd, builder, migrations) = cluster_artifacts();
+    let root = state.root.clone();
     let sequencer_seed = random32();
     let sequencer_key = SigningKey::from_bytes(&sequencer_seed)
         .verifying_key()
@@ -1321,6 +1355,7 @@ fn start_cluster(with_sequencer: bool) -> Cluster {
         treasury_seed,
         treasury_did,
         asset: genesis.asset,
+        _state: state,
     }
 }
 
@@ -1944,7 +1979,7 @@ fn boundary_tls_environment(env: &mut BTreeMap<&str, String>, certificates: &Cer
     );
 }
 
-fn cluster_artifacts() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+fn cluster_artifacts() -> (TestState, PathBuf, PathBuf, PathBuf) {
     let repository = repository_root();
     let native_bin = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
         .map_or_else(|| repository.join("build/bin"), PathBuf::from);
@@ -1978,7 +2013,7 @@ fn cluster_artifacts() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         "chmod migrations",
     );
 
-    (root, layerxd, builder, migrations)
+    (TestState { root }, layerxd, builder, migrations)
 }
 
 fn start_replica(
@@ -2244,7 +2279,8 @@ fn start_supervised_cluster() -> Cluster {
         0,
         "real supervisor harness needs separate daemon uid"
     );
-    let (root, layerxd, builder, migrations) = cluster_artifacts();
+    let (state, layerxd, builder, migrations) = cluster_artifacts();
+    let root = state.root.clone();
     let sequencer_seed = random32();
     let treasury_seed = random32();
     let sequencer_key = SigningKey::from_bytes(&sequencer_seed)
@@ -2341,6 +2377,7 @@ fn start_supervised_cluster() -> Cluster {
         treasury_seed,
         treasury_did: treasury_did(&treasury_seed),
         asset,
+        _state: state,
     }
 }
 
