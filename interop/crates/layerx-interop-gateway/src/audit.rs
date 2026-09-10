@@ -421,9 +421,7 @@ mod tests {
     #[test]
     fn an_intact_export_verifies_and_stamps_every_entry_with_its_trace() {
         let chain = chain_with_entries();
-        let head = chain
-            .head()
-            .unwrap_or_else(|error| panic!("head: {error}"));
+        let head = chain.head().unwrap_or_else(|error| panic!("head: {error}"));
         let entries = verify_export("alice", &chain.export(), &head)
             .unwrap_or_else(|error| panic!("verify: {error}"));
         assert_eq!(entries.len(), 3);
@@ -436,9 +434,7 @@ mod tests {
     #[test]
     fn truncation_reordering_and_alteration_are_refused() {
         let chain = chain_with_entries();
-        let head = chain
-            .head()
-            .unwrap_or_else(|error| panic!("head: {error}"));
+        let head = chain.head().unwrap_or_else(|error| panic!("head: {error}"));
         let export = chain.export();
 
         let mut truncated = export.clone();

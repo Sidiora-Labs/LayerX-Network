@@ -6,9 +6,7 @@ use super::{
 };
 use crate::engine::{
     bytecode::{BranchOffset, Instruction},
-    CompiledFunc,
-    DropKeep,
-    Engine,
+    CompiledFunc, DropKeep, Engine,
 };
 use alloc::vec::Vec;
 
@@ -146,33 +144,36 @@ impl InstructionsBuilder {
         control_stack: Vec<crate::execution_trace::ExecutionControlFrame>,
     ) -> Instr {
         let instr = self.push_inst(Instruction::Observe(program_counter));
-        self.metadata[instr.into_usize()] = Some(
-            crate::execution_trace::InstructionMetadata {
-                program_counter,
-                canonical_instruction: Vec::new(),
-                instruction_fuel: 0,
-                operand_types,
-                control_stack,
-            },
-        );
+        self.metadata[instr.into_usize()] = Some(crate::execution_trace::InstructionMetadata {
+            program_counter,
+            canonical_instruction: Vec::new(),
+            instruction_fuel: 0,
+            operand_types,
+            control_stack,
+        });
         instr
     }
-
 
     pub fn finish_observe(&mut self, instr: Instr, canonical_instruction: &[u8]) {
         let metadata = self.metadata[instr.into_usize()]
             .as_mut()
             .expect("observation instruction metadata must exist");
-        metadata.canonical_instruction.extend_from_slice(canonical_instruction);
+        metadata
+            .canonical_instruction
+            .extend_from_slice(canonical_instruction);
     }
 
     pub fn bump_observe_fuel(&mut self, instr: Instr, delta: u64) -> Result<(), TranslationError> {
         let metadata = self.metadata[instr.into_usize()]
             .as_mut()
             .expect("observation instruction metadata must exist");
-        metadata.instruction_fuel = metadata.instruction_fuel.checked_add(delta).ok_or_else(|| {
-            TranslationError::new(super::TranslationErrorInner::BlockFuelOutOfBounds)
-        })?;
+        metadata.instruction_fuel =
+            metadata
+                .instruction_fuel
+                .checked_add(delta)
+                .ok_or_else(|| {
+                    TranslationError::new(super::TranslationErrorInner::BlockFuelOutOfBounds)
+                })?;
         Ok(())
     }
 

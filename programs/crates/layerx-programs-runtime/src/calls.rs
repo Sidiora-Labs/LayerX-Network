@@ -465,6 +465,18 @@ pub trait ProgramResolver: fmt::Debug {
         Ok(())
     }
 
+    /// # Errors
+    /// Refuses calls that violate a deployment's published spend descriptor.
+    fn authorize_interface_call(
+        &self,
+        _program: ProgramId,
+        _entrypoint: &str,
+        _input: &[u8],
+        capabilities: &crate::CapabilitySet,
+    ) -> Result<crate::CapabilitySet, AbiError> {
+        Ok(capabilities.clone())
+    }
+
     /// Returns the validated module deployed under a program identifier.
     fn program_module(&self, program: ProgramId) -> Option<&ValidatedModule>;
 }
@@ -936,6 +948,7 @@ fn execute_nested(
     admitted_graph.enter(callee)?;
     let (
         principal,
+        payment_account,
         capabilities,
         storage,
         receipts,
@@ -952,6 +965,7 @@ fn execute_nested(
         let capabilities = abi.stage_call(callee, input, requested, callee_frame)?;
         (
             abi.principal(),
+            abi.payment_account(),
             capabilities,
             abi.storage_snapshot(),
             abi.verified_receipts(),
@@ -961,6 +975,8 @@ fn execute_nested(
             abi.emitted_event_count(),
         )
     };
+    let capabilities =
+        resolver.authorize_interface_call(callee, CALL_ENTRY_EXPORT, input, &capabilities)?;
     state
         .composition_mut()
         .ok_or(CompositionRefusal::NotComposable)?
@@ -975,7 +991,8 @@ fn execute_nested(
             attempted: child_meter.cpu_budget().saturating_add(1),
         }));
     }
-    let authorization = AuthorizationContext::nested(principal, capabilities, callee_frame);
+    let authorization = AuthorizationContext::nested(principal, capabilities, callee_frame)
+        .with_payment_account(payment_account);
     let mut child_abi = Abi::nested(
         match expected {
             AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,

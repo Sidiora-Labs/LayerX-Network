@@ -1545,6 +1545,11 @@ impl PreparedAuthorizedActivity {
         self.transfer_set.as_ref()
     }
 
+    #[cfg(feature = "host-ffi")]
+    pub(crate) fn transfer_set_mut(&mut self) -> Option<&mut AtomicTransferSet> {
+        self.transfer_set.as_mut()
+    }
+
     /// Reports sealed monetary work without exposing an executable transfer
     /// set outside this crate's affine settlement boundary.
     #[must_use]
@@ -4449,3 +4454,11 @@ mod budgeted_v1_invariant_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "lxt20_tests.rs"]
+mod lxt20_tests;
+
+#[cfg(test)]
+#[path = "merchant_tests.rs"]
+mod merchant_tests;

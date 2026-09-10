@@ -192,7 +192,10 @@ impl Lifecycle {
             return Err(LifecycleRefusal::InvalidAuthority);
         }
         Self::check_abi(activity.abi_version)?;
-        if let Err(refusal) = self.engine.validate_versioned(activity.abi_version, &activity.wasm) {
+        if let Err(refusal) = self
+            .engine
+            .validate_versioned(activity.abi_version, &activity.wasm)
+        {
             self.retain(&activity, &refusal.to_string());
             return Err(LifecycleRefusal::Validation(refusal));
         }
@@ -235,7 +238,11 @@ impl Lifecycle {
             .programs
             .get(&activity.program)
             .ok_or(LifecycleRefusal::UnknownProgram)?;
-        let current_abi = record.versions.last().ok_or(LifecycleRefusal::UnknownProgram)?.abi_version;
+        let current_abi = record
+            .versions
+            .last()
+            .ok_or(LifecycleRefusal::UnknownProgram)?
+            .abi_version;
         admit_abi_upgrade(current_abi, activity.abi_version)
             .map_err(LifecycleRefusal::AbiVersion)?;
         match record.policy {
@@ -245,7 +252,10 @@ impl Lifecycle {
             }
             UpgradePolicy::Authority(_) => {}
         }
-        let validated = match self.engine.validate_versioned(activity.abi_version, &activity.wasm) {
+        let validated = match self
+            .engine
+            .validate_versioned(activity.abi_version, &activity.wasm)
+        {
             Ok(module) => module,
             Err(refusal) => {
                 self.retain_upgrade(&activity, &refusal.to_string());
@@ -258,7 +268,8 @@ impl Lifecycle {
         }
         let migration_executor = self.executor.for_abi(activity.abi_version);
         let migration = match &activity.migration {
-            Some(migration) => match migration_executor.execute(&validated, &migration.export, &[]) {
+            Some(migration) => match migration_executor.execute(&validated, &migration.export, &[])
+            {
                 Ok(record) => Some(record),
                 Err(error) => {
                     self.retain_upgrade(&activity, &error.to_string());

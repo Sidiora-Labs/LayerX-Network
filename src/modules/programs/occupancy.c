@@ -196,9 +196,6 @@ static lxp_result activation_visit(
         (lxp_programs_occupancy_bridge *)user;
     lxp_programs_occupancy_activation_position *position;
     activation_sum sum = {0U};
-    const uint8_t *owner_record;
-    size_t owner_record_length;
-    uint8_t owner_key[40] = {'p','r','o','g','r','a','m',0};
     uint8_t namespace_length;
     lxp_result status;
     (void)value;
@@ -220,14 +217,9 @@ static lxp_result activation_visit(
     if (namespace_length == 65U) {
         (void)memcpy(position->payer, key + 41U, 32U);
     } else {
-        (void)memcpy(owner_key + 8U, key + 8U, 32U);
-        status = lxp_ctx_kv_get(bridge->ctx, owner_key, sizeof(owner_key),
-                                &owner_record, &owner_record_length);
+        status = lxp_programs_account_owner_read(
+            bridge->ctx, key + 8U, position->payer);
         if (status != LXP_OK) return status;
-        if (owner_record_length != 71U ||
-            lxp_ct_is_zero(owner_record + 1U, 32U))
-            return LXP_FATAL_INVARIANT;
-        (void)memcpy(position->payer, owner_record + 1U, 32U);
     }
     status = lxp_programs_storage_import(
         bridge->ctx, position->namespace_bytes, namespace_length,
@@ -293,13 +285,13 @@ lxp_result lxp_programs_occupancy_bridge_init(
 
 lxp_result lxp_programs_occupancy_bind_call(
     lxp_programs_occupancy_bridge *bridge, const uint8_t root_program[32],
-    const uint64_t budget[LX_PROGRAMS_CALL_BUDGET_FIELDS])
+    const uint8_t principal[32], const uint64_t budget[LX_PROGRAMS_CALL_BUDGET_FIELDS])
 {
     const lxp_call_admission_facts *admission;
     lxp_u128 execution_ceiling = {0U, 0U};
     size_t index;
     if (bridge == NULL || bridge->ctx == NULL || root_program == NULL ||
-        budget == NULL || bridge->call_authorized || bridge->begun ||
+        budget == NULL || principal == NULL || bridge->call_authorized || bridge->begun ||
         lxp_ct_is_zero(root_program, 32U))
         return LXP_ERR_NON_CANONICAL;
     admission = lxp_ctx_call_admission(bridge->ctx);
@@ -325,7 +317,7 @@ lxp_result lxp_programs_occupancy_bind_call(
                      &bridge->authorized_responsibility_ceiling) != LXP_OK)
         return LXP_ERR_UNAUTHORIZED_DEBIT;
     (void)memcpy(bridge->authorized_root_program, root_program, 32U);
-    (void)memcpy(bridge->authorized_payer, admission->payer, 32U);
+    (void)memcpy(bridge->authorized_payer, principal, 32U);
     (void)memcpy(bridge->authorized_activity_binding,
                  admission->activity_binding, 32U);
     bridge->call_authorized = true;
@@ -543,18 +535,6 @@ lxp_result layerx_programs_occupancy_output_byte(
     return LXP_OK;
 }
 
-static lx_account *ordinary_account(lx_account_registry *registry,
-                                    const uint8_t principal[32])
-{
-    size_t index;
-    if (registry == NULL) return NULL;
-    for (index = 0U; index < registry->count; ++index)
-        if (registry->accounts[index].kind == LX_ACCOUNT_AGENT_MAIN &&
-            memcmp(registry->accounts[index].id, principal, 32U) == 0)
-            return &registry->accounts[index];
-    return NULL;
-}
-
 lxp_result layerx_programs_occupancy_payer_available(
     uint64_t token, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3,
     uint64_t fee_hi, uint64_t fee_lo)
@@ -577,8 +557,9 @@ lxp_result layerx_programs_occupancy_payer_available(
         runtime->asset_count == 0U) return LXP_ERR_MODULE_DISABLED;
     for (index = 0U; index < 4U; ++index)
         write_u64(principal + index * 8U, words[index]);
-    account = ordinary_account(runtime->accounts, principal);
-    if (account == NULL) return LXP_ERR_INSUFFICIENT_BALANCE;
+    status = lxp_kernel_program_payment_account(runtime->accounts, principal,
+        bridge->resolved_asset_id, bridge->ctx->protocol_version, &account);
+    if (status != LXP_OK) return status;
     if (account->frozen) return LXP_ERR_INSUFFICIENT_BALANCE;
     {
         lx_account *treasury;
@@ -638,8 +619,9 @@ static lxp_result append_payer_transfer(
         runtime->asset_count == 0U ||
         lxp_ct_is_zero(bridge->resolved_asset_id, 32U))
         return LXP_ERR_MODULE_DISABLED;
-    from = ordinary_account(runtime->accounts, payer->principal);
-    if (from == NULL) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    status = lxp_kernel_program_payment_account(runtime->accounts, payer->principal,
+        bridge->resolved_asset_id, bridge->ctx->protocol_version, &from);
+    if (status != LXP_OK) return status;
     status = lxp_fee_treasury_account(runtime->accounts, &treasury);
     if (status != LXP_OK) return status;
     index = set->leg_count;
@@ -653,7 +635,7 @@ static lxp_result append_payer_transfer(
     leg->amount = payer->paid;
     leg->reason = LXP_REASON_STORAGE_OCCUPANCY;
     leg->supply_mode = LXP_TRANSFER_CONSERVED;
-    (void)memcpy(authority->authorized_from, payer->principal, 32U);
+    (void)memcpy(authority->authorized_from, from->id, 32U);
     authority->debit_authority_kind = LXP_AUTH_OCCUPANCY_RESPONSIBILITY;
     authority->protocol_system_capability = true;
     ++set->leg_count;
@@ -871,6 +853,8 @@ static lxp_result finalize_occupancy_batch(
     ctx.protocol_version = protocol_version;
     ctx.batch_number = batch_number;
     status = lxp_programs_occupancy_bridge_init(&bridge, &ctx);
+    if (status == LXP_OK)
+        (void)memcpy(bridge.resolved_asset_id, occupancy_asset_id, 32U);
     if (status == LXP_OK && bridge.uninitialized) {
         bridge.finalized_batch = batch_number - 1U;
         bridge.current_batch = bridge.finalized_batch;

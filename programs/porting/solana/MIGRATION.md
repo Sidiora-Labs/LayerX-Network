@@ -361,3 +361,62 @@ primitive, which stays a caller-supplied boundary.
    explicit protocol facts or a counted quantity and say so in published source.
 7. Publish the source, the descriptor, the toolchain manifest and the lock, and
    verify the deployment reproduces before you announce it.
+
+## SPL tokens, LXT-20 and native assets
+
+LXT-20 request codecs live in `programs/sdk/rust/src/lxt20.rs`. The real
+`programs/sdk/rust/examples/token-lxt20` WASM reference executes all seven methods
+in runtime tests. Its bound interface and registry state-value inputs live in
+`programs/fixtures/pay5`, alongside signed native deployment/call receipts.
+Run `python3 programs/fixtures/pay5/run_native_roundtrip.py` to replay the isolated
+native token and merchant settlements and compare canonical artifacts byte for
+byte. These fixtures do not certify a live deployment. The reference does not emulate the SPL Token program or
+make an unregistered backing account spendable.
+
+| SPL flow | LayerX mapping |
+| --- | --- |
+| Transfer / transfer checked | LXT-20 `Transfer`, or `TransferFrom` for an authenticated allowance spender; exact u128 units, explicit asset binding |
+| Approve / revoke delegate | `Approve` using a spender DID identity; zero revokes the program allowance, not an unrelated kernel grant |
+| Read token account balance | `BalanceOf`; a native balance read requires receipt-bound `BalanceView` authority |
+| Read delegated amount | `Allowance` with owner and spender identities |
+| Read mint supply and metadata | `TotalSupply` and `Metadata` return token supply and configured token metadata; backing-asset facts come from the native asset registry |
+| PDA custody / CPI payout | Registered program-derived account plus `ProgramSpend`; a public derivation seed is not spending authority |
+
+The seven selectors and committed request vectors are shared with the EVM guide.
+Their encoding is LayerX convention 01, bounded bytes tag 20 and a u32 big-endian
+length after the four-byte selector. Borsh's little-endian integers, eight-byte
+Anchor discriminators, Solana pubkeys and associated-token-account derivations
+must not be copied into these calls unchanged.
+
+Use `PreparedProgramAccount::registration_payload` under deployment authority,
+verify registration, then authorize the funding grant and subsequent spend grants.
+`ProgramPaymentCapabilities` builds a mixed canonical set and refuses duplicate
+keys. The token reference uses the owner DID id32 as its account seed; recipients
+call `approve` (zero is sufficient) to register in token storage, and deployment
+authority separately registers their native program accounts. Initialization is
+restricted to the configured issuer and stages funding of the full fixed supply.
+The published interface uses version 2 dynamic-spend descriptors bound to the
+backing asset and ceiling; native admission resolves recipient and amount from
+calldata and checks actual caller grants on every call. Descriptors grant no
+spending authority.
+The merchant example at `programs/sdk/rust/examples/payments-merchant` shows the
+real guest bindings for a deposit and fee split. The native fixture checks its
+funding and payouts atomically, including settlement refusal rollback. A token
+allowance alone does not authorize debiting another
+principal's account, and token storage changes cannot replace 402 settlement.
+
+Native asset registration, account opening, mint and burn are separate signed
+asset activities, not LXT-20 methods. Per-asset accounts use
+`agent:<DID>:asset:<lowercase asset hex>` and the existing `LX:ACCOUNT:v1` rule;
+program accounts use the program-account domain with a u32 big-endian seed length.
+Programs envelopes bind the signer DID and identity sequence separately from
+the canonical payment account and its sequence. Native fees can use a different
+account from token funding. Account-bound terminal evidence commits actual
+account endpoints while retaining signer authorization. The Go, Swift, .NET and
+JVM terminal verifiers decode and bind the
+`LayerX/programs/402LXP/account-bound-set/v1` encoding, and the native PAY5
+fixture exercises it end to end.
+
+SPL account closing/rent recovery, Token-2022 extensions, mint/freeze authority
+migration, multisig signer lists and an enumerable Anchor account context are not
+provided by the LXT-20 codecs. Refuse unsupported semantics explicitly.

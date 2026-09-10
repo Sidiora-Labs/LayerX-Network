@@ -5,6 +5,7 @@
 #undef main
 
 #include "layerx/lxp_snapshot.h"
+#include "layerx/lxp_da.h"
 #include "../../../cmd/layerxd/lxp_daemon_batch_wal.h"
 
 #include <openssl/evp.h>
@@ -53,6 +54,7 @@ typedef struct differential_run {
                            [LXP_MAX_ACTIVITY_BYTES];
     uint8_t event_storage[DIFFERENTIAL_BATCH_SIZE][8192];
     lxp_byte_span canonical_receipts[DIFFERENTIAL_BATCH_SIZE];
+
     uint8_t root[32];
     uint8_t canonical_root[32];
     uint8_t prepared_root[32];
@@ -521,6 +523,8 @@ static int execute_workload(differential_fixture *fixture,
     static uint8_t snapshot_storage[16U * 1024U * 1024U];
     lxp_byte_span canonical_activities[DIFFERENTIAL_BATCH_SIZE];
     lxp_byte_span canonical_receipts[DIFFERENTIAL_BATCH_SIZE];
+    lxp_byte_span terminal_payloads[DIFFERENTIAL_BATCH_SIZE];
+    lxp_byte_span call_graphs[DIFFERENTIAL_BATCH_SIZE];
     lxp_merkle_proof proofs[DIFFERENTIAL_BATCH_SIZE];
     uint8_t receipt_hashes[DIFFERENTIAL_BATCH_SIZE][32];
     lxp_kernel_prepared_batch *prepared = NULL;
@@ -533,6 +537,7 @@ static int execute_workload(differential_fixture *fixture,
     lxp_batch_roots roots;
     lxp_batch_roots scheduling_roots;
     lxp_batch_header header;
+    lxp_batch_body availability_body = {0};
     lxp_byte_span canonical_header;
     lxp_arena batch_arena;
     differential_checkpoint checkpoint;
@@ -745,6 +750,14 @@ static int execute_workload(differential_fixture *fixture,
     (void)memcpy(header.sequencer_id,
                  fixture->sequencer_authorization.sequencer_id, 32U);
     if (status == LXP_OK)
+        status = lxp_da_body_from_kernels(
+            &header, lxp_kernel_prepared_batch_base_kernel(prepared),
+            lxp_kernel_prepared_batch_settled_kernel(prepared),
+            canonical_activities, activity_count,
+            canonical_receipts, activity_count, prepared_events, activity_count,
+            NULL, 0U, &batch_arena, &availability_body);
+    if (status == LXP_OK) header = availability_body.header;
+    if (status == LXP_OK)
         status = lxp_batch_sign(
             &header, fixture->sequencer_private_key,
             &fixture->sequencer_authorization, header_signature,
@@ -778,7 +791,15 @@ static int execute_workload(differential_fixture *fixture,
         wal_input.activities = canonical_activities;
         wal_input.receipts = canonical_receipts;
         wal_input.events = prepared_events;
+        for (index = 0U; index < activity_count; ++index) {
+            terminal_payloads[index] = prepared_receipts[index].program_outcome.terminal_payload;
+            call_graphs[index] = prepared_receipts[index].program_outcome.call_graph_payload;
+        }
+        wal_input.terminal_payloads = terminal_payloads;
+        wal_input.call_graphs = call_graphs;
         wal_input.receipt_proofs = proofs;
+        wal_input.state_diff = availability_body.state_diff;
+        wal_input.recovery_metadata = availability_body.recovery_metadata;
         checkpoint.directory = directory;
         checkpoint.kernel = &fixture->kernel;
         checkpoint.storage = snapshot_storage;
@@ -1209,8 +1230,47 @@ static int qualify_planning_refusal(void)
            differential_fixture_destroy(&parallel_fixture) == LXP_OK ? 0 : 1;
 }
 
+static int qualify_payment_account_balance(void)
+{
+    static lx_account_registry accounts;
+    static const uint8_t name[] = "agent:did:lxp:payer:main";
+    static const uint8_t did[] = "did:lxp:payer";
+    const uint8_t asset[32] = {9U};
+    const uint8_t wrong_asset[32] = {10U};
+    uint8_t principal[32], id[32];
+    lx_account *account = NULL, *resolved = NULL;
+    if (lx_account_registry_init(&accounts) != LXP_OK ||
+        lxp_did_id_derive(did, sizeof(did) - 1U, principal) != LXP_OK ||
+        lx_account_id_from_string(name, sizeof(name) - 1U, id) != LXP_OK ||
+        lx_account_open(&accounts, name, sizeof(name) - 1U, id, 1U,
+                        LX_ACCOUNT_OPEN_GENESIS, NULL, &account) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(account, asset,
+                                     (lxp_u128){0U, 12345U}, 1U) != LXP_OK ||
+        lxp_kernel_program_payment_account(&accounts, principal, asset,
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, &resolved) != LXP_OK ||
+        resolved != account || resolved->balance.hi != 0U ||
+        resolved->balance.lo != 12345U)
+        return 1;
+    account->balance = (lxp_u128){0U, 0U};
+    if (lxp_kernel_program_payment_account(&accounts, principal, asset,
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, &resolved) != LXP_OK ||
+        resolved != account || resolved->balance.hi != 0U ||
+        resolved->balance.lo != 0U ||
+        lxp_kernel_program_payment_account(&accounts, principal, wrong_asset,
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, &resolved) !=
+            LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE || resolved != NULL ||
+        lxp_kernel_program_payment_account(&accounts, id, asset,
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, &resolved) !=
+            LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE || resolved != NULL ||
+        lxp_kernel_program_payment_account(&accounts, id, asset,
+            LXP_PROTOCOL_VERSION, &resolved) != LXP_OK || resolved != account)
+        return 1;
+    return 0;
+}
+
 int main(void)
 {
+    if (qualify_payment_account_balance() != 0) return 1;
     if (qualify_workload(DIFFERENTIAL_LOW_CONFLICT) != 0) {
         (void)fputs("low-conflict differential failed\n", stderr);
         return 1;

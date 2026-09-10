@@ -15,7 +15,7 @@ use crate::error::PortRefusal;
 use crate::hash::sha256;
 
 /// Native Solana/Anchor names backed by authenticated ABI v2 context.
-#[cfg(target_arch="wasm32")]
+#[cfg(target_arch = "wasm32")]
 pub use layerx_porting_solana_guest as context;
 
 /// The width of every Anchor discriminator.

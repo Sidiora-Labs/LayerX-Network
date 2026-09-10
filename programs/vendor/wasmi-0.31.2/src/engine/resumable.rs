@@ -1,12 +1,6 @@
 use super::Func;
 use crate::{
-    engine::Stack,
-    func::CallResultsTuple,
-    AsContextMut,
-    Engine,
-    Error,
-    Value,
-    WasmResults,
+    engine::Stack, func::CallResultsTuple, AsContextMut, Engine, Error, Value, WasmResults,
 };
 use core::{fmt, marker::PhantomData, mem::replace, ops::Deref};
 use wasmi_core::Trap;

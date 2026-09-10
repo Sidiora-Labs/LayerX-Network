@@ -1,7 +1,11 @@
 //! Data structures to represent the Wasm call stack during execution.
 
 use super::{err_stack_overflow, DEFAULT_MAX_RECURSION_DEPTH};
-use crate::{core::TrapCode, engine::{code_map::InstructionPtr, CompiledFunc}, Instance};
+use crate::{
+    core::TrapCode,
+    engine::{code_map::InstructionPtr, CompiledFunc},
+    Instance,
+};
 use alloc::vec::Vec;
 
 /// A function frame of a function on the call stack.
@@ -24,7 +28,12 @@ pub struct FuncFrame {
 
 impl FuncFrame {
     /// Creates a new [`FuncFrame`].
-    pub fn new(ip: InstructionPtr, instance: &Instance, function: CompiledFunc, value_base: usize) -> Self {
+    pub fn new(
+        ip: InstructionPtr,
+        instance: &Instance,
+        function: CompiledFunc,
+        value_base: usize,
+    ) -> Self {
         Self {
             ip,
             instance: *instance,
@@ -43,10 +52,19 @@ impl FuncFrame {
     pub fn instance(&self) -> &Instance {
         &self.instance
     }
-    pub fn function(&self) -> CompiledFunc { self.function }
-    pub fn value_base(&self) -> usize { self.value_base }
-    pub(crate) fn operand_types(&self) -> &[crate::execution_trace::ExecutionValueType] { &self.operand_types }
-    pub(crate) fn set_operand_types(&mut self, operand_types: Vec<crate::execution_trace::ExecutionValueType>) {
+    pub fn function(&self) -> CompiledFunc {
+        self.function
+    }
+    pub fn value_base(&self) -> usize {
+        self.value_base
+    }
+    pub(crate) fn operand_types(&self) -> &[crate::execution_trace::ExecutionValueType] {
+        &self.operand_types
+    }
+    pub(crate) fn set_operand_types(
+        &mut self,
+        operand_types: Vec<crate::execution_trace::ExecutionValueType>,
+    ) {
         self.operand_types = operand_types;
     }
 }
@@ -76,9 +94,16 @@ impl CallStack {
     }
 
     /// Initializes the [`CallStack`] given the Wasm function.
-    pub fn init(&mut self, ip: InstructionPtr, instance: &Instance, function: CompiledFunc, value_base: usize) {
+    pub fn init(
+        &mut self,
+        ip: InstructionPtr,
+        instance: &Instance,
+        function: CompiledFunc,
+        value_base: usize,
+    ) {
         self.reset();
-        self.frames.push(FuncFrame::new(ip, instance, function, value_base));
+        self.frames
+            .push(FuncFrame::new(ip, instance, function, value_base));
     }
 
     /// Pushes a Wasm caller function onto the [`CallStack`].
@@ -102,8 +127,12 @@ impl CallStack {
     pub fn peek(&self) -> Option<&FuncFrame> {
         self.frames.last()
     }
-    pub(crate) fn peek_mut(&mut self) -> Option<&mut FuncFrame> { self.frames.last_mut() }
-    pub(crate) fn frames(&self) -> &[FuncFrame] { &self.frames }
+    pub(crate) fn peek_mut(&mut self) -> Option<&mut FuncFrame> {
+        self.frames.last_mut()
+    }
+    pub(crate) fn frames(&self) -> &[FuncFrame] {
+        &self.frames
+    }
 
     /// Returns the amount of function frames on the [`CallStack`].
     #[inline]

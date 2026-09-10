@@ -298,21 +298,16 @@ static void activation_as_position(
 static lxp_result activation_payer_matches(
     lxp_programs_occupancy_bridge *bridge, const occ_position *position)
 {
-    uint8_t key[40] = {'p','r','o','g','r','a','m',0};
-    const uint8_t *record;
-    size_t record_length;
+    uint8_t owner[32];
+    lxp_result status;
     if (position->namespace_length == 65U)
         return memcmp(position->payer,
                       position->namespace_bytes + 33U, 32U) == 0 ?
                LXP_OK : LXP_ERR_UNAUTHORIZED_DEBIT;
-    (void)memcpy(key + 8U, position->namespace_bytes, 32U);
-    {
-        lxp_result status = lxp_ctx_kv_get(bridge->ctx, key, sizeof(key),
-                                           &record, &record_length);
-        if (status != LXP_OK) return status;
-    }
-    return record_length == 71U &&
-           memcmp(record + 1U, position->payer, 32U) == 0 ?
+    status = lxp_programs_account_owner_read(
+        bridge->ctx, position->namespace_bytes, owner);
+    if (status != LXP_OK) return status;
+    return memcmp(owner, position->payer, 32U) == 0 ?
            LXP_OK : LXP_ERR_UNAUTHORIZED_DEBIT;
 }
 

@@ -26,7 +26,7 @@ use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRe
 use layerx_types::program_call::{NativeProgramCall, Resources};
 use native_tls::{Certificate, Identity, TlsConnector};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Write as _};
 use std::fs;
 use std::io::{Read, Write};
@@ -37,6 +37,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -78,8 +79,18 @@ fn repository_root() -> PathBuf {
 }
 
 fn free_port() -> u16 {
-    let listener = must(TcpListener::bind("127.0.0.1:0"), "ephemeral port");
-    must(listener.local_addr(), "listener address").port()
+    static ALLOCATED: OnceLock<Mutex<BTreeSet<u16>>> = OnceLock::new();
+    loop {
+        let listener = must(TcpListener::bind("127.0.0.1:0"), "ephemeral port");
+        let port = must(listener.local_addr(), "listener address").port();
+        let mut allocated = must(
+            ALLOCATED.get_or_init(|| Mutex::new(BTreeSet::new())).lock(),
+            "port registry",
+        );
+        if allocated.insert(port) {
+            return port;
+        }
+    }
 }
 
 fn write(path: &Path, bytes: &[u8], mode: u32) {
@@ -2204,6 +2215,15 @@ fn supervised_files(root: &Path, builder: &Path, keys: [&[u8; 32]; 2], tokens: [
 }
 
 fn supervisor_arguments(root: &Path, role: &str) -> Vec<String> {
+    let socat = std::env::var_os("LAYERX_TEST_SOCAT_BIN").map_or_else(
+        || panic!("LAYERX_TEST_SOCAT_BIN must name the real socat executable"),
+        PathBuf::from,
+    );
+    assert!(
+        socat.is_file(),
+        "{} is not a socat executable",
+        socat.display()
+    );
     vec![
         "--role".into(),
         role.into(),
@@ -2213,6 +2233,8 @@ fn supervisor_arguments(root: &Path, role: &str) -> Vec<String> {
         text(&root.join("run")),
         "--layerxd".into(),
         text(&root.join("layerxd")),
+        "--socat".into(),
+        text(&socat),
     ]
 }
 

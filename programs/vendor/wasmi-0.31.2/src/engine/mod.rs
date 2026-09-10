@@ -205,6 +205,15 @@ impl Engine {
         self.inner.resolve_instr(func_body, index)
     }
 
+    #[cfg(test)]
+    pub(crate) fn resolve_instr_metadata(
+        &self,
+        func_body: CompiledFunc,
+        index: usize,
+    ) -> Option<crate::execution_trace::InstructionMetadata> {
+        self.inner.resolve_instr_metadata(func_body, index)
+    }
+
     /// Executes the given [`Func`] with parameters `params`.
     ///
     /// Stores the execution result into `results` upon a successful execution.
@@ -451,6 +460,19 @@ impl EngineInner {
             .code_map
             .get_instr(func_body, index)
             .copied()
+    }
+
+    #[cfg(test)]
+    fn resolve_instr_metadata(
+        &self,
+        func_body: CompiledFunc,
+        index: usize,
+    ) -> Option<crate::execution_trace::InstructionMetadata> {
+        self.res
+            .read()
+            .code_map
+            .get_metadata(func_body, index)
+            .cloned()
     }
 
     fn execute_func<T, Results>(

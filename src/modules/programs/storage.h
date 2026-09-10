@@ -45,4 +45,7 @@ lxp_result lxp_programs_storage_cell_at(
     uint16_t *key_length, const uint8_t **value, uint32_t *value_length,
     uint32_t *cell_count);
 
+lxp_result layerx_programs_call_catalog_interface_length(uint64_t token, uint32_t index);
+lxp_result layerx_programs_call_catalog_interface_byte(uint64_t token, uint32_t index, uint32_t offset);
+
 #endif

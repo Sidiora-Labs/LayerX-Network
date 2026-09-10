@@ -9,6 +9,7 @@ const VERSION_UNSUPPORTED: i32 = -101;
 const LENGTH_LIMIT: i32 = -5;
 const CONTEXT_MISMATCH: i32 = -213;
 const DOMAIN: &[u8] = b"LayerX/program-interface/v1\0";
+const DOMAIN_V2: &[u8] = b"LayerX/program-interface/v2\0";
 const MAX_INTERFACE_BYTES: usize = 952;
 const MAX_MODULE_BYTES: usize = 1_048_576;
 const MAX_ENTRIES: usize = 256;
@@ -72,7 +73,9 @@ struct Interface {
 }
 fn capability_mask(capabilities: &[Vec<u8>]) -> u16 {
     capabilities.iter().fold(0u16, |mask, c| {
-        mask | c.first().map_or(0, |tag| 1u16 << u32::from(*tag))
+        mask | c.first().map_or(0, |tag| {
+            1u16 << u32::from(if *tag == 10 { 7 } else { *tag })
+        })
     })
 }
 
@@ -196,7 +199,9 @@ fn value_type(input: &[u8], cursor: &mut usize, depth: usize) -> Result<ValueTyp
     )
 }
 fn decode(input: &[u8]) -> Result<Interface, i32> {
-    if input.len() > MAX_INTERFACE_BYTES || input.get(..DOMAIN.len()) != Some(DOMAIN) {
+    if input.len() > MAX_INTERFACE_BYTES
+        || !matches!(input.get(..DOMAIN.len()), Some(prefix) if prefix == DOMAIN || prefix == DOMAIN_V2)
+    {
         return Err(NON_CANONICAL);
     }
     let mut c = DOMAIN.len();
@@ -218,7 +223,13 @@ fn decode(input: &[u8]) -> Result<Interface, i32> {
         let cn = count(input, &mut c)?;
         let mut capabilities = Vec::with_capacity(cn);
         for _ in 0..cn {
-            capabilities.push(capability(input, &mut c)?);
+            let decoded = capability(input, &mut c)?;
+            if decoded.first() == Some(&10)
+                && (abi != 2 || input.get(..DOMAIN.len()) != Some(DOMAIN_V2))
+            {
+                return Err(NON_CANONICAL);
+            }
+            capabilities.push(decoded);
         }
         if !capabilities.windows(2).all(|p| p[0] < p[1]) {
             return Err(NON_CANONICAL);
@@ -258,6 +269,15 @@ fn decode(input: &[u8]) -> Result<Interface, i32> {
         || !entries.windows(2).all(|p| p[0].name < p[1].name)
         || discriminators.len() != entries.len()
     {
+        return Err(NON_CANONICAL);
+    }
+    let dynamic = entries.iter().any(|entry| {
+        entry
+            .capabilities
+            .iter()
+            .any(|cap| cap.first() == Some(&10))
+    });
+    if dynamic != (input.get(..DOMAIN.len()) == Some(DOMAIN_V2)) {
         return Err(NON_CANONICAL);
     }
     Ok(Interface { hash, abi, entries })
@@ -301,6 +321,19 @@ fn capability(input: &[u8], cursor: &mut usize) -> Result<Vec<u8>, i32> {
                 || asset == [0; 32]
                 || to == [0; 32]
                 || u128::from_be_bytes(take::<16>(input, cursor)?) == 0
+            {
+                return Err(NON_CANONICAL);
+            }
+        }
+        10 => {
+            let asset = take::<32>(input, cursor)?;
+            let ceiling = u128::from_be_bytes(take::<16>(input, cursor)?);
+            let recipient = u32::from_be_bytes(take::<4>(input, cursor)?);
+            let amount = u32::from_be_bytes(take::<4>(input, cursor)?);
+            if asset == [0; 32]
+                || ceiling == 0
+                || recipient.checked_add(32).is_none()
+                || amount.checked_add(16).is_none()
             {
                 return Err(NON_CANONICAL);
             }
@@ -433,4 +466,54 @@ pub extern "C" fn layerx_programs_interface_validate(
         }
     }
     OK
+}
+
+pub(crate) fn authorize_call(
+    encoding: &[u8],
+    program: crate::ProgramId,
+    entrypoint: &str,
+    calldata: &[u8],
+    grants: &[crate::Capability],
+) -> Result<Vec<crate::Capability>, i32> {
+    let interface = decode(encoding)?;
+    if !interface.entries.iter().any(|entry| {
+        entry
+            .capabilities
+            .iter()
+            .any(|cap| cap.first() == Some(&10))
+    }) {
+        return Ok(grants.to_vec());
+    }
+    let entry = interface
+        .entries
+        .iter()
+        .find(|entry| entry.name == entrypoint && calldata.get(..4) == Some(&entry.discriminator))
+        .ok_or(NON_CANONICAL)?;
+    let mut descriptors = Vec::new();
+    for cap in &entry.capabilities {
+        if cap.first() == Some(&10) {
+            let mut cursor = 1;
+            descriptors.push(crate::dynamic_spend::CallerAuthorizedSpend {
+                asset: take::<32>(cap, &mut cursor)?,
+                maximum_amount: u128::from_be_bytes(take::<16>(cap, &mut cursor)?),
+                recipient_offset: u32::from_be_bytes(take::<4>(cap, &mut cursor)?),
+                amount_offset: u32::from_be_bytes(take::<4>(cap, &mut cursor)?),
+            });
+        }
+    }
+    crate::dynamic_spend::CallerAuthorizedSpend::constrain_grants(
+        program,
+        calldata,
+        &descriptors,
+        grants,
+    )
+    .map_err(|_| NON_CANONICAL)
+}
+
+pub(crate) fn validate_binding(encoding: &[u8], hash: [u8; 32], abi: u16) -> Result<(), i32> {
+    let interface = decode(encoding)?;
+    if interface.hash != hash || interface.abi != abi {
+        return Err(CONTEXT_MISMATCH);
+    }
+    Ok(())
 }

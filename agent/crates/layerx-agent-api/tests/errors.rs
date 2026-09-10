@@ -97,7 +97,10 @@ fn verification_lattice_and_success_status_are_explicit() {
         Level::SettlementAnchored,
     ];
     assert!(levels.windows(2).all(|pair| pair[0] < pair[1]));
-    assert_eq!(Level::from(VerificationLevel::UNVERIFIED), Level::Unverified);
+    assert_eq!(
+        Level::from(VerificationLevel::UNVERIFIED),
+        Level::Unverified
+    );
     assert_eq!(
         Level::from(VerificationLevel::SETTLEMENT_ANCHORED),
         Level::SettlementAnchored

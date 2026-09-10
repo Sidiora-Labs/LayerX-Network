@@ -57,7 +57,8 @@ impl ProgramAccountTransferPlan {
             || amount == 0
             || derive_program_account(owner_program, seed)
                 .map_err(|_| PortRefusal::InvalidProgramAccount)?
-                .bytes() != source
+                .bytes()
+                != source
         {
             return Err(PortRefusal::InvalidProgramAccount);
         }
@@ -226,7 +227,12 @@ impl ValueFlow {
     ) -> Result<TranslatedValueFlow, PortRefusal> {
         match self {
             Self::ContractFunded { recipient, amount } => ProgramAccountTransferPlan::new(
-                owner_program, seed, source, asset, *recipient, *amount,
+                owner_program,
+                seed,
+                source,
+                asset,
+                *recipient,
+                *amount,
             )
             .map(TranslatedValueFlow::ProgramAccount),
             Self::SelfDestructSweep { .. } => Err(PortRefusal::UnboundedBalanceSweep),
@@ -322,9 +328,12 @@ mod custody_tests {
         let source = derive_program_account(owner, b"vault")
             .unwrap_or_else(|error| panic!("derive: {error}"))
             .bytes();
-        let translated = (ValueFlow::ContractFunded { recipient: [4; 32], amount: 9 })
-            .translate_with_program_account([3; 32], [2; 32], owner, b"vault", source)
-            .unwrap_or_else(|error| panic!("translate: {error}"));
+        let translated = (ValueFlow::ContractFunded {
+            recipient: [4; 32],
+            amount: 9,
+        })
+        .translate_with_program_account([3; 32], [2; 32], owner, b"vault", source)
+        .unwrap_or_else(|error| panic!("translate: {error}"));
         assert!(matches!(translated, TranslatedValueFlow::ProgramAccount(_)));
         assert_eq!(
             (ValueFlow::SelfDestructSweep { recipient: [4; 32] })

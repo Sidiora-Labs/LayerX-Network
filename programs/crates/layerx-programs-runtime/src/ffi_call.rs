@@ -403,6 +403,7 @@ const PROGRAM_REFUSED: i32 = -736;
 #[derive(Debug, Default)]
 struct CachedProgramResolver {
     modules: BTreeMap<ProgramId, Arc<CompiledModule>>,
+    interfaces: BTreeMap<ProgramId, Vec<u8>>,
 }
 
 impl CachedProgramResolver {
@@ -420,6 +421,23 @@ impl CachedProgramResolver {
 }
 
 impl ProgramResolver for CachedProgramResolver {
+    fn authorize_interface_call(
+        &self,
+        program: ProgramId,
+        entrypoint: &str,
+        input: &[u8],
+        capabilities: &CapabilitySet,
+    ) -> Result<CapabilitySet, AbiError> {
+        if let Some(encoding) = self.interfaces.get(&program) {
+            let grants = CapabilitySet::decode_v2_canonical(&capabilities.canonical_encoding())?;
+            let constrained =
+                crate::ffi_interface::authorize_call(encoding, program, entrypoint, input, &grants)
+                    .map_err(|_| AbiError::InvalidCapability)?;
+            return CapabilitySet::new(constrained);
+        }
+        Ok(capabilities.clone())
+    }
+
     fn program_module(&self, program: ProgramId) -> Option<&crate::ValidatedModule> {
         self.modules.get(&program).map(|module| module.validated())
     }
@@ -1107,6 +1125,8 @@ unsafe extern "C" {
     ) -> i32;
     fn layerx_programs_call_event_byte(token: u64, section: u16, offset: u32, byte: u8) -> i32;
     fn layerx_programs_call_event_emit(token: u64) -> i32;
+    fn layerx_programs_call_catalog_interface_length(token: u64, index: u32) -> i32;
+    fn layerx_programs_call_catalog_interface_byte(token: u64, index: u32, offset: u32) -> i32;
     fn layerx_programs_call_transfer_begin(token: u64, legs: u16) -> i32;
     fn layerx_programs_call_transfer_leg(
         token: u64,
@@ -1622,6 +1642,51 @@ impl ReceiptOracle for CReceiptOracle {
             observed_sequence: sequence,
         })
     }
+}
+
+unsafe extern "C" {
+    fn layerx_programs_call_payment_name_byte(
+        token: u64,
+        a0: u64,
+        a1: u64,
+        a2: u64,
+        a3: u64,
+        offset: u32,
+    ) -> i32;
+}
+
+fn bind_payment_accounts(token: u64, set: &mut AtomicTransferSet) -> Result<(), i32> {
+    let mut names = Vec::with_capacity(set.legs().len());
+    for leg in set.legs() {
+        if matches!(leg.source, TransferSource::Program(_)) {
+            names.push(Vec::new());
+            continue;
+        }
+        let asset = words(leg.asset);
+        let length = unsafe {
+            layerx_programs_call_payment_name_byte(
+                token,
+                asset[0],
+                asset[1],
+                asset[2],
+                asset[3],
+                u32::MAX,
+            )
+        };
+        let length = u32::try_from(length).map_err(|_| NON_CANONICAL)?;
+        if length == 0 || length > 512 {
+            return Err(NON_CANONICAL);
+        }
+        names.push(scalar_bytes(
+            usize::try_from(length).map_err(|_| LENGTH_LIMIT)?,
+            |offset| unsafe {
+                layerx_programs_call_payment_name_byte(
+                    token, asset[0], asset[1], asset[2], asset[3], offset,
+                )
+            },
+        )?);
+    }
+    set.bind_account_names(&names).map_err(|_| NON_CANONICAL)
 }
 
 fn submit_kernel_transfer_leg(
@@ -2371,6 +2436,10 @@ pub extern "C" fn layerx_programs_call_begin(
     r1: u64,
     r2: u64,
     r3: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+    a3: u64,
     h0: u64,
     h1: u64,
     h2: u64,
@@ -2486,6 +2555,10 @@ pub extern "C" fn layerx_programs_call_begin(
             .map_err(|_| NON_CANONICAL)?;
         let program = ProgramId::new(bytes([p0, p1, p2, p3])).map_err(|_| NON_CANONICAL)?;
         let payer = PrincipalId::new(bytes([r0, r1, r2, r3])).map_err(|_| NON_CANONICAL)?;
+        let payment_account = bytes([a0, a1, a2, a3]);
+        if payment_account == [0; 32] {
+            return Err(NON_CANONICAL);
+        }
         let execution_principal = sandbox_execution_principal(token, program)?.unwrap_or(payer);
         let authority = bytes([h0, h1, h2, h3]);
         if authority == [0; 32] {
@@ -2634,6 +2707,15 @@ pub extern "C" fn layerx_programs_call_begin(
                 .map_err(|_| NON_CANONICAL)?,
                 &wasm,
             )?;
+            let interface_length =
+                c_count(unsafe { layerx_programs_call_catalog_interface_length(token, index) })?;
+            if interface_length > 0 {
+                let encoding = scalar_bytes(interface_length as usize, |offset| unsafe {
+                    layerx_programs_call_catalog_interface_byte(token, index, offset)
+                })?;
+                crate::ffi_interface::validate_binding(&encoding, hash, catalog_abi)?;
+                catalog.interfaces.insert(entry_program, encoding);
+            }
             let root_candidate = if entry_program == program {
                 Some(Arc::clone(&module))
             } else {
@@ -2667,6 +2749,9 @@ pub extern "C" fn layerx_programs_call_begin(
         }
         .map_err(|_| NON_CANONICAL)?;
         let capabilities = CapabilitySet::new(grants).map_err(|_| NON_CANONICAL)?;
+        let capabilities = catalog
+            .authorize_interface_call(program, &entrypoint, &calldata, &capabilities)
+            .map_err(|_| NON_CANONICAL)?;
         if sandbox && capabilities.has_program_spend() {
             return Err(NON_CANONICAL);
         }
@@ -2697,7 +2782,8 @@ pub extern "C" fn layerx_programs_call_begin(
             .into_iter()
             .collect();
         let receipts = CReceiptOracle { token };
-        let authorization = AuthorizationContext::new(execution_principal, capabilities);
+        let authorization = AuthorizationContext::new(execution_principal, capabilities)
+            .with_payment_account(payment_account);
         let v2_transfer = if root_module.validated().abi_revision() == AbiRevision::V2 {
             Some(
                 TransferCapability::from_root_authorization(
@@ -2760,7 +2846,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         return Err(NON_CANONICAL);
                     }
                     let transfer = v2_transfer.ok_or(FATAL_INVARIANT)?;
-                    let transfer_set = if effects.transfers.is_empty() {
+                    let mut transfer_set = if effects.transfers.is_empty() {
                         None
                     } else {
                         match transfer.authorize_for_graph_with_version(
@@ -2793,6 +2879,11 @@ pub extern "C" fn layerx_programs_call_begin(
                             }
                         }
                     };
+                    if protocol_version == 3 {
+                        if let Some(set) = transfer_set.as_mut() {
+                            bind_payment_accounts(token, set)?;
+                        }
+                    }
                     let program_authority_evidence = transfer_set
                         .as_ref()
                         .filter(|set| set.is_v2())
@@ -3204,7 +3295,12 @@ pub extern "C" fn layerx_programs_call_begin(
             )
             .map_err(|_| NON_CANONICAL)?
         {
-            PreparedAuthorizedActivityOutcome::Success(prepared) => {
+            PreparedAuthorizedActivityOutcome::Success(mut prepared) => {
+                if protocol_version == 3 {
+                    if let Some(set) = prepared.transfer_set_mut() {
+                        bind_payment_accounts(token, set)?;
+                    }
+                }
                 let program_authority_evidence = prepared
                     .transfer_set()
                     .filter(|set| set.is_v2())

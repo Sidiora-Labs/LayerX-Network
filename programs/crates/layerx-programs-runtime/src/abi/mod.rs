@@ -150,6 +150,7 @@ pub const HOST_FUNCTIONS: [HostFunction; 7] = [
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthorizationContext {
     principal: PrincipalId,
+    payment_account: Option<[u8; 32]>,
     capabilities: CapabilitySet,
     frame: CallFrameId,
 }
@@ -159,6 +160,7 @@ impl AuthorizationContext {
     pub const fn new(principal: PrincipalId, capabilities: CapabilitySet) -> Self {
         Self {
             principal,
+            payment_account: None,
             capabilities,
             frame: CallFrameId::root(),
         }
@@ -167,6 +169,18 @@ impl AuthorizationContext {
     #[must_use]
     pub const fn principal(&self) -> PrincipalId {
         self.principal
+    }
+
+    pub(crate) const fn payment_account(&self) -> [u8; 32] {
+        match self.payment_account {
+            Some(account) => account,
+            None => self.principal.bytes(),
+        }
+    }
+
+    pub(crate) const fn with_payment_account(mut self, account: [u8; 32]) -> Self {
+        self.payment_account = Some(account);
+        self
     }
 
     #[must_use]
@@ -188,6 +202,7 @@ impl AuthorizationContext {
     ) -> Self {
         Self {
             principal,
+            payment_account: None,
             capabilities,
             frame,
         }
@@ -640,6 +655,10 @@ impl Abi {
         self.version
     }
 
+    pub(crate) const fn payment_account(&self) -> [u8; 32] {
+        self.authorization.payment_account()
+    }
+
     pub(crate) const fn principal(&self) -> PrincipalId {
         self.authorization.principal()
     }
@@ -877,7 +896,7 @@ impl Abi {
         }
         self.access_declaration
             .enforce_account(
-                self.authorization.principal().bytes(),
+                self.authorization.payment_account(),
                 asset,
                 crate::AccessMode::Write,
             )
@@ -928,7 +947,7 @@ impl Abi {
             .map_err(|_| AbiError::CapabilityDenied)?;
         self.access_declaration
             .enforce_account(
-                self.authorization.principal().bytes(),
+                self.authorization.payment_account(),
                 asset,
                 crate::AccessMode::Write,
             )

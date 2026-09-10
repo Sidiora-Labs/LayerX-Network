@@ -35,6 +35,7 @@ pub struct UsageObservation {
 
 impl UsageObservation {
     #[must_use]
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) const fn host_sealed(
         outcome: ActivityOutcome,
         root_program: ProgramId,
@@ -705,16 +706,19 @@ impl UsageLedger {
 }
 
 #[derive(Clone, Copy)]
+#[cfg(feature = "host-ffi")]
 pub(crate) struct SettlementBindings {
     pub lease_terms_digest: [u8; 32],
     pub expected_lease_digest: [u8; 32],
 }
 
+#[cfg(feature = "host-ffi")]
 pub(crate) struct SettlementBuffers<'a> {
     pub lease_state: &'a mut Vec<u8>,
     pub receipt_bytes: &'a mut Vec<u8>,
 }
 
+#[cfg(feature = "host-ffi")]
 pub(crate) fn record_host_settlement_reserved(
     state: &mut DurableUsageState,
     observation: UsageObservation,
@@ -825,6 +829,7 @@ pub(crate) fn record_host_settlement_reserved(
     Ok(receipt)
 }
 
+#[cfg(any(feature = "host-ffi", test))]
 pub(crate) fn record_expiry_occupancy_settlement(
     state: &mut DurableUsageState,
     activity_id: [u8; 32],
@@ -932,6 +937,7 @@ pub(crate) fn record_expiry_occupancy_settlement(
     Ok(receipt)
 }
 
+#[cfg(any(feature = "host-ffi", test))]
 fn validate_expiry_settlement(
     state: &DurableUsageState,
     activity_id: [u8; 32],
@@ -951,6 +957,7 @@ fn validate_expiry_settlement(
     Ok(())
 }
 
+#[cfg(any(feature = "host-ffi", test))]
 fn occupancy_byte_batches(prior_bytes: u64, elapsed_batches: u64) -> Result<u128, UsageRefusal> {
     u128::from(prior_bytes)
         .checked_mul(u128::from(elapsed_batches))

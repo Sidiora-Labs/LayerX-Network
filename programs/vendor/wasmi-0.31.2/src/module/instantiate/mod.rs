@@ -10,21 +10,8 @@ use crate::{
     func::WasmFuncEntity,
     memory::{DataSegment, MemoryError},
     value::WithType,
-    AsContext,
-    AsContextMut,
-    ElementSegment,
-    Error,
-    Extern,
-    ExternType,
-    FuncRef,
-    FuncType,
-    Global,
-    Instance,
-    InstanceEntity,
-    InstanceEntityBuilder,
-    Memory,
-    Table,
-    Value,
+    AsContext, AsContextMut, ElementSegment, Error, Extern, ExternType, FuncRef, FuncType, Global,
+    Instance, InstanceEntity, InstanceEntityBuilder, Memory, Table, Value,
 };
 use wasmi_core::{Trap, UntypedValue};
 

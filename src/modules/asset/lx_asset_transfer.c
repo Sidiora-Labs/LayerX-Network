@@ -10,8 +10,10 @@ lxp_result lx_asset_validate(const lx_asset_transfer_request *request)
     if (request == NULL || request->from == NULL || request->to == NULL ||
         request->asset == NULL) return LXP_ERR_NON_CANONICAL;
     if (request->direct_balance_write) return LXP_ERR_BALANCE_BYPASS;
-    if (request->from->kind != LX_ACCOUNT_AGENT_MAIN ||
-        request->to->kind != LX_ACCOUNT_AGENT_MAIN)
+    if ((request->from->kind != LX_ACCOUNT_AGENT_MAIN &&
+         request->from->kind != LX_ACCOUNT_AGENT_ASSET) ||
+        (request->to->kind != LX_ACCOUNT_AGENT_MAIN &&
+         request->to->kind != LX_ACCOUNT_AGENT_ASSET))
         return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
     if (lxp_u128_is_zero(request->amount)) return LXP_ERR_INVALID_AMOUNT;
     if (request->asset->paused) return LXP_ERR_ASSET_PAUSED;

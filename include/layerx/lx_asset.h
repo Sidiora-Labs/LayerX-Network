@@ -80,7 +80,8 @@ lxp_result lx_asset_grant_revoke_decode(const uint8_t *bytes, size_t length,
 
 /* Persisted registry custody kind. Distinct from register issuer_kind. */
 typedef enum lx_asset_custody_kind {
-    LX_ASSET_CUSTODY_PAXEER = 1
+    LX_ASSET_CUSTODY_NATIVE = 1,
+    LX_ASSET_CUSTODY_PAXEER = 2
 } lx_asset_custody_kind;
 
 typedef struct lx_asset_record {

@@ -9,6 +9,7 @@ license.workspace = true
 name = "layerx_programs"
 
 [dependencies]
+layerx-program-sdk = { path = "../../sdk/rust" }
 layerx-proof = { path = "../../../agent/crates/layerx-proof" }
 layerx-programs-runtime = { path = "../layerx-programs-runtime" }
 layerx-types = { path = "../../../agent/crates/layerx-types" }

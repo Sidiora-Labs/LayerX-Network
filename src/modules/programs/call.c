@@ -171,7 +171,7 @@ static lxp_result call_namespace_for_program(const lxp_programs_call_activity *v
     (void)memcpy(bytes, program_id, 32U);
     bytes[32] = (uint8_t)(selector == 0U ? 0U : 1U);
     if (selector == 0U) {
-        (void)memcpy(bytes + 33U, admission->payer, 32U);
+        (void)memcpy(bytes + 33U, value->authority->principal, 32U);
         *length = 65U;
     } else *length = 33U;
     return LXP_OK;
@@ -417,7 +417,13 @@ static lxp_result catalog_fill_visit(const uint8_t *key, size_t key_length,
         return LXP_FATAL_INVARIANT;
     entry = &value->catalog[value->catalog_cursor];
     (void)memcpy(entry->program_id, key + 8U, 32U);
-    (void)memcpy(entry->owner, record + 1U, 32U);
+    if (lxp_protocol_version_uses_occupancy(value->ctx->protocol_version)) {
+        status = lxp_programs_account_owner_read(
+            value->ctx, entry->program_id, entry->owner);
+        if (status != LXP_OK) return status;
+    } else {
+        (void)memcpy(entry->owner, record + 1U, 32U);
+    }
     (void)memcpy(entry->code_hash, record + 33U, 32U);
     entry->abi_version = read_u16(record + 65U);
     status = lxp_programs_artifact_open(value->ctx, entry->program_id,
@@ -473,6 +479,60 @@ lxp_result layerx_programs_call_catalog_count(uint64_t token)
     if (value == NULL || value->catalog == NULL || value->catalog_count == 0U ||
         value->catalog_count > INT32_MAX) return LXP_ERR_NON_CANONICAL;
     return (lxp_result)value->catalog_count;
+}
+
+static lxp_result catalog_interface(lxp_programs_call_activity *value,
+                                     uint32_t index, const uint8_t **encoding,
+                                     size_t *length)
+{
+    lxp_programs_call_catalog_entry *entry = catalog_entry(value, index);
+    uint8_t key[42] = "interface";
+    uint8_t digest[32];
+    const uint8_t *stored;
+    size_t stored_length;
+    lxp_result status;
+    if (entry == NULL || encoding == NULL || length == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(key + 10U, entry->program_id, 32U);
+    status = lxp_ctx_kv_get(value->ctx, key, sizeof(key), &stored, &stored_length);
+    if (status == LXP_ERR_UNKNOWN_FIELD) {
+        *encoding = NULL;
+        *length = 0U;
+        return LXP_OK;
+    }
+    if (status != LXP_OK) return status;
+    if (stored_length <= 72U || stored_length > 1024U ||
+        lxp_ct_memcmp(stored, entry->program_id, 32U) != 0 ||
+        read_u32(stored + 32U) == 0U ||
+        read_u32(stored + 68U) != stored_length - 72U)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_hash_sha256(stored + 72U, stored_length - 72U, digest);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(digest, stored + 36U, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    *encoding = stored + 72U;
+    *length = stored_length - 72U;
+    return LXP_OK;
+}
+
+lxp_result layerx_programs_call_catalog_interface_length(uint64_t token, uint32_t index)
+{
+    const uint8_t *encoding;
+    size_t length;
+    lxp_result status = catalog_interface((lxp_programs_call_activity *)(uintptr_t)token,
+                                         index, &encoding, &length);
+    return status == LXP_OK ? (lxp_result)length : status;
+}
+
+lxp_result layerx_programs_call_catalog_interface_byte(uint64_t token, uint32_t index,
+                                                       uint32_t offset)
+{
+    const uint8_t *encoding;
+    size_t length;
+    lxp_result status = catalog_interface((lxp_programs_call_activity *)(uintptr_t)token,
+                                         index, &encoding, &length);
+    if (status != LXP_OK) return status;
+    return offset < length ? (lxp_result)encoding[offset] : LXP_ERR_TRUNCATED;
 }
 
 lxp_result layerx_programs_call_catalog_wasm_length(uint64_t token,
@@ -1163,7 +1223,7 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
         return lxp_ctx_bind_program_outcome(value->ctx, &outcome);
     (void)memcpy(outcome.transfer_root, value->terminal.transfer_root, 32U);
     event.program_id = value->program_id;
-    event.principal = admission->payer;
+    event.principal = value->authority->principal;
     event.activity_id = activity_id;
     event.frame_path = frame;
     event.frame_depth = 0U;
@@ -1232,7 +1292,7 @@ lxp_result layerx_programs_call_event_begin(
     write_u64(value->event.principal + 24U, r3);
     write_u64(value->event.frame_path, frame_path);
     if (!catalog_contains(value, value->event.program_id) ||
-        lxp_ct_memcmp(value->event.principal, admission->payer, 32U) != 0 ||
+        lxp_ct_memcmp(value->event.principal, value->authority->principal, 32U) != 0 ||
         !event_frame_valid(value->event.frame_path, frame_depth))
         return LXP_ERR_NON_CANONICAL;
     status = lxp_ctx_arena_alloc(value->ctx, topic_length == 0U ? 1U : topic_length,
@@ -1322,6 +1382,7 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
     const lxp_call_admission_facts *admission = lxp_ctx_call_admission(value->ctx);
     uint64_t program[4];
     uint64_t principal[4];
+    uint64_t payment_account[4];
     uint64_t authority_hash[4];
     uint64_t binding[4];
     size_t index;
@@ -1332,7 +1393,8 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
         return LXP_FATAL_INVARIANT;
     for (index = 0U; index < 4U; ++index) {
         program[index] = read_u64(value->program_id + index * 8U);
-        principal[index] = read_u64(admission->payer + index * 8U);
+        principal[index] = read_u64(value->authority->principal + index * 8U);
+        payment_account[index] = read_u64(admission->payer + index * 8U);
         authority_hash[index] = read_u64(authority->authority_hash + index * 8U);
         binding[index] = read_u64(admission->activity_binding + index * 8U);
     }
@@ -1341,6 +1403,8 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
         (uint64_t)(uintptr_t)value->occupancy,
         program[0], program[1], program[2], program[3],
         principal[0], principal[1], principal[2], principal[3],
+        payment_account[0], payment_account[1], payment_account[2],
+        payment_account[3],
         authority_hash[0], authority_hash[1], authority_hash[2], authority_hash[3],
         binding[0], binding[1], binding[2], binding[3],
         admission->signed_fee_limit.hi, admission->signed_fee_limit.lo,
@@ -1455,6 +1519,29 @@ lxp_result layerx_programs_call_transfer_begin(uint64_t token,
     return LXP_OK;
 }
 
+lxp_result layerx_programs_call_payment_name_byte(
+    uint64_t token, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+    uint32_t offset)
+{
+    const lxp_programs_call_activity *value = (const void *)(uintptr_t)token;
+    lx_programs_transfer_runtime *runtime;
+    lx_account *account;
+    uint8_t asset[32];
+    lxp_result status;
+    if (value == NULL || value->ctx == NULL || value->authority == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    runtime = lxp_ctx_module_runtime(value->ctx);
+    if (runtime == NULL) return LXP_ERR_MODULE_DISABLED;
+    write_u64(asset, a0); write_u64(asset + 8U, a1);
+    write_u64(asset + 16U, a2); write_u64(asset + 24U, a3);
+    status = lxp_kernel_program_payment_account(runtime->accounts,
+        value->authority->principal, asset, value->ctx->protocol_version, &account);
+    if (status != LXP_OK) return status;
+    if (offset == UINT32_MAX) return (lxp_result)account->name_length;
+    if (offset >= account->name_length) return LXP_ERR_TRUNCATED;
+    return (lxp_result)account->name[offset];
+}
+
 lxp_result layerx_programs_call_transfer_leg(
     uint64_t token, uint16_t index, uint8_t source_kind,
     uint64_t f0, uint64_t f1, uint64_t f2, uint64_t f3,
@@ -1499,11 +1586,19 @@ lxp_result layerx_programs_call_transfer_leg(
     source = &value->transfer_sources[index];
     leg->from = account_by_id(runtime->accounts, from);
     leg->to = account_by_id(runtime->accounts, to);
-    if (leg->from == NULL || leg->to == NULL) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
     write_u64(leg->asset_id, a0);
     write_u64(leg->asset_id + 8U, a1);
     write_u64(leg->asset_id + 16U, a2);
     write_u64(leg->asset_id + 24U, a3);
+    if (source_kind == PROGRAM_TRANSFER_SOURCE_PRINCIPAL ||
+        source_kind == PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING) {
+        if (memcmp(from, value->authority->principal, 32U) != 0)
+            return LXP_ERR_AUTH_SCOPE;
+        status = lxp_kernel_program_payment_account(runtime->accounts, from,
+            leg->asset_id, value->ctx->protocol_version, &leg->from);
+        if (status != LXP_OK) return status;
+    }
+    if (leg->from == NULL || leg->to == NULL) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
     leg->amount = (lxp_u128){amount_hi, amount_lo};
     leg->reason = LXP_REASON_PAYMENT;
     leg->supply_mode = LXP_TRANSFER_CONSERVED;
@@ -1598,11 +1693,21 @@ static lxp_result transfer_source_validate(
         lxp_ct_is_zero(source->staging_program, 32U) ||
         !transfer_catalog_contains(value, source->staging_program))
         return LXP_ERR_AUTH_SCOPE;
+    if (source->kind == PROGRAM_TRANSFER_SOURCE_PRINCIPAL ||
+        source->kind == PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING) {
+        lx_programs_transfer_runtime *runtime = lxp_ctx_module_runtime(value->ctx);
+        lx_account *expected;
+        if (runtime == NULL) return LXP_ERR_MODULE_DISABLED;
+        status = lxp_kernel_program_payment_account(runtime->accounts,
+            value->authority->principal, leg->asset_id,
+            value->ctx->protocol_version, &expected);
+        if (status != LXP_OK) return status;
+        if (expected != leg->from) return LXP_ERR_AUTH_SCOPE;
+    }
     if (source->kind == PROGRAM_TRANSFER_SOURCE_PRINCIPAL) {
         if (!lxp_ct_is_zero(source->owner_program, 32U) ||
             source->seed != NULL || source->seed_length != 0U ||
-            source->seed_written != 0U ||
-            lxp_ct_memcmp(leg->from->id, value->authority->principal, 32U) != 0)
+            source->seed_written != 0U)
             return LXP_ERR_AUTH_SCOPE;
         return LXP_OK;
     }
@@ -1611,8 +1716,7 @@ static lxp_result transfer_source_validate(
             lxp_ct_is_zero(source->owner_program, 32U) ||
             lxp_ct_memcmp(source->owner_program, source->staging_program, 32U) != 0 ||
             source->seed_written != source->seed_length ||
-            (source->seed_length != 0U && source->seed == NULL) ||
-            lxp_ct_memcmp(leg->from->id, value->authority->principal, 32U) != 0)
+            (source->seed_length != 0U && source->seed == NULL))
             return LXP_ERR_AUTH_SCOPE;
         status = lxp_programs_account_lookup(value->ctx, source->owner_program,
                                              source->seed, source->seed_length,
@@ -1685,6 +1789,7 @@ lxp_result layerx_programs_call_transfer_apply(uint64_t token)
     lx_programs_transfer_runtime *runtime;
     lxp_transfer_set *set;
     lx_account *sequence_account;
+    lx_account *payment_account = NULL;
     size_t authority_count = 0U;
     size_t index;
     if (value == NULL || value->ctx == NULL || value->authority == NULL ||
@@ -1698,7 +1803,9 @@ lxp_result layerx_programs_call_transfer_apply(uint64_t token)
         return LXP_ERR_MODULE_DISABLED;
     set = value->transfer_set;
     sequence_account = account_by_id(runtime->accounts,
-                                     value->authority->principal);
+                                     value->ctx->ledger_admission.bound ?
+                                         value->ctx->ledger_admission.account_id :
+                                         value->authority->principal);
     if (sequence_account == NULL) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
     for (index = 0U; index < set->leg_count; ++index) {
         lxp_result status = transfer_source_validate(value, (uint16_t)index);
@@ -1709,13 +1816,28 @@ lxp_result layerx_programs_call_transfer_apply(uint64_t token)
     }
     set->context.assets = runtime->assets;
     set->context.asset_count = runtime->asset_count;
-    (void)memcpy(set->context.authorized_from, value->authority->principal, 32U);
+    (void)memcpy(set->context.authorized_from, sequence_account->id, 32U);
     set->context.actor_sequence = lxp_ctx_global_sequence(value->ctx);
     {
         lxp_result status = lxp_ctx_ledger_execution_sequence(
-            value->ctx, value->authority->principal,
+            value->ctx, sequence_account->id,
             set->context.actor_sequence, &set->context.actor_sequence);
         if (status != LXP_OK) return status;
+    }
+    if (value->ctx->ledger_admission.bound) {
+        for (index = 0U; index < set->leg_count; ++index) {
+            if (value->transfer_sources[index].kind != PROGRAM_TRANSFER_SOURCE_PRINCIPAL &&
+                value->transfer_sources[index].kind != PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING)
+                continue;
+            if (payment_account != NULL && payment_account != set->legs[index].from)
+                return LXP_ERR_ASSET_MISMATCH;
+            payment_account = set->legs[index].from;
+        }
+        if (payment_account != NULL) {
+            sequence_account = payment_account;
+            set->context.actor_sequence = payment_account->next_sequence;
+            (void)memcpy(set->context.authorized_from, payment_account->id, 32U);
+        }
     }
     set->context.batch_timestamp = lxp_ctx_batch_timestamp_ms(value->ctx);
     set->context.sequence_account = sequence_account;
@@ -1837,6 +1959,7 @@ lxp_result lxp_programs_call_validate(
         lxp_ct_is_zero(authority->principal, sizeof(authority->principal)) ||
         lxp_ct_is_zero(authority->authority_hash, sizeof(authority->authority_hash)))
         return LXP_ERR_NON_CANONICAL;
+    value->authority = authority;
     program_key(value->program_id, key);
     status = lxp_ctx_kv_get(ctx, key, sizeof(key), &record, &record_length);
     if (status != LXP_OK) return status;
@@ -2005,7 +2128,7 @@ lxp_result lxp_programs_call_execute(
     if (status == LXP_OK &&
         lxp_protocol_version_uses_occupancy(ctx->protocol_version))
         status = lxp_programs_occupancy_bind_call(
-            value->occupancy, value->program_id, value->budget);
+            value->occupancy, value->program_id, authority->principal, value->budget);
     if (status != LXP_OK) return status;
     /* The Rust boundary consumes this exact arena-owned activity once. It must
      * publish into the existing C journal before reporting success. */

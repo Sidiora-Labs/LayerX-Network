@@ -27,6 +27,7 @@ pub struct Escrow {
 }
 
 impl Escrow {
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) fn funded_genesis(
         lease: &Lease,
         funding_root: [u8; 32],
@@ -277,6 +278,7 @@ impl Escrow {
         })
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn projected_spend(
         self,
         lease: &Lease,
@@ -294,6 +296,7 @@ impl Escrow {
         Ok(projected)
     }
 
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) fn projected_expiry_spend(
         self,
         lease: &Lease,
@@ -318,6 +321,7 @@ impl Escrow {
         Ok(projected)
     }
 
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) fn finalize_refund(
         &mut self,
         lease: &Lease,

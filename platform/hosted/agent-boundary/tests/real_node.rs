@@ -16,7 +16,7 @@ use layerx_wire::hash::{activity_id, Domain};
 use layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION as PROTOCOL_VERSION;
 use native_tls::{Certificate, Identity, TlsConnector};
 use sha2::{Digest as _, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::fs;
 use std::io::{Read, Write};
@@ -24,6 +24,7 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -93,8 +94,18 @@ fn repository_root() -> PathBuf {
 }
 
 fn free_port() -> u16 {
-    let listener = must(TcpListener::bind("127.0.0.1:0"), "port allocation");
-    must(listener.local_addr(), "port address").port()
+    static ALLOCATED: OnceLock<Mutex<BTreeSet<u16>>> = OnceLock::new();
+    loop {
+        let listener = must(TcpListener::bind("127.0.0.1:0"), "port allocation");
+        let port = must(listener.local_addr(), "port address").port();
+        let mut allocated = must(
+            ALLOCATED.get_or_init(|| Mutex::new(BTreeSet::new())).lock(),
+            "port registry",
+        );
+        if allocated.insert(port) {
+            return port;
+        }
+    }
 }
 
 fn write(path: &Path, bytes: &[u8], mode: u32) {
@@ -217,7 +228,12 @@ fn genesis_request(asset: &[u8; 32], guarantor_key: &[u8; 33]) -> Vec<u8> {
         request.extend_from_slice(&value.to_be_bytes());
     }
     let issuer = SigningKey::from_bytes(&random32());
-    lxgb_metadata::append(&mut request, asset, &issuer.verifying_key().to_bytes(), &random32());
+    lxgb_metadata::append(
+        &mut request,
+        asset,
+        &issuer.verifying_key().to_bytes(),
+        &random32(),
+    );
     request
 }
 

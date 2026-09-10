@@ -31,6 +31,8 @@ pub mod commit;
 #[deny(unsafe_code)]
 pub mod crypto;
 #[deny(unsafe_code)]
+pub mod dynamic_spend;
+#[deny(unsafe_code)]
 pub mod engine;
 #[deny(unsafe_code)]
 pub mod entrypoint;

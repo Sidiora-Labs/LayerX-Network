@@ -763,6 +763,7 @@ static lxp_result owner_authority(platform_emulator *emulator,
                                   lxp_authority_resolved *authority)
 {
     lxp_identity *identity;
+    uint8_t payment_account[32];
     uint8_t actor[32];
     uint8_t grant_id[32] = { 0 };
     lxp_result status = lxp_identity_resolve(&emulator->identities,
@@ -785,14 +786,16 @@ static lxp_result owner_authority(platform_emulator *emulator,
         (void)memcpy(name, "agent:", 6U);
         (void)memcpy(name + 6U, activity->actor_did.bytes, activity->actor_did.length);
         (void)memcpy(name + 6U + activity->actor_did.length, ":main", 5U);
-        status = lx_account_id_from_string(name, name_length, authority->principal);
+        status = lx_account_id_from_string(name, name_length, payment_account);
         if (status == LXP_OK)
             status = lx_account_lookup(&emulator->accounts, name, name_length,
-                authority->principal, &account);
+                payment_account, &account);
         if (status != LXP_OK) return status;
         if (account->kind != LX_ACCOUNT_AGENT_MAIN || !account->has_authority_key ||
             lxp_ct_memcmp(account->authority_key, identity->primary_key, 32U) != 0)
             return LXP_ERR_BAD_SIGNATURE;
+        if (lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS)
+            (void)memcpy(authority->principal, payment_account, 32U);
     }
     (void)memcpy(authority->verified_key, identity->primary_key, 32U);
     authority->kind = LXP_AUTHORITY_OWNER;
@@ -864,18 +867,30 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
     execution.fee_parameters = &emulator->fee_parameters;
     execution.fee_balance = (lxp_u128){ UINT64_MAX, UINT64_MAX };
     if (status == LXP_OK && emulator->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        lx_account *payment_account = NULL;
         lx_programs_fee_schedule fees;
         lx_programs_metering_schedule metering;
         uint8_t fee_asset[32];
         execution.fee_balance = (lxp_u128){0U, 0U};
-        for (index = 0U; index < emulator->accounts.count; ++index) {
-            const lx_account *account = &emulator->accounts.accounts[index];
-            if (account->kind == LX_ACCOUNT_AGENT_MAIN &&
-                lxp_ct_memcmp(account->id, authority.principal, 32U) == 0)
-                execution.fee_balance = account->balance;
-        }
-        status = lxp_programs_metering_schedule_current(&emulator->kernel,
-            execution.batch_number, &metering);
+        if (lxp_activity_module_id(activity.activity_type) == LXP_MODULE_PROGRAMS)
+            status = lxp_kernel_program_payment_account(
+                &emulator->accounts, authority.principal,
+                emulator->native_asset.asset_id, activity.protocol_version,
+                &payment_account);
+        else
+            for (index = 0U; index < emulator->accounts.count; ++index) {
+                lx_account *account = &emulator->accounts.accounts[index];
+                if (account->kind == LX_ACCOUNT_AGENT_MAIN &&
+                    lxp_ct_memcmp(account->id, authority.principal, 32U) == 0) {
+                    payment_account = account;
+                    break;
+                }
+            }
+        if (status == LXP_OK && payment_account != NULL)
+            execution.fee_balance = payment_account->balance;
+        if (status == LXP_OK)
+            status = lxp_programs_metering_schedule_current(&emulator->kernel,
+                execution.batch_number, &metering);
         if (status == LXP_OK)
             status = lxp_programs_fee_governance_resolve_runtime(&emulator->kernel, 0U,
                 &fees, fee_asset);

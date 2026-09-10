@@ -14,7 +14,8 @@ static lxp_u128 *bucket(lx_asset_reserve_report_record *report,
                         lx_account_kind kind)
 {
     switch (kind) {
-    case LX_ACCOUNT_AGENT_MAIN: return &report->agent_main;
+    case LX_ACCOUNT_AGENT_MAIN:
+    case LX_ACCOUNT_AGENT_ASSET: return &report->agent_main;
     case LX_ACCOUNT_AGENT_ESCROW: return &report->escrow;
     case LX_ACCOUNT_AGENT_BUDGET: return &report->budget;
     case LX_ACCOUNT_AGENT_STREAM: return &report->stream;

@@ -9,6 +9,10 @@ static void make_asset(lx_asset_record *record, uint8_t id, const char *symbol)
     record->symbol_length = (uint8_t)strlen(symbol);
     (void)memcpy(record->symbol, symbol, record->symbol_length + 1U);
     record->decimals = 6U;
+    record->name[0] = (uint8_t)'A';
+    record->name_length = 1U;
+    record->issuer_kind = 2U;
+    record->issuer_did32[0] = id;
     record->custody_kind = LX_ASSET_CUSTODY_PAXEER;
     record->custody_reference[0] = id;
     record->custody_reference_length = 1U;

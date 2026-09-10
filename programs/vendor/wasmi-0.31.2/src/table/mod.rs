@@ -4,13 +4,8 @@ pub use self::{
 };
 use super::{AsContext, AsContextMut, Stored};
 use crate::{
-    engine::executor::EntityGrowError,
-    module::FuncIdx,
-    store::ResourceLimiterRef,
-    value::WithType,
-    Func,
-    FuncRef,
-    Value,
+    engine::executor::EntityGrowError, module::FuncIdx, store::ResourceLimiterRef, value::WithType,
+    Func, FuncRef, Value,
 };
 use alloc::vec::Vec;
 use core::cmp::max;

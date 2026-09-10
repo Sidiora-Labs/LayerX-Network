@@ -72,6 +72,10 @@ static void asset_init(lx_asset_record *asset)
     asset->asset_id[0] = 1U;
     asset->symbol_length = 3U;
     (void)memcpy(asset->symbol, "USD", 4U);
+    asset->name[0] = (uint8_t)'A';
+    asset->name_length = 1U;
+    asset->issuer_kind = 2U;
+    asset->issuer_did32[0] = 1U;
     asset->custody_kind = LX_ASSET_CUSTODY_PAXEER;
     asset->custody_reference[0] = 1U;
     asset->custody_reference_length = 1U;

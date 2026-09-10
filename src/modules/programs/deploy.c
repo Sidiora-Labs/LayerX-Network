@@ -7,6 +7,7 @@
 #include "artifact.h"
 
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -417,7 +418,59 @@ static lxp_result execute_deploy(lxp_module_ctx *ctx,
                               value->new_hash, 32U);
 }
 
+static lxp_result upgrade_policy_authorized(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const uint8_t policy[32])
+{
+    static const uint8_t prefix[] = "agent:";
+    static const uint8_t suffix[] = ":main";
+    uint8_t name[LX_ACCOUNT_NAME_MAX];
+    uint8_t main_account[32];
+    uint8_t (*accounts)[32] = NULL;
+    size_t name_length = 0U;
+    size_t account_count = 0U;
+    lxp_result status;
+    if (ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        return lxp_ct_memcmp(policy, authority->principal, 32U) == 0 ?
+            LXP_OK : LXP_ERR_AUTH_SCOPE;
+    if (lxp_ct_memcmp(policy, authority->principal, 32U) == 0) return LXP_OK;
+    if (activity == NULL || activity->actor_did.bytes == NULL ||
+        activity->actor_did.length == 0U ||
+        activity->actor_did.length >
+            sizeof(name) - (sizeof(prefix) - 1U) - (sizeof(suffix) - 1U))
+        return LXP_ERR_AUTH_SCOPE;
+    (void)memcpy(name + name_length, prefix, sizeof(prefix) - 1U);
+    name_length += sizeof(prefix) - 1U;
+    (void)memcpy(name + name_length, activity->actor_did.bytes,
+                 activity->actor_did.length);
+    name_length += activity->actor_did.length;
+    (void)memcpy(name + name_length, suffix, sizeof(suffix) - 1U);
+    name_length += sizeof(suffix) - 1U;
+    status = lx_account_id_from_string(name, name_length, main_account);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(policy, main_account, 32U) == 0) return LXP_OK;
+    {
+        const lx_programs_transfer_runtime *runtime =
+            lxp_ctx_module_runtime(ctx);
+        if (runtime == NULL || runtime->accounts == NULL)
+            return LXP_ERR_MODULE_DISABLED;
+        accounts = calloc(LX_ACCOUNT_REGISTRY_CAPACITY, sizeof(*accounts));
+        if (accounts == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+        status = lx_account_list_did(
+            runtime->accounts, authority->principal, accounts,
+            LX_ACCOUNT_REGISTRY_CAPACITY, &account_count);
+    }
+    for (size_t index = 0U; status == LXP_OK && index < account_count; ++index)
+        if (lxp_ct_memcmp(policy, accounts[index], 32U) == 0) {
+            free(accounts);
+            return LXP_OK;
+        }
+    free(accounts);
+    return status == LXP_OK ? LXP_ERR_AUTH_SCOPE : status;
+}
+
 static lxp_result execute_upgrade(lxp_module_ctx *ctx,
+                                  const lxp_activity *activity,
                                   const lxp_authority_resolved *authority,
                                   const programs_lifecycle_decoded *value)
 {
@@ -437,8 +490,9 @@ static lxp_result execute_upgrade(lxp_module_ctx *ctx,
     if (status != LXP_OK) return status;
     if (current[0] != PROGRAM_POLICY_AUTHORITY)
         return LXP_ERR_AUTH_SCOPE;
-    if (lxp_ct_memcmp(current + 1U, authority->principal, 32U) != 0)
-        return LXP_ERR_AUTH_SCOPE;
+    status = upgrade_policy_authorized(
+        ctx, activity, authority, current + 1U);
+    if (status != LXP_OK) return status;
     if (lxp_ct_memcmp(current + 33U, value->old_hash, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
     status = lxp_programs_abi_transition_validate(
@@ -538,12 +592,12 @@ lxp_result lxp_programs_lifecycle_execute(
 {
     const programs_lifecycle_decoded *value =
         (const programs_lifecycle_decoded *)decoded;
-    (void)activity;
     (void)effects;
     if (ctx == NULL || authority == NULL || value == NULL)
         return LXP_ERR_UNKNOWN_ACTIVITY;
     return value->ordinal == 1U ? execute_deploy(ctx, authority, value) :
-                                 execute_upgrade(ctx, authority, value);
+                                 execute_upgrade(ctx, activity, authority,
+                                                 value);
 }
 
 void lxp_programs_lifecycle_release(lxp_module_ctx *ctx, void *decoded)

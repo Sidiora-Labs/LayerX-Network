@@ -4,9 +4,25 @@ import XCTest
 @testable import LayerXSDK
 
 final class ReceiptFixtureTests: XCTestCase {
+    func testNativeAccountAuthorizationVectors() throws {
+        let raw = try Data(contentsOf: fixtureURL("../../../../programs/fixtures/pay5/account-authorization-vectors.json"))
+        let vectors = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [[String: Any]])
+        for vector in vectors {
+            let encoded = try hexField(vector, "encoded"), root = try hexField(vector, "root")
+            if try XCTUnwrap(vector["accept"] as? Bool) {
+                XCTAssertEqual(try ProgramsWireTestSupport.authorizationRoot(encoded), root)
+            } else {
+                let actual: Data
+                do { actual = try ProgramsWireTestSupport.authorizationRoot(encoded) }
+                catch { continue }
+                XCTAssertNotEqual(actual, root)
+            }
+        }
+    }
+
     func testSignedTerminalV4Vectors() async throws {
-        for name in ["executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3"] {
-            let raw = try Data(contentsOf: fixtureURL("receipt-programs-\(name).json"))
+        for name in ["executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3", "account-bound-v4"] {
+            let raw = try Data(contentsOf: fixtureURL(name == "account-bound-v4" ? "../../../../programs/fixtures/pay5/receipt-account-bound-v4.json" : "receipt-programs-\(name).json"))
             let vector = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
             let batch = try XCTUnwrap(vector["authorized_batch"] as? [String: Any])
             let authority = AuthorizedReceiptBatch(
@@ -37,7 +53,7 @@ final class ReceiptFixtureTests: XCTestCase {
                     documentOutcome: outcome, protocolVersion: 3, receipt: receipt),
                     name == "executed-v3" ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed", name)
             }
-            if name == "executed-v4" {
+            if name == "executed-v4" || name == "account-bound-v4" {
                 for length in 0..<terminal.count {
                     XCTAssertThrowsError(try verifyTerminal(Data(terminal.prefix(length)), availableGraph: graph, expectedProgram: program,
                         documentOutcome: outcome, protocolVersion: 3, receipt: receipt))

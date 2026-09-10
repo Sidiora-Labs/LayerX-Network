@@ -149,15 +149,30 @@ fn target_components_require_one_canonical_authority_and_path_representation() {
         Err(TapError::InvalidTarget)
     );
     assert_eq!(
-        TapRequest::parse("shop.example:0443", "/checkout", &signature_input, &signature),
+        TapRequest::parse(
+            "shop.example:0443",
+            "/checkout",
+            &signature_input,
+            &signature
+        ),
         Err(TapError::InvalidTarget)
     );
     assert_eq!(
-        TapRequest::parse("shop.example", "/checkout/../pay", &signature_input, &signature),
+        TapRequest::parse(
+            "shop.example",
+            "/checkout/../pay",
+            &signature_input,
+            &signature
+        ),
         Err(TapError::InvalidTarget)
     );
     assert_eq!(
-        TapRequest::parse("shop.example", "/checkout//pay", &signature_input, &signature),
+        TapRequest::parse(
+            "shop.example",
+            "/checkout//pay",
+            &signature_input,
+            &signature
+        ),
         Err(TapError::InvalidTarget)
     );
 }

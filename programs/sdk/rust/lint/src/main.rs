@@ -11,8 +11,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use layerx_program_lint::{
-    abi_surface_violations, lint_artifact_for_abi, lint_project_for_abi,
-    DeterminismViolation,
+    abi_surface_violations, lint_artifact_for_abi, lint_project_for_abi, DeterminismViolation,
 };
 use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
 
@@ -78,7 +77,10 @@ fn project_violations(
     };
     if let Some(requested) = requested_version {
         let Some(requested) = parse_version(requested) else {
-            return vec![metadata_refusal(project, "ABI version must be exactly 1 or 2")];
+            return vec![metadata_refusal(
+                project,
+                "ABI version must be exactly 1 or 2",
+            )];
         };
         if requested != recorded {
             return vec![metadata_refusal(
@@ -150,8 +152,9 @@ fn parse_version(value: &str) -> Option<u16> {
 
 const fn parse_version_number(value: u16) -> Option<u16> {
     match value {
-        layerx_programs_runtime::ABI_V1_VERSION
-        | layerx_programs_runtime::ABI_V2_VERSION => Some(value),
+        layerx_programs_runtime::ABI_V1_VERSION | layerx_programs_runtime::ABI_V2_VERSION => {
+            Some(value)
+        }
         _ => None,
     }
 }
@@ -176,13 +179,13 @@ mod tests {
 
     #[test]
     fn project_metadata_requires_one_supported_abi_version() {
-        let root = std::env::temp_dir().join(format!(
-            "layerx-lint-abi-{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("layerx-lint-abi-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap_or_else(|error| panic!("fixture directory: {error}"));
-        fs::write(root.join("layerx-program.json"), "{\n  \"abi_version\": 2\n}\n")
-            .unwrap_or_else(|error| panic!("fixture manifest: {error}"));
+        fs::write(
+            root.join("layerx-program.json"),
+            "{\n  \"abi_version\": 2\n}\n",
+        )
+        .unwrap_or_else(|error| panic!("fixture manifest: {error}"));
         assert_eq!(recorded_abi_version(&root), Ok(2));
         fs::write(root.join("layerx-program.json"), "{\"abi_version\":1}\n")
             .unwrap_or_else(|error| panic!("one-line fixture manifest: {error}"));
@@ -208,8 +211,11 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("nested fixture manifest: {error}"));
         assert!(recorded_abi_version(&root).is_err());
-        fs::write(root.join("layerx-program.json"), "{\"abi_version\":\"2\"}\n")
-            .unwrap_or_else(|error| panic!("string fixture manifest: {error}"));
+        fs::write(
+            root.join("layerx-program.json"),
+            "{\"abi_version\":\"2\"}\n",
+        )
+        .unwrap_or_else(|error| panic!("string fixture manifest: {error}"));
         assert!(recorded_abi_version(&root).is_err());
         fs::write(root.join("layerx-program.json"), "{\"abi_version\":2.0}\n")
             .unwrap_or_else(|error| panic!("floating fixture manifest: {error}"));

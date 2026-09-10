@@ -9,8 +9,8 @@ const VENDOR_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../specs/vend
 fn pin(digest: [u8; 32]) -> PinnedSpec {
     let protocol =
         AdapterId::new("ucp").unwrap_or_else(|error| panic!("protocol identifier: {error}"));
-    let version = SpecVersion::parse("2026.04.08")
-        .unwrap_or_else(|error| panic!("pinned version: {error}"));
+    let version =
+        SpecVersion::parse("2026.04.08").unwrap_or_else(|error| panic!("pinned version: {error}"));
     PinnedSpec::new(protocol, version, digest).unwrap_or_else(|error| panic!("pin: {error}"))
 }
 
@@ -18,9 +18,11 @@ fn verify_vendored(file: &str, digest: [u8; 32]) {
     let path = format!("{VENDOR_ROOT}/{file}");
     let document = std::fs::read(&path)
         .unwrap_or_else(|error| panic!("vendored UCP document {file} must exist: {error}"));
-    pin(digest).verify_document(&document).unwrap_or_else(|error| {
-        panic!("vendored UCP document {file} does not match the compiled pin: {error}")
-    });
+    pin(digest)
+        .verify_document(&document)
+        .unwrap_or_else(|error| {
+            panic!("vendored UCP document {file} does not match the compiled pin: {error}")
+        });
 }
 
 #[test]

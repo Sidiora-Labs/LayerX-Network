@@ -346,7 +346,8 @@ lxp_result lx_account_credit_registration_commit(
     if (registry == NULL || registration == NULL || account == NULL ||
         registry->count != registration->expected_count ||
         registry->count >= LX_ACCOUNT_REGISTRY_CAPACITY ||
-        registration->account.kind != LX_ACCOUNT_AGENT_MAIN ||
+        (registration->account.kind != LX_ACCOUNT_AGENT_MAIN &&
+         registration->account.kind != LX_ACCOUNT_AGENT_ASSET) ||
         !registration->account.has_asset ||
         bytes_zero(registration->account.asset_id, 32U) ||
         !registration->account.has_authority_key ||
@@ -354,7 +355,7 @@ lxp_result lx_account_credit_registration_commit(
         registration->account.frozen || registration->account.has_open_reference ||
         lx_account_name_parse(registration->account.name,
             registration->account.name_length, &name) != LXP_OK ||
-        name.kind != LX_ACCOUNT_AGENT_MAIN ||
+        name.kind != registration->account.kind ||
         lx_account_id_from_string(registration->account.name,
             registration->account.name_length, derived) != LXP_OK ||
         memcmp(derived, registration->account.id, 32U) != 0)

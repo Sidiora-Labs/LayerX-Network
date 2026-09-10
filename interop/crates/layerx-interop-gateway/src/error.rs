@@ -119,7 +119,11 @@ impl Display for GatewayError {
                 formatter.write_str("translation already reached a terminal refusal")
             }
             Self::ReceiptRejected(failure) => {
-                write!(formatter, "receipt verification failed: {:?}", failure.check)
+                write!(
+                    formatter,
+                    "receipt verification failed: {:?}",
+                    failure.check
+                )
             }
             Self::Corrupt(reason) => write!(formatter, "corrupt gateway record: {reason}"),
         }
@@ -193,8 +197,8 @@ mod tests {
         let trace = TraceId::mint([9; 16]);
         for error in EVERY_ERROR {
             let traced = trace.wrap(*error);
-            let bytes = error_emission(&traced)
-                .unwrap_or_else(|error| panic!("emission refused: {error}"));
+            let bytes =
+                error_emission(&traced).unwrap_or_else(|error| panic!("emission refused: {error}"));
             let emission =
                 decode(&bytes).unwrap_or_else(|error| panic!("emission unreadable: {error}"));
             let [FieldValue::Label(code), FieldValue::Label(retriability), FieldValue::Trace(emitted)] =
@@ -203,10 +207,7 @@ mod tests {
                 panic!("error emission shape drifted");
             };
             assert_eq!(code.as_str(), traced.error().code());
-            assert_eq!(
-                retriability.as_str(),
-                traced.error().retriability().label()
-            );
+            assert_eq!(retriability.as_str(), traced.error().retriability().label());
             assert_eq!(emitted, &trace);
         }
     }

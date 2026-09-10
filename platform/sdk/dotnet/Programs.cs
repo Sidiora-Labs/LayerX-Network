@@ -711,7 +711,7 @@ public sealed class ProgramsClient
         {
             if (authorization.Length == 0 || attachments.TransferRoot is null || !Fixed(attachments.TransferRoot, receipt.TransferRoot))
                 throw new InvalidDataException();
-            if (receipt.EncodingVersion == 4 && !Starts(authorization, "LayerX/programs/402LXP/transfer-set/v2\0")) throw new InvalidDataException();
+            if (receipt.EncodingVersion == 4 && !AuthorizationV2(authorization)) throw new InvalidDataException();
             VerifyAuthorizationRoot(authorization, receipt.TransferRoot);
         }
         return recorded ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed";
@@ -722,8 +722,37 @@ public sealed class ProgramsClient
         if (!Fixed(DecodeAuthorizationRoot(encoded), expected)) throw new InvalidDataException();
     }
 
+    private static bool AuthorizationV2(byte[] encoded)
+    {
+        var domain = Encoding.UTF8.GetBytes("LayerX/programs/402LXP/account-bound-set/v1\0");
+        if (Starts(encoded, domain)) encoded = new TerminalCursor(encoded, domain.Length).Sized32();
+        return Starts(encoded, "LayerX/programs/402LXP/transfer-set/v2\0");
+    }
+
+    private static byte[] PrincipalPaymentAccount(byte[] principal, byte[] asset, byte[] name)
+    {
+        if (name.Length > 512 || name.Any(b => !(b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '.' || b == '_' || b == '-' || b == ':')))
+            throw new InvalidDataException();
+        var text = Encoding.ASCII.GetString(name);
+        if (!text.StartsWith("agent:", StringComparison.Ordinal) || text.Contains("::", StringComparison.Ordinal)) throw new InvalidDataException();
+        var suffix = text.EndsWith(":main", StringComparison.Ordinal) ? ":main" : ":asset:" + Convert.ToHexString(asset).ToLowerInvariant();
+        if (!text.EndsWith(suffix, StringComparison.Ordinal) || text.Length <= 6 + suffix.Length) throw new InvalidDataException();
+        var did = Encoding.ASCII.GetBytes(text[6..^suffix.Length]);
+        if (did[0] == ':' || did[^1] == ':' || !Fixed(Digest(Encoding.UTF8.GetBytes("LXP/v1/did-id\0"), BigEndian((ulong)did.Length, 2), did), principal))
+            throw new InvalidDataException();
+        return Digest(Encoding.UTF8.GetBytes("LX:ACCOUNT:v1"), BigEndian((ulong)name.Length, 4), name);
+    }
+
     private static byte[] DecodeAuthorizationRoot(byte[] encoded)
     {
+        var boundDomain = Encoding.UTF8.GetBytes("LayerX/programs/402LXP/account-bound-set/v1\0");
+        TerminalCursor? names = null;
+        if (Starts(encoded, boundDomain))
+        {
+            names = new TerminalCursor(encoded, boundDomain.Length);
+            encoded = names.Sized32();
+            if (Starts(encoded, boundDomain)) throw new InvalidDataException();
+        }
         var v1 = Encoding.UTF8.GetBytes("LayerX/programs/402LXP/transfer-set/v1\0");
         var v2 = Encoding.UTF8.GetBytes("LayerX/programs/402LXP/transfer-set/v2\0");
         var candidate = Starts(encoded, v2); var domain = candidate ? v2 : v1; var cursor = new TerminalCursor(encoded, 0);
@@ -767,10 +796,16 @@ public sealed class ProgramsClient
                 throw new InvalidDataException();
             if (funding is not null && (!Fixed(funding.Owner, program) || !Fixed(funding.Destination, destination) ||
                 !Fixed(funding.Asset, asset))) throw new InvalidDataException();
+            if (names is not null)
+            {
+                var name = names.Take(names.U16());
+                if (authority is not null) { if (name.Length != 0) throw new InvalidDataException(); }
+                else source = PrincipalPaymentAccount(source, asset, name);
+            }
             total = CheckedU128Add(total, amount);
             kernelLegs.Add(Concatenate([0], source, destination, asset, UInt128Bytes(amount), BigEndian(1, 2)));
         }
-        cursor.Finish(); _ = total;
+        cursor.Finish(); names?.Finish(); _ = total;
         return MerkleRoot(kernelLegs);
     }
 

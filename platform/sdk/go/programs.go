@@ -524,7 +524,7 @@ func verifyProgramTerminal(execution ProgramExecutionDocument, receipt ProtocolR
 	if !recorded && ((!authorityRequired && projection.TransferAuthorization != nil) || authorityRequired && (projection.TransferAuthorization != nil) != (receiptOutcome.TransferRoot != ([32]byte{}))) {
 		return "", errors.New("Programs transfer authority presence mismatch")
 	}
-	if receiptOutcome.EncodingVersion == 4 && projection.TransferAuthorization != nil && !bytes.HasPrefix(projection.TransferAuthorization, []byte("LayerX/programs/402LXP/transfer-set/v2\x00")) {
+	if receiptOutcome.EncodingVersion == 4 && projection.TransferAuthorization != nil && !programAuthorizationV2(projection.TransferAuthorization) {
 		return "", errors.New("Programs V2 transfer authority required")
 	}
 	if projection.TransferAuthorization != nil && (projection.TransferRoot != receiptOutcome.TransferRoot || verifyProgramTransferAuthorization(projection.TransferAuthorization, projection.TransferRoot) != nil) {
@@ -1208,7 +1208,62 @@ func programOccupancyTransferRoot(paid map[[32]byte]Uint128, asset [32]byte) [32
 	return level[0]
 }
 
+func programAuthorizationV2(encoded []byte) bool {
+	domain := []byte("LayerX/programs/402LXP/account-bound-set/v1\x00")
+	if bytes.HasPrefix(encoded, domain) {
+		cursor := programTerminalCursor{value: encoded[len(domain):]}
+		encoded = cursor.take(int(cursor.u32()))
+		if cursor.failed {
+			return false
+		}
+	}
+	return bytes.HasPrefix(encoded, []byte("LayerX/programs/402LXP/transfer-set/v2\x00"))
+}
+
+func programPrincipalPaymentAccount(principal, asset [32]byte, name []byte) ([32]byte, error) {
+	bad := errors.New("invalid Programs payment account binding")
+	if len(name) > 512 || !bytes.HasPrefix(name, []byte("agent:")) || bytes.Contains(name, []byte("::")) {
+		return [32]byte{}, bad
+	}
+	for _, b := range name {
+		if !(b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || bytes.ContainsRune([]byte("._-:"), rune(b))) {
+			return [32]byte{}, bad
+		}
+	}
+	tail := name[6:]
+	var did []byte
+	if bytes.HasSuffix(tail, []byte(":main")) {
+		did = tail[:len(tail)-5]
+	} else {
+		suffix := []byte(":asset:" + hex.EncodeToString(asset[:]))
+		if !bytes.HasSuffix(tail, suffix) {
+			return [32]byte{}, bad
+		}
+		did = tail[:len(tail)-len(suffix)]
+	}
+	if len(did) == 0 || did[0] == ':' || did[len(did)-1] == ':' {
+		return [32]byte{}, bad
+	}
+	var length [4]byte
+	binary.BigEndian.PutUint16(length[:2], uint16(len(did)))
+	if domainDigest([]byte("LXP/v1/did-id\x00"), length[:2], did) != principal {
+		return [32]byte{}, bad
+	}
+	binary.BigEndian.PutUint32(length[:], uint32(len(name)))
+	return domainDigest([]byte("LX:ACCOUNT:v1"), length[:], name), nil
+}
+
 func verifyProgramTransferAuthorization(encoded []byte, expected [32]byte) error {
+	boundDomain := []byte("LayerX/programs/402LXP/account-bound-set/v1\x00")
+	var names *programTerminalCursor
+	if bytes.HasPrefix(encoded, boundDomain) {
+		wrapper := programTerminalCursor{value: encoded[len(boundDomain):]}
+		encoded = wrapper.take(int(wrapper.u32()))
+		if wrapper.failed || bytes.HasPrefix(encoded, boundDomain) {
+			return errors.New("invalid Programs account-bound set")
+		}
+		names = &wrapper
+	}
 	v1, v2 := []byte("LayerX/programs/402LXP/transfer-set/v1\x00"), []byte("LayerX/programs/402LXP/transfer-set/v2\x00")
 	candidate := bytes.HasPrefix(encoded, v2)
 	domain := v1
@@ -1245,6 +1300,7 @@ func verifyProgramTransferAuthorization(encoded []byte, expected [32]byte) error
 		return errors.New("invalid Programs transfer leg count")
 	}
 	leaves := make([][32]byte, 0, legCount)
+	total := Uint128{}
 	for index := uint64(0); index < legCount; index++ {
 		frameStart := cursor.offset
 		if !consumeProgramFrame(&cursor) {
@@ -1292,6 +1348,28 @@ func verifyProgramTransferAuthorization(encoded []byte, expected [32]byte) error
 		if asset == ([32]byte{}) || to == ([32]byte{}) || amount == (Uint128{}) || legProgram == ([32]byte{}) || sourceTag == 2 && (binding.owner != legProgram || !bytes.Equal(binding.frame, frame) || binding.asset != asset || binding.to != to || binding.amount != amount) || sourceTag == 3 && (binding.owner != legProgram || binding.source != to || binding.asset != asset) {
 			return errors.New("invalid Programs transfer leg")
 		}
+		if names != nil {
+			name := names.take(int(names.u16()))
+			if names.failed {
+				return errors.New("truncated Programs payment account")
+			}
+			if sourceTag == 2 {
+				if len(name) != 0 {
+					return errors.New("named Programs source")
+				}
+			} else {
+				var err error
+				source, err = programPrincipalPaymentAccount(source, asset, name)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		var amountOK bool
+		total, amountOK = total.Add(amount)
+		if !amountOK {
+			return errors.New("Programs transfer total overflow")
+		}
 		leg := []byte{0}
 		leg = append(leg, source[:]...)
 		leg = append(leg, to[:]...)
@@ -1303,7 +1381,7 @@ func verifyProgramTransferAuthorization(encoded []byte, expected [32]byte) error
 		leg = append(leg, 0, 1)
 		leaves = append(leaves, domainDigest([]byte("LXP/v1/merkle-leaf\x00"), leg))
 	}
-	if cursor.failed || !cursor.finished() {
+	if cursor.failed || !cursor.finished() || names != nil && (names.failed || !names.finished()) {
 		return errors.New("trailing Programs transfer authorization")
 	}
 	for len(leaves) > 1 {

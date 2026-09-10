@@ -150,6 +150,10 @@ static int world_init(
     world->asset.asset_id[0] = 4U;
     (void)memcpy(world->asset.symbol, "USD", 4U);
     world->asset.symbol_length = 3U;
+    world->asset.name[0] = (uint8_t)'A';
+    world->asset.name_length = 1U;
+    world->asset.issuer_kind = 2U;
+    world->asset.issuer_did32[0] = 1U;
     world->asset.custody_kind = LX_ASSET_CUSTODY_PAXEER;
     world->asset.custody_reference[0] = 1U;
     world->asset.custody_reference_length = 1U;

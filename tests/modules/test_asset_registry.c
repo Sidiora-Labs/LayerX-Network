@@ -36,6 +36,10 @@ int main(void)
     (void)memcpy(record.symbol, "USDC", 5U);
     record.symbol_length = 4U;
     record.decimals = 6U;
+    (void)memcpy(record.name, "USD Coin", 8U);
+    record.name_length = 8U;
+    record.issuer_kind = 2U;
+    record.issuer_did32[0] = 1U;
     record.custody_kind = LX_ASSET_CUSTODY_PAXEER;
     (void)memcpy(record.custody_reference, "paxeer:usdc", 11U);
     record.custody_reference_length = 11U;
@@ -53,6 +57,15 @@ int main(void)
             LXP_OK || memcmp(decoded.asset_id, record.asset_id, 32U) != 0 ||
         strcmp(decoded.symbol, "USDC") != 0 ||
         decoded.custody_reference_length != 11U) return 1;
+    encoded[encoded_length - 49U] = 0U;
+    if (lx_asset_record_decode(encoded, encoded_length, &decoded) !=
+        LXP_ERR_NON_CANONICAL) return 1;
+    encoded[encoded_length - 49U] = 2U;
+    record.issuer_kind = 0U;
+    if (lx_asset_record_encode(&record, encoded, sizeof(encoded),
+                               &encoded_length) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    record.issuer_kind = 2U;
     if (lx_asset_amount_decode((const uint8_t *)"1000000", 7U, &amount) !=
             LXP_OK || amount.lo != 1000000U || amount.hi != 0U ||
         lx_asset_amount_decode((const uint8_t *)"1.0", 3U, &amount) !=

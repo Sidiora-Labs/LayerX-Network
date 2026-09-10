@@ -472,6 +472,7 @@ lxp_result layerx_programs_call_begin(
     uint64_t token, uint64_t occupancy_token,
     uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3,
     uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
+    uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
     uint64_t h0, uint64_t h1, uint64_t h2, uint64_t h3,
     uint64_t b0, uint64_t b1, uint64_t b2, uint64_t b3,
     uint64_t signed_fee_hi, uint64_t signed_fee_lo,
@@ -789,6 +790,9 @@ lxp_result lxp_programs_state_record_encode(
 lxp_result lxp_programs_account_owner_bind(
     lxp_module_ctx *ctx, const uint8_t program_id[32],
     const uint8_t owner[32]);
+lxp_result lxp_programs_account_owner_read(
+    lxp_module_ctx *ctx, const uint8_t program_id[32],
+    uint8_t owner[32]);
 lxp_result lxp_programs_program_abi(
     lxp_module_ctx *ctx, const uint8_t program_id[32], uint16_t *abi_version);
 lxp_result lxp_programs_program_active(

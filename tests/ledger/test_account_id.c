@@ -14,7 +14,7 @@ typedef struct vector {
 } vector;
 
 static const vector vectors[] = {
-    { "agent:did:key:alice:asset:0300000000000000000000000000000000000000000000000000000000000000", LX_ACCOUNT_AGENT_MAIN, "cd99e00b8c6897b6ba6e250492de75103b65fcb5e7c48313bbb9183237a2c3e7" },
+    { "agent:did:key:alice:asset:0300000000000000000000000000000000000000000000000000000000000000", LX_ACCOUNT_AGENT_ASSET, "cd99e00b8c6897b6ba6e250492de75103b65fcb5e7c48313bbb9183237a2c3e7" },
     { "agent:did:key:alice:main", LX_ACCOUNT_AGENT_MAIN, "efc9802f76722dfc48ebfed35bfd8b20dbc2775fe2f027d6cbd595aff1307454" },
     { "agent:did:key:alice:budget:daily", LX_ACCOUNT_AGENT_BUDGET, "6f27c8a878c055eeb4056e5bf32864cbf113748af82e6b72e2060c39b4a18829" },
     { "agent:did:key:alice:escrow:order-7", LX_ACCOUNT_AGENT_ESCROW, "a781282c755f899aeff3881c53d68b14ed796f97c5f05d9b5b9da90d7c7aecc2" },

@@ -1,10 +1,7 @@
 use crate::{
     errors::{MemoryError, TableError},
     global::GlobalError,
-    Extern,
-    ExternType,
-    FuncType,
-    Table,
+    Extern, ExternType, FuncType, Table,
 };
 use core::{fmt, fmt::Display};
 

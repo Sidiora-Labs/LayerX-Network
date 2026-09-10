@@ -29,7 +29,8 @@ typedef enum lx_account_kind {
     LX_ACCOUNT_SYSTEM_FEES = 10,
     LX_ACCOUNT_SYSTEM_PAXEER_RESERVE = 11,
     LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS = 12,
-    LX_ACCOUNT_MODULE_VALUE = 13
+    LX_ACCOUNT_MODULE_VALUE = 13,
+    LX_ACCOUNT_AGENT_ASSET = 14
 } lx_account_kind;
 
 typedef enum lx_account_open_authority {

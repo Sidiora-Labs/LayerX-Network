@@ -766,9 +766,7 @@ pub fn canonical_tap_authority(value: &str) -> Result<String, TapError> {
             if host.contains(':') || port.is_empty() {
                 return Err(TapError::InvalidTarget);
             }
-            let port = port
-                .parse::<u16>()
-                .map_err(|_| TapError::InvalidTarget)?;
+            let port = port.parse::<u16>().map_err(|_| TapError::InvalidTarget)?;
             if port == 0 {
                 return Err(TapError::InvalidTarget);
             }
