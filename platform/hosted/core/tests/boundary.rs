@@ -1070,6 +1070,10 @@ struct HttpAnswer {
 }
 
 fn parse_http(raw: &[u8]) -> HttpAnswer {
+    parse_http_with_connection(raw, "close")
+}
+
+fn parse_http_with_connection(raw: &[u8], expected_connection: &str) -> HttpAnswer {
     let position = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -1103,7 +1107,10 @@ fn parse_http(raw: &[u8]) -> HttpAnswer {
         headers.get("cache-control").map(String::as_str),
         Some("no-store")
     );
-    assert_eq!(headers.get("connection").map(String::as_str), Some("close"));
+    assert_eq!(
+        headers.get("connection").map(String::as_str),
+        Some(expected_connection)
+    );
     assert!(!headers.contains_key("transfer-encoding"));
     HttpAnswer {
         status,
@@ -1157,7 +1164,7 @@ impl Http {
         body: &[u8],
     ) -> HttpAnswer {
         let mut request = format!(
-            "{method} {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n",
+            "{method} {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n",
             body.len()
         );
         for (name, value) in headers {
@@ -1354,10 +1361,12 @@ fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
         "LAYERX_CORE_NODE_URL",
         format!("http://127.0.0.1:{}", cluster.program_port),
     );
-    env.insert(
+    for name in [
+        "LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE",
         "LAYERX_CORE_NODE_BEARER_TOKEN_FILE",
-        text(&secrets.join("program-token")),
-    );
+    ] {
+        env.insert(name, text(&secrets.join("program-token")));
+    }
     env.insert(
         "LAYERX_CORE_ADMIN_TOKEN_FILE",
         text(&secrets.join("admin-token")),
@@ -1916,8 +1925,10 @@ fn boundary_tls_environment(env: &mut BTreeMap<&str, String>, certificates: &Cer
 
 fn cluster_artifacts() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     let repository = repository_root();
-    let layerxd_source = repository.join("build/bin/layerxd");
-    let builder = repository.join("build/bin/layerx-genesis-build");
+    let native_bin = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
+        .map_or_else(|| repository.join("build/bin"), PathBuf::from);
+    let layerxd_source = native_bin.join("layerxd");
+    let builder = native_bin.join("layerx-genesis-build");
     assert!(
         layerxd_source.is_file(),
         "{} is not built",
@@ -2386,7 +2397,7 @@ fn wait_for_supervisor(socket: &Path, supervisor: &mut Daemon) {
     }
 }
 
-fn establish_receipt_head(boundary: &Boundary, cluster: &Cluster) {
+fn establish_receipt_head(boundary: &Boundary, cluster: &Cluster) -> [u8; 32] {
     let mut request = SendRequest {
         network_id: NETWORK_ID,
         source_did: cluster.treasury_did.clone(),
@@ -2459,4 +2470,482 @@ fn establish_receipt_head(boundary: &Boundary, cluster: &Cluster) {
             .status,
         200
     );
+    signed.activity_id
+}
+
+#[test]
+fn public_read_selectors_use_real_node_and_refuse_missing_evidence() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let core = &boundary.core;
+    let node = core.get("/v1/node-info");
+    assert_eq!(node.status, 200, "{}", node.body);
+    assert_eq!(json(&node)["result"]["network_id"], NETWORK_ID);
+    assert_eq!(
+        json(&node)["result"]["authorised_sequencer_key"],
+        hex_encode(&cluster.sequencer_key)
+    );
+    assert_refusal(
+        &core.get("/v1/accounts/invalid/balance"),
+        400,
+        "invalid_account_id",
+    );
+    assert_refusal(&core.get("/v1/batches/0"), 400, "invalid_batch");
+    assert_refusal(
+        &core.get("/v1/checkpoints/invalid"),
+        400,
+        "invalid_checkpoint",
+    );
+    assert_refusal(
+        &core.get("/v1/dids/did:layerx:alice/accounts"),
+        503,
+        "did_account_listing_unavailable",
+    );
+    let missing = hex_encode(&[99; 32]);
+    assert_refusal(
+        &core.get(&format!("/v1/accounts/{missing}/balance")),
+        503,
+        "account_evidence_unavailable",
+    );
+    assert_refusal(
+        &core.get("/v1/batches/18446744073709551615"),
+        503,
+        "batch_evidence_unavailable",
+    );
+    assert_refusal(
+        &core.get(&format!("/v1/checkpoints/{missing}")),
+        503,
+        "checkpoint_evidence_unavailable",
+    );
+}
+
+#[test]
+fn proof_and_sequence_reads_refuse_invalid_or_absent_real_node_evidence() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let core = &boundary.core;
+    for kind in ["activity", "receipt"] {
+        assert_refusal(
+            &core.get(&format!("/v1/proofs/{kind}/invalid")),
+            400,
+            "invalid_proof_selector",
+        );
+        assert_refusal(
+            &core.get(&format!("/v1/proofs/{kind}/{}", "63".repeat(32))),
+            503,
+            "proof_evidence_unavailable",
+        );
+    }
+    assert_refusal(
+        &core.get(&format!("/v1/proofs/unknown/{}", "63".repeat(32))),
+        400,
+        "invalid_proof_selector",
+    );
+    assert_refusal(&core.get("/v1/dids//sequence"), 400, "invalid_did");
+}
+
+#[test]
+fn receipt_latency_and_public_proofs_use_real_committed_refusals() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let mut elapsed = Vec::new();
+    for _ in 0..20 {
+        let sequence = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
+        let snapshot = boundary
+            .core
+            .get(&format!("/v1/dids/{}/sequence", cluster.treasury_did));
+        assert_eq!(snapshot.status, 200, "{}", snapshot.body);
+        assert_eq!(
+            json(&snapshot)["result"]["next_sequence"],
+            sequence.to_string()
+        );
+        let signed = must(
+            build_send(
+                &cluster.treasury_seed,
+                &SendRequest {
+                    network_id: NETWORK_ID,
+                    source_did: cluster.treasury_did.clone(),
+                    destination_did: recipient().0,
+                    asset: cluster.asset,
+                    amount: 1,
+                    account_sequence: sequence,
+                    idempotency_key: random32(),
+                    not_before_ms: now_ms() - 1_000,
+                    expires_at_ms: now_ms() + 60_000,
+                    fee_limit: 0,
+                },
+            ),
+            "latency SEND",
+        );
+        let started = Instant::now();
+        let answer = boundary.core.request(
+            "POST",
+            "/v1/activities",
+            &[("Content-Type", "application/octet-stream")],
+            &signed.canonical,
+        );
+        let duration = started.elapsed().as_micros();
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let result = json(&answer);
+        assert_eq!(result["result"]["state"], "refused");
+        assert_eq!(
+            result["result"]["activity_id"],
+            hex_encode(&signed.activity_id)
+        );
+        elapsed.push(duration);
+        for kind in ["activity", "receipt"] {
+            let proof = boundary.core.get(&format!(
+                "/v1/proofs/{kind}/{}",
+                hex_encode(&signed.activity_id)
+            ));
+            assert_eq!(proof.status, 200, "{}", proof.body);
+            let document = json(&proof);
+            assert_eq!(
+                document["result"]["activity_id"],
+                hex_encode(&signed.activity_id)
+            );
+            assert_eq!(
+                document["result"]["signed_header"]["public_key"],
+                hex_encode(&cluster.sequencer_key)
+            );
+            assert!(document["result"]["proof"]["leaf_count"]
+                .as_u64()
+                .is_some_and(|count| count > 0));
+        }
+    }
+    elapsed.sort_unstable();
+    println!(
+        "submit_to_receipt_us samples={} p50={} p99={} outcome=committed_refusal transport=core_https receipt_wait=commit_condition",
+        elapsed.len(),
+        elapsed[9],
+        elapsed[19]
+    );
+}
+
+#[test]
+fn malformed_program_transfer_and_account_are_refused_before_native_admission() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let sequence = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
+    let before = chain_head(&cluster.lni_socket);
+    for ordinal in [5, 6] {
+        let canonical = signed_program_activity(
+            &cluster.treasury_seed,
+            &cluster.treasury_did,
+            sequence,
+            ordinal,
+            &[1; 32],
+        );
+        assert_refusal(
+            &boundary.core.request(
+                "POST",
+                "/v1/activities",
+                &[("Content-Type", "application/octet-stream")],
+                &canonical,
+            ),
+            400,
+            "invalid_program_account_operation",
+        );
+    }
+    assert_eq!(chain_head(&cluster.lni_socket), before);
+}
+
+fn receipt_wait_request(socket: &Path, selector: &[u8]) -> (u16, Vec<u8>) {
+    let gate = ConnectionGate::new(1);
+    let mut transport = must(Uds::connect(socket, &gate, lni_limits()), "wait connection");
+    let handshake = must(
+        perform(&mut transport, &handshake_config(), None),
+        "wait handshake",
+    );
+    receipt_wait_request_on(
+        &mut transport,
+        handshake.node().interface_version,
+        selector,
+        1,
+    )
+}
+
+fn receipt_wait_request_on(
+    transport: &mut Uds,
+    interface_version: Version,
+    selector: &[u8],
+    correlation_id: u64,
+) -> (u16, Vec<u8>) {
+    use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope};
+    use layerx_client::lni::transport::FrameTransport;
+    let request = must(
+        encode_envelope(Envelope {
+            version: interface_version,
+            message_tag: 5,
+            correlation_id,
+            canonical_payload: selector,
+            proof_material: &[],
+        }),
+        "wait encoding",
+    );
+    must(transport.send(&request), "wait send");
+    let bytes = must(transport.receive(), "wait receive");
+    let answer = must(decode_envelope(&bytes), "wait decode");
+    assert_eq!(answer.correlation_id, correlation_id);
+    (answer.message_tag, answer.canonical_payload.to_vec())
+}
+
+#[test]
+fn authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receipts() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let mut selector = vec![1];
+    selector.extend_from_slice(&[99; 32]);
+    selector.extend_from_slice(&150_u32.to_be_bytes());
+    assert_eq!(receipt_wait_request(&cluster.lni_socket, &selector).0, 25);
+    selector[33..].copy_from_slice(&30001_u32.to_be_bytes());
+    assert_eq!(receipt_wait_request(&cluster.lni_socket, &selector).0, 25);
+    selector.push(0);
+    assert_eq!(receipt_wait_request(&cluster.lni_socket, &selector).0, 25);
+    let signed = must(
+        build_send(
+            &cluster.treasury_seed,
+            &SendRequest {
+                network_id: NETWORK_ID,
+                source_did: cluster.treasury_did.clone(),
+                destination_did: recipient().0,
+                asset: cluster.asset,
+                amount: 1,
+                account_sequence: account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+                idempotency_key: random32(),
+                not_before_ms: now_ms() - 1000,
+                expires_at_ms: now_ms() + 60000,
+                fee_limit: 0,
+            },
+        ),
+        "wait SEND",
+    );
+    let mut selector = vec![1];
+    selector.extend_from_slice(&signed.activity_id);
+    selector.push(1);
+    thread::scope(|scope| {
+        let waiter = scope.spawn(|| receipt_wait_request(&cluster.lni_socket, &selector));
+        thread::sleep(Duration::from_millis(100));
+        admit_receipt_wait_send(&cluster, &signed.canonical, signed.activity_id);
+        let concurrent = (0..3)
+            .map(|_| scope.spawn(|| receipt_wait_request(&cluster.lni_socket, &selector)))
+            .collect::<Vec<_>>();
+        let (tag, receipt) = must(waiter.join(), "wait thread");
+        let concurrent = concurrent
+            .into_iter()
+            .map(|reader| must(reader.join(), "concurrent receipt reader"))
+            .collect::<Vec<_>>();
+        let submitted = boundary.core.request(
+            "POST",
+            "/v1/activities",
+            &[("Content-Type", "application/octet-stream")],
+            &signed.canonical,
+        );
+        assert_eq!(submitted.status, 200, "{}", submitted.body);
+        assert_eq!(tag, 6);
+        assert_eq!(hex_encode(&receipt), json(&submitted)["result"]["receipt"]);
+        for reader in concurrent {
+            assert_eq!(reader, (6, receipt.clone()));
+        }
+        let already = receipt_wait_request(&cluster.lni_socket, &selector);
+        assert_eq!(already, (6, receipt));
+    });
+}
+
+fn admit_receipt_wait_send(cluster: &Cluster, canonical: &[u8], activity_id: [u8; 32]) {
+    use layerx_client::submit::{submit_signed, Submission, SubmissionContext};
+    let gate = ConnectionGate::new(1);
+    let mut transport = must(
+        Uds::connect(&cluster.lni_socket, &gate, lni_limits()),
+        "wait admission LNI",
+    );
+    let handshake = must(
+        perform(&mut transport, &handshake_config(), None),
+        "wait admission handshake",
+    );
+    let (registry, _) = must(
+        layerx_platform_core::asset_registry(),
+        "wait admission registry",
+    );
+    let submitted = must(
+        submit_signed(
+            &mut transport,
+            &registry,
+            SubmissionContext {
+                interface_version: handshake.node().interface_version,
+                protocol_version: PROTOCOL_VERSION,
+                network_id: NETWORK_ID,
+                correlation_id: 1,
+                signer_public_key: SigningKey::from_bytes(&cluster.treasury_seed)
+                    .verifying_key()
+                    .to_bytes(),
+                attempt: 1,
+            },
+            canonical,
+        ),
+        "wait durable admission",
+    );
+    let Submission::Acknowledged(ack) = submitted else {
+        panic!("wait admission unknown")
+    };
+    assert_eq!(ack.activity_id(), activity_id);
+}
+
+#[test]
+fn account_proof_export_preserves_exact_native_verified_bytes() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let activity = hex_encode(&establish_receipt_head(&boundary, &cluster));
+    let account = must(
+        layerx_types::account::AccountId::parse("system:fees"),
+        "system account",
+    );
+    let account = hex_encode(&must(
+        layerx_wire::hash::account_id_for_protocol(&account, PROTOCOL_VERSION),
+        "account id",
+    ));
+    let value = boundary
+        .core
+        .get(&format!("/v1/accounts/{account}/balance"));
+    assert_eq!(value.status, 200, "{}", value.body);
+    let exported = boundary
+        .core
+        .get(&format!("/v1/proofs/account/{activity}/{account}"));
+    assert_eq!(exported.status, 200, "{}", exported.body);
+    let exported = json(&exported);
+    assert_eq!(
+        exported["result"]["canonical_value"],
+        json(&value)["result"]["canonical_value"]
+    );
+    assert_eq!(
+        exported["result"]["proof"]["canonical_bytes"],
+        json(&value)["result"]["proof_material"]
+    );
+    assert_eq!(exported["result"]["account_id"], account);
+    for account in ["invalid".to_owned(), "00".repeat(32)] {
+        assert_refusal(
+            &boundary
+                .core
+                .get(&format!("/v1/proofs/account/{activity}/{account}")),
+            400,
+            "invalid_proof_selector",
+        );
+    }
+    assert_refusal(
+        &boundary
+            .core
+            .get(&format!("/v1/proofs/account/{}/{account}", "63".repeat(32))),
+        503,
+        "proof_evidence_unavailable",
+    );
+}
+
+#[test]
+fn receipt_events_require_auth_and_bind_global_sequence() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    assert_eq!(
+        boundary.core.get("/internal/v1/receipt-events/1").status,
+        401
+    );
+    let authorization = format!("Bearer {}", cluster.program_token);
+    let get = |path: &str| {
+        boundary
+            .core
+            .request("GET", path, &[("Authorization", &authorization)], &[])
+    };
+    for selector in ["0", "01", "-1", "18446744073709551616"] {
+        assert_eq!(
+            get(&format!("/internal/v1/receipt-events/{selector}")).status,
+            400
+        );
+    }
+    establish_receipt_head(&boundary, &cluster);
+    let event = get("/internal/v1/receipt-events/1");
+    assert_eq!(event.status, 200, "{}", event.body);
+    assert_eq!(json(&event)["result"]["global_sequence"], 1);
+    assert!(json(&event)["result"]["receipt"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+}
+
+#[test]
+fn minor_five_receipt_publication_wait_verifies_committed_receipt() {
+    let cluster = start_cluster(true);
+    let mut missing = vec![1];
+    missing.extend_from_slice(&[99; 32]);
+    missing.push(1);
+    let started = Instant::now();
+    assert_eq!(
+        receipt_wait_request(&cluster.lni_socket, &missing),
+        (6, vec![])
+    );
+    assert!(started.elapsed() >= Duration::from_millis(1500));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let signed = must(
+        build_send(
+            &cluster.treasury_seed,
+            &SendRequest {
+                network_id: NETWORK_ID,
+                source_did: cluster.treasury_did.clone(),
+                destination_did: recipient().0,
+                asset: cluster.asset,
+                amount: 1,
+                account_sequence: account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+                idempotency_key: random32(),
+                not_before_ms: now_ms() - 1000,
+                expires_at_ms: now_ms() + 60000,
+                fee_limit: 0,
+            },
+        ),
+        "future publication SEND",
+    );
+    let mut selector = vec![1];
+    selector.extend_from_slice(&signed.activity_id);
+    selector.push(1);
+    let gate = ConnectionGate::new(1);
+    let mut transport = must(
+        Uds::connect(&cluster.lni_socket, &gate, lni_limits()),
+        "persistent wait connection",
+    );
+    let handshake = must(
+        perform(&mut transport, &handshake_config(), None),
+        "persistent wait handshake",
+    );
+    thread::sleep(Duration::from_millis(1200));
+    let (tag, bytes) = thread::scope(|scope| {
+        let publisher = scope.spawn(|| {
+            thread::sleep(Duration::from_millis(750));
+            admit_receipt_wait_send(&cluster, &signed.canonical, signed.activity_id);
+        });
+        let answer = receipt_wait_request_on(
+            &mut transport,
+            handshake.node().interface_version,
+            &selector,
+            2,
+        );
+        must(publisher.join(), "future publication thread");
+        answer
+    });
+    assert_eq!(tag, 6);
+    let receipt = must(
+        layerx_proof::receipt::verify_sequencer_signature(&bytes, cluster.sequencer_key),
+        "published receipt signature",
+    );
+    assert_eq!(
+        receipt
+            .protocol()
+            .unwrap_or_else(|| panic!("protocol receipt"))
+            .activity_id(),
+        signed.activity_id
+    );
+    selector.push(1);
+    assert_eq!(receipt_wait_request(&cluster.lni_socket, &selector).0, 25);
 }

@@ -743,6 +743,10 @@ impl<'a> Reader<'a> {
         self.array().map(u8::from_be_bytes)
     }
 
+    fn u16(&mut self) -> Result<u16, ReadError> {
+        self.array().map(u16::from_be_bytes)
+    }
+
     fn u32(&mut self) -> Result<u32, ReadError> {
         self.array().map(u32::from_be_bytes)
     }
@@ -756,6 +760,11 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// Reads every committed per-asset account owned by one DID.
+///
+/// # Errors
+///
+/// Refuses unsupported selectors, malformed or mismatched responses, and invalid evidence.
 pub fn did_accounts(
     transport: &mut dyn FrameTransport,
     did: &layerx_types::ids::Did,
@@ -800,24 +809,11 @@ pub fn did_accounts(
     if response.message_tag != 8 {
         return Err(ReadError::UnexpectedResponse);
     }
-    let mut bytes = response.canonical_payload;
-    fn take<'a>(bytes: &mut &'a [u8], count: usize) -> Result<&'a [u8], ReadError> {
-        if count > bytes.len() {
-            return Err(ReadError::MalformedValue);
-        }
-        let (value, tail) = bytes.split_at(count);
-        *bytes = tail;
-        Ok(value)
-    }
-    fn number(bytes: &mut &[u8], count: usize) -> Result<usize, ReadError> {
-        Ok(take(bytes, count)?
-            .iter()
-            .fold(0_usize, |value, byte| (value << 8) | usize::from(*byte)))
-    }
-    if number(&mut bytes, 2)? != 1 {
+    let mut reader = Reader::new(response.canonical_payload);
+    if reader.u16()? != 1 {
         return Err(ReadError::MalformedValue);
     }
-    let count = number(&mut bytes, 2)?;
+    let count = usize::from(reader.u16()?);
     if count > 4096 {
         return Err(ReadError::MalformedValue);
     }
@@ -827,17 +823,15 @@ pub fn did_accounts(
     owner_prefix.extend_from_slice(did.as_bytes());
     owner_prefix.push(b':');
     for _ in 0..count {
-        let id: [u8; 32] = take(&mut bytes, 32)?
-            .try_into()
-            .map_err(|_| ReadError::MalformedValue)?;
+        let id: [u8; 32] = reader.array()?;
         if previous.is_some_and(|prior| prior >= id) {
             return Err(ReadError::MalformedValue);
         }
         previous = Some(id);
-        let value_length = number(&mut bytes, 4)?;
-        let value = take(&mut bytes, value_length)?;
-        let proof_length = number(&mut bytes, 4)?;
-        let proof = take(&mut bytes, proof_length)?;
+        let value_length = usize::try_from(reader.u32()?).map_err(|_| ReadError::MalformedValue)?;
+        let value = reader.bytes(value_length)?;
+        let proof_length = usize::try_from(reader.u32()?).map_err(|_| ReadError::MalformedValue)?;
+        let proof = reader.bytes(proof_length)?;
         if proof.is_empty() {
             return Err(ReadError::MalformedValue);
         }
@@ -852,8 +846,6 @@ pub fn did_accounts(
             context,
         )?);
     }
-    if !bytes.is_empty() {
-        return Err(ReadError::MalformedValue);
-    }
+    reader.finish()?;
     Ok(result)
 }

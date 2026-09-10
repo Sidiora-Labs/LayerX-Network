@@ -3,6 +3,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_state_diff.h"
 #include "layerx/lx_asset.h"
 #include "layerx/programs.h"
@@ -189,6 +190,7 @@ int main(int argc, char **argv)
     CHECK(lxp_kernel_create(kernel, state, journal, manifest, 1U) == LXP_OK);
     CHECK(lxp_kernel_register_module(kernel, programs_module_registration_v4()) == LXP_OK);
     CHECK(lxp_kernel_register_module(kernel, lx_asset_module_iface()) == LXP_OK);
+    CHECK(lxp_kernel_register_module(kernel, lxp_governance_module_iface()) == LXP_OK);
     CHECK(lxp_kernel_register_module(kernel, lxp_bridge_module_iface()) == LXP_OK);
     CHECK(lxp_kernel_set_capabilities(kernel, NULL, lxp_kernel_canonical_ledger_apply) == LXP_OK);
     CHECK(lxp_genesis_materialize(manifest, &arena, kernel) == LXP_OK);

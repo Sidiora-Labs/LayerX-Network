@@ -107,6 +107,64 @@ from .verifier import (
     verify_receipt as verify_receipt,
     verify_receipt_outcome as verify_receipt_outcome,
 )
-from .native_program_call import NativeProgramCall as NativeProgramCall, encode_native_program_call as encode_native_program_call, decode_native_program_call as decode_native_program_call
+from .native_program_call import (
+    NativeProgramCall as NativeProgramCall,
+    encode_native_program_call as encode_native_program_call,
+    decode_native_program_call as decode_native_program_call,
+)
 
 from .programs import NativeProgramRequest as NativeProgramRequest
+
+from .x402 import (
+    PaymentCheckpointEvidence as PaymentCheckpointEvidence,
+    PaymentCommitment as PaymentCommitment,
+    PaymentCommitmentEvidence as PaymentCommitmentEvidence,
+    payment_commitment as payment_commitment,
+    payment_payer as payment_payer,
+    payment_purpose as payment_purpose,
+    verify_payment_commitment_evidence as verify_payment_commitment_evidence,
+    verify_payment_receipt as verify_payment_receipt,
+)
+from .x402_activity import bind_receive_activity as bind_receive_activity
+from .x402_agent import (
+    AgentGrantMiddleware as AgentGrantMiddleware,
+    PaymentBudget as PaymentBudget,
+)
+from .x402_checkpoint import (
+    RpcCheckpointAuthority as RpcCheckpointAuthority,
+    rpc_checkpoint_evidence as rpc_checkpoint_evidence,
+)
+from .x402_draw import PreparedGrantDraws as PreparedGrantDraws
+from .x402_grant import validate_grant_draw as validate_grant_draw
+from .x402_http import (
+    BuyerMiddleware as BuyerMiddleware,
+    ConfiguredReceiptAuthority as ConfiguredReceiptAuthority,
+    FulfillmentStore as FulfillmentStore,
+    PaymentEvidence as PaymentEvidence,
+    SellerMiddleware as SellerMiddleware,
+    decode_header as decode_header,
+    encode_header as encode_header,
+    grant_payment_header as grant_payment_header,
+    validate_payload as validate_payload,
+    validate_required as validate_required,
+    validate_requirements as validate_requirements,
+)
+from .x402_receive import (
+    decode_receive as decode_receive,
+    derive_native_asset_id as derive_native_asset_id,
+    encode_account_open as encode_account_open,
+    encode_asset_register as encode_asset_register,
+    encode_asset_supply as encode_asset_supply,
+    encode_grant as encode_grant,
+    encode_grant_revoke as encode_grant_revoke,
+    encode_receive as encode_receive,
+    grant_authorization_message as grant_authorization_message,
+    receive_authorization_message as receive_authorization_message,
+)
+from .x402_rpc import (
+    PaymentRpc as PaymentRpc,
+    PaymentRpcError as PaymentRpcError,
+    rpc_batch_evidence as rpc_batch_evidence,
+    rpc_hex as rpc_hex,
+    verify_rpc_payment as verify_rpc_payment,
+)

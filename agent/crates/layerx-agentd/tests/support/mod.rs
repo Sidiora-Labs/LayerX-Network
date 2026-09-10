@@ -34,6 +34,7 @@ use layerx_wire::hash::{batch_header_digest, execution_batch_id, receipt_digest}
 #[path = "../../../../tests/support/monotonic_clock.rs"]
 mod monotonic_clock;
 mod real_authority;
+pub(crate) mod send_authorization;
 #[path = "../../../../tests/support/wall_clock.rs"]
 mod wall_clock;
 
@@ -127,7 +128,7 @@ fn send_payload(id: u8) -> Vec<u8> {
     encoder
         .u16(layerx_wire::limits::PROTOCOL_VERSION)
         .unwrap_or_else(|error| panic!("version: {error:?}"));
-    encoder.finish()
+    send_authorization::sign(encoder.finish())
 }
 
 pub fn verified_submission(id: u8) -> VerifiedSubmission {

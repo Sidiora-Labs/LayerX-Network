@@ -22,13 +22,17 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node dist/test/integration.test.js && node dist/test/receipt-fixture.test.js && node dist/test/agent-http.test.js && node dist/test/program-lifecycle.test.js && node dist/test/native-capabilities.test.js && node dist/test/program-executed-v3.test.js"
+    "test": "npm run build && node dist/test/integration.test.js && node dist/test/receipt-fixture.test.js && node dist/test/agent-http.test.js && node dist/test/program-lifecycle.test.js && node dist/test/native-capabilities.test.js && node dist/test/program-executed-v3.test.js && node dist/test/rpc.test.js"
   },
   "engines": {
     "node": ">=22"
   },
   "devDependencies": {
     "@types/node": "22.18.1",
+    "@types/ws": "8.18.1",
     "typescript": "5.9.2"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
   }
 }

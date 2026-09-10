@@ -1,3 +1,5 @@
+import { paymentCommitment, verifyPaymentReceipt, type GrantDrawExecution, type SellerSettlementOutcome } from "@sidiora/layerx-seller-middleware";
+import { verifyPaymentCommitment, type PaymentCommitment, type PaymentCommitmentResolver } from "@sidiora/layerx-seller-middleware";
 import {
   PlatformSdkError,
   ProductionClient,
@@ -19,6 +21,7 @@ const POST_SUBMIT_UNCERTAIN_CODES: ReadonlySet<SdkErrorCode> = new Set([
 ]);
 
 export interface AgentSpendRequest {
+  readonly commitment?: { readonly network: string; readonly level: PaymentCommitment };
   readonly tenant: string;
   readonly actor: string;
   readonly authority: string;
@@ -151,6 +154,7 @@ export interface AgentRefusal {
 }
 
 export interface AgentMiddlewareConfig {
+  readonly commitments?: PaymentCommitmentResolver;
   readonly client: ProductionClient;
   readonly budgets: AgentBudgetLedger;
   readonly signer: AgentSigner;
@@ -173,6 +177,7 @@ export type AgentSpendResult =
   | { readonly kind: "budget-refused"; readonly code: "budget-refusal"; readonly retry: "never"; readonly available: string };
 
 export class AgentMiddleware {
+  readonly #commitments: PaymentCommitmentResolver | undefined;
   readonly #client: ProductionClient;
   readonly #budgets: AgentBudgetLedger;
   readonly #signer: AgentSigner;
@@ -181,6 +186,7 @@ export class AgentMiddleware {
   readonly #wait: (milliseconds: number) => Promise<void>;
 
   public constructor(config: AgentMiddlewareConfig) {
+    this.#commitments = config.commitments;
     this.#client = config.client;
     this.#budgets = config.budgets;
     this.#signer = config.signer;
@@ -194,6 +200,7 @@ export class AgentMiddleware {
 
   public async spend(request: AgentSpendRequest): Promise<AgentSpendResult> {
     validateSpend(request);
+    if (request.commitment !== undefined && request.commitment.level !== "executed" && this.#commitments === undefined) throw new AgentMiddlewareError("invalid-request");
     if (!await payloadHashMatches(request.payloadBase64, request.payloadHash)) {
       throw new AgentMiddlewareError("invalid-request");
     }
@@ -368,7 +375,7 @@ export class AgentMiddleware {
     }
     let verification: ReceiptVerification;
     try {
-      verification = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch);
+      verification = await verifyAgentPayment(evidence, request, this.#commitments);
     } catch {
       return { kind: "unknown", reservation, submission };
     }
@@ -635,6 +642,8 @@ function sameRefusal(left: AgentRefusal, right: AgentRefusal): boolean {
 }
 
 function validateSpend(request: AgentSpendRequest): void {
+  if (request.commitment !== undefined && (!/^layerx:[A-Za-z0-9._-]{1,64}$/u.test(request.commitment.network)
+    || !["executed", "batched", "finalised"].includes(request.commitment.level))) throw new AgentMiddlewareError("invalid-request");
   for (const value of [request.tenant, request.actor, request.authority, request.idempotencyKey]) {
     if (value.length === 0 || value.length > 512 || value.includes("\0")) {
       throw new AgentMiddlewareError("invalid-request");
@@ -735,6 +744,7 @@ async function digestSpend(request: AgentSpendRequest): Promise<string> {
     asset: request.asset,
     amount: request.amount,
     recipient: request.recipient,
+    ...(request.commitment === undefined ? {} : { commitment: request.commitment }),
   });
   const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
   return toHex(digest);
@@ -786,4 +796,50 @@ function text(value: unknown, maximum: number): string {
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function verifyAgentPayment(evidence: AgentReceiptEvidence, request: AgentSpendRequest,
+  commitments?: PaymentCommitmentResolver): Promise<ReceiptVerification> {
+  validateSpend(request);
+  const verification = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch);
+  if (verification.receipt.amount !== BigInt(request.amount)
+    || !constantTimeHex(verification.receipt.asset, request.asset)
+    || !constantTimeHex(verification.receipt.to, request.recipient)) throw new AgentMiddlewareError("verification-failure");
+  if (request.commitment !== undefined) await verifyPaymentCommitment(verification,
+    evidence.authorizedBatch.sequencerPublicKey, request.commitment.network, request.commitment.level, commitments);
+  return verification;
+}
+
+export class AgentGrantMiddleware implements GrantDrawExecution {
+  public constructor(private readonly config: {
+    readonly tenant: string;
+    readonly budgets: AgentBudgetLedger;
+    readonly draws: GrantDrawExecution;
+    readonly commitments?: PaymentCommitmentResolver;
+  }) {
+    if (!config.tenant || config.tenant.length > 512 || config.tenant.includes("\0")) throw new AgentMiddlewareError("invalid-request");
+  }
+
+  public async execute(request: Parameters<GrantDrawExecution["execute"]>[0]): Promise<SellerSettlementOutcome> {
+    const requirements = request.requirements;
+    if (requirements.scheme !== "metered" && requirements.scheme !== "subscription") throw new AgentMiddlewareError("invalid-request");
+    const commitment = paymentCommitment(requirements.extra);
+    if (commitment !== "executed" && this.config.commitments === undefined) throw new AgentMiddlewareError("invalid-request");
+    const amount = protocolAmount(requirements.amount).toString();
+    if (!/^[0-9a-f]{64}$/u.test(request.requestDigest) || !/^[0-9a-f]{64}$/u.test(request.idempotencyKey)) throw new AgentMiddlewareError("invalid-request");
+    const facts = { amount, asset: requirements.asset, requestDigest: request.requestDigest };
+    const result = await this.config.budgets.reserve({ tenant: this.config.tenant, idempotencyKey: request.idempotencyKey, ...facts });
+    if (result.kind === "exhausted") return { kind: "refused", reason: "budget_refused" };
+    if (result.kind === "conflict") throw new AgentMiddlewareError("budget-conflict");
+    const reservation = validateBudgetReservation(result.reservation, facts);
+    if (reservation.state === "held") return { kind: "pending" };
+    if (reservation.state === "released") return { kind: "refused", reason: "budget_released" };
+    const outcome = await this.config.draws.execute(request);
+    if (outcome.kind !== "settled") return outcome;
+    const verification = await verifyPaymentReceipt(outcome, requirements, this.config.commitments);
+    const receiptDigest = toHex(verification.receiptDigest);
+    const committed = validateBudgetReservation(await this.config.budgets.commit({ reservationId: reservation.reservationId, ...facts, receiptDigest }), facts, reservation.reservationId);
+    if (committed.state !== "committed" || committed.receiptDigest !== receiptDigest) throw new AgentMiddlewareError("budget-conflict");
+    return outcome;
+  }
 }

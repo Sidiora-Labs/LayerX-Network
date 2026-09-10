@@ -6,6 +6,7 @@ import {
   verifyPaymentReceipt,
   type JsonValue,
   type PaymentRequired,
+  type PaymentCommitmentResolver,
   type SellerDecision,
   type WebhookConsumeResult,
   type WebhookRequestHeaders,
@@ -15,6 +16,7 @@ import type { ReceiptVerification } from "@sidiora/layerx-sdk";
 const MAX_U128 = 340282366920938463463374607431768211455n;
 const MAX_LINES = 256;
 const MAX_QUANTITY = 1_000_000;
+const MERKLE_LEAF_DOMAIN = new TextEncoder().encode("LXP/v1/merkle-leaf\0");
 
 export interface CatalogItem {
   readonly sku: string;
@@ -25,6 +27,7 @@ export interface CatalogItem {
   readonly scheme: string;
   readonly network: string;
   readonly maxTimeoutSeconds: number;
+  readonly extra?: JsonValue;
 }
 
 export interface CatalogProvider {
@@ -149,6 +152,7 @@ export class MerchantMiddleware {
         || item.payTo !== first.payTo
         || item.scheme !== first.scheme
         || item.network !== first.network
+        || JSON.stringify(item.extra) !== JSON.stringify(first.extra)
       ) {
         throw new MerchantError("mixed-payment-facts");
       }
@@ -184,6 +188,7 @@ export class MerchantMiddleware {
         asset: first.asset,
         payTo: first.payTo,
         maxTimeoutSeconds: first.maxTimeoutSeconds,
+        ...(first.extra === undefined ? {} : { extra: first.extra }),
       }],
       extensions: {},
     };
@@ -289,6 +294,7 @@ export class MerchantSettlementWebhooks {
     private readonly verifier: VerifiedWebhookConsumer,
     private readonly orders: MerchantOrderStore,
     private readonly receipts: MerchantReceiptResolver,
+    private readonly commitments?: PaymentCommitmentResolver,
   ) {}
 
   public consume(rawBody: Uint8Array, headers: WebhookRequestHeaders): Promise<WebhookConsumeResult> {
@@ -303,11 +309,11 @@ export class MerchantSettlementWebhooks {
         throw new MerchantError("order-conflict");
       }
       const evidence = await this.receipts.resolve(event.receipt_ref);
-      const verification = await verifyPaymentReceipt(evidence, current.quote.paymentRequired.accepts[0]!);
+      const verification = await verifyPaymentReceipt(evidence, current.quote.paymentRequired.accepts[0]!, this.commitments);
       if (verificationRank(event.verification) > verificationRank(verification.level)) {
         throw new MerchantError("invalid-webhook");
       }
-      const receiptDigest = toHex(verification.receiptDigest);
+      const receiptDigest = toHex(await settlementReceiptDigest(evidence.canonicalReceipt));
       if (!constantTimeHex(receiptDigest, event.receipt_digest)) {
         throw new MerchantError("invalid-webhook");
       }
@@ -460,6 +466,13 @@ function constantTimeHex(actual: string, expected: string): boolean {
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function settlementReceiptDigest(canonicalReceipt: Uint8Array): Promise<Uint8Array> {
+  const input = new Uint8Array(MERKLE_LEAF_DOMAIN.length + canonicalReceipt.length);
+  input.set(MERKLE_LEAF_DOMAIN);
+  input.set(canonicalReceipt, MERKLE_LEAF_DOMAIN.length);
+  return new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", input));
 }
 
 function layerXReceiptDigest(extensions: Readonly<Record<string, JsonValue>> | undefined): string {

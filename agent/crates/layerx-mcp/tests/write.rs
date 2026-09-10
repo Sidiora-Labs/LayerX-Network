@@ -327,3 +327,41 @@ fn closed_session_refuses_submit_and_track_with_a_typed_revocation_before_any_tr
     assert_eq!(server.audit_entries(), 2);
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn exported_payment_and_wait_paths_refuse_unrelated_scopes_before_execution() {
+    use layerx_mcp::tools::write::{execute_payment, wait, PaymentTool};
+    let root = directory("wallet-scope");
+    let (mut server, _control, _tenant) = server(&root);
+    for tool in [
+        PaymentTool::Send,
+        PaymentTool::Create,
+        PaymentTool::Mint,
+        PaymentTool::Transfer,
+        PaymentTool::IssueGrant,
+        PaymentTool::DrawGrant,
+    ] {
+        assert!(matches!(
+            execute_payment(
+                &mut server,
+                50,
+                tool,
+                b"request".to_vec(),
+                |_| panic!("unrelated scope must not execute"),
+                0
+            ),
+            Err(WriteToolError::Server(ServerError::ToolAbsent))
+        ));
+    }
+    assert!(matches!(
+        wait(
+            &mut server,
+            50,
+            b"activity".to_vec(),
+            |_| panic!("track scope must not authorize wait"),
+            0
+        ),
+        Err(WriteToolError::Server(ServerError::ToolAbsent))
+    ));
+    let _ = fs::remove_dir_all(root);
+}

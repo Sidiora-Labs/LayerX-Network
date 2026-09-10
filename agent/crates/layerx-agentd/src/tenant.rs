@@ -167,7 +167,8 @@ impl OperationClass {
     #[must_use]
     pub const fn authorized_scopes(operation: Operation) -> &'static [&'static str] {
         match operation {
-            Operation::ReadBalance => &["read", "read:balance"],
+            Operation::ReadBalance => &["read", "read:balance", "read:wallet:balance"],
+            Operation::ReadAccount => &["read", "read:wallet:accounts"],
             Operation::ReadHistory => &["read", "read:history"],
             Operation::ProgramDiscover
             | Operation::ProgramInterface
@@ -183,8 +184,18 @@ impl OperationClass {
             Operation::AvailabilityFetch => &["read", "read:availability"],
             Operation::Prepare => &["prepare", "write:prepare", "write:disclose"],
             Operation::Sign => &["write", "write:sign"],
-            Operation::Submit => &["write", "write:submit"],
+            Operation::Submit => &[
+                "write",
+                "write:submit",
+                "write:wallet:send",
+                "write:token:create",
+                "write:token:mint",
+                "write:token:transfer",
+                "write:grant:issue",
+                "write:grant:draw",
+            ],
             Operation::Track => &["write", "write:track"],
+            Operation::Wait => &["write", "write:activity:wait"],
             operation => match Self::for_operation(operation) {
                 Some(Self::Read) => &["read"],
                 Some(Self::Subscribe) => &["subscribe"],
@@ -472,6 +483,31 @@ mod lifecycle_scope_tests {
             );
             assert!(!OperationClass::authorized_scopes(operation).contains(&"read"));
             assert!(!OperationClass::authorized_scopes(operation).contains(&"program:call"));
+        }
+    }
+    #[test]
+    fn wait_alias_does_not_authorize_track_or_other_operations() {
+        assert_eq!(
+            OperationClass::for_operation(Operation::Wait),
+            Some(OperationClass::Write)
+        );
+        assert_eq!(
+            OperationClass::authorized_scopes(Operation::Wait),
+            &["write", "write:activity:wait"]
+        );
+        for operation in [Operation::Track, Operation::Submit, Operation::ReadBalance] {
+            assert!(!OperationClass::authorized_scopes(operation).contains(&"write:activity:wait"));
+        }
+        assert!(!OperationClass::authorized_scopes(Operation::Wait).contains(&"write:track"));
+    }
+
+    #[test]
+    fn grant_aliases_authorize_submit_only() {
+        for scope in ["write:grant:issue", "write:grant:draw"] {
+            assert!(OperationClass::authorized_scopes(Operation::Submit).contains(&scope));
+            for operation in [Operation::Wait, Operation::Track, Operation::ReadBalance] {
+                assert!(!OperationClass::authorized_scopes(operation).contains(&scope));
+            }
         }
     }
 }

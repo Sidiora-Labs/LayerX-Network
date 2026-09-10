@@ -19,7 +19,7 @@
   "files": ["dist"],
   "scripts": { "build": "tsc -p tsconfig.json" },
   "publishConfig": { "access": "public", "provenance": true },
-  "dependencies": { "@sidiora/layerx-sdk": "0.1.0" },
+  "dependencies": { "@sidiora/layerx-sdk": "0.1.0", "@sidiora/layerx-seller-middleware": "0.1.0" },
   "devDependencies": { "typescript": "5.9.2" },
   "engines": { "node": ">=22" }
 }

@@ -82,6 +82,7 @@ enum {
     LNI_SIMULATION_FIXED_BYTES = 2 + 32 + 4 + 4 + 4,
     LNI_SIMULATION_EVIDENCE_BYTES = 2 + 32 * 4 + 8 + 8 + 32 + 64,
     LNI_BACKLOG = 16,
+    LNI_RESPONSE_BUDGET_MS = 100,
     LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES = 32,
     LNI_ADMISSION_JOURNAL_RECORD_BYTES = 64,
     LNI_ADMISSION_JOURNAL_VERSION = 1
@@ -2102,6 +2103,27 @@ static lxp_result pending_receipt_lookup(
     return LXP_ERR_UNKNOWN_ACTIVITY;
 }
 
+static bool server_stopping(lxp_daemon_lni_server *server);
+
+static pthread_mutex_t receipt_commit_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t receipt_commit_changed = PTHREAD_COND_INITIALIZER;
+static uint64_t receipt_commit_generation;
+
+lxp_result lxp_daemon_lni_receipts_committed(void)
+{
+    int result;
+    if (pthread_mutex_lock(&receipt_commit_mutex) != 0) return LXP_ERR_IO;
+    if (receipt_commit_generation == UINT64_MAX) {
+        (void)pthread_mutex_unlock(&receipt_commit_mutex);
+        return LXP_FATAL_INVARIANT;
+    }
+    ++receipt_commit_generation;
+    result = pthread_cond_broadcast(&receipt_commit_changed);
+    if (pthread_mutex_unlock(&receipt_commit_mutex) != 0)
+        return LXP_FATAL_INVARIANT;
+    return result == 0 ? LXP_OK : LXP_ERR_IO;
+}
+
 static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
                                const lni_envelope *request, int64_t deadline)
 {
@@ -2115,6 +2137,8 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     lxp_result status;
     size_t selector_length = request->payload_length;
     bool wait_publication = false;
+    int64_t wait_until;
+    struct timespec wait_deadline;
     if (request->minor >= 5U && (selector_length == 34U || selector_length == 10U) &&
         request->payload[selector_length - 1U] == 1U) {
         wait_publication = true;
@@ -2141,44 +2165,71 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     }
     query.maximum_response_bytes = server->frame_bytes -
         LNI_ENVELOPE_FIXED_BYTES;
+    wait_until = deadline > LNI_RESPONSE_BUDGET_MS ?
+        deadline - LNI_RESPONSE_BUDGET_MS : deadline;
+    wait_deadline.tv_sec = (time_t)(wait_until / 1000);
+    wait_deadline.tv_nsec = (long)(wait_until % 1000) * 1000000L;
     storage = malloc(query.maximum_response_bytes);
     if (storage == NULL) return LXP_ERR_IO;
-    status = lxp_arena_init(&arena, storage, query.maximum_response_bytes);
-    if (status == LXP_OK && pthread_mutex_lock(&server->daemon->mutex) != 0) status = LXP_ERR_IO;
-    if (status == LXP_OK) {
-        for (;;) {
-            status = lxp_arena_reset(&arena, 0U);
-            if (status != LXP_OK) break;
-            if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) { status = LXP_ERR_IO; break; }
-            status = pending_receipt_lookup(
-                server->owner, &query, &arena, &receipt);
-            if (status == LXP_ERR_UNKNOWN_ACTIVITY)
-                published_log = server->owner->published_receipt_log;
-            if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0) { status = LXP_FATAL_INVARIANT; break; }
+    if (pthread_mutex_lock(&receipt_commit_mutex) != 0) {
+        free(storage);
+        return LXP_ERR_IO;
+    }
+    for (;;) {
+        int waited;
+        uint64_t generation = receipt_commit_generation;
+        if (pthread_mutex_unlock(&receipt_commit_mutex) != 0) {
+            free(storage);
+            return LXP_FATAL_INVARIANT;
+        }
+        status = lxp_arena_init(&arena, storage,
+                                query.maximum_response_bytes);
+        if (status == LXP_OK) {
+            if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) {
+                free(storage);
+                return LXP_ERR_IO;
+            }
+            status = pending_receipt_lookup(server->owner, &query, &arena,
+                                            &receipt);
+            published_log = server->owner->published_receipt_log;
+            if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0) {
+                free(storage);
+                return LXP_FATAL_INVARIANT;
+            }
             if (status == LXP_ERR_UNKNOWN_ACTIVITY) {
                 history.log = &published_log;
-                status = lxp_receipt_lookup(
-                    &history, &query, &arena, &receipt);
+                status = lxp_receipt_lookup(&history, &query, &arena,
+                                            &receipt);
             }
-            if (status != LXP_ERR_UNKNOWN_ACTIVITY || !wait_publication ||
-                server->daemon->queue_count == 0U || server->daemon->stop_requested ||
-                server->daemon->failure != LXP_OK) break;
-            int64_t now;
-            struct timespec until;
-            if (monotonic_milliseconds(&now) != LXP_OK || clock_gettime(CLOCK_REALTIME, &until) != 0) {
-                status = LXP_ERR_IO; break;
-            }
-            if (now >= deadline) break;
-            int64_t remaining = deadline - now;
-            until.tv_sec += remaining / 1000;
-            until.tv_nsec += (long)(remaining % 1000) * 1000000L;
-            if (until.tv_nsec >= 1000000000L) { ++until.tv_sec; until.tv_nsec -= 1000000000L; }
-            int waited = pthread_cond_timedwait(&server->daemon->queue_changed, &server->daemon->mutex, &until);
-            if (waited == ETIMEDOUT) break;
-            if (waited != 0) { status = LXP_ERR_IO; break; }
         }
-        if (pthread_mutex_unlock(&server->daemon->mutex) != 0) status = LXP_FATAL_INVARIANT;
+        if (pthread_mutex_lock(&receipt_commit_mutex) != 0) {
+            free(storage);
+            return LXP_ERR_IO;
+        }
+        if (status != LXP_ERR_UNKNOWN_ACTIVITY || !wait_publication ||
+            server_stopping(server))
+            break;
+        if (generation != receipt_commit_generation) {
+            int64_t now;
+            if (monotonic_milliseconds(&now) != LXP_OK) {
+                status = LXP_ERR_IO;
+                break;
+            }
+            if (now >= wait_until) wait_publication = false;
+            continue;
+        }
+        waited = pthread_cond_clockwait(&receipt_commit_changed,
+                                        &receipt_commit_mutex,
+                                        CLOCK_MONOTONIC, &wait_deadline);
+        if (waited == ETIMEDOUT)
+            wait_publication = false;
+        else if (waited != 0) {
+            status = LXP_ERR_IO;
+            break;
+        }
     }
+    if (pthread_mutex_unlock(&receipt_commit_mutex) != 0)
+        status = LXP_FATAL_INVARIANT;
     if (status == LXP_ERR_UNKNOWN_ACTIVITY)
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_RECEIPT_LOOKUP_RESPONSE,
@@ -3492,10 +3543,12 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
         uint8_t *frame;
         uint32_t length;
         lni_envelope request;
+        int64_t idle_deadline;
         int64_t deadline;
-        lxp_result status = request_deadline(server, &deadline);
+        lxp_result status = request_deadline(server, &idle_deadline);
         if (status == LXP_OK)
-            status = exact_read(descriptor, prefix, sizeof(prefix), deadline);
+            status = exact_read(descriptor, prefix, sizeof(prefix),
+                                idle_deadline);
         if (status == LXP_ERR_TRUNCATED) return LXP_OK;
         if (status != LXP_OK) return status;
         length = load_u32(prefix);
@@ -3503,7 +3556,8 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
             return LXP_ERR_LENGTH_LIMIT;
         frame = (uint8_t *)malloc(length);
         if (frame == NULL) return LXP_ERR_IO;
-        status = exact_read(descriptor, frame, length, deadline);
+        status = exact_read(descriptor, frame, length, idle_deadline);
+        if (status == LXP_OK) status = request_deadline(server, &deadline);
         if (status == LXP_OK) status = decode_envelope(frame, length, &request);
         if (status != LXP_OK) {
             lxp_secure_zero(frame, length);
@@ -3605,40 +3659,92 @@ static bool server_stopping(lxp_daemon_lni_server *server)
     return stopping;
 }
 
+enum { LNI_CONNECTION_WORKERS = 4 };
+
+typedef struct lni_connection_worker {
+    lxp_daemon_lni_server *server;
+    pthread_t thread;
+    int descriptor;
+    bool started;
+    bool finished;
+} lni_connection_worker;
+
+static void *connection_run(void *context)
+{
+    lni_connection_worker *worker = context;
+    lxp_daemon_lni_server *server = worker->server;
+    lxp_result status = lxp_daemon_lni_serve_connected(server, worker->descriptor);
+    (void)pthread_mutex_lock(&server->mutex);
+    (void)shutdown(worker->descriptor, SHUT_RDWR);
+    (void)close(worker->descriptor);
+    worker->descriptor = -1;
+    worker->finished = true;
+    if (status != LXP_OK && status != LXP_ERR_TRUNCATED &&
+        status != LXP_ERR_EXPIRED && status != LXP_ERR_IO &&
+        status != LXP_ERR_AUTH_SCOPE && status != LXP_ERR_LENGTH_LIMIT &&
+        status != LXP_ERR_MALFORMED_ENVELOPE &&
+        status != LXP_ERR_VERSION_UNSUPPORTED) {
+        server->failure = status;
+        server->stopping = true;
+        (void)shutdown(server->listener_descriptor, SHUT_RDWR);
+    }
+    (void)pthread_mutex_unlock(&server->mutex);
+    return NULL;
+}
+
 static void *server_run(void *context)
 {
-    lxp_daemon_lni_server *server = (lxp_daemon_lni_server *)context;
+    lxp_daemon_lni_server *server = context;
+    lni_connection_worker workers[LNI_CONNECTION_WORKERS] = {0};
+    size_t index;
     while (!server_stopping(server)) {
         int descriptor = accept(server->listener_descriptor, NULL, NULL);
-        lxp_result status;
+        lni_connection_worker *available = NULL;
         if (descriptor < 0) {
             if (errno == EINTR) continue;
             if (server_stopping(server)) break;
-            status = LXP_ERR_IO;
-        } else {
             (void)pthread_mutex_lock(&server->mutex);
-            server->connection_descriptor = descriptor;
-            (void)pthread_mutex_unlock(&server->mutex);
-            status = lxp_daemon_lni_serve_connected(server, descriptor);
-            (void)shutdown(descriptor, SHUT_RDWR);
-            (void)close(descriptor);
-            (void)pthread_mutex_lock(&server->mutex);
-            server->connection_descriptor = -1;
-            (void)pthread_mutex_unlock(&server->mutex);
-            if (status == LXP_ERR_TRUNCATED || status == LXP_ERR_EXPIRED ||
-                status == LXP_ERR_IO ||
-                status == LXP_ERR_AUTH_SCOPE || status == LXP_ERR_LENGTH_LIMIT ||
-                status == LXP_ERR_MALFORMED_ENVELOPE ||
-                status == LXP_ERR_VERSION_UNSUPPORTED)
-                status = LXP_OK;
-        }
-        if (status != LXP_OK) {
-            (void)pthread_mutex_lock(&server->mutex);
-            server->failure = status;
+            server->failure = LXP_ERR_IO;
             server->stopping = true;
             (void)pthread_mutex_unlock(&server->mutex);
+            break;
+        }
+        for (index = 0U; index < LNI_CONNECTION_WORKERS; ++index) {
+            bool finished;
+            (void)pthread_mutex_lock(&server->mutex);
+            finished = workers[index].finished;
+            (void)pthread_mutex_unlock(&server->mutex);
+            if (workers[index].started && finished) {
+                (void)pthread_join(workers[index].thread, NULL);
+                workers[index].started = false;
+            }
+            if (!workers[index].started && available == NULL)
+                available = &workers[index];
+        }
+        if (available == NULL) {
+            (void)shutdown(descriptor, SHUT_RDWR);
+            (void)close(descriptor);
+            continue;
+        }
+        available->server = server;
+        available->descriptor = descriptor;
+        available->finished = false;
+        if (pthread_create(&available->thread, NULL, connection_run, available) != 0) {
+            (void)close(descriptor);
+            available->descriptor = -1;
+        } else {
+            available->started = true;
         }
     }
+    (void)pthread_mutex_lock(&server->mutex);
+    for (index = 0U; index < LNI_CONNECTION_WORKERS; ++index)
+        if (workers[index].started && workers[index].descriptor >= 0)
+            (void)shutdown(workers[index].descriptor, SHUT_RDWR);
+    (void)pthread_mutex_unlock(&server->mutex);
+    (void)lxp_daemon_lni_receipts_committed();
+    for (index = 0U; index < LNI_CONNECTION_WORKERS; ++index)
+        if (workers[index].started)
+            (void)pthread_join(workers[index].thread, NULL);
     return NULL;
 }
 

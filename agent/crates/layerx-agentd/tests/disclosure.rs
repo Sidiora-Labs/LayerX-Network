@@ -1,3 +1,6 @@
+#[path = "support/send_authorization.rs"]
+mod send_authorization;
+
 use layerx_agentd::prepare::{
     prepare_activity, verify_disclosure_binding, CorePreparationBoundary, CorePreparationState,
     CoreStateError, DisclosureBindingError, PreparationDefaults, PrepareRequest,
@@ -85,7 +88,7 @@ fn send_payload() -> Vec<u8> {
     encoder
         .u16(layerx_wire::limits::PROTOCOL_VERSION)
         .unwrap_or_else(|error| panic!("version: {error:?}"));
-    encoder.finish()
+    send_authorization::sign(encoder.finish())
 }
 
 fn prepared() -> layerx_agentd::prepare::Prepared {

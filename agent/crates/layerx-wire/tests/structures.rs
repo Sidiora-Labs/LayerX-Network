@@ -385,3 +385,19 @@ fn state_commitment_header_round_trips_without_changing_default_version() {
     future[..2].copy_from_slice(&4_u16.to_be_bytes());
     assert!(decode_batch_header(&future).is_err());
 }
+
+#[test]
+fn per_asset_account_uses_ledger_account_domain() {
+    let account =
+        layerx_types::account::AccountId::for_asset("did:layerx:alice", [0xab; 32], [0; 32])
+            .unwrap_or_else(|error| panic!("{error:?}"));
+    let actual = layerx_wire::hash::account_id_for_protocol(&account, 3)
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    assert_eq!(
+        actual,
+        [
+            1, 187, 195, 8, 58, 94, 54, 225, 226, 229, 26, 20, 85, 195, 1, 236, 65, 65, 49, 203,
+            104, 128, 248, 128, 86, 91, 193, 25, 152, 124, 197, 103
+        ]
+    );
+}

@@ -9,6 +9,10 @@ fn main() {
         .join("../../../core")
         .canonicalize()
         .required("core source");
+    let repository = core
+        .join("../../..")
+        .canonicalize()
+        .required("repository source");
     let source = core.join("tests/boundary.rs");
     println!("cargo:rerun-if-changed={}", source.display());
     println!("cargo:rerun-if-env-changed=LAYERX_TEST_CORE_BIN");
@@ -38,6 +42,16 @@ fn main() {
         (
             "env!(\"CARGO_BIN_EXE_layerx-core-boundary\")",
             format!("{:?}", binary.to_str().required("binary path")),
+        ),
+        (
+            "\"../../../../tests/support/lxgb_metadata.rs\"",
+            format!(
+                "{:?}",
+                repository
+                    .join("tests/support/lxgb_metadata.rs")
+                    .to_str()
+                    .required("metadata path")
+            ),
         ),
     ] {
         assert_eq!(

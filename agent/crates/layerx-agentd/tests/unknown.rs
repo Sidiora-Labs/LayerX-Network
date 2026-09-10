@@ -1,3 +1,5 @@
+use support::send_authorization;
+
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::pin;
@@ -156,7 +158,7 @@ fn send_payload(id: u8) -> Vec<u8> {
     encoder
         .u16(layerx_wire::limits::PROTOCOL_VERSION)
         .unwrap_or_else(|error| panic!("version: {error:?}"));
-    encoder.finish()
+    send_authorization::sign(encoder.finish())
 }
 
 fn verified_submission(id: u8) -> VerifiedSubmission {

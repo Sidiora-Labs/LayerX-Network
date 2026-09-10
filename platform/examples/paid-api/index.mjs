@@ -117,10 +117,9 @@ class StatePreservingReceiptAuthority {
 
 const config = await loadApplicationConfig(import.meta.url, "paid-api");
 const resourceBody = exactObject(JSON.parse(await readFile(resolve(config.directory, config.resourceFile), "utf8")));
-const resolver = new ReceiptAuthorityClient(
-  config.receiptAuthorityUrl,
-  requiredEnvironment(config.tokenEnvironment),
-);
+const resolver = config.authorizedBatchEnvironment === undefined
+  ? new ReceiptAuthorityClient(config.receiptAuthorityUrl, requiredEnvironment(config.tokenEnvironment))
+  : { resolve: async () => parseBatch(JSON.parse(requiredEnvironment(config.authorizedBatchEnvironment))) };
 const middleware = new SellerMiddleware({
   paymentRequired: {
     x402Version: 2,

@@ -251,6 +251,16 @@ Unknown `production_route` values are `404 not_found`
 | `LAYERX_GATEWAY_MODULE_REGISTRY_FILE` | JSON module ordinals (`platform/hosted/gateway/src/main.rs:2231-2271`) |
 | `LAYERX_GATEWAY_IDEMPOTENCY_SECONDS` | Retention `3600..=2592000`; default `604800` (`platform/hosted/gateway/src/main.rs:41`; `platform/hosted/gateway/src/main.rs:506-511`; `platform/hosted/gateway/deployment.yaml:95`) |
 
+The public registry admits Asset register (1), account_open (4), send (5),
+receive (6), grant_issue (7), grant_revoke (8), mint (10), and burn (11), plus
+Programs deploy (1), upgrade (2), call (3), transfer (5), account registration
+(6), and wind-down (7). Asset pause/unpause (2/3) are excluded and ordinal 9 is
+reserved. `lx_sendActivity` applies the same authenticated signer and fee path
+to every admitted type. `lx_estimateFee` strictly decodes that same set and
+prices canonical envelope bytes with the authenticated committed schedule;
+runtime-metered schedules fail closed when the request cannot supply the
+required execution or storage units.
+
 The testnet Deployment pins `LAYERX_GATEWAY_NETWORK_ID=layerx-testnet`,
 `LAYERX_GATEWAY_LXP_WIRE_VERSION=3`,
 `LAYERX_GATEWAY_PROTOCOL_NETWORK_ID=402`

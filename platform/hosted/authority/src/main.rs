@@ -32,6 +32,7 @@ const MAX_TLS_FILE_BYTES: u64 = 64 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(8);
 const REPLICA_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_CONNECTIONS: usize = 128;
+const MAX_REQUESTS_PER_CONNECTION: usize = 64;
 const MAX_LNI_CONNECTIONS: usize = 16;
 const LNI_FRAME_BYTES: usize = 1_212_416;
 const RECEIPT_LOOKUP_REQUEST: u16 = 5;
@@ -47,6 +48,8 @@ Routes (GET only):
   /livez
   /readyz                                              {ready, network_id, wire_version}
   /v1/authorized-batches/by-activity/{activity_id}     bearer required
+  /v1/authorized-batches/wait-by-activity/{activity_id}
+                                                       bearer required; waits for a publication notification
   /internal/v1/activities/{activity_id}/authority      bearer required
   /v1/batches/{batch_id}/receipt-authority?receipt_digest={digest}
                                                        bearer required, relayed to the replica unchanged
@@ -402,7 +405,11 @@ fn refusal(status: u16, code: &str, retry_after: Option<u64>) -> Response {
     }
 }
 
-fn write_response(stream: &mut impl Write, response: &Response) -> Result<(), String> {
+fn write_response(
+    stream: &mut impl Write,
+    response: &Response,
+    keep_alive: bool,
+) -> Result<(), String> {
     let reason = match response.status {
         200 => "OK",
         400 => "Bad Request",
@@ -416,8 +423,9 @@ fn write_response(stream: &mut impl Write, response: &Response) -> Result<(), St
     let retry = response.retry_after.map_or(String::new(), |seconds| {
         format!("Retry-After: {seconds}\r\n")
     });
+    let connection = if keep_alive { "keep-alive" } else { "close" };
     let head = format!(
-        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{retry}Connection: close\r\n\r\n",
+        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{retry}Connection: {connection}\r\n\r\n",
         response.status,
         response.body.len()
     );
@@ -539,7 +547,7 @@ enum ReceiptSource {
     KeyMismatch,
 }
 
-fn lookup_receipt(config: &Config, activity_id: [u8; 32]) -> ReceiptSource {
+fn lookup_receipt(config: &Config, activity_id: [u8; 32], wait_publication: bool) -> ReceiptSource {
     let limits = Limits {
         maximum_frame_bytes: LNI_FRAME_BYTES,
         maximum_connections: MAX_LNI_CONNECTIONS,
@@ -552,7 +560,7 @@ fn lookup_receipt(config: &Config, activity_id: [u8; 32]) -> ReceiptSource {
         Err(error) => return ReceiptSource::Unavailable(format!("LNI connect: {error:?}")),
     };
     let expected = HandshakeConfig {
-        built_interface_version: Version::V1_3,
+        built_interface_version: Version::V1_5,
         expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: config.protocol_network_id,
     };
@@ -563,15 +571,23 @@ fn lookup_receipt(config: &Config, activity_id: [u8; 32]) -> ReceiptSource {
     if !handshake.capabilities().contains(Capability::ReceiptLookup) {
         return ReceiptSource::Unavailable("LNI does not advertise receipt_lookup".to_owned());
     }
+    if wait_publication && handshake.node().interface_version.minor < Version::V1_5.minor {
+        return ReceiptSource::Unavailable(
+            "LNI does not advertise publication notification waits".to_owned(),
+        );
+    }
     if handshake.node().authorised_sequencer_key != config.sequencer_public_key {
         return ReceiptSource::KeyMismatch;
     }
     let mut selector = Vec::with_capacity(33);
     selector.push(1);
     selector.extend_from_slice(&activity_id);
+    if wait_publication {
+        selector.push(1);
+    }
     let correlation_id = CORRELATION.fetch_add(1, Ordering::AcqRel);
     let request = match encode_envelope(Envelope {
-        version: Version::V1_3,
+        version: handshake.node().interface_version,
         message_tag: RECEIPT_LOOKUP_REQUEST,
         correlation_id,
         canonical_payload: &selector,
@@ -591,7 +607,9 @@ fn lookup_receipt(config: &Config, activity_id: [u8; 32]) -> ReceiptSource {
         Ok(envelope) => envelope,
         Err(error) => return ReceiptSource::Unavailable(format!("LNI decode: {error:?}")),
     };
-    if envelope.version.major != Version::V1_3.major || envelope.correlation_id != correlation_id {
+    if envelope.version.major != handshake.node().interface_version.major
+        || envelope.correlation_id != correlation_id
+    {
         return ReceiptSource::Unavailable(
             "LNI response changed version or correlation".to_owned(),
         );
@@ -655,14 +673,14 @@ fn evidence_refusal(refusal_kind: &EvidenceRefusal) -> Response {
     refusal(502, "evidence_refused", None)
 }
 
-fn by_activity(config: &Config, requested: &str) -> Response {
+fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Response {
     let Ok(activity_id) = hex::decode32(requested) else {
         return refusal(400, "invalid_activity_id", None);
     };
     if activity_id == [0; 32] {
         return refusal(400, "invalid_activity_id", None);
     }
-    let receipt = match lookup_receipt(config, activity_id) {
+    let receipt = match lookup_receipt(config, activity_id, wait_publication) {
         ReceiptSource::Found(receipt) => receipt,
         ReceiptSource::Unknown => return refusal(404, "unknown_activity", None),
         ReceiptSource::KeyMismatch => {
@@ -713,6 +731,7 @@ fn by_activity(config: &Config, requested: &str) -> Response {
             }
             let mut response = serde_json::json!({
                 "activity_id": requested,
+                "receipt": hex::encode(&receipt),
                 "batch_id": hex::encode(&facts.batch_id),
                 "asset": hex::encode(&facts.asset),
                 "previous_state_root": hex::encode(&facts.previous_state_root),
@@ -809,13 +828,19 @@ fn route(config: &Config, request: &Request) -> Response {
     }
     let activity = path
         .strip_prefix("/v1/authorized-batches/by-activity/")
+        .map(|activity| (activity, false))
+        .or_else(|| {
+            path.strip_prefix("/v1/authorized-batches/wait-by-activity/")
+                .map(|activity| (activity, true))
+        })
         .or_else(|| {
             path.strip_prefix("/internal/v1/activities/")
                 .and_then(|rest| rest.strip_suffix("/authority"))
+                .map(|activity| (activity, false))
         });
     match activity {
-        Some(activity) => match authenticate(config, request) {
-            Ok(()) => by_activity(config, activity),
+        Some((activity, wait_publication)) => match authenticate(config, request) {
+            Ok(()) => by_activity(config, activity, wait_publication),
             Err(response) => response,
         },
         None => refusal(404, "not_found", None),
@@ -823,6 +848,7 @@ fn route(config: &Config, request: &Request) -> Response {
 }
 
 fn handle_connection(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
+    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
     tcp.set_read_timeout(Some(IO_TIMEOUT))
         .map_err(|error| error.to_string())?;
     tcp.set_write_timeout(Some(IO_TIMEOUT))
@@ -830,11 +856,25 @@ fn handle_connection(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String>
     let connection =
         ServerConnection::new(Arc::clone(&config.tls)).map_err(|error| error.to_string())?;
     let mut stream = StreamOwned::new(connection, tcp);
-    let response = read_http_message(&mut stream).map_or_else(
-        |_| refusal(400, "invalid_request", None),
-        |request| route(config, &request),
-    );
-    write_response(&mut stream, &response)?;
+    for request_number in 0..MAX_REQUESTS_PER_CONNECTION {
+        let request = match read_http_message(&mut stream) {
+            Ok(request) => request,
+            Err(_) if request_number == 0 => {
+                write_response(&mut stream, &refusal(400, "invalid_request", None), false)?;
+                break;
+            }
+            Err(_) => break,
+        };
+        let keep_alive = request_number + 1 < MAX_REQUESTS_PER_CONNECTION
+            && request
+                .headers
+                .get("connection")
+                .is_none_or(|value| !value.eq_ignore_ascii_case("close"));
+        write_response(&mut stream, &route(config, &request), keep_alive)?;
+        if !keep_alive {
+            break;
+        }
+    }
     stream.conn.send_close_notify();
     let _ = stream.conn.write_tls(&mut stream.sock);
     Ok(())

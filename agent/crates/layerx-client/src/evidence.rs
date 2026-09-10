@@ -175,9 +175,19 @@ pub struct FinalityEvidenceCandidate {
     context_bytes: Vec<u8>,
     checkpoint_id: [u8; 32],
     batch_number: u64,
+    canonical_header: Vec<u8>,
 }
 
 impl FinalityEvidenceCandidate {
+    #[must_use]
+    pub fn canonical_header(&self) -> &[u8] {
+        &self.canonical_header
+    }
+    #[must_use]
+    pub const fn checkpoint_id(&self) -> [u8; 32] {
+        self.checkpoint_id
+    }
+
     /// Checks exact core/Paxeer evidence bytes before they can be submitted to
     /// the node's independently configured finality-authority callback.
     ///
@@ -204,6 +214,7 @@ impl FinalityEvidenceCandidate {
                 EvidenceError::Checkpoint(CheckpointError::CheckpointIdentifier),
             )?,
             batch_number: checked.report.batch_number(),
+            canonical_header: checked.canonical_header,
         })
     }
 }
@@ -233,6 +244,7 @@ pub enum VerifiedProofBundle {
     },
     MaintainedAccount {
         canonical_bytes: Vec<u8>,
+        proof_material: Vec<u8>,
         activity_id: [u8; 32],
         activity_receipt: Vec<u8>,
         verified: Box<VerifiedMaintenanceAccountState>,
@@ -240,6 +252,7 @@ pub enum VerifiedProofBundle {
     },
     Account {
         canonical_bytes: Vec<u8>,
+        proof_material: Vec<u8>,
         activity_id: [u8; 32],
         verified: Box<VerifiedAccountState>,
         signed_header: SignedHeader,
@@ -704,6 +717,7 @@ fn account_proof_bundle(
         }
         return Ok(VerifiedProofBundle::MaintainedAccount {
             canonical_bytes: response.payload,
+            proof_material: response.proof,
             activity_id,
             activity_receipt,
             verified: Box::new(verified),
@@ -723,6 +737,7 @@ fn account_proof_bundle(
     }
     Ok(VerifiedProofBundle::Account {
         canonical_bytes: response.payload,
+        proof_material: response.proof,
         activity_id: target_activity_id,
         verified: Box::new(verified),
         signed_header: decoded.signed_header,

@@ -2,8 +2,10 @@ mod support;
 
 use layerx_agentd::boot::GateError;
 use layerx_agentd::protocol_evidence::{
-    EvidenceAuthority, ReceiptEvidenceError, StateEvidenceError, VerifierPolicyError,
+    CumulativeUseError, CumulativeUseWindow, EvidenceAuthority, ReceiptEvidenceError,
+    StateEvidenceError, VerifierPolicyError,
 };
+use layerx_types::ids::Did;
 use layerx_wire::limits::{LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION};
 
 use support::{StateHeaderIdentity, TestAuthorityPolicy, TestAuthorityRecord};
@@ -49,6 +51,29 @@ fn verifier(identity: PolicyIdentity) -> EvidenceAuthority {
 
 fn state(identity: StateHeaderIdentity) -> layerx_agentd::protocol_evidence::RawStateEvidence {
     support::raw_state_leaf_with(b"canonical-state-value".to_vec(), 50, identity)
+}
+
+#[test]
+fn cumulative_use_refuses_invalid_or_incomplete_windows_before_receipt_use() {
+    let authority = support::evidence_verifier();
+    let actor = Did::new(b"did:layerx:cumulative")
+        .unwrap_or_else(|error| panic!("cumulative DID: {error:?}"));
+    assert!(matches!(
+        authority.authenticate_cumulative_use(
+            &actor,
+            CumulativeUseWindow { first: 2, last: 1 },
+            &[]
+        ),
+        Err(CumulativeUseError::InvalidWindow)
+    ));
+    assert!(matches!(
+        authority.authenticate_cumulative_use(
+            &actor,
+            CumulativeUseWindow { first: 1, last: 1 },
+            &[]
+        ),
+        Err(CumulativeUseError::IncompleteWindow)
+    ));
 }
 
 #[test]

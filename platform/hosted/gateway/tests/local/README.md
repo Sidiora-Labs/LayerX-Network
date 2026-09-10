@@ -53,6 +53,9 @@ bodies, and key replay compares exact values without formatting credentials.
 The real gateway separately obtains authority from the receipt-authority service.
 
 This gate covers deploy, upgrade and deprecate, authenticated route refusals,
-signature rejection and idempotent replay. It does not claim CALL occupancy,
+signature rejection and idempotent replay. The same harness also exercises
+`POST /rpc` (`local_gateway_rpc`) and authenticated `GET /rpc/ws`
+(`local_gateway_websocket_receipt_wake`). It does not claim CALL occupancy,
 custody-funded execution, explorer reads or production certification. No tests
-or builds are implied by source availability.
+or builds are implied by source availability. The funded SEND latency
+selection remains a separate qualifier and is not implied by this README.

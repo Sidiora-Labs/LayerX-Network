@@ -22,7 +22,7 @@ transport to core:
 | Surface | Process | Tools | Authority |
 | --- | --- | --- | --- |
 | CLI install / `layerx mcp serve` | `layerx` stdio MCP (`platform/cli/src/mcp.rs:13-56`; `platform/cli/src/main.rs:439-455, 527-545`) | `receipt.get`, `activity.submit` (`platform/cli/src/toolset.rs:23-38, 104-116`) | Hosted gateway `Authorization: LayerX-Key` (`platform/cli/src/http.rs:50-64, 229-231`; `platform/cli/src/toolset.rs:95`) |
-| `layerx-mcp` crate | `Server::bind` / `ReadOnly::bind` (`agent/crates/layerx-mcp/src/server.rs:348-363`; `agent/crates/layerx-mcp/src/readonly.rs:25-40`) | Eleven tools in `TOOL_CATALOGUE` (`agent/crates/layerx-mcp/src/server.rs:51-129`) | One daemon session and one capability (`agent/crates/layerx-mcp/README.md:3-6`; `agent/crates/layerx-mcp/src/server.rs:136-145, 390`) |
+| `layerx-mcp` crate | `Server::bind` / `ReadOnly::bind` (`agent/crates/layerx-mcp/src/server.rs:397-412`; `agent/crates/layerx-mcp/src/readonly.rs:25-40`) | Eighteen tools in `TOOL_CATALOGUE` (`agent/crates/layerx-mcp/src/server.rs:51-178`) | One daemon session and one capability (`agent/crates/layerx-mcp/README.md:3-6`; `agent/crates/layerx-mcp/src/server.rs:187-194, 397`) |
 
 `layerx-mcp` has no binary (`agent/crates/layerx-mcp/Cargo.toml:1-19`).
 Every crate tool call routes through `layerx-agentd`; there is no
@@ -354,14 +354,17 @@ CLI MCP read tool: `receipt.get` with argument `activity_id`
 `layerx receipt get <id>` is the same HTTP fetch outside MCP
 (`platform/cli/src/main.rs:194-195, 956-964`).
 
-Daemon MCP read tools `balance.get`, `history.list`, `receipt.get`,
-`checkpoint.get`, `proof.get`, `availability.get` return
-`VerifiedToolResult` with `value`, `verification_level`, `freshness`,
-`page` (`agent/crates/layerx-mcp/src/server.rs:51-93`;
-`agent/crates/layerx-mcp/src/tools/read.rs:101-108`). Read-only
+Daemon MCP read tools `balance.get`, `wallet.balance`, `wallet.accounts`,
+`history.list`, `receipt.get`, `checkpoint.get`, `proof.get`,
+`availability.get` are catalogue entries authorized through the daemon
+(`agent/crates/layerx-mcp/src/server.rs:51-141, 673-676`). Helpers
+`balance`, `history`, `receipt`, `checkpoint`, `proof`, and
+`availability` return `VerifiedToolResult` with `value`,
+`verification_level`, `freshness`, `page`
+(`agent/crates/layerx-mcp/src/tools/read.rs:101-108`). Read-only
 deployment omits write tools
-(`agent/crates/layerx-mcp/src/server.rs:29-32, 391-396`;
-`agent/crates/layerx-mcp/README.md:35`).
+(`agent/crates/layerx-mcp/src/server.rs:29-32, 414-449`;
+`agent/crates/layerx-mcp/README.md:41`).
 
 The TypeScript and Python payment examples call `client.call("submit",
 request)` and require `VerificationLevel.SequencerSigned` /
@@ -416,12 +419,18 @@ Daemon writes follow `ORDINARY_WRITE_STAGES`: Prepare, Disclose,
 Policy, Sign, Submit, Track
 (`agent/crates/layerx-mcp/src/tools/write.rs:10-28`).
 `tools::write::execute` invokes tool name `activity.submit`
-(`agent/crates/layerx-mcp/src/tools/write.rs:94-121`). Non-error
+(`agent/crates/layerx-mcp/src/tools/write.rs:138-156`).
+`execute_payment` uses the same stages for `wallet.send`,
+`token.create`, `token.mint`, and `token.transfer`
+(`agent/crates/layerx-mcp/src/tools/write.rs:89-131`).
+`wait` uses the track stages under `activity.wait`
+(`agent/crates/layerx-mcp/src/tools/write.rs:209-227`). Non-error
 outcomes: `Executed` (`submission_ref`, `receipt`), `Unknown`
 (`submission_ref`, `age_ms`), `Pending` (`submission_ref`, `state`)
 (`agent/crates/layerx-mcp/src/tools/write.rs:64-78`).
-`activity.prepare` / `disclose` / `sign` / `submit` / `track` are
-separate catalogue tools (`agent/crates/layerx-mcp/src/server.rs:94-128`).
+`activity.prepare` / `disclose` / `sign` / `submit` / `track` and the
+wallet, token, and wait tools are separate catalogue entries
+(`agent/crates/layerx-mcp/src/server.rs:94-177`).
 
 Human opcodes `PREPARE` `1`, `SUBMIT` `2`, `TRACK` `3`
 (`agent/crates/layerx-agentd/src/human.rs:13-15`). There is no
@@ -471,7 +480,7 @@ Daemon MCP `receipt.get` returns `ReceiptValue` with
 (`agent/crates/layerx-mcp/src/tools/write.rs:46-53, 66-69`).
 Executed without that verified receipt is
 `WriteToolError::SuccessWithoutVerifiedReceipt`
-(`agent/crates/layerx-mcp/src/tools/write.rs:194-204`;
+(`agent/crates/layerx-mcp/src/tools/write.rs:291-301`;
 `agent/crates/layerx-mcp/tests/write.rs:269-272`).
 
 Human opcode `RECEIPT_LOOKUP` `4` carries `idempotency_key` and
@@ -497,9 +506,11 @@ Prepared and signed work is cancelled; queued/unknown work continues
 resolution; executed/failed work is left untouched
 (`agent/crates/layerx-agentd/src/session_revocation.rs:109-121`).
 
-After close, MCP `activity.submit` and `activity.track` return
+After close, MCP write tools including `activity.submit`,
+`wallet.send`, `token.create`, `token.mint`, `token.transfer`,
+`activity.track`, and `activity.wait` return
 `WriteToolError::Server(ServerError::RevokedSession)` before any
-write transcript (`agent/crates/layerx-mcp/src/server.rs:676-694`;
+write transcript (`agent/crates/layerx-mcp/src/server.rs:729-745`;
 `agent/crates/layerx-mcp/tests/write.rs:276-325`).
 
 Hosted gateway key revocation response fields: `ok`, `id`, `state`
@@ -533,6 +544,8 @@ There is no CLI command that registers that endpoint.
 | Name | Scope | Read/write |
 | --- | --- | --- |
 | `balance.get` | `read:balance` | read |
+| `wallet.balance` | `read:wallet:balance` | read |
+| `wallet.accounts` | `read:wallet:accounts` | read |
 | `history.list` | `read:history` | read |
 | `receipt.get` | `read:receipt` | read |
 | `checkpoint.get` | `read:checkpoint` | read |
@@ -542,13 +555,19 @@ There is no CLI command that registers that endpoint.
 | `activity.disclose` | `write:disclose` | write |
 | `activity.sign` | `write:sign` | write |
 | `activity.submit` | `write:submit` | write |
+| `wallet.send` | `write:wallet:send` | write |
+| `token.create` | `write:token:create` | write |
+| `token.mint` | `write:token:mint` | write |
+| `token.transfer` | `write:token:transfer` | write |
 | `activity.track` | `write:track` | write |
+| `activity.wait` | `write:activity:wait` | write |
 
-(`agent/crates/layerx-mcp/src/server.rs:51-129`;
-`agent/crates/layerx-mcp/README.md:21-34`). Mapped daemon operations:
-`ReadBalance`, `ReadHistory`, `ProgramReceipt`, `ReadCheckpoint`,
-`ReadProofBundle`, `AvailabilityFetch`, `Prepare`, `Sign`, `Submit`,
-`Track` (`agent/crates/layerx-mcp/src/server.rs:624-637`).
+(`agent/crates/layerx-mcp/src/server.rs:51-178`;
+`agent/crates/layerx-mcp/README.md:16-40`). Mapped daemon operations:
+`ReadBalance`, `ReadAccount`, `ReadHistory`, `ProgramReceipt`,
+`ReadCheckpoint`, `ReadProofBundle`, `AvailabilityFetch`, `Prepare`,
+`Sign`, `Submit`, `Track` (`agent/crates/layerx-mcp/src/server.rs:673-688`).
+Wallet and token writes alias `Submit`; `activity.wait` aliases `Track`.
 
 ---
 
@@ -642,17 +661,17 @@ Missing required values print `{name} is required`
 
 | Type | Meaning |
 | --- | --- |
-| `ServerError::MissingSession` / `MissingCapability` | Bind-time records absent (`agent/crates/layerx-mcp/src/server.rs:381-389, 640-657`) |
-| `ClosedSession` / `RevokedSession` | Session closed or generation advanced (`agent/crates/layerx-mcp/src/server.rs:168-169, 676-694`) |
-| `TenantMismatch` / `CapabilityMismatch` | Session and capability disagree (`agent/crates/layerx-mcp/src/server.rs:171-175, 189-191`) |
-| `ExpiredAuthority` | `core_sequence` at or past session or capability expiry (`agent/crates/layerx-mcp/src/server.rs:177-180`) |
-| `NoScope` | No catalogue scope remains after filtering (`agent/crates/layerx-mcp/src/server.rs:182-205, 399-400`) |
-| `ToolAbsent` | Unknown, out-of-scope, or non-matching read/write tool (`agent/crates/layerx-mcp/src/server.rs:483, 551-555, 583-587`; `agent/crates/layerx-mcp/src/readonly.rs:74-79`) |
-| `InvalidInvocation` | Empty/oversized/NUL tool name or arguments > `1_048_576` (`agent/crates/layerx-mcp/src/server.rs:19-20, 457-462`) |
+| `ServerError::MissingSession` / `MissingCapability` | Bind-time records absent (`agent/crates/layerx-mcp/src/server.rs:422-438, 652-669`) |
+| `ClosedSession` / `RevokedSession` | Session closed or generation advanced (`agent/crates/layerx-mcp/src/server.rs:217-218, 729-745`) |
+| `TenantMismatch` / `CapabilityMismatch` | Session and capability disagree (`agent/crates/layerx-mcp/src/server.rs:220-224`) |
+| `ExpiredAuthority` | `core_sequence` at or past session or capability expiry (`agent/crates/layerx-mcp/src/server.rs:226-229`) |
+| `NoScope` | No catalogue scope remains after filtering (`agent/crates/layerx-mcp/src/server.rs:231-250, 448-449`) |
+| `ToolAbsent` | Unknown, out-of-scope, or non-matching read/write tool (`agent/crates/layerx-mcp/src/server.rs:532, 600-604, 632-636`; `agent/crates/layerx-mcp/src/readonly.rs:74-79`) |
+| `InvalidInvocation` | Empty/oversized/NUL tool name or arguments > `1_048_576` (`agent/crates/layerx-mcp/src/server.rs:19-20, 506-511`) |
 | `ValidationError::ScopeDenied` / `CounterpartyDenied` / `AuthorityOverride` | Untrusted arguments cannot change tenant, scope, or counterparty (`agent/crates/layerx-mcp/src/untrusted.rs:64-71, 81-125`) |
 | `ReadToolError::Unverified` / `InvalidBounds` / `CursorMismatch` / `ResultTooLarge` / `MissingReceiptEvidence` | Read envelope refusals (`agent/crates/layerx-mcp/src/tools/read.rs:110-119`) |
 | `WriteToolError::Stage(StageFailure)` | Named `WriteStage` with `FailureClass` `Refused` / `Unavailable` / `InvalidEvidence` / `Protocol` (`agent/crates/layerx-mcp/src/tools/write.rs:30-44, 80-87`) |
-| `WriteToolError::SuccessWithoutVerifiedReceipt` | `Executed` without verified receipt evidence (`agent/crates/layerx-mcp/src/tools/write.rs:194-204`) |
+| `WriteToolError::SuccessWithoutVerifiedReceipt` | `Executed` without verified receipt evidence (`agent/crates/layerx-mcp/src/tools/write.rs:291-301`) |
 | `LimitRefusal::Exceeded` | Names `limit`, `name`, `ceiling`, `consumed`, `held`, `requested` (`agent/crates/layerx-agentd/src/budget/reserve.rs:161-169, 203-211`) |
 | `ApprovalError::DisclosureChanged` | Presented disclosure ≠ held ticket (`agent/crates/layerx-mcp/src/approval.rs:25-28, 139-140`) |
 

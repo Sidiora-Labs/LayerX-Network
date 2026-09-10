@@ -780,6 +780,56 @@ fn https_get(port: u16, certificate: &Certificate, path: &str, bearer: Option<&s
     parse_http(&raw)
 }
 
+fn persistent_https_get(
+    stream: &mut (impl Read + Write),
+    path: &str,
+    bearer: Option<&str>,
+    close: bool,
+) -> HttpAnswer {
+    let authorization = bearer.map_or(String::new(), |token| {
+        format!("Authorization: Bearer {token}\r\n")
+    });
+    let connection = if close { "close" } else { "keep-alive" };
+    must(
+        stream.write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{authorization}Connection: {connection}\r\n\r\n")
+                .as_bytes(),
+        ),
+        "persistent request write",
+    );
+    let mut raw = Vec::with_capacity(2048);
+    while !raw.ends_with(b"\r\n\r\n") {
+        let mut byte = [0_u8; 1];
+        must(stream.read_exact(&mut byte), "persistent response headers");
+        raw.push(byte[0]);
+        assert!(raw.len() <= 8192, "persistent response headers are bounded");
+    }
+    let headers = std::str::from_utf8(&raw).unwrap_or_else(|_| panic!("response headers UTF-8"));
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            line.split_once(':').and_then(|(name, value)| {
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or_else(|| panic!("persistent content length"));
+    assert!(
+        content_length <= 8 * 1024 * 1024,
+        "persistent response is bounded"
+    );
+    let header_length = raw.len();
+    raw.resize(header_length + content_length, 0);
+    must(
+        stream.read_exact(&mut raw[header_length..]),
+        "persistent response body",
+    );
+    parse_http(&raw)
+}
+
 fn http_get(port: u16, path: &str, bearer: &str) -> HttpAnswer {
     let mut stream = must(TcpStream::connect(("127.0.0.1", port)), "replica connect");
     must(
@@ -1322,6 +1372,29 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
     assert_eq!(live.status, 200);
     assert_eq!(live.content_type, "application/json");
 
+    let connector = must(
+        TlsConnector::builder()
+            .add_root_certificate(cluster.certificate.clone())
+            .build(),
+        "persistent TLS connector",
+    );
+    let tcp = must(
+        TcpStream::connect(("127.0.0.1", cluster.authority_port)),
+        "persistent authority connect",
+    );
+    must(
+        tcp.set_read_timeout(Some(Duration::from_secs(30))),
+        "persistent authority timeout",
+    );
+    let mut persistent = must(
+        connector.connect("localhost", tcp),
+        "persistent authority TLS handshake",
+    );
+    let first_on_connection = persistent_https_get(&mut persistent, "/livez", None, false);
+    let second_on_connection = persistent_https_get(&mut persistent, "/readyz", None, true);
+    assert_eq!(first_on_connection.status, 200);
+    assert_eq!(second_on_connection.status, 200);
+
     let ready = https_get(
         cluster.authority_port,
         &cluster.certificate,
@@ -1403,6 +1476,7 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
             "batch_id",
             "network_id",
             "previous_state_root",
+            "receipt",
             "resulting_state_root",
             "sequencer_public_key",
             "wire_version",
@@ -1414,6 +1488,7 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
         .collect::<Vec<&String>>()
     );
     assert_eq!(field(&facts, "activity_id"), activity_hex);
+    assert_eq!(field(&facts, "receipt"), hex::encode(&submitted.receipt));
     assert_eq!(field(&facts, "network_id"), NETWORK_NAME);
     assert_eq!(field(&facts, "wire_version"), PROTOCOL_VERSION.to_string());
     assert_eq!(

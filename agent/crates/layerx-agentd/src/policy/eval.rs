@@ -7,6 +7,7 @@ use layerx_types::ids::Did;
 
 use crate::budget::ReconciliationState;
 use crate::capability::{self, Capability, CapabilityId, PreparedIntent};
+use crate::protocol_evidence::AuthenticatedCumulativeUse;
 use crate::session::{SessionId, SessionRecord};
 use crate::store::TenantId;
 
@@ -76,22 +77,21 @@ pub struct PolicySet {
 
 /// Inputs admitted to deterministic local evaluation.
 ///
-/// The budget and cumulative-count contexts are private. Callers may supply an
-/// opaque budget result issued by protocol reconciliation, but no canonical
-/// cumulative-count producer exists yet, so current evaluation remains a
-/// fail-closed invalid-context denial.
+/// Cumulative contexts are private. Callers may supply only opaque facts issued
+/// by protocol reconciliation or complete authenticated activity/receipt
+/// windows; arbitrary caller-provided totals are not accepted.
 pub struct EvaluationInput<'a> {
     pub request: &'a PolicyRequest,
     pub session: &'a SessionRecord,
     pub capability: &'a Capability,
-    budget: BudgetContext<'a>,
-    cumulative_count: Option<u64>,
+    cumulative: CumulativeContext<'a>,
 }
 
 #[derive(Clone, Copy)]
-enum BudgetContext<'a> {
+enum CumulativeContext<'a> {
     Unavailable,
-    Verified(&'a ReconciliationState),
+    ProtocolBudget(&'a ReconciliationState),
+    Authenticated(&'a AuthenticatedCumulativeUse),
 }
 
 impl<'a> EvaluationInput<'a> {
@@ -108,8 +108,7 @@ impl<'a> EvaluationInput<'a> {
             request,
             session,
             capability,
-            budget: BudgetContext::Unavailable,
-            cumulative_count: None,
+            cumulative: CumulativeContext::Unavailable,
         }
     }
 
@@ -127,20 +126,47 @@ impl<'a> EvaluationInput<'a> {
             request,
             session,
             capability,
-            budget: BudgetContext::Verified(budget),
-            cumulative_count: None,
+            cumulative: CumulativeContext::ProtocolBudget(budget),
         }
     }
 
-    const fn verified_budget(&self) -> Option<&ReconciliationState> {
-        match self.budget {
-            BudgetContext::Unavailable => None,
-            BudgetContext::Verified(budget) => Some(budget),
+    /// Binds cumulative amount and count issued from a complete authenticated
+    /// protocol-sequence window.
+    #[must_use]
+    pub const fn with_authenticated_cumulative_use(
+        request: &'a PolicyRequest,
+        session: &'a SessionRecord,
+        capability: &'a Capability,
+        cumulative: &'a AuthenticatedCumulativeUse,
+    ) -> Self {
+        Self {
+            request,
+            session,
+            capability,
+            cumulative: CumulativeContext::Authenticated(cumulative),
+        }
+    }
+
+    const fn authenticated_cumulative_amount(&self) -> Option<u128> {
+        match self.cumulative {
+            CumulativeContext::Authenticated(cumulative) => Some(cumulative.amount()),
+            CumulativeContext::ProtocolBudget(budget) => Some(budget.protocol_consumed()),
+            CumulativeContext::Unavailable => None,
         }
     }
 
     const fn authenticated_cumulative_count(&self) -> Option<u64> {
-        self.cumulative_count
+        match self.cumulative {
+            CumulativeContext::Authenticated(cumulative) => Some(cumulative.count()),
+            CumulativeContext::ProtocolBudget(_) | CumulativeContext::Unavailable => None,
+        }
+    }
+
+    const fn authenticated_window(&self) -> Option<&AuthenticatedCumulativeUse> {
+        match self.cumulative {
+            CumulativeContext::Authenticated(cumulative) => Some(cumulative),
+            CumulativeContext::ProtocolBudget(_) | CumulativeContext::Unavailable => None,
+        }
     }
 }
 
@@ -177,8 +203,7 @@ impl RuleMatcher for DeterministicMatcher {
             return Err(EvaluationFailure::InvalidRule);
         }
         let cumulative_amount = input
-            .verified_budget()
-            .map(ReconciliationState::protocol_consumed)
+            .authenticated_cumulative_amount()
             .ok_or(EvaluationFailure::ProtocolBudgetUnavailable)?;
         if constraints.maximum_cumulative_count.is_some()
             && input.authenticated_cumulative_count().is_none()
@@ -193,13 +218,16 @@ impl RuleMatcher for DeterministicMatcher {
             && constraints
                 .maximum_amount
                 .is_none_or(|maximum| request.amount <= maximum)
-            && constraints
-                .maximum_cumulative_amount
-                .is_none_or(|maximum| cumulative_amount <= maximum)
+            && constraints.maximum_cumulative_amount.is_none_or(|maximum| {
+                cumulative_amount
+                    .checked_add(request.amount)
+                    .is_some_and(|projected| projected <= maximum)
+            })
             && constraints.maximum_cumulative_count.is_none_or(|maximum| {
                 input
                     .authenticated_cumulative_count()
-                    .is_some_and(|count| count <= maximum)
+                    .and_then(|count| count.checked_add(1))
+                    .is_some_and(|projected| projected <= maximum)
             })
             && (constraints.purposes.is_empty() || constraints.purposes.contains(&request.purpose))
             && (constraints.capability_ids.is_empty()
@@ -296,7 +324,7 @@ fn evaluate_inner(
 }
 
 fn valid_context(policy: &PolicySet, input: &EvaluationInput<'_>) -> bool {
-    let Some(budget) = input.verified_budget() else {
+    let Some(cumulative) = input.authenticated_window() else {
         return false;
     };
     let Some(cumulative_count) = input.authenticated_cumulative_count() else {
@@ -307,7 +335,25 @@ fn valid_context(policy: &PolicySet, input: &EvaluationInput<'_>) -> bool {
         || policy.version != session.policy_version
         || !input.session.open
         || session.tenant != input.capability.tenant
-        || input.request.amount > budget.remaining()
+        || cumulative.actor() != &session.agent
+    {
+        return false;
+    }
+    let Some(expected_last) = input.request.core_sequence.checked_sub(1) else {
+        return false;
+    };
+    let Some(expected_first) = input
+        .request
+        .core_sequence
+        .checked_sub(input.capability.dimensions.rate_ceiling.window_sequences)
+    else {
+        return false;
+    };
+    if cumulative.window()
+        != (crate::protocol_evidence::CumulativeUseWindow {
+            first: expected_first,
+            last: expected_last,
+        })
     {
         return false;
     }

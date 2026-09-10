@@ -91,3 +91,32 @@ fn amounts_use_checked_integer_arithmetic_only() {
         Err(ArithmeticError::Overflow)
     );
 }
+
+#[test]
+fn per_asset_accounts_reject_malformed_and_mismatched_suffixes() {
+    let did = "did:layerx:alice";
+    let account =
+        AccountId::for_asset(did, [0xab; 32], [0; 32]).unwrap_or_else(|error| panic!("{error:?}"));
+    assert_eq!(
+        account.canonical(),
+        format!("agent:{did}:asset:{}", "ab".repeat(32))
+    );
+    assert_eq!(account.namespace(), AccountNamespace::AgentAsset);
+    assert!(account.matches_asset(did, [0xab; 32], [0; 32]).is_ok());
+    assert!(account.matches_asset(did, [0xac; 32], [0; 32]).is_err());
+    assert_eq!(
+        AccountId::for_asset(did, [0; 32], [0; 32])
+            .unwrap_or_else(|error| panic!("{error:?}"))
+            .canonical(),
+        "agent:did:layerx:alice:main"
+    );
+    for suffix in [
+        "AB".repeat(32),
+        "a".repeat(63),
+        "a".repeat(65),
+        "gg".repeat(32),
+        format!("{}:main", "ab".repeat(32)),
+    ] {
+        assert!(AccountId::parse(&format!("agent:{did}:asset:{suffix}")).is_err());
+    }
+}

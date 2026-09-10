@@ -567,3 +567,35 @@ fn assert_operations_admitted(
         .iter()
         .all(|entry| entry.outcome == AuthorizationOutcome::Allowed));
 }
+
+#[test]
+fn wait_alias_preserves_tenant_isolation_and_unrelated_scope_refusal() {
+    let root = directory("wait-alias");
+    let mut fixture = fixture(&root);
+    let token = fixture.open_scoped(1, 4, BTreeSet::from(["write:activity:wait".to_owned()]));
+    let mut observability = TenantObservability::default();
+    let mut wait = request(
+        Surface::Contract,
+        ObjectOwner {
+            tenant: fixture.tenant.clone(),
+            agent: None,
+        },
+    );
+    wait.operation = Operation::Wait;
+    assert!(resolve(&token, &fixture.registry, &wait, &mut observability).is_ok());
+    wait.operation = Operation::Track;
+    assert_eq!(
+        resolve(&token, &fixture.registry, &wait, &mut observability),
+        Err(AuthorizationError::ScopeDenied)
+    );
+    wait.operation = Operation::Wait;
+    wait.target_owner = Some(ObjectOwner {
+        tenant: TenantId::new("other-tenant").unwrap_or_else(|error| panic!("{error:?}")),
+        agent: None,
+    });
+    assert_eq!(
+        resolve(&token, &fixture.registry, &wait, &mut observability),
+        Err(AuthorizationError::NotAuthorized)
+    );
+    let _ = fs::remove_dir_all(root);
+}

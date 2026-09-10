@@ -1,0 +1,46 @@
+[package]
+name = "layerx-pay2-funded-qualification"
+version = "0.1.0"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[workspace]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+float_arithmetic = "deny"
+lossy_float_literal = "deny"
+
+[dependencies]
+layerx-agent-api = { path = "../../crates/layerx-agent-api" }
+layerx-agentd = { path = "../../crates/layerx-agentd" }
+layerx-client = { path = "../../crates/layerx-client" }
+layerx-crypto = { path = "../../crates/layerx-crypto" }
+layerx-intents = { path = "../../../human/crates/layerx-intents" }
+layerx-mcp = { path = "../../crates/layerx-mcp" }
+layerx-platform-authority = { path = "../../../platform/hosted/authority" }
+layerx-platform-core = { path = "../../../platform/hosted/core" }
+layerx-programs-registry = { path = "../../../programs/crates/layerx-programs-registry" }
+layerx-proof = { path = "../../crates/layerx-proof" }
+layerx-sdk = { path = "../../crates/layerx-sdk" }
+layerx-types = { path = "../../crates/layerx-types" }
+layerx-wire = { path = "../../crates/layerx-wire" }
+ed25519-dalek = "2.2"
+native-tls = "0.2"
+serde_json = "1"
+sha2 = "0.10"
+
+[[test]]
+name = "funded"
+path = "funded.rs"
+
+[[bin]]
+name = "gateway-lifecycle-receipt-verify"
+path = "../../../platform/hosted/gateway/tests/local/verifier.rs"

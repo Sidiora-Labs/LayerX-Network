@@ -20,6 +20,7 @@ use layerx_wire::hash::{activity_id, Domain};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fmt::{Display, Formatter};
+use std::time::Instant;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
@@ -27,6 +28,17 @@ use store::{KeyRecord, RedisStore};
 
 const KEY_PREFIX: &str = "lxp_live_";
 const KEY_BYTES: usize = 32;
+
+/// Emits one monotonic payment-path duration when qualification timing is enabled.
+#[doc(hidden)]
+pub fn pay_timing(stage: &str, started: Instant) {
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing stage={stage} duration_us={}",
+            started.elapsed().as_micros()
+        );
+    }
+}
 
 /// Authentication failures shared by every hosted ingress using gateway API
 /// keys. Persistence failure is deliberately distinct from a bad credential
@@ -312,6 +324,7 @@ pub struct VerifiedOperation {
 pub struct VerifiedSubmission {
     activity_id: [u8; 32],
     idempotency_key: [u8; 32],
+    activity_type: ActivityType,
     transfer: Option<VerifiedTransfer>,
 }
 
@@ -373,6 +386,11 @@ impl VerifiedSubmission {
     #[must_use]
     pub const fn idempotency_key(self) -> [u8; 32] {
         self.idempotency_key
+    }
+
+    #[must_use]
+    pub const fn activity_type(self) -> ActivityType {
+        self.activity_type
     }
 
     #[must_use]
@@ -456,6 +474,7 @@ pub fn verify_submission(
     Ok(VerifiedSubmission {
         activity_id: activity_id(&activity).map_err(|_| GatewayError::InvalidRequest)?,
         idempotency_key: activity.idempotency_key(),
+        activity_type: activity.activity_type(),
         transfer,
     })
 }

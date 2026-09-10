@@ -27,7 +27,13 @@ const MAX_AGENT_RESPONSE: usize = 4096;
 #[derive(Clone, Copy)]
 pub struct SigningRequest<'a> {
     message: SignatureMessage<'a>,
-    disclosure: &'a Disclosure,
+    disclosure: SigningDisclosure<'a>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum SigningDisclosure<'a> {
+    Activity(&'a Disclosure),
+    SendDebit(&'a crate::send::SendDebit),
 }
 
 impl<'a> SigningRequest<'a> {
@@ -47,16 +53,41 @@ impl<'a> SigningRequest<'a> {
         }
         Ok(Self {
             message,
-            disclosure,
+            disclosure: SigningDisclosure::Activity(disclosure),
         })
     }
 
-    pub(crate) const fn message(self) -> SignatureMessage<'a> {
+    pub(crate) const fn send_debit(
+        message: SignatureMessage<'a>,
+        disclosure: &'a crate::send::SendDebit,
+    ) -> Self {
+        Self {
+            message,
+            disclosure: SigningDisclosure::SendDebit(disclosure),
+        }
+    }
+
+    #[must_use]
+    pub const fn message(self) -> SignatureMessage<'a> {
         self.message
     }
 
-    pub(crate) const fn disclosure(self) -> &'a Disclosure {
+    #[must_use]
+    pub const fn disclosure(self) -> SigningDisclosure<'a> {
         self.disclosure
+    }
+}
+
+impl SigningDisclosure<'_> {
+    pub(crate) fn transport_bytes(self) -> Result<Vec<u8>, DisclosureError> {
+        match self {
+            Self::Activity(disclosure) => disclosure.transport_bytes(),
+            Self::SendDebit(debit) => {
+                let mut bytes = b"LXP/agent/send-debit-disclosure/v1\0".to_vec();
+                bytes.extend_from_slice(&debit.authorization_message()?);
+                Ok(bytes)
+            }
+        }
     }
 }
 

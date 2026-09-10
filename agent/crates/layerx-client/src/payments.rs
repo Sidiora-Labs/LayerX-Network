@@ -166,6 +166,11 @@ fn request(
     })
 }
 
+/// Reads the bounded, canonically ordered native Asset registry snapshot.
+///
+/// # Errors
+///
+/// Refuses unsupported interfaces, malformed metadata, selector mismatches and unavailable reads.
 pub fn list_assets(
     transport: &mut dyn FrameTransport,
     asset: Option<[u8; 32]>,
@@ -207,6 +212,11 @@ pub fn list_assets(
     })
 }
 
+/// Reads one exact native Asset registry record.
+///
+/// # Errors
+///
+/// Refuses a missing or mismatched asset and preserves every snapshot-read refusal.
 pub fn get_asset(
     transport: &mut dyn FrameTransport,
     asset: [u8; 32],
@@ -221,6 +231,11 @@ pub fn get_asset(
     })
 }
 
+/// Reads the committed fee schedule and estimates one canonical activity.
+///
+/// # Errors
+///
+/// Refuses unsupported interfaces, malformed schedules and unavailable committed reads.
 pub fn estimate_fee(
     transport: &mut dyn FrameTransport,
     activity_type: u32,

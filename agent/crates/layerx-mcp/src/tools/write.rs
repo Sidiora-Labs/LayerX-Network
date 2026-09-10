@@ -86,6 +86,54 @@ pub enum WriteToolError {
     ReceiptMismatch,
 }
 
+/// Named payment write tools that reuse the ordinary submit path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PaymentTool {
+    Send,
+    Create,
+    Mint,
+    Transfer,
+    IssueGrant,
+    DrawGrant,
+}
+
+impl PaymentTool {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Send => "wallet.send",
+            Self::Create => "token.create",
+            Self::Mint => "token.mint",
+            Self::Transfer => "token.transfer",
+            Self::IssueGrant => "grant.issue",
+            Self::DrawGrant => "grant.draw",
+        }
+    }
+}
+
+/// # Errors
+/// Refuses missing scope, incomplete daemon stages and unverifiable receipt outcomes.
+pub fn execute_payment<F>(
+    server: &mut Server,
+    core_sequence: u64,
+    tool: PaymentTool,
+    validated_arguments: Vec<u8>,
+    executor: F,
+    unknown_age_ms: u64,
+) -> Result<WriteOutcome, WriteToolError>
+where
+    F: FnOnce(&DaemonInvocation) -> WriteTranscript,
+{
+    execute_named(
+        server,
+        core_sequence,
+        tool.name(),
+        validated_arguments,
+        executor,
+        unknown_age_ms,
+    )
+}
+
 /// Executes a new write invocation through the scoped server's daemon-only route.
 ///
 /// # Errors
@@ -101,22 +149,38 @@ pub fn execute<F>(
 where
     F: FnOnce(&DaemonInvocation) -> WriteTranscript,
 {
+    execute_named(
+        server,
+        core_sequence,
+        "activity.submit",
+        validated_arguments,
+        executor,
+        unknown_age_ms,
+    )
+}
+
+fn execute_named<F>(
+    server: &mut Server,
+    core_sequence: u64,
+    name: &str,
+    validated_arguments: Vec<u8>,
+    executor: F,
+    unknown_age_ms: u64,
+) -> Result<WriteOutcome, WriteToolError>
+where
+    F: FnOnce(&DaemonInvocation) -> WriteTranscript,
+{
     server
-        .execute_committed(
-            core_sequence,
-            "activity.submit",
-            validated_arguments,
-            |invocation| {
-                let transcript = executor(invocation);
-                let result = if transcript_matches(&transcript.stages, &ORDINARY_WRITE_STAGES) {
-                    classify_transcript(transcript, unknown_age_ms)
-                } else {
-                    Err(WriteToolError::InvalidTranscript)
-                };
-                let outcome = invocation_outcome(&result);
-                (result, outcome)
-            },
-        )
+        .execute_committed(core_sequence, name, validated_arguments, |invocation| {
+            let transcript = executor(invocation);
+            let result = if transcript_matches(&transcript.stages, &ORDINARY_WRITE_STAGES) {
+                classify_transcript(transcript, unknown_age_ms)
+            } else {
+                Err(WriteToolError::InvalidTranscript)
+            };
+            let outcome = invocation_outcome(&result);
+            (result, outcome)
+        })
         .map_err(WriteToolError::Server)?
 }
 
@@ -135,23 +199,61 @@ pub fn track<F>(
 where
     F: FnOnce(&DaemonInvocation) -> WriteTranscript,
 {
+    track_named(
+        server,
+        core_sequence,
+        "activity.track",
+        validated_arguments,
+        executor,
+        unknown_age_ms,
+    )
+}
+
+/// # Errors
+/// Refuses missing scope, invalid tracking evidence and success without a verified receipt.
+pub fn wait<F>(
+    server: &mut Server,
+    core_sequence: u64,
+    validated_arguments: Vec<u8>,
+    executor: F,
+    unknown_age_ms: u64,
+) -> Result<WriteOutcome, WriteToolError>
+where
+    F: FnOnce(&DaemonInvocation) -> WriteTranscript,
+{
+    track_named(
+        server,
+        core_sequence,
+        "activity.wait",
+        validated_arguments,
+        executor,
+        unknown_age_ms,
+    )
+}
+
+fn track_named<F>(
+    server: &mut Server,
+    core_sequence: u64,
+    name: &str,
+    validated_arguments: Vec<u8>,
+    executor: F,
+    unknown_age_ms: u64,
+) -> Result<WriteOutcome, WriteToolError>
+where
+    F: FnOnce(&DaemonInvocation) -> WriteTranscript,
+{
     server
-        .execute_committed(
-            core_sequence,
-            "activity.track",
-            validated_arguments,
-            |invocation| {
-                let mut transcript = executor(invocation);
-                let result = if transcript.stages == [WriteStage::Track] {
-                    transcript.stages = ORDINARY_WRITE_STAGES.to_vec();
-                    classify_transcript(transcript, unknown_age_ms)
-                } else {
-                    Err(WriteToolError::InvalidTranscript)
-                };
-                let outcome = invocation_outcome(&result);
-                (result, outcome)
-            },
-        )
+        .execute_committed(core_sequence, name, validated_arguments, |invocation| {
+            let mut transcript = executor(invocation);
+            let result = if transcript.stages == [WriteStage::Track] {
+                transcript.stages = ORDINARY_WRITE_STAGES.to_vec();
+                classify_transcript(transcript, unknown_age_ms)
+            } else {
+                Err(WriteToolError::InvalidTranscript)
+            };
+            let outcome = invocation_outcome(&result);
+            (result, outcome)
+        })
         .map_err(WriteToolError::Server)?
 }
 

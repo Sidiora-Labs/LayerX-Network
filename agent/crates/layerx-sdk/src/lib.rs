@@ -37,6 +37,9 @@ pub mod production;
 pub mod program_lifecycle;
 pub mod programs;
 mod receipt_generated;
+pub mod rpc;
+pub mod rpc_verification;
+pub mod wallet;
 
 pub use layerx_agent_api::Operation;
 pub use receipt_generated::{
@@ -449,3 +452,5 @@ const fn validate_contract(contract: ContractVersion) -> Result<(), SdkError> {
         })
     }
 }
+
+mod rpc_subscription;

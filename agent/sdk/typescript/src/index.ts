@@ -11,3 +11,12 @@ export * from "./verifier.js";
 export * from "./native-program-call.js";
 export * from "./program-lifecycle.js";
 export * from "./native-capabilities.js";
+
+export * from "./rpc.js";
+
+export * from "./wallet.js";
+
+export * from "./x402/activity.js";
+export * from "./x402/draw.js";
+export * from "./x402/grant.js";
+export * from "./x402/receive.js";

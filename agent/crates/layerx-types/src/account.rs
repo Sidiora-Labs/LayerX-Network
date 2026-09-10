@@ -7,6 +7,7 @@ use crate::limits::{MAX_ACCOUNT_NAME_BYTES, MAX_DID_BYTES};
 pub enum AccountNamespace {
     /// `agent:<did>:main`.
     AgentMain,
+    AgentAsset,
     /// `agent:<did>:budget:<id>`.
     AgentBudget,
     /// `agent:<did>:escrow:<id>`.
@@ -77,6 +78,53 @@ impl AccountId {
         })
     }
 
+    /// # Errors
+    /// Rejects malformed DIDs and account names.
+    pub fn for_asset(
+        did: &str,
+        asset: [u8; 32],
+        native_asset: [u8; 32],
+    ) -> Result<Self, AccountError> {
+        if did.is_empty()
+            || did.len() > MAX_DID_BYTES
+            || did.starts_with(':')
+            || did.ends_with(':')
+            || did.contains("::")
+            || did.contains(":asset:")
+            || !did
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-:".contains(&b))
+        {
+            return Err(AccountError::UnknownNamespace);
+        }
+        let suffix = if asset == native_asset {
+            "main".to_owned()
+        } else {
+            const DIGITS: &[u8; 16] = b"0123456789abcdef";
+            let mut hex = String::with_capacity(64);
+            for byte in asset {
+                hex.push(char::from(DIGITS[usize::from(byte >> 4)]));
+                hex.push(char::from(DIGITS[usize::from(byte & 15)]));
+            }
+            format!("asset:{hex}")
+        };
+        Self::parse(&format!("agent:{did}:{suffix}"))
+    }
+
+    /// # Errors
+    /// Rejects an account that names another DID or asset.
+    pub fn matches_asset(
+        &self,
+        did: &str,
+        asset: [u8; 32],
+        native_asset: [u8; 32],
+    ) -> Result<(), AccountError> {
+        if *self != Self::for_asset(did, asset, native_asset)? {
+            return Err(AccountError::UnknownNamespace);
+        }
+        Ok(())
+    }
+
     /// Returns the validated namespace.
     #[must_use]
     pub const fn namespace(&self) -> AccountNamespace {
@@ -91,6 +139,18 @@ impl AccountId {
 }
 
 fn parse_agent(agent: &str) -> Result<AccountNamespace, AccountError> {
+    if let Some((did, asset)) = agent.split_once(":asset:") {
+        if did.is_empty()
+            || did.len() > MAX_DID_BYTES
+            || asset.len() != 64
+            || !asset
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(AccountError::UnknownNamespace);
+        }
+        return Ok(AccountNamespace::AgentAsset);
+    }
     if let Some(did) = agent.strip_suffix(":main") {
         return if did.is_empty() || did.len() > MAX_DID_BYTES {
             Err(AccountError::EmptyComponent)

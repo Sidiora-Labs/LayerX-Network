@@ -7828,3 +7828,1014 @@ symbol = "recover_multi_activity_batch lxp_daemon_activity_evidence_recover_batc
 observed = "The explicitly invoked build/tests/lxp_test_finality_evidence exits 1 at multi-activity batch evidence recovery. Its real evidence-store fixture does not bind availability_log before lxp_daemon_activity_evidence_recover_batch reads the authenticated batch body, so the unchanged recovery path returns LXP_ERR_NON_CANONICAL. The fixture is byte-identical to HEAD and this change does not modify activity-evidence recovery. Evidence: qual-logs/pay1/pay1j-finality-evidence-alone.log and pay1j-finality-base-comparison.log."
 assumption = "The fixture must bind its real availability log and body before recovery. The recovery validation and failing assertion remain intact; this inherited fixture failure is not repaired outside the latency task."
 severity = "blocker"
+
+[observation.6.7.4021]
+task = "6.7"
+file = "platform/hosted/gateway/src/lib.rs agent/sdk/typescript/package.json agent/sdk/typescript/src/index.ts platform/middleware/seller/src/commitment.ts"
+symbol = "lx_sendActivity lx_getReceipt PaymentCommitmentResolver"
+observed = "The checkout has no lx_sendActivity or lx_getReceipt handler or public JSON-RPC result schema. Canonical grant and receive codecs match the native signed fixture in Python and TypeScript. Payment verification invokes existing receipt, signed batch inclusion and checkpoint verifiers, with missing evidence refused. The TypeScript x402 receive module is not exported through the package entry points. Public RPC grant draws, recurring draws, faucet examples, complete Python buyer/seller HTTP middleware parity and agent commitment integration remain incomplete. Positive finalised payment evidence has not been qualified."
+assumption = "Public activity submission and evidence resolution require concrete gateway schemas, identity-bound Asset activity envelopes, trusted network/checkpoint inputs and the package export change. Payload parity and offline proof verification do not prove public RPC execution. Exact integration requests are retained in the untracked NEEDS.md."
+severity = "blocker"
+
+[observation.6.7.4022]
+task = "6.7"
+file = "platform/middleware/conformance/service.mjs platform/examples/paid-api/index.mjs platform/examples/support/runtime.mjs platform/middleware/conformance/src/scenarios.ts platform/middleware/merchant/src/index.ts"
+symbol = "runServiceScenarios parseArguments MerchantSettlementWebhooks"
+observed = "npm run conformance --workspace platform/middleware/conformance exits 1 because the paid-api child exits before readiness. The harness supplies no environment argument, while parseArguments requires --environment emulator or testnet; direct example startup reproduces usage_--environment_emulator_or_testnet. In-process conformance exits 1 with the signed merchant settlement webhook positive check reporting invalid-webhook. Compiling and loading the unchanged merchant source from d4d4e0a4 reproduces the identical failed check. Evidence: qual-logs/pay6/middleware-conformance.log, paid-api-startup.log, middleware-in-process.log, baseline-build.log and middleware-baseline.log."
+assumption = "The existing service harness and example configuration contracts require reconciliation. The merchant webhook failure predates the commitment changes and remains unchanged. Its existing verification-rank and digest assertions were not weakened; stronger webhook-level claims still require separate qualification."
+severity = "blocker"
+
+[observation.6.7.4023]
+task = "6.7"
+file = "platform/middleware/seller/src/rpc.ts agent/sdk/python/layerx_sdk/x402_rpc.py agent/sdk/typescript/src/x402/draw.ts agent/sdk/python/layerx_sdk/x402_draw.py agent/sdk/typescript/package.json agent/sdk/typescript/src/index.ts"
+symbol = "verifyRpcPayment verify_rpc_payment PreparedGrantDraws"
+observed = "The supplied public RPC reference exposes activity_id and receipt for receipt and activity-status reads, and receipt, commitment, state, batch_evidence and checkpoint_evidence for submission. Both payment implementations bind canonical receipts to expected activity and payer. Prepared grant draws persist exact signed bytes and request ownership, enforce unique subscription period keys, and recover uncertain submissions with receipt lookup. A native encoded and Ed25519-verified Asset receive envelope fixture passes binding and truncation tests. The TypeScript package root still does not export its x402 modules. The RPC reference contains no lx_subscribe, /rpc/ws, lx_getAsset, lx_listAssets or lx_estimateFee implementation. Trusted receipt state roots and decoded checkpoint authority remain explicit caller inputs."
+assumption = "The native activity integration must supply end-to-end Asset ordinal 6 execution evidence. Native envelope signatures and payload codecs do not establish grant-draw execution, finalised payment qualification or public deployment. Required package exports, authority contracts and absent public methods are recorded in NEEDS.md."
+severity = "blocker"
+
+[observation.6.7.4024]
+task = "6.7"
+file = "platform/middleware/conformance/service.mjs platform/examples/paid-api/index.mjs platform/middleware/agent/package.json package-lock.json"
+symbol = "runServiceScenarios verifyAgentPayment"
+observed = "The SDK test suites, middleware package builds, payment fixture suites, Python Ruff checks, make test-ledger-receive and make beta-ledger-check exit 0. A real local HTTP 402 exchange releases a resource only after receipt verification, and SQLite concurrent retries preserve one fulfillment. Agent payment commitment is bound to the request digest and verified before budget commit. Full middleware conformance still exits 1 because the paid-api example exits before readiness. Evidence: qual-logs/pay6/pay6b-sdk-ts.log, pay6b-sdk-python.log, pay6b-middleware-build.log, pay6b-payments-ts.log, http-roundtrip-python.log, pay6b-python-lint.log, pay6b-native-receive.log, pay6b-beta-ledger.log and pay6b-conformance.log."
+assumption = "The existing service startup contract remains unresolved without changing its assertions. The root package lock must reflect the agent middleware dependency on the seller middleware when package metadata is integrated. Public RPC and faucet examples have local syntax and entry-point qualification only; no public service or cluster execution is claimed."
+severity = "blocker"
+
+[observation.6.7.4025]
+task = "6.7"
+file = "platform/middleware/conformance/service.mjs platform/middleware/conformance/src/scenarios.ts platform/examples/support/merchant-app.mjs platform/examples/agent-spend/index.mjs"
+symbol = "runServiceScenarios runMerchantApplication"
+observed = "Explicit emulator arguments and isolated application configuration reach paid-api and merchant readiness. Full conformance exits 1 with 25/29 checks passing. All four failures reproduce at origin/main 048da6bed3261d08a739b908e1153606866d9648 in qual-logs/pay6/origin-main with only the identical launch patch: signed merchant webhook invalid-webhook; merchant checkout and paid response assertions expect kind while the example emits state; agent output uses the receipt signing digest while the assertion expects the Merkle leaf digest. Evidence: qual-logs/pay6/pay6c-conformance.log, pay6c-base-conformance.log, pay6c-base-build.log and pay6c-launch.patch. Base package build exits 0."
+assumption = "These inherited code/assertion contradictions remain intact. The base comparison uses its own dependency install and build; no payment implementation changes are applied to the base. Configured receipt authority is explicit operator input and receipts still pass the existing cryptographic verifier."
+severity = "blocker"
+
+[observation.6.7.4026]
+task = "6.7"
+file = "platform/middleware/examples/public-rpc.mjs platform/middleware/examples/public_rpc.py agent/sdk/typescript/src/x402/draw.ts agent/sdk/python/layerx_sdk/x402_draw.py"
+symbol = "PreparedGrantDraws"
+observed = "End-to-end native metered draw and recurring renewal remain pending. Execute against an isolated native RPC with registered assets, open payer and recipient accounts, funded fees, issued grants, and receiver-signed activities supplied by the native activity implementation. Commands from the repository root: node platform/middleware/examples/public-rpc.mjs --activity \"$LAYERX_METERED_ACTIVITY_FILE\" --offer \"$LAYERX_METERED_OFFER_FILE\" --authority \"$LAYERX_METERED_AUTHORITY_FILE\" --payer \"$LAYERX_PAYER_ACCOUNT\"; node platform/middleware/examples/public-rpc.mjs --activity \"$LAYERX_SUBSCRIPTION_ACTIVITY_FILE\" --offer \"$LAYERX_SUBSCRIPTION_OFFER_FILE\" --authority \"$LAYERX_SUBSCRIPTION_AUTHORITY_FILE\" --payer \"$LAYERX_PAYER_ACCOUNT\"; PYTHONPATH=agent/sdk/python python3 platform/middleware/examples/public_rpc.py --activity \"$LAYERX_RENEWAL_ACTIVITY_FILE\" --offer \"$LAYERX_RENEWAL_OFFER_FILE\" --authority \"$LAYERX_RENEWAL_AUTHORITY_FILE\" --payer \"$LAYERX_PAYER_ACCOUNT\"."
+assumption = "LAYERX_RPC_URL, LAYERX_DID and LAYERX_RPC_TOKEN select the isolated service and authorization. Leave LAYERX_FAUCET_URL unset for draw qualification. Each authority file must bind the corresponding native receipt batch. Subscription renewal uses a distinct authorized period and signed activity, then retries identical bytes to qualify idempotency. These commands are pending and do not claim native execution, allowance/refusal coverage, or recurring execution proof. Port 18545 and chain 125 are prohibited."
+severity = "blocker"
+
+[observation.6.7.4027]
+task = "6.7"
+file = "platform/middleware/seller/src/checkpoint.ts agent/sdk/python/layerx_sdk/x402_checkpoint.py agent/sdk/python/layerx_sdk/x402_agent.py platform/middleware/examples/public-rpc.mjs platform/middleware/examples/public_rpc.py"
+symbol = "rpcCheckpointEvidence rpc_checkpoint_evidence PaymentBudget AgentGrantMiddleware"
+observed = "The published checkpoint binary and canonical header map into the SDK verifier with independently configured context, guarantor keys, threshold, registration and availability. Real recoverable secp256k1 signatures qualify finalised receipt verification in both languages. No RPC checkpoint field is missing. SDK TypeScript tests, all five middleware builds, 18 TypeScript payment tests, 34 Python SDK tests, 39 Python payment tests and Python Ruff exit 0. make beta-ledger-check exits 0. Evidence: qual-logs/pay6/pay6c-final-typescript-0.log through pay6c-final-typescript-3.log, pay6c-final-python-0.log through pay6c-final-python-2.log, pay6c-final-ledger-0.log. Each log has a sibling exit file. Final example receipt-operation binding checks and lint exit 0 in pay6c-example-final-test.log and pay6c-example-final-lint.log."
+assumption = "Conformance remains 25/29 with the four base-reproduced contradictions recorded in observation.6.7.4025. Cryptographic fixtures do not prove native execution or deployment. Public endpoint runs require operator URLs and authentication; finalised integration requires authenticated operator authority and context. No public endpoint, persistent chain, image or cluster gate was run. Package-root exports and workspace lock metadata remain external changes."
+severity = "note"
+[observation.6.2.900]
+task = "6.2"
+file = "platform/hosted/core/src/main.rs platform/hosted/core/src/public_reads.rs platform/hosted/gateway/src/main.rs"
+symbol = "public_reads core_route"
+observed = "Concurrent writers modified the same worktree during public-read implementation. The core entry point contains duplicate public_reads declarations and an independently added account route; the new account-read module changed during inspection. Implementation and qualification cannot be attributed to a single stable source state."
+assumption = "Exclusive worktree ownership and reconciliation of the mixed edits are required before qualification or a checkpoint commit. No format, build, test, or ledger gate is claimed for this partial implementation."
+severity = "blocker"
+
+[observation.6.11.904]
+task = "6.11"
+file = "platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/public_reads.rs platform/hosted/core/src/main.rs platform/hosted/core/src/public_reads.rs"
+symbol = "public_reads route account"
+observed = "Concurrent writes replaced the public read modules and added incompatible call sites during qualification. The gateway main module contains duplicate public_reads declarations and both bool-returning target/route and Result-returning target/read call patterns. Formatting commands exited 0 before this collision; clippy was interrupted and no test or runtime result qualifies the combined source. Partial compiler output is retained in qual-logs/pay4/clippy.log."
+assumption = "The combined source requires exclusive write ownership and reconciliation before qualification. No public RPC, complete DID account listing, receipt latency, or expanded activity admission gate is established by this partial work."
+severity = "blocker"
+
+[observation.6.2.901]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs platform/hosted/gateway/src/rpc.rs agent/schema/lni/v1.kvx include/layerx/lxp_daemon.h cmd/layerxd/lxp_daemon_protocol.c"
+symbol = "public_reads await_receipt submission_registry"
+observed = "The public read declarations and route call sites are reconciled. Account reads retain canonical proof verification. The read dispatcher routes account, balance, DID accounts, receipt, activity status, batch header, checkpoint and node information reads; DID enumeration remains explicitly unavailable because tag 7 defines only point selectors. The current receipt lookup has no bounded wait selector, and commit publication does not notify a waiter in the owned LNI reader. Core retains its existing receipt poll and activity allowlist."
+assumption = "Complete public payment RPC requires coordinated native read selectors, commit publication notifications and strict expanded activity decoders. WebSocket subscriptions, activity-ID-derived outer deduplication, commitment evidence waits, proof RPC, asset RPC, identity sequence and fee estimation remain incomplete. No latency or complete payment RPC qualification is established."
+severity = "blocker"
+
+[observation.6.2.902]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs platform/hosted/core/tests/boundary.rs platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/openrpc.json"
+symbol = "public_read_selectors_use_real_node_and_refuse_missing_evidence invalid_envelopes_have_json_rpc_errors_and_null_ids selectors_bind_each_public_read"
+observed = "cargo fmt --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --check, cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --all-targets -- -D warnings, and LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --no-fail-fast all exit 0. The real daemon boundary suite passes seven tests, including public node information and missing account, batch and checkpoint evidence refusals. The existing state-head relay success assertion passes. Exact output is retained in qual-logs/pay4/current-fmt-check.log, current-clippy.log and current-test.log, with matching exit files."
+assumption = "The native bundle manifest identifies source c63b80eee91589422a9ecc6891c57b4dfa9a73aa. These package gates qualify the implemented read subset; they do not establish complete DID enumeration, expanded activity admission, public JSON-RPC submission, WebSocket subscriptions or submit-to-receipt latency."
+severity = "note"
+
+[observation.6.2.903]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs platform/hosted/core/tests/boundary.rs platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/openrpc.json"
+symbol = "sequence proof proof_and_sequence_reads_refuse_invalid_or_absent_real_node_evidence"
+observed = "Identity sequence reads use the authenticated atomic preparation snapshot. Activity and receipt proof reads invoke Client::proof_bundle and return the verified inclusion path and signed header. The new negative test expects invalid_did HTTP 400 for the string invalid, but Did::new accepts that identifier and the daemon lookup returns sequence_unavailable HTTP 503. The package test command exits 101 with that assertion conflict; implementation and assertion remain intact. Evidence: qual-logs/pay4/reads-test.log."
+assumption = "Reconcile the public DID selector grammar with the canonical Did type before qualifying this negative test. Full account proof export additionally requires the client verified bundle to retain the complete NP1 proof bytes; the current Account and MaintainedAccount variants retain verified state without the full exportable proof path."
+severity = "blocker"
+
+[observation.6.2.904]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_protocol.c include/layerx/lxp_daemon.h cmd/layerxd/lxp_daemon_lni.c agent/schema/lni/v1.kvx src/modules/asset/lx_asset_registry.c"
+symbol = "published_receipt_log send_receipt module_decode module_execute"
+observed = "Commit publication assigns published_receipt_log and published_checkpoint_id in lxp_daemon_process.c under receipt_mutex. The owned LNI receipt reader only copies the published log and has no producer notification. Native Asset module_decode refuses ordinals above 8, strictly decodes SEND only, and module_execute emits an event for non-SEND values. LNI account tags define point reads without DID or asset enumeration; no fee-estimation selector is defined."
+assumption = "Instant receipt and subscription delivery requires a bounded authenticated producer notification contract and notification at the actual commit publication site, outside the owned LNI reader. Expanded public admission requires real strict native operation decoders and execution instead of admitting opaque event-only payloads. Account enumeration, asset reads and fee estimates require authoritative native read contracts."
+severity = "blocker"
+
+[observation.6.2.905]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs platform/hosted/core/src/main.rs"
+symbol = "receipt_latency_and_public_proofs_use_real_committed_refusals await_receipt"
+observed = "LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-core --test boundary receipt_latency_and_public_proofs_use_real_committed_refusals -- --nocapture exits 0. Twenty real core HTTPS submissions return signed committed refusal receipts, with submit-to-receipt p50 1020718 microseconds and p99 1872177 microseconds. Every sample also retrieves verified activity and receipt inclusion proofs and checks the authenticated identity sequence snapshot. Evidence: qual-logs/pay4/receipt-latency.log."
+assumption = "This measures the existing 200 ms receipt-poll path and committed refusals, not successful payments, gateway RPC latency, instant notification delivery, or finalised commitment. The supplied native manifest identifies source c63b80eee91589422a9ecc6891c57b4dfa9a73aa rather than the source named in the shared binary announcement."
+severity = "note"
+
+[observation.6.2.906]
+task = "6.2"
+file = "platform/hosted/core/src/main.rs platform/hosted/core/src/program_accounts.rs platform/hosted/core/tests/boundary.rs"
+symbol = "submission_registry program_accounts::validate malformed_program_transfer_and_account_are_refused_before_native_admission"
+observed = "Programs ordinals 5 and 6 have native decoder contracts in src/modules/programs/transfer.c and accounts.c. Core now admits them and validates exact payload lengths, transfer count 1 through 256 with 112-byte legs, LXPA1 account magic, nonzero identifiers and seed length at most 128. Decoder truncation, trailing-byte, zero-identifier, invalid-magic and bounds tests pass. The real-daemon malformed-payload test passes with unchanged chain head. Evidence: qual-logs/pay4/programs-unit.log and programs-native.log."
+assumption = "This supersedes the missing Programs decoder-contract dependency. Native state authorization remains in the native validators. Successful funded Programs transfer/account execution through gateway RPC is not established. The retained DID selector assertion conflict remains separate from this admission change."
+severity = "note"
+
+[observation.6.2.907]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs"
+symbol = "proof_and_sequence_reads_refuse_invalid_or_absent_real_node_evidence"
+observed = "The invalid DID fixture is an empty DID path segment, which canonical Did::new rejects. The HTTP 400 assertion and production validation remain unchanged. Formatting, strict Clippy, the focused real-daemon selector test, all core and gateway tests and beta-ledger-check exit 0. Evidence: qual-logs/pay4/did-fmt.log, did-clippy.log, did-test.log, did-all-test.log and did-ledger.log."
+assumption = "This resolves the fixture conflict in observation 6.2.903 without redefining canonical DID grammar."
+severity = "note"
+
+[observation.6.2.908]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_lni.c cmd/layerxd/lxp_daemon_process.c platform/hosted/core/src/main.rs platform/hosted/core/tests/boundary.rs"
+symbol = "send_receipt lxp_daemon_lni_receipts_committed server_run await_receipt"
+observed = "Receipt lookup tag 5 accepts an optional trailing big-endian u32 wait_ms bounded at 30000. Waiters use a monotonic condition deadline and rescan only committed log publication. LNI peer authentication and handshake remain mandatory. Four bounded connection workers permit submissions while another authenticated connection waits; shutdown closes and joins workers. Core uses bounded receipt waits instead of the 200 ms poll. Native rebuild and the focused real-daemon commit, missing-receipt deadline, malformed-bound and already-committed tests exit 0. Evidence: qual-logs/pay4/wait-native-concurrent.log and wait-test-final.log."
+assumption = "The parallel core and gateway aggregate exits 101 because the waiting test receives deadline not-found before its concurrently submitted activity commits under aggregate load; its three-second wait and equality assertion remain intact. Evidence: qual-logs/pay4/wait-all-test.log. Focused success is not successful payment or gateway RPC latency evidence."
+severity = "note"
+
+[observation.6.2.909]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_lni.c platform/hosted/core/tests/boundary.rs"
+symbol = "server_run authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receipts"
+observed = "make test-daemon-lni-admission exits 0, preserving real admission authentication, durability, queue and crash-recovery coverage. cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --no-fail-fast -- --test-threads=1 exits 0, including the unchanged receipt wait deadline and equality assertions. Formatting and strict Clippy exit 0. Evidence: qual-logs/pay4/wait-admission.log, wait-serial-test.log, wait-final-fmt.log and wait-final-clippy.log."
+assumption = "Serial qualification avoids resource contention between independent real-daemon fixtures. The parallel deadline failure remains recorded in observation 6.2.908 and is not a passing concurrency latency gate."
+severity = "note"
+
+[observation.6.2.910]
+task = "6.2"
+file = "agent/crates/layerx-client/src/evidence.rs platform/hosted/core/src/public_reads.rs platform/hosted/core/tests/boundary.rs platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/openrpc.json platform/hosted/agent-boundary/tests/real_node/custody.rs"
+symbol = "VerifiedProofBundle account_proof_export_preserves_exact_native_verified_bytes verify_account_bundle"
+observed = "Account and MaintainedAccount bundles retain the exact verified response proof bytes. lx_getProof accepts account, activity ID and account ID and exports those bytes without reconstruction. The real core export test compares canonical account and proof bytes exactly against the native account read and refuses malformed or mismatched selectors. Core and gateway formatting, strict Clippy and complete serial package tests exit 0; client library tests exit 0. Existing forwarding proof assertions also compare the retained bytes, and the custody-backed real escrow destination test exits 0 after building the escrow guest, credit tools and installing Python dependencies in qual-logs/pay4/venv. Evidence: qual-logs/pay4/proof-test-final.log, proof-fmt.log, proof-clippy.log, proof-all-test.log, proof-client-final.log, proof-forwarding.log, proof-maintained.log and proof-funded-complete.log."
+assumption = "Account-proof export resolves the retained-byte dependency in observation 6.2.903. Custody-backed test execution uses disposable Anvil nodes and does not establish gateway successful-SEND latency. Initial missing guest, Python and credit-tool failures remain in proof-funded.log, proof-funded-final.log and proof-funded-ready.log; the platform-manifest client test invocation failed before running tests and was rerun from the agent manifest."
+severity = "note"
+
+[observation.6.2.911]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/src/main.rs platform/hosted/core/src/public_reads.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/openrpc.json"
+symbol = "send complete_commitment local_gateway_rpc"
+observed = "lx_sendActivity uses the existing authenticated, scoped, signature-verified and durable gateway path, derives the outer reservation scope from activity ID and preserves signed inner idempotency equality. Executed returns a verified receipt in the same response; batched binds the exact receipt bytes to a verified inclusion proof; finalised additionally requires an exact matching verified checkpoint header. Absent stronger evidence returns pending after a bounded wait; malformed successful upstream responses without receipts are errors. The real gateway, identity, TLS Redis, core, daemon, replica and authority test proves anonymous node reads, submission authentication, successful lifecycle execution, replay, batch inclusion and pending finality. Evidence: qual-logs/pay4/rpc-final-real.log. Formatting, strict Clippy and full serial core/gateway tests exit 0: rpc-final-fmt.log, rpc-qualified-clippy.log and rpc-all-test.log."
+assumption = "The integration test proves lifecycle RPC execution, not successful SEND latency. A later checkpoint with a different header is insufficient to prove an older receipt finalised without an authenticated ancestry or inclusion contract. The standalone harness lockfile was refreshed within its owned crate."
+severity = "note"
+
+[observation.6.2.912]
+task = "6.2"
+file = "platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs src/ledger/lxp_send.c src/modules/asset/lx_asset_registry.c"
+symbol = "local_gateway_successful_send_latency lxp_send_validate"
+observed = "The real disposable custody producer credits 100000000000000 units successfully. The funded account reports next_sequence 0 while the authenticated identity preparation snapshot reports next_sequence 1. The first canonical gateway RPC SEND using identity sequence 1 receives signed native refusal -305. Native SEND compares the payload sequence against from->next_sequence in src/ledger/lxp_send.c. The successful receipt assertion remains unchanged. cargo test --locked --manifest-path platform/hosted/gateway/tests/local/Cargo.toml --test lifecycle local_gateway_successful_send_latency -- --nocapture exits 101. Evidence: qual-logs/pay4/latency-sequence-conflict.log. Standalone formatting and strict all-targets Clippy exit 0: latency-fmt-final.log and latency-clippy-qualified.log."
+assumption = "Successful gateway SEND p50 and p99 are unavailable: zero successful samples. Native identity-bound SEND sequencing requires changes outside the receipt-notification grant. This benchmark is an unqualified checkpoint and must pass unchanged after native reconciliation. WebSocket transport still needs a coordinated platform/Cargo.lock dependency update outside owned paths; native asset metadata, fee estimation and complete Asset execution contracts remain unavailable. DID account enumeration remains explicitly unavailable pending its native implementation."
+severity = "blocker"
+
+[observation.6.2.913]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs agent/crates/layerx-crypto/src/disclosure.rs"
+symbol = "local_gateway_successful_send_latency verify_submission send_semantics"
+observed = "lx_getSequence now accepts an account ID and uses the account balance read for next_sequence. The funded SEND fixture reads that value through gateway RPC and independently reads identity sequence for the envelope. Lower-level canonical encoders and the same test key sign separate sequence domains. With the existing receipt-wait-enabled worktree binaries, custody funding succeeds and the first SEND reaches gateway authorization, which returns JSON-RPC -32002 with activity_authorization_refused. verify_submission calls verified_transfer and bind_disclosure; the SEND disclosure parser still requires payload sequence equal envelope sequence. The unchanged successful execution assertion fails. Evidence: qual-logs/pay4/e-latency-local.log, exit 101."
+assumption = "This supersedes the native-sequence diagnosis in observation 6.2.912: the kernel correctly uses two sequence domains. The disclosure equality correction is outside owned paths and is required in production verification as well as signing. No production disclosure bypass is permitted or implemented. Successful gateway SEND samples remain zero; p50 and p99 are unavailable."
+severity = "blocker"
+
+[observation.6.2.914]
+task = "6.2"
+file = "platform/hosted/gateway/tests/local/funding.rs cmd/layerxd/lxp_daemon_lni.c"
+symbol = "submit_credit receipt_wait_request"
+observed = "The supplied native binary directory identifies source c63b80eee91589422a9ecc6891c57b4dfa9a73aa. Running the corrected SEND latency gate with LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin fails during custody receipt lookup: response tag 25 differs from required receipt tag 6. Evidence: qual-logs/pay4/e-latency.log, exit 101."
+assumption = "The supplied producer cannot qualify the receipt-wait path. The worktree producer reaches gateway SEND authorization, as recorded in observation 6.2.913. Native producer integration and the disclosure correction are separate dependencies. WebSocket subscriptions remain blocked on an outside-owned platform/Cargo.lock dependency update; asset and fee reads lack native client contracts; DID account listing remains unavailable."
+severity = "blocker"
+
+[observation.6.2.915]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/openrpc.json platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/tests/local/funding.rs"
+symbol = "selector rpc_account_sequence"
+observed = "The account sequence selector and OpenRPC account_id contract pass gateway unit and integration package tests. Core and gateway cargo fmt --check, strict all-targets Clippy and full serial package tests exit 0. Standalone local harness formatting and strict all-targets Clippy exit 0. Evidence: qual-logs/pay4/e-fmt-final.log, e-local-fmt-final.log, e-clippy-final.log, e-local-clippy-final.log, e-tests.log and e-gateway-final.log. Initial duplicate-match-arm and function-length Clippy failures were fixed within touched paths without lint suppression."
+assumption = "These gates qualify the selector and fixture source; they do not establish successful gateway SEND latency. The disclosure dependency and producer incompatibility remain in observations 6.2.913 and 6.2.914."
+severity = "note"
+
+[observation.6.2.916]
+task = "6.2"
+file = "platform/hosted/gateway/src/ws.rs platform/hosted/gateway/src/ws_wire.rs platform/hosted/core/src/public_reads.rs"
+symbol = "receipt_event local_gateway_websocket_receipt_wake"
+observed = "GET /rpc/ws authenticates gateway keys and enforces receipt:read or state:read scopes. A single gateway receipt feed consumes authenticated core global-sequence waits backed by the native receipt commit condition. Fan-out is bounded to 32 connections, eight subscriptions per connection and 16 queued wakes; slow consumers and lost feeds disconnect, and delivery rechecks key authorization. The real daemon test receives the exact core receipt after submission outside the gateway and receives the existing system:fees account snapshot. Anonymous upgrades are refused. Core global-sequence reads require an explicit receipt-events bearer token and verify signed receipts. Evidence: qual-logs/pay4/f-ws-real-qualified.log and f-ws-tests.log."
+assumption = "The native receipt-wait producer is the worktree build/bin bundle. Successful checkpoint notification delivery still requires a finalised certificate fixture. The transport has no additional Cargo dependency, so the prior WebSocket lockfile dependency is superseded. The core receipt-events token must be configured to match the gateway component token. Live notifications require read reconciliation after disconnect and do not claim durable replay. Successful SEND latency remains dependent on the shared signer disclosure correction."
+severity = "note"
+
+[observation.6.2.917]
+task = "6.2"
+file = "src/modules/asset/lx_asset_registry.c agent/schema/lni/v1.kvx agent/crates/layerx-client/src/lni/preparation.rs"
+symbol = "module_decode module_execute AccountReadRequest PreparationState"
+observed = "The native Asset decoder accepts ordinals only through eight, strictly decodes only SEND, and executes non-SEND operations by emitting an event without the required asset or account transition. AccountReadRequest has only account-ID balance and account selectors. PreparationState has no fee table, and the checked-in LNI capability set has no asset listing, asset detail, fee estimation or DID account enumeration contract."
+assumption = "Widening core admission on this source could expose signed event-only receipts as successful Asset operations. Native strict decoders and real state transitions must be integrated before expanding that admission. Native read schemas and client methods are outside the owned source grant. Programs 5 and 6 retain their existing strict payload validation; successful funded execution remains unqualified."
+severity = "blocker"
+
+[observation.6.2.918]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/src/public_reads.rs platform/hosted/gateway/openrpc.json"
+symbol = "selector fee_params schema_lists_every_public_method"
+observed = "The gateway recognizes lx_listAssets, lx_getAsset and lx_estimateFee with bounded positional parameters and forwards them through the rate-limited authenticated core client. OpenRPC lists all fifteen public methods exactly once. HTTP lx_subscribe returns WebSocket required. The real gateway test proves missing asset, fee and DID enumeration backends return JSON-RPC -32001 rather than fabricated result objects or Method not found. Evidence: qual-logs/pay4/f-reads-real.log, exit 0."
+assumption = "These changes qualify the gateway method boundary and upstream refusal behavior only. The checked-in core and native schema still lack the corresponding read implementations. Gateway contracts are GET /v1/assets, GET /v1/assets/{asset_id}, POST /v1/fees/estimate with canonical_hex JSON, and GET /v1/dids/{did}/accounts. Native/client integration remains necessary before positive asset, fee or DID enumeration results can be qualified."
+severity = "blocker"
+
+[observation.6.2.919]
+task = "6.2"
+file = "platform/hosted/gateway/deployment.yaml platform/hosted/gateway/src/ws.rs platform/hosted/node/deployment.yaml platform/hosted/internal/deployment.yaml platform/hosted/webhooks/deployment.yaml"
+symbol = "LAYERX_GATEWAY_PUBLIC_CORE_URL session topology_check"
+observed = "The gateway manifest now configures the public core endpoint. WebSocket heartbeats run every five seconds, within the unchanged ten-second ingress read timeout. Formatting, strict core/gateway Clippy, gateway package tests and the real receipt/account WebSocket test pass: qual-logs/pay4/f-config-fmt.log, f-config-clippy.log, f-config-tests.log and f-config-real.log. The topology checker admits the new gateway-to-core edge through both network policies and DNS, but the aggregate command exits 2 with twenty existing failures involving internal human event sources, payments/programs ingress and developer-plane policies. Raw evidence: qual-logs/pay4/f-config-topology.log."
+assumption = "No deployment was run. The core container still needs an outside-owned receipt-events token mount matching the gateway component token. Existing unrelated topology failures are retained without broadening policy access or changing other manifests. Positive checkpoint notification delivery and successful SEND latency remain unqualified."
+severity = "blocker"
+
+[observation.6.11.129]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/lib.rs agent/sdk/typescript/src/agent-http.ts platform/ src/"
+symbol = "lx_getAccount lx_getBalances lx_sendActivity lx_getActivityStatus lx_getReceipt"
+observed = "Source search for the public wallet JSON-RPC methods finds no implementations. Existing SDK transports expose the typed node boundary and Programs HTTP routes, but no public wallet RPC result schema binds canonical receipts, inclusion proofs and guarantor certificates for the executed, batched and finalised commitment levels. Search evidence: qual-logs/pay2/rpc-contract-search.log; rg exit 1."
+assumption = "Wallet execution and commitment verification require the gateway request/result and proof transport contracts. An admission acknowledgement cannot substitute for verified receipt evidence."
+severity = "blocker"
+
+[observation.6.11.130]
+task = "6.11"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs agent/crates/layerx-agentd/tests/budget_create.rs agent/crates/layerx-mcp/src/server.rs agent/crates/layerx-mcp/src/tools/write.rs"
+symbol = "fixture tool_operation execute_payment wait"
+observed = "cargo test --manifest-path agent/Cargo.toml -p layerx-mcp -p layerx-agentd exits 101 because build/bin/layerxd is absent; subsequent budget cases encounter the poisoned fixture lock. The advertised /root/lx-lanes/native-bin/layerxd and layerx-genesis-build binaries are also absent. Logs: qual-logs/pay2/mcp-test.log. Separate cargo test -p layerx-mcp exits 0; focused agentd tenant_resolve, tenant_leakage, tenant_store, tenant_isolation and session tests exit 0. Logs: qual-logs/pay2/mcp-test-isolated.log and qual-logs/pay2/agentd-scope-tests.log. Formatting checks and all-target Clippy with -D warnings pass for crypto, MCP and agentd. The existing TypeScript build and tests pass."
+assumption = "The named payment tools have explicit scopes, canonical daemon operation mappings and ordinary receipt-stage refusal checks. Wallet backend execution and executed/batched/finalised wait evidence remain dependent on the public RPC contract. Full agentd qualification requires real native binaries. No cluster or image gates ran."
+severity = "blocker"
+[observation.6.11.131]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/rpc_verification.rs agent/crates/layerx-sdk/src/wallet.rs agent/sdk/typescript/src/wallet.ts"
+symbol = "RpcClient Wallet wait_for WalletRpc"
+observed = "The OpenRPC document defines eleven positional methods, including submission and three commitment selectors. Rust and TypeScript clients implement those methods and preserve JSON-RPC errors. The upstream public-core reference supplies exact sequence, receipt, inclusion and CP1/CX1 checkpoint result encodings. Wallet execution obtains independent identity and source sequences, binds full disclosure, uses the external signer and requires verified receipt evidence after submission. Batched verification checks the configured sequencer and Merkle inclusion. Finalised verification additionally pins the trusted context digest and verifies the exact CP1/CX1 certificate and matching header. The TypeScript wallet binding executes the real Rust wallet binary with an external signer socket."
+assumption = "The contract omits lx_estimateFee, lx_listAssets and lx_getAsset; lx_getBalances still returns unavailable until native DID enumeration exists. Fee ceilings and finality trust inputs remain explicit configuration. Live public-RPC wallet execution was not exercised against an integrated gateway endpoint."
+severity = "note"
+
+[observation.6.11.132]
+task = "6.11"
+file = "tests/daemon/lxp_test_program_admission.c tests/daemon/program-admission.sh agent/crates/layerx-client/tests/availability_daemon.rs"
+symbol = "availability_batches real_daemon_availability_refusals"
+observed = "After make -j16, named native binary builds and the admission/finality harness prerequisite builds, cargo test --manifest-path agent/Cargo.toml -p layerx-client exits 101. The native harness reports test_daemon_lni_admission:620: found and line 649: availability_batches(descriptor, &key) == 0 before the Rust integration test fails at line 296. Evidence: qual-logs/pay2/wallet-client-test.log and qual-logs/pay2/wallet-client-native-prerequisites.log; native diagnostics: /tmp/lxp-program-admission-M7nARO."
+assumption = "The existing native availability failure is outside the wallet client changes. No native assertion or test was altered. The full daemon suite passed with LAYERX_TEST_NATIVE_BIN_DIR=/root/lx/pay2/build/bin. Evidence: qual-logs/pay2/continuation-agentd-test.log."
+severity = "blocker"
+
+[observation.6.11.133]
+task = "6.11"
+file = "agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-mcp/src/tools/wallet.rs"
+symbol = "EvaluationInput evaluate execute"
+observed = "Both public EvaluationInput constructors set the private cumulative_count field to None. Context validation requires an opaque verified budget result and an authenticated cumulative count, so no available constructor can yield a permitting context. The MCP payment backend checks bound session/capability identity, derives policy monetary fields from the prepared disclosure and invokes this evaluator before calling the real wallet signer and RPC execution."
+assumption = "Positive MCP payment execution requires the real canonical cumulative-use and protocol-budget evidence producer. Existing policy checks remain intact. Native duplicate, ownership, pause and supply-cap checks are native execution responsibilities and are not signer blockers."
+severity = "blocker"
+
+[observation.6.2.920]
+task = "6.2"
+file = "platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/tests/local/deposit_recipient.py platform/Cargo.lock"
+symbol = "sign_disclosed local_gateway_successful_send_latency"
+observed = "The signer integration accepts independently disclosed identity-envelope and source-account sequences. The funded fixture now signs through the production disclosure-bound LocalSigner and credits a distinct recipient agent main account through a second real custody deposit on disposable chain 31337. The former system:fees recipient was correctly refused with native result -208. Twenty successful gateway HTTPS JSON-RPC executed SENDs, each with matching activity ID, result code zero and verified sequencer signature, measured p50 2946178 us and p99 4196111 us before transport changes. After coalescing writes, enabling TCP_NODELAY and releasing the commit-notification mutex during receipt scans, twenty successful SENDs measured p50 2106405 us and p99 3404539 us. Batched replay returned inclusion evidence in 363379 us; finalised replay returned executed/pending in 5817963 us under the unchanged deadline. Evidence: qual-logs/pay4/g-funded-agent-latency.log and g-funded-final.log, both exit 0. Native producers were rebuilt from base 4ad5b4c15d1a01e3e1f9ccb56011fc7843c54157 with the qualified working-tree receipt-wait change."
+assumption = "The 250 ms p50 threshold remains unmet. This harness has no finalised guarantor certificate, so the finalised result proves bounded pending behavior only. Standard locked platform build exits 101 because the integrated layerx-mcp dependency on layerx-sdk is absent from protected platform/Cargo.lock. Qualification uses an untracked alternate lockfile containing only that dependency addition; the tracked lockfile is unchanged. Exact commands and raw logs are in qual-logs/pay4/g-gate-commands.md. No persistent chain was used."
+severity = "blocker"
+
+[observation.6.2.921]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_lni.c platform/hosted/core/src/main.rs platform/hosted/core/tests/boundary.rs platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/store.rs src/replica/lxp_history.c cmd/layerxd/lxp_daemon_main.c"
+symbol = "send_receipt receipt_commit_generation executor_run lxp_receipt_lookup"
+observed = "Receipt history scans formerly held the global commit-notification mutex and serialized readers with publication notifications. A generation check now protects notification ordering while scans run outside the mutex; generation changes retain the original monotonic deadline. Four real concurrent receipt readers receive the exact committed receipt, and existing absent-receipt, oversized-wait, malformed-selector and already-present assertions remain intact. The concurrency fixture durably admits the real signed activity before occupying all four native connection workers, joins those readers, then checks the core replay response. The initial fixture exhausted all four workers before submission and correctly received 503; the worker bound was not widened. Gateway HTTP and Redis frames are coalesced in zeroizing buffers and owned TCP endpoints disable Nagle delays."
+assumption = "The syscall-traced baseline is diagnostic only: it timed out on SEND 15 and failed the unchanged executed-success assertion. Retained numeric spans show median core submission 346740 us, core receipt wait 3419135 us, gateway authentication 637060 us and gateway activity processing 10242278 us under tracing; these are not benchmark results. Raw diagnostics: qual-logs/pay4/g-profile-syscalls.log, g-profile-spans.log and g-profile-summary.json. The native executor waits for a nonempty queue with a condition variable; its separate 100 ms health loop and idle listener polls do not delay queued submission. Native lxp_receipt_lookup scans the published history from offset zero. Indexed authenticated history reads and executor/history cost reduction require changes outside the receipt-wait ownership boundary, preserving corruption, duplicate, signature and durability checks."
+severity = "blocker"
+
+[observation.6.2.922]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs platform/hosted/gateway/tests/local/lifecycle.rs cmd/layerxd/lxp_daemon_lni.c"
+symbol = "authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receipts local_gateway_websocket_receipt_wake"
+observed = "Final source core/gateway cargo fmt checks, all-target Clippy with -D warnings, full serial core/gateway cargo test including real daemon boundary tests and doctests, standalone local harness formatting and all-target Clippy, four-reader receipt commit/deadline qualification, real WebSocket receipt/account wake and beta-ledger-check all exit 0. Logs: qual-logs/pay4/g-fmt-qualified.log, g-local-fmt-qualified.log, g-clippy-qualified.log, g-local-clippy-qualified-final.log, g-tests-qualified.log, g-concurrent-focused-final.log, g-ws-final.log and g-ledger-qualified.log. The native build exits 0 with existing strict C warnings; g-native-concurrent-build.log and g-native-bundle-final.json retain producer provenance."
+assumption = "Platform Cargo commands use the untracked alternate lockfile described in observation 6.2.920. Qualification covers the owned receipt/transport implementation and disposable harness, not the 250 ms threshold, positive finalised certificates, deployment, production certification or other unresolved public-read/native interfaces. No task status was changed."
+severity = "note"
+
+[observation.6.2.923]
+task = "6.2"
+file = "platform/hosted/tests/topology-check.sh platform/hosted/internal/deployment.yaml platform/hosted/webhooks/deployment.yaml platform/hosted/gateway/deployment.yaml"
+symbol = "egress_admits"
+observed = "Separating dashboard and webhook ConfigMaps and admitting only the required source pods and destination ports reduces topology failures from twenty to four. Both parser runs exit 1: qual-logs/pay4/h/topology.log and topology-builtin.log. Journeys and approvals reference undeclared layerx-human.layerx-testnet.svc:9443. Payments and programs DNS egress selects kube-system kube-dns pods, but egress_admits only recognizes a namespaceSelector without podSelector. The existing DNS restriction and checker remain unchanged."
+assumption = "A real Human service manifest and a source-grounded DNS checker repair are required; adding placeholder workloads or widening DNS access to silence the checker is not acceptable."
+severity = "blocker"
+
+[observation.6.2.924]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs agent/schema/lni/v1.kvx agent/crates/layerx-client/src/client.rs"
+symbol = "route"
+observed = "DID accounts, asset list/detail and fee routes preserve explicit HTTP 503 refusals mapped to JSON-RPC -32001. The supplied shared encodings and NEEDS define HTTP selectors but no new native request tags, payload version, bounded enumeration cursor, response layout or authenticated completeness contract. The client exposes no corresponding enumeration, asset registry or fee methods."
+assumption = "Native request and response contracts are required before real adapters can be implemented. Native Asset admission remains restricted; ordinal 9 stays reserved. No fabricated empty lists, metadata or fees are returned."
+severity = "blocker"
+
+[observation.6.2.925]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "send complete_commitment local_gateway_rpc assert_funded_commitments"
+observed = "HTTP 202 maps to a typed submission error. Unmet batched or finalised commitment maps to -32001 with pending state and requested_commitment instead of executed success. Existing local harness assertions at finalised replay require result.state=pending and result.commitment=executed, contradicting the no-ack and no-downgrade contract. Those assertions are retained unchanged."
+assumption = "The conflicting assertions need explicit reconciliation authority; they must not be skipped or weakened. Positive finalised certificate and delayed or incorrect evidence runtime coverage remains required."
+severity = "blocker"
+
+[observation.6.2.926]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/core/src/public_reads.rs platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "pending_commitment selector valid_fee_request local_gateway_successful_send_latency"
+observed = "Core and gateway formatting, strict all-target Clippy and full package tests pass using tracked platform/Cargo.lock, including thirteen real core boundary tests. Final gateway package tests and strict Clippy also pass after wrapping arbitrary upstream JSON inside typed 202 error data. Logs: qual-logs/pay4/h/fmt-final.log, clippy-final-source.log, tests.log and gateway-final.log. The real RPC harness exits 101 at the preserved finalised-success assertion after executed and batched assertions pass; local-rpc.log contains the typed -32001 response with requested_commitment=finalised. The funded harness completes twenty successful production-disclosure-signed SENDs with p50 1937166 us and p99 3271887 us; batched replay succeeds in 402157 us before the preserved finalised result assertion fails. Funded aggregate exit is 101, log funded.log."
+assumption = "The funded runtime measurement precedes the final malformed-202-body wrapping repair. It does not qualify the aggregate gate or the 250 ms latency threshold. Native producer is the retained local receipt-wait bundle and was not rebuilt in this continuation. Missing native reads, positive finality and retained assertion conflicts remain blockers."
+severity = "blocker"
+
+[observation.3.7.101]
+task = "3.7"
+file = "src/ledger/lxp_journal.c"
+symbol = "lxp_conservation_check lxp_apply_transfer_set"
+observed = "Native mint and burn require a change in total account units, but the transfer set unconditionally rejects unequal per-asset debit and credit totals. The current balance primitive applies both endpoints. These checks are identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
+assumption = "An authenticated issuance and destruction invariant must be specified before altering the existing conservation check; a direct balance write or fabricated reserve does not satisfy the contract."
+severity = "blocker"
+
+[observation.3.7.102]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "collect_assets verify replay admission"
+observed = "Daemon asset admission and replay allow only LX_ASSET_SEND. Runtime registry reconstruction collects asset ids from accounts without issuer, cap, name or pause metadata. The file is outside the permitted account-read changes and identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
+assumption = "Extend daemon admission and replay to the assigned asset ordinals and reconstruct the committed asset registry without synthesizing metadata from balances."
+severity = "blocker"
+
+[observation.3.7.103]
+task = "3.7"
+file = "include/layerx/lxp_receipt.h"
+symbol = "lxp_receipt lxp_ledger_receipt_input"
+observed = "The existing canonical ledger receipt fields have balances but no total_units before and after. The receipt schema and protocol codecs are outside the permitted asset dispatch paths and identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
+assumption = "Define and implement a versioned supply receipt binding across native encoding, decoding, signing and replay before qualifying native mint and burn."
+severity = "blocker"
+
+[observation.3.7.104]
+task = "3.7"
+file = "src/protocol/lxp_module_ctx.c include/layerx/lxp_module.h src/ledger/lx_account_registry.c"
+symbol = "lxp_ctx_bind_ledger_receipt commit_account lxp_ctx_account_stage_module_value"
+observed = "The approved issuance account model preserves per-asset conservation and binds supply through existing receipt endpoint balances, resolving the model and schema questions in observations 3.7.24 and 3.7.26. The module context still restricts ledger receipt operation to Send and routes staged owner-account commit only for Bridge. Its module-value staging derives module:<module>:value:<id>, rather than the specified issuance account name. The implementation-boundary files are unchanged from 2e5ee777; evidence: qual-logs/pay1/continuation-base-comparison.log."
+assumption = "Asset register, account_open, receive, mint and burn require scoped module-context staging, commit/import/export and receipt-operation integration while preserving generic registration, conserved transfer, balance, authorization and receipt checks. These paths are outside the granted daemon and asset-dispatch ownership. The typed activities remain refused until execution is implemented; registry reconstruction and full new-ordinal execution qualification remain incomplete."
+severity = "blocker"
+
+[observation.3.7.105]
+task = "3.7"
+file = "src/protocol/lxp_fee.c src/protocol/lxp_fee_policy.c include/layerx/lxp_fee.h cmd/layerx-genesis/lxp_genesis_builder.c"
+symbol = "lxp_fee_compute materialize_snapshot"
+observed = "The current fee representation multiplies per_activity_type_unit by the complete activity type and already computes fees for the additional ordinal numbers; lxp_fee_policy.c contains no per-ordinal price table. Genesis materialization registers lx_asset_module_iface, including its expanded type table. The fee implementation and parameter header are unchanged from 2e5ee777; evidence: qual-logs/pay1/continuation-base-comparison.log."
+assumption = "A separately configured per-ordinal price schedule requires a canonical parameter representation and ownership of the fee calculator and parameter codec paths. Account enumeration, persisted registry reconstruction and complete new-ordinal replay remain unimplemented; existing genesis and account-read regression gates do not qualify those absent behaviors."
+severity = "blocker"
+
+[observation.3.7.106]
+task = "3.7"
+file = "include/layerx/lx_asset.h src/modules/asset/lx_asset_decode.c src/modules/asset/lx_asset_registry.c src/ledger/lxp_receive.c cmd/layerxd/lxp_daemon_process.c tests/modules/test_asset_payloads.h"
+symbol = "module_decode asset_activity_supported"
+observed = "make -j16; make test-asset-registry test-asset-balance test-asset-transfer test-asset-deposit test-asset-withdraw test-asset-reserve test-ledger-accounts test-ledger-send test-ledger-receive test-ledger-receipt test-state-commitment-transition test-genesis test-daemon-lni-admission test-daemon-lni-account; sh tools/lxp_check_sole_writer.sh; make test; make beta-ledger-check; and git diff --check each exit 0. Logs: qual-logs/pay1/pay1b-build.log, pay1b-focused.log, pay1b-sole-writer.log, pay1b-test.log, pay1b-beta-ledger-check.log and pay1b-diff-check.log, each with an adjacent exit file. The initial focused run exited 2 at test-asset-transfer because simultaneous decoded payload storage exhausted the existing arena; allocating the additional typed payload separately repaired the regression without changing that test or its arena bound. Initial output remains in pay1b-focused-attempt1.log."
+assumption = "These gates qualify the canonical decoders and existing regression paths, not missing registry, issuance, receive/grant execution or account enumeration. Daemon admission and replay now share the explicit Asset allowlist and constrain Asset owner scopes to the submitted ordinal; successful execution and persisted registry replay remain unqualified. Codify gates were not run because cg is unavailable. Cluster and image gates were not run because this host has no cluster or image tooling. No inherited executed failure is asserted."
+severity = "blocker"
+
+[observation.3.7.107]
+task = "3.7"
+file = "src/protocol/lxp_fee.c include/layerx/lxp_fee.h src/modules/governance/lxp_fee_params.c src/protocol/lxp_fee_policy.c"
+symbol = "lxp_fee_compute lxp_fee_params"
+observed = "Version-1 fee parameters contain per_activity_type_unit, which lxp_fee_compute multiplies by the complete numeric activity type. The policy file owns admission, rejection and replay checks but contains no ordinal price representation. The calculator, parameter declaration and governance codec are identical to 55a8246d; evidence: qual-logs/pay1/pay1c-scope-base-comparison.log."
+assumption = "A separately configured ordinal table requires an explicit canonical representation and version/migration contract plus ownership of the calculator, parameter declaration and governance/genesis serialization consumers. Those paths are outside the fee-policy grant. Existing fee calculation and assertions remain intact; no unused parallel price table is introduced."
+severity = "blocker"
+
+[observation.3.7.108]
+task = "3.7"
+file = "src/modules/asset/lx_asset_execution.h src/protocol/lxp_module_ctx.c src/modules/asset/lx_asset_state.c tests/test_state_commitment_transition.c cmd/layerxd/lxp_daemon_lni.c cmd/layerxd/lxp_daemon_process.c"
+symbol = "asset_execute_typed lxp_ctx_asset_account_stage lxp_ctx_asset_issuance_stage lxp_ctx_bind_ledger_receipt lx_account_list_did collect_assets"
+observed = "make -j16; make test-asset-registry test-asset-balance test-asset-transfer test-asset-deposit test-asset-withdraw test-asset-reserve test-ledger-accounts test-ledger-send test-ledger-receive test-ledger-receipt test-state-commitment-transition test-genesis test-daemon-lni-admission test-daemon-lni-account; sh tools/lxp_check_sole_writer.sh; make test; make beta-ledger-check; git diff --check; and make -j16 layerxd each exit 0. Logs: qual-logs/pay1/pay1c-build.log, pay1c-focused.log, pay1c-sole-writer.log, pay1c-test.log, pay1c-beta-ledger-check.log, pay1c-diff-check.log and pay1c-daemon-build.log, each with adjacent exit file. Real signed kernel tests exercise registration, owner opening, capped issuance, burning, grant issue/revoke and receive, unauthorized actors, balance/cap refusals, deterministic roots, strict record decoding and receipt signatures. Prepared transition tests cover preview/export/rollback/import/commit for owner, capped issuance and uncapped issuance registrations, wrong token/operation refusal and receipt field tampering. Existing generic registration assertions remain unchanged. make test-state-commitment-transition and make test also exit 0 after adding stored-receipt replay and unchanged-root/identity-sequence assertions for each new ordinal; logs: qual-logs/pay1/pay1c-final-replay.log and pay1c-final-test.log. make test-layerxd test-daemon-lni-admission test-daemon-lni-account exits 0 after rebuilding the final daemon reconstruction source; log: qual-logs/pay1/pay1c-final-daemon.log."
+assumption = "These gates do not establish exhaustive new-ordinal refusal coverage or process-level replay/restart and wire enumeration qualification for every new activity. Existing genesis registration and account-evidence gates pass. The configurable ordinal fee representation remains the scope boundary in observation.3.7.30. Task-scoped regressions in cached supply-root derivation, bootstrap pause checking and a sanitizer link dependency were repaired without weakening assertions; earlier attempt logs remain under qual-logs/pay1. No executed failure is classified as inherited. Codify gates were not run because cg is unavailable; cluster and image gates were not run on this host."
+severity = "blocker"
+
+[observation.3.7.109]
+task = "3.7"
+file = "spec/layerx-protocol/spec.kvx agent/schema/lni/v1.kvx tests/test_fees.c tests/test_genesis_manifest.c tests/test_guarantor_duties.c tests/support/lxp_pay1_replay.h"
+symbol = "lxp_fee_compute materialize_snapshot lxp_guarantor_recompute_roots send_did_accounts"
+observed = "Asset ordinals 1, 4, 6, 7, 8, 10 and 11 retain fee-parameter version 1 and the existing complete-activity-type, byte, execution and storage formula with the existing multiplier rounding. Admission, replay and refusal policy remains unchanged. Exact computed fees for every new ordinal, genesis snapshot registration and reserved ordinal refusal, and independent kernel replay with guarantor root recomputation across eight batches pass. Each new ordinal produces a verified signed replay receipt; mutated resulting roots are refused. Account enumeration uses LNI request tag 7 kind 3 with derived DID id32, latest selector and rank at most 3; response tag 8 carries sorted account values with individual account proofs and refuses response overflow. The schema now describes this existing route. make test-fees test-fee-replay test-genesis test-guarantor test-state-commitment-transition test-asset-registry test-daemon-lni-account exits 0; evidence: qual-logs/pay1/pay1d-item4-5-focused.log and pay1d-item4-5-focused.exit."
+assumption = "The fee representation boundary in observations 3.7.28 and 3.7.30 is resolved by retaining version 1. A separate per-ordinal schedule is a governance follow-up outside this branch. Genesis materialization already registers the expanded Asset module; guarantor replay already dispatches the registered kernel implementation and needs no separate ordinal table."
+severity = "note"
+
+[observation.3.7.110]
+task = "3.7"
+file = "tests/test_state_commitment_transition.c tests/modules/test_asset_payloads.h tests/support/lxp_pay1_replay.h"
+symbol = "pay1_submit_bytes pay1_receive_grant pay1_issuance pay1_snapshot_roundtrip pay1_malformed"
+observed = "Signed kernel tests cover the seven new ordinals, replay, exact identity-sequence consumption, unchanged balances and module KV on refusals, and signed receipt root and endpoint tampering. Registration covers derived-id mismatch and duplicates; opening covers unknown and paused assets and duplicates; mint and burn cover unknown assets and accounts, asset mismatch, unauthorized actors, paused assets, frozen accounts, zero amount, cap exhaustion, exact cap, full burn and underflow. Grant issue covers invalid maximum, allowance, expiration, recurrence/window, recipient, purpose, identifier and signature, foreign key and owner, unknown asset/account, pause and duplicates. Receive covers missing grants, unknown assets/accounts, draw bounds, purpose, sequence, context, receiver network/controller/key/signature, idempotency binding, self draw, zero amount, pause, embedded grant mismatch, expiry, total and recurring exhaustion, invoice reuse and revocation. Revoke covers unknown grants, stale sequence, duplicate revocation and foreign owner. Canonical decoder prefix, trailing-byte, version, length and field bounds remain covered. Issued assets and grant state round-trip through real snapshots with identical state roots and account ids, assets, balances and sequences. Repeated issuance histories produce identical roots. make test-state-commitment-transition test-asset-registry test-asset-balance test-asset-transfer test-ledger-accounts test-ledger-receive test-ledger-receipt test-genesis test-guarantor and sh tools/lxp_check_sole_writer.sh exit 0; evidence: qual-logs/pay1/pay1d-item5-focused.log and pay1d-item5-sole-writer.log with adjacent exit files. Final additional owner and pause cases pass make test-state-commitment-transition; evidence: qual-logs/pay1/pay1d-item5-final-kernel.log and pay1d-item5-final-kernel.exit."
+assumption = "Snapshot account ordering is canonical rather than insertion order; round-trip equality is checked by canonical account identity. Existing checks and protocol bounds remain unchanged."
+severity = "note"
+
+[observation.3.7.111]
+task = "3.7"
+file = "tests/test_state_commitment_transition.c tests/test_fees.c tests/test_genesis_manifest.c tests/test_guarantor_duties.c agent/schema/lni/v1.kvx"
+symbol = "pay1_snapshot_roundtrip pay1_guarantor_replay lxp_fee_compute"
+observed = "make -j16 exits 0; make test-asset-registry test-asset-balance test-asset-transfer test-asset-deposit test-asset-withdraw test-asset-reserve test-ledger-accounts test-ledger-send test-ledger-receive test-ledger-receipt test-state-commitment-transition test-fees test-fee-replay test-genesis test-guarantor test-layerxd test-daemon-lni-admission test-daemon-lni-account exits 0; make test exits 0; make beta-ledger-check exits 0. Evidence: qual-logs/pay1/pay1d-build.log, pay1d-final-focused.log, pay1d-test.log and pay1d-beta-ledger.log, each with an adjacent exit file. sh tools/lxp_check_sole_writer.sh exits 0 in qual-logs/pay1/pay1d-item5-sole-writer.log. Initial added test failures were confined to temporary encoding arena retention, querying the restored genesis module at the wrong epoch, the grant decoder's exact refusal code, snapshot insertion-order assumptions and the qualification severity vocabulary. The corrected tests preserve canonical identity equality, exact refusal codes, protocol bounds and all pre-existing assertions."
+assumption = "No executed failure is classified as inherited. Codify gates were not run because cg is unavailable. Cluster and image gates were not run on this server. The evidence establishes native build and test qualification; it does not establish deployment or live cluster certification."
+severity = "note"
+
+[observation.3.7.112]
+task = "3.7"
+file = "include/layerx/lx_asset.h src/modules/asset/lx_asset_registry.c src/modules/asset/lx_asset_execution.h tests/modules/test_asset_state.c tests/test_state_commitment_transition.c"
+symbol = "lx_asset_record_encode lx_asset_record_decode asset_execute_typed lx_asset_state_root"
+observed = "Committed Asset record encoding version 3 persists salt32 alongside issuer identity, issuer kind, name, cap and circulating total units. Registration copies the canonical payload salt into the stored record. Salt changes alter the authenticated asset root; record truncation, trailing bytes and older record versions are refused. Native registration retains empty custody reference and issuer_kind remains distinct from custody_kind. make test-asset-registry test-asset-balance test-state-commitment-transition test-genesis test-guarantor exits 0; evidence: qual-logs/pay1/pay1e-item3.log and pay1e-item3.exit."
+assumption = "Stored record version 2 lacks salt and is deliberately not silently upgraded. Existing snapshots containing version 2 asset records require an explicit migration before replay through this decoder. Activity ordinal 1 remains version 1 and has a separate codec."
+severity = "note"
+
+[observation.3.7.113]
+task = "3.7"
+file = "tests/test_state_commitment_transition.c tests/support/lxp_pay1_replay.h"
+symbol = "pay1_snapshot_roundtrip"
+observed = "Snapshot qualification now compares every restored module KV key/value byte for byte, rejects duplicate keys and checks decoded salt, issuer, issuer kind, pause, cap and supply alongside state roots and account balances. make test-state-commitment-transition test-guarantor exits 0 in qual-logs/pay1/pay1e-item10.log. Existing signed execution and negative tests remain intact."
+assumption = "Actual process restart coverage for all new ordinals and explicit receipt supply tampering remain incomplete pending the daemon and receipt interfaces. This is partial qualification, not closure of the complete test request."
+severity = "blocker"
+
+[observation.3.7.114]
+task = "3.7"
+file = "src/modules/asset/lx_asset_execution.h"
+symbol = "asset_execute_typed"
+observed = "The seven typed ordinals already execute through asset_execute_typed. Signed kernel coverage exercises duplicate registration/open, issuer and owner authority, amount/cap/asset/balance bounds and canonical grant draw and revocation. Existing checks are retained. Focused qualification exits 0 in qual-logs/pay1/pay1e-item3.log."
+assumption = "Execution exists; receipt supply schema, fees and daemon reconstruction remain separate unresolved findings."
+severity = "note"
+
+[observation.3.7.115]
+task = "3.7"
+file = "src/modules/asset/lx_asset_execution.h"
+symbol = "asset_execute_typed"
+observed = "Native registration recomputes SHA-256 over LX:ASSET:v1, resolved actor identity id32 and salt32, and refuses a differing asset id. The kind-2 branch retains the supplied custody id. The signed invalid-derivation test passes in qual-logs/pay1/pay1e-item3.log."
+assumption = "No encoding or derivation change is needed."
+severity = "note"
+
+[observation.3.7.116]
+task = "3.7"
+file = "src/modules/asset/lx_asset_registry.c src/modules/asset/lx_asset_decode.c"
+symbol = "symbol_valid lx_asset_register_decode"
+observed = "The typed registration decoder and issuer_kind nonzero stored-record validation accept 1..16 ASCII bytes consistently. UTF-8 name, decimals, custody lengths, truncation and trailing-byte refusals pass in qual-logs/pay1/pay1e-item3.log. The legacy issuer_kind zero registry helper retains its uppercase/digit check."
+assumption = "Broadening the legacy helper check is not required for shared native activity encoding and would relax an existing check; it is left intact."
+severity = "note"
+
+[observation.3.7.117]
+task = "3.7"
+file = "include/layerx/lxp_receipt.h src/protocol/lxp_receipt.c src/protocol/lxp_receipt_verify.c"
+symbol = "lxp_receipt lxp_ledger_receipt_input"
+observed = "Canonical receipt structures still lack before/after total_units. The Asset requirement now mandates explicit versioned authenticated supply binding and rejects the earlier no-new-schema claim. Receipt structs, wire codecs and verification are outside owned paths."
+assumption = "Endpoint tamper tests do not qualify supply tamper refusal. A coordinated receipt interface and verifier change is required; the earlier resolution in observation.3.7.27 does not close this finding."
+severity = "blocker"
+
+[observation.3.7.118]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "collect_assets"
+observed = "Committed Asset records are decoded and overlaid with cap/supply consistency checks, but the initial account scan still synthesizes registered=true and paused=false for every balance asset. This reconstruction path is outside owned paths."
+assumption = "Remove synthesis through an authoritative bootstrap and persisted registry interface, then qualify actual daemon restart metadata and root equality. Snapshot equality alone does not establish this."
+severity = "blocker"
+
+[observation.3.7.119]
+task = "3.7"
+file = "src/protocol/lxp_module_ctx.c src/modules/asset/lx_asset_execution.h src/ledger/lx_account_id.c"
+symbol = "lxp_ctx_asset_issuance_stage issuance_find"
+observed = "Current issuance staging, prepared-account commit validation and replay use asset:<hex>:issuance. The shared account encoding does not authorize that extra namespace. The Asset requirement now specifies one explicit internal representation through module:<mod>:value:<hex64> and preserves public agent account names and conservation."
+assumption = "Module context and daemon replay changes are outside owned paths. Updating only owned lookup/parser code would split producers and consumers. Observation.3.7.24 is an accounting integration issue, not authority to weaken conservation."
+severity = "blocker"
+
+[observation.3.7.120]
+task = "3.7"
+file = "src/protocol/lxp_fee.c include/layerx/lxp_fee.h src/protocol/lxp_fee_policy.c"
+symbol = "lxp_fee_compute"
+observed = "The fee calculator still multiplies per_activity_type_unit by the full module/ordinal value. The owned policy file controls admission/refusal decisions, not the schedule. The Asset requirement now mandates canonical named prices and retracts the earlier version-1 formula as resolution."
+assumption = "Pricing types, calculation, canonical parameters and replay must change together outside the owned policy path. Existing exact-fee assertions are retained. Prior fee tests establish only current formula behavior."
+severity = "blocker"
+
+[observation.3.7.121]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c src/modules/asset/lx_asset_registry.c spec/layerx-protocol/spec.kvx"
+symbol = "asset_activity_supported module_execute"
+observed = "Pause/unpause are explicitly excluded from supported authenticated Asset activity execution in the Asset requirement. Daemon admission excludes ordinals 2 and 3. The module table retains legacy constants and direct registry helpers; its event-only path does not establish execution support."
+assumption = "No new ordinal 2/3 encoding or authority rule is introduced. Paused-state refusal checks remain required and unchanged."
+severity = "note"
+
+[observation.3.7.122]
+task = "3.7"
+file = "spec/layerx-protocol/docs/activity-types.md docs/wiki/Modules.md spec/layerx-protocol/design.body.md"
+symbol = "activity_type"
+observed = "The documentation still assigns ASSET_SEND to 0x0101. Current SEND is module 1 ordinal 5, or 0x00010005. Merged design text also presents the disputed issuance namespace and pause/unpause support without the current limits. These documentation and generated projection paths are outside ownership."
+assumption = "The documentation owner must retire the old table, retain Asset 9 reservation, correct issuance and qualification claims and regenerate projections. No generated file was hand-edited."
+severity = "blocker"
+
+[observation.3.7.123]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_lni.c platform/hosted/core/src/public_reads.rs platform/hosted/gateway/src/rpc.rs"
+symbol = "send_did_accounts"
+observed = "Native DID enumeration exists as tag 7 kind 3 and tag 8 sorted canonical account values with proofs. The named hosted public-read and gateway files do not exist in this clone. No gateway ownership was duplicated."
+assumption = "Public RPC ownership must integrate committed Asset metadata, enumeration and canonical fee reads; method presence and decoders must not be reported as executed activities."
+severity = "blocker"
+
+[observation.3.7.124]
+task = "3.7"
+file = "include/layerx/lx_asset.h"
+symbol = "lx_asset_register_decode"
+observed = "The merged payload comments used dotted numeric ranges that matched the existing consensus floating-point scanner. make test exited 2 at test-arith-nofloat; evidence: qual-logs/pay1/pay1e-test.log. Spelling the same bounds as 1 to 16 and 1 to 32 fixes the comment-only diagnostic without altering payload bounds or the scanner. make test-arith-nofloat exits 0; evidence: qual-logs/pay1/pay1e-qa-comments.log and pay1e-qa-comments.exit."
+assumption = "This is a merge-introduced comment failure, not an inherited implementation failure. No test, scanner rule or protocol check was weakened."
+severity = "note"
+
+[observation.3.7.125]
+task = "3.7"
+file = "spec/layerx-protocol/docs/activity-types.md"
+symbol = "activity_type"
+observed = "The obsolete byte-pair catalogue is retired as a native wire authority. Native types use (module << 16) | ordinal; SEND is 0x00010005. The Asset table identifies native register, account_open, receive, grant_issue, grant_revoke, mint and burn, preserves reserved ordinal 9, and excludes authenticated pause/unpause execution."
+assumption = "The retained non-Asset sketches are explicitly historical and do not redefine the native module registry or envelope."
+severity = "note"
+
+[observation.3.7.126]
+task = "3.7"
+file = "src/ledger/lx_account_id.c src/modules/asset/lx_asset_execution.h src/protocol/lxp_module_ctx.c cmd/layerxd/lxp_daemon_process.c"
+symbol = "lx_asset_issuance_name"
+observed = "New issuance staging, lookup, commit validation, supply summation and reconstruction share module:asset:value:<hex64 account_id>. The account id retains the prior LX:ACCOUNT:v1 seed derivation; the former asset:<hex>:issuance name is no longer accepted by the general account parser. Account-name roots change even though account ids remain stable."
+assumption = "Existing snapshots with the retired account name require an explicit operator migration and a newly authorized root; rewriting a name in an already signed snapshot is invalid."
+severity = "note"
+
+[observation.3.7.127]
+task = "3.7"
+file = "include/layerx/lxp_fee.h src/protocol/lxp_fee.c src/modules/governance/lxp_fee_params.c"
+symbol = "lxp_fee_schedule lxp_fee_compute lxp_fee_params_decode"
+observed = "Fee parameter encoding 2 carries exactly eight named Asset prices ordered register, account_open, send, receive, grant_issue, grant_revoke, mint, burn. Governance fee.encoding selects this encoding; every named price must resolve at the same parameter version. Encoding 1 retains its historical calculation. Encoding 2 uses the named Asset price, never the complete activity-type multiplier; reserved ordinal 9 is refused. Exact price, missing-price, truncated, trailing-byte and legacy round-trip checks pass in test-fees."
+assumption = "Committed fee.schedule records carry the canonical encoding. An absent committed schedule is accepted only for the existing parameter-version-1 zero-fee replay representation. New bootstrap inputs provide the explicit encoding-2 schedule."
+severity = "note"
+
+[observation.3.7.128]
+task = "3.7"
+file = "src/modules/asset/lx_asset_registry.c cmd/layerx-genesis/lxp_genesis_build_cli.c"
+symbol = "lx_asset_record_migrate_v2 migrate_asset_v2"
+observed = "The operator command layerx-genesis-build --migrate-asset-v2 input-record salt-file salt-source output-directory validates a version-2 record with an explicit 32-byte salt and emits asset-v3.bin plus salt-source.txt into an exclusive directory. Native issuer ids must match the supplied salt derivation. No salt is synthesized. Wrong native salt and exact-byte migration round trip pass in test-state-commitment-transition."
+assumption = "The command migrates record artifacts, not signed snapshot manifests, historical roots or settlement anchors. Snapshot incorporation requires an independently authorized migration boundary."
+severity = "note"
+
+[observation.3.7.129]
+task = "3.7"
+file = "include/layerx/lxp_receipt.h src/protocol/lxp_receipt.c src/protocol/lxp_module_ctx.c agent/crates/layerx-wire/src/receipt.rs"
+symbol = "lxp_receipt_validate_supply lxp_ctx_bind_asset_supply"
+observed = "Receipt structure tag 0x5202 authenticates total_units_before and total_units_after as two big-endian u128 values immediately after timestamp. Protocol version remains independent. Tag 0x5201 remains decodable. Native Asset execution binds the committed supply transition, and native and Rust codecs enforce register, conserved, mint and burn supply equations. Single-field, paired-field and downgrade signature tampering are refused by the real signed transition tests. make test-state-commitment-transition and make test passed; evidence: qual-logs/pay1/pay1f-focused.log and qual-logs/pay1/pay1f-test.log. The snapshot and signature gates do not establish historical deployment compatibility."
+assumption = "Consumers of the new receipt structure must retain the supply bytes in digest and signature verification. Existing receipt fixtures retain their legacy structure; the native fixture generator accepts --supply for the new structure."
+severity = "note"
+
+[observation.3.7.130]
+task = "3.7"
+file = "src/modules/asset/lx_asset_registry.c cmd/layerxd/lxp_daemon_process.c cmd/layerx-genesis/lxp_genesis_build_cli.c cmd/layerx-genesis/lxp_genesis_builder.c"
+symbol = "lx_asset_committed_records collect_assets parse_request"
+observed = "Daemon reconstruction requires committed Asset records and refuses account assets without metadata. Bootstrap records use the manifest asset-id key; native updates use asset: plus asset-id. Custody bootstrap supply is read from committed custody-issued metadata when present. Issuer, salt, cap and pause come from decoded records. LXGB request version 2 appends explicit Asset records and a canonical named fee schedule; version 1 remains parseable but cannot create missing authoritative metadata. Genesis version-2 artifact round trip passes in test-genesis."
+assumption = "Existing external bootstrap request generators must provide the new metadata and schedule. The actual daemon restart matrix for funded native register/open/mint/burn/grants remains unqualified."
+severity = "note"
+
+[observation.3.7.131]
+task = "3.7"
+file = "agent/schema/lni/v1.kvx agent/schema/lni/README.md agent/crates/layerx-client/tests/lni_schema.rs cmd/layerxd/lxp_daemon_lni.c"
+symbol = "send_asset_read send_fee_estimate lni_schema_and_document_cover_every_declared_message"
+observed = "LNI minor 5 adds AssetReadRequest/Response tags 32/33 and FeeEstimateRequest/Response tags 34/35. Typed client calls decode committed metadata and canonical fee schedule snapshots; DID enumeration verifies each existing account proof. Native compilation, existing LNI account evidence and durable admission gates pass. The Rust schema gate fails because the boundary README does not list the new message names; the exact NODE_BOUNDARY assertion is unchanged. Evidence: qual-logs/pay1/pay1f-schema.log. The README is outside the granted schema file path."
+assumption = "This is a new integration requirement, not an inherited failure. Add the four message names and snapshot semantics to agent/schema/lni/README.md, then rerun cargo test --manifest-path agent/Cargo.toml -p layerx-client --test lni_schema. New metadata/fee handlers still need a real daemon client integration matrix."
+severity = "blocker"
+
+[observation.6.2.927]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/openrpc.json"
+symbol = "assets did_accounts estimate_fee read_response"
+observed = "Typed LNI minor-5 committed DID account, AssetRead 32/33, and FeeEstimate 34/35 APIs serve the public payment reads. The real funded RPC read gate passes for balances, asset list/detail, canonical fees, malformed requests, absent assets, and unavailable Program meters. Evidence: qual-logs/pay4/i/reads-qualified.log. Snapshots retain their actual authentication and proof semantics; no completeness or finality proof is fabricated."
+assumption = "Per-asset account names remain refused by the shared Rust account decoder. Runtime-metered fee requests retain typed unavailability."
+severity = "note"
+
+[observation.6.2.928]
+task = "6.2"
+file = "platform/hosted/core/src/main.rs cmd/layerxd/lxp_daemon_lni.c platform/hosted/core/tests/boundary.rs platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "await_receipt send_receipt minor_five_receipt_publication_wait_verifies_committed_receipt assert_unavailable_reads"
+observed = "The core uses one minor-5 publication-wait lookup, preserves response version, correlation, receipt signature and activity binding, and retains bounded transport waits. The new real receipt test passes. Existing tests still require the old millisecond selector, an unavailable empty DID list, and unavailable asset listing. Existing finalised-success assertions also conflict with typed unmet-commitment errors. These assertions remain unchanged. Evidence: qual-logs/pay4/i/core-final-tests.log, rpc-final.log, and after-funded-current-services.log."
+assumption = "The aggregate tests remain unqualified until the conflicting assertions are explicitly reconciled and positive finality evidence is supplied."
+severity = "blocker"
+
+[observation.6.2.929]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_batch_wal.c platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/store.rs"
+symbol = "apply_canonical_batch commit_prepared_batch_wal publish_canonical_batch reserve_activity authority complete_activity"
+observed = "Twenty funded SENDs through the core container completed before and after integration with LAYERX_PAY_TIMING enabled. Gateway p50/p99 were 1853885/3458869 us for the preserved bundle and 1986731/2967630 us for the merged bundle with rebuilt authority. Post-merge SEND-only native preparation p50 was 37950 us, commit/WAL 172946 us, publication including availability 299127 us, and total batch 707574 us. Evidence: qual-logs/pay4/i/before-funded.log, after-funded-current-services.log, and after-timing-summary.json."
+assumption = "The 250 ms target is unmet. Nested spans and their percentiles are not additive. Native commit/publication and gateway persistence/evidence paths require further work without relaxing durability or authentication."
+severity = "blocker"
+
+[observation.6.2.930]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_process.c src/protocol/lxp_kernel.c platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/store.rs"
+symbol = "apply_canonical_batch lxp_kernel_prepare_serial_activity_batch lxp_kernel_commit_prepared_batch publish_canonical_batch reserve_activity complete_activity"
+observed = "External probes captured matching native function spans for twenty SENDs from each preserved and merged binary. Native batch p50/p99 were 982130/1728748 us before and 877078/1469732 us after; publication function p50/p99 were 390382/874111 us before and 298116/988507 us after. Sixteen complete gateway call trees showed reservation p50 158418 us, authority 209208 us, local receipt verification 8421 us, and completion persistence 193670 us. Evidence: qual-logs/pay4/i/before-native-trace.log, after-stage-trace.log, after-gateway-trace.log, native-comparison.json, and gateway-stage-summary.json."
+assumption = "External kernel-commit probes cover only lxp_kernel_commit_prepared_batch, whereas inline commit timing includes WAL work. Traced gateway percentiles are diagnostic and separate from the normal benchmark. The gateway probe attached after four submissions, so its complete call-tree sample count is sixteen."
+severity = "note"
+
+[observation.6.2.931]
+task = "6.2"
+file = "agent/crates/layerx-proof/src/state.rs agent/crates/layerx-client/src/read.rs agent/crates/layerx-types/src/account.rs src/ledger/lx_account_id.c"
+symbol = "account_kind did_accounts agent_asset"
+observed = "Native account parsing accepts agent DID asset-specific names, but the Rust proof account_kind parser lacks this exact namespace. Typed DID enumeration decodes every account through that parser before returning the list. The consumer AccountId vocabulary also lacks this namespace. Main-account enumeration passes the real RPC gate; affected asset-specific lists retain typed refusal."
+assumption = "Extend the shared decoder and consumer namespace with native identity and proof checks. Do not fabricate partial lists or bypass the decoder. The mismatch is source-established; a real per-asset enumeration matrix remains required."
+severity = "blocker"
+
+[observation.6.2.932]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_process.c src/protocol/lxp_kernel.c platform/hosted/core/src/public_reads.rs platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "apply_canonical_batch estimate_fee assert_committed_fee_reads verify_funded_receipt"
+observed = "Twenty successfully executed SENDs each contained 690 canonical bytes and charged 4 units. The signed genesis commits per-byte price 1 and named SEND price 4; the typed native fee estimate with the supplied canonical byte count returns 694. Native execution inputs are zero-initialized without populating fee_meter.canonical_encoded_bytes. Evidence: qual-logs/pay4/i/after-traced-funded.log and reads-qualified.log."
+assumption = "Populate the native execution meter from real canonical bytes, including replay, while retaining fee bounds and canonical price computation. The core must not substitute a fabricated meter or alter the native estimate to hide the difference."
+severity = "blocker"
+
+[observation.6.2.933]
+task = "6.2"
+file = "platform/hosted/node/bootstrap.sh platform/hosted/internal/deployment.yaml platform/hosted/tests/topology-check.sh"
+symbol = "genesis_request egress_admits supervisor_reset_rebuilds_genesis_and_replays_once"
+observed = "The hosted bootstrap generator emits metadata-free LXGB v1 while the merged native reconstruction requires explicit Asset records and named fees. The supervisor reset gate fails with result -402. Both hosted topology parser modes retain four failures: absent Human service for journeys/approvals and rejection of scoped kube-dns egress for payments/programs. Evidence: qual-logs/pay4/i/core-final-tests.log, topology.log, and topology-builtin.log."
+assumption = "Provide actual bootstrap metadata and the real Human workload, and reconcile DNS checking without broadening network access. These files were not changed by the payment read implementation."
+severity = "blocker"
+
+[observation.6.2.934]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_lni.c agent/schema/lni/v1.kvx platform/hosted/gateway/src/ws.rs"
+symbol = "send_receipt feed"
+observed = "Minor-5 publication waiting stops when the queue drains. A future global-sequence query on an idle queue therefore returns absence, while the gateway receipt feed immediately requests again on HTTP 202. Pending-submission receipt waiting is event-driven, but the current contract does not establish an idle future-publication subscription."
+assumption = "Define the bounded authenticated future-sequence wait before claiming idle WebSocket delivery has no polling. This is a source finding; no idle subscription runtime gate is claimed."
+severity = "blocker"
+
+[observation.6.2.935]
+task = "6.2"
+file = "platform/hosted/core/src/main.rs platform/hosted/core/src/public_reads.rs platform/hosted/core/tests/boundary.rs platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "connect_raw_with_deadline await_receipt local_gateway_committed_payment_reads local_gateway_successful_send_latency"
+observed = "Final core/gateway builds and strict all-target Clippy pass; local harness strict Clippy passes after clearing the colliding archived-harness build script. Native layerxd, genesis builder and layerxctl build, and real LNI account and durable admission tests pass. Final core tests run with no-fail-fast: five unit tests and the SEND encoding test pass, with eleven boundary tests passing and three retained failures. Gateway package tests pass. The final real committed payment read gate passes. Final funded execution completes twenty SENDs with gateway p50/p99 1848834/3799299 us, then the unchanged finalised-success assertion fails. SEND-only native preparation, commit/WAL, publication and total batch p50 values are 50133, 337453, 266738 and 875700 us. Evidence: qual-logs/pay4/i/native-build.log, native-tests.log, clippy-deadline.log, build-deadline.log, local-clippy-current.log, core-qualified-tests.log, gateway-final-tests.log, reads-deadline.log, funded-final.log, and final-timing-summary.json."
+assumption = "The 250 ms target, aggregate runtime tests, bootstrap reset, idle future-sequence subscriptions, per-asset proof decoding, native canonical execution-byte metering, and four hosted topology checks remain unqualified. No task status or deployed runtime changed."
+severity = "blocker"
+
+[observation.6.7.4028]
+task = "6.7"
+file = "platform/middleware/seller/src/commitment.ts platform/middleware/seller/src/index.ts platform/middleware/buyer/src/index.ts agent/sdk/python/layerx_sdk/x402.py agent/sdk/python/layerx_sdk/x402_http.py agent/sdk/typescript/src/x402/receive.ts agent/sdk/python/layerx_sdk/x402_receive.py spec/402lxp/protocol.md"
+symbol = "paymentPayer paymentPurpose verifyPaymentReceipt verify_payment_receipt encodeAssetRegister encode_asset_register"
+observed = "Metered and subscription challenges require an explicit nonzero lowercase payer and purpose hash. The receive core, embedded payer grant, verified receipt source and successful settlement payer are bound in both languages; grant settlements repeat and buyers verify the challenged purpose. Executed receipts cannot satisfy batched offers, and real signed batch inclusion is verified only with caller-configured network and sequencer authorization. Native Asset registration codecs derive kind-1 ids, preserve explicit kind-2 ids, emit the exact version-1 big-endian signer vector and refuse malformed metadata, bounds and custody. TypeScript SDK tests, all middleware builds, 21 TypeScript payment tests, 34 Python SDK tests, 42 Python payment tests, Python Ruff, signer payment vectors, native Asset registry and Receive tests pass. Evidence: qual-logs/pay6/pay6d-sdk-typescript.log, pay6d-middleware-build-rerun.log, pay6d-payments-typescript-rerun.log, pay6d-sdk-python.log, pay6d-payments-python-rerun.log, pay6d-python-lint-rerun.log, pay6d-signer-payments.log and pay6d-native-asset-receive.log."
+assumption = "The aggregate middleware conformance result remains 25 of 29 with the same four base-reproduced contradictions recorded in observation.6.7.4025. Passing codec and proof gates do not establish native draw execution or hosted deployment."
+severity = "note"
+
+[observation.6.7.4029]
+task = "6.7"
+file = "agent/crates/layerx-crypto/src/disclosure.rs agent/crates/layerx-crypto/src/payments.rs src/modules/asset/lx_asset_registry.c platform/hosted/gateway/src/lib.rs platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "RECEIVE_FIELD_COUNT Payment::decode IssueGrant verify_submission local_gateway_rpc"
+observed = "The shared signer disclosure and payment decoder require Asset ordinal 6 tag 0x5201 with field_count 8 and finish after the short core. Native and payment middleware require the canonical 733-byte field_count-10 Receive with receiver authorization and the 346-byte payer grant. The signer ordinal-7 decoder separately requires a generic 0x2001 grant structure while native ordinal 7 decodes the canonical payer grant directly. Gateway verify_submission invokes this disclosure for Asset transfer activities, so canonical grant issue and Receive activities cannot traverse the current production gateway signing boundary. The isolated local_gateway_rpc attempt built the real native and hosted binaries but stopped before gateway startup because /usr/bin/redis-server is absent. Gateway unit tests pass 35 checks; both real-Redis integration tests stop on the same missing executable. Evidence: qual-logs/pay6/pay6d-native-binaries.log, pay6d-hosted-binaries.log, pay6d-hosted-rpc.log and pay6d-gateway-tests.log."
+assumption = "The signer and gateway files are outside payment-middleware ownership and must be reconciled to the native canonical grant and Receive without bypassing disclosure. A TLS Redis prerequisite is also required before rerunning executed and batched metered draw and recurring renewal through POST /rpc. No acknowledgement, pending result, offline fixture or successful build is treated as settlement evidence."
+severity = "blocker"
+
+[observation.6.7.4030]
+task = "6.7"
+file = "agent/sdk/typescript/src/index.ts agent/sdk/python/layerx_sdk/__init__.py docs/wiki/Modules.md docs/wiki/Quickstart.md docs/wiki/X402Transport.md"
+symbol = "package exports 402LXP quickstart"
+observed = "Built TypeScript and installed Python package entry points do not export the x402 receive, register, supply or commitment helpers. The package import probes exit 1 with the expected missing-export errors. The wiki module page describes typed Asset ordinals but still says module execution applies only SEND and the pause/unpause event path; the quickstart and x402 transport pages do not document the maintained challenge, payer grant, receipt settlement and recurring renewal flow through lx_sendActivity and receipt recovery. Evidence: qual-logs/pay6/pay6d-typescript-package-import.log and pay6d-python-package-import.log."
+assumption = "These package-root and wiki paths are outside the lane ownership contract. Their owners must export the already qualified codecs and helpers, test installed imports, reconcile Asset execution wording and document the public JSON-RPC flow without presenting unqualified deployment as live."
+severity = "blocker"
+[observation.6.11.134]
+task = "6.11"
+file = "src/state/lxp_identity.c agent/crates/layerx-types/src/account.rs agent/crates/layerx-wire/src/hash.rs agent/crates/layerx-sdk/src/rpc.rs"
+symbol = "account_namespace_valid AccountId::for_asset account_id_for_protocol wallet_account"
+observed = "The shared Rust account builder admits exactly 64 lowercase hexadecimal asset suffixes, preserves native main accounts, and rejects mismatched asset selections. Wire hashing uses LX:ACCOUNT:v1 with the big-endian name length. Native account_namespace_valid still has no asset suffix branch. Native source is outside the authorized paths."
+assumption = "Native identity and ledger account admission must accept the same per-asset names and reject malformed or mismatched suffixes before end-to-end per-asset account qualification."
+severity = "blocker"
+
+[observation.6.11.135]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/sdk/typescript/src/rpc.ts agent/crates/layerx-sdk/src/rpc_verification.rs"
+symbol = "estimate_fee list_assets get_asset wait_for"
+observed = "The refreshed OpenRPC document supplies positional lx_estimateFee, lx_listAssets and lx_getAsset contracts. Both HTTP clients now expose them, retaining native errors and unverified read status. Signed receipt, batch inclusion and exact CP1/CX1 checkpoint verification remain required for commitment waits; acknowledgements do not establish success. The contract still marks native asset and fee integration as required."
+assumption = "Live assembled gateway execution and authenticated WebSocket subscription qualification have not run. Native-backed read availability must be qualified by the gateway integration path."
+severity = "note"
+
+[observation.6.11.136]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/disclosure.rs agent/crates/layerx-sdk/src/wallet.rs agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-mcp/tests/write.rs"
+symbol = "decode_send payload_sequence EvaluationInput execute_payment wait"
+observed = "SEND disclosure independently binds the source-account and envelope identity sequences and verifies the inner authorization signature. RECEIVE independently binds the receiver-account sequence, both embedded signatures, grant identifier, purpose context and envelope network/protocol. Direct exported MCP payment and wait tests retain unrelated-scope refusal. Both EvaluationInput constructors still set private cumulative_count to None while context validation requires authenticated cumulative use and verified budget reconciliation."
+assumption = "A permitting MCP payment requires the canonical cumulative-use and budget producer. Positive funded SEND through the assembled wallet/RPC stack and positive MCP evidence completion remain unqualified; fabricated transcripts cannot supply that evidence."
+severity = "blocker"
+
+[observation.6.11.137]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/send.rs agent/crates/layerx-crypto/src/signer.rs agent/crates/layerx-crypto/tests/native_payment_vectors.c"
+symbol = "SendDebit signing_request encode_send_envelope"
+observed = "SendDebit exposes every inner debit field and creates a disclosure-bound SigningRequest for the exact lxp_send_authorization_message preimage under SignaturePreimage. The shared envelope encoder separately binds identity_sequence; the source sequence is not required to equal it. Native C fixture generation uses explicit field values, native authorization messages, domain hashes, OpenSSL Ed25519 signatures and lxp_receive_encode/lxp_send_encode. Command: bash agent/crates/layerx-crypto/tests/generate-native-payments.sh. Evidence: qual-logs/pay2/d-native-command.log, d-native-tests.log and d-x402-check.log. Rust and the separate 402 codec reproduce the native receive and payer-grant bytes exactly."
+assumption = "This native source has no public lxp_payer_grant_encode symbol; the committed 346-byte grant fixture is the exact grant segment emitted by lxp_receive_encode. The native public grant encoder must be integrated from its owning source before that exact named entry point can be independently qualified. Shared crypto signing is qualified separately from funded gateway execution."
+severity = "note"
+
+[observation.6.11.138]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/wallet.rs platform/hosted/gateway/openrpc.json"
+symbol = "get_asset list_assets get_balances estimate_fee prepare_payload"
+observed = "The read-only reference at /root/lx/pay4-ref/platform/hosted/gateway/openrpc.json specifies the four read results only as object, without field schemas. Distinct Rust AssetSnapshot, AssetListSnapshot, BalancesSnapshot and FeeEstimate types preserve these unverified object fields and upstream errors. The reference lx_getSequence accepts a 64-hex account identifier and routes to /v1/accounts/{id}/balance. Wallet preparation currently requests a DID and requires an authenticated identity next_sequence snapshot; those contracts do not match."
+assumption = "The gateway must expose a separate authenticated identity next_sequence read, or specify its existing public transport route. Account sequence must not substitute for identity sequence. Complete typed monetary and metadata fields require the gateway result schemas. Native-backed enumeration, asset reads and fee estimation remain explicitly unavailable in the reference. No live wallet completion is claimed."
+severity = "blocker"
+
+[observation.6.11.139]
+task = "6.11"
+file = "agent/crates/layerx-wire/src/account.rs agent/crates/layerx-proof/src/state.rs src/state/lxp_identity.c src/ledger/lx_account_id.c src/ledger/lx_account_registry.c"
+symbol = "account_name_for_asset account_kind account_namespace_valid"
+observed = "The SDK uses the wire-exported shared account_name_for_asset builder backed by AccountId::for_asset, preserving native main names, lowercase asset suffixes and mismatch refusal. Native admission still lacks asset account namespaces. The proof account_kind decoder also lacks an asset suffix case; admitting a guessed numeric kind would not establish compatibility with native canonical account values."
+assumption = "Native account admission must define and emit the per-asset account kind and canonical state values, including suffix-to-held-asset consistency. The proof decoder then requires real native fixtures and mismatch coverage for that exact format. Existing proof checks remain intact."
+severity = "blocker"
+
+[observation.6.11.140]
+task = "6.11"
+file = "agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-mcp/src/server.rs agent/crates/layerx-mcp/src/tools/wallet.rs agent/crates/layerx-mcp/tests/write.rs"
+symbol = "EvaluationInput Operation::Wait execute_payment wait"
+observed = "activity.wait remains bound to Operation::Wait and the tenant write:activity:wait alias. Direct exported payment and wait refusal cases and the existing submit/track evidence assertions are retained. Both EvaluationInput constructors still initialize the private cumulative_count to None, and validate_context requires authenticated cumulative use and verified protocol budget evidence."
+assumption = "Positive MCP payment and evidence completion require the canonical cumulative-use and budget evidence producer. Supplying invented usage, bypassing policy, returning an acknowledgement as a receipt, removing signature verification or conflating account and identity sequences would weaken existing checks and is rejected."
+severity = "blocker"
+
+[observation.6.7.4031]
+task = "6.7"
+file = "agent/crates/layerx-crypto/src/payments.rs agent/crates/layerx-crypto/src/disclosure.rs agent/crates/layerx-crypto/tests/payments.rs agent/crates/layerx-crypto/tests/native_payment_vectors.c"
+symbol = "Payment::decode bind native_generated_receive_and_grant_are_byte_identical"
+observed = "Signer disclosure now accepts and re-encodes the native ten-field 733-byte Asset receive and its embedded 346-byte payer grant. Native regeneration leaves both committed fixtures byte-identical. Seven payment disclosure tests pass, including every-byte receive and grant mutation refusal, independent receiver source-sequence disclosure and exact native fixture reproduction. Evidence: qual-logs/pay6/pay6e-signer-native-generate.log, pay6e-signer-native-diff.log and pay6e-signer-payments.log."
+assumption = "Signer byte identity and refusal coverage qualify the signing boundary codec. They do not establish a funded gateway draw, grant-state transition or hosted renewal."
+severity = "note"
+
+[observation.6.7.4032]
+task = "6.7"
+file = "agent/sdk/typescript/src/index.ts agent/sdk/python/layerx_sdk/__init__.py agent/sdk/python/layerx_sdk/__init__.pyi docs/wiki/Modules.md docs/wiki/Quickstart.md docs/wiki/X402Transport.md"
+symbol = "402LXP package exports and public payment flow"
+observed = "The supported Node package root exports the receive, asset, grant, activity and persistent-draw helpers. The supported Python package root and type stub export the corresponding receive, Asset, grant, draw, RPC, HTTP and commitment surfaces. A built Node package import and a freshly installed Python wheel import pass. TypeScript SDK tests, Python SDK tests, all five middleware builds, 21 TypeScript payment tests, 42 Python payment tests, Python format and Ruff checks pass. The wiki identifies typed Asset execution and documents challenge, payer grant, verified settlement and recurring renewal over the public RPC without treating pending or acknowledgement as success. Evidence: qual-logs/pay6/pay6e-typescript-package-import.log, pay6e-python-package-import.log, pay6e-sdk-typescript-rerun.log, pay6e-sdk-python.log, pay6e-middleware-build.log, pay6e-payments-typescript.log, pay6e-payments-python.log, pay6e-python-format.log and pay6e-python-lint.log."
+assumption = "Package availability and documentation do not establish a deployed public endpoint or funded Asset activity. Runtime claims remain bounded to executed gates."
+severity = "note"
+
+[observation.6.7.4033]
+task = "6.7"
+file = "platform/middleware/conformance/src/receipts.ts platform/middleware/conformance/src/scenarios.ts platform/middleware/conformance/service.mjs platform/middleware/merchant/src/index.ts platform/examples/support/merchant-app.mjs platform/examples/agent-spend/index.mjs agent/sdk/typescript/src/verifier.ts"
+symbol = "MerchantSettlementWebhooks runMerchantServiceScenarios runAgentServiceScenarios"
+observed = "Aggregate middleware conformance exits 1 with the same 25 of 29 result reproduced on the recorded base. The merchant webhook event supplies the complete-receipt Merkle-leaf digest while MerchantSettlementWebhooks compares it to ReceiptVerification.receiptDigest, which is the unsigned-receipt signing-domain digest. Both merchant service failures assert body.kind even though the maintained HTTP example emits body.state for payment-required and paid outcomes. The agent service asserts the complete-receipt Merkle-leaf digest while the maintained example emits ReceiptVerification.receiptDigest. Evidence: qual-logs/pay6/pay6e-conformance.log and observation.6.7.4025."
+assumption = "All four failures are inherited contract and fixture contradictions. Assertions, example output, webhook binding and digest definitions remain unchanged pending their owning contract resolution."
+severity = "blocker"
+
+[observation.6.7.4034]
+task = "6.7"
+file = "platform/Cargo.lock platform/hosted/gateway/tests/local/Cargo.lock platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/gateway/deployment.yaml"
+symbol = "local_gateway_rpc start_local_redis"
+observed = "The current-source local gateway RPC and gateway package commands both exit 101 under --locked because their committed unowned Cargo.lock files require dependency reconciliation after the signer merge. The hosted lifecycle requires a TLS-enabled executable specifically at /usr/bin/redis-server; it is absent, redis-server is absent from PATH, and repository tooling contains no executable Redis binary. Hosted manifests reference Redis images, but no container or cluster gate is available on this host. The existing local RPC harness exercises signed Programs and SEND activities and contains no funded grant-issue, metered receive or later-period renewal case. Evidence: qual-logs/pay6/pay6e-hosted-rpc.log, pay6e-gateway-unit.log and pay6e-redis-prerequisite.log."
+assumption = "Updating either unowned lockfile, substituting a fake Redis process or claiming SEND coverage as a payer-grant draw would violate the qualification boundary. A real hosted metered draw and renewal remain unrun."
+severity = "blocker"
+
+[observation.6.7.4035]
+task = "6.7"
+file = "platform/middleware/merchant/src/index.ts platform/middleware/conformance/src/receipts.ts platform/middleware/conformance/service.mjs"
+symbol = "MerchantSettlementWebhooks buildSignedReceipt runMerchantServiceScenarios runAgentServiceScenarios"
+observed = "Merchant webhook settlement now derives the complete-receipt Merkle-leaf digest from the verified canonical receipt while retaining the SDK signing-domain digest for receipt verification. Conformance fixtures expose both digests explicitly, merchant service checks use the maintained state field, and agent checks bind the SDK verification digest. All five middleware TypeScript builds and the aggregate 29 of 29 conformance checks pass. TypeScript and Python payment suites pass 21 and 42 tests. Evidence: qual-logs/pay6/pay6f-middleware-build.log, pay6f-conformance.log, pay6f-payments-typescript.log and pay6f-payments-python.log."
+assumption = "Local conformance qualifies the owned contract reconciliation. It does not establish funded native execution, a deployed public endpoint or production settlement."
+severity = "note"
+
+[observation.6.7.4036]
+task = "6.7"
+file = "platform/Cargo.lock platform/hosted/gateway/tests/local/Cargo.lock platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/core/src/main.rs"
+symbol = "submission_registry payer_grant signed_draw local_gateway_grant_draw_and_subscription_renewal_latency"
+observed = "Both Cargo lockfiles now contain only the packages and dependency disambiguation required by the workspace's pinned tungstenite dependency; locked hosted service builds and 37 gateway tests pass. A real TLS Redis 7.0.15 executable was installed at /usr/bin/redis-server and its system service is disabled and inactive. The local harness uses its existing certificate generator and an isolated TLS Redis process. The added disposable-custody fixture funds both principals, signs canonical Asset grant and Receive activities with real keys, requires executed and batched commitments, rejects ack, verifies receipts and batch inclusion, checks replay without a second debit, and records draw latency only after twenty successful draws. Strict standalone Clippy passes. Runtime reaches the real gateway after both custody credits, but platform/hosted/core/src/main.rs submission_registry registers only Asset ordinal 5; the gateway forwards ordinal 7 to /v1/activities and core returns invalid_activity before native admission. No draw executes and no p50 or p99 is claimed. Evidence: qual-logs/pay6/pay6f-redis-install.log, pay6f-redis-disable.log, pay6f-redis-state.log, pay6f-hosted-service-build.log, pay6f-gateway-tests.log, pay6f-hosted-clippy-rerun.log and pay6f-hosted-grant-draw-renewal-receipt-retry.log."
+assumption = "The hosted core registry must admit the native Asset grant and Receive ordinals without bypassing canonical decoding. That core path is outside this lane's ownership. Cluster, image, deployed endpoint and production gates remain unrun."
+severity = "blocker"
+
+[observation.6.7.4037]
+task = "6.7"
+file = "agent/sdk/python/layerx_sdk/generated/__init__.py agent/sdk/python/layerx_sdk/native_capabilities.py agent/sdk/python/layerx_sdk/program_wire.py agent/sdk/python/layerx_sdk/programs.py agent/sdk/python/tests"
+symbol = "package-wide Ruff format and lint"
+observed = "Python SDK unit discovery passes all 34 tests, and the nine owned x402 modules pass Ruff format and lint. Package-wide ruff format --check exits 1 with 31 pre-existing files requiring formatting. Package-wide ruff check exits 1 with 239 pre-existing diagnostics, including wildcard generated exports, multiple statements per line and test-only style findings. None of the reported files changed in this continuation. Evidence: qual-logs/pay6/pay6f-sdk-python.log, pay6f-python-x402-format.log, pay6f-python-x402-lint.log, pay6f-python-format.log and pay6f-python-lint.log."
+assumption = "Package-wide Python formatting and lint require their owning paths. Reformatting or repairing unrelated Programs, generated and test code is outside this lane; the focused x402 Python surface remains qualified."
+severity = "blocker"
+
+[observation.6.2.936]
+task = "6.2"
+file = "platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/store.rs platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/rpc.rs platform/hosted/core/src/main.rs platform/hosted/core/tests/boundary.rs platform/hosted/gateway/tests/local/lifecycle.rs cmd/layerxd/lxp_daemon_lni.c platform/hosted/authority/src/main.rs"
+symbol = "request_authorized_traced command reserve_activity authority complete_activity await_receipt journal_write serve_connection assert_funded_commitments"
+observed = "Monotonic SEND spans cover ingress, authentication, canonical verification, reservation, component submission, native admission and publication wait, receipt authority and verification, journal commits and completion. Authenticated Redis reuse, bounded HTTP keep-alive, append-only fsynced journals and single RPC signature verification reduce twenty-SEND p50/p99 from 1905191/3220361 us to 698890/1178527 us. Aligned gateway/core overhead beyond native falls from 1026339/2239358 us to 246797/435914 us, so the 100000 us p50 target remains unmet. Final reservation, authority and completion-persistence p50 values are 7963, 106440 and 9727 us. The unchanged finalised-success assertion fails after all twenty executed SENDs and batched evidence because the production RPC returns typed -32001 pending evidence without a matching signed checkpoint. Reused LNI receipt connections were removed after native measured the next request deadline before its idle frame read and returned -303 with PeerShutdown. Strict clippy, focused unit and real daemon-down journal tests, touched-file rustfmt and diff checks pass; workspace-wide cargo fmt --all --check retains formatting drift outside the touched paths. Evidence: qual-logs/pay4/j/before-funded-local-native.log, before-stage-summary.json, after-funded-published-source-rerun.log, after-published-stage-summary.json, clippy-published-source.log, core-journal-unit-final.log, core-boundary-journal-final.log, rustfmt-touched-check-final-rerun.log, diff-check-final-rerun2.log and fmt-check-final-rerun.log."
+assumption = "Authority publication notification, authority-side connection reuse, native per-request deadline placement, and positive checkpoint evidence require their owning contracts. No durability, authentication, receipt, finality, assertion or typed refusal was weakened."
+severity = "blocker"
+
+[observation.6.2.937]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_lni.c platform/hosted/authority/src/main.rs platform/hosted/authority/src/human.rs platform/hosted/authority/tests/real_node.rs platform/hosted/core/tests/boundary.rs platform/hosted/gateway/src/main.rs platform/hosted/gateway/tests/local/checkpoint_settlement.py platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "serve_connection send_receipt handle_connection lookup_receipt by_activity submit_upstreams authority_response finalise_first_batch assert_funded_commitments"
+observed = "The authenticated authority now accepts bounded persistent TLS requests and exposes a publication-notified lookup backed by the native receipt-commit condition. The gateway overlaps that lookup and independent maintained-evidence verification with component execution, then constant-time matches the authority-verified receipt to the component receipt before completion. Native LNI idle-frame and request execution deadlines are separate. The same twenty funded SEND harness passes with end-to-end p50/p99 516916/1014150 us, native total 438334/869645 us, and aligned gateway/core overhead 92564/356591 us, meeting the 100000 us overhead p50 bound. Before values were 698890/1178527 us end to end, 458158/882122 us native, and 246797/435914 us overhead. New native prepare, commit/WAL and publication p50/p99 values are 30919/126980, 122230/270614 and 156941/430292 us. Reservation, authority verification and completion persistence p50/p99 values are 6269/57743, 18511/49134 and 6771/32742 us; the residual post-join authority match is 22/249 us. A disposable Paxeer chain with real bond and checkpoint registry contracts produces and registers exact batch-1 finality evidence; the authenticated checkpoint read succeeds, while a later unfinalised SEND retains typed -32001 pending evidence. Evidence: qual-logs/pay4/k/funded-send-overlap-final.log and measurement-summary.md."
+assumption = "Nested stage percentiles are diagnostic and not additive. Native commit/WAL and publication remain independently owned performance work. The positive finality assertion covers the registered first batch and does not reclassify later batches without matching checkpoint evidence."
+severity = "note"
+
+[observation.6.2.938]
+task = "6.2"
+file = "platform/hosted/core/src/main.rs platform/hosted/core/src/public_reads.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/openrpc.json"
+symbol = "submission_registry submission_decode_registry validate_submission_payload estimate_fee assert_committed_fee_reads"
+observed = "Authenticated hosted admission strictly decodes Asset register, account_open, send, receive, grant_issue, grant_revoke, mint and burn, and Programs deploy, upgrade, call, transfer, account registration and wind-down. Asset ordinal 9 has a dedicated reserved-operation refusal and is excluded from execution admission. Every admitted type retains the SEND signer, fee-limit, native submission and receipt path. Fee estimates validate the same type set before using the authenticated committed native schedule. Three focused admission tests pass, including malformed payloads and the reserved ordinal. The disposable funded committed-read test prices all fourteen admitted types and returns the reserved refusal. Native state-commitment transition qualification executes the Asset operations with real state and native payload encoders. Strict core and gateway all-target Clippy and strict local-harness Clippy pass. Evidence: qual-logs/pay4/l/core-admission-tests-final.log, committed-fees-all-ordinals-publish.log, native-state-commitment-transition.log, platform-clippy-final.log and local-clippy-final.log."
+assumption = "The authenticated committed schedule currently prices canonical bytes and the named SEND operation while execution and storage rates are zero. A future nonzero runtime-metered schedule remains fail closed until those units are supplied from authenticated execution facts."
+severity = "note"
+
+[observation.6.2.939]
+task = "6.2"
+file = "platform/hosted/gateway/tests/local/build.rs interop/deploy/gateway/module-registry.example.json platform/hosted/core/tests/boundary.rs"
+symbol = "local_gateway_grant_draw_and_subscription_renewal_latency configured_modules public_read_selectors_return_authenticated_shapes supervisor_reset_rebuilds_genesis_and_replays_once"
+observed = "The source-only grant, draw and renewal harness cannot start without modifying or integrating its source checkout. Its build script resolves the core fixture from CARGO_MANIFEST_DIR and then requires /root/lx-lanes/pay6/build/tests/bridge/sign-credit, which is absent; the compatible helper exists only in this checkout. Evidence: qual-logs/pay4/l/pay6-402lxp-harness-online-attempt.log. The cluster registry source remains an unversioned interoperability example whose Asset declaration is ordinal 1 only, so it does not provision the hosted admission set. The full core run otherwise passes its unit tests and eleven boundary tests; the retained authenticated empty DID snapshot assertion expects unavailability, and the supervisor reset fixture retains native result -402 from the metadata-free hosted bootstrap. Evidence: qual-logs/pay4/l/core-all-tests.log."
+assumption = "Publish a version-2 cluster registry with Asset 1, 4, 5, 6, 7, 8, 10 and 11 and Programs 1, 2, 3, 5, 6 and 7 from the interoperability-owned configuration. Run the grant, draw and renewal harness from a checkout containing its required helper binaries or after its source is integrated. Retain the authenticated snapshot and bootstrap assertions until their owning contracts are reconciled."
+severity = "blocker"
+
+[observation.6.7.4038]
+task = "6.7"
+file = "platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/core/src/main.rs platform/hosted/gateway/src/rpc.rs docs/wiki/Quickstart.md docs/wiki/X402Transport.md spec/402lxp/protocol.md"
+symbol = "local_gateway_grant_draw_and_subscription_renewal_latency send_payment lx_sendActivity lx_getReceipt lx_getProof"
+observed = "The disposable hosted path funds both principals from real custody attestations, issues signed canonical Asset ordinal-7 grants, executes twenty ordinal-6 metered draws, and executes a recurring first draw and later-window renewal through authenticated gateway JSON-RPC. Every draw requires a successful sequencer-signed receipt; the renewal additionally requires and verifies receipt inclusion in an authorized signed batch header. Typed pending responses are recovered only by public receipt and proof reads for the exact activity, and ack is refused. The final post-Clippy twenty-draw submit-to-receipt samples measure p50 990202 us and p99 11801435 us. Evidence: qual-logs/pay6/pay6g-hosted-grant-draw-renewal-post-clippy.log."
+assumption = "This isolated end-to-end result qualifies the hosted source path and disposable custody setup. It does not establish a deployed endpoint, cluster or production certification."
+severity = "note"
+
+[observation.6.2.940]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs platform/hosted/core/src/public_reads.rs"
+symbol = "supervisor_reset_rebuilds_genesis_and_replays_once public_read_selectors_use_real_node_and_refuse_missing_evidence receipt_latency_and_public_proofs_use_real_committed_refusals lifecycle_routes_submit_real_signed_activities_and_verify_state_receipts"
+observed = "The core package unit and admission tests pass 9 of 9, while its aggregate boundary target passes 10 of 14. One fixture requires the unavailable socat executable. One assertion expects an authenticated DID-account read to be unavailable although the current source returns a verified empty account list. Two receipt tests require immediate HTTP 200 and fail on typed HTTP 202 pending results under the observed execution load. Both pending results retain the exact activity identifier. Evidence: qual-logs/pay6/pay6g-core-tests.log."
+assumption = "Host prerequisite installation, read-contract reconciliation and core boundary timing policy are outside the authorized payment extension paths. The assertions and typed pending behavior remain unchanged."
+severity = "blocker"
+
+[observation.6.2.941]
+task = "6.2"
+file = "platform/hosted/authority/tests/real_node.rs cmd/layerxd/lxp_daemon_lni.c"
+symbol = "real_node_authority_serves_verified_facts_and_reflects_replica_loss"
+observed = "Authority unit, TLS and maintenance targets pass 21 checks. Its real-node target passes the replica-refusal case, while the positive authority case fails because its generated sequencer fixture exits during bootstrap with native result -402. Evidence: qual-logs/pay6/pay6g-authority-tests.log."
+assumption = "The authority real-node bootstrap fixture requires reconciliation in its owning paths. No bootstrap check or positive authority assertion was weakened."
+severity = "blocker"
+[observation.6.11.141]
+task = "6.11"
+file = "platform/hosted/core/tests/boundary.rs"
+symbol = "native lane merge conflict resolution"
+observed = "The authorized merge of lane/pay-native conflicted with the already integrated lane/pay-402lxp version of the hosted core boundary target. The incoming native lane version was retained exactly because this path is outside the signer SDK lane ownership."
+assumption = "No hosted-core boundary behavior was reconciled or qualified by the signer SDK lane. The native lane version remains authoritative for this non-owned conflict."
+severity = "note"
+
+[observation.6.11.142]
+task = "6.11"
+file = "agent/crates/layerx-crypto/tests/native_payment_vectors.c agent/crates/layerx-crypto/tests/generate-native-payments.sh agent/crates/layerx-crypto/tests/fixtures/payments/native-1-6.hex agent/crates/layerx-crypto/tests/fixtures/payments/native-1-7.hex"
+symbol = "lxp_receive_encode lxp_payer_grant_encode native_generated_receive_and_grant_are_byte_identical"
+observed = "agent/crates/layerx-crypto/tests/generate-native-payments.sh exits 0 after make -j16 and make -j16 programs/target/debug/liblayerx_programs_sandbox.a. Its C generator invokes lxp_receive_encode and lxp_payer_grant_encode directly, requires lengths 733 and 346, and requires byte equality between the independently encoded grant and the receive grant segment before writing both committed fixtures. cargo test --manifest-path agent/Cargo.toml -p layerx-crypto exits 0, including native byte equality plus complete accepted-byte mutation refusal for both encodings. Evidence: qual-logs/pay2/stage-native/generate-native-payments-rerun-2.log and test-crypto-2.log."
+assumption = "The fixtures did not change under the merged native build. The proof exercises the merged C implementation and Rust decoder with real signatures; no fixture-derived native encoding path is used."
+severity = "note"
+
+[observation.6.11.143]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/wallet.rs agent/crates/layerx-sdk/src/bin/layerx-wallet-rpc.rs agent/sdk/typescript/src/rpc.ts agent/sdk/typescript/src/wallet.ts"
+symbol = "RpcClient::get_identity_sequence Wallet::prepare_payload RpcClient::get_asset RpcClient::list_assets RpcClient::connect_with_ca_der"
+observed = "Wallet envelope preparation now obtains identity.next_sequence only through lx_getSequence with the exact positional parameters [did, identity], while Send and Receive source-account sequences continue to come from lx_getAccount. Rust and TypeScript reject malformed identity snapshots and expose typed Asset metadata, list ordering, committed sequence and state root. Explicit local CA trust uses native TLS certificate verification and never disables hostname or certificate checks. cargo clippy --manifest-path agent/Cargo.toml -p layerx-sdk --all-targets -- -D warnings, cargo test --manifest-path agent/Cargo.toml -p layerx-sdk, npm --prefix agent/sdk/typescript run build, npm --prefix agent/sdk/typescript test and git diff --check exit 0. Evidence: qual-logs/pay2/stage-sdk/clippy-rerun-3.log, test-sdk-rerun.log, ts-build-rerun.log and ts-test-rerun.log."
+assumption = "The Asset read verification label authenticates the gateway-to-native snapshot but is not promoted to an independent Merkle-proof guarantee. Finalised receipt verification still requires the configured trusted checkpoint context."
+severity = "note"
+
+[observation.6.11.144]
+task = "6.11"
+file = "agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/program-admission.sh tests/daemon/lxp_test_program_admission.c cmd/layerxd/lxp_daemon_lni.c"
+symbol = "real_daemon_availability_refusals handshake"
+observed = "The supplied /root/lx-lanes/native-bin directory is absent on this build server. After building current-lane layerxd, layerx-genesis-build and both required native test clients in the worktree, cargo test --manifest-path agent/Cargo.toml -p layerx-client launches the real availability harness but reproducibly fails its initial LNI minor-4 node-info handshake. The current merged daemon includes minor-5 public-read behavior and the unchanged native test client requires an exact minor-4 node-info response. Evidence: qual-logs/pay2/stage-sdk/test-client-rerun.log and test-client-availability-rerun.log; disposable raw audit directories are named in those logs."
+assumption = "No LNI handshake assertion or daemon compatibility check was changed. The layerx-sdk and TypeScript suites pass independently; the full layerx-client suite remains unqualified until the disclosed native binary set is available or the non-owned native handshake is reconciled."
+severity = "blocker"
+
+[observation.6.11.145]
+task = "6.11"
+file = "agent/crates/layerx-agentd/src/protocol_evidence.rs agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-agentd/src/tenant.rs agent/crates/layerx-mcp/src/tools/wallet.rs agent/crates/layerx-mcp/src/server.rs agent/crates/layerx-sdk/src/rpc_verification.rs agent/crates/layerx-crypto/src/disclosure.rs"
+symbol = "authenticate_cumulative_use with_authenticated_cumulative_use cumulative_evidence execute_payment wait"
+observed = "The policy boundary accepts cumulative use only as an opaque value issued after exact activity decoding, activity-id binding, sequencer receipt authentication, signed batch inclusion, complete activity-leaf occupancy, consecutive batch numbering, state-root chaining and exact global-sequence coverage. Duplicate, forged, mismatched, incomplete and overflowed windows are refused. Grant issue and draw MCP routes use Submit with distinct scopes; activity.wait remains Wait-only. Wallet receipts retain the exact signed activity and verified inclusion material for this ingress. Asset registration, receive, payer grant, mint, burn and every Programs transfer leg disclose their monetary caps, amounts and parties. Full layerx-agentd, layerx-crypto, layerx-sdk and layerx-mcp tests exit 0; the funded path additionally proves the incomplete-window refusal before its positive MCP executions. Evidence: qual-logs/pay2/final/test-agentd.log, test-crypto-sdk-mcp.log and qual-logs/pay2/funded/run-final.log."
+assumption = "Cumulative evidence counts only successful activities signed by the requested actor within the authenticated window. It does not disclose caller-supplied totals to policy and does not treat executed-only receipts or acknowledgements as batch evidence."
+severity = "note"
+
+[observation.6.11.146]
+task = "6.11"
+file = "agent/qualification/pay2/Cargo.toml agent/qualification/pay2/build.rs agent/qualification/pay2/funded.rs agent/qualification/pay2/pay2e_test.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/tests/local/funding.rs"
+symbol = "pay2e_funded_sdk_send_and_mcp_grant_draw"
+observed = "LAYERX_TEST_CORE_BIN=/root/lx/pay2/platform/target/debug/layerx-core-boundary PAY2_EVIDENCE_OUT=/root/lx/pay2/qual-logs/pay2/funded/evidence-final.json cargo test --manifest-path agent/qualification/pay2/Cargo.toml --test funded pay2e_funded_sdk_send_and_mcp_grant_draw -- --exact --nocapture exits 0 against disposable real Anvil custody, native layerxd, hosted core, TLS Redis, identity, authority and gateway processes. SDK Send activity 477e416f8b20fc0488029945257983fe4c0e0bd84f803093659e07e52a178bfa is verified first at executed and then batched with receipt 972fb105329f5a365cfb509ddfc196b8038b59f9847baf35a0e7725a057f589f and batch 1ad5eecd88ad20f828a25dc5309e1f8f8a7e915ab55005532fd78ee5540c186f; identity sequence 1 and source-account sequence 0 differ. SDK grant issue e532f78f7a2a56351c90f29224ba3d3bf58e8fb9b95d9806c1e29f6bc512464f has receipt eee3121150eda0a2aa413250b006f6fcc993d119d57400dfdad5333f278408ab and batch bcfd74f9ee26f6eb295f4f07ea55439f16a8d2f31f836a4acccf1a2829c3f358; SDK draw 0fcb393b2f7981967b440b4a44b7f93795558764ff8844b44357413bf36e71c4 has receipt 9f9e5688c9b4cf5bc5bb6cb1df12bfe20113667754de8936da69bfc3403c6e78 and batch ecee3836d6a25f7b570457f7db5e14298dd6cf8c96ed19742ccc8d60bfe0691c. MCP grant issue b4298620ca210b2740b43ddb3e870f1410d0fc44ad58856602e06be61279f8aa has receipt cbb37be5f5a02f90ddcdc2a30c89f507c21d9e00e49f58b830cf8104b91058d8 and batch ea9e67d75f306f991f1546bf54dea2bc7371a1729b3438df2940ea772acc0c75; MCP draw c58857351b16cc32a6e6177384b35121fff4f6eecaff5c196bb331d50577b8b0 has receipt cc4409ed48cd46f172b0a860525e3165f63cc8bc34dba80b2f632e32e87a7b1a and batch 26481ae4924078746c3806fc481b969f1e155ac28ddab314aeb0d05664af8bc5. The positive cumulative-use window covers global sequences 9 through 12 using activity sequences 9 and 11 in batches 5 and 6."
+assumption = "The run qualifies the merged local source path at executed and batched commitments without fixtures for usage totals. It does not establish finalised commitment, a deployed endpoint, cluster, image or production certification."
+severity = "note"
+
+[observation.6.11.147]
+task = "6.11"
+file = "tests/support/lxgb_metadata.rs agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "cargo fmt --check cargo clippy --all-targets"
+observed = "rustfmt --check over every changed Rust source exits 0. Strict Clippy exits 0 for the layerx-agentd library and all targets of layerx-crypto, layerx-sdk and layerx-mcp. The required agentd and funded-harness --all-targets invocations exit 101 before checking their complete target sets because the unchanged non-owned tests/support/lxgb_metadata.rs has one format_collect and three cast_possible_truncation diagnostics under -D warnings. The touched-crate cargo fmt --check exits 1 on that same root helper and unchanged agent/crates/layerx-agentd/tests/support/real_authority.rs formatting drift. No lint allowance, cast, assertion or unrelated formatter edit was introduced. Evidence: qual-logs/pay2/final/rustfmt-touched-check.log, clippy-agentd-lib.log, clippy-crypto-sdk-mcp.log, clippy-all-targets.log, clippy-funded-harness.log and cargo-fmt-check.log."
+assumption = "The complete tests and funded end-to-end run compile and execute the affected target code. Repairing the unrelated shared helpers requires their owning lane; cluster and image gates are unavailable on this host and remain unrun."
+severity = "blocker"
+
+[observation.6.11.148]
+task = "6.11"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "observation.6.2.941 beta-ledger-check"
+observed = "make beta-ledger-check exits 2 because the previously committed observation.6.2.941 lacks the required severity key at line 6053. The failing observation records an authority real-node bootstrap refusal and otherwise contains task, file, symbol, observed and assumption fields. Evidence: qual-logs/pay2/final/beta-ledger-check.log."
+assumption = "This lane may append technical observations but may not alter existing ledger records. Adding the missing severity to observation.6.2.941 requires the owner of that prior record; no existing ledger content was rewritten."
+severity = "blocker"
+
+[observation.6.11.149]
+task = "6.11"
+file = "tests/support/lxgb_metadata.rs agent/crates/layerx-agentd/tests/support/real_authority.rs platform/hosted/core/tests/boundary.rs platform/hosted/authority/tests/real_node.rs"
+symbol = "cargo fmt --all --check cargo clippy --workspace --all-targets"
+observed = "Run from agent, cargo fmt --all --check exits 1 with 659 hunks over 90 files: 33 under agent, 15 under interop, 13 under platform and 598 under the vendored programs tree. Eighty-eight of those 90 files are byte-identical to 0717c87ca. The two that are not, platform/hosted/core/tests/boundary.rs and platform/hosted/authority/tests/real_node.rs, produce the same three and one hunks at 0717c87ca, at f89cb11c0 and at the integrated tip, and the exact unformatted lines of all three boundary.rs hunks are present in all three blobs, so no hunk originates in the integration. Checking either blob on its own with rustfmt --edition 2021 --check reports one entry more, for tests/support/lxgb_metadata.rs, which both files reach through the same path-attribute include and which the workspace run counts once in its own right. Run from agent, cargo clippy --workspace --all-targets -- -D warnings exits 101 with one format_collect and three cast_possible_truncation diagnostics in tests/support/lxgb_metadata.rs, reached through the path-attribute include in agent/crates/layerx-agentd/tests/support/real_authority.rs while compiling the layerx-agentd budget_create and migration test targets. That helper, the include site, both test targets and the workspace clippy levels in agent/Cargo.toml are each byte-identical to 0717c87ca. Evidence: qual-logs/rebase-205-3.log and qual-logs/rebase-205-4.log."
+assumption = "Both commands are reproducible from an unmodified checkout of 0717c87ca. Repairing them means reformatting vendored third-party sources and relaxing or restructuring a shared root test helper owned by another lane, so no formatter run, lint allowance, cast or assertion was introduced here."
+severity = "blocker"
+
+[observation.6.11.150]
+task = "6.11"
+file = "platform/hosted/node/bootstrap.sh contracts/config/checkpoint-settlement.json tests/daemon/program-admission.sh agent/crates/layerx-client/tests/availability_daemon.rs"
+symbol = "genesis request has an unexpected length certificate_threshold GUARANTOR_ENTRIES"
+observed = "cargo test --workspace run from agent exits 101 on the layerx-client availability_daemon target: real_daemon_availability_refusals drives tests/daemon/program-admission.sh, whose call to platform/hosted/node/bootstrap.sh refuses with the message that the genesis request has an unexpected length. bootstrap.sh compares the LXGB v2 request against the fixed size 395 plus the size of the genesis metadata, but it emits one guarantor record per certificate_threshold read from contracts/config/checkpoint-settlement.json, and each record is 81 bytes: a 32-byte sha256 identifier, a 33-byte compressed secp256k1 public key and a 16-byte zero field. The metadata term cancels on both sides, so with certificate_threshold set to 2 the request measures 851 bytes against an expected 770, an excess of exactly one guarantor record; the bound therefore describes a single-guarantor request only. All four files are byte-identical to 0717c87ca. The same test additionally requires build/tests/lxp_test_program_admission and build/tests/lxp_test_daemon_finality_authority, which the make test target does not build, so they must be made before the workspace test run. Evidence: qual-logs/rebase-205-5.log and qual-logs/availability-harness.log."
+assumption = "The mismatch is arithmetic and independent of the metadata length. Correcting it means changing either the length bound in the node bootstrap or the default certificate threshold in the settlement document, both owned by other lanes, so neither the bound nor the threshold was altered here."
+severity = "blocker"
+
+[observation.6.11.151]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/disclosure.rs agent/crates/layerx-crypto/tests/disclosure.rs include/layerx/lx_asset.h"
+symbol = "decoded_fields native_withdrawal_refuses_old_unknown_truncated_extended_and_invalid_fields"
+observed = "cargo test --workspace run from agent exits 101 on the layerx-crypto disclosure target. The assertion at agent/crates/layerx-crypto/tests/disclosure.rs:252 requires that binding an activity of asset ordinal 10 returns UnsupportedActivity. That test arrives only from 0717c87ca, where the disclosure layer decodes asset ordinals 5 and 6 and asset ordinal 9 through the withdraw path, so ordinal 10 is refused. The predicate in decoded_fields that routes asset ordinals 1, 4, 6, 7, 8, 10 and 11 to payment_fields arrives only from f89cb11c0, introduced by 58e5656a8, and makes ordinals 10 and 11 disclosable. include/layerx/lx_asset.h defines LX_ASSET_MINT as ordinal 10 and LX_ASSET_BURN as ordinal 11 identically on both sides, so no ordinal was renumbered and the two sides did not collide over a value. The integrated decoded_fields retains both dispatches in the correct order: the withdraw early return for ordinal 9 precedes the payment predicate, and the ten remaining disclosure tests pass. The single failing assertion is the only point at which the two behaviours are mutually exclusive: it holds exactly when mint disclosure is absent. Evidence: qual-logs/rebase-205-5.log and qual-logs/rebase-205-5-nofailfast.log."
+assumption = "Mint and burn disclosure is the intended behaviour, so the payment predicate stands unchanged and the negative example could not remain at ordinal 10. The example moved to asset ordinal 12, which include/layerx/lx_asset.h leaves undefined above burn and which neither the withdraw early return, the payment predicate nor the send and receive semantics route, so the property that an activity the disclosure layer does not decode is refused as an unsupported activity is still asserted. No assertion was relaxed, no ordinal was removed from the predicate, every other case in the test is unchanged, and the layerx-crypto disclosure target passes all eleven tests."
+severity = "blocker"
+
+[observation.6.11.152]
+task = "6.11"
+file = "package-lock.json agent/sdk/typescript/package.json agent/sdk/typescript/package-lock.json platform/middleware/agent/package.json"
+symbol = "npm ci --workspaces --include-workspace-root"
+observed = "npm ci run in agent/sdk/typescript and npm ci --workspaces --include-workspace-root run from the repository root both exit 1 with EUSAGE, reporting ws@8.21.3 and @types/ws@8.18.1 missing from the lock file. agent/sdk/typescript is one of the nineteen workspaces declared in the root package.json, so npm resolves it against the root package-lock.json and ignores the package-lock.json that sits beside the SDK manifest. 368e9e928 added ws and @types/ws to the SDK manifest and to that ignored local lock only, and 050e61ae2 added @sidiora/layerx-seller-middleware to platform/middleware/agent without recording it either, so the root lock described neither dependency and every workspace install refused before any package was fetched. Evidence: qual-logs/rebase-205-10.log."
+assumption = "Regenerating the root lock with npm install --package-lock-only adds the two ws entries and the missing workspace reference, and carries across the Apache-2.0 identifier that nine workspace manifests already declare where the lock still held the earlier SEE LICENSE IN LICENSE string; no resolved package version, integrity or URL moved. The regenerated lock is recorded in 4994801b2105049398bea454e11a547dc312968d and the workspace install then completes."
+severity = "blocker"
+
+[observation.6.11.153]
+task = "6.11"
+file = "platform/hosted/gateway/tests/local/build.rs platform/hosted/core/tests/boundary.rs tests/support/lxgb_metadata.rs"
+symbol = "adapt_core core_fixture.rs lxgb_metadata"
+observed = "The local gateway lifecycle harness copies platform/hosted/core/tests/boundary.rs into OUT_DIR as core_fixture.rs and rewrites a fixed list of needles in it. 72c986271 added a path attribute module to boundary.rs that names ../../../../tests/support/lxgb_metadata.rs, which resolves from the source location but not from OUT_DIR, and the adapter at 0717c87ca does not rewrite it, so every target in that harness fails to compile with a file not found error for the metadata helper. The adapter in agent/qualification/pay2/build.rs already resolves the same include to an absolute repository path. Evidence: qual-logs/rebase-205-9a.log."
+assumption = "Adding a third needle that rewrites the include to the canonical repository path of tests/support/lxgb_metadata.rs restores compilation with the existing exactly-once assertion kept for each needle. boundary.rs, lifecycle.rs and every test are unchanged; the repair is recorded in 5abed17e986055d34c63939dafe77ccdcc06c9ee."
+severity = "blocker"
+
+[observation.6.11.154]
+task = "6.11"
+file = "platform/hosted/identity/src/main.rs platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "PrincipalRequest tenant local_gateway_lifecycle local_gateway_rpc local_gateway_websocket_receipt_wake"
+observed = "With the fixture adapter repaired, all three local gateway lifecycle tests fail at the same assertion: the principal provisioning call to /v1/principals answers 400 where 200 is required. 38de71338 made tenant a required field of PrincipalRequest under deny_unknown_fields in the identity service, and validates it as a subject without a colon. No revision of platform/hosted/gateway/tests/local/lifecycle.rs contains the word tenant: neither 0717c87ca, nor f89cb11c0, nor the integrated tip, so the provisioning body carries sub, allowed_signer_public_keys, account and audiences only. platform/hosted/identity/src/main.rs is byte-identical to 0717c87ca. The identity service tests and platform/hosted/tests/beta-cluster.sh do send tenant, so the local harness is the only caller left behind. Evidence: qual-logs/rebase-205-9a.log, qual-logs/rebase-205-9b.log and qual-logs/rebase-205-9c.log."
+assumption = "The refusal is reproducible from an unmodified checkout of 0717c87ca once the fixture adapter compiles, and it stayed unnoticed because the harness had not compiled since 72c986271. Both provisioning bodies now carry the beta tenant that platform/hosted/identity/tests/service.rs and platform/hosted/tests/beta-cluster.sh already send, a subject without a colon shaped exactly like theirs, completing the contract change of 38de71338 for the last callers left behind; the repair is recorded in 1b7a3c8dbc89f80c1109912a8afe18bd34af84a4. Only the two provisioning bodies changed: platform/hosted/identity/src/main.rs, PrincipalRequest, its validation and every one of the six harness tests and their assertions are unchanged, and this branch's own lifecycle.rs edits remain in place. Provisioning is then admitted with 200 and all three tests proceed past it."
+severity = "blocker"
+
+[observation.6.11.155]
+task = "6.11"
+file = "platform/hosted/core/tests/boundary.rs platform/hosted/authority/tests/real_node.rs tests/support/lxgb_metadata.rs platform/Cargo.toml"
+symbol = "cargo fmt --all --check cargo clippy -p layerx-platform-core -p layerx-platform-gateway -p layerx-platform-authority -p layerx-platform-agent-boundary"
+observed = "Run from platform, cargo fmt --all --check exits 1 with the same 659 hunks over the same 90 files reported for the agent workspace, because both workspaces reach the same shared sources. Run from platform, the four-package clippy invocation exits 101 with four diagnostics, one format_collect and three cast_possible_truncation, all inside tests/support/lxgb_metadata.rs, reached through the path attribute include in platform/hosted/core/tests/boundary.rs. That helper is byte-identical to 0717c87ca, and no file under platform/hosted src, include, tests or contracts trees differs from 0717c87ca. Evidence: qual-logs/rebase-205-6.log and qual-logs/rebase-205-7.log."
+assumption = "Both commands are reproducible from an unmodified checkout of 0717c87ca. The same shared root helper and vendored sources named in the agent workspace observation are their only cause, so no formatter run, lint allowance or cast was introduced here."
+severity = "blocker"
+
+[observation.6.11.156]
+task = "6.11"
+file = "src/protocol/lxp_genesis.c tests/bridge/test_credit.c tests/bridge/qualify_credit.py platform/hosted/agent-boundary/tests/real_node/lifecycle.rs"
+symbol = "lxp_genesis_materialize LXP_MODULE_GOVERNANCE test-credit"
+observed = "The four-package platform test run exits 101 with three agent-boundary lifecycle failures, each reporting that build/tests/bridge/test-credit failed with credit check failed at line 194 on lxp_genesis_materialize. 06c54ca48 requires the kernel handed to lxp_genesis_materialize to hold four modules with governance at index two whenever the manifest carries a bridge profile, but tests/bridge/test_credit.c registers programs, asset and bridge only. Both files are byte-identical to 0717c87ca and to f89cb11c0. make test-bridge-credit, whose whole path is byte-identical to 0717c87ca and never touches this branch's custody harness, reproduces the same refusal, so the failure is independent of the harness the lifecycle tests use. The bridge credit target is not reachable from the make test target, so the condition is not observed there. The reason is the module set and not the manifest: a copy of the test built outside the tree with one added registration of the governance module, and nothing else changed, completes the whole credit qualification against the same retained artifacts. The refusal also holds for any manifest, because the materializer requires governance at index two whenever the protocol version is the state commitment version and requires a single module otherwise, while this kernel always holds programs, asset and bridge. Evidence: qual-logs/rebase-205-8.log, qual-logs/bridge-credit-probe.log and qual-logs/credit-retained-probe.log."
+assumption = "tests/bridge/test_credit.c now registers the governance module between the asset and the bridge module, in the same order and through the same interface as the fresh-genesis path of 06c54ca48 in src/protocol/lxp_genesis.c, tests/test_genesis_manifest.c and the daemon, completing that contract change for the last caller left behind; the repair is recorded in 1e818156a108a46587d85405df58ea0d6820ad7c. The materializer, its module requirement, the manifest, the credit inputs and every credit assertion are unchanged. make CC=gcc test-bridge-credit then passes all nine credit checks and the three agent-boundary lifecycle tests pass. The custody producer these tests spawn additionally imports Crypto.Hash from pycryptodome, which the interpreter on the default path does not provide; that is a local prerequisite and is supplied by the interpreter recorded in the gate commands, not by any change in the tree."
+severity = "blocker"
+
+[observation.6.11.157]
+task = "6.11"
+file = "agent/sdk/python/pyproject.toml agent/sdk/python/layerx_sdk/program_wire.py agent/sdk/python/layerx_sdk/production.pyi agent/sdk/python/layerx_sdk/x402_rpc.py agent/sdk/python/layerx_sdk/__init__.py"
+symbol = "ruff check agent/sdk/python"
+observed = "ruff check agent/sdk/python exits 1 with 103 diagnostics across 38 files, led by 31 I001, 13 UP035, 11 B009, 7 PYI026, 6 TRY004, 6 PYI034 and 6 PYI001. No ruff.toml, no .ruff.toml and no tool.ruff section exists in agent/sdk/python/pyproject.toml, anywhere else in the tree or in the user configuration, so the rule set is whatever the installed release selects by default; the run recorded here used ruff 0.16.6. Thirty of the 38 files are byte-identical to 0717c87ca and carry 87 of the diagnostics. The remaining eight, the six x402 modules together with layerx_sdk/__init__.py and its stub, are byte-identical to f89cb11c0 and carry 16. No file differs from both sides. The test run in the same tree passes 34 tests once agent/sdk/python is on the interpreter path, which pytest does not arrange when the suite is invoked by path from the repository root. Evidence: qual-logs/rebase-205-11a.log and qual-logs/rebase-205-11b.log."
+assumption = "Pinning a ruff version or adding a rule selection would decide a policy the SDK has never stated, and formatting the sources would rewrite files owned by another lane alongside this branch's own, so neither a configuration nor a formatter run was introduced. The interpreter path is supplied in the gate command."
+severity = "blocker"
+
+[observation.6.11.158]
+task = "6.11"
+file = "platform/middleware/conformance/package.json platform/middleware/conformance/tsconfig.json platform/middleware/conformance/pay6/draw.test.mjs platform/hosted/authority/tests/human_tls.rs"
+symbol = "npm run build test:payments PreparedGrantDraws mkdtempSync"
+observed = "The conformance package resolves @sidiora/layerx-buyer-middleware and @sidiora/layerx-merchant-middleware through the exports entry of each workspace manifest, which names dist/index.d.ts, so its build fails with TS2307 for both until those two workspaces have been built; the card's gate builds the seller and agent packages only. With them built, the conformance build succeeds and the payments suite runs 21 tests, of which the persistent draw registration test fails with ENOENT from mkdtempSync on qual-logs/pay6. 38eef9e37 places that temporary directory under the repository qual-logs tree but calls mkdtempSync directly, where the equivalent Rust harness in platform/hosted/authority/tests/human_tls.rs calls create_dir_all on its own qual-logs subdirectory first. With the parent directory present all 21 tests pass. Evidence: qual-logs/rebase-205-12c.log."
+assumption = "Both conditions are properties of the invocation rather than of the payment logic, so the build order and the artifact directory are supplied by the gate commands and neither the test nor any manifest was changed."
+severity = "note"
+[observation.6.11.159]
+task = "6.11"
+file = "platform/hosted/gateway/tests/local/verifier.rs agent/crates/layerx-wire/src/hash.rs cmd/layerxd/lxp_daemon_batch_wal.c cmd/layerxd/lxp_daemon_lni.c cmd/layerx-guarantor/runtime.c"
+symbol = "local_gateway_lifecycle receipt_execution_batch_id execution_batch_id lxp_daemon_batch_bind_prefix"
+observed = "With the fixture adapter repaired and the principal tenant supplied, local_gateway_lifecycle passes provisioning and fails in the verifier the lifecycle script runs: verifier.rs:116 requires the batch identifier recomputed from the committed receipt to equal the identifier the daemon bound, and the two 32-byte values differ. platform/hosted/gateway/tests/local/verifier.rs and platform/hosted/gateway/tests/lifecycle-boundary.sh are byte-identical to 0717c87ca and to f89cb11c0. cmd/layerxd/lxp_daemon_batch_wal.c, its header and cmd/layerx-guarantor/runtime.c are byte-identical to 0717c87ca, which already carries this branch's write-ahead work, and the batch-bind region of cmd/layerxd/lxp_daemon_lni.c carries no difference from 0717c87ca. agent/crates/layerx-wire/src/hash.rs differs from 0717c87ca in one hunk only, the asset account tail inside canonical_payload, so receipt_execution_batch_id and execution_batch_id are byte-identical to 0717c87ca. The two sides disagree on the preimage: lxp_daemon_batch_bind_prefix builds the 88-byte program form for every execution, while the wire crate builds it only for module 9 operation 3, and the verified receipt is module 9 operation 4 ordinal 0. Evidence: qual-logs/rebase-205-9a.log."
+assumption = "Both sides of the mismatch are decided by sources byte-identical to 0717c87ca, so the divergence is reproducible from an unmodified checkout once the harness compiles. Reconciling them changes the batch identifier contract between the daemon and the wire crate, which is protocol surface outside this branch's paths, so neither preimage, neither helper and no assertion was altered."
+severity = "blocker"
+
+[observation.6.11.160]
+task = "6.11"
+file = "platform/hosted/core/tests/boundary.rs platform/hosted/node/bootstrap.sh contracts/config/checkpoint-settlement.json"
+symbol = "supervisor_reset_rebuilds_genesis_and_replays_once supervised_files wait_for_lni SETTLEMENT_DOCUMENT"
+observed = "With the bridge credit qualification repaired the four-package platform test run reaches the core boundary target, where the three agent-boundary lifecycle tests now pass and boundary.rs exits 101 with two of fourteen failures. supervisor_reset_rebuilds_genesis_and_replays_once fails in wait_for_lni because layerxd exits during bootstrap: supervised_files copies platform/hosted/node/bootstrap.sh out of its directory into the disposable test root, so the SOURCE_ROOT that bootstrap.sh derives from its own location no longer names the repository, the readable contracts/config/checkpoint-settlement.json is not found, the fallback /opt/layerx/checkpoint-settlement.json does not exist, and jq refuses the certificate threshold. The test body, start_supervised_cluster, supervised_files and wait_for_lni are byte-identical to 0717c87ca, as is platform/hosted/node/bootstrap.sh, and the refusal happens inside the bootstrap script before any binary built from this branch runs. Evidence: qual-logs/rebase-205-8.log."
+assumption = "Every input on this path is byte-identical to 0717c87ca, so the failure is reproducible from an unmodified checkout. Passing the settlement document into the copied script or teaching the harness where the repository root is would edit a fixture owned by another lane, so neither the harness nor the script was changed."
+severity = "blocker"
+
+[observation.6.11.161]
+task = "6.11"
+file = "platform/hosted/core/tests/boundary.rs platform/hosted/core/src/public_reads.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/src/rpc.rs cmd/layerxd/lxp_daemon_lni.c"
+symbol = "public_read_selectors_use_real_node_and_refuse_missing_evidence assert_unavailable_reads did_accounts send_did_accounts lx_getBalances"
+observed = "The second boundary failure is the DID account read contract recorded at observation 6.2.940: the assertion requires /v1/dids/did:layerx:alice/accounts to refuse 503 did_account_listing_unavailable and the integrated source answers 200 with an empty account list and authenticated_node_snapshot verification. 847f86f18 wrote that assertion when no revision defined send_did_accounts in cmd/layerxd/lxp_daemon_lni.c; this branch added both send_did_accounts and the did_accounts handler before 63ef8df81 without revisiting it, and the assertion, the handler and the daemon function are each byte-identical across 63ef8df81, f89cb11c0, 0717c87ca and the integrated tip. The same contract decides the first divergence of local_gateway_rpc: assert_unavailable_reads requires error code -32001 for lx_listAssets, lx_getAsset, lx_estimateFee and lx_getBalances, lx_getBalances resolves to the same /v1/dids/ accounts selector, and platform/hosted/gateway/src/rpc.rs maps an upstream 200 carrying a result to a result, so no error code is present. Every file under platform/hosted/gateway/src is byte-identical to f89cb11c0. The assertion is present in the integrated boundary.rs because the rebase restored the whole signer lane version of that file, which the merge recorded at observation 6.11.141 had replaced wholesale with the native lane version; twelve of its fourteen tests pass. Evidence: qual-logs/rebase-205-8.log and qual-logs/rebase-205-9b.log."
+assumption = "The assertion and the source it contradicts both belong to this branch and are unchanged since the commits that qualified them, so read-contract reconciliation is the same deferred work recorded at 6.2.940. Editing the assertion would weaken a real refusal check and deleting the restored tests would discard branch coverage that otherwise passes, so boundary.rs, lifecycle.rs, the handler and the daemon were all left exactly as written."
+severity = "blocker"
+
+[observation.6.11.162]
+task = "6.11"
+file = "tests/storage/lxp_test_maintenance_publication.c src/protocol/lxp_genesis.c"
+symbol = "lxp_genesis_materialize test-bridge-maintenance-publication"
+observed = "tests/storage/lxp_test_maintenance_publication.c registers the programs, asset and bridge modules at lines 537 to 539 and then fails the same lxp_genesis_materialize refusal at line 541 that 06c54ca48 introduced for kernels without governance at index two, so make CC=gcc test-bridge-maintenance-publication exits 2. The file is byte-identical to 0717c87ca and to f89cb11c0, the target is not reachable from the make test target and it is not part of this qualification's gate set. Evidence: qual-logs/bridge-maintenance-probe.log."
+assumption = "This is the same missing registration repaired for the bridge credit qualification, in a target outside the gate set and outside this branch's paths, so it is recorded for its owning lane rather than repaired here."
+severity = "blocker"
+
+[observation.6.11.163]
+task = "6.11"
+file = "platform/hosted/core/tests/boundary.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/ws.rs"
+symbol = "local_gateway_websocket_receipt_wake request valid_upgrade"
+observed = "local_gateway_websocket_receipt_wake requires the unauthenticated upgrade GET /rpc/ws to answer 401 and receives 400. The shared request helper the harness borrows from the core fixture writes Connection: close into every request, and the upgrade case adds its own Connection: Upgrade header, so the request carries that header twice; the gateway request parser refuses any repeated header name before ws::valid_upgrade or the key authentication is reached. Connection: close belongs to this branch's own boundary.rs work, which the merge recorded at observation 6.11.141 had replaced wholesale with the native lane version and which the rebase restored, so the collision is already present in this branch's own 63ef8df81, where boundary.rs carries Connection: close and lifecycle.rs carries the same 401 assertion. platform/hosted/gateway/src/http.rs and platform/hosted/gateway/src/ws.rs are byte-identical across 63ef8df81, f89cb11c0 and the integrated tip. Evidence: qual-logs/rebase-205-9c.log."
+assumption = "The parser is right to refuse a repeated header and the 401 refusal was never reached, so the collision is a defect in this branch's own request construction. The upgrade path now writes its own request carrying a single Connection: Upgrade header, mirroring the shared helper and reusing its transport and response parsing; the repair is recorded in d2b13ac99813fb2197e6ea23d44a7f7abc5ac048. platform/hosted/gateway/src/http.rs, ws.rs, the 401 assertion and the parse_http connection assertion are unchanged, every other request the core boundary target sends still carries Connection: close, and local_gateway_websocket_receipt_wake then passes the unauthenticated refusal and the whole receipt wake. Its subscription reader accepts only text frames while the gateway sends a ping every five seconds, so a run whose first subscription response arrives later than that reads the ping instead; the passing runs complete in about two seconds."
+severity = "blocker"
