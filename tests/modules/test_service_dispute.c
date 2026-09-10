@@ -1,18 +1,12 @@
-#include "layerx/lx_service.h"
-#include "layerx/lxp_kernel.h"
+#include "test_service_helpers.h"
+
+#include "layerx/lx_escrow.h"
 
 #include <string.h>
 
-enum { WORK_ARENA_BYTES = 16384, GAS_LIMIT = 100000 };
-
-static lxp_state_store store_state;
-static lxp_state_journal state_journal;
-static lxp_kernel service_kernel;
-static lxp_effect_buffer event_buffer;
-static lxp_arena work_arena;
-static uint8_t work_bytes[WORK_ARENA_BYTES];
 static lxp_effect_buffer audit_buffer;
-static uint64_t parameter_set = 1U;
+static lxp_arena escrow_arena;
+static uint8_t escrow_bytes[WORK_ARENA_BYTES];
 static size_t transfer_calls;
 static size_t event_effects;
 
@@ -37,33 +31,6 @@ static lxp_result counting_reader(const void *set, uint32_t parameter_id,
     return LXP_OK;
 }
 
-static void be16(uint8_t *bytes, uint16_t value)
-{
-    bytes[0] = (uint8_t)(value >> 8);
-    bytes[1] = (uint8_t)value;
-}
-
-static void be32(uint8_t *bytes, uint32_t value)
-{
-    bytes[0] = (uint8_t)(value >> 24);
-    bytes[1] = (uint8_t)(value >> 16);
-    bytes[2] = (uint8_t)(value >> 8);
-    bytes[3] = (uint8_t)value;
-}
-
-static void be64(uint8_t *bytes, uint64_t value)
-{
-    size_t i;
-    for (i = 0U; i < 8U; ++i)
-        bytes[i] = (uint8_t)(value >> ((7U - i) * 8U));
-}
-
-static void id32(uint8_t out[32], uint8_t marker)
-{
-    (void)memset(out, 0, 32U);
-    out[0] = marker;
-}
-
 static size_t offer_payload(uint8_t *out, uint8_t offer_marker)
 {
     size_t offset = 0U;
@@ -81,14 +48,6 @@ static size_t offer_payload(uint8_t *out, uint8_t offer_marker)
     out[offset++] = (uint8_t)LX_SERVICE_DEFAULT_ACCEPT;
     be64(out + offset, 900U); offset += 8U;
     return offset;
-}
-
-static size_t identifier_payload(uint8_t *out, const uint8_t identifier[32])
-{
-    out[0] = 0U;
-    out[1] = (uint8_t)LX_SERVICE_RECORD_VERSION;
-    (void)memcpy(out + LX_SERVICE_PAYLOAD_VERSION_BYTES, identifier, 32U);
-    return (size_t)LX_SERVICE_IDENTIFIER_PAYLOAD_BYTES;
 }
 
 static size_t propose_payload(uint8_t *out, const uint8_t agreement_id[32],
@@ -179,19 +138,6 @@ static size_t dispute_resolve_payload(uint8_t *out,
     return offset;
 }
 
-static int open_ctx(lxp_module_ctx *ctx, uint64_t timestamp,
-                    uint64_t sequence)
-{
-    if (lxp_arena_init(&work_arena, work_bytes, sizeof(work_bytes)) !=
-            LXP_OK ||
-        lxp_effect_buffer_init(&event_buffer) != LXP_OK ||
-        lxp_module_ctx_init(ctx, &service_kernel, LXP_MODULE_SERVICE,
-                            timestamp, 0U, sequence, (uint64_t)GAS_LIMIT,
-                            &work_arena, true) != LXP_OK)
-        return 1;
-    return lxp_module_ctx_bind_effects(ctx, &event_buffer) == LXP_OK ? 0 : 1;
-}
-
 static int effects_are_events(void)
 {
     size_t i;
@@ -203,55 +149,6 @@ static int effects_are_events(void)
         ++event_effects;
     }
     return 0;
-}
-
-static lxp_result dispatch(uint32_t activity_type, const uint8_t *payload,
-                           size_t length,
-                           const lxp_authority_resolved *authority,
-                           uint64_t timestamp, uint64_t sequence,
-                           uint8_t activity_marker,
-                           lxp_result *module_result)
-{
-    const lxp_module_registration *registration = NULL;
-    lxp_activity activity;
-    lxp_module_ctx ctx;
-    lxp_result status;
-
-    *module_result = LXP_FATAL_INVARIANT;
-    status = lxp_kernel_module_for_activity(&service_kernel, activity_type,
-                                            0U, &registration);
-    if (status != LXP_OK) return status;
-    if (open_ctx(&ctx, timestamp, sequence) != 0) return LXP_FATAL_INVARIANT;
-    ctx.activity_id[0] = activity_marker;
-    (void)memset(&activity, 0, sizeof(activity));
-    activity.activity_type = activity_type;
-    activity.payload.bytes = payload;
-    activity.payload.length = length;
-    status = lxp_kernel_dispatch(registration, &ctx, &activity, authority,
-                                 &event_buffer, module_result);
-    if (status != LXP_OK) return status;
-    if (effects_are_events() != 0) return LXP_FATAL_INVARIANT;
-    if (*module_result == LXP_OK) return lxp_module_ctx_commit(&ctx);
-    lxp_module_ctx_rollback(&ctx);
-    return LXP_OK;
-}
-
-static int event_is(uint16_t event_type, const uint8_t primary[32],
-                    const uint8_t secondary[32], uint8_t code,
-                    uint64_t sequence)
-{
-    uint8_t body[LX_SERVICE_EVENT_BODY_BYTES];
-    const lxp_effect *effect = &event_buffer.effects[0];
-    if (event_buffer.count != 1U || effect->kind != LXP_EFFECT_EVENT ||
-        effect->monetary || effect->module_id != LXP_MODULE_SERVICE ||
-        effect->event_type != event_type ||
-        effect->body_length != (uint16_t)LX_SERVICE_EVENT_BODY_BYTES)
-        return 1;
-    (void)memcpy(body, primary, 32U);
-    (void)memcpy(body + 32U, secondary, 32U);
-    body[64] = code;
-    be64(body + 65U, sequence);
-    return memcmp(effect->body, body, sizeof(body)) == 0 ? 0 : 1;
 }
 
 static int rejected_agreement(uint8_t marker, uint8_t *agreement_id,
@@ -295,6 +192,76 @@ static int rejected_agreement(uint8_t marker, uint8_t *agreement_id,
                  ++(*sequence), marker, &status) != LXP_OK || status != LXP_OK)
         return 1;
     return 0;
+}
+
+static int open_escrow_ctx(lxp_module_ctx *ctx, uint64_t sequence)
+{
+    if (lxp_arena_init(&escrow_arena, escrow_bytes, sizeof(escrow_bytes)) !=
+        LXP_OK)
+        return 1;
+    return lxp_module_ctx_init(ctx, &service_kernel, LXP_MODULE_ESCROW, 100U,
+                               0U, sequence, (uint64_t)GAS_LIMIT,
+                               &escrow_arena, true) == LXP_OK ? 0 : 1;
+}
+
+/* Seed one escrow hold, held for the agreement the service dispute is raised
+ * over, through escrow's context-based key-value API. */
+static int escrow_hold_seed(const uint8_t hold_id[32],
+                            const uint8_t agreement_id[32],
+                            lx_escrow_record *seeded, uint8_t root[32])
+{
+    lxp_module_ctx ctx;
+    (void)memset(seeded, 0, sizeof(*seeded));
+    (void)memcpy(seeded->escrow_id, hold_id, 32U);
+    id32(seeded->owner, 2U);
+    id32(seeded->escrow_account, 81U);
+    id32(seeded->beneficiary, 1U);
+    id32(seeded->arbiter, 3U);
+    id32(seeded->asset_id, 82U);
+    seeded->locked_amount.lo = 1000U;
+    seeded->state = LX_ESCROW_STATE_OPEN;
+    seeded->expiry = 5000U;
+    seeded->dispute_window = 2000U;
+    id32(seeded->terms_hash, 83U);
+    (void)memcpy(seeded->agreement_reference, agreement_id, 32U);
+    if (open_escrow_ctx(&ctx, 30U) != 0 ||
+        lx_escrow_state_put(&ctx, seeded) != LXP_OK ||
+        lxp_module_ctx_commit(&ctx) != LXP_OK)
+        return 1;
+    /* lxp_module_ctx_commit leaves the staged writes on the committed context
+     * (observation 6.11.3210), so the escrow subtree root is read from a
+     * context opened after the commit. */
+    return open_escrow_ctx(&ctx, 31U) == 0 &&
+           lx_escrow_module_iface()->state_root(&ctx, root) == LXP_OK ? 0 : 1;
+}
+
+/* The service dispute settles inside the service module only: the escrow hold
+ * it names keeps its locked and captured amounts, its state, its parties and
+ * the escrow subtree root it had before the dispute was opened. */
+static int escrow_hold_unchanged(const uint8_t hold_id[32],
+                                 const uint8_t agreement_id[32],
+                                 const lx_escrow_record *before,
+                                 const uint8_t root_before[32],
+                                 uint64_t sequence)
+{
+    lx_escrow_record after;
+    uint8_t root_after[32];
+    lxp_module_ctx ctx;
+    if (open_escrow_ctx(&ctx, sequence) != 0 ||
+        lx_escrow_module_iface()->state_root(&ctx, root_after) != LXP_OK ||
+        memcmp(root_before, root_after, 32U) != 0 ||
+        lx_escrow_lookup(&ctx, hold_id, &after) != LXP_OK ||
+        memcmp(after.agreement_reference, agreement_id, 32U) != 0)
+        return 1;
+    return after.state == before->state &&
+           after.locked_amount.hi == before->locked_amount.hi &&
+           after.locked_amount.lo == before->locked_amount.lo &&
+           after.captured_amount.hi == before->captured_amount.hi &&
+           after.captured_amount.lo == before->captured_amount.lo &&
+           memcmp(after.owner, before->owner, 32U) == 0 &&
+           memcmp(after.escrow_account, before->escrow_account, 32U) == 0 &&
+           memcmp(after.beneficiary, before->beneficiary, 32U) == 0 &&
+           memcmp(after.asset_id, before->asset_id, 32U) == 0 ? 0 : 1;
 }
 
 static int iface_shape(void)
@@ -356,6 +323,9 @@ int main(void)
     uint8_t evidence[3];
     uint8_t root_before[32];
     uint8_t root_after[32];
+    uint8_t hold_id[32];
+    uint8_t escrow_root_before[32];
+    lx_escrow_record hold_before;
     lx_service_dispute dispute;
     lx_service_agreement agreement;
     lxp_authority_resolved provider;
@@ -373,10 +343,12 @@ int main(void)
     buyer.principal[0] = 2U;
     outsider.principal[0] = 3U;
     id32(open_id, 99U);
+    id32(hold_id, 80U);
     evidence[0] = 55U;
     evidence[1] = 33U;
     evidence[2] = 44U;
 
+    effect_audit_hook = effects_are_events;
     if (lxp_state_store_init(&store_state, 0U) != LXP_OK ||
         lxp_kernel_create(&service_kernel, &store_state, &state_journal,
                           &parameter_set, 0U) != LXP_OK ||
@@ -384,12 +356,18 @@ int main(void)
                                     counting_applier) != LXP_OK ||
         lxp_kernel_register_module(&service_kernel,
                                    lx_service_module_iface()) != LXP_OK ||
+        lxp_kernel_register_module(&service_kernel,
+                                   lx_escrow_module_iface()) != LXP_OK ||
         iface_shape() != 0)
         return 1;
 
     if (rejected_agreement(60U, disputed_id, &provider, &buyer,
                            &sequence) != 0 ||
         rejected_agreement(70U, second_id, &provider, &buyer, &sequence) != 0)
+        return 1;
+
+    if (escrow_hold_seed(hold_id, disputed_id, &hold_before,
+                         escrow_root_before) != 0)
         return 1;
 
     if (open_ctx(&ctx, 100U, 40U) != 0 ||
@@ -507,6 +485,10 @@ int main(void)
         lx_service_module_iface()->epoch_end(&ctx, 0U, 100U) != LXP_OK ||
         lx_service_module_iface()->epoch_end(NULL, 0U, 100U) !=
             LXP_ERR_NON_CANONICAL)
+        return 1;
+
+    if (escrow_hold_unchanged(hold_id, disputed_id, &hold_before,
+                              escrow_root_before, 49U) != 0)
         return 1;
 
     if (audit_refusals() != 0) return 1;
