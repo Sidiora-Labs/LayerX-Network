@@ -39,8 +39,9 @@ Read tools are absent from the list when the bound scope does not include them. 
 | `grant.draw` | write | `write:grant:draw` | `Submit` |
 | `activity.track` | write | `write:track` | `Track` |
 | `activity.wait` | write | `write:activity:wait` | `Wait` |
+| `faucet.request` | write | `write:faucet:claim` | `FaucetClaim` |
 
-Write tools follow the ordinary daemon path: prepare, disclose, sign, submit, track. Outcomes are evidence-shaped (`Executed` + receipt, `Unknown`, or `Failed`). Read-only deployment omits write tools entirely. This catalogue is exactly what `layerx mcp serve` and the `layerx-mcp` binary serve: both bind one daemon session through `src/binding.rs` and route every call through `src/stdio.rs`, so no signing seed and no gateway credential is read on the served path.
+Write tools follow the ordinary daemon path: prepare, disclose, sign, submit, track. Outcomes are evidence-shaped (`Executed` + receipt, `Unknown`, or `Failed`). Read-only deployment omits write tools entirely. This catalogue is exactly what `layerx mcp serve` and the `layerx-mcp` binary serve: both bind one daemon session through `src/binding.rs` and route every call through `src/stdio.rs`, so no signing seed and no gateway credential is read on the served path. The CLI's gateway-bound `layerx a2a serve` surface is a different catalogue (`receipt.get`, `activity.submit` and `faucet.request` against the hosted gateway, `SERVED` in `platform/cli/src/toolset.rs`); it shares only the `faucet.request` definition, the `FAUCET_REQUEST` constant in `src/server.rs`, so the two surfaces cannot drift apart on that tool's name, kind, scope, mutation or evidence.
 
 The wallet and token tools (`wallet.accounts`, `wallet.balance`, `wallet.send`, `token.create`, `token.mint`, `token.transfer`) are registered in `src/server.rs` and implemented in `src/tools/wallet.rs` and `src/tools/write.rs`. Payment walkthrough: [`docs/wiki/PaymentsQuickstart.md`](../../../docs/wiki/PaymentsQuickstart.md).
 

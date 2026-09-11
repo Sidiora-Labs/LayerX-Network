@@ -25,6 +25,7 @@ final class GeneratedContract {
         "capability.list",
         "capability.revoke",
         "export.offline",
+        "faucet.claim",
         "prepare",
         "program.activity",
         "program.call",

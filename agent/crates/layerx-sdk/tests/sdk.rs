@@ -110,7 +110,7 @@ fn daemon_and_direct_node_shapes_publish_identical_guarantees_and_calls() {
 
 #[test]
 fn operation_catalogue_covers_the_complete_contract_surface() {
-    assert_eq!(Operation::ALL.len(), 49);
+    assert_eq!(Operation::ALL.len(), 50);
     let names: std::collections::BTreeSet<_> = Operation::ALL
         .iter()
         .map(|operation| operation.name())
@@ -128,6 +128,7 @@ fn operation_catalogue_covers_the_complete_contract_surface() {
         "read.balance",
         "read.proof_bundle",
         "availability.fetch",
+        "faucet.claim",
         "subscription.create",
         "approval.list",
         "approval.get",

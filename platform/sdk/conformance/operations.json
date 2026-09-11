@@ -163,6 +163,16 @@
     },
     {
       "plane": "agent",
+      "name": "faucet.claim",
+      "method": "POST",
+      "path": "",
+      "request": "object",
+      "response": "FaucetGrant",
+      "idempotency": false,
+      "bodyless": false
+    },
+    {
+      "plane": "agent",
       "name": "prepare",
       "method": "POST",
       "path": "",

@@ -80,3 +80,14 @@ response = "AuthorityResponse<BudgetRecord>"
 [type.AuthorityResponse]
 required = ["authority","value"]
 authority_description = "Every response names the tenant, agent DID, authority reference and exact protocol authority actually used."
+
+[type.FaucetGrant]
+required = ["funded","funding_id","transaction_id","amount","network"]
+funded_semantics = "Only a grant the funding boundary confirmed as funded is a value. A pending, unfunded or incomplete document is a refusal and never a zero amount."
+
+[operation.faucet.claim]
+required = ["did","signer_public_key"]
+response = "FaucetGrant"
+network_scope = "test_network_only"
+signer_binding = "The signer key must be one the calling session already authorises. A key the session does not name is refused before any grant is reserved."
+idempotency_binding = "The claim key is derived by the funding boundary from the principal, the DID and the signer key, so a repeated claim settles onto the reservation it already made instead of consuming a second grant."

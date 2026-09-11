@@ -48,7 +48,16 @@ pub struct ToolDefinition {
     pub evidence: &'static str,
 }
 
-const TOOL_CATALOGUE: [ToolDefinition; 20] = [
+/// The one faucet tool definition every LayerX MCP surface serves.
+pub const FAUCET_REQUEST: ToolDefinition = ToolDefinition {
+    name: "faucet.request",
+    kind: ToolKind::Write,
+    required_scope: "write:faucet:claim",
+    mutation: "one bounded testnet faucet grant through the hosted gateway",
+    evidence: "the faucet claim the gateway confirmed as funded, or an honest refusal",
+};
+
+const TOOL_CATALOGUE: [ToolDefinition; 21] = [
     ToolDefinition {
         name: "balance.get",
         kind: ToolKind::Read,
@@ -189,6 +198,7 @@ const TOOL_CATALOGUE: [ToolDefinition; 20] = [
         mutation: "daemon-local receipt resolution state",
         evidence: "verified receipt or honest non-terminal state",
     },
+    FAUCET_REQUEST,
 ];
 
 #[must_use]
@@ -698,6 +708,7 @@ fn tool_operation(name: &str) -> Option<Operation> {
         "activity.submit" | "wallet.send" | "token.create" | "token.mint" | "token.transfer"
         | "grant.issue" | "grant.draw" => Some(Operation::Submit),
         "activity.track" => Some(Operation::Track),
+        "faucet.request" => Some(Operation::FaucetClaim),
         "activity.wait" => Some(Operation::Wait),
         _ => None,
     }
