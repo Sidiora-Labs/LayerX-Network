@@ -445,18 +445,10 @@ struct InstallA2aArgs {
 
 #[derive(Subcommand)]
 enum McpCommand {
-    /// Serve the installed tool surface for one environment and key.
+    /// Serve the daemon-bound tool catalogue for one agent daemon binding.
     Serve {
         #[arg(long)]
-        environment: Option<String>,
-        #[arg(long)]
-        key: Option<String>,
-        #[arg(long)]
-        gateway_credential: String,
-        #[arg(long)]
-        source_account: Option<String>,
-        #[arg(long)]
-        asset: Option<String>,
+        daemon_binding: PathBuf,
         #[arg(long)]
         read_only: bool,
     },
@@ -534,23 +526,10 @@ fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String>
         }
         Command::Install(command) => install(command).map(Some),
         Command::Mcp(McpCommand::Serve {
-            environment,
-            key,
-            gateway_credential,
-            source_account,
-            asset,
+            daemon_binding,
             read_only,
         }) => {
-            let configuration = serving_configuration(environment)?;
-            let key = serving_key(&configuration, key.as_deref())?;
-            mcp::serve(
-                &configuration,
-                &gateway_credential,
-                key,
-                source_account.as_deref(),
-                asset.as_deref(),
-                deployment_mode(read_only),
-            )?;
+            mcp::serve(&daemon_binding, read_only)?;
             Ok(None)
         }
         Command::A2a(command) => match command {
