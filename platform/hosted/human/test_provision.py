@@ -8,6 +8,20 @@ import unittest
 
 import provision
 
+IDENTITY_PROVIDER_VARIABLE = 'LAYERX_HUMAN_IDENTITY_PROVIDER_BIN'
+IDENTITY_PROVIDER_DEFAULT = (Path(__file__).resolve().parents[3]
+                             / 'human/target/debug/layerx-human-identity-provider')
+
+
+def identity_provider_binary():
+    binary = Path(os.environ.get(IDENTITY_PROVIDER_VARIABLE) or IDENTITY_PROVIDER_DEFAULT)
+    if not binary.is_file():
+        raise FileNotFoundError(
+            f'required real provider binary: {binary}; build it with '
+            f'`make human-test-hosted-provisioning`, or set {IDENTITY_PROVIDER_VARIABLE} '
+            f'to a built layerx-human-identity-provider')
+    return binary
+
 
 def generated_catalog(directory, binary):
     import yaml
@@ -79,8 +93,7 @@ class RegistrationInputTests(unittest.TestCase):
             self.refused()
 
     def test_real_owner_output_is_not_a_protocol_registration(self):
-        repo = Path(__file__).resolve().parents[3]
-        binary = repo / 'human/target/debug/layerx-human-identity-provider'
+        binary = identity_provider_binary()
         self.assertTrue(binary.is_file(), f'required real provider binary: {binary}')
         policy = self.root / 'recovery-policy.json'
         policy.write_text(json.dumps({'root': list(os.urandom(32)), 'threshold': 1,
@@ -175,7 +188,7 @@ class RegistrationInputTests(unittest.TestCase):
         self.assertFalse(job['spec']['template']['spec']['automountServiceAccountToken'])
 
     def test_generated_catalog_uses_real_keys_and_production_registry_modules(self):
-        binary = Path(__file__).resolve().parents[3] / 'human/target/debug/layerx-human-identity-provider'
+        binary = identity_provider_binary()
         catalog = generated_catalog(self.root, binary)
         self.assertEqual(len(catalog['presets'][0]['counterparties']), 2)
         self.assertNotEqual(*catalog['presets'][0]['counterparties'])

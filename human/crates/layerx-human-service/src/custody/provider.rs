@@ -968,6 +968,9 @@ fn encode_disclosure(disclosure: &Disclosure) -> Result<Vec<u8>, CustodyError> {
         writer.u8(match amount.role {
             layerx_crypto::disclosure::AmountRole::Transfer => 1,
             layerx_crypto::disclosure::AmountRole::SpendingLimit => 2,
+            layerx_crypto::disclosure::AmountRole::SupplyCap => 3,
+            layerx_crypto::disclosure::AmountRole::PerDrawMaximum => 4,
+            layerx_crypto::disclosure::AmountRole::GrantAllowance => 5,
         })?;
         writer.fixed(&amount.value.to_be_bytes())?;
     }
