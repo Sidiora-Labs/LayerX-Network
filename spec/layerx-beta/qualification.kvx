@@ -10785,3 +10785,43 @@ symbol = "ArtifactManifest images layerx/artifact-manifest/1"
 observed = "images is a required field of the artifact manifest and parse_artifact_manifest refuses a manifest whose images list is empty, but the schema identifier stays layerx/artifact-manifest/1. No manifest has been emitted yet: platform/release/artifact-manifest.json does not exist in the tree and platform/docs/content/beta.md line 180 carries artifact_manifest_status = not_emitted, so the added field invalidates no committed or published document and there is no consumer pinned to the earlier shape of schema 1."
 assumption = "A schema identifier may gain a required field while no document of that schema has been emitted; the first emitted manifest defines schema 1 in full. Once platform/release/artifact-manifest.json is committed with the first tagged release, any further required field needs layerx/artifact-manifest/2 and a migration for the committed document."
 severity = "note"
+
+[observation.6.5.5100]
+task = "6.5"
+file = "platform/hosted/identity/src/store.rs platform/hosted/identity/src/main.rs"
+symbol = "Principal StoredSession Store::principal Store::subject_tenant create_principal create_session lookup_session"
+observed = "POST /v1/principals required, validated and echoed a tenant but the store dropped it: Principal held only the subject and the principal map was keyed by the subject alone, so provisioning the same subject under a second tenant silently replaced the first tenant's signer key set, account and audiences. Principal and StoredSession now carry the tenant, the principal map is tenant then subject, and the store keeps a subject to tenant binding that refuses any principal whose subject is already bound to a different tenant; the service answers that refusal with 409 subject_tenant_conflict rather than overwriting. Sessions are minted only for a principal of the resolved tenant, the stored session records that tenant, and introspection resolves the principal as (session tenant, session subject), so a session can never be answered with another tenant's principal. The snapshot, the journal records and the replay path all carry the tenant, and replay refuses a journal or snapshot that binds one subject to two tenants or that keys a principal under a tenant other than its own."
+assumption = "A subject is globally unique across tenants because the gateway mints it as a tenant-domain-separated hash of the signer key (platform/hosted/gateway/src/rpc_register.rs subject), so refusing the second tenant's claim is stricter than keying alone and removes the ambiguity that sub-only introspection would otherwise carry."
+severity = "note"
+
+[observation.6.5.5101]
+task = "6.5"
+file = "platform/hosted/identity/src/store.rs"
+symbol = "Snapshot State::restore Store::open"
+observed = "The on-disk snapshot shape changed from principals keyed by subject to principals keyed by tenant then subject, and Principal now requires a tenant field under serde deny_unknown_fields. An identity state directory written by the previous build therefore fails to deserialize and Store::open returns an error, which main propagates so layerx-identity exits 2 at startup instead of coming up with a partial view. There is no automatic upgrade because the old records carry no tenant to migrate to."
+assumption = "Refusing to start on an unreadable store is correct for a principal service; an existing beta identity state directory has to be re-provisioned rather than upgraded, which the disposable beta deployment allows."
+severity = "note"
+
+[observation.6.5.5102]
+task = "6.5"
+file = "platform/hosted/identity/src/main.rs platform/hosted/tests/beta-cluster.sh platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "SessionRequest create_session identity_provision"
+observed = "POST /v1/sessions takes an optional tenant. When it is present the tenant is validated and the session is refused with 404 principal_not_found unless the subject is bound to exactly that tenant; when it is absent the tenant is resolved from the store's subject binding and recorded on the session. The field is optional because platform/hosted/tests/beta-cluster.sh:1443 and platform/hosted/gateway/tests/local/lifecycle.rs:188 mint sessions with a subject only and neither file is an owned path of this lane; making the field mandatory would refuse both callers."
+assumption = "Resolving the tenant from a subject that the store binds to exactly one tenant is exact rather than a fallback, so the recorded tenant is the same either way. Once those two callers send the tenant the field can be made mandatory."
+severity = "note"
+
+[observation.6.5.5103]
+task = "6.5"
+file = "platform/hosted/identity/tests/service.rs platform/hosted/identity/src/store.rs"
+symbol = "principal_tenant_is_required_bounded_and_echoed cross_tenant_state_on_disk_is_refused"
+observed = "principal_tenant_is_required_bounded_and_echoed created one subject under two different tenants and asserted 200 for both, which is exactly the replacement the row requires to be refused. Its two accepted cases now use distinct subjects, so the tenant name bounds and the echoed response it was written to prove are still asserted unchanged, and the case it used to cover incidentally is now asserted explicitly: a second tenant claiming a bound subject answers 409 subject_tenant_conflict. The new store test cross_tenant_state_on_disk_is_refused first failed because a store that has never been reopened holds its principals in the journal and not in the snapshot, so overwriting the journal erased the record the conflict was supposed to collide with; the test now covers a conflict inside one journal, a journal that claims a subject the snapshot bound elsewhere, a session naming a principal of another tenant, a snapshot keyed under the wrong tenant, a snapshot holding one subject under two tenants, and a principal with no tenant at all."
+assumption = "An assertion that a behaviour is permitted has to move when the behaviour becomes a refusal; the replacement asserts the refusal rather than dropping the case, and everything the original test proved about tenant validation is still proved."
+severity = "note"
+
+[observation.6.5.5104]
+task = "6.5"
+file = "platform/hosted/identity/src/main.rs"
+symbol = "GatewayShape DeveloperShape SubjectShape RampShape introspection_shape"
+observed = "The four introspection shapes are unchanged and still identify a session by its subject alone, with no tenant field, so platform/hosted/gateway, platform/hosted/webhooks, dashboard, faucet, testnet and the ramp consumer are unaffected by this change. That remains sound only because the store refuses to bind one subject to two tenants. If that binding is ever relaxed so that a subject may exist in more than one tenant, every one of these shapes has to carry the tenant, otherwise a consumer cannot tell two tenants' principals apart."
+assumption = "Not widening a response shape that six services parse is the smaller change; the constraint that makes it safe is recorded here so relaxing the binding cannot silently reintroduce cross-tenant confusion."
+severity = "note"
