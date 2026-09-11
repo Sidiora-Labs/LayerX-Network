@@ -86,9 +86,11 @@ or invent proof material.
   decimal-string `batch_number`, and `verification`. `verification` is one of
   `state_proven`, `checkpoint_finalised`, or `settlement_anchored`: the read is
   requested at state-proven level and fails closed if no level is achieved.
-- A DID account list's entries carry the same fields without a per-entry
-  `verification`; every entry still carries proof material that the client
-  verifies against the signed batch header.
+- A DID account list's entries carry the same fields, each with a per-entry
+  `verification: "state_proven"`: the enumeration is requested at state-proven
+  level and fails closed with core code `did_account_listing_unavailable` when
+  the node holds no proof for it. Every entry still carries proof material that
+  the client verifies against the signed batch header.
 - A DID account list includes `did`, `accounts`, and
   `verification: "authenticated_node_snapshot"`. It is complete within the
   native bound; it does not independently prove completeness or finality.
@@ -98,7 +100,10 @@ or invent proof material.
   nests under `assets`. Both carry version-3 metadata, `observed_head_sequence`,
   `state_root`, and
   `verification: "authenticated_committed_snapshot"`. Amounts are decimal
-  strings; ids and custody references are hexadecimal.
+  strings; ids and custody references are hexadecimal. `symbol` is the record's
+  1..=16 ASCII bytes as a string; a committed record whose symbol falls outside
+  that encoding is refused with core code `invalid_asset_symbol` (JSON-RPC
+  `-32001`) rather than rendered with replacement characters.
 - A fee estimate includes decimal-string `fee`, `parameter_version`,
   hexadecimal `canonical_schedule`, `canonical_bytes`,
   `observed_head_sequence`, `state_root`, and

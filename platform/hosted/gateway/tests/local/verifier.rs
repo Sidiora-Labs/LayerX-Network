@@ -94,6 +94,20 @@ fn verify_batch(bytes: &[u8], protocol: &layerx_wire::receipt::ProtocolReceipt, 
             .required("sequencer ID size");
     let authorization =
         layerx_proof::inclusion::SequencerAuthorization::new(sequencer_id, signer, 1, u64::MAX);
+    let authority = verify_batch_identity(bytes, protocol, &evidence, &authorization);
+    assert!(
+        verify_selected_program_state(bytes, &authority, &evidence, &authorization),
+        "independent Programs state proof"
+    );
+    verify_tamper_rejections(bytes, protocol, &authority, &evidence, &authorization);
+}
+
+fn verify_batch_identity(
+    bytes: &[u8],
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+    evidence: &layerx_platform_authority::BatchEvidence,
+    authorization: &layerx_proof::inclusion::SequencerAuthorization,
+) -> AuthorizedBatch {
     let proof = layerx_proof::merkle::decode_proof(&evidence.receipt_proof)
         .required("receipt inclusion proof");
     let inclusion = layerx_proof::inclusion::verify_receipt(
@@ -101,7 +115,7 @@ fn verify_batch(bytes: &[u8], protocol: &layerx_wire::receipt::ProtocolReceipt, 
         &proof,
         &evidence.header,
         &evidence.header_signature,
-        &authorization,
+        authorization,
     )
     .required("independent signed batch and receipt inclusion");
     let header = inclusion.header().header();
@@ -111,39 +125,82 @@ fn verify_batch(bytes: &[u8], protocol: &layerx_wire::receipt::ProtocolReceipt, 
         protocol.global_sequence() >= header.first_sequence()
             && protocol.global_sequence() <= header.last_sequence()
     );
-    let batch_id = layerx_wire::hash::receipt_execution_batch_id(protocol, header)
-        .required("header-derived execution batch identity");
-    assert_eq!(protocol.batch_id(), batch_id);
-    assert_eq!(protocol.previous_state_root(), header.previous_state_root());
-    assert_eq!(
-        protocol.resulting_state_root(),
-        header.resulting_state_root()
-    );
-    let authority = AuthorizedBatch::new(
-        batch_id,
-        protocol.asset(),
-        header.previous_state_root(),
-        header.resulting_state_root(),
-        signer,
-    );
-    verify_program_state(bytes, &authority).required("independent Programs state proof");
+    let facts = layerx_platform_authority::authorized_batch_by_activity(
+        protocol.activity_id(),
+        bytes,
+        evidence,
+        authorization,
+    )
+    .required("maintained or historical execution batch identity");
+    assert_eq!(protocol.batch_id(), facts.batch_id);
+    assert_eq!(facts.previous_state_root, header.previous_state_root());
+    assert_eq!(facts.resulting_state_root, header.resulting_state_root());
+    match &evidence.batch_identity {
+        layerx_platform_authority::BatchIdentityEvidence::Historical => {
+            assert_eq!(protocol.previous_state_root(), facts.previous_state_root);
+            assert_eq!(protocol.resulting_state_root(), facts.resulting_state_root);
+        }
+        layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 {
+            receipt,
+            ..
+        } => {
+            let maintenance = layerx_wire::maintenance::decode_occupancy_maintenance(receipt)
+                .required("authenticated occupancy maintenance");
+            assert_eq!(protocol.previous_state_root(), facts.previous_state_root);
+            assert_eq!(
+                protocol.resulting_state_root(),
+                maintenance.previous_state_root
+            );
+            assert_eq!(maintenance.resulting_state_root, facts.resulting_state_root);
+        }
+    }
+    AuthorizedBatch::new(
+        facts.batch_id,
+        facts.asset,
+        facts.previous_state_root,
+        facts.resulting_state_root,
+        facts.sequencer_public_key,
+    )
+}
+
+fn verify_tamper_rejections(
+    bytes: &[u8],
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+    authority: &AuthorizedBatch,
+    evidence: &layerx_platform_authority::BatchEvidence,
+    authorization: &layerx_proof::inclusion::SequencerAuthorization,
+) {
+    let proof = layerx_proof::merkle::decode_proof(&evidence.receipt_proof)
+        .required("receipt inclusion proof");
     let mut bad_header = evidence.header.clone();
     *bad_header.last_mut().required("header") ^= 1;
+    let mut bad_evidence = evidence.clone();
+    bad_evidence.header.clone_from(&bad_header);
     assert!(
         layerx_proof::inclusion::verify_receipt(
             bytes,
             &proof,
             &bad_header,
             &evidence.header_signature,
-            &authorization
+            authorization
         )
         .is_err(),
         "mutated independent header must fail"
     );
+    assert!(
+        layerx_platform_authority::authorized_batch_by_activity(
+            protocol.activity_id(),
+            bytes,
+            &bad_evidence,
+            authorization
+        )
+        .is_err(),
+        "mutated maintained authority evidence must fail"
+    );
     let mut corrupted = bytes.to_vec();
     *corrupted.last_mut().required("nonempty receipt") ^= 1;
     assert!(
-        verify_program_state(&corrupted, &authority).is_err(),
+        !verify_selected_program_state(&corrupted, authority, evidence, authorization),
         "tampered evidence must fail"
     );
     assert!(
@@ -152,11 +209,59 @@ fn verify_batch(bytes: &[u8], protocol: &layerx_wire::receipt::ProtocolReceipt, 
             &proof,
             &evidence.header,
             &evidence.header_signature,
-            &authorization
+            authorization
         )
         .is_err(),
         "mutated receipt inclusion must fail"
     );
+    assert!(
+        layerx_platform_authority::authorized_batch_by_activity(
+            protocol.activity_id(),
+            &corrupted,
+            evidence,
+            authorization
+        )
+        .is_err(),
+        "mutated receipt authority evidence must fail"
+    );
+}
+
+fn verify_selected_program_state(
+    bytes: &[u8],
+    authority: &AuthorizedBatch,
+    evidence: &layerx_platform_authority::BatchEvidence,
+    authorization: &layerx_proof::inclusion::SequencerAuthorization,
+) -> bool {
+    match &evidence.batch_identity {
+        layerx_platform_authority::BatchIdentityEvidence::Historical => {
+            verify_program_state(bytes, authority).is_ok()
+        }
+        layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 {
+            receipt,
+            proof,
+        } => {
+            let Ok(activity_proof) = layerx_proof::merkle::decode_proof(&evidence.receipt_proof)
+            else {
+                return false;
+            };
+            let Ok(maintenance_proof) = layerx_proof::merkle::decode_proof(proof) else {
+                return false;
+            };
+            layerx_proof::receipt::verify_program_state_maintained(
+                bytes,
+                authority,
+                &layerx_proof::receipt::MaintainedOutcomeEvidence {
+                    header: &evidence.header,
+                    header_signature: &evidence.header_signature,
+                    activity_proof: &activity_proof,
+                    maintenance: receipt,
+                    maintenance_proof: &maintenance_proof,
+                    authorization,
+                },
+            )
+            .is_ok()
+        }
+    }
 }
 
 fn independent_evidence(

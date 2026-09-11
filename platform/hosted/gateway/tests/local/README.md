@@ -32,7 +32,10 @@ cargo test --manifest-path platform/hosted/gateway/tests/local/Cargo.toml \
 
 The first Cargo invocation resolves this standalone test package's lockfile;
 subsequent runs should use `--locked`. Keep its target directory separate from
-concurrent platform/native qualification.
+concurrent platform/native qualification. Each real-node fixture, including the
+funded cluster this harness builds from the included core fixture, owns the
+core `TestState` guard and removes its generated state root when dropped; set
+`LAYERX_TEST_RETAIN_STATE` to keep the tree for inspection.
 
 The shell's six required variables are supplied by the harness. Its receipt
 verifier is a separate executable using `layerx-proof`, a locally pinned
@@ -41,10 +44,14 @@ requires network 7332, protocol 3, Programs version 4, state operation 0, succes
 absent call outcome, matching activity ID and a valid state proof. The verifier
 fetches the real authority's batch-header signature and receipt inclusion proof
 over authenticated TLS, pins replica/sequencer identities, verifies header
-signature, network, sequence range and receipt inclusion, then derives the batch
-identity and state roots from the verified header. The asset comes from the
-independently included receipt, not an unproven receipt assertion. Mutated headers
-and receipts must fail verification.
+signature, network, sequence range and receipt inclusion, then resolves the
+batch identity, asset and state roots through
+`layerx_platform_authority::authorized_batch_by_activity`, which re-derives
+them from the verified header and the decoded receipt and accepts both the
+historical and the occupancy-maintenance evidence shapes; the Programs state
+proof is checked through the verifier matching that shape. A mutated header,
+mutated authority evidence and corrupted receipt bytes must each fail
+verification.
 
 Evidence is retained beside each receipt and replayed by a fresh verifier process
 without authority URL or transport configuration. All three lifecycle receipts

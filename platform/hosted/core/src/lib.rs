@@ -108,6 +108,19 @@ pub fn domain_hash(domain: Domain, bytes: &[u8]) -> [u8; 32] {
 ///
 /// Returns every construction, compilation or encoding failure as text.
 pub fn build_send(seed: &[u8; 32], request: &SendRequest) -> Result<SignedSend, String> {
+    build_send_with_identity_sequence(seed, request.account_sequence, request)
+}
+
+/// Builds one SEND whose actor sequence is independent of its source-account sequence.
+///
+/// # Errors
+///
+/// Returns every construction, compilation or encoding failure as text.
+pub fn build_send_with_identity_sequence(
+    seed: &[u8; 32],
+    identity_sequence: u64,
+    request: &SendRequest,
+) -> Result<SignedSend, String> {
     if request.amount == 0 {
         return Err("amount must be greater than zero".into());
     }
@@ -169,7 +182,7 @@ pub fn build_send(seed: &[u8; 32], request: &SendRequest) -> Result<SignedSend, 
         .and_then(|value| value.activity_type(activity_type))
         .and_then(|value| value.actor_did(actor))
         .and_then(|value| value.authority(authority))
-        .and_then(|value| value.account_sequence(request.account_sequence))
+        .and_then(|value| value.account_sequence(identity_sequence))
         .and_then(|value| value.timestamp_bound(timestamp))
         .and_then(|value| value.idempotency_key(IdempotencyKey::new(request.idempotency_key)))
         .and_then(|value| value.fee_limit(Amount::from_u128(request.fee_limit)))
@@ -182,7 +195,7 @@ pub fn build_send(seed: &[u8; 32], request: &SendRequest) -> Result<SignedSend, 
     let unsigned_bytes = layerx_wire::activity::encode_unsigned_envelope(&unsigned)
         .map_err(|error| format!("send signing bytes are invalid: {error:?}"))?;
     let digest = domain_hash(Domain::SignaturePreimage, &unsigned_bytes);
-    let signature = signing_key.sign(&digest).to_bytes();
+    let signature = disclosed_signature(seed, &unsigned_bytes, &registry)?;
     layerx_crypto::ed25519::verify_digest(&public_key, &signature, &digest)
         .map_err(|error| format!("send signature does not verify: {error:?}"))?;
     let signed = unsigned.attach_signature(
@@ -203,6 +216,26 @@ pub fn build_send(seed: &[u8; 32], request: &SendRequest) -> Result<SignedSend, 
         signer_public_key: public_key,
         idempotency_key: request.idempotency_key,
     })
+}
+
+fn disclosed_signature(
+    seed: &[u8; 32],
+    canonical: &[u8],
+    registry: &ModuleRegistry,
+) -> Result<[u8; 64], String> {
+    let disclosure = layerx_crypto::disclosure::bind(canonical, registry)
+        .map_err(|error| format!("send disclosure is invalid: {error:?}"))?;
+    let local_key = layerx_crypto::signer::LocalSigner::new(*seed);
+    let mut future =
+        layerx_crypto::signer::sign_disclosed(&local_key, canonical, &disclosure, registry);
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    let signature = match std::future::Future::poll(future.as_mut(), &mut context) {
+        std::task::Poll::Ready(result) => *result
+            .map_err(|error| format!("send signer refused: {error:?}"))?
+            .as_bytes(),
+        std::task::Poll::Pending => return Err("local signer unexpectedly pending".into()),
+    };
+    Ok(signature)
 }
 
 fn send_authorization(

@@ -76,8 +76,8 @@ Served on the core plane (`platform/hosted/core/src/main.rs:1158-1256`). Query s
 | `GET` | `/v1/state` | none | wrapped relay of `/v1/protocol/account-state/head` (`platform/hosted/core/src/main.rs:1229-1238`) |
 | `GET` | `/v1/accounts/{id}` or `/balance` | nonzero 32-byte hex account id | account snapshot with canonical value and native proof material |
 | `GET` | `/v1/dids/{did}/sequence` | valid DID | authenticated identity sequence snapshot |
-| `GET` | `/v1/dids/{did}/accounts` | valid DID | complete bounded LNI minor-5 account enumeration |
-| `GET` | `/v1/assets` or `/v1/assets/{id}` | no selector or one nonzero Asset id | complete bounded list or one version-3 record |
+| `GET` | `/v1/dids/{did}/accounts` | valid DID | complete bounded LNI minor-5 account enumeration requested at `VerificationLevel::STATE_PROVEN`; each entry carries `verification: "state_proven"` (`platform/hosted/core/src/public_reads.rs:134-206`) |
+| `GET` | `/v1/assets` or `/v1/assets/{id}` | no selector or one nonzero Asset id | complete bounded list or one version-3 record; a record whose `symbol` is outside 1..=16 ASCII bytes is `502 invalid_asset_symbol` (`platform/hosted/core/src/public_reads.rs:62-131`) |
 | `POST` | `/v1/fees/estimate` | JSON `canonical_hex` | committed-schedule estimate or typed unavailable refusal |
 | `GET` | `/v1/node-info` | none | protocol/network handshake and current heads |
 | `GET` | `/v1/batches/{number}` | canonical nonzero decimal batch number | signed batch header |
@@ -201,40 +201,57 @@ These paths are not relayed. They return `503 capability_unavailable` with `retr
 ## Admin treasury SEND
 
 Library path: `build_send` compiles an owner-authorised Asset SEND (ordinal 5)
-with `layerx-intents`, signs the envelope, and returns canonical bytes
-(`platform/hosted/core/src/lib.rs:110-206`). Source and destination accounts are
+with `layerx-intents`, signs the envelope, and returns canonical bytes. It
+delegates to `build_send_with_identity_sequence`, which takes the envelope
+actor sequence as its own argument
+(`platform/hosted/core/src/lib.rs:110-219`). Source and destination accounts are
 `agent:<did>:main` (`platform/hosted/core/src/lib.rs:53-61`). The treasury DID is
-`did:layerx:<public key hex>` (`platform/hosted/core/src/lib.rs:296-301`). Amount
+`did:layerx:<public key hex>` (`platform/hosted/core/src/lib.rs:331-334`). Amount
 0 and expiry not after `not_before` are construction errors
-(`platform/hosted/core/src/lib.rs:111-116`). The envelope and the SEND payload
-both carry `SendRequest::account_sequence`
-(`platform/hosted/core/src/lib.rs:24-35`).
+(`platform/hosted/core/src/lib.rs:124-129`). The SEND payload carries
+`SendRequest::account_sequence`, the source account's sequence
+(`platform/hosted/core/src/lib.rs:24-35`); the envelope carries the identity
+sequence passed separately, and `build_send` passes the account sequence for
+both. The envelope signature is produced through
+`layerx_crypto::disclosure::bind` and `layerx_crypto::signer::sign_disclosed`
+with a `LocalSigner`; a disclosure refusal, a signer refusal, or a signer that
+does not answer synchronously is a construction error
+(`platform/hosted/core/src/lib.rs:221-239`). The separate owner authorization
+over the SEND payload is unchanged (`platform/hosted/core/src/lib.rs:241-262`).
 
-HTTP path `fund` / `fund_send` (`platform/hosted/core/src/main.rs:1705-1806`):
+HTTP path `fund` / `fund_send` (`platform/hosted/core/src/main.rs:1705-1816`):
 
 1. JSON `FundingCommand`: `funding_id`, `did`, `public_key`, `amount` (`platform/hosted/core/src/main.rs:107-114`). Parse failure is `400 invalid_argument`.
 2. Validation: `funding_id` matches `valid_key`; `did` starts with `did:` and length ≤ 512; `public_key` is 64 hex chars; `did` equals `did:layerx:` plus lowercase public key; `amount != 0`; `did` is not the treasury DID; `main_account` succeeds. Failure is `400 invalid_argument` (`platform/hosted/core/src/main.rs:1709-1719`).
 3. LNI connect; failure `503 node_unavailable` retry 5
    (`platform/hosted/core/src/main.rs:1726-1729`).
-4. `treasury_sequence` reads and decodes the treasury main account at
-   `VerificationLevel::UNVERIFIED` and requires `treasury_asset` balance ≥ amount
-   (`platform/hosted/core/src/main.rs:1669-1703`). A native refusal or decode
-   failure is `422 treasury_account_unavailable` retry 60; unavailable capability
-   is `503 capability_unavailable` retry 30; insufficient balance is
+4. The treasury identity sequence is read from the node's preparation snapshot
+   for the treasury DID (`Client::preparation_state`, correlation 3) and used
+   as the envelope actor sequence
+   (`platform/hosted/core/src/main.rs:1731-1739`). DID derivation failure is
+   `503 treasury_unavailable` retry 60; a preparation read failure is
+   `503 treasury_identity_unavailable` retry 5. The signer never substitutes a
+   guessed identity sequence.
+5. `treasury_sequence` reads and decodes the treasury main account at
+   `VerificationLevel::STATE_PROVEN` and requires `treasury_asset` balance ≥
+   amount (`platform/hosted/core/src/main.rs:1669-1703`). A native refusal or
+   decode failure is `422 treasury_account_unavailable` retry 60; unavailable
+   capability is `503 capability_unavailable` retry 30; insufficient balance is
    `422 insufficient_treasury_balance` retry 60; account derivation failure is
    `503 treasury_unavailable` retry 60.
-5. `build_send` uses that account sequence, an idempotency key equal to SHA-256
-   of `layerx-core-fund\0` plus the HTTP key, a validity interval from 60
-   seconds before `now` through 300 seconds after it, and the configured fee
-   limit (`platform/hosted/core/src/main.rs:1662-1667`,
-   `platform/hosted/core/src/main.rs:1733-1747`). Construction failure is
+6. `build_send_with_identity_sequence` uses the identity sequence for the
+   envelope, that account sequence for the SEND payload, an idempotency key
+   equal to SHA-256 of `layerx-core-fund\0` plus the HTTP key, a validity
+   interval from 60 seconds before `now` through 300 seconds after it, and the
+   configured fee limit (`platform/hosted/core/src/main.rs:1662-1667`,
+   `platform/hosted/core/src/main.rs:1740-1761`). Construction failure is
    `422 send_unbuildable`.
-6. `submit_signed` uses the treasury public key
-   (`platform/hosted/core/src/main.rs:1753-1769`). Same submission mapping as
+7. `submit_signed` uses the treasury public key
+   (`platform/hosted/core/src/main.rs:1762-1780`). Same submission mapping as
    public activities, except other errors are `422 send_unbuildable`.
-7. Receipt: result 0 → `200` `state: funded`; non-zero → `422 send_refused`;
+8. Receipt: result 0 → `200` `state: funded`; non-zero → `422 send_refused`;
    timeout → `202` `state: pending`; lookup error → `503 receipt_unavailable`
-   (`platform/hosted/core/src/main.rs:1776-1805`).
+   (`platform/hosted/core/src/main.rs:1787-1816`).
 
 Durable idempotency is the on-disk journal under `LAYERX_CORE_STATE_DIR/journal`. The file name is SHA-256 of `scope`, a 0 byte, and the idempotency key (`platform/hosted/core/src/main.rs:1267-1276`). The request digest is SHA-256 of method, path, and body (`platform/hosted/core/src/main.rs:1278-1285`). Writes use a `0o600` temp file, `sync_all`, `rename`, then directory `sync_all` (`platform/hosted/core/src/main.rs:1298-1316`). Same digest replays the stored status and body. A different digest for the same key is `409 idempotency_conflict` (`platform/hosted/core/src/main.rs:1340-1365`). Journal lock poison or I/O is `503 journal_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1335-1336`, `platform/hosted/core/src/main.rs:1367-1369`, `platform/hosted/core/src/main.rs:1390-1391`, `platform/hosted/core/src/main.rs:1403-1404`). Scope `fund` and `reset` first persist `409 outcome_unknown` then overwrite with the real outcome (`platform/hosted/core/src/main.rs:1372-1406`). Admin work also takes `admin_lock`; poison is `503 admin_unavailable` retry 5 (`platform/hosted/core/src/main.rs:1912-1915`).
 
@@ -286,12 +303,16 @@ Core-plane refusals keep the status in this table. Admin-plane rows that start a
 | `supervisor_unavailable` | 503 then 422 | 30 | (`platform/hosted/core/src/main.rs:1604-1606`) |
 | `reset_failed` | 503 then 422 | 30 | (`platform/hosted/core/src/main.rs:1635-1637`) |
 | `treasury_unavailable` | 503 then 422 | 60 | (`platform/hosted/core/src/main.rs:1436-1437`) |
+| `treasury_identity_unavailable` | 503 then 422 | 5 | preparation snapshot for the treasury identity sequence (`platform/hosted/core/src/main.rs:1733-1738`) |
+| `invalid_asset_symbol` | 502 | never | committed asset record with a symbol outside 1..=16 ASCII bytes (`platform/hosted/core/src/public_reads.rs:62-73`) |
 
 ---
 
 ## Real-node boundary tests
 
 `platform/hosted/core/tests/boundary.rs` drives the real `layerx-core-boundary` binary over TLS against a real `layerxd` sequencer and authority replica started from `build/bin` (`platform/hosted/core/tests/boundary.rs:1-3`, `platform/hosted/core/tests/boundary.rs:1372-1376`). The harness requires root so `layerxd` runs as uid `65534` (`platform/hosted/core/tests/boundary.rs:1223-1226`, `platform/hosted/core/tests/boundary.rs:43-44`).
+
+`cluster_artifacts` returns a `TestState` guard together with the daemon, genesis-builder and migration paths; every `Cluster` owns that guard, and dropping it removes the harness root under the process temporary directory (`platform/hosted/core/tests/boundary.rs:1239-1247`, `platform/hosted/core/tests/boundary.rs:1982-2017`). Setting `LAYERX_TEST_RETAIN_STATE` keeps the tree and prints its path instead. A removal failure panics unless the test is already panicking, so a failing test keeps its evidence and a passing one cannot leak state (`platform/hosted/core/tests/boundary.rs:1266-1286`).
 
 `boundary_refuses_typed_and_journals_while_the_daemon_is_down` starts the boundary without a sequencer (`platform/hosted/core/tests/boundary.rs:1548-1592`). It proves `/livez` is 200 on both planes; `/readyz`, `/v1/sequencer`, `/v1/state`, account-state head, and receipt lookup are `503 node_unavailable`; `/v1/programs/registry` is `503 capability_unavailable`; lifecycle GETs are `405`; lifecycle POST JSON is `415`; lifecycle POST octet-stream without idempotency is `400`; a signed SEND POST is `503 node_unavailable`; a client certificate chained to the configured CA is accepted on `/livez`; a certificate from another CA fails the TLS handshake (`platform/hosted/core/tests/boundary.rs:1459-1556`, `platform/hosted/core/tests/boundary.rs:1734-1754`). Admin refusals without a node are `401` without bearer, `400` without content type or idempotency key, `422 node_unavailable` for fund (5xx rewritten), `422 supervisor_unavailable` for reset (`platform/hosted/core/tests/boundary.rs:1757-1826`).
 
@@ -309,9 +330,10 @@ That test then posts `/admin/v1/testnet/fund` against a fresh genesis. The statu
 
 `lifecycle_routes_submit_real_signed_activities_and_verify_state_receipts` submits deploy, upgrade, and wind-down over the real node, verifies state receipts, and replays idempotent 200 bodies (`platform/hosted/core/tests/boundary.rs:375-472`, `platform/hosted/core/tests/boundary.rs:475-544`).
 
-`platform/hosted/core/tests/send.rs` asserts `build_send` embeds native
-`agent:<did>:main` account ids in the payload and authorization and that the
-signed envelope starts with protocol bytes `[0, 3]`
-(`platform/hosted/core/tests/send.rs:1-33`).
+`platform/hosted/core/tests/send.rs` asserts `build_send_with_identity_sequence`
+embeds native `agent:<did>:main` account ids in the payload and authorization,
+binds the envelope to the identity sequence (11) independently of the payload's
+account sequence (0), and that the signed envelope starts with protocol bytes
+`[0, 3]` (`platform/hosted/core/tests/send.rs:1-37`).
 
 [Home](Home.md)

@@ -641,7 +641,8 @@ fn start_node(
         0,
         "the real-node harness must run as root so layerxd can run under a distinct uid"
     );
-    let (root, layerxd, builder, migrations) = cluster_artifacts();
+    let (state, layerxd, builder, migrations) = cluster_artifacts();
+    let root = state.root.clone();
     let sequencer_seed = random32();
     let sequencer_key = SigningKey::from_bytes(&sequencer_seed)
         .verifying_key()
@@ -725,6 +726,7 @@ fn start_node(
         treasury_seed,
         treasury_did,
         asset: genesis.asset,
+        _state: state,
     }
 }
 

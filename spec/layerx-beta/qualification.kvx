@@ -11441,3 +11441,107 @@ symbol = "test-genesis-bootstrap check_version lxp_kernel_module_for_activity"
 observed = "make CC=gcc test-state-commitment-transition test-asset-registry test-asset-balance test-fees test-fee-replay test-genesis-bootstrap exits 2 on this revision. Five targets pass; test_genesis_manifest reports "genesis line 203: lxp_kernel_module_for_activity(&kernel, ((uint32_t)LXP_MODULE_ASSET << 16U) | 9U, kernel.epoch, &entry) != LXP_OK" and "genesis line 301: check_version(LXP_PROTOCOL_VERSION_STATE_COMMITMENT) == 0", the advertised-ordinal disagreement already recorded against the genesis and module-registry fixtures. Evidence: qual-logs/c3/4.log."
 assumption = "This branch changes no C source, header, Makefile rule or fixture, so the failure is the published state of the target and is recorded rather than repaired here."
 severity = "note"
+
+[observation.6.2.6700]
+task = "6.2"
+file = "platform/hosted/node/bootstrap.sh platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/tests/local/README.md"
+symbol = "GENESIS_METADATA local_gateway_successful_send_latency"
+observed = "The public-RPC payments branch carried 67 commits over 137 files. Comparing every file against the current main by content: 52 are byte-identical, 31 are superseded by a later main revision of the same file, and 54 still differ. Matching commit subjects, 60 of the 67 landed on main through other reviews. The two items named as the branch's distinguishing content are both already on main in a stronger form. Fee-schedule genesis metadata: main's platform/hosted/node/bootstrap.sh takes --genesis-metadata FILE as an external authoritative LXGB v2 suffix, validated at line 199 to be a regular readable non-symlink file, and drives a multi-guarantor loop whose count comes from contracts/config/checkpoint-settlement.json .finality_policy.certificate_threshold; the branch instead inlines one hardcoded Asset record and a literal FEE_SCHEDULE_LENGTH=215. Funded SEND latency gate: main carries local_gateway_successful_send_latency at platform/hosted/gateway/tests/local/lifecycle.rs:1688 with the successful_send_submit_to_receipt_us report line, and the branch's copy of that file is 817 lines behind main. Both were therefore dropped rather than rebased."
+assumption = "A branch file that differs from main only by being older is treated as superseded, not as content main lacks. Content was kept only where a direct grep of origin/main shows the symbol or behaviour absent."
+severity = "note"
+
+[observation.6.2.6701]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs"
+symbol = "AssetSnapshotError asset_json assets"
+observed = "The public asset snapshot on main rendered the on-wire asset symbol with String::from_utf8_lossy at platform/hosted/core/src/public_reads.rs:64, so a record whose symbol bytes are not valid UTF-8 was published as replacement characters and a reader could not distinguish that from a genuine symbol. asset_json now returns Result<serde_json::Value, AssetSnapshotError>, refuses a symbol outside 1..=16 bytes or containing non-ASCII, and std::str::from_utf8 is used in place of the lossy decoder. Both call sites in assets() surface the refusal as 502 invalid_asset_symbol instead of emitting a corrupted symbol: the single-asset arm matches on the result and the list arm collects into Result<Vec<_>, _>. The unit test asset_json_refuses_symbols_outside_the_shared_encoding covers the empty, oversized and non-ASCII cases against a real layerx_client::payments::AssetMetadata fixture."
+assumption = "The 1..=16 ASCII bound is the shared symbol encoding already enforced when an asset record is written; the read path is being brought up to the same bound rather than a new bound being introduced."
+severity = "note"
+
+[observation.6.2.6702]
+task = "6.2"
+file = "platform/hosted/core/src/public_reads.rs"
+symbol = "did_accounts Requested VerificationLevel"
+observed = "did_accounts asked the node for accounts at Requested::new(VerificationLevel::UNVERIFIED) at platform/hosted/core/src/public_reads.rs:121 while the neighbouring read at line 24 already asked for STATE_PROVEN, so the same public surface published two different trust levels without saying which was which. The request is now STATE_PROVEN and each account object in the response carries \"verification\": \"state_proven\", using the label platform/hosted/authority/README.md:103 defines and that the account-proof export path already asserts at platform/hosted/core/tests/boundary.rs:2871. No existing test asserts the did_accounts response shape, so nothing was relaxed to accommodate the new field."
+assumption = "Raising the requested level can turn a previously answered read into an unavailable read when the node holds no proof; that refusal is the correct answer for a public read and is preferred to publishing an unverified balance under no label."
+severity = "note"
+
+[observation.6.2.6703]
+task = "6.2"
+file = "platform/hosted/core/src/lib.rs platform/hosted/core/src/main.rs platform/hosted/core/tests/send.rs"
+symbol = "build_send_with_identity_sequence disclosed_signature fund_send treasury_sequence"
+observed = "build_send on main bound the activity envelope's actor sequence to request.account_sequence, the source account's sequence, so a hosted signer with one identity and several source accounts could not advance both independently, and it signed the canonical envelope with a bare signing_key.sign(&digest) at platform/hosted/core/src/lib.rs:185, bypassing disclosure binding. build_send now delegates to build_send_with_identity_sequence(seed, identity_sequence, request), which takes the actor sequence separately, and the envelope signature is produced by disclosed_signature, which calls layerx_crypto::disclosure::bind over the canonical bytes and signs through layerx_crypto::signer::sign_disclosed with a LocalSigner, refusing rather than falling back if the signer returns Pending. The separate send_authorization signature at line 234 is unchanged. The faucet in platform/hosted/core/src/main.rs now reads the treasury identity sequence from client.preparation_state(&actor, 3).account_sequence and passes it as the identity sequence while treasury_sequence still supplies the source-account sequence, and treasury_sequence's own balance read was raised from VerificationLevel::UNVERIFIED to VerificationLevel::STATE_PROVEN. platform/hosted/core/tests/send.rs exercises the split directly: identity sequence 11 with request.account_sequence 0, asserting activity.account_sequence() == 11."
+assumption = "A hosted signer that cannot reach its node to read a preparation snapshot now refuses funding with 503 treasury_identity_unavailable rather than signing with a guessed identity sequence."
+severity = "note"
+
+[observation.6.2.6704]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs"
+symbol = "TestState cluster_artifacts remove_test_state LAYERX_TEST_RETAIN_STATE"
+observed = "cluster_artifacts on main returned a bare PathBuf root and nothing removed it, so every boundary run left a populated /tmp/layerx-core-* tree behind and a full test matrix accumulated them until the volume filled. cluster_artifacts now returns a TestState guard whose Drop removes the root, both Cluster values own one as _state, and setting LAYERX_TEST_RETAIN_STATE keeps the tree for inspection. remove_test_state panics if removal fails, except while already panicking, so a failing test keeps its evidence and a passing one cannot silently leak. The port-allocation guard in free_port() was not re-applied because main already carries it."
+assumption = "Deleting the root on drop is safe because each root is created fresh per run under the process temporary directory and no other test reads another test's root."
+severity = "note"
+
+[observation.6.2.6705]
+task = "6.2"
+file = "platform/hosted/gateway/tests/local/verifier.rs"
+symbol = "verify_batch_identity verify_selected_program_state verify_tamper_rejections"
+observed = "The gateway lifecycle receipt verifier was a single main() that checked a batch identity and stopped. It is now three named checks. verify_batch_identity calls layerx_platform_authority::authorized_batch_by_activity over the activity ID and raw bytes and handles both evidence shapes: BatchIdentityEvidence::Historical, and OccupancyMaintenanceV2 { receipt, proof }, decoded with layerx_wire::maintenance::decode_occupancy_maintenance and checked with layerx_proof::receipt::verify_program_state_maintained against MaintainedOutcomeEvidence. verify_selected_program_state checks the selected program state separately. verify_tamper_rejections asserts refusal for a mutated header, mutated evidence and corrupted receipt bytes, so a verifier that accepted everything would now fail. main() on origin/main is unchanged since the branch point, so none of this is duplicated."
+assumption = "The tamper cases mutate a byte in a real encoded receipt rather than constructing a synthetic malformed one, so the rejection is exercised through the production decoder."
+severity = "note"
+
+[observation.6.2.6706]
+task = "6.2"
+file = "tests/support/lxgb_metadata.rs"
+symbol = "lxgb_metadata"
+observed = "tests/support/lxgb_metadata.rs on an unmodified origin/main does not satisfy rustfmt: line 4 exceeds the configured width and rustfmt --check exits 1 on it. The file is not edited by this change, but platform/hosted/core/tests/boundary.rs includes it through #[path], so any rustfmt run that reaches boundary.rs also reports it. The reformat rustfmt produced was reverted with git checkout so this change carries no edit to that file, and the touched-file format gate therefore records exit 1 with that single pre-existing diff as its whole content."
+assumption = "Reformatting a file outside this change's scope to make a gate report exit 0 would hide a pre-existing violation in someone else's path, so it is recorded instead."
+severity = "suspect"
+
+[observation.6.2.6707]
+task = "6.2"
+file = "tests/support/lxgb_metadata.rs platform/hosted/core/tests/boundary.rs platform/Makefile.inc"
+symbol = "platform-lint lxgb_metadata start_supervised_cluster account_proof_export_preserves_exact_native_verified_bytes"
+observed = "platform/Makefile.inc:106 defines platform-lint as cargo clippy --offline --manifest-path platform/Cargo.toml --locked --workspace --all-targets -- -D warnings, and .github/workflows/platform.yml runs it. That command does not pass on the current revision. cargo clippy --locked --offline --manifest-path platform/Cargo.toml -p layerx-platform-core --all-targets -- -D warnings exits 101 with six errors, five of which are on code identical to origin/main: four in tests/support/lxgb_metadata.rs, which platform/hosted/core/tests/boundary.rs:4 pulls in through #[path] and which is byte-identical to origin/main (format_collect at line 4 and cast_possible_truncation at lines 8, 20 and 32), and one too_many_lines on account_proof_export_preserves_exact_native_verified_bytes, whose 105 lines are byte-identical to origin/main. The sixth is too_many_lines on start_supervised_cluster, reported at 105 of 100; that function is 105 raw lines on origin/main and 107 here, so it exceeds the limit on origin/main as well. tests/support/lxgb_metadata.rs also fails rustfmt --edition 2021 --check on origin/main, which is observation 6.2.6706."
+assumption = "Repairing four lints in tests/support/lxgb_metadata.rs and splitting two long harness functions would edit paths this change does not own and would be a workspace-wide lint repair rather than the content this change carries, so the failure is recorded with the identity evidence that separates it from this change."
+severity = "blocker"
+
+[observation.6.2.6708]
+task = "6.2"
+file = "platform/hosted/gateway/tests/local/Cargo.lock programs/crates/layerx-programs-registry/Cargo.toml"
+symbol = "layerx-program-sdk core-foundation"
+observed = "platform/hosted/gateway/tests/local/Cargo.lock is out of date on the current revision, independently of this change: cargo refuses with 'the lock file needs to be updated but --locked was passed' and resolving it offline adds exactly one package, layerx-program-sdk 0.1.0 from programs/sdk/rust, as a dependency of layerx-programs-registry. Neither the harness manifest nor any lock file is touched by this change (git diff origin/main HEAD on every Cargo.toml and Cargo.lock is empty). Separately, cargo metadata on that manifest then fails to download core-foundation 0.9.4, a native-tls dependency resolved for a non-Linux target, so the harness cannot be resolved with a cold offline cache either."
+assumption = "Committing a lock-file update for a crate outside this change's paths would take ownership of the registry dependency change that caused it, so the staleness is recorded rather than committed: the harness lint for this change's file was run with --offline in place of --locked, cargo added the missing entry to the lock file in the working tree during that run, and the lock file was restored to its committed content afterwards, so this change carries no lock edit. The substitution is disclosed in the gate table."
+severity = "blocker"
+
+[observation.6.2.6709]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs tests/support/lxgb_metadata.rs platform/hosted/node/bootstrap.sh"
+symbol = "build_genesis command supervisor_reset_rebuilds_genesis_and_replays_once"
+observed = "cargo test --offline --locked --manifest-path platform/Cargo.toml -p layerx-platform-core exits 101 on the current revision for reasons already recorded against the base. The library target runs 0 tests, the binary unit target passes 11 of 11, including this change's public_reads::tests::asset_json_refuses_symbols_outside_the_shared_encoding, and tests/send.rs passes its single test, which is this change's identity-sequence assertion. The boundary target fails all 14. Thirteen fail identically at platform/hosted/core/tests/boundary.rs:144, where build/bin/layerx-genesis-build exits 1 with empty stderr on the request tests/support/lxgb_metadata.rs assembles; that is observation 6.1.5801, which records that the shared fixture builds a version 3 asset record with custody kind 1, an empty custody reference and issuer kind 2, which lx_asset_record_decode refuses and which names platform/hosted/core/tests/boundary.rs among the affected harnesses, and observation 3.7.2704, which records the same fourteen failures at the same line against the base. The fourteenth, supervisor_reset_rebuilds_genesis_and_replays_once, refuses first at boundary.rs:2254 because LAYERX_TEST_SOCAT_BIN is unset; with it set to /usr/bin/socat it fails at boundary.rs:803 because platform/hosted/node/bootstrap.sh reads /opt/layerx/checkpoint-settlement.json, which does not exist on this machine, and refuses with 'certificate threshold must be an integer in 1..32'. None of the fourteen reaches this change's code: the earliest line this change touches in that file is 1236, and all fourteen fail during cluster construction."
+assumption = "The two targets that do reach this change's code both pass, so the boundary failures are reported as the pre-existing base failure they are rather than repaired here; repairing them means editing the shared genesis fixture, which observation 6.1.5801 already argues would change the genesis state root of eight harnesses."
+severity = "blocker"
+
+[observation.6.2.6710]
+task = "6.2"
+file = "platform/hosted/core/src/lib.rs platform/hosted/core/src/main.rs platform/hosted/core/src/public_reads.rs platform/hosted/core/tests/boundary.rs platform/hosted/core/tests/send.rs platform/hosted/gateway/tests/local/verifier.rs"
+symbol = "rpc_faucet topology-regressions asset_json build_send_with_identity_sequence"
+observed = "The two reviews that landed the remaining public-surface work deliver nothing this change carries. The faucet review changed agent/crates/layerx-sdk/src/rpc.rs, fifteen docs/wiki pages, platform/cli/src/faucet.rs, platform/cli/src/main.rs, platform/cli/src/toolset.rs, platform/hosted/faucet/src/main.rs, platform/hosted/gateway/openrpc.json, platform/hosted/gateway/src/main.rs, platform/hosted/gateway/src/rpc.rs and the new platform/hosted/gateway/src/rpc_faucet.rs. The hosted-topology review changed platform/Makefile.inc and platform/hosted/tests/topology-regressions.py. Neither set intersects the six files this change touches, and a grep of origin/main finds none of build_send_with_identity_sequence, disclosed_signature, AssetSnapshotError, invalid_asset_symbol, TestState, LAYERX_TEST_RETAIN_STATE, verify_batch_identity, verify_tamper_rejections or verify_selected_program_state. On main did_accounts still requests VerificationLevel::UNVERIFIED at platform/hosted/core/src/public_reads.rs:121 and labels its answer authenticated_node_snapshot at line 171, asset_json still renders the symbol with String::from_utf8_lossy at line 64, and platform/hosted/gateway/tests/local/verifier.rs:129 still calls verify_program_state directly with no occupancy-maintenance arm, although layerx_platform_authority::authorized_batch_by_activity has existed at platform/hosted/authority/src/lib.rs:313 and is already used by the authority service and its own tests."
+assumption = "Absence is established by file-set comparison of the merged reviews plus a symbol grep of origin/main, not by commit subjects."
+severity = "note"
+
+[observation.6.2.6711]
+task = "6.2"
+file = "platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/build.rs platform/hosted/core/tests/boundary.rs"
+symbol = "cluster_artifacts TestState Cluster funded_cluster"
+observed = "platform/hosted/gateway/tests/local/build.rs:16 generates its core fixture from platform/hosted/core/tests/boundary.rs and includes it into the lifecycle test, and platform/hosted/gateway/tests/local/funding.rs builds its own Cluster from that fixture's cluster_artifacts. Changing cluster_artifacts to return the TestState guard therefore broke that harness with seven compile errors (E0308 at funding.rs:658, 659, 666, 673 and 715, E0599 at 709 and E0063 at 714) even though nothing in the harness was edited. The harness now destructures the guard, clones its root for the fields that need a path, and stores the guard in Cluster._state, so the funded harness removes its own state tree on drop exactly as the core harness does. platform/hosted/registry/tests/native_deployment.rs:579 declares its own cluster_artifacts and is unaffected; agent/qualification/pay2/build.rs also adapts boundary.rs but constructs no Cluster of its own."
+assumption = "A fixture consumed through a generated include is part of the same compilation contract as the fixture, so a change to the fixture's signature is repaired in every consumer rather than reverted."
+severity = "note"
+
+[observation.6.2.6712]
+task = "6.2"
+file = "platform/hosted/gateway/tests/local/Cargo.toml tests/support/lxgb_metadata.rs platform/hosted/core/tests/boundary.rs"
+symbol = "layerx-gateway-local-qualification core_fixture lxgb_metadata start_supervised_cluster"
+observed = "cargo clippy --offline --manifest-path platform/hosted/gateway/tests/local/Cargo.toml --all-targets -- -D warnings exits 101 with exactly the six errors observation 6.2.6707 records for the platform workspace, reached here through the generated core fixture: format_collect and three cast_possible_truncation in tests/support/lxgb_metadata.rs at lines 4, 8, 20 and 32, and too_many_lines on the fixture copies of start_supervised_cluster (105 of 100) and account_proof_export_preserves_exact_native_verified_bytes (101 of 100). None names platform/hosted/gateway/tests/local/verifier.rs or funding.rs. The same command as cargo check --offline --all-targets exits 0, so every file this change touches in that package compiles; the harness also needs LAYERX_TEST_CORE_BIN, without which its build script panics at required.rs:13 with 'parent-built core binary required'."
+assumption = "A lint gate that fails only on lines outside the change is recorded with the identity of each failing line rather than silenced with an allow attribute or a narrowed target selection."
+severity = "blocker"

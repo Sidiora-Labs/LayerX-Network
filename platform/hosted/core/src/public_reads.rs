@@ -59,15 +59,35 @@ fn snapshot_context(handshake: &super::Handshake) -> layerx_client::payments::Sn
     }
 }
 
-fn asset_json(asset: &layerx_client::payments::AssetMetadata) -> serde_json::Value {
-    serde_json::json!({
-        "asset_id": hex_encode(&asset.asset_id), "symbol": String::from_utf8_lossy(&asset.symbol),
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AssetSnapshotError {
+    InvalidSymbol,
+}
+
+impl AssetSnapshotError {
+    fn response(self) -> Response {
+        match self {
+            Self::InvalidSymbol => refusal(502, "invalid_asset_symbol", None),
+        }
+    }
+}
+
+fn asset_json(
+    asset: &layerx_client::payments::AssetMetadata,
+) -> Result<serde_json::Value, AssetSnapshotError> {
+    if !(1..=16).contains(&asset.symbol.len()) || !asset.symbol.is_ascii() {
+        return Err(AssetSnapshotError::InvalidSymbol);
+    }
+    let symbol =
+        std::str::from_utf8(&asset.symbol).map_err(|_| AssetSnapshotError::InvalidSymbol)?;
+    Ok(serde_json::json!({
+        "asset_id": hex_encode(&asset.asset_id), "symbol": symbol,
         "name": asset.name, "decimals": asset.decimals, "custody_kind": asset.custody_kind,
         "custody_reference": hex_encode(&asset.custody_reference), "paused": asset.paused,
         "supply_cap": asset.supply_cap.to_string(), "issuer_did": hex_encode(&asset.issuer_did),
         "issuer_kind": asset.issuer_kind, "total_units": asset.total_units.to_string(),
         "salt": hex_encode(&asset.salt)
-    })
+    }))
 }
 
 fn assets(config: &Config, id: Option<[u8; 32]>) -> Response {
@@ -77,22 +97,36 @@ fn assets(config: &Config, id: Option<[u8; 32]>) -> Response {
     let context = snapshot_context(&handshake);
     if let Some(id) = id {
         return match layerx_client::payments::get_asset(&mut transport, id, context) {
-            Ok(snapshot) => success(&serde_json::json!({
-                "asset": asset_json(&snapshot.value),
-                "observed_head_sequence": snapshot.observed_sequence.to_string(),
-                "state_root": hex_encode(&snapshot.state_root),
-                "verification": "authenticated_committed_snapshot"
-            })),
+            Ok(snapshot) => match asset_json(&snapshot.value) {
+                Ok(asset) => success(&serde_json::json!({
+                    "asset": asset,
+                    "observed_head_sequence": snapshot.observed_sequence.to_string(),
+                    "state_root": hex_encode(&snapshot.state_root),
+                    "verification": "authenticated_committed_snapshot"
+                })),
+                Err(error) => error.response(),
+            },
             Err(_) => refusal(503, "asset_evidence_unavailable", Some(5)),
         };
     }
     match layerx_client::payments::list_assets(&mut transport, None, context) {
-        Ok(snapshot) => success(&serde_json::json!({
-            "assets": snapshot.value.iter().map(asset_json).collect::<Vec<_>>(),
-            "observed_head_sequence": snapshot.observed_sequence.to_string(),
-            "state_root": hex_encode(&snapshot.state_root),
-            "verification": "authenticated_committed_snapshot"
-        })),
+        Ok(snapshot) => {
+            let assets = match snapshot
+                .value
+                .iter()
+                .map(asset_json)
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(assets) => assets,
+                Err(error) => return error.response(),
+            };
+            success(&serde_json::json!({
+                "assets": assets,
+                "observed_head_sequence": snapshot.observed_sequence.to_string(),
+                "state_root": hex_encode(&snapshot.state_root),
+                "verification": "authenticated_committed_snapshot"
+            }))
+        }
         Err(_) => refusal(503, "asset_evidence_unavailable", Some(5)),
     }
 }
@@ -118,7 +152,7 @@ fn did_accounts(config: &Config, did: &str) -> Response {
         correlation_id: 1,
         expected_protocol_version: node.protocol_version,
         expected_network_id: config.network_id,
-        requested: Requested::new(VerificationLevel::UNVERIFIED),
+        requested: Requested::new(VerificationLevel::STATE_PROVEN),
         head: HeadTracker::new(node).current(),
         sequencer_authorization: SequencerAuthorization::new(
             config.sequencer_id,
@@ -164,7 +198,8 @@ fn did_accounts(config: &Config, did: &str) -> Response {
             "next_sequence": account.next_sequence.to_string(), "frozen": account.frozen,
             "canonical_value": hex_encode(bytes), "proof_material": hex_encode(value.proof_material()),
             "observed_head_sequence": value.freshness().observed_head_sequence.to_string(),
-            "batch_number": value.freshness().batch_number.to_string()
+            "batch_number": value.freshness().batch_number.to_string(),
+            "verification": "state_proven"
         }));
     }
     success(&serde_json::json!({"did": did, "accounts": accounts,
@@ -540,6 +575,41 @@ fn valid_fee_request(body: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    fn asset(symbol: &[u8]) -> layerx_client::payments::AssetMetadata {
+        layerx_client::payments::AssetMetadata {
+            asset_id: [1; 32],
+            symbol: symbol.to_vec(),
+            name: "Test asset".to_owned(),
+            decimals: 6,
+            custody_kind: 1,
+            custody_reference: Vec::new(),
+            paused: false,
+            supply_cap: 0,
+            issuer_did: [2; 32],
+            issuer_kind: 2,
+            total_units: 1,
+            salt: [3; 32],
+        }
+    }
+
+    #[test]
+    fn asset_json_refuses_symbols_outside_the_shared_encoding() {
+        let valid = super::asset_json(&asset(b"LXP"))
+            .unwrap_or_else(|error| panic!("valid symbol: {error:?}"));
+        assert_eq!(valid["symbol"], "LXP");
+        for symbol in [&[][..], &[b'X'; 17][..], &[0xff][..]] {
+            assert_eq!(
+                super::asset_json(&asset(symbol)),
+                Err(super::AssetSnapshotError::InvalidSymbol)
+            );
+        }
+        let response = super::AssetSnapshotError::InvalidSymbol.response();
+        assert_eq!(response.status, 502);
+        let body: serde_json::Value = serde_json::from_str(&response.body)
+            .unwrap_or_else(|error| panic!("typed response: {error}"));
+        assert_eq!(body["error"]["code"], "invalid_asset_symbol");
+    }
+
     #[test]
     fn fee_request_requires_bounded_canonical_bytes() {
         assert!(super::valid_fee_request(br#"{"canonical_hex":"abcd"}"#));
