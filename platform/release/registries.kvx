@@ -87,5 +87,5 @@ provenance = "github-actions-attestation"
 sbom = "spdx-json"
 verification = "digest-pinned-registry-manifest"
 platforms = ["linux/amd64"]
-images = ["layerx-agent-boundary","layerx-core-boundary","layerx-dashboard","layerx-dashboard-web","layerx-faucet","layerx-gateway","layerx-human","layerx-identity","layerx-internal","layerx-node","layerx-paxeer-boundary","layerx-program-registry","layerx-receipt-authority","layerx-testnet-control","layerx-webhooks","paxd","paxd-node"]
+images = ["layerx-agent-boundary","layerx-core-boundary","layerx-dashboard","layerx-dashboard-web","layerx-faucet","layerx-gateway","layerx-human","layerx-identity","layerx-internal","layerx-mirror","layerx-node","layerx-paxeer-boundary","layerx-program-registry","layerx-receipt-authority","layerx-testnet-control","layerx-webhooks","paxd","paxd-node"]
 status = "active"

@@ -19,7 +19,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: publisher
-          image: ghcr.io/layerx/layerx-mirror-publisher@sha256:REPLACE_WITH_PINNED_DIGEST
+          image: ghcr.io/sidiora-labs/layerx-mirror:0.1.0
           args: ["/etc/layerx-mirror/config.json"]
           securityContext:
             allowPrivilegeEscalation: false
