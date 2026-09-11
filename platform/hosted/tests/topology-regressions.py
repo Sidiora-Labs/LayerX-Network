@@ -28,6 +28,7 @@ RESOLVED_EDGES = (
     'Deployment layerx-testnet/layerx-gateway -> layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443 [env LAYERX_GATEWAY_AUTHORITY_URL]',
     'Deployment layerx-testnet/layerx-gateway -> layerx-identity.layerx-testnet.svc.cluster.local:9443 [env LAYERX_GATEWAY_IDENTITY_URL]',
     'Deployment layerx-testnet/layerx-gateway -> layerx-program-registry.layerx-testnet.svc.cluster.local:9420 [env LAYERX_GATEWAY_PROGRAM_REGISTRY_URL]',
+    'Deployment layerx-testnet/layerx-gateway -> layerx-faucet-public.layerx-testnet.svc.cluster.local:443 [env LAYERX_GATEWAY_FAUCET_URL]',
     'Deployment layerx-testnet/layerx-gateway -> layerx-gateway-redis.layerx-testnet.svc.cluster.local:6379 [env LAYERX_GATEWAY_REDIS_URL]',
     'StatefulSet layerx-testnet/layerx-program-registry -> layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443 [env LAYERX_REGISTRY_NODE_ENDPOINT]',
     'StatefulSet layerx-testnet/layerx-program-registry -> layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443 [env LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT]',

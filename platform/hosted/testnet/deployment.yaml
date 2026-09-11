@@ -144,6 +144,7 @@ spec:
             - {name: LAYERX_OUTBOUND_CA_DER, value: /run/layerx/tls/ca.crt.der}
             - {name: LAYERX_IDENTITY_INTROSPECTION_URL, value: "https://layerx-identity.layerx-testnet.svc.cluster.local:9443/v1/introspect"}
             - {name: LAYERX_IDENTITY_SERVICE_TOKEN_FILE, value: /run/layerx/identity/token}
+            - {name: LAYERX_FAUCET_SERVICE_CLAIM_TOKEN_FILE, value: /run/layerx/gateway-faucet/token}
             - {name: LAYERX_TESTNET_FUNDING_URL, value: "https://layerx-testnet-admin.layerx-testnet.svc.cluster.local/admin/v1/testnet/fund"}
             - {name: LAYERX_TESTNET_ADMIN_TOKEN_FILE, value: /run/layerx/control-admin/token}
             - {name: LAYERX_FAUCET_REDIS_URL, value: "rediss://layerx-faucet-redis.layerx-testnet.svc.cluster.local:6379"}
@@ -164,12 +165,14 @@ spec:
             - {name: tls, mountPath: /run/layerx/tls, readOnly: true}
             - {name: identity, mountPath: /run/layerx/identity, readOnly: true}
             - {name: control-admin, mountPath: /run/layerx/control-admin, readOnly: true}
+            - {name: gateway-faucet, mountPath: /run/layerx/gateway-faucet, readOnly: true}
             - {name: redis-auth, mountPath: /run/layerx/redis-auth, readOnly: true}
       volumes:
         - {name: tls, secret: {secretName: layerx-faucet-tls}}
         - {name: identity, secret: {secretName: layerx-testnet-identity-client}}
         - {name: control-admin, secret: {secretName: layerx-testnet-control-admin}}
         - {name: redis-auth, secret: {secretName: layerx-faucet-redis-client}}
+        - {name: gateway-faucet, secret: {secretName: layerx-gateway-faucet-client}}
 ---
 apiVersion: v1
 kind: Service
@@ -303,6 +306,8 @@ spec:
     - from: [{ipBlock: {cidr: 0.0.0.0/0}}, {ipBlock: {cidr: "::/0"}}]
       ports: [{protocol: TCP, port: 9443}]
     - from: [{podSelector: {matchLabels: {app: layerx-testnet-control}}}]
+      ports: [{protocol: TCP, port: 9443}]
+    - from: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
       ports: [{protocol: TCP, port: 9443}]
 ---
 apiVersion: networking.k8s.io/v1

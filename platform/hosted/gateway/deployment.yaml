@@ -82,6 +82,9 @@ spec:
             - {name: LAYERX_GATEWAY_AUTHORITY_TOKEN_FILE, value: /run/layerx/authority/token}
             - {name: LAYERX_GATEWAY_IDENTITY_URL, value: "https://layerx-identity.layerx-testnet.svc.cluster.local:9443"}
             - {name: LAYERX_GATEWAY_IDENTITY_TOKEN_FILE, value: /run/layerx/identity/token}
+            - {name: LAYERX_GATEWAY_IDENTITY_PROVISIONING_TOKEN_FILE, value: /run/layerx/identity-provisioning/token}
+            - {name: LAYERX_GATEWAY_FAUCET_URL, value: "https://layerx-faucet-public.layerx-testnet.svc.cluster.local:443"}
+            - {name: LAYERX_GATEWAY_FAUCET_SERVICE_TOKEN_FILE, value: /run/layerx/faucet/token}
             - {name: LAYERX_GATEWAY_PROGRAM_REGISTRY_URL, value: "https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420"}
             - {name: LAYERX_GATEWAY_PROGRAM_REGISTRY_TOKEN_FILE, value: /run/layerx/registry/token}
             - {name: LAYERX_GATEWAY_REDIS_URL, value: "rediss://layerx-gateway-redis.layerx-testnet.svc.cluster.local:6379"}
@@ -108,6 +111,8 @@ spec:
             - {name: component, mountPath: /run/layerx/component, readOnly: true}
             - {name: authority, mountPath: /run/layerx/authority, readOnly: true}
             - {name: identity, mountPath: /run/layerx/identity, readOnly: true}
+            - {name: identity-provisioning, mountPath: /run/layerx/identity-provisioning, readOnly: true}
+            - {name: faucet, mountPath: /run/layerx/faucet, readOnly: true}
             - {name: registry, mountPath: /run/layerx/registry, readOnly: true}
             - {name: redis, mountPath: /run/layerx/redis, readOnly: true}
             - {name: provisioning, mountPath: /run/layerx/provisioning, readOnly: true}
@@ -119,6 +124,8 @@ spec:
         - {name: component, secret: {secretName: layerx-gateway-component-client}}
         - {name: authority, secret: {secretName: layerx-gateway-authority-client}}
         - {name: identity, secret: {secretName: layerx-gateway-identity-client}}
+        - {name: identity-provisioning, secret: {secretName: layerx-identity-service-tokens, items: [{key: provisioning, path: token}]}}
+        - {name: faucet, secret: {secretName: layerx-gateway-faucet-client}}
         - {name: registry, secret: {secretName: layerx-program-registry-request-client}}
         - {name: redis, secret: {secretName: layerx-gateway-redis-client}}
         - {name: provisioning, secret: {secretName: layerx-gateway-key-provisioning}}
@@ -181,6 +188,8 @@ spec:
       ports: [{protocol: TCP, port: 9420}]
     - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
       ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
+    - to: [{podSelector: {matchLabels: {app: layerx-faucet}}}]
+      ports: [{protocol: TCP, port: 9443}]
     - to: [{namespaceSelector: {}}]
       ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
 ---
