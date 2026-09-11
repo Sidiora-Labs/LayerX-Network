@@ -5,6 +5,13 @@
 #   beta-cluster.sh up [--boundary-checks]
 #   beta-cluster.sh down
 #   beta-cluster.sh render
+#   beta-cluster.sh images
+#   beta-cluster.sh publish-images <check|dry-run|push|promote|self-test> [publisher options]
+#
+# publish-images names the mode of platform/hosted/tests/publish-images.sh on behalf of its caller: check and
+# self-test reach no registry, dry-run resolves the release binding and writes the publication plan, push
+# publishes the immutable revision tag of every image and promote repoints the release and the moving beta
+# tags once every published digest verifies. Options after the mode are forwarded to the publisher unchanged.
 #
 # Inputs (environment variables, all optional unless stated):
 #   LAYERX_BETA_KUBECONFIG              owner cluster kubeconfig; unset selects a disposable local kind cluster
@@ -22,7 +29,12 @@
 #   LAYERX_BETA_DEVELOPER_HOST          public developer hostname (default developers.testnet.layerx.network)
 #   LAYERX_BETA_KIND_CNI                calico (default, enforces NetworkPolicy) or kindnet
 #   LAYERX_BETA_READY_TIMEOUT           seconds to wait for every journey to report ready (default 900)
-#   LAYERX_BETA_MIN_FREE_GIB            free disk required before building images (default 24)
+#   LAYERX_BETA_MIN_FREE_GIB            free disk required before building the images of a local cluster
+#                                       bring-up (default 24)
+#   LAYERX_BETA_IMAGE_MIN_FREE_GIB      free disk required by `beta-cluster.sh images`, which builds the image
+#                                       set without creating a cluster or loading it into kind nodes; a job
+#                                       that only builds and publishes images sets its own bound here
+#                                       (default LAYERX_BETA_MIN_FREE_GIB)
 #   LAYERX_BETA_TESTNET_PORT            host ports of the testnet, gateway and faucet port-forwards
 #   LAYERX_BETA_GATEWAY_PORT            (defaults 19443, 19444, 19445)
 #   LAYERX_BETA_FAUCET_PORT
@@ -79,6 +91,7 @@ GATEWAY_HOST=api.testnet.layerx.network
 KIND_CNI=${LAYERX_BETA_KIND_CNI:-calico}
 READY_TIMEOUT=${LAYERX_BETA_READY_TIMEOUT:-900}
 MIN_FREE_GIB=${LAYERX_BETA_MIN_FREE_GIB:-24}
+IMAGE_MIN_FREE_GIB=${LAYERX_BETA_IMAGE_MIN_FREE_GIB:-$MIN_FREE_GIB}
 TESTNET_PORT=${LAYERX_BETA_TESTNET_PORT:-19443}
 GATEWAY_PORT=${LAYERX_BETA_GATEWAY_PORT:-19444}
 FAUCET_PORT=${LAYERX_BETA_FAUCET_PORT:-19445}
@@ -164,12 +177,13 @@ free_gib() {
 }
 
 preflight_disk() {
-    local docker_root free
+    local required=$1 bound=$2 purpose=$3 docker_root free dir
+    [[ $required =~ ^[0-9]+$ ]] || fail "$bound must be a whole number of GiB, got '$required'"
     docker_root=$(docker info --format '{{.DockerRootDir}}')
     for dir in "$REPO_ROOT/build" "$docker_root"; do
         free=$(free_gib "$dir")
-        if [ "$free" -lt "$MIN_FREE_GIB" ]; then
-            fail "insufficient free disk under $dir: ${free} GiB free, ${MIN_FREE_GIB} GiB required (LAYERX_BETA_MIN_FREE_GIB) to build the beta images and run a local cluster"
+        if [ "$free" -lt "$required" ]; then
+            fail "insufficient free disk under $dir: ${free} GiB free, ${required} GiB required ($bound) to $purpose"
         fi
     done
 }
@@ -1804,7 +1818,7 @@ beta_cluster_up() {
     mkdir -p "$WORK_DIR" "$LOG_DIR"
     PULL_POLICY=IfNotPresent
     [ "$(cluster_mode)" = owner ] && PULL_POLICY=Always
-    preflight_disk
+    preflight_disk "$MIN_FREE_GIB" LAYERX_BETA_MIN_FREE_GIB "build the beta images and run a local cluster"
     tools_install
     prepare_images
     cluster_create
@@ -1966,6 +1980,21 @@ beta_cluster_render() {
     log "rendered manifests under $MANIFESTS_DIR and beta CA under $CA_DIR (nothing applied)"
 }
 
+publish_images() {
+    local mode=${1:-} flags=()
+    shift || true
+    case "$mode" in
+        check) flags=(--check) ;;
+        dry-run) flags=(--dry-run) ;;
+        push) flags=(--phase push) ;;
+        promote) flags=(--phase promote) ;;
+        self-test) flags=(--self-test) ;;
+        "") fail "publish-images requires the caller to name its mode: check, dry-run, push, promote or self-test" ;;
+        *) fail "unknown publish-images mode '$mode': expected check, dry-run, push, promote or self-test" ;;
+    esac
+    bash "$SCRIPT_DIR/publish-images.sh" "${flags[@]}" "$@"
+}
+
 main() {
     local command=${1:-} boundary=0
     shift || true
@@ -1973,11 +2002,11 @@ main() {
         images)
             require_tool docker git tar
             REVISION=$(revision)
-            preflight_disk
+            preflight_disk "$IMAGE_MIN_FREE_GIB" LAYERX_BETA_IMAGE_MIN_FREE_GIB "build the beta images"
             prepare_images
             ;;
         publish-images)
-            bash "$SCRIPT_DIR/publish-images.sh" "$@"
+            publish_images "$@"
             ;;
         up)
             for argument in "$@"; do
@@ -1992,7 +2021,7 @@ main() {
         test-guarantor-sequences) guarantor_sequence_test ;;
         down) beta_cluster_down ;;
         render) beta_cluster_render ;;
-        *) sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
+        *) sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
     esac
 }
 

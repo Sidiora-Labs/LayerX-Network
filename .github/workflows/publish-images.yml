@@ -77,6 +77,10 @@ jobs:
     env:
       LAYERX_PUBLISH_GATE_REVISION: ${{ needs.gate.outputs.revision }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # This job builds the image set without creating a cluster or loading it into kind nodes, so it names its
+      # own free-disk bound instead of the 24 GiB a local beta cluster bring-up requires: a standard hosted
+      # ubuntu-24.04 runner provides 14 GB (13.0 GiB) of SSD space, which the local bound refuses outright.
+      LAYERX_BETA_IMAGE_MIN_FREE_GIB: '12'
     steps:
       - name: Check out the revision that is to be published
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,7 +101,7 @@ jobs:
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_ACTOR" --password-stdin
       - name: Push the immutable revision tag, generate the SBOM and sign every image
         run: |
-          bash platform/hosted/tests/publish-images.sh --phase push \
+          bash platform/hosted/tests/beta-cluster.sh publish-images push \
             ${LAYERX_PUBLISH_RELEASE_TAG:+--release-tag "$LAYERX_PUBLISH_RELEASE_TAG"} \
             ${LAYERX_PUBLISH_RELEASE_CANDIDATE:+--release-candidate "$LAYERX_PUBLISH_RELEASE_CANDIDATE"} \
             --output "$LAYERX_PUBLISH_OUTPUT"
@@ -182,7 +186,7 @@ jobs:
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_ACTOR" --password-stdin
       - name: Verify every published digest and only then repoint the release and beta tags
         run: |
-          bash platform/hosted/tests/publish-images.sh --phase promote \
+          bash platform/hosted/tests/beta-cluster.sh publish-images promote \
             ${LAYERX_PUBLISH_RELEASE_TAG:+--release-tag "$LAYERX_PUBLISH_RELEASE_TAG"} \
             ${LAYERX_PUBLISH_RELEASE_CANDIDATE:+--release-candidate "$LAYERX_PUBLISH_RELEASE_CANDIDATE"} \
             --output "$LAYERX_PUBLISH_OUTPUT"
