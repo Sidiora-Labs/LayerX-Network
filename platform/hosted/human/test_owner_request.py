@@ -1,10 +1,10 @@
 import os
-from pathlib import Path
 import subprocess
 
 import pytest
 
 import provision
+from test_provision import identity_provider_binary
 
 
 def test_owner_email_must_be_operator_protected_file(tmp_path):
@@ -42,7 +42,7 @@ def test_generated_request_is_accepted_by_real_provider(tmp_path):
     request = inputs / 'owner-request.json'
     policy = inputs / 'recovery-policy.json'
     provision.write_json(policy, {'root': list(os.urandom(32)), 'threshold': 2, 'delay_seconds': 60})
-    binary = Path(__file__).resolve().parents[3] / 'human/target/debug/layerx-human-identity-provider'
+    binary = identity_provider_binary()
     result = subprocess.run([str(binary), 'provision-owner'], input=request.read_bytes(),
         capture_output=True, env=dict(os.environ,
             LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT=str(tmp_path / 'state'),

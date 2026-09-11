@@ -2061,10 +2061,23 @@ human-build:
 	$(HUMAN_CARGO) build --manifest-path $(HUMAN_MANIFEST) --locked --workspace
 	$(HUMAN_NPM) run build
 
-human-test: $(BUILD_DIR)/tests/explorer_fixture
+human-test: $(BUILD_DIR)/tests/explorer_fixture human-test-hosted-provisioning
 	LAYERX_EXPLORER_CORE_FIXTURE=$(abspath $(BUILD_DIR)/tests/explorer_fixture) \
 		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace
 	$(HUMAN_NPM) test
+
+HUMAN_TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),$(CURDIR)/human/target)
+HUMAN_IDENTITY_PROVIDER := $(HUMAN_TARGET_DIR)/debug/layerx-human-identity-provider
+
+.PHONY: human-test-hosted-provisioning
+human-test-hosted-provisioning:
+	@python3 -c 'import cryptography, pytest, yaml' || \
+		{ echo "pytest, PyYAML and cryptography are required for the hosted Human provisioning tests" >&2; exit 1; }
+	$(HUMAN_CARGO) build --manifest-path $(HUMAN_MANIFEST) --locked \
+		--target-dir $(HUMAN_TARGET_DIR) -p layerx-human-identity-provider
+	test -x $(HUMAN_IDENTITY_PROVIDER)
+	LAYERX_HUMAN_IDENTITY_PROVIDER_BIN=$(HUMAN_IDENTITY_PROVIDER) \
+		python3 -m pytest platform/hosted/human -q
 
 human-test-unit:
 	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace --lib
