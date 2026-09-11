@@ -21,6 +21,7 @@ path = "src/bin/layerx-cgroup-exec.rs"
 layerx-client.workspace = true
 layerx-types.workspace = true
 nix = { version = "=0.29.0", features = ["user", "process", "fs"] }
+layerx-platform-internal.workspace = true
 layerx-programs = { package = "layerx-programs-registry", path = "../../../programs/crates/layerx-programs-registry" }
 layerx-programs-protocol-adapter = { path = "../../../programs/crates/layerx-programs-protocol-adapter" }
 layerx-proof.workspace = true
@@ -35,6 +36,8 @@ ureq.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+native-tls.workspace = true
+layerx-platform-gateway = { path = "../gateway" }
 ed25519-dalek.workspace = true
 layerx-programs-runtime = { path = "../../../programs/crates/layerx-programs-runtime" }
 

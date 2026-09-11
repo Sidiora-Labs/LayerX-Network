@@ -38,6 +38,21 @@ spec:
           args: [layerx-program-registry]
           ports: [{name: registry, containerPort: 9420}]
           env:
+            - {name: LAYERX_EVENTS_PROGRAM_UPSTREAM_URL, value: "https://programs.layerx-internal.svc"}
+            - {name: LAYERX_EVENTS_PROGRAM_UPSTREAM_CA_DER, value: "/run/layerx/events/ca.der"}
+            - {name: LAYERX_EVENTS_PROGRAM_UPSTREAM_TOKEN_FILE, value: "/run/layerx/events/token"}
+            - {name: LAYERX_EVENTS_PROGRAM_UPSTREAM_CLIENT_IDENTITY_PKCS12, value: "/run/layerx/events/client.p12"}
+            - {name: LAYERX_EVENTS_PROGRAM_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE, value: "/run/layerx/events/password"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_URL, value: "https://layerx-webhooks.layerx-developer.svc"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_CA_DER, value: "/run/layerx/events/ca.der"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_TOKEN_FILE, value: "/run/layerx/events/webhook-token"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_CLIENT_IDENTITY_PKCS12, value: "/run/layerx/events/client.p12"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE, value: "/run/layerx/events/password"}
+            - {name: LAYERX_REGISTRY_IDENTITY_URL, value: "https://identity.layerx-internal.svc"}
+            - {name: LAYERX_REGISTRY_IDENTITY_CA_DER, value: "/run/layerx/events/ca.der"}
+            - {name: LAYERX_REGISTRY_IDENTITY_TOKEN_FILE, value: "/run/layerx/events/identity-token"}
+            - {name: LAYERX_REGISTRY_IDENTITY_CLIENT_IDENTITY_PKCS12, value: "/run/layerx/events/client.p12"}
+            - {name: LAYERX_REGISTRY_IDENTITY_CLIENT_IDENTITY_PASSWORD_FILE, value: "/run/layerx/events/password"}
             - {name: LAYERX_REGISTRY_LISTEN, value: "0.0.0.0:9420"}
             - {name: LAYERX_REGISTRY_STATE, value: /var/lib/layerx-program-registry}
             - {name: LAYERX_REGISTRY_JOURNAL, value: /var/lib/layerx-registry-journal}
@@ -75,6 +90,7 @@ spec:
           resources: {requests: {cpu: "1", memory: 1Gi}, limits: {cpu: "4", memory: 4Gi}}
           securityContext: {runAsUser: 0, runAsGroup: 0, runAsNonRoot: false, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL], add: [CHOWN, SETUID, SETGID]}, seccompProfile: {type: RuntimeDefault}}
           volumeMounts:
+            - {name: events, mountPath: /run/layerx/events, readOnly: true}
             - {name: state, mountPath: /var/lib/layerx-program-registry}
             - {name: journal, mountPath: /var/lib/layerx-registry-journal, subPath: journal}
             - {name: request, mountPath: /run/layerx/request/token, subPath: token, readOnly: true}
@@ -88,6 +104,7 @@ spec:
             - {name: quota, mountPath: /run/layerx/quota}
       volumes:
         - {name: journal, persistentVolumeClaim: {claimName: layerx-registry-journal}}
+        - {name: events, secret: {secretName: layerx-registry-event-producer, defaultMode: 0440}}
         - {name: request, secret: {secretName: layerx-program-registry-request-client, defaultMode: 0440}}
         - {name: publication, secret: {secretName: layerx-program-registry-publication-operator, defaultMode: 0440}}
         - {name: server, secret: {secretName: layerx-program-registry-server-tls, defaultMode: 0440}}
@@ -128,6 +145,36 @@ kind: NetworkPolicy
 metadata: {name: layerx-registry-lni-bridge, namespace: layerx-testnet}
 spec:
   podSelector: {matchLabels: {app: layerx-node}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-program-registry}}}]
+      ports: [{protocol: TCP, port: 9443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-registry-event-producer, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-program-registry}}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-internal}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-internal-programs]} ]}
+      ports: [{protocol: TCP, port: 9443}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
+          podSelector: {matchLabels: {app: layerx-webhooks}}
+      ports: [{protocol: TCP, port: 9444}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-identity}}
+      ports: [{protocol: TCP, port: 9443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: registry-principal-identity, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-identity}}
   policyTypes: [Ingress]
   ingress:
     - from: [{podSelector: {matchLabels: {app: layerx-program-registry}}}]

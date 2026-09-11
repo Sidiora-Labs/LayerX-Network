@@ -19,5 +19,8 @@ sha2.workspace = true
 subtle.workspace = true
 zeroize.workspace = true
 
+[dev-dependencies]
+layerx-platform-internal.workspace = true
+
 [lints]
 workspace = true
