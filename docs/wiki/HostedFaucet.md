@@ -294,7 +294,7 @@ The in-cluster funding URL is
 | `LAYERX_OUTBOUND_CA_DER` | Trust bundle for HTTPS and Redis; mounted `/run/layerx/tls/ca.crt.der` |
 | `LAYERX_IDENTITY_INTROSPECTION_URL` | Identity HTTPS origin including introspect path |
 | `LAYERX_IDENTITY_SERVICE_TOKEN_FILE` | Bearer to identity; mounted `/run/layerx/identity/token` |
-| `LAYERX_FAUCET_SERVICE_CLAIM_TOKEN_FILE` | Optional shared secret admitting `POST /v1/faucet/service-claims`; absent means that route is `404 not_found` (`platform/hosted/faucet/src/main.rs:218-223`; `platform/hosted/faucet/src/main.rs:285`). The Deployment does not set this key |
+| `LAYERX_FAUCET_SERVICE_CLAIM_TOKEN_FILE` | Optional shared secret admitting `POST /v1/faucet/service-claims`; absent means that route is `404 not_found` (`platform/hosted/faucet/src/main.rs:218-223`; `platform/hosted/faucet/src/main.rs:285`). The Deployment sets it to `/run/layerx/gateway-faucet/token`, the `token` key of Secret `layerx-gateway-faucet-client`, the same file the gateway reads through `LAYERX_GATEWAY_FAUCET_SERVICE_TOKEN_FILE` (`platform/hosted/testnet/deployment.yaml:147`; `platform/hosted/testnet/deployment.yaml:168`; `platform/hosted/testnet/deployment.yaml:175`; `platform/hosted/gateway/deployment.yaml:87`) |
 | `LAYERX_TESTNET_FUNDING_URL` | Testnet-control admin fund origin including path |
 | `LAYERX_TESTNET_ADMIN_TOKEN_FILE` | Bearer to testnet-control; mounted `/run/layerx/control-admin/token` |
 | `LAYERX_FAUCET_REDIS_URL` | `rediss://` origin |
@@ -313,9 +313,10 @@ Secret files are read, trailing CR/LF stripped, and refused when empty
 or longer than 4096 bytes (`platform/hosted/faucet/src/main.rs:205-215`).
 Volume mounts are TLS Secret `layerx-faucet-tls` at `/run/layerx/tls`,
 `layerx-testnet-identity-client` at `/run/layerx/identity`,
-`layerx-testnet-control-admin` at `/run/layerx/control-admin`, and
+`layerx-testnet-control-admin` at `/run/layerx/control-admin`,
+`layerx-gateway-faucet-client` at `/run/layerx/gateway-faucet`, and
 `layerx-faucet-redis-client` at `/run/layerx/redis-auth`
-(`platform/hosted/testnet/deployment.yaml:163-172`).
+(`platform/hosted/testnet/deployment.yaml:164-175`).
 
 ---
 

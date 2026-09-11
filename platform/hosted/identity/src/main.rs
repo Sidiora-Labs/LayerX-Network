@@ -41,10 +41,18 @@ enum Service {
     Testnet,
     Ramp,
     Provisioning,
+    Registrar,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Capabilities {
+    introspect: bool,
+    create_principals: bool,
+    manage_sessions: bool,
 }
 
 impl Service {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Gateway,
         Self::Webhooks,
         Self::Dashboard,
@@ -52,6 +60,7 @@ impl Service {
         Self::Testnet,
         Self::Ramp,
         Self::Provisioning,
+        Self::Registrar,
     ];
 
     const fn name(self) -> &'static str {
@@ -63,6 +72,32 @@ impl Service {
             Self::Testnet => "testnet",
             Self::Ramp => "ramp",
             Self::Provisioning => "provisioning",
+            Self::Registrar => "registrar",
+        }
+    }
+
+    const fn capabilities(self) -> Capabilities {
+        match self {
+            Self::Gateway
+            | Self::Webhooks
+            | Self::Dashboard
+            | Self::Faucet
+            | Self::Testnet
+            | Self::Ramp => Capabilities {
+                introspect: true,
+                create_principals: false,
+                manage_sessions: false,
+            },
+            Self::Provisioning => Capabilities {
+                introspect: false,
+                create_principals: true,
+                manage_sessions: true,
+            },
+            Self::Registrar => Capabilities {
+                introspect: false,
+                create_principals: true,
+                manage_sessions: false,
+            },
         }
     }
 }
@@ -690,7 +725,7 @@ fn introspection_shape(
                 },
             )
         }
-        Service::Provisioning => refusal(403, "service_not_permitted", None),
+        Service::Provisioning | Service::Registrar => refusal(403, "service_not_permitted", None),
     }
 }
 
@@ -893,27 +928,28 @@ fn route(shared: &Shared, request: &Request) -> Response {
         Ok(service) => service,
         Err(response) => return response,
     };
+    let capabilities = service.capabilities();
     match (request.method.as_str(), request.path.as_str()) {
         ("POST", "/v1/sessions/introspect" | "/v1/introspect") => {
-            if service == Service::Provisioning {
+            if !capabilities.introspect {
                 return refusal(403, "service_not_permitted", None);
             }
             introspect(shared, service, request)
         }
         ("POST", "/v1/principals") => {
-            if service != Service::Provisioning {
+            if !capabilities.create_principals {
                 return refusal(403, "service_not_permitted", None);
             }
             create_principal(shared, request)
         }
         ("POST", "/v1/sessions") => {
-            if service != Service::Provisioning {
+            if !capabilities.manage_sessions {
                 return refusal(403, "service_not_permitted", None);
             }
             create_session(shared, request)
         }
         ("DELETE", path) => {
-            if service != Service::Provisioning {
+            if !capabilities.manage_sessions {
                 return refusal(403, "service_not_permitted", None);
             }
             let session_id = path.strip_prefix("/v1/sessions/").unwrap_or_default();
@@ -1073,6 +1109,10 @@ mod tests {
             Some(Service::Provisioning)
         );
         assert_eq!(
+            resolve_service(&tokens, "registrar-token-0123456789abcdef"),
+            Some(Service::Registrar)
+        );
+        assert_eq!(
             resolve_service(&tokens, "gateway-token-0123456789abcde"),
             None
         );
@@ -1081,6 +1121,64 @@ mod tests {
             None
         );
         assert_eq!(resolve_service(&tokens, ""), None);
+    }
+
+    #[test]
+    fn the_registrar_creates_principals_without_session_authority() {
+        let registrar = Service::Registrar.capabilities();
+        assert!(registrar.create_principals);
+        assert!(!registrar.manage_sessions);
+        assert!(!registrar.introspect);
+        let provisioning = Service::Provisioning.capabilities();
+        assert!(provisioning.create_principals);
+        assert!(provisioning.manage_sessions);
+        assert!(!provisioning.introspect);
+    }
+
+    #[test]
+    fn session_authority_belongs_to_provisioning_alone() {
+        let minting: Vec<&'static str> = Service::ALL
+            .iter()
+            .filter(|service| service.capabilities().manage_sessions)
+            .map(|service| service.name())
+            .collect();
+        assert_eq!(minting, ["provisioning"]);
+        let provisioning: Vec<&'static str> = Service::ALL
+            .iter()
+            .filter(|service| service.capabilities().create_principals)
+            .map(|service| service.name())
+            .collect();
+        assert_eq!(provisioning, ["provisioning", "registrar"]);
+        let introspecting: Vec<&'static str> = Service::ALL
+            .iter()
+            .filter(|service| service.capabilities().introspect)
+            .map(|service| service.name())
+            .collect();
+        assert_eq!(
+            introspecting,
+            [
+                "gateway",
+                "webhooks",
+                "dashboard",
+                "faucet",
+                "testnet",
+                "ramp"
+            ]
+        );
+    }
+
+    #[test]
+    fn service_names_are_distinct_and_file_name_safe() {
+        let names: Vec<&'static str> = Service::ALL.iter().map(|service| service.name()).collect();
+        assert_eq!(names.len(), Service::ALL.len());
+        for (index, name) in names.iter().enumerate() {
+            assert!(!names[..index].contains(name), "{name} is not distinct");
+            assert!(
+                name.bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'-'),
+                "{name} is not a safe Secret key"
+            );
+        }
     }
 
     #[test]
