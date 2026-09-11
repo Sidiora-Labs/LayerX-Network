@@ -58,9 +58,10 @@ int main(void)
         historical_version == current_version)
         return 1;
     {
-        static const uint32_t types[] = {LX_ASSET_REGISTER, LX_ASSET_ACCOUNT_OPEN,
-            LX_ASSET_RECEIVE, LX_ASSET_GRANT_ISSUE, LX_ASSET_GRANT_REVOKE,
-            LX_ASSET_MINT, LX_ASSET_BURN};
+        static const uint32_t types[] = {LX_ASSET_REGISTER, LX_ASSET_PAUSE,
+            LX_ASSET_UNPAUSE, LX_ASSET_ACCOUNT_OPEN, LX_ASSET_RECEIVE,
+            LX_ASSET_GRANT_ISSUE, LX_ASSET_GRANT_REVOKE, LX_ASSET_MINT,
+            LX_ASSET_BURN};
         lxp_fee_meter meter = {.canonical_encoded_bytes = 101U,
             .execution_units = 17U, .storage_units = 9U};
         for (size_t ordinal = 0U; ordinal < sizeof(types) / sizeof(types[0]); ++ordinal) {
@@ -76,11 +77,12 @@ int main(void)
         lxp_param_table named;
         lxp_fee_params schedule, decoded;
         uint32_t version;
-        uint8_t bytes[216];
+        uint8_t bytes[LXP_FEE_PARAMS_V2_BYTES + 1];
         size_t length;
         static const char *const base[] = {"fee.base", "fee.activity", "fee.byte", "fee.exec", "fee.storage", "fee.multiplier_bps"};
-        static const uint32_t types[] = {LX_ASSET_REGISTER, LX_ASSET_ACCOUNT_OPEN, LX_ASSET_SEND,
-            LX_ASSET_RECEIVE, LX_ASSET_GRANT_ISSUE, LX_ASSET_GRANT_REVOKE, LX_ASSET_MINT, LX_ASSET_BURN};
+        static const uint32_t types[] = {LX_ASSET_REGISTER, LX_ASSET_PAUSE, LX_ASSET_UNPAUSE,
+            LX_ASSET_ACCOUNT_OPEN, LX_ASSET_SEND, LX_ASSET_RECEIVE, LX_ASSET_GRANT_ISSUE,
+            LX_ASSET_GRANT_REVOKE, LX_ASSET_MINT, LX_ASSET_BURN};
         if (lxp_param_table_init(&named) != LXP_OK) return 1;
         for (size_t price = 0U; price < 6U; ++price)
             if (add_parameter(&named, base[price], price == 5U ? 10000U : 0U) != 0) return 1;
@@ -89,8 +91,9 @@ int main(void)
         for (size_t price = 0U; price < LXP_ASSET_FEE_PRICE_COUNT; ++price)
             if (add_parameter(&named, lxp_asset_fee_name(price), 101U + price) != 0) return 1;
         if (lxp_fee_schedule(&named, 2U, NULL, &schedule, &version) != LXP_OK ||
-            schedule.version != 2U || schedule.asset_price_count != 8U ||
-            lxp_fee_params_encode(&schedule, bytes, sizeof(bytes), &length) != LXP_OK || length != 215U ||
+            schedule.version != 2U || schedule.asset_price_count != LXP_ASSET_FEE_PRICE_COUNT ||
+            lxp_fee_params_encode(&schedule, bytes, sizeof(bytes), &length) != LXP_OK ||
+            length != (size_t)LXP_FEE_PARAMS_V2_BYTES ||
             lxp_fee_params_decode(bytes, length, &decoded) != LXP_OK) return 1;
         for (size_t prefix = 0U; prefix < length; ++prefix)
             if (lxp_fee_params_decode(bytes, prefix, &decoded) == LXP_OK) return 1;
@@ -105,8 +108,23 @@ int main(void)
         lxp_u128 fee;
         if (lxp_fee_compute(&decoded, 0x00010009U, (lxp_fee_meter){0}, &fee) != LXP_ERR_UNKNOWN_ACTIVITY) return 1;
         if (lxp_fee_params_encode(&historical_schedule, bytes, sizeof(bytes), &length) != LXP_OK ||
-            length != 86U || lxp_fee_params_decode(bytes, length, &decoded) != LXP_OK || decoded.version != 1U)
+            length != (size_t)LXP_FEE_PARAMS_V1_BYTES ||
+            lxp_fee_params_decode(bytes, length, &decoded) != LXP_OK || decoded.version != 1U)
             return 1;
+        {
+            lxp_fee_params unpriced = {0};
+            uint8_t canonical[LXP_FEE_PARAMS_V2_BYTES] = {0};
+            unpriced.version = 2U;
+            unpriced.multiplier_basis_points = 10000U;
+            unpriced.asset_price_count = LXP_ASSET_FEE_PRICE_COUNT;
+            canonical[1] = 2U;
+            canonical[84] = 0x27U;
+            canonical[85] = 0x10U;
+            canonical[86] = LXP_ASSET_FEE_PRICE_COUNT;
+            if (lxp_fee_params_encode(&unpriced, bytes, sizeof(bytes), &length) != LXP_OK ||
+                length != sizeof(canonical) || memcmp(bytes, canonical, sizeof(canonical)) != 0)
+                return 1;
+        }
     }
     if (lx_account_registry_init(&registry) != LXP_OK ||
         lx_account_id_from_string(actor_name, sizeof(actor_name) - 1U,

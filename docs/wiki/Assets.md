@@ -170,7 +170,7 @@ artifacts but carries no Asset-record or fee-schedule metadata.
 
 ## Named fee schedule
 
-The canonical Asset fee schedule is version 2 and exactly 215 bytes:
+The canonical Asset fee schedule is version 2 and exactly 247 bytes:
 
 ```text
 version:u16=2
@@ -180,20 +180,22 @@ version:u16=2
 || per_execution_unit:u128
 || per_storage_unit:u128
 || multiplier_basis_points:u32
-|| asset_price_count:u8=8
-|| eight asset prices:u128
+|| asset_price_count:u8=10
+|| ten asset prices:u128
 ```
 
-The eight prices are ordered and named:
+The ten prices are ordered by ordinal and named:
 
 1. `fee.asset.register` — ordinal `1`
-2. `fee.asset.account_open` — ordinal `4`
-3. `fee.asset.send` — ordinal `5`
-4. `fee.asset.receive` — ordinal `6`
-5. `fee.asset.grant_issue` — ordinal `7`
-6. `fee.asset.grant_revoke` — ordinal `8`
-7. `fee.asset.mint` — ordinal `10`
-8. `fee.asset.burn` — ordinal `11`
+2. `fee.asset.pause` — ordinal `2`
+3. `fee.asset.unpause` — ordinal `3`
+4. `fee.asset.account_open` — ordinal `4`
+5. `fee.asset.send` — ordinal `5`
+6. `fee.asset.receive` — ordinal `6`
+7. `fee.asset.grant_issue` — ordinal `7`
+8. `fee.asset.grant_revoke` — ordinal `8`
+9. `fee.asset.mint` — ordinal `10`
+10. `fee.asset.burn` — ordinal `11`
 
 Fee estimation uses the committed schedule and canonical activity length. An
 unsupported Asset ordinal or a schedule requiring unavailable execution or

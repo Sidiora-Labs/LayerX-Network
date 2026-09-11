@@ -24,11 +24,11 @@ pub fn append(request: &mut Vec<u8>, asset: &[u8; 32], issuer_public: &[u8; 32],
         schedule.extend_from_slice(&value.to_be_bytes());
     }
     schedule.extend_from_slice(&10000_u32.to_be_bytes());
-    schedule.push(8);
-    for value in [0_u128; 8] {
+    schedule.push(10);
+    for value in [0_u128; 10] {
         schedule.extend_from_slice(&value.to_be_bytes());
     }
-    assert_eq!(schedule.len(), 215);
+    assert_eq!(schedule.len(), 247);
     request.extend_from_slice(&(schedule.len() as u16).to_be_bytes());
     request.extend_from_slice(&schedule);
 }

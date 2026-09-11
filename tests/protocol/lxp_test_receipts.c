@@ -1,5 +1,6 @@
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_receipt.h"
 
 #include <openssl/evp.h>
 #include <stdint.h>
@@ -60,5 +61,33 @@ int main(void)
     receipt.result_code = LXP_ERR_AGREEMENT_STATE;
     if (lxp_receipt_verify(&receipt, public_key, &arena) !=
         LXP_ERR_BAD_SIGNATURE) return 1;
+    {
+        static const uint8_t unchanged_supply[] = { 2U, 3U, 4U, 5U, 6U, 7U, 8U };
+        lxp_receipt supply;
+        size_t index;
+        (void)memset(&supply, 0, sizeof(supply));
+        supply.module_id = LXP_MODULE_ASSET;
+        supply.result_code = LXP_OK;
+        supply.supply_binding_version = 1U;
+        supply.asset[0] = 6U;
+        supply.total_units_before = (lxp_u128){ 0U, 41U };
+        for (index = 0U; index < sizeof(unchanged_supply) /
+             sizeof(unchanged_supply[0]); ++index) {
+            supply.operation = unchanged_supply[index];
+            supply.total_units_after = supply.total_units_before;
+            if (lxp_receipt_validate_supply(&supply) != LXP_OK) return 1;
+            supply.total_units_after = (lxp_u128){ 0U, 42U };
+            if (lxp_receipt_validate_supply(&supply) !=
+                LXP_FATAL_SUPPLY_MISMATCH) return 1;
+        }
+        supply.operation = 9U;
+        supply.total_units_after = supply.total_units_before;
+        if (lxp_receipt_validate_supply(&supply) != LXP_ERR_NON_CANONICAL)
+            return 1;
+        supply.operation = 2U;
+        supply.module_id = LXP_MODULE_PROGRAMS;
+        if (lxp_receipt_validate_supply(&supply) != LXP_ERR_NON_CANONICAL)
+            return 1;
+    }
     return 0;
 }
