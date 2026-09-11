@@ -2274,7 +2274,8 @@ static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
           (request->payload[2] == 2U && request->payload_length == 35U &&
            !lxp_ct_is_zero(request->payload + 3U, 32U))))
         return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
-            1U, LXP_ERR_NON_CANONICAL, deadline);
+            1U, request->minor < 5U ? LXP_ERR_VERSION_UNSUPPORTED :
+                                      LXP_ERR_NON_CANONICAL, deadline);
     payload = malloc(server->frame_bytes);
     if (payload == NULL) return LXP_ERR_IO;
     if (pthread_mutex_lock(&server->owner->mutex) != 0) { free(payload); return LXP_ERR_IO; }
@@ -2568,7 +2569,8 @@ static lxp_result send_fee_estimate(lxp_daemon_lni_server *server, int descripto
     if (request->minor < 5U || request->proof_length != 0U || request->correlation_id == 0U ||
         request->payload_length != 30U || load_u16(request->payload) != 1U)
         return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
-            1U, LXP_ERR_NON_CANONICAL, deadline);
+            1U, request->minor < 5U ? LXP_ERR_VERSION_UNSUPPORTED :
+                                      LXP_ERR_NON_CANONICAL, deadline);
     meter.canonical_encoded_bytes = load_u64(request->payload + 6U);
     meter.execution_units = load_u64(request->payload + 14U);
     meter.storage_units = load_u64(request->payload + 22U);
