@@ -58,6 +58,7 @@ class MaterialTests(unittest.TestCase):
             stateful = next(d for d in yaml.safe_load_all(output.read_text()) if d['kind'] == 'StatefulSet')
             pod = stateful['spec']['template']['spec']
             self.assertIn('layerxd', {c['name'] for c in pod['containers']})
+            self.assertTrue({'guarantor-1', 'guarantor-2'} <= {c['name'] for c in pod['containers']})
             self.assertFalse(any(c['name'].startswith('human') for c in pod['containers']))
             self.assertFalse(any(v.get('secret', {}).get('secretName', '').startswith('layerx-human-')
                                  for v in pod['volumes']))

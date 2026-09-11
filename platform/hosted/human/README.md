@@ -1,5 +1,10 @@
 # Hosted Human service
 
+Cluster material, retained inventories, and evidence assembly are also
+summarized on [HostedHuman.md](../../../docs/wiki/HostedHuman.md). The
+owner Job consumes registry journal `pairs/` documented on
+[RegistryDeploymentJournal.md](../../../docs/wiki/RegistryDeploymentJournal.md).
+
 The API, components, identity/security/movement providers, KMS and Human owner run in the node pod. The service selects `layerx-node` and forwards HTTPS to port 9447. Provider binaries run as UID/GID 4020 and admit component UID 4020. Their sockets are `/run/layerx/human/{identity,security,movement}.sock`, in a 4020-owned 0750 directory. The Human owner runs as UID 4021/GID 4020, matching the native LNI admission policy, with its socket in the separately owned 0750 directory `/run/layerx/human/owner`. The shared process namespace preserves real peer PID checks. The pod is one trusted local boundary; same-UID processes are not isolated from each other.
 
 The retained `layerx-human-state` PVC is mounted by the node. The cluster script deletes the old standalone Human Deployment before applying the node workload and retains the PVC. Private state directories belong to each process; KMS uses UID 4026. The authority state directory belongs to UID 4021. Runtime containers drop all capabilities and use read-only root filesystems. The directory initializer has only CHOWN, FOWNER and DAC_OVERRIDE. It does not read credentials.
@@ -25,9 +30,9 @@ Agentd explicitly uses `human-owner` mode and the cluster DER CA for both author
 
 Contract fields are derived from `paxeer/deployment.json`: vault, checkpoint registry, withdrawal claims and emergency exit. Missing source files, mismatched network/chain, unversioned registry, missing policy bindings or unsafe files refuse generation. Component limits and movement finality remain enforced by the real consumers. The assembly utility does not establish state proofs or checkpoint finality.
 
-## Remaining integration inputs
+## Integrated evidence production
 
-The cluster script generates the version-2 module registry using the node image tool and bootstrap asset metadata. It does not produce the evidence files listed above; those missing producers prevent `human_policy_publish` from succeeding. Registry image execution remains unqualified here. Movement also documents an incomplete online deposit/withdrawal/exit evidence producer, and several authority routes deliberately refuse absent state/checkpoint proofs. Provider packaging cannot close those source gaps. No complete Human readiness or cluster execution is claimed.
+The cluster script generates the version-2 module registry and protected journal pair, prepares a fresh LXIP owner request and dedicated recovery guardians, and obtains the bootstrap custody profile before native genesis. After identity provisioning, `human_evidence_provision` creates the durable LXIP owner, admits that exact DID to native genesis, records the custody deposit, and runs the native Governance identity, rotation, recovery, custody, sequencer-receipt, and independent receipt-authority producer. Evidence assembly starts only after the generated owner registration and complete input set pass the protected-file validators. Registry and cluster execution still require the full gate; source integration alone is not readiness evidence.
 
 The image builds all real providers, components, service, KMS and agentd. API readiness requires the real component graph; provider probes use real binaries; KMS readiness is exercised through LXKP. `human/apps/web` remains a separate website and is not deployed by this pod.
 
@@ -37,7 +42,7 @@ With the identity provider stopped, `layerx-human-identity-provider provision-ow
 
 Compact JSON stdout contains exactly `principal`, `did`, `recovery_root` (32-byte array), `recovery_threshold`, and `recovery_delay_seconds`. These are all five fields returned by LXIP op 1. It does not return an authority reference, protocol owner account, capability evidence or rotation/recovery key-policy receipts because the underlying operation creates none. Its output therefore cannot by itself produce `components.json` or `principal-policy.json`. Preserve the same state for the runtime provider; a host-only state root is not a deployed identity.
 
-Recovery receipt ingest verifies signed historical receipt inclusion; no operator key-set derivation is required for provisioning. The corrected provisioning hook runs after identity/gateway provisioning and before policy publication. Identity principal responses now echo the required tenant. The catalog uses treasury and sequencer authority accounts. Missing external producer inputs still prevent a complete evidence set.
+Recovery receipt ingest verifies signed historical receipt inclusion; no operator key-set derivation is required for provisioning. The provisioning hook runs after identity provisioning and verified registry journal export, before policy publication. Identity principal responses echo the required tenant. The catalog uses treasury and sequencer authority accounts, and the native producer supplies the authenticated registration evidence.
 
 ## Owner registration input contract
 
@@ -61,15 +66,17 @@ The Job requires the bootstrap initializer to have created the PVC identity dire
 
 ## Evidence provisioning
 
-`human_evidence_provision` runs after identity and gateway provisioning and before
+`human_evidence_provision` runs after identity provisioning and verified registry
+journal export, before
 `human_policy_publish` and enabling the Human node containers. The owner Job uses
 the same PVC subPath and identity state root as the runtime. It refuses an already
 enabled Human runtime. Recovery is taken unchanged from the established input
 policy and LXIP result; no recovery key-set derivation is performed.
 
-The protected `human-evidence-input/owner-registration.json` and
-`recovery-policy.json` must be supplied by the protocol registration producer,
-along with `owner-request.json`. The assembler validates the registration's complete
+The cluster prepares the protected `owner-request.json`, recovery policy, guardian
+bindings, and custody inputs. The native protocol producer writes
+`human-evidence-input/owner-registration.json` only after its live operations and
+evidence checks succeed. The assembler validates the registration's complete
 identity entry, DID binding and evidence references. The authority currently has
 no independent config-validation command: the Python validator reparses the exact
 serialized principal policy against its documented schema. It does not certify

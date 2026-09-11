@@ -88,6 +88,7 @@ IMAGE_LABEL=io.layerx.beta-cluster
 BOUNDARY_LABEL=layerx.io/program-registry-boundary
 
 source "$SCRIPT_DIR/beta-images.sh"
+source "$REPO_ROOT/platform/hosted/human/provision.sh"
 TRUSTED_BOUNDARY_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-boundary layerx-identity layerx-receipt-authority layerx-agent-boundary)
 INTERNAL_NAMESPACE=layerx-internal
 FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
