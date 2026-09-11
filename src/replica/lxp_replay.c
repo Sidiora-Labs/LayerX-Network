@@ -122,7 +122,24 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
                              _Alignof(lx_account_registry), &memory);
     if (status != LXP_OK) return status;
     before = memory;
-    *before = *engine->kernel->state->accounts;
+    {
+        const lx_account_registry *live = engine->kernel->state->accounts;
+        lx_account *before_slots = NULL;
+        lx_account_index_entry *before_index = NULL;
+        if (live->count != 0U) {
+            status = lxp_arena_alloc(arena, live->count * sizeof(*before_slots),
+                                     _Alignof(lx_account), &memory);
+            if (status != LXP_OK) return status;
+            before_slots = memory;
+            status = lxp_arena_alloc(arena, live->count * sizeof(*before_index),
+                                     _Alignof(lx_account_index_entry), &memory);
+            if (status != LXP_OK) return status;
+            before_index = memory;
+        }
+        status = lx_account_registry_borrow(live, before_slots, before_index,
+                                            live->count, before);
+        if (status != LXP_OK) return status;
+    }
     transition = transition_for(engine, body->header.protocol_version);
     if (activity_count != 0U && transition == NULL)
         return LXP_ERR_VERSION_UNSUPPORTED;

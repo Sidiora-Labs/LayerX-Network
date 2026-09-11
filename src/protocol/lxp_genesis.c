@@ -810,11 +810,17 @@ lxp_result lxp_genesis_materialize(const lxp_genesis_manifest *manifest,
     if (status == LXP_OK)
         status = lxp_state_store_require_account_root(kernel->state);
     accounts = kernel->state->accounts;
+    if (status == LXP_OK && manifest->account_count != 0U)
+        status = lx_account_registry_reserve(accounts,
+                                             manifest->account_count);
     for (index = 0U; status == LXP_OK &&
          index < manifest->account_count; ++index) {
+        lx_account materialized;
         status = materialize_account(&manifest->accounts[index],
-                                     &accounts->accounts[index]);
-        if (status == LXP_OK) ++accounts->count;
+                                     &materialized);
+        if (status == LXP_OK)
+            status = lx_account_registry_slot_insert(accounts, &materialized,
+                                                     NULL);
     }
     for (index = 0U; status == LXP_OK &&
          index < manifest->parameter_count; ++index)
@@ -885,6 +891,7 @@ lxp_result lxp_genesis_state_root(
         lxp_result close_status = lxp_state_store_destroy(state);
         if (status == LXP_OK && close_status != LXP_OK) status = close_status;
     }
+    lx_account_registry_release(accounts);
     free(accounts); free(kernel); free(journal); free(state);
     return status;
 }

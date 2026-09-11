@@ -208,7 +208,7 @@ int main(int argc, char **argv)
     CHECK(lxp_state_root(kernel, initial_root) == LXP_OK);
     CHECK(memcmp(initial_root, manifest->genesis_state_root, 32U) == 0);
     initial_kv = kernel->module_kv_count;
-    *before = *accounts;
+    CHECK(lx_account_registry_copy(accounts, before) == LXP_OK);
     for (size_t index = 0U; index < accounts->count; ++index)
         CHECK(lxp_u128_is_zero(accounts->accounts[index].balance));
     CHECK(activity.actor_did.length <= sizeof(name) - 11U);
@@ -353,7 +353,9 @@ int main(int argc, char **argv)
     free(manifest_bytes);
     free(effects);
     free(ctx);
+    lx_account_registry_release(before);
     free(before);
+    lx_account_registry_release(accounts);
     free(accounts);
     free(kernel);
     free(journal);

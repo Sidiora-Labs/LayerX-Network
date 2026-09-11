@@ -329,7 +329,7 @@ static inline int lxp_real_replay_build(lxp_real_replay_fixture *f,
     REAL_REQUIRE(before != NULL && state != NULL && accounts != NULL && count <= 8U && count != 0U);
     *before = f->kernel;
     *state = f->state;
-    *accounts = f->accounts;
+    REAL_REQUIRE(lx_account_registry_copy(&f->accounts, accounts) == LXP_OK);
     state->accounts = accounts;
     before->state = state;
     header.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
@@ -362,6 +362,7 @@ static inline int lxp_real_replay_build(lxp_real_replay_fixture *f,
     REAL_REQUIRE(lxp_da_body_from_kernels(&header, before, &f->kernel,
         activities, count, receipts, count + 1U, events, count, oracles, oracle_count,
         arena, body) == LXP_OK);
+    lx_account_registry_release(accounts);
     free(accounts);
     free(state);
     free(before);

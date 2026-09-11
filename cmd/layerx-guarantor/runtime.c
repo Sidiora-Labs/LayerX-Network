@@ -25,7 +25,7 @@ struct gp_runtime {
     lxp_kernel kernel;
     lxp_daemon_configuration configuration;
     lx_account_registry accounts;
-    lxp_transfer_asset_state assets[LX_ACCOUNT_REGISTRY_CAPACITY];
+    lxp_transfer_asset_state assets[LX_ASSET_REGISTRY_CAPACITY];
     lx_asset_record send_assets[LX_ASSET_REGISTRY_CAPACITY];
     lx_asset_runtime asset_runtime;
     size_t asset_count;
@@ -755,6 +755,7 @@ void gp_runtime_close(gp_runtime *runtime)
         (void)pthread_mutex_destroy(&runtime->feed_mutex);
     if (runtime->state_open)
         (void)lxp_state_store_destroy(&runtime->state);
+    lx_account_registry_release(&runtime->accounts);
     free(runtime->execution_bytes);
     free(runtime->preparation_bytes);
     free(runtime);

@@ -1,7 +1,13 @@
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_crypto.h"
 
+#include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 static bool system_kind(lx_account_kind kind)
 {
@@ -91,6 +97,359 @@ static lxp_result append_creation(lxp_log *log, const lx_account *account)
                           (uint32_t)cursor, NULL);
 }
 
+static size_t index_position(const lx_account_registry *registry,
+                             const uint8_t id[LX_ACCOUNT_ID_BYTES],
+                             bool *found)
+{
+    size_t low = 0U;
+    size_t high = registry->count;
+    *found = false;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2U;
+        int order = memcmp(registry->index[middle].id, id,
+                           LX_ACCOUNT_ID_BYTES);
+        if (order == 0) {
+            *found = true;
+            return middle;
+        }
+        if (order < 0) low = middle + 1U;
+        else high = middle;
+    }
+    return low;
+}
+
+static lxp_result index_insert(lx_account_registry *registry,
+                               const uint8_t id[LX_ACCOUNT_ID_BYTES],
+                               size_t slot)
+{
+    bool found = false;
+    size_t position;
+    if (registry->index == NULL || registry->count >= registry->index_capacity)
+        return LXP_FATAL_INVARIANT;
+    position = index_position(registry, id, &found);
+    if (found) return LXP_FATAL_INVARIANT;
+    if (position < registry->count)
+        (void)memmove(&registry->index[position + 1U],
+                      &registry->index[position],
+                      (registry->count - position) *
+                          sizeof(registry->index[0]));
+    (void)memcpy(registry->index[position].id, id, LX_ACCOUNT_ID_BYTES);
+    registry->index[position].slot = slot;
+    return LXP_OK;
+}
+
+static lxp_result index_remove(lx_account_registry *registry, size_t slot)
+{
+    bool found = false;
+    size_t position;
+    size_t i;
+    if (registry->index == NULL || slot >= registry->count ||
+        registry->count > registry->index_capacity)
+        return LXP_FATAL_INVARIANT;
+    position = index_position(registry, registry->accounts[slot].id, &found);
+    if (!found || registry->index[position].slot != slot)
+        return LXP_FATAL_INVARIANT;
+    if (position + 1U < registry->count)
+        (void)memmove(&registry->index[position],
+                      &registry->index[position + 1U],
+                      (registry->count - position - 1U) *
+                          sizeof(registry->index[0]));
+    for (i = 0U; i + 1U < registry->count; ++i)
+        if (registry->index[i].slot > slot) --registry->index[i].slot;
+    return LXP_OK;
+}
+
+static size_t registry_page_bytes(void)
+{
+    long page = sysconf(_SC_PAGESIZE);
+    return page > 0L ? (size_t)page : (size_t)4096;
+}
+
+static size_t registry_round_up(size_t bytes, size_t page)
+{
+    size_t remainder = bytes % page;
+    if (remainder == 0U) return bytes;
+    if (bytes > SIZE_MAX - (page - remainder)) return 0U;
+    return bytes + (page - remainder);
+}
+
+static size_t registry_account_span(void)
+{
+    return (size_t)LX_ACCOUNT_REGISTRY_CAPACITY * sizeof(lx_account);
+}
+
+static size_t registry_index_span(void)
+{
+    return (size_t)LX_ACCOUNT_REGISTRY_CAPACITY *
+           sizeof(lx_account_index_entry);
+}
+
+static lxp_result registry_map(lx_account_registry *registry)
+{
+    void *accounts;
+    void *index;
+    if (registry->accounts != NULL && registry->index != NULL) return LXP_OK;
+    if (registry->accounts != NULL || registry->index != NULL)
+        return LXP_FATAL_INVARIANT;
+    accounts = mmap(NULL, registry_account_span(), PROT_NONE,
+                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (accounts == MAP_FAILED) return LXP_ERR_ARENA_EXHAUSTED;
+    index = mmap(NULL, registry_index_span(), PROT_NONE,
+                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (index == MAP_FAILED) {
+        (void)munmap(accounts, registry_account_span());
+        return LXP_ERR_ARENA_EXHAUSTED;
+    }
+    registry->accounts = (lx_account *)accounts;
+    registry->index = (lx_account_index_entry *)index;
+    registry->capacity = 0U;
+    registry->index_capacity = 0U;
+    return LXP_OK;
+}
+
+static lxp_result registry_commit(void *base, size_t used_bytes,
+                                  size_t span_bytes, size_t page)
+{
+    size_t bytes = registry_round_up(used_bytes, page);
+    if (bytes == 0U && used_bytes != 0U) return LXP_ERR_LENGTH_LIMIT;
+    if (bytes > span_bytes) bytes = registry_round_up(span_bytes, page);
+    if (bytes == 0U) return LXP_OK;
+    return mprotect(base, bytes, PROT_READ | PROT_WRITE) == 0 ?
+        LXP_OK : LXP_ERR_ARENA_EXHAUSTED;
+}
+
+lxp_result lx_account_registry_reserve(lx_account_registry *registry,
+                                       size_t slots)
+{
+    size_t target;
+    size_t page;
+    lxp_result status;
+    if (registry == NULL) return LXP_ERR_NON_CANONICAL;
+    if (slots > (size_t)LX_ACCOUNT_REGISTRY_CAPACITY)
+        return LXP_ERR_LENGTH_LIMIT;
+    if (registry->accounts == NULL && slots == 0U) return LXP_OK;
+    if (registry->accounts != NULL && slots <= registry->capacity &&
+        registry->capacity == registry->index_capacity)
+        return LXP_OK;
+    if (registry->borrowed) return LXP_ERR_ARENA_EXHAUSTED;
+    status = registry_map(registry);
+    if (status != LXP_OK) return status;
+    target = registry->capacity != 0U ? registry->capacity :
+             (size_t)LX_ACCOUNT_REGISTRY_INITIAL_SLOTS;
+    while (target < slots) {
+        if (target > (size_t)LX_ACCOUNT_REGISTRY_CAPACITY / 2U) {
+            target = (size_t)LX_ACCOUNT_REGISTRY_CAPACITY;
+            break;
+        }
+        target *= 2U;
+    }
+    if (target < slots) return LXP_ERR_LENGTH_LIMIT;
+    page = registry_page_bytes();
+    status = registry_commit(registry->accounts, target * sizeof(lx_account),
+                             registry_account_span(), page);
+    if (status == LXP_OK)
+        status = registry_commit(registry->index,
+                                 target * sizeof(lx_account_index_entry),
+                                 registry_index_span(), page);
+    if (status != LXP_OK) return status;
+    registry->capacity = target;
+    registry->index_capacity = target;
+    return LXP_OK;
+}
+
+void lx_account_registry_release(lx_account_registry *registry)
+{
+    if (registry == NULL) return;
+    if (registry->borrowed) {
+        registry->accounts = NULL;
+        registry->index = NULL;
+        registry->count = 0U;
+        registry->capacity = 0U;
+        registry->index_capacity = 0U;
+        registry->borrowed = false;
+        return;
+    }
+    if (registry->accounts != NULL)
+        (void)munmap(registry->accounts, registry_account_span());
+    if (registry->index != NULL)
+        (void)munmap(registry->index, registry_index_span());
+    registry->accounts = NULL;
+    registry->index = NULL;
+    registry->count = 0U;
+    registry->capacity = 0U;
+    registry->index_capacity = 0U;
+}
+
+lxp_result lx_account_registry_index_lookup(
+    const lx_account_registry *registry,
+    const uint8_t account_id[LX_ACCOUNT_ID_BYTES], size_t *slot)
+{
+    bool found = false;
+    size_t position;
+    if (registry == NULL || account_id == NULL || slot == NULL ||
+        registry->count > registry->index_capacity)
+        return LXP_ERR_NON_CANONICAL;
+    if (registry->count == 0U) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    position = index_position(registry, account_id, &found);
+    if (!found) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    if (registry->index[position].slot >= registry->count)
+        return LXP_FATAL_INVARIANT;
+    *slot = registry->index[position].slot;
+    return LXP_OK;
+}
+
+lxp_result lx_account_registry_index_slot(const lx_account_registry *registry,
+                                          size_t position, size_t *slot)
+{
+    if (registry == NULL || slot == NULL || position >= registry->count ||
+        registry->count > registry->index_capacity)
+        return LXP_ERR_NON_CANONICAL;
+    if (registry->index[position].slot >= registry->count)
+        return LXP_FATAL_INVARIANT;
+    *slot = registry->index[position].slot;
+    return LXP_OK;
+}
+
+lxp_result lx_account_registry_index_validate(
+    const lx_account_registry *registry)
+{
+    size_t i;
+    if (registry == NULL) return LXP_ERR_NON_CANONICAL;
+    if (registry->count > (size_t)LX_ACCOUNT_REGISTRY_CAPACITY)
+        return LXP_ERR_LENGTH_LIMIT;
+    if (registry->count == 0U) return LXP_OK;
+    if (registry->accounts == NULL || registry->index == NULL ||
+        registry->count > registry->capacity ||
+        registry->count > registry->index_capacity)
+        return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < registry->count; ++i) {
+        size_t slot = registry->index[i].slot;
+        if (slot >= registry->count) return LXP_FATAL_INVARIANT;
+        if (memcmp(registry->index[i].id, registry->accounts[slot].id,
+                   LX_ACCOUNT_ID_BYTES) != 0)
+            return LXP_FATAL_INVARIANT;
+        if (i != 0U && memcmp(registry->index[i - 1U].id,
+                              registry->index[i].id,
+                              LX_ACCOUNT_ID_BYTES) >= 0)
+            return LXP_ERR_NON_CANONICAL;
+    }
+    return LXP_OK;
+}
+
+static int index_entry_compare(const void *left, const void *right)
+{
+    return memcmp(((const lx_account_index_entry *)left)->id,
+                  ((const lx_account_index_entry *)right)->id,
+                  LX_ACCOUNT_ID_BYTES);
+}
+
+lxp_result lx_account_registry_index_rebuild(lx_account_registry *registry)
+{
+    size_t i;
+    lxp_result status;
+    if (registry == NULL) return LXP_ERR_NON_CANONICAL;
+    if (registry->count == 0U) return LXP_OK;
+    status = lx_account_registry_reserve(registry, registry->count);
+    if (status != LXP_OK) return status;
+    for (i = 0U; i < registry->count; ++i) {
+        (void)memcpy(registry->index[i].id, registry->accounts[i].id,
+                     LX_ACCOUNT_ID_BYTES);
+        registry->index[i].slot = i;
+    }
+    qsort(registry->index, registry->count, sizeof(registry->index[0]),
+          index_entry_compare);
+    return lx_account_registry_index_validate(registry);
+}
+
+lxp_result lx_account_registry_slot_insert(lx_account_registry *registry,
+                                           const lx_account *account,
+                                           size_t *slot)
+{
+    lxp_result status;
+    if (registry == NULL || account == NULL) return LXP_ERR_NON_CANONICAL;
+    status = lx_account_registry_reserve(registry, registry->count + 1U);
+    if (status != LXP_OK) return status;
+    status = index_insert(registry, account->id, registry->count);
+    if (status != LXP_OK) return status;
+    registry->accounts[registry->count] = *account;
+    if (slot != NULL) *slot = registry->count;
+    ++registry->count;
+    return LXP_OK;
+}
+
+lxp_result lx_account_registry_slot_remove(lx_account_registry *registry,
+                                           size_t slot)
+{
+    lxp_result status;
+    if (registry == NULL || slot >= registry->count)
+        return LXP_ERR_NON_CANONICAL;
+    status = index_remove(registry, slot);
+    if (status != LXP_OK) return status;
+    if (slot + 1U < registry->count)
+        (void)memmove(&registry->accounts[slot],
+                      &registry->accounts[slot + 1U],
+                      (registry->count - slot - 1U) * sizeof(lx_account));
+    --registry->count;
+    return LXP_OK;
+}
+
+lxp_result lx_account_registry_copy(const lx_account_registry *source,
+                                    lx_account_registry *target)
+{
+    lxp_result status;
+    if (source == NULL || target == NULL || source == target)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memset(target, 0, sizeof(*target));
+    atomic_init(&target->gateway_owner, NULL);
+    atomic_init(&target->gateway_acquirers, 0U);
+    atomic_init(&target->gateway_transition, false);
+    status = lx_account_registry_index_validate(source);
+    if (status != LXP_OK) return status;
+    if (source->count == 0U) return LXP_OK;
+    status = lx_account_registry_reserve(target, source->count);
+    if (status != LXP_OK) return status;
+    (void)memcpy(target->accounts, source->accounts,
+                 source->count * sizeof(source->accounts[0]));
+    (void)memcpy(target->index, source->index,
+                 source->count * sizeof(source->index[0]));
+    target->count = source->count;
+    return LXP_OK;
+}
+
+lxp_result lx_account_registry_borrow(const lx_account_registry *source,
+                                      lx_account *slots,
+                                      lx_account_index_entry *index,
+                                      size_t capacity,
+                                      lx_account_registry *target)
+{
+    lxp_result status;
+    if (source == NULL || target == NULL || source == target)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memset(target, 0, sizeof(*target));
+    atomic_init(&target->gateway_owner, NULL);
+    atomic_init(&target->gateway_acquirers, 0U);
+    atomic_init(&target->gateway_transition, false);
+    if (capacity < source->count ||
+        (capacity != 0U && (slots == NULL || index == NULL)))
+        return LXP_ERR_NON_CANONICAL;
+    status = lx_account_registry_index_validate(source);
+    if (status != LXP_OK) return status;
+    if (capacity == 0U) return LXP_OK;
+    target->accounts = slots;
+    target->index = index;
+    target->capacity = capacity;
+    target->index_capacity = capacity;
+    target->borrowed = true;
+    if (source->count != 0U) {
+        (void)memcpy(target->accounts, source->accounts,
+                     source->count * sizeof(source->accounts[0]));
+        (void)memcpy(target->index, source->index,
+                     source->count * sizeof(source->index[0]));
+        target->count = source->count;
+    }
+    return LXP_OK;
+}
+
 lxp_result lx_account_registry_init(lx_account_registry *registry)
 {
     if (registry == NULL) return LXP_ERR_NON_CANONICAL;
@@ -156,8 +515,9 @@ lxp_result lx_account_registry_snapshot(lx_account_registry *source,
                                         lx_account_registry *snapshot)
 {
     bool expected = false;
+    lxp_result status;
     if (source == NULL || snapshot == NULL || source == snapshot ||
-        source->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        source->count > (size_t)LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     if (!atomic_compare_exchange_strong_explicit(
             &source->gateway_transition, &expected, true,
@@ -170,16 +530,21 @@ lxp_result lx_account_registry_snapshot(lx_account_registry *source,
         return LXP_ERR_CONTEXT_MISMATCH;
     }
     (void)memset(snapshot, 0, sizeof(*snapshot));
-    snapshot->count = source->count;
-    if (source->count != 0U)
-        (void)memcpy(snapshot->accounts, source->accounts,
-                     source->count * sizeof(source->accounts[0]));
     atomic_init(&snapshot->gateway_owner, NULL);
     atomic_init(&snapshot->gateway_acquirers, 0U);
     atomic_init(&snapshot->gateway_transition, false);
+    status = lx_account_registry_reserve(snapshot, source->count);
+    if (status == LXP_OK && source->count != 0U) {
+        (void)memcpy(snapshot->accounts, source->accounts,
+                     source->count * sizeof(source->accounts[0]));
+        (void)memcpy(snapshot->index, source->index,
+                     source->count * sizeof(source->index[0]));
+        snapshot->count = source->count;
+    }
     atomic_store_explicit(&source->gateway_transition, false,
                           memory_order_release);
-    return LXP_OK;
+    if (status != LXP_OK) lx_account_registry_release(snapshot);
+    return status;
 }
 
 lxp_result lx_account_lookup(lx_account_registry *registry,
@@ -188,7 +553,7 @@ lxp_result lx_account_lookup(lx_account_registry *registry,
                              lx_account **account)
 {
     uint8_t derived[32];
-    size_t i;
+    size_t slot = 0U;
     lxp_result status;
     if (registry == NULL || presented_id == NULL || account == NULL)
         return LXP_ERR_NON_CANONICAL;
@@ -196,16 +561,13 @@ lxp_result lx_account_lookup(lx_account_registry *registry,
     if (status != LXP_OK) return status;
     if (memcmp(derived, presented_id, sizeof(derived)) != 0)
         return LXP_ERR_ACCOUNT_ID_MISMATCH;
-    for (i = 0U; i < registry->count; ++i) {
-        if (memcmp(registry->accounts[i].id, derived, sizeof(derived)) == 0) {
-            if ((size_t)registry->accounts[i].name_length != name_length ||
-                memcmp(registry->accounts[i].name, name, name_length) != 0)
-                return LXP_ERR_ACCOUNT_ID_MISMATCH;
-            *account = &registry->accounts[i];
-            return LXP_OK;
-        }
-    }
-    return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    status = lx_account_registry_index_lookup(registry, derived, &slot);
+    if (status != LXP_OK) return status;
+    if ((size_t)registry->accounts[slot].name_length != name_length ||
+        memcmp(registry->accounts[slot].name, name, name_length) != 0)
+        return LXP_ERR_ACCOUNT_ID_MISMATCH;
+    *account = &registry->accounts[slot];
+    return LXP_OK;
 }
 
 lxp_result lx_account_open(lx_account_registry *registry,
@@ -218,7 +580,7 @@ lxp_result lx_account_open(lx_account_registry *registry,
     uint8_t derived[32];
     lx_account_name parsed;
     lx_account *created;
-    size_t i;
+    size_t slot = 0U;
     lxp_result status;
     if (registry == NULL || presented_id == NULL || account == NULL)
         return LXP_ERR_NON_CANONICAL;
@@ -230,19 +592,19 @@ lxp_result lx_account_open(lx_account_registry *registry,
         return LXP_ERR_ACCOUNT_ID_MISMATCH;
     if (parsed.kind == LX_ACCOUNT_MODULE_VALUE)
         return LXP_ERR_UNAUTHORIZED_DEBIT;
-    for (i = 0U; i < registry->count; ++i) {
-        if (memcmp(registry->accounts[i].id, derived, sizeof(derived)) == 0) {
-            if ((size_t)registry->accounts[i].name_length != name_length ||
-                memcmp(registry->accounts[i].name, name, name_length) != 0)
-                return LXP_ERR_ACCOUNT_ID_MISMATCH;
-            *account = &registry->accounts[i];
-            return LXP_OK;
-        }
+    status = lx_account_registry_index_lookup(registry, derived, &slot);
+    if (status == LXP_OK) {
+        if ((size_t)registry->accounts[slot].name_length != name_length ||
+            memcmp(registry->accounts[slot].name, name, name_length) != 0)
+            return LXP_ERR_ACCOUNT_ID_MISMATCH;
+        *account = &registry->accounts[slot];
+        return LXP_OK;
     }
+    if (status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) return status;
     if (system_kind(parsed.kind) && authority == LX_ACCOUNT_OPEN_CREDIT)
         return LXP_ERR_UNAUTHORIZED_DEBIT;
-    if (registry->count == LX_ACCOUNT_REGISTRY_CAPACITY)
-        return LXP_ERR_ARENA_EXHAUSTED;
+    status = lx_account_registry_reserve(registry, registry->count + 1U);
+    if (status != LXP_OK) return status;
     created = &registry->accounts[registry->count];
     (void)memset(created, 0, sizeof(*created));
     (void)memcpy(created->id, derived, sizeof(created->id));
@@ -251,6 +613,8 @@ lxp_result lx_account_open(lx_account_registry *registry,
     created->kind = parsed.kind;
     created->created_at_sequence = global_sequence;
     status = append_creation(activity_log, created);
+    if (status != LXP_OK) return status;
+    status = index_insert(registry, created->id, registry->count);
     if (status != LXP_OK) return status;
     ++registry->count;
     *account = created;
@@ -266,12 +630,12 @@ lxp_result lx_account_module_value_prepare(
 {
     lx_account candidate;
     uint8_t derived[LX_ACCOUNT_ID_BYTES];
-    size_t i;
+    size_t slot = 0U;
     lxp_result status;
     if (registry == NULL || account_id == NULL || asset_id == NULL ||
         registration == NULL || account == NULL || created == NULL ||
         bytes_zero(asset_id, 32U) ||
-        registry->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        registry->count > (size_t)LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     (void)memset(&candidate, 0, sizeof(candidate));
     status = module_value_name(module_name, module_name_length, account_id,
@@ -281,10 +645,9 @@ lxp_result lx_account_module_value_prepare(
                                        derived);
     if (status != LXP_OK || memcmp(derived, account_id, sizeof(derived)) != 0)
         return status != LXP_OK ? status : LXP_FATAL_INVARIANT;
-    for (i = 0U; i < registry->count; ++i) {
-        lx_account *existing = &registry->accounts[i];
-        if (memcmp(existing->id, account_id, LX_ACCOUNT_ID_BYTES) != 0)
-            continue;
+    status = lx_account_registry_index_lookup(registry, account_id, &slot);
+    if (status == LXP_OK) {
+        lx_account *existing = &registry->accounts[slot];
         if (existing->kind != LX_ACCOUNT_MODULE_VALUE ||
             existing->name_length != candidate.name_length ||
             memcmp(existing->name, candidate.name,
@@ -298,8 +661,7 @@ lxp_result lx_account_module_value_prepare(
         *created = false;
         return LXP_OK;
     }
-    if (registry->count == LX_ACCOUNT_REGISTRY_CAPACITY)
-        return LXP_ERR_ARENA_EXHAUSTED;
+    if (status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) return status;
     (void)memcpy(candidate.id, account_id, LX_ACCOUNT_ID_BYTES);
     candidate.kind = LX_ACCOUNT_MODULE_VALUE;
     (void)memcpy(candidate.asset_id, asset_id, 32U);
@@ -319,8 +681,7 @@ lxp_result lx_account_registration_commit(
     uint8_t derived[LX_ACCOUNT_ID_BYTES];
     lxp_result status;
     if (registry == NULL || registration == NULL || account == NULL ||
-        registry->count != registration->expected_count ||
-        registry->count == LX_ACCOUNT_REGISTRY_CAPACITY)
+        registry->count != registration->expected_count)
         return LXP_FATAL_INVARIANT;
     status = lx_account_id_from_string(registration->account.name,
                                        registration->account.name_length,
@@ -331,6 +692,11 @@ lxp_result lx_account_registration_commit(
         !registration->account.has_asset ||
         bytes_zero(registration->account.asset_id, 32U))
         return LXP_FATAL_INVARIANT;
+    status = lx_account_registry_reserve(registry, registry->count + 1U);
+    if (status != LXP_OK) return status;
+    status = index_insert(registry, registration->account.id,
+                          registry->count);
+    if (status != LXP_OK) return status;
     registry->accounts[registry->count] = registration->account;
     *account = &registry->accounts[registry->count];
     ++registry->count;
@@ -343,9 +709,10 @@ lxp_result lx_account_credit_registration_commit(
 {
     uint8_t derived[32];
     lx_account_name name;
+    size_t existing = 0U;
+    lxp_result status;
     if (registry == NULL || registration == NULL || account == NULL ||
         registry->count != registration->expected_count ||
-        registry->count >= LX_ACCOUNT_REGISTRY_CAPACITY ||
         (registration->account.kind != LX_ACCOUNT_AGENT_MAIN &&
          registration->account.kind != LX_ACCOUNT_AGENT_ASSET) ||
         !registration->account.has_asset ||
@@ -360,9 +727,13 @@ lxp_result lx_account_credit_registration_commit(
             registration->account.name_length, derived) != LXP_OK ||
         memcmp(derived, registration->account.id, 32U) != 0)
         return LXP_FATAL_INVARIANT;
-    for (size_t index = 0U; index < registry->count; ++index)
-        if (memcmp(registry->accounts[index].id, derived, 32U) == 0)
-            return LXP_FATAL_INVARIANT;
+    status = lx_account_registry_index_lookup(registry, derived, &existing);
+    if (status == LXP_OK) return LXP_FATAL_INVARIANT;
+    if (status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) return status;
+    status = lx_account_registry_reserve(registry, registry->count + 1U);
+    if (status != LXP_OK) return status;
+    status = index_insert(registry, registration->account.id, registry->count);
+    if (status != LXP_OK) return status;
     registry->accounts[registry->count] = registration->account;
     *account = &registry->accounts[registry->count++];
     return LXP_OK;
@@ -371,19 +742,13 @@ lxp_result lx_account_credit_registration_commit(
 lxp_result lx_account_close(lx_account_registry *registry,
                             const uint8_t account_id[32])
 {
-    size_t i;
+    size_t slot = 0U;
+    lxp_result status;
     if (registry == NULL || account_id == NULL) return LXP_ERR_NON_CANONICAL;
-    for (i = 0U; i < registry->count; ++i) {
-        if (memcmp(registry->accounts[i].id, account_id, 32U) == 0) {
-            if (!lxp_u128_is_zero(registry->accounts[i].balance) ||
-                registry->accounts[i].has_open_reference)
-                return LXP_ERR_ACCOUNT_NOT_EMPTY;
-            if (i + 1U < registry->count)
-                (void)memmove(&registry->accounts[i], &registry->accounts[i + 1U],
-                              (registry->count - i - 1U) * sizeof(lx_account));
-            --registry->count;
-            return LXP_OK;
-        }
-    }
-    return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    status = lx_account_registry_index_lookup(registry, account_id, &slot);
+    if (status != LXP_OK) return status;
+    if (!lxp_u128_is_zero(registry->accounts[slot].balance) ||
+        registry->accounts[slot].has_open_reference)
+        return LXP_ERR_ACCOUNT_NOT_EMPTY;
+    return lx_account_registry_slot_remove(registry, slot);
 }

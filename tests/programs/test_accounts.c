@@ -587,6 +587,7 @@ static int shared_state_vectors(void)
         max_depth != LXP_STATE_PROOF_MAX_DEPTH ||
         refused_depth != LXP_STATE_PROOF_MAX_DEPTH + 1U)
         return 1;
+    lx_account_registry_release(&registry);
     return 0;
 }
 
@@ -662,6 +663,15 @@ static lxp_result count_value_account(
     return LXP_OK;
 }
 
+static void growth_account_id(size_t index, uint8_t account_id[32])
+{
+    size_t i;
+    (void)memset(account_id, 0, 32U);
+    account_id[0] = 0x0aU;
+    for (i = 0U; i < 8U; ++i)
+        account_id[31U - i] = (uint8_t)(index >> (i * 8U));
+}
+
 static int registry_boundaries(void)
 {
     static const uint8_t module_name[] = "programs";
@@ -674,26 +684,108 @@ static int registry_boundaries(void)
 
     (void)memset(account_id, 0x31, sizeof(account_id));
     (void)memset(asset_id, 0x42, sizeof(asset_id));
-    if (lx_account_registry_init(&registry) != LXP_OK)
+    if (lx_account_registry_init(&registry) != LXP_OK ||
+        lx_account_registry_reserve(&registry, 1U) != LXP_OK)
         return 1;
     registry.count = 1U;
     registry.accounts[0].kind = LX_ACCOUNT_AGENT_MAIN;
     (void)memcpy(registry.accounts[0].id, account_id, sizeof(account_id));
+    (void)memcpy(registry.index[0].id, account_id, sizeof(account_id));
+    registry.index[0].slot = 0U;
     if (lx_account_module_value_prepare(
             &registry, module_name, sizeof(module_name) - 1U, account_id,
             asset_id, 1U, &registration, &account, &created) !=
         LXP_ERR_ACCOUNT_ID_MISMATCH)
         return 1;
+    lx_account_registry_release(&registry);
 
-    if (lx_account_registry_init(&registry) != LXP_OK)
+    if (lx_account_registry_init(&registry) != LXP_OK ||
+        lx_account_registry_reserve(
+            &registry, (size_t)LX_ACCOUNT_REGISTRY_CAPACITY + 1U) !=
+            LXP_ERR_LENGTH_LIMIT)
         return 1;
-    registry.count = LX_ACCOUNT_REGISTRY_CAPACITY;
+    registry.count = (size_t)LX_ACCOUNT_REGISTRY_CAPACITY + 1U;
     if (lx_account_module_value_prepare(
             &registry, module_name, sizeof(module_name) - 1U, account_id,
             asset_id, 1U, &registration, &account, &created) !=
-        LXP_ERR_ARENA_EXHAUSTED)
+        LXP_ERR_NON_CANONICAL)
         return 1;
+    registry.count = 0U;
+    lx_account_registry_release(&registry);
     return 0;
+}
+
+static int registry_growth(void)
+{
+    static const uint8_t module_name[] = "programs";
+    static const uint8_t asset_id[32] = {0x42U};
+    const size_t total = (size_t)LX_ACCOUNT_REGISTRY_INITIAL_SLOTS * 3U + 7U;
+    lx_account_registry registry;
+    lxp_state_proof *proofs = NULL;
+    uint8_t first_root[32], second_root[32];
+    size_t index;
+    int failure = 0;
+
+    if (total <= (size_t)LX_ACCOUNT_REGISTRY_INITIAL_SLOTS ||
+        lx_account_registry_init(&registry) != LXP_OK)
+        return 1;
+    for (index = 0U; index < total && failure == 0; ++index) {
+        lx_account_registration registration;
+        lx_account *account = NULL;
+        uint8_t account_id[32];
+        bool created = false;
+        growth_account_id(index, account_id);
+        if (lx_account_module_value_prepare(
+                &registry, module_name, sizeof(module_name) - 1U, account_id,
+                asset_id, index + 1U, &registration, &account, &created) !=
+                LXP_OK ||
+            !created ||
+            lx_account_registration_commit(&registry, &registration,
+                                           &account) != LXP_OK ||
+            account->created_at_sequence != index + 1U)
+            failure = 1;
+    }
+    if (failure == 0 &&
+        (registry.count != total ||
+         registry.capacity < total ||
+         registry.capacity != registry.index_capacity ||
+         lx_account_registry_index_validate(&registry) != LXP_OK))
+        failure = 1;
+    for (index = 0U; index < total && failure == 0; ++index) {
+        uint8_t account_id[32];
+        size_t slot = total;
+        growth_account_id(index, account_id);
+        if (lx_account_registry_index_lookup(&registry, account_id, &slot) !=
+                LXP_OK ||
+            slot >= registry.count ||
+            memcmp(registry.accounts[slot].id, account_id,
+                   sizeof(account_id)) != 0 ||
+            registry.accounts[slot].kind != LX_ACCOUNT_MODULE_VALUE ||
+            registry.accounts[slot].created_at_sequence != index + 1U)
+            failure = 1;
+    }
+    if (failure == 0) {
+        proofs = (lxp_state_proof *)calloc(registry.count, sizeof(*proofs));
+        if (proofs == NULL ||
+            lx_account_registry_root(&registry, first_root) != LXP_OK ||
+            lx_account_registry_proofs(&registry, second_root, proofs) !=
+                LXP_OK ||
+            memcmp(first_root, second_root, 32U) != 0)
+            failure = 1;
+    }
+    for (index = 0U; index < total && failure == 0; index += 173U) {
+        uint8_t single_root[32];
+        lxp_state_proof single;
+        if (lx_account_registry_proof(&registry, registry.accounts[index].id,
+                                      single_root, &single) != LXP_OK ||
+            memcmp(single_root, first_root, 32U) != 0 ||
+            memcmp(&proofs[index], &single, sizeof(single)) != 0 ||
+            single.leaf_count != (uint32_t)total)
+            failure = 1;
+    }
+    free(proofs);
+    lx_account_registry_release(&registry);
+    return failure;
 }
 
 static int registration_law(const lxp_module_iface *module,
@@ -1011,6 +1103,7 @@ int main(void)
     if (derivation_vectors() != 0) return 1;
     if (shared_state_vectors() != 0) return 1;
     if (registry_boundaries() != 0) return 1;
+    if (registry_growth() != 0) return 1;
     if (feed_group_pairing_replay() != 0) return 1;
     if (feed_runtime_bindings() != 0) return 1;
     if (registration_law(programs_module_registration_v2(),

@@ -428,16 +428,16 @@ static lxp_result account_registry_preview(
     live = ctx->kernel->state->accounts;
     if (live == NULL || live->count > LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
-    status = lx_account_registry_init(preview);
+    status = lx_account_registry_copy(live, preview);
     if (status != LXP_OK) return status;
-    preview->count = live->count;
-    (void)memcpy(preview->accounts, live->accounts,
-                 live->count * sizeof(live->accounts[0]));
     for (i = 0U; i < ctx->staged_account_count; ++i) {
         lx_account *committed;
         status = commit_account(ctx,
             preview, &ctx->staged_accounts[i], &committed);
-        if (status != LXP_OK) return status;
+        if (status != LXP_OK) {
+            lx_account_registry_release(preview);
+            return status;
+        }
     }
     return LXP_OK;
 }
@@ -469,9 +469,8 @@ lxp_result lxp_ctx_asset_issuance_stage(
     if (status == LXP_OK) status = lx_asset_register_decode(
         activity->payload.bytes, activity->payload.length, &payload);
     if (status != LXP_OK) return status;
-    if (ctx->staged_account_count >= LXP_MODULE_MAX_STAGED_ACCOUNTS ||
-        ctx->kernel->state->accounts->count + ctx->staged_account_count >=
-            LX_ACCOUNT_REGISTRY_CAPACITY) return LXP_ERR_ARENA_EXHAUSTED;
+    if (ctx->staged_account_count >= LXP_MODULE_MAX_STAGED_ACCOUNTS)
+        return LXP_ERR_ARENA_EXHAUSTED;
     (void)memset(&registration, 0, sizeof(registration));
     status = lx_asset_issuance_name(payload.asset_id, registration.account.name,
                                      registration.account.id);
@@ -529,9 +528,7 @@ lxp_result lxp_ctx_asset_account_stage(
         status = lx_asset_account_open_decode(activity->payload.bytes,
                                                activity->payload.length, &payload);
     if (status != LXP_OK) return status;
-    if (ctx->staged_account_count >= LXP_MODULE_MAX_STAGED_ACCOUNTS ||
-        ctx->kernel->state->accounts->count + ctx->staged_account_count >=
-            LX_ACCOUNT_REGISTRY_CAPACITY)
+    if (ctx->staged_account_count >= LXP_MODULE_MAX_STAGED_ACCOUNTS)
         return LXP_ERR_ARENA_EXHAUSTED;
     (void)memset(&registration, 0, sizeof(registration));
     (void)memcpy(candidate->name, "agent:", 6U);
@@ -616,6 +613,7 @@ lxp_result lxp_ctx_account_stage_module_value(
         ctx->staged_accounts[location] = registration;
         *account = &ctx->staged_accounts[location].account;
     }
+    lx_account_registry_release(preview);
     free(preview);
     if (status != LXP_OK) return status;
     status = lxp_state_journal_require_account_root(ctx->kernel->journal);
@@ -640,12 +638,14 @@ lxp_result lxp_ctx_account_find(lxp_module_ctx *ctx,
     registry = ctx->kernel->state->accounts;
     if (registry == NULL || registry->count > LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
-    for (i = 0U; i < registry->count; ++i)
-        if (memcmp(registry->accounts[i].id, account_id, 32U) == 0) {
-            *account = &registry->accounts[i];
-            return LXP_OK;
-        }
-    return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    {
+        size_t slot = 0U;
+        lxp_result status =
+            lx_account_registry_index_lookup(registry, account_id, &slot);
+        if (status != LXP_OK) return status;
+        *account = &registry->accounts[slot];
+    }
+    return LXP_OK;
 }
 
 lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
@@ -748,6 +748,7 @@ lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx)
         account_preview = (lx_account_registry *)malloc(
             sizeof(*account_preview));
         if (account_preview == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+        (void)memset(account_preview, 0, sizeof(*account_preview));
         status = account_registry_preview(ctx, account_preview);
         if (status == LXP_OK)
             status = lx_account_registry_root(account_preview, account_root);
@@ -755,7 +756,12 @@ lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx)
         if (status == LXP_OK && ctx->module_id == LXP_MODULE_BRIDGE &&
             ctx->bridge_credit_fail_stage == 4U) status = LXP_ERR_IO;
 #endif
+        lx_account_registry_release(account_preview);
         free(account_preview);
+        if (status != LXP_OK) return status;
+        status = lx_account_registry_reserve(
+            ctx->kernel->state->accounts,
+            ctx->kernel->state->accounts->count + ctx->staged_account_count);
         if (status != LXP_OK) return status;
     }
     for (i = 0U; i < ctx->staged_blob_count; ++i)
@@ -965,7 +971,10 @@ lxp_result lxp_module_ctx_preview_state_root(
             sizeof(*preview_accounts));
         if (preview_accounts == NULL)
             status = LXP_ERR_ARENA_EXHAUSTED;
-        else status = account_registry_preview(ctx, preview_accounts);
+        else {
+            (void)memset(preview_accounts, 0, sizeof(*preview_accounts));
+            status = account_registry_preview(ctx, preview_accounts);
+        }
     } else if (ctx->staged_account_count != 0U) {
         status = LXP_FATAL_INVARIANT;
     }
@@ -979,6 +988,7 @@ lxp_result lxp_module_ctx_preview_state_root(
     if (status == LXP_OK) status = preview_apply_module(ctx, preview_kernel);
     if (status == LXP_OK) status = lxp_state_root(preview_kernel, root);
     destroy_status = lxp_state_store_destroy(preview_state);
+    lx_account_registry_release(preview_accounts);
     free(preview_accounts);
     free(preview_state);
     free(preview_kernel);
@@ -1553,8 +1563,6 @@ lxp_result lxp_ctx_bridge_credit(lxp_module_ctx *ctx,
     status = lxp_ctx_account_find(ctx, beneficiary, &recipient);
     if (status == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) {
         lx_account_registration *registration = &ctx->staged_accounts[0];
-        if (ctx->kernel->state->accounts->count >= LX_ACCOUNT_REGISTRY_CAPACITY)
-            return LXP_ERR_ARENA_EXHAUSTED;
         (void)memset(registration, 0, sizeof(*registration));
         registration->expected_count = ctx->kernel->state->accounts->count;
         recipient = &registration->account;

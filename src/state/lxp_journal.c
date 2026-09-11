@@ -40,7 +40,8 @@ struct lxp_state_transition {
     lxp_state_idempotency_delta idempotency[
         LXP_STATE_MAX_IDEMPOTENCY * 2U];
     size_t idempotency_count;
-    lxp_state_account_delta accounts[LX_ACCOUNT_REGISTRY_CAPACITY * 2U];
+    lxp_state_account_delta *accounts;
+    size_t account_capacity;
     size_t account_count;
     bool before_account_root_required;
     bool after_account_root_required;
@@ -244,6 +245,7 @@ void lxp_state_snapshot_destroy(lxp_state_snapshot *snapshot)
     if (snapshot == NULL) return;
     if (snapshot->store_initialized)
         (void)lxp_state_store_destroy(&snapshot->store);
+    lx_account_registry_release(&snapshot->accounts);
     (void)memset(snapshot, 0, sizeof(*snapshot));
     free(snapshot);
 }
@@ -312,10 +314,10 @@ static size_t find_idempotency(const lxp_state_store *store,
 static size_t find_account(const lx_account_registry *accounts,
                            const uint8_t id[32])
 {
-    size_t i;
-    for (i = 0U; i < accounts->count; ++i)
-        if (memcmp(accounts->accounts[i].id, id, 32U) == 0) return i;
-    return accounts->count;
+    size_t slot = 0U;
+    if (lx_account_registry_index_lookup(accounts, id, &slot) != LXP_OK)
+        return accounts->count;
+    return slot;
 }
 
 static bool cell_equal(const lxp_state_cell *left,
@@ -397,6 +399,17 @@ lxp_result lxp_state_transition_create(
         return LXP_ERR_CONTEXT_MISMATCH;
     }
     created->has_accounts = before->accounts != NULL;
+    if (before->accounts != NULL) {
+        size_t needed = before->accounts->count + after->accounts->count;
+        if (needed != 0U) {
+            created->accounts = calloc(needed, sizeof(*created->accounts));
+            if (created->accounts == NULL) {
+                free(created);
+                return LXP_ERR_IO;
+            }
+        }
+        created->account_capacity = needed;
+    }
     {
         size_t i;
         for (i = 0U; i < before->count; ++i) {
@@ -485,6 +498,7 @@ lxp_result lxp_state_transition_create(
 void lxp_state_transition_destroy(lxp_state_transition *transition)
 {
     if (transition == NULL) return;
+    free(transition->accounts);
     (void)memset(transition, 0, sizeof(*transition));
     free(transition);
 }
@@ -579,6 +593,14 @@ lxp_result lxp_state_transition_apply_snapshot(
             (void)pthread_mutex_unlock(&store->lock);
             return LXP_ERR_ARENA_EXHAUSTED;
         }
+        if (store->accounts != NULL && account_additions != 0U) {
+            lxp_result reserve = lx_account_registry_reserve(
+                store->accounts, store->accounts->count + account_additions);
+            if (reserve != LXP_OK) {
+                (void)pthread_mutex_unlock(&store->lock);
+                return reserve;
+            }
+        }
         for (i = 0U; i < transition->cell_count; ++i) {
             const lxp_state_cell_delta *delta = &transition->cells[i];
             const uint8_t *key = delta->before_present ? delta->before.key :
@@ -621,17 +643,29 @@ lxp_result lxp_state_transition_apply_snapshot(
             const uint8_t *id = delta->before_present ? delta->before.id :
                                                        delta->after.id;
             size_t location = find_account(store->accounts, id);
+            lxp_result applied;
             if (!delta->after_present) {
-                if (location + 1U < store->accounts->count)
-                    (void)memmove(&store->accounts->accounts[location],
-                                  &store->accounts->accounts[location + 1U],
-                                  (store->accounts->count - location - 1U) *
-                                      sizeof(store->accounts->accounts[0]));
-                --store->accounts->count;
+                if (location == store->accounts->count) {
+                    (void)pthread_mutex_unlock(&store->lock);
+                    return LXP_FATAL_INVARIANT;
+                }
+                applied = lx_account_registry_slot_remove(store->accounts,
+                                                          location);
+            } else if (location == store->accounts->count) {
+                applied = lx_account_registry_slot_insert(
+                    store->accounts, &delta->after, NULL);
             } else {
-                if (location == store->accounts->count)
-                    ++store->accounts->count;
+                if (memcmp(store->accounts->accounts[location].id,
+                           delta->after.id, LX_ACCOUNT_ID_BYTES) != 0) {
+                    (void)pthread_mutex_unlock(&store->lock);
+                    return LXP_FATAL_INVARIANT;
+                }
                 store->accounts->accounts[location] = delta->after;
+                applied = LXP_OK;
+            }
+            if (applied != LXP_OK) {
+                (void)pthread_mutex_unlock(&store->lock);
+                return applied;
             }
         }
         store->account_root_required = store->account_root_required ||
@@ -728,6 +762,18 @@ lxp_result lxp_state_publication_guard_begin(
         free(created);
         return LXP_ERR_CONTEXT_MISMATCH;
     }
+    if (live->accounts != NULL) {
+        status = lx_account_registry_reserve(live->accounts,
+                                             settled->accounts.count);
+        if (status != LXP_OK) {
+            if (pthread_mutex_unlock(&live->lock) != 0) abort();
+            if (created->gateway_excluded)
+                atomic_store_explicit(&live->accounts->gateway_transition,
+                                      false, memory_order_release);
+            free(created);
+            return status;
+        }
+    }
     *guard = created;
     return LXP_OK;
 }
@@ -747,9 +793,17 @@ void lxp_state_snapshot_publish_guarded(lxp_state_publication_guard *guard)
     live->next_sequence = settled->store.next_sequence;
     live->account_root_required = settled->store.account_root_required;
     if (live->accounts != NULL) {
+        if (settled->accounts.count > live->accounts->capacity ||
+            settled->accounts.count > live->accounts->index_capacity) abort();
         live->accounts->count = settled->accounts.count;
-        (void)memcpy(live->accounts->accounts, settled->accounts.accounts,
-                     sizeof(live->accounts->accounts));
+        if (settled->accounts.count != 0U) {
+            (void)memcpy(live->accounts->accounts, settled->accounts.accounts,
+                         settled->accounts.count *
+                             sizeof(live->accounts->accounts[0]));
+            (void)memcpy(live->accounts->index, settled->accounts.index,
+                         settled->accounts.count *
+                             sizeof(live->accounts->index[0]));
+        }
     }
     guard->published = true;
 }
