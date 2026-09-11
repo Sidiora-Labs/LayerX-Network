@@ -21,6 +21,7 @@ const NOT_BEFORE_MS: u64 = 1_699_999_970_000;
 const NOT_AFTER_MS: u64 = 1_700_000_120_000;
 const TIMESTAMP_WINDOW_MS: u64 = 86_400_000;
 const ASSET_MODULE: u16 = 1;
+const GOVERNANCE_MODULE: u16 = 7;
 const PROGRAMS_MODULE: u16 = 9;
 const ORDINAL_MINIMUM: u16 = 1;
 const ORDINAL_MAXIMUM: u16 = 11;
@@ -204,11 +205,7 @@ fn authority_hash(kind: u8, grant_id: &[u8; 32], verified_key: &[u8; 32]) -> [u8
 fn did_identifier(did: &[u8]) -> Result<[u8; 32], String> {
     use layerx_wire::hash::Domain;
     let length = u16::try_from(did.len()).map_err(|error| error.to_string())?;
-    Ok(sha256(&[
-        Domain::DidId.tag(),
-        &length.to_be_bytes(),
-        did,
-    ]))
+    Ok(sha256(&[Domain::DidId.tag(), &length.to_be_bytes(), did]))
 }
 
 fn signed_activity(
@@ -282,7 +279,7 @@ fn check_owner_grant(view: &CoreAuthority, public: &[u8; 32]) -> Result<(), Stri
 }
 
 fn check_declared_envelope_scope(view: &CoreAuthority) {
-    let declared = (1u64 << ASSET_MODULE) | (1u64 << PROGRAMS_MODULE);
+    let declared = (1u64 << ASSET_MODULE) | (1u64 << GOVERNANCE_MODULE) | (1u64 << PROGRAMS_MODULE);
     assert_eq!(view.scope_module_mask, declared);
     assert_ne!(view.scope_module_mask, u64::MAX);
     assert_eq!(view.scope_activity_ordinal_min, ORDINAL_MINIMUM);
@@ -293,6 +290,15 @@ fn check_declared_envelope_scope(view: &CoreAuthority) {
     assert_eq!(view.scope_maximum_total_lo, 0);
     assert_eq!(view.scope_maximum_per_period_hi, 0);
     assert_eq!(view.scope_maximum_per_period_lo, 0);
+}
+
+/// The emulator library publishes the build-script link directives for the
+/// LayerX C core, so the bridge entry points these tests call resolve only when
+/// the library itself is part of this binary. Driving its public entry keeps
+/// that dependency explicit and pins the refusal an empty command line earns.
+#[test]
+fn emulator_entry_refuses_an_empty_command_line() {
+    assert!(layerx_platform_emulator::run(Vec::<String>::new()).is_err());
 }
 
 #[test]

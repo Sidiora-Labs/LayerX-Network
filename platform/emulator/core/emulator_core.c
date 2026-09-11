@@ -137,10 +137,11 @@ static void rollback_fee(lxp_kernel *kernel, void *transaction)
 static lxp_result register_modules(platform_emulator *emulator)
 {
     if (emulator->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
-        lxp_result status = lxp_kernel_register_module(
-            &emulator->kernel, programs_module_registration_v4());
-        return status == LXP_OK ? lxp_kernel_register_module(
-            &emulator->kernel, lx_asset_module_iface()) : status;
+        lxp_genesis_module_plan plan;
+        lxp_result status = lxp_genesis_module_plan_default(
+            emulator->protocol_version, false, &plan);
+        return status == LXP_OK ?
+            lxp_genesis_module_plan_register(&plan, &emulator->kernel) : status;
     }
     const lxp_module_iface *modules[] = {
         lx_asset_module_iface(), lx_budget_module_iface(),
