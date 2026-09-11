@@ -357,3 +357,105 @@ fn native_generated_receive_and_grant_are_byte_identical() -> Result<(), Box<dyn
     }
     Ok(())
 }
+
+const VERSION_PREFIXED_ASSET_ORDINALS: &[u16] = &[1, 2, 3, 4, 8, 10, 11];
+
+#[test]
+fn asset_bodies_refuse_a_version_prefix_other_than_one() {
+    for &(module, ordinal, fixture) in VECTORS {
+        if module != ModuleId::Asset || !VERSION_PREFIXED_ASSET_ORDINALS.contains(&ordinal) {
+            continue;
+        }
+        let payload = hex(fixture);
+        assert_eq!(&payload[0..2], &[0x00, 0x01]);
+        assert!(Payment::decode(module, ordinal, &payload, ACTOR).is_ok());
+        for version in [0x0000_u16, 0x0002, 0x0100, 0xffff] {
+            let mut changed = payload.clone();
+            changed[0..2].copy_from_slice(&version.to_be_bytes());
+            assert_eq!(
+                Payment::decode(module, ordinal, &changed, ACTOR),
+                Err(DisclosureError::MalformedPayload),
+                "{module:?}/{ordinal} version {version:#06x}"
+            );
+        }
+    }
+}
+
+#[test]
+fn receive_frame_marker_and_field_count_are_pinned() {
+    let payload = hex(VECTORS[4].2);
+    assert_eq!(&payload[0..4], &[0x52, 0x01, 0x00, 0x0a]);
+    assert!(Payment::decode(ModuleId::Asset, 6, &payload, ACTOR).is_ok());
+    for marker in [0x0000_u16, 0x0152, 0x5200, 0x5202] {
+        let mut changed = payload.clone();
+        changed[0..2].copy_from_slice(&marker.to_be_bytes());
+        assert_eq!(
+            Payment::decode(ModuleId::Asset, 6, &changed, ACTOR),
+            Err(DisclosureError::MalformedPayload),
+            "marker {marker:#06x}"
+        );
+    }
+    for count in [0x0000_u16, 0x0009, 0x000b, 0xffff] {
+        let mut changed = payload.clone();
+        changed[2..4].copy_from_slice(&count.to_be_bytes());
+        assert_eq!(
+            Payment::decode(ModuleId::Asset, 6, &changed, ACTOR),
+            Err(DisclosureError::MalformedPayload),
+            "count {count}"
+        );
+    }
+}
+
+#[test]
+fn program_transfer_leg_count_bounds_are_enforced() {
+    let payload = hex(VECTORS[9].2);
+    assert_eq!(payload.len(), 258);
+    assert_eq!(&payload[32..34], &[0x00, 0x02]);
+    assert!(Payment::decode(ModuleId::Programs, 5, &payload, ACTOR).is_ok());
+    for count in [0x0000_u16, 0x0101, 0xffff] {
+        let mut changed = payload.clone();
+        changed[32..34].copy_from_slice(&count.to_be_bytes());
+        assert_eq!(
+            Payment::decode(ModuleId::Programs, 5, &changed, ACTOR),
+            Err(DisclosureError::MalformedPayload),
+            "count {count}"
+        );
+    }
+}
+
+#[test]
+fn program_account_seed_marker_is_pinned() {
+    let payload = hex(VECTORS[10].2);
+    assert_eq!(payload.len(), 77);
+    assert_eq!(&payload[32..37], b"LXPA1");
+    assert!(Payment::decode(ModuleId::Programs, 6, &payload, ACTOR).is_ok());
+    for offset in 32..37 {
+        let mut changed = payload.clone();
+        changed[offset] ^= 1;
+        assert_eq!(
+            Payment::decode(ModuleId::Programs, 6, &changed, ACTOR),
+            Err(DisclosureError::MalformedPayload),
+            "offset {offset}"
+        );
+    }
+}
+
+#[test]
+fn an_unregistered_activity_names_its_type() {
+    assert_eq!(
+        Payment::decode(ModuleId::Asset, 9, &[0; 80], ACTOR),
+        Err(DisclosureError::UnsupportedActivity(0x0001_0009))
+    );
+    assert_eq!(
+        Payment::decode(ModuleId::Asset, 5, &[0; 80], ACTOR),
+        Err(DisclosureError::UnsupportedActivity(0x0001_0005))
+    );
+    assert_eq!(
+        Payment::decode(ModuleId::Programs, 7, &[0; 80], ACTOR),
+        Err(DisclosureError::UnsupportedActivity(0x0009_0007))
+    );
+    assert_eq!(
+        Payment::decode(ModuleId::Escrow, 1, &[0; 80], ACTOR),
+        Err(DisclosureError::UnsupportedActivity(0x0002_0001))
+    );
+}
