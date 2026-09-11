@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use store::{Principal, Store, StoredSession};
+use store::{Principal, Store, StoredSession, SUBJECT_TENANT_CONFLICT};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -109,6 +109,8 @@ struct PrincipalRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SessionRequest {
+    #[serde(default)]
+    tenant: Option<String>,
     sub: String,
     #[serde(default)]
     ttl_seconds: Option<u64>,
@@ -155,6 +157,7 @@ struct PrincipalResponse<'a> {
 #[derive(Serialize)]
 struct SessionResponse<'a> {
     session_id: &'a str,
+    tenant: &'a str,
     sub: &'a str,
     token: &'a str,
     csrf_token: &'a str,
@@ -211,6 +214,10 @@ fn valid_sub(value: &str) -> bool {
                 || byte.is_ascii_digit()
                 || matches!(byte, b'-' | b'_' | b'.' | b':')
         })
+}
+
+fn valid_tenant(value: &str) -> bool {
+    valid_sub(value) && !value.contains(':')
 }
 
 fn valid_identifier(value: &str, max: usize) -> bool {
@@ -509,6 +516,7 @@ fn lookup_session(
         .map_err(|_| refusal(503, "store_unavailable", Some(5)))?;
     let placeholder = StoredSession {
         session_id: String::new(),
+        tenant: String::new(),
         principal: String::new(),
         token_digest: "0".repeat(64),
         csrf_digest: String::new(),
@@ -532,7 +540,7 @@ fn lookup_session(
     {
         return Ok(None);
     }
-    let Some(principal) = store.principal(&session.principal) else {
+    let Some(principal) = store.principal(&session.tenant, &session.principal) else {
         return Ok(None);
     };
     let csrf = shared
@@ -700,8 +708,7 @@ fn create_principal(shared: &Shared, request: &Request) -> Response {
         Ok(body) => body,
         Err(_) => return refusal(400, "invalid_argument", None),
     };
-    if !valid_sub(&body.tenant)
-        || body.tenant.contains(':')
+    if !valid_tenant(&body.tenant)
         || !valid_sub(&body.sub)
         || !valid_signer_keys(&body.allowed_signer_public_keys)
         || body
@@ -722,6 +729,7 @@ fn create_principal(shared: &Shared, request: &Request) -> Response {
         return refusal(400, "invalid_argument", None);
     }
     let principal = Principal {
+        tenant: body.tenant,
         sub: body.sub,
         allowed_signer_public_keys: body.allowed_signer_public_keys,
         account: body.account,
@@ -730,11 +738,15 @@ fn create_principal(shared: &Shared, request: &Request) -> Response {
     let Ok(mut store) = shared.store.lock() else {
         return refusal(503, "store_unavailable", Some(5));
     };
-    if store.put_principal(principal.clone()).is_err() {
-        return refusal(503, "store_unavailable", Some(5));
+    if let Err(error) = store.put_principal(principal.clone()) {
+        return if error == SUBJECT_TENANT_CONFLICT {
+            refusal(409, "subject_tenant_conflict", None)
+        } else {
+            refusal(503, "store_unavailable", Some(5))
+        };
     }
     serialize(&PrincipalResponse {
-        tenant: &body.tenant,
+        tenant: &principal.tenant,
         sub: &principal.sub,
         allowed_signer_public_keys: &principal.allowed_signer_public_keys,
         account: principal.account.as_deref(),
@@ -753,7 +765,14 @@ fn create_session(shared: &Shared, request: &Request) -> Response {
     let ttl = body
         .ttl_seconds
         .unwrap_or(shared.config.default_ttl_seconds);
-    if !valid_sub(&body.sub) || ttl == 0 || ttl > MAX_SESSION_TTL_SECONDS {
+    if !valid_sub(&body.sub)
+        || body
+            .tenant
+            .as_deref()
+            .is_some_and(|tenant| !valid_tenant(tenant))
+        || ttl == 0
+        || ttl > MAX_SESSION_TTL_SECONDS
+    {
         return refusal(400, "invalid_argument", None);
     }
     let Ok(now) = unix_seconds() else {
@@ -769,8 +788,23 @@ fn create_session(shared: &Shared, request: &Request) -> Response {
     let Ok(csrf_sealed) = shared.config.store_key.seal(csrf_token.as_bytes()) else {
         return refusal(503, "entropy_unavailable", Some(5));
     };
+    let Ok(mut store) = shared.store.lock() else {
+        return refusal(503, "store_unavailable", Some(5));
+    };
+    let Some(tenant) = store.subject_tenant(&body.sub).map(str::to_owned) else {
+        return refusal(404, "principal_not_found", None);
+    };
+    if body
+        .tenant
+        .as_deref()
+        .is_some_and(|requested| requested != tenant)
+        || store.principal(&tenant, &body.sub).is_none()
+    {
+        return refusal(404, "principal_not_found", None);
+    }
     let session = StoredSession {
         session_id: session_id.to_string(),
+        tenant: tenant.clone(),
         principal: body.sub.clone(),
         token_digest: sha256_hex(secret.as_bytes()),
         csrf_digest: sha256_hex(csrf_token.as_bytes()),
@@ -779,12 +813,6 @@ fn create_session(shared: &Shared, request: &Request) -> Response {
         expires_at: now.saturating_add(ttl),
         revoked_at: None,
     };
-    let Ok(mut store) = shared.store.lock() else {
-        return refusal(503, "store_unavailable", Some(5));
-    };
-    if store.principal(&body.sub).is_none() {
-        return refusal(404, "principal_not_found", None);
-    }
     let expires_at = session.expires_at;
     if let Err(error) = store.put_session(session) {
         return if error.contains("bound") {
@@ -796,6 +824,7 @@ fn create_session(shared: &Shared, request: &Request) -> Response {
     let token = Zeroizing::new(format!("ses_{}.{}", session_id.as_str(), secret.as_str()));
     serialize(&SessionResponse {
         session_id: &session_id,
+        tenant: &tenant,
         sub: &body.sub,
         token: &token,
         csrf_token: &csrf_token,
@@ -926,6 +955,7 @@ fn write_response(stream: &mut impl Write, response: &Response) -> Result<(), St
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
+        409 => "Conflict",
         429 => "Too Many Requests",
         _ => "Service Unavailable",
     };
@@ -1129,6 +1159,63 @@ mod tests {
             ramp.body,
             "{\"active\":true,\"principal_id\":\"alpha\",\"account\":\"agent:did:key:alpha:main\",\"audience\":\"ramp-reference\",\"expires_at\":42}"
         );
+    }
+
+    #[test]
+    fn tenant_names_are_bounded_and_colon_free() {
+        assert!(valid_tenant("beta"));
+        assert!(valid_tenant("beta-tenant_1.prod"));
+        assert!(valid_tenant(&"a".repeat(128)));
+        assert!(!valid_tenant(""));
+        assert!(!valid_tenant(&"a".repeat(129)));
+        assert!(!valid_tenant("Beta"));
+        assert!(!valid_tenant("beta:one"));
+        assert!(!valid_tenant("beta one"));
+        assert!(valid_sub("beta:one"), "subjects still carry colons");
+    }
+
+    #[test]
+    fn session_response_names_the_tenant_it_was_minted_in() {
+        let session = serialize(&SessionResponse {
+            session_id: "0".repeat(32).as_str(),
+            tenant: "beta",
+            sub: "did:key:alpha",
+            token: "ses_token",
+            csrf_token: "csrf",
+            expires_at: 42,
+        });
+        assert_eq!(
+            session.body,
+            format!(
+                "{{\"session_id\":\"{}\",\"tenant\":\"beta\",\"sub\":\"did:key:alpha\",\"token\":\"ses_token\",\"csrf_token\":\"csrf\",\"expires_at\":42}}",
+                "0".repeat(32)
+            )
+        );
+        let principal = serialize(&PrincipalResponse {
+            tenant: "beta",
+            sub: "did:key:alpha",
+            allowed_signer_public_keys: &[],
+            account: None,
+            audiences: &[],
+        });
+        assert_eq!(
+            principal.body,
+            "{\"tenant\":\"beta\",\"sub\":\"did:key:alpha\",\"allowed_signer_public_keys\":[],\"account\":null,\"audiences\":[]}"
+        );
+    }
+
+    #[test]
+    fn a_cross_tenant_subject_claim_is_a_conflict() {
+        let conflict = refusal(409, "subject_tenant_conflict", None);
+        assert_eq!(
+            conflict.body,
+            "{\"error\":{\"code\":\"subject_tenant_conflict\",\"retry\":\"never\"}}"
+        );
+        let mut bytes = Vec::new();
+        write_response(&mut bytes, &conflict).unwrap_or_else(|error| panic!("write: {error}"));
+        let text = String::from_utf8(bytes).unwrap_or_default();
+        assert!(text.starts_with("HTTP/1.1 409 Conflict\r\n"), "{text}");
+        assert!(!text.contains("\r\nRetry-After:"));
     }
 
     #[test]

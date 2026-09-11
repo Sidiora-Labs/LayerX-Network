@@ -20,7 +20,10 @@ const SERVICES: [&str; 7] = [
     "provisioning",
 ];
 const SIGNER_KEY: &str = "1f2e3d4c5b6a79880123456789abcdef1f2e3d4c5b6a79880123456789abcdef";
+const OTHER_SIGNER_KEY: &str = "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9";
 const SUB: &str = "did:key:z6mkbeta-principal_1";
+const ALPHA_SUB: &str = "did:key:z6mkalpha-principal";
+const BRAVO_SUB: &str = "did:key:z6mkbravo-principal";
 const ACCOUNT: &str = "agent:did:key:z6mkbeta-principal_1:main";
 
 struct Fixture {
@@ -397,12 +400,74 @@ fn provision(fixture: &Fixture, server: &Server) -> (String, String, String) {
     let csrf = value["csrf_token"].as_str().unwrap_or_default().to_owned();
     let session_id = value["session_id"].as_str().unwrap_or_default().to_owned();
     assert_eq!(value["sub"], SUB);
+    assert_eq!(value["tenant"], "beta");
     assert!(value["expires_at"].as_u64().unwrap_or_default() > 0);
     assert_eq!(session_id.len(), 32);
     assert_eq!(csrf.len(), 64);
     assert_eq!(token, format!("ses_{session_id}.{}", &token[37..]));
     assert_eq!(token.len(), 4 + 32 + 1 + 64);
     (session_id, token, csrf)
+}
+
+fn create_principal(fixture: &Fixture, server: &Server, body: &serde_json::Value) -> Reply {
+    fixture.request(
+        server,
+        "POST",
+        "/v1/principals",
+        Some(&token_for("provisioning")),
+        Some(&body.to_string()),
+    )
+}
+
+fn create_session(fixture: &Fixture, server: &Server, body: &serde_json::Value) -> Reply {
+    fixture.request(
+        server,
+        "POST",
+        "/v1/sessions",
+        Some(&token_for("provisioning")),
+        Some(&body.to_string()),
+    )
+}
+
+fn cross_tenant_claim() -> serde_json::Value {
+    serde_json::json!({
+        "tenant": "bravo",
+        "sub": ALPHA_SUB,
+        "allowed_signer_public_keys": [OTHER_SIGNER_KEY]
+    })
+}
+
+fn provision_two_tenants(fixture: &Fixture, server: &Server) {
+    for (tenant, sub, key) in [
+        ("alpha", ALPHA_SUB, SIGNER_KEY),
+        ("bravo", BRAVO_SUB, OTHER_SIGNER_KEY),
+    ] {
+        let reply = create_principal(
+            fixture,
+            server,
+            &serde_json::json!({
+                "tenant": tenant,
+                "sub": sub,
+                "allowed_signer_public_keys": [key],
+                "account": format!("agent:{sub}:main"),
+                "audiences": ["ramp-reference"]
+            }),
+        );
+        assert_eq!(reply.status, 200, "{}", reply.body);
+        assert_eq!(json(&reply)["tenant"], tenant);
+        assert_eq!(json(&reply)["sub"], sub);
+    }
+}
+
+fn assert_tenant_binding(fixture: &Fixture, server: &Server, token: &str, sub: &str, key: &str) {
+    let gateway = introspect(fixture, server, "gateway", "/v1/sessions/introspect", token);
+    assert_eq!(
+        gateway.body,
+        format!("{{\"active\":true,\"sub\":\"{sub}\",\"allowed_signer_public_keys\":[\"{key}\"]}}")
+    );
+    let ramp = introspect(fixture, server, "ramp", "/v1/introspect", token);
+    assert_eq!(json(&ramp)["principal_id"], sub);
+    assert_eq!(json(&ramp)["account"], format!("agent:{sub}:main"));
 }
 
 fn introspect(fixture: &Fixture, server: &Server, service: &str, path: &str, token: &str) -> Reply {
@@ -899,8 +964,12 @@ fn principal_tenant_is_required_bounded_and_echoed() {
         );
         assert_eq!(reply.status, 400, "{}", reply.body);
     }
-    for tenant in ["beta-tenant_1.prod".to_owned(), "a".repeat(128)] {
-        let body = serde_json::json!({"tenant": tenant, "sub": SUB, "allowed_signer_public_keys": [SIGNER_KEY]});
+    for (index, tenant) in ["beta-tenant_1.prod".to_owned(), "a".repeat(128)]
+        .into_iter()
+        .enumerate()
+    {
+        let sub = format!("{SUB}-{index}");
+        let body = serde_json::json!({"tenant": tenant, "sub": sub, "allowed_signer_public_keys": [SIGNER_KEY]});
         let reply = fixture.request(
             &server,
             "POST",
@@ -910,6 +979,120 @@ fn principal_tenant_is_required_bounded_and_echoed() {
         );
         assert_eq!(reply.status, 200, "{}", reply.body);
         assert_eq!(json(&reply)["tenant"], tenant);
-        assert_eq!(json(&reply)["sub"], SUB);
+        assert_eq!(json(&reply)["sub"], sub);
     }
+    let claimed = serde_json::json!({
+        "tenant": "rival",
+        "sub": format!("{SUB}-0"),
+        "allowed_signer_public_keys": [OTHER_SIGNER_KEY]
+    });
+    let conflict = fixture.request(
+        &server,
+        "POST",
+        "/v1/principals",
+        Some(&token_for("provisioning")),
+        Some(&claimed.to_string()),
+    );
+    assert_eq!(conflict.status, 409, "{}", conflict.body);
+    assert_eq!(
+        conflict.body,
+        "{\"error\":{\"code\":\"subject_tenant_conflict\",\"retry\":\"never\"}}"
+    );
+}
+#[test]
+fn a_second_tenant_cannot_claim_a_bound_subject() {
+    let fixture = fixture("tenant-claim");
+    let server = fixture.spawn(&fixture.root.join("state"));
+    provision_two_tenants(&fixture, &server);
+    let refused = create_principal(&fixture, &server, &cross_tenant_claim());
+    assert_eq!(refused.status, 409, "{}", refused.body);
+    assert_eq!(
+        refused.body,
+        "{\"error\":{\"code\":\"subject_tenant_conflict\",\"retry\":\"never\"}}"
+    );
+    let alpha = create_session(&fixture, &server, &serde_json::json!({"sub": ALPHA_SUB}));
+    assert_eq!(alpha.status, 200, "{}", alpha.body);
+    assert_eq!(json(&alpha)["tenant"], "alpha");
+    let bravo = create_session(&fixture, &server, &serde_json::json!({"sub": BRAVO_SUB}));
+    assert_eq!(bravo.status, 200, "{}", bravo.body);
+    assert_eq!(json(&bravo)["tenant"], "bravo");
+    assert_tenant_binding(
+        &fixture,
+        &server,
+        json(&alpha)["token"].as_str().unwrap_or_default(),
+        ALPHA_SUB,
+        SIGNER_KEY,
+    );
+    assert_tenant_binding(
+        &fixture,
+        &server,
+        json(&bravo)["token"].as_str().unwrap_or_default(),
+        BRAVO_SUB,
+        OTHER_SIGNER_KEY,
+    );
+}
+
+#[test]
+fn sessions_belong_to_the_tenant_of_their_principal() {
+    let fixture = fixture("tenant-sessions");
+    let state = fixture.root.join("state");
+    let server = fixture.spawn(&state);
+    provision_two_tenants(&fixture, &server);
+    for (tenant, sub) in [("bravo", ALPHA_SUB), ("alpha", BRAVO_SUB)] {
+        let reply = create_session(
+            &fixture,
+            &server,
+            &serde_json::json!({"tenant": tenant, "sub": sub}),
+        );
+        assert_eq!(
+            reply.status, 404,
+            "{tenant} must not mint a session for {sub}"
+        );
+        assert_eq!(
+            reply.body,
+            "{\"error\":{\"code\":\"principal_not_found\",\"retry\":\"never\"}}"
+        );
+    }
+    for tenant in ["Alpha", "al:pha", &"a".repeat(129)] {
+        let reply = create_session(
+            &fixture,
+            &server,
+            &serde_json::json!({"tenant": tenant, "sub": ALPHA_SUB}),
+        );
+        assert_eq!(reply.status, 400, "{tenant} is not a tenant name");
+    }
+    let scoped = create_session(
+        &fixture,
+        &server,
+        &serde_json::json!({"tenant": "alpha", "sub": ALPHA_SUB}),
+    );
+    assert_eq!(scoped.status, 200, "{}", scoped.body);
+    assert_eq!(json(&scoped)["tenant"], "alpha");
+    let alpha_token = json(&scoped)["token"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let resolved = create_session(&fixture, &server, &serde_json::json!({"sub": BRAVO_SUB}));
+    assert_eq!(resolved.status, 200, "{}", resolved.body);
+    assert_eq!(json(&resolved)["tenant"], "bravo");
+    let bravo_token = json(&resolved)["token"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert_tenant_binding(&fixture, &server, &alpha_token, ALPHA_SUB, SIGNER_KEY);
+    assert_tenant_binding(&fixture, &server, &bravo_token, BRAVO_SUB, OTHER_SIGNER_KEY);
+    drop(server);
+
+    let server = fixture.spawn(&state);
+    let snapshot = fs::read_to_string(state.join("snapshot.json")).unwrap_or_default();
+    assert!(
+        snapshot.contains(&format!("\"alpha\":{{\"{ALPHA_SUB}\":"))
+            && snapshot.contains(&format!("\"bravo\":{{\"{BRAVO_SUB}\":")),
+        "the snapshot keys principals by tenant then subject: {snapshot}"
+    );
+    assert_tenant_binding(&fixture, &server, &alpha_token, ALPHA_SUB, SIGNER_KEY);
+    assert_tenant_binding(&fixture, &server, &bravo_token, BRAVO_SUB, OTHER_SIGNER_KEY);
+    let still_refused = create_principal(&fixture, &server, &cross_tenant_claim());
+    assert_eq!(still_refused.status, 409, "{}", still_refused.body);
+    assert_tenant_binding(&fixture, &server, &alpha_token, ALPHA_SUB, SIGNER_KEY);
 }
