@@ -226,6 +226,41 @@ class RegistrationInputTests(unittest.TestCase):
         self.assertEqual(provision.peer_binding(binding, path),
                          'uid=4020;tenant=beta_owner;principal=did:layerx:owner')
 
+    def test_named_peer_binding_preserves_identity_did_and_refuses_delimiters(self):
+        request = self.input / 'request.json'
+        response = self.input / 'response.json'
+        output = self.input / 'binding.json'
+        binding = {'tenant': 'beta', 'sub': 'did:layerx:beta:owner'}
+        provision.write_json(request, binding)
+        provision.write_json(response, binding)
+        provision.preserve_binding(request, response, output)
+        self.assertEqual(provision.peer_binding(provision.protected_json(output), output),
+                         'uid=4020;tenant=beta;principal=did:layerx:beta:owner')
+        for principal in ('owner', 'did::owner', 'did:layerx:', 'did:layerx:a;b',
+                          'did:layerx:a,b', 'did:layerx:a b', 'did:layerx:a\x00b',
+                          'did:layerx:' + 'a' * 246):
+            with self.assertRaises(provision.Refused):
+                provision.peer_binding({'tenant': 'beta', 'principal': principal}, output)
+        for tenant in ('beta.prod', 'beta;prod', 'beta,prod', 'beta prod', ''):
+            with self.assertRaises(provision.Refused):
+                provision.peer_binding({'tenant': tenant, 'principal': binding['sub']}, output)
+
+    def test_evidence_preflight_names_missing_registration_before_job(self):
+        with self.assertRaises(provision.Refused) as caught:
+            provision.evidence_inputs(self.root, self.root / 'module-registry.json', None)
+        self.assertIn(str(self.path), str(caught.exception))
+        self.assertFalse((self.root / 'human-owner-result.json').exists())
+        self.assertFalse((self.root / 'human-evidence').exists())
+
+    def test_cluster_sources_producer_and_runs_validation_after_production(self):
+        cluster = Path(provision.__file__).parents[1] / 'tests/beta-cluster.sh'
+        self.assertIn('source "$REPO_ROOT/platform/hosted/human/provision.sh"', cluster.read_text())
+        script = Path(provision.__file__).with_name('provision.sh').read_text()
+        body = script.split('human_evidence_provision() (', 1)[1].split('\n)\n', 1)[0]
+        produced = body.index('human_native_provision')
+        self.assertGreater(body.index('--validate-owner-registration'), produced)
+        self.assertGreater(body.index('--validate-evidence-inputs'), produced)
+
     def test_custody_source_missing_field_is_not_derived_from_address(self):
         paxeer = self.root / 'paxeer'
         paxeer.mkdir()

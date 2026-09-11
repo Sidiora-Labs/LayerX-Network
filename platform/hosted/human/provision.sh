@@ -131,6 +131,24 @@ module.require(not Path(sys.argv[3]).exists() and not Path(sys.argv[3]).is_symli
                sys.argv[3], 'existing deployment result requires reconciliation')
 PYDEPLOY
     port_forward registry "$TESTNET_NAMESPACE" layerx-program-registry 19455 9420
+    local field refused="$WORK_DIR/registry-deployment-refused.json"
+    for field in record_hex proof_hex; do
+        status=$(curl --silent --show-error --max-time 120 --max-filesize 1048576 --noproxy '*' \
+            --cacert "$CA_DIR/ca.crt" --cert "$CA_DIR/gateway-client/cert.pem" --key "$CA_DIR/gateway-client/key.pem" \
+            --connect-to 'layerx-program-registry:9420:127.0.0.1:19455' \
+            --header "Authorization: Bearer $(cat "$SECRETS_DIR/registry-request.token")" \
+            --header 'Content-Type: application/octet-stream' --data "{\"$field\":\"00\"}" \
+            --output "$refused" --write-out '%{http_code}' \
+            'https://layerx-program-registry:9420/__registry/deployments')
+        [ "$status" = 503 ] || fail "registry accepted or misclassified caller $field: status $status"
+        python3 - "$refused" <<'PYREFUSAL'
+import json
+import sys
+value = json.load(open(sys.argv[1]))
+if value.get('error', {}).get('code') != 'deployment_proof_unavailable':
+    raise SystemExit('registry caller projection did not reach deployment verification')
+PYREFUSAL
+    done
     status=$(curl --silent --show-error --max-time 120 --max-filesize 1048576 --noproxy '*' \
         --cacert "$CA_DIR/ca.crt" --cert "$CA_DIR/gateway-client/cert.pem" --key "$CA_DIR/gateway-client/key.pem" \
         --connect-to 'layerx-program-registry:9420:127.0.0.1:19455' \
@@ -164,10 +182,7 @@ human_evidence_provision() (
     local input="$WORK_DIR/human-evidence-input" status
     local provision="$REPO_ROOT/platform/hosted/human/provision.py"
     [ -d "$input" ] && [ ! -L "$input" ] || fail "$input: owner registration producer inputs required"
-    python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
     python3 "$provision" --validate-job-input --work-dir "$WORK_DIR"
-    python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
-        --registry "$SECRETS_DIR/module-registry.json" --journal "$WORK_DIR/registry-journal"
     kube -n "$TESTNET_NAMESPACE" get secret layerx-guarantor-checkpoint-authority \
         -o 'jsonpath={.data.public\.hex}' > "$input/checkpoint-public.base64" \
         || fail 'Secret layerx-guarantor-checkpoint-authority/public.hex: checkpoint producer output required'

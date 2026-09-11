@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <time.h>
@@ -129,7 +130,8 @@ static lxp_result request_parse(
     char *request, size_t length, char method[8], char path[LISTENER_PATH_BYTES],
     const uint8_t **token, size_t *token_length)
 {
-    static const char authorization[] = "Authorization: Bearer ";
+    static const char authorization[] = "Authorization:";
+    static const char bearer[] = " Bearer ";
     char *line_end;
     char *first_space;
     char *second_space;
@@ -159,11 +161,15 @@ static lxp_result request_parse(
     while (line < request + length && strncmp(line, "\r\n", 2U) != 0) {
         char *end = strstr(line, "\r\n");
         if (end == NULL) return LXP_ERR_NON_CANONICAL;
-        if (strncmp(line, authorization, sizeof(authorization) - 1U) == 0) {
-            if (*token != NULL) return LXP_ERR_NON_CANONICAL;
-            *token = (const uint8_t *)line + sizeof(authorization) - 1U;
-            *token_length = (size_t)(end - line) -
-                            (sizeof(authorization) - 1U);
+        if ((size_t)(end - line) >= sizeof(authorization) - 1U &&
+            strncasecmp(line, authorization, sizeof(authorization) - 1U) == 0) {
+            size_t prefix = sizeof(authorization) + sizeof(bearer) - 2U;
+            if (*token != NULL || (size_t)(end - line) <= prefix ||
+                strncmp(line + sizeof(authorization) - 1U, bearer,
+                        sizeof(bearer) - 1U) != 0)
+                return LXP_ERR_NON_CANONICAL;
+            *token = (const uint8_t *)line + prefix;
+            *token_length = (size_t)(end - line) - prefix;
         }
         line = end + 2;
     }

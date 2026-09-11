@@ -665,6 +665,100 @@ impl ProtocolDeploymentVerifier {
         )
     }
 
+    /// Verifies a maintenance head under the active signed-header trust anchor.
+    /// # Errors
+    /// Refuses invalid inclusion, maintenance identity, settlement or freshness.
+    pub fn verify_current_maintenance_head(
+        &self,
+        receipt: &[u8],
+        proof: &Proof,
+        header: &[u8],
+        signature: &[u8; 64],
+        now_ms: u64,
+    ) -> Result<(crate::AccountStateHead, [u8; 32]), ProtocolEvidenceError> {
+        self.verify_maintenance_head(
+            receipt,
+            proof,
+            header,
+            signature,
+            EvidenceMoment::Current(now_ms),
+        )
+    }
+
+    /// Verifies a maintenance head under its historical signed-header trust anchor.
+    /// # Errors
+    /// Refuses invalid inclusion, maintenance identity or settlement.
+    pub fn verify_historical_maintenance_head(
+        &self,
+        receipt: &[u8],
+        proof: &Proof,
+        header: &[u8],
+        signature: &[u8; 64],
+    ) -> Result<(crate::AccountStateHead, [u8; 32]), ProtocolEvidenceError> {
+        self.verify_maintenance_head(
+            receipt,
+            proof,
+            header,
+            signature,
+            EvidenceMoment::Historical,
+        )
+    }
+
+    fn verify_maintenance_head(
+        &self,
+        receipt: &[u8],
+        proof: &Proof,
+        header: &[u8],
+        signature: &[u8; 64],
+        moment: EvidenceMoment,
+    ) -> Result<(crate::AccountStateHead, [u8; 32]), ProtocolEvidenceError> {
+        let anchor = self.anchors[self.select_anchor(header, moment)?];
+        let inclusion =
+            verify_receipt_inclusion(receipt, proof, header, signature, &anchor.authorization())
+                .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
+        let header = inclusion.header().header();
+        let record = layerx_wire::maintenance::decode_occupancy_maintenance(receipt)
+            .map_err(|_| ProtocolEvidenceError::Receipt)?;
+        let count = header
+            .last_sequence()
+            .checked_sub(header.first_sequence())
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or(ProtocolEvidenceError::BatchMismatch)?;
+        if header.protocol_version() != 3
+            || header.first_sequence() == 0
+            || count == 0
+            || count.checked_add(1) != Some(proof.leaf_count())
+            || proof.leaf_index() != count
+            || record.batch_number != header.batch_number()
+            || record.global_sequence != header.last_sequence()
+            || record.resulting_state_root != header.resulting_state_root()
+        {
+            return Err(ProtocolEvidenceError::BatchMismatch);
+        }
+        verify_maintenance_settlement(&record)?;
+        let observed_at = header.timestamp_ms();
+        if observed_at == 0 {
+            return Err(ProtocolEvidenceError::Stale);
+        }
+        if let EvidenceMoment::Current(now_ms) = moment {
+            if now_ms < observed_at || now_ms.saturating_sub(observed_at) > self.staleness_limit_ms
+            {
+                return Err(ProtocolEvidenceError::Stale);
+            }
+        }
+        Ok((
+            crate::AccountStateHead {
+                receipt_digest: crate::hash::sha256(receipt),
+                state_root: record.resulting_state_root,
+                freshness: ReadFreshness {
+                    observed_sequence: record.global_sequence,
+                    observed_at,
+                },
+            },
+            anchor.sequencer_public_key,
+        ))
+    }
+
     fn verify_protocol_head(
         &self,
         receipt: &[u8],
@@ -933,6 +1027,53 @@ impl ProtocolDeploymentVerifier {
         }
         Ok(selected)
     }
+}
+
+fn verify_maintenance_settlement(
+    record: &layerx_wire::maintenance::OccupancyMaintenance<'_>,
+) -> Result<(), ProtocolEvidenceError> {
+    let settlement = layerx_programs_runtime::occupancy::OccupancySettlement::canonical_decode(
+        record.settlement_evidence,
+    )
+    .map_err(|_| ProtocolEvidenceError::Receipt)?;
+    let usage = settlement.usage();
+    let schedule = settlement.fee_schedule();
+    let prices = [
+        schedule.cpu_price(),
+        schedule.memory_byte_price(),
+        schedule.storage_read_byte_price(),
+        schedule.storage_write_byte_price(),
+        schedule.output_value_price(),
+        schedule.output_byte_price(),
+        schedule.occupancy_byte_batch_price(),
+    ];
+    let payers = settlement
+        .payer_dispositions()
+        .map_err(|_| ProtocolEvidenceError::Receipt)?;
+    if settlement.canonical_evidence() != record.settlement_evidence
+        || settlement.batch() != record.batch_number
+        || schedule.version() != record.schedule_version
+        || prices != record.schedule_prices
+        || usage.byte_batches != record.byte_batches
+        || usage.fee_units != record.fee_units
+        || usage.paid_fee_units != record.paid_fee_units
+        || usage.arrears_fee_units != record.arrears_fee_units
+        || settlement
+            .transfer_root(record.occupancy_asset_id)
+            .map_err(|_| ProtocolEvidenceError::Receipt)?
+            != record.transfer_set_root
+        || payers.len() != record.payers.len()
+        || payers
+            .iter()
+            .zip(&record.payers)
+            .any(|((principal, amounts), payer)| {
+                principal.bytes() != payer.principal
+                    || *amounts != (payer.due, payer.paid, payer.arrears, payer.frozen)
+            })
+    {
+        return Err(ProtocolEvidenceError::Receipt);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -23,26 +23,38 @@ This page covers bootstrap, the supervisor, `layerxd`
 listeners, and the node StatefulSet. The colocated TLS
 boundaries are [Hosted core](HostedCore.md),
 [Hosted authority](HostedAuthority.md), and
-[Hosted agent boundary](HostedAgentBoundary.md). The loopback
+[Hosted agent boundary](HostedAgentBoundary.md). The Human
+API, providers, KMS and owner run in this same pod; see
+[Hosted Human](HostedHuman.md). The loopback
 Paxeer relay is documented with [Paxeer boundary](PaxeerBoundary.md).
 
 ---
 
 ## Cluster shape
 
-Containers in the pod (`platform/hosted/node/deployment.yaml:28-223`):
+Containers in the pod (`platform/hosted/node/deployment.yaml:106-784`):
 
 | Container | Image | Role |
 | --- | --- | --- |
 | `layerxd` | `layerx-node:0.1.0` | Sequencer supervisor: bootstrap, `layerxd --serve`, supervisor Unix socket |
 | `layerxd-authority` | `layerx-node:0.1.0` | Replica supervisor: `layerxd --authority-replica` |
-| `paxeer-relay` | `layerx-node:0.1.0` | `socat` TCP `127.0.0.1:18545` to `OPENSSL:paxeer-boundary.layerx-testnet.svc.cluster.local:9443` (`platform/hosted/node/deployment.yaml:78-90`) |
+| `treasury-signer` | `layerx-node:0.1.0` | Treasury signer `signer.py` on Unix socket `/run/layerx/node/treasury-signer.sock` as UID `4020` (`platform/hosted/node/deployment.yaml:156-178`) |
+| `guarantor-1`, `guarantor-2` | `layerx-node:0.1.0` | Persistent checkpoint-authority processes |
+| `paxeer-relay` | `layerx-node:0.1.0` | `socat` TCP `127.0.0.1:18545` to `OPENSSL:paxeer-boundary.layerx-testnet.svc.cluster.local:9443` (`platform/hosted/node/deployment.yaml:239-248`) |
 | `core-boundary` | `layerx-core-boundary:0.1.0` | TLS core/admin planes; see [Hosted core](HostedCore.md) |
 | `receipt-authority` | `layerx-receipt-authority:0.1.0` | TLS receipt authority; see [Hosted authority](HostedAuthority.md) |
 | `agent-boundary` | `layerx-agent-boundary:0.1.0` | TLS agent boundary; see [Hosted agent boundary](HostedAgentBoundary.md) |
+| `agentd-boundary` | `layerx-node:0.1.0` | `socat` TLS listener on container port `9454` (`agentd-tls`) to loopback agentd `127.0.0.1:9453` as UID `4021` (`platform/hosted/node/deployment.yaml:396-417`) |
+| `human` | `layerx-human:0.1.0` | Human HTTPS API on container port `9447`; Service `layerx-human` maps `9443` to `human-https` (`platform/hosted/node/deployment.yaml:418-434`; `platform/hosted/human/deployment.yaml:1-12`) |
+| `components` | `layerx-human:0.1.0` | Privileged Human component graph (`platform/hosted/node/deployment.yaml:479`) |
+| `human-identity`, `human-security`, `human-movement` | `layerx-human:0.1.0` | Provider binaries as UID `4020` (`platform/hosted/node/deployment.yaml:534, 585, 636`) |
+| `human-kms` | `layerx-human:0.1.0` | Human KMS as UID `4026` (`platform/hosted/node/deployment.yaml:685`) |
+| `human-owner` | `layerx-human:0.1.0` | Human owner as UID `4021` (`platform/hosted/node/deployment.yaml:738`) |
 
 Services (`platform/hosted/node/deployment.yaml:12-14`;
-`platform/hosted/node/deployment.yaml:246-264`):
+`platform/hosted/node/deployment.yaml:867-884`;
+`platform/hosted/node/deployment.yaml:924-927`;
+`platform/hosted/human/deployment.yaml:1-12`):
 
 | Service | Type | Port | Target |
 | --- | --- | --- | --- |
@@ -51,6 +63,8 @@ Services (`platform/hosted/node/deployment.yaml:12-14`;
 | `layerx-pending-core-admin` | ClusterIP | `9444` | `core-admin-tls` (`9444`) |
 | `layerx-receipt-authority` | ClusterIP | `9443` | `authority-tls` (`9445`) |
 | `layerx-agent-boundary` | ClusterIP | `9443` | `agent-tls` (`9446`) |
+| `layerx-agentd` | ClusterIP | `9443` | `agentd-tls` (`9454`) (`platform/hosted/node/deployment.yaml:924-927`) |
+| `layerx-human` | ClusterIP | `9443` | `human-https` (`9447`) (`platform/hosted/human/deployment.yaml:1-12`) |
 
 Loopback listeners inside the pod are not Services:
 program HTTP `127.0.0.1:9401`, replica HTTP `127.0.0.1:9402`,
