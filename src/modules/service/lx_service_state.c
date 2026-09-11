@@ -107,7 +107,7 @@ lxp_result lx_service_hashes_check(
         if (lxp_ct_is_zero(hashes[i], 32U)) return LXP_ERR_NON_CANONICAL;
         for (j = 0U; j < i; ++j)
             if (memcmp(hashes[i], hashes[j], 32U) == 0)
-                return LXP_ERR_NON_CANONICAL;
+                return LXP_ERR_DUPLICATE_ENTRY;
     }
     return LXP_OK;
 }

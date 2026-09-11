@@ -85,6 +85,7 @@ protocol_result_codes! {
     LengthLimit = -5, Terminal;
     InvalidTag = -6, Terminal;
     UnknownField = -7, Terminal;
+    DuplicateEntry = -8, Terminal;
     WrongNetwork = -100, Terminal;
     VersionUnsupported = -101, Terminal;
     UnknownModule = -102, Terminal;

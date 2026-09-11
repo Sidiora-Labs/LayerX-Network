@@ -137,6 +137,8 @@ int main(void)
     uint8_t swept_id[32];
     uint8_t markers[2];
     uint8_t contested[2];
+    uint8_t record[LX_SERVICE_AGREEMENT_RECORD_BYTES];
+    size_t record_length = 0U;
     lx_service_agreement agreement;
     lx_service_outcome_request request;
     lxp_authority_resolved provider;
@@ -224,8 +226,15 @@ int main(void)
     length = reject_payload(payload, rejected_id, 9U, contested, 2U);
     if (dispatch(LX_SERVICE_REJECT, payload, length, &buyer, 100U, 44U, 44U,
                  &outcome) != LXP_OK ||
+        outcome != LXP_ERR_DUPLICATE_ENTRY)
+        return 1;
+    contested[1] = 0U;
+    length = reject_payload(payload, rejected_id, 9U, contested, 2U);
+    if (dispatch(LX_SERVICE_REJECT, payload, length, &buyer, 100U, 44U, 44U,
+                 &outcome) != LXP_OK ||
         outcome != LXP_ERR_NON_CANONICAL)
         return 1;
+    contested[1] = 13U;
     length = reject_payload(payload, rejected_id, 9U, contested, 1U);
     if (dispatch(LX_SERVICE_REJECT, payload, length, &outsider, 100U, 44U,
                  44U, &outcome) != LXP_OK ||
@@ -267,6 +276,15 @@ int main(void)
     if (lx_service_reject_execute(&ctx, &request, &agreement) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
+    request.contested_hash_count = 2U;
+    id32(request.contested_hashes[1], 13U);
+    if (lx_service_reject_execute(&ctx, &request, &agreement) !=
+            LXP_ERR_DUPLICATE_ENTRY ||
+        lx_service_agreement_lookup(&ctx, swept_id, &agreement) != LXP_OK ||
+        agreement.state != LX_SERVICE_AGREEMENT_DELIVERED ||
+        agreement.contested_hash_count != 0U)
+        return 1;
+    (void)memset(request.contested_hashes[1], 0, 32U);
     request.contested_hash_count = 1U;
     request.attempts_balance_mutation = true;
     if (lx_service_reject_execute(&ctx, &request, &agreement) !=
@@ -275,6 +293,33 @@ int main(void)
             LXP_ERR_MODULE_MAY_NOT_WRITE_BALANCE)
         return 1;
     request.attempts_balance_mutation = false;
+
+    if (lx_service_agreement_lookup(&ctx, rejected_id, &agreement) != LXP_OK ||
+        agreement.contested_hash_count != 1U)
+        return 1;
+    agreement.contested_hash_count = 2U;
+    id32(agreement.contested_hashes[0], 13U);
+    id32(agreement.contested_hashes[1], 13U);
+    if (lx_service_agreement_encode(&agreement, record, &record_length) !=
+        LXP_ERR_DUPLICATE_ENTRY)
+        return 1;
+    id32(agreement.contested_hashes[1], 14U);
+    if (lx_service_agreement_encode(&agreement, record, &record_length) !=
+            LXP_OK ||
+        record_length < 64U ||
+        lx_service_agreement_decode(record, record_length, &agreement) !=
+            LXP_OK ||
+        agreement.contested_hash_count != 2U)
+        return 1;
+    (void)memcpy(record + record_length - 32U, record + record_length - 64U,
+                 32U);
+    if (lx_service_agreement_decode(record, record_length, &agreement) !=
+        LXP_ERR_DUPLICATE_ENTRY)
+        return 1;
+    (void)memset(record + record_length - 32U, 0, 32U);
+    if (lx_service_agreement_decode(record, record_length, &agreement) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
 
     if (lx_service_epoch_begin(&ctx, 1U, 100U) !=
             LXP_ERR_TIMESTAMP_REGRESSION ||
