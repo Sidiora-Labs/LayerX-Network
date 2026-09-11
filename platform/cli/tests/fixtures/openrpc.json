@@ -52,6 +52,54 @@
       ]
     },
     {
+      "name": "lx_requestFunds",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "did",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^did:[0-9A-Za-z._:-]+$",
+            "maxLength": 512
+          }
+        },
+        {
+          "name": "signer_public_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      ],
+      "result": {
+        "name": "claim",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Claims one testnet faucet grant for the authenticated identity principal and proxies it to the faucet service. Requires the same bearer identity session used to provision gateway keys; the signer public key must be one the session authorises, so a principal cannot fund a key it does not hold. The faucet bounds claims per principal per window, and the gateway derives the faucet idempotency key from SHA-256(len-prefixed \"layerx-faucet-claim-v1\", principal, did, signer_public_key), so a repeated request returns the same grant instead of a second one. The result is the faucet claim record: funded, funding_id, transaction_id, decimal-string amount and network; a claim whose evidence is incomplete is -32603 and is never reported as funded. Malformed arguments are -32602; a missing session, an unauthorised signer key or a faucet refusal is -32002; the per-minute claim budget and faucet quotas are -32005; a faucet that is unconfigured, unavailable or still settling is -32001 with a machine-readable data.code.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32002,
+          "message": "Faucet claim refused"
+        },
+        {
+          "code": -32001,
+          "message": "Faucet claim unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Faucet claim unavailable"
+        }
+      ]
+    },
+    {
       "name": "lx_getAccount",
       "paramStructure": "by-position",
       "params": [

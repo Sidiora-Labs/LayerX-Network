@@ -12663,7 +12663,7 @@ observed = "The retained OpenRPC fixture is refreshed verbatim from dfbb7bf42241
 assumption = "Hosted DID registration/history have no published backend. Live authenticated gateway fee/asset reads, subscription delivery and token execution remain unqualified. No public deployment, cluster or image gate is implied by local tests."
 severity = "note"
 
-[observation.6.11.167]
+[observation.6.11.6400]
 task = "6.11"
 file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/wallet.rs platform/cli/src/rpc.rs platform/cli/src/wallet.rs platform/cli/tests/fixtures/openrpc.json"
 symbol = "get_sequence prepare_payload execute_write positional_requests_match_published_contract"
@@ -12671,7 +12671,7 @@ observed = "The SDK get_sequence method at a1cb3cda still emits one selector arg
 assumption = "SDK Wallet callers require a separate typed identity-sequence method and the published schema must express the conditional selector. Account sequence cannot substitute for identity sequence."
 severity = "blocker"
 
-[observation.6.11.168]
+[observation.6.11.6401]
 task = "6.11"
 file = "platform/Cargo.lock agent/crates/layerx-sdk/Cargo.toml platform/cli/src/wallet.rs agent/crates/layerx-mcp/src/tools/write.rs"
 symbol = "create_wallet WalletCommand::History sdk_rpc"
@@ -12679,7 +12679,7 @@ observed = "The merged SDK adds tungstenite 0.30.0 and requires a platform works
 assumption = "Workspace lock maintenance, published authenticated registration/history schemas and MCP scope-preserving implementations require their owning paths. No funded authenticated public Send, deployed topic delivery or cluster/image qualification is established by local fixture tests."
 severity = "blocker"
 
-[observation.6.11.169]
+[observation.6.11.6402]
 task = "6.11"
 file = "platform/cli/src/wallet.rs platform/cli/src/wallet_send.rs platform/cli/src/wallet_signing.rs platform/cli/src/wallet_encoding.rs platform/cli/tests/wallet_send.rs platform/cli/tests/fixtures/native-send.c"
 symbol = "execute_write prepare_send PreparedPayment::from_send Send::encode native_send_and_authorization_bytes_match"
@@ -12687,7 +12687,7 @@ observed = "CLI Send and token transfer use the disclosed shared native debit si
 assumption = "Qualification uses the generated platform lock retained outside version control pending workspace-owner integration. The published contract fixture is verbatim 75049011. No funded public Send, authenticated deployed token execution or live subscription delivery is implied by local qualification."
 severity = "note"
 
-[observation.6.11.170]
+[observation.6.11.6403]
 task = "6.11"
 file = "platform/Cargo.lock platform/cli/tests/wallet_commands.rs agent/crates/layerx-sdk/src/rpc_verification.rs"
 symbol = "unpublished_registration_and_history_preserve_local_keys acknowledgement_is_not_inclusion finality_requires_the_exact_trusted_context_and_header"
@@ -12695,7 +12695,7 @@ observed = "The added CLI command test confirms unpublished registration and his
 assumption = "The workspace lock update is required before locked reproducibility can be claimed. Source test success is not a public deployment or funded execution claim."
 severity = "blocker"
 
-[observation.6.11.201]
+[observation.6.11.6404]
 task = "6.11"
 file = "platform/cli/src/wallet.rs platform/cli/src/wallet_signing.rs platform/hosted/gateway/src/rpc.rs platform/hosted/core/src/main.rs"
 symbol = "execute_write prepare_send lx_sendActivity lx_getReceipt"
@@ -12703,7 +12703,7 @@ observed = "A disposable funded network-7332 stack returns the treasury's authen
 assumption = "The CLI prints the locally derived activity id before submission and does not treat admission, pending or unknown state as success. Executed and batched receipt evidence and creation of a distinct per-asset account remain blocked by the hosted execution path; no receipt or commitment identifier exists to record."
 severity = "blocker"
 
-[observation.6.11.202]
+[observation.6.11.6405]
 task = "6.11"
 file = "platform/cli/src/main.rs platform/cli/src/programs.rs programs/sdk/rust/examples/token-lxt20/README.md platform/hosted/gateway/src/main.rs platform/hosted/core/src/main.rs"
 symbol = "program_client deploy discover_call_head render_call_result"
@@ -12711,7 +12711,7 @@ observed = "The locked wasm32 build of the LXT-20 example exits 0 and is byte-id
 assumption = "Artifact validation and admitted signed deployment bytes do not establish deployment. The registry, execution receipt and response decoder must receive real authenticated committed evidence before an LXT-20 outcome can be reported."
 severity = "blocker"
 
-[observation.6.11.203]
+[observation.6.11.6406]
 task = "6.11"
 file = "platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/src/rpc.rs platform/hosted/core/src/main.rs"
 symbol = "payer_grant send_payment lx_sendActivity lx_getReceipt"
@@ -12719,7 +12719,7 @@ observed = "The disposable funded 402 qualification signs canonical Asset ordina
 assumption = "The signed grant and retained activity id establish attempted real issuance only. Without its sequencer-signed receipt, the grant is not claimed issued and no acknowledgement is reclassified as success."
 severity = "blocker"
 
-[observation.6.11.204]
+[observation.6.11.6407]
 task = "6.11"
 file = "platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/public_reads.rs platform/hosted/core/src/main.rs platform/cli/src/rpc.rs"
 symbol = "request public_reads RpcClient"
@@ -12727,7 +12727,7 @@ observed = "Authenticated wallet commands expose a gateway-to-core idle-connecti
 assumption = "The gateway HTTP client must discard or retry a stale pre-request keep-alive before exposing component_unavailable. The CLI retains the typed upstream error and does not add an unverified fallback."
 severity = "blocker"
 
-[observation.6.11.205]
+[observation.6.11.6408]
 task = "6.11"
 file = "platform/hosted/gateway/openrpc.json platform/cli/src/wallet.rs"
 symbol = "create_wallet WalletCommand::History"
