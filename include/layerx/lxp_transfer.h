@@ -1,6 +1,7 @@
 #ifndef LAYERX_LXP_TRANSFER_H
 #define LAYERX_LXP_TRANSFER_H
 
+#include "layerx/lxp_authority.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_protocol.h"
 
@@ -39,6 +40,17 @@ typedef struct lxp_transfer_source_authority {
     bool protocol_system_capability;
 } lxp_transfer_source_authority;
 
+/* The resolved grant a debit draws against. The ledger binds every debit leg
+ * to it and charges the scope before the balance moves; the journal restores
+ * the pre-charge scope whenever the transfer set rolls back. The scope is the
+ * live one the caller resolved, so the caller persists it once the transition
+ * commits. */
+typedef struct lxp_transfer_allowance {
+    lxp_authority_scope *scope;
+    lxp_authority_kind kind;
+    uint8_t grantor[32];
+} lxp_transfer_allowance;
+
 typedef struct lxp_transfer_context {
     const lxp_transfer_asset_state *assets;
     size_t asset_count;
@@ -59,6 +71,7 @@ typedef struct lxp_transfer_context {
     const lxp_transfer_source_authority *source_authorities;
     size_t source_authority_count;
     uint64_t program_spend_token;
+    lxp_transfer_allowance *allowance;
 } lxp_transfer_context;
 
 typedef struct lxp_transfer_result {
@@ -80,6 +93,9 @@ typedef struct lxp_ledger_journal {
     lxp_ledger_journal_entry entries[LXP_MAX_TRANSFER_SET_LEGS * 2U];
     size_t count;
     bool open;
+    lxp_transfer_allowance *allowance;
+    lxp_authority_scope allowance_before;
+    bool allowance_charged;
 } lxp_ledger_journal;
 
 typedef struct lxp_transfer_set_result {

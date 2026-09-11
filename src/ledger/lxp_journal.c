@@ -240,6 +240,8 @@ lxp_result lxp_apply_transfer_set(lxp_transfer_leg *legs, size_t leg_count,
     for (i = 0U; i < compact_count; ++i) {
         status = lxp_precondition_check(&compact[i], 1U, context);
         if (status == LXP_OK)
+            status = lxp_allowance_charge_leg(&compact[i], context, &journal);
+        if (status == LXP_OK)
             status = lxp_balance_apply_leg(&compact[i], &result->legs[i]);
 #ifdef LXP_TESTING
         if (status == LXP_OK && context->inject_failure &&

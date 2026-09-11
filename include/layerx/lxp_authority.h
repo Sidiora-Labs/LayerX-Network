@@ -139,6 +139,21 @@ lxp_result lxp_authority_spend_check(const lxp_authority_scope *scope,
 lxp_result lxp_authority_charge_allowance(lxp_authority_scope *scope,
                                           lxp_u128 amount,
                                           uint64_t batch_timestamp);
+/* One debit leg drawn under a resolved grant. A kind that carries an allowance
+ * is bound to the grant asset and charged against its caps; a kind that carries
+ * none must present a scope with no caps and no recorded spend, so an unmetered
+ * kind can never be used to move a metered grant past the ledger. Both entries
+ * refuse a module the grant scope does not cover. */
+lxp_result lxp_authority_check_debit(const lxp_authority_scope *scope,
+                                     lxp_authority_kind kind,
+                                     const uint8_t asset_id[32],
+                                     uint16_t module_id, lxp_u128 amount,
+                                     uint64_t batch_timestamp);
+lxp_result lxp_authority_charge_debit(lxp_authority_scope *scope,
+                                      lxp_authority_kind kind,
+                                      const uint8_t asset_id[32],
+                                      uint16_t module_id, lxp_u128 amount,
+                                      uint64_t batch_timestamp);
 lxp_result lxp_authority_revoke(lxp_authority_grant *grant,
                                 uint64_t revocation_sequence,
                                 uint64_t global_sequence);
