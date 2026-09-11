@@ -664,8 +664,10 @@ void platform_emulator_destroy(platform_emulator *emulator)
     close_native_feed(emulator);
     if (emulator->feed_mutex_initialized) (void)pthread_mutex_destroy(&emulator->feed_mutex);
     free(emulator->feed_bytes);
-    if (emulator->state_initialized)
+    if (emulator->state_initialized) {
         (void)lxp_state_store_destroy(&emulator->state);
+        lx_account_registry_release(&emulator->accounts);
+    }
     free(emulator->arena_bytes);
     free(emulator->snapshot_bytes);
     free(emulator);
@@ -1223,10 +1225,16 @@ int32_t platform_emulator_snapshot_import(platform_emulator *emulator,
                  emulator->snapshot_bytes + sizeof(header),
                  identity_bytes);
     emulator->identities.count = (size_t)header.identity_count;
-    (void)memcpy(emulator->accounts.accounts,
-                 emulator->snapshot_bytes + sizeof(header) + identity_bytes,
-                 account_bytes);
+    status = lx_account_registry_reserve(&emulator->accounts,
+                                         (size_t)header.account_count);
+    if (status != LXP_OK) return status;
+    if (account_bytes != 0U)
+        (void)memcpy(emulator->accounts.accounts,
+                     emulator->snapshot_bytes + sizeof(header) + identity_bytes,
+                     account_bytes);
     emulator->accounts.count = (size_t)header.account_count;
+    status = lx_account_registry_index_rebuild(&emulator->accounts);
+    if (status != LXP_OK) return status;
     (void)memcpy(emulator->program_ids,
                  emulator->snapshot_bytes + sizeof(header) + identity_bytes + account_bytes,
                  program_bytes / 2U);
