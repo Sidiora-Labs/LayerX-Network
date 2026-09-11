@@ -283,7 +283,7 @@ test: test-state-diff test-da-verified test-result test-protocol test-state-comm
 	test-stream-settle test-stream-lifecycle \
 	test-service-offer test-service-commit test-service-attest \
 	test-service-deliver test-service-acceptance test-service-dispute \
-	test-wave-9
+	test-wave-9 test-lni-version-parity
 
 $(BUILD_DIR)/tests/lxp_test_kernel: tests/protocol/lxp_test_kernel.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -3308,6 +3308,10 @@ beta-qualify:
 
 beta-driver-test:
 	python3 -m unittest tools.qualification.test_release_runner tools.qualification.test_beta_driver
+
+.PHONY: test-lni-version-parity
+test-lni-version-parity:
+	tools/ci/lni-version-parity.sh
 
 $(BUILD_DIR)/tests/lxp_test_program_admission: tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)

@@ -54,6 +54,11 @@ enum {
     SUBMIT_REQUEST = 3,
     SUBMIT_RESPONSE = 4,
     ERROR_RESPONSE = 25,
+    ASSET_READ_REQUEST = 32,
+    ASSET_READ_RESPONSE = 33,
+    FEE_ESTIMATE_REQUEST = 34,
+    FEE_ESTIMATE_RESPONSE = 35,
+    TYPED_READ_MINOR = 5,
     ENVELOPE_FIXED_BYTES = 22,
     JOURNAL_SUPERBLOCK_BYTES = 32,
     JOURNAL_RECORD_BYTES = 64,
@@ -409,6 +414,61 @@ static int expect_ack(int descriptor, uint64_t correlation_id,
     return 0;
 }
 
+
+static int expect_typed_read(int descriptor, uint64_t correlation_id,
+                             uint16_t tag, size_t minimum_payload)
+{
+    wire_envelope response;
+    bool accepted;
+    if (receive_envelope(descriptor, &response) != 0) return 1;
+    accepted = response.tag == tag && response.correlation_id == correlation_id &&
+        response.proof_length == 0U &&
+        response.payload_length >= minimum_payload &&
+        load_u16(response.payload) == 1U;
+    if (!accepted)
+        (void)fprintf(stderr,
+            "typed read tag=%u correlation=%llu payload=%zu refusal=%d\n",
+            response.tag, (unsigned long long)response.correlation_id,
+            response.payload_length,
+            response.tag == ERROR_RESPONSE && response.payload_length == 5U ?
+                (int32_t)load_u32(response.payload + 1U) : 0);
+    release_envelope(&response);
+    return accepted ? 0 : 1;
+}
+
+static int typed_read_version_gate(int descriptor)
+{
+    uint8_t asset_read[3] = {0};
+    uint8_t fee_estimate[30] = {0};
+    store_u16(asset_read, 1U);
+    asset_read[2] = 1U;
+    store_u16(fee_estimate, 1U);
+    store_u32(fee_estimate + 2U, LX_PROGRAMS_CALL);
+    store_u64(fee_estimate + 6U, 512U);
+    store_u64(fee_estimate + 14U, 64U);
+    store_u64(fee_estimate + 22U, 8U);
+    REQUIRE(send_request(descriptor, TYPED_READ_MINOR - 1, ASSET_READ_REQUEST,
+                         60U, asset_read, sizeof(asset_read)) == 0);
+    REQUIRE(expect_error(descriptor, 60U, 1U, LXP_ERR_VERSION_UNSUPPORTED) == 0);
+    REQUIRE(send_request(descriptor, TYPED_READ_MINOR - 1, FEE_ESTIMATE_REQUEST,
+                         61U, fee_estimate, sizeof(fee_estimate)) == 0);
+    REQUIRE(expect_error(descriptor, 61U, 1U, LXP_ERR_VERSION_UNSUPPORTED) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, ASSET_READ_REQUEST, 62U,
+                         asset_read, sizeof(asset_read) - 1U) == 0);
+    REQUIRE(expect_error(descriptor, 62U, 1U, LXP_ERR_NON_CANONICAL) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, FEE_ESTIMATE_REQUEST, 63U,
+                         fee_estimate, sizeof(fee_estimate) - 1U) == 0);
+    REQUIRE(expect_error(descriptor, 63U, 1U, LXP_ERR_NON_CANONICAL) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, ASSET_READ_REQUEST, 64U,
+                         asset_read, sizeof(asset_read)) == 0);
+    REQUIRE(expect_typed_read(descriptor, 64U, ASSET_READ_RESPONSE, 44U) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, FEE_ESTIMATE_REQUEST, 65U,
+                         fee_estimate, sizeof(fee_estimate)) == 0);
+    REQUIRE(expect_typed_read(descriptor, 65U, FEE_ESTIMATE_RESPONSE, 64U) == 0);
+    puts("typed committed reads refuse a below-5 minor as unsupported, refuse a"
+         " malformed payload as non-canonical and answer at minor 5");
+    return 0;
+}
 
 typedef lxp_result (*simulate_function)(lxp_daemon_protocol_owner *,
     const uint8_t *, const uint8_t *, size_t, uint8_t *, size_t, size_t *,
@@ -837,6 +897,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc == 3) REQUIRE(simulate_call(descriptor, &key) == 0);
+    REQUIRE(typed_read_version_gate(descriptor) == 0);
     for (size_t i = 0U; i < sizeof(types) / sizeof(types[0]); ++i) {
         REQUIRE(build_activity(&key, 0U, types[i], 0U, malformed, sizeof(malformed), encoded,
                                sizeof(encoded), &length) == 0);
