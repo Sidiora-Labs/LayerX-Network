@@ -18,7 +18,7 @@ use layerx_proof::availability::RootCommitments;
 
 fn refusal(transport: &mut Uds, payload: &[u8], expected: i32, correlation: u64) {
     let encoded = encode_envelope(Envelope {
-        version: Version::V1_4,
+        version: Version::V1_5,
         message_tag: 18,
         correlation_id: correlation,
         canonical_payload: payload,
@@ -44,7 +44,7 @@ fn refusal(transport: &mut Uds, payload: &[u8], expected: i32, correlation: u64)
 
 fn candidate_fetch(transport: &mut Uds, signed: &layerx_client::batch::SignedBatchHeader) {
     let context = FetchContext {
-        interface_version: Version::V1_4,
+        interface_version: Version::V1_5,
         correlation_id: 30,
         expected_batch_number: signed.header.batch_number(),
         data_availability_root: signed.header.data_availability_root(),
@@ -92,7 +92,7 @@ fn finalized_fetch(
         .unwrap_or_else(|error| panic!("finality bytes: {error}"));
     let candidate = FinalityEvidenceCandidate::from_exact_bytes(checkpoint, proof, 3, 77)
         .unwrap_or_else(|error| panic!("real settlement candidate: {error:?}"));
-    let registered = register_finality_evidence(transport, &candidate, Version::V1_4, 10)
+    let registered = register_finality_evidence(transport, &candidate, Version::V1_5, 10)
         .unwrap_or_else(|error| panic!("daemon finality registration: {error:?}"));
     assert_eq!(registered.batch_number, 1);
     let text = fs::read_to_string(work.join("availability-activity-id"))
@@ -114,7 +114,7 @@ fn finalized_fetch(
         AvailabilitySelector::Checkpoint(registered.checkpoint_id),
     ] {
         let context = FetchContext {
-            interface_version: Version::V1_4,
+            interface_version: Version::V1_5,
             correlation_id: 20,
             expected_batch_number: 1,
             data_availability_root: first.header.data_availability_root(),
@@ -174,7 +174,7 @@ fn probe(socket: &Path, stage: &str) {
     let handshake = perform(
         &mut transport,
         &HandshakeConfig {
-            built_interface_version: Version::V1_4,
+            built_interface_version: Version::V1_5,
             expected_protocol_version: 3,
             expected_network_id: 77,
         },
@@ -191,7 +191,7 @@ fn probe(socket: &Path, stage: &str) {
     );
     let first = lookup(
         &mut transport,
-        Version::V1_4,
+        Version::V1_5,
         1,
         1,
         node.authorised_sequencer_key,
@@ -199,7 +199,7 @@ fn probe(socket: &Path, stage: &str) {
     .unwrap_or_else(|error| panic!("first signed header: {error:?}"));
     let last = lookup(
         &mut transport,
-        Version::V1_4,
+        Version::V1_5,
         9,
         2,
         node.authorised_sequencer_key,
@@ -297,10 +297,17 @@ fn certificate_threshold(repository: &Path) -> usize {
 
 /// The bootstrap builds one guarantor record per configured certificate
 /// threshold, so the length it accepts has to follow that threshold instead of
-/// describing a single-guarantor request.
+/// describing a single-guarantor request. The request is read from the copy the
+/// bootstrap retains beside the genesis artifacts it built from it; the scratch
+/// directory that held the request and the genesis signer key while genesis was
+/// being built must be gone from a completed data directory.
 fn assert_genesis_request(work: &Path, threshold: usize) {
-    let request = fs::read(work.join("data/work/genesis-request.lxgb"))
-        .unwrap_or_else(|error| panic!("bootstrap genesis request: {error}"));
+    assert!(
+        !work.join("data/work").exists(),
+        "bootstrap scratch directory survived the bootstrap"
+    );
+    let request = fs::read(work.join("data/genesis/genesis-request.lxgb"))
+        .unwrap_or_else(|error| panic!("retained genesis request: {error}"));
     let metadata = fs::read(work.join("metadata"))
         .unwrap_or_else(|error| panic!("bootstrap genesis metadata: {error}"));
     assert!(request.len() > REQUEST_PREFIX_BYTES, "truncated request");
