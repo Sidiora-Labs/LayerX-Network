@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { decodeReceive } from "../../../../agent/sdk/typescript/dist/src/x402/receive.js";
@@ -17,7 +18,7 @@ test("native signed envelope binds receive payload, identity network and idempot
   for (const [actor, network, id] of [["wrong", 7, key], ["did:lxp:pay6-receiver", 8, key], ["did:lxp:pay6-receiver", 7, "00".repeat(32)]]) assert.throws(() => bindReceiveActivity(canonical, receive, actor, network, id));
 });
 test("persistent draw registrations preserve signed bytes and reject changed request ownership", async () => {
-  const directory = mkdtempSync(new URL("../../../../qual-logs/pay6/draw-", import.meta.url).pathname);
+  const directory = mkdtempSync(join(tmpdir(), "layerx-pay6-draw-"));
   const rpc = new PaymentRpc("http://127.0.0.1:1/rpc");
   const f = JSON.parse(readFileSync(new URL("../../../sdk/conformance/fixtures/receipt-positive-v2.json", import.meta.url))).authorized_batch;
   const b = v => Uint8Array.from(Buffer.from(v, "hex"));
@@ -74,7 +75,7 @@ test("draw execution maps only typed protocol pending and surfaces HTTP, parse, 
   try {
     for (const selected of ["pending", "invalid-pending", "rpc", "http", "parse"]) {
       mode = selected;
-      const directory = mkdtempSync(new URL(`../../../../qual-logs/pay6/draw-${selected}-`, import.meta.url).pathname);
+      const directory = mkdtempSync(join(tmpdir(), `layerx-pay6-draw-${selected}-`));
       const store = new PreparedGrantDraws(join(directory, "draws.sqlite"), "did:lxp:pay6-receiver", 7,
         new PaymentRpc(`http://127.0.0.1:${address.port}/rpc`), authority);
       try {
