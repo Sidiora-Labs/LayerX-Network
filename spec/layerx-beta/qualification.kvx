@@ -11965,8 +11965,8 @@ severity = "note"
 task = "6.2"
 file = "docs/wiki/PublicAPI.md docs/wiki/Getting-Started-Testnet.md platform/hosted/core/src/public_reads.rs"
 symbol = "did_account_listing_unavailable lx_getBalances"
-observed = "docs/wiki/PublicAPI.md:494-501 describes the did_account_listing_unavailable refusal as meaning that account-listing evidence could not be decoded, and docs/wiki/Getting-Started-Testnet.md:180 reads the same way. The route now also returns it when the node reports a listing with no entries, because that answer carries no absence proof and so cannot be distinguished from an unavailable one. The documented meaning is therefore narrower than the refusal the code emits, though the code and error shape a client sees are unchanged."
-assumption = "The public documentation pages are outside this row's files and are edited by the lane that owns the public read contract wording, so only the code was changed and the wording drift is recorded."
+observed = "The account-listing boundary section of docs/wiki/PublicAPI.md and the lx_getBalances paragraph of docs/wiki/Getting-Started-Testnet.md described the did_account_listing_unavailable refusal as meaning only that account-listing evidence could not be decoded. The route now also returns it when the node reports a listing with no entries, because that answer carries no absence proof and so cannot be distinguished from an unavailable one, so the documented meaning had become narrower than the refusal the code emits. Both passages now name the empty listing as the second cause of the same refusal and state that every served entry carries state proof material. The code and error shape a client sees are unchanged; platform/hosted/gateway/openrpc.json, docs/wiki/PublicRpc.md and docs/wiki/HostedCore.md describe the route without naming a single cause for the refusal and needed no change."
+assumption = "The two passages describe the behaviour this change alters, so they were brought in line in the same change rather than left to drift; no other page names a cause for the refusal."
 severity = "note"
 
 [observation.6.2.5905]
