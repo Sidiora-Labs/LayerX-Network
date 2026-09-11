@@ -188,14 +188,12 @@ A target outside the evidence map raises no surface; a surface no map entry name
 
 | Key | Value |
 | --- | --- |
-| mapped_targets | 104 |
-| surfaces_no_target_can_raise | 2 |
-| surfaces_no_target_can_prove_at_required_rung | 19 |
+| mapped_targets | 109 |
+| surfaces_no_target_can_raise | 0 |
+| surfaces_no_target_can_prove_at_required_rung | 17 |
 | unmapped_targets_in_release_candidate_records | 0 |
 | runner_expansion | tools/qualification/release_runner.py |
 | malformed_ledger_records | 0 |
-
-Surfaces no evidence-map target names: `hosted-agentd`, `middleware-examples`.
 
 Surfaces whose highest reachable rung is below their required rung even when every mapped target passes. No gate command in the repository proves these surfaces at the rung the contract requires, so the gap is in the gate set, not in the ledger.
 
@@ -204,13 +202,11 @@ Surfaces whose highest reachable rung is below their required rung even when eve
 | settlement-contracts | tested | runtime_proven |
 | agent-mcp | tested | runtime_proven |
 | human-service | tested | runtime_proven |
-| hosted-agentd | source_present | deployment_proven |
 | hosted-tests | statically_coherent | deployment_proven |
 | middleware-buyer | tested | runtime_proven |
 | middleware-seller | tested | runtime_proven |
 | middleware-merchant | tested | runtime_proven |
 | middleware-agent | tested | runtime_proven |
-| middleware-examples | source_present | runtime_proven |
 | reference-app-buyer-agent | statically_coherent | runtime_proven |
 | reference-app-paid-api | statically_coherent | runtime_proven |
 | reference-app-merchant-shop | statically_coherent | runtime_proven |
