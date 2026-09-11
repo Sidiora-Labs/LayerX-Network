@@ -20,6 +20,7 @@
 #include "layerx/lxp_storage.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_ledger.h"
+#include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_receipt.h"
 #include "layerx/lxp_snapshot.h"
 #include "layerx/lxp_transfer.h"
@@ -775,6 +776,8 @@ static lxp_result owner_authority(platform_emulator *emulator,
         authority == NULL) return LXP_ERR_NON_CANONICAL;
     status = lxp_identity_resolve(&emulator->identities,
         activity->actor_did.bytes, activity->actor_did.length, &identity);
+    if (status == LXP_OK)
+        status = lxp_governance_identity_refresh(&emulator->kernel, identity);
     if (status != LXP_OK) return status;
     if (activity->authority.length != 32U) return LXP_ERR_BAD_SIGNATURE;
     (void)memset(grant, 0, sizeof(*grant));
