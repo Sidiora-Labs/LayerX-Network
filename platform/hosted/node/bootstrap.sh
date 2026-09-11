@@ -8,8 +8,8 @@
 # environment files the supervisor sources when it starts both daemons.
 #
 # Usage:
-#   bootstrap.sh --data-dir DIR --run-dir DIR --network-id N \
-#       --sequencer-key FILE --treasury-key FILE [options]
+#   bootstrap.sh --data-dir DIR --run-dir DIR --network-id N --sequencer-key FILE \
+#       (--treasury-key FILE | --treasury-signer-socket PATH) [options]
 #
 # Required:
 #   --data-dir DIR          Node data directory (created 0700; must be empty
@@ -25,6 +25,15 @@
 #   --treasury-key FILE     Treasury ed25519 seed (same format). The treasury
 #                           DID did:layerx:<public-key-hex> is registered as
 #                           an identity so the admin plane can sign from it.
+#                           The seed is read once for its public key and is
+#                           never copied into DATA_DIR: components ask the
+#                           treasury signer for signatures instead of opening
+#                           a key file.
+#   --treasury-signer-socket PATH
+#                           Treasury signer socket (platform/hosted/node/signer)
+#                           in place of --treasury-key: the treasury public key
+#                           is read from the signer and no seed reaches this
+#                           host. Exactly one of the two is required.
 #
 # Options:
 #   --asset HEX64           Genesis asset id (32 bytes hex). Default: the beta
@@ -80,7 +89,7 @@
 set -euo pipefail
 
 usage() {
-    sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,88p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -139,11 +148,13 @@ if [ "${1:-}" = --check-settlement ]; then
     exit 0
 fi
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 DATA_DIR=""
 RUN_DIR=""
 NETWORK_ID=""
 SEQUENCER_KEY_FILE=""
 TREASURY_KEY_FILE=""
+TREASURY_SIGNER_SOCKET=""
 ASSET_ID="b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898"
 ASSET_SYMBOL=LXT
 ASSET_CURRENCY=LXT
@@ -173,6 +184,7 @@ while [ $# -gt 0 ]; do
         --network-id) NETWORK_ID=$2; shift 2 ;;
         --sequencer-key) SEQUENCER_KEY_FILE=$2; shift 2 ;;
         --treasury-key) TREASURY_KEY_FILE=$2; shift 2 ;;
+        --treasury-signer-socket) TREASURY_SIGNER_SOCKET=$2; shift 2 ;;
         --asset) ASSET_ID=$2; shift 2 ;;
         --genesis-metadata) GENESIS_METADATA=$2; shift 2 ;;
         --treasury-balance) TREASURY_BALANCE=$2; shift 2 ;;
@@ -204,7 +216,15 @@ case "$GENESIS_METADATA" in "$(readlink -m "$DATA_DIR")"/*) fail "genesis metada
 [ -n "$RUN_DIR" ] || fail "--run-dir is required"
 [ -n "$NETWORK_ID" ] || fail "--network-id is required"
 [ -n "$SEQUENCER_KEY_FILE" ] || fail "--sequencer-key is required"
-[ -n "$TREASURY_KEY_FILE" ] || fail "--treasury-key is required"
+if [ -n "$TREASURY_KEY_FILE" ]; then
+    [ -z "$TREASURY_SIGNER_SOCKET" ] \
+        || fail "--treasury-key and --treasury-signer-socket are exclusive"
+elif [ -n "$TREASURY_SIGNER_SOCKET" ]; then
+    [[ $TREASURY_SIGNER_SOCKET = /* ]] || fail "--treasury-signer-socket must be an absolute path"
+    [ ${#TREASURY_SIGNER_SOCKET} -lt 108 ] || fail "--treasury-signer-socket path is too long"
+else
+    fail "--treasury-key or --treasury-signer-socket is required"
+fi
 if [ -n "$CUSTODY_PROFILE" ]; then
     [ -f "$CUSTODY_PROFILE" ] && [ ! -L "$CUSTODY_PROFILE" ] && [ -r "$CUSTODY_PROFILE" ] \
         || fail "--custody-profile must name a readable regular file, not a symlink"
@@ -322,6 +342,16 @@ public_key_hex() {
         | openssl pkey -inform DER -pubout -outform DER | tail -c 32 | bin_to_hex
 }
 
+signer_public_key() {
+    # signer_public_key SOCKET -> the treasury public key the signer holds
+    local socket=$1 client="$SCRIPT_DIR/signer/client.py"
+    command -v python3 >/dev/null || fail "python3 is required by --treasury-signer-socket"
+    [ -r "$client" ] || fail "treasury signer client is missing: $client"
+    [ -S "$socket" ] || fail "treasury signer socket is not available: $socket"
+    python3 "$client" --socket "$socket" public-key \
+        || fail "the treasury signer refused the public key request"
+}
+
 load_token() {
     local file=$1 name=$2 token
     [ -r "$file" ] || fail "$name token file is not readable: $file"
@@ -332,9 +362,14 @@ load_token() {
 }
 
 SEQUENCER_PRIVATE=$(load_seed_hex "$SEQUENCER_KEY_FILE" sequencer)
-TREASURY_PRIVATE=$(load_seed_hex "$TREASURY_KEY_FILE" treasury)
 SEQUENCER_PUBLIC=$(public_key_hex "$SEQUENCER_PRIVATE")
-TREASURY_PUBLIC=$(public_key_hex "$TREASURY_PRIVATE")
+if [ -n "$TREASURY_SIGNER_SOCKET" ]; then
+    TREASURY_PUBLIC=$(signer_public_key "$TREASURY_SIGNER_SOCKET")
+else
+    TREASURY_PUBLIC=$(public_key_hex "$(load_seed_hex "$TREASURY_KEY_FILE" treasury)")
+fi
+TREASURY_PUBLIC=$(printf '%s' "$TREASURY_PUBLIC" | tr -d ' \t\r\n')
+is_hex64 "$TREASURY_PUBLIC" || fail "the treasury public key must be 64 hex characters"
 [ "$SEQUENCER_PUBLIC" != "$TREASURY_PUBLIC" ] || fail "sequencer and treasury keys must differ"
 SEQUENCER_ID=$(printf 'layerx-sequencer:%s' "$SEQUENCER_PUBLIC" | sha256_hex)
 if [ -z "$REPLICA_ID" ]; then
@@ -496,7 +531,6 @@ done
 
 printf '%s' "$PROGRAM_TOKEN" > "$DATA_DIR/secrets/program-token"
 printf '%s' "$REPLICA_TOKEN" > "$DATA_DIR/secrets/replica-token"
-printf '%s' "$TREASURY_PRIVATE" > "$DATA_DIR/secrets/treasury-key.hex"
 
 write_config() {
     printf 'role=%s\nnetwork_id=%s\nstart_sequence=0\nverify_workers=2\nnetwork_workers=2\nprojection_workers=2\ncheckpoint_workers=1\nserial_execution=false\n' "$1" "$NETWORK_ID" > "$2"
@@ -583,12 +617,14 @@ LAYERX_NODE_TREASURY_DID=$TREASURY_DID
 LAYERX_NODE_TREASURY_PUBLIC_KEY=$TREASURY_PUBLIC
 LAYERX_NODE_TREASURY_ACCOUNT=$TREASURY_ACCOUNT
 LAYERX_NODE_TREASURY_BALANCE=$TREASURY_BALANCE
-LAYERX_NODE_TREASURY_KEY_FILE=$DATA_DIR/secrets/treasury-key.hex
 LAYERX_NODE_SEQUENCER_CONFIG=$DATA_DIR/sequencer.conf
 LAYERX_NODE_REPLICA_CONFIG=$DATA_DIR/replica.conf
 LAYERX_NODE_SEQUENCER_ENV=$DATA_DIR/sequencer.env
 LAYERX_NODE_REPLICA_ENV=$DATA_DIR/replica.env
 EOF
+if [ -n "$TREASURY_SIGNER_SOCKET" ]; then
+    printf 'LAYERX_NODE_TREASURY_SIGNER_SOCKET=%s\n' "$TREASURY_SIGNER_SOCKET" >> "$DATA_DIR/node.env.tmp"
+fi
 printf 'LAYERX_NODE_GENESIS_GUARANTOR_COUNT=%s\n' "$GUARANTOR_COUNT" >> "$DATA_DIR/node.env.tmp"
 for ((index = 0; index < GUARANTOR_COUNT; index++)); do
     entry=${GUARANTOR_ENTRIES[index]}
@@ -602,7 +638,7 @@ if [ "$GUARANTOR_COUNT" -gt 1 ]; then
     printf 'LAYERX_NODE_SECOND_GUARANTOR_ID=%s\nLAYERX_NODE_SECOND_GUARANTOR_PUBLIC_KEY=%s\nLAYERX_NODE_SECOND_GUARANTOR_KEY_FILE=%s\n' \
         "$GUARANTOR_SECOND_ID" "$GUARANTOR_SECOND_PUBLIC" "$GUARANTOR_SECOND_KEY_FILE" >> "$DATA_DIR/node.env.tmp"
 fi
-chmod 0644 "$DATA_DIR/node.env.tmp"
+chmod 0600 "$DATA_DIR/node.env.tmp"
 mv "$DATA_DIR/node.env.tmp" "$DATA_DIR/node.env"
 for ((index = 0; index < GUARANTOR_COUNT; index++)); do
     identity=$((index + 1))
@@ -632,6 +668,9 @@ for ((index = 0; index < GUARANTOR_COUNT; index++)); do
 done
 printf 'LAYERX_CORE_SEQUENCER_ID=%s\nLAYERX_CORE_TREASURY_ASSET=%s\n' \
     "$SEQUENCER_ID" "$ASSET_ID" > "$RUN_DIR/core.env.tmp"
+if [ -n "$TREASURY_SIGNER_SOCKET" ]; then
+    printf 'LAYERX_CORE_TREASURY_SIGNER_SOCKET=%s\n' "$TREASURY_SIGNER_SOCKET" >> "$RUN_DIR/core.env.tmp"
+fi
 chmod 0644 "$RUN_DIR/core.env.tmp"
 mv "$RUN_DIR/core.env.tmp" "$RUN_DIR/core.env"
 

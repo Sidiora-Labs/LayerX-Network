@@ -124,8 +124,8 @@ spec:
             - $(LAYERX_NODE_REPLICA_ID)
             - --sequencer-key
             - /run/layerx/keys/sequencer.key
-            - --treasury-key
-            - /run/layerx/keys/treasury.key
+            - --treasury-signer-socket
+            - /run/layerx/node/treasury-signer.sock
             - --program-token-file
             - /run/layerx/tokens/program-token
             - --replica-token-file
@@ -153,6 +153,29 @@ spec:
             - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
             - {name: settlement, mountPath: /run/layerx/settlement, readOnly: true}
             - {name: tmp, mountPath: /tmp}
+        - name: treasury-signer
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/usr/bin/python3]
+          args:
+            - /opt/layerx/signer/signer.py
+            - --socket
+            - /run/layerx/node/treasury-signer.sock
+            - --provider
+            - file
+            - --key-file
+            - /run/layerx/treasury/treasury.key
+            - --allowed-uid
+            - "4020,4021"
+            - --socket-group
+            - "4020"
+            - --public-key-file
+            - /run/layerx/node/treasury-public-key
+          securityContext: {runAsUser: 4020, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 200m, memory: 128Mi}}
+          volumeMounts:
+            - {name: run, mountPath: /run/layerx}
+            - {name: treasury-material, mountPath: /run/layerx/treasury, readOnly: true}
         - name: guarantor-1
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
           imagePullPolicy: Always
@@ -282,7 +305,7 @@ spec:
           volumeMounts:
             - {name: data, mountPath: /var/lib/layerx}
             - {name: run, mountPath: /run/layerx}
-            - {name: keys, mountPath: /run/layerx/keys, readOnly: true}
+            - {name: treasury-material, mountPath: /run/layerx/keys, readOnly: true}
             - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
             - {name: backend-admin, mountPath: /run/layerx/backend-admin, readOnly: true}
             - {name: gateway-component, mountPath: /run/layerx/gateway-component, readOnly: true}
@@ -775,7 +798,8 @@ spec:
         - {name: human-state, persistentVolumeClaim: {claimName: layerx-human-state}}
         - {name: run, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
         - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
-        - {name: keys, secret: {secretName: layerx-node-keys, defaultMode: 0440}}
+        - {name: keys, secret: {secretName: layerx-node-keys, defaultMode: 0440, items: [{key: sequencer.key, path: sequencer.key}]}}
+        - {name: treasury-material, secret: {secretName: layerx-node-keys, defaultMode: 0440, items: [{key: treasury.key, path: treasury.key}]}}
         - {name: tokens, secret: {secretName: layerx-node-tokens, defaultMode: 0440}}
         - {name: settlement, configMap: {name: layerx-node-settlement, optional: true}}
         - {name: backend-admin, secret: {secretName: layerx-testnet-backend-admin}}
