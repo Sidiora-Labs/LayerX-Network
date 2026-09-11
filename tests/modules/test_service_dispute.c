@@ -325,6 +325,8 @@ int main(void)
     uint8_t root_after[32];
     uint8_t hold_id[32];
     uint8_t escrow_root_before[32];
+    uint8_t record[LX_SERVICE_DISPUTE_RECORD_BYTES];
+    size_t record_length = 0U;
     lx_escrow_record hold_before;
     lx_service_dispute dispute;
     lx_service_agreement agreement;
@@ -394,6 +396,12 @@ int main(void)
     evidence[2] = 33U;
     length = dispute_open_payload(payload, open_id, second_id, evidence, 3U);
     if (dispatch(LX_SERVICE_DISPUTE_OPEN, payload, length, &buyer, 100U, 40U,
+                 40U, &outcome) != LXP_OK ||
+        outcome != LXP_ERR_DUPLICATE_ENTRY)
+        return 1;
+    evidence[2] = 0U;
+    length = dispute_open_payload(payload, open_id, second_id, evidence, 3U);
+    if (dispatch(LX_SERVICE_DISPUTE_OPEN, payload, length, &buyer, 100U, 40U,
                  40U, &outcome) != LXP_OK || outcome != LXP_ERR_NON_CANONICAL)
         return 1;
     evidence[2] = 44U;
@@ -429,6 +437,30 @@ int main(void)
         agreement.state != LX_SERVICE_AGREEMENT_DISPUTED ||
         lx_service_dispute_lookup(&ctx, second_id, &dispute) !=
             LXP_ERR_UNKNOWN_FIELD)
+        return 1;
+
+    if (lx_service_dispute_lookup(&ctx, open_id, &dispute) != LXP_OK ||
+        dispute.evidence_hash_count != 3U)
+        return 1;
+    (void)memcpy(dispute.evidence_hashes[2], dispute.evidence_hashes[1], 32U);
+    if (lx_service_dispute_encode(&dispute, record, &record_length) !=
+        LXP_ERR_DUPLICATE_ENTRY)
+        return 1;
+    id32(dispute.evidence_hashes[2], 55U);
+    if (lx_service_dispute_encode(&dispute, record, &record_length) !=
+            LXP_OK ||
+        record_length < 64U ||
+        lx_service_dispute_decode(record, record_length, &dispute) != LXP_OK ||
+        dispute.evidence_hash_count != 3U)
+        return 1;
+    (void)memcpy(record + record_length - 32U, record + record_length - 64U,
+                 32U);
+    if (lx_service_dispute_decode(record, record_length, &dispute) !=
+        LXP_ERR_DUPLICATE_ENTRY)
+        return 1;
+    (void)memset(record + record_length - 32U, 0, 32U);
+    if (lx_service_dispute_decode(record, record_length, &dispute) !=
+        LXP_ERR_NON_CANONICAL)
         return 1;
 
     length = dispute_resolve_payload(payload, open_id, 0U, 4000U, 77U);

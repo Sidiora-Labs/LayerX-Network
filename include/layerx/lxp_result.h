@@ -35,6 +35,7 @@ typedef enum lxp_result_domain_id {
     X(LXP_ERR_LENGTH_LIMIT, -5) \
     X(LXP_ERR_INVALID_TAG, -6) \
     X(LXP_ERR_UNKNOWN_FIELD, -7) \
+    X(LXP_ERR_DUPLICATE_ENTRY, -8) \
     X(LXP_ERR_WRONG_NETWORK, -100) \
     X(LXP_ERR_VERSION_UNSUPPORTED, -101) \
     X(LXP_ERR_UNKNOWN_MODULE, -102) \
