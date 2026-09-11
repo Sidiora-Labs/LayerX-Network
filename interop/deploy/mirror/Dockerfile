@@ -3,9 +3,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends libssl-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY agent ./agent
-COPY human ./human
-COPY interop ./interop
+COPY . .
 RUN cargo build --locked --manifest-path interop/Cargo.toml --release --package layerx-mirror --bin layerx-mirror-publisher
 RUN cargo build --locked --manifest-path interop/Cargo.toml --release --package layerx-mirror --bin layerx-mirror-verify
 
