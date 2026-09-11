@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.error import URLError
 
 from test_commitment import CommitmentTests
 from layerx_sdk.x402_agent import PaymentBudget, AgentGrantMiddleware
@@ -95,14 +96,13 @@ class AgentBudgetTests(CommitmentTests):
             )
             agent = AgentGrantMiddleware(budget, draws, self.signatures)
             for _ in range(2):
-                self.assertIsNone(
+                with self.assertRaises(URLError):
                     agent(
                         "payer",
                         digest,
                         {"receive": receive.hex(), "idempotencyKey": key},
                         offer,
                     )
-                )
             with sqlite3.connect(path) as db:
                 self.assertEqual(
                     db.execute(

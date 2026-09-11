@@ -118,6 +118,12 @@ class HttpTests(unittest.TestCase):
                 validate_required(
                     self.required | {"accepts": [self.offer | {"scheme": scheme}]}
                 )
+        for level in ("executed", "batched", "finalised", "finalized"):
+            payload = self.payload | {
+                "payload": self.payload["payload"] | {"verificationLevel": level}
+            }
+            with self.assertRaises(ValueError):
+                self.seller.handle("payer", encode_header(payload), lambda: b"resource")
 
     def test_real_http_402_retry(self):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

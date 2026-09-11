@@ -888,8 +888,16 @@ fn local_gateway_rpc() {
         serde_json::json!([hex_encode(&signed), "finalised"]),
         true,
     );
-    assert_eq!(finalised["result"]["state"], "pending", "{finalised}");
-    assert_eq!(finalised["result"]["commitment"], "executed");
+    assert_eq!(finalised["error"]["code"], -32001, "{finalised}");
+    assert_eq!(
+        finalised["error"]["data"]["requested_commitment"], "finalised",
+        "{finalised}"
+    );
+    assert_eq!(
+        finalised["error"]["data"]["state"], "pending",
+        "{finalised}"
+    );
+    assert!(finalised.get("result").is_none(), "{finalised}");
     assert_eq!(
         call(
             "lx_sendActivity",

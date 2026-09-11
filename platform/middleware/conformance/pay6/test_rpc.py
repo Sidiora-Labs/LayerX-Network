@@ -52,6 +52,8 @@ class RpcTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 PaymentRpc(endpoint)
+        with self.assertRaises(ValueError):
+            PaymentRpc("http://127.0.0.1:1/rpc").send("00", "finalized")
 
     def test_batched_result_uses_configured_sequencer_authority(self):
         fixture = CommitmentTests()

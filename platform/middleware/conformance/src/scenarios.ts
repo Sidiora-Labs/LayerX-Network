@@ -363,6 +363,21 @@ export async function runScenarios(): Promise<Suite> {
     );
   });
 
+  await suite.check("x402 verificationLevel stays sequencer-signed and never aliases an RPC commitment", async () => {
+    for (const level of ["executed", "batched", "finalised", "finalized"]) {
+      const payload = buyerPayload(offer, receipt, "verification-level");
+      const invalid = {
+        ...payload,
+        payload: { ...payload.payload, verificationLevel: level },
+      } as unknown as PaymentPayload;
+      await expectThrows(
+        () => releasedDecision(offer, invalid, resolver, new InMemoryFulfillmentRepository<string>()),
+        isMiddlewareError("verification-failure"),
+        `verificationLevel ${level}`,
+      );
+    }
+  });
+
   await suite.check("buyer: a failed settlement is never reported as paid", async () => {
     const buyer = buildBuyer(offer);
     const parsed = buyer.parseOffer(encodePaymentRequiredHeader(offer.paymentRequired));

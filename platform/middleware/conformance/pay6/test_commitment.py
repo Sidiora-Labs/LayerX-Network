@@ -69,7 +69,14 @@ class CommitmentTests(unittest.TestCase):
             )
 
     def test_no_commitment_downgrade(self):
-        for commitment in ("batched", "finalised", "acknowledged", None, 1):
+        for commitment in (
+            "batched",
+            "finalised",
+            "finalized",
+            "acknowledged",
+            None,
+            1,
+        ):
             with self.assertRaises(PlatformSdkError):
                 self.verify(commitment=commitment)
         self.assertEqual(payment_commitment(), "executed")

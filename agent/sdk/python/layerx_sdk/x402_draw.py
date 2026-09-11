@@ -6,10 +6,6 @@ from .x402_grant import validate_grant_draw
 from .x402_rpc import PaymentRpcError, rpc_hex, verify_rpc_payment
 
 
-class _DrawUnresolved(Exception):
-    __slots__ = ()
-
-
 class PreparedGrantDraws:
     def __init__(self, path, actor, network, rpc, authority, signatures):
         self.path, self.actor, self.network = path, actor, network
@@ -53,16 +49,11 @@ class PreparedGrantDraws:
             )
 
     def _resolve(self, claimed, row, offer):
-        try:
-            if claimed:
-                return self.rpc.send(
-                    row["canonical"].hex(), offer["extra"]["layerx"]["commitment"]
-                )
-            return self.rpc.receipt(row["activity_id"])
-        except PaymentRpcError:
-            raise
-        except Exception as unresolved:
-            raise _DrawUnresolved from unresolved
+        if claimed:
+            return self.rpc.send(
+                row["canonical"].hex(), offer["extra"]["layerx"]["commitment"]
+            )
+        return self.rpc.receipt(row["activity_id"])
 
     def __call__(self, principal, request_digest, body, offer):
         key = body["idempotencyKey"]
@@ -96,8 +87,14 @@ class PreparedGrantDraws:
             ).rowcount
         try:
             result = self._resolve(claimed, row, offer)
-        except _DrawUnresolved:
-            return None
+        except PaymentRpcError as error:
+            if (
+                error.code == -32001
+                and isinstance(error.data, dict)
+                and error.data.get("state") == "pending"
+            ):
+                return None
+            raise
         if result.get("activity_id") != row["activity_id"]:
             raise ValueError("draw-activity-mismatch")
         if result.get("state") == "pending":

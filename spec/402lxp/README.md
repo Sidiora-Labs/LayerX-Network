@@ -15,3 +15,9 @@ of the payment RPC response. The adapter constructs evidence; payment verificati
 must still call the SDK verifier before releasing a resource. No RPC evidence field
 is missing from this mapping. A deployment without the operator inputs remains
 unqualified for finalised payments.
+
+402LXP payment payloads always use the literal `sequencer-signed` for
+`verificationLevel`. The selected offer separately carries the RPC commitment:
+`executed`, `batched`, or `finalised`. Implementations must not copy a commitment into
+`verificationLevel`, infer a commitment from that field, or accept the spelling
+`finalized`.

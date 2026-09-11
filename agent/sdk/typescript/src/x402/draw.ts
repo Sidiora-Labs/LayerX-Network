@@ -33,7 +33,10 @@ export class PreparedGrantDraws {
     let result: Record<string, unknown>;
     try {
       result = claimed.changes === 1 ? await this.rpc.send(Buffer.from(row["canonical"] as Uint8Array).toString("hex"), offer.extra.layerx.commitment) : await this.rpc.receipt(row["activity_id"] as string);
-    } catch (error) { if (error !== null && typeof error === "object" && "code" in error) throw error; return { kind: "pending" }; }
+    } catch (error) {
+      if (isProtocolPending(error)) return { kind: "pending" };
+      throw error;
+    }
     if (result["activity_id"] !== row["activity_id"]) throw new Error("draw-activity-mismatch");
     if (result["state"] === "pending") return { kind: "pending" };
     if ((result["state"] !== undefined && result["state"] !== "completed") || typeof result["receipt"] !== "string" || (result["receipt"].length > 2097152 || !/^(?:[0-9a-f]{2})+$/u.test(result["receipt"]))) throw new Error("draw-receipt-unavailable");
@@ -47,4 +50,12 @@ export class PreparedGrantDraws {
       || verified.receipt.amount !== BigInt(receive.amount)) throw new Error("draw-receipt-mismatch");
     return { kind: "settled", canonicalReceipt, authorizedBatch };
   }
+}
+
+function isProtocolPending(error: unknown): boolean {
+  if (!(error instanceof Error) || !("code" in error) || !("data" in error)
+    || (error as { readonly code?: unknown }).code !== -32001) return false;
+  const data = (error as { readonly data?: unknown }).data;
+  return data !== null && typeof data === "object" && !Array.isArray(data)
+    && (data as Record<string, unknown>)["state"] === "pending";
 }
