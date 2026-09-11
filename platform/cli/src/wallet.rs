@@ -283,7 +283,7 @@ fn create_wallet(
 ) -> Result<CommandOutput, String> {
     let transport = Transport::new(config, rpc, gateway)?;
     if !transport.emulator {
-        return Err("wallet_registration_unavailable: the gateway contract does not expose DID/public-key registration and main-account creation; no key was generated".into());
+        return Err("wallet_registration_unavailable: the gateway contract publishes no DID registration and no main-account creation; lx_register creates an identity tenant principal with a null account, which layerx register already covers; no key was generated".into());
     }
     let metadata = if let Some(existing) = config.keys.get(name) {
         if did.is_some_and(|d| d != existing.did) {
