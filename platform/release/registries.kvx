@@ -1,5 +1,6 @@
 [release]
 registries = ["crates-io", "npm", "pypi", "go-modules", "maven-central", "swiftpm", "nuget"]
+image_registries = ["ghcr"]
 tag_format = "sdk-v{version}"
 source_digest = "git-archive-sha256"
 reference_applications = ["@sidiora/layerx-example-buyer-agent","@sidiora/layerx-example-marketplace","@sidiora/layerx-example-merchant-shop","@sidiora/layerx-example-paid-api"]
@@ -75,4 +76,16 @@ signing = "nuget-repository-signature"
 provenance = "github-actions-attestation"
 verification = "byte-compare-against-tagged-source"
 packages = ["LayerX.Sdk"]
+status = "active"
+
+[image_registry.ghcr]
+ecosystem = "oci"
+artifact = "container-image"
+distribution = "ghcr.io/sidiora-labs"
+signing = "sigstore-keyless"
+provenance = "github-actions-attestation"
+sbom = "spdx-json"
+verification = "digest-pinned-registry-manifest"
+platforms = ["linux/amd64"]
+images = ["layerx-agent-boundary","layerx-core-boundary","layerx-dashboard","layerx-dashboard-web","layerx-faucet","layerx-gateway","layerx-human","layerx-identity","layerx-internal","layerx-node","layerx-paxeer-boundary","layerx-program-registry","layerx-receipt-authority","layerx-testnet-control","layerx-webhooks","paxd","paxd-node"]
 status = "active"

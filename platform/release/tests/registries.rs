@@ -161,7 +161,7 @@ fn plan_is_deterministic_and_machine_readable() {
     let first = plan(&pipeline).unwrap_or_else(|error| panic!("plan: {error}"));
     let second = plan(&pipeline).unwrap_or_else(|error| panic!("plan: {error}"));
     assert_eq!(first, second);
-    assert_eq!(first.lines().count(), 3 + 7 + 4 + 1);
+    assert_eq!(first.lines().count(), 3 + 7 + 1 + 4 + 1);
     assert!(first.starts_with("tag_format=sdk-v{version}\n"));
     assert!(first
         .lines()
@@ -182,7 +182,23 @@ fn plan_is_deterministic_and_machine_readable() {
             "plan line lost its publication binding: {line}"
         );
     }
-    for line in first.lines().skip(10).take(4) {
+    let image_line = first
+        .lines()
+        .nth(10)
+        .unwrap_or_else(|| panic!("plan lost its container registry line"));
+    assert!(
+        image_line.starts_with("image_registry=ghcr "),
+        "unexpected image registry line: {image_line}"
+    );
+    assert!(
+        image_line.contains(" distribution=ghcr.io/sidiora-labs")
+            && image_line.contains(" signing=sigstore-keyless")
+            && image_line.contains(" sbom=spdx-json")
+            && image_line.contains(" platforms=linux/amd64")
+            && image_line.contains(" images=layerx-agent-boundary,"),
+        "plan line lost its container binding: {image_line}"
+    );
+    for line in first.lines().skip(11).take(4) {
         assert!(
             line.starts_with("gate=") && line.contains(" command=make "),
             "unexpected gate line: {line}"
@@ -245,6 +261,159 @@ fn expect_manifest_refusal(source: &str, needle: &str) {
         error.contains(needle),
         "expected refusal mentioning {needle}, got: {error}"
     );
+}
+
+#[test]
+fn committed_manifest_declares_the_container_registry_with_every_beta_image() {
+    let declarations = registries_declarations(&committed_manifest())
+        .unwrap_or_else(|error| panic!("manifest refused: {error}"));
+    let names = declarations
+        .image_registries
+        .iter()
+        .map(|registry| registry.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["ghcr"]);
+    let ghcr = declarations
+        .image_registries
+        .first()
+        .unwrap_or_else(|| panic!("container registry missing"));
+    assert_eq!(ghcr.platforms, vec!["linux/amd64"]);
+    let mut sorted = ghcr.images.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted, ghcr.images, "container images unsorted");
+    for declaration in [
+        ("ecosystem", "oci"),
+        ("artifact", "container-image"),
+        ("distribution", "ghcr.io/sidiora-labs"),
+        ("signing", "sigstore-keyless"),
+        ("provenance", "github-actions-attestation"),
+        ("sbom", "spdx-json"),
+        ("verification", "digest-pinned-registry-manifest"),
+        ("status", "active"),
+    ] {
+        assert!(
+            ghcr.declarations
+                .contains(&(declaration.0.to_owned(), declaration.1.to_owned())),
+            "container registry lost {}={}",
+            declaration.0,
+            declaration.1
+        );
+    }
+    for image in [
+        "layerx-gateway",
+        "layerx-node",
+        "layerx-core-boundary",
+        "layerx-identity",
+        "paxd",
+        "paxd-node",
+    ] {
+        assert!(
+            ghcr.images.iter().any(|declared| declared == image),
+            "container registry does not declare {image}"
+        );
+    }
+}
+
+#[test]
+fn dropping_the_container_registry_from_the_list_is_refused() {
+    let source =
+        committed_manifest().replace("image_registries = [\"ghcr\"]", "image_registries = []");
+    expect_manifest_refusal(&source, "mandated container registries");
+}
+
+#[test]
+fn missing_image_registry_section_is_refused() {
+    let manifest = committed_manifest();
+    let start = manifest
+        .find("[image_registry.ghcr]")
+        .unwrap_or_else(|| panic!("container registry section missing from fixture"));
+    expect_manifest_refusal(&manifest[..start], "image registry ghcr is not declared");
+}
+
+#[test]
+fn unknown_image_registry_section_is_refused() {
+    let source = format!(
+        "{}\n[image_registry.dockerhub]\necosystem = \"oci\"\n",
+        committed_manifest()
+    );
+    expect_manifest_refusal(&source, "unknown image registry dockerhub");
+}
+
+#[test]
+fn unknown_image_registry_declaration_is_refused() {
+    let source = committed_manifest().replace(
+        "[image_registry.ghcr]\necosystem = \"oci\"",
+        "[image_registry.ghcr]\nmirror = \"true\"\necosystem = \"oci\"",
+    );
+    expect_manifest_refusal(&source, "unknown declaration image_registry.ghcr.mirror");
+}
+
+#[test]
+fn missing_image_registry_declaration_is_refused() {
+    let source = committed_manifest().replace("sbom = \"spdx-json\"\n", "");
+    expect_manifest_refusal(&source, "missing declaration image_registry.ghcr.sbom");
+}
+
+#[test]
+fn unsorted_image_list_is_refused() {
+    let source = committed_manifest().replace("\"paxd\",\"paxd-node\"]", "\"paxd-node\",\"paxd\"]");
+    expect_manifest_refusal(&source, "image_registry.ghcr.images");
+}
+
+#[test]
+fn image_name_carrying_a_registry_path_is_refused() {
+    let source =
+        committed_manifest().replace("\"paxd-node\"]", "\"paxd-node\",\"sidiora-labs/paxd-web\"]");
+    expect_manifest_refusal(&source, "expected a bare image name");
+}
+
+#[test]
+fn non_canonical_container_registry_is_refused() {
+    let source = committed_manifest().replace(
+        "distribution = \"ghcr.io/sidiora-labs\"",
+        "distribution = \"docker.io/sidiora\"",
+    );
+    expect_manifest_refusal(
+        &source,
+        "image_registry.ghcr.distribution is docker.io/sidiora, not the canonical container registry ghcr.io/sidiora-labs",
+    );
+}
+
+#[test]
+fn unknown_image_sbom_format_is_refused() {
+    let source = committed_manifest().replace("sbom = \"spdx-json\"", "sbom = \"prose\"");
+    expect_manifest_refusal(&source, "image_registry.ghcr.sbom is prose");
+}
+
+#[test]
+fn unknown_image_signing_scheme_is_refused() {
+    let source = committed_manifest().replace(
+        "[image_registry.ghcr]\necosystem = \"oci\"\nartifact = \"container-image\"\ndistribution = \"ghcr.io/sidiora-labs\"\nsigning = \"sigstore-keyless\"",
+        "[image_registry.ghcr]\necosystem = \"oci\"\nartifact = \"container-image\"\ndistribution = \"ghcr.io/sidiora-labs\"\nsigning = \"trust-me\"",
+    );
+    expect_manifest_refusal(&source, "unknown signing scheme trust-me");
+}
+
+#[test]
+fn unknown_image_registry_status_is_refused() {
+    let manifest = committed_manifest();
+    let start = manifest
+        .find("[image_registry.ghcr]")
+        .unwrap_or_else(|| panic!("container registry section missing from fixture"));
+    let source = format!(
+        "{}{}",
+        &manifest[..start],
+        manifest[start..].replace("status = \"active\"", "status = \"imagined\"")
+    );
+    expect_manifest_refusal(&source, "image registry ghcr has unknown status imagined");
+}
+
+#[test]
+fn image_platform_without_an_architecture_is_refused() {
+    let source =
+        committed_manifest().replace("platforms = [\"linux/amd64\"]", "platforms = [\"linux\"]");
+    expect_manifest_refusal(&source, "expected <os>/<architecture>");
 }
 
 fn expect_workflow_refusal(workflow_source: &str, needle: &str) {

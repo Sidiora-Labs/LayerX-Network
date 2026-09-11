@@ -10754,3 +10754,34 @@ symbol = "programs-interpreter-conformance programs-interpreter-bench programs-p
 observed = "programs-build and $(PROGRAMS_RUNTIME_LIB) are pinned to the checkout's programs/target, but the remaining programs-* recipes still honour an inherited CARGO_TARGET_DIR while reading their artifacts back from a fixed path. programs-interpreter-conformance (Makefile:3223-3225) and programs-interpreter-bench (Makefile:3229-3232) build the interpreter with $(PROGRAMS_CARGO) and then pass LAYERX_INTERPRETER_WASM=$$(pwd)/target/wasm32-unknown-unknown/release/layerx_programs_interpreter.wasm, and programs-porting-v2-references (Makefile:3237-3247) builds three reference crates and then reads porting/*/reference-v2/target/wasm32-unknown-unknown/release/*.wasm. With CARGO_TARGET_DIR exported in the environment those builds write elsewhere and the step that follows reads a path that was never produced. Not changed here: this change owns the programs-build deadlock only, and the repair for these recipes is a per-invocation --target-dir rather than one shared pin, because each reference-v2 crate is its own workspace."
 assumption = "Recorded rather than repaired because the fix belongs to the interpreter and porting recipes, which are outside the two rules this change owns. No check was relaxed and no artifact path was moved to make anything pass."
 severity = "suspect"
+[observation.4.2.5300]
+task = "4.2"
+file = "platform/release/registries.kvx platform/docs/content/beta.md"
+symbol = "image_registry ghcr"
+observed = "Container images are release artifacts but could not be added as an eighth entry of release.registries. tools/ci/beta-contract-check.sh compares the Ecosystem column of the Artifact set table in platform/docs/content/beta.md against release.registries for equality in both directions, and platform/docs/content/beta.md is outside this lane's owned paths, so an eighth registry id would fail the contract check on a document the lane may not edit. The declaration is therefore a separate namespace: release.image_registries lists the image registry ids and [image_registry.ghcr] carries ecosystem, artifact, distribution ghcr.io/sidiora-labs, signing, provenance, sbom, verification, platforms and the seventeen beta image names taken from platform/hosted/tests/beta-images.sh. platform/release/src/main.rs validates that namespace beside the package registries, layerx-platform-release --plan emits one image_registry line after the seven registry lines, and beta-contract-check.sh checks the image registry entry and the manifest images list against it without touching the Artifact set table."
+assumption = "The Artifact set table of the beta contract is the SDK package ecosystem set and stays that way; the container image set is a second artifact class that the manifest carries and the contract check enforces separately. A follow-up owning platform/docs/content/beta.md can add an image table and point the contract check at it without changing the schema."
+severity = "note"
+
+[observation.4.2.5301]
+task = "4.2"
+file = "platform/release/src/main.rs"
+symbol = "release_pipeline_verify verified_images"
+observed = "layerx-platform-release -- verify re-fetches package bytes from each registry and hashes them against the manifest digest, but it does not re-fetch image bytes. An OCI image is content addressed by its registry manifest digest, so the binding verify enforces for an image is the digest pin itself: the manifest entry must carry repository equal to the declared distribution plus the image name, reference equal to repository@digest, a well formed sha256 digest, a non empty tag, platform, signature, SBOM and attestation reference with sha256 digests for the SBOM and the attestation, the published and pull_check flags, and a source_revision equal to the manifest revision. A reference moved off its digest, an unpublished image, a failed pull check or a foreign revision halts the release before promotion in the same message as a failing package artifact. Retained image SBOM and attestation files are hashed and compared with the recorded digests at emission time, where the bytes are present in the publication bundle."
+assumption = "Digest pinning plus a signature and attestation reference is the correct verification for a content addressed registry: fetching the bytes again could only confirm what the digest already states, and cosign and the registry are not available to the verifier on this path."
+severity = "note"
+
+[observation.4.2.5302]
+task = "4.2"
+file = "platform/docs/content/beta.md"
+symbol = "artifact_manifest prose"
+observed = "The beta contract prose that describes the artifact manifest states it lists every published artifact with its name, version, registry, digest, signature, SBOM and attestation references, registry location, source revision and rollback identity, and describes -- verify as fetching every artifact from its registry. After this change the manifest also carries an images list with the image name, tag, digest, platform, repository, digest pinned reference, signature, SBOM and attestation references and their digests, and -- verify reports images on a second summary line without fetching their bytes. The prose is unchanged because platform/docs/content/beta.md is outside this lane's owned paths; the contract check enforces the new image fields regardless of what the prose says, so the two do not contradict, the prose is only silent about images."
+assumption = "Prose that is silent about a second artifact class is stale rather than wrong; the owner of the beta contract document extends the manifest paragraph and adds an image table when the image publication workflow lands."
+severity = "note"
+
+[observation.4.2.5303]
+task = "4.2"
+file = "platform/release/src/main.rs platform/docs/content/beta.md"
+symbol = "ArtifactManifest images layerx/artifact-manifest/1"
+observed = "images is a required field of the artifact manifest and parse_artifact_manifest refuses a manifest whose images list is empty, but the schema identifier stays layerx/artifact-manifest/1. No manifest has been emitted yet: platform/release/artifact-manifest.json does not exist in the tree and platform/docs/content/beta.md line 180 carries artifact_manifest_status = not_emitted, so the added field invalidates no committed or published document and there is no consumer pinned to the earlier shape of schema 1."
+assumption = "A schema identifier may gain a required field while no document of that schema has been emitted; the first emitted manifest defines schema 1 in full. Once platform/release/artifact-manifest.json is committed with the first tagged release, any further required field needs layerx/artifact-manifest/2 and a migration for the committed document."
+severity = "note"
