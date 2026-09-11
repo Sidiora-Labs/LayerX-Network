@@ -44,6 +44,8 @@ enum {
     PLATFORM_EMULATOR_FAULT_CORRUPT_RECEIPT = 3
 };
 
+#define PLATFORM_EMULATOR_TIMESTAMP_WINDOW_MS UINT64_C(86400000)
+
 static const uint8_t snapshot_magic[8] = { 'L', 'X', 'E', 'M', 'U', '0', '3', 0 };
 
 typedef struct platform_snapshot_header {
@@ -762,25 +764,32 @@ int32_t platform_emulator_prefund(platform_emulator *emulator,
 
 static lxp_result owner_authority(platform_emulator *emulator,
                                   const lxp_activity *activity,
+                                  lxp_authority_grant *grant,
                                   lxp_authority_resolved *authority)
 {
     lxp_identity *identity;
     uint8_t payment_account[32];
-    uint8_t actor[32];
-    uint8_t grant_id[32] = { 0 };
-    lxp_result status = lxp_identity_resolve(&emulator->identities,
+    lxp_result status;
+    if (emulator == NULL || activity == NULL || grant == NULL ||
+        authority == NULL) return LXP_ERR_NON_CANONICAL;
+    status = lxp_identity_resolve(&emulator->identities,
         activity->actor_did.bytes, activity->actor_did.length, &identity);
     if (status != LXP_OK) return status;
-    if (activity->authority.length != 32U ||
-        memcmp(activity->authority.bytes, identity->primary_key, 32U) != 0)
-        return LXP_ERR_BAD_SIGNATURE;
-    status = lxp_did_id_derive(activity->actor_did.bytes,
-                               activity->actor_did.length, actor);
-    if (status != LXP_OK) return status;
+    if (activity->authority.length != 32U) return LXP_ERR_BAD_SIGNATURE;
+    (void)memset(grant, 0, sizeof(*grant));
     (void)memset(authority, 0, sizeof(*authority));
-    (void)memcpy(authority->actor, actor, 32U);
-    (void)memcpy(authority->principal, actor, 32U);
+    status = lxp_authority_resolve_activity(
+        &emulator->kernel, identity, activity,
+        lxp_identity_key_valid(identity, activity->authority.bytes,
+                               emulator->timestamp_ms,
+                               emulator->global_sequence),
+        true, emulator->timestamp_ms,
+        PLATFORM_EMULATOR_TIMESTAMP_WINDOW_MS, emulator->global_sequence,
+        grant, authority);
+    if (status != LXP_OK) return status;
     if (emulator->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        const uint8_t *account_key = grant->kind == LXP_AUTHORITY_OWNER ?
+            grant->key : identity->primary_key;
         uint8_t name[LX_ACCOUNT_NAME_MAX];
         size_t name_length = 6U + activity->actor_did.length + 5U;
         lx_account *account = NULL;
@@ -794,16 +803,12 @@ static lxp_result owner_authority(platform_emulator *emulator,
                 payment_account, &account);
         if (status != LXP_OK) return status;
         if (account->kind != LX_ACCOUNT_AGENT_MAIN || !account->has_authority_key ||
-            lxp_ct_memcmp(account->authority_key, identity->primary_key, 32U) != 0)
+            lxp_ct_memcmp(account->authority_key, account_key, 32U) != 0)
             return LXP_ERR_BAD_SIGNATURE;
         if (lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS)
             (void)memcpy(authority->principal, payment_account, 32U);
     }
-    (void)memcpy(authority->verified_key, identity->primary_key, 32U);
-    authority->kind = LXP_AUTHORITY_OWNER;
-    return lxp_authority_hash(authority->kind, grant_id,
-                              authority->verified_key,
-                              authority->authority_hash);
+    return LXP_OK;
 }
 
 int32_t platform_emulator_execute(platform_emulator *emulator,
@@ -811,6 +816,7 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
                                   platform_emulator_receipt *output)
 {
     lxp_activity activity;
+    lxp_authority_grant grant;
     lxp_authority_resolved authority;
     lxp_kernel_execution execution;
     lxp_receipt receipt;
@@ -837,7 +843,7 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
         status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK) status = lxp_activity_verify_signature(&activity);
     if (status == LXP_OK)
-        status = owner_authority(emulator, &activity, &authority);
+        status = owner_authority(emulator, &activity, &grant, &authority);
     (void)memset(&root_inputs, 0, sizeof(root_inputs));
     canonical_activity = (lxp_byte_span){ activity_bytes, length };
     root_inputs.activities = &canonical_activity;
@@ -848,7 +854,8 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
     (void)memset(&execution, 0, sizeof(execution));
     execution.network_id = emulator->network_id;
     execution.batch_timestamp_ms = emulator->timestamp_ms;
-    execution.maximum_timestamp_window = UINT64_C(86400000);
+    execution.maximum_timestamp_window =
+        PLATFORM_EMULATOR_TIMESTAMP_WINDOW_MS;
     execution.epoch = 0U;
     execution.global_sequence = emulator->global_sequence;
     if (status == LXP_OK) {
@@ -1037,6 +1044,50 @@ int32_t platform_emulator_inspect(const platform_emulator *emulator,
     state->timestamp_ms = emulator->timestamp_ms;
     state->cell_count = emulator->state.count;
     state->account_count = emulator->accounts.count;
+    return LXP_OK;
+}
+
+int32_t platform_emulator_resolve_authority(
+    platform_emulator *emulator, const uint8_t *activity_bytes, size_t length,
+    platform_emulator_authority *view)
+{
+    lxp_activity activity;
+    lxp_authority_grant grant;
+    lxp_authority_resolved authority;
+    lxp_result status;
+    if (emulator == NULL || activity_bytes == NULL || length == 0U ||
+        view == NULL) return LXP_ERR_NON_CANONICAL;
+    status = lxp_activity_decode(activity_bytes, length, &activity);
+    if (status == LXP_OK)
+        status = lxp_activity_check_envelope(&activity, emulator->network_id);
+    if (status == LXP_OK &&
+        activity.protocol_version != emulator->protocol_version)
+        status = LXP_ERR_VERSION_UNSUPPORTED;
+    if (status == LXP_OK) status = lxp_activity_verify_signature(&activity);
+    if (status == LXP_OK)
+        status = owner_authority(emulator, &activity, &grant, &authority);
+    if (status != LXP_OK) return status;
+    (void)memset(view, 0, sizeof(*view));
+    (void)memcpy(view->actor, authority.actor, 32U);
+    (void)memcpy(view->principal, authority.principal, 32U);
+    (void)memcpy(view->verified_key, authority.verified_key, 32U);
+    (void)memcpy(view->grant_id, grant.grant_id, 32U);
+    (void)memcpy(view->grantor, grant.grantor, 32U);
+    (void)memcpy(view->grantee, grant.grantee, 32U);
+    (void)memcpy(view->authority_hash, authority.authority_hash, 32U);
+    view->kind = (uint32_t)authority.kind;
+    view->not_before = grant.not_before;
+    view->not_after = grant.not_after;
+    view->scope_module_mask = grant.scope.module_mask;
+    view->scope_activity_ordinal_min = grant.scope.activity_ordinal_min;
+    view->scope_activity_ordinal_max = grant.scope.activity_ordinal_max;
+    view->scope_maximum_per_activity_hi = grant.scope.maximum_per_activity.hi;
+    view->scope_maximum_per_activity_lo = grant.scope.maximum_per_activity.lo;
+    view->scope_maximum_total_hi = grant.scope.maximum_total.hi;
+    view->scope_maximum_total_lo = grant.scope.maximum_total.lo;
+    view->scope_maximum_per_period_hi = grant.scope.maximum_per_period.hi;
+    view->scope_maximum_per_period_lo = grant.scope.maximum_per_period.lo;
+    view->revoked = grant.revoked ? 1U : 0U;
     return LXP_OK;
 }
 

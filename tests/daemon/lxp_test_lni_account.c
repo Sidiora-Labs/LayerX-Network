@@ -2,11 +2,109 @@
 #include "../storage/lxp_test_finality_evidence.c"
 #undef main
 #include "lxp_daemon_lni_account.h"
+#include "layerx/lx_asset.h"
+#include "layerx/lxp_activity.h"
+#include "layerx/lxp_authority.h"
+#include "layerx/lxp_identity.h"
+#include "layerx/lxp_kernel.h"
+#include "layerx/lxp_u128.h"
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "LNI account evidence line %d\n", __LINE__); return 1; } } while (0)
 static test_fixture fixture;
 static uint8_t memory[TEST_ARENA_BYTES];
 static lxp_daemon_protocol_owner owner;
+static lxp_identity_store identities;
+
+/* The node interface simulation path resolves the executing authority through
+ * lxp_authority_resolve_activity, exactly as the daemon replay, single activity
+ * and batch paths do. This locks the value that resolution binds for an owner
+ * key: the hash commits to the grant identifier the owner grant derives over
+ * the node's declared module envelope, never to a zero identifier over a
+ * synthesized scope. */
+static int authority_resolution_matches_the_node(lxp_arena *arena)
+{
+    static const uint8_t did[] = "did:lxp:finality-evidence";
+    static const uint8_t zero_grant_id[32] = {0};
+    lxp_identity *identity = NULL;
+    lxp_activity activity;
+    lxp_authority_envelope envelope;
+    lxp_authority_grant owner_grant;
+    lxp_authority_grant resolved_grant;
+    lxp_authority_resolved resolved;
+    uint8_t actor_public[32];
+    uint8_t expected_hash[32];
+    uint8_t synthesized_hash[32];
+    uint64_t sequence = fixture.state.next_sequence;
+    (void)arena;
+    (void)memset(&identities, 0, sizeof(identities));
+    CHECK(raw_public_key(fixture.actor_private, actor_public) == 0);
+    CHECK(lxp_identity_register(&identities, did, sizeof(did) - 1U,
+                                actor_public, &identity) == LXP_OK);
+    CHECK(lxp_kernel_register_module(&fixture.kernel,
+                                     lx_asset_module_iface()) == LXP_OK);
+    CHECK(lxp_activity_decode(fixture.canonical_activity[0],
+                              fixture.canonical_activity_length[0],
+                              &activity) == LXP_OK);
+    CHECK(activity.authority.length == 32U &&
+          memcmp(activity.authority.bytes, actor_public, 32U) == 0);
+    CHECK(lxp_authority_envelope_declare(&fixture.kernel, fixture.kernel.epoch,
+                                         &envelope) == LXP_OK);
+    CHECK(lxp_authority_owner_grant(identity, activity.authority.bytes,
+                                    &envelope,
+                                    activity.timestamp_bound.not_before,
+                                    activity.timestamp_bound.not_after,
+                                    &owner_grant) == LXP_OK);
+    CHECK(memcmp(owner_grant.grant_id, zero_grant_id, 32U) != 0);
+    CHECK(lxp_authority_hash(LXP_AUTHORITY_OWNER, owner_grant.grant_id,
+                             activity.authority.bytes,
+                             expected_hash) == LXP_OK);
+    CHECK(lxp_authority_hash(LXP_AUTHORITY_OWNER, zero_grant_id,
+                             activity.authority.bytes,
+                             synthesized_hash) == LXP_OK);
+    CHECK(memcmp(expected_hash, synthesized_hash, 32U) != 0);
+    CHECK(lxp_authority_resolve_activity(
+              &fixture.kernel, identity, &activity,
+              lxp_identity_key_valid(identity, activity.authority.bytes,
+                                     TEST_TIMESTAMP_MS, sequence),
+              true, TEST_TIMESTAMP_MS, UINT64_C(300000), sequence,
+              &resolved_grant, &resolved) == LXP_OK);
+    CHECK(memcmp(resolved.authority_hash, expected_hash, 32U) == 0);
+    CHECK(memcmp(resolved.authority_hash, synthesized_hash, 32U) != 0);
+    CHECK(resolved.kind == LXP_AUTHORITY_OWNER);
+    CHECK(memcmp(resolved.actor, identity->did_id, 32U) == 0);
+    CHECK(memcmp(resolved.principal, identity->did_id, 32U) == 0);
+    CHECK(memcmp(resolved.verified_key, activity.authority.bytes, 32U) == 0);
+    CHECK(resolved.scope == &resolved_grant.scope);
+    CHECK(resolved_grant.scope.module_mask == envelope.module_mask &&
+          resolved_grant.scope.module_mask != UINT64_MAX);
+    CHECK(resolved_grant.scope.activity_ordinal_min ==
+              envelope.activity_ordinal_min &&
+          resolved_grant.scope.activity_ordinal_max ==
+              envelope.activity_ordinal_max);
+    CHECK(lxp_u128_is_zero(resolved_grant.scope.maximum_per_activity) &&
+          lxp_u128_is_zero(resolved_grant.scope.maximum_total) &&
+          lxp_u128_is_zero(resolved_grant.scope.maximum_per_period));
+    CHECK(lxp_authority_is_live(&resolved_grant, identity->revocation_sequence,
+                                TEST_TIMESTAMP_MS, sequence) == LXP_OK);
+    CHECK(lxp_authority_is_live(&resolved_grant, identity->revocation_sequence,
+                                activity.timestamp_bound.not_before - 1U,
+                                sequence) == LXP_ERR_NOT_YET_VALID);
+    CHECK(lxp_authority_is_live(&resolved_grant, identity->revocation_sequence,
+                                activity.timestamp_bound.not_after + 1U,
+                                sequence) == LXP_ERR_AUTH_EXPIRED);
+    CHECK(lxp_authority_is_live(&resolved_grant,
+                                identity->revocation_sequence + 1U,
+                                TEST_TIMESTAMP_MS,
+                                sequence) == LXP_ERR_AUTH_REVOKED);
+    CHECK(lxp_authority_revoke(&resolved_grant,
+                               identity->revocation_sequence + 1U,
+                               sequence) == LXP_OK);
+    CHECK(lxp_authority_is_live(&resolved_grant,
+                                identity->revocation_sequence + 1U,
+                                TEST_TIMESTAMP_MS,
+                                sequence) == LXP_ERR_AUTH_REVOKED);
+    return 0;
+}
 
 int main(void)
 {
@@ -130,7 +228,8 @@ int main(void)
     fixture.kernel.current_state_root[0] ^= 1U;
     CHECK(lxp_log_close(&receipt_log) == LXP_OK && unlink(receipt_path) == 0);
     CHECK(lxp_log_close(&evidence_log) == LXP_OK && unlink(evidence_path) == 0);
+    CHECK(authority_resolution_matches_the_node(&arena) == 0);
     lxp_state_store_destroy(&fixture.state);
-    puts("ordinary and maintained LNI account evidence, activity binding and tamper refusals passed");
+    puts("ordinary and maintained LNI account evidence, activity binding, resolved authority and tamper refusals passed");
     return 0;
 }

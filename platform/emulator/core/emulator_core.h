@@ -36,6 +36,29 @@ typedef struct platform_emulator_state {
     size_t account_count;
 } platform_emulator_state;
 
+typedef struct platform_emulator_authority {
+    uint8_t actor[32];
+    uint8_t principal[32];
+    uint8_t verified_key[32];
+    uint8_t grant_id[32];
+    uint8_t grantor[32];
+    uint8_t grantee[32];
+    uint8_t authority_hash[32];
+    uint32_t kind;
+    uint64_t not_before;
+    uint64_t not_after;
+    uint64_t scope_module_mask;
+    uint16_t scope_activity_ordinal_min;
+    uint16_t scope_activity_ordinal_max;
+    uint64_t scope_maximum_per_activity_hi;
+    uint64_t scope_maximum_per_activity_lo;
+    uint64_t scope_maximum_total_hi;
+    uint64_t scope_maximum_total_lo;
+    uint64_t scope_maximum_per_period_hi;
+    uint64_t scope_maximum_per_period_lo;
+    uint8_t revoked;
+} platform_emulator_authority;
+
 typedef struct platform_emulator_program {
     uint8_t program_id[32];
     uint8_t code_hash[32];
@@ -77,6 +100,9 @@ int32_t platform_emulator_simulate(platform_emulator *emulator,
                                    platform_emulator_receipt *receipt);
 int32_t platform_emulator_inspect(const platform_emulator *emulator,
                                   platform_emulator_state *state);
+int32_t platform_emulator_resolve_authority(
+    platform_emulator *emulator, const uint8_t *activity, size_t length,
+    platform_emulator_authority *authority);
 int32_t platform_emulator_program_read(platform_emulator *emulator,
                                        const uint8_t program_id[32],
                                        platform_emulator_program *program);
