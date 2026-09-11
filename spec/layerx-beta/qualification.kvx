@@ -10825,3 +10825,51 @@ symbol = "GatewayShape DeveloperShape SubjectShape RampShape introspection_shape
 observed = "The four introspection shapes are unchanged and still identify a session by its subject alone, with no tenant field, so platform/hosted/gateway, platform/hosted/webhooks, dashboard, faucet, testnet and the ramp consumer are unaffected by this change. That remains sound only because the store refuses to bind one subject to two tenants. If that binding is ever relaxed so that a subject may exist in more than one tenant, every one of these shapes has to carry the tenant, otherwise a consumer cannot tell two tenants' principals apart."
 assumption = "Not widening a response shape that six services parse is the smaller change; the constraint that makes it safe is recorded here so relaxing the binding cannot silently reintroduce cross-tenant confusion."
 severity = "note"
+
+[observation.2.2.2200]
+task = "2.2"
+file = "src/ledger/lxp_apply.c src/ledger/lxp_journal.c src/state/lxp_authority.c"
+symbol = "allowance_check lxp_allowance_charge_leg lxp_authority_check_debit lxp_authority_charge_debit allowance_required"
+observed = "The transfer transition now charges a resolved grant per debit leg before the balance moves, which is the row default. The binding is checked inside lxp_precondition_check at src/ledger/lxp_apply.c:306 through allowance_check at :154, which reads the scope without touching it: lxp_authority_check_debit at src/state/lxp_authority.c:518 rolls the period on a copy and runs lxp_authority_spend_check against that copy. The mutation is a separate entry, lxp_allowance_charge_leg at src/ledger/lxp_apply.c:174, called once per leg from lxp_apply_transfer at :417 and from lxp_apply_transfer_set at src/ledger/lxp_journal.c:243, immediately before lxp_balance_apply_leg. Splitting check from charge is what keeps lxp_precondition_check callable by everything that reads it as a pure predicate while the single-leg and transfer-set paths each charge exactly once. Refusals are typed by the authority domain and are terminal-rejection applicable: LXP_ERR_AUTH_ALLOWANCE for a delegated debit that presents no grant, LXP_ERR_AUTH_SCOPE for a module outside the grant mask or a kind that does not match the presented grant, LXP_ERR_ASSET_MISMATCH for an asset the grant does not meter, LXP_ERR_UNAUTHORIZED_DEBIT when the debited account is not the grantor, and LXP_ERR_GRANT_EXHAUSTED for a per-activity, lifetime or period cap. lxp_authority_charge_allowance at src/state/lxp_authority.c:465 remains atomic on a copy, so an exhausted draw leaves the scope byte-identical."
+assumption = "Charging per debit leg before the balance mutation is the row default. The check stays where every caller already runs it and the charge is a separate exported entry so no caller can perform the mutation twice for one leg; the declaration lives in the private src/ledger/lxp_ledger_internal.h rather than the public include/layerx/lxp_transfer.h so a module object cannot reach it, matching the placement of lxp_balance_restore_snapshot and lxp_sequence_terminal_check."
+severity = "note"
+
+[observation.2.2.2201]
+task = "2.2"
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "lxp_authority_resolve_activity lxp_authority_grant lxp_transfer_context allowance"
+observed = "The daemon resolves every activity's grant into a stack local and discards it: lxp_authority_grant grant at cmd/layerxd/lxp_daemon_process.c:1128 and :2907 and lxp_authority_grant grants[] at :3326, filled by lxp_authority_resolve_activity at :1185, :2957 and :3438. None of the three sites hands the resolved scope to the ledger through lxp_transfer_context.allowance, and none writes a charged scope back to the tag-5 governance grant record that lxp_authority_grant_lookup reads at src/state/lxp_authority.c:334. The ledger now charges whatever grant a caller presents and the transfer set restores it on rollback, but until a caller both presents the resolved scope and persists it after the transition commits, a delegated draw that the ledger charged would be invisible to the next activity and the lifetime cap would never advance."
+assumption = "Presenting the resolved scope and persisting it belongs to the daemon and module wiring rows, not to the ledger transition. The ledger side is written so the caller keeps ownership: lxp_transfer_allowance holds a pointer to the caller's live scope, so a caller that resolves a grant, executes and then writes the same scope back to the grant record needs no new state."
+severity = "blocker"
+
+[observation.2.2.2202]
+task = "2.2"
+file = "src/protocol/lxp_module_ctx.c src/network/lxp_gateway_send.c"
+symbol = "restore_transfer_snapshots lxp_module_ctx_rollback lxp_journal_open lxp_journal_rollback"
+observed = "Two outer unwind paths restore balances only. restore_transfer_snapshots at src/protocol/lxp_module_ctx.c:990, reached from lxp_module_ctx_rollback at :1007, replays lxp_module_account_snapshot entries that carry balance, asset id and next sequence and nothing else. The gateway opens its own journal at src/network/lxp_gateway_send.c:519 and rolls it back at :83; lxp_journal_open zeroes the journal, so that outer journal carries no allowance and its rollback restores none. An inner transfer set that charged a grant and committed would therefore keep the charge if either outer path later unwound the balances. The inner rollback is complete: lxp_balance_restore_snapshot at src/ledger/lxp_apply.c:369 restores the pre-charge scope before it restores any account, so a set that fails at any leg leaves the scope exactly as it was."
+assumption = "Both files are outside this row's owned paths. Extending either unwind to carry the allowance means giving the module context snapshot and the gateway transaction the same three journal fields the ledger journal now carries, not new state."
+severity = "suspect"
+
+[observation.2.2.2203]
+task = "2.2"
+file = "src/modules/budget/lx_budget_spend.c src/modules/budget/lx_budget_close.c src/ledger/lxp_apply.c"
+symbol = "lx_budget_spend_prepare lx_budget_record spent_this_period allowance_required"
+observed = "The Budget module meters its own record rather than an lxp_authority_scope: lx_budget_spend_prepare charges lx_budget_record before it emits the set and then sets set.context.debit_authority_kind = LXP_AUTH_BUDGET_ALLOWANCE at src/modules/budget/lx_budget_spend.c:119, and lx_budget_close.c:55 does the same for the defund path. Both reach the ledger through the module context, which stamps origin_module_id with the emitting module id, so allowance_required at src/ledger/lxp_apply.c:125 admits a budget authorization with no grant scope only when the origin is LXP_MODULE_BUDGET. Every other origin presenting LXP_AUTH_BUDGET_ALLOWANCE, and every origin presenting LXP_AUTH_DELEGATED_CAPABILITY, must hand the ledger a chargeable scope. The carve-out is explicit and commented rather than a silent fallback, because the alternative is either double-metering the budget record or leaving the delegated kind unmetered."
+assumption = "Two independent meters for one budget draw would disagree, so the ledger defers to the module that already charged. If the Budget module is later moved onto a persisted authority grant, the carve-out is the single line to delete."
+severity = "note"
+
+[observation.2.2.2204]
+task = "2.2"
+file = "src/ledger/lxp_send.c src/ledger/lxp_receive.c"
+symbol = "lxp_send_execute lxp_receive_execute debit_authority_kind origin_module_id"
+observed = "The send and receive paths take the debit authorization kind straight from the decoded activity and leave origin_module_id zero: src/ledger/lxp_send.c:349-350 assigns context.debit_authority_kind from send->authorization.kind, which the decoder admits anywhere in LXP_AUTH_OWNER..LXP_AUTH_PROTOCOL_MODULE at :253-254, and src/ledger/lxp_receive.c:456-457 does the same for receive->receiver_authorization.kind. A submission declaring LXP_AUTH_DELEGATED_CAPABILITY therefore used to debit with no allowance consulted at all. It is now refused with LXP_ERR_AUTH_ALLOWANCE unless the caller presents the grant, which closes the declared-kind bypass but does not yet make a delegated send work: that needs the send path to resolve the grant for the declared kind and bind it to the context."
+assumption = "Both files are owned by another row, so the refusal is enforced in the ledger and the resolve-and-present wiring is recorded rather than written here. No production caller sets LXP_AUTH_DELEGATED_CAPABILITY today, so the refusal changes no passing path: make CC=gcc test is green."
+severity = "note"
+
+[observation.2.2.2205]
+task = "2.2"
+file = "include/layerx/lxp_transfer.h src/ledger/lxp_ledger_internal.h src/ledger/lxp_journal.c"
+symbol = "lxp_transfer_allowance lxp_transfer_context lxp_ledger_journal lxp_allowance_charge_leg"
+observed = "Three files outside the row's listed owned paths were touched, all minimally. include/layerx/lxp_transfer.h gains the lxp_transfer_allowance descriptor at :48-52, the lxp_transfer_context.allowance pointer at :74 and the three lxp_ledger_journal fields at :96-98; the transfer context and the journal are both defined there, so the fields cannot live anywhere else. src/ledger/lxp_ledger_internal.h gains the lxp_allowance_charge_leg declaration. src/ledger/lxp_journal.c gains one line, the charge call at :243 inside the transfer-set leg loop. The allowance is a pointer member so a const lxp_transfer_context * still reaches a mutable scope, which is what lets lxp_precondition_check keep its const signature."
+assumption = "No other row owns include/layerx/lxp_transfer.h or src/ledger/lxp_ledger_internal.h. The one line in src/ledger/lxp_journal.c is inside the leg loop the sequence row already reworked and merged, so the two changes do not overlap."
+severity = "note"

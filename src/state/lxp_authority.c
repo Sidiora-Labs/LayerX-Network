@@ -483,6 +483,64 @@ lxp_result lxp_authority_charge_allowance(lxp_authority_scope *scope,
     return LXP_OK;
 }
 
+static bool authority_kind_metered(lxp_authority_kind kind)
+{
+    return kind == LXP_AUTHORITY_DELEGATED_CAPABILITY ||
+           kind == LXP_AUTHORITY_BUDGET_ALLOWANCE;
+}
+
+static lxp_result debit_scope_binding(const lxp_authority_scope *scope,
+                                      lxp_authority_kind kind,
+                                      const uint8_t asset_id[32],
+                                      uint16_t module_id)
+{
+    if (scope == NULL || asset_id == NULL) return LXP_ERR_NON_CANONICAL;
+    if (kind < LXP_AUTHORITY_OWNER || kind > LXP_AUTHORITY_PROTOCOL_MODULE)
+        return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
+    if (module_id >= 64U ||
+        (scope->module_mask & (UINT64_C(1) << module_id)) == 0U)
+        return LXP_ERR_AUTH_SCOPE;
+    if (!authority_kind_metered(kind)) {
+        if (!lxp_u128_is_zero(scope->maximum_per_activity) ||
+            !lxp_u128_is_zero(scope->maximum_total) ||
+            !lxp_u128_is_zero(scope->maximum_per_period) ||
+            !lxp_u128_is_zero(scope->spent_total) ||
+            !lxp_u128_is_zero(scope->spent_this_period) ||
+            scope->period_length != 0U)
+            return LXP_ERR_AUTH_SCOPE;
+        return LXP_OK;
+    }
+    if (lxp_ct_memcmp(scope->asset_id, asset_id, 32U) != 0)
+        return LXP_ERR_ASSET_MISMATCH;
+    return LXP_OK;
+}
+
+lxp_result lxp_authority_check_debit(const lxp_authority_scope *scope,
+                                     lxp_authority_kind kind,
+                                     const uint8_t asset_id[32],
+                                     uint16_t module_id, lxp_u128 amount,
+                                     uint64_t batch_timestamp)
+{
+    lxp_authority_scope rolled;
+    lxp_result status = debit_scope_binding(scope, kind, asset_id, module_id);
+    if (status != LXP_OK || !authority_kind_metered(kind)) return status;
+    rolled = *scope;
+    status = lxp_authority_period_roll(&rolled, batch_timestamp);
+    if (status != LXP_OK) return status;
+    return lxp_authority_spend_check(&rolled, amount);
+}
+
+lxp_result lxp_authority_charge_debit(lxp_authority_scope *scope,
+                                      lxp_authority_kind kind,
+                                      const uint8_t asset_id[32],
+                                      uint16_t module_id, lxp_u128 amount,
+                                      uint64_t batch_timestamp)
+{
+    lxp_result status = debit_scope_binding(scope, kind, asset_id, module_id);
+    if (status != LXP_OK || !authority_kind_metered(kind)) return status;
+    return lxp_authority_charge_allowance(scope, amount, batch_timestamp);
+}
+
 lxp_result lxp_authority_revoke(lxp_authority_grant *grant,
                                 uint64_t revocation_sequence,
                                 uint64_t global_sequence)

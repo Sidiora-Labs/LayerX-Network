@@ -1,5 +1,7 @@
+#include "layerx/lxp_module.h"
 #include "layerx/lxp_transfer.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static lxp_result open_system(lx_account_registry *registry, const char *name,
@@ -23,6 +25,129 @@ static int balances(lx_account *const accounts[4], uint64_t a, uint64_t b,
 {
     return accounts[0]->balance.lo == a && accounts[1]->balance.lo == b &&
            accounts[2]->balance.lo == c && accounts[3]->balance.lo == d;
+}
+
+static void metered_grant_scope(lxp_authority_scope *scope,
+                                const uint8_t asset_id[32], uint64_t total)
+{
+    (void)memset(scope, 0, sizeof(*scope));
+    scope->module_mask = UINT64_C(1) << LXP_MODULE_ASSET;
+    scope->activity_ordinal_min = 1U;
+    scope->activity_ordinal_max = 2U;
+    (void)memcpy(scope->asset_id, asset_id, 32U);
+    scope->maximum_per_activity = (lxp_u128){ 0U, 40U };
+    scope->maximum_total = (lxp_u128){ 0U, total };
+    scope->purpose_hash[0] = 0x77U;
+}
+
+/* A transfer set draws every leg against the one grant the context presents.
+ * The charges accumulate across the legs, and a set that fails anywhere puts
+ * the recorded spend back exactly where the balances go back to. */
+static int allowance_set_checks(void)
+{
+    static const char *names[3] = { "agent:did:key:erin:main",
+                                    "agent:did:key:frank:main",
+                                    "agent:did:key:grace:main" };
+    lx_account_registry *registry;
+    lx_account *accounts[3];
+    uint8_t ids[3][32];
+    uint8_t asset_id[32] = { 9U };
+    lxp_transfer_asset_state asset;
+    lxp_authority_scope scope;
+    lxp_transfer_allowance allowance;
+    lxp_transfer_leg legs[2];
+    lxp_transfer_context context;
+    lxp_transfer_set_result result;
+    size_t i;
+    int failed = 1;
+
+    registry = malloc(sizeof(*registry));
+    if (registry == NULL) return 1;
+    if (lx_account_registry_init(registry) != LXP_OK) goto done;
+    for (i = 0U; i < 3U; ++i) {
+        if (lx_account_id_from_string((const uint8_t *)names[i],
+                                      strlen(names[i]), ids[i]) != LXP_OK ||
+            lx_account_open(registry, (const uint8_t *)names[i],
+                            strlen(names[i]), ids[i], 1U,
+                            LX_ACCOUNT_OPEN_CREDIT, NULL,
+                            &accounts[i]) != LXP_OK ||
+            lxp_ledger_bootstrap_balance(accounts[i], asset_id,
+                                         (lxp_u128){ 0U, i == 0U ? 100U : 0U },
+                                         0U) != LXP_OK) goto done;
+    }
+    (void)memset(&asset, 0, sizeof(asset));
+    (void)memcpy(asset.asset_id, asset_id, 32U);
+    asset.registered = true;
+    metered_grant_scope(&scope, asset_id, 50U);
+    (void)memset(&allowance, 0, sizeof(allowance));
+    allowance.scope = &scope;
+    allowance.kind = LXP_AUTHORITY_DELEGATED_CAPABILITY;
+    (void)memcpy(allowance.grantor, ids[0], 32U);
+    (void)memset(&context, 0, sizeof(context));
+    context.assets = &asset;
+    context.asset_count = 1U;
+    (void)memcpy(context.authorized_from, ids[0], 32U);
+    context.batch_timestamp = 100U;
+    context.origin_module_id = LXP_MODULE_ASSET;
+    context.debit_authority_kind = LXP_AUTH_DELEGATED_CAPABILITY;
+    context.allowance = &allowance;
+    (void)memset(legs, 0, sizeof(legs));
+    for (i = 0U; i < 2U; ++i) {
+        legs[i].from = accounts[0];
+        legs[i].to = accounts[i + 1U];
+        (void)memcpy(legs[i].asset_id, asset_id, 32U);
+        legs[i].amount = (lxp_u128){ 0U, 30U };
+        legs[i].reason = LXP_REASON_PAYMENT;
+    }
+
+    /* The second leg puts the set over the lifetime cap. The refusal is typed,
+     * and the charge the first leg already made is rolled back with it. */
+    if (lxp_apply_transfer_set(legs, 2U, &context, &result) !=
+            LXP_ERR_GRANT_EXHAUSTED ||
+        result.failure != LXP_ERR_GRANT_EXHAUSTED || result.failed_leg != 1U ||
+        result.leg_count != 1U || result.receipt_emitted ||
+        accounts[0]->balance.lo != 100U || accounts[1]->balance.lo != 0U ||
+        accounts[2]->balance.lo != 0U || accounts[0]->next_sequence != 0U ||
+        !lxp_u128_is_zero(scope.spent_total) ||
+        !lxp_u128_is_zero(scope.spent_this_period)) goto done;
+    /* Inside the cap both legs charge the same grant and the set commits. */
+    scope.maximum_total = (lxp_u128){ 0U, 60U };
+    if (lxp_apply_transfer_set(legs, 2U, &context, &result) != LXP_OK ||
+        !result.receipt_emitted || result.leg_count != 2U ||
+        accounts[0]->balance.lo != 40U || accounts[1]->balance.lo != 30U ||
+        accounts[2]->balance.lo != 30U || accounts[0]->next_sequence != 1U ||
+        scope.spent_total.lo != 60U || scope.spent_this_period.lo != 60U)
+        goto done;
+    /* A failure raised after the legs applied restores the recorded spend the
+     * same way it restores the balances. */
+    for (i = 0U; i < 3U; ++i)
+        if (lxp_ledger_bootstrap_balance(accounts[i], asset_id,
+                                         (lxp_u128){ 0U, i == 0U ? 100U : 0U },
+                                         i == 0U ? 1U : 0U) != LXP_OK)
+            goto done;
+    metered_grant_scope(&scope, asset_id, 60U);
+    context.actor_sequence = 1U;
+    context.inject_failure = true;
+    context.failure_after_leg = 1U;
+    if (lxp_apply_transfer_set(legs, 2U, &context, &result) != LXP_ERR_IO ||
+        result.failed_leg != 1U || accounts[0]->balance.lo != 100U ||
+        accounts[1]->balance.lo != 0U || accounts[2]->balance.lo != 0U ||
+        accounts[0]->next_sequence != 1U ||
+        !lxp_u128_is_zero(scope.spent_total) ||
+        !lxp_u128_is_zero(scope.spent_this_period)) goto done;
+    context.inject_failure = false;
+    /* A delegated set that hands the ledger no grant cannot spend either. */
+    context.allowance = NULL;
+    if (lxp_apply_transfer_set(legs, 2U, &context, &result) !=
+            LXP_ERR_AUTH_ALLOWANCE || result.failed_leg != 0U ||
+        result.leg_count != 0U || result.receipt_emitted ||
+        accounts[0]->balance.lo != 100U || accounts[1]->balance.lo != 0U ||
+        accounts[2]->balance.lo != 0U || accounts[0]->next_sequence != 1U)
+        goto done;
+    failed = 0;
+done:
+    free(registry);
+    return failed;
 }
 
 int main(void)
@@ -128,5 +253,6 @@ int main(void)
         !balances(accounts, 130U, 90U, 90U, 90U) ||
         accounts[0]->next_sequence != 1U ||
         accounts[3]->next_sequence != 0U) return 1;
+    if (allowance_set_checks() != 0) return 1;
     return 0;
 }

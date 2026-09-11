@@ -116,6 +116,84 @@ static lxp_result source_authority(
     return matches == 1U ? LXP_OK : LXP_ERR_UNAUTHORIZED_DEBIT;
 }
 
+/* A delegated debit has to present the grant it draws against. The Budget
+ * module charges its own record before it emits the set, so it is the one
+ * origin that carries a budget authorization without a grant scope; every
+ * other origin has to hand the ledger the scope it charges. */
+static bool allowance_required(lxp_authorization_kind authority_kind,
+                               uint16_t origin_module_id)
+{
+    if (authority_kind == LXP_AUTH_DELEGATED_CAPABILITY) return true;
+    return authority_kind == LXP_AUTH_BUDGET_ALLOWANCE &&
+           origin_module_id != LXP_MODULE_BUDGET;
+}
+
+static lxp_result allowance_grant_kind(lxp_authorization_kind authority_kind,
+                                       lxp_authority_kind *kind)
+{
+    switch (authority_kind) {
+    case LXP_AUTH_OWNER: *kind = LXP_AUTHORITY_OWNER; return LXP_OK;
+    case LXP_AUTH_SESSION_KEY: *kind = LXP_AUTHORITY_SESSION_KEY; return LXP_OK;
+    case LXP_AUTH_DELEGATED_CAPABILITY:
+        *kind = LXP_AUTHORITY_DELEGATED_CAPABILITY;
+        return LXP_OK;
+    case LXP_AUTH_BUDGET_ALLOWANCE:
+        *kind = LXP_AUTHORITY_BUDGET_ALLOWANCE;
+        return LXP_OK;
+    case LXP_AUTH_ESCROW: *kind = LXP_AUTHORITY_ESCROW; return LXP_OK;
+    case LXP_AUTH_PROTOCOL_MODULE:
+        *kind = LXP_AUTHORITY_PROTOCOL_MODULE;
+        return LXP_OK;
+    default: return LXP_ERR_AUTH_SCOPE;
+    }
+}
+
+/* Binds the debit leg to the grant before anything moves: the presented grant
+ * kind is the one the debit claims, the debited account is the grantor, and
+ * the scope still holds the amount at this batch timestamp. */
+static lxp_result allowance_check(const lxp_transfer_leg *leg,
+                                  const lxp_transfer_context *context,
+                                  lxp_authorization_kind authority_kind)
+{
+    const lxp_transfer_allowance *allowance = context->allowance;
+    lxp_authority_kind kind;
+    lxp_result status;
+    if (allowance == NULL || allowance->scope == NULL)
+        return allowance_required(authority_kind, context->origin_module_id) ?
+                   LXP_ERR_AUTH_ALLOWANCE : LXP_OK;
+    status = allowance_grant_kind(authority_kind, &kind);
+    if (status != LXP_OK) return status;
+    if (allowance->kind != kind) return LXP_ERR_AUTH_SCOPE;
+    if (memcmp(allowance->grantor, leg->from->id, 32U) != 0)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    return lxp_authority_check_debit(allowance->scope, allowance->kind,
+                                     leg->asset_id, context->origin_module_id,
+                                     leg->amount, context->batch_timestamp);
+}
+
+lxp_result lxp_allowance_charge_leg(const lxp_transfer_leg *leg,
+                                    const lxp_transfer_context *context,
+                                    lxp_ledger_journal *journal)
+{
+    lxp_transfer_allowance *allowance;
+    if (leg == NULL || leg->from == NULL || context == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    allowance = context->allowance;
+    if (allowance == NULL || allowance->scope == NULL) return LXP_OK;
+    if (journal != NULL) {
+        if (!journal->open) return LXP_ERR_NON_CANONICAL;
+        if (!journal->allowance_charged) {
+            journal->allowance = allowance;
+            journal->allowance_before = *allowance->scope;
+            journal->allowance_charged = true;
+        } else if (journal->allowance != allowance)
+            return LXP_ERR_NON_CANONICAL;
+    }
+    return lxp_authority_charge_debit(allowance->scope, allowance->kind,
+                                      leg->asset_id, context->origin_module_id,
+                                      leg->amount, context->batch_timestamp);
+}
+
 lxp_result lxp_ledger_bootstrap_balance(lx_account *account,
                                         const uint8_t asset_id[32],
                                         lxp_u128 balance,
@@ -226,6 +304,11 @@ lxp_result lxp_precondition_check(const lxp_transfer_leg *legs,
          memcmp(authorized_from, leg->from->id, 32U) != 0))
         return LXP_ERR_UNAUTHORIZED_DEBIT;
     {
+        lxp_result allowance_status = allowance_check(leg, context,
+                                                      authority_kind);
+        if (allowance_status != LXP_OK) return allowance_status;
+    }
+    {
         lxp_result terminal_status = lxp_sequence_terminal_check(context, leg);
         if (terminal_status != LXP_OK) return terminal_status;
     }
@@ -284,6 +367,12 @@ lxp_result lxp_balance_restore_snapshot(lxp_ledger_journal *journal)
 {
     size_t i;
     if (journal == NULL || !journal->open) return LXP_ERR_NON_CANONICAL;
+    if (journal->allowance_charged) {
+        if (journal->allowance == NULL || journal->allowance->scope == NULL)
+            return LXP_ERR_NON_CANONICAL;
+        *journal->allowance->scope = journal->allowance_before;
+        journal->allowance_charged = false;
+    }
     for (i = 0U; i < journal->count; ++i) {
         lxp_result status = lxp_ledger_restore_account_snapshot(
             journal->entries[i].account, journal->entries[i].balance_before,
@@ -299,8 +388,11 @@ lxp_result lxp_apply_transfer(lxp_transfer_leg *leg,
                               lxp_transfer_context *context,
                               lxp_transfer_result *result)
 {
+    lxp_authority_scope allowance_before;
+    bool allowance_bound;
     size_t index;
     lxp_result status;
+    (void)memset(&allowance_before, 0, sizeof(allowance_before));
     if (context == NULL) return LXP_ERR_NON_CANONICAL;
     if (context->source_authority_count > LXP_MAX_TRANSFER_SET_LEGS)
         return LXP_ERR_NON_CANONICAL;
@@ -319,9 +411,17 @@ lxp_result lxp_apply_transfer(lxp_transfer_leg *leg,
     if (status != LXP_OK) return status;
     status = lxp_sequence_terminal_check(context, leg);
     if (status != LXP_OK) return status;
+    allowance_bound = context->allowance != NULL &&
+                      context->allowance->scope != NULL;
+    if (allowance_bound) allowance_before = *context->allowance->scope;
+    status = lxp_allowance_charge_leg(leg, context, NULL);
+    if (status != LXP_OK) return status;
     status = lxp_balance_apply_leg(leg, result);
-    if (status == LXP_OK && context->debit_authority_kind !=
-                            LXP_AUTH_OCCUPANCY_RESPONSIBILITY)
+    if (status != LXP_OK) {
+        if (allowance_bound) *context->allowance->scope = allowance_before;
+        return status;
+    }
+    if (context->debit_authority_kind != LXP_AUTH_OCCUPANCY_RESPONSIBILITY)
         ++sequence_account_of(context, leg)->next_sequence;
     return status;
 }
