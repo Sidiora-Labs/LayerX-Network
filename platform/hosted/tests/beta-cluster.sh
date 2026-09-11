@@ -518,6 +518,7 @@ secrets_generate() {
     component_secrets_generate "$d"
     write_token "$d/gateway-authority.token"
     write_token "$d/gateway-identity.token"
+    write_token "$d/gateway-faucet.token"
     write_token "$d/registry-request.token"
     write_token "$d/registry-publication.token"
     write_token "$d/registry-authority.token"
@@ -786,6 +787,7 @@ secrets_apply() {
         --from-file=sequencer-id="$s/sequencer-id" --from-file=sequencer-first-batch="$s/sequencer-first-batch" \
         --from-file=sequencer-last-batch="$s/sequencer-last-batch"
     apply_secret "$ns" layerx-gateway-identity-client --from-file=token="$s/gateway-identity.token"
+    apply_secret "$ns" layerx-gateway-faucet-client --from-file=token="$s/gateway-faucet.token"
     apply_secret "$ns" layerx-gateway-redis-tls --from-file=tls.crt="$c/gateway-redis/cert.pem" \
         --from-file=tls.key="$c/gateway-redis/key.pem" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-gateway-redis-auth --from-file=users.acl="$s/gateway-redis.acl"
