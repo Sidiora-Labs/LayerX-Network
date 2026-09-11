@@ -541,6 +541,15 @@
             "pattern": "^[0-9a-fA-F]{64}$"
           },
           "description": "Required for account subscriptions only."
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "description": "Last delivered receipt-feed position for this topic, taken from params.cursor of the last notification received before the connection was lost. Positional: for account subscriptions it follows account_id."
         }
       ],
       "result": {
@@ -549,7 +558,42 @@
           "type": "string"
         }
       },
-      "description": "Authenticated GET /rpc/ws upgrade using Authorization: LayerX-Key. receipt:read scope for receipts; state:read for checkpoints and account. Server notifications use lx_subscription with params.subscription and params.result. At most 32 connections, 8 subscriptions per connection and 16 queued receipt wakes. Slow consumers and feed loss close with 1013; key revocation closes with 1008. Reconnect and reconcile through reads after closure; notifications are live, not a durable replay. Ping every 5 seconds, idle deadline 60 seconds, connection lifetime one hour. Browser Origin requests are refused. Core requires LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE matching the gateway component token. Receipts originate from authenticated native commit waits; checkpoints and account snapshots refresh on wakes, checkpoints also on bounded wait expiry."
+      "description": "Authenticated GET /rpc/ws upgrade using Authorization: LayerX-Key. receipt:read scope for receipts; state:read for checkpoints and account. Server notifications use lx_subscription with params.subscription, params.result and params.cursor. params.cursor is the receipt-feed position last delivered on that subscription, as a canonical decimal string. At most 32 connections, 8 subscriptions per connection and 16 queued receipt wakes. Slow consumers and feed loss close with 1013; key revocation closes with 1008. Reconnect by subscribing again with the cursor of the last notification: receipt subscriptions replay every event after it, checkpoint and account subscriptions replay the current snapshot once, and events replayed on resume are delivered before any live event. The resume window is 16 positions; a wider gap is refused with -32005 and a cursor ahead of chain_head_sequence with -32602, and the subscription is not created. Reconcile through reads after a refused resume. Ping every 5 seconds, idle deadline 60 seconds, connection lifetime one hour. Browser Origin requests are refused. Core requires LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE matching the gateway component token. Receipts originate from authenticated native commit waits; checkpoints and account snapshots refresh on wakes, checkpoints also on bounded wait expiry."
+    },
+    {
+      "name": "lx_unsubscribe",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "subscription",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "description": "Identifier returned by lx_subscribe on this connection."
+        }
+      ],
+      "result": {
+        "name": "cancelled",
+        "schema": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        }
+      },
+      "description": "Cancels one subscription on the WebSocket connection that created it and stops its notifications; other subscriptions keep their identifiers and cursors. WebSocket only: over POST /rpc it returns -32004. An identifier that is not active on this connection returns -32602.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32004,
+          "message": "WebSocket required"
+        }
+      ]
     },
     {
       "name": "lx_listAssets",

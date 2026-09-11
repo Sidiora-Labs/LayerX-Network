@@ -26,7 +26,7 @@ hexadecimal. Amounts and balances in read results are decimal strings.
 
 ## Complete published method set
 
-The embedded OpenRPC document publishes these 15 method
+The embedded OpenRPC document publishes these 18 method
 names. Parameters are positional; the alternatives shown for sequence, proof,
 and subscription are part of the same method contract
 (`platform/hosted/gateway/openrpc.json`;
@@ -34,6 +34,8 @@ and subscription are part of the same method contract
 
 | Method | Exact positional parameters | Result |
 | --- | --- | --- |
+| `lx_register` | `[signer_public_key, registration_signature]` | Identity principal record for a self-registered signer |
+| `lx_requestFunds` | `[did, signer_public_key]` | One bounded testnet faucet grant the faucet confirmed as funded |
 | `lx_getAccount` | `[account_id]` | Authenticated account snapshot |
 | `lx_getBalance` | `[account_id]` | Same account object; read `balance` and `asset_id` |
 | `lx_getBalances` | `[did]` | Complete bounded DID account list |
@@ -48,14 +50,16 @@ and subscription are part of the same method contract
 | `lx_getProof` | `["receipt", activity_id]` | Receipt proof and signed header |
 | `lx_getProof` | `["account", activity_id, account_id]` | Exact verified native account-proof bytes |
 | `lx_sendActivity` | `[canonical_hex, "executed"|"batched"|"finalised"]` | Verified outcome at exactly the requested commitment |
-| `lx_subscribe` | `["receipts"]`, `["checkpoints"]`, or `["account", account_id]` | WebSocket subscription id string |
+| `lx_subscribe` | `["receipts"]`, `["checkpoints"]`, or `["account", account_id]`, each optionally followed by a resume `cursor` string | WebSocket subscription id string |
+| `lx_unsubscribe` | `[subscription]` | `true` once that WebSocket subscription stops |
 | `lx_listAssets` | `[]` or no `params` | Complete Asset registry snapshot |
 | `lx_getAsset` | `[asset_id]` | One Asset metadata record |
 | `lx_estimateFee` | `[canonical_hex]` | Committed-schedule estimate; it does not reserve a fee or prove execution |
 
 Account, activity, checkpoint, and Asset identifiers are nonzero 32-byte hex.
-`lx_getProof` permits only the three selectors above. `lx_subscribe` is served
-only over `GET /rpc/ws`; sending it to HTTPS `POST /rpc` returns:
+`lx_getProof` permits only the three selectors above. `lx_subscribe` and
+`lx_unsubscribe` are served only over `GET /rpc/ws`; sending either to HTTPS
+`POST /rpc` returns:
 
 ```json
 {

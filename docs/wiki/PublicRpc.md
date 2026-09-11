@@ -45,13 +45,14 @@ limit enforced by the gateway is 8 MiB. Parameters are positional.
 | `lx_getProof` | `["receipt", activity_id]` | Receipt proof and signed header |
 | `lx_getProof` | `["account", activity_id, account_id]` | Exact verified native account-proof bytes |
 | `lx_sendActivity` | `[canonical_hex, commitment]` | Verified outcome at the requested commitment |
-| `lx_subscribe` | `["receipts"]`, `["checkpoints"]`, or `["account", account_id]` | Subscription id string; WebSocket only |
+| `lx_subscribe` | `["receipts"]`, `["checkpoints"]`, or `["account", account_id]`, each optionally followed by a `cursor` string | Subscription id string; WebSocket only |
+| `lx_unsubscribe` | `[subscription]` | `true` once that subscription stops; WebSocket only |
 | `lx_listAssets` | `[]` or no `params` | Asset registry snapshot under `assets`, bounded at 64 records |
 | `lx_getAsset` | `[asset_id]` | One Asset metadata record |
 | `lx_estimateFee` | `[canonical_hex]` | Committed-schedule estimate |
 
 Although `lx_getSequence` has two parameter forms, it is one method; the table
-therefore describes all 17 method names.
+therefore describes all 18 method names.
 
 `lx_register` and `lx_requestFunds` are the onboarding pair. `lx_register`
 takes a lowercase-hex 32-byte Ed25519 public key and its 64-byte signature over
@@ -197,26 +198,46 @@ Open `GET /rpc/ws` with WebSocket version 13, an empty body, no browser
 `receipt:read`; checkpoint and account subscriptions require `state:read`.
 Sending `lx_subscribe` to HTTPS `POST /rpc` returns `-32004`.
 
-The result of `lx_subscribe` is a one-based string id. Notifications are:
+The result of `lx_subscribe` is a one-based string id, allocated once per
+subscription on the connection and never reused after `lx_unsubscribe`.
+Notifications are:
 
 ```json
 {
   "jsonrpc": "2.0",
   "method": "lx_subscription",
-  "params": {"subscription": "1", "result": {}}
+  "params": {"subscription": "1", "result": {}, "cursor": "41"}
 }
 ```
 
-Subscriptions are live signals, not durable replay. Reconnect and reconcile
-with reads. The gateway allows 32 sockets, 8 subscriptions per socket, and 16
-queued receipt wakes. It pings every 5 seconds, closes idle sockets after 60
+`params.cursor` is the receipt-feed position last delivered on that
+subscription, as a canonical decimal string with no leading zeros.
+
+`lx_unsubscribe` takes that subscription id and answers `{"result": true}`;
+the remaining subscriptions keep their ids and cursors. An id that is not
+active on the connection returns `-32602`, and the method is refused over
+HTTPS `POST /rpc` with `-32004` like `lx_subscribe`.
+
+To reconnect, subscribe again with the cursor of the last notification the
+client kept: `["receipts", "41"]`, `["checkpoints", "41"]` or
+`["account", account_id, "41"]`. A receipt subscription replays every event
+after that position; checkpoint and account subscriptions replay the current
+snapshot once. Replayed notifications carry the position they replayed and are
+delivered after the acknowledgement and before any live notification, and a
+live event at or below the cursor is not delivered twice. The resume window is
+16 positions: a wider gap is refused with `-32005`, a cursor ahead of
+`chain_head_sequence` with `-32602`, and an unavailable feed with `-32001`. A
+refused resume creates no subscription, so reconcile through reads and
+subscribe without a cursor. The gateway allows 32 sockets, 8 subscriptions per
+socket, and 16 queued receipt wakes. It pings every 5 seconds, closes idle sockets after 60
 seconds, and limits a connection to one hour; both of those expiries close with
 `1000`. Slow consumers, feed loss, and exhausting the read rate limiter inside
 a live socket close with `1013`; revoked keys or changed scope close with
 `1008`; protocol errors close with `1002`.
 
 Every read method is also servable over the socket: a frame whose `method` is
-not `lx_subscribe` is dispatched as an ordinary JSON-RPC request, and the key
+neither `lx_subscribe` nor `lx_unsubscribe` is dispatched as an ordinary
+JSON-RPC request, and the key
 is re-authenticated on every inbound frame, every wake, and every ping.
 `account` notifications fire only on a receipt wake and are suppressed when the
 account is unchanged; the account id is lowercased into the topic name.
@@ -234,12 +255,12 @@ HTTP `429` and `Retry-After: 1`, never as a JSON-RPC error.
 | `-32700` | Parse error |
 | `-32600` | Invalid request envelope, empty batch, or batch over 32 |
 | `-32601` | Method not found |
-| `-32602` | Invalid positional parameters, selector, canonical activity, or commitment |
+| `-32602` | Invalid positional parameters, selector, resume cursor, canonical activity, or commitment, or a subscription id that is not active |
 | `-32603` | Invalid upstream response, gateway persistence failure, invalid route, or missing verified receipt |
 | `-32001` | Read/submission unavailable or requested commitment still pending |
 | `-32002` | Authentication, authorization, or scope refusal |
-| `-32004` | `lx_subscribe` requires WebSocket |
-| `-32005` | Read rate limit, or the per-connection subscription limit |
+| `-32004` | `lx_subscribe` and `lx_unsubscribe` require WebSocket |
+| `-32005` | Read rate limit, the per-connection subscription limit, or a resume cursor outside the 16-position window |
 
 For proxied calls, upstream HTTP `400`/`415` maps to `-32602`, `401`/`403`
 to `-32002`, `429` to `-32005`, and other non-success status to `-32001`.
