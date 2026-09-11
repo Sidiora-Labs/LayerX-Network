@@ -12734,3 +12734,83 @@ symbol = "create_wallet WalletCommand::History"
 observed = "The merged published OpenRPC contract contains no authenticated DID registration, main-account opening or DID activity-history method. Wallet create and history therefore retain typed not-published refusals, and history remains outside the advertised working help surface. The funded qualification uses the disposable stack principal and main account created by its local gateway lifecycle setup rather than claiming hosted registration coverage."
 assumption = "Publish authenticated request and response schemas for DID registration, main-account creation and DID-scoped history before enabling those hosted commands. Emulator registration does not qualify the hosted contract."
 severity = "blocker"
+
+[observation.6.11.6431]
+task = "6.11"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "observation.6.11.130"
+observed = "Re-checked on the current base: observation.6.11.130 now carries a single well formed record with one section header and one occurrence of each key, and make CC=gcc beta-ledger-check exits 0 over 48 gate records and 1307 observation records. The duplicated-key condition recorded in observation.6.11.6419 is no longer reproducible. Evidence: qual-logs/c2/26.log, qual-logs/c2/ledger-pre.log."
+assumption = "observation.6.11.6419 is superseded and no longer blocks the aggregate ledger gate. The record is kept because it is append-only."
+severity = "note"
+
+[observation.6.11.6432]
+task = "6.11"
+file = "cmd/layerx-genesis/lxp_genesis_build_cli.c tests/test_genesis_manifest.c"
+symbol = "lxp_genesis_builder_cli_main build_artifacts"
+observed = "build/bin/layerx-genesis-build returns 1 and writes nothing to stdout or stderr for a genesis request produced by the real-node fixtures, because lxp_genesis_builder_cli_main collapses every build_artifacts failure into exit 1 without reporting the lxp_result. The same builder path fails in tree: make CC=gcc test-genesis-bootstrap stops at tests/test_genesis_manifest.c line 203, where asset ordinal 9 resolves through lxp_kernel_module_for_activity although the manifest test requires it not to, and at line 301 on check_version(LXP_PROTOCOL_VERSION_STATE_COMMITMENT). The native, programs and Makefile trees are byte identical to the branch base, so the failure is inherited. Evidence: qual-logs/c2/4.log, qual-logs/c2/genesis-repro.log, qual-logs/c2/genesis-repro2.log."
+assumption = "The genesis builder CLI must surface the failing lxp_result, and the genesis module table and the state-commitment protocol version must agree with tests/test_genesis_manifest.c before any gate that builds a real genesis can pass."
+severity = "blocker"
+
+[observation.6.11.6433]
+task = "6.11"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs platform/hosted/agent-boundary/tests/real_node.rs"
+symbol = "command budget_create real_node"
+observed = "Every Rust workspace test that stands up a real node fails on the genesis builder described in observation.6.11.6432. In the agent workspace cargo test --workspace fails with 5 failures in layerx-agentd test budget_create: the first panics at crates/layerx-agentd/tests/support/real_authority.rs line 145 on layerx-genesis-build, and the remaining four report a poisoned fixture lock at line 1437. In the platform workspace cargo test --workspace --features layerx-platform-cli/test-credential-store fails only in layerx-platform-agent-boundary test real_node, 12 failures, each panicking at hosted/agent-boundary/tests/real_node.rs line 142 on the same builder. All other platform test binaries, including the wallet and token command suites of this branch, pass in the same run. Evidence: qual-logs/c2/11.log, qual-logs/c2/15.log."
+assumption = "The shared fixture lock should not be poisoned by a failed external command, so that the first real cause is reported once instead of as four secondary panics. The underlying builder defect is tracked by observation.6.11.6432."
+severity = "blocker"
+
+[observation.6.11.6434]
+task = "6.11"
+file = "tests/modules/test_asset_withdraw_activity.c"
+symbol = "test_asset_withdraw_activity"
+observed = "make CC=gcc test-asset-withdraw-activity exits 1 on the branch base. The binary prints case 0 line 151, the CHECK(status == LXP_OK && result == LXP_OK) that follows a withdraw dispatch for mode 0, so the dispatch is refused where the case expects it to commit. The native tree is byte identical to the branch base. Evidence: qual-logs/c2/4.log."
+assumption = "Either the withdraw activity dispatch or the mode 0 expectation in the test is stale; both are left as written."
+severity = "blocker"
+
+[observation.6.11.6435]
+task = "6.11"
+file = "tests/support/lxgb_metadata.rs agent/crates/layerx-agentd/tests/support/real_authority.rs platform/hosted/authority/tests/real_node.rs programs/crates/layerx-programs-runtime/src/ffi_call.rs programs/crates/layerx-programs-runtime/src/ffi_transfer.rs"
+symbol = "append real_authority ffi_call ffi_transfer"
+observed = "cargo fmt --all --check exits 1 in both the agent and the platform workspace on files that are byte identical to the branch base and to upstream: the shared test support module tests/support/lxgb_metadata.rs, agent/crates/layerx-agentd/tests/support/real_authority.rs line 221, platform/hosted/authority/tests/real_node.rs and the two programs runtime FFI modules. No file owned by this branch appears in either diff list. Evidence: qual-logs/c2/9.log, qual-logs/c2/13.log."
+assumption = "The shared test support files are expected to be rustfmt clean under the pinned toolchain; the reformatting belongs to the owners of those paths."
+severity = "note"
+
+[observation.6.11.6436]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/payments.rs tests/support/lxgb_metadata.rs"
+symbol = "decode append"
+observed = "cargo clippy --workspace --all-targets -- -D warnings exits 101 in both Rust workspaces on inherited code. In the agent workspace layerx-crypto fails to compile because pub fn decode at crates/layerx-crypto/src/payments.rs line 403 trips clippy::too_many_lines with 109 of 100 lines. In the platform workspace layerx-platform-authority test real_node fails with four clippy::cast_possible_truncation errors raised inside the shared tests/support/lxgb_metadata.rs, at the two usize to u16 casts that length prefix the metadata record and the fee schedule. Neither file is changed by this branch. Evidence: qual-logs/c2/10.log, qual-logs/c2/14.log."
+assumption = "The pedantic lint set is enforced repository wide, so these two inherited sites have to be split or converted with try_from by their owners before either clippy gate can pass."
+severity = "note"
+
+[observation.6.11.6437]
+task = "6.11"
+file = "platform/middleware/conformance/pay6 platform/middleware/examples/public_rpc.py platform/hosted/gateway/tests/local/checkpoint_settlement.py"
+symbol = "ruff check"
+observed = "ruff check over agent/sdk/python, platform/middleware/conformance/pay6, platform/middleware/examples and platform/hosted/gateway/tests/local reports 30 errors and exits 1 on files this branch does not change: unsorted import blocks in ten modules, four C408 dict() literals, three B017 blind exception assertions, one RUF012 mutable class attribute, one UP012 redundant encode and one EXE001 shebang without the executable bit. agent/sdk/python itself is clean. Evidence: qual-logs/c2/22c.log."
+assumption = "The Python lint gate is expected to be clean repository wide; the fixes belong to the owners of the conformance and example packages."
+severity = "note"
+
+[observation.6.11.6438]
+task = "6.11"
+file = "platform/hosted/agent-boundary/tests/real_node/custody.rs tests/bridge/custody_credit.py"
+symbol = "AccountProofConnection custody producer"
+observed = "The custody producers of the agent-boundary real-node tests run tests/bridge/custody_credit.py, which imports Crypto.Hash.keccak. The interpreter reached through PATH at platform/hosted/agent-boundary/tests/real_node/custody.rs line 329, and the interpreter hard coded as /usr/bin/python3 at line 28, have no pycryptodome installed, so three of the twelve real-node failures report ModuleNotFoundError before any protocol assertion runs. A virtual environment carrying pycryptodome has to precede on PATH, and the hard coded absolute interpreter cannot be redirected that way at all. Evidence: qual-logs/c2/15.log."
+assumption = "The real-node custody tests need their Python dependency declared and resolved through one interpreter selection, not a mix of PATH lookup and an absolute path."
+severity = "note"
+
+[observation.6.11.6439]
+task = "6.11"
+file = "platform/emulator/build.rs Makefile"
+symbol = "PROGRAMS_TARGET_DIR programs-build"
+observed = "Running the platform workspace clippy gate inflates the worktree programs target directory to about 9.9G against about 2.1G for a plain native build, because platform/emulator/build.rs re-enters make build, which runs the nested cargo build into PROGRAMS_TARGET_DIR while the outer invocation is a clippy run, so the nested build produces a second complete artifact set beside the plain build and test artifacts, plus an incremental cache of about 1.8G. With the native, programs and platform gates in flight together the directory exhausted the device and make CC=gcc programs-test failed with No space left on device while linking layerx-programs-runtime test binaries; that run is recorded as void and rerun. Evidence: qual-logs/c2/8.log, qual-logs/c2/8r.log, qual-logs/c2/programs-clean.log."
+assumption = "The nested programs build should not inherit the outer invocation kind, so a lint run over the platform workspace does not duplicate the whole programs artifact set in the shared worktree target directory."
+severity = "note"
+
+[observation.6.11.6440]
+task = "6.11"
+file = "docs/wiki/Quickstart.md platform/cli/src/main.rs"
+symbol = "Faucet FaucetArgs"
+observed = "docs/wiki/Quickstart.md still states that the command line has no faucet command, while platform/cli/src/main.rs registers Faucet(faucet::FaucetArgs) at line 81 and dispatches it at line 554 over the module declared at line 14. The page is inherited unchanged at that point by this branch. Evidence: the Command enum and the dispatch arm named above."
+assumption = "The Quickstart page has to follow the command surface it documents; the correction belongs to the owner of the wiki pages."
+severity = "note"
