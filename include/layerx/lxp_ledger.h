@@ -75,6 +75,8 @@ lxp_result lx_account_credit_registration_commit(
 enum {
     LXP_SEND_MAX_CONDITIONS = 8,
     LXP_SEND_STORE_CAPACITY = 64,
+    LXP_SEND_HISTORY_RECORD_BYTES = 161,
+    LXP_SEND_HISTORY_INITIAL_CAPACITY = 64,
     LXP_GRANT_STORE_CAPACITY = 64,
     LXP_REASON_PAYMENT = 1,
     LXP_REASON_DEPOSIT = 2,
@@ -163,9 +165,19 @@ typedef struct lxp_send_store_record {
     lxp_send_receipt_projection receipt;
 } lxp_send_store_record;
 
+struct lxp_meter_ctx;
+typedef struct lxp_send_history {
+    lxp_send_store_record *records;
+    size_t count;
+    size_t capacity;
+    uint64_t stored_bytes;
+} lxp_send_history;
+
 typedef struct lxp_send_store {
     lxp_send_store_record records[LXP_SEND_STORE_CAPACITY];
     size_t count;
+    lxp_send_history *history;
+    struct lxp_meter_ctx *meter;
 } lxp_send_store;
 
 typedef struct lxp_send_environment {
@@ -325,6 +337,17 @@ lxp_result lxp_send_build_transfer_set(const lxp_send *send,
 lxp_result lxp_send_execute(const lxp_send *send,
                             lxp_send_environment *environment,
                             lxp_send_receipt_projection *receipt);
+lxp_result lxp_send_store_init(lxp_send_store *store,
+                               struct lxp_meter_ctx *meter);
+void lxp_send_store_release(lxp_send_store *store);
+lxp_result lxp_send_store_lookup(const lxp_send_store *store,
+                                 const uint8_t idempotency_key[32],
+                                 const uint8_t activity_hash[32],
+                                 lxp_send_receipt_projection *projection);
+lxp_result lxp_send_store_admit(lxp_send_store *store);
+lxp_result lxp_send_store_append(lxp_send_store *store,
+                                 const lxp_send_store_record *record);
+lxp_result lxp_send_store_total(const lxp_send_store *store, size_t *total);
 /* Canonical grant_issue (asset ordinal 7) payload. */
 lxp_result lxp_payer_grant_encode(const lxp_payer_grant *grant,
                                   uint8_t *bytes, size_t capacity, size_t *length);

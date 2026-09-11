@@ -1,4 +1,5 @@
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_transfer.h"
@@ -153,5 +154,151 @@ int main(void)
         lxp_send_execute(&send, &environment, &receipt) != LXP_OK ||
         from->balance.lo != 65U || to->balance.lo != 35U ||
         from->next_sequence != 2U) return 1;
+    {
+        const size_t window = (size_t)LXP_SEND_STORE_CAPACITY;
+        const size_t beyond = window + 3U;
+        const uint64_t window_bytes =
+            (uint64_t)window * (uint64_t)LXP_SEND_HISTORY_RECORD_BYTES;
+        lxp_send_store spilling;
+        lxp_send_environment spilling_environment;
+        lxp_meter_ctx meter;
+        lxp_send_receipt_projection oldest;
+        lxp_send_receipt_projection replay;
+        lxp_send oldest_send;
+        size_t total = 0U;
+        size_t index;
+
+        if (lxp_send_store_init(&spilling, &meter) != LXP_OK ||
+            lxp_meter_init(&meter, UINT64_MAX, UINT64_MAX,
+                           (lxp_u128){ 0U, 1U }, (lxp_u128){ 0U, UINT64_MAX },
+                           1U, true) != LXP_OK ||
+            lxp_ledger_bootstrap_balance(from, asset_id,
+                                         (lxp_u128){ 0U, 1000U }, 0U) !=
+                LXP_OK ||
+            lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 0U },
+                                         0U) != LXP_OK) return 1;
+        spilling_environment = (lxp_send_environment){ &registry, &asset, 1U,
+            &spilling, 10U, 7U, LXP_PROTOCOL_VERSION };
+        (void)memset(&oldest, 0, sizeof(oldest));
+        (void)memset(&oldest_send, 0, sizeof(oldest_send));
+        send.amount = (lxp_u128){ 0U, 1U };
+        for (index = 0U; index < beyond; ++index) {
+            send.sequence = (uint64_t)index;
+            send.idempotency_key[0] = 0U;
+            send.idempotency_key[1] = (uint8_t)(index + 1U);
+            if (sign_send(&send, seed, public_key) != 0 ||
+                lxp_send_execute(&send, &spilling_environment, &receipt) !=
+                    LXP_OK) return 1;
+            if (index == 0U) {
+                oldest = receipt;
+                oldest_send = send;
+            }
+        }
+        if (lxp_send_store_total(&spilling, &total) != LXP_OK ||
+            total != beyond || spilling.count != beyond - window ||
+            spilling.history == NULL || spilling.history->count != window ||
+            spilling.history->stored_bytes != window_bytes ||
+            meter.net_storage_bytes != window_bytes ||
+            from->balance.lo != 1000U - beyond || to->balance.lo != beyond ||
+            from->next_sequence != beyond) return 1;
+        if (lxp_send_execute(&oldest_send, &spilling_environment, &receipt) !=
+                LXP_ERR_SEQUENCE_REUSED ||
+            from->balance.lo != 1000U - beyond) return 1;
+        send.sequence = (uint64_t)beyond;
+        send.amount = (lxp_u128){ 0U, 7U };
+        send.idempotency_key[0] = 0U;
+        send.idempotency_key[1] = 1U;
+        oldest.replayed = true;
+        if (sign_send(&send, seed, public_key) != 0 ||
+            lxp_send_execute(&send, &spilling_environment, &replay) !=
+                LXP_ERR_IDEMPOTENT_REPLAY ||
+            memcmp(&replay, &oldest, sizeof(replay)) != 0 ||
+            from->balance.lo != 1000U - beyond || to->balance.lo != beyond ||
+            from->next_sequence != beyond) return 1;
+        lxp_send_store_release(&spilling);
+        if (spilling.count != 0U || spilling.history != NULL) return 1;
+    }
+    {
+        const size_t window = (size_t)LXP_SEND_STORE_CAPACITY;
+        const uint64_t window_bytes =
+            (uint64_t)window * (uint64_t)LXP_SEND_HISTORY_RECORD_BYTES;
+        lxp_send_store metered;
+        lxp_send_environment metered_environment;
+        lxp_meter_ctx meter;
+        size_t spilled = 0U;
+        size_t index;
+
+        if (lxp_send_store_init(&metered, &meter) != LXP_OK ||
+            lxp_meter_init(&meter, UINT64_MAX, window_bytes - 1U,
+                           (lxp_u128){ 0U, 1U }, (lxp_u128){ 0U, UINT64_MAX },
+                           1U, true) != LXP_OK ||
+            lxp_ledger_bootstrap_balance(from, asset_id,
+                                         (lxp_u128){ 0U, 1000U }, 0U) !=
+                LXP_OK ||
+            lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 0U },
+                                         0U) != LXP_OK) return 1;
+        metered_environment = (lxp_send_environment){ &registry, &asset, 1U,
+            &metered, 10U, 7U, LXP_PROTOCOL_VERSION };
+        send.amount = (lxp_u128){ 0U, 1U };
+        for (index = 0U; index < window; ++index) {
+            send.sequence = (uint64_t)index;
+            send.idempotency_key[0] = 1U;
+            send.idempotency_key[1] = (uint8_t)(index + 1U);
+            if (sign_send(&send, seed, public_key) != 0 ||
+                lxp_send_execute(&send, &metered_environment, &receipt) !=
+                    LXP_OK) return 1;
+        }
+        send.sequence = (uint64_t)window;
+        send.idempotency_key[0] = 2U;
+        send.idempotency_key[1] = 1U;
+        if (sign_send(&send, seed, public_key) != 0 ||
+            lxp_send_execute(&send, &metered_environment, &receipt) !=
+                LXP_ERR_GAS_EXHAUSTED ||
+            metered.count != window || metered.history == NULL ||
+            metered.history->count != 0U ||
+            metered.history->stored_bytes != 0U ||
+            lxp_send_store_total(&metered, &spilled) != LXP_OK ||
+            spilled != window ||
+            from->balance.lo != 1000U - window || to->balance.lo != window ||
+            from->next_sequence != window) return 1;
+        lxp_send_store_release(&metered);
+    }
+    {
+        const size_t window = (size_t)LXP_SEND_STORE_CAPACITY;
+        lxp_send_store unmetered;
+        lxp_send_environment unmetered_environment;
+        size_t total = 0U;
+        size_t index;
+
+        if (lxp_send_store_init(&unmetered, NULL) != LXP_OK ||
+            lxp_ledger_bootstrap_balance(from, asset_id,
+                                         (lxp_u128){ 0U, 1000U }, 0U) !=
+                LXP_OK ||
+            lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 0U },
+                                         0U) != LXP_OK) return 1;
+        unmetered_environment = (lxp_send_environment){ &registry, &asset, 1U,
+            &unmetered, 10U, 7U, LXP_PROTOCOL_VERSION };
+        send.amount = (lxp_u128){ 0U, 1U };
+        for (index = 0U; index < window; ++index) {
+            send.sequence = (uint64_t)index;
+            send.idempotency_key[0] = 3U;
+            send.idempotency_key[1] = (uint8_t)(index + 1U);
+            if (sign_send(&send, seed, public_key) != 0 ||
+                lxp_send_execute(&send, &unmetered_environment, &receipt) !=
+                    LXP_OK) return 1;
+        }
+        send.sequence = (uint64_t)window;
+        send.idempotency_key[0] = 4U;
+        send.idempotency_key[1] = 1U;
+        if (sign_send(&send, seed, public_key) != 0 ||
+            lxp_send_execute(&send, &unmetered_environment, &receipt) !=
+                LXP_ERR_ARENA_EXHAUSTED ||
+            lxp_send_store_total(&unmetered, &total) != LXP_OK ||
+            total != window || unmetered.count != window ||
+            unmetered.history != NULL ||
+            from->balance.lo != 1000U - window || to->balance.lo != window ||
+            from->next_sequence != window) return 1;
+        lxp_send_store_release(&unmetered);
+    }
     return 0;
 }

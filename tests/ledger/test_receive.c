@@ -1,3 +1,4 @@
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_transfer.h"
@@ -202,5 +203,89 @@ int main(void)
         from->balance.lo != 50U || to->balance.lo != 50U ||
         to->next_sequence != 2U || grants.grants[0].drawn_total.lo != 50U ||
         !grants.grants[0].invoice_settled) return 1;
+    {
+        const size_t window = (size_t)LXP_SEND_STORE_CAPACITY;
+        const size_t beyond = window + 2U;
+        const uint64_t window_bytes =
+            (uint64_t)window * (uint64_t)LXP_SEND_HISTORY_RECORD_BYTES;
+        lxp_payer_grant bulk_grant;
+        lxp_receive bulk;
+        lxp_receive oldest_receive;
+        lxp_send_store spilling;
+        lxp_receive_environment spilling_environment;
+        lxp_meter_ctx meter;
+        lxp_send_receipt_projection oldest;
+        lxp_send_receipt_projection replay;
+        size_t total = 0U;
+        size_t index;
+
+        (void)memset(&bulk_grant, 0, sizeof(bulk_grant));
+        (void)memcpy(bulk_grant.from, from->id, 32U);
+        (void)memcpy(bulk_grant.recipient, to->id, 32U);
+        (void)memcpy(bulk_grant.asset, asset_id, 32U);
+        bulk_grant.per_draw_maximum = (lxp_u128){ 0U, 1U };
+        bulk_grant.allowance = (lxp_u128){ 0U, 200U };
+        bulk_grant.expiration = 100U;
+        bulk_grant.purpose_hash[0] = 21U;
+        bulk_grant.revocation_sequence = 50U;
+        (void)memcpy(bulk_grant.public_key, from->authority_key, 32U);
+        if (sign_grant(&bulk_grant, payer_seed) != 0 ||
+            lxp_grant_store_put(&grants, &bulk_grant, from) != LXP_OK ||
+            lxp_send_store_init(&spilling, &meter) != LXP_OK ||
+            lxp_meter_init(&meter, UINT64_MAX, UINT64_MAX,
+                           (lxp_u128){ 0U, 1U }, (lxp_u128){ 0U, UINT64_MAX },
+                           1U, true) != LXP_OK ||
+            lxp_ledger_bootstrap_balance(from, asset_id,
+                                         (lxp_u128){ 0U, 200U }, 0U) !=
+                LXP_OK ||
+            lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 0U },
+                                         0U) != LXP_OK) return 1;
+        bulk = receive;
+        (void)memcpy(bulk.grant_id, bulk_grant.grant_id, 32U);
+        bulk.payer_grant = bulk_grant;
+        bulk.amount = (lxp_u128){ 0U, 1U };
+        if (lxp_hash_context_value(bulk_grant.purpose_hash, 32U,
+                                   bulk.context_hash) != LXP_OK) return 1;
+        (void)memcpy(bulk.receiver_authorization.signed_context_hash,
+                     bulk.context_hash, 32U);
+        spilling_environment = (lxp_receive_environment){ &accounts, &asset,
+            1U, &grants, &spilling, 10U, 1U, 7U, LXP_PROTOCOL_VERSION };
+        (void)memset(&oldest, 0, sizeof(oldest));
+        (void)memset(&oldest_receive, 0, sizeof(oldest_receive));
+        for (index = 0U; index < beyond; ++index) {
+            bulk.receiver_sequence = (uint64_t)index;
+            bulk.idempotency_key[0] = 0U;
+            bulk.idempotency_key[1] = (uint8_t)(index + 1U);
+            if (sign_receive(&bulk, receiver_seed) != 0 ||
+                lxp_receive_execute(&bulk, &spilling_environment, &receipt) !=
+                    LXP_OK) return 1;
+            if (index == 0U) {
+                oldest = receipt;
+                oldest_receive = bulk;
+            }
+        }
+        if (lxp_send_store_total(&spilling, &total) != LXP_OK ||
+            total != beyond || spilling.count != beyond - window ||
+            spilling.history == NULL || spilling.history->count != window ||
+            spilling.history->stored_bytes != window_bytes ||
+            meter.net_storage_bytes != window_bytes ||
+            from->balance.lo != 200U - beyond || to->balance.lo != beyond ||
+            to->next_sequence != beyond) return 1;
+        if (lxp_receive_execute(&oldest_receive, &spilling_environment,
+                                &receipt) != LXP_ERR_SEQUENCE_REUSED ||
+            from->balance.lo != 200U - beyond) return 1;
+        bulk.receiver_sequence = (uint64_t)beyond;
+        bulk.idempotency_key[0] = 0U;
+        bulk.idempotency_key[1] = 1U;
+        oldest.replayed = true;
+        if (sign_receive(&bulk, receiver_seed) != 0 ||
+            lxp_receive_execute(&bulk, &spilling_environment, &replay) !=
+                LXP_ERR_IDEMPOTENT_REPLAY ||
+            memcmp(&replay, &oldest, sizeof(replay)) != 0 ||
+            from->balance.lo != 200U - beyond || to->balance.lo != beyond ||
+            to->next_sequence != beyond) return 1;
+        lxp_send_store_release(&spilling);
+        if (spilling.count != 0U || spilling.history != NULL) return 1;
+    }
     return 0;
 }
