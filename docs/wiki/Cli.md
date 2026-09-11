@@ -274,7 +274,7 @@ Default config when the file is absent: environment `emulator`, endpoint
 The CLI talks HTTP to the active environment endpoint
 (`platform/cli/src/main.rs:1420-1424`; `platform/cli/src/http.rs:24-50`).
 `layerx --rpc <url> wallet|token …` additionally POSTs JSON-RPC 2.0 to the
-gateway `/rpc` surface (`platform/cli/src/rpc.rs:14-15, 29-37`). That is
+gateway `/rpc` surface (`platform/cli/src/rpc.rs:14-15, 29-36`). That is
 the public gateway contract, not a `layerxd` node admin socket. Other
 commands do not open a node RPC.
 
@@ -319,7 +319,7 @@ the detail string is `code: …` (`platform/cli/src/output.rs:62-75`;
 | `wallet_registration_unavailable` | `wallet create` on a non-emulator environment; no key is generated (`platform/cli/src/wallet.rs:286`) |
 | `wallet_history_unavailable` | `wallet history`; no DID activity-history method or REST route is published (`platform/cli/src/wallet.rs:439-442`) |
 | `identity_sequence_unavailable` | Authenticated identity state is unavailable; token writes refuse before signing. Send additionally requires the shared debit-authorization signing API |
-| `rpc_method_unavailable` | `token info` / `token list` without `--rpc`, or an RPC method absent from the published contract (`platform/cli/src/wallet.rs:605-620`; `platform/cli/src/rpc.rs:138-143`) |
+| `rpc_method_unavailable` | `token info` / `token list` without `--rpc`, or an RPC method absent from the published contract (`platform/cli/src/wallet.rs:605-620`; `platform/cli/src/rpc.rs:156-161`) |
 
 ---
 

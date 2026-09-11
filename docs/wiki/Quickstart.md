@@ -575,7 +575,7 @@ Failure text is `receipt verification failed at {:?}`
 The CLI talks HTTP to the active environment endpoint
 (`platform/cli/src/main.rs:1420-1424`; `platform/cli/src/http.rs:24-50`).
 `layerx --rpc <url> wallet|token …` POSTs JSON-RPC 2.0 to the gateway `/rpc`
-surface (`platform/cli/src/rpc.rs:14-15, 29-37`). That is not a `layerxd` node
+surface (`platform/cli/src/rpc.rs:14-15, 29-36`). That is not a `layerxd` node
 admin socket. `layerx receipt verify` is local `layerx_proof` against
 caller-supplied batch facts (`platform/cli/src/receipt.rs:4, 25-34`).
 

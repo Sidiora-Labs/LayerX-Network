@@ -27,11 +27,10 @@ impl RpcClient {
     /// # Errors
     /// Refuses unsupported methods, invalid parameters, transport failures and RPC errors.
     pub fn call(&self, method: &str, params: &Value) -> Result<Value, String> {
-        if method == "lx_subscribe" {
-            return Err(
-                "rpc_transport_required: lx_subscribe requires authenticated WebSocket transport"
-                    .into(),
-            );
+        if matches!(method, "lx_subscribe" | "lx_unsubscribe") {
+            return Err(format!(
+                "rpc_transport_required: {method} requires authenticated WebSocket transport"
+            ));
         }
         let request = request(method, params)?;
         decode_response(method, &self.client.post("/rpc", &request, None)?)
@@ -114,14 +113,32 @@ pub fn request(method: &str, params: &Value) -> Result<Value, String> {
         }
         "lx_subscribe" => match args.as_slice() {
             [Value::String(topic)] if matches!(topic.as_str(), "receipts" | "checkpoints") => {}
+            [Value::String(topic), Value::String(cursor)]
+                if matches!(topic.as_str(), "receipts" | "checkpoints") =>
+            {
+                canonical_decimal(cursor, "subscription cursor")?;
+            }
             [Value::String(topic), Value::String(account)] if topic == "account" => id32(account)?,
+            [Value::String(topic), Value::String(account), Value::String(cursor)]
+                if topic == "account" =>
+            {
+                id32(account)?;
+                canonical_decimal(cursor, "subscription cursor")?;
+            }
             _ => {
                 return Err(
-                    "lx_subscribe requires receipts, checkpoints, or account with account_id"
+                    "lx_subscribe requires receipts, checkpoints, or account with account_id, \
+                     each optionally followed by a cursor"
                         .into(),
                 )
             }
         },
+        "lx_unsubscribe" => {
+            let [Value::String(subscription)] = args.as_slice() else {
+                return Err("lx_unsubscribe requires one subscription identifier".into());
+            };
+            canonical_decimal(subscription, "subscription identifier")?;
+        }
         "lx_sendActivity" => {
             let [Value::String(canonical), Value::String(commitment)] = args.as_slice() else {
                 return Err("lx_sendActivity requires canonical_hex and commitment".into());
@@ -176,6 +193,13 @@ pub fn decode_response(method: &str, response: &Value) -> Result<Value, String> 
             .cloned()
             .ok_or_else(|| "invalid subscription identifier".to_owned());
     }
+    if method == "lx_unsubscribe" {
+        return response
+            .get("result")
+            .filter(|value| value.as_bool() == Some(true))
+            .cloned()
+            .ok_or_else(|| "invalid unsubscribe acknowledgement".to_owned());
+    }
     response
         .get("result")
         .filter(|value| value.is_object())
@@ -203,6 +227,17 @@ fn canonical_hex(value: &str) -> Result<(), String> {
         || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("invalid canonical activity hex".into());
+    }
+    Ok(())
+}
+
+fn canonical_decimal(value: &str, what: &str) -> Result<(), String> {
+    let canonical = value == "0"
+        || (!value.is_empty()
+            && !value.starts_with('0')
+            && value.bytes().all(|byte| byte.is_ascii_digit()));
+    if !canonical {
+        return Err(format!("{what} must be a canonical decimal string"));
     }
     Ok(())
 }
@@ -240,6 +275,7 @@ mod tests {
                 "lx_getProof",
                 "lx_sendActivity",
                 "lx_subscribe",
+                "lx_unsubscribe",
                 "lx_listAssets",
                 "lx_getAsset",
                 "lx_estimateFee",
@@ -256,7 +292,7 @@ mod tests {
         assert!(description("lx_listAssets")?.contains("bounded to 64 records"));
         assert!(description("lx_getAsset")?.contains("authenticated_committed_snapshot"));
         let fee_description = description("lx_estimateFee")?;
-        assert!(fee_description.contains("Asset 1/4/5/6/7/8/10/11"));
+        assert!(fee_description.contains("Asset 1/2/3/4/5/6/7/8/10/11"));
         assert!(fee_description.contains("Programs 1/2/3/5/6/7"));
         let submission_description = description("lx_sendActivity")?;
         assert!(submission_description.contains("Asset ordinal 9 is reserved and refused"));
@@ -300,6 +336,29 @@ mod tests {
             .as_str()
             .ok_or("description missing")?
             .contains("[did, \"identity\"]"));
+        let subscribe = methods
+            .iter()
+            .find(|entry| entry["name"] == "lx_subscribe")
+            .ok_or("subscribe contract missing")?;
+        assert_eq!(subscribe["params"][2]["name"], "cursor");
+        assert_eq!(
+            subscribe["params"][2]["schema"]["pattern"],
+            "^(0|[1-9][0-9]*)$"
+        );
+        let unsubscribe = methods
+            .iter()
+            .find(|entry| entry["name"] == "lx_unsubscribe")
+            .ok_or("unsubscribe contract missing")?;
+        assert_eq!(unsubscribe["params"][0]["name"], "subscription");
+        assert_eq!(
+            unsubscribe["params"][0]["schema"]["pattern"],
+            "^(0|[1-9][0-9]*)$"
+        );
+        assert_eq!(unsubscribe["result"]["schema"]["enum"], json!([true]));
+        assert!(unsubscribe["description"]
+            .as_str()
+            .ok_or("description missing")?
+            .contains("WebSocket only"));
         request("lx_getSequence", &json!(["did:layerx:alice", "identity"]))?;
         assert!(request("lx_getSequence", &json!(["did:layerx:alice", "account"])).is_err());
         assert!(request("lx_getSequence", &json!(["../alice", "identity"])).is_err());
@@ -310,6 +369,10 @@ mod tests {
         request("lx_subscribe", &json!(["receipts"]))?;
         request("lx_subscribe", &json!(["checkpoints"]))?;
         request("lx_subscribe", &json!(["account", id]))?;
+        request("lx_subscribe", &json!(["receipts", "0"]))?;
+        request("lx_subscribe", &json!(["checkpoints", "17"]))?;
+        request("lx_subscribe", &json!(["account", id, "3"]))?;
+        request("lx_unsubscribe", &json!(["1"]))?;
         request("lx_getBatchHeader", &json!(["12"]))?;
         request("lx_getProof", &json!(["account", id, id]))?;
         for commitment in ["executed", "batched", "finalised"] {
@@ -327,6 +390,13 @@ mod tests {
             ("lx_subscribe", json!(["account"])),
             ("lx_subscribe", json!(["receipts", id])),
             ("lx_subscribe", json!(["unknown"])),
+            ("lx_subscribe", json!(["receipts", "01"])),
+            ("lx_subscribe", json!(["account", id, "-1"])),
+            ("lx_subscribe", json!(["account", id, id])),
+            ("lx_unsubscribe", json!([])),
+            ("lx_unsubscribe", json!(["01"])),
+            ("lx_unsubscribe", json!([1])),
+            ("lx_unsubscribe", json!(["1", "2"])),
             ("lx_getAsset", json!([])),
         ] {
             assert!(request(method, &args).is_err());
@@ -338,6 +408,7 @@ mod tests {
     fn subscriptions_require_authenticated_websocket_and_string_ack() -> Result<(), String> {
         let client = RpcClient::new("http://127.0.0.1:1/rpc", None)?;
         assert!(client.call("lx_subscribe", &json!(["receipts"])).is_err());
+        assert!(client.call("lx_unsubscribe", &json!(["1"])).is_err());
         assert!(client
             .subscribe(&json!(["receipts"]), std::time::Duration::from_secs(1))
             .is_err());
@@ -348,6 +419,15 @@ mod tests {
         for result in [json!(null), json!({}), json!(""), json!(1)] {
             assert!(decode_response(
                 "lx_subscribe",
+                &json!({"jsonrpc":"2.0","id":1,"result":result})
+            )
+            .is_err());
+        }
+        let cancelled = json!({"jsonrpc":"2.0","id":1,"result":true});
+        assert_eq!(decode_response("lx_unsubscribe", &cancelled)?, true);
+        for result in [json!(false), json!("true"), json!({}), json!(null)] {
+            assert!(decode_response(
+                "lx_unsubscribe",
                 &json!({"jsonrpc":"2.0","id":1,"result":result})
             )
             .is_err());
