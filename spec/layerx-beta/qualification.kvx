@@ -11441,6 +11441,7 @@ symbol = "test-genesis-bootstrap check_version lxp_kernel_module_for_activity"
 observed = "make CC=gcc test-state-commitment-transition test-asset-registry test-asset-balance test-fees test-fee-replay test-genesis-bootstrap exits 2 on this revision. Five targets pass; test_genesis_manifest reports "genesis line 203: lxp_kernel_module_for_activity(&kernel, ((uint32_t)LXP_MODULE_ASSET << 16U) | 9U, kernel.epoch, &entry) != LXP_OK" and "genesis line 301: check_version(LXP_PROTOCOL_VERSION_STATE_COMMITMENT) == 0", the advertised-ordinal disagreement already recorded against the genesis and module-registry fixtures. Evidence: qual-logs/c3/4.log."
 assumption = "This branch changes no C source, header, Makefile rule or fixture, so the failure is the published state of the target and is recorded rather than repaired here."
 severity = "note"
+
 [observation.6.2.6700]
 task = "6.2"
 file = "platform/hosted/node/bootstrap.sh platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/tests/local/README.md"
