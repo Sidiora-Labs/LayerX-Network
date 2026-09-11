@@ -12439,3 +12439,1187 @@ symbol = "did_accounts VerifiedRpcBalances verified_balances lx_getBalances"
 observed = "The DID account listing recorded at observation 6.2.4101 and observation 6.11.161 now serves the read contract of the single-account reads. did_accounts already requested VerificationLevel::STATE_PROVEN and refused an empty listing with 503 did_account_listing_unavailable; it still stamped every entry with the literal state_proven and the listing with authenticated_node_snapshot, a label no proof establishes. Each entry now carries verification_label of the level layerx_client::read::did_accounts verified for it, an entry whose achieved level has no label refuses the whole listing with the same typed 503, and the listing label names the weakest level any entry achieved, so lx_getBalances, which the gateway maps unchanged to /v1/dids/{did}/accounts and to -32001 on refusal, carries the same labels. The SDK gains VerifiedRpcBalances::from_rpc_result and RpcClient::verified_balances, which verify every served entry through VerifiedRpcAccount::from_rpc_result, require ascending distinct account identifiers, the agent:{did}: owner prefix on every proven account name, a non-empty listing and a listing label equal to the weakest entry level; account_reads.rs adds three tests covering the served listing, each refusal and the lx_getBalances round trip. No build, compile or test ran in this lane: rustfmt --check on the three touched Rust files, git diff --check and a JSON parse of openrpc.json were the only checks executed, and the boundary assertion at platform/hosted/core/tests/boundary.rs was left as written."
 assumption = "The row owns the core listing handler, the gateway lx_getBalances dispatch, the SDK balances verification and their tests; the gateway dispatch needed no code change because read_response already forwards the core result body and maps 503 to -32001. The owner builds and tests once the change is on main, so this record claims no gate."
 severity = "note"
+
+[observation.5.1.7000]
+task = "5.1"
+file = "human/Cargo.lock agent/tests/qualify/Cargo.lock agent/Cargo.lock"
+symbol = "cargo update --workspace --offline"
+observed = "formerly observation.5.1.40. formerly observation.5.1.7. formerly observation.5.1.1 (renumbered after rebase). formerly observation.5.1.1 (renumbered after rebase). formerly observation.5.1.focused-lock-reconciliation. cargo update --workspace --offline --manifest-path human/Cargo.toml and cargo update --workspace --offline --manifest-path agent/tests/qualify/Cargo.toml exit 0; logs qual-logs/r15/human-lock.log and qualify-lock.log. cargo metadata --locked --offline --manifest-path agent/Cargo.toml exits 0 for the complete workspace, with agent-metadata.json and agent-metadata.err. The same locked offline metadata command with --format-version 1 for human/Cargo.toml and agent/tests/qualify/Cargo.toml exits 0; human-metadata.json, qualify-metadata.json and their .err/.exit files retain evidence. No existing package version, source or checksum changes; no removals. Human changes only the layerx-mirror dependency edge base64 0.22.1 -> 0.23.1, required by interop/crates/layerx-mirror/Cargo.toml:9 and interop/Cargo.toml:24 (=0.23.1). Both versions were already locked. The qualify lock adds 79 previously absent package records; exact patch qual-logs/r15/qualify-lock.diff."
+assumption = "Root requirements are agent/tests/qualify/Cargo.toml:9-12, agent/crates/layerx-sdk/Cargo.toml:12-20, agent/crates/layerx-proof/Cargo.toml:12-13 and agent/crates/layerx-client/Cargo.toml. New SDK mirror, HTTP and URL requirements and proof runtime requirements account for the new transitive closure. Feature unification adds signature to ed25519-dalek and serde_derive to serde; version-qualified references disambiguate der, getrandom and windows-sys. sha3 and keccak records are reordered without version changes. agent/Cargo.lock is unchanged. Package old/new and direct requiring manifest lines follow; cargo-registry paths are relative to /root/.cargo/registry/src/: arrayref: absent -> 0.3.9; required by blake3 ^0.3.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:34 | arrayvec: absent -> 0.7.8; required by blake3 ^0.7.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:37 | autocfg: absent -> 1.5.1; required by num-traits ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-traits-0.2.19/Cargo.toml:47 | base64: absent -> 0.23.1; required by layerx-mirror =0.23.1 at interop/crates/layerx-mirror/Cargo.toml:9 | blake3: absent -> 1.5.0; required by layerx-programs-runtime =1.5.0 at programs/crates/layerx-programs-runtime/Cargo.toml:25 | bytes: absent -> 1.12.1; required by http ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/http-1.5.0/Cargo.toml:58 | constant_time_eq: absent -> 0.3.1; required by blake3 ^0.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:44 | core-foundation: absent -> 0.9.4; required by security-framework ^0.9.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/security-framework-2.11.1/Cargo.toml:60 | core-foundation-sys: absent -> 0.8.7; required by security-framework ^0.8.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/security-framework-2.11.1/Cargo.toml:63 | der: absent -> 0.8.2; required by ureq ^0.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:158 | displaydoc: absent -> 0.2.7; required by icu_properties ^0.2.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:104 | downcast-rs: absent -> 1.2.1; required by wasmi_core ^1.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:40 | errno: absent -> 0.3.14; required by rustix ^0.3.10 at cargo-registry/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/Cargo.toml:211 | fastrand: absent -> 2.5.0; required by tempfile ^2.1.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:80 | form_urlencoded: absent -> 1.2.2; required by url ^1.2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/url-2.5.8/Cargo.toml:81 | getrandom: absent -> 0.4.3; required by tempfile >=0.3.0, <0.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:95 | http: absent -> 1.5.0; required by ureq-proto ^1.1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-proto-0.6.1/Cargo.toml:58 | httparse: absent -> 1.10.1; required by ureq-proto ^1.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-proto-0.6.1/Cargo.toml:63 | icu_collections: absent -> 2.3.0; required by icu_normalizer ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:151 | icu_locale_core: absent -> 2.3.0; required by icu_properties ^2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:117 | icu_normalizer: absent -> 2.3.0; required by idna_adapter ^2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna_adapter-1.2.2/Cargo.toml:50 | icu_normalizer_data: absent -> 2.3.0; required by icu_normalizer ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:155 | icu_properties: absent -> 2.3.0; required by idna_adapter ^2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna_adapter-1.2.2/Cargo.toml:54 | icu_properties_data: absent -> 2.3.0; required by icu_properties ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:122 | icu_provider: absent -> 2.3.1; required by icu_normalizer ^2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:165 | idna: absent -> 1.1.0; required by url ^1.1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/url-2.5.8/Cargo.toml:86 | idna_adapter: absent -> 1.2.2; required by idna ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/Cargo.toml:69 | indexmap-nostd: absent -> 0.4.0; required by wasmparser-nostd ^0.4.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmparser-nostd-0.100.2/Cargo.toml:35 | itoa: absent -> 1.0.18; required by serde_json ^1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:117 | layerx-mirror: absent -> 0.1.0; required by layerx-sdk * at agent/crates/layerx-sdk/Cargo.toml:15 | layerx-programs-runtime: absent -> 0.1.0; required by layerx-proof * at agent/crates/layerx-proof/Cargo.toml:12 | libm: absent -> 0.2.16; required by wasmi_core ^0.2.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:44 | linux-raw-sys: absent -> 0.12.1; required by rustix ^0.12 at cargo-registry/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/Cargo.toml:194 | litemap: absent -> 0.8.3; required by icu_locale_core ^0.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/Cargo.toml:123 | log: absent -> 0.4.34; required by ureq ^0.4.25 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:179 | memchr: absent -> 2.8.3; required by serde_json ^2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:120 | native-tls: absent -> 0.2.15; required by ureq ^0.2.14 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:88 | num-bigint: absent -> 0.4.8; required by layerx-programs-runtime ^0.4 at programs/crates/layerx-programs-runtime/Cargo.toml:28 | num-integer: absent -> 0.1.47; required by num-bigint ^0.1.46 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8/Cargo.toml:131 | num-traits: absent -> 0.2.19; required by num-bigint ^0.2.18 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8/Cargo.toml:136 | openssl-probe: absent -> 0.1.6; required by native-tls ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:68 | parity-wasm: absent -> 0.45.0; required by wasm-instrument =0.45.0 at programs/vendor/wasm-instrument/Cargo.toml:42 | paste: absent -> 1.0.15; required by wasmi_core ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:51 | pem-rfc7468: absent -> 1.0.0; required by der ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/der-0.8.2/Cargo.toml:138 | percent-encoding: absent -> 2.3.2; required by ureq ^2.3.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:191 | potential_utf: absent -> 0.1.6; required by icu_collections ^0.1.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:112 | r-efi: absent -> 6.0.0; required by getrandom ^6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.3/Cargo.toml:103 | rustix: absent -> 1.1.4; required by tempfile ^1.1.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:91 | schannel: absent -> 0.1.29; required by native-tls ^0.1.26 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:77 | security-framework: absent -> 2.11.1; required by native-tls ^2.11.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:83 | security-framework-sys: absent -> 2.17.0; required by native-tls ^2.15.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:86 | serde_json: absent -> 1.0.149; required by layerx-sdk =1.0.149 at agent/crates/layerx-sdk/Cargo.toml:16 | smallvec: absent -> 1.16.0; required by wasmi ^1.10.0 at programs/vendor/wasmi-0.31.2/Cargo.toml:41 | spin: absent -> 0.9.9; required by wasmi ^0.9 at programs/vendor/wasmi-0.31.2/Cargo.toml:45 | stable_deref_trait: absent -> 1.2.1; required by yoke ^1.2.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-0.8.3/Cargo.toml:89 | synstructure: absent -> 0.13.2; required by yoke-derive ^0.13.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/Cargo.toml:63 | tempfile: absent -> 3.27.0; required by native-tls ^3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:74 | tinystr: absent -> 0.8.4; required by icu_locale_core ^0.8.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/Cargo.toml:133 | ureq: absent -> 3.4.0; required by layerx-sdk =3.4.0 at agent/crates/layerx-sdk/Cargo.toml:18 | ureq-proto: absent -> 0.6.1; required by ureq ^0.6.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:231 | url: absent -> 2.5.8; required by layerx-sdk =2.5.8 at agent/crates/layerx-sdk/Cargo.toml:19 | utf8-zero: absent -> 0.8.1; required by ureq ^0.8.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:241 | utf8_iter: absent -> 1.0.4; required by idna ^1.0.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/Cargo.toml:76 | wasm-instrument: absent -> 0.4.0; required by layerx-programs-runtime * at programs/crates/layerx-programs-runtime/Cargo.toml:22 | wasmi: absent -> 0.31.2; required by layerx-programs-runtime =0.31.2 at programs/crates/layerx-programs-runtime/Cargo.toml:20 | wasmi_arena: absent -> 0.4.1; required by wasmi ^0.4.1 at programs/vendor/wasmi-0.31.2/Cargo.toml:54 | wasmi_core: absent -> 0.13.0; required by wasmi ^0.13 at programs/vendor/wasmi-0.31.2/Cargo.toml:58 | wasmparser-nostd: absent -> 0.100.2; required by layerx-programs-runtime =0.100.2 at programs/crates/layerx-programs-runtime/Cargo.toml:21 | windows-link: absent -> 0.2.1; required by windows-sys ^0.2.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/windows-sys-0.61.2/Cargo.toml:289 | windows-sys: absent -> 0.61.2; required by schannel ^0.61 at cargo-registry/index.crates.io-1949cf8c6b5b557f/schannel-0.1.29/Cargo.toml:52 | writeable: absent -> 0.6.4; required by icu_provider ^0.6.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_provider-2.3.1/Cargo.toml:162 | yoke: absent -> 0.8.3; required by icu_collections ^0.8.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:127 | yoke-derive: absent -> 0.8.2; required by yoke ^0.8.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-0.8.3/Cargo.toml:93 | zerofrom: absent -> 0.1.8; required by icu_collections ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:132 | zerofrom-derive: absent -> 0.1.7; required by zerofrom ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/zerofrom-0.1.8/Cargo.toml:68 | zerotrie: absent -> 0.2.5; required by icu_properties ^0.2.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:147 | zerovec: absent -> 0.11.8; required by icu_normalizer ^0.11.7 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:198 | zerovec-derive: absent -> 0.11.6; required by zerovec ^0.11.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/zerovec-0.11.8/Cargo.toml:151 | zmij: absent -> 1.0.23; required by serde_json ^1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:128 | "
+severity = "note"
+
+[observation.5.1.7001]
+task = "5.1"
+file = "human/Cargo.lock agent/tests/qualify/Cargo.lock agent/Cargo.lock"
+symbol = "cargo update --workspace --offline"
+observed = "formerly observation.5.1.41. formerly observation.5.1.44. formerly observation.5.1.7 (renumbered after rebase). formerly observation.5.1.focused-lock-reconciliation. cargo update --workspace --offline --manifest-path human/Cargo.toml and cargo update --workspace --offline --manifest-path agent/tests/qualify/Cargo.toml exit 0; logs qual-logs/r15/human-lock.log and qualify-lock.log. cargo metadata --locked --offline --manifest-path agent/Cargo.toml exits 0 for the complete workspace, with agent-metadata.json and agent-metadata.err. The same locked offline metadata command with --format-version 1 for human/Cargo.toml and agent/tests/qualify/Cargo.toml exits 0; human-metadata.json, qualify-metadata.json and their .err/.exit files retain evidence. No existing package version, source or checksum changes; no removals. Human changes only the layerx-mirror dependency edge base64 0.22.1 -> 0.23.1, required by interop/crates/layerx-mirror/Cargo.toml:9 and interop/Cargo.toml:24 (=0.23.1). Both versions were already locked. The qualify lock adds 79 previously absent package records; exact patch qual-logs/r15/qualify-lock.diff."
+assumption = "Root requirements are agent/tests/qualify/Cargo.toml:9-12, agent/crates/layerx-sdk/Cargo.toml:12-20, agent/crates/layerx-proof/Cargo.toml:12-13 and agent/crates/layerx-client/Cargo.toml. New SDK mirror, HTTP and URL requirements and proof runtime requirements account for the new transitive closure. Feature unification adds signature to ed25519-dalek and serde_derive to serde; version-qualified references disambiguate der, getrandom and windows-sys. sha3 and keccak records are reordered without version changes. agent/Cargo.lock is unchanged. Package old/new and direct requiring manifest lines follow; cargo-registry paths are relative to /root/.cargo/registry/src/: arrayref: absent -> 0.3.9; required by blake3 ^0.3.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:34 | arrayvec: absent -> 0.7.8; required by blake3 ^0.7.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:37 | autocfg: absent -> 1.5.1; required by num-traits ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-traits-0.2.19/Cargo.toml:47 | base64: absent -> 0.23.1; required by layerx-mirror =0.23.1 at interop/crates/layerx-mirror/Cargo.toml:9 | blake3: absent -> 1.5.0; required by layerx-programs-runtime =1.5.0 at programs/crates/layerx-programs-runtime/Cargo.toml:25 | bytes: absent -> 1.12.1; required by http ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/http-1.5.0/Cargo.toml:58 | constant_time_eq: absent -> 0.3.1; required by blake3 ^0.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:44 | core-foundation: absent -> 0.9.4; required by security-framework ^0.9.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/security-framework-2.11.1/Cargo.toml:60 | core-foundation-sys: absent -> 0.8.7; required by security-framework ^0.8.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/security-framework-2.11.1/Cargo.toml:63 | der: absent -> 0.8.2; required by ureq ^0.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:158 | displaydoc: absent -> 0.2.7; required by icu_properties ^0.2.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:104 | downcast-rs: absent -> 1.2.1; required by wasmi_core ^1.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:40 | errno: absent -> 0.3.14; required by rustix ^0.3.10 at cargo-registry/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/Cargo.toml:211 | fastrand: absent -> 2.5.0; required by tempfile ^2.1.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:80 | form_urlencoded: absent -> 1.2.2; required by url ^1.2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/url-2.5.8/Cargo.toml:81 | getrandom: absent -> 0.4.3; required by tempfile >=0.3.0, <0.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:95 | http: absent -> 1.5.0; required by ureq-proto ^1.1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-proto-0.6.1/Cargo.toml:58 | httparse: absent -> 1.10.1; required by ureq-proto ^1.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-proto-0.6.1/Cargo.toml:63 | icu_collections: absent -> 2.3.0; required by icu_normalizer ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:151 | icu_locale_core: absent -> 2.3.0; required by icu_properties ^2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:117 | icu_normalizer: absent -> 2.3.0; required by idna_adapter ^2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna_adapter-1.2.2/Cargo.toml:50 | icu_normalizer_data: absent -> 2.3.0; required by icu_normalizer ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:155 | icu_properties: absent -> 2.3.0; required by idna_adapter ^2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna_adapter-1.2.2/Cargo.toml:54 | icu_properties_data: absent -> 2.3.0; required by icu_properties ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:122 | icu_provider: absent -> 2.3.1; required by icu_normalizer ^2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:165 | idna: absent -> 1.1.0; required by url ^1.1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/url-2.5.8/Cargo.toml:86 | idna_adapter: absent -> 1.2.2; required by idna ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/Cargo.toml:69 | indexmap-nostd: absent -> 0.4.0; required by wasmparser-nostd ^0.4.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmparser-nostd-0.100.2/Cargo.toml:35 | itoa: absent -> 1.0.18; required by serde_json ^1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:117 | layerx-mirror: absent -> 0.1.0; required by layerx-sdk * at agent/crates/layerx-sdk/Cargo.toml:15 | layerx-programs-runtime: absent -> 0.1.0; required by layerx-proof * at agent/crates/layerx-proof/Cargo.toml:12 | libm: absent -> 0.2.16; required by wasmi_core ^0.2.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:44 | linux-raw-sys: absent -> 0.12.1; required by rustix ^0.12 at cargo-registry/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/Cargo.toml:194 | litemap: absent -> 0.8.3; required by icu_locale_core ^0.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/Cargo.toml:123 | log: absent -> 0.4.34; required by ureq ^0.4.25 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:179 | memchr: absent -> 2.8.3; required by serde_json ^2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:120 | native-tls: absent -> 0.2.15; required by ureq ^0.2.14 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:88 | num-bigint: absent -> 0.4.8; required by layerx-programs-runtime ^0.4 at programs/crates/layerx-programs-runtime/Cargo.toml:28 | num-integer: absent -> 0.1.47; required by num-bigint ^0.1.46 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8/Cargo.toml:131 | num-traits: absent -> 0.2.19; required by num-bigint ^0.2.18 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8/Cargo.toml:136 | openssl-probe: absent -> 0.1.6; required by native-tls ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:68 | parity-wasm: absent -> 0.45.0; required by wasm-instrument =0.45.0 at programs/vendor/wasm-instrument/Cargo.toml:42 | paste: absent -> 1.0.15; required by wasmi_core ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:51 | pem-rfc7468: absent -> 1.0.0; required by der ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/der-0.8.2/Cargo.toml:138 | percent-encoding: absent -> 2.3.2; required by ureq ^2.3.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:191 | potential_utf: absent -> 0.1.6; required by icu_collections ^0.1.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:112 | r-efi: absent -> 6.0.0; required by getrandom ^6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.3/Cargo.toml:103 | rustix: absent -> 1.1.4; required by tempfile ^1.1.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:91 | schannel: absent -> 0.1.29; required by native-tls ^0.1.26 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:77 | security-framework: absent -> 2.11.1; required by native-tls ^2.11.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:83 | security-framework-sys: absent -> 2.17.0; required by native-tls ^2.15.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:86 | serde_json: absent -> 1.0.149; required by layerx-sdk =1.0.149 at agent/crates/layerx-sdk/Cargo.toml:16 | smallvec: absent -> 1.16.0; required by wasmi ^1.10.0 at programs/vendor/wasmi-0.31.2/Cargo.toml:41 | spin: absent -> 0.9.9; required by wasmi ^0.9 at programs/vendor/wasmi-0.31.2/Cargo.toml:45 | stable_deref_trait: absent -> 1.2.1; required by yoke ^1.2.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-0.8.3/Cargo.toml:89 | synstructure: absent -> 0.13.2; required by yoke-derive ^0.13.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/Cargo.toml:63 | tempfile: absent -> 3.27.0; required by native-tls ^3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:74 | tinystr: absent -> 0.8.4; required by icu_locale_core ^0.8.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/Cargo.toml:133 | ureq: absent -> 3.4.0; required by layerx-sdk =3.4.0 at agent/crates/layerx-sdk/Cargo.toml:18 | ureq-proto: absent -> 0.6.1; required by ureq ^0.6.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:231 | url: absent -> 2.5.8; required by layerx-sdk =2.5.8 at agent/crates/layerx-sdk/Cargo.toml:19 | utf8-zero: absent -> 0.8.1; required by ureq ^0.8.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:241 | utf8_iter: absent -> 1.0.4; required by idna ^1.0.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/Cargo.toml:76 | wasm-instrument: absent -> 0.4.0; required by layerx-programs-runtime * at programs/crates/layerx-programs-runtime/Cargo.toml:22 | wasmi: absent -> 0.31.2; required by layerx-programs-runtime =0.31.2 at programs/crates/layerx-programs-runtime/Cargo.toml:20 | wasmi_arena: absent -> 0.4.1; required by wasmi ^0.4.1 at programs/vendor/wasmi-0.31.2/Cargo.toml:54 | wasmi_core: absent -> 0.13.0; required by wasmi ^0.13 at programs/vendor/wasmi-0.31.2/Cargo.toml:58 | wasmparser-nostd: absent -> 0.100.2; required by layerx-programs-runtime =0.100.2 at programs/crates/layerx-programs-runtime/Cargo.toml:21 | windows-link: absent -> 0.2.1; required by windows-sys ^0.2.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/windows-sys-0.61.2/Cargo.toml:289 | windows-sys: absent -> 0.61.2; required by schannel ^0.61 at cargo-registry/index.crates.io-1949cf8c6b5b557f/schannel-0.1.29/Cargo.toml:52 | writeable: absent -> 0.6.4; required by icu_provider ^0.6.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_provider-2.3.1/Cargo.toml:162 | yoke: absent -> 0.8.3; required by icu_collections ^0.8.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:127 | yoke-derive: absent -> 0.8.2; required by yoke ^0.8.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-0.8.3/Cargo.toml:93 | zerofrom: absent -> 0.1.8; required by icu_collections ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:132 | zerofrom-derive: absent -> 0.1.7; required by zerofrom ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/zerofrom-0.1.8/Cargo.toml:68 | zerotrie: absent -> 0.2.5; required by icu_properties ^0.2.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:147 | zerovec: absent -> 0.11.8; required by icu_normalizer ^0.11.7 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:198 | zerovec-derive: absent -> 0.11.6; required by zerovec ^0.11.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/zerovec-0.11.8/Cargo.toml:151 | zmij: absent -> 1.0.23; required by serde_json ^1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:128 | "
+severity = "note"
+
+[observation.5.1.7002]
+task = "5.1"
+file = "tools/lxp_qual_replay_matrix.sh tools/lxp_replay_matrix.sh tools/ci/replay-matrix.sh .github/workflows/ci.yml .github/workflows/platform.yml .github/workflows/programs-conformance.yml"
+symbol = "clang-18"
+observed = "formerly observation.5.1.42. formerly observation.5.1.45. formerly observation.5.1.8 (renumbered after rebase). formerly observation.5.1.focused-replay-compiler-prerequisite. Read-only diagnosis: tools/lxp_qual_replay_matrix.sh:24-27 explicitly refuses absent clang-18; lines 41-42 select clang-18 for both optimization levels. tools/lxp_replay_matrix.sh:21-22 and tools/ci/replay-matrix.sh:26 also pin that executable. The searched CI workflows install unversioned clang, not clang-18; no clang-18 pin appears in docs. ls /usr/bin/clang* exits 2 with: ls: cannot access '/usr/bin/clang*': No such file or directory. command -v finds gcc-13 at /usr/bin/gcc-13 and neither clang nor clang-18. Evidence: qual-logs/r15/compiler-pins.log and host-clang.log."
+assumption = "Compiler provisioning is external to this repair. No compiler was installed and make qualify-replay was not rerun. The executable requirement remains intact."
+severity = "blocker"
+
+[observation.5.1.7003]
+task = "5.1"
+file = "spec/layerx-beta/spec.kvx tools/qualification/release_runner.py tools/ci/beta-qualify.sh"
+symbol = "human-qualify-faults"
+observed = "formerly observation.5.1.43. formerly observation.5.1.46. formerly observation.5.1.9 (renumbered after rebase). formerly observation.5.1.focused-human-real-stack-prerequisite. Read-only diagnosis: release_runner.py:576-577 requires LAYERX_QUALIFICATION_REAL_STACK=1 before real evidence collection. Task 5.1 do_1 includes human-qualify-faults but supplies no stack provisioning step. Task 5.2 do_1 explicitly starts the components and do_2 supplies LAYERX_QUALIFICATION_REAL_STACK=1; task 5.2 requires 5.1. The focused runner on lane/beta-qualify-focused invokes the command and records failure; it does not provision or assert a real stack. That runner is not yet present on the measured lane/native base. Evidence: qual-logs/r15/runner-diagnosis.log."
+assumption = "Task 5.1 needs an already provisioned authorized real stack to pass this gate; its current contract does not instruct the runner to create it. Task 5.2 owns setup, creating a prerequisite ordering issue for the orchestrator. Setting the flag alone does not establish a stack. Runner and task statuses remain unchanged; make human-qualify-faults was not rerun."
+severity = "blocker"
+
+[observation.5.1.7004]
+task = "5.1"
+file = "human/Cargo.lock agent/tests/qualify/Cargo.lock human/crates/layerx-human-service/tests/withdraw.rs Makefile"
+symbol = "human-build human-test-service human-test-activity human-test-unit human-test-component agent-qualify-fuzz agent-qualify-wire"
+observed = "formerly observation.5.1.44. formerly observation.5.1.47. formerly observation.5.1.10 (renumbered after rebase). formerly observation.5.1.focused-lock-gate-results. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. Measured base 97e7e9097daeab58d18d801d8e7297692f3fc9d1. make human-build exits 2; qual-logs/r15/row-27-before-dependencies.log | make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service exits 2; qual-logs/r15/row-32.log | make human-test-activity exits 0; qual-logs/r15/row-33.log | make human-build human-test-unit human-test-component exits 2; qual-logs/r15/row-34-before-dependencies.log | make human-build exits 0; qual-logs/r15/row-27.log | make agent-qualify-fuzz exits 2; qual-logs/r15/row-45.log | make agent-qualify-wire exits 0; qual-logs/r15/row-46.log | make human-build human-test-unit human-test-component exits 0; qual-logs/r15/row-34.log Initial rows 27 and 34 failed verbatim: sh: 1: ../../node_modules/.bin/tsup: not found. npm --prefix human/apps/web ci first exited 152 with npm error network read ECONNRESET (qual-logs/r15/npm-ci.log), then retry exited 0 (npm-ci-retry.log). Repeated rows 27 and 34 pass. Row 33 passes activity, detail, export and three export documentation tests. Row 46 passes 125 wire cases, ten vector classes, 53 activity types and eight payload boundaries. Row 32 retains: error[E0425]: cannot find function `deploy_suite` in this scope; crates/layerx-human-service/tests/withdraw.rs:24:17; error: could not compile `layerx-human-service` (test \"withdraw\") due to 1 previous error; make: *** [Makefile:1952: human-test-service] Error 101. The included human/crates/layerx-paxeer-client/tests/withdraw.rs:468 now defines deploy_suite_for_protocol; the caller is outside the assigned lockfile repair. Row 45 builds the qualification binary successfully and enters bounded-fuzz, then rustup attempts to provision the absent pinned nightly. The owned subprocess was terminated to honor the no-compiler-installation constraint. Verbatim final failure: Terminated; make[1]: *** [Makefile:2138: agent-fuzz-all] Error 143; make: *** [Makefile:2306: agent-qualify-fuzz] Error 1. Before termination the subprocess downloaded components and logged installation of cargo, clippy and rust-docs; full toolchain installation and fuzz execution are not established. qual-logs/r15/fuzz-toolchain-stop.log records the intervention; row-45.log retains the complete failure envelope. This is an interrupted prerequisite attempt, not a fuzz pass."
+assumption = "The lockfiles pass locked offline resolution and their binaries build. Remaining compiler-prerequisite and Human test caller failures require their owners; no production or full wave qualification is claimed. No assertion or runner was changed."
+severity = "blocker"
+
+[observation.5.1.7005]
+task = "5.1"
+file = "human/Cargo.lock agent/tests/qualify/Cargo.lock agent/Cargo.lock"
+symbol = "cargo update --workspace --offline"
+observed = "formerly observation.5.1.45. formerly observation.5.1.35. formerly observation.5.1.20. formerly observation.5.1.7 (renumbered after rebase). formerly observation.5.1.focused-lock-reconciliation. cargo update --workspace --offline --manifest-path human/Cargo.toml and cargo update --workspace --offline --manifest-path agent/tests/qualify/Cargo.toml exit 0; logs qual-logs/r15/human-lock.log and qualify-lock.log. cargo metadata --locked --offline --manifest-path agent/Cargo.toml exits 0 for the complete workspace, with agent-metadata.json and agent-metadata.err. The same locked offline metadata command with --format-version 1 for human/Cargo.toml and agent/tests/qualify/Cargo.toml exits 0; human-metadata.json, qualify-metadata.json and their .err/.exit files retain evidence. No existing package version, source or checksum changes; no removals. Human changes only the layerx-mirror dependency edge base64 0.22.1 -> 0.23.1, required by interop/crates/layerx-mirror/Cargo.toml:9 and interop/Cargo.toml:24 (=0.23.1). Both versions were already locked. The qualify lock adds 79 previously absent package records; exact patch qual-logs/r15/qualify-lock.diff."
+assumption = "Root requirements are agent/tests/qualify/Cargo.toml:9-12, agent/crates/layerx-sdk/Cargo.toml:12-20, agent/crates/layerx-proof/Cargo.toml:12-13 and agent/crates/layerx-client/Cargo.toml. New SDK mirror, HTTP and URL requirements and proof runtime requirements account for the new transitive closure. Feature unification adds signature to ed25519-dalek and serde_derive to serde; version-qualified references disambiguate der, getrandom and windows-sys. sha3 and keccak records are reordered without version changes. agent/Cargo.lock is unchanged. Package old/new and direct requiring manifest lines follow; cargo-registry paths are relative to /root/.cargo/registry/src/: arrayref: absent -> 0.3.9; required by blake3 ^0.3.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:34 | arrayvec: absent -> 0.7.8; required by blake3 ^0.7.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:37 | autocfg: absent -> 1.5.1; required by num-traits ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-traits-0.2.19/Cargo.toml:47 | base64: absent -> 0.23.1; required by layerx-mirror =0.23.1 at interop/crates/layerx-mirror/Cargo.toml:9 | blake3: absent -> 1.5.0; required by layerx-programs-runtime =1.5.0 at programs/crates/layerx-programs-runtime/Cargo.toml:25 | bytes: absent -> 1.12.1; required by http ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/http-1.5.0/Cargo.toml:58 | constant_time_eq: absent -> 0.3.1; required by blake3 ^0.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:44 | core-foundation: absent -> 0.9.4; required by security-framework ^0.9.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/security-framework-2.11.1/Cargo.toml:60 | core-foundation-sys: absent -> 0.8.7; required by security-framework ^0.8.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/security-framework-2.11.1/Cargo.toml:63 | der: absent -> 0.8.2; required by ureq ^0.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:158 | displaydoc: absent -> 0.2.7; required by icu_properties ^0.2.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:104 | downcast-rs: absent -> 1.2.1; required by wasmi_core ^1.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:40 | errno: absent -> 0.3.14; required by rustix ^0.3.10 at cargo-registry/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/Cargo.toml:211 | fastrand: absent -> 2.5.0; required by tempfile ^2.1.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:80 | form_urlencoded: absent -> 1.2.2; required by url ^1.2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/url-2.5.8/Cargo.toml:81 | getrandom: absent -> 0.4.3; required by tempfile >=0.3.0, <0.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:95 | http: absent -> 1.5.0; required by ureq-proto ^1.1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-proto-0.6.1/Cargo.toml:58 | httparse: absent -> 1.10.1; required by ureq-proto ^1.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-proto-0.6.1/Cargo.toml:63 | icu_collections: absent -> 2.3.0; required by icu_normalizer ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:151 | icu_locale_core: absent -> 2.3.0; required by icu_properties ^2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:117 | icu_normalizer: absent -> 2.3.0; required by idna_adapter ^2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna_adapter-1.2.2/Cargo.toml:50 | icu_normalizer_data: absent -> 2.3.0; required by icu_normalizer ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:155 | icu_properties: absent -> 2.3.0; required by idna_adapter ^2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna_adapter-1.2.2/Cargo.toml:54 | icu_properties_data: absent -> 2.3.0; required by icu_properties ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:122 | icu_provider: absent -> 2.3.1; required by icu_normalizer ^2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:165 | idna: absent -> 1.1.0; required by url ^1.1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/url-2.5.8/Cargo.toml:86 | idna_adapter: absent -> 1.2.2; required by idna ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/Cargo.toml:69 | indexmap-nostd: absent -> 0.4.0; required by wasmparser-nostd ^0.4.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmparser-nostd-0.100.2/Cargo.toml:35 | itoa: absent -> 1.0.18; required by serde_json ^1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:117 | layerx-mirror: absent -> 0.1.0; required by layerx-sdk * at agent/crates/layerx-sdk/Cargo.toml:15 | layerx-programs-runtime: absent -> 0.1.0; required by layerx-proof * at agent/crates/layerx-proof/Cargo.toml:12 | libm: absent -> 0.2.16; required by wasmi_core ^0.2.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:44 | linux-raw-sys: absent -> 0.12.1; required by rustix ^0.12 at cargo-registry/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/Cargo.toml:194 | litemap: absent -> 0.8.3; required by icu_locale_core ^0.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/Cargo.toml:123 | log: absent -> 0.4.34; required by ureq ^0.4.25 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:179 | memchr: absent -> 2.8.3; required by serde_json ^2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:120 | native-tls: absent -> 0.2.15; required by ureq ^0.2.14 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:88 | num-bigint: absent -> 0.4.8; required by layerx-programs-runtime ^0.4 at programs/crates/layerx-programs-runtime/Cargo.toml:28 | num-integer: absent -> 0.1.47; required by num-bigint ^0.1.46 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8/Cargo.toml:131 | num-traits: absent -> 0.2.19; required by num-bigint ^0.2.18 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8/Cargo.toml:136 | openssl-probe: absent -> 0.1.6; required by native-tls ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:68 | parity-wasm: absent -> 0.45.0; required by wasm-instrument =0.45.0 at programs/vendor/wasm-instrument/Cargo.toml:42 | paste: absent -> 1.0.15; required by wasmi_core ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:51 | pem-rfc7468: absent -> 1.0.0; required by der ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/der-0.8.2/Cargo.toml:138 | percent-encoding: absent -> 2.3.2; required by ureq ^2.3.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:191 | potential_utf: absent -> 0.1.6; required by icu_collections ^0.1.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:112 | r-efi: absent -> 6.0.0; required by getrandom ^6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.3/Cargo.toml:103 | rustix: absent -> 1.1.4; required by tempfile ^1.1.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:91 | schannel: absent -> 0.1.29; required by native-tls ^0.1.26 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:77 | security-framework: absent -> 2.11.1; required by native-tls ^2.11.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:83 | security-framework-sys: absent -> 2.17.0; required by native-tls ^2.15.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:86 | serde_json: absent -> 1.0.149; required by layerx-sdk =1.0.149 at agent/crates/layerx-sdk/Cargo.toml:16 | smallvec: absent -> 1.16.0; required by wasmi ^1.10.0 at programs/vendor/wasmi-0.31.2/Cargo.toml:41 | spin: absent -> 0.9.9; required by wasmi ^0.9 at programs/vendor/wasmi-0.31.2/Cargo.toml:45 | stable_deref_trait: absent -> 1.2.1; required by yoke ^1.2.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-0.8.3/Cargo.toml:89 | synstructure: absent -> 0.13.2; required by yoke-derive ^0.13.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/Cargo.toml:63 | tempfile: absent -> 3.27.0; required by native-tls ^3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:74 | tinystr: absent -> 0.8.4; required by icu_locale_core ^0.8.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/Cargo.toml:133 | ureq: absent -> 3.4.0; required by layerx-sdk =3.4.0 at agent/crates/layerx-sdk/Cargo.toml:18 | ureq-proto: absent -> 0.6.1; required by ureq ^0.6.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:231 | url: absent -> 2.5.8; required by layerx-sdk =2.5.8 at agent/crates/layerx-sdk/Cargo.toml:19 | utf8-zero: absent -> 0.8.1; required by ureq ^0.8.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:241 | utf8_iter: absent -> 1.0.4; required by idna ^1.0.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/Cargo.toml:76 | wasm-instrument: absent -> 0.4.0; required by layerx-programs-runtime * at programs/crates/layerx-programs-runtime/Cargo.toml:22 | wasmi: absent -> 0.31.2; required by layerx-programs-runtime =0.31.2 at programs/crates/layerx-programs-runtime/Cargo.toml:20 | wasmi_arena: absent -> 0.4.1; required by wasmi ^0.4.1 at programs/vendor/wasmi-0.31.2/Cargo.toml:54 | wasmi_core: absent -> 0.13.0; required by wasmi ^0.13 at programs/vendor/wasmi-0.31.2/Cargo.toml:58 | wasmparser-nostd: absent -> 0.100.2; required by layerx-programs-runtime =0.100.2 at programs/crates/layerx-programs-runtime/Cargo.toml:21 | windows-link: absent -> 0.2.1; required by windows-sys ^0.2.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/windows-sys-0.61.2/Cargo.toml:289 | windows-sys: absent -> 0.61.2; required by schannel ^0.61 at cargo-registry/index.crates.io-1949cf8c6b5b557f/schannel-0.1.29/Cargo.toml:52 | writeable: absent -> 0.6.4; required by icu_provider ^0.6.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_provider-2.3.1/Cargo.toml:162 | yoke: absent -> 0.8.3; required by icu_collections ^0.8.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:127 | yoke-derive: absent -> 0.8.2; required by yoke ^0.8.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-0.8.3/Cargo.toml:93 | zerofrom: absent -> 0.1.8; required by icu_collections ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:132 | zerofrom-derive: absent -> 0.1.7; required by zerofrom ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/zerofrom-0.1.8/Cargo.toml:68 | zerotrie: absent -> 0.2.5; required by icu_properties ^0.2.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:147 | zerovec: absent -> 0.11.8; required by icu_normalizer ^0.11.7 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:198 | zerovec-derive: absent -> 0.11.6; required by zerovec ^0.11.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/zerovec-0.11.8/Cargo.toml:151 | zmij: absent -> 1.0.23; required by serde_json ^1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:128 | "
+severity = "note"
+
+[observation.5.1.7006]
+task = "5.1"
+file = "tools/lxp_qual_replay_matrix.sh tools/lxp_replay_matrix.sh tools/ci/replay-matrix.sh .github/workflows/ci.yml .github/workflows/platform.yml .github/workflows/programs-conformance.yml"
+symbol = "clang-18"
+observed = "formerly observation.5.1.46. formerly observation.5.1.36. formerly observation.5.1.21. formerly observation.5.1.8 (renumbered after rebase). formerly observation.5.1.focused-replay-compiler-prerequisite. Read-only diagnosis: tools/lxp_qual_replay_matrix.sh:24-27 explicitly refuses absent clang-18; lines 41-42 select clang-18 for both optimization levels. tools/lxp_replay_matrix.sh:21-22 and tools/ci/replay-matrix.sh:26 also pin that executable. The searched CI workflows install unversioned clang, not clang-18; no clang-18 pin appears in docs. ls /usr/bin/clang* exits 2 with: ls: cannot access '/usr/bin/clang*': No such file or directory. command -v finds gcc-13 at /usr/bin/gcc-13 and neither clang nor clang-18. Evidence: qual-logs/r15/compiler-pins.log and host-clang.log."
+assumption = "Compiler provisioning is external to this repair. No compiler was installed and make qualify-replay was not rerun. The executable requirement remains intact."
+severity = "blocker"
+
+[observation.5.1.7007]
+task = "5.1"
+file = "spec/layerx-beta/spec.kvx tools/qualification/release_runner.py tools/ci/beta-qualify.sh"
+symbol = "human-qualify-faults"
+observed = "formerly observation.5.1.47. formerly observation.5.1.37. formerly observation.5.1.22. formerly observation.5.1.9 (renumbered after rebase). formerly observation.5.1.focused-human-real-stack-prerequisite. Read-only diagnosis: release_runner.py:576-577 requires LAYERX_QUALIFICATION_REAL_STACK=1 before real evidence collection. Task 5.1 do_1 includes human-qualify-faults but supplies no stack provisioning step. Task 5.2 do_1 explicitly starts the components and do_2 supplies LAYERX_QUALIFICATION_REAL_STACK=1; task 5.2 requires 5.1. The focused runner on lane/beta-qualify-focused invokes the command and records failure; it does not provision or assert a real stack. That runner is not yet present on the measured lane/native base. Evidence: qual-logs/r15/runner-diagnosis.log."
+assumption = "Task 5.1 needs an already provisioned authorized real stack to pass this gate; its current contract does not instruct the runner to create it. Task 5.2 owns setup, creating a prerequisite ordering issue for the orchestrator. Setting the flag alone does not establish a stack. Runner and task statuses remain unchanged; make human-qualify-faults was not rerun."
+severity = "blocker"
+
+[observation.5.1.7008]
+task = "5.1"
+file = "human/Cargo.lock agent/tests/qualify/Cargo.lock human/crates/layerx-human-service/tests/withdraw.rs Makefile"
+symbol = "human-build human-test-service human-test-activity human-test-unit human-test-component agent-qualify-fuzz agent-qualify-wire"
+observed = "formerly observation.5.1.48. formerly observation.5.1.38. formerly observation.5.1.23. formerly observation.5.1.10 (renumbered after rebase). formerly observation.5.1.focused-lock-gate-results. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. Measured base 97e7e9097daeab58d18d801d8e7297692f3fc9d1. make human-build exits 2; qual-logs/r15/row-27-before-dependencies.log | make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service exits 2; qual-logs/r15/row-32.log | make human-test-activity exits 0; qual-logs/r15/row-33.log | make human-build human-test-unit human-test-component exits 2; qual-logs/r15/row-34-before-dependencies.log | make human-build exits 0; qual-logs/r15/row-27.log | make agent-qualify-fuzz exits 2; qual-logs/r15/row-45.log | make agent-qualify-wire exits 0; qual-logs/r15/row-46.log | make human-build human-test-unit human-test-component exits 0; qual-logs/r15/row-34.log Initial rows 27 and 34 failed verbatim: sh: 1: ../../node_modules/.bin/tsup: not found. npm --prefix human/apps/web ci first exited 152 with npm error network read ECONNRESET (qual-logs/r15/npm-ci.log), then retry exited 0 (npm-ci-retry.log). Repeated rows 27 and 34 pass. Row 33 passes activity, detail, export and three export documentation tests. Row 46 passes 125 wire cases, ten vector classes, 53 activity types and eight payload boundaries. Row 32 retains: error[E0425]: cannot find function `deploy_suite` in this scope; crates/layerx-human-service/tests/withdraw.rs:24:17; error: could not compile `layerx-human-service` (test \"withdraw\") due to 1 previous error; make: *** [Makefile:1952: human-test-service] Error 101. The included human/crates/layerx-paxeer-client/tests/withdraw.rs:468 now defines deploy_suite_for_protocol; the caller is outside the assigned lockfile repair. Row 45 builds the qualification binary successfully and enters bounded-fuzz, then rustup attempts to provision the absent pinned nightly. The owned subprocess was terminated to honor the no-compiler-installation constraint. Verbatim final failure: Terminated; make[1]: *** [Makefile:2138: agent-fuzz-all] Error 143; make: *** [Makefile:2306: agent-qualify-fuzz] Error 1. Before termination the subprocess downloaded components and logged installation of cargo, clippy and rust-docs; full toolchain installation and fuzz execution are not established. qual-logs/r15/fuzz-toolchain-stop.log records the intervention; row-45.log retains the complete failure envelope. This is an interrupted prerequisite attempt, not a fuzz pass."
+assumption = "The lockfiles pass locked offline resolution and their binaries build. Remaining compiler-prerequisite and Human test caller failures require their owners; no production or full wave qualification is claimed. No assertion or runner was changed."
+severity = "blocker"
+
+[observation.6.10.14]
+task = "6.10"
+file = "agent/crates/layerx-sdk/src/program_http.rs agent/crates/layerx-agentd/tests/support/mod.rs agent/crates/layerx-agentd/tests/support/real_authority.rs agent/tests/support/wall_clock.rs agent/tests/support/monotonic_clock.rs"
+symbol = "HttpProgramTransport::connect Clock::now_ms authorize"
+observed = "formerly observation.6.10.11. formerly observation.6.10.13. The SDK program transport receives a required fallible millisecond clock callback. The real authority harness receives wall and monotonic clock callbacks from the outer real-process harness. Freshness bounds and 30/60/30-second process deadlines are unchanged. rustfmt exits 0; qual-logs/r22/rustfmt.log and rustfmt-final.log. Strict SDK and agentd all-target Clippy exits 0; qual-logs/r22/clippy-qualified.log. SDK tests and agentd all-targets exit 0; qual-logs/r22/sdk-test.log and agentd-test.log. All five additional approval_semantics runs exit 0; qual-logs/r22/approval-semantics-1.log through approval-semantics-5.log. The boundary qualification gate make agent-qualify-fuzz exits 0; qual-logs/r22/boundary-gate.log. Only its final three lines are read: ten targets, 256 runs per target, allowlist passed, address passed and thread unsupported-pinned-stdlib."
+assumption = "The branch is rebased onto main at 5c17c8d4, with qualified code inputs unchanged as verified in observation 6.10.12. The checker, allowlists, assertions and clock bounds remain unchanged. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin."
+severity = "note"
+
+[observation.5.1.7009]
+task = "5.1"
+file = "tests/qualification/lxp_qual_replay.c include/layerx/lxp_protocol.h tools/lxp_qual_replay_matrix.sh tests/vectors/qualification_replay_10m.digest"
+symbol = "encode_activity qualify-replay"
+observed = "formerly observation.5.1.49. formerly observation.5.1.39. formerly observation.5.1.16. formerly observation.5.1.31. Initial make qualify-replay exits 2 (qual-logs/r17/row-43.log): /root/lx-lanes/exec/tests/vectors/qualification_replay_10m.digest /root/lx-lanes/exec/build/qualification/replay/gcc-o2.digest differ: byte 43, line 3. All six outputs match each other; the mutation refuses with status=-1002 sequence=10000. The published vector and generator originated in 2e9b08ec when LXP_PROTOCOL_VERSION was 1. e93f5fb3 changed the default to occupancy protocol 2, while encode_activity continued using that moving default. The harness now explicitly selects LXP_PROTOCOL_VERSION_LEGACY, reproducing the published corpus without changing the golden file. Exact make qualify-replay rerun exits 0 (qual-logs/r17/row-43-final.log): activities=10000000 batches=1000 corpus=2ea6be03496f578075334f3365a6dd57266af0bad632a8b91d8846b512a1be1b. GCC and clang-18 at O0/O2, musl and AArch64 outputs all match the original digest. The original single-byte mutation check passes, refusing at sequence 10000. Raw digests and mutation evidence are in qual-logs/r17/replay-before/ and replay-final/; source history is replay-source-history.diff."
+assumption = "Only the test corpus protocol selection changes. No matrix compiler pin, golden digest, assertion, workload count or runtime codec changes. This is qualification of the published legacy replay corpus, not a protocol-2 or protocol-3 corpus claim. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. make check exits 0 after rebasing onto native base 0f2e8326fcf9a598d86a3beac1b4dca65e55ff9c, including the added maintenance protocol test (qual-logs/r17/make-check-rebased.log). The native rebase does not change replay inputs or row-32 recipes. Replay completed before the subsequent disk-threshold interruption recorded below; disk output is retained in disk-before.log and disk-after.log."
+severity = "note"
+
+[observation.5.1.7010]
+task = "5.1"
+file = "spec/layerx-beta/qualification.kvx tests/qualification/lxp_qual_replay.c"
+symbol = "row-32-final disk-stop"
+observed = "formerly observation.5.1.50. formerly observation.5.1.40. formerly observation.5.1.17. formerly observation.5.1.32. The final row-32 rerun was terminated by the owned disk monitor at free_bytes=26179309568, below its 25 GiB threshold. qual-logs/r17/DISK-STOP and disk-monitor.log retain the measurement. The make process received SIGTERM (Python returncode -15; wrapper exit 143); row-32-final.log ends: make: *** [Makefile:1967: human-test-service] Terminated. This is an interrupted gate, not an assertion failure or pass. The earlier exact row 32 exits 0 and five consecutive exit suites exit 0. make check on final native base c63b80eee91589422a9ecc6891c57b4dfa9a73aa exits 0 (make-check-published-base.log)."
+assumption = "Historical interrupted aggregate qualification at f4b157a92808b1ce495c812e3214a7fc447657cd. The native update changes client evidence and native LNI paths, so the interrupted row-32 rerun is not replaced by the earlier pass."
+severity = "blocker"
+
+[observation.5.1.7011]
+task = "5.1"
+file = "spec/layerx-beta/qualification.kvx tools/ci/beta-ledger-check.sh"
+symbol = "beta-ledger-check"
+observed = "formerly observation.5.1.51. formerly observation.5.1.41. formerly observation.5.1.18. formerly observation.5.1.33. make beta-ledger-check exits 2 in qual-logs/r18/ledger-replay.log with 344 violations after the pending replay and disk-stop observations receive numeric IDs. Existing records contain duplicate sections and keys, nonnumeric IDs, missing severity fields, and invalid severity values. The first finding is duplicate observation.6.4.7 at line 1466, first declared at line 1123. git fetch origin succeeds; origin/lane/native remains c63b80eee91589422a9ecc6891c57b4dfa9a73aa and retains the incompatible ledger records."
+assumption = "Historical ledger validation failure on c63b80eee91589422a9ecc6891c57b4dfa9a73aa; this result does not describe validation of the current ledger."
+severity = "blocker"
+
+[observation.5.1.7012]
+task = "5.1"
+file = "tests/qualification/lxp_qual_replay.c tools/lxp_qual_replay_matrix.sh tests/vectors/qualification_replay_10m.digest"
+symbol = "encode_activity qualify-replay"
+observed = "formerly observation.5.1.52. formerly observation.5.1.42. formerly observation.5.1.19. formerly observation.5.1.34. On 39deceadc2588221ef10dc7199250995226a0b55 with the legacy corpus pin applied, make qualify-replay exits 0 (qual-logs/r23/qualify-replay.log); make check exits 0 (qual-logs/r23/check.log); git diff --check exits 0 (qual-logs/r23/diff-check.log); make beta-ledger-check exits 0 (qual-logs/r23/beta-ledger-check.log). The replay gate generates 10000000 activities in 1000 batches; all six compiler and architecture outputs match the published legacy corpus digest 2ea6be03496f578075334f3365a6dd57266af0bad632a8b91d8846b512a1be1b, and the original single-byte mutation refusal check passes. Imported historical observations use distinct numeric identifiers 5.1.31 through 5.1.33."
+assumption = "Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin; worktree-default build directories. Gate output inspection is limited to exit codes and the last 40 log lines. encode_activity selects LXP_PROTOCOL_VERSION_LEGACY explicitly; golden bytes, runtime codecs, workload bounds and assertions are unchanged. This qualifies the legacy corpus only."
+severity = "note"
+
+[observation.6.8.6918]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs"
+symbol = "Observe Service::observe Service::route principal_matches derive"
+observed = "formerly observation.6.8.33. formerly observation.6.8.24. formerly observation.6.8.20. formerly observation.6.8.5. The observation POST contract is exactly {principal:string,resource:string} with deny_unknown_fields; it does not accept Fact or Record bodies. POST /internal/v1/observe requires peer_verified and the single configured bearer token. Service::observe binds the provisioned principal credential using GET /internal/v1/principal, then fetches the current resource through its existing route. Human journeys and approvals require active=true and sub equal to the original principal with Cookie __Host-layerx_access; payments and programs require principal_digest equal to SHA256 of the original principal with Authorization LayerX-Key. Every upstream response must be HTTP 200 application/json with ok=true and a result. Journey GET /v1/journeys/{resource} requires journey_id equal to resource and kind,state,updated_at; approval GET /v1/approvals/{resource} requires approval_id and agent_id,state,created_at; program GET /v1/programs/registry/{resource} requires program_id and top-level lifecycle,version,code_hash,receipt_digest. Fact names and values are strings; non-string upstream values are JSON encoded. Payment GET /v1/receipts/{resource} requires activity_id and a decodable protocol receipt whose activity matches resource, deriving activity_id,amount,asset and occurred_at from that receipt. Record is exactly id,principal,subject,subject_sequence,occurred_at,facts:[{name,value}], with optional activity_id,amount,asset. Identity is SHA256 of serialized principal,resource,current snapshot; the journal deduplicates that identity and assigns increasing sequence per principal and subject. GET /internal/v1/events/{64hex-id} reads one record and rebinds its stored principal. No kind-list route or caller-principal filter exists. Readiness probes the upstream, every credential binding and journal writability. Raw source excerpts: qual-logs/r24/event-contract.txt."
+assumption = "The existing authenticated resource-derived contract must be reconciled explicitly before adding producers that require immutable transition payloads, stable retry identity or principal-filtered kind reads."
+severity = "note"
+
+[observation.6.8.6919]
+task = "6.8"
+file = "platform/hosted/webhooks/src/trusted.rs"
+symbol = "TrustedSources::fetch TrustedSources::event settled_payment internal_route Dashboard::receipt"
+observed = "formerly observation.6.8.34. formerly observation.6.8.25. formerly observation.6.8.21. formerly observation.6.8.6. TrustedSources fetches GET /internal/v1/events/{id} from one of four configured source Services and parses the exact Record fields with deny_unknown_fields and at most 32 facts. Non-payment facts become unverified; optional activity_id triggers independent component and authority verification. Payment always requires activity_id,amount,asset and settled_payment, which refuses missing receipt bytes, nonzero result code or evidence below receipt-verified. Thus accepted submissions without receipts and terminal refusals cannot be represented by the current payment consumer. Webhook ingestion requires POST /internal/v1/events/{singular-kind}/{source-event-id} with the source-trigger bearer; posting observe alone does not call HostedService::publish. Dashboard reads HostedReader Redis shards by principal, not the internal sources. PaymentView reads state,amount,asset and only reports settled with a receipt-verified state fact and digest; Dashboard::receipt additionally requires matching receipt-backed activity_id. No journey or approval event projection exists in Dashboard service.rs. The sink hashes the latest fetched snapshot rather than a producer transition identity, so a lost observe response followed by a state change can make a retry append a different record and delayed delivery can collapse intermediate transitions. Gateway submit_activity handles admission at main.rs:1773; complete_activity persists verified terminal data at main.rs:1960. KeyRecord contains principal_digest without the original principal required by the sink, so passing it as principal would hash twice and fail binding. Registry registry_read_json returns latest_version,versions[].code_hash and receipt.deployment_receipt_digest, not the top-level fields derive requires. Its raw deployment ingress deliberately refuses untrusted caller proof bytes. These conflicts remain unchanged. Raw source excerpts: qual-logs/r24/event-contract.txt."
+assumption = "Consumer changes require ownership of webhooks/src/trusted.rs and events.rs; accepted and refused payments need explicit non-settlement contracts preserving every existing settlement check. Immutable retry semantics require a durable transition identifier and authenticated historical resource reads. A raw-principal provisioning map must be explicit, never inferred by reversing a digest."
+severity = "blocker"
+
+[observation.6.8.6920]
+task = "6.8"
+file = "platform/hosted/internal/deployment.yaml"
+symbol = "LAYERX_EVENTS_UPSTREAM_URL topology_check"
+observed = "formerly observation.6.8.35. formerly observation.6.8.26. formerly observation.6.8.22. formerly observation.6.8.7. make platform-hosted-topology-check exits 2: Human Service layerx-testnet/layerx-human is absent for journeys and approvals, gateway ingress refuses payments and programs, developer egress does not admit resolved target ports for internal sources and authority, and inherited ConfigMap URLs introduce dashboard edges refused by internal ingress. Full log qual-logs/r24/topology.log. make platform-lint exits 0, including strict locked offline workspace all-target clippy, workspace contract, marketplace Wasm clippy, dependency policy and cargo-deny; log qual-logs/r24/platform-lint.log. make beta-ledger-check and git diff --check exit 0; logs qual-logs/r24/beta-ledger-check.log and diff-check.log. Only contract observations were added. Producer code, credential mounts, topology edges and real TLS producer integration tests remain unimplemented; no crate-test or deployment qualification is claimed."
+assumption = "Passing baseline lint does not establish event delivery. The topology failures and event contract conflicts must be resolved without removing readiness or settlement checks."
+severity = "blocker"
+
+[observation.6.8.6921]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.36. formerly observation.6.8.27. formerly observation.6.8.23. formerly observation.6.8.20. Payments: emit a `payment` fact only from the existing verified-receipt path. The V4 applied-legs envelope is THE terminal, so a verified terminal carrying a settlement-failure inner code is still a verified receipt and is emitted with its terminal status; there is NO unverified \"accepted\" event. `settled_payment` and its settlement assertions are untouched."
+assumption = "Normative implementation contract; implementation and qualification remain pending."
+severity = "note"
+
+[observation.6.8.6922]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.37. formerly observation.6.8.28. formerly observation.6.8.24. formerly observation.6.8.21. Transition identity: every fact carries the producer's own durable per-resource sequence (gateway receipt sequence, Human journal sequence, registry publish sequence) and its id is the digest of (kind, resource, sequence). Retries reuse the id; the sink stores a fact once by id (append if absent, byte-identical or refuse with 409). The producer queue holds complete facts, persisted in the producer's existing durable store (gateway store, Human journal, registry store) — never references re-fetched later. If a producer has no durable store for it, add a small append-only table in the store it already owns; do not invent a new datastore."
+assumption = "Normative implementation contract; implementation and qualification remain pending."
+severity = "note"
+
+[observation.6.8.6923]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.38. formerly observation.6.8.29. formerly observation.6.8.25. formerly observation.6.8.22. Reads: keep the existing per-kind Services and `GET /internal/v1/events/<64hex-id>`. No principal-filtered list interface is added."
+assumption = "Normative implementation contract; implementation and qualification remain pending."
+severity = "note"
+
+[observation.6.8.6924]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.39. formerly observation.6.8.30. formerly observation.6.8.26. formerly observation.6.8.23. Delivery: after the sink acknowledges the durable observation, the producer invokes the existing authenticated `POST /internal/v1/events/<singular-kind>/<event-id>` on the webhooks service and retries it durably from the same queue entry until acknowledged. Dashboard projections beyond payments are out of scope; record it."
+assumption = "Normative implementation contract; implementation and qualification remain pending."
+severity = "note"
+
+[observation.6.8.6925]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.40. formerly observation.6.8.31. formerly observation.6.8.27. formerly observation.6.8.24. Gateway principal: emit from the sites where the authenticated raw principal is in hand (the request path that already binds the session), and persist the raw principal next to the queued fact so the background terminal-receipt emission can use it. If the store layer cannot carry the raw principal without widening `KeyRecord`, extend the sink's observe body with an explicit `principal_digest` alternative that the sink accepts ONLY from the gateway's producer credential (a per-credential allow flag in the sink config), and never re-hashes. Registry facts take version, code_hash and receipt_digest from the verified nested fields; the registry's refusal of untrusted deployment ingress stays."
+assumption = "Normative implementation contract; implementation and qualification remain pending."
+severity = "note"
+
+[observation.6.8.6926]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.41. formerly observation.6.8.32. formerly observation.6.8.28. formerly observation.6.8.25. Topology: with the cluster branch as base, declare the three producer→events edges and the producer→webhooks notification edges; `make platform-hosted-topology-check` must pass on this branch without weakening any policy."
+assumption = "Normative implementation contract; implementation and qualification remain pending."
+severity = "note"
+
+[observation.6.8.6927]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs platform/hosted/internal/src/producer.rs platform/hosted/internal/src/tls.rs platform/hosted/internal/src/bin/layerx-event-source.rs"
+symbol = "Service::observe_produced Store::append_produced producer::Client producer::Outbox"
+observed = "formerly observation.6.8.42. formerly observation.6.8.33. formerly observation.6.8.29. Unqualified source adds complete producer observations with framed kind/resource/sequence identities, bounded payloads, principal or explicitly authorized payment principal_digest, credential-scoped observation admission, immutable journal records with exact incoming body comparison and 409 conflicts, and a shared mTLS/bearer delivery client. Delivery separates durable sink acknowledgement from webhook notification acknowledgement through an Outbox interface. Unit tests for immutable retries, journal restart, sequence gaps, payload substitution and readiness thresholds are written but not executed. No producer implements Outbox yet; no gateway, registry or Human transition hook, queue persistence, credential provisioning, manifest edge or real TLS producer integration test is implemented. No formatting, build, test, topology, lint, ledger or diff-check gate has run against these edits."
+assumption = "Implementation remains incomplete. The source is uncommitted and does not establish event production, durable producer queues or cluster delivery. Existing contract decisions remain in observations 6.8.23 through 6.8.28."
+severity = "note"
+
+[observation.6.8.6928]
+task = "6.8"
+file = "platform/hosted/gateway/Cargo.toml platform/hosted/registry/Cargo.toml platform/Cargo.lock human/Cargo.lock"
+symbol = "layerx-platform-internal producer::Client"
+observed = "formerly observation.6.8.43. formerly observation.6.8.34. formerly observation.6.8.30. The shared producer module is exported by the existing layerx-platform-internal library. Gateway and registry currently declare no dependency on that library. Integration requires adding the local library dependency to both crate manifests and updating the workspace dependency lockfiles, which are outside the supplied source/deployment ownership list. Exact requested dependency entries are recorded in the untracked NEEDS.md. Those manifests and lockfiles remain unchanged."
+assumption = "Dependency ownership must be supplied before dependent integration. Qualification is deferred until the entire producer implementation is written."
+severity = "blocker"
+
+[observation.6.8.6929]
+task = "6.8"
+file = "platform/Cargo.toml platform/hosted/gateway/Cargo.toml platform/hosted/registry/Cargo.toml human/Cargo.toml human/crates/layerx-human-service/Cargo.toml"
+symbol = "layerx-platform-internal"
+observed = "formerly observation.6.8.44. formerly observation.6.8.35. formerly observation.6.8.31. Manifest ownership is supplied. Both workspaces now declare the local layerx-platform-internal library and gateway, registry and Human declare the workspace dependency. The existing internal workspace member is reused. Static lockfile inspection found matching rustls 0.23.43, native-tls 0.2.15, ring 0.17.14, serde 1.0.229, serde_json 1.0.149 and zeroize 1.9.0 entries in both workspace lockfiles. Neither lockfile has been edited and no dependency version has been changed. Ordinary unlocked cargo builds and subsequent locked gates have not run because implementation remains incomplete."
+assumption = "Resolves the ownership prerequisite in observation 6.8.30; dependency resolution and compilation remain unqualified."
+severity = "note"
+
+[observation.6.8.6930]
+task = "6.8"
+file = "platform/hosted/gateway/src/store.rs platform/hosted/gateway/tests/tap_nonce.rs"
+symbol = "RedisStore::complete_observed RedisStore::complete_inner Outbox::pending Outbox::acknowledge"
+observed = "formerly observation.6.8.45. formerly observation.6.8.36. formerly observation.6.8.32. Unqualified implementation adds a payment outbox in the existing Redis store, persisted in the completion Lua operation. Admission binds the principal digest, activity, amount, asset, timestamp and result code to the completion receipt. Complete observations are retained for exact retry comparison; the pending list is bounded at 1024 and reports overflow through producer health. Sink acknowledgement persists the observed stage and webhook acknowledgement removes the pending entry using a compare-and-set on the queue head and exact payload. A real isolated TLS Redis test is written for durable completion, reconstruction, acknowledgement ordering, principal mismatch and immutable retry refusal using the existing receipt fixture. The test has not run. No request-path hook or delivery worker is connected."
+assumption = "Source presence does not establish atomicity under faults, real event-source delivery, or qualified payment production."
+severity = "note"
+
+[observation.6.8.6931]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs platform/hosted/internal/src/producer.rs platform/hosted/gateway/src/main.rs human/crates/layerx-human-service/src/server/stream_journal.rs"
+symbol = "Store::next Store::append_produced producer_retries_require_identical_bytes_after_restart ProtocolReceipt::global_sequence"
+observed = "formerly observation.6.8.46. formerly observation.6.8.37. formerly observation.6.8.33. The decided identity contract names the gateway receipt sequence and Human journal sequence while also calling the sequence per-resource. The current producer sink enforces exactly previous plus one starting at one, and its existing retry test rejects a jump from one to three. Protocol receipts expose global_sequence; Human StreamJournal increments a principal-wide stream-head. Those native sequences need not start at one or be consecutive for a resource. Hook implementation needs an explicit choice between retaining those native sequences with a reconciled sink check and introducing durable per-resource counters while preserving native sequence as a separate fact. The sink checks and their test assertions remain intact."
+assumption = "No sequence reinterpretation or assertion relaxation has been applied."
+severity = "blocker"
+
+[observation.6.8.6932]
+task = "6.8"
+file = "platform/hosted/registry/src/auth.rs platform/hosted/registry/src/main.rs platform/hosted/registry/src/routes.rs platform/hosted/internal/src/events.rs"
+symbol = "RegistryAuthority Authorization Service::bind principal_matches"
+observed = "formerly observation.6.8.47. formerly observation.6.8.38. formerly observation.6.8.34. The program event sink binds a principal through GET /internal/v1/principal using a LayerX-Key credential and requires the returned principal_digest to match that principal. The registry authenticates request/publication service-plane bearer authorities and has no matching principal route or LayerX-Key handling. Its authenticated publication context therefore supplies no raw principal or trusted deployment-owner-to-principal mapping for the producer. Deployment ingress remains refused because canonical deployment proof production is unavailable. A service token cannot be relabelled as an end-user principal and an untrusted request body cannot supply this missing authority."
+assumption = "A trusted registry principal mapping and matching read-authentication contract are required before the program producer can bind and deliver observations. Untrusted deployment ingress remains refused."
+severity = "blocker"
+
+[observation.6.8.7000]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.48. formerly observation.6.8.39. formerly observation.6.8.35. Sequence identity: the sink's contract (`Store::append_produced`, contiguous per-resource values from 1, existing test rejecting 1 → 3) is authoritative and stays. Each producer keeps a durable per-resource counter in its own outbox (the Redis outbox for the gateway, the journal-backed outbox for Human, the registry store for the registry), assigned when the fact is enqueued, contiguous from 1 per (kind, resource). The native ordering value — `ProtocolReceipt::global_sequence` for payments, the Human `StreamJournal` head for journeys/approvals, the registry publication version for programs — travels INSIDE the fact body as `source_sequence` (u64, informational, consumers may use it to order across resources) and is never used as the sink sequence. The fact id stays digest(kind, resource, producer sequence). Retries reuse the same enqueued entry, so the sequence is stable across restarts."
+assumption = "Normative implementation contract; qualification remains pending."
+severity = "note"
+
+[observation.6.8.7001]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.49. formerly observation.6.8.40. formerly observation.6.8.36. Registry principal binding: the identity service is the single principal authority. The registry resolves the authenticated publication key through identity's existing `GET /internal/v1/principal` with `LayerX-Key`, using the registry's own mounted internal credential (same mechanism the gateway uses; reuse the gateway's client type if it is in a shared crate, else move that client into the shared internal library without changing its behaviour). The resolved principal (digest form as identity returns it) is what the program fact carries. A publication whose key identity cannot resolve emits no fact, increments an explicit `program_facts_unbound` counter surfaced with the other producer metrics, and is refused as it is today; nothing about the registry's bearer-plane authentication or its refusal of untrusted deployment ingress changes."
+assumption = "Normative implementation contract; qualification remains pending."
+severity = "note"
+
+[observation.6.8.7002]
+task = "6.8"
+file = "platform/hosted/internal/src/producer.rs platform/hosted/registry/src/routes.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.50. formerly observation.6.8.41. formerly observation.6.8.37. source_sequence is a u64 in the complete persisted observation body. The existing strict consumer Record schema remains intact; the sink projects source_sequence into the existing facts name/value representation. Gateway and registry digest alternatives remain credential-allow-flag scoped. Registry raw archive mirroring has no verified program version or receipt, so it produces no fabricated program fact. The verified source publication route queues program facts from the existing verified registry read, using its nested version, code_hash and deployment_receipt_digest. Untrusted deployment ingress remains refused."
+assumption = "The native source sequence is informational and never replaces the contiguous sink sequence. Source-only archive storage cannot assert a verified program deployment."
+severity = "note"
+
+[observation.6.8.7003]
+task = "6.8"
+file = "platform/hosted/identity/src/main.rs platform/hosted/internal/src/principal.rs"
+symbol = "route service_tokens PrincipalClient::resolve"
+observed = "formerly observation.6.8.51. formerly observation.6.8.42. formerly observation.6.8.38. The current identity route admits POST introspection, principal/session provisioning and DELETE session revocation; GET /internal/v1/principal is absent. Service::ALL does not include registry, and service_tokens rejects unknown service token filenames. The registry client uses the shared gateway TLS client, its own mounted Bearer service credential and the LayerX-Key header for the publication key. The registry token is provisioned and mounted only to the registry; installing its identity-side service mapping requires an out-of-scope identity implementation."
+assumption = "Registry principal resolution and positive real identity integration remain blocked until the authoritative identity route and registry service registration are implemented. No gateway-local key mapping is relabelled as identity authority."
+severity = "blocker"
+
+[observation.6.8.7004]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/rustfmt.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.52. formerly observation.6.8.43. formerly observation.6.8.39. Command rustfmt --edition 2021 --config skip_children=true human/crates/layerx-human-service/src/journeys/engine.rs human/crates/layerx-human-service/src/lib.rs human/crates/layerx-human-service/src/server/mod.rs human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-human-service/src/server/stream_journal.rs human/crates/layerx-human-service/src/store/mod.rs human/crates/layerx-human-service/src/store/retention.rs platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/lib.rs platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/store.rs platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/internal/src/bin/layerx-event-source.rs platform/hosted/internal/src/events.rs platform/hosted/internal/src/lib.rs platform/hosted/internal/src/tls.rs platform/hosted/registry/src/lib.rs platform/hosted/registry/src/main.rs platform/hosted/registry/src/routes.rs human/crates/layerx-human-service/src/event_producer.rs platform/hosted/gateway/tests/support/payment_events.rs platform/hosted/internal/src/gateway_http.rs platform/hosted/internal/src/principal.rs platform/hosted/internal/src/producer.rs platform/hosted/registry/src/event_producer.rs exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/rustfmt.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7005]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/beta-cluster-shell.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.53. formerly observation.6.8.44. formerly observation.6.8.40. Command bash -n platform/hosted/tests/beta-cluster.sh exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/beta-cluster-shell.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7006]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/topology.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.54. formerly observation.6.8.45. formerly observation.6.8.41. Command make platform-hosted-topology-check exited 2. Output: /root/lx-lanes/exec/qual-logs/r26/topology.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7007]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/platform-build.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.55. formerly observation.6.8.46. formerly observation.6.8.42. Command cargo build --manifest-path platform/Cargo.toml -p layerx-platform-internal -p layerx-platform-gateway -p layerx-platform-registry exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/platform-build.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7008]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/human-build.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.56. formerly observation.6.8.47. formerly observation.6.8.43. Command cargo build --manifest-path human/Cargo.toml -p layerx-human-service exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/human-build.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7009]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/internal-clippy.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.57. formerly observation.6.8.48. formerly observation.6.8.44. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-internal --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/internal-clippy.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7010]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/internal-clippy-rerun.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.58. formerly observation.6.8.49. formerly observation.6.8.45. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-internal --all-targets -- -D warnings exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/internal-clippy-rerun.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7011]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/ledger.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.59. formerly observation.6.8.50. formerly observation.6.8.46. Command make beta-ledger-check exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/ledger.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7012]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/gateway-clippy.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.60. formerly observation.6.8.51. formerly observation.6.8.47. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/gateway-clippy.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7013]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/registry-clippy.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.61. formerly observation.6.8.52. formerly observation.6.8.48. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/registry-clippy.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7014]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/internal-test.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.62. formerly observation.6.8.53. formerly observation.6.8.49. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-internal exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/internal-test.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7015]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/rustfmt-rerun.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.63. formerly observation.6.8.54. formerly observation.6.8.50. Command rustfmt --edition 2021 --config skip_children=true human/crates/layerx-human-service/src/agents/archive.rs human/crates/layerx-human-service/src/agents/recovery.rs human/crates/layerx-human-service/src/audit/mod.rs human/crates/layerx-human-service/src/journeys/engine.rs human/crates/layerx-human-service/src/lib.rs human/crates/layerx-human-service/src/server/mod.rs human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-human-service/src/server/stream_journal.rs human/crates/layerx-human-service/src/store/mod.rs human/crates/layerx-human-service/src/store/retention.rs platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/lib.rs platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/store.rs platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/internal/src/bin/layerx-event-source.rs platform/hosted/internal/src/events.rs platform/hosted/internal/src/lib.rs platform/hosted/internal/src/tls.rs platform/hosted/registry/src/lib.rs platform/hosted/registry/src/main.rs platform/hosted/registry/src/routes.rs human/crates/layerx-human-service/src/event_producer.rs platform/hosted/gateway/tests/support/payment_events.rs platform/hosted/internal/src/gateway_http.rs platform/hosted/internal/src/principal.rs platform/hosted/internal/src/producer.rs platform/hosted/registry/src/event_producer.rs exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/rustfmt-rerun.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7016]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/gateway-clippy-rerun.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.64. formerly observation.6.8.55. formerly observation.6.8.51. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/gateway-clippy-rerun.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7017]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/human-build-rerun.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.65. formerly observation.6.8.56. formerly observation.6.8.52. Command cargo build --locked --manifest-path human/Cargo.toml -p layerx-human-service exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/human-build-rerun.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7018]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/gateway-test.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.66. formerly observation.6.8.57. formerly observation.6.8.53. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/gateway-test.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7019]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/registry-test.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.67. formerly observation.6.8.58. formerly observation.6.8.54. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/registry-test.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7020]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/human-clippy.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.68. formerly observation.6.8.59. formerly observation.6.8.55. Command cargo clippy --locked --manifest-path human/Cargo.toml -p layerx-human-service --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/human-clippy.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7021]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/gateway-clippy-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.69. formerly observation.6.8.60. formerly observation.6.8.56. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/gateway-clippy-final.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7022]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/registry-clippy-rerun.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.70. formerly observation.6.8.61. formerly observation.6.8.57. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/registry-clippy-rerun.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7023]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/rustfmt-qualified.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.71. formerly observation.6.8.62. formerly observation.6.8.58. Command rustfmt --edition 2021 --config skip_children=true human/crates/layerx-human-service/src/agents/archive.rs human/crates/layerx-human-service/src/agents/recovery.rs human/crates/layerx-human-service/src/audit/mod.rs human/crates/layerx-human-service/src/journeys/engine.rs human/crates/layerx-human-service/src/lib.rs human/crates/layerx-human-service/src/server/mod.rs human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-human-service/src/server/stream_journal.rs human/crates/layerx-human-service/src/store/mod.rs human/crates/layerx-human-service/src/store/retention.rs platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/lib.rs platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/store.rs platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/internal/src/bin/layerx-event-source.rs platform/hosted/internal/src/events.rs platform/hosted/internal/src/lib.rs platform/hosted/internal/src/tls.rs platform/hosted/registry/src/lib.rs platform/hosted/registry/src/main.rs platform/hosted/registry/src/routes.rs human/crates/layerx-human-service/src/event_producer.rs platform/hosted/gateway/tests/support/payment_events.rs platform/hosted/internal/src/gateway_http.rs platform/hosted/internal/src/principal.rs platform/hosted/internal/src/producer.rs platform/hosted/registry/src/event_producer.rs exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/rustfmt-qualified.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7024]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/gateway-clippy-qualified.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.72. formerly observation.6.8.63. formerly observation.6.8.59. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway --all-targets -- -D warnings exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/gateway-clippy-qualified.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7025]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/registry-clippy-qualified.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.73. formerly observation.6.8.64. formerly observation.6.8.60. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/registry-clippy-qualified.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7026]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/gateway-test-rerun.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.74. formerly observation.6.8.65. formerly observation.6.8.61. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/gateway-test-rerun.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7027]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/registry-test-rerun.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.75. formerly observation.6.8.66. formerly observation.6.8.62. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/registry-test-rerun.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7028]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/human-test.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.76. formerly observation.6.8.67. formerly observation.6.8.63. Command cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-service exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/human-test.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7029]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/rustfmt-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.77. formerly observation.6.8.68. formerly observation.6.8.64. Command rustfmt --edition 2021 --config skip_children=true human/crates/layerx-human-service/src/agents/archive.rs human/crates/layerx-human-service/src/agents/recovery.rs human/crates/layerx-human-service/src/audit/mod.rs human/crates/layerx-human-service/src/journeys/engine.rs human/crates/layerx-human-service/src/lib.rs human/crates/layerx-human-service/src/server/mod.rs human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-human-service/src/server/stream_journal.rs human/crates/layerx-human-service/src/store/mod.rs human/crates/layerx-human-service/src/store/retention.rs platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/lib.rs platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/store.rs platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/internal/src/bin/layerx-event-source.rs platform/hosted/internal/src/events.rs platform/hosted/internal/src/lib.rs platform/hosted/internal/src/tls.rs platform/hosted/registry/src/lib.rs platform/hosted/registry/src/main.rs platform/hosted/registry/src/routes.rs human/crates/layerx-human-service/src/event_producer.rs platform/hosted/gateway/tests/support/payment_events.rs platform/hosted/internal/src/gateway_http.rs platform/hosted/internal/src/principal.rs platform/hosted/internal/src/producer.rs platform/hosted/registry/src/event_producer.rs exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/rustfmt-final.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7030]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/platform-lint.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.78. formerly observation.6.8.69. formerly observation.6.8.65. Command make platform-lint exited 2. Output: /root/lx-lanes/exec/qual-logs/r26/platform-lint.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7031]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/registry-clippy-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.79. formerly observation.6.8.70. formerly observation.6.8.66. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/registry-clippy-final.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7032]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/human-clippy-qualified.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.80. formerly observation.6.8.71. formerly observation.6.8.67. Command cargo clippy --locked --manifest-path human/Cargo.toml -p layerx-human-service --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r26/human-clippy-qualified.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7033]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/rustfmt-release.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.81. formerly observation.6.8.72. formerly observation.6.8.68. Command rustfmt --edition 2021 --config skip_children=true human/crates/layerx-human-service/src/agents/archive.rs human/crates/layerx-human-service/src/agents/recovery.rs human/crates/layerx-human-service/src/audit/mod.rs human/crates/layerx-human-service/src/journeys/engine.rs human/crates/layerx-human-service/src/lib.rs human/crates/layerx-human-service/src/server/mod.rs human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-human-service/src/server/stream_journal.rs human/crates/layerx-human-service/src/store/mod.rs human/crates/layerx-human-service/src/store/retention.rs platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/lib.rs platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/store.rs platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/internal/src/bin/layerx-event-source.rs platform/hosted/internal/src/events.rs platform/hosted/internal/src/lib.rs platform/hosted/internal/src/tls.rs platform/hosted/registry/src/lib.rs platform/hosted/registry/src/main.rs platform/hosted/registry/src/routes.rs human/crates/layerx-human-service/src/event_producer.rs platform/hosted/gateway/tests/support/payment_events.rs platform/hosted/internal/src/gateway_http.rs platform/hosted/internal/src/principal.rs platform/hosted/internal/src/producer.rs platform/hosted/registry/src/event_producer.rs exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/rustfmt-release.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7034]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/registry-clippy-release.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.82. formerly observation.6.8.73. formerly observation.6.8.69. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry --all-targets -- -D warnings exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/registry-clippy-release.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7035]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/registry-test-release.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.83. formerly observation.6.8.74. formerly observation.6.8.70. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/registry-test-release.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7036]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/platform-lint-release.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.84. formerly observation.6.8.75. formerly observation.6.8.71. Command make platform-lint exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/platform-lint-release.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7037]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/diff-check.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.85. formerly observation.6.8.76. formerly observation.6.8.72. Command git diff --check exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/diff-check.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "note"
+
+[observation.6.8.7038]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/cortex-guard-availability.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.86. formerly observation.6.8.77. formerly observation.6.8.73. Command bash -c cortex_guard exited 127. Output: /root/lx-lanes/exec/qual-logs/r26/cortex-guard-availability.log."
+assumption = "This records only this execution; later executions do not erase prior failures."
+severity = "blocker"
+
+[observation.6.8.7039]
+task = "6.8"
+file = "platform/hosted/tests/topology-regressions.py"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.87. formerly observation.6.8.78. formerly observation.6.8.74. The topology checker reports 51 edges, 50 admitted, one external and zero failed. All twelve added producer-policy refusal checks pass across both parsers. The unchanged baseline assertion requires 40 admitted edges but the added producer URLs change the count; execution stops there and later original negative cases are unrun. Existing assertions and policies are retained."
+assumption = "The topology aggregate remains failed until this assertion-contract conflict is resolved without weakening existing negative coverage."
+severity = "blocker"
+
+[observation.6.8.7040]
+task = "6.8"
+file = "human/crates/layerx-human-service/src"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.88. formerly observation.6.8.79. formerly observation.6.8.75. Strict Human clippy exits 101 with 436 library diagnostics and 448 library-test diagnostics. Comparing reported diagnostic locations against changed lines finds no remaining diagnostic anchored on a changed line; the extraction is qual-logs/r26/human-clippy-final-task-errors.txt. This location comparison is not a complete baseline qualification."
+assumption = "Existing diagnostics remain intact and Human strict lint remains unqualified."
+severity = "blocker"
+
+[observation.6.8.7041]
+task = "6.8"
+file = "platform/hosted/gateway/tests/support/payment_events.rs human/crates/layerx-human-service/src/event_producer.rs platform/hosted/registry/src/event_producer.rs"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.89. formerly observation.6.8.80. formerly observation.6.8.76. Real gateway Redis and TLS event Service coverage passes for terminal payment delivery, duplicate observation, foreign-principal refusal and retention after sink loss. Human approval journal and registry outbox restart tests pass. Complete real TLS journey, approval and registry publication delivery, webhook notification recovery and per-producer readiness after sink loss are not proven by these tests."
+assumption = "End-to-end event producer qualification is incomplete; passing crate tests do not establish the missing integration paths."
+severity = "blocker"
+
+[observation.6.8.7042]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/ledger-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.90. formerly observation.6.8.81. formerly observation.6.8.77. Command make beta-ledger-check exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/ledger-final.log."
+assumption = "This records this execution only; aggregate event producer qualification remains incomplete."
+severity = "note"
+
+[observation.6.8.7043]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/diff-check-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.91. formerly observation.6.8.82. formerly observation.6.8.78. Command git diff --check exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/diff-check-final.log."
+assumption = "This records this execution only; aggregate event producer qualification remains incomplete."
+severity = "note"
+
+[observation.6.8.7044]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r26/human-test-release.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.92. formerly observation.6.8.83. formerly observation.6.8.79. Command cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-service exited 0. Output: /root/lx-lanes/exec/qual-logs/r26/human-test-release.log."
+assumption = "This records this execution only; aggregate event producer qualification remains incomplete."
+severity = "note"
+
+[observation.6.8.7045]
+task = "6.8"
+file = "platform/hosted/identity/src/main.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.93. formerly observation.6.8.84. formerly observation.6.8.80. Identity principal resolver: implement `GET /internal/v1/principal` in `platform/hosted/identity/src/main.rs` and its durable authority store exactly as the registry client from pass 28 expects. Authentication is the caller's mounted internal service credential (same mechanism the gateway uses against identity today) plus the publication `LayerX-Key` header naming the key to resolve. Response is the authoritative `principal_digest` for that key, `404` when the key is unknown, `401`/`403` for a missing or unauthorised service credential, never a body-supplied principal. Register the registry as a permitted caller through the existing service-registration mechanism; no bearer-plane or ingress change. Tests: unit tests for the route in identity, and the registry positive delivery test against a real identity instance over the real TLS transport."
+assumption = "Qualification is recorded separately from implementation decisions."
+severity = "note"
+
+[observation.6.8.7046]
+task = "6.8"
+file = "platform/hosted/tests/topology-regressions.py"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.94. formerly observation.6.8.85. formerly observation.6.8.81. Topology count: `ok == 40` in `topology-regressions.py:42` counted the admitted edges declared before this branch. This branch declares ten new producer edges on purpose, each covered by a new refusal check. Set the literal to `50`, keep every original policy-removal negative case, and add one negative case per new edge class that asserts removing that policy drops the count and refuses the edge. This is not a weakening: the baseline is a count of declared edges and the declaration grew. Record the derivation (40 original + 10 producer edges) in the observation."
+assumption = "Qualification is recorded separately from implementation decisions."
+severity = "note"
+
+[observation.6.8.7047]
+task = "6.8"
+file = "platform/hosted/identity/src/store.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.95. formerly observation.6.8.86. formerly observation.6.8.82. Publication keys are provisioned only by the existing provisioning service through POST /v1/publication-keys with the key in LayerX-Key and an existing subject plus explicit revoked flag in the body. The authority journal stores the SHA-256 digest of the publication key and its subject, rejects reassignment and resurrection after revocation, and derives principal_digest as SHA-256 of the stored subject. Resolution accepts no body and returns no principal from caller input. Store loss refuses resolution. The cluster provisioning path binds its issued program key through this authority."
+assumption = "Qualification is recorded separately from implementation decisions."
+severity = "note"
+
+[observation.6.8.7048]
+task = "6.8"
+file = "platform/hosted/tests/topology-regressions.py"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.96. formerly observation.6.8.87. formerly observation.6.8.83. The admitted-edge baseline is 40 original + 10 producer edges = 50. Including the two original Human edges gives 52. Original policy-removal negative cases remain. Each producer-policy removal must lower the admitted count and explicitly refuse its affected ingress edges."
+assumption = "Qualification is recorded separately from implementation decisions."
+severity = "note"
+
+[observation.6.8.7049]
+task = "6.8"
+file = "platform/hosted/internal/src/producer.rs"
+symbol = "event_producer_contract"
+observed = "formerly observation.6.8.97. formerly observation.6.8.88. formerly observation.6.8.84. The delivery worker and deterministic integration driver share Client::step, including durable acknowledgements and health updates. Real sink loss is held beyond the existing 30-second threshold; the threshold and readiness assertions are unchanged."
+assumption = "Qualification is recorded separately from implementation decisions."
+severity = "note"
+
+[observation.6.8.7050]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/rustfmt.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.98. formerly observation.6.8.89. formerly observation.6.8.85. Command python3 -c 'import pathlib,subprocess; paths=[p for p in subprocess.check_output([\"git\",\"diff\",\"--name-only\"],text=True).splitlines() if p.endswith(\".rs\")]; paths += [\"platform/hosted/internal/src/producer_test_support.rs\",\"platform/hosted/registry/tests/producer_tls.rs\",\"platform/hosted/registry/tests/producer_redis.rs\",\"human/crates/layerx-human-service/src/event_producer_tls.rs\"]; subprocess.run([\"rustfmt\",\"--edition\",\"2021\",\"--config\",\"skip_children=true\",*paths],check=True)' exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/rustfmt.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7051]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/topology.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.99. formerly observation.6.8.90. formerly observation.6.8.86. Command make platform-hosted-topology-check exited 2. Output: /root/lx-lanes/exec/qual-logs/r29/topology.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7052]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/platform-build.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.100. formerly observation.6.8.91. formerly observation.6.8.87. Command cargo build --locked --manifest-path platform/Cargo.toml -p layerx-platform-internal -p layerx-platform-gateway -p layerx-platform-registry -p layerx-platform-identity -p layerx-platform-webhooks exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/platform-build.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7053]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/topology-counts.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.101. formerly observation.6.8.92. formerly observation.6.8.88. Command python3 -c 'from pathlib import Path; p=Path(\"platform/hosted/tests/topology-regressions.py\"); scope={\"__file__\":str(p.resolve())}; exec(p.read_text().split(\"producer_edges()\\n\\nbase\",1)[0],scope); rows=scope[\"module\"][\"check\"](scope[\"load\"](\"load_pyyaml\")); print(\"without Human\",sum(r[0]==\"ok\" for r in rows)); scope[\"paths\"].append(\"human\"); rows=scope[\"module\"][\"check\"](scope[\"load\"](\"load_pyyaml\")); print(\"with Human\",sum(r[0]==\"ok\" for r in rows)); print(\"\\n\".join(str(r) for r in rows if \"LAYERX_EVENTS_\" in r[1] or \"LAYERX_REGISTRY_IDENTITY\" in r[1]))' exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/topology-counts.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7054]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-build.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.102. formerly observation.6.8.93. formerly observation.6.8.89. Command cargo build --locked --manifest-path human/Cargo.toml -p layerx-human-service exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/human-build.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7055]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/topology-repair.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.103. formerly observation.6.8.94. formerly observation.6.8.90. Command make platform-hosted-topology-check exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/topology-repair.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7056]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/platform-build-repair.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.104. formerly observation.6.8.95. formerly observation.6.8.91. Command cargo build --locked --manifest-path platform/Cargo.toml -p layerx-platform-internal -p layerx-platform-gateway -p layerx-platform-registry -p layerx-platform-identity -p layerx-platform-webhooks exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/platform-build-repair.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7057]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/identity-clippy-lib.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.105. formerly observation.6.8.96. formerly observation.6.8.92. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-identity --lib -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/identity-clippy-lib.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7058]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-tls.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.106. formerly observation.6.8.97. formerly observation.6.8.93. Command cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-service --lib human_journey_and_approval_cross_tls_and_recover_after_sink_loss exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/human-tls.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7059]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/internal-clippy.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.107. formerly observation.6.8.98. formerly observation.6.8.94. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-internal --all-targets -- -D warnings exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/internal-clippy.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7060]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/identity-tests.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.108. formerly observation.6.8.99. formerly observation.6.8.95. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-identity exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/identity-tests.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7061]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/registry-test.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.109. formerly observation.6.8.100. formerly observation.6.8.96. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/registry-test.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7062]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/registry-clippy.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.110. formerly observation.6.8.101. formerly observation.6.8.97. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/registry-clippy.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7063]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/identity-clippy-lib-repair.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.111. formerly observation.6.8.102. formerly observation.6.8.98. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-identity --lib -- -D warnings exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/identity-clippy-lib-repair.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7064]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-clippy.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.112. formerly observation.6.8.103. formerly observation.6.8.99. Command cargo clippy --locked --manifest-path human/Cargo.toml -p layerx-human-service --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/human-clippy.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7065]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-tls-repair.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.113. formerly observation.6.8.104. formerly observation.6.8.100. Command cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-service --lib human_journey_and_approval_cross_tls_and_recover_after_sink_loss exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/human-tls-repair.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7066]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/identity-clippy.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.114. formerly observation.6.8.105. formerly observation.6.8.101. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-identity --all-targets -- -D warnings exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/identity-clippy.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7067]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/gateway-test.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.115. formerly observation.6.8.106. formerly observation.6.8.102. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/gateway-test.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7068]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/gateway-clippy.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.116. formerly observation.6.8.107. formerly observation.6.8.103. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/gateway-clippy.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7069]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/registry-clippy-repair.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.117. formerly observation.6.8.108. formerly observation.6.8.104. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/registry-clippy-repair.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7070]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-scoped-clippy.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.118. formerly observation.6.8.109. formerly observation.6.8.105. Command python3 qual-logs/r29/human-scoped-clippy.py exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/human-scoped-clippy.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7071]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/internal-test.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.119. formerly observation.6.8.110. formerly observation.6.8.106. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-internal exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/internal-test.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7072]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/identity-tests-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.120. formerly observation.6.8.111. formerly observation.6.8.107. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-identity exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/identity-tests-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7073]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/rustfmt-repair.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.121. formerly observation.6.8.112. formerly observation.6.8.108. Command python3 -c 'import subprocess; paths=[p for p in subprocess.check_output([\"git\",\"diff\",\"--name-only\"],text=True).splitlines() if p.endswith(\".rs\")]; paths += [\"platform/hosted/identity/src/lib.rs\",\"platform/hosted/internal/src/producer_test_support.rs\",\"platform/hosted/registry/tests/producer_tls.rs\",\"platform/hosted/registry/tests/support/producer_redis.rs\",\"human/crates/layerx-human-service/src/event_producer_tls.rs\"]; subprocess.run([\"rustfmt\",\"--edition\",\"2021\",\"--config\",\"skip_children=true\",*paths],check=True)' exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/rustfmt-repair.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7074]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/registry-clippy-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.122. formerly observation.6.8.113. formerly observation.6.8.109. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry --all-targets -- -D warnings exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/registry-clippy-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7075]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/gateway-clippy-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.123. formerly observation.6.8.114. formerly observation.6.8.110. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway --all-targets -- -D warnings exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/gateway-clippy-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7076]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/gateway-clippy-qualified.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.124. formerly observation.6.8.115. formerly observation.6.8.111. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway --all-targets -- -D warnings exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/gateway-clippy-qualified.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7077]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-test.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.125. formerly observation.6.8.116. formerly observation.6.8.112. Command cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-service exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/human-test.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7078]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/beta-cluster-shell.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.126. formerly observation.6.8.117. formerly observation.6.8.113. Command bash -n platform/hosted/tests/beta-cluster.sh exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/beta-cluster-shell.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7079]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-scoped-clippy-repair.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.127. formerly observation.6.8.118. formerly observation.6.8.114. Command python3 qual-logs/r29/human-scoped-clippy.py exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/human-scoped-clippy-repair.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7080]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/platform-lint.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.128. formerly observation.6.8.119. formerly observation.6.8.115. Command make platform-lint exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/platform-lint.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7081]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/cortex-guard.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.129. formerly observation.6.8.120. formerly observation.6.8.116. Command bash -c cortex_guard exited 127. Output: /root/lx-lanes/exec/qual-logs/r29/cortex-guard.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7082]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/registry-test-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.130. formerly observation.6.8.121. formerly observation.6.8.117. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/registry-test-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7083]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/gateway-test-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.131. formerly observation.6.8.122. formerly observation.6.8.118. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/gateway-test-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7084]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/ledger.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.132. formerly observation.6.8.123. formerly observation.6.8.119. Command make beta-ledger-check exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/ledger.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7085]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-scoped-clippy-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.133. formerly observation.6.8.124. formerly observation.6.8.120. Command python3 qual-logs/r29/human-scoped-clippy.py exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/human-scoped-clippy-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7086]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/identity-clippy-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.134. formerly observation.6.8.125. formerly observation.6.8.121. Command cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-identity --all-targets -- -D warnings exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/identity-clippy-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7087]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/identity-qualification-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.135. formerly observation.6.8.126. formerly observation.6.8.122. Command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-identity exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/identity-qualification-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7088]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/rustfmt-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.136. formerly observation.6.8.127. formerly observation.6.8.123. Command python3 -c 'import subprocess; paths=[p for p in subprocess.check_output([\"git\",\"diff\",\"--name-only\"],text=True).splitlines() if p.endswith(\".rs\")]; paths += [\"platform/hosted/identity/src/lib.rs\",\"platform/hosted/internal/src/producer_test_support.rs\",\"platform/hosted/registry/tests/producer_tls.rs\",\"platform/hosted/registry/tests/support/producer_redis.rs\",\"human/crates/layerx-human-service/src/event_producer_tls.rs\"]; subprocess.run([\"rustfmt\",\"--edition\",\"2021\",\"--config\",\"skip_children=true\",*paths],check=True)' exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/rustfmt-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7089]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/ancestry.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.137. formerly observation.6.8.128. formerly observation.6.8.124. Command git merge-base --is-ancestor origin/lane/cluster-internal HEAD exited 1. Output: /root/lx-lanes/exec/qual-logs/r29/ancestry.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7090]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-scoped-clippy-qualified.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.138. formerly observation.6.8.129. formerly observation.6.8.125. Command python3 qual-logs/r29/human-scoped-clippy.py exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/human-scoped-clippy-qualified.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7091]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/topology-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.139. formerly observation.6.8.130. formerly observation.6.8.126. Command make platform-hosted-topology-check exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/topology-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7092]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/diff-check.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.140. formerly observation.6.8.131. formerly observation.6.8.127. Command git diff --check exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/diff-check.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7093]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-scoped-clippy-release.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.141. formerly observation.6.8.132. formerly observation.6.8.128. Command python3 qual-logs/r29/human-scoped-clippy.py exited 101. Output: /root/lx-lanes/exec/qual-logs/r29/human-scoped-clippy-release.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "blocker"
+
+[observation.6.8.7094]
+task = "6.8"
+file = "platform/hosted/tests/topology-regressions.py"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.142. formerly observation.6.8.133. formerly observation.6.8.129. The real manifest enumeration gives 45 admitted edges with Human omitted and 50 with Human included. The requested 50-edge baseline is therefore checked over the complete declaration set. The original omitted-Human fixture still requires exactly two refused Human upstream edges and retains every original parser, alias, selector, port, ingress, egress and DNS negative. The ten additional admissions relative to the original 40-edge fixture comprise eight producer and identity edges plus two Human upstream edges. Policy-removal checks require exact refusal counts of one for each of four producer sinks, three for webhook notifications, one for registry identity and two for Human upstreams. The earlier extrapolation to 52 did not match the manifests and is superseded by this measured derivation."
+assumption = "Focused qualification does not establish complete cluster or release qualification."
+severity = "note"
+
+[observation.6.8.7095]
+task = "6.8"
+file = "platform/hosted/identity/src/lib.rs"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.143. formerly observation.6.8.134. formerly observation.6.8.130. Identity now exposes its actual durable Store as a library while retaining the HTTP resolver in main.rs. The initial clippy --lib command failed because no library existed; the durable-store library clippy gate and all-target identity clippy subsequently pass. No dummy library target was introduced."
+assumption = "Focused qualification does not establish complete cluster or release qualification."
+severity = "note"
+
+[observation.6.8.7096]
+task = "6.8"
+file = "platform/hosted/internal/src/producer_test_support.rs"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.144. formerly observation.6.8.135. formerly observation.6.8.131. Notification recovery tests run the real webhook executable with real Redis and the real event Service over TLS. Journey, approval and program notification acceptance uses the referenced source and Redis. These cases do not exercise a customer endpoint, KMS signing, payment receipt authority verification, or whole-webhook readiness. Unused authority endpoints do not supply invented successful responses."
+assumption = "Focused qualification does not establish complete cluster or release qualification."
+severity = "note"
+
+[observation.6.8.7097]
+task = "6.8"
+file = "platform/hosted/tests/beta-cluster.sh"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.145. formerly observation.6.8.136. formerly observation.6.8.132. The fetched cluster base 944ba68385bdaf924a398c383c4a1a84c8dbd584 is not an ancestor of this branch. Integrating its history changes paths outside the owned set, including Makefile, agent/, docs/, platform/hosted/node/, tests/qualification/lxp_qual_replay.c and tools/ci/beta-qualify.sh. The required pre-push ancestry command exits 1; ordinary push remains blocked pending integration by the repository owner. No merge or force push was performed."
+assumption = "Focused qualification does not establish complete cluster or release qualification."
+severity = "blocker"
+
+[observation.6.8.7098]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-test-repair.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.146. formerly observation.6.8.137. formerly observation.6.8.133. Command cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-service exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/human-test-repair.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.7099]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/commit-internal.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.147. formerly observation.6.8.138. formerly observation.6.8.134. Command python3 qual-logs/r29/commit-item.py internal 'Share durable producer delivery steps and TLS recovery support' platform/hosted/internal/src/principal.rs platform/hosted/internal/src/producer.rs platform/hosted/internal/src/producer_test_support.rs exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/commit-internal.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.148]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/commit-identity.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.139. formerly observation.6.8.135. Command python3 qual-logs/r29/commit-item.py identity 'Resolve publication principals from durable identity authority' platform/hosted/identity/Cargo.toml platform/hosted/identity/src/main.rs platform/hosted/identity/src/store.rs platform/hosted/identity/src/lib.rs platform/hosted/identity/tests/service.rs exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/commit-identity.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.149]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/commit-gateway.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.140. formerly observation.6.8.136. Command python3 qual-logs/r29/commit-item.py gateway 'Qualify payment producer readiness and recovery after sink loss' platform/hosted/gateway/tests/support/payment_events.rs exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/commit-gateway.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.150]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/commit-registry.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.141. formerly observation.6.8.137. Command python3 qual-logs/r29/commit-item.py registry 'Qualify identity-bound program publication delivery over TLS' platform/hosted/registry/Cargo.toml platform/hosted/registry/src/event_producer.rs platform/hosted/registry/src/routes.rs platform/hosted/registry/tests/producer_tls.rs platform/hosted/registry/tests/support/producer_redis.rs platform/Cargo.lock exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/commit-registry.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.151]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/rustfmt-check.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.142. formerly observation.6.8.138. Command python3 -c 'import subprocess; paths=set(subprocess.check_output([\"git\",\"diff\",\"--name-only\",\"34bf13aa\"],text=True).splitlines()); paths.add(\"human/crates/layerx-human-service/src/event_producer_tls.rs\"); subprocess.run([\"rustfmt\",\"--check\",\"--edition\",\"2021\",\"--config\",\"skip_children=true\",*sorted(p for p in paths if p.endswith(\".rs\"))],check=True)' exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/rustfmt-check.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.152]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/human-test-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.143. formerly observation.6.8.139. Command cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-service exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/human-test-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.153]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/commit-manifests.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.144. formerly observation.6.8.140. Command python3 qual-logs/r29/commit-item.py manifests 'Register publication authority and qualify the complete producer topology' platform/hosted/tests/beta-cluster.sh platform/hosted/tests/topology-regressions.py exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/commit-manifests.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.154]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/commit-human.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.145. formerly observation.6.8.141. Command python3 qual-logs/r29/commit-item.py human 'Exercise real Human event delivery and durable recovery' human/Cargo.lock human/crates/layerx-human-service/Cargo.toml human/crates/layerx-human-service/src/event_producer.rs human/crates/layerx-human-service/src/event_producer_tls.rs exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/commit-human.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.155]
+task = "6.8"
+file = "human/crates/layerx-human-service/src/event_producer_tls.rs"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.146. formerly observation.6.8.142. The final full Human crate test command exits 0 in qual-logs/r29/human-test-final.log. The real passkey component boundary and Human router authenticate the source principal over TLS; JourneyEngine::start and StreamJournal::append produce durable journey and approval entries. Foreign-principal delivery is refused for both kinds. Independent source-loss intervals exceed the unchanged readiness threshold, queued facts remain, and recovered sources deliver through the real webhook executable. Webhook restart preserves duplicate notification acceptance and producer acknowledgements survive store reopen."
+assumption = "Source qualification is distinct from complete cluster qualification."
+severity = "note"
+
+[observation.6.8.156]
+task = "6.8"
+file = "human/crates/layerx-human-service/src/event_producer_tls.rs"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.147. formerly observation.6.8.143. Strict Human clippy remains failed with exit 101. The final structured run in qual-logs/r29/human-clippy-structured.jsonl and scoped tail in qual-logs/r29/human-scoped-clippy-release.log contain no diagnostics anchored in the new event_producer or producer_test_support files. Existing Human errors were retained, not suppressed or changed. A clean scoped diagnostic extraction does not qualify the failed full lint gate."
+assumption = "Source qualification is distinct from complete cluster qualification."
+severity = "blocker"
+
+[observation.6.8.157]
+task = "6.8"
+file = "platform/hosted/gateway/tests/support/payment_events.rs"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.148. formerly observation.6.8.144. Gateway full tests and strict clippy pass. The real Redis outbox retains verified payment observations through TLS sink loss, the existing health predicate becomes unready after the unchanged threshold, and sink restart restores observation acknowledgement and readiness. Payment webhook receipt-authority verification and customer delivery are not exercised by this test."
+assumption = "Source qualification is distinct from complete cluster qualification."
+severity = "note"
+
+[observation.6.8.158]
+task = "6.8"
+file = "/root/lx-lanes/exec/qual-logs/r29/ledger-final.log"
+symbol = "event_producer_qualification"
+observed = "formerly observation.6.8.149. formerly observation.6.8.145. Command make beta-ledger-check exited 0. Output: /root/lx-lanes/exec/qual-logs/r29/ledger-final.log."
+assumption = "This execution does not erase earlier failures or establish unrun integration gates."
+severity = "note"
+
+[observation.6.8.159]
+task = "6.8"
+file = "platform/hosted/tests/topology-regressions.py"
+symbol = "producer_edges"
+observed = "formerly observation.6.8.150. Declared-edge enumeration in qual-logs/r30/declared-edges.json counts 50 URL declarations on the cluster base: 7 offcluster notes, 1 separately operated edge, and 42 in-cluster admissions. Producer integration adds 8 declarations: gateway 2, registry 3, Human 3. Combined declarations total 58: 7 offcluster notes, 1 separately operated edge, and 50 in-cluster admissions. Both expected admission literals remain 50. All original negative cases and all producer policy-removal negatives remain intact."
+assumption = "Declaration counts do not establish runtime cluster readiness."
+severity = "note"
+
+[observation.6.8.160]
+task = "6.8"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "ledger_reconstruction"
+observed = "formerly observation.6.8.151. The supplied reconstruction helper rejects an empty duplicate observation.5.1.1 header on the cluster base. An untracked copy accepts an adjacent section header without a body. Reconstruction retains cluster records followed by branch-only records; the supplied duplicate-id helper renumbers five existing identifiers. The resulting empty observation.5.1.43 section has no evidence or keys and produces six missing-key violations in qual-logs/r30/ledger-precheck.log. Removing that empty duplicate header preserves every nonempty evidence body from both branches."
+assumption = "Identifier reconciliation and empty-header removal do not alter recorded technical outcomes."
+severity = "note"
+
+[observation.6.8.161]
+task = "6.8"
+file = "human/crates/layerx-human-service/src/server/production_components.rs"
+symbol = "human_strict_clippy"
+observed = "formerly observation.6.8.152. cargo clippy --locked --manifest-path human/Cargo.toml -p layerx-human-service --all-targets -- -D warnings exits 101. The final tail reports 448 errors for the library test target, including expect_used at production_components.rs:3484. Raw output: qual-logs/r30/human-clippy.log. No Rust source changes were introduced by the integration and existing checks remain intact."
+assumption = "Focused qualification does not establish cluster readiness or complete task qualification."
+severity = "blocker"
+
+[observation.6.8.162]
+task = "6.8"
+file = "platform/hosted/registry/tests/producer_tls.rs"
+symbol = "registry_tls_prerequisite"
+observed = "formerly observation.6.8.153. The initial registry test exits 101 at producer_tls.rs:58 because LAYERX_TEST_IDENTITY_BIN is unset. cargo build --locked for the identity, webhooks, internal, gateway and registry packages exits 0 in qual-logs/r30/producer-binaries.log. Subsequent delivery tests receive explicit paths to the real identity and webhook executables under platform/target/debug."
+assumption = "Focused qualification does not establish cluster readiness or complete task qualification."
+severity = "note"
+
+[observation.6.8.163]
+task = "6.8"
+file = "qual-logs/r30/gates.jsonl"
+symbol = "event_producer_integration_qualification"
+observed = "formerly observation.6.8.154. rustfmt on changed Rust files exits 0. Strict all-target clippy for platform internal, identity, gateway, registry and webhooks exits 0 for each package. Full cargo test for those five packages exits 0, with registry passing after real executable paths are configured. Full Human cargo test exits 0; Human strict clippy remains 101. make platform-hosted-topology-check, make platform-lint, make beta-ledger-check, git diff --check and bash -n platform/hosted/tests/beta-cluster.sh each exit 0. Exact commands, exits and absolute log paths are in qual-logs/r30/gates.jsonl. Function comparison proves all cluster shell functions except producer credential provisioning are unchanged, and the topology checker is identical to the cluster base; every nonempty ledger body from both branches is retained. Preservation output: qual-logs/r30/preservation.log."
+assumption = "CARGO_BUILD_JOBS=4 and MAKEFLAGS=-j4 apply. Human uses its own Cargo manifest. Delivery binaries are real executables in this worktree. cortex_guard is unavailable with exit 127. No cluster bring-up or full task qualification is claimed."
+severity = "note"
+
+[observation.6.8.164]
+task = "6.8"
+file = "platform/hosted/tests/topology-regressions.py"
+symbol = "producer_edges"
+observed = "Declared-edge enumeration in qual-logs/r31/declared-edges.json counts 50 URL declarations on the cluster base: 42 in-cluster admissions, 7 offcluster notes and 1 separately operated edge. Producer integration adds 8 declarations: gateway 2, registry 3 and Human 3. Combined declarations total 58, with 50 in-cluster admissions, 7 offcluster notes and 1 separately operated edge. Both expected admission literals remain 50. All original negative cases and producer policy-removal cases remain intact. The ledger is reconstructed with the supplied helper from cluster records followed by producer-only records; the duplicate-id helper reports zero remaining renumberings."
+assumption = "Declared admissions and source preservation do not establish runtime cluster readiness."
+severity = "note"
+
+[observation.6.8.165]
+task = "6.8"
+file = "human/crates/layerx-human-service/src/server/production_components.rs"
+symbol = "human_strict_clippy"
+observed = "cargo clippy --locked --manifest-path human/Cargo.toml -p layerx-human-service --all-targets -- -D warnings exits 101, reporting 436 library errors and 448 library-test errors, including expect_used at production_components.rs:3484. Raw output: qual-logs/r31/human-clippy.log. Full Human cargo test exits 0 in qual-logs/r31/human-test.log. Existing assertions and checks remain intact."
+assumption = "No cluster bring-up, transaction or complete task qualification is claimed."
+severity = "blocker"
+
+[observation.6.8.166]
+task = "6.8"
+file = "qual-logs/r31/gates.jsonl"
+symbol = "event_producer_cluster_integration"
+observed = "Rustfmt, real producer binary builds, strict all-target clippy and full tests for internal, identity, gateway, registry and webhooks exit 0. Full Human tests, topology, platform lint, ledger, whitespace and shell syntax exit 0. Human strict clippy exits 101. The cluster branch advanced with guarantor sequencing during qualification; the subsequent rebase retains that commit. Rust source, Cargo manifests and lockfiles are unchanged by that subsequent rebase. Final shell, topology, lint, ledger and preservation checks are recorded separately in qual-logs/r31/gates.jsonl. cortex_guard exits 127 because the executable is unavailable."
+assumption = "No cluster bring-up, transaction or complete task qualification is claimed."
+severity = "note"

@@ -208,6 +208,7 @@ struct Service {
     builder: HermeticBuilder,
     builder_ready: Arc<Mutex<Option<Instant>>>,
     registrar_gate: Mutex<()>,
+    event_outbox: Arc<layerx_platform_registry::event_producer::ProgramOutbox>,
     request_authority: RegistryAuthority,
     publication_authority: RegistryAuthority,
     active_builds: AtomicUsize,
@@ -783,9 +784,13 @@ fn serve(config: &Config) -> Result<(), String> {
         }
         thread::sleep(Duration::from_millis(250));
     });
+    let event_outbox =
+        Arc::new(layerx_platform_registry::event_producer::ProgramOutbox::new(&config.journal));
+    event_outbox.start()?;
     let service = Arc::new(Service {
         builder,
         builder_ready,
+        event_outbox,
         registrar_gate: Mutex::new(()),
         request_authority: config.request_authority.clone(),
         publication_authority: config.publication_authority.clone(),
@@ -920,11 +925,46 @@ fn complete_worker(
     })
 }
 
+fn producer_metrics(service: &Service) -> layerx_platform_registry::Response {
+    let (failures, _) = service.event_outbox.health.metrics();
+    let counts = service.event_outbox.unbound_count().and_then(|unbound| {
+        service
+            .event_outbox
+            .overflow_count()
+            .map(|overflow| (unbound, overflow))
+    });
+    counts.map_or_else(
+        |_| {
+            refusal(
+                503,
+                "program_metrics_unavailable",
+                "producer journal unavailable",
+            )
+        },
+        |(unbound, overflow)| layerx_platform_registry::Response {
+            status: 200,
+            body: serde_json::json!({
+                "program_facts_unbound": unbound,
+                "event_producer_failures": failures,
+                "event_producer_overflow": overflow,
+            })
+            .to_string(),
+        },
+    )
+}
+
 fn route_request(
     service: &Service,
     request: &layerx_platform_registry::Request,
     deadline: Instant,
 ) -> layerx_platform_registry::Response {
+    if request.path == "/healthz" && !service.event_outbox.health.ready() {
+        return refusal(
+            503,
+            "program_events_unavailable",
+            "event delivery is unavailable",
+        );
+    }
     let header = request.headers.get("authorization").map(String::as_str);
     let authenticated = if request.path == "/healthz" {
         true
@@ -939,6 +979,9 @@ fn route_request(
             "authentication_required",
             "a valid registry authority is required",
         );
+    }
+    if request.method == "GET" && request.path == "/metrics" {
+        return producer_metrics(service);
     }
     if service
         .builder_ready

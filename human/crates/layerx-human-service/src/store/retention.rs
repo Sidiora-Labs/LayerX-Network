@@ -44,6 +44,7 @@ impl RetentionPolicy {
             Table::Notifications | Table::Support | Table::Stream => self.notifications,
             Table::Telemetry => self.telemetry,
             Table::Cache => self.cache,
+            Table::EventOutbox => RetentionPeriod::new(u64::MAX),
         }
     }
 }

@@ -1548,6 +1548,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "layerx-crypto",
+ "layerx-platform-internal",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
@@ -1565,6 +1566,7 @@ name = "layerx-platform-identity"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
+ "layerx-platform-internal",
  "native-tls",
  "rustls",
  "serde",
@@ -1613,12 +1615,15 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "layerx-client",
+ "layerx-platform-gateway",
+ "layerx-platform-internal",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
  "layerx-programs-runtime",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "native-tls",
  "nix",
  "rustix",
  "rustls",
