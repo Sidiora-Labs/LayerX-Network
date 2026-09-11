@@ -414,18 +414,7 @@ impl Payment {
             return bad();
         }
         let result = match (module, ordinal) {
-            (ModuleId::Asset, 1) => Self::Register(Registration {
-                asset: fixed(&mut d)?,
-                salt: fixed(&mut d)?,
-                symbol: String::from_utf8(short(&mut d)?)
-                    .map_err(|_| DisclosureError::MalformedPayload)?,
-                name: String::from_utf8(short(&mut d)?)
-                    .map_err(|_| DisclosureError::MalformedPayload)?,
-                decimals: d.u8()?,
-                supply_cap: d.u128()?,
-                issuer_kind: d.u8()?,
-                custody_ref: short(&mut d)?,
-            }),
+            (ModuleId::Asset, 1) => Self::Register(decode_registration(&mut d)?),
             (ModuleId::Asset, 2) => Self::Pause {
                 asset: fixed(&mut d)?,
             },
@@ -449,60 +438,10 @@ impl Payment {
                 from: fixed(&mut d)?,
                 amount: d.u128()?,
             },
-            (ModuleId::Asset, 6) => {
-                if d.u16()? != 0x5201 || d.u16()? != 10 {
-                    return bad();
-                }
-                Self::Receive {
-                    from: fixed(&mut d)?,
-                    to: fixed(&mut d)?,
-                    asset: fixed(&mut d)?,
-                    amount: d.u128()?,
-                    grant: fixed(&mut d)?,
-                    sequence: d.u64()?,
-                    idempotency_key: fixed(&mut d)?,
-                    context_hash: fixed(&mut d)?,
-                    receiver_authorization: ReceiverAuthorization {
-                        kind: d.u8()?,
-                        controller: fixed(&mut d)?,
-                        public_key: fixed(&mut d)?,
-                        signature: fixed(&mut d)?,
-                        signed_context_hash: fixed(&mut d)?,
-                        network_id: d.u32()?,
-                        protocol_version: d.u16()?,
-                    },
-                    payer_grant: Box::new(decode_grant(&mut d)?),
-                }
-            }
+            (ModuleId::Asset, 6) => decode_receive(&mut d)?,
             (ModuleId::Asset, 7) => Self::IssueGrant(decode_grant(&mut d)?),
-            (ModuleId::Programs, 5) => {
-                let program = fixed(&mut d)?;
-                let n = usize::from(d.u16()?);
-                if n == 0 || n > 256 {
-                    return bad();
-                }
-                let mut legs = Vec::with_capacity(n);
-                for _ in 0..n {
-                    legs.push(TransferLeg {
-                        from: fixed(&mut d)?,
-                        asset: fixed(&mut d)?,
-                        to: fixed(&mut d)?,
-                        amount: d.u128()?,
-                    });
-                }
-                Self::ProgramTransfer { program, legs }
-            }
-            (ModuleId::Programs, 6) => {
-                let program = fixed(&mut d)?;
-                if d.fixed(5)? != b"LXPA1" {
-                    return bad();
-                }
-                Self::ProgramAccount {
-                    program,
-                    asset: fixed(&mut d)?,
-                    seed: d.bytes(128)?.to_vec(),
-                }
-            }
+            (ModuleId::Programs, 5) => decode_program_transfer(&mut d)?,
+            (ModuleId::Programs, 6) => decode_program_account(&mut d)?,
             _ => {
                 return Err(DisclosureError::UnsupportedActivity(
                     (u32::from(module as u16) << 16) | u32::from(ordinal),
@@ -543,6 +482,75 @@ fn boolean(d: &mut Decoder<'_>) -> Result<bool, DisclosureError> {
         1 => Ok(true),
         _ => bad(),
     }
+}
+
+fn decode_registration(d: &mut Decoder<'_>) -> Result<Registration, DisclosureError> {
+    Ok(Registration {
+        asset: fixed(d)?,
+        salt: fixed(d)?,
+        symbol: String::from_utf8(short(d)?).map_err(|_| DisclosureError::MalformedPayload)?,
+        name: String::from_utf8(short(d)?).map_err(|_| DisclosureError::MalformedPayload)?,
+        decimals: d.u8()?,
+        supply_cap: d.u128()?,
+        issuer_kind: d.u8()?,
+        custody_ref: short(d)?,
+    })
+}
+
+fn decode_receive(d: &mut Decoder<'_>) -> Result<Payment, DisclosureError> {
+    if d.u16()? != 0x5201 || d.u16()? != 10 {
+        return bad();
+    }
+    Ok(Payment::Receive {
+        from: fixed(d)?,
+        to: fixed(d)?,
+        asset: fixed(d)?,
+        amount: d.u128()?,
+        grant: fixed(d)?,
+        sequence: d.u64()?,
+        idempotency_key: fixed(d)?,
+        context_hash: fixed(d)?,
+        receiver_authorization: ReceiverAuthorization {
+            kind: d.u8()?,
+            controller: fixed(d)?,
+            public_key: fixed(d)?,
+            signature: fixed(d)?,
+            signed_context_hash: fixed(d)?,
+            network_id: d.u32()?,
+            protocol_version: d.u16()?,
+        },
+        payer_grant: Box::new(decode_grant(d)?),
+    })
+}
+
+fn decode_program_transfer(d: &mut Decoder<'_>) -> Result<Payment, DisclosureError> {
+    let program = fixed(d)?;
+    let n = usize::from(d.u16()?);
+    if n == 0 || n > 256 {
+        return bad();
+    }
+    let mut legs = Vec::with_capacity(n);
+    for _ in 0..n {
+        legs.push(TransferLeg {
+            from: fixed(d)?,
+            asset: fixed(d)?,
+            to: fixed(d)?,
+            amount: d.u128()?,
+        });
+    }
+    Ok(Payment::ProgramTransfer { program, legs })
+}
+
+fn decode_program_account(d: &mut Decoder<'_>) -> Result<Payment, DisclosureError> {
+    let program = fixed(d)?;
+    if d.fixed(5)? != b"LXPA1" {
+        return bad();
+    }
+    Ok(Payment::ProgramAccount {
+        program,
+        asset: fixed(d)?,
+        seed: d.bytes(128)?.to_vec(),
+    })
 }
 
 fn decode_grant(d: &mut Decoder<'_>) -> Result<Grant, DisclosureError> {
