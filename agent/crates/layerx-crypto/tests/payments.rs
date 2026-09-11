@@ -13,6 +13,16 @@ const VECTORS: &[(ModuleId, u16, &str)] = &[
     ),
     (
         ModuleId::Asset,
+        2,
+        include_str!("fixtures/payments/1-2.hex"),
+    ),
+    (
+        ModuleId::Asset,
+        3,
+        include_str!("fixtures/payments/1-3.hex"),
+    ),
+    (
+        ModuleId::Asset,
         4,
         include_str!("fixtures/payments/1-4.hex"),
     ),
@@ -264,6 +274,30 @@ fn every_accepted_field_mutation_is_refused_at_the_signing_boundary(
 }
 
 #[test]
+fn pause_and_unpause_share_the_open_account_body_and_stay_distinct(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pause = hex(VECTORS[1].2);
+    let unpause = hex(VECTORS[2].2);
+    let open = hex(VECTORS[3].2);
+    assert_eq!(pause.len(), 34);
+    assert_eq!(pause, unpause);
+    assert_eq!(pause, open);
+    let mut decoded = Vec::new();
+    for ordinal in [2, 3, 4] {
+        let payment = Payment::decode(ModuleId::Asset, ordinal, &pause, ACTOR)?;
+        assert_eq!(payment.activity_type(), (ModuleId::Asset, ordinal));
+        let (canonical, registry) = canonical(ModuleId::Asset, ordinal, &pause)?;
+        let disclosure = bind(&canonical, &registry)?;
+        assert_eq!(disclosure.payment.as_ref(), Some(&payment));
+        decoded.push(payment);
+    }
+    assert_ne!(decoded[0], decoded[1]);
+    assert_ne!(decoded[1], decoded[2]);
+    assert_ne!(decoded[0], decoded[2]);
+    Ok(())
+}
+
+#[test]
 fn receive_discloses_source_sequence_independently() -> Result<(), Box<dyn std::error::Error>> {
     let payload = hex(include_str!("fixtures/payments/1-6-source-sequence-23.hex"));
     let payment = Payment::decode(ModuleId::Asset, 6, &payload, ACTOR)?;
@@ -278,7 +312,7 @@ fn receive_discloses_source_sequence_independently() -> Result<(), Box<dyn std::
 
 #[test]
 fn payer_grant_signature_and_identifier_are_bound() {
-    let payload = hex(VECTORS[3].2);
+    let payload = hex(VECTORS[5].2);
     assert_eq!(payload.len(), 346);
     for offset in 0..payload.len() {
         let mut changed = payload.clone();
@@ -289,7 +323,7 @@ fn payer_grant_signature_and_identifier_are_bound() {
 
 #[test]
 fn receive_rejects_forged_authorization_and_grant() {
-    let payload = hex(VECTORS[2].2);
+    let payload = hex(VECTORS[4].2);
     assert_eq!(payload.len(), 733);
     for offset in 0..payload.len() {
         let mut changed = payload.clone();

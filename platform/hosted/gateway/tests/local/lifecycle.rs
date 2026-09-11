@@ -2373,6 +2373,6 @@ fn assert_canonical_fee(
             .as_str()
             .required("schedule")
             .len(),
-        430
+        494
     );
 }

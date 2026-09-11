@@ -4,14 +4,16 @@
 #include <stddef.h>
 #include <string.h>
 
-static const uint16_t asset_ordinals[LXP_ASSET_FEE_PRICE_COUNT] = {1U, 4U, 5U, 6U, 7U, 8U, 10U, 11U};
+static const uint16_t asset_ordinals[LXP_ASSET_FEE_PRICE_COUNT] =
+    {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 10U, 11U};
 
 const char *lxp_asset_fee_name(size_t index)
 {
     static const char *const names[LXP_ASSET_FEE_PRICE_COUNT] = {
-        "fee.asset.register", "fee.asset.account_open", "fee.asset.send",
-        "fee.asset.receive", "fee.asset.grant_issue", "fee.asset.grant_revoke",
-        "fee.asset.mint", "fee.asset.burn"
+        "fee.asset.register", "fee.asset.pause", "fee.asset.unpause",
+        "fee.asset.account_open", "fee.asset.send", "fee.asset.receive",
+        "fee.asset.grant_issue", "fee.asset.grant_revoke", "fee.asset.mint",
+        "fee.asset.burn"
     };
     return index < LXP_ASSET_FEE_PRICE_COUNT ? names[index] : NULL;
 }
@@ -36,7 +38,8 @@ lxp_result lxp_fee_params_encode(const lxp_fee_params *parameters,
         parameters == NULL ? (lxp_u128){0U, 0U} : parameters->per_storage_unit};
     if (parameters == NULL || bytes == NULL || length == NULL) return LXP_ERR_NON_CANONICAL;
     if (!fee_version_valid(parameters)) return LXP_ERR_VERSION_UNSUPPORTED;
-    size_t required = parameters->version == 2U ? 215U : 86U;
+    size_t required = parameters->version == 2U ?
+        (size_t)LXP_FEE_PARAMS_V2_BYTES : (size_t)LXP_FEE_PARAMS_V1_BYTES;
     if (capacity < required) return LXP_ERR_LENGTH_LIMIT;
     bytes[0] = 0U; bytes[1] = (uint8_t)parameters->version;
     for (size_t i = 0U; i < 5U; ++i) (void)lxp_u128_to_be(components[i], bytes + 2U + 16U * i);
@@ -58,7 +61,9 @@ lxp_result lxp_fee_params_decode(const uint8_t *bytes, size_t length,
     if (bytes == NULL || parameters == NULL || length < 2U || bytes[0] != 0U)
         return LXP_ERR_NON_CANONICAL;
     if (bytes[1] != 1U && bytes[1] != 2U) return LXP_ERR_VERSION_UNSUPPORTED;
-    if (length != (bytes[1] == 2U ? 215U : 86U)) return LXP_ERR_NON_CANONICAL;
+    if (length != (size_t)(bytes[1] == 2U ?
+            LXP_FEE_PARAMS_V2_BYTES : LXP_FEE_PARAMS_V1_BYTES))
+        return LXP_ERR_NON_CANONICAL;
     decoded.version = bytes[1];
     (void)lxp_u128_from_be(bytes + 2U, &decoded.base_fee);
     (void)lxp_u128_from_be(bytes + 18U, &decoded.per_activity_type_unit);

@@ -551,7 +551,7 @@ lxp_result lxp_receipt_validate_supply(const lxp_receipt *receipt)
         expected = (lxp_u128){0U, 0U};
         status = LXP_OK;
         break;
-    case 4U: case 5U: case 6U: case 7U: case 8U:
+    case 2U: case 3U: case 4U: case 5U: case 6U: case 7U: case 8U:
         expected = receipt->total_units_before;
         status = LXP_OK;
         break;

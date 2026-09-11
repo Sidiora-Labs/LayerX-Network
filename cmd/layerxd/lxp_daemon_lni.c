@@ -2562,7 +2562,7 @@ static lxp_result send_fee_estimate(lxp_daemon_lni_server *server, int descripto
     lxp_fee_meter meter = {0};
     lxp_u128 fee;
     uint32_t version;
-    uint8_t payload[279];
+    uint8_t payload[64U + LXP_FEE_PARAMS_V2_BYTES];
     size_t length;
     lxp_result status;
     if (request->minor < 5U || request->proof_length != 0U || request->correlation_id == 0U ||

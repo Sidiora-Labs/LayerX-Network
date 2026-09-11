@@ -258,7 +258,7 @@ pub fn estimate_fee(
     if !bytes.is_empty()
         || parameter_version == 0
         || !((length == 86 && schedule[..2] == [0, 1])
-            || (length == 215 && schedule[..2] == [0, 2] && schedule[86] == 8))
+            || (length == 247 && schedule[..2] == [0, 2] && schedule[86] == 10))
     {
         return Err(ReadError::MalformedValue);
     }

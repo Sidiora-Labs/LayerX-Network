@@ -593,11 +593,11 @@ fn funded_genesis(
         .verifying_key()
         .to_bytes();
     let mut request = genesis_request(&asset, &sequencer_key);
-    let schedule = request.len() - 215;
+    let schedule = request.len() - 247;
     request[schedule + 34..schedule + 50].copy_from_slice(&1_u128.to_be_bytes());
-    request[schedule + 119..schedule + 135].copy_from_slice(&4_u128.to_be_bytes());
-    request[schedule + 135..schedule + 151].copy_from_slice(&4_u128.to_be_bytes());
     request[schedule + 151..schedule + 167].copy_from_slice(&4_u128.to_be_bytes());
+    request[schedule + 167..schedule + 183].copy_from_slice(&4_u128.to_be_bytes());
+    request[schedule + 183..schedule + 199].copy_from_slice(&4_u128.to_be_bytes());
     write(&directory.join("request.lxgb"), &request, 0o600);
     write(&directory.join("signer.key"), sequencer_seed, 0o600);
     let artifacts = directory.join("artifacts");

@@ -633,7 +633,7 @@
           "type": "object"
         }
       },
-      "description": "Strictly decodes any activity admitted by lx_sendActivity and returns fee as a decimal string, parameter_version, canonical_schedule as hexadecimal, canonical_bytes, observed_head_sequence, state_root and verification=authenticated_committed_snapshot from native FeeEstimate. The native committed schedule determines the canonical-envelope price for Asset 1/4/5/6/7/8/10/11 and Programs 1/2/3/5/6/7. A schedule requiring unavailable execution or storage units fails closed with -32001. Asset ordinal 9 is reserved and refused. This estimate does not reserve a fee or prove execution.",
+      "description": "Strictly decodes any activity admitted by lx_sendActivity and returns fee as a decimal string, parameter_version, canonical_schedule as hexadecimal, canonical_bytes, observed_head_sequence, state_root and verification=authenticated_committed_snapshot from native FeeEstimate. The native committed schedule determines the canonical-envelope price for Asset 1/2/3/4/5/6/7/8/10/11 and Programs 1/2/3/5/6/7. A schedule requiring unavailable execution or storage units fails closed with -32001. Asset ordinal 9 is reserved and refused. This estimate does not reserve a fee or prove execution.",
       "errors": [
         {
           "code": -32602,

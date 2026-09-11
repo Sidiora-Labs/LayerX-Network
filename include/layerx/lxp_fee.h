@@ -18,7 +18,9 @@ typedef struct lxp_fee_meter {
 } lxp_fee_meter;
 #define lxp_fee_meter lxp_fee_meter
 
-enum { LXP_ASSET_FEE_PRICE_COUNT = 8 };
+enum { LXP_ASSET_FEE_PRICE_COUNT = 10 };
+enum { LXP_FEE_PARAMS_V1_BYTES = 86,
+       LXP_FEE_PARAMS_V2_BYTES = 87 + 16 * LXP_ASSET_FEE_PRICE_COUNT };
 
 typedef struct lxp_fee_params {
     uint16_t version;
