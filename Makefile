@@ -2264,8 +2264,15 @@ human-qualify:
 platform-qualify:
 	python3 tools/qualification/release_runner.py $@
 
-agent-test:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked --workspace
+PUBLIC_TLS_TEST_TARGET_DIR = $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(CURDIR)/platform/target)
+PUBLIC_TLS_TEST_BOUNDARY = $(PUBLIC_TLS_TEST_TARGET_DIR)/debug/layerx-paxeer-boundary
+
+.PHONY: public-tls-test-prerequisites
+public-tls-test-prerequisites:
+	cargo build --manifest-path platform/Cargo.toml --locked -p layerx-platform-paxeer-boundary --target-dir "$(PUBLIC_TLS_TEST_TARGET_DIR)"
+
+agent-test: public-tls-test-prerequisites
+	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked --workspace
 
 agent-lint:
 	$(AGENT_CARGO) clippy --manifest-path $(AGENT_MANIFEST) --locked --workspace --all-targets -- -D warnings
@@ -2776,8 +2783,8 @@ agent-qualify-wire: $(BUILD_DIR)/agent-wire-reference
 		$(CURDIR) $(CURDIR)/$(BUILD_DIR)/agent-wire-reference \
 		$(CURDIR)/agent/tools/wire-differential/target/debug/agent-wire-differential
 
-agent-test-sanitize:
-	sh agent/tools/run-sanitizers.sh
+agent-test-sanitize: public-tls-test-prerequisites
+	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" sh agent/tools/run-sanitizers.sh
 
 agent-check-boundary:
 	$(AGENT_CARGO) test --manifest-path agent/tools/boundary-check/Cargo.toml --locked
