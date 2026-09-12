@@ -24,15 +24,15 @@ static const uint8_t metered_asset[32] = {
 static const uint8_t metered_program[32] = {0x49U};
 static const char *metered_state_path;
 
-static int metered_simulation_evidence(const wire_envelope *response)
+static int metered_simulation_evidence(const wire_envelope *response, bool refused)
 {
     char path[4096];
     const char *suffixes[] = {"simulation-payload", "simulation-proof"};
     const uint8_t *bytes[] = {response->payload, response->proof};
     const size_t lengths[] = {response->payload_length, response->proof_length};
     for (size_t i = 0U; i < 2U; ++i) {
-        int length = snprintf(path, sizeof(path), "%s.%s", metered_state_path,
-                              suffixes[i]);
+        int length = snprintf(path, sizeof(path), "%s.%s%s", metered_state_path,
+                              refused ? "refused-" : "", suffixes[i]);
         REQUIRE(length > 0 && (size_t)length < sizeof(path));
         FILE *output = fopen(path, "wbx");
         REQUIRE(output != NULL && fwrite(bytes[i], 1U, lengths[i], output) == lengths[i] &&
@@ -300,6 +300,7 @@ static size_t metered_wasm(uint8_t out[512], const uint8_t destination[32])
 
 static size_t metered_call(uint8_t payload[512], const uint8_t destination[32])
 {
+    static const uint8_t entrypoint[] = "layerx_call";
     static const uint8_t access[] = "LayerX/programs/access-declaration/v1\0";
     static const uint64_t budgets[] = {
         1000000U, 16777216U, 1048576U, 1048576U, 64U, 1048576U, 4096U
@@ -307,19 +308,21 @@ static size_t metered_call(uint8_t payload[512], const uint8_t destination[32])
     (void)memset(payload, 0, 512U);
     (void)memcpy(payload, metered_program, 32U);
     store_u16(payload + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
-    store_u16(payload + 34U, 10U);
+    store_u16(payload + 34U, (uint16_t)(sizeof(entrypoint) - 1U));
     store_u16(payload + 40U, 83U);
     store_u32(payload + 42U, (uint32_t)sizeof(access));
     store_u32(payload + 46U, 16U);
     for (size_t i = 0U; i < 7U; ++i) store_u64(payload + 50U + 8U * i, budgets[i]);
-    (void)memcpy(payload + 106U, "layerx_call", 10U);
-    store_u16(payload + 116U, 1U);
-    payload[118U] = 5U;
-    (void)memcpy(payload + 119U, metered_asset, 32U);
-    (void)memcpy(payload + 151U, destination, 32U);
-    store_u64(payload + 191U, 2U);
-    (void)memcpy(payload + 199U, access, sizeof(access));
-    return 199U + sizeof(access);
+    (void)memcpy(payload + 106U, entrypoint, sizeof(entrypoint) - 1U);
+    size_t cursor = 106U + sizeof(entrypoint) - 1U;
+    store_u16(payload + cursor, 1U);
+    payload[cursor + 2U] = 5U;
+    (void)memcpy(payload + cursor + 3U, metered_asset, 32U);
+    (void)memcpy(payload + cursor + 35U, destination, 32U);
+    store_u64(payload + cursor + 75U, 2U);
+    cursor += 83U;
+    (void)memcpy(payload + cursor, access, sizeof(access));
+    return cursor + sizeof(access);
 }
 
 static int metered_issue(int descriptor, const signer *owner, metered_run *run,
@@ -370,7 +373,8 @@ static int metered_issue(int descriptor, const signer *owner, metered_run *run,
 }
 
 static int metered_simulate(int descriptor, const signer *delegate, metered_run *run,
-                              const uint8_t *payload, size_t payload_length)
+                              const uint8_t *payload, size_t payload_length,
+                              lxp_result expected)
 {
     static const uint8_t domain[] = "LayerX/agent/program-simulation-evidence/v1";
     static const uint8_t boundary_domain[] = "LayerX/emulator/simulation-boundary/v1";
@@ -399,7 +403,7 @@ static int metered_simulate(int descriptor, const signer *delegate, metered_run 
     REQUIRE(receive_envelope(descriptor, &response) == 0);
     REQUIRE(response.tag == 31U && response.correlation_id == 611U);
     REQUIRE(response.payload_length >= 46U && response.proof_length == 242U);
-    REQUIRE(metered_simulation_evidence(&response) == 0);
+    REQUIRE(metered_simulation_evidence(&response, expected != LXP_OK) == 0);
     REQUIRE(load_u16(response.payload) == 1U && load_u16(response.proof) == 1U);
     REQUIRE(memcmp(response.payload + 2U, id, 32U) == 0 && memcmp(response.proof + 34U, id, 32U) == 0);
     uint32_t receipt_length = load_u32(response.payload + 34U);
@@ -408,21 +412,31 @@ static int metered_simulate(int descriptor, const signer *delegate, metered_run 
     REQUIRE(signer_init(&sequencer, 0x22U) == 0);
     REQUIRE(lxp_arena_init(&receipt_arena, receipt_storage, sizeof(receipt_storage)) == LXP_OK);
     REQUIRE(lxp_receipt_verify(&receipt, sequencer.public_key, &receipt_arena) == LXP_OK);
-    if (receipt.result_code != LXP_OK)
+    if (receipt.result_code != expected)
         (void)fprintf(stderr, "metered simulation receipt result=%d terminal=%u outcome=%d\n",
                       receipt.result_code, (unsigned)receipt.program_outcome.terminal_kind,
                       receipt.program_outcome.result_code);
-    REQUIRE(receipt.result_code == LXP_OK && receipt.program_outcome.present &&
-            receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS);
-    REQUIRE(metered_transfer(&receipt, LXP_OK) == 0);
+    if (expected == LXP_OK) {
+        REQUIRE(receipt.result_code == LXP_OK && receipt.program_outcome.present &&
+                receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS);
+        REQUIRE(metered_transfer(&receipt, LXP_OK) == 0);
+    } else {
+        REQUIRE(expected == LXP_ERR_NON_CANONICAL && receipt.result_code == expected &&
+                receipt.program_outcome.present &&
+                receipt.program_outcome.result_code == expected &&
+                receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_FAILURE &&
+                receipt.program_outcome.terminal_payload.length == 0U &&
+                receipt.program_outcome.call_graph_payload.length == 0U);
+    }
     REQUIRE(memcmp(receipt.activity_id, id, 32U) == 0);
     size_t cursor = 38U + receipt_length;
     uint32_t terminal_length = load_u32(response.payload + cursor);
     cursor += 4U;
     REQUIRE(terminal_length <= response.payload_length - cursor - 4U);
-    REQUIRE(terminal_length == receipt.program_outcome.terminal_payload.length &&
-            memcmp(response.payload + cursor,
-                   receipt.program_outcome.terminal_payload.bytes, terminal_length) == 0);
+    REQUIRE(terminal_length == receipt.program_outcome.terminal_payload.length);
+    if (terminal_length != 0U)
+        REQUIRE(memcmp(response.payload + cursor,
+                       receipt.program_outcome.terminal_payload.bytes, terminal_length) == 0);
     cursor += terminal_length;
     uint32_t graph_length = load_u32(response.payload + cursor);
     cursor += 4U;
@@ -496,7 +510,15 @@ static int metered_initial(int descriptor, const signer *owner, metered_run *run
     length = metered_call(payload, destination);
     REQUIRE(signer_init(&capability, 0x44U) == 0 && signer_init(&budget, 0x45U) == 0 &&
             signer_init(&mismatched, 0x46U) == 0);
-    REQUIRE(metered_simulate(descriptor, &capability, run, payload, length) == 0);
+    {
+        uint8_t truncated[512];
+        (void)memcpy(truncated, payload, length);
+        store_u16(truncated + 34U, 10U);
+        (void)memmove(truncated + 116U, truncated + 117U, length - 117U);
+        REQUIRE(metered_simulate(descriptor, &capability, run, truncated, length - 1U,
+                                  LXP_ERR_NON_CANONICAL) == 0);
+    }
+    REQUIRE(metered_simulate(descriptor, &capability, run, payload, length, LXP_OK) == 0);
     size_t first = run->receipt_count;
     for (size_t i = 0U; i < 2U; ++i) {
         size_t encoded_length;
