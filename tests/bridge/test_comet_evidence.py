@@ -2,6 +2,7 @@ import argparse
 import base64
 import copy
 import json
+import os
 from pathlib import Path
 import unittest
 
@@ -32,11 +33,25 @@ class RealCometEvidence(unittest.TestCase):
         self.refused(lambda r: r['bundle'].__setitem__('genesis', base64.b64encode(b'{}').decode()))
 
     def test_full_history_and_ancestry(self):
-        self.refused(lambda r: r['bundle']['history'].pop(0))
-        self.refused(lambda r: r['bundle']['history'].pop(1))
-        self.refused(lambda r: r['bundle']['history'].append(r['bundle']['history'][-1]))
-        self.refused(lambda r: r['bundle']['history'][1].__setitem__('commit', r['bundle']['history'][0]['commit']))
-        self.refused(lambda r: r['bundle']['history'][1]['commit']['signed_header']['header']['last_block_id'].__setitem__('hash', '01'*32))
+        complete = self.request()
+        complete['bundle']['history'] = verifier(complete | {'operation': 'export'})
+        state = os.environ.pop('LAYERX_CUSTODY_HISTORY_STATE')
+        authority = os.environ.pop('LAYERX_CUSTODY_HISTORY_KEY')
+        try:
+            self.assertEqual(verifier(complete)['deposit_id'], complete['expected']['deposit_id'])
+            changes = [lambda r: r['bundle']['history'].pop(0),
+                       lambda r: r['bundle']['history'].pop(1),
+                       lambda r: r['bundle']['history'].append(r['bundle']['history'][-1]),
+                       lambda r: r['bundle']['history'][1].__setitem__('commit', r['bundle']['history'][0]['commit']),
+                       lambda r: r['bundle']['history'][1]['commit']['signed_header']['header']['last_block_id'].__setitem__('hash', '01'*32)]
+            for change in changes:
+                altered = copy.deepcopy(complete)
+                change(altered)
+                with self.assertRaises(ValueError):
+                    verifier(altered)
+        finally:
+            os.environ['LAYERX_CUSTODY_HISTORY_STATE'] = state
+            os.environ['LAYERX_CUSTODY_HISTORY_KEY'] = authority
 
     def test_header_commit_and_validator_authentication(self):
         self.refused(lambda r: r['bundle']['history'][0]['commit'].__setitem__('canonical', False))
@@ -104,7 +119,11 @@ class RealCometEvidence(unittest.TestCase):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--evidence', type=Path, required=True)
+    parser.add_argument('--history-state', required=True)
+    parser.add_argument('--attestor-key', required=True)
     args, remaining = parser.parse_known_args()
+    os.environ['LAYERX_CUSTODY_HISTORY_STATE'] = args.history_state
+    os.environ['LAYERX_CUSTODY_HISTORY_KEY'] = args.attestor_key
     RealCometEvidence.evidence = json.loads(args.evidence.read_bytes())
     require_deposit = RealCometEvidence.evidence['requests'][0]['expected']['deposit_id']
     if not require_deposit:

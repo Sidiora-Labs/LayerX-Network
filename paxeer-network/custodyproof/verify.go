@@ -65,6 +65,7 @@ type Bundle struct {
 }
 
 type Request struct {
+	Operation string `json:"operation,omitempty"`
 	Expected Expected `json:"expected"`
 	Bundle Bundle `json:"bundle"`
 }
@@ -125,72 +126,80 @@ func validatorSet(pages []coretypes.ResultValidators, height int64) (*types.Vali
 	return types.NewValidatorSet(validators), nil
 }
 
-func verifyHistory(bundle *Bundle, expected Expected, genesisHash []byte, now time.Time) ([]*types.SignedHeader, error) {
-	if bundle.Version != Version || len(bundle.Genesis) == 0 || len(bundle.Genesis) > 32*1024*1024 ||
-		len(bundle.History) == 0 || len(bundle.History) > MaxHistory ||
-		bundle.StateHeight < 2 || bundle.FinalizedHeight < bundle.StateHeight ||
-		bundle.FinalizedHeight >= MaxHistory || int64(len(bundle.History)) != bundle.FinalizedHeight+1 ||
-		expected.Confirmations == 0 || expected.Confirmations > MaxHistory ||
-		uint64(bundle.FinalizedHeight-bundle.StateHeight+1) < expected.Confirmations {
-		return nil, errors.New("history or finality bound")
-	}
-	digest := sha256.Sum256(bundle.Genesis)
-	if !bytes.Equal(digest[:], genesisHash) {
-		return nil, errors.New("genesis identity")
-	}
-	var genesis types.GenesisDoc
-	err := json.Unmarshal(bundle.Genesis, &genesis)
-	if err != nil || genesis.ChainID != expected.CometChainID || genesis.InitialHeight != 1 ||
-		genesis.GenesisTime.IsZero() || genesis.GenesisTime.After(now.Add(MaxClockDrift)) ||
-		len(genesis.Validators) == 0 || len(genesis.Validators) > MaxValidators {
-		return nil, errors.New("genesis chain or validator identity")
-	}
-	genesisPage := coretypes.ResultValidators{BlockHeight: 1, Count: len(genesis.Validators), Total: len(genesis.Validators)}
-	for _, validator := range genesis.Validators {
-		genesisPage.Validators = append(genesisPage.Validators, &types.Validator{
-			Address: validator.Address, PubKey: validator.PubKey, VotingPower: validator.Power})
-	}
-	var genesisPages []coretypes.ResultValidators
-	for start := 0; start < len(genesisPage.Validators); start += 100 {
-		end := min(start+100, len(genesisPage.Validators))
-		genesisPages = append(genesisPages, coretypes.ResultValidators{BlockHeight: 1, Count: end-start,
-			Total: genesisPage.Total, Validators: genesisPage.Validators[start:end]})
-	}
-	initial, err := validatorSet(genesisPages, 1)
-	if err != nil { return nil, err }
-	headers := make([]*types.SignedHeader, 0, len(bundle.History))
-	for index := range bundle.History {
-		entry := &bundle.History[index]
-		header := &entry.Commit.SignedHeader
-		height := int64(index+1)
-		if !entry.Commit.CanonicalCommit || header.ValidateBasic(expected.CometChainID) != nil ||
-			header.Height != height || len(header.AppHash) != 32 ||
-			!header.Time.Before(now.Add(MaxClockDrift)) {
-			return nil, fmt.Errorf("signed header identity at %d", height)
-		}
-		validators, err := validatorSet(entry.Validators, height)
-		if err != nil { return nil, err }
-		if index == 0 {
-			if !bytes.Equal(initial.Hash(), validators.Hash()) || !bytes.Equal(initial.Hash(), header.ValidatorsHash) ||
-				header.Time.Before(genesis.GenesisTime) || light.HeaderExpired(header, TrustingPeriod, now) {
-				return nil, errors.New("initial header genesis binding or age")
-			}
-		} else {
-			previous := headers[index-1]
-			if !bytes.Equal(header.LastBlockID.Hash, previous.Hash()) {
-				return nil, errors.New("header ancestry")
-			}
-			if err := light.VerifyAdjacent(previous, header, validators, TrustingPeriod, now, MaxClockDrift); err != nil {
-				return nil, fmt.Errorf("header transition: %w", err)
-			}
-		}
-		if err := validators.VerifyCommitLightAllSignatures(expected.CometChainID, header.Commit.BlockID,
-			height, header.Commit); err != nil {
-			return nil, fmt.Errorf("header quorum: %w", err)
-		}
-		headers = append(headers, header)
-	}
-	return headers, nil
+func genesisValidators(genesisBytes []byte, expected Expected, now time.Time) (*types.GenesisDoc, *types.ValidatorSet, error) {
+    genesisHash, err := fixedHex(expected.GenesisSHA256, 32)
+    if err != nil { return nil, nil, err }
+    if expected.ChainID != 125 || config.GetEVMChainID(expected.CometChainID).Uint64() != expected.ChainID ||
+        len(genesisBytes) == 0 || len(genesisBytes) > 32*1024*1024 {
+        return nil, nil, errors.New("genesis identity bounds")
+    }
+    digest := sha256.Sum256(genesisBytes)
+    if !bytes.Equal(digest[:], genesisHash) { return nil, nil, errors.New("genesis identity") }
+    var genesis types.GenesisDoc
+    if err := json.Unmarshal(genesisBytes, &genesis); err != nil { return nil, nil, err }
+    if genesis.ChainID != expected.CometChainID || genesis.InitialHeight != 1 || genesis.GenesisTime.IsZero() ||
+        genesis.GenesisTime.After(now.Add(MaxClockDrift)) || len(genesis.Validators) == 0 || len(genesis.Validators) > MaxValidators {
+        return nil, nil, errors.New("genesis chain or validator identity")
+    }
+    validators := make([]*types.Validator, 0, len(genesis.Validators))
+    for _, validator := range genesis.Validators {
+        validators = append(validators, &types.Validator{Address: validator.Address,
+            PubKey: validator.PubKey, VotingPower: validator.Power})
+    }
+    var pages []coretypes.ResultValidators
+    for start := 0; start < len(validators); start += 100 {
+        end := min(start+100, len(validators))
+        pages = append(pages, coretypes.ResultValidators{BlockHeight: 1, Count: end-start,
+            Total: len(validators), Validators: validators[start:end]})
+    }
+    initial, err := validatorSet(pages, 1)
+    return &genesis, initial, err
+}
+
+func verifyEntry(previous *types.SignedHeader, entry *LightBlock, genesis *types.GenesisDoc,
+    initial *types.ValidatorSet, now time.Time) error {
+    header := &entry.Commit.SignedHeader
+    if !entry.Commit.CanonicalCommit || header.ValidateBasic(genesis.ChainID) != nil || len(header.AppHash) != 32 ||
+        !header.Time.Before(now.Add(MaxClockDrift)) {
+        return errors.New("signed header identity")
+    }
+    validators, err := validatorSet(entry.Validators, header.Height)
+    if err != nil { return err }
+    if previous == nil {
+        if header.Height != 1 || !bytes.Equal(initial.Hash(), validators.Hash()) ||
+            !bytes.Equal(initial.Hash(), header.ValidatorsHash) || header.Time.Before(genesis.GenesisTime) {
+            return errors.New("initial header genesis binding")
+        }
+    } else {
+        if previous.ValidateBasic(genesis.ChainID) != nil || previous.Height >= int64(^uint64(0)>>1) ||
+            header.Height != previous.Height+1 || !header.Time.After(previous.Time) ||
+            !header.LastBlockID.Equals(previous.Commit.BlockID) ||
+            !bytes.Equal(header.ValidatorsHash, previous.NextValidatorsHash) ||
+            !bytes.Equal(header.ValidatorsHash, validators.Hash()) {
+            return errors.New("historical header transition")
+        }
+    }
+    if err := validators.VerifyCommitLightAllSignatures(genesis.ChainID, header.Commit.BlockID,
+        header.Height, header.Commit); err != nil { return fmt.Errorf("header quorum: %w", err) }
+    return nil
+}
+
+func verifyHistory(bundle *Bundle, expected Expected, now time.Time) ([]*types.SignedHeader, error) {
+    if bundle.Version != Version || len(bundle.History) == 0 || len(bundle.History) > MaxHistory ||
+        bundle.FinalizedHeight >= MaxHistory || int64(len(bundle.History)) != bundle.FinalizedHeight+1 {
+        return nil, errors.New("individual history message bound")
+    }
+    genesis, initial, err := genesisValidators(bundle.Genesis, expected, now)
+    if err != nil { return nil, err }
+    headers := make([]*types.SignedHeader, 0, len(bundle.History))
+    var previous *types.SignedHeader
+    for index := range bundle.History {
+        entry := &bundle.History[index]
+        if err := verifyEntry(previous, entry, genesis, initial, now); err != nil { return nil, err }
+        previous = &entry.Commit.SignedHeader
+        headers = append(headers, previous)
+    }
+    return headers, nil
 }
 
 func membership(response *abci.ResponseQuery, height int64, root, key []byte, maxValue int) error {
@@ -215,6 +224,16 @@ func membership(response *abci.ResponseQuery, height int64, root, key []byte, ma
 }
 
 func Verify(request *Request, now time.Time) (*Result, error) {
+    if request == nil { return nil, errors.New("missing proof request") }
+    headers, err := verifyHistory(&request.Bundle, request.Expected, now)
+    if err != nil { return nil, err }
+    return verifyState(request, now, func(height int64) (*types.SignedHeader, error) {
+        if height <= 0 || height > int64(len(headers)) { return nil, errors.New("unverified state height") }
+        return headers[height-1], nil
+    })
+}
+
+func verifyState(request *Request, now time.Time, lookup func(int64) (*types.SignedHeader, error)) (*Result, error) {
 	if request == nil || request.Expected.ChainID != 125 || request.Expected.CometChainID == "" || now.IsZero() {
 		return nil, errors.New("Paxeer proof identity")
 	}
@@ -222,8 +241,19 @@ func Verify(request *Request, now time.Time) (*Result, error) {
 	if config.GetEVMChainID(expected.CometChainID).Uint64() != expected.ChainID {
 		return nil, errors.New("Comet to EVM chain identity")
 	}
-	genesisHash, err := fixedHex(expected.GenesisSHA256, 32)
-	if err != nil { return nil, err }
+	if bundle.Version != Version || bundle.StateHeight < 2 || bundle.FinalizedHeight < bundle.StateHeight ||
+        bundle.FinalizedHeight == int64(^uint64(0)>>1) || expected.Confirmations == 0 || expected.Confirmations >= MaxHistory ||
+        bundle.FinalizedHeight-bundle.StateHeight >= MaxHistory ||
+        uint64(bundle.FinalizedHeight-bundle.StateHeight+1) < expected.Confirmations {
+        return nil, errors.New("state finality window")
+    }
+    stateHeader, err := lookup(bundle.StateHeight+1)
+    if err != nil { return nil, err }
+    finalHeader, err := lookup(bundle.FinalizedHeight+1)
+    if err != nil { return nil, err }
+    if light.HeaderExpired(finalHeader, TrustingPeriod, now) || !finalHeader.Time.Before(now.Add(MaxClockDrift)) {
+        return nil, errors.New("live head freshness")
+    }
 	vault, err := fixedHex(expected.Vault, 20)
 	if err != nil { return nil, err }
 	runtimeHash, err := fixedHex(expected.RuntimeSHA256, 32)
@@ -241,8 +271,6 @@ func Verify(request *Request, now time.Time) (*Result, error) {
 	} else if expected.DepositSlot != "" {
 		return nil, errors.New("unexpected deposit slot")
 	}
-	headers, err := verifyHistory(bundle, expected, genesisHash, now)
-	if err != nil { return nil, err }
 	points := []int64{bundle.StateHeight}
 	if bundle.FinalizedHeight != bundle.StateHeight { points = append(points, bundle.FinalizedHeight) }
 	if len(bundle.State) != len(points) { return nil, errors.New("state point count") }
@@ -250,7 +278,9 @@ func Verify(request *Request, now time.Time) (*Result, error) {
 	for index, height := range points {
 		point := &bundle.State[index]
 		if point.Height != height { return nil, errors.New("state point height") }
-		root := headers[height].AppHash
+        header, err := lookup(height+1)
+        if err != nil { return nil, err }
+		root := header.AppHash
 		if err := membership(&point.Code, height, root, append([]byte{7}, vault...), MaxRuntimeBytes); err != nil {
 			return nil, err
 		}
@@ -275,9 +305,9 @@ func Verify(request *Request, now time.Time) (*Result, error) {
 	if err != nil { return nil, err }
 	digest := sha256.Sum256(canonical)
 	return &Result{Version: Version, StateHeight: bundle.StateHeight,
-		StateHeaderHash: hexBytes(headers[bundle.StateHeight].Hash()),
-		ApplicationRoot: hexBytes(headers[bundle.StateHeight].AppHash),
-		FinalizedHeight: bundle.FinalizedHeight, FinalizedHeaderHash: hexBytes(headers[bundle.FinalizedHeight].Hash()),
+		StateHeaderHash: hexBytes(stateHeader.Hash()),
+		ApplicationRoot: hexBytes(stateHeader.AppHash),
+		FinalizedHeight: bundle.FinalizedHeight, FinalizedHeaderHash: hexBytes(finalHeader.Hash()),
 		RuntimeSHA256: hexBytes(runtimeHash), ProofSHA256: hexBytes(digest[:]), DepositID: expected.DepositID,
 		Runtime: runtime}, nil
 }

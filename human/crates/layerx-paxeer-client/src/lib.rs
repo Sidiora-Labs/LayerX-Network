@@ -5,6 +5,7 @@ mod deposit;
 mod exit;
 mod finality;
 mod json;
+mod native_custody;
 mod rpc;
 mod status;
 pub mod wire;
@@ -31,6 +32,7 @@ pub use finality::{
     FinalityTracker, TrackerConfig, TrackerConfigError,
 };
 pub use json::{parse as parse_json, Json, JsonError, JsonErrorReason};
+pub use native_custody::{AttestedNativeCustodyCredit, NativeCustodyError, NativeCustodyEvidence, NativeCustodyExpectation};
 pub use rpc::{raw_call, EndpointConfig, EndpointFailure, EndpointFault, EndpointTransport};
 pub use status::{
     BoundaryHealth, BoundaryStatus, ChainStatus, ContractStatus, DelayExpectation, EndpointStatus,

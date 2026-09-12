@@ -22,6 +22,8 @@ sys.path.insert(0, str(ROOT / 'tests/bridge'))
 sys.path.insert(0, str(ROOT / 'tests/daemon'))
 from custody_chain import boundaries, owned_chain
 from custody_credit import Rpc, create_profile, eth_hash, unhex, write_new
+sys.path.insert(0, str(ROOT / 'tests/support'))
+from lxgb_metadata import metadata
 from deploy_local_custody import (command, disposable_rpc, signer, genesis_document,
                                   PERSISTENT_GENESIS, PERSISTENT_BLUEPRINT)
 from cryptography.exceptions import InvalidSignature
@@ -381,8 +383,11 @@ class DisposableCustody(unittest.TestCase):
                         asset=deployed['asset'], confirmations=2, attestor_key=str(authority_path),
                         output=str(profile), vault_artifact=str(self.vault_artifact), history_state=str(history)))
                     self.assertEqual(profile.read_bytes()[:5], b'LXBC2')
+                    genesis_metadata = directory / 'genesis-metadata'
+                    write_new(genesis_metadata, metadata(unhex(deployed['asset'], 32), actor_public, os.urandom(32)))
                     invocation = ['python3', str(ROOT / 'tests/bridge/custody_genesis.py'),
-                                  '--profile', str(profile), '--builder', str(self.builder)]
+                                  '--profile', str(profile), '--builder', str(self.builder),
+                                  '--genesis-metadata', str(genesis_metadata)]
                     with self.assertRaises(ValueError):
                         command(*invocation, '--output', str(directory / 'refused-genesis'))
                     self.assertFalse((directory / 'refused-genesis').exists())

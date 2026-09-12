@@ -294,7 +294,8 @@ def _produce(work_dir):
             and credit[139:171] == public, credit_path, 'real custody credit beneficiary binding')
     if credit[:5] == b'LXDC2':
         require(credit[359:363] == b'\0\0\0\1' and
-                2 <= int.from_bytes(credit[215:223], 'big') <= int.from_bytes(credit[287:295], 'big') < 8192,
+                2 <= int.from_bytes(credit[215:223], 'big') <= int.from_bytes(credit[287:295], 'big') < 2**63-1 and
+                int.from_bytes(credit[287:295], 'big')-int.from_bytes(credit[215:223], 'big') < 8192,
                 credit_path, 'Comet custody state evidence binding')
     output = root / 'owner-registration.json'
     require(not output.exists(), output, 'existing registration requires reconciliation')

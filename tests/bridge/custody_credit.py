@@ -508,6 +508,7 @@ def main():
     credit.add_argument("--expected-amount", type=int, required=True)
     for command in (profile, credit):
         command.add_argument("--vault-artifact")
+        command.add_argument("--history-state")
         command.add_argument("--ca-bundle")
         command.add_argument("--disposable-identity")
         command.add_argument("--rpc", action="append", required=True)

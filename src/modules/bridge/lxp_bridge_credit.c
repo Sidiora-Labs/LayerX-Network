@@ -145,7 +145,7 @@ lxp_result lxp_bridge_credit_verify(const lxp_bridge_profile *profile,
         lxp_ct_is_zero(bytes + 295U, 32U) ||
         lxp_ct_is_zero(bytes + 327U, 32U))
         return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
-    if (comet && (block < 2U || finalized >= LXP_BRIDGE_COMET_MAX_HISTORY ||
+    if (comet && (block < 2U || finalized >= INT64_MAX || finalized - block >= LXP_BRIDGE_COMET_MAX_HISTORY ||
         bytes[359] != 0U || bytes[360] != 0U || bytes[361] != 0U ||
         bytes[362] != LXP_BRIDGE_COMET_PROOF_KIND))
         return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;

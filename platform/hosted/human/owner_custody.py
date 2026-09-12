@@ -82,6 +82,7 @@ if __name__ == '__main__':
     parser.add_argument('--ca-bundle')
     parser.add_argument('--disposable-identity')
     parser.add_argument('--vault-artifact')
+    parser.add_argument('--history-state')
     parser.add_argument('--key-file', required=True)
     parser.add_argument('--attestor-key', required=True)
     parser.add_argument('--network-id', type=int, required=True)

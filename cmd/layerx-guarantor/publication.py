@@ -173,7 +173,7 @@ def native_request(api, request, header, checkpoint):
         require(key[18:] == sha(b'LX:DEPOSIT:NULLIFIER:v1' + credit[43:75]), 'native deposit nullifier')
         if comet:
             height, finalized = int.from_bytes(credit[215:223], 'big'), int.from_bytes(credit[287:295], 'big')
-            require(2 <= height <= finalized < 8192 and finalized-height+1 >= int.from_bytes(profile[161:169], 'big')
+            require(2 <= height <= finalized < 2**63-1 and finalized-height < 8192 and finalized-height+1 >= int.from_bytes(profile[161:169], 'big')
                     and credit[359:363] == b'\0\0\0\1' and
                     all(credit[start:start+32] != bytes(32) for start in (223, 255, 295, 327)), 'native Comet custody evidence')
         signature(profile[65:97], (b'LX:CUSTODY:CREDIT:v2' if comet else b'LX:CUSTODY:CREDIT:v1') + credit[:363], credit[363:])

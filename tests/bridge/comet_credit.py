@@ -1,10 +1,11 @@
 import base64
-import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
+import time
 import urllib.request
+import urllib.error
 
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -31,23 +32,54 @@ def canonical(value):
 
 def comet(rpc, method, params):
     require(getattr(rpc, 'disposable', False), 'Comet requires verified disposable identity')
-    require(rpc.budget['calls'] < MAX_RPC_CALLS, 'aggregate RPC work bound')
-    rpc.budget['calls'] += 1
-    identifier = rpc.budget['calls']
-    request = urllib.request.Request(rpc.url.rstrip('/') + '/comet', method='POST',
-        data=canonical(dict(jsonrpc='2.0', id=identifier, method=method, params=params)),
-        headers={'Content-Type': 'application/json'})
-    remaining = min(MAX_RESPONSE, MAX_TOTAL_RESPONSE-rpc.budget['bytes'])
-    require(remaining > 0, 'aggregate RPC response bound')
-    with rpc.opener.open(request, timeout=30) as response:
-        data = response.read(remaining+1)
-        require(response.status == 200, 'Comet HTTP status')
-    rpc.budget['bytes'] += len(data)
-    require(len(data) <= remaining, 'aggregate RPC response bound')
-    value = json.loads(data, object_pairs_hook=unique_object)
-    require(set(value) == {'jsonrpc', 'id', 'result'} and value['jsonrpc'] == '2.0'
-            and type(value['id']) is int and value['id'] == identifier, 'Comet response envelope')
-    return value['result']
+    deadline = time.monotonic()+30
+    for attempt in range(6):
+        if method == 'abci_query':
+            delay = rpc.budget.get('next_proof', 0)-time.monotonic()
+            if delay > 0:
+                require(time.monotonic()+delay < deadline, 'Comet proof pacing deadline')
+                time.sleep(delay)
+        require(rpc.budget['calls'] < MAX_RPC_CALLS, 'aggregate RPC work bound')
+        rpc.budget['calls'] += 1
+        identifier = rpc.budget['calls']
+        request = urllib.request.Request(rpc.url.rstrip('/') + '/comet', method='POST',
+            data=canonical(dict(jsonrpc='2.0', id=identifier, method=method, params=params)),
+            headers={'Content-Type': 'application/json'})
+        remaining = min(MAX_RESPONSE, MAX_TOTAL_RESPONSE-rpc.budget['bytes'])
+        require(remaining > 0, 'aggregate RPC response bound')
+        timeout = deadline-time.monotonic()
+        require(timeout > 0, 'Comet request deadline')
+        try:
+            response = rpc.opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as refused:
+            response = refused
+        with response:
+            data = response.read(remaining+1)
+            status = response.status
+            retry_after = response.headers.get('Retry-After')
+        if method == 'abci_query':
+            rpc.budget['next_proof'] = time.monotonic()+1.05
+        rpc.budget['bytes'] += len(data)
+        require(len(data) <= remaining, 'aggregate RPC response bound')
+        value = json.loads(data, object_pairs_hook=unique_object)
+        if status == 503:
+            require(isinstance(value.get('error'), dict) and
+                    value['error'].get('code') in ('comet_unavailable', 'comet_evidence_unavailable') and
+                    value['error'].get('retry') == 'after',
+                    'Comet typed temporary refusal')
+            require(isinstance(retry_after, str) and retry_after.isascii()
+                    and retry_after.isdecimal() and 0 < int(retry_after) <= 10,
+                    'Comet retry delay bound')
+            require(value['error'].get('retry_after_seconds') == int(retry_after), 'Comet retry metadata binding')
+            delay = int(retry_after)
+            require(attempt < 5 and time.monotonic()+delay < deadline, 'Comet temporary refusal deadline')
+            time.sleep(delay)
+            continue
+        require(status == 200, 'Comet HTTP status: '+str(status))
+        require(set(value) == {'jsonrpc', 'id', 'result'} and value['jsonrpc'] == '2.0'
+                and type(value['id']) is int and value['id'] == identifier, 'Comet response envelope')
+        return value['result']
+    raise ValueError('Comet retry work bound')
 
 
 def positive_decimal(value):
@@ -122,31 +154,86 @@ def verifier(request):
     binary = Path(os.environ.get('LAYERX_CUSTODY_PROOF_BIN', ROOT/'build/bin/layerx-custody-proof'))
     encoded = canonical(request)
     require(0 < len(encoded) <= MAX_TOTAL_RESPONSE, 'Comet proof request bound')
-    completed = subprocess.run([str(binary)], input=encoded, capture_output=True, timeout=120, check=False)
+    command = [str(binary)]
+    state = os.environ.get('LAYERX_CUSTODY_HISTORY_STATE')
+    authority = os.environ.get('LAYERX_CUSTODY_HISTORY_KEY')
+    require(bool(state) == bool(authority), 'history state and authority configuration')
+    if state:
+        command += ['--history-state', state, '--attestor-key', authority]
+    completed = subprocess.run(command, input=encoded, capture_output=True, timeout=120, check=False)
     require(completed.returncode == 0, 'Comet proof verification refused: ' +
             completed.stderr[:1024].decode('utf-8', errors='replace'))
-    require(len(completed.stdout) <= 2*1024*1024, 'Comet verifier result bound')
+    require(len(completed.stdout) <= (MAX_TOTAL_RESPONSE if request.get('operation') == 'export' else 2*1024*1024),
+            'Comet verifier result bound')
     result = json.loads(completed.stdout, object_pairs_hook=unique_object)
-    require(result['version'] == VERSION, 'Comet verifier version')
+    if request.get('operation') == 'export':
+        require(isinstance(result, list) and 0 < len(result) <= MAX_ANCESTRY, 'history export bound')
+    else:
+        require(result['version'] == VERSION, 'Comet verifier version')
     return result
 
 
-def verified_state(rpcs, args, genesis_hash, vault, runtime_hash, confirmations, deposit_id=None):
+def history_state(args, genesis_hash):
+    return Path(getattr(args, 'history_state', None) or Path(args.attestor_key).resolve().parent/'secrets'/('custody-history-'+genesis_hash.hex()))
+
+
+def catch_up(rpcs, args, genesis_hash, final):
     from deploy_local_custody import genesis_document
 
+    os.environ['LAYERX_CUSTODY_HISTORY_STATE'] = str(history_state(args, genesis_hash))
+    os.environ['LAYERX_CUSTODY_HISTORY_KEY'] = str(Path(args.attestor_key).resolve())
+    documents = [genesis_document(rpc, 'boundary') for rpc in rpcs]
+    require(documents[0] == documents[1] and sha(documents[0]) == genesis_hash, 'Comet pinned genesis bytes')
+    expected = dict(genesis_sha256='0x'+genesis_hash.hex(), comet_chain_id=rpcs[0].comet_chain_id, chain_id=125,
+                    vault='', runtime_sha256='', confirmations=0)
+    bundle = dict(version=VERSION, genesis=base64.b64encode(documents[0]).decode(), history=[], state_height=0,
+                  finalized_height=0, state=[])
+    request = dict(operation='status', expected=expected, bundle=bundle)
+    status = verifier(request)
+    require(status['height'] <= final+1, 'Comet endpoint head rollback')
+    while status['height'] < final+1:
+        start = status['height']+1
+        end = min(start+127, final+1)
+        budget = {'calls': 0, 'bytes': 0}
+        for rpc in rpcs:
+            rpc.budget = budget
+        for rpc in rpcs:
+            entries = []
+            for height in range(start, end+1):
+                commit = comet(rpc, 'commit', dict(height=str(height)))
+                require(positive_decimal(commit['signed_header']['header']['height']) == height, 'Comet requested commit height')
+                entries.append(dict(commit=commit, validators=validators(rpc, height)))
+            advance = dict(operation='advance', expected=expected, bundle=bundle | {'history': entries})
+            status = verifier(advance)
+            require(status['height'] == end, 'authenticated history progress')
+            if getattr(args, 'history_evidence', None):
+                origin = sha(rpc.url.encode()).hex()
+                write_new(str(Path(args.history_evidence)/f'{start}-{end}-{origin}.json'), canonical(advance)+b'\n')
+    budget = {'calls': 0, 'bytes': 0}
+    for rpc in rpcs:
+        rpc.budget = budget
+    return documents
+
+
+def verified_state(rpcs, args, genesis_hash, vault, runtime_hash, confirmations, deposit_id=None, minimum_height=2):
     require(len(rpcs) == 2 and 0 < confirmations < MAX_ANCESTRY, 'Comet quorum and confirmation bound')
-    tips = [comet(rpc, 'commit', {}) for rpc in rpcs]
-    final = min(positive_decimal(tip['signed_header']['header']['height']) for tip in tips)-1
-    height = final-confirmations+1
-    require(2 <= height <= final and final+1 <= MAX_ANCESTRY, 'Comet finalized history bound')
+    deadline = time.monotonic()+30
+    while True:
+        tips = [comet(rpc, 'commit', {}) for rpc in rpcs]
+        final = min(positive_decimal(tip['signed_header']['header']['height']) for tip in tips)-2
+        height = final-confirmations+1
+        if height >= minimum_height:
+            break
+        require(time.monotonic() < deadline, 'Comet deposit confirmation deadline')
+        time.sleep(.1)
+    require(2 <= height <= final < 2**63-1, 'Comet finalized history bound')
+    documents = catch_up(rpcs, args, genesis_hash, final)
     points = sorted({height, final})
     requests, results = [], []
     compiler_hash = None
-    for rpc in rpcs:
-        genesis = genesis_document(rpc, 'boundary')
-        require(sha(genesis) == genesis_hash, 'Comet pinned genesis bytes')
+    for rpc, genesis in zip(rpcs, documents, strict=True):
         history = []
-        for number in range(1, final+2):
+        for number in range(max(1, final-126), final+2):
             commit = comet(rpc, 'commit', dict(height=str(number)))
             require(positive_decimal(commit['signed_header']['header']['height']) == number,
                     'Comet requested commit height')
@@ -170,7 +257,7 @@ def verified_state(rpcs, args, genesis_hash, vault, runtime_hash, confirmations,
                         chain_id=125, vault=vault, runtime_sha256='0x'+runtime_hash.hex(), confirmations=confirmations)
         if deposit_id is not None:
             expected.update(deposit_id='0x'+deposit_id.hex(), deposit_slot='0x'+slot.hex())
-        request = dict(expected=expected, bundle=dict(version=VERSION,
+        request = dict(operation='verify', expected=expected, bundle=dict(version=VERSION,
             genesis=base64.b64encode(genesis).decode(), history=history,
             state_height=height, finalized_height=final, state=state))
         result = verifier(request)
@@ -231,8 +318,9 @@ def attest(args, rpcs, genesis, profile):
     require(deposits[0] == deposits[1], 'deposit discovery quorum')
     deposit_id, asset, beneficiary, payer, amount, nonce = deposits[0]
     owner = unhex(args.beneficiary_key, 32)
+    minimum = max(quantity(receipt['blockNumber']) for receipt in receipts)
     result, evidence = verified_state(rpcs, args, genesis, '0x'+profile[13:33].hex(), profile[33:65],
-                                     int.from_bytes(profile[161:169], 'big'), deposit_id)
+                                     int.from_bytes(profile[161:169], 'big'), deposit_id, minimum)
     unsigned = (b'LXDC2'+sha(profile)+big(args.network_id, 4)+big(3, 2)+deposit_id+asset+beneficiary+
         owner+payer+big(amount, 16)+big(nonce, 8)+big(result['state_height'], 8)+
         unhex(result['state_header_hash'], 32)+unhex(result['application_root'], 32)+

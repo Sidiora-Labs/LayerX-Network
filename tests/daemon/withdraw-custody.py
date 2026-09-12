@@ -143,14 +143,24 @@ def main():
                 'contracts/custody/LayerXVault.sol', 'paxeer-network/loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol',
                 '--threads', str(threads), '--out', artifacts, '--cache-path', build / 'withdraw-contracts/cache')
             target = Path(os.environ['CARGO_TARGET_DIR']).resolve()
-            run('cargo', 'build', '--manifest-path', 'platform/Cargo.toml', '--locked',
-                '--jobs', str(threads), '-p', 'layerx-platform-paxeer-boundary', '--bin', 'layerx-paxeer-boundary')
+            boundary_binary = Path(os.environ.get('LAYERX_PAXEER_BOUNDARY_BIN', target/'debug/layerx-paxeer-boundary')).resolve()
+            if 'LAYERX_PAXEER_BOUNDARY_BIN' not in os.environ:
+                run('cargo', 'build', '--manifest-path', 'platform/Cargo.toml', '--locked',
+                    '--jobs', str(threads), '-p', 'layerx-platform-paxeer-boundary', '--bin', 'layerx-paxeer-boundary')
+            assert boundary_binary.is_file(), 'explicit boundary executable unavailable'
+            proof_binary = Path(os.environ.get('LAYERX_CUSTODY_PROOF_BIN', build/'bin/layerx-custody-proof')).resolve()
+            if 'LAYERX_CUSTODY_PROOF_BIN' not in os.environ:
+                proof_env = os.environ | {'GOCACHE': str(target/'go-cache'), 'GOMAXPROCS': str(threads)}
+                run('make', 'custody-proof-build', 'BUILD_DIR='+str(build), 'PAXEER_GO_JOBS='+str(threads), env=proof_env)
+            assert proof_binary.is_file(), 'explicit custody proof executable unavailable'
+            os.environ['LAYERX_CUSTODY_PROOF_BIN'] = str(proof_binary)
             with owned_chain(work, artifacts) as first:
                 custody = deposit(first, artifacts, beneficiary, amount)
                 (work / 'custody.json').write_text(json.dumps(custody, sort_keys=True) + '\n')
-                with boundaries(work, first, target / 'debug/layerx-paxeer-boundary') as (origins, ca, identity):
+                with boundaries(work, first, boundary_binary) as (origins, ca, identity):
                     retain_custody_proofs(work, origins, ca, identity, custody['vault'])
-                    pair = ['--rpc', origins[0], '--rpc', origins[1], '--ca-bundle', str(ca), '--disposable-identity', str(identity)]
+                    pair = ['--rpc', origins[0], '--rpc', origins[1], '--ca-bundle', str(ca), '--disposable-identity', str(identity),
+                            '--vault-artifact', str(artifacts/'LayerXVault.sol/LayerXVault.json')]
                     run(sys.executable, 'tests/bridge/custody_credit.py', 'profile', *pair, '--chain-id', '125',
                         '--network-id', '77', '--vault', custody['vault'], '--runtime-sha256', custody['runtime_sha256'],
                         '--asset', '0x' + ASSET, '--confirmations', '2', '--attestor-key', work / 'attestor', '--output', work / 'profile')
@@ -158,6 +168,33 @@ def main():
                         '--network-id', '77', '--transaction', custody['transaction'], '--beneficiary', '0x' + beneficiary,
                         '--beneficiary-key', '0x' + public.hex(), '--expected-amount', str(amount),
                         '--attestor-key', work / 'attestor', '--output', work / 'credit')
+                    identity_record = json.loads(identity.read_bytes())
+                    history = work/'secrets'/('custody-history-'+identity_record['genesis_sha256'][2:])
+                    run(sys.executable, 'tests/bridge/test_comet_evidence.py', '--evidence', str(work/'credit.proof.json'),
+                        '--history-state', str(history), '--attestor-key', str(work/'attestor'))
+                    if os.environ.get('LAYERX_CUSTODY_FIXTURE_DIR'):
+                        exported = Path(os.environ['LAYERX_CUSTODY_FIXTURE_DIR'])
+                        exported.mkdir(parents=True, exist_ok=True)
+                        for source, name in ((work/'profile', 'custody.profile'), (work/'credit', 'custody.credit')):
+                            with (exported/name).open('xb') as output:
+                                output.write(source.read_bytes())
+                        proof_evidence = json.loads((work/'credit.proof.json').read_bytes())
+                        fixture_request = proof_evidence['requests'][0]
+                        exported_history = subprocess.run([str(proof_binary),
+                            '--history-state', str(history), '--attestor-key', str(work/'attestor')],
+                            input=json.dumps(fixture_request | {'operation': 'export'}).encode(),
+                            capture_output=True, check=True, timeout=120)
+                        fixture_request['bundle']['history'] = json.loads(exported_history.stdout)
+                        with (exported/'state-credit.json').open('x') as output:
+                            json.dump(fixture_request, output, sort_keys=True, separators=(',', ':'))
+                            output.write('\n')
+                    if os.environ.get('LAYERX_CUSTODY_HISTORY_WINDOW') == '1':
+                        run(sys.executable, 'tests/bridge/comet_history.py', *pair,
+                            '--history-state', history, '--evidence', work/'credit.proof.json',
+                            '--profile', work/'profile', '--network-id', '77',
+                            '--transaction', custody['transaction'], '--beneficiary', '0x'+beneficiary,
+                            '--beneficiary-key', '0x'+public.hex(), '--expected-amount', str(amount),
+                            '--attestor-key', work/'attestor', '--output', work/'credit-after-window')
                     run(build / 'tests/bridge/sign-credit', work / 'profile', work / 'credit', did, work / 'actor',
                         '0', str(int(time.time() * 1000)), work / 'activity')
                     (work / 'activity').chmod(0o644)
