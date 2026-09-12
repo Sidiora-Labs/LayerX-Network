@@ -70,7 +70,7 @@ else
         LAYERX_NODE_CHECKPOINT_REGISTRY=0x2222222222222222222222222222222222222222
         LAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1 LAYERX_NODE_PAXEER_RPC_PORT="$rpc_port")
 fi
-if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+if [[ ${2:-} == --module-maintenance ]]; then
     for module in escrow budget stream service perps; do
         bootstrap_extra+=(--enable-module "$module")
     done
