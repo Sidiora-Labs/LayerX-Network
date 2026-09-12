@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "runtime.h"
 #include "../layerxd/lxp_daemon_batch_wal.h"
+#include "../layerxd/lxp_daemon_modules.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_activity.h"
 #include "layerx/lxp_batch_identity.h"
@@ -27,10 +28,11 @@ struct gp_runtime {
     lxp_daemon_configuration configuration;
     lx_account_registry accounts;
     lxp_transfer_asset_state assets[LX_ASSET_REGISTRY_CAPACITY];
-    lx_asset_record send_assets[LX_ASSET_REGISTRY_CAPACITY];
+    lx_asset_registry asset_registry;
     lx_asset_runtime asset_runtime;
     size_t asset_count;
     lx_programs_transfer_runtime programs;
+    lxp_daemon_module_runtimes module_runtimes;
     lxp_identity_store identities;
     lxp_fee_params fees;
     lxp_verified_receipt_index verified_receipts;
@@ -171,6 +173,9 @@ static lxp_result load_identities(const char *path, lxp_identity_store *identiti
 static lxp_result collect_assets(gp_runtime *process)
 {
     size_t account_index;
+    lxp_result status = lx_asset_registry_init(&process->asset_registry, 0U);
+    if (status != LXP_OK)
+        return status;
     process->asset_count = 0U;
     for (account_index = 0U; account_index < process->accounts.count; ++account_index) {
         lx_account *account = &process->accounts.accounts[account_index];
@@ -187,9 +192,11 @@ static lxp_result collect_assets(gp_runtime *process)
         (void)memcpy(process->assets[process->asset_count].asset_id, account->asset_id, 32U);
         process->assets[process->asset_count].registered = true;
         process->assets[process->asset_count].paused = false;
-        (void)memcpy(process->send_assets[process->asset_count].asset_id, account->asset_id, 32U);
+        (void)memcpy(process->asset_registry.assets[process->asset_count].asset_id,
+                     account->asset_id, 32U);
         ++process->asset_count;
     }
+    process->asset_registry.count = process->asset_count;
     return process->asset_count == 0U ? LXP_ERR_ASSET_MISMATCH : LXP_OK;
 }
 
@@ -682,22 +689,50 @@ lxp_result gp_runtime_prepare(gp_runtime *runtime, const lxp_batch_body *body)
 {
     lxp_byte_span *events;
     size_t event_count;
+    bool epoch_advanced = false;
     lxp_result status;
     if (!runtime || !body || runtime->poisoned)
         return LXP_ERR_NON_CANONICAL;
     if (body->header.protocol_version != runtime->protocol_version ||
         body->header.network_id != runtime->network_id ||
-        body->header.first_sequence != runtime->state.next_sequence ||
-        lxp_ct_memcmp(body->header.previous_state_root, runtime->kernel.current_state_root, 32U) ||
-        body->header.batch_number != runtime->last_batch + 1U)
+        body->header.batch_number != runtime->last_batch + 1U ||
+        body->header.epoch < runtime->kernel.epoch)
         return LXP_ERR_CONTEXT_MISMATCH;
     (void)lxp_arena_reset(&runtime->preparation_arena, 0U);
     status = lxp_replica_validate_header(
         body, runtime->network_id, &runtime->sequencer_authorization, &runtime->preparation_arena);
-    if (status == LXP_OK)
-        status =
-            lxp_replay_section_decode(&body->activities, &runtime->preparation_arena,
-                                      &runtime->published_activities, &runtime->activity_count);
+    if (status != LXP_OK)
+        return status;
+    if (body->header.epoch > runtime->kernel.epoch) {
+        /* The sequencer sealed a higher epoch into this header. The replica
+         * follows it through the module epoch hooks before judging the batch's
+         * continuity: the transition consumes one global sequence and
+         * recomputes the state root, and the header's first_sequence and
+         * previous_state_root must describe the kernel after that step. The
+         * signature was checked first so that only a sealed header can move
+         * the epoch. */
+        (void)lxp_arena_reset(&runtime->execution_arena, 0U);
+        status = lxp_kernel_epoch_transition(&runtime->kernel, body->header.epoch,
+                                             body->header.timestamp_ms, &runtime->execution_arena);
+        if (status != LXP_OK) {
+            if (lxp_result_is_fatal(status))
+                runtime->poisoned = true;
+            return status;
+        }
+        epoch_advanced = true;
+    }
+    if (body->header.first_sequence != runtime->state.next_sequence ||
+        lxp_ct_memcmp(body->header.previous_state_root, runtime->kernel.current_state_root, 32U)) {
+        /* Once a transition has landed, a header that continues from another
+         * sequence or root proves the sequencer stepped the epoch differently;
+         * the consumed sequence cannot be undone, so the runtime stops. */
+        if (!epoch_advanced)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        runtime->poisoned = true;
+        return LXP_FATAL_REPLAY_DIVERGENCE;
+    }
+    status = lxp_replay_section_decode(&body->activities, &runtime->preparation_arena,
+                                       &runtime->published_activities, &runtime->activity_count);
     if (status == LXP_OK)
         status = lxp_da_receipt_section_decode(body->receipts, &runtime->preparation_arena,
                                                &runtime->published_receipts,
@@ -854,11 +889,16 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
         status = collect_assets(runtime);
     if (status == LXP_OK && runtime->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
         runtime->asset_runtime = (lx_asset_runtime){
-            &runtime->accounts,   runtime->send_assets, runtime->asset_count,     runtime->assets,
-            runtime->asset_count, runtime->network_id,  runtime->protocol_version};
+            &runtime->accounts,   runtime->asset_registry.assets, runtime->asset_count,
+            runtime->assets,      runtime->asset_count,           runtime->network_id,
+            runtime->protocol_version};
         status = lxp_kernel_bind_module_runtime(&runtime->kernel, LXP_MODULE_ASSET,
                                                 &runtime->asset_runtime);
     }
+    if (status == LXP_OK)
+        status = lxp_daemon_module_runtimes_bind(&runtime->kernel, &runtime->module_runtimes,
+                                                 &runtime->accounts, &runtime->asset_registry,
+                                                 runtime->assets, runtime->asset_count);
     if (status == LXP_OK)
         status = load_schedule(runtime);
     if (status == LXP_OK)

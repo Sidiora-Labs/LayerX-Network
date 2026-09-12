@@ -16,6 +16,7 @@
 #include "lxp_daemon_batch_wal.h"
 #include "lxp_daemon_lni_internal.h"
 #include "lxp_daemon_finality_authority.h"
+#include "lxp_daemon_modules.h"
 
 #include <openssl/evp.h>
 
@@ -56,10 +57,11 @@ typedef struct lxp_daemon_process {
     bool custody_credit_enabled;
     lx_account_registry accounts;
     lxp_transfer_asset_state assets[LX_ASSET_REGISTRY_CAPACITY];
-    lx_asset_record send_assets[LX_ASSET_REGISTRY_CAPACITY];
+    lx_asset_registry asset_registry;
     lx_asset_runtime asset_runtime;
     size_t asset_count;
     lx_programs_transfer_runtime programs;
+    lxp_daemon_module_runtimes module_runtimes;
     lxp_identity_store identities;
     uint8_t admitted_identity_digest[32];
     lxp_fee_params fees;
@@ -590,20 +592,26 @@ static bool asset_activity_supported(uint32_t activity_type)
 
 static lxp_result collect_assets(lxp_daemon_process *process)
 {
-    lxp_result status = lx_asset_committed_records(&process->kernel,
-        process->send_assets, LX_ASSET_REGISTRY_CAPACITY, &process->asset_count);
+    lxp_result status = lx_asset_registry_init(&process->asset_registry, 0U);
+    if (status != LXP_OK) return status;
+    status = lx_asset_committed_records(&process->kernel,
+        process->asset_registry.assets, LX_ASSET_REGISTRY_CAPACITY,
+        &process->asset_count);
     if (status != LXP_OK) return status;
     if (process->asset_count == 0U) return LXP_ERR_ASSET_MISMATCH;
+    process->asset_registry.count = process->asset_count;
     for (size_t i = 0U; i < process->accounts.count; ++i) {
         const lx_account *account = &process->accounts.accounts[i];
         size_t asset;
         if (!account->has_asset) continue;
         for (asset = 0U; asset < process->asset_count; ++asset)
-            if (memcmp(account->asset_id, process->send_assets[asset].asset_id, 32U) == 0) break;
+            if (memcmp(account->asset_id,
+                       process->asset_registry.assets[asset].asset_id, 32U) == 0)
+                break;
         if (asset == process->asset_count) return LXP_ERR_ASSET_MISMATCH;
     }
     for (size_t asset = 0U; asset < process->asset_count; ++asset) {
-        const lx_asset_record *record = &process->send_assets[asset];
+        const lx_asset_record *record = &process->asset_registry.assets[asset];
         lxp_u128 circulating = {0U, 0U};
         lxp_u128 initial = lxp_u128_is_zero(record->supply_cap) ?
             (lxp_u128){UINT64_MAX, UINT64_MAX} : record->supply_cap;
@@ -5094,12 +5102,16 @@ static lxp_result open_process(lxp_daemon_process *process,
     if (status == LXP_OK &&
         process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
         process->asset_runtime = (lx_asset_runtime){
-            &process->accounts, process->send_assets, process->asset_count,
-            process->assets, process->asset_count, process->network_id,
-            process->protocol_version};
+            &process->accounts, process->asset_registry.assets,
+            process->asset_count, process->assets, process->asset_count,
+            process->network_id, process->protocol_version};
         status = lxp_kernel_bind_module_runtime(
             &process->kernel, LXP_MODULE_ASSET, &process->asset_runtime);
     }
+    if (status == LXP_OK)
+        status = lxp_daemon_module_runtimes_bind(
+            &process->kernel, &process->module_runtimes, &process->accounts,
+            &process->asset_registry, process->assets, process->asset_count);
     if (status == LXP_OK) status = load_schedule(process);
     if (status == LXP_OK) {
         process->programs.accounts = &process->accounts;
