@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tests/bridge'))
-from custody_chain import artifact, boundaries, from_environment, govern, owned_chain
+from custody_chain import artifact, boundaries, from_environment, govern, owned_chain, retain_custody_proofs
 
 COMMON = runpy.run_path(str(ROOT / 'tests/daemon/finality-authority-chain.py'))
 ASSET = 'b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'
@@ -148,7 +148,9 @@ def main():
             with owned_chain(work, artifacts) as first:
                 custody = deposit(first, artifacts, beneficiary, amount)
                 (work / 'custody.json').write_text(json.dumps(custody, sort_keys=True) + '\n')
-                with boundaries(work, first, target / 'debug/layerx-paxeer-boundary') as pair:
+                with boundaries(work, first, target / 'debug/layerx-paxeer-boundary') as (origins, ca, identity):
+                    retain_custody_proofs(work, origins, ca, identity, custody['vault'])
+                    pair = ['--rpc', origins[0], '--rpc', origins[1], '--ca-bundle', str(ca), '--disposable-identity', str(identity)]
                     run(sys.executable, 'tests/bridge/custody_credit.py', 'profile', *pair, '--chain-id', '125',
                         '--network-id', '77', '--vault', custody['vault'], '--runtime-sha256', custody['runtime_sha256'],
                         '--asset', '0x' + ASSET, '--confirmations', '2', '--attestor-key', work / 'attestor', '--output', work / 'profile')

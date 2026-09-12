@@ -102,6 +102,23 @@ def govern(chain, timelock, target, signature, *args):
     execute(target, data)
 
 
+def retain_custody_proofs(work, origins, ca, identity, vault):
+    from deploy_local_custody import disposable_rpc
+
+    observations = []
+    for origin in origins:
+        rpc = disposable_rpc(origin, ca, identity)
+        header = rpc.call('eth_getBlockByNumber', ['finalized', False])
+        proof = {'method': 'eth_getProof', 'params': [vault, ['0x0'], header['number']]}
+        try:
+            proof['result'] = rpc.call(proof['method'], proof['params'])
+        except ValueError as error:
+            proof['error'] = str(error)
+        observations.append({'origin': origin, 'finalized_header': header, 'storage_proof': proof,
+                             'runtime_code': rpc.call('eth_getCode', [vault, header['number']])})
+    (work / 'custody-proof-responses.json').write_text(json.dumps(observations, sort_keys=True) + '\n')
+
+
 @contextlib.contextmanager
 def owned_chain(work, artifacts):
     with tempfile.TemporaryDirectory(prefix='lxp-custody-paxd-', dir='/tmp') as temporary:
@@ -275,7 +292,7 @@ def boundaries(work, source, binary):
         }
         path = work / 'disposable-identity.json'
         path.write_text(json.dumps(disposable, sort_keys=True) + '\n')
-        yield ['--rpc', origins[0], '--rpc', origins[1], '--ca-bundle', str(ca), '--disposable-identity', str(path)]
+        yield origins, ca, path
     finally:
         for process in processes:
             if process.poll() is None:
