@@ -66,7 +66,40 @@ fn account(value: &str) -> AccountId {
     AccountId::parse(value).unwrap_or_else(|error| panic!("account: {error:?}"))
 }
 
-fn send_intent(public_key: [u8; 32], amount: u128, idempotency: u8) -> Intent {
+fn send_intent(
+    public_key: [u8; 32],
+    signing_key: [u8; 32],
+    amount: u128,
+    idempotency: u8,
+) -> Intent {
+    let signer = layerx_crypto::local::LocalSigner::new(signing_key);
+    assert_eq!(
+        layerx_crypto::signer::Signer::public_key(&signer),
+        public_key
+    );
+    let debit = layerx_crypto::send::SendDebit {
+        from: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:alice:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("source account: {error:?}")),
+        to: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:recipient:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("destination account: {error:?}")),
+        asset: [0x33; 32],
+        amount,
+        source_sequence: 7,
+        idempotency_key: [idempotency; 32],
+        expires_at: 1_010,
+        context_hash: [0x55; 32],
+        conditions: Vec::new(),
+        authorization_kind: SendAuthorizationKind::Owner as u8,
+        network_id: NETWORK_ID,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+    };
+
     let send = LxpSend::new(
         account("agent:did:layerx:alice:main"),
         account("agent:did:layerx:recipient:main"),
@@ -76,10 +109,14 @@ fn send_intent(public_key: [u8; 32], amount: u128, idempotency: u8) -> Intent {
         IdempotencyKey::new([idempotency; 32]),
         TimestampSeconds::from_u64(1_010),
         ContextHash::new([0x55; 32]),
-        SendAuthorization::new(
-            SendAuthorizationKind::Owner,
-            PublicKey::new(public_key),
-            AuthorizationSignature::new([0x77; 64]),
+        support::sign_send(
+            &signer,
+            &debit,
+            SendAuthorization::new(
+                SendAuthorizationKind::Owner,
+                PublicKey::new(public_key),
+                AuthorizationSignature::new([0x77; 64]),
+            ),
         ),
         NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
         ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
@@ -99,10 +136,13 @@ impl CorePreparationBoundary for PreparedCore {
     }
 }
 
-fn prepared(public_key: [u8; 32], amount: u128, idempotency: u8) -> Prepared {
+fn prepared(public_key: [u8; 32], seed: [u8; 32], amount: u128, idempotency: u8) -> Prepared {
     let registry = registry();
-    let compiled = compile(&send_intent(public_key, amount, idempotency), &registry)
-        .unwrap_or_else(|error| panic!("compile: {error:?}"));
+    let compiled = compile(
+        &send_intent(public_key, seed, amount, idempotency),
+        &registry,
+    )
+    .unwrap_or_else(|error| panic!("compile: {error:?}"));
     let mut core = PreparedCore {
         state: CorePreparationState {
             network_id: NETWORK_ID,
@@ -280,7 +320,7 @@ fn real_kms_envelope_signs_only_the_exact_disclosed_bytes_and_audits_the_grant()
         vec![key.clone()]
     );
 
-    let prepared = prepared(public_key, 25, 4);
+    let prepared = prepared(public_key, seed, 25, 4);
     let signer = CustodySigner::new(
         keystore,
         fixture.store(),
@@ -332,8 +372,8 @@ fn step_up_and_disclosure_mismatches_are_typed_and_every_decision_is_audited() {
         registry(),
         SigningLimits::new(20, 60).unwrap_or_else(|error| panic!("limits: {error}")),
     );
-    let original = prepared(public_key, 25, 4);
-    let altered = prepared(public_key, 26, 5);
+    let original = prepared(public_key, [0xb5; 32], 25, 4);
+    let altered = prepared(public_key, [0xb5; 32], 26, 5);
 
     let missing = ready(signer.sign(SignRequest::new(
         &fixture.alice,
@@ -505,8 +545,8 @@ fn throughput_is_durable_per_principal_and_kms_loss_has_no_fallback() {
     let alice_key = generate(&keystore, &fixture.alice, &key, [0xc5; 32], 0x13, 0x24);
     let bob_key = generate(&keystore, &fixture.bob, &key, [0xd5; 32], 0x14, 0x25);
     drop(keystore);
-    let alice = prepared(alice_key, 25, 4);
-    let bob = prepared(bob_key, 30, 6);
+    let alice = prepared(alice_key, [0xc5; 32], 25, 4);
+    let bob = prepared(bob_key, [0xd5; 32], 30, 6);
     let limits = SigningLimits::new(2, 10).unwrap_or_else(|error| panic!("limits: {error}"));
     let signer = fixture.signer(limits);
 
@@ -614,7 +654,7 @@ fn copied_principal_record_cannot_cross_the_authenticated_kms_identity() {
     fs::copy(&alice_record, bob_directory.join("primary.key"))
         .unwrap_or_else(|error| panic!("copy sealed record: {error}"));
 
-    let prepared = prepared(public_key, 25, 4);
+    let prepared = prepared(public_key, [0xe5; 32], 25, 4);
     let signer = fixture
         .signer(SigningLimits::new(10, 60).unwrap_or_else(|error| panic!("limits: {error}")));
     let crossed = ready(signer.sign(SignRequest::new(

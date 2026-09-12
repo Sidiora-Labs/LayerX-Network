@@ -34,15 +34,47 @@ impl ReclaimAgentBoundary for RealAgentLayer {
 }
 
 fn send_route(public_key: [u8; 32], key: u8) -> SendRoute {
+    let signer = layerx_crypto::local::LocalSigner::new([0x51; 32]);
+    assert_eq!(
+        layerx_crypto::signer::Signer::public_key(&signer),
+        public_key
+    );
+    let debit = layerx_crypto::send::SendDebit {
+        from: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:worker:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("source account: {error:?}")),
+        to: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:human:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("destination account: {error:?}")),
+        asset: [0x33; 32],
+        amount: 1,
+        source_sequence: 7,
+        idempotency_key: [key; 32],
+        expires_at: 1_010,
+        context_hash: [0x61; 32],
+        conditions: Vec::new(),
+        authorization_kind: SendAuthorizationKind::Owner as u8,
+        network_id: NETWORK_ID,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+    };
+
     SendRoute {
         account_sequence: Sequence::from_u64(ACCOUNT_SEQUENCE),
         idempotency_key: IdempotencyKey::new([key; 32]),
         expires_at: TimestampSeconds::from_u64(1_010),
         context_hash: ContextHash::new([0x61; 32]),
-        authorization: SendAuthorization::new(
-            SendAuthorizationKind::Owner,
-            PublicKey::new(public_key),
-            AuthorizationSignature::new([0x62; 64]),
+        authorization: support::sign_send(
+            &signer,
+            &debit,
+            SendAuthorization::new(
+                SendAuthorizationKind::Owner,
+                PublicKey::new(public_key),
+                AuthorizationSignature::new([0x62; 64]),
+            ),
         ),
         network_id: NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
         protocol_version: ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)

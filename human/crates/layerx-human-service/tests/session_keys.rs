@@ -131,6 +131,7 @@ impl CorePreparationBoundary for PreparationBoundary {
 struct InstalledSession {
     issued: IssuedSessionKey,
     signer: ProvisionedSessionKey,
+    debit_signer: LocalSigner,
     token: Token,
     current_revocation_sequence: u64,
 }
@@ -236,7 +237,7 @@ impl AgentLayer {
         let prepared = prepared_send(
             &self.did,
             installed.issued.authority.clone(),
-            installed.issued.session_public_key,
+            &installed.debit_signer,
             self.now,
         );
         ready(self_sign(
@@ -382,6 +383,7 @@ impl AgentSessionContract for AgentLayer {
                 current_revocation_sequence: issued.revocation_sequence,
                 issued,
                 signer,
+                debit_signer: LocalSigner::new(seed),
                 token,
             },
         );
@@ -547,7 +549,31 @@ fn account(value: &str) -> AccountId {
     AccountId::parse(value).unwrap_or_else(|error| panic!("account: {error:?}"))
 }
 
-fn send_intent(session_public_key: [u8; 32], now: u64) -> Intent {
+fn send_intent(signer: &LocalSigner, now: u64) -> Intent {
+    let session_public_key = signer.public_key();
+    let debit = layerx_crypto::send::SendDebit {
+        from: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:managed:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("source account: {error:?}")),
+        to: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:recipient:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("destination account: {error:?}")),
+        asset: [0x33; 32],
+        amount: 25,
+        source_sequence: 7,
+        idempotency_key: [0x44; 32],
+        expires_at: now.saturating_add(20),
+        context_hash: [0x55; 32],
+        conditions: Vec::new(),
+        authorization_kind: SendAuthorizationKind::SessionKey as u8,
+        network_id: NETWORK_ID,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+    };
+
     let send = LxpSend::new(
         account("agent:did:layerx:managed:main"),
         account("agent:did:layerx:recipient:main"),
@@ -557,10 +583,14 @@ fn send_intent(session_public_key: [u8; 32], now: u64) -> Intent {
         IdempotencyKey::new([0x44; 32]),
         TimestampSeconds::from_u64(now.saturating_add(20)),
         ContextHash::new([0x55; 32]),
-        SendAuthorization::new(
-            SendAuthorizationKind::SessionKey,
-            PublicKey::new(session_public_key),
-            AuthorizationSignature::new([0x66; 64]),
+        support::sign_send(
+            signer,
+            &debit,
+            SendAuthorization::new(
+                SendAuthorizationKind::SessionKey,
+                PublicKey::new(session_public_key),
+                AuthorizationSignature::new([0x66; 64]),
+            ),
         ),
         NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
         ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
@@ -570,13 +600,8 @@ fn send_intent(session_public_key: [u8; 32], now: u64) -> Intent {
     Intent::v1(IntentKind::LxpSend(send))
 }
 
-fn prepared_send(
-    did: &Did,
-    authority: Authority,
-    session_public_key: [u8; 32],
-    now: u64,
-) -> Prepared {
-    let compiled = compile(&send_intent(session_public_key, now), &registry())
+fn prepared_send(did: &Did, authority: Authority, signer: &LocalSigner, now: u64) -> Prepared {
+    let compiled = compile(&send_intent(signer, now), &registry())
         .unwrap_or_else(|error| panic!("send compile: {error:?}"));
     let mut boundary = PreparationBoundary(CorePreparationState {
         network_id: NETWORK_ID,
