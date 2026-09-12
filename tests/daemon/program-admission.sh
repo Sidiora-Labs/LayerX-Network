@@ -23,11 +23,11 @@ cleanup() {
 }
 trap cleanup EXIT
 chmod 0755 "$work"
-python3 - "$work" <<'PY'
+python3 - "$work" "${2:-}" <<'PY'
 import os, pathlib, socket, sys
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 sys.path.insert(0, "tests/support")
-from lxgb_metadata import metadata
+from lxgb_metadata import metadata, metadata_withdrawal
 root = pathlib.Path(sys.argv[1])
 for name, value in [('sequencer', 0x22), ('treasury', 0x11)]:
     path = root / name
@@ -42,7 +42,8 @@ for _ in range(3):
     ports.append(str(sock.getsockname()[1]))
 (root / 'ports').write_text(' '.join(ports) + '\n')
 issuer = Ed25519PrivateKey.from_private_bytes(bytes([0x11]) * 32).public_key().public_bytes_raw()
-(root / 'metadata').write_bytes(metadata(bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'), issuer, os.urandom(32)))
+emit_metadata = metadata_withdrawal if sys.argv[2] == '--withdraw' else metadata
+(root / 'metadata').write_bytes(emit_metadata(bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'), issuer, os.urandom(32)))
 PY
 read -r program_port replica_port rpc_port < "$work/ports"
 mkfifo "$work/replica-ready"

@@ -255,11 +255,7 @@ pub fn estimate_fee(
     let fee = u128::from_be_bytes(fixed(&mut bytes)?);
     let length = usize::from(u16::from_be_bytes(fixed(&mut bytes)?));
     let schedule = take(&mut bytes, length)?;
-    if !bytes.is_empty()
-        || parameter_version == 0
-        || !((length == 86 && schedule[..2] == [0, 1])
-            || (length == 247 && schedule[..2] == [0, 2] && schedule[86] == 10))
-    {
+    if !bytes.is_empty() || parameter_version == 0 || !canonical_fee_schedule(schedule) {
         return Err(ReadError::MalformedValue);
     }
     Ok(CommittedSnapshot {
@@ -271,4 +267,40 @@ pub fn estimate_fee(
             canonical_schedule: schedule.to_vec(),
         },
     })
+}
+
+fn canonical_fee_schedule(schedule: &[u8]) -> bool {
+    (schedule.len() == 86 && schedule[..2] == [0, 1])
+        || (schedule.len() == 247 && schedule[..2] == [0, 2] && schedule[86] == 10)
+        || (schedule.len() == 255 && schedule[..2] == [0, 3] && schedule[86] == 11)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_fee_schedule;
+
+    const WITHDRAWAL: &[u8] = include_bytes!("../../../../tests/fixtures/fee-params-v3.bin");
+
+    #[test]
+    fn native_withdrawal_fee_encoding_is_exact_and_bounded() {
+        assert_eq!(WITHDRAWAL.len(), 255);
+        assert!(canonical_fee_schedule(WITHDRAWAL));
+        assert_eq!(&WITHDRAWAL[247..], &17_u64.to_be_bytes());
+        for prefix in 0..WITHDRAWAL.len() {
+            assert!(!canonical_fee_schedule(&WITHDRAWAL[..prefix]));
+        }
+        let mut extra = WITHDRAWAL.to_vec();
+        extra.push(0);
+        assert!(!canonical_fee_schedule(&extra));
+        for count in 0..=u8::MAX {
+            let mut invalid = WITHDRAWAL.to_vec();
+            invalid[86] = count;
+            assert_eq!(canonical_fee_schedule(&invalid), count == 11);
+        }
+        for version in 0..=u8::MAX {
+            let mut invalid = WITHDRAWAL.to_vec();
+            invalid[1] = version;
+            assert_eq!(canonical_fee_schedule(&invalid), version == 3);
+        }
+    }
 }

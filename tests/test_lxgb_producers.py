@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tests/support'))
-from lxgb_metadata import metadata
+from lxgb_metadata import metadata, metadata_withdrawal
 
 
 def main():
@@ -47,6 +47,30 @@ def main():
         assert (result.returncode == 0) == accepted, f'{label}: exit {result.returncode}'
         assert (work / label / 'genesis.manifest').exists() == accepted
         print(f'{label}: native builder exit={result.returncode}; signed artifacts={accepted}')
+    withdrawal = metadata_withdrawal(asset, issuer, salt, 17)
+    native_fee = (ROOT / 'tests/fixtures/fee-params-v3.bin').read_bytes()
+    assert len(native_fee) == 255 and withdrawal[-255:] == native_fee
+    assert len(withdrawal) == len(suffix) + 8 and withdrawal[:-257] == suffix[:-249]
+    withdrawal_request = producer.genesis_request(members, 77, asset.hex(), 1700000000000, withdrawal)
+    for label, payload, accepted in [('withdrawal', withdrawal_request, True),
+                                     ('withdrawal-truncated', withdrawal_request[:-1], False),
+                                     ('withdrawal-trailing', withdrawal_request + b'\0', False)]:
+        path = work / f'{label}.lxgb'
+        path.write_bytes(payload)
+        result = subprocess.run([str(args.builder.resolve()), str(path), str(work / 'signer'), str(work / label)],
+                                capture_output=True)
+        assert (result.returncode == 0) == accepted, f'{label}: exit {result.returncode}'
+        assert (work / label / 'genesis.manifest').exists() == accepted
+        print(f'{label}: native builder exit={result.returncode}; signed artifacts={accepted}')
+    assert (work / 'withdrawal/genesis.manifest').read_bytes() != (work / 'valid/genesis.manifest').read_bytes()
+    assert (work / 'withdrawal/00000000000000000000.lxs').read_bytes() != (work / 'valid/00000000000000000000.lxs').read_bytes()
+    for price in (-1, 2**64, True):
+        try:
+            metadata_withdrawal(asset, issuer, salt, price)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('withdrawal price u64 bound was not enforced')
     for suffix_input in [b'', suffix[:219], bytes(16384)]:
         try:
             producer.genesis_request(members, 77, asset.hex(), 1700000000000, suffix_input)

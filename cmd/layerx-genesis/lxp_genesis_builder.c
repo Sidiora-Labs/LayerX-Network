@@ -165,7 +165,7 @@ static lxp_result build_fresh(
                 memcmp(value->key, "fee.schedule", 12U) == 0 && lxp_ct_is_zero(value->key + 12U, 20U)) {
                 lxp_fee_params schedule;
                 if (schedule_present || lxp_fee_params_decode(value->value, value->value_length, &schedule) != LXP_OK ||
-                    schedule.version != 2U) return LXP_ERR_NON_CANONICAL;
+                    (schedule.version != 2U && schedule.version != 3U)) return LXP_ERR_NON_CANONICAL;
                 schedule_present = true;
             } else return LXP_ERR_NON_CANONICAL;
         }

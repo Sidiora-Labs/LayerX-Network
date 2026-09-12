@@ -55,14 +55,15 @@ lxp_result lxp_fee_schedule(
                          &encoding, &encoding_version);
         if (status != LXP_OK) return status;
         if (encoding_version != version) return LXP_FATAL_INVARIANT;
-        if (encoding != 1U && encoding != 2U) return LXP_ERR_VERSION_UNSUPPORTED;
+        if (encoding != 1U && encoding != 2U && encoding != 3U) return LXP_ERR_VERSION_UNSUPPORTED;
         schedule->version = (uint16_t)encoding;
-        if (encoding == 2U) {
-            schedule->asset_price_count = LXP_ASSET_FEE_PRICE_COUNT;
-            for (size_t price = 0U; price < LXP_ASSET_FEE_PRICE_COUNT; ++price) {
+        if (encoding == 2U || encoding == 3U) {
+            schedule->asset_price_count = encoding == 3U ?
+                LXP_ASSET_FEE_PRICE_COUNT_V3 : LXP_ASSET_FEE_PRICE_COUNT;
+            for (size_t price = 0U; price < schedule->asset_price_count; ++price) {
                 uint64_t value;
                 uint32_t price_version;
-                status = resolve(parameters, lxp_asset_fee_name(price), batch_epoch,
+                status = resolve(parameters, lxp_asset_fee_name_for_version(schedule->version, price), batch_epoch,
                                  cohort_id, &value, &price_version);
                 if (status != LXP_OK) return status;
                 if (price_version != version) return LXP_FATAL_INVARIANT;
