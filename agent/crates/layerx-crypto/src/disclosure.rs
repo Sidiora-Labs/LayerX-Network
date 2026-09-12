@@ -12,6 +12,7 @@ use layerx_wire::hash;
 use layerx_wire::WireError;
 
 use crate::{
+    authority_grant::AuthorityGrant,
     ct,
     payments::{Grant, Payment},
     SignatureMessage,
@@ -143,6 +144,7 @@ pub struct Disclosure {
     pub withdrawal: Option<DisclosedWithdrawal>,
     /// Decoded payment or Programs payload, present for those activity types.
     pub payment: Option<Payment>,
+    pub authority_grant: Option<AuthorityGrant>,
     activity: Activity,
     signing_digest: [u8; 32],
 }
@@ -494,6 +496,7 @@ fn decode_withdraw(activity: &Activity) -> Result<DisclosureFields, DisclosureEr
             payload_expires_at: bounds.not_after,
         },
         idempotency_key: activity.idempotency_key(),
+        authority_grant: None,
         evm_payout_binding: None,
         withdrawal: Some(DisclosedWithdrawal {
             account_sequence: activity.account_sequence(),
@@ -686,6 +689,7 @@ fn payment_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
             payload_expires_at,
         },
         idempotency_key: activity.idempotency_key(),
+        authority_grant: None,
         evm_payout_binding: None,
         withdrawal: None,
         payment: Some(payment),
@@ -712,9 +716,58 @@ fn governance_fields(
             payload_expires_at: not_after,
         },
         idempotency_key: activity.idempotency_key(),
+        authority_grant: None,
         evm_payout_binding: Some(binding),
         withdrawal: None,
         payment: None,
+    })
+}
+
+fn authority_grant_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
+    if activity.protocol_version() != 3 {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    let grant = AuthorityGrant::from_payload(activity.payload())
+        .map_err(|_| DisclosureError::MalformedPayload)?;
+    let did = layerx_types::ids::Did::new(activity.actor_did())
+        .map_err(|_| DisclosureError::MalformedPayload)?;
+    if grant.grantor != hash::did_id_for_protocol(&did, activity.protocol_version())?
+        || activity.authority() == grant.delegate_key
+    {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    let scope = grant.scope;
+    Ok(DisclosureFields {
+        activity_type: activity.activity_type(),
+        actor: activity.actor_did().to_vec(),
+        authority: activity.authority().to_vec(),
+        counterparties: Vec::new(),
+        amounts: vec![
+            DisclosedAmount {
+                role: AmountRole::PerDrawMaximum,
+                value: scope.maximum_per_activity,
+            },
+            DisclosedAmount {
+                role: AmountRole::GrantAllowance,
+                value: scope.maximum_total,
+            },
+            DisclosedAmount {
+                role: AmountRole::SpendingLimit,
+                value: scope.maximum_per_period,
+            },
+        ],
+        asset: scope.asset,
+        fee_limit: activity.fee_limit(),
+        expiry: Expiry {
+            not_before: activity.timestamp_bound().not_before,
+            not_after: activity.timestamp_bound().not_after,
+            payload_expires_at: grant.not_after,
+        },
+        idempotency_key: activity.idempotency_key(),
+        evm_payout_binding: None,
+        withdrawal: None,
+        payment: None,
+        authority_grant: Some(grant),
     })
 }
 
@@ -737,6 +790,9 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         (ModuleId::Asset, 1 | 2 | 3 | 4 | 6 | 7 | 8 | 10 | 11) | (ModuleId::Programs, 5 | 6)
     ) {
         return payment_fields(activity);
+    }
+    if kind == (ModuleId::Governance, 8) {
+        return authority_grant_fields(activity);
     }
     if kind == (ModuleId::Governance, GOVERNANCE_EVM_BINDING_ORDINAL) {
         return governance_fields(activity, not_before, not_after);
@@ -769,6 +825,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
                 payload_expires_at: budget.expires_at,
             },
             idempotency_key: activity.idempotency_key(),
+            authority_grant: None,
             evm_payout_binding: None,
             withdrawal: None,
             payment: None,
@@ -801,6 +858,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
             payload_expires_at: send.expires_at,
         },
         idempotency_key: send.idempotency_key,
+        authority_grant: None,
         evm_payout_binding: None,
         withdrawal: None,
         payment: None,
@@ -820,6 +878,7 @@ struct DisclosureFields {
     evm_payout_binding: Option<DisclosedEvmPayoutBinding>,
     withdrawal: Option<DisclosedWithdrawal>,
     payment: Option<Payment>,
+    authority_grant: Option<AuthorityGrant>,
 }
 
 impl Disclosure {
@@ -864,6 +923,7 @@ impl Disclosure {
         require_field!(expiry);
         require_field!(idempotency_key);
         require_field!(withdrawal);
+        require_field!(authority_grant);
         require_field!(evm_payout_binding);
         require_field!(payment);
         Ok(())
@@ -948,6 +1008,14 @@ impl Disclosure {
             encoder.fixed(&withdrawal.evm_recipient)?;
             encoder.fixed(&withdrawal.request_anchor)?;
         }
+        if let Some(grant) = self.authority_grant {
+            encoder.bytes(
+                &grant
+                    .encode()
+                    .map_err(|_| DisclosureError::MalformedPayload)?,
+                1024,
+            )?;
+        }
         if let Some(payment) = &self.payment {
             encoder.bytes(&payment.encode(&self.actor)?, 32768)?;
         }
@@ -997,6 +1065,7 @@ impl Disclosure {
         require_field!(expiry);
         require_field!(idempotency_key);
         require_field!(withdrawal);
+        require_field!(authority_grant);
         let reencoded = self.reencode()?;
         if !ct::eq(&reencoded, canonical) {
             return Err(DisclosureError::FieldMismatch("canonical_bytes"));
@@ -1040,6 +1109,7 @@ pub fn bind(canonical: &[u8], registry: &ModuleRegistry) -> Result<Disclosure, D
         fee_limit: fields.fee_limit,
         expiry: fields.expiry,
         idempotency_key: fields.idempotency_key,
+        authority_grant: fields.authority_grant,
         evm_payout_binding: fields.evm_payout_binding,
         withdrawal: fields.withdrawal,
         payment: fields.payment,

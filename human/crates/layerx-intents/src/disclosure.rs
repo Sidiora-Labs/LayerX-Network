@@ -153,6 +153,13 @@ impl DisclosureCheck {
                     DisclosureField::OwnershipSignature,
                 )?;
             }
+            IntentKind::AuthorityGrant(value) => {
+                let body = value.encode().map_err(|_| {
+                    DisclosureCheckError::FieldMismatch(DisclosureField::AuthorityGrant)
+                })?;
+                round_trip.header(0x7108, 0x0101)?;
+                round_trip.bytes(&body, 1024, DisclosureField::AuthorityGrant)?;
+            }
             IntentKind::SessionGrant(value) => {
                 round_trip.header(0x7105, 1)?;
                 round_trip.bytes(
@@ -559,6 +566,7 @@ fn expected_activity_type(intent: &Intent) -> Result<ActivityType, DisclosureChe
         IntentKind::KeyRotation(_) => (ModuleId::Governance, 2),
         IntentKind::RecoveryRegistration(_) => (ModuleId::Governance, 3),
         IntentKind::EvmPayoutBinding(_) => (ModuleId::Governance, 4),
+        IntentKind::AuthorityGrant(_) => (ModuleId::Governance, 8),
         IntentKind::SessionGrant(_) => (ModuleId::Governance, 5),
         IntentKind::SessionRevoke(_) => (ModuleId::Governance, 6),
         IntentKind::LxpSend(_) => (ModuleId::Asset, 5),

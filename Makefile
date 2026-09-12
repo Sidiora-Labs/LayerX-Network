@@ -3542,3 +3542,17 @@ $(BUILD_DIR)/tests/lxp_test_paxeer_membership_sync: tests/paxeer/membership_sync
 test-paxeer-membership-chain: $(BUILD_DIR)/tests/lxp_test_paxeer_membership_sync
 	$(GUARANTOR_PYTHON) tests/paxeer/membership-sync-chain.py \
 		$(BUILD_DIR)/tests/lxp_test_paxeer_membership_sync
+
+$(BUILD_DIR)/tests/lxp_test_grant_issuance: tests/daemon/lxp_test_grant_issuance.c tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-daemon-grant-issuance authority-grant-fixtures authority-grant-fixtures-check
+test-daemon-grant-issuance: $(BUILD_DIR)/tests/lxp_test_grant_issuance $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	bash tests/daemon/program-admission.sh $(BUILD_DIR) --grant-issuance
+
+authority-grant-fixtures: $(BUILD_DIR)/tests/lxp_test_grant_issuance
+	python3 tests/daemon/grant-fixtures.py --encoder $<
+
+authority-grant-fixtures-check: $(BUILD_DIR)/tests/lxp_test_grant_issuance
+	python3 tests/daemon/grant-fixtures.py --encoder $< --check
