@@ -136,6 +136,27 @@ static int contains_bytes(const uint8_t *bytes, size_t length,
     return 0;
 }
 
+static int genesis_fee_schedule_is_current(const lxp_genesis_manifest *genesis)
+{
+    static const uint8_t schedule_key[32] = "fee.schedule";
+    size_t found = 0U;
+    for (size_t i = 0U; i < genesis->module_value_count; ++i) {
+        const lxp_genesis_module_value *value = &genesis->module_values[i];
+        lxp_fee_params schedule;
+        if (value->module_id != LXP_MODULE_GOVERNANCE ||
+            memcmp(value->key, schedule_key, sizeof(schedule_key)) != 0)
+            continue;
+        if (value->value_length != (size_t)LXP_FEE_PARAMS_V2_BYTES ||
+            lxp_fee_params_decode(value->value, value->value_length,
+                                  &schedule) != LXP_OK ||
+            schedule.version != 2U ||
+            schedule.asset_price_count != LXP_ASSET_FEE_PRICE_COUNT)
+            return 0;
+        ++found;
+    }
+    return found == 1U;
+}
+
 static int signed_snapshot_migration_fixture(const char *base)
 {
     static const char fixture_manifest[] =
@@ -178,6 +199,8 @@ static int signed_snapshot_migration_fixture(const char *base)
                   &manifest_length) != 0 ||
         lxp_genesis_parse(manifest_bytes, manifest_length,
                           LXP_GENESIS_INPUT_MANIFEST, &genesis) != LXP_OK ||
+        genesis.protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        !genesis_fee_schedule_is_current(&genesis) ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
         lxp_genesis_verify_signature(&genesis, &arena) != LXP_OK ||
         lxp_arena_reset(&arena, 0U) != LXP_OK ||
