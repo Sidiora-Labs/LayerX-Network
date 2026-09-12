@@ -16,7 +16,10 @@ pub(crate) fn private_ca(ca_der: &[u8]) -> Option<TlsConfig> {
 
 pub(crate) fn system(endpoint: &str) -> Option<TlsConfig> {
     let mut certificates = Vec::new();
-    if endpoint.starts_with("https://") {
+    if endpoint
+        .split_once("://")
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
+    {
         let loaded = rustls_native_certs::load_native_certs();
         if loaded.certs.is_empty() || !loaded.errors.is_empty() {
             return None;
