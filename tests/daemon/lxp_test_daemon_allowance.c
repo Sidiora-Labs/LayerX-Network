@@ -73,13 +73,7 @@ static const uint8_t sequencer_seed[32] = { 9U };
 static const uint8_t did[] = "did:key:payer";
 static const char payer_name[] = "agent:did:key:payer:main";
 static const char provider_name[] = "agent:did:key:provider:main";
-static const char *const stream_names[STREAM_ACCOUNTS] = {
-    "agent:did:key:payer:stream:s1", "agent:did:key:payer:stream:s2",
-    "agent:did:key:payer:stream:s3", "agent:did:key:payer:stream:s4",
-    "agent:did:key:payer:stream:s5", "agent:did:key:payer:stream:s6",
-    "agent:did:key:payer:stream:s7", "agent:did:key:payer:stream:s8",
-    "agent:did:key:payer:stream:s9"
-};
+static const uint8_t stream_markers[STREAM_ACCOUNTS] = {1U, 2U, 3U, 4U, 5U, 6U, 8U, 9U, 7U};
 
 static int public_from_seed(const uint8_t seed[32], uint8_t public_key[32])
 {
@@ -125,7 +119,7 @@ static bool balance_is(const lx_account *account, uint64_t expected)
     return account->balance.hi == 0U && account->balance.lo == expected;
 }
 
-static int fixture_init(fixture *f)
+static int fixture_init(fixture *f, uint8_t marker_offset)
 {
     size_t i;
     CHECK(public_from_seed(owner_seed, f->owner_public) == 0);
@@ -143,8 +137,21 @@ static int fixture_init(fixture *f)
     CHECK(open_account(f, payer_name, &f->payer) == 0);
     CHECK(open_account(f, provider_name, &f->provider) == 0);
     for (i = 0U; i < STREAM_ACCOUNTS; ++i) {
-        CHECK(open_account(f, stream_names[i], &f->streams[i]) == 0);
+        static const char prefix[] = "agent:did:key:payer:stream:";
+        static const char hex[] = "0123456789abcdef";
+        uint8_t object_id[32] = {0};
+        char name[sizeof(prefix) + 64U];
+        object_id[0] = (uint8_t)(stream_markers[i] + marker_offset);
+        (void)memcpy(name, prefix, sizeof(prefix) - 1U);
+        for (size_t byte = 0U; byte < sizeof(object_id); ++byte) {
+            name[sizeof(prefix) - 1U + byte * 2U] = hex[object_id[byte] >> 4U];
+            name[sizeof(prefix) + byte * 2U] = hex[object_id[byte] & 15U];
+        }
+        name[sizeof(name) - 1U] = '\0';
+        CHECK(open_account(f, name, &f->streams[i]) == 0);
         CHECK(f->streams[i]->kind == LX_ACCOUNT_AGENT_STREAM);
+        CHECK(lxp_ledger_bootstrap_balance(f->streams[i], f->asset.asset_id,
+                                           (lxp_u128){0U, 0U}, 0U) == LXP_OK);
     }
     CHECK(f->payer->kind == LX_ACCOUNT_AGENT_MAIN);
     CHECK(f->provider->kind == LX_ACCOUNT_AGENT_MAIN);
@@ -490,7 +497,7 @@ static int allowance_end_to_end(void)
     uint8_t foreign_id[32];
     size_t store_count;
     CHECK(f != NULL);
-    CHECK(fixture_init(f) == 0);
+    CHECK(fixture_init(f, 0U) == 0);
     owner_signer = (signer){ owner_seed, f->owner_public };
     delegate_signer = (signer){ delegate_seed, f->delegate_public };
     foreign_signer = (signer){ foreign_seed, f->foreign_public };
@@ -634,7 +641,7 @@ static int allowance_private_candidates(void)
     uint8_t base_root[32];
     uint8_t candidate_root[32];
     CHECK(live != NULL && replay != NULL);
-    CHECK(fixture_init(live) == 0 && fixture_init(replay) == 0);
+    CHECK(fixture_init(live, 30U) == 0 && fixture_init(replay, 30U) == 0);
     CHECK(fixture_programs(live) == 0 && fixture_programs(replay) == 0);
     metered_grant(live, &grant, live->delegate_public, 6U);
     CHECK(seed_grant(live, &grant) == 0);
