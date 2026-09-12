@@ -107,7 +107,10 @@ fn feed(config: &Config, mut sequence: u64) -> Result<(), String> {
                     .ok_or("receipt sequence exhausted")?;
                 (delivered, receipt)
             }
-            None => (sequence.saturating_sub(1), Value::Null),
+            None => {
+                std::thread::sleep(Duration::from_millis(100));
+                (sequence.saturating_sub(1), Value::Null)
+            }
         };
         let mut hub = HUB
             .get_or_init(Mutex::default)

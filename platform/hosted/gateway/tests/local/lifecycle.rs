@@ -814,6 +814,82 @@ fn local_manifest(cluster: &Cluster) -> PathBuf {
 }
 
 #[test]
+fn local_gateway_account_sequence_matches_authenticated_account() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let activity = hex_encode(&establish_receipt_head(&boundary, &cluster));
+    wait_for_published_receipt(&boundary, &cluster, &activity);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let account = layerx_types::account::AccountId::parse("system:fees").required("account name");
+    let account_id = layerx_wire::hash::account_id_for_protocol(&account, PROTOCOL_VERSION)
+        .required("account id");
+    let account_hex = hex_encode(&account_id);
+    let direct = boundary
+        .core
+        .get(&format!("/v1/accounts/{account_hex}/balance"));
+    assert_eq!(direct.status, 200, "{}", direct.body);
+    let rpc = local_rpc(
+        &http,
+        "",
+        "lx_getSequence",
+        &serde_json::json!([account_hex]),
+        false,
+    );
+    assert_eq!(rpc["result"], json(&direct)["result"]);
+    let value = &rpc["result"];
+    let canonical = hex_decode(
+        value["canonical_value"]
+            .as_str()
+            .required("canonical account"),
+    )
+    .required("account hex");
+    let material = hex_decode(value["proof_material"].as_str().required("account proof"))
+        .required("proof hex");
+    let proven = verify_account_evidence(
+        &canonical,
+        &material,
+        account_id,
+        None,
+        AccountEvidencePolicy {
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: NETWORK_ID,
+            handshake_sequencer_key: cluster.sequencer_key,
+            root_selector: RootSelector::Latest,
+        },
+    )
+    .required("independent account verification");
+    assert_eq!(
+        value["next_sequence"],
+        proven.account().next_sequence.to_string()
+    );
+    assert_eq!(value["verification"], "state_proven");
+    let malformed = local_rpc(
+        &http,
+        "",
+        "lx_getSequence",
+        &serde_json::json!(["ab"]),
+        false,
+    );
+    assert_eq!(malformed["error"]["code"], -32602);
+}
+
+#[test]
 fn local_gateway_rpc() {
     let cluster = start_cluster(true);
     let certificates = certificates(&cluster.root);

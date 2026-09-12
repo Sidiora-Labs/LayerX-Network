@@ -445,6 +445,37 @@ impl Projection {
         {
             return Err(RampError::Conflict);
         }
+        let included = matches!(stage, "confirming" | "final" | "displaced");
+        if !matches!(
+            stage,
+            "broadcast_unknown"
+                | "announced"
+                | "missing"
+                | "pooled"
+                | "confirming"
+                | "final"
+                | "displaced"
+        ) || included != block_hash.is_some()
+            || block_hash == Some([0; 32])
+            || (!included && confirmations != 0)
+            || (stage == "final" && confirmations == 0)
+        {
+            return Err(RampError::Paxeer);
+        }
+        if snapshot.block_hash.is_some() && stage != "displaced" {
+            if block_hash != snapshot.block_hash && snapshot.stage != "displaced" {
+                return Err(RampError::Conflict);
+            }
+            if snapshot.stage != "displaced"
+                && (confirmations < snapshot.confirmations
+                    || (snapshot.stage == "final" && stage != "final"))
+            {
+                return Err(RampError::Conflict);
+            }
+        }
+        if stage == "displaced" && snapshot.block_hash.is_none() {
+            return Err(RampError::Conflict);
+        }
         snapshot.operation_id = Some(operation_id.to_owned());
         snapshot.transaction_hash = Some(transaction_hash);
         stage.clone_into(&mut snapshot.stage);

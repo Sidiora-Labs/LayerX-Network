@@ -10,9 +10,15 @@ set -eu
 : "${LAYERX_TEST_DESTINATION_DID:?LAYERX_TEST_DESTINATION_DID is required}"
 : "${LAYERX_TEST_ASSET:?LAYERX_TEST_ASSET is required}"
 : "${LAYERX_TEST_AMOUNT:?LAYERX_TEST_AMOUNT is required}"
+: "${LAYERX_TEST_PROGRAM_ACTIVITY_FILE:?A real signed ProgramCall activity file is required}"
+: "${LAYERX_TEST_PROGRAM_IDEMPOTENCY_KEY:?The signed ProgramCall idempotency key is required}"
 : "${LAYERX_BIN:=layerx}"
 test -r "$LAYERX_TEST_AUTH_TOKEN_FILE"
 test -r "$LAYERX_TEST_CA_FILE"
+test -f "$LAYERX_TEST_PROGRAM_ACTIVITY_FILE"
+test ! -L "$LAYERX_TEST_PROGRAM_ACTIVITY_FILE"
+test -s "$LAYERX_TEST_PROGRAM_ACTIVITY_FILE"
+printf '%s' "$LAYERX_TEST_PROGRAM_IDEMPOTENCY_KEY" | grep -Eq '^[0-9a-f]{64}$'
 command -v jq >/dev/null
 command -v openssl >/dev/null
 command -v "$LAYERX_BIN" >/dev/null
@@ -149,5 +155,31 @@ jq -e '.ok == true and .kind == "receipt.verified" and .data.verified == true' \
 printf '%s\n' "receipt inspection journey: batch $batch_id receipt $receipt_id independently verified"
 
 admit_journey programs
+curl --fail --silent --show-error --max-time 120 --cacert "$LAYERX_TEST_CA_FILE" \
+  --config "$auth_config" --request POST "$LAYERX_GATEWAY_URL/v1/programs/call" \
+  --header 'Content-Type: application/octet-stream' \
+  --header "Idempotency-Key: $LAYERX_TEST_PROGRAM_IDEMPOTENCY_KEY" \
+  --data-binary "@$LAYERX_TEST_PROGRAM_ACTIVITY_FILE" > "$work/program-response.json"
+jq -e '.ok == true and .result.state == "completed"
+  and (.result.receipt | type == "string" and length > 0)
+  and (.result.terminal_payload | type == "string" and length > 0)
+  and (.result.call_graph | type == "string" and length > 0)' "$work/program-response.json" >/dev/null
+program_activity=$(jq -er '.result.activity_id' "$work/program-response.json")
+curl --fail --silent --show-error --max-time 30 --cacert "$LAYERX_TEST_CA_FILE" \
+  --config "$auth_config" "$LAYERX_GATEWAY_URL/v1/receipts/$program_activity" \
+  > "$work/program-receipt.json"
+jq -e --slurpfile submitted "$work/program-response.json" \
+  '.result.activity_id == $submitted[0].result.activity_id and .result.receipt == $submitted[0].result.receipt' \
+  "$work/program-receipt.json" >/dev/null
+jq -er '.result.receipt' "$work/program-receipt.json" > "$work/program-receipt.hex"
+"$LAYERX_BIN" --json receipt verify --receipt "$work/program-receipt.hex" \
+  --batch-id "$(jq -er '.result.authority.batch_id' "$work/program-receipt.json")" \
+  --asset "$(jq -er '.result.authority.asset' "$work/program-receipt.json")" \
+  --previous-state-root "$(jq -er '.result.authority.previous_state_root' "$work/program-receipt.json")" \
+  --resulting-state-root "$(jq -er '.result.authority.resulting_state_root' "$work/program-receipt.json")" \
+  --sequencer-public-key "$(jq -er '.result.authority.sequencer_public_key' "$work/program-receipt.json")" \
+  > "$work/program-verification.json"
+jq -e '.ok == true and .kind == "receipt.verified" and .data.verified == true' "$work/program-verification.json" >/dev/null
+printf '%s\n' "Programs journey: activity $program_activity executed and independently receipt-verified"
 printf '%s\n' "hosted payment $receipt_id was independently receipt-verified"
 printf '%s\n' "$cluster_identity"

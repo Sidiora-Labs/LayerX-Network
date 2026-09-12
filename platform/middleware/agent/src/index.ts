@@ -166,7 +166,7 @@ export interface AgentMiddlewareConfig {
 export type AgentSpendResult =
   | {
     readonly kind: "verified";
-    readonly submission: Submission;
+    readonly submission?: Submission;
     readonly verification: ReceiptVerification;
     readonly reservation: CommittedBudgetReservation;
   }
@@ -237,6 +237,21 @@ export class AgentMiddleware {
     }
     if (reservation.state === "released") {
       return { kind: "refused", reservation, ...reservation.refusal };
+    }
+    if (reservation.state === "committed") {
+      try {
+        const evidence = await this.#receipts.resolve(reservation.receiptDigest);
+        const verification = await verifyAgentPayment(evidence, request, this.#commitments);
+        if (toHex(verification.receiptDigest) !== reservation.receiptDigest
+          || verification.receipt.amount !== BigInt(amount)
+          || !constantTimeHex(verification.receipt.asset, request.asset)
+          || !constantTimeHex(verification.receipt.to, request.recipient)) {
+          throw new AgentMiddlewareError("budget-conflict");
+        }
+        return { kind: "verified", verification, reservation };
+      } catch {
+        return { kind: "unknown", reservation };
+      }
     }
     let prepared: PreparedActivity;
     try {
@@ -339,9 +354,6 @@ export class AgentMiddleware {
       return { kind: "unknown", reservation, submission };
     }
     if (state === "Pending") {
-      if (reservation.state === "committed") {
-        return { kind: "unknown", reservation, submission };
-      }
       return { kind: "pending", submission, reservation };
     }
     if (state === "Failed" || state === "Expired") {
@@ -359,18 +371,12 @@ export class AgentMiddleware {
     }
     const receiptRef = executedReceiptRef(submission);
     if (receiptRef === undefined) {
-      if (reservation.state === "committed") {
-        return { kind: "unknown", reservation, submission };
-      }
       return { kind: "pending", submission, reservation };
     }
     let evidence: AgentReceiptEvidence;
     try {
       evidence = await this.#receipts.resolve(receiptRef);
     } catch {
-      if (reservation.state === "committed") {
-        return { kind: "unknown", reservation, submission };
-      }
       return { kind: "pending", submission, reservation };
     }
     let verification: ReceiptVerification;
@@ -815,6 +821,7 @@ export class AgentGrantMiddleware implements GrantDrawExecution {
     readonly tenant: string;
     readonly budgets: AgentBudgetLedger;
     readonly draws: GrantDrawExecution;
+    readonly receipts: AgentReceiptResolver;
     readonly commitments?: PaymentCommitmentResolver;
   }) {
     if (!config.tenant || config.tenant.length > 512 || config.tenant.includes("\0")) throw new AgentMiddlewareError("invalid-request");
@@ -834,6 +841,13 @@ export class AgentGrantMiddleware implements GrantDrawExecution {
     const reservation = validateBudgetReservation(result.reservation, facts);
     if (reservation.state === "held") return { kind: "pending" };
     if (reservation.state === "released") return { kind: "refused", reason: "budget_released" };
+    if (reservation.state === "committed") {
+      const evidence = await this.config.receipts.resolve(reservation.receiptDigest);
+      const outcome: SellerSettlementOutcome = { kind: "settled", ...evidence };
+      const verification = await verifyPaymentReceipt(outcome, requirements, this.config.commitments);
+      if (toHex(verification.receiptDigest) !== reservation.receiptDigest) throw new AgentMiddlewareError("budget-conflict");
+      return outcome;
+    }
     const outcome = await this.config.draws.execute(request);
     if (outcome.kind !== "settled") return outcome;
     const verification = await verifyPaymentReceipt(outcome, requirements, this.config.commitments);

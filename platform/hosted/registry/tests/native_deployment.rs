@@ -1010,7 +1010,26 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
         "journal",
     );
     must(journal.append(&evidence), "append");
+    for step in [
+        layerx_platform_registry::WriteStep::WriteProof,
+        layerx_platform_registry::WriteStep::WriteRecord,
+        layerx_platform_registry::WriteStep::SyncTemporary,
+        layerx_platform_registry::WriteStep::Commit,
+    ] {
+        assert!(journal
+            .clone()
+            .interrupt_before(step)
+            .export_pair(&evidence)
+            .is_err());
+        assert!(!cluster.root.join("journal/pairs").exists());
+    }
     must(journal.export_pair(&evidence), "pair");
+    assert!(journal
+        .clone()
+        .interrupt_before(layerx_platform_registry::WriteStep::SyncDirectory)
+        .export_pair(&evidence)
+        .is_err());
+    must(journal.export_pair(&evidence), "recovered pair");
     for (suffix, expected) in [
         ("admission", proof.canonical_encoding()),
         ("deployment", evidence.record().canonical_encoding()),
@@ -1407,7 +1426,10 @@ fn cluster_producer(cluster: &Cluster, artifact: &Path) -> std::process::Output 
 fn cluster_producer_signs_built_program_for_live_treasury() {
     use layerx_types::program_lifecycle::NativeProgramDeploy;
     let cluster = start_cluster(true);
-    let artifact = repository_root().join("programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm");
+    let artifact = std::env::var_os("LAYERX_TEST_ESCROW_WASM").map_or_else(
+        || repository_root().join("programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"),
+        PathBuf::from,
+    );
     let sequence = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
     let output = cluster_producer(&cluster, &artifact);
     assert!(

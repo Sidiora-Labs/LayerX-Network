@@ -414,8 +414,12 @@ impl FiatAdapter {
         let opened = gateway
             .begin_translation(principal, &request, trace, now)
             .map_err(|error| trace.wrap(FiatError::Gateway(error.into_error())))?;
-        if opened == TranslationStatus::Refused {
-            return Ok(FiatJourneyState::Refused);
+        match opened {
+            TranslationStatus::Refused => return Ok(FiatJourneyState::Refused),
+            TranslationStatus::ReceiptVerified { receipt_digest } => {
+                return Ok(completed_state(facts.class, receipt_digest));
+            }
+            _ => {}
         }
         let intent = FiatIntent {
             kind,
