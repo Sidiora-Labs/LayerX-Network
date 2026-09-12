@@ -155,19 +155,15 @@ fn finalized_reads(route: &mut NativeReadRoute, work: &Path) {
         .as_array()
         .is_some_and(|chunks| chunks.len() >= 5));
     assert_eq!(availability["header_hex"], checkpoint["header_hex"]);
-    let receipt_bytes = hex::decode(
-        receipt["canonical_hex"]
-            .as_str()
-            .unwrap_or_else(|| panic!("receipt bytes")),
-    )
-    .unwrap_or_else(|error| panic!("receipt hex: {error:?}"));
-    let decoded = layerx_wire::receipt::decode(&receipt_bytes)
-        .unwrap_or_else(|error| panic!("receipt decode: {error:?}"));
+    let key = SigningKey::from_bytes(&[0x11; 32]);
+    let account_name = layerx_types::account::AccountId::parse(&format!(
+        "agent:did:layerx:{}:main",
+        hex::encode(key.verifying_key().as_bytes())
+    ))
+    .unwrap_or_else(|error| panic!("actual actor account: {error:?}"));
     let account = hex::encode(
-        &decoded
-            .protocol()
-            .unwrap_or_else(|| panic!("protocol receipt"))
-            .from(),
+        &layerx_wire::hash::account_id_for_protocol(&account_name, 3)
+            .unwrap_or_else(|error| panic!("actor account identifier: {error:?}")),
     );
     history_reads(route, &account);
 }

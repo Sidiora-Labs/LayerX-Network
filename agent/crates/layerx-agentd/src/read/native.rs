@@ -10,12 +10,15 @@ use layerx_programs::hex;
 use layerx_proof::availability::RootCommitments;
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::merkle::Proof;
+use layerx_types::account::AccountId;
+use layerx_types::activity::Envelope;
 use layerx_types::ids::Did;
 use layerx_types::payload::ModuleRegistry;
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::activity::decode_signed;
 use layerx_wire::hash;
 use layerx_wire::receipt::decode_batch_header;
+use layerx_wire::receipt::ProtocolReceipt;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
@@ -294,7 +297,7 @@ impl NativeReadRoute {
                         return Err(NativeReadError::Verification);
                     }
                     let receipt_value = proof_json(&receipt, self.client.head().chain_sequence)?;
-                    (protocol.from() == account || protocol.to() == account).then(|| json!({
+                    receipt_mentions_account(protocol, &activity, account)?.then(|| json!({
                         "global_sequence": item.global_sequence.to_string(), "kind": "activity",
                         "activity_id": hex::encode(&id), "canonical_hex": hex::encode(item.canonical_bytes()),
                         "receipt": receipt_value,
@@ -432,6 +435,54 @@ fn proof_json(bundle: &VerifiedProofBundle, observed: u64) -> Result<Value, Nati
         "verification_level": VerificationLevel::BATCH_INCLUDED.wire_rank(), "complete": true,
         "freshness": {"observed_sequence": observed, "batch_number": header.batch_number(), "observed_at": header.timestamp_ms()}}),
     )
+}
+
+fn actor_main_account(actor: &Did, protocol: u16) -> Result<[u8; 32], NativeReadError> {
+    let did = std::str::from_utf8(actor.as_bytes()).map_err(|_| NativeReadError::Verification)?;
+    let name = AccountId::parse(&format!("agent:{did}:main"))
+        .map_err(|_| NativeReadError::Verification)?;
+    hash::account_id_for_protocol(&name, protocol).map_err(|_| NativeReadError::Verification)
+}
+
+fn receipt_mentions_account(
+    receipt: &ProtocolReceipt,
+    activity: &Envelope,
+    account: [u8; 32],
+) -> Result<bool, NativeReadError> {
+    if account == [0; 32] {
+        return Err(NativeReadError::InvalidRequest);
+    }
+    let directly_named = receipt.from() == account
+        || receipt.to() == account
+        || actor_main_account(activity.actor_did(), activity.protocol_version())? == account;
+    if receipt.module_id() != 8
+        || activity.activity_type().ordinal() != 1
+        || receipt.result_code() != 0
+    {
+        return Ok(directly_named);
+    }
+    let payload = activity.payload().as_bytes();
+    if payload.len() != 427 || !matches!(&payload[..5], b"LXDC1" | b"LXDC2") {
+        return Err(NativeReadError::Verification);
+    }
+    let payload_hash = Sha256::digest(payload);
+    let expected = [
+        &payload[43..139],
+        &payload[191..207],
+        &payload[5..37],
+        &payload_hash[..],
+    ]
+    .concat();
+    let mut deposits = receipt
+        .effects()
+        .iter()
+        .filter(|effect| effect.module_id() == 8 && effect.event_type() == 1 && !effect.monetary());
+    let deposit = deposits.next().ok_or(NativeReadError::Verification)?;
+    if deposits.next().is_some() || deposit.body().len() != 208 || deposit.body()[..176] != expected
+    {
+        return Err(NativeReadError::Verification);
+    }
+    Ok(directly_named || deposit.body()[64..96] == account)
 }
 
 fn maintenance_json(

@@ -531,7 +531,12 @@ pub fn history(
     cursor: Option<HistoryCursor>,
     context: ReadContext,
 ) -> Result<HistoryPage, ReadError> {
-    if page_bound == 0 || end_sequence < start_sequence {
+    if page_bound == 0
+        || page_bound > 256
+        || start_sequence == 0
+        || end_sequence < start_sequence
+        || end_sequence == u64::MAX
+    {
         return Err(ReadError::PageBound);
     }
     let expected_start = if let Some(cursor) = cursor {
@@ -539,6 +544,7 @@ pub fn history(
             || cursor.head_sequence != context.head.chain_sequence
             || cursor.checkpoint != context.head.finalised_checkpoint
             || cursor.next_sequence < start_sequence
+            || cursor.next_sequence > end_sequence
         {
             return Err(ReadError::UnexpectedResponse);
         }
@@ -575,18 +581,7 @@ pub fn history(
                     return Err(ReadError::PageBound);
                 }
                 let (kind, sequence, evidence_bytes) = history_metadata(response.proof_material)?;
-                if sequence < expected {
-                    return Err(ReadError::HistoryRepetition {
-                        previous: expected.saturating_sub(1),
-                        actual: sequence,
-                    });
-                }
-                if sequence > expected {
-                    return Err(ReadError::HistoryGap {
-                        expected,
-                        actual: sequence,
-                    });
-                }
+                validate_history_sequence(expected, sequence, end_sequence)?;
                 let achieved = verify_history_item(
                     kind,
                     sequence,
@@ -603,7 +598,11 @@ pub fn history(
                 expected = expected.checked_add(1).ok_or(ReadError::PageBound)?;
             }
             HISTORY_END_TAG => {
+                if !response.proof_material.is_empty() {
+                    return Err(ReadError::MalformedValue);
+                }
                 let next = decode_history_end(response.canonical_payload)?;
+                validate_history_progress(expected_start, next, end_sequence)?;
                 if next != expected {
                     return Err(if next < expected {
                         ReadError::HistoryRepetition {
@@ -627,6 +626,74 @@ pub fn history(
             }
             _ => return Err(ReadError::UnexpectedResponse),
         }
+    }
+}
+
+fn validate_history_sequence(expected: u64, sequence: u64, end: u64) -> Result<(), ReadError> {
+    if sequence > end {
+        return Err(ReadError::SelectorMismatch);
+    }
+    if sequence < expected {
+        return Err(ReadError::HistoryRepetition {
+            previous: expected.saturating_sub(1),
+            actual: sequence,
+        });
+    }
+    if sequence > expected {
+        return Err(ReadError::HistoryGap {
+            expected,
+            actual: sequence,
+        });
+    }
+    Ok(())
+}
+
+fn validate_history_progress(start: u64, next: u64, end: u64) -> Result<(), ReadError> {
+    if next <= start {
+        return Err(ReadError::HistoryRepetition {
+            previous: start,
+            actual: next,
+        });
+    }
+    if next > end.checked_add(1).ok_or(ReadError::PageBound)? {
+        return Err(ReadError::SelectorMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod history_bounds_tests {
+    use super::{validate_history_progress, validate_history_sequence, ReadError};
+    #[test]
+    fn authenticated_history_must_stay_within_selector_and_make_progress() {
+        assert_eq!(validate_history_sequence(10, 10, 12), Ok(()));
+        assert_eq!(validate_history_sequence(12, 12, 12), Ok(()));
+        assert_eq!(
+            validate_history_sequence(13, 13, 12),
+            Err(ReadError::SelectorMismatch)
+        );
+        assert!(matches!(
+            validate_history_sequence(11, 10, 12),
+            Err(ReadError::HistoryRepetition { .. })
+        ));
+        assert!(matches!(
+            validate_history_sequence(10, 11, 12),
+            Err(ReadError::HistoryGap { .. })
+        ));
+        assert_eq!(validate_history_progress(10, 11, 12), Ok(()));
+        assert_eq!(validate_history_progress(10, 13, 12), Ok(()));
+        assert!(matches!(
+            validate_history_progress(10, 10, 12),
+            Err(ReadError::HistoryRepetition { .. })
+        ));
+        assert_eq!(
+            validate_history_progress(10, 14, 12),
+            Err(ReadError::SelectorMismatch)
+        );
+        assert_eq!(
+            validate_history_progress(10, u64::MAX, u64::MAX),
+            Err(ReadError::PageBound)
+        );
     }
 }
 
