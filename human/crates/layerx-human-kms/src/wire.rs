@@ -163,6 +163,9 @@ pub(crate) fn disclosure(value: &Disclosure) -> Result<Vec<u8>> {
         out.push(match amount.role {
             AmountRole::Transfer => 1,
             AmountRole::SpendingLimit => 2,
+            AmountRole::SupplyCap => 3,
+            AmountRole::PerDrawMaximum => 4,
+            AmountRole::GrantAllowance => 5,
         });
         out.extend(amount.value.to_be_bytes());
     }

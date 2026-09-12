@@ -12,12 +12,16 @@ use layerx_agentd::config::StartupConfig;
 use layerx_agentd::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence, RawStateEvidence};
 use layerx_agentd::store::TenantId;
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
+use layerx_crypto::local::LocalSigner;
+use layerx_crypto::send::SendDebit;
+use layerx_crypto::signer::Signer as _;
 use layerx_human_service::store::{
     AgentTenantId, PrincipalId, PrincipalStore, RetentionPeriod, RetentionPolicy, RowKey,
     TenancyDigest, TenancyMap,
 };
 use layerx_proof::merkle::build_proof;
 use layerx_proof::receipt::AuthorizedBatch;
+use layerx_types::intent::{AuthorizationSignature, PublicKey, SendAuthorization};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::hash::execution_batch_id as wire_execution_batch_id;
@@ -230,6 +234,64 @@ pub fn execution_batch_id(
 }
 
 /// # Panics
+/// Panics if the committed execution fields cannot form a batch identifier.
+#[must_use]
+pub fn committed_execution_batch_id(
+    previous_state_root: [u8; 32],
+    activity_root: [u8; 32],
+    global_sequence: u64,
+) -> [u8; 32] {
+    layerx_wire::hash::program_execution_batch_id(
+        previous_state_root,
+        activity_root,
+        global_sequence,
+        global_sequence,
+        7,
+    )
+    .unwrap_or_else(|error| panic!("committed execution batch id: {error:?}"))
+}
+
+/// # Panics
+/// Panics if the invalid authorization is accepted or the real signer refuses the debit.
+#[must_use]
+pub fn sign_send(
+    signer: &LocalSigner,
+    debit: &SendDebit,
+    rejected: SendAuthorization,
+) -> SendAuthorization {
+    use std::future::Future as _;
+    use std::task::{Context, Poll, Waker};
+
+    assert_eq!(debit.authorization_kind, rejected.kind() as u8);
+    assert!(matches!(
+        debit.encode_signed(rejected.public_key().bytes(), rejected.signature().bytes()),
+        Err(layerx_crypto::disclosure::DisclosureError::MalformedPayload)
+    ));
+    let canonical = debit
+        .authorization_message()
+        .unwrap_or_else(|error| panic!("send authorization: {error:?}"));
+    let request = debit
+        .signing_request(&canonical)
+        .unwrap_or_else(|error| panic!("send signing request: {error:?}"));
+    let mut future = std::pin::pin!(signer.sign(request));
+    let Poll::Ready(signature) = future
+        .as_mut()
+        .poll(&mut Context::from_waker(Waker::noop()))
+    else {
+        panic!("local debit signer unexpectedly blocked");
+    };
+    let signature = signature.unwrap_or_else(|error| panic!("send signature: {error:?}"));
+    debit
+        .encode_signed(signer.public_key(), *signature.as_bytes())
+        .unwrap_or_else(|error| panic!("signed send: {error:?}"));
+    SendAuthorization::new(
+        rejected.kind(),
+        PublicKey::new(signer.public_key()),
+        AuthorizationSignature::new(*signature.as_bytes()),
+    )
+}
+
+/// # Panics
 /// Panics if the signer differs from the authorized batch key or proof construction fails.
 #[must_use]
 pub fn raw_receipt_evidence(
@@ -246,10 +308,16 @@ pub fn raw_receipt_evidence(
     let (proof, receipt_root) =
         build_proof(&leaves, 0).unwrap_or_else(|error| panic!("receipt proof: {error:?}"));
     let sequencer_id = signer.verifying_key().to_bytes();
+    let decoded = layerx_wire::receipt::decode(&canonical_receipt)
+        .unwrap_or_else(|error| panic!("canonical receipt: {error:?}"));
+    let protocol = decoded
+        .protocol()
+        .unwrap_or_else(|| panic!("protocol receipt required"));
+    assert_eq!(protocol.global_sequence(), global_sequence);
     let header = canonical_header(
         authorised_batch.previous_state_root(),
         authorised_batch.resulting_state_root(),
-        [0x32; 32],
+        protocol.activity_root(),
         receipt_root,
         global_sequence,
         sequencer_id,
@@ -307,7 +375,7 @@ fn canonical_header(
         (2, 42_u32.to_be_bytes().to_vec()),
         (3, 2_u64.to_be_bytes().to_vec()),
         (4, 7_u64.to_be_bytes().to_vec()),
-        (5, 1_u64.to_be_bytes().to_vec()),
+        (5, last_sequence.to_be_bytes().to_vec()),
         (6, last_sequence.to_be_bytes().to_vec()),
         (7, previous_state_root.to_vec()),
         (8, resulting_state_root.to_vec()),

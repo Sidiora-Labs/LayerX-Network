@@ -26,6 +26,53 @@ pub enum RpcError {
     },
 }
 
+#[cfg(test)]
+#[path = "../../../../platform/tests/support/tls_boundary.rs"]
+mod tls_boundary;
+
+#[test]
+fn rpc_system_tls_checks_the_actual_server_identity() {
+    tls_boundary::qualify(
+        "rpc::rpc_system_tls_checks_the_actual_server_identity",
+        |endpoint| {
+            let uppercase = endpoint.replacen("https://", "HTTPS://", 1);
+            let client =
+                RpcClient::connect(&uppercase, None).map_err(|error| format!("{error:?}"))?;
+            client
+                .agent
+                .get(format!("{endpoint}/livez"))
+                .call()
+                .map_err(|error| error.to_string())?
+                .body_mut()
+                .read_to_vec()
+                .map_err(|error| error.to_string())
+        },
+    );
+}
+
+#[test]
+fn rpc_private_ca_tls_checks_the_actual_server_identity() {
+    tls_boundary::qualify(
+        "rpc::rpc_private_ca_tls_checks_the_actual_server_identity",
+        |endpoint| {
+            let ca = std::fs::read(
+                std::env::var("LAYERX_TLS_QUAL_CA_DER").map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            let client = RpcClient::connect_with_ca_der(endpoint, None, &ca)
+                .map_err(|error| format!("{error:?}"))?;
+            client
+                .agent
+                .get(format!("{endpoint}/livez"))
+                .call()
+                .map_err(|error| error.to_string())?
+                .body_mut()
+                .read_to_vec()
+                .map_err(|error| error.to_string())
+        },
+    );
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Commitment {
     Executed,
@@ -506,7 +553,10 @@ impl RpcClient {
         endpoint: &str,
         credential: Option<LayerXKeyCredential>,
     ) -> Result<Self, RpcError> {
-        Self::connect_with_roots(endpoint, credential, ureq::tls::RootCerts::PlatformVerifier)
+        let endpoint =
+            crate::programs::http::validate_endpoint(endpoint).map_err(RpcError::Configuration)?;
+        let roots = crate::tls::system_roots(endpoint.as_str()).map_err(RpcError::Configuration)?;
+        Self::connect_with_roots(endpoint.as_str(), credential, roots)
     }
 
     /// Connects with one explicitly trusted DER root certificate.
@@ -548,7 +598,7 @@ impl RpcClient {
             .max_redirects(0)
             .tls_config(
                 ureq::tls::TlsConfig::builder()
-                    .provider(ureq::tls::TlsProvider::NativeTls)
+                    .provider(ureq::tls::TlsProvider::Rustls)
                     .root_certs(roots)
                     .build(),
             )

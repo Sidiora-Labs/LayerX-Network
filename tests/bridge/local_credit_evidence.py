@@ -73,13 +73,15 @@ def existing_evidence(args, directory):
                        disposable_identity=args.disposable_identity,
                        chain_id=identity['chain_id'], network_id=args.network_id,
                        vault=custody['vault'], runtime_sha256=custody['runtime_sha256'], asset=args.asset,
-                       confirmations=args.confirmations, attestor_key=args.attestor_key, output=profile))
+                       confirmations=args.confirmations, attestor_key=args.attestor_key, output=profile,
+                       vault_artifact=args.vault_artifact, history_state=args.history_state))
         encoded = Path(profile).read_bytes()
         require(encoded[169:201] == unhex(identity['genesis_sha256'], 32), 'profile disposable genesis binding')
         attest(SimpleNamespace(rpc=args.rpc, ca_bundle=args.ca_bundle,
                disposable_identity=args.disposable_identity, profile=profile, network_id=args.network_id,
                transaction=custody['transaction'], beneficiary=beneficiary, beneficiary_key=args.beneficiary_key,
                attestor_key=args.attestor_key, expected_amount=int(custody['amount']),
+               vault_artifact=args.vault_artifact, history_state=args.history_state,
                output=str(directory / 'custody.credit')))
     finally:
         if previous_ca is None:
@@ -109,6 +111,8 @@ def main():
     parser.add_argument('--beneficiary-key')
     parser.add_argument('--network-id', type=int)
     parser.add_argument('--confirmations', type=int)
+    parser.add_argument('--vault-artifact')
+    parser.add_argument('--history-state')
     args = parser.parse_args()
     directory = Path(args.output).resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -117,7 +121,7 @@ def main():
         return
     require(not any((args.ca_bundle, args.disposable_identity, args.custody, args.asset,
                      args.attestor_key, args.attestor_public_key, args.beneficiary_key,
-                     args.network_id, args.confirmations)), 'cluster inputs require explicit RPC origins')
+                     args.network_id, args.confirmations, args.vault_artifact, args.history_state)), 'cluster inputs require explicit RPC origins')
     actor = Ed25519PrivateKey.generate()
     public = actor.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     did = 'did:layerx:' + public.hex()

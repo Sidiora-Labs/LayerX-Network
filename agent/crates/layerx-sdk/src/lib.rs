@@ -40,6 +40,7 @@ mod receipt_generated;
 pub mod register;
 pub mod rpc;
 pub mod rpc_verification;
+mod tls;
 pub mod wallet;
 
 pub use layerx_agent_api::Operation;

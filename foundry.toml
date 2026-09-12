@@ -9,6 +9,7 @@ optimizer_runs = 100000
 via_ir = true
 bytecode_hash = "none"
 cbor_metadata = false
+extra_output = ["storageLayout"]
 fs_permissions = [
     { access = "read", path = "./contracts/config" },
     { access = "read", path = "./tests/vectors/checkpoint" },

@@ -2505,6 +2505,19 @@ fn supervisor_arguments(root: &Path, role: &str) -> Vec<String> {
     ]
 }
 
+fn supervised_metadata(root: &Path, asset: &[u8; 32], treasury_seed: &[u8; 32]) {
+    let mut metadata = Vec::new();
+    lxgb_metadata::append(
+        &mut metadata,
+        asset,
+        &SigningKey::from_bytes(treasury_seed)
+            .verifying_key()
+            .to_bytes(),
+        &random32(),
+    );
+    write(&root.join("bootstrap-metadata.lxgb"), &metadata, 0o644);
+}
+
 fn start_supervised_cluster() -> Cluster {
     assert_eq!(
         effective_uid(),
@@ -2530,16 +2543,7 @@ fn start_supervised_cluster() -> Cluster {
         [&sequencer_seed, &treasury_seed],
         [&program_token, &replica_token],
     );
-    let mut metadata = Vec::new();
-    lxgb_metadata::append(
-        &mut metadata,
-        &asset,
-        &SigningKey::from_bytes(&treasury_seed)
-            .verifying_key()
-            .to_bytes(),
-        &random32(),
-    );
-    write(&root.join("bootstrap-metadata.lxgb"), &metadata, 0o644);
+    supervised_metadata(&root, &asset, &treasury_seed);
     let mut environment = BTreeMap::new();
     finality_environment(&mut environment);
     let replica_args = supervisor_arguments(&root, "replica");
@@ -3106,12 +3110,155 @@ fn admit_receipt_wait_send(cluster: &Cluster, canonical: &[u8], activity_id: [u8
     assert_eq!(ack.activity_id(), activity_id);
 }
 
+fn assert_account_proof_selector_refusals(boundary: &Boundary, activity: &str, account: &str) {
+    for account in ["invalid".to_owned(), "00".repeat(32)] {
+        assert_refusal(
+            &boundary
+                .core
+                .get(&format!("/v1/proofs/account/{activity}/{account}")),
+            400,
+            "invalid_proof_selector",
+        );
+    }
+    assert_refusal(
+        &boundary
+            .core
+            .get(&format!("/v1/proofs/account/{}/{account}", "63".repeat(32))),
+        503,
+        "proof_evidence_unavailable",
+    );
+}
+
+fn receipt_proof_batch(answer: &HttpAnswer, cluster: &Cluster, activity: &str) -> u64 {
+    let document = json(answer);
+    let result = &document["result"];
+    let text = |value: &serde_json::Value| {
+        value
+            .as_str()
+            .unwrap_or_else(|| panic!("proof field is not text: {value}"))
+            .to_owned()
+    };
+    assert_eq!(result["kind"], "receipt");
+    assert_eq!(result["activity_id"], activity);
+    let canonical = must(
+        hex_decode(&text(&result["canonical_value"])),
+        "receipt bytes",
+    );
+    let layerx_wire::receipt::Receipt::Protocol(receipt) = must(
+        layerx_wire::receipt::decode(&canonical),
+        "canonical receipt",
+    ) else {
+        panic!("published receipt must use the protocol encoding");
+    };
+    assert_eq!(hex_encode(&receipt.activity_id()), activity);
+    let proof = &result["proof"];
+    let number = |field: &str| {
+        must(
+            u32::try_from(
+                proof[field]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("missing {field}")),
+            ),
+            field,
+        )
+    };
+    let siblings = proof["siblings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing siblings"))
+        .iter()
+        .map(|sibling| must(fixed_hex("sibling", &text(sibling)), "proof sibling"))
+        .collect();
+    let proof = must(
+        layerx_proof::merkle::Proof::new(number("leaf_index"), number("leaf_count"), siblings),
+        "receipt proof",
+    );
+    let signed_header = &result["signed_header"];
+    assert_eq!(
+        signed_header["public_key"],
+        hex_encode(&cluster.sequencer_key)
+    );
+    assert_eq!(
+        signed_header["sequencer_id"],
+        hex_encode(&cluster.sequencer_id)
+    );
+    let header = must(
+        hex_decode(&text(&signed_header["canonical_header"])),
+        "header bytes",
+    );
+    let signature = must(
+        fixed_hex("signature", &text(&signed_header["signature"])),
+        "header signature",
+    );
+    let authorization = layerx_proof::inclusion::SequencerAuthorization::new(
+        cluster.sequencer_id,
+        cluster.sequencer_key,
+        1,
+        LAST_BATCH,
+    );
+    let verified = must(
+        layerx_proof::inclusion::verify_receipt(
+            &canonical,
+            &proof,
+            &header,
+            &signature,
+            &authorization,
+        ),
+        "authenticated receipt inclusion",
+    );
+    let header = verified.header().header();
+    assert_eq!(header.protocol_version(), PROTOCOL_VERSION);
+    assert_eq!(header.network_id(), NETWORK_ID);
+    header.batch_number()
+}
+
+fn wait_for_published_receipt(boundary: &Boundary, cluster: &Cluster, activity: &str) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let batch = loop {
+        let proof = boundary.core.get(&format!("/v1/proofs/receipt/{activity}"));
+        if proof.status == 200 {
+            break receipt_proof_batch(&proof, cluster, activity);
+        }
+        assert_refusal(&proof, 503, "proof_evidence_unavailable");
+        assert!(
+            Instant::now() < deadline,
+            "receipt proof was not published: {}",
+            proof.body
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    loop {
+        let gate = ConnectionGate::new(1);
+        let mut transport = must(
+            Uds::connect(&cluster.lni_socket, &gate, lni_limits()),
+            "LNI connect",
+        );
+        let handshake = must(
+            perform(&mut transport, &handshake_config(), None),
+            "LNI handshake",
+        );
+        assert_eq!(
+            handshake.node().authorised_sequencer_key,
+            cluster.sequencer_key
+        );
+        let published = handshake.node().latest_sealed_batch;
+        if published >= batch {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "receipt batch {batch} was not sealed; published {published}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn account_proof_export_preserves_exact_native_verified_bytes() {
     let cluster = start_cluster(true);
     let certificates = certificates(&cluster.root);
     let boundary = start_boundary(&cluster, &certificates);
     let activity = hex_encode(&establish_receipt_head(&boundary, &cluster));
+    wait_for_published_receipt(&boundary, &cluster, &activity);
     let account = must(
         layerx_types::account::AccountId::parse("system:fees"),
         "system account",
@@ -3195,22 +3342,7 @@ fn account_proof_export_preserves_exact_native_verified_bytes() {
         Err(EvidenceError::SequencerMismatch)
     ));
 
-    for account in ["invalid".to_owned(), "00".repeat(32)] {
-        assert_refusal(
-            &boundary
-                .core
-                .get(&format!("/v1/proofs/account/{activity}/{account}")),
-            400,
-            "invalid_proof_selector",
-        );
-    }
-    assert_refusal(
-        &boundary
-            .core
-            .get(&format!("/v1/proofs/account/{}/{account}", "63".repeat(32))),
-        503,
-        "proof_evidence_unavailable",
-    );
+    assert_account_proof_selector_refusals(&boundary, &activity, &account);
 }
 
 #[test]

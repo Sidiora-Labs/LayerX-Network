@@ -36,8 +36,9 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 toml_edit = "=0.25.13"
-ureq = { workspace = true, features = ["rustls"] }
-tungstenite = { version = "=0.28.0", features = ["native-tls"] }
+ureq.workspace = true
+rustls-native-certs.workspace = true
+tungstenite = { version = "=0.29.0", features = ["native-tls"] }
 zeroize.workspace = true
 
 [dev-dependencies]

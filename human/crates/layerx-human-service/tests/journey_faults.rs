@@ -115,6 +115,34 @@ fn account(value: &str) -> AccountId {
 }
 
 fn send_intent(public_key: [u8; 32], amount: u128, key: u8) -> Intent {
+    let signer = layerx_crypto::local::LocalSigner::new([0x51; 32]);
+    assert_eq!(
+        layerx_crypto::signer::Signer::public_key(&signer),
+        public_key
+    );
+    let debit = layerx_crypto::send::SendDebit {
+        from: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:alice:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("source account: {error:?}")),
+        to: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:recipient:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("destination account: {error:?}")),
+        asset: [0x33; 32],
+        amount,
+        source_sequence: ACCOUNT_SEQUENCE,
+        idempotency_key: [key; 32],
+        expires_at: 1_010,
+        context_hash: [0x55; 32],
+        conditions: Vec::new(),
+        authorization_kind: SendAuthorizationKind::Owner as u8,
+        network_id: NETWORK_ID,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+    };
+
     let send = LxpSend::new(
         account("agent:did:layerx:alice:main"),
         account("agent:did:layerx:recipient:main"),
@@ -124,10 +152,14 @@ fn send_intent(public_key: [u8; 32], amount: u128, key: u8) -> Intent {
         IdempotencyKey::new([key; 32]),
         TimestampSeconds::from_u64(1_010),
         ContextHash::new([0x55; 32]),
-        SendAuthorization::new(
-            SendAuthorizationKind::Owner,
-            PublicKey::new(public_key),
-            AuthorizationSignature::new([0x77; 64]),
+        support::sign_send(
+            &signer,
+            &debit,
+            SendAuthorization::new(
+                SendAuthorizationKind::Owner,
+                PublicKey::new(public_key),
+                AuthorizationSignature::new([0x77; 64]),
+            ),
         ),
         NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
         ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
@@ -577,9 +609,9 @@ fn receipt(activity_id: [u8; 32], marker: u8, activity: ActivityType) -> Receipt
         activity_id,
         previous_state_root: [marker.saturating_add(1); 32],
         resulting_state_root: [marker.saturating_add(2); 32],
-        batch_id: support::execution_batch_id(
+        batch_id: support::committed_execution_batch_id(
             [marker.saturating_add(1); 32],
-            activity_id,
+            [0x81; 32],
             u64::from(marker),
         ),
         asset: [0x33; 32],

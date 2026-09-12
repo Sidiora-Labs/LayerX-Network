@@ -8,7 +8,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use layerx_agentd::read::LayerxdProgramBalanceReader;
+use layerx_agentd::read::{LayerxdProgramBalanceReader, ProgramAuthority};
 use layerx_client::head::Head;
 use layerx_explorer_index::programs::{ExplorerProgram, VerifiedProgramInterfaceMetadata};
 use layerx_explorer_index::{Indexer, ProtocolProgramIngestor};
@@ -20,6 +20,7 @@ use layerx_programs::{
 use serde_json::Value;
 
 const HEADER_LIMIT: usize = 16 * 1024;
+const CA_LIMIT: u64 = 64 * 1024;
 
 #[derive(Clone)]
 struct FileJournal {
@@ -60,6 +61,7 @@ struct Config {
     node_bearer: String,
     authority_endpoint: String,
     authority_bearer: String,
+    authority_ca_der: Vec<u8>,
     authority_replica_id: [u8; 32],
     sequencer_trust_history: PathBuf,
     staleness_ms: u64,
@@ -87,6 +89,23 @@ fn parse_digest(name: &str) -> Result<[u8; 32], String> {
     hex::decode_digest(&required(name)?).map_err(|error| format!("{name} is invalid: {error}"))
 }
 
+fn read_ca(name: &str) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(required(name)?).map_err(|_| format!("{name} is unreadable"))?;
+    let mut bytes = Vec::new();
+    file.take(CA_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| format!("{name} is unreadable"))?;
+    if bytes.is_empty() {
+        return Err(format!("{name} is empty"));
+    }
+    if u64::try_from(bytes.len()).map_or(true, |length| length > CA_LIMIT) {
+        return Err(format!("{name} exceeds the certificate size limit"));
+    }
+    native_tls::Certificate::from_der(&bytes)
+        .map_err(|_| format!("{name} must contain a DER certificate"))?;
+    Ok(bytes)
+}
+
 fn config() -> Result<Config, String> {
     let listen = required("LAYERX_EXPLORER_PROGRAM_LISTEN")?;
     let bearer = required("LAYERX_EXPLORER_PROGRAM_BEARER_TOKEN")?;
@@ -112,6 +131,7 @@ fn config() -> Result<Config, String> {
         node_bearer,
         authority_endpoint: required("LAYERX_EXPLORER_AUTHORITY_ENDPOINT")?,
         authority_bearer,
+        authority_ca_der: read_ca("LAYERX_EXPLORER_AUTHORITY_CA_DER")?,
         authority_replica_id: parse_digest("LAYERX_EXPLORER_AUTHORITY_REPLICA_ID")?,
         sequencer_trust_history: PathBuf::from(required(
             "LAYERX_EXPLORER_SEQUENCER_TRUST_HISTORY",
@@ -441,9 +461,12 @@ fn refresh_program(
     let reader = LayerxdProgramBalanceReader::connect(
         &config.node_endpoint,
         config.node_bearer.clone(),
-        &config.authority_endpoint,
-        config.authority_bearer.clone(),
-        config.authority_replica_id,
+        ProgramAuthority {
+            endpoint: &config.authority_endpoint,
+            authorization: config.authority_bearer.clone(),
+            replica_id: config.authority_replica_id,
+            ca_der: &config.authority_ca_der,
+        },
         verifier,
         loaded.registry.clone(),
     )
