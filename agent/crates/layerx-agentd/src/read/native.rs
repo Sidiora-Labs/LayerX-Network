@@ -222,6 +222,9 @@ impl NativeReadRoute {
             .split_once('?')
             .ok_or(NativeReadError::InvalidRequest)?;
         let account = digest(account)?;
+        if account == [0; 32] {
+            return Err(NativeReadError::InvalidRequest);
+        }
         let (limit, cursor) = history_query(query)?;
         let head = self.client.head();
         let (start, end) = match cursor {
@@ -250,6 +253,21 @@ impl NativeReadRoute {
             head.sealed_batch,
         );
         let correlation = self.next_id()?;
+        let account_evidence = self
+            .client
+            .account(
+                account,
+                VerificationLevel::BATCH_INCLUDED,
+                correlation,
+                authorization,
+            )
+            .map_err(|_| NativeReadError::Verification)?;
+        let payer = maintenance_payer(
+            account,
+            account_evidence.canonical_bytes(),
+            signed.header.protocol_version(),
+        )?;
+        let correlation = self.next_id()?;
         let page = self
             .client
             .history(
@@ -262,12 +280,13 @@ impl NativeReadRoute {
                 authorization,
             )
             .map_err(|_| NativeReadError::Verification)?;
-        self.history_json(account, end, page, registry)
+        self.history_json(account, payer, end, page, registry)
     }
 
     fn history_json(
         &mut self,
         account: [u8; 32],
+        payer: Option<([u8; 32], [u8; 32])>,
         end: u64,
         page: HistoryPage,
         registry: &ModuleRegistry,
@@ -304,7 +323,7 @@ impl NativeReadRoute {
                         "verification_level": item.achieved().wire_rank()}))
                 }
                 HistoryKind::Receipt => {
-                    maintenance_json(item.canonical_bytes(), account, item.global_sequence)?
+                    maintenance_json(item.canonical_bytes(), payer, item.global_sequence)?
                 }
                 HistoryKind::Event => return Err(NativeReadError::Verification),
             };
@@ -485,9 +504,36 @@ fn receipt_mentions_account(
     Ok(directly_named || deposit.body()[64..96] == account)
 }
 
+fn maintenance_payer(
+    account: [u8; 32],
+    value: &[u8],
+    protocol: u16,
+) -> Result<Option<([u8; 32], [u8; 32])>, NativeReadError> {
+    let decoded = layerx_proof::state::decode_account_value(account, value)
+        .map_err(|_| NativeReadError::Verification)?;
+    let Some(asset) = decoded.asset else {
+        return Ok(None);
+    };
+    let name = std::str::from_utf8(&decoded.name).map_err(|_| NativeReadError::Verification)?;
+    let Some(agent) = name.strip_prefix("agent:") else {
+        return Ok(None);
+    };
+    let did = if let Some(did) = agent.strip_suffix(":main") {
+        did
+    } else if let Some((did, _)) = agent.rsplit_once(":asset:") {
+        did
+    } else {
+        return Ok(None);
+    };
+    let did = Did::new(did.as_bytes()).map_err(|_| NativeReadError::Verification)?;
+    let principal =
+        hash::did_id_for_protocol(&did, protocol).map_err(|_| NativeReadError::Verification)?;
+    Ok(Some((principal, asset.asset_id)))
+}
+
 fn maintenance_json(
     bytes: &[u8],
-    account: [u8; 32],
+    payer: Option<([u8; 32], [u8; 32])>,
     sequence: u64,
 ) -> Result<Option<Value>, NativeReadError> {
     let record = layerx_wire::maintenance::decode_occupancy_maintenance(bytes)
@@ -495,7 +541,7 @@ fn maintenance_json(
     if record.global_sequence != sequence {
         return Err(NativeReadError::Verification);
     }
-    Ok(record.payers.iter().any(|payer| payer.principal == account).then(|| json!({
+    Ok(payer.is_some_and(|(principal, asset)| record.occupancy_asset_id == asset && record.payers.iter().any(|payer| payer.principal == principal)).then(|| json!({
         "global_sequence": sequence.to_string(), "kind": "maintenance", "canonical_hex": hex::encode(bytes),
         "verification_level": VerificationLevel::BATCH_INCLUDED.wire_rank()})))
 }
