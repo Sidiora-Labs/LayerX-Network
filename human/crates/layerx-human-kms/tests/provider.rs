@@ -563,12 +563,14 @@ fn authorize_canonical_send(host: &Host, binding: [u8; 32], handle: &[u8]) -> Re
         principal: "alice".into(),
         tenant: "tenant".into(),
         binding_digest: binding,
-        from: checked(layerx_wire::hash::account_id(&checked(AccountId::parse(
-            "agent:did:layerx:alice:main",
-        ))?))?,
-        to: checked(layerx_wire::hash::account_id(&checked(AccountId::parse(
-            "agent:did:layerx:recipient:main",
-        ))?))?,
+        from: checked(layerx_wire::hash::account_id_for_protocol(
+            &checked(AccountId::parse("agent:did:layerx:alice:main"))?,
+            3,
+        ))?,
+        to: checked(layerx_wire::hash::account_id_for_protocol(
+            &checked(AccountId::parse("agent:did:layerx:recipient:main"))?,
+            3,
+        ))?,
         asset: [3; 32],
         amount: 10,
         sequence: 7,
