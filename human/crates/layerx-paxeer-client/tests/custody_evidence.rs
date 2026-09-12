@@ -155,9 +155,17 @@ fn real_comet_state_credit_after_history_pruning() {
     let credit =
         std::fs::read(fixtures.join("custody.credit")).unwrap_or_else(|error| panic!("{error}"));
     let expected = NativeCustodyExpectation {
-        network_id: u32::from_be_bytes(profile[201..205].try_into().expect("network")),
-        beneficiary: credit[107..139].try_into().expect("beneficiary"),
-        owner_key: credit[139..171].try_into().expect("owner"),
+        network_id: u32::from_be_bytes(
+            profile[201..205]
+                .try_into()
+                .unwrap_or_else(|_| panic!("network")),
+        ),
+        beneficiary: credit[107..139]
+            .try_into()
+            .unwrap_or_else(|_| panic!("beneficiary")),
+        owner_key: credit[139..171]
+            .try_into()
+            .unwrap_or_else(|_| panic!("owner")),
     };
     let decoded = AttestedNativeCustodyCredit::verify(&profile, &credit, expected)
         .unwrap_or_else(|error| panic!("{error:?}"));
