@@ -11,7 +11,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/custodyproof"
 )
 
-func run() error {
+func run(output io.Writer) error {
 	flags := flag.NewFlagSet("layerx-custody-proof", flag.ContinueOnError)
 	state := flags.String("history-state", "", "protected authenticated history directory")
 	key := flags.String("attestor-key", "", "protected attestor seed file")
@@ -64,11 +64,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(os.Stdout).Encode(result)
+	return json.NewEncoder(output).Encode(result)
 }
 
 func main() {
-	if err := run(); err != nil {
+	output := os.Stdout
+	os.Stdout = os.Stderr
+	if err := run(output); err != nil {
 		fmt.Fprintln(os.Stderr, "custody proof refused:", err)
 		os.Exit(1)
 	}
