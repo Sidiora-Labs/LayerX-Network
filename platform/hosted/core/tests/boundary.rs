@@ -3144,10 +3144,12 @@ fn receipt_proof_batch(answer: &HttpAnswer, cluster: &Cluster, activity: &str) -
         hex_decode(&text(&result["canonical_value"])),
         "receipt bytes",
     );
-    let receipt = must(
+    let layerx_wire::receipt::Receipt::Protocol(receipt) = must(
         layerx_wire::receipt::decode(&canonical),
         "canonical receipt",
-    );
+    ) else {
+        panic!("published receipt must use the protocol encoding");
+    };
     assert_eq!(hex_encode(&receipt.activity_id()), activity);
     let proof = &result["proof"];
     let number = |field: &str| {
