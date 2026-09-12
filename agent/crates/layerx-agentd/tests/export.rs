@@ -82,9 +82,8 @@ fn header_bytes(
             8 => assert_eq!(encoder.bytes(&state_root, 32), Ok(())),
             9 => assert_eq!(encoder.bytes(&activity_root, 32), Ok(())),
             10 => assert_eq!(encoder.bytes(&receipt_root, 32), Ok(())),
-            11 => assert_eq!(encoder.bytes(&empty_root, 32), Ok(())),
+            11 | 13 => assert_eq!(encoder.bytes(&empty_root, 32), Ok(())),
             12 => assert_eq!(encoder.bytes(&availability_root, 32), Ok(())),
-            13 => assert_eq!(encoder.bytes(&empty_root, 32), Ok(())),
             14 => assert_eq!(encoder.u64(1_000), Ok(())),
             15 => assert_eq!(encoder.bytes(&sequencer_id, 32), Ok(())),
             _ => panic!("unreachable header field"),
@@ -172,13 +171,23 @@ fn availability(
     use layerx_proof::merkle::build_leaf_hash_proof;
     use layerx_wire::hash::availability_chunk_digest;
     let mut activities = Encoder::new(4096);
-    activities.sequence_length(1, 65_535).unwrap();
-    activities.bytes(activity, 4096).unwrap();
+    activities
+        .sequence_length(1, 65_535)
+        .unwrap_or_else(|error| panic!("availability fixture: {error:?}"));
+    activities
+        .bytes(activity, 4096)
+        .unwrap_or_else(|error| panic!("availability fixture: {error:?}"));
     let mut receipts = Encoder::new(4096);
-    receipts.u8(1).unwrap();
-    receipts.bytes(receipt, 4096).unwrap();
+    receipts
+        .u8(1)
+        .unwrap_or_else(|error| panic!("availability fixture: {error:?}"));
+    receipts
+        .bytes(receipt, 4096)
+        .unwrap_or_else(|error| panic!("availability fixture: {error:?}"));
     let mut oracle = Encoder::new(4096);
-    oracle.sequence_length(0, 65_535).unwrap();
+    oracle
+        .sequence_length(0, 65_535)
+        .unwrap_or_else(|error| panic!("availability fixture: {error:?}"));
     let sections = [
         (AvailabilityClass::Activities, activities.finish()),
         (AvailabilityClass::Receipts, receipts.finish()),
@@ -190,8 +199,10 @@ fn availability(
         .into_iter()
         .enumerate()
         .map(|(index, (class, bytes))| {
-            let index = u32::try_from(index).unwrap();
-            let claimed_hash = availability_chunk_digest(8, index, class as u8, 0, &bytes).unwrap();
+            let index = u32::try_from(index)
+                .unwrap_or_else(|error| panic!("availability fixture: {error:?}"));
+            let claimed_hash = availability_chunk_digest(8, index, class as u8, 0, &bytes)
+                .unwrap_or_else(|error| panic!("availability fixture: {error:?}"));
             Chunk {
                 batch_number: 8,
                 index,
@@ -206,11 +217,20 @@ fn availability(
         .iter()
         .map(|chunk| chunk.claimed_hash)
         .collect::<Vec<_>>();
-    let root = build_leaf_hash_proof(&hashes, 0).unwrap().1;
+    let root = build_leaf_hash_proof(&hashes, 0)
+        .unwrap_or_else(|error| panic!("availability fixture: {error:?}"))
+        .1;
     let proven = chunks
         .into_iter()
         .enumerate()
-        .map(|(index, chunk)| (chunk, build_leaf_hash_proof(&hashes, index).unwrap().0))
+        .map(|(index, chunk)| {
+            (
+                chunk,
+                build_leaf_hash_proof(&hashes, index)
+                    .unwrap_or_else(|error| panic!("availability fixture: {error:?}"))
+                    .0,
+            )
+        })
         .collect();
     (proven, root)
 }
@@ -244,8 +264,10 @@ fn artifact() -> OfflineExport {
     let sequencer_key = EdSigningKey::from_bytes(&[7; 32]);
     let sequencer_id = sequencer_key.verifying_key().to_bytes();
     let (availability, availability_root) = availability(&activity, &receipt_bytes);
-    let receipt_root = layerx_proof::merkle::root(&[receipt_bytes.as_slice()]).unwrap();
-    let empty_root = layerx_proof::merkle::root(&[]).unwrap();
+    let receipt_root = layerx_proof::merkle::root(&[receipt_bytes.as_slice()])
+        .unwrap_or_else(|error| panic!("availability fixture: {error:?}"));
+    let empty_root = layerx_proof::merkle::root(&[])
+        .unwrap_or_else(|error| panic!("availability fixture: {error:?}"));
     let header = header_bytes(
         state_root,
         activity_root,
