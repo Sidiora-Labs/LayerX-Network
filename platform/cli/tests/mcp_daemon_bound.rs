@@ -19,7 +19,7 @@ use layerx_agentd::identity::{
 };
 use layerx_agentd::session::{SessionId, SessionRegistry};
 use layerx_agentd::store::{Store, TenantId};
-use layerx_mcp::server::catalogue;
+use layerx_mcp::server::{catalogue, ToolKind};
 use layerx_types::ids::Did;
 use layerx_types::verify::VerificationLevel;
 use serde_json::Value;
@@ -299,7 +299,7 @@ fn a_fresh_install_serves_the_catalogue_through_the_daemon_without_a_gateway_key
         data.pointer("/tools")
             .and_then(Value::as_array)
             .map(Vec::len),
-        Some(20)
+        Some(catalogue().len())
     );
     assert_eq!(
         data.pointer("/changed").and_then(Value::as_bool),
@@ -390,7 +390,7 @@ fn a_fresh_install_serves_the_catalogue_through_the_daemon_without_a_gateway_key
             .pointer("/result/tools")
             .and_then(Value::as_array)
             .map(Vec::len),
-        Some(20)
+        Some(catalogue().len())
     );
     assert_eq!(
         responses[2]
@@ -458,7 +458,13 @@ fn an_explicit_binding_path_narrows_the_installed_surface_to_read_only() {
         .pointer("/tools")
         .and_then(Value::as_array)
         .unwrap_or_else(|| panic!("tools absent"));
-    assert_eq!(tools.len(), 8);
+    assert_eq!(
+        tools.len(),
+        catalogue()
+            .iter()
+            .filter(|tool| tool.kind == ToolKind::Read)
+            .count()
+    );
     let _ = fs::remove_dir_all(root);
 }
 

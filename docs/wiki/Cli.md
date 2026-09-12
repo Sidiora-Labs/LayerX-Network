@@ -95,9 +95,9 @@ that the binary implements are listed; unimplemented flags are omitted.
 | `layerx program registry verify-source <program_id>` | Submit a source digest and location (`platform/cli/src/main.rs:369-378, 1213-1227`; `platform/cli/src/programs.rs:700-717`) | `program_id`, `--source-uri`, `--source-digest`, `--idempotency-key` |
 | `layerx emulator provision` | Generate the sequencer seed and publish its trust anchor under the profile directory (`platform/cli/src/main.rs:385-390, 549-553`; `platform/cli/src/emulator.rs:223-305`) | `--force` optional; without it an existing seed or anchor is refused |
 | `layerx emulator up` | Start the local real-transition gateway (`platform/cli/src/main.rs:383-384, 390-402, 554-566`) | `--sequencer-seed-file`. `--listen`, `--network-id`, `--time-ms`, `--prefund` optional |
-| `layerx install mcp` | Install a payment-capable MCP server (`platform/cli/src/main.rs:408-410, 412-430, 637-653`; `platform/cli/src/install/mcp.rs:24-98`) | hosted environment only (`platform/cli/src/install/mod.rs:573-577`). `--host` values: `layerx`, `claude-code`, `claude-desktop`, `cursor`, `vscode` (`platform/cli/src/install/mod.rs:53-64`). Payment mode requires `--source-account` and `--asset` (`platform/cli/src/install/mcp.rs:142-156`) |
+| `layerx install mcp` | Register the daemon-bound MCP server against the binding document agent-daemon enrolment wrote (`platform/cli/src/main.rs:412-417, 420-427, 612-628`; `platform/cli/src/install/mcp.rs:26-98`) | `--host` values: `layerx`, `claude-code`, `claude-desktop`, `cursor`, `vscode` (`platform/cli/src/install/mod.rs:53-64`). `--daemon-binding` defaults to `mcp/binding.json` beside the CLI configuration file (`platform/cli/src/install/mcp.rs:31-34, 141-162`); the installer opens that document and refuses when it is absent (`platform/cli/src/install/mcp.rs:35-41`). `--read-only` optional. No gateway key, environment, or payment flag |
 | `layerx install a2a` | Install a payment-capable A2A server (`platform/cli/src/main.rs:411-412, 432-452, 655-672`; `platform/cli/src/install/a2a.rs:40-119`) | hosted environment only. `--listen` default `127.0.0.1:9433` |
-| `layerx mcp serve` | Serve MCP on stdin/stdout (`platform/cli/src/main.rs:457-473, 568-586`; `platform/cli/src/mcp.rs:13-56`) | `--gateway-credential`. `--environment`, `--key`, `--source-account`, `--asset`, `--read-only` optional |
+| `layerx mcp serve` | Serve the daemon-bound tool catalogue on stdin/stdout for one binding document (`platform/cli/src/main.rs:452-460, 559-565`; `platform/cli/src/mcp.rs:11-22`) | `--daemon-binding <path>` required. `--read-only` optional. The served path holds no signing seed and no gateway credential (`platform/cli/src/mcp.rs:6-16`) |
 | `layerx a2a serve` | Serve the agent card and task interface on loopback (`platform/cli/src/main.rs:476-496, 588-613`; `platform/cli/src/a2a.rs:89-176`) | `--gateway-credential`, `--authorization-file`. `--listen` default `127.0.0.1:9433` |
 | `layerx a2a start` | Start the installed managed A2A runtime (`platform/cli/src/main.rs:497-498, 615-618`; `platform/cli/src/a2a.rs:710-748`) | none (reads `a2a/runtime.json`) |
 | `layerx a2a stop` | Stop the installed managed A2A runtime (`platform/cli/src/main.rs:499-500, 619-623`; `platform/cli/src/a2a.rs:750-770`) | none |
@@ -131,8 +131,9 @@ credential, an independently supplied receipt policy, and a fee limit, with
 remote RPC URLs restricted to HTTPS and a `/rpc` path. None of those flags
 exists in this tree; the only globally applied argument the binary declares is
 `--json` (`platform/cli/src/main.rs:35-40`), the per-command
-`--gateway-credential` belongs to `mcp serve` and `a2a serve`
-(`platform/cli/src/main.rs:466-467, 482-483`), and `--fee-limit` is optional
+`--gateway-credential` belongs to `a2a serve` alone
+(`platform/cli/src/main.rs:465-489`, gateway credential at `470-471`), and
+`--fee-limit` is optional
 with default `0` (`platform/cli/src/main.rs:312-313, 1156-1157`). A pending
 result retains the activity id; rerun receipt lookup instead of creating a
 second payment.
@@ -210,7 +211,7 @@ created `0o600` (`platform/cli/src/config.rs:85-88`;
 | --- | --- | --- |
 | Ed25519 seed | `key create` fills 32 OS-random bytes, or `key import` reads hex from stdin, then `set_password` (`platform/cli/src/credential.rs:83-132`) | `key_seed` `get_password` then hex-decode (`platform/cli/src/credential.rs:219-226`) |
 | Hosted API token | `auth set` reads stdin, validates visible ASCII, `set_password` (`platform/cli/src/credential.rs:175-186, 209-216`) | `token` `get_password`; `NoEntry` is `None` (`platform/cli/src/credential.rs:195-206`) |
-| Gateway key | `install mcp` / `install a2a` provision `/v1/keys` or `/v1/keys/{id}/rotate` and `set_gateway` (`platform/cli/src/install/mod.rs:594-640, 673-690`; `platform/cli/src/credential.rs:228-236`) | `gateway` `get_password`; MCP/A2A serve load by alias (`platform/cli/src/toolset.rs:67-71`) |
+| Gateway key | `install a2a` provisions `/v1/keys` or `/v1/keys/{id}/rotate` and `set_gateway` (`platform/cli/src/install/mod.rs:594-640, 673-690`; `platform/cli/src/credential.rs:228-236`) | `gateway` `get_password`; `a2a serve` loads by alias (`platform/cli/src/toolset.rs:62-66`). `install mcp` and `mcp serve` issue, store and read no gateway key (`platform/cli/src/install/mcp.rs:20-25`; `platform/cli/src/mcp.rs:6-16`) |
 
 Stdin secrets are capped at 16 KiB
 (`platform/cli/src/credential.rs:12, 65-73`). Gateway credentials must be
@@ -244,7 +245,7 @@ whether a seed may be typed; the import command exists.
 | `XDG_CONFIG_HOME` | `config::path` (`platform/cli/src/config.rs:133-134`) | `{XDG_CONFIG_HOME}/layerx/config.json` when `LAYERX_CONFIG` is unset |
 | `HOME` | `config::path` (`platform/cli/src/config.rs:136-139`); install host paths (`platform/cli/src/install/mod.rs:1119-1125`) | `{HOME}/.config/layerx/config.json`; agent-runtime install roots |
 | `LAYERX_CREDENTIAL_STORE` | `install_store` (`platform/cli/src/credential.rs:17, 34-45`) | `file` selects encrypted storage; `os` selects OS storage; `mock` requires `test-credential-store` |
-| `LAYERX_GATEWAY_KEY_ID` | MCP/A2A runtime (`platform/cli/src/toolset.rs:72-82`); written into install env (`platform/cli/src/install/mcp.rs:53-55`; `platform/cli/src/install/a2a.rs:67-69`) | Must match the non-secret id of the stored gateway credential |
+| `LAYERX_GATEWAY_KEY_ID` | A2A runtime (`platform/cli/src/toolset.rs:67-78`); written into the installed A2A env map (`platform/cli/src/install/a2a.rs:67-70`) | Must match the non-secret id of the stored gateway credential. The installed MCP env map is empty (`platform/cli/src/install/mcp.rs:49-51`) |
 | `LAYERX_INSTALL_ROOT` | install host path resolution (`platform/cli/src/install/mod.rs:1119-1130`) | Replaces `HOME` for host config discovery |
 | `LAYERX_REPO_ROOT` | workspace (`platform/cli/src/workspace.rs:1098`) | Repository root for workspace commands |
 | `LAYERX_PROGRAM_SDK` | scaffold (`platform/cli/src/scaffold.rs:65-68`) | Path written into a new program `Cargo.toml` |
@@ -281,7 +282,8 @@ commands do not open a node RPC.
 | Target | How the CLI reaches it |
 | --- | --- |
 | Emulator | `emulator up` runs `layerx_platform_emulator::run` in-process (`platform/cli/src/main.rs:87-89, 554-565`). Other commands HTTP to the configured emulator endpoint. `environment use emulator` with bound inputs waits for a listener and `GET /v1/sequencer`, then refuses `network_id_mismatch` or `sequencer_trust_anchor_mismatch` (`platform/cli/src/emulator.rs:860-891`; `platform/cli/src/main.rs:772-802`) |
-| Hosted gateway | `environment use testnet` or `production` stores `https://…` (non-loopback `http://` is refused; `platform/cli/src/http.rs:29-39`). Account, payment, receipt, and program commands send `Authorization: Bearer` when a token exists (`platform/cli/src/http.rs:240-245`; `platform/cli/src/main.rs:1415-1418`). MCP/A2A send `Authorization: LayerX-Key` (`platform/cli/src/http.rs:54-68, 247-249`; `platform/cli/src/toolset.rs:103-104`). Install MCP/A2A refuse the emulator (`platform/cli/src/install/mod.rs:573-577`) |
+| Hosted gateway | `environment use testnet` or `production` stores `https://…` (non-loopback `http://` is refused; `platform/cli/src/http.rs:29-39`). Account, payment, receipt, and program commands send `Authorization: Bearer` when a token exists (`platform/cli/src/http.rs:240-245`; `platform/cli/src/main.rs:1415-1418`). A2A sends `Authorization: LayerX-Key` (`platform/cli/src/http.rs:54-68, 247-249`; `platform/cli/src/toolset.rs:103-104`). `install a2a` refuses the emulator (`platform/cli/src/install/mod.rs:573-577`) |
+| Agent daemon | The MCP path reaches no gateway. `install mcp` and `mcp serve` both open the binding document agent-daemon enrolment wrote and talk to the loopback daemon endpoint it names (`platform/cli/src/install/mcp.rs:31-46`; `platform/cli/src/mcp.rs:11-22`; `agent/crates/layerx-mcp/src/binding.rs:313-317, 339`) |
 | Node | Not a CLI transport. `layerx receipt verify` is local `layerx_proof` against caller-supplied batch facts (`platform/cli/src/receipt.rs:4, 25-34`). `platform/docs/content/concepts/receipts.md:3-4` states the same: verification needs no LayerX node, gateway, or hosted service |
 
 Emulator account create posts `/__emulator/accounts/prefund`
@@ -291,7 +293,7 @@ Emulator account create posts `/__emulator/accounts/prefund`
 Receipts get `/v1/receipts/{id}` (`platform/cli/src/main.rs:1008`). Program
 lifecycle posts octet-stream to `/v1/programs/deploy`, `/upgrade`,
 `/wind-down`, `/call`, `/simulate` (`platform/cli/src/programs.rs:436-442,
-816, 906`). MCP/A2A `activity.submit` posts JSON to `/v1/activities`
+816, 906`). A2A `activity.submit` posts JSON to `/v1/activities`
 (`platform/cli/src/toolset.rs:341-344`).
 
 ---
@@ -305,7 +307,7 @@ the detail string is `code: …` (`platform/cli/src/output.rs:62-75`;
 | Refusal | Condition |
 | --- | --- |
 | `credential store override … is unavailable in this binary` (`command_failed`) | `LAYERX_CREDENTIAL_STORE` set to an unsupported value; `mock` requires `test-credential-store` (`platform/cli/src/credential.rs:34-45`; `platform/cli/tests/production-credential-refusal.sh:17-25`) |
-| missing credential (`command_failed`) | `token` `NoEntry` is not itself a refusal; HTTP proceeds without `Authorization` (`platform/cli/src/credential.rs:195-202`; `platform/cli/src/http.rs:48, 76-79`). Install without a stored identity session: `no {environment} identity session is held in credential storage…` (`platform/cli/src/install/mod.rs:603-606`). MCP/A2A serve without a gateway alias: `gateway credential alias … is absent; rerun layerx install…` (`platform/cli/src/toolset.rs:67-70`). Empty stdin secret (`platform/cli/src/credential.rs:77-78`). OS store unavailable (`platform/cli/src/credential.rs:47-50`) |
+| missing credential (`command_failed`) | `token` `NoEntry` is not itself a refusal; HTTP proceeds without `Authorization` (`platform/cli/src/credential.rs:195-202`; `platform/cli/src/http.rs:48, 76-79`). Install without a stored identity session: `no {environment} identity session is held in credential storage…` (`platform/cli/src/install/mod.rs:603-606`). `a2a serve` without a gateway alias: `gateway credential alias … is absent; rerun layerx install…` (`platform/cli/src/toolset.rs:62-66`). Empty stdin secret (`platform/cli/src/credential.rs:77-78`). OS store unavailable (`platform/cli/src/credential.rs:47-50`) |
 | `network_id_mismatch` | `environment use emulator` supplied network id disagrees with `GET /v1/sequencer` (`platform/cli/src/emulator.rs:116, 871-876`; `platform/cli/tests/emulator.rs:910-926`) |
 | `network_id_reserved` | `--network-id 0` (`platform/cli/src/emulator.rs:113, 180, 768-769`) |
 | `environment must be emulator, testnet, or production` (`command_failed`) | any other profile name (`platform/cli/src/config.rs:121-126`; `platform/cli/src/main.rs:764`) |
@@ -315,7 +317,9 @@ the detail string is `code: …` (`platform/cli/src/output.rs:62-75`;
 | `environment_input_missing` | `environment use` given a partial endpoint/network/anchor set (`platform/cli/src/emulator.rs:106, 779-790`; `platform/cli/tests/commands.rs:90-105`) |
 | `sequencer_trust_anchor_mismatch` | supplied anchor disagrees with advertised sequencer identity (`platform/cli/src/emulator.rs:117, 878-884`) |
 | `sequencer_seed_exists` / `sequencer_trust_anchor_exists` | `emulator provision` without `--force` when those files exist (`platform/cli/src/emulator.rs:100-101, 126-135, 246-252`) |
-| `MCP and A2A installation require a configured hosted testnet or production gateway…` (`command_failed`) | install against emulator (`platform/cli/src/install/mod.rs:573-577`; `platform/cli/tests/install.rs:35-52`) |
+| `MCP and A2A installation require a configured hosted testnet or production gateway…` (`command_failed`) | `install a2a` against the emulator (`platform/cli/src/install/mod.rs:573-577`; `platform/cli/tests/install.rs:34-51`) |
+| `the daemon binding document at … could not be used: …; agent-daemon enrolment writes it before the MCP server is installed` (`command_failed`) | `install mcp` before agent-daemon enrolment published the document, or against an unreadable, malformed or refused one (`platform/cli/src/install/mcp.rs:35-41`; `agent/crates/layerx-mcp/src/binding.rs:57-63`; `platform/cli/tests/install.rs:81-89`) |
+| `agent runtime … is not supported; use layerx, claude-code, claude-desktop, cursor, or vscode` (`command_failed`) | `--host` naming an undocumented runtime; refused before the binding document is read (`platform/cli/src/install/mod.rs:60-62`; `platform/cli/src/install/mcp.rs:27-34`; `platform/cli/tests/install.rs:53-59`) |
 | `wallet_registration_unavailable` | `wallet create` on a non-emulator environment; no key is generated (`platform/cli/src/wallet.rs:286`) |
 | `wallet_history_unavailable` | `wallet history`; no DID activity-history method or REST route is published (`platform/cli/src/wallet.rs:439-442`) |
 | `identity_sequence_unavailable` | Authenticated identity state is unavailable; token writes refuse before signing. Send additionally requires the shared debit-authorization signing API |
