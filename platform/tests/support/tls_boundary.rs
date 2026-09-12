@@ -19,36 +19,91 @@ fn openssl(directory: &Path, arguments: &[&str]) {
         .current_dir(directory)
         .output()
         .unwrap_or_else(|error| panic!("start OpenSSL: {error}"));
-    assert!(output.status.success(), "OpenSSL qualification prerequisite");
+    assert!(
+        output.status.success(),
+        "OpenSSL qualification prerequisite"
+    );
 }
 
 fn certificates(directory: &Path) {
-    openssl(directory, &[
-        "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-        "-nodes", "-keyout", "key.pem", "-out", "cert.pem", "-days", "1",
-        "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost",
-    ]);
-    openssl(directory, &[
-        "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-        "-nodes", "-keyout", "other-key.pem", "-out", "other-cert.pem", "-days", "1",
-        "-subj", "/CN=unrelated-root",
-    ]);
-    openssl(directory, &["x509", "-in", "cert.pem", "-outform", "DER", "-out", "cert.der"]);
-    openssl(directory, &["pkcs8", "-topk8", "-nocrypt", "-in", "key.pem", "-outform", "DER", "-out", "key.der"]);
+    openssl(
+        directory,
+        &[
+            "req",
+            "-x509",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
+            "-nodes",
+            "-keyout",
+            "key.pem",
+            "-out",
+            "cert.pem",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=DNS:localhost",
+        ],
+    );
+    openssl(
+        directory,
+        &[
+            "req",
+            "-x509",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
+            "-nodes",
+            "-keyout",
+            "other-key.pem",
+            "-out",
+            "other-cert.pem",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=unrelated-root",
+        ],
+    );
+    openssl(
+        directory,
+        &[
+            "x509", "-in", "cert.pem", "-outform", "DER", "-out", "cert.der",
+        ],
+    );
+    openssl(
+        directory,
+        &[
+            "pkcs8", "-topk8", "-nocrypt", "-in", "key.pem", "-outform", "DER", "-out", "key.der",
+        ],
+    );
 }
 
 fn start(directory: &Path) -> (Boundary, u16) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .unwrap_or_else(|error| panic!("reserve boundary port: {error}"));
-    let address = listener.local_addr().unwrap_or_else(|error| panic!("boundary address: {error}"));
+    let address = listener
+        .local_addr()
+        .unwrap_or_else(|error| panic!("boundary address: {error}"));
     drop(listener);
-    let executable = std::env::var_os("LAYERX_PAXEER_BOUNDARY_BIN").map_or_else(|| {
-        std::env::current_exe().unwrap_or_else(|error| panic!("test executable: {error}"))
-            .parent().and_then(Path::parent)
-            .unwrap_or_else(|| panic!("Cargo target directory"))
-            .join("layerx-paxeer-boundary")
-    }, PathBuf::from);
-    assert!(executable.is_file(), "build the real Paxeer TLS boundary first");
+    let executable = std::env::var_os("LAYERX_PAXEER_BOUNDARY_BIN").map_or_else(
+        || {
+            std::env::current_exe()
+                .unwrap_or_else(|error| panic!("test executable: {error}"))
+                .parent()
+                .and_then(Path::parent)
+                .unwrap_or_else(|| panic!("Cargo target directory"))
+                .join("layerx-paxeer-boundary")
+        },
+        PathBuf::from,
+    );
+    assert!(
+        executable.is_file(),
+        "build the real Paxeer TLS boundary first"
+    );
     let mut command = Command::new(executable);
     for (name, _) in std::env::vars_os() {
         if name.to_string_lossy().starts_with("LAYERX_PAXEER_") {
@@ -59,13 +114,25 @@ fn start(directory: &Path) -> (Boundary, u16) {
         .env("LAYERX_PAXEER_CHAIN_ID", "125")
         .env("LAYERX_PAXEER_BOUNDARY_LISTEN", address.to_string())
         .env("LAYERX_PAXEER_NODE_URL", "http://127.0.0.1:1")
-        .env("LAYERX_PAXEER_BOUNDARY_TLS_CERT_DER", directory.join("cert.der"))
-        .env("LAYERX_PAXEER_BOUNDARY_TLS_KEY_DER", directory.join("key.der"))
-        .stdout(Stdio::null()).stderr(Stdio::null())
-        .spawn().unwrap_or_else(|error| panic!("start real TLS boundary: {error}"));
+        .env(
+            "LAYERX_PAXEER_BOUNDARY_TLS_CERT_DER",
+            directory.join("cert.der"),
+        )
+        .env(
+            "LAYERX_PAXEER_BOUNDARY_TLS_KEY_DER",
+            directory.join("key.der"),
+        )
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap_or_else(|error| panic!("start real TLS boundary: {error}"));
     let mut boundary = Boundary(process);
     for _ in 0..100 {
-        assert!(boundary.0.try_wait().unwrap_or_else(|error| panic!("boundary status: {error}")).is_none());
+        assert!(boundary
+            .0
+            .try_wait()
+            .unwrap_or_else(|error| panic!("boundary status: {error}"))
+            .is_none());
         if TcpStream::connect_timeout(&address, Duration::from_millis(50)).is_ok() {
             return (boundary, address.port());
         }
@@ -81,15 +148,23 @@ pub fn qualify(test_name: &str, probe: impl Fn(&str) -> Result<Vec<u8>, String>)
             let bytes = result.unwrap_or_else(|error| panic!("trusted TLS response: {error}"));
             let value: serde_json::Value = serde_json::from_slice(&bytes)
                 .unwrap_or_else(|error| panic!("real boundary response: {error}"));
-            assert_eq!(value, serde_json::json!({"status":"live","service":"paxeer-boundary"}));
+            assert_eq!(
+                value,
+                serde_json::json!({"status":"live","service":"paxeer-boundary"})
+            );
         } else {
-            assert!(result.is_err(), "untrusted certificate or wrong hostname was accepted");
+            assert!(
+                result.is_err(),
+                "untrusted certificate or wrong hostname was accepted"
+            );
         }
         println!("TLS client probe completed");
         return;
     }
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|error| panic!("qualification clock: {error}")).as_nanos();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|error| panic!("qualification clock: {error}"))
+        .as_nanos();
     let directory = std::env::temp_dir().join(format!("tls-client-{}-{stamp}", std::process::id()));
     fs::create_dir(&directory).unwrap_or_else(|error| panic!("qualification directory: {error}"));
     let empty_roots = directory.join("empty-roots");
@@ -101,14 +176,25 @@ pub fn qualify(test_name: &str, probe: impl Fn(&str) -> Result<Vec<u8>, String>)
         ("unrelated-root", "localhost", "other-cert.pem"),
         ("wrong-hostname", "127.0.0.1", "cert.pem"),
     ] {
-        let output = Command::new(std::env::current_exe().unwrap_or_else(|error| panic!("test executable: {error}")))
-            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
-            .env("LAYERX_TLS_QUAL_ENDPOINT", format!("https://{host}:{port}"))
-            .env("LAYERX_TLS_QUAL_EXPECT", case)
-            .env("SSL_CERT_FILE", directory.join(roots))
-            .env("SSL_CERT_DIR", &empty_roots)
-            .output().unwrap_or_else(|error| panic!("start TLS client probe: {error}"));
-        assert!(output.status.success(), "TLS case {case}: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-        assert!(String::from_utf8_lossy(&output.stdout).contains("TLS client probe completed"), "TLS probe must execute exactly the requested case");
+        let output = Command::new(
+            std::env::current_exe().unwrap_or_else(|error| panic!("test executable: {error}")),
+        )
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env("LAYERX_TLS_QUAL_ENDPOINT", format!("https://{host}:{port}"))
+        .env("LAYERX_TLS_QUAL_EXPECT", case)
+        .env("SSL_CERT_FILE", directory.join(roots))
+        .env("SSL_CERT_DIR", &empty_roots)
+        .output()
+        .unwrap_or_else(|error| panic!("start TLS client probe: {error}"));
+        assert!(
+            output.status.success(),
+            "TLS case {case}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("TLS client probe completed"),
+            "TLS probe must execute exactly the requested case"
+        );
     }
 }

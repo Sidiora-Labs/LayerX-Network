@@ -194,8 +194,11 @@ mod tls_boundary;
 
 #[test]
 fn artifact_fetch_uses_system_trust_and_checks_server_identity() {
-    let module = module_path!().split_once("::").map_or("", |(_, module)| module);
-    let test_name = format!("{module}::artifact_fetch_uses_system_trust_and_checks_server_identity");
+    let module = module_path!()
+        .split_once("::")
+        .map_or("", |(_, module)| module);
+    let test_name =
+        format!("{module}::artifact_fetch_uses_system_trust_and_checks_server_identity");
     tls_boundary::qualify(&test_name, |endpoint| {
         get(&format!("{endpoint}/livez"), 1024, "boundary liveness")
     });
