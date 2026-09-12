@@ -19,7 +19,9 @@ lxp_result lxp_bridge_profile_validate(const lxp_bridge_profile *profile)
 {
     uint8_t reserve[32];
     static const uint8_t name[] = "system:paxeer-reserve";
-    if (profile == NULL || memcmp(profile->bytes, "LXBC1", 5U) != 0 ||
+    if (profile == NULL ||
+        (memcmp(profile->bytes, "LXBC1", 5U) != 0 &&
+         memcmp(profile->bytes, "LXBC2", 5U) != 0) ||
         read_u64(profile->bytes + 5U) == 0U ||
         lxp_ct_is_zero(profile->bytes + 13U, 20U) ||
         lxp_ct_is_zero(profile->bytes + 33U, 32U) ||
@@ -31,6 +33,10 @@ lxp_result lxp_bridge_profile_validate(const lxp_bridge_profile *profile)
         profile->bytes[205] != 0U || profile->bytes[206] != 3U ||
         lx_account_id_from_string(name, sizeof(name) - 1U, reserve) != LXP_OK ||
         lxp_ct_memcmp(reserve, profile->bytes + 129U, 32U) != 0)
+        return LXP_ERR_NON_CANONICAL;
+    if (memcmp(profile->bytes, "LXBC2", 5U) == 0 &&
+        (read_u64(profile->bytes + 5U) != 125U ||
+         read_u64(profile->bytes + 161U) >= LXP_BRIDGE_COMET_MAX_HISTORY))
         return LXP_ERR_NON_CANONICAL;
     return LXP_OK;
 }
@@ -99,6 +105,7 @@ lxp_result lxp_bridge_credit_verify(const lxp_bridge_profile *profile,
                                     uint8_t nullifier[32])
 {
     static const uint8_t domain[] = "LX:CUSTODY:CREDIT:v1";
+    static const uint8_t comet_domain[] = "LX:CUSTODY:CREDIT:v2";
     static const uint8_t deposit_domain[] = "LXP/Paxeer/custody-deposit/v1";
     static const uint8_t nullifier_domain[] = "LX:DEPOSIT:NULLIFIER:v1";
     uint8_t message[sizeof(domain) - 1U + LXP_BRIDGE_CREDIT_SIGNED_BYTES];
@@ -109,18 +116,20 @@ lxp_result lxp_bridge_credit_verify(const lxp_bridge_profile *profile,
     uint32_t network;
     uint64_t block;
     uint64_t finalized;
+    bool comet;
     lxp_result status;
     if (credit == NULL || nullifier == NULL || protocol_version != 3U ||
         network_id == 0U || lxp_bridge_profile_validate(profile) != LXP_OK)
         return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
     bytes = credit->bytes;
+    comet = memcmp(profile->bytes, "LXBC2", 5U) == 0;
     network = ((uint32_t)bytes[37] << 24U) | ((uint32_t)bytes[38] << 16U) |
               ((uint32_t)bytes[39] << 8U) | bytes[40];
     block = read_u64(bytes + 215U);
     finalized = read_u64(bytes + 287U);
     status = lxp_hash_sha256(profile->bytes, sizeof(profile->bytes), digest);
     if (status != LXP_OK) return status;
-    if (memcmp(bytes, "LXDC1", 5U) != 0 || network != network_id ||
+    if (memcmp(bytes, comet ? "LXDC2" : "LXDC1", 5U) != 0 || network != network_id ||
         memcmp(bytes + 37U, profile->bytes + 201U, 6U) != 0 ||
         bytes[41] != 0U || bytes[42] != 3U ||
         lxp_ct_memcmp(bytes + 5U, digest, 32U) != 0 ||
@@ -136,6 +145,10 @@ lxp_result lxp_bridge_credit_verify(const lxp_bridge_profile *profile,
         lxp_ct_is_zero(bytes + 295U, 32U) ||
         lxp_ct_is_zero(bytes + 327U, 32U))
         return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
+    if (comet && (block < 2U || finalized >= LXP_BRIDGE_COMET_MAX_HISTORY ||
+        bytes[359] != 0U || bytes[360] != 0U || bytes[361] != 0U ||
+        bytes[362] != LXP_BRIDGE_COMET_PROOF_KIND))
+        return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
     deposit[30] = 1U;
     (void)memcpy(deposit + 56U, profile->bytes + 5U, 8U);
     (void)memcpy(deposit + 76U, profile->bytes + 13U, 20U);
@@ -150,7 +163,7 @@ lxp_result lxp_bridge_credit_verify(const lxp_bridge_profile *profile,
     if (status != LXP_OK) return status;
     if (lxp_ct_memcmp(digest, bytes + 43U, 32U) != 0)
         return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
-    (void)memcpy(message, domain, sizeof(domain) - 1U);
+    (void)memcpy(message, comet ? comet_domain : domain, sizeof(domain) - 1U);
     (void)memcpy(message + sizeof(domain) - 1U, bytes,
                  LXP_BRIDGE_CREDIT_SIGNED_BYTES);
     status = lxp_ed25519_verify_raw(profile->bytes + 65U, bytes + 363U,

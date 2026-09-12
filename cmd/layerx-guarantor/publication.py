@@ -159,15 +159,24 @@ def native_request(api, request, header, checkpoint):
     deposits, profile = [], None
     if facts['profile'] is not None:
         module, profile_key, profile, _ = witness(facts['profile'], header[7])
-        require(module == 8 and profile_key == b'custody-credit-profile/v1'.ljust(32, b'\0') and len(profile) == 207 and profile[:5] == b'LXBC1', 'native custody profile')
+        require(module == 8 and profile_key == b'custody-credit-profile/v1'.ljust(32, b'\0') and len(profile) == 207 and profile[:5] in (b'LXBC1', b'LXBC2'), 'native custody profile')
         require(int.from_bytes(profile[5:13], 'big') == request['chain_id'], 'native custody chain')
+        if profile[:5] == b'LXBC2':
+            require(request['chain_id'] == 125 and 0 < int.from_bytes(profile[161:169], 'big') < 8192,
+                    'native Comet custody profile')
     for encoded in facts['deposits']:
         require(profile is not None, 'native custody profile absent')
         module, key, credit, _ = witness(encoded, header[7])
-        require(module == 8 and len(key) == 50 and key[:18] == b'deposit-nullifier:' and len(credit) == 427 and credit[:5] == b'LXDC1', 'native custody credit')
+        comet = profile[:5] == b'LXBC2'
+        require(module == 8 and len(key) == 50 and key[:18] == b'deposit-nullifier:' and len(credit) == 427 and credit[:5] == (b'LXDC2' if comet else b'LXDC1'), 'native custody credit')
         require(credit[5:37] == sha(profile) and credit[37:43] == header[1].to_bytes(4, 'big') + header[0].to_bytes(2, 'big'), 'native custody domain')
         require(key[18:] == sha(b'LX:DEPOSIT:NULLIFIER:v1' + credit[43:75]), 'native deposit nullifier')
-        signature(profile[65:97], b'LX:CUSTODY:CREDIT:v1' + credit[:363], credit[363:])
+        if comet:
+            height, finalized = int.from_bytes(credit[215:223], 'big'), int.from_bytes(credit[287:295], 'big')
+            require(2 <= height <= finalized < 8192 and finalized-height+1 >= int.from_bytes(profile[161:169], 'big')
+                    and credit[359:363] == b'\0\0\0\1' and
+                    all(credit[start:start+32] != bytes(32) for start in (223, 255, 295, 327)), 'native Comet custody evidence')
+        signature(profile[65:97], (b'LX:CUSTODY:CREDIT:v2' if comet else b'LX:CUSTODY:CREDIT:v1') + credit[:363], credit[363:])
         deposits.append(dict(identity=credit[43:75], asset=credit[75:107], amount=credit[191:207], beneficiary=credit[107:139], payer=credit[171:191], nonce=int.from_bytes(credit[207:215], 'big')))
     deposits.sort(key=lambda v: v['identity'])
     require(len({v['identity'] for v in deposits}) == len(deposits), 'duplicate deposit leaf')

@@ -54,7 +54,7 @@ def deposit(args):
     account = signer(rpc, args.key_file)
     require(account == config['payer'] and args.asset == config['asset'], root, 'custody payer and asset')
     profile = (root / 'custody.profile').read_bytes()
-    require(len(profile) == 207 and profile[:5] == b'LXBC1' and profile[13:33] == unhex(config['vault'], 20)
+    require(len(profile) == 207 and profile[:5] in (b'LXBC1', b'LXBC2') and profile[13:33] == unhex(config['vault'], 20)
             and profile[97:129] == bytes.fromhex(args.asset) and profile[201:207] == args.network_id.to_bytes(4, 'big') + b'\0\3',
             root, 'immutable custody profile binding')
     for endpoint in rpcs:
@@ -81,6 +81,7 @@ if __name__ == '__main__':
     parser.add_argument('--rpc', action='append', required=True)
     parser.add_argument('--ca-bundle')
     parser.add_argument('--disposable-identity')
+    parser.add_argument('--vault-artifact')
     parser.add_argument('--key-file', required=True)
     parser.add_argument('--attestor-key', required=True)
     parser.add_argument('--network-id', type=int, required=True)
