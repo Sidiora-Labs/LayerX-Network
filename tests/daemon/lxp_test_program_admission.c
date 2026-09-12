@@ -596,6 +596,7 @@ static int maintenance_head(int *descriptor, uint64_t sequence, uint64_t batch)
 {
     struct sockaddr_un address;
     socklen_t address_length = sizeof(address);
+    uint64_t observed_sequence = 0U, observed_batch = 0U;
     REQUIRE(getpeername(*descriptor, (struct sockaddr *)&address, &address_length) == 0);
     for (unsigned attempt = 0U; attempt < 200U; ++attempt) {
         wire_envelope response;
@@ -606,12 +607,16 @@ static int maintenance_head(int *descriptor, uint64_t sequence, uint64_t batch)
         REQUIRE(send_request(*descriptor, LNI_MINOR, NODE_INFO_REQUEST, 0U, NULL, 0U) == 0);
         REQUIRE(receive_envelope(*descriptor, &response) == 0);
         REQUIRE(response.tag == NODE_INFO_RESPONSE && response.payload_length >= 93U);
-        reached = load_u64(response.payload + 11U) == sequence &&
-            load_u64(response.payload + 19U) == batch;
+        observed_sequence = load_u64(response.payload + 11U);
+        observed_batch = load_u64(response.payload + 19U);
+        reached = observed_sequence == sequence && observed_batch == batch;
         release_envelope(&response);
         if (reached) return 0;
         { const struct timespec delay = {0, 50000000}; REQUIRE(nanosleep(&delay, NULL) == 0); }
     }
+    (void)fprintf(stderr, "published head wanted %llu/%llu, observed %llu/%llu\n",
+                  (unsigned long long)sequence, (unsigned long long)batch,
+                  (unsigned long long)observed_sequence, (unsigned long long)observed_batch);
     return 1;
 }
 
