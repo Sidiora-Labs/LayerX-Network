@@ -93,10 +93,20 @@ static int metered_head(int descriptor, uint64_t minimum, uint8_t root[32])
         REQUIRE(handshake(current) == 0);
         REQUIRE(send_request(current, LNI_MINOR, 26U, 613U, preparation, sizeof(preparation)) == 0);
         REQUIRE(receive_envelope(current, &response) == 0);
-        REQUIRE(response.tag == 27U && response.correlation_id == 613U &&
-                response.payload_length >= 139U);
-        bool reached = load_u64(response.payload + 99U) >= minimum;
-        if (reached) (void)memcpy(root, response.payload + 107U, 32U);
+        bool reached = false;
+        if (response.tag == ERROR_RESPONSE) {
+            REQUIRE(response.correlation_id == 613U && response.payload_length == 5U &&
+                    response.proof_length == 0U && response.payload[0] == 4U);
+            lxp_result refusal = (lxp_result)load_u32(response.payload + 1U);
+            (void)fprintf(stderr, "metered preparation attempt=%u refusal=%d\n",
+                          attempt, refusal);
+            REQUIRE(refusal == LXP_ERR_MODULE_DISABLED || refusal == LXP_ERR_PROJECTION_STALE);
+        } else {
+            REQUIRE(response.tag == 27U && response.correlation_id == 613U &&
+                    response.payload_length >= 139U);
+            reached = load_u64(response.payload + 99U) >= minimum;
+            if (reached) (void)memcpy(root, response.payload + 107U, 32U);
+        }
         release_envelope(&response);
         if (reached) {
             if (current != descriptor) {
