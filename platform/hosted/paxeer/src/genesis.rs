@@ -1,12 +1,9 @@
 use super::{
-    read_http_message, refusal, NodeEndpoint, NodeFailure, Response, CONNECT_TIMEOUT,
-    NODE_IO_TIMEOUT,
+    refusal, transport, NodeEndpoint, NodeFailure, Response, NODE_IO_TIMEOUT,
 };
 use serde_json::{value::RawValue, Value};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::io::{self, Read, Write};
-use std::net::TcpStream;
 use std::time::Instant;
 
 const MAX_GENESIS_BYTES: usize = 32 * 1024 * 1024;
@@ -23,50 +20,8 @@ pub(super) fn endpoint(value: &str) -> Result<NodeEndpoint, String> {
     Ok(endpoint)
 }
 
-struct DeadlineStream {
-    stream: TcpStream,
-    deadline: Instant,
-}
-
-impl Read for DeadlineStream {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        let remaining = self
-            .deadline
-            .checked_duration_since(Instant::now())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "Comet response deadline"))?;
-        self.stream.set_read_timeout(Some(remaining))?;
-        self.stream.read(bytes)
-    }
-}
-
 fn request(node: &NodeEndpoint, path: &str, deadline: Instant) -> Result<Vec<u8>, NodeFailure> {
-    let remaining = deadline
-        .checked_duration_since(Instant::now())
-        .filter(|remaining| !remaining.is_zero())
-        .ok_or(NodeFailure::Unreachable)?;
-    let mut stream = TcpStream::connect_timeout(&node.address, CONNECT_TIMEOUT.min(remaining))
-        .map_err(|_| NodeFailure::Unreachable)?;
-    stream
-        .set_write_timeout(Some(remaining.min(NODE_IO_TIMEOUT)))
-        .map_err(|_| NodeFailure::Unreachable)?;
-    write!(stream, "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", node.address)
-        .map_err(|_| NodeFailure::Unreachable)?;
-    let mut response = read_http_message(
-        &mut DeadlineStream { stream, deadline },
-        MAX_COMET_RESPONSE_BYTES,
-        true,
-    )
-    .map_err(|_| NodeFailure::Invalid)?;
-    let mut start = response
-        .headers
-        .get("")
-        .ok_or(NodeFailure::Invalid)?
-        .split_whitespace();
-    if start.next() != Some("HTTP/1.1") || start.next() != Some("200") {
-        return Err(NodeFailure::Invalid);
-    }
-    Ok(std::mem::take(&mut response.body))
+    transport::request(node, path, None, MAX_COMET_RESPONSE_BYTES, deadline)
 }
 
 enum CometReply {
