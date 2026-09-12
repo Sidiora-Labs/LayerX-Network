@@ -6,6 +6,7 @@ pub struct RpcClient {
     client: Client,
     url: String,
     credential: Option<zeroize::Zeroizing<String>>,
+    identity_session: bool,
 }
 
 impl RpcClient {
@@ -21,6 +22,22 @@ impl RpcClient {
             client,
             url: url.to_owned(),
             credential,
+            identity_session: false,
+        })
+    }
+
+    /// # Errors
+    /// Requires an explicit identity session, an /rpc endpoint, and verified HTTPS off loopback.
+    pub fn new_session(url: &str, session: zeroize::Zeroizing<String>) -> Result<Self, String> {
+        let base = url.strip_suffix("/rpc").ok_or("RPC URL must end in /rpc")?;
+        if session.is_empty() {
+            return Err("identity_session_required: an empty identity session is invalid".into());
+        }
+        Ok(Self {
+            client: Client::new(base, Some(session))?,
+            url: url.to_owned(),
+            credential: None,
+            identity_session: true,
         })
     }
 
@@ -33,6 +50,12 @@ impl RpcClient {
             ));
         }
         let request = request(method, params)?;
+        if method == "lx_requestFunds" && !self.identity_session {
+            return Err(
+                "identity_session_required: lx_requestFunds requires a bearer identity session"
+                    .into(),
+            );
+        }
         decode_response(method, &self.client.post("/rpc", &request, None)?)
     }
 
@@ -54,6 +77,8 @@ pub fn request(method: &str, params: &Value) -> Result<Value, String> {
         .as_array()
         .ok_or("RPC parameters must be positional")?;
     match method {
+        "lx_register" => registration_params(args)?,
+        "lx_requestFunds" => faucet_params(args)?,
         "lx_getNodeInfo" | "lx_listAssets" if args.is_empty() => {}
         "lx_getAsset"
         | "lx_getAccount"
@@ -139,6 +164,44 @@ pub fn request(method: &str, params: &Value) -> Result<Value, String> {
         }
     }
     Ok(json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
+}
+
+fn registration_params(args: &[Value]) -> Result<(), String> {
+    let [Value::String(signer), Value::String(signature)] = args else {
+        return Err("lx_register requires signer_public_key and registration_signature".into());
+    };
+    if !lowercase_hex(signer, 32) || !lowercase_hex(signature, 64) {
+        return Err("lx_register requires a lowercase 32-byte key and 64-byte signature".into());
+    }
+    Ok(())
+}
+
+fn faucet_params(args: &[Value]) -> Result<(), String> {
+    let [Value::String(did), Value::String(signer)] = args else {
+        return Err("lx_requestFunds requires DID and signer_public_key".into());
+    };
+    layerx_types::ids::Did::new(did.as_bytes()).map_err(|e| format!("invalid DID: {e:?}"))?;
+    let valid_did = did
+        .strip_prefix("did:")
+        .and_then(|value| value.split_once(':'))
+        .is_some_and(|(method, identifier)| !method.is_empty() && !identifier.is_empty())
+        && did.len() <= 512
+        && did
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-._:".contains(&byte));
+    if !valid_did || !lowercase_hex(signer, 32) || signer.bytes().all(|byte| byte == b'0') {
+        return Err(
+            "lx_requestFunds requires a canonical DID and nonzero lowercase signer key".into(),
+        );
+    }
+    Ok(())
+}
+
+fn lowercase_hex(value: &str, bytes: usize) -> bool {
+    value.len() == bytes * 2
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// # Errors
@@ -261,13 +324,15 @@ fn id32(value: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn assert_published_native_methods(methods: &[Value]) -> Result<(), String> {
+    fn assert_published_methods(methods: &[Value]) -> Result<(), String> {
         assert_eq!(
             methods
                 .iter()
                 .filter_map(|entry| entry["name"].as_str())
                 .collect::<Vec<_>>(),
             [
+                "lx_register",
+                "lx_requestFunds",
                 "lx_getAccount",
                 "lx_getBalance",
                 "lx_getBalances",
@@ -315,7 +380,7 @@ mod tests {
         let methods = published["methods"]
             .as_array()
             .ok_or("missing contract methods")?;
-        assert_published_native_methods(methods)?;
+        assert_published_methods(methods)?;
         let id = "ab".repeat(32);
         for method in [
             "lx_getAsset",
