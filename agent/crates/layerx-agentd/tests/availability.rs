@@ -392,3 +392,96 @@ fn class_presence_precedes_decoding_and_complete_chunks_require_order() {
         assert!(server.join().is_ok(), "provider failed");
     }
 }
+
+#[test]
+fn withheld_recovery_tail_retains_evidence_without_emitting_complete_replay() {
+    let mut fixture = fixture();
+    fixture.chunks[4].bytes = vec![b'r'; 65_536];
+    fixture.chunks[4].claimed_hash = availability_chunk_digest(
+        7,
+        4,
+        AvailabilityClass::Recovery as u8,
+        0,
+        &fixture.chunks[4].bytes,
+    )
+    .unwrap_or_else(|error| panic!("recovery digest: {error:?}"));
+    let mut tail = fixture.chunks[4].clone();
+    tail.index = 5;
+    tail.class_offset =
+        u64::try_from(tail.bytes.len()).unwrap_or_else(|error| panic!("offset: {error:?}"));
+    tail.bytes = b"withheld recovery".to_vec();
+    tail.claimed_hash =
+        availability_chunk_digest(7, 5, tail.class as u8, tail.class_offset, &tail.bytes)
+            .unwrap_or_else(|error| panic!("tail digest: {error:?}"));
+    fixture.chunks.push(tail);
+    let hashes: Vec<_> = fixture
+        .chunks
+        .iter()
+        .map(|chunk| chunk.claimed_hash)
+        .collect();
+    fixture.proofs.clear();
+    for index in 0..hashes.len() {
+        let (proof, root) = build_leaf_hash_proof(&hashes, index)
+            .unwrap_or_else(|error| panic!("proof: {error:?}"));
+        fixture.proofs.push(proof);
+        fixture.availability_root = root;
+    }
+    let socket = SocketPath::new("recovery-tail");
+    let server = provider(&socket, fixture.clone(), 5, None);
+    let gate = ConnectionGate::new(1);
+    let mut transport = Uds::connect(&socket.0, &gate, transport_limits())
+        .unwrap_or_else(|error| panic!("transport: {error:?}"));
+    let mut providers = ProviderSet::new(vec![Provider {
+        name: "recovery-tail".to_owned(),
+        transport: &mut transport,
+    }]);
+    let root =
+        std::env::temp_dir().join(format!("layerx-availability-tail-{}", std::process::id()));
+    let mut store = Store::open(&root).unwrap_or_else(|error| panic!("store: {error:?}"));
+    let mut audit = AvailabilityAudit::default();
+    let mut request_context = context(&fixture, 100);
+    request_context.limits.maximum_bytes = 131_072;
+    let outcome = availability(
+        &mut store,
+        &tenant(),
+        &mut audit,
+        &mut providers,
+        &AvailabilityRequest {
+            selector: AvailabilitySelector::Batch(7),
+            checkpoint_id: [0x77; 32],
+            context: request_context,
+        },
+        |_| {},
+    )
+    .unwrap_or_else(|error| panic!("availability: {error:?}"));
+    let AvailabilityRead::Partial { failures, .. } = outcome else {
+        panic!("withheld recovery cannot produce complete replay frames");
+    };
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].check, AvailabilityCheck::BundleCompleteness);
+    assert!(failures[0].classes.missing.is_empty());
+    assert_eq!(
+        failures[0].mismatching_commitment,
+        fixture.availability_root
+    );
+    assert_eq!(
+        failures[0].served_bytes,
+        fixture.chunks[..5]
+            .iter()
+            .flat_map(|chunk| chunk.bytes.iter().copied())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(audit.provider_failure_count("recovery-tail"), 1);
+    assert_eq!(store.list_object_ids(&tenant(), ObjectKind::Audit).len(), 1);
+    assert!(server.join().is_ok(), "provider failed");
+    drop(store);
+    let recovered = Store::open(&root).unwrap_or_else(|error| panic!("recovered store: {error:?}"));
+    assert_eq!(
+        recovered
+            .list_object_ids(&tenant(), ObjectKind::Audit)
+            .len(),
+        1
+    );
+    drop(recovered);
+    let _ = fs::remove_dir_all(root);
+}
