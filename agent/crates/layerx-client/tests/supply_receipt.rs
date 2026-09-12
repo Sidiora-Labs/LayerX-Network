@@ -29,8 +29,11 @@ fn verified(bytes: &[u8]) -> bool {
 
 #[test]
 fn native_supply_receipt_roundtrip_and_authenticated_tampering() {
-    let receipt = decode(NATIVE).expect("native supply receipt");
-    assert_eq!(encode(&receipt).expect("canonical encoding"), NATIVE);
+    let receipt = decode(NATIVE).unwrap_or_else(|error| panic!("native supply receipt: {error:?}"));
+    assert_eq!(
+        encode(&receipt).unwrap_or_else(|error| panic!("canonical encoding: {error:?}")),
+        NATIVE
+    );
     let Receipt::Protocol(protocol) = receipt else {
         panic!("protocol receipt required");
     };

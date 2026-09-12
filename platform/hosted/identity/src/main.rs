@@ -1,5 +1,5 @@
 mod seal;
-mod store;
+use layerx_platform_identity::store;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::WebPkiClientVerifier;
@@ -35,6 +35,7 @@ static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Service {
     Gateway,
+    Registry,
     Webhooks,
     Dashboard,
     Faucet,
@@ -52,8 +53,9 @@ struct Capabilities {
 }
 
 impl Service {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Gateway,
+        Self::Registry,
         Self::Webhooks,
         Self::Dashboard,
         Self::Faucet,
@@ -66,6 +68,7 @@ impl Service {
     const fn name(self) -> &'static str {
         match self {
             Self::Gateway => "gateway",
+            Self::Registry => "registry",
             Self::Webhooks => "webhooks",
             Self::Dashboard => "dashboard",
             Self::Faucet => "faucet",
@@ -96,6 +99,11 @@ impl Service {
             Self::Registrar => Capabilities {
                 introspect: false,
                 create_principals: true,
+                manage_sessions: false,
+            },
+            Self::Registry => Capabilities {
+                introspect: false,
+                create_principals: false,
                 manage_sessions: false,
             },
         }
@@ -725,7 +733,9 @@ fn introspection_shape(
                 },
             )
         }
-        Service::Provisioning | Service::Registrar => refusal(403, "service_not_permitted", None),
+        Service::Provisioning | Service::Registrar | Service::Registry => {
+            refusal(403, "service_not_permitted", None)
+        }
     }
 }
 
@@ -898,6 +908,74 @@ fn readiness(shared: &Shared) -> Response {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicationKeyRequest {
+    sub: String,
+    revoked: bool,
+}
+
+fn publication_key_digest(request: &Request) -> Result<String, Response> {
+    let key = request
+        .headers
+        .get("layerx-key")
+        .filter(|key| {
+            !key.is_empty() && key.len() <= 4096 && key.bytes().all(|b| b.is_ascii_graphic())
+        })
+        .ok_or_else(|| refusal(400, "publication_key_required", None))?;
+    Ok(sha256_hex(key.as_bytes()))
+}
+
+fn resolve_publication_principal(shared: &Shared, request: &Request) -> Response {
+    if !request.body.is_empty() {
+        return refusal(400, "invalid_argument", None);
+    }
+    let digest = match publication_key_digest(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let Ok(store) = shared.store.lock() else {
+        return refusal(503, "store_unavailable", Some(5));
+    };
+    if store.check_available().is_err() {
+        return refusal(503, "store_unavailable", Some(5));
+    }
+    let Some(principal) = store.publication_principal(&digest) else {
+        return refusal(404, "principal_not_found", None);
+    };
+    serialize(
+        &serde_json::json!({"ok":true,"result":{"principal_digest":sha256_hex(principal.sub.as_bytes())}}),
+    )
+}
+
+fn bind_publication_key(shared: &Shared, request: &Request) -> Response {
+    if request.headers.get("content-type").map(String::as_str) != Some("application/json") {
+        return refusal(400, "content_type_required", None);
+    }
+    let body: PublicationKeyRequest = match serde_json::from_slice(&request.body) {
+        Ok(body) => body,
+        Err(_) => return refusal(400, "invalid_argument", None),
+    };
+    let digest = match publication_key_digest(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let Ok(mut store) = shared.store.lock() else {
+        return refusal(503, "store_unavailable", Some(5));
+    };
+    if store.check_available().is_err() {
+        return refusal(503, "store_unavailable", Some(5));
+    }
+    if store.subject_tenant(&body.sub).is_none() {
+        return refusal(404, "principal_not_found", None);
+    }
+    match store.bind_publication_key(digest, body.sub, body.revoked) {
+        Ok(()) => serialize(&serde_json::json!({"ok":true})),
+        Err(_) if store.check_available().is_err() => refusal(503, "store_unavailable", Some(5)),
+        Err(_) => refusal(409, "publication_key_binding_refused", None),
+    }
+}
+
 fn route(shared: &Shared, request: &Request) -> Response {
     if request.method == "GET" && request.path == "/livez" {
         return ok("{\"status\":\"live\",\"service\":\"identity\"}".to_owned());
@@ -917,10 +995,14 @@ fn route(shared: &Shared, request: &Request) -> Response {
         (request.method.as_str(), request.path.as_str()),
         (
             "POST",
-            "/v1/sessions/introspect" | "/v1/introspect" | "/v1/principals" | "/v1/sessions"
+            "/v1/sessions/introspect"
+                | "/v1/introspect"
+                | "/v1/principals"
+                | "/v1/sessions"
+                | "/v1/publication-keys"
         )
-    ) || (request.method == "DELETE"
-        && request.path.starts_with("/v1/sessions/"));
+    ) || (request.method == "GET" && request.path == "/internal/v1/principal")
+        || (request.method == "DELETE" && request.path.starts_with("/v1/sessions/"));
     if !known_route {
         return refusal(404, "not_found", None);
     }
@@ -930,6 +1012,18 @@ fn route(shared: &Shared, request: &Request) -> Response {
     };
     let capabilities = service.capabilities();
     match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/internal/v1/principal") => {
+            if service != Service::Registry {
+                return refusal(403, "service_not_permitted", None);
+            }
+            resolve_publication_principal(shared, request)
+        }
+        ("POST", "/v1/publication-keys") => {
+            if service != Service::Provisioning {
+                return refusal(403, "service_not_permitted", None);
+            }
+            bind_publication_key(shared, request)
+        }
         ("POST", "/v1/sessions/introspect" | "/v1/introspect") => {
             if !capabilities.introspect {
                 return refusal(403, "service_not_permitted", None);
@@ -1360,5 +1454,107 @@ mod tests {
         );
         let mut oversized = oversized.as_bytes();
         assert!(parse_client_request(&mut oversized).is_err());
+    }
+}
+
+#[cfg(test)]
+mod resolver_tests {
+    use super::*;
+
+    #[test]
+    fn route_requires_registry_authority_and_rejects_principal_substitution() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let directory =
+            std::env::temp_dir().join(format!("identity-resolver-route-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap_or_else(|error| panic!("{error}"));
+        let shared = Shared {
+            config: Config {
+                listen: "127.0.0.1:0"
+                    .parse()
+                    .unwrap_or_else(|error| panic!("{error}")),
+                tls: Arc::new(
+                    ServerConfig::builder()
+                        .with_no_client_auth()
+                        .with_cert_resolver(Arc::new(
+                            rustls::server::ResolvesServerCertUsingSni::new(),
+                        )),
+                ),
+                state_dir: directory.clone(),
+                store_key: StoreKey::derive(b"resolver-unit-store-key"),
+                service_tokens: vec![
+                    ServiceToken {
+                        service: Service::Registry,
+                        token: Zeroizing::new("registry-unit-token".to_owned()),
+                    },
+                    ServiceToken {
+                        service: Service::Gateway,
+                        token: Zeroizing::new("gateway-unit-token".to_owned()),
+                    },
+                ],
+                default_ttl_seconds: 60,
+            },
+            store: Mutex::new(Store::open(&directory).unwrap_or_else(|error| panic!("{error}"))),
+        };
+        let mut request = Request {
+            method: "GET".to_owned(),
+            path: "/internal/v1/principal".to_owned(),
+            headers: BTreeMap::new(),
+            body: Vec::new(),
+        };
+        assert_eq!(route(&shared, &request).status, 401);
+        request.headers.insert(
+            "authorization".to_owned(),
+            "Bearer gateway-unit-token".to_owned(),
+        );
+        assert_eq!(route(&shared, &request).status, 403);
+        request.headers.insert(
+            "authorization".to_owned(),
+            "Bearer registry-unit-token".to_owned(),
+        );
+        assert_eq!(route(&shared, &request).status, 400);
+        request
+            .headers
+            .insert("layerx-key".to_owned(), "unit-publication-key".to_owned());
+        assert_eq!(route(&shared, &request).status, 404);
+        {
+            let mut store = shared
+                .store
+                .lock()
+                .unwrap_or_else(|error| panic!("{error}"));
+            for sub in ["alice", "bob"] {
+                store
+                    .put_principal(Principal {
+                        tenant: "resolver-unit".to_owned(),
+                        sub: sub.to_owned(),
+                        allowed_signer_public_keys: vec!["ab".repeat(32)],
+                        account: None,
+                        audiences: Vec::new(),
+                    })
+                    .unwrap_or_else(|error| panic!("{error}"));
+            }
+            let digest = sha256_hex(b"unit-publication-key");
+            store
+                .bind_publication_key(digest.clone(), "alice".to_owned(), false)
+                .unwrap_or_else(|error| panic!("{error}"));
+            assert!(store
+                .bind_publication_key(digest, "bob".to_owned(), false)
+                .is_err());
+        }
+        let response = route(&shared, &request);
+        assert_eq!(response.status, 200);
+        let response: serde_json::Value =
+            serde_json::from_str(&response.body).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(response["result"]["principal_digest"], sha256_hex(b"alice"));
+        request.body = b"{\"principal\":\"bob\"}".to_vec();
+        assert_eq!(route(&shared, &request).status, 400);
+        request.body.clear();
+        fs::rename(
+            directory.join("journal.log"),
+            directory.join("detached.log"),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(route(&shared, &request).status, 503);
+        drop(shared);
+        fs::remove_dir_all(directory).unwrap_or_else(|error| panic!("{error}"));
     }
 }

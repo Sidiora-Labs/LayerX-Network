@@ -6,7 +6,7 @@ receipts and signed batch evidence. It never mints balances. It never
 mints a protocol budget object from local state.
 
 The crate is a library plus a binary. The binary
-(`agent/crates/layerx-agentd/src/main.rs:554-558`) binds a loopback
+(`agent/crates/layerx-agentd/src/main.rs:782-787`) binds a loopback
 program-balance listener and a human Unix owner. Budget creation,
 approval holds, capability ceilings, and receipt verification are
 library paths. Evidence tests construct `EvidenceAuthority` from a
@@ -537,7 +537,7 @@ The binary in `main.rs` reads a disjoint `LAYERX_AGENT_*` set for
 the program-balance listener and human owner (loopback listen,
 distinct bearers, deployment journal, human socket, one
 `LimitConfig`). Those names are required environment keys, not
-`SECURITY_RELEVANT_SETTINGS` (`agent/crates/layerx-agentd/src/main.rs:50-54, 101-122, 293-327`).
+`SECURITY_RELEVANT_SETTINGS` (`agent/crates/layerx-agentd/src/main.rs:61-67, 114-135, 514-549`).
 
 ---
 

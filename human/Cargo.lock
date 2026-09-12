@@ -1043,10 +1043,12 @@ dependencies = [
  "layerx-human-test-support",
  "layerx-intents",
  "layerx-paxeer-client",
+ "layerx-platform-internal",
  "layerx-proof",
  "layerx-sdk",
  "layerx-types",
  "layerx-wire",
+ "native-tls",
  "passkey-auth",
  "proptest",
  "rustix",
@@ -1126,6 +1128,23 @@ dependencies = [
  "rustix",
  "rustls",
  "sha2",
+]
+
+[[package]]
+name = "layerx-platform-internal"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "layerx-wire",
+ "native-tls",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]

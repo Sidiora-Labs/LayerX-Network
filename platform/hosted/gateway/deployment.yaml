@@ -69,6 +69,16 @@ spec:
           imagePullPolicy: Always
           ports: [{name: https, containerPort: 9443}]
           env:
+            - {name: LAYERX_EVENTS_PAYMENT_UPSTREAM_URL, value: "https://payments.layerx-internal.svc"}
+            - {name: LAYERX_EVENTS_PAYMENT_UPSTREAM_CA_DER, value: "/run/layerx/events/ca.der"}
+            - {name: LAYERX_EVENTS_PAYMENT_UPSTREAM_TOKEN_FILE, value: "/run/layerx/events/token"}
+            - {name: LAYERX_EVENTS_PAYMENT_UPSTREAM_CLIENT_IDENTITY_PKCS12, value: "/run/layerx/events/client.p12"}
+            - {name: LAYERX_EVENTS_PAYMENT_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE, value: "/run/layerx/events/password"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_URL, value: "https://layerx-webhooks.layerx-developer.svc"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_CA_DER, value: "/run/layerx/events/ca.der"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_TOKEN_FILE, value: "/run/layerx/events/webhook-token"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_CLIENT_IDENTITY_PKCS12, value: "/run/layerx/events/client.p12"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE, value: "/run/layerx/events/password"}
             - {name: LAYERX_GATEWAY_LISTEN, value: "0.0.0.0:9443"}
             - {name: LAYERX_GATEWAY_TLS_CERT_DER, value: /run/layerx/server/server.crt.der}
             - {name: LAYERX_GATEWAY_TLS_KEY_DER, value: /run/layerx/server/server.key.der}
@@ -105,6 +115,7 @@ spec:
           resources: {requests: {cpu: 500m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           volumeMounts:
+            - {name: events, mountPath: /run/layerx/events, readOnly: true}
             - {name: server, mountPath: /run/layerx/server, readOnly: true}
             - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
             - {name: client, mountPath: /run/layerx/client, readOnly: true}
@@ -118,6 +129,7 @@ spec:
             - {name: provisioning, mountPath: /run/layerx/provisioning, readOnly: true}
             - {name: modules, mountPath: /run/layerx/modules, readOnly: true}
       volumes:
+        - {name: events, secret: {secretName: layerx-gateway-event-producer, defaultMode: 0440}}
         - {name: server, secret: {secretName: layerx-gateway-server-tls}}
         - {name: trust, secret: {secretName: layerx-internal-ca}}
         - {name: client, secret: {secretName: layerx-gateway-client-identity}}
@@ -213,3 +225,19 @@ spec:
           - path: /
             pathType: Prefix
             backend: {service: {name: layerx-gateway, port: {name: https}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-gateway-event-producer, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-gateway}}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-internal}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-internal-payments]} ]}
+      ports: [{protocol: TCP, port: 9443}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
+          podSelector: {matchLabels: {app: layerx-webhooks}}
+      ports: [{protocol: TCP, port: 9444}]

@@ -53,6 +53,17 @@ RESOLVED_EDGES = (
     'IngressController ingress-nginx/ingress-nginx -> layerx-dashboard-web.layerx-developer.svc:http [Ingress layerx-developer/layerx-developer-web developers.layerx.example/]',
 )
 
+PRODUCER_EDGES = (
+    'Deployment layerx-testnet/layerx-gateway -> payments.layerx-internal.svc:443 [env LAYERX_EVENTS_PAYMENT_UPSTREAM_URL]',
+    'Deployment layerx-testnet/layerx-gateway -> layerx-webhooks.layerx-developer.svc:443 [env LAYERX_EVENTS_WEBHOOKS_UPSTREAM_URL]',
+    'StatefulSet layerx-testnet/layerx-program-registry -> programs.layerx-internal.svc:443 [env LAYERX_EVENTS_PROGRAM_UPSTREAM_URL]',
+    'StatefulSet layerx-testnet/layerx-program-registry -> layerx-webhooks.layerx-developer.svc:443 [env LAYERX_EVENTS_WEBHOOKS_UPSTREAM_URL]',
+    'StatefulSet layerx-testnet/layerx-program-registry -> identity.layerx-internal.svc:443 [env LAYERX_REGISTRY_IDENTITY_URL]',
+    'StatefulSet layerx-testnet/layerx-node -> journeys.layerx-internal.svc:443 [env LAYERX_EVENTS_JOURNEY_UPSTREAM_URL]',
+    'StatefulSet layerx-testnet/layerx-node -> approvals.layerx-internal.svc:443 [env LAYERX_EVENTS_APPROVAL_UPSTREAM_URL]',
+    'StatefulSet layerx-testnet/layerx-node -> layerx-webhooks.layerx-developer.svc:443 [env LAYERX_EVENTS_WEBHOOKS_UPSTREAM_URL]',
+)
+
 HUMAN_EDGES = (
     'Deployment layerx-internal/journeys -> layerx-human.layerx-testnet.svc:9443 [env LAYERX_EVENTS_UPSTREAM_URL]',
     'Deployment layerx-internal/approvals -> layerx-human.layerx-testnet.svc:9443 [env LAYERX_EVENTS_UPSTREAM_URL]',
@@ -62,7 +73,9 @@ SEPARATELY_OPERATED_EDGES = (
     'CronJob layerx-testnet/layerx-testnet-status-publisher -> status-publisher.layerx-status.svc.cluster.local:443 [env LAYERX_STATUS_PUBLISH_URL]',
 )
 
-COMPLETE_EDGES = RESOLVED_EDGES + HUMAN_EDGES
+BASELINE_EDGES = RESOLVED_EDGES + PRODUCER_EDGES
+
+COMPLETE_EDGES = BASELINE_EDGES + HUMAN_EDGES
 
 
 def load(parser):
@@ -89,11 +102,43 @@ def named(rows, status, expected, description):
     )
     assert len(observed) == len(expected), (description, len(observed), len(expected))
 
+def producer_edges():
+    original = paths[:]
+    paths.append('human')
+    for parser in ('load_pyyaml', 'load_builtin'):
+        topology = load(parser)
+        assert not failures(topology), failures(topology)
+        named(module['check'](topology), 'ok', COMPLETE_EDGES, 'producer topology resolved edges (%s)' % parser)
+        for policy_name, edge_names in {
+            'payment-producer': ('LAYERX_EVENTS_PAYMENT_UPSTREAM_URL',),
+            'program-producer': ('LAYERX_EVENTS_PROGRAM_UPSTREAM_URL',),
+            'journey-producer': ('LAYERX_EVENTS_JOURNEY_UPSTREAM_URL',),
+            'approval-producer': ('LAYERX_EVENTS_APPROVAL_UPSTREAM_URL',),
+            'event-producers': ('LAYERX_EVENTS_WEBHOOKS_UPSTREAM_URL',),
+            'registry-principal-identity': ('LAYERX_REGISTRY_IDENTITY_URL',),
+            'layerx-human': ('LAYERX_EVENTS_UPSTREAM_URL',),
+        }.items():
+            changed = copy.deepcopy(topology)
+            policy = next(item for item in changed.policies if item['name'] == policy_name)
+            policy['ingress'] = []
+            refused = failures(changed)
+            assert refused, (parser, policy_name)
+            expected_count = {'event-producers': 3, 'layerx-human': 2}.get(policy_name, 1)
+            assert len(refused) == expected_count, (parser, policy_name, refused)
+            assert len(labelled(module['check'](changed), 'ok')) == len(COMPLETE_EDGES) - expected_count, (parser, policy_name)
+            assert all('ingress NetworkPolicy' in row[2] for row in refused), (parser, policy_name, refused)
+            for edge_name in edge_names:
+                assert any(edge_name in row[1] for row in refused), (parser, policy_name, edge_name, refused)
+            print('PASS producer ingress refusal:', parser, policy_name)
+    paths[:] = original
+
+producer_edges()
+
 base = load('load_pyyaml')
 baseline = module['check'](base)
 named(baseline, 'FAIL', HUMAN_EDGES, 'baseline Human edges without the Human manifest')
 assert all('layerx-human' in row[2] for row in failures(base))
-named(baseline, 'ok', RESOLVED_EDGES, 'baseline resolved edges')
+named(baseline, 'ok', BASELINE_EDGES, 'baseline resolved edges')
 named(baseline, 'external', SEPARATELY_OPERATED_EDGES, 'baseline separately operated edges')
 parity_failed = False
 try:
@@ -101,7 +146,7 @@ try:
 except Exception as error:
     parity_failed = True
     print('FAIL full-manifest parser parity:', error)
-print('PASS baseline without the Human manifest resolves the %d named edges and leaves exactly the %d named Human edges unresolved' % (len(RESOLVED_EDGES), len(HUMAN_EDGES)))
+print('PASS baseline without the Human manifest resolves the %d named edges and leaves exactly the %d named Human edges unresolved' % (len(BASELINE_EDGES), len(HUMAN_EDGES)))
 
 for parser in ('load_pyyaml', 'load_builtin'):
     for change, expected in [

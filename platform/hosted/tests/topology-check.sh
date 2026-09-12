@@ -9,7 +9,8 @@ Parses the hosted Kubernetes manifests, resolves every in-cluster URL that a
 workload configures (container env values, ConfigMap-sourced env values and
 Ingress backends) to a Service and port, and checks each declared edge against
 NetworkPolicy on both ends: the callee's ingress rules and the caller's egress
-rules, including the DNS egress the hostname needs. Any host without a Service,
+rules, including the DNS egress the hostname needs. Producer observe and webhook
+notification URLs are checked through those same configured workload edges. Any host without a Service,
 any port the Service does not expose, any targetPort that is not a container
 port, any Service that selects no workload and any policy that does not admit
 the edge fails the check.

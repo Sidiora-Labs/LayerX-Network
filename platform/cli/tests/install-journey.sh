@@ -9,7 +9,6 @@ set -euo pipefail
 : "${LAYERX_SOURCE_ACCOUNT:?set the funded 64-hex source account}"
 : "${LAYERX_PAYMENT_ASSET:?set the 64-hex payment asset}"
 : "${LAYERX_PAYMENT_DESTINATION:?set the 64-hex destination account}"
-: "${LAYERX_MCP_SEQUENCE:?set the current source sequence for the MCP payment}"
 : "${LAYERX_A2A_SEQUENCE:?set the next source sequence for the A2A payment}"
 
 journey_root=$(mktemp -d)
@@ -29,38 +28,21 @@ export LAYERX_INSTALL_ROOT="$journey_root"
 printf '%s\n' "$LAYERX_SIGNING_SEED" | \
   "$LAYERX_BIN" --json key import agent-runtime >/dev/null
 
-printf '%s\n' "$LAYERX_IDENTITY_TOKEN" | \
-  "$LAYERX_BIN" --json install mcp --environment testnet --host layerx \
-    --key agent-runtime --source-account "$LAYERX_SOURCE_ACCOUNT" \
-    --asset "$LAYERX_PAYMENT_ASSET" --token-stdin >"$journey_root/mcp-install.json"
-
-now_ms=$(($(date +%s) * 1000))
-expires_ms=$((now_ms + 120000))
-mcp_idempotency=$(openssl rand -hex 32)
-mcp_call=$(jq -nc \
-  --arg destination "$LAYERX_PAYMENT_DESTINATION" \
-  --arg sequence "$LAYERX_MCP_SEQUENCE" \
-  --arg not_before "$now_ms" \
-  --arg expires "$expires_ms" \
-  --arg idempotency "$mcp_idempotency" \
-  '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"activity.submit",arguments:{destination:$destination,amount:"1",account_sequence:$sequence,not_before_ms:$not_before,expires_at_ms:$expires,fee_limit:"1000",idempotency_key:$idempotency}}}')
-mcp_command=$(jq -er '.mcpServers.layerx.command' "$journey_root/mcp.json")
-mapfile -t mcp_arguments < <(jq -er '.mcpServers.layerx.args[]' "$journey_root/mcp.json")
-test "$(jq -er '.mcpServers.layerx.env.LAYERX_CONFIG' "$journey_root/mcp.json")" = "$LAYERX_CONFIG"
-export LAYERX_GATEWAY_KEY_ID
-LAYERX_GATEWAY_KEY_ID=$(jq -er '.mcpServers.layerx.env.LAYERX_GATEWAY_KEY_ID' "$journey_root/mcp.json")
-{
-  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
-  printf '%s\n' "$mcp_call"
-} | "$mcp_command" "${mcp_arguments[@]}" >"$journey_root/mcp-runtime.jsonl"
-mcp_activity=$(tail -n 1 "$journey_root/mcp-runtime.jsonl" | \
-  jq -er '.result.structuredContent.result.gateway.result.activity_id')
-test "$(printf '%s' "$mcp_activity" | wc -c)" -eq 64
+mcp_refusal="$journey_root/mcp-install.json"
+if "$LAYERX_BIN" --json install mcp --host layerx >"$mcp_refusal" 2>&1; then
+  echo "install mcp registered a server without an agent-daemon binding" >&2
+  exit 1
+fi
+grep -q 'binding.json' "$mcp_refusal"
+grep -q 'agent-daemon enrolment' "$mcp_refusal"
+test ! -e "$journey_root/mcp.json"
 
 a2a_port="${LAYERX_A2A_PORT:-19433}"
-"$LAYERX_BIN" --json install a2a --environment testnet --key agent-runtime \
-  --source-account "$LAYERX_SOURCE_ACCOUNT" --asset "$LAYERX_PAYMENT_ASSET" \
-  --listen "127.0.0.1:$a2a_port" >"$journey_root/a2a-install.json"
+printf '%s\n' "$LAYERX_IDENTITY_TOKEN" | \
+  "$LAYERX_BIN" --json install a2a --environment testnet --key agent-runtime \
+    --token-stdin --source-account "$LAYERX_SOURCE_ACCOUNT" \
+    --asset "$LAYERX_PAYMENT_ASSET" --listen "127.0.0.1:$a2a_port" \
+    >"$journey_root/a2a-install.json"
 jq -e '.data.lifecycle.state == "running"' "$journey_root/a2a-install.json" >/dev/null
 a2a_authorization_file=$(jq -er '.data.authorization.credential_file' "$journey_root/a2a-install.json")
 a2a_authorization=$(tr -d '\r\n' <"$a2a_authorization_file")

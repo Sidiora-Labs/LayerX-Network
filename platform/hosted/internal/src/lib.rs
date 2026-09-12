@@ -10,9 +10,12 @@
 
 pub mod base64;
 pub mod events;
+pub mod gateway_http;
 pub mod http;
 pub mod journal;
 pub mod kms;
+pub mod principal;
+pub mod producer;
 pub mod seal;
 pub mod secret;
 pub mod tls;

@@ -17,7 +17,7 @@ pub mod production_auth;
 pub mod production_components;
 mod production_reads;
 pub mod schema;
-mod stream_journal;
+pub(crate) mod stream_journal;
 
 use std::io;
 use std::net::{SocketAddr, TcpListener};

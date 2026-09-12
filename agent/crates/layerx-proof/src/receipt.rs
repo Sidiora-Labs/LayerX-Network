@@ -401,10 +401,19 @@ fn maintained_activity_batch(
     if authorised.resulting_state_root != header.resulting_state_root() {
         return Err(Failure(ReceiptCheck::ResultingStateRoot));
     }
-    let maintenance = layerx_wire::maintenance::decode_occupancy_maintenance(evidence.maintenance)
+    let record = layerx_wire::batch_maintenance::decode_maintenance(evidence.maintenance)
         .map_err(|_| MaintainedOutcomeFailure::MaintenanceEncoding)?;
+    let maintenance = record.occupancy();
     if maintenance.resulting_state_root != authorised.resulting_state_root {
         return Err(Failure(ReceiptCheck::ResultingStateRoot));
+    }
+    if matches!(
+        record,
+        layerx_wire::batch_maintenance::MaintenanceReceipt::Batch(_)
+    ) {
+        record
+            .verify_header(header)
+            .map_err(|_| MaintainedOutcomeFailure::MaintenanceEncoding)?;
     }
     let receipt = decode(receipt_bytes).map_err(|_| Failure(ReceiptCheck::Decode))?;
     let protocol = receipt
@@ -430,7 +439,7 @@ fn maintained_activity_batch(
     let expected = layerx_wire::hash::receipt_execution_batch_id_maintenance(
         protocol,
         header,
-        &maintenance,
+        maintenance,
         count,
     )
     .map_err(|_| Failure(ReceiptCheck::BatchId))?;

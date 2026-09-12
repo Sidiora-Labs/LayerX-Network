@@ -430,8 +430,10 @@ Hosted `POST /v1/programs/deploy` authenticates `LayerX-Key` with scope
 `platform/hosted/gateway/src/main.rs:1077-1080, 1144-1153, 2413-2415`).
 Bearer on that route is `401 api_key_required`. Those sources disagree
 on how deploy reaches the gateway. The CLI command that issues a gateway
-key is `layerx install mcp` or `layerx install a2a`
-(`platform/cli/src/install/mod.rs:603-632`).
+key is `layerx install a2a`
+(`platform/cli/src/install/mod.rs:603-632`); `layerx install mcp` binds
+to the agent daemon and issues no key
+(`platform/cli/src/install/mcp.rs:33-56`).
 
 ---
 
@@ -481,12 +483,14 @@ MCP/A2A `activity.submit` POSTs JSON `{"activity": <hex>}` to
 `/v1/activities` (`platform/cli/src/toolset.rs:341-344`). That route
 requires scope `activity:write` (`platform/hosted/gateway/src/main.rs:1072-1087`).
 
-The CLI command that issues a gateway key is `layerx install mcp` or
-`layerx install a2a`, which POST `/v1/keys` with the stored session
+The CLI command that issues a gateway key is `layerx install a2a`,
+which POSTs `/v1/keys` with the stored session
 (`platform/cli/src/install/mod.rs:603-632`). Payment-capable install
 requires `--source-account` and `--asset` as 64-hex
-(`platform/cli/src/install/mcp.rs:142-156`). There is no other CLI key-issue
-command. The HTTP issue body is `{signer_public_key, scopes, quota_requests,
+(`platform/cli/src/install/a2a.rs:357-376`). `layerx install mcp` takes
+neither: it binds to the agent daemon and issues no key
+(`platform/cli/src/install/mcp.rs:33-56`). There is no other CLI
+key-issue command. The HTTP issue body is `{signer_public_key, scopes, quota_requests,
 quota_window_seconds}` (`platform/hosted/gateway/src/main.rs:77-84`). Success
 JSON includes `ok`, `key.id`, `key.secret`, `key.authorization_scheme`
 `LayerX-Key`, `key.scopes` (`platform/hosted/gateway/src/main.rs:2354-2367`).

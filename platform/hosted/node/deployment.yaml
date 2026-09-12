@@ -488,6 +488,21 @@ spec:
             - secretRef:
                 name: layerx-human-components-config
           env:
+            - {name: LAYERX_EVENTS_JOURNEY_UPSTREAM_URL, value: "https://journeys.layerx-internal.svc"}
+            - {name: LAYERX_EVENTS_JOURNEY_UPSTREAM_CA_DER, value: "/run/layerx/events/ca.der"}
+            - {name: LAYERX_EVENTS_JOURNEY_UPSTREAM_TOKEN_FILE, value: "/run/layerx/events/token"}
+            - {name: LAYERX_EVENTS_JOURNEY_UPSTREAM_CLIENT_IDENTITY_PKCS12, value: "/run/layerx/events/client.p12"}
+            - {name: LAYERX_EVENTS_JOURNEY_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE, value: "/run/layerx/events/password"}
+            - {name: LAYERX_EVENTS_APPROVAL_UPSTREAM_URL, value: "https://approvals.layerx-internal.svc"}
+            - {name: LAYERX_EVENTS_APPROVAL_UPSTREAM_CA_DER, value: "/run/layerx/events/ca.der"}
+            - {name: LAYERX_EVENTS_APPROVAL_UPSTREAM_TOKEN_FILE, value: "/run/layerx/events/token"}
+            - {name: LAYERX_EVENTS_APPROVAL_UPSTREAM_CLIENT_IDENTITY_PKCS12, value: "/run/layerx/events/client.p12"}
+            - {name: LAYERX_EVENTS_APPROVAL_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE, value: "/run/layerx/events/password"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_URL, value: "https://layerx-webhooks.layerx-developer.svc"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_CA_DER, value: "/run/layerx/events/ca.der"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_TOKEN_FILE, value: "/run/layerx/events/webhook-token"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_CLIENT_IDENTITY_PKCS12, value: "/run/layerx/events/client.p12"}
+            - {name: LAYERX_EVENTS_WEBHOOKS_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE, value: "/run/layerx/events/password"}
             - name: LAYERX_HUMAN_COMPONENT_SOCKET
               value: /run/layerx/human/components.sock
             - name: LAYERX_HUMAN_COMPONENT_ALLOWED_UID
@@ -522,6 +537,7 @@ spec:
             runAsUser: 4020
             runAsGroup: 4020
           volumeMounts:
+            - {name: human-events, mountPath: /run/layerx/events, readOnly: true}
             - name: run
               mountPath: /run/layerx/human
               subPath: human
@@ -826,6 +842,7 @@ spec:
           secret:
             secretName: layerx-human-component-material
             defaultMode: 288
+        - {name: human-events, secret: {secretName: layerx-human-event-producer, defaultMode: 0440}}
         - name: human-kms-material
           secret:
             secretName: layerx-human-kms-material
@@ -928,3 +945,19 @@ apiVersion: v1
 kind: Service
 metadata: {name: layerx-agentd, namespace: layerx-testnet}
 spec: {type: ClusterIP, selector: {app: layerx-node}, ports: [{name: https, port: 9443, targetPort: agentd-tls}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-human-event-producer, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-node}}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-internal}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-internal-journeys, layerx-internal-approvals]}]}
+      ports: [{protocol: TCP, port: 9443}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
+          podSelector: {matchLabels: {app: layerx-webhooks}}
+      ports: [{protocol: TCP, port: 9444}]

@@ -292,6 +292,30 @@ impl Binding {
         self.deadline
     }
 
+    /// Returns the tenant whose daemon records this binding serves.
+    #[must_use]
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+
+    /// Returns the agent store this binding opens.
+    #[must_use]
+    pub fn store(&self) -> &Path {
+        &self.store
+    }
+
+    /// Returns the revocation generation the bound session token was minted under.
+    #[must_use]
+    pub const fn session_generation(&self) -> u64 {
+        self.session_generation
+    }
+
+    /// Returns the loopback endpoint of the agent daemon that authorizes every tool call.
+    #[must_use]
+    pub fn agent_endpoint(&self) -> &str {
+        &self.agent.endpoint
+    }
+
     /// Narrows a full binding to its read-only surface. It never widens a read-only binding.
     pub fn restrict_to_read_only(&mut self) {
         self.mode = DeploymentMode::ReadOnly;

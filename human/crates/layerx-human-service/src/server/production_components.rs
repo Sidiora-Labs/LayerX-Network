@@ -339,6 +339,7 @@ impl ProductionComponentsConfig {
 /// In-process owners used by the privileged component listener.
 pub struct ProductionComponents {
     store: Arc<Mutex<PrincipalStore>>,
+    event_outbox: Arc<crate::event_producer::HumanOutbox>,
     passkeys: Passkeys,
     auth_index: AuthDiscoveryIndex,
     capability_ttl_seconds: u64,
@@ -438,8 +439,10 @@ impl ProductionComponents {
         .map_err(|_| "Paxeer exit boundary refused startup".to_owned())?;
         let settlement_domain =
             SettlementDomain::new(config.settlement_chain_id, config.exit_contract.bytes());
+        let event_outbox = crate::event_producer::HumanOutbox::start(Arc::clone(&store))?;
         Ok(Self {
             store,
+            event_outbox,
             passkeys,
             auth_index,
             capability_ttl_seconds: config.capability_ttl_seconds,
@@ -705,7 +708,8 @@ impl HumanApiComponents for ProductionComponents {
             .is_some_and(|store| store.probe().is_ok());
         let paxeer_ready = raw_call(&self.paxeer_endpoint, "eth_chainId", &[]).is_ok();
         Ok(Readiness {
-            human_service: if store_ready
+            human_service: if self.event_outbox.ready()
+                && store_ready
                 && security_ready
                 && identity_ready
                 && movement_ready
@@ -3966,7 +3970,10 @@ impl ProductionComponents {
                 _ => "approval-expired",
             },
             sequence,
-            json!({"approval":value.clone()}),
+            json!({"approval": {"approval_id": value["approval_id"], "state": state,
+                "state_copy_key": value["state_copy_key"], "money_moved": value["money_moved"],
+                "moved_copy_key": value["moved_copy_key"], "evidence": value["evidence"],
+                "agent_id": hold.held_activity.actor.as_str(), "created_at": hold.created_at_sequence}}),
         )?;
         Ok(BackendResponse {
             result: value,

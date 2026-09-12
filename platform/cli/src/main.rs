@@ -91,7 +91,7 @@ enum Command {
     /// Run the local gateway around the real protocol core transition.
     #[command(subcommand)]
     Emulator(EmulatorCommand),
-    /// Install and register a payment-capable agent transport in one command.
+    /// Install and register an agent transport in one command.
     #[command(subcommand)]
     Install(InstallCommand),
     /// Serve the model context protocol transport on standard input and output.
@@ -410,7 +410,7 @@ struct EmulatorUpArgs {
 
 #[derive(Subcommand)]
 enum InstallCommand {
-    /// Install a payment-capable model context protocol server.
+    /// Install the daemon-bound model context protocol server.
     Mcp(InstallMcpArgs),
     /// Install a payment-capable agent-to-agent server.
     A2a(InstallA2aArgs),
@@ -419,21 +419,11 @@ enum InstallCommand {
 #[derive(Args)]
 struct InstallMcpArgs {
     #[arg(long)]
-    environment: Option<String>,
-    #[arg(long)]
     host: Vec<String>,
-    #[arg(long)]
-    key: Option<String>,
     #[arg(long)]
     read_only: bool,
     #[arg(long)]
-    token_stdin: bool,
-    #[arg(long)]
-    rotate: bool,
-    #[arg(long)]
-    source_account: Option<String>,
-    #[arg(long)]
-    asset: Option<String>,
+    daemon_binding: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -620,27 +610,24 @@ fn run(
 }
 
 fn install(command: InstallCommand) -> Result<CommandOutput, String> {
-    let mut configuration = Configuration::load()?;
     match command {
         InstallCommand::Mcp(arguments) => {
             let request = install::mcp::Request {
-                environment: arguments.environment,
                 hosts: arguments.host,
-                key: arguments.key,
                 read_only: arguments.read_only,
-                token_stdin: arguments.token_stdin,
-                rotate: arguments.rotate,
-                source_account: arguments.source_account,
-                asset: arguments.asset,
+                daemon_binding: arguments.daemon_binding,
             };
-            let data = install::mcp::platform_install_mcp(&mut configuration, &request)?;
-            let message = format!(
-                "Installed the LayerX model context protocol server for {}",
-                environment_of(&data)
-            );
-            Ok(CommandOutput::new("install.mcp", message, data))
+            let (endpoint, data) = install::mcp::platform_install_mcp(&request)?;
+            Ok(CommandOutput::new(
+                "install.mcp",
+                format!(
+                    "Installed the LayerX model context protocol server bound to the agent daemon at {endpoint}"
+                ),
+                data,
+            ))
         }
         InstallCommand::A2a(arguments) => {
+            let mut configuration = Configuration::load()?;
             let request = install::a2a::Request {
                 environment: arguments.environment,
                 listen: arguments.listen,

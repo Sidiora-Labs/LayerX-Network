@@ -107,6 +107,24 @@ pub struct BatchEvidence {
 pub enum BatchIdentityEvidence {
     Historical,
     OccupancyMaintenanceV2 { receipt: Vec<u8>, proof: Vec<u8> },
+    BatchMaintenanceV1 { receipt: Vec<u8>, proof: Vec<u8> },
+}
+
+fn decode_maintenance_identity(
+    identity: &BatchIdentityEvidence,
+) -> Result<layerx_wire::batch_maintenance::MaintenanceReceipt<'_>, EvidenceRefusal> {
+    use layerx_wire::batch_maintenance::{decode_batch_maintenance, MaintenanceReceipt};
+    match identity {
+        BatchIdentityEvidence::Historical => return Err(EvidenceRefusal::BatchIdentity),
+        BatchIdentityEvidence::OccupancyMaintenanceV2 { receipt, .. } => {
+            layerx_wire::maintenance::decode_occupancy_maintenance(receipt)
+                .map(MaintenanceReceipt::Occupancy)
+        }
+        BatchIdentityEvidence::BatchMaintenanceV1 { receipt, .. } => {
+            decode_batch_maintenance(receipt).map(MaintenanceReceipt::Batch)
+        }
+    }
+    .map_err(|_| EvidenceRefusal::EvidenceEncoding)
 }
 
 /// The exact reason an authority answer was refused.
@@ -193,6 +211,10 @@ struct ReplicaBatchEvidence {
 enum ReplicaBatchIdentity {
     Historical {},
     OccupancyMaintenanceV2 {
+        receipt_hex: String,
+        receipt_proof_hex: String,
+    },
+    BatchMaintenanceV1 {
         receipt_hex: String,
         receipt_proof_hex: String,
     },
@@ -296,6 +318,29 @@ pub fn parse_replica_evidence(
                     proof: encode_proof(&proof),
                 }
             }
+            ReplicaBatchIdentity::BatchMaintenanceV1 {
+                receipt_hex,
+                receipt_proof_hex,
+            } => {
+                let receipt =
+                    hex::decode(&receipt_hex).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+                layerx_wire::batch_maintenance::decode_batch_maintenance(&receipt)
+                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+                let canonical = hex::decode(&receipt_proof_hex)
+                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+                let decoded = decode_merkle_proof(&canonical)
+                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+                let proof = Proof::new(
+                    decoded.leaf_index(),
+                    decoded.leaf_count(),
+                    decoded.siblings().to_vec(),
+                )
+                .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+                BatchIdentityEvidence::BatchMaintenanceV1 {
+                    receipt,
+                    proof: encode_proof(&proof),
+                }
+            }
         },
     })
 }
@@ -346,6 +391,10 @@ pub fn authorized_batch_by_activity(
         BatchIdentityEvidence::OccupancyMaintenanceV2 {
             receipt: maintenance,
             proof: maintenance_proof,
+        }
+        | BatchIdentityEvidence::BatchMaintenanceV1 {
+            receipt: maintenance,
+            proof: maintenance_proof,
         } => {
             let maintenance_proof =
                 decode_proof(maintenance_proof).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
@@ -373,10 +422,17 @@ pub fn authorized_batch_by_activity(
             {
                 return Err(EvidenceRefusal::SequenceRange);
             }
-            let record = layerx_wire::maintenance::decode_occupancy_maintenance(maintenance)
-                .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-            receipt_execution_batch_id_maintenance(protocol, header, &record, activity_count)
-                .map_err(|_| EvidenceRefusal::BatchIdentity)?
+            let record = decode_maintenance_identity(&evidence.batch_identity)?;
+            record
+                .verify_header(header)
+                .map_err(|_| EvidenceRefusal::BatchIdentity)?;
+            receipt_execution_batch_id_maintenance(
+                protocol,
+                header,
+                record.occupancy(),
+                activity_count,
+            )
+            .map_err(|_| EvidenceRefusal::BatchIdentity)?
         }
     };
     if protocol.batch_id() != expected {
@@ -577,7 +633,12 @@ fn verify_selected_authorized_receipt(
         BatchIdentityEvidence::OccupancyMaintenanceV2 {
             receipt,
             proof: maintenance_proof,
+        }
+        | BatchIdentityEvidence::BatchMaintenanceV1 {
+            receipt,
+            proof: maintenance_proof,
         } => {
+            decode_maintenance_identity(&evidence.batch_identity)?;
             let maintenance_proof =
                 decode_proof(maintenance_proof).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
             let proof = decode_proof(&evidence.receipt_proof)
