@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import runpy
 import socket
+import ssl
 import subprocess
 import tempfile
 import time
@@ -159,6 +160,7 @@ def owned_chain(work, artifacts):
                 'rpc': f'http://127.0.0.1:{ports[0]}', 'pid': process.pid,
                 'home': str(chain_home), 'deployer_key': str(key_file), 'deployer': account.address,
                 'evidence_dir': str(work),
+                'comet_url': f'http://127.0.0.1:{ports[2]}',
                 'anchor_number': int(reader.rpc('eth_blockNumber', []), 16),
             }
             identity['anchor_hash'] = reader.rpc('eth_getBlockByNumber', [hex(identity['anchor_number']), False])['hash']
@@ -191,33 +193,95 @@ def owned_chain(work, artifacts):
 
 
 @contextlib.contextmanager
-def observer(work, source, block):
-    port = COMMON['free_port']()
-    assert port not in FORBIDDEN_PORTS
-    with (work / 'observer.log').open('w') as log:
-        process = subprocess.Popen(['anvil', '--host', '127.0.0.1', '--port', str(port),
-            '--chain-id', '125', '--fork-url', source.url, '--fork-block-number', str(block), '--silent'],
-            cwd=ROOT, stdout=log, stderr=log)
+def boundaries(work, source, binary):
+    identity = json.loads(source.identity_path.read_text())
+    private = source.identity_path.parent
+    processes = []
     try:
-        reader = COMMON['Chain'](port)
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            assert process.poll() is None, 'owned observer exited'
-            try:
-                assert reader.rpc('eth_chainId', []) == '0x7d'
-                assert reader.rpc('eth_getBlockByNumber', [hex(block), False])['hash'] == source.rpc(
-                    'eth_getBlockByNumber', [hex(block), False])['hash']
-                break
-            except (OSError, http.client.HTTPException):
+        with (work / 'boundary-certificates.log').open('w') as log:
+            command('openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256',
+                    '-nodes', '-keyout', private / 'ca.key', '-out', private / 'ca.pem', '-days', '1',
+                    '-subj', '/CN=LayerX custody qualification CA', stdout=log, stderr=log)
+            command('openssl', 'req', '-new', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256',
+                    '-nodes', '-keyout', private / 'tls.key', '-out', private / 'server.csr',
+                    '-subj', '/CN=localhost', stdout=log, stderr=log)
+            (private / 'extensions').write_text(
+                'subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n')
+            command('openssl', 'x509', '-req', '-in', private / 'server.csr', '-CA', private / 'ca.pem',
+                    '-CAkey', private / 'ca.key', '-CAcreateserial', '-days', '1', '-extfile', private / 'extensions',
+                    '-out', private / 'cert.pem', stdout=log, stderr=log)
+            command('openssl', 'x509', '-in', private / 'cert.pem', '-outform', 'DER', '-out', private / 'cert.der',
+                    stdout=log, stderr=log)
+            command('openssl', 'pkcs8', '-topk8', '-nocrypt', '-in', private / 'tls.key', '-outform', 'DER',
+                    '-out', private / 'tls.der', stdout=log, stderr=log)
+        ca = work / 'boundary-ca.pem'
+        ca.write_bytes((private / 'ca.pem').read_bytes())
+        context = ssl.create_default_context(cafile=ca)
+        origins = []
+        genesis = None
+        for index in range(2):
+            port = COMMON['free_port']()
+            assert port not in FORBIDDEN_PORTS
+            env = os.environ | {
+                'LAYERX_PAXEER_CHAIN_ID': '125', 'LAYERX_PAXEER_BOUNDARY_LISTEN': f'127.0.0.1:{port}',
+                'LAYERX_PAXEER_BOUNDARY_TLS_CERT_DER': str(private / 'cert.der'),
+                'LAYERX_PAXEER_BOUNDARY_TLS_KEY_DER': str(private / 'tls.der'),
+                'LAYERX_PAXEER_NODE_URL': source.url, 'LAYERX_PAXEER_COMET_URL': identity['comet_url'],
+            }
+            with (work / f'boundary-{index}.log').open('w') as log:
+                process = subprocess.Popen([str(binary)], cwd=ROOT, env=env, stdout=log, stderr=log)
+            processes.append(process)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                assert process.poll() is None, 'owned boundary exited'
+                connection = http.client.HTTPSConnection('localhost', port, context=context, timeout=5)
+                try:
+                    connection.request('GET', '/readyz')
+                    response = connection.getresponse()
+                    response.read()
+                    if response.status == 200:
+                        break
+                except (OSError, http.client.HTTPException):
+                    pass
+                finally:
+                    connection.close()
                 time.sleep(.1)
-        else:
-            raise AssertionError('owned observer readiness deadline')
-        yield f'http://127.0.0.1:{port}'
-    finally:
-        if process.poll() is None:
-            process.terminate()
+            else:
+                raise AssertionError('owned boundary readiness deadline')
+            connection = http.client.HTTPSConnection('localhost', port, context=context, timeout=5)
             try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                connection.request('GET', '/genesis')
+                response = connection.getresponse()
+                document = response.read(64 * 1024 * 1024 + 1)
+                assert response.status == 200 and len(document) <= 64 * 1024 * 1024
+                assert response.headers.get_all('X-LayerX-Genesis-SHA256') == [hashlib.sha256(document).hexdigest()]
+            finally:
+                connection.close()
+            if genesis is None:
+                expected = json.loads((work / 'paxeer-genesis.json').read_bytes())
+                abci = expected['consensus_params']['abci']
+                assert type(abci['vote_extensions_enable_height']) is int
+                abci['vote_extensions_enable_height'] = str(abci['vote_extensions_enable_height'])
+                assert json.loads(document) == expected
+                genesis = document
+            else:
+                assert document == genesis
+            origins.append(f'https://localhost:{port}')
+        (work / 'boundary-genesis.json').write_bytes(genesis)
+        disposable = {
+            'rpc_origins': origins, 'chain_id': 125, 'comet_chain_id': json.loads(genesis)['chain_id'],
+            'genesis_sha256': '0x' + hashlib.sha256(genesis).hexdigest(),
+            'ca_sha256': '0x' + hashlib.sha256(ca.read_bytes()).hexdigest(), 'genesis_source': 'boundary',
+        }
+        path = work / 'disposable-identity.json'
+        path.write_text(json.dumps(disposable, sort_keys=True) + '\n')
+        yield ['--rpc', origins[0], '--rpc', origins[1], '--ca-bundle', str(ca), '--disposable-identity', str(path)]
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()

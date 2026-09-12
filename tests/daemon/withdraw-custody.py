@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tests/bridge'))
-from custody_chain import artifact, from_environment, govern, observer, owned_chain
+from custody_chain import artifact, boundaries, from_environment, govern, owned_chain
 
 COMMON = runpy.run_path(str(ROOT / 'tests/daemon/finality-authority-chain.py'))
 ASSET = 'b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'
@@ -29,7 +29,7 @@ def retain_public_evidence(work, evidence):
     for source in work.rglob('*'):
         relative = source.relative_to(work)
         if (not source.is_file() or source.is_symlink() or 'secrets' in relative.parts
-                or source.suffix in ('.pem', '.key', '.env')
+                or (source.suffix in ('.pem', '.key', '.env') and source.name != 'boundary-ca.pem')
                 or source.name in ('actor', 'attestor', 'sequencer', 'treasury', 'client')):
             continue
         target = evidence / relative
@@ -142,11 +142,13 @@ def main():
                 'contracts/governance/LayerXBetaTimelock.sol', 'contracts/custody/AssetRegistry.sol',
                 'contracts/custody/LayerXVault.sol', 'paxeer-network/loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol',
                 '--threads', str(threads), '--out', artifacts, '--cache-path', build / 'withdraw-contracts/cache')
+            target = Path(os.environ['CARGO_TARGET_DIR']).resolve()
+            run('cargo', 'build', '--manifest-path', 'platform/Cargo.toml', '--locked',
+                '--jobs', str(threads), '-p', 'layerx-platform-paxeer-boundary', '--bin', 'layerx-paxeer-boundary')
             with owned_chain(work, artifacts) as first:
                 custody = deposit(first, artifacts, beneficiary, amount)
                 (work / 'custody.json').write_text(json.dumps(custody, sort_keys=True) + '\n')
-                with observer(work, first, custody['fork_block']) as second:
-                    pair = ['--rpc', first.url, '--rpc', second]
+                with boundaries(work, first, target / 'debug/layerx-paxeer-boundary') as pair:
                     run(sys.executable, 'tests/bridge/custody_credit.py', 'profile', *pair, '--chain-id', '125',
                         '--network-id', '77', '--vault', custody['vault'], '--runtime-sha256', custody['runtime_sha256'],
                         '--asset', '0x' + ASSET, '--confirmations', '2', '--attestor-key', work / 'attestor', '--output', work / 'profile')
