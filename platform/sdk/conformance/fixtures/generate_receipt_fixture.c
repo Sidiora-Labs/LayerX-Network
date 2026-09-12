@@ -1,6 +1,7 @@
 #include "layerx/lxp_gateway.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_module.h"
+#include "layerx/lxp_identity.h"
 
 #include <openssl/evp.h>
 #include <stdio.h>
@@ -104,6 +105,13 @@ static int world_init(
     world->asset.asset_id[0] = 3U;
     (void)memcpy(world->asset.symbol, "USD", 4U);
     world->asset.symbol_length = 3U;
+    memcpy(world->asset.name, "Conformance USD", 15U);
+    world->asset.name_length = 15U;
+    world->asset.issuer_kind = 2U;
+    if (lxp_did_id_derive((const uint8_t *)"did:key:fixture-service",
+                         strlen("did:key:fixture-service"),
+                         world->asset.issuer_did32) != LXP_OK)
+        return 1;
     world->asset.custody_kind = LX_ASSET_CUSTODY_PAXEER;
     world->asset.custody_reference[0] = 1U;
     world->asset.custody_reference_length = 1U;

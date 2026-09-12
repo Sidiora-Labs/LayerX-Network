@@ -40,6 +40,8 @@ typedef struct lxp_real_replay_fixture {
     lxp_fee_params fees;
     lxp_receipt receipt;
     lxp_replay_engine engine;
+    lxp_replay_checkpoint *checkpoint;
+    struct lxp_real_replay_fixture *saved;
 } lxp_real_replay_fixture;
 
 static const uint8_t lxp_real_replay_seed[32] = {1U};
@@ -260,6 +262,46 @@ static lxp_result lxp_real_seed_fee_governance(
     return LXP_OK;
 }
 
+static lxp_result lxp_real_replay_transaction_begin(void *context)
+{
+    lxp_real_replay_fixture *f = context;
+    lxp_result status;
+    if (f->saved != NULL) return LXP_ERR_NON_CANONICAL;
+    f->saved = malloc(sizeof(*f->saved));
+    if (f->saved == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    *f->saved = *f;
+    status = lxp_replay_checkpoint_create(&f->kernel, &f->checkpoint);
+    if (status != LXP_OK) {
+        free(f->saved);
+        f->saved = NULL;
+    }
+    return status;
+}
+
+static lxp_result lxp_real_replay_transaction_finish(void *context, bool commit)
+{
+    lxp_real_replay_fixture *f = context;
+    lxp_result status = LXP_OK;
+    if (f->saved == NULL) return LXP_ERR_NON_CANONICAL;
+    if (!commit) {
+        status = lxp_replay_checkpoint_restore(f->checkpoint);
+        f->identities = f->saved->identities;
+        f->fees = f->saved->fees;
+        f->programs_runtime = f->saved->programs_runtime;
+        f->runtime = f->saved->runtime;
+        f->asset = f->saved->asset;
+        f->transfer_asset = f->saved->transfer_asset;
+        f->receipt = f->saved->receipt;
+        f->execution = f->saved->execution;
+        f->authority = f->saved->authority;
+    }
+    lxp_replay_checkpoint_destroy(f->checkpoint);
+    f->checkpoint = NULL;
+    free(f->saved);
+    f->saved = NULL;
+    return status;
+}
+
 static inline int lxp_real_replay_init(lxp_real_replay_fixture *f)
 {
     REAL_REQUIRE(lxp_real_replay_prepare(f, LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true) == 0);
@@ -275,6 +317,8 @@ static inline int lxp_real_replay_init(lxp_real_replay_fixture *f)
     REAL_REQUIRE(lxp_real_seed_fee_governance(&f->kernel, &f->programs_runtime) == LXP_OK);
     REAL_REQUIRE(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
     REAL_REQUIRE(lxp_replay_engine_init(&f->engine, lxp_real_replay_parameters, f) == LXP_OK);
+    REAL_REQUIRE(lxp_replay_engine_bind_transaction(&f->engine,
+        lxp_real_replay_transaction_begin, lxp_real_replay_transaction_finish) == LXP_OK);
     REAL_REQUIRE(lxp_programs_replay_engine_bind(&f->engine, &f->kernel) == LXP_OK);
     REAL_REQUIRE(lxp_replay_engine_register(&f->engine, LXP_PROTOCOL_VERSION_STATE_COMMITMENT,
                                              lxp_real_replay_transition) == LXP_OK);

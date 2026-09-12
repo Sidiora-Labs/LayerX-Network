@@ -344,6 +344,53 @@ static lxp_result tick_run(const char *did)
                NULL);
 }
 
+static int interval_boundaries(lx_perps_market *market)
+{
+    lx_perps_funding_tick_request request = {0};
+    lxp_receipt receipt;
+    uint64_t last = 1700U;
+    lxp_i128 index = {false, {0U, 0U}};
+    request.market = market;
+    request.long_funding_account = long_pool_account;
+    request.short_funding_account = short_pool_account;
+    request.asset = &asset_state;
+    request.last_funding_timestamp_ms = &last;
+    request.funding_index = &index;
+    request.funding_rate_bps = (lxp_i128){false, {0U, 1U}};
+    request.open_notional = (lxp_u128){0U, 3334U};
+    batch_timestamp = 2037U;
+    if (ctx_open() != 0 ||
+        lx_perps_funding_tick_execute(&ctx, &request, &receipt) != LXP_OK ||
+        last != 2000U || index.negative || index.magnitude.lo != 3U ||
+        !balance_is(long_pool_account, 99998U) ||
+        !balance_is(short_pool_account, 100002U) ||
+        lxp_module_ctx_commit(&ctx) != LXP_OK)
+        return 1;
+    ++global_sequence;
+    request.funding_rate_bps.negative = true;
+    batch_timestamp = 2337U;
+    if (ctx_open() != 0 ||
+        lx_perps_funding_tick_execute(&ctx, &request, &receipt) != LXP_OK ||
+        last != 2300U || !lxp_u128_is_zero(index.magnitude) ||
+        !balance_is(long_pool_account, 100000U) ||
+        !balance_is(short_pool_account, 100000U) ||
+        lxp_module_ctx_commit(&ctx) != LXP_OK)
+        return 1;
+    ++global_sequence;
+    index = (lxp_i128){false, {UINT64_MAX, UINT64_MAX}};
+    request.funding_rate_bps.negative = false;
+    batch_timestamp = 2400U;
+    if (ctx_open() != 0 ||
+        lx_perps_funding_tick_execute(&ctx, &request, &receipt) != LXP_ERR_OVERFLOW ||
+        last != 2300U || index.magnitude.hi != UINT64_MAX ||
+        index.magnitude.lo != UINT64_MAX ||
+        !balance_is(long_pool_account, 100000U) ||
+        !balance_is(short_pool_account, 100000U))
+        return 1;
+    lxp_module_ctx_rollback(&ctx);
+    return 0;
+}
+
 int main(void)
 {
     lx_perps_market market;
@@ -437,6 +484,7 @@ int main(void)
         lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
         !lxp_u128_is_zero(funding.long_open_notional) ||
         !lxp_u128_is_zero(funding.short_open_notional) ||
+        interval_boundaries(&market) != 0 ||
         lxp_state_store_destroy(&store) != LXP_OK)
         return 1;
     return 0;

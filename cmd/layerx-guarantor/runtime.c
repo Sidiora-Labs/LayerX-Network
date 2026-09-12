@@ -64,6 +64,9 @@ struct gp_runtime {
     off_t feed_session_start;
     uint64_t feed_sequence;
     uint32_t feed_ordinal;
+    struct gp_runtime *transaction;
+    lxp_replay_checkpoint *checkpoint;
+    off_t transaction_feed_offset;
 };
 static lxp_result parse_u64_text(const char *text, uint64_t *value)
 {
@@ -204,20 +207,22 @@ static lxp_result occupancy_parameters(void *context, uint32_t recorded_fee_sche
         &process->kernel, recorded_fee_schedule_version, schedule, occupancy_asset_id);
 }
 
-static lxp_result principal_authority(gp_runtime *process, const lxp_activity *activity,
-                                      const uint8_t account_key[32],
-                                      uint8_t principal_id[32], lxp_u128 *fee_balance)
+static lxp_result principal_authority(
+    gp_runtime *process, const lxp_activity *activity,
+    const uint8_t account_key[32], uint8_t principal_id[32],
+    lxp_u128 *fee_balance)
 {
     static const uint8_t prefix[] = "agent:";
     static const uint8_t suffix[] = ":main";
     uint8_t name[LX_ACCOUNT_NAME_MAX];
+    uint8_t account_id[32];
     size_t length;
     size_t index;
     lxp_result status;
     if (process == NULL || activity == NULL || account_key == NULL ||
-        principal_id == NULL || fee_balance == NULL ||
-        activity->actor_did.bytes == NULL || activity->actor_did.length == 0U ||
-        activity->authority.length != 32U ||
+        principal_id == NULL ||
+        fee_balance == NULL || activity->actor_did.bytes == NULL ||
+        activity->actor_did.length == 0U || activity->authority.length != 32U ||
         activity->actor_did.length > sizeof(name) - sizeof(prefix) - sizeof(suffix) + 2U)
         return LXP_ERR_NON_CANONICAL;
     length = sizeof(prefix) - 1U;
@@ -226,20 +231,24 @@ static lxp_result principal_authority(gp_runtime *process, const lxp_activity *a
     length += activity->actor_did.length;
     (void)memcpy(name + length, suffix, sizeof(suffix) - 1U);
     length += sizeof(suffix) - 1U;
-    status = lx_account_id_from_string(name, length, principal_id);
-    if (status != LXP_OK)
-        return status;
+    status = lx_account_id_from_string(name, length, account_id);
+    if (status != LXP_OK) return status;
     *fee_balance = (lxp_u128){0U, 0U};
     for (index = 0U; index < process->accounts.count; ++index) {
         const lx_account *account = &process->accounts.accounts[index];
-        if (lxp_ct_memcmp(account->id, principal_id, 32U) != 0)
-            continue;
-        if (account->kind != LX_ACCOUNT_AGENT_MAIN || !account->has_authority_key ||
+        if (lxp_ct_memcmp(account->id, account_id, 32U) != 0) continue;
+        if (account->kind != LX_ACCOUNT_AGENT_MAIN ||
+            !account->has_authority_key ||
             lxp_ct_memcmp(account->authority_key, account_key, 32U) != 0)
             return LXP_ERR_BAD_SIGNATURE;
         *fee_balance = account->balance;
-        return LXP_OK;
+        break;
     }
+    if (activity->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+        lxp_activity_module_id(activity->activity_type) == LXP_MODULE_PROGRAMS)
+        return lxp_did_id_derive(activity->actor_did.bytes,
+                                 activity->actor_did.length, principal_id);
+    (void)memcpy(principal_id, account_id, 32U);
     return LXP_OK;
 }
 
@@ -290,6 +299,8 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     lxp_byte_span encoded_receipt;
     uint8_t activity_id[32];
     lxp_result status;
+    uint8_t fee_wire[LXP_FEE_PARAMS_V2_BYTES];
+    size_t fee_wire_length;
     if (process == NULL || canonical_activity == NULL || canonical_receipt == NULL ||
         activity == NULL || receipt == NULL || expected == NULL || activity_length == 0U ||
         receipt_length == 0U || timestamp == 0U ||
@@ -302,9 +313,10 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
          expected->module_id != LXP_MODULE_GOVERNANCE &&
          !(process->custody_credit_enabled && expected->module_id == LXP_MODULE_BRIDGE)) ||
         expected->module_version == 0U ||
-        expected->parameter_version != process->parameter_version ||
-        process->fees.version != expected->parameter_version)
+        expected->parameter_version != process->parameter_version)
         return LXP_ERR_VERSION_UNSUPPORTED;
+    status = lxp_fee_params_encode(&process->fees, fee_wire, sizeof(fee_wire), &fee_wire_length);
+    if (status != LXP_OK) return status;
     status = lxp_activity_decode(canonical_activity, activity_length, activity);
     if (status == LXP_OK && activity->protocol_version != process->protocol_version)
         status = LXP_ERR_VERSION_UNSUPPORTED;
@@ -678,6 +690,102 @@ static lxp_result replay_transition(void *context, uint16_t version, uint32_t pa
         runtime->poisoned = true;
     return status;
 }
+static lxp_result copy_feed(FILE *source, FILE *target, off_t begin, off_t end)
+{
+    uint8_t bytes[65536];
+    while (begin < end) {
+        size_t length = (uint64_t)(end - begin) > sizeof(bytes) ?
+            sizeof(bytes) : (size_t)(end - begin);
+        ssize_t count = pread(fileno(source), bytes, length, begin);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0 || fwrite(bytes, 1U, (size_t)count, target) != (size_t)count)
+            return LXP_ERR_IO;
+        begin += count;
+    }
+    return fflush(target) == 0 ? LXP_OK : LXP_ERR_IO;
+}
+
+static lxp_result replay_transaction_begin(void *context)
+{
+    gp_runtime *runtime = context;
+    gp_runtime *saved;
+    FILE *staged;
+    struct stat info;
+    lxp_result status;
+    if (runtime == NULL || runtime->transaction != NULL || runtime->feed_file == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    saved = malloc(sizeof(*saved));
+    if (saved == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    *saved = *runtime;
+    saved->checkpoint = NULL;
+    saved->last_batch = runtime->prepared_batch - 1U;
+    status = lxp_replay_checkpoint_create(&runtime->kernel, &saved->checkpoint);
+    staged = status == LXP_OK ? tmpfile() : NULL;
+    if (status == LXP_OK && (staged == NULL || fflush(runtime->feed_file) != 0 ||
+        fstat(fileno(runtime->feed_file), &info) != 0))
+        status = LXP_ERR_IO;
+    if (status == LXP_OK)
+        status = copy_feed(runtime->feed_file, staged, 0, info.st_size);
+    if (status != LXP_OK) {
+        if (staged != NULL) fclose(staged);
+        lxp_replay_checkpoint_destroy(saved->checkpoint);
+        free(saved);
+        return status;
+    }
+    runtime->transaction_feed_offset = info.st_size;
+    runtime->transaction = saved;
+    runtime->feed_file = staged;
+    return LXP_OK;
+}
+
+static lxp_result replay_transaction_finish(void *context, bool commit)
+{
+    gp_runtime *runtime = context;
+    gp_runtime *saved;
+    lxp_result status = LXP_OK;
+    struct stat info;
+    if (runtime == NULL || runtime->transaction == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    saved = runtime->transaction;
+    if (commit) {
+        if (fflush(runtime->feed_file) != 0 ||
+            fstat(fileno(runtime->feed_file), &info) != 0)
+            return LXP_ERR_IO;
+        status = copy_feed(runtime->feed_file, saved->feed_file,
+                           runtime->transaction_feed_offset, info.st_size);
+        if (status == LXP_OK && fsync(fileno(saved->feed_file)) != 0)
+            status = LXP_ERR_IO;
+        if (status != LXP_OK) return status;
+    } else {
+        if (fflush(saved->feed_file) != 0 ||
+            ftruncate(fileno(saved->feed_file), runtime->transaction_feed_offset) != 0 ||
+            fsync(fileno(saved->feed_file)) != 0)
+            status = LXP_ERR_IO;
+        if (lxp_replay_checkpoint_restore(saved->checkpoint) != LXP_OK)
+            status = LXP_FATAL_INVARIANT;
+        runtime->identities = saved->identities;
+        runtime->verified_receipts = saved->verified_receipts;
+        runtime->fees = saved->fees;
+        runtime->programs = saved->programs;
+        runtime->asset_runtime = saved->asset_runtime;
+        runtime->asset_count = saved->asset_count;
+        memcpy(runtime->assets, saved->assets, sizeof(runtime->assets));
+        memcpy(runtime->send_assets, saved->send_assets, sizeof(runtime->send_assets));
+        runtime->parameter_version = saved->parameter_version;
+        runtime->last_batch = saved->last_batch;
+        runtime->poisoned = saved->poisoned;
+        runtime->feed_sequence = saved->feed_sequence;
+        runtime->feed_ordinal = saved->feed_ordinal;
+        runtime->expected = saved->expected;
+    }
+    if (fclose(runtime->feed_file) != 0 && !commit) status = LXP_ERR_IO;
+    runtime->feed_file = saved->feed_file;
+    runtime->transaction = NULL;
+    lxp_replay_checkpoint_destroy(saved->checkpoint);
+    free(saved);
+    return status;
+}
+
 lxp_result gp_runtime_prepare(gp_runtime *runtime, const lxp_batch_body *body)
 {
     lxp_byte_span *events;
@@ -747,6 +855,8 @@ void gp_runtime_close(gp_runtime *runtime)
 {
     if (!runtime)
         return;
+    if (runtime->transaction != NULL)
+        (void)replay_transaction_finish(runtime, false);
     if (runtime->feed_file)
         (void)fclose(runtime->feed_file);
     if (runtime->mutex_open)
@@ -941,6 +1051,9 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
     }
     if (status == LXP_OK)
         status = lxp_replay_engine_init(&runtime->engine, parameter_version, runtime);
+    if (status == LXP_OK)
+        status = lxp_replay_engine_bind_transaction(&runtime->engine,
+                    replay_transaction_begin, replay_transaction_finish);
     if (status == LXP_OK)
         status = lxp_programs_replay_engine_bind(&runtime->engine, &runtime->kernel);
     if (status == LXP_OK)
