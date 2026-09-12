@@ -73,9 +73,10 @@ static int metered_head(int descriptor, uint64_t minimum, uint8_t root[32])
         int current = socket(AF_UNIX, SOCK_STREAM, 0);
         REQUIRE(current >= 0 && connect(current, (struct sockaddr *)&address, address_length) == 0);
         REQUIRE(handshake(current) == 0);
-        REQUIRE(send_request(current, LNI_MINOR, 26U, 0U, preparation, sizeof(preparation)) == 0);
+        REQUIRE(send_request(current, LNI_MINOR, 26U, 613U, preparation, sizeof(preparation)) == 0);
         REQUIRE(receive_envelope(current, &response) == 0);
-        REQUIRE(response.tag == 27U && response.payload_length >= 139U);
+        REQUIRE(response.tag == 27U && response.correlation_id == 613U &&
+                response.payload_length >= 139U);
         bool reached = load_u64(response.payload + 99U) >= minimum;
         if (reached) (void)memcpy(root, response.payload + 107U, 32U);
         release_envelope(&response);
@@ -529,6 +530,12 @@ int main(int argc, char **argv)
                 fgetc(state) == EOF && !ferror(state) && fclose(state) == 0);
         REQUIRE(metered_recovered(descriptor, &run) == 0);
     } else {
+        uint8_t preparation[79];
+        store_u16(preparation, 1U); store_u16(preparation + 2U, 75U);
+        (void)memcpy(preparation + 4U, REGISTERED_DID, 75U);
+        REQUIRE(send_request(descriptor, LNI_MINOR, 26U, 0U,
+                             preparation, sizeof(preparation)) == 0);
+        REQUIRE(expect_error(descriptor, 0U, 1U, LXP_ERR_MALFORMED_ENVELOPE) == 0);
         REQUIRE(metered_initial(descriptor, &owner, &run) == 0);
         state = fopen(argv[3], "wbx");
         REQUIRE(state != NULL && fwrite(&run, sizeof(run), 1U, state) == 1U &&

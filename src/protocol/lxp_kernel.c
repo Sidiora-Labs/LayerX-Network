@@ -3,6 +3,7 @@
 #include "layerx/lxp_admission.h"
 #include "layerx/lxp_bridge_credit.h"
 #include "layerx/lx_asset.h"
+#include "layerx/lx_stream.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/programs.h"
@@ -22,7 +23,9 @@ struct lxp_kernel_batch_snapshot {
     lx_programs_transfer_runtime programs_runtime;
     lx_asset_runtime asset_runtime;
     lx_asset_record *asset_records;
+    lx_stream_runtime stream_runtime;
     bool asset_runtime_bound;
+    bool stream_runtime_bound;
     lxp_transfer_asset_state *assets;
     lx_programs_fee_schedule fee_schedule;
     lx_programs_metering_schedule metering_schedule;
@@ -388,10 +391,22 @@ static lxp_result kernel_snapshot_finish(
         snapshot->asset_runtime.transfer_assets = snapshot->assets;
         snapshot->asset_runtime_bound = true;
     }
+    if (snapshot->kernel.module_runtime[LXP_MODULE_STREAM] != NULL) {
+        const lx_stream_runtime *stream =
+            snapshot->kernel.module_runtime[LXP_MODULE_STREAM];
+        if (stream->assets != runtime->assets ||
+            stream->asset_count != runtime->asset_count)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        snapshot->stream_runtime.assets = snapshot->assets;
+        snapshot->stream_runtime.asset_count = runtime->asset_count;
+        snapshot->stream_runtime_bound = true;
+    }
     (void)memset(snapshot->kernel.module_runtime, 0,
                  sizeof(snapshot->kernel.module_runtime));
     if (snapshot->asset_runtime_bound)
         snapshot->kernel.module_runtime[LXP_MODULE_ASSET] = &snapshot->asset_runtime;
+    if (snapshot->stream_runtime_bound)
+        snapshot->kernel.module_runtime[LXP_MODULE_STREAM] = &snapshot->stream_runtime;
     snapshot->programs_runtime = *runtime;
     snapshot->programs_runtime.accounts =
         lxp_state_snapshot_accounts_for_prepare(snapshot->state);
@@ -2864,6 +2879,8 @@ static lxp_result kernel_snapshot_replace(
         target->asset_runtime.accounts = lxp_state_snapshot_accounts_for_prepare(target->state);
         target->kernel.module_runtime[LXP_MODULE_ASSET] = &target->asset_runtime;
     }
+    if (target->stream_runtime_bound)
+        target->kernel.module_runtime[LXP_MODULE_STREAM] = &target->stream_runtime;
     target->programs_runtime.accounts =
         lxp_state_snapshot_accounts_for_prepare(target->state);
     target->programs_runtime.metering_schedule_context = target;
