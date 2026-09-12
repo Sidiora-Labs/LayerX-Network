@@ -329,7 +329,7 @@ fn binding_receipt(
         activity_id: submission.activity_id,
         previous_state_root: [2; 32],
         resulting_state_root: [3; 32],
-        batch_id: support::execution_batch_id([2; 32], submission.activity_id, 9),
+        batch_id: support::committed_execution_batch_id([2; 32], [8; 32], 9),
         asset: [5; 32],
         operation,
         recorded_address: address.bytes(),
@@ -350,6 +350,51 @@ fn binding_receipt(
             fields.resulting_state_root,
             signing_key.verifying_key().to_bytes(),
         ),
+    }
+}
+
+#[test]
+fn scalar_identifier_cannot_replace_a_committed_receipt_batch() {
+    let signer = Ed25519SigningKey::from_bytes(&[0x35; 32]);
+    let authority = support::evidence_verifier(&signer);
+    let scalar = support::execution_batch_id([2; 32], [1; 32], 9);
+    let committed = support::committed_execution_batch_id([2; 32], [8; 32], 9);
+    for (batch_id, accepted) in [(committed, true), (scalar, false)] {
+        let fields = ReceiptFields {
+            activity_id: [1; 32],
+            previous_state_root: [2; 32],
+            resulting_state_root: [3; 32],
+            batch_id,
+            asset: [5; 32],
+            operation: 4,
+            recorded_address: [0x21; 20],
+        };
+        let unsigned = encode_receipt(&fields, None);
+        let mut digest = Sha256::new();
+        digest.update(b"LXP/v1/receipt\0");
+        digest.update(&unsigned);
+        let signature = signer.sign(&<[u8; 32]>::from(digest.finalize()));
+        let raw = support::raw_receipt_evidence(
+            encode_receipt(&fields, Some(signature.to_bytes())),
+            AuthorizedBatch::new(
+                batch_id,
+                fields.asset,
+                fields.previous_state_root,
+                fields.resulting_state_root,
+                signer.verifying_key().to_bytes(),
+            ),
+            9,
+            &signer,
+        );
+        let result = authority.verify_receipt(&raw);
+        if accepted {
+            assert!(result.is_ok(), "committed receipt: {result:?}");
+        } else {
+            assert!(matches!(
+                result,
+                Err(layerx_agentd::protocol_evidence::ReceiptEvidenceError::BatchIdentity)
+            ));
+        }
     }
 }
 
