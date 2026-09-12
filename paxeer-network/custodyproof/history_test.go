@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	consensuscrypto "github.com/sidiora-labs/paxeer-network/consensus/crypto"
+	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 )
 
@@ -197,8 +199,14 @@ func TestRealHistoryRefusesGapsEquivocationAndInvalidQuorum(t *testing.T) {
 	signatures := changed.Bundle.History[0].Commit.Commit.Signatures
 	damaged := false
 	for index := range signatures {
-		if len(signatures[index].Signature) > 0 {
-			signatures[index].Signature[0] ^= 1
+		if signature, present := signatures[index].Signature.Get(); present {
+			raw := signature.Bytes()
+			raw[0] ^= 1
+			altered, err := consensuscrypto.SigFromBytes(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			signatures[index].Signature = utils.Some(altered)
 			damaged = true
 			break
 		}

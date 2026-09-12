@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	consensuscrypto "github.com/sidiora-labs/paxeer-network/consensus/crypto"
 )
 
 func realRequest(t *testing.T) *Request {
@@ -41,7 +43,7 @@ func TestRealStateCreditAndClockBounds(t *testing.T) {
 func TestRealStateCreditRefusesMissingAuthority(t *testing.T) {
 	request := realRequest(t)
 	now := request.Bundle.History[len(request.Bundle.History)-1].Commit.Time.Add(time.Second)
-	request.Bundle.History[0].Validators[0].Validators[0].PubKey = nil
+	request.Bundle.History[0].Validators[0].Validators[0].PubKey = consensuscrypto.PubKey{}
 	if _, err := Verify(request, now); err == nil {
 		t.Fatal("missing validator key accepted")
 	}

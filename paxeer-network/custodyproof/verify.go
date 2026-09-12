@@ -113,7 +113,7 @@ func validatorSet(pages []coretypes.ResultValidators, height int64) (*types.Vali
 			return nil, errors.New("validator page identity")
 		}
 		for _, validator := range page.Validators {
-			if validator == nil || validator.PubKey == nil || validator.ValidateBasic() != nil ||
+			if validator == nil || bytes.Equal(validator.PubKey.Bytes(), make([]byte, 32)) || validator.ValidateBasic() != nil ||
 				validator.VotingPower <= 0 || validator.VotingPower > types.MaxTotalVotingPower-totalPower ||
 				!bytes.Equal(validator.Address, validator.PubKey.Address()) || seen[string(validator.Address)] {
 				return nil, errors.New("invalid or duplicate validator")
