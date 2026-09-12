@@ -1127,11 +1127,7 @@ unsafe extern "C" {
     fn layerx_programs_call_event_emit(token: u64) -> i32;
     fn layerx_programs_call_catalog_interface_length(token: u64, index: u32) -> i32;
     fn layerx_programs_call_catalog_interface_byte(token: u64, index: u32, offset: u32) -> i32;
-    fn layerx_programs_call_transfer_begin(
-        token: u64,
-        program_spend_token: u64,
-        legs: u16,
-    ) -> i32;
+    fn layerx_programs_call_transfer_begin(token: u64, program_spend_token: u64, legs: u16) -> i32;
     fn layerx_programs_call_transfer_leg(
         token: u64,
         index: u16,
@@ -1801,7 +1797,8 @@ impl KernelTransferPrimitive for CKernel {
         }
         c_ok(unsafe { layerx_programs_call_transfer_apply(self.token) })
             .map_err(|_| TransferLawError::ReceiptMismatch)?;
-        if program_spend.is_some() && !crate::ffi_transfer::program_spend_consumed(program_spend_token)
+        if program_spend.is_some()
+            && !crate::ffi_transfer::program_spend_consumed(program_spend_token)
         {
             return Err(TransferLawError::KernelRefused);
         }
