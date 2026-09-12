@@ -138,7 +138,7 @@ def main():
                 'platform/hosted/paxeer/contracts/BetaUsdl.sol', 'contracts/challenge/CheckpointChallengeManager.sol',
                 'contracts/governance/LayerXBetaTimelock.sol', 'contracts/custody/AssetRegistry.sol',
                 'contracts/custody/LayerXVault.sol', 'paxeer-network/loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol',
-                '--out', artifacts, '--cache-path', build / 'withdraw-contracts/cache')
+                '--threads', '4', '--out', artifacts, '--cache-path', build / 'withdraw-contracts/cache')
             with owned_chain(work, artifacts) as first:
                 custody = deposit(first, artifacts, beneficiary, amount)
                 (work / 'custody.json').write_text(json.dumps(custody, sort_keys=True) + '\n')
