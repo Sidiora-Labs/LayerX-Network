@@ -43,16 +43,31 @@ pub fn fetch(entry: &ArtifactManifestEntry, destination: &Path) -> Result<(), St
     Err(format!("location {location} uses no fetchable scheme"))
 }
 
-fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
+fn agent() -> Result<ureq::Agent, String> {
+    let loaded = rustls_native_certs::load_native_certs();
+    if loaded.certs.is_empty() || !loaded.errors.is_empty() {
+        return Err("system TLS trust roots are unavailable or invalid".into());
+    }
+    let certificates = loaded
+        .certs
+        .iter()
+        .map(|certificate| ureq::tls::Certificate::from_der(certificate.as_ref()).to_owned())
+        .collect::<Vec<_>>();
+    Ok(ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::Rustls)
+                .root_certs(ureq::tls::RootCerts::new_with_certs(&certificates))
+                .build(),
+        )
         .timeout_global(Some(TIMEOUT))
         .http_status_as_error(false)
         .build()
-        .into()
+        .into())
 }
 
 fn get(url: &str, limit: u64, what: &str) -> Result<Vec<u8>, String> {
-    let mut response = agent()
+    let mut response = agent()?
         .get(url)
         .call()
         .map_err(|error| format!("GET {url}: {error}"))?;
@@ -180,4 +195,20 @@ fn run(command: &mut Command, what: &str) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ))
     }
+}
+
+#[cfg(test)]
+#[path = "../../tests/support/tls_boundary.rs"]
+mod tls_boundary;
+
+#[test]
+fn artifact_fetch_uses_system_trust_and_checks_server_identity() {
+    let module = module_path!()
+        .split_once("::")
+        .map_or("", |(_, module)| module);
+    let test_name =
+        format!("{module}::artifact_fetch_uses_system_trust_and_checks_server_identity");
+    tls_boundary::qualify(&test_name, |endpoint| {
+        get(&format!("{endpoint}/livez"), 1024, "boundary liveness")
+    });
 }

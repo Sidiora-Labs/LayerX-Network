@@ -110,7 +110,7 @@ impl NodeProgramStateSource {
         }
         let root = ureq::tls::Certificate::from_der(outbound_ca_der).to_owned();
         let tls = ureq::tls::TlsConfig::builder()
-            .provider(ureq::tls::TlsProvider::NativeTls)
+            .provider(ureq::tls::TlsProvider::Rustls)
             .root_certs(ureq::tls::RootCerts::new_with_certs(&[root]))
             .build();
         let config = ureq::Agent::config_builder()

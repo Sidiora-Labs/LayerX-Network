@@ -39,6 +39,12 @@ impl Client {
             }
         }
         let config = ureq::Agent::config_builder()
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .provider(ureq::tls::TlsProvider::Rustls)
+                    .root_certs(system_roots(endpoint)?)
+                    .build(),
+            )
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
             .build();
@@ -256,6 +262,22 @@ impl Client {
         }
         Ok(format!("{}{path}", self.endpoint))
     }
+}
+
+fn system_roots(endpoint: &str) -> Result<ureq::tls::RootCerts, String> {
+    let mut certificates = Vec::new();
+    if endpoint.starts_with("https://") {
+        let loaded = rustls_native_certs::load_native_certs();
+        if loaded.certs.is_empty() || !loaded.errors.is_empty() {
+            return Err("system TLS trust roots are unavailable or invalid".into());
+        }
+        certificates.extend(
+            loaded.certs.iter().map(|certificate| {
+                ureq::tls::Certificate::from_der(certificate.as_ref()).to_owned()
+            }),
+        );
+    }
+    Ok(ureq::tls::RootCerts::new_with_certs(&certificates))
 }
 
 fn decode(

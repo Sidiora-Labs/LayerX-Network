@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
-export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-16} MAKEFLAGS=${MAKEFLAGS:--j16}
+export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4} MAKEFLAGS=${MAKEFLAGS:--j4}
 root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
 [[ $(id -u) == 0 ]]
 build_dir=${1:-build}
-native_bin=${LAYERX_TEST_NATIVE_BIN_DIR:-"$root/$build_dir/bin"}
+if [[ $build_dir != /* ]]; then build_dir="$root/$build_dir"; fi
+native_bin=${LAYERX_TEST_NATIVE_BIN_DIR:-"$build_dir/bin"}
 sequencer_binary="$native_bin/layerxd"
 if [[ ${2:-} == --maintenance-crash ]]; then
-    sequencer_binary="$root/$build_dir/tests/lxp_test_maintenance_crash"
+    sequencer_binary="$build_dir/tests/lxp_test_maintenance_crash"
 fi
 work=$(mktemp -d "${LAYERX_TEST_ADMISSION_LOG_DIR:-/tmp}/lxp-program-admission-XXXXXX")
 runtime=$(mktemp -d /tmp/lxp-program-admission-run-XXXXXX)
@@ -54,25 +55,55 @@ if [[ ${2:-} == --maintenance-crash ]]; then
     export LXP_TEST_APPLY_GATE_FD="$apply_gate_fd" LXP_TEST_CRASH_BOUNDARY="$3" LXP_TEST_CRASH_OCCURRENCE="$4"
 fi
 bootstrap_extra=()
-if [[ ${2:-} == --withdraw ]]; then
-    bootstrap_extra+=(--custody-profile "$LAYERX_TEST_WITHDRAW_PROFILE")
+bootstrap_environment=(env)
+custody_mode=0
+case ${2:-} in
+    --withdraw|--module-maintenance|--metered-allowance) custody_mode=1 ;;
+esac
+if [[ $custody_mode == 1 ]]; then
+    bootstrap_extra+=(--custody-profile "$LAYERX_TEST_WITHDRAW_PROFILE" --settlement-env "$work/settlement.env")
+    for name in LAYERX_NODE_PAXEER_CHAIN_ID LAYERX_NODE_SETTLEMENT_CONTRACT LAYERX_NODE_CHECKPOINT_REGISTRY LAYERX_NODE_PAXEER_RPC_ADDRESS LAYERX_NODE_PAXEER_RPC_PORT; do
+        bootstrap_environment+=(-u "$name")
+    done
+else
+    bootstrap_environment+=(LAYERX_NODE_PAXEER_CHAIN_ID=31337
+        LAYERX_NODE_SETTLEMENT_CONTRACT=0x1111111111111111111111111111111111111111
+        LAYERX_NODE_CHECKPOINT_REGISTRY=0x2222222222222222222222222222222222222222
+        LAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1 LAYERX_NODE_PAXEER_RPC_PORT="$rpc_port")
 fi
-LAYERX_NODE_PAXEER_CHAIN_ID=31337 \
-LAYERX_NODE_SETTLEMENT_CONTRACT=0x1111111111111111111111111111111111111111 \
-LAYERX_NODE_CHECKPOINT_REGISTRY=0x2222222222222222222222222222222222222222 \
-LAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1 LAYERX_NODE_PAXEER_RPC_PORT="$rpc_port" \
+if [[ ${2:-} == --module-maintenance ]]; then
+    for module in escrow budget stream service perps; do
+        bootstrap_extra+=(--enable-module "$module")
+    done
+fi
+"${bootstrap_environment[@]}" \
 bash platform/hosted/node/bootstrap.sh --data-dir "$work/data" --run-dir "$runtime" \
     --network-id 77 --genesis-metadata "$work/metadata" --sequencer-key "$work/sequencer" --treasury-key "$work/treasury" \
     --lni-uid 4021 --lni-gid 4021 --program-port "$program_port" --replica-port "$replica_port" \
     --layerxd "$native_bin/layerxd" --genesis-build "$native_bin/layerx-genesis-build" "${bootstrap_extra[@]}" \
     > "$work/bootstrap.log" 2>&1
-if [[ ${2:-} == --withdraw ]]; then
-    python3 tests/daemon/withdraw-custody.py --register "$work" "$LAYERX_TEST_WITHDRAW_RPC"
+if [[ $custody_mode == 1 ]]; then
+    "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/withdraw-custody.py --register "$work" "$LAYERX_TEST_WITHDRAW_RPC"
+    settlement_lines=$(bash platform/hosted/node/bootstrap.sh --check-settlement "$work/settlement.env")
+    while IFS= read -r line; do export "$line"; done <<< "$settlement_lines"
+fi
+if [[ ${2:-} == --module-maintenance ]]; then
+    python3 - "$work/data/identities.txt" <<'PYPROVIDER'
+from pathlib import Path
+import sys
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+public = Ed25519PrivateKey.from_private_bytes(bytes([0x33]) * 32).public_key().public_bytes_raw()
+did = ('did:layerx:' + public.hex()).encode()
+with Path(sys.argv[1]).open('a') as identities:
+    identities.write(did.hex() + ':' + public.hex() + ':0\n')
+for target in Path(sys.argv[1]).parents[1].glob('guarantor-*/identity/identities.txt'):
+    target.write_bytes(Path(sys.argv[1]).read_bytes())
+PYPROVIDER
 fi
 if [[ ${2:-} == --availability-batches ]]; then
     mkdir "$work/availability-output"
     chown 4021:4021 "$work/availability-output"
-    python3 tests/daemon/availability-settlement.py "$work" "$root/$build_dir/tests/lxp_test_daemon_finality_authority" > "$work/availability-settlement.log" 2>&1 &
+    python3 tests/daemon/availability-settlement.py "$work" "$build_dir/tests/lxp_test_daemon_finality_authority" > "$work/availability-settlement.log" 2>&1 &
     settlement_pid=$!
     for ((attempt=0; attempt<3000; attempt++)); do
         [[ ! -f "$work/availability-chain-ready.json" ]] || break
@@ -97,7 +128,15 @@ for ((attempt=0; attempt<200; attempt++)); do
     kill -0 "$sequencer_pid"
     sleep 0.1
 done
-if [[ ${2:-} == --grant-issuance ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+    client_name=${2#--}
+    client_name=${client_name//-/_}
+    cp "$build_dir/tests/lxp_test_$client_name" "$work/client"
+    mkdir "$work/scenario"
+    chown 4021:4021 "$work/scenario"
+    scenario_state="$work/scenario"
+    if [[ ${2:-} == --metered-allowance ]]; then scenario_state="$work/scenario/state"; fi
+elif [[ ${2:-} == --grant-issuance ]]; then
     cp "$build_dir/tests/lxp_test_grant_issuance" "$work/client"
     mkdir "$work/grants"
     chown 4021:4021 "$work/grants"
@@ -125,6 +164,8 @@ elif [[ ${2:-} == --post-lxip ]]; then
     exit 0
 elif [[ ${2:-} == --grant-issuance ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --grant-issuance "$work/grants/state"
+elif [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$2" "$scenario_state"
 elif [[ ${2:-} == --maintenance-crash ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --maintenance-queue
     printf G >&"$apply_gate_fd"
@@ -174,7 +215,7 @@ else
     kill -0 "$sequencer_pid"
 fi
 
-if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw || ${2:-} == --grant-issuance ]]; then
+if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw || ${2:-} == --grant-issuance || ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
     if [[ -n "$sequencer_pid" ]]; then
         kill -KILL "$sequencer_pid"
         wait "$sequencer_pid" || true
@@ -236,14 +277,16 @@ else:
 PYWAIT
     recovered_mode=--maintenance-recovered
     if [[ ${2:-} == --withdraw ]]; then recovered_mode=--withdraw-recovered; fi
-    if [[ ${2:-} == --grant-issuance ]]; then
+    if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$2-recovered" "$scenario_state"
+    elif [[ ${2:-} == --grant-issuance ]]; then
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --grant-issuance-recovered "$work/grants/state"
     else
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$recovered_mode"
     fi
     kill -0 "$sequencer_pid"
     kill -0 "$replica_pid"
-    if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance ]]; then
+    if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance && ${2:-} != --module-maintenance && ${2:-} != --metered-allowance ]]; then
         (set -a; source "$work/data/replica.env"; python3 tests/daemon/maintenance-evidence.py)
     fi
 fi
