@@ -429,9 +429,12 @@ fn verify_bundle(chunks: &[VerifiedChunk]) -> Result<ReassemblyReport, Availabil
     let mut total_bytes = 0;
     for class in AvailabilityClass::ALL {
         let mut expected_offset = 0_u64;
-        let mut count = 0;
         let mut empty = false;
-        for chunk in chunks.iter().filter(|chunk| chunk.chunk.class == class) {
+        for (count, chunk) in chunks
+            .iter()
+            .filter(|chunk| chunk.chunk.class == class)
+            .enumerate()
+        {
             if chunk.chunk.class_offset != expected_offset
                 || empty
                 || (count != 0 && chunk.chunk.bytes.is_empty())
@@ -445,7 +448,6 @@ fn verify_bundle(chunks: &[VerifiedChunk]) -> Result<ReassemblyReport, Availabil
                 .filter(|value| *value <= MAX_SECTION_BYTES as u64)
                 .ok_or_else(|| bundle_failure(chunks, AvailabilityCheck::ChunkBounds))?;
             total_bytes += chunk.chunk.bytes.len();
-            count += 1;
             empty = chunk.chunk.bytes.is_empty();
         }
     }
