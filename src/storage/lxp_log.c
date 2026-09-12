@@ -397,6 +397,7 @@ lxp_result lxp_log_append(lxp_log *log, lxp_log_record_kind kind,
     lxp_result status;
     if (log == NULL || log->descriptor < 0 || !valid_kind((uint8_t)kind) ||
         (body == NULL && body_length != 0U)) return LXP_ERR_NON_CANONICAL;
+    if (global_sequence == UINT64_MAX) return LXP_ERR_SEQUENCE_EXHAUSTED;
     end = log->write_offset + LXP_LOG_HEADER_BYTES + body_length;
     if (end < log->write_offset || end > log->capacity)
         return LXP_ERR_LENGTH_LIMIT;

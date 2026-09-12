@@ -145,7 +145,7 @@ int main(void)
             (lxp_byte_span){original_receipt, sizeof(original_receipt)},
             (lxp_byte_span){activity, sizeof(activity)},
             (lxp_byte_span){state_leaf, sizeof(state_leaf)},
-            &activity_proof, &state_proof, &proof_certificate,
+            &activity_proof, &activity_proof, &state_proof, &proof_certificate,
             (lxp_byte_span){settlement, sizeof(settlement)}, &augmented) !=
             LXP_OK ||
         augmented.pre_checkpoint_receipt.bytes != original_receipt ||

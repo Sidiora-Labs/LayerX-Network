@@ -342,9 +342,41 @@ int main(void)
         memcmp(delivery.delivery_id, delivery_two, 32U) != 0 ||
         delivery.deliverable_count != 1U || delivery.global_sequence != 13U ||
         lx_service_agreement_lookup(&ctx, formed, &agreement) != LXP_OK ||
-        agreement.state != LX_SERVICE_AGREEMENT_DELIVERED)
+        agreement.state != LX_SERVICE_AGREEMENT_REJECTED ||
+        agreement.rejection_reason != 7U || agreement.outcome_sequence != 11U ||
+        agreement.outcome_timestamp != 100U)
         return 1;
 
+    {
+        lx_service_dispute_request dispute_request;
+        lx_service_dispute dispute;
+        uint64_t acceptance_end = agreement.acceptance_window_end;
+        uint64_t dispute_end = agreement.dispute_window_end;
+        if (lx_service_acceptance_default(&ctx, acceptance_end, 15U) != LXP_OK ||
+            lx_service_agreement_lookup(&ctx, formed, &agreement) != LXP_OK ||
+            agreement.state != LX_SERVICE_AGREEMENT_REJECTED ||
+            agreement.dispute_window_end != dispute_end ||
+            agreement.acceptance_window_end != acceptance_end) return 1;
+        (void)memset(&dispute_request, 0, sizeof(dispute_request));
+        dispute_request.authority = &buyer;
+        id32(dispute_request.dispute.dispute_id, 92U);
+        id32(dispute_request.dispute.activity_id, 93U);
+        (void)memcpy(dispute_request.dispute.agreement_id, formed, 32U);
+        (void)memcpy(dispute_request.dispute.raiser, buyer.principal, 32U);
+        dispute_request.dispute.evidence_hash_count = 1U;
+        dispute_request.dispute.evidence_hashes[0][0] = 13U;
+        if (lx_service_dispute_open_execute(&ctx, &dispute_request, &dispute) != LXP_OK ||
+            lx_service_agreement_lookup(&ctx, formed, &agreement) != LXP_OK ||
+            agreement.state != LX_SERVICE_AGREEMENT_DISPUTED) return 1;
+        dispute_request.dispute.ruling = 1U;
+        dispute_request.dispute.provider_basis_points = 5000U;
+        id32(dispute_request.dispute.escrow_resolution_id, 94U);
+        if (lx_service_dispute_resolve_execute(&ctx, &dispute_request, &dispute) != LXP_OK ||
+            !dispute.resolved ||
+            lx_service_agreement_lookup(&ctx, formed, &agreement) != LXP_OK ||
+            agreement.state != LX_SERVICE_AGREEMENT_RESOLVED ||
+            lx_service_effect_audit(LX_SERVICE_DISPUTE_RESOLVE, &event_buffer) != LXP_OK) return 1;
+    }
     if (lxp_state_store_destroy(&store_state) != LXP_OK) return 1;
     return 0;
 }

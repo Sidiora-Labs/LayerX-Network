@@ -122,6 +122,7 @@ lxp_result lx_stream_result_load(lxp_module_ctx *ctx,
     result->ordinal = (uint16_t)(((uint16_t)bytes[64] << 8U) |
                                  (uint16_t)bytes[65]);
     result->leg_count = bytes[66];
+    (void)memcpy(result->stream_id, bytes + 67U, 32U);
     if (result->ordinal == 0U || result->ordinal > 7U ||
         result->leg_count > 2U)
         return LXP_ERR_NON_CANONICAL;
@@ -151,6 +152,7 @@ lxp_result lx_stream_result_save(lxp_module_ctx *ctx,
     bytes[64] = (uint8_t)(result->ordinal >> 8U);
     bytes[65] = (uint8_t)result->ordinal;
     bytes[66] = result->leg_count;
+    (void)memcpy(bytes + 67U, result->stream_id, 32U);
     return lxp_ctx_kv_put(ctx, key, sizeof(key), bytes, sizeof(bytes));
 }
 

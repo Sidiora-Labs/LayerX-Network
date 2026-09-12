@@ -54,6 +54,9 @@ enum {
     LNI_RECEIPT_LOOKUP_RESPONSE = 6,
     LNI_ACCOUNT_READ_REQUEST = 7,
     LNI_ACCOUNT_READ_RESPONSE = 8,
+    LNI_HISTORY_RANGE_REQUEST = 9,
+    LNI_HISTORY_ITEM = 10,
+    LNI_HISTORY_END = 11,
     LNI_BATCH_HEADER_REQUEST = 12,
     LNI_BATCH_HEADER_RESPONSE = 13,
     LNI_CHECKPOINT_REQUEST = 14,
@@ -1335,12 +1338,12 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     };
     static const char *evidence_capabilities[] = {
         "account_read", "asset_read", "authenticated_durable_submit", "batch_header",
-        "checkpoint", "fee_estimate", "historical_proofs", "node_info",
+        "checkpoint", "fee_estimate", "historical_proofs", "history_range", "node_info",
         "preparation_state", "proof_bundle", "receipt_lookup", "submit"
     };
     static const char *finalizer_capabilities[] = {
         "account_read", "asset_read", "authenticated_durable_submit", "batch_header",
-        "checkpoint", "fee_estimate", "finality_evidence_register", "historical_proofs",
+        "checkpoint", "fee_estimate", "finality_evidence_register", "historical_proofs", "history_range",
         "node_info", "preparation_state", "proof_bundle", "receipt_lookup",
         "submit"
     };
@@ -1348,7 +1351,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         "asset_read", "batch_header", "fee_estimate", "node_info", "receipt_lookup"
     };
     static const char *evidence_reader_capabilities[] = {
-        "account_read", "asset_read", "batch_header", "checkpoint", "fee_estimate", "historical_proofs",
+        "account_read", "asset_read", "batch_header", "checkpoint", "fee_estimate", "historical_proofs", "history_range",
         "node_info", "proof_bundle", "receipt_lookup"
     };
     static const char simulate_capability[] = "simulate";
@@ -1363,7 +1366,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                   sequencer_capabilities) :
             (evidence_available ? evidence_reader_capabilities :
                                   reader_capabilities);
-    const char *capabilities[16];
+    const char *capabilities[17];
     uint8_t payload[512];
     uint64_t head;
     uint64_t batch;
@@ -3285,6 +3288,121 @@ static lxp_result send_checkpoint(
     return status;
 }
 
+static lxp_result send_history_item(lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, const lxp_daemon_receipt_evidence *receipt,
+    int64_t deadline)
+{
+    lxp_daemon_activity_evidence activity;
+    lxp_receipt decoded;
+    lxp_batch_header header;
+    const lxp_merkle_proof *proof = &receipt->receipt_proof;
+    lxp_byte_span value = receipt->canonical_receipt;
+    lxp_byte_span signed_header = receipt->canonical_header;
+    const uint8_t *signature = receipt->header_signature;
+    uint8_t kind = 2U;
+    uint8_t *wire;
+    size_t length, cursor;
+    void *allocation;
+    lxp_result status = LXP_OK;
+    if (receipt->format_version != 3U) {
+        status = lxp_receipt_decode(value.bytes, value.length, true, &decoded);
+        if (status == LXP_OK)
+            status = lxp_daemon_activity_evidence_lookup(server->owner->evidence_store,
+                decoded.activity_id, server->owner->scratch, &activity);
+        if (status == LXP_OK &&
+            (activity.global_sequence != receipt->global_sequence ||
+             activity.canonical_receipt.length != value.length ||
+             lxp_ct_memcmp(activity.canonical_receipt.bytes, value.bytes, value.length) != 0))
+            status = LXP_ERR_CONTEXT_MISMATCH;
+        if (status != LXP_OK) return status;
+        kind = 1U;
+        value = activity.canonical_activity;
+        signed_header = activity.signed_header.canonical_header;
+        signature = activity.signed_header.signature;
+        proof = &activity.activity_proof;
+    }
+    status = lxp_batch_header_decode(signed_header.bytes, signed_header.length, &header);
+    if (status != LXP_OK) return status;
+    length = 9U + 1U + 32U + 4U + 4U + 1U + (size_t)proof->depth * 32U +
+             4U + signed_header.length + 64U;
+    status = lxp_arena_alloc(server->owner->scratch, length, 1U, &allocation);
+    if (status != LXP_OK) return status;
+    wire = allocation;
+    wire[0] = kind;
+    store_u64(wire + 1U, receipt->global_sequence);
+    wire[9U] = 2U;
+    memcpy(wire + 10U, kind == 1U ? header.activity_merkle_root : header.receipt_merkle_root, 32U);
+    store_u32(wire + 42U, proof->leaf_index);
+    store_u32(wire + 46U, proof->leaf_count);
+    wire[50U] = proof->depth;
+    cursor = 51U;
+    memcpy(wire + cursor, proof->siblings, (size_t)proof->depth * 32U);
+    cursor += (size_t)proof->depth * 32U;
+    store_u32(wire + cursor, (uint32_t)signed_header.length);
+    cursor += 4U;
+    memcpy(wire + cursor, signed_header.bytes, signed_header.length);
+    cursor += signed_header.length;
+    memcpy(wire + cursor, signature, 64U);
+    return send_envelope(descriptor, server->frame_bytes, LNI_HISTORY_ITEM,
+        request->correlation_id, value.bytes, value.length, wire, length, deadline);
+}
+
+static lxp_result send_history_range(lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    lxp_daemon_protocol_owner *owner = server->owner;
+    uint64_t first, last, next, offset = 0U;
+    uint16_t limit;
+    size_t mark;
+    size_t count = 0U;
+    lxp_result status;
+    uint8_t end[8];
+    if (request->correlation_id == 0U || request->proof_length != 0U ||
+        request->payload_length != 19U)
+        return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+                            1U, LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    first = load_u64(request->payload);
+    last = load_u64(request->payload + 8U);
+    limit = load_u16(request->payload + 16U);
+    if (first == 0U || first > last || last == UINT64_MAX || limit == 0U || limit > 256U ||
+        request->payload[18U] > 2U)
+        return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+                            1U, LXP_ERR_PARAMETER_BOUNDS, deadline);
+    if (owner->receipt_authority == NULL || owner->evidence_store == NULL || owner->scratch == NULL)
+        return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+                            3U, LXP_ERR_MODULE_DISABLED, deadline);
+    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    mark = lxp_arena_mark(owner->scratch);
+    next = first;
+    status = last <= owner->receipt_authority->last_global_sequence ? LXP_OK : LXP_ERR_SEQUENCE_GAP;
+    while (status == LXP_OK && next <= last && count < limit) {
+        lxp_daemon_receipt_evidence receipt;
+        bool present = false;
+        size_t item_mark = lxp_arena_mark(owner->scratch);
+        status = lxp_daemon_receipt_authority_scan(owner->receipt_authority, &offset,
+                                                   owner->scratch, &receipt, &present);
+        if (status == LXP_OK && !present) status = LXP_ERR_SEQUENCE_GAP;
+        if (status == LXP_OK && receipt.global_sequence >= first) {
+            if (receipt.global_sequence != next) status = LXP_ERR_SEQUENCE_GAP;
+            if (status == LXP_OK)
+                status = send_history_item(server, descriptor, request, &receipt, deadline);
+            if (status == LXP_OK) { ++next; ++count; }
+        }
+        (void)lxp_arena_reset(owner->scratch, item_mark);
+    }
+    if (status == LXP_OK) {
+        store_u64(end, next);
+        status = send_envelope(descriptor, server->frame_bytes, LNI_HISTORY_END,
+            request->correlation_id, end, sizeof(end), NULL, 0U, deadline);
+    } else {
+        status = send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+                              3U, status, deadline);
+    }
+    (void)lxp_arena_reset(owner->scratch, mark);
+    if (pthread_mutex_unlock(&owner->mutex) != 0) return LXP_FATAL_INVARIANT;
+    return status;
+}
+
 static lxp_result send_proof_bundle(
     lxp_daemon_lni_server *server, int descriptor,
     const lni_envelope *request, int64_t deadline)
@@ -3614,6 +3732,8 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
             status = send_account_read(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_AVAILABILITY_FETCH) {
             status = send_availability(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_HISTORY_RANGE_REQUEST) {
+            status = send_history_range(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_BATCH_HEADER_REQUEST) {
             status = send_batch_header(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_CHECKPOINT_REQUEST) {

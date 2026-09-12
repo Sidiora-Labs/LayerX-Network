@@ -518,6 +518,18 @@ int main(void)
             memcmp(replay_state_root, settled_state_root, 32U) != 0)
             return 1;
     }
+    {
+        lxp_send repeated_invoice = decoded;
+        repeated_invoice.sequence = 1U;
+        repeated_invoice.idempotency_key[0] = 0x78U;
+        if (sign_send(payer_private_key, &repeated_invoice, payer_public_key) != 0 ||
+            lxp_gateway_send_settle(&requirement, &repeated_invoice,
+                &direct.settlement, &direct_receipt) != LXP_ERR_INVOICE_ALREADY_SETTLED ||
+            direct.payer->balance.lo != 75U || direct.payee->balance.lo != 25U)
+            return 1;
+    }
+    requirement.invoice_id[0] ^= 1U;
+    if (sign_requirement(service_private_key, &requirement) != 0) return 1;
     direct.environment.batch_timestamp = 201U;
     decoded.sequence = 1U;
     decoded.idempotency_key[0] = 0x77U;
