@@ -14,7 +14,8 @@ const CHECKPOINT_TAG: u8 = 2;
 const FINALITY_TAG: u8 = 3;
 const DEPOSIT_TAG: u8 = 4;
 const DEPOSIT_FAILURE_TAG: u8 = 5;
-pub const MAX_DEPOSIT_PROOF_BYTES: usize = 2 + DEPOSIT_NATIVE_PAYLOAD_MAX;
+const LEGACY_DEPOSIT_PROOF_BYTES: usize = 2 + DEPOSIT_NATIVE_PAYLOAD_MAX;
+pub const MAX_DEPOSIT_PROOF_BYTES: usize = LEGACY_DEPOSIT_PROOF_BYTES + 4 + 207 + 427;
 pub const MAX_DEPOSIT_FAILURE_BYTES: usize = 65_538;
 const MAX_CHECKPOINT_SIBLINGS: usize = 256;
 const MAX_CHECKPOINT_ATTESTATIONS: usize = 4096;
@@ -42,16 +43,35 @@ pub fn encode_deposit_proof(
     if maximum_bytes == 0 {
         return Err(NativeWireError::Limit);
     }
+    let overhead = if value.native_credit().is_some() {
+        4 + 207 + 427
+    } else {
+        0
+    };
     let payload_limit = maximum_bytes
-        .min(MAX_DEPOSIT_PROOF_BYTES)
+        .checked_sub(overhead)
+        .ok_or(NativeWireError::Limit)?
+        .min(LEGACY_DEPOSIT_PROOF_BYTES)
         .checked_sub(2)
         .ok_or(NativeWireError::Limit)?;
     let payload = value
         .encode_native(payload_limit)
         .map_err(map_deposit_error)?;
     let mut out = Vec::with_capacity(2 + payload.len());
-    out.extend_from_slice(&[VERSION, DEPOSIT_TAG]);
-    out.extend_from_slice(&payload);
+    if let Some(credit) = value.native_credit() {
+        out.extend_from_slice(&[2, DEPOSIT_TAG]);
+        out.extend_from_slice(
+            &u32::try_from(payload.len())
+                .map_err(|_| NativeWireError::Limit)?
+                .to_be_bytes(),
+        );
+        out.extend_from_slice(&payload);
+        out.extend_from_slice(credit.profile_bytes());
+        out.extend_from_slice(credit.canonical_bytes());
+    } else {
+        out.extend_from_slice(&[VERSION, DEPOSIT_TAG]);
+        out.extend_from_slice(&payload);
+    }
     bounded(out, maximum_bytes.min(MAX_DEPOSIT_PROOF_BYTES))
 }
 
@@ -61,14 +81,47 @@ pub fn decode_deposit_proof(
     bytes: &[u8],
     maximum_bytes: usize,
 ) -> Result<DepositProof, NativeWireError> {
-    if maximum_bytes == 0
-        || bytes.len() > maximum_bytes
-        || bytes.len() > MAX_DEPOSIT_PROOF_BYTES
-        || bytes.get(..2) != Some(&[VERSION, DEPOSIT_TAG][..])
-    {
+    if maximum_bytes == 0 || bytes.len() > maximum_bytes || bytes.len() > MAX_DEPOSIT_PROOF_BYTES {
         return Err(NativeWireError::Encoding);
     }
-    DepositProof::decode_native(&bytes[2..]).map_err(map_deposit_error)
+    match bytes.get(..2) {
+        Some([VERSION, DEPOSIT_TAG]) => {
+            DepositProof::decode_native(&bytes[2..]).map_err(map_deposit_error)
+        }
+        Some([2, DEPOSIT_TAG]) => {
+            let length = u32::from_be_bytes(
+                bytes
+                    .get(2..6)
+                    .ok_or(NativeWireError::Encoding)?
+                    .try_into()
+                    .map_err(|_| NativeWireError::Encoding)?,
+            ) as usize;
+            let end = 6_usize.checked_add(length).ok_or(NativeWireError::Limit)?;
+            if bytes.len() != end + 207 + 427 || length > DEPOSIT_NATIVE_PAYLOAD_MAX {
+                return Err(NativeWireError::Encoding);
+            }
+            let proof = DepositProof::decode_native(&bytes[6..end]).map_err(map_deposit_error)?;
+            let profile = &bytes[end..end + 207];
+            let raw = &bytes[end + 207..];
+            let owner_key = raw[139..171]
+                .try_into()
+                .map_err(|_| NativeWireError::Encoding)?;
+            let credit = crate::AttestedNativeCustodyCredit::verify(
+                profile,
+                raw,
+                crate::NativeCustodyExpectation {
+                    network_id: proof.network_id(),
+                    beneficiary: proof.custody().beneficiary,
+                    owner_key,
+                },
+            )
+            .map_err(|_| NativeWireError::Encoding)?;
+            proof
+                .with_native_credit(credit)
+                .map_err(NativeWireError::Deposit)
+        }
+        _ => Err(NativeWireError::Encoding),
+    }
 }
 
 fn map_deposit_error(error: DepositNativeError) -> NativeWireError {

@@ -93,6 +93,7 @@ fn config(dir: &Directory) -> Result<Config> {
         listener: listener_config(dir),
         state_root: dir.0.join("state"),
         evidence_root,
+        custody_profile: None,
         tracker: TrackerConfig {
             endpoints: vec![endpoint.clone()],
             minimum_endpoint_agreement: 1,

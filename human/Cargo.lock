@@ -1015,6 +1015,7 @@ dependencies = [
  "layerx-types",
  "layerx-wire",
  "proptest",
+ "sha2",
 ]
 
 [[package]]

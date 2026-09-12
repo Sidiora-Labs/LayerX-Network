@@ -2796,6 +2796,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         peer: &HumanPeer,
         submission_ref: &str,
     ) -> Result<HumanResponse, HumanOperationError> {
+        self.last_verified_receipt = None;
         let id = *self
             .submissions
             .get(&(

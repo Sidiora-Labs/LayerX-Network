@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import { JsonRpcError } from "./rpc.js";
+import { decodeBatchHeader } from "./verifier.js";
 
 export type SubscriptionTopic = "receipts" | "checkpoints" | "account";
 
@@ -64,6 +65,8 @@ export async function* subscribeRpc(endpoint: URL, authorization: string | undef
   const queue: SubscriptionEvent[] = [];
   let subscription: string | undefined;
   let lastCursor = cursor;
+  let lastCheckpointBatch: bigint | undefined;
+  let lastCheckpointId: string | undefined;
   let failure: unknown;
   let wake: (() => void) | undefined;
   let settleCancel: (() => void) | undefined;
@@ -86,7 +89,18 @@ export async function* subscribeRpc(endpoint: URL, authorization: string | undef
       if (object(value) && value.id === cancelId) { unsubscribeAcknowledgement(value, cancelId); settleCancel?.(); return; }
       if (queue.length >= 16) throw new Error("Subscription queue overflow; reconcile through reads");
       const event = subscriptionNotification(value, subscription);
-      if (lastCursor !== undefined && event.cursor <= lastCursor) throw new Error("Subscription cursor regression or duplicate; reconcile through reads");
+      if (lastCursor !== undefined && event.cursor < lastCursor) throw new Error("Subscription cursor regression; reconcile through reads");
+      if (topic === "checkpoints") {
+        const header = event.result.canonical_header;
+        const checkpoint = event.result.checkpoint_id;
+        if (typeof header !== "string" || !/^[0-9a-f]{708}$/u.test(header) || typeof checkpoint !== "string" || !/^[0-9a-f]{64}$/u.test(checkpoint)) throw new Error("Invalid checkpoint notification");
+        const batch = decodeBatchHeader(Buffer.from(header, "hex")).batchNumber;
+        if ((lastCheckpointBatch !== undefined && batch <= lastCheckpointBatch) || checkpoint === lastCheckpointId) throw new Error("Checkpoint regression or duplicate; reconcile through reads");
+        lastCheckpointBatch = batch;
+        lastCheckpointId = checkpoint;
+      } else if (lastCursor !== undefined && (event.cursor === lastCursor || (topic === "receipts" && event.cursor !== lastCursor + 1n))) {
+        throw new Error("Subscription cursor discontinuity; reconcile through reads");
+      }
       queue.push(event);
       lastCursor = event.cursor;
       wake?.();
