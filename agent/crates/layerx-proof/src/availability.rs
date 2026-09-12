@@ -191,12 +191,16 @@ impl AvailabilityRecords {
         let receipts: Vec<_> = self.receipts.iter().map(Vec::as_slice).collect();
         let events: Vec<_> = self.events.iter().map(Vec::as_slice).collect();
         let oracle_inputs: Vec<_> = self.oracle_inputs.iter().map(Vec::as_slice).collect();
-        verify_reassembled(chunks, &ReassembledRecords {
-            activities: &activities,
-            receipts: &receipts,
-            events: &events,
-            oracle_inputs: &oracle_inputs,
-        }, commitments)
+        verify_reassembled(
+            chunks,
+            &ReassembledRecords {
+                activities: &activities,
+                receipts: &receipts,
+                events: &events,
+                oracle_inputs: &oracle_inputs,
+            },
+            commitments,
+        )
     }
 }
 
@@ -242,8 +246,10 @@ pub fn verify_chunk(
 ) -> Result<VerifiedChunk, AvailabilityFailure> {
     if chunk.bytes.len() > MAX_CHUNK_BYTES
         || usize::try_from(proof.leaf_count()).map_or(true, |count| count > MAX_CHUNKS)
-        || u64::try_from(chunk.bytes.len()).ok()
-            .and_then(|length| chunk.class_offset.checked_add(length)).is_none()
+        || u64::try_from(chunk.bytes.len())
+            .ok()
+            .and_then(|length| chunk.class_offset.checked_add(length))
+            .is_none()
     {
         return Err(AvailabilityFailure {
             check: AvailabilityCheck::ChunkBounds,
@@ -353,10 +359,26 @@ pub fn verify_reassembled(
     commitments: RootCommitments,
 ) -> Result<ReassemblyReport, AvailabilityFailure> {
     let (decoded, report) = reassemble(chunks, commitments)?;
-    if !decoded.activities.iter().map(Vec::as_slice).eq(records.activities.iter().copied())
-        || !decoded.receipts.iter().map(Vec::as_slice).eq(records.receipts.iter().copied())
-        || !decoded.events.iter().map(Vec::as_slice).eq(records.events.iter().copied())
-        || !decoded.oracle_inputs.iter().map(Vec::as_slice).eq(records.oracle_inputs.iter().copied())
+    if !decoded
+        .activities
+        .iter()
+        .map(Vec::as_slice)
+        .eq(records.activities.iter().copied())
+        || !decoded
+            .receipts
+            .iter()
+            .map(Vec::as_slice)
+            .eq(records.receipts.iter().copied())
+        || !decoded
+            .events
+            .iter()
+            .map(Vec::as_slice)
+            .eq(records.events.iter().copied())
+        || !decoded
+            .oracle_inputs
+            .iter()
+            .map(Vec::as_slice)
+            .eq(records.oracle_inputs.iter().copied())
     {
         return Err(bundle_failure(chunks, AvailabilityCheck::RecordBinding));
     }
@@ -367,7 +389,9 @@ fn bundle_failure(chunks: &[VerifiedChunk], check: AvailabilityCheck) -> Availab
     AvailabilityFailure {
         check,
         served_bytes: all_served_bytes(chunks),
-        commitment: chunks.first().map_or([0; 32], VerifiedChunk::data_availability_root),
+        commitment: chunks
+            .first()
+            .map_or([0; 32], VerifiedChunk::data_availability_root),
         classes: class_report(chunks),
     }
 }
@@ -386,11 +410,16 @@ fn verify_bundle(chunks: &[VerifiedChunk]) -> Result<ReassemblyReport, Availabil
             return Err(bundle_failure(chunks, AvailabilityCheck::ChunkOrder));
         }
     }
-    if chunks.len() > MAX_CHUNKS || chunks.iter().enumerate().any(|(index, chunk)| {
-        usize::try_from(chunk.chunk.index) != Ok(index)
-            || usize::try_from(chunk.leaf_count) != Ok(chunks.len())
-    }) {
-        return Err(bundle_failure(chunks, AvailabilityCheck::BundleCompleteness));
+    if chunks.len() > MAX_CHUNKS
+        || chunks.iter().enumerate().any(|(index, chunk)| {
+            usize::try_from(chunk.chunk.index) != Ok(index)
+                || usize::try_from(chunk.leaf_count) != Ok(chunks.len())
+        })
+    {
+        return Err(bundle_failure(
+            chunks,
+            AvailabilityCheck::BundleCompleteness,
+        ));
     }
     let mut total_bytes = 0;
     for class in AvailabilityClass::ALL {
@@ -398,14 +427,16 @@ fn verify_bundle(chunks: &[VerifiedChunk]) -> Result<ReassemblyReport, Availabil
         let mut count = 0;
         let mut empty = false;
         for chunk in chunks.iter().filter(|chunk| chunk.chunk.class == class) {
-            if chunk.chunk.class_offset != expected_offset || empty
+            if chunk.chunk.class_offset != expected_offset
+                || empty
                 || (count != 0 && chunk.chunk.bytes.is_empty())
             {
                 return Err(bundle_failure(chunks, AvailabilityCheck::ClassOffset));
             }
             let length = u64::try_from(chunk.chunk.bytes.len())
                 .map_err(|_| bundle_failure(chunks, AvailabilityCheck::ChunkBounds))?;
-            expected_offset = expected_offset.checked_add(length)
+            expected_offset = expected_offset
+                .checked_add(length)
                 .filter(|value| *value <= MAX_SECTION_BYTES as u64)
                 .ok_or_else(|| bundle_failure(chunks, AvailabilityCheck::ChunkBounds))?;
             total_bytes += chunk.chunk.bytes.len();
@@ -413,13 +444,22 @@ fn verify_bundle(chunks: &[VerifiedChunk]) -> Result<ReassemblyReport, Availabil
             empty = chunk.chunk.bytes.is_empty();
         }
     }
-    let hashes: Vec<_> = chunks.iter().map(|chunk| chunk.chunk.claimed_hash).collect();
+    let hashes: Vec<_> = chunks
+        .iter()
+        .map(|chunk| chunk.chunk.claimed_hash)
+        .collect();
     let computed = root_from_leaf_hashes(&hashes)
         .map_err(|_| bundle_failure(chunks, AvailabilityCheck::AvailabilityRoot))?;
-    if chunks.first().is_none_or(|chunk| computed != chunk.data_availability_root) {
+    if chunks
+        .first()
+        .is_none_or(|chunk| computed != chunk.data_availability_root)
+    {
         return Err(bundle_failure(chunks, AvailabilityCheck::AvailabilityRoot));
     }
-    Ok(ReassemblyReport { classes, total_bytes })
+    Ok(ReassemblyReport {
+        classes,
+        total_bytes,
+    })
 }
 
 /// Reconstructs canonical records solely from a complete authenticated bundle.
@@ -434,10 +474,26 @@ pub fn reassemble(
     let report = verify_bundle(chunks)?;
     let records = Sections::from_chunks(chunks)?.into_records();
     for (stream, commitment, check) in [
-        (&records.activities, commitments.activity, AvailabilityCheck::ActivityRoot),
-        (&records.receipts, commitments.receipt, AvailabilityCheck::ReceiptRoot),
-        (&records.events, commitments.event, AvailabilityCheck::EventRoot),
-        (&records.oracle_inputs, commitments.oracle, AvailabilityCheck::OracleRoot),
+        (
+            &records.activities,
+            commitments.activity,
+            AvailabilityCheck::ActivityRoot,
+        ),
+        (
+            &records.receipts,
+            commitments.receipt,
+            AvailabilityCheck::ReceiptRoot,
+        ),
+        (
+            &records.events,
+            commitments.event,
+            AvailabilityCheck::EventRoot,
+        ),
+        (
+            &records.oracle_inputs,
+            commitments.oracle,
+            AvailabilityCheck::OracleRoot,
+        ),
     ] {
         let bytes: Vec<_> = stream.iter().map(Vec::as_slice).collect();
         compare_root(&bytes, commitment, check, chunks, &report.classes)?;
@@ -464,8 +520,10 @@ impl Sections {
         let activities = section_bytes(chunks, AvailabilityClass::Activities);
         let receipts = section_bytes(chunks, AvailabilityClass::Receipts);
         let oracle = section_bytes(chunks, AvailabilityClass::Oracle);
-        let activities = decode_records(&activities, false).map_err(|()| bundle_failure(chunks, AvailabilityCheck::RecordEncoding))?;
-        let receipt_records = decode_records(&receipts, true).map_err(|()| bundle_failure(chunks, AvailabilityCheck::RecordEncoding))?;
+        let activities = decode_records(&activities, false)
+            .map_err(|()| bundle_failure(chunks, AvailabilityCheck::RecordEncoding))?;
+        let receipt_records = decode_records(&receipts, true)
+            .map_err(|()| bundle_failure(chunks, AvailabilityCheck::RecordEncoding))?;
         let mut verified_receipts = Vec::new();
         let mut events = Vec::new();
         for (kind, bytes) in receipt_records {
@@ -508,25 +566,41 @@ fn section_bytes(chunks: &[VerifiedChunk], class: AvailabilityClass) -> Vec<u8> 
 
 fn decode_records(bytes: &[u8], tagged: bool) -> Result<Vec<(u8, Vec<u8>)>, ()> {
     let mut reader = Decoder::new(bytes, MAX_SECTION_BYTES);
-    let count = if tagged { None } else {
+    let count = if tagged {
+        None
+    } else {
         Some(reader.sequence_length(MAX_RECORDS).map_err(|_| ())?)
     };
     let mut records = Vec::new();
     let mut previous_kind = 1;
     let mut counts = [0_usize; 3];
     while reader.remaining() != 0 {
-        let kind = if tagged { reader.u8().map_err(|_| ())? } else { 0 };
+        let kind = if tagged {
+            reader.u8().map_err(|_| ())?
+        } else {
+            0
+        };
         if tagged && (kind < previous_kind || kind > 2) {
             return Err(());
         }
-        if tagged { previous_kind = kind; }
+        if tagged {
+            previous_kind = kind;
+        }
         let count_for_kind = &mut counts[usize::from(kind)];
-        if *count_for_kind == MAX_RECORDS { return Err(()); }
+        if *count_for_kind == MAX_RECORDS {
+            return Err(());
+        }
         *count_for_kind += 1;
-        let maximum = if tagged { MAX_SECTION_BYTES } else { MAX_MESSAGE_BYTES };
+        let maximum = if tagged {
+            MAX_SECTION_BYTES
+        } else {
+            MAX_MESSAGE_BYTES
+        };
         records.push((kind, reader.bytes_owned(maximum).map_err(|_| ())?));
     }
-    if count.is_some_and(|count| count != records.len()) { return Err(()); }
+    if count.is_some_and(|count| count != records.len()) {
+        return Err(());
+    }
     Ok(records)
 }
 

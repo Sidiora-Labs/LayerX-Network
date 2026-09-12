@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use layerx_proof::availability::{
-    reassemble, verify_chunk, AvailabilityCheck, AvailabilityClass, AvailabilityFailure,
-    Chunk, ClassReport, ReassemblyReport, RootCommitments, VerifiedChunk,
+    reassemble, verify_chunk, AvailabilityCheck, AvailabilityClass, AvailabilityFailure, Chunk,
+    ClassReport, ReassemblyReport, RootCommitments, VerifiedChunk,
 };
 use layerx_proof::merkle::{Proof, MAX_DEPTH};
 
@@ -374,8 +374,10 @@ where
                         ProviderFailure::UnexpectedResponse,
                     ));
                 }
-                let (records, verified) = reassemble(&chunks, context.record_roots)
-                    .map_err(|failure| report(provider, &chunks, ProviderFailure::Reassembly(failure)))?;
+                let (records, verified) =
+                    reassemble(&chunks, context.record_roots).map_err(|failure| {
+                        report(provider, &chunks, ProviderFailure::Reassembly(failure))
+                    })?;
                 return Ok(AvailabilityResult {
                     provider: provider.to_owned(),
                     chunks,
@@ -584,4 +586,3 @@ impl<'a> Reader<'a> {
         }
     }
 }
-

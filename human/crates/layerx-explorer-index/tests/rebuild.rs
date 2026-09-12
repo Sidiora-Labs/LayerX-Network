@@ -12,8 +12,8 @@ use layerx_proof::checkpoint::{
 };
 use layerx_proof::merkle::{build_leaf_hash_proof, root};
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::limits::PROTOCOL_VERSION;
 use layerx_wire::encode::Encoder;
+use layerx_wire::limits::PROTOCOL_VERSION;
 use layerx_wire::receipt::{decode_batch_header, encode_batch_header};
 use sha2::{Digest as _, Sha256};
 
@@ -68,19 +68,29 @@ fn chunk_digest(batch_number: u64, index: u32, class: AvailabilityClass, bytes: 
     hasher.finalize().into()
 }
 
-fn availability_material(canonical: bool) -> (Vec<VerifiedChunk>, AvailabilityRecords, RootCommitments) {
+fn availability_material(
+    canonical: bool,
+) -> (Vec<VerifiedChunk>, AvailabilityRecords, RootCommitments) {
     let records = AvailabilityRecords {
         activities: vec![b"activity-public-1".to_vec()],
         receipts: vec![b"receipt-public-1".to_vec(), b"receipt-public-2".to_vec()],
         events: vec![b"event-public-1".to_vec(), b"event-public-2".to_vec()],
         oracle_inputs: vec![b"oracle-public-1".to_vec()],
     };
-    let activities = if canonical { counted(&records.activities[0]) } else { framed(&records.activities[0]) };
+    let activities = if canonical {
+        counted(&records.activities[0])
+    } else {
+        framed(&records.activities[0])
+    };
     let mut receipts = tagged(1, &records.receipts[0]);
     receipts.extend_from_slice(&tagged(1, &records.receipts[1]));
     receipts.extend_from_slice(&tagged(2, &records.events[0]));
     receipts.extend_from_slice(&tagged(2, &records.events[1]));
-    let oracle = if canonical { counted(&records.oracle_inputs[0]) } else { framed(&records.oracle_inputs[0]) };
+    let oracle = if canonical {
+        counted(&records.oracle_inputs[0])
+    } else {
+        framed(&records.oracle_inputs[0])
+    };
     let sections = [
         (AvailabilityClass::Activities, activities),
         (AvailabilityClass::Receipts, receipts),
@@ -109,7 +119,9 @@ fn availability_material(canonical: bool) -> (Vec<VerifiedChunk>, AvailabilityRe
     for (index, chunk) in chunks.into_iter().enumerate() {
         let (proof, availability_root) = build_leaf_hash_proof(&hashes, index)
             .unwrap_or_else(|error| panic!("fixture availability proof failed: {error:?}"));
-        if !canonical { assert_eq!(availability_root, AVAILABILITY_ROOT); }
+        if !canonical {
+            assert_eq!(availability_root, AVAILABILITY_ROOT);
+        }
         verified.push(
             verify_chunk(chunk, &proof, 8, &availability_root)
                 .unwrap_or_else(|error| panic!("fixture chunk failed: {error:?}")),
@@ -219,13 +231,18 @@ fn attestation(
 fn checkpoint_fixture() -> (Certificate, Vec<GuarantorKey>, [u8; 32]) {
     let availability_root = availability_result().data_availability_root();
     let mut header_bytes = decode_hex(HEADER_HEX);
-    let offsets: Vec<_> = header_bytes.windows(32).enumerate()
-        .filter_map(|(index, bytes)| (bytes == AVAILABILITY_ROOT).then_some(index)).collect();
+    let offsets: Vec<_> = header_bytes
+        .windows(32)
+        .enumerate()
+        .filter_map(|(index, bytes)| (bytes == AVAILABILITY_ROOT).then_some(index))
+        .collect();
     assert_eq!(offsets.len(), 1);
     header_bytes[offsets[0]..offsets[0] + 32].copy_from_slice(&availability_root);
-    let header = decode_batch_header(&header_bytes).unwrap_or_else(|error| panic!("canonical checkpoint header: {error:?}"));
+    let header = decode_batch_header(&header_bytes)
+        .unwrap_or_else(|error| panic!("canonical checkpoint header: {error:?}"));
     assert_eq!(header.data_availability_root(), availability_root);
-    let encoded = encode_batch_header(&header).unwrap_or_else(|error| panic!("canonical checkpoint encoding: {error:?}"));
+    let encoded = encode_batch_header(&header)
+        .unwrap_or_else(|error| panic!("canonical checkpoint encoding: {error:?}"));
     assert_eq!(encoded, header_bytes);
     let checkpoint = Checkpoint::new(encoded, b"EXPLORER-PROOF".to_vec());
     let identifier = checkpoint_id(&checkpoint)
@@ -234,7 +251,12 @@ fn checkpoint_fixture() -> (Certificate, Vec<GuarantorKey>, [u8; 32]) {
     let mut keys = Vec::new();
     for value in 1..=3 {
         let (signing, public_key, guarantor_id) = key(value);
-        attestations.push(attestation(identifier, guarantor_id, &signing, availability_root));
+        attestations.push(attestation(
+            identifier,
+            guarantor_id,
+            &signing,
+            availability_root,
+        ));
         keys.push(GuarantorKey::new(guarantor_id, public_key, true));
     }
     (
@@ -458,9 +480,16 @@ fn availability_result_exposes_only_record_sets_that_reverify() {
 #[test]
 fn uncounted_legacy_availability_fixture_cannot_become_indexable() {
     let (verified, records, roots) = availability_material(false);
-    let failure = AvailabilityResult::from_verified("node-boundary".to_owned(), verified, records, roots)
-        .err().unwrap_or_else(|| panic!("old uncounted sections cannot authenticate independent record arrays"));
-    assert_eq!(failure.check, layerx_proof::availability::AvailabilityCheck::RecordEncoding);
+    let failure =
+        AvailabilityResult::from_verified("node-boundary".to_owned(), verified, records, roots)
+            .err()
+            .unwrap_or_else(|| {
+                panic!("old uncounted sections cannot authenticate independent record arrays")
+            });
+    assert_eq!(
+        failure.check,
+        layerx_proof::availability::AvailabilityCheck::RecordEncoding
+    );
     assert_eq!(failure.commitment, AVAILABILITY_ROOT);
 }
 
@@ -470,8 +499,18 @@ fn caller_record_substitution_cannot_create_verified_availability() {
     let mut records = result.records().clone();
     records.activities[0] = b"independent-caller-record".to_vec();
     let mut roots = result.record_roots();
-    roots.activity = root(&[records.activities[0].as_slice()]).unwrap_or_else(|error| panic!("caller record root: {error:?}"));
-    let failure = AvailabilityResult::from_verified("node-boundary".to_owned(), result.chunks,
-        records, roots).err().unwrap_or_else(|| panic!("caller roots must authenticate the actual chunk records"));
-    assert_eq!(failure.check, layerx_proof::availability::AvailabilityCheck::ActivityRoot);
+    roots.activity = root(&[records.activities[0].as_slice()])
+        .unwrap_or_else(|error| panic!("caller record root: {error:?}"));
+    let failure = AvailabilityResult::from_verified(
+        "node-boundary".to_owned(),
+        result.chunks,
+        records,
+        roots,
+    )
+    .err()
+    .unwrap_or_else(|| panic!("caller roots must authenticate the actual chunk records"));
+    assert_eq!(
+        failure.check,
+        layerx_proof::availability::AvailabilityCheck::ActivityRoot
+    );
 }

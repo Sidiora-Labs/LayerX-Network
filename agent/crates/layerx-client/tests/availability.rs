@@ -14,8 +14,8 @@ use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Ver
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_proof::availability::{AvailabilityCheck, AvailabilityClass, Chunk, RootCommitments};
 use layerx_proof::merkle::{build_leaf_hash_proof, root, Proof};
-use layerx_wire::hash::availability_chunk_digest;
 use layerx_wire::encode::Encoder;
+use layerx_wire::hash::availability_chunk_digest;
 
 static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
 
@@ -415,20 +415,36 @@ fn all_selector_forms_are_encoded_distinctly_and_limits_are_mandatory() {
 fn provider_end_cannot_hide_authenticated_state_or_recovery_tails() {
     for class in [AvailabilityClass::StateDiff, AvailabilityClass::Recovery] {
         let mut fixture = fixture();
-        let first = fixture.chunks.iter().position(|chunk| chunk.class == class).unwrap_or_else(|| panic!("class absent"));
+        let first = fixture
+            .chunks
+            .iter()
+            .position(|chunk| chunk.class == class)
+            .unwrap_or_else(|| panic!("class absent"));
         let mut tail = fixture.chunks[first].clone();
-        tail.class_offset = u64::try_from(tail.bytes.len()).unwrap_or_else(|error| panic!("offset: {error:?}"));
+        tail.class_offset =
+            u64::try_from(tail.bytes.len()).unwrap_or_else(|error| panic!("offset: {error:?}"));
         tail.bytes = b"withheld suffix".to_vec();
         fixture.chunks.insert(first + 1, tail);
         for (index, chunk) in fixture.chunks.iter_mut().enumerate() {
             chunk.index = u32::try_from(index).unwrap_or_else(|error| panic!("index: {error:?}"));
-            chunk.claimed_hash = availability_chunk_digest(7, chunk.index, chunk.class as u8,
-                chunk.class_offset, &chunk.bytes).unwrap_or_else(|error| panic!("chunk digest: {error:?}"));
+            chunk.claimed_hash = availability_chunk_digest(
+                7,
+                chunk.index,
+                chunk.class as u8,
+                chunk.class_offset,
+                &chunk.bytes,
+            )
+            .unwrap_or_else(|error| panic!("chunk digest: {error:?}"));
         }
-        let hashes: Vec<_> = fixture.chunks.iter().map(|chunk| chunk.claimed_hash).collect();
+        let hashes: Vec<_> = fixture
+            .chunks
+            .iter()
+            .map(|chunk| chunk.claimed_hash)
+            .collect();
         fixture.proofs.clear();
         for index in 0..hashes.len() {
-            let (proof, root) = build_leaf_hash_proof(&hashes, index).unwrap_or_else(|error| panic!("proof: {error:?}"));
+            let (proof, root) = build_leaf_hash_proof(&hashes, index)
+                .unwrap_or_else(|error| panic!("proof: {error:?}"));
             fixture.proofs.push(proof);
             fixture.availability_root = root;
         }
@@ -437,12 +453,19 @@ fn provider_end_cannot_hide_authenticated_state_or_recovery_tails() {
         let socket = SocketPath::new("withheld-tail");
         let server = spawn_provider(&socket, fixture.clone(), 5, None, true);
         let gate = ConnectionGate::new(1);
-        let mut transport = Uds::connect(&socket.0, &gate, limits()).unwrap_or_else(|error| panic!("provider transport: {error:?}"));
+        let mut transport = Uds::connect(&socket.0, &gate, limits())
+            .unwrap_or_else(|error| panic!("provider transport: {error:?}"));
         let mut providers = ProviderSet::new(vec![Provider {
-            name: "withheld-tail".to_owned(), transport: &mut transport,
+            name: "withheld-tail".to_owned(),
+            transport: &mut transport,
         }]);
-        let outcome = fetch(&mut providers, AvailabilitySelector::Batch(7),
-            context(&fixture, 4096, 8), |_| {}).unwrap_or_else(|error| panic!("fetch: {error:?}"));
+        let outcome = fetch(
+            &mut providers,
+            AvailabilitySelector::Batch(7),
+            context(&fixture, 4096, 8),
+            |_| {},
+        )
+        .unwrap_or_else(|error| panic!("fetch: {error:?}"));
         let FetchOutcome::Partial(reports) = outcome else {
             panic!("five prefixes must not produce complete availability");
         };
@@ -454,8 +477,14 @@ fn provider_end_cannot_hide_authenticated_state_or_recovery_tails() {
         };
         assert_eq!(failure.check, AvailabilityCheck::BundleCompleteness);
         assert_eq!(failure.commitment, fixture.availability_root);
-        assert_eq!(failure.served_bytes,
-            fixture.chunks.iter().flat_map(|chunk| chunk.bytes.iter().copied()).collect::<Vec<_>>());
+        assert_eq!(
+            failure.served_bytes,
+            fixture
+                .chunks
+                .iter()
+                .flat_map(|chunk| chunk.bytes.iter().copied())
+                .collect::<Vec<_>>()
+        );
         assert!(server.join().is_ok(), "provider panicked");
     }
 }

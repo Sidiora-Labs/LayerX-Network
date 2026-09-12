@@ -394,7 +394,10 @@ fn counted(bytes: &[u8]) -> Vec<u8> {
     encoder.finish()
 }
 
-fn availability_material(fixture: &CoreFixture, canonical: bool) -> (Vec<VerifiedChunk>, AvailabilityRecords, RootCommitments) {
+fn availability_material(
+    fixture: &CoreFixture,
+    canonical: bool,
+) -> (Vec<VerifiedChunk>, AvailabilityRecords, RootCommitments) {
     let records = AvailabilityRecords {
         activities: vec![fixture.activity.clone()],
         receipts: vec![fixture.receipt.clone()],
@@ -404,14 +407,25 @@ fn availability_material(fixture: &CoreFixture, canonical: bool) -> (Vec<Verifie
     let sections = [
         (
             AvailabilityClass::Activities,
-            if canonical { counted(&records.activities[0]) } else { framed(&records.activities[0]) },
+            if canonical {
+                counted(&records.activities[0])
+            } else {
+                framed(&records.activities[0])
+            },
         ),
         (AvailabilityClass::Receipts, {
             let mut section = tagged(1, &records.receipts[0]);
             section.extend_from_slice(&tagged(2, &records.events[0]));
             section
         }),
-        (AvailabilityClass::Oracle, if canonical { counted(&records.oracle_inputs[0]) } else { framed(&records.oracle_inputs[0]) }),
+        (
+            AvailabilityClass::Oracle,
+            if canonical {
+                counted(&records.oracle_inputs[0])
+            } else {
+                framed(&records.oracle_inputs[0])
+            },
+        ),
         (AvailabilityClass::StateDiff, b"core-state-diff".to_vec()),
         (AvailabilityClass::Recovery, b"core-recovery".to_vec()),
     ];
@@ -467,9 +481,16 @@ fn availability_result(fixture: &CoreFixture) -> AvailabilityResult {
 fn core_records_cannot_bypass_canonical_availability_encoding() {
     let fixture = CoreFixture::load();
     let (verified, records, roots) = availability_material(&fixture, false);
-    let failure = AvailabilityResult::from_verified("core-boundary".to_owned(), verified, records, roots)
-        .err().unwrap_or_else(|| panic!("uncounted activity and oracle sections must remain unindexable"));
-    assert_eq!(failure.check, layerx_proof::availability::AvailabilityCheck::RecordEncoding);
+    let failure =
+        AvailabilityResult::from_verified("core-boundary".to_owned(), verified, records, roots)
+            .err()
+            .unwrap_or_else(|| {
+                panic!("uncounted activity and oracle sections must remain unindexable")
+            });
+    assert_eq!(
+        failure.check,
+        layerx_proof::availability::AvailabilityCheck::RecordEncoding
+    );
 }
 
 #[test]
