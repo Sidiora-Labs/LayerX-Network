@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::time::{Duration, Instant};
 
 use layerx_client::evidence::{
@@ -6,6 +7,7 @@ use layerx_client::evidence::{
 };
 use layerx_proof::inclusion::{verify_receipt, SequencerAuthorization};
 use layerx_proof::merkle::Proof;
+use layerx_types::verify::VerificationLevel;
 use layerx_wire::receipt::{decode_batch_header, Receipt};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
@@ -14,6 +16,7 @@ use crate::rpc::{Commitment, RpcClient, RpcError};
 
 const MAX_ACCOUNT_VALUE_BYTES: usize = 4_096;
 const MAX_ACCOUNT_PROOF_BYTES: usize = 1_048_576;
+const MAX_LISTED_ACCOUNTS: usize = 4_096;
 
 pub struct ReceiptPolicy {
     pub protocol_version: u16,
@@ -175,6 +178,95 @@ impl VerifiedRpcAccount {
     }
 }
 
+/// An `lx_getBalances` listing whose every served entry was reproduced from
+/// its own proof material and bound by name to the DID the caller asked for.
+pub struct VerifiedRpcBalances {
+    did: String,
+    accounts: Vec<VerifiedRpcAccount>,
+    level: VerificationLevel,
+}
+
+impl VerifiedRpcBalances {
+    /// Returns the DID every verified entry is owned by.
+    #[must_use]
+    pub fn did(&self) -> &str {
+        &self.did
+    }
+
+    /// Borrows the per-asset accounts this client verified itself, in the
+    /// ascending account identifier order the listing was served in.
+    #[must_use]
+    pub fn accounts(&self) -> &[VerifiedRpcAccount] {
+        &self.accounts
+    }
+
+    /// Returns the weakest level any entry achieved, which is the level the
+    /// whole listing is established at.
+    #[must_use]
+    pub const fn level(&self) -> VerificationLevel {
+        self.level
+    }
+
+    /// Verifies one served DID account listing entry by entry and refuses any
+    /// listing whose served fields, ordering, ownership or labels the proof
+    /// material does not establish. An empty listing is refused because the
+    /// node exports no proof of absence for a DID that owns nothing.
+    ///
+    /// # Errors
+    /// Returns `InvalidResponse` for a malformed result and `Verification` for
+    /// a listing served for another DID, an empty or unordered listing, an
+    /// entry owned by another DID, an entry its own proof does not reproduce,
+    /// or a listing label that disagrees with the weakest level its entries
+    /// achieved.
+    pub fn from_rpc_result(
+        result: &Value,
+        did: &str,
+        policy: &AccountPolicy,
+    ) -> Result<Self, RpcError> {
+        if result.get("did").and_then(Value::as_str) != Some(did) {
+            return Err(RpcError::Verification);
+        }
+        let entries = result
+            .get("accounts")
+            .and_then(Value::as_array)
+            .ok_or(RpcError::InvalidResponse)?;
+        if entries.is_empty() || entries.len() > MAX_LISTED_ACCOUNTS {
+            return Err(RpcError::Verification);
+        }
+        let mut owner = b"agent:".to_vec();
+        owner.extend_from_slice(did.as_bytes());
+        owner.push(b':');
+        let mut accounts = Vec::with_capacity(entries.len());
+        let mut level = VerificationLevel::SETTLEMENT_ANCHORED;
+        let mut previous: Option<[u8; 32]> = None;
+        for entry in entries {
+            let account: [u8; 32] = hex_field(entry, "account_id", 32)?
+                .try_into()
+                .map_err(|_| RpcError::InvalidResponse)?;
+            if previous.is_some_and(|prior| prior >= account) {
+                return Err(RpcError::Verification);
+            }
+            previous = Some(account);
+            let verified = VerifiedRpcAccount::from_rpc_result(entry, account, policy)?;
+            if !verified.evidence().account().name.starts_with(&owner) {
+                return Err(RpcError::Verification);
+            }
+            if verified.evidence().level().compare(level) == Ordering::Less {
+                level = verified.evidence().level();
+            }
+            accounts.push(verified);
+        }
+        if result.get("verification").and_then(Value::as_str) != verification_label(level) {
+            return Err(RpcError::Verification);
+        }
+        Ok(Self {
+            did: did.to_owned(),
+            accounts,
+            level,
+        })
+    }
+}
+
 fn decimal_field(value: &Value, name: &str) -> Result<u128, RpcError> {
     let text = value
         .get(name)
@@ -216,6 +308,23 @@ impl RpcClient {
     ) -> Result<VerifiedRpcAccount, RpcError> {
         let result = self.get_balance(&super::rpc::encode_hex(&account))?;
         VerifiedRpcAccount::from_rpc_result(&result, account, policy)
+    }
+
+    /// Lists every per-asset account a DID owns through `lx_getBalances` and
+    /// verifies each served entry against its own proof material before
+    /// returning the listing.
+    ///
+    /// # Errors
+    /// Rejects malformed DID selectors, preserves RPC refusals including an
+    /// unavailable listing, and returns `Verification` for any listing the
+    /// proof material does not establish at `STATE_PROVEN` or above.
+    pub fn verified_balances(
+        &self,
+        did: &str,
+        policy: &AccountPolicy,
+    ) -> Result<VerifiedRpcBalances, RpcError> {
+        let result = self.get_balances(did)?.into_value();
+        VerifiedRpcBalances::from_rpc_result(&result, did, policy)
     }
 
     /// # Errors

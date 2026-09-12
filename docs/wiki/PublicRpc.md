@@ -87,13 +87,15 @@ or invent proof material.
   `state_proven`, `checkpoint_finalised`, or `settlement_anchored`: the read is
   requested at state-proven level and fails closed if no level is achieved.
 - A DID account list's entries carry the same fields, each with a per-entry
-  `verification: "state_proven"`: the enumeration is requested at state-proven
-  level and fails closed with core code `did_account_listing_unavailable` when
-  the node holds no proof for it. Every entry still carries proof material that
-  the client verifies against the signed batch header.
-- A DID account list includes `did`, `accounts`, and
-  `verification: "authenticated_node_snapshot"`. It is complete within the
-  native bound; it does not independently prove completeness or finality.
+  `verification` naming the level its own proof achieved: the enumeration is
+  requested at state-proven level and fails closed with core code
+  `did_account_listing_unavailable` when the node holds no proof for it or
+  reports no entries, which carries no proof of absence. Every entry carries
+  proof material that the client verifies against the signed batch header.
+- A DID account list includes `did`, `accounts`, and a listing `verification`
+  that names the weakest level any entry achieved (`state_proven`,
+  `checkpoint_finalised`, or `settlement_anchored`). It is complete within the
+  native bound; it does not independently prove completeness.
 - Asset results carry `asset_id`, `symbol`, `name`, `decimals`, `custody_kind`,
   `custody_reference`, `paused`, `supply_cap`, `issuer_did`, `issuer_kind`,
   `total_units`, and `salt`. A single record nests under `asset`; the list
