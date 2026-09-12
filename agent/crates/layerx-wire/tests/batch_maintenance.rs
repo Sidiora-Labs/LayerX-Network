@@ -3,9 +3,9 @@ use layerx_wire::batch_maintenance::{
     EFFECTS_DOMAIN, MAX_BYTES,
 };
 use layerx_wire::encode::Encoder;
-use layerx_wire::hash::sha256;
 use layerx_wire::maintenance::decode_occupancy_maintenance;
 use layerx_wire::receipt::{decode_batch_header, BatchHeader};
+use sha2::{Digest as _, Sha256};
 
 #[path = "support/maintenance.rs"]
 mod maintenance;
@@ -50,7 +50,7 @@ fn effects(modules: &[u16], kind: u8, monetary: bool) -> Vec<u8> {
             must(encoded.u16(1));
             must(encoded.u8(b'k'));
             must(encoded.u8(1));
-            must(encoded.fixed(&must(sha256(&[]))));
+            must(encoded.fixed(&Sha256::digest([])));
         } else {
             must(encoded.u16(0));
         }
@@ -123,6 +123,8 @@ fn formats_are_distinct_and_every_envelope_boundary_is_checked() {
 
 #[test]
 fn module_effects_preserve_order_kind_accounting_and_deletion_commitments() {
+    assert_eq!(must(validate_effects(&effects(&[2; 512], 1, false))), 512);
+    assert!(validate_effects(&effects(&[2; 513], 1, false)).is_err());
     for (kind, monetary) in [(1, false), (2, false), (2, true), (3, false)] {
         let bytes = effects(&[2, 2, 3, 5], kind, monetary);
         assert_eq!(must(validate_effects(&bytes)), 4);
