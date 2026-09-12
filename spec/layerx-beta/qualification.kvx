@@ -13663,3 +13663,11 @@ symbol = "event_producer_cluster_integration"
 observed = "Rustfmt, real producer binary builds, strict all-target clippy and full tests for internal, identity, gateway, registry and webhooks exit 0. Full Human tests, topology, platform lint, ledger, whitespace and shell syntax exit 0. Human strict clippy exits 101. The cluster branch advanced with guarantor sequencing during qualification; the subsequent rebase retains that commit. Rust source, Cargo manifests and lockfiles are unchanged by that subsequent rebase. Final shell, topology, lint, ledger and preservation checks are recorded separately in qual-logs/r31/gates.jsonl. cortex_guard exits 127 because the executable is unavailable."
 assumption = "No cluster bring-up, transaction or complete task qualification is claimed."
 severity = "note"
+
+[observation.4.1.9700]
+task = "4.1"
+file = "programs/sdk/rust/examples/escrow/build.sh"
+symbol = "escrow_reference_target_directory"
+observed = "At revision 5973b11402025a3a71dc125e5802fd46ddab9a26, make CC=gcc build/bin/layerxd build/bin/layerx-genesis-build exited 0 and make CC=gcc test exited 2: the escrow guest built into CARGO_TARGET_DIR, but the validation script searched its default target directory. Revision 3e043d2179a2e6b1f75956e3d473826dd0f92fcd resolves the artifact from the configured target directory; make CC=gcc test-program-artifacts and make CC=gcc test both exited 0. Exact commands, revisions, start times, output and exits are retained under /root/lx-lanes/day/Q1/qual-logs/{native-build-baseline,native-test-baseline,escrow-artifacts,native-test-after-target-fix}.{command,sha,started,log,exit}."
+assumption = "CARGO_TARGET_DIR=/root/lx-lanes/day/Q1/.lane-target; CARGO_BUILD_JOBS=4; CC=gcc; MAKEFLAGS=-j4 PROGRAMS_TARGET_DIR=/root/lx-lanes/day/Q1/.lane-target/programs PROGRAMS_RUNTIME_LIB=/root/lx-lanes/day/Q1/.lane-target/programs/debug/liblayerx_programs_sandbox.a. This is native build and test evidence; release and deployed journeys remain unqualified."
+severity = "note"
