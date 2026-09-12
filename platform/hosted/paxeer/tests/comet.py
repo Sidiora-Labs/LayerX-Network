@@ -44,11 +44,13 @@ def qualify(raw_request, comet_port, evidence_path):
     key = '0885fcd13735f4309833a503ee804ea32395851479'
     params = dict(path='/store/evm/key', data='0x' + key, height=height, prove=True)
     expected = upstream('abci_query', params | {'data': key})
+    next_historical_proof = time.monotonic() + 1.1
     evidence_path.write_bytes(expected)
     context = {
         'latest': json.loads(upstream('commit', {})),
         'anchor': json.loads(upstream('commit', {'height': str(int(height) + 1)})),
     }
+    time.sleep(max(0, next_historical_proof - time.monotonic()))
     status, reply, body = query('abci_query', params)
     context['boundary_status'] = status
     context['boundary_reply'] = reply
