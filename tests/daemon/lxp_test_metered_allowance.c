@@ -67,18 +67,26 @@ static int metered_head(int descriptor, uint64_t minimum, uint8_t root[32])
     store_u16(preparation, 1U); store_u16(preparation + 2U, 75U);
     (void)memcpy(preparation + 4U, REGISTERED_DID, 75U);
     REQUIRE(getpeername(descriptor, (struct sockaddr *)&address, &address_length) == 0);
+    REQUIRE(close(descriptor) == 0);
     for (unsigned attempt = 0U; attempt < 200U; ++attempt) {
         wire_envelope response;
         int current = socket(AF_UNIX, SOCK_STREAM, 0);
         REQUIRE(current >= 0 && connect(current, (struct sockaddr *)&address, address_length) == 0);
+        REQUIRE(handshake(current) == 0);
         REQUIRE(send_request(current, LNI_MINOR, 26U, 0U, preparation, sizeof(preparation)) == 0);
         REQUIRE(receive_envelope(current, &response) == 0);
         REQUIRE(response.tag == 27U && response.payload_length >= 139U);
         bool reached = load_u64(response.payload + 99U) >= minimum;
         if (reached) (void)memcpy(root, response.payload + 107U, 32U);
         release_envelope(&response);
+        if (reached) {
+            if (current != descriptor) {
+                REQUIRE(dup2(current, descriptor) == descriptor);
+                REQUIRE(close(current) == 0);
+            }
+            return 0;
+        }
         REQUIRE(close(current) == 0);
-        if (reached) return 0;
         const struct timespec pause = {0, 50000000L};
         REQUIRE(nanosleep(&pause, NULL) == 0);
     }
@@ -336,10 +344,14 @@ static int metered_simulate(int descriptor, const signer *delegate, metered_run 
                               const uint8_t *payload, size_t payload_length)
 {
     static const uint8_t domain[] = "LayerX/agent/program-simulation-evidence/v1";
+    static const uint8_t boundary_domain[] = "LayerX/emulator/simulation-boundary/v1";
     uint8_t preparation[79], encoded[ACTIVITY_CAPACITY], id[32], root[32];
     uint8_t digest_input[sizeof(domain) + 145U], digest[32], query[33] = {1U};
+    uint8_t boundary_input[sizeof(boundary_domain) + 32U];
+    uint8_t receipt_storage[2U * LXP_MAX_ACTIVITY_BYTES];
     wire_envelope response;
     lxp_receipt receipt;
+    lxp_arena receipt_arena;
     signer sequencer;
     size_t length;
     uint64_t timestamp;
@@ -365,10 +377,37 @@ static int metered_simulate(int descriptor, const signer *delegate, metered_run 
     REQUIRE(lxp_receipt_decode(response.payload + 38U, receipt_length, true, &receipt) == LXP_OK);
     REQUIRE(receipt.result_code == LXP_OK && receipt.program_outcome.present &&
             receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS);
+    REQUIRE(signer_init(&sequencer, 0x22U) == 0);
+    REQUIRE(lxp_arena_init(&receipt_arena, receipt_storage, sizeof(receipt_storage)) == LXP_OK);
+    REQUIRE(lxp_receipt_verify(&receipt, sequencer.public_key, &receipt_arena) == LXP_OK);
     REQUIRE(metered_transfer(&receipt, LXP_OK) == 0);
     REQUIRE(memcmp(receipt.activity_id, id, 32U) == 0);
-    REQUIRE(signer_init(&sequencer, 0x22U) == 0);
+    size_t cursor = 38U + receipt_length;
+    uint32_t terminal_length = load_u32(response.payload + cursor);
+    cursor += 4U;
+    REQUIRE(terminal_length <= response.payload_length - cursor - 4U);
+    REQUIRE(terminal_length == receipt.program_outcome.terminal_payload.length &&
+            memcmp(response.payload + cursor,
+                   receipt.program_outcome.terminal_payload.bytes, terminal_length) == 0);
+    cursor += terminal_length;
+    uint32_t graph_length = load_u32(response.payload + cursor);
+    cursor += 4U;
+    REQUIRE(graph_length == response.payload_length - cursor &&
+            graph_length == receipt.program_outcome.call_graph_payload.length);
+    if (graph_length != 0U)
+        REQUIRE(memcmp(response.payload + cursor,
+                       receipt.program_outcome.call_graph_payload.bytes, graph_length) == 0);
     REQUIRE(memcmp(response.proof + 146U, sequencer.public_key, 32U) == 0);
+    REQUIRE(memcmp(response.proof + 66U, receipt.previous_state_root, 32U) == 0 &&
+            memcmp(response.proof + 66U, run->root, 32U) == 0 &&
+            memcmp(response.proof + 98U, receipt.resulting_state_root, 32U) == 0);
+    REQUIRE(load_u64(response.proof + 130U) < UINT64_MAX &&
+            load_u64(response.proof + 130U) + 1U == receipt.global_sequence &&
+            load_u64(response.proof + 138U) == timestamp);
+    (void)memcpy(boundary_input, boundary_domain, sizeof(boundary_domain));
+    (void)memcpy(boundary_input + sizeof(boundary_domain), sequencer.public_key, 32U);
+    REQUIRE(lxp_hash_sha256(boundary_input, sizeof(boundary_input), digest) == LXP_OK);
+    REQUIRE(memcmp(response.proof + 2U, digest, 32U) == 0);
     (void)memcpy(digest_input, domain, sizeof(domain));
     (void)memcpy(digest_input + sizeof(domain), response.proof + 2U, 144U);
     digest_input[sizeof(digest_input) - 1U] = 0U;
