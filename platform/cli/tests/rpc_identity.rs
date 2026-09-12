@@ -112,9 +112,15 @@ fn identity_sessions_and_gateway_credentials_are_distinct() -> Result<(), String
     assert!(session.call("lx_subscribe", &json!(["receipts"])).is_err());
     assert!(session.call("lx_unsubscribe", &json!(["1"])).is_err());
     let credential = Zeroizing::new(format!("key:lxp_live_{}", "a".repeat(64)));
-    for client in [RpcClient::new(url, None)?, RpcClient::new(url, Some(credential))?] {
+    for client in [
+        RpcClient::new(url, None)?,
+        RpcClient::new(url, Some(credential))?,
+    ] {
         assert!(client
-            .call("lx_requestFunds", &json!(["did:layerx:alice", registration()?.0]))
+            .call(
+                "lx_requestFunds",
+                &json!(["did:layerx:alice", registration()?.0])
+            )
             .err()
             .ok_or("faucet accepted without an identity session")?
             .starts_with("identity_session_required:"));
@@ -142,8 +148,12 @@ fn identity_rpc_responses_remain_bound_and_preserve_all_refusal_fields() -> Resu
         ] {
             let error = json!({"code":code,"message":"refused","data":{"code":reason}});
             let refused = decode_response(method, &json!({"jsonrpc":"2.0","id":1,"error":error}))
-                .err().ok_or("RPC refusal was accepted")?;
-            assert_eq!(serde_json::from_str::<Value>(&refused).map_err(|e| e.to_string())?, error);
+                .err()
+                .ok_or("RPC refusal was accepted")?;
+            assert_eq!(
+                serde_json::from_str::<Value>(&refused).map_err(|e| e.to_string())?,
+                error
+            );
         }
         for response in [
             json!({"jsonrpc":"2.0","id":2,"result":{}}),

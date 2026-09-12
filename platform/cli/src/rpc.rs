@@ -190,7 +190,9 @@ fn faucet_params(args: &[Value]) -> Result<(), String> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"-._:".contains(&byte));
     if !valid_did || !lowercase_hex(signer, 32) || signer.bytes().all(|byte| byte == b'0') {
-        return Err("lx_requestFunds requires a canonical DID and nonzero lowercase signer key".into());
+        return Err(
+            "lx_requestFunds requires a canonical DID and nonzero lowercase signer key".into(),
+        );
     }
     Ok(())
 }
