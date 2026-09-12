@@ -19,9 +19,12 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / 'tests/bridge'))
+sys.path.insert(0, str(ROOT / 'tests/daemon'))
+from custody_chain import boundaries, owned_chain
 from custody_credit import Rpc, create_profile, eth_hash, unhex, write_new
 from deploy_local_custody import (command, disposable_rpc, signer, genesis_document,
                                   PERSISTENT_GENESIS, PERSISTENT_BLUEPRINT)
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -181,6 +184,30 @@ def boundary(directory, rpc, genesis_path, comet_url):
 
 
 class DisposableCustody(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        (ROOT / 'qual-logs').mkdir(exist_ok=True)
+        target = Path(os.environ.get('CARGO_TARGET_DIR', ROOT / '.lane-target'))
+        cls.boundary_binary = Path(os.environ.get('LAYERX_PAXEER_BOUNDARY_BIN',
+                                                  target / 'debug/layerx-paxeer-boundary'))
+        cls.proof_binary = Path(os.environ.get('LAYERX_CUSTODY_PROOF_BIN',
+                                               ROOT / 'build/bin/layerx-custody-proof'))
+        cls.builder = Path(os.environ.get('LAYERX_TEST_NATIVE_BIN_DIR', ROOT / 'build/bin')) / 'layerx-genesis-build'
+        for binary in (cls.boundary_binary, cls.proof_binary, cls.builder):
+            if not binary.is_file() or not os.access(binary, os.X_OK):
+                raise RuntimeError(f'real custody prerequisite is missing: {binary}')
+        threads = min(4, int(os.environ.get('CARGO_BUILD_JOBS', '4')),
+                      int(os.environ.get('RAYON_NUM_THREADS', '4')))
+        if threads <= 0:
+            raise ValueError('positive contract build concurrency required')
+        command('forge', 'build', 'platform/hosted/paxeer/contracts/BetaUsdl.sol',
+                'contracts/governance/LayerXBetaTimelock.sol', 'contracts/custody/AssetRegistry.sol',
+                'contracts/custody/LayerXVault.sol',
+                'paxeer-network/loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol',
+                '--threads', str(threads))
+        cls.artifacts = ROOT / 'build/forge-artifacts'
+        cls.vault_artifact = cls.artifacts / 'LayerXVault.sol/LayerXVault.json'
+
     def test_real_paxeer_genesis_code_at_denied_blueprint_address(self):
         with tempfile.TemporaryDirectory(dir=ROOT / 'qual-logs') as temporary:
             directory = Path(temporary)
@@ -199,7 +226,7 @@ class DisposableCustody(unittest.TestCase):
                     disposable_rpc(url, str(directory / 'ca.pem'), identity_path)
                 self.assertEqual(refused, [])
 
-    def test_real_signed_ca_verified_deployment_and_identity_refusals(self):
+    def test_synthetic_evm_and_unrelated_comet_association_is_refused(self):
         with tempfile.TemporaryDirectory(dir=ROOT / 'qual-logs') as temporary:
             directory = Path(temporary)
             with comet_chain(directory) as (paxeer, comet_url, genesis_path), chain(directory) as rpc, \
@@ -261,91 +288,136 @@ class DisposableCustody(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     signer(verified, directory / 'signer.key')
                 os.chmod(directory / 'signer.key', 0o600)
-                actor = ed25519.Ed25519PrivateKey.generate()
-                actor_public = actor.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-                name = ('agent:did:layerx:' + actor_public.hex() + ':main').encode()
-                beneficiary = '0x' + hashlib.sha256(b'LX:ACCOUNT:v1' + len(name).to_bytes(4, 'big') + name).hexdigest()
-                output = directory / 'custody.json'
-                command('python3', str(ROOT / 'tests/bridge/deploy_local_custody.py'),
-                        '--allow-local-chain', '--rpc', url, '--ca-bundle', ca,
-                        '--disposable-identity', str(identity_path), '--key-file', str(directory / 'signer.key'),
-                        '--asset', '0x' + hashlib.sha256(b'test asset').hexdigest(),
-                        '--beneficiary', beneficiary,
-                        '--amount', '1000000000000000000', '--output', str(output))
-                deployed = json.loads(output.read_text())
-                self.assertEqual(deployed['chain_id'], 125)
+                self.assertNotEqual(int(paxeer.call('eth_chainId', []), 16), 125)
+                authority = ed25519.Ed25519PrivateKey.generate()
+                authority_path = directory / 'attestor.key'
+                write_new(authority_path, authority.private_bytes_raw())
+                request = dict(operation='status', expected=dict(
+                    genesis_sha256=genesis, comet_chain_id=identity['comet_chain_id'],
+                    chain_id=125, vault='', runtime_sha256='', confirmations=0),
+                    bundle=dict(version='paxeer-custody-state-v2',
+                        genesis=base64.b64encode(genesis_path.read_bytes()).decode(),
+                        history=[], state_height=0, finalized_height=0, state=[]))
+                history = directory / 'rejected-history'
+                result = subprocess.run([str(self.proof_binary), '--history-state', str(history),
+                    '--attestor-key', str(authority_path)], input=json.dumps(request).encode(),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b'genesis identity bounds', result.stderr)
+                self.assertEqual(result.stdout, b'')
+                self.assertFalse(history.exists())
                 self.assertEqual(refused, [])
-                code = unhex(rpc.call('eth_getCode', [deployed['vault'], 'latest']))
-                self.assertEqual(deployed['runtime_sha256'], '0x' + hashlib.sha256(code).hexdigest())
-                self.assertEqual(int(rpc.call('eth_getBalance', [deployed['token'], 'latest']), 16), 10 ** 18)
 
-                rpc.call('anvil_mine', ['0x80'], allow_missing=True)
-                fork_height = int(rpc.call('eth_blockNumber', []), 16)
-                observer_dir = directory / 'observer'
-                observer_dir.mkdir()
-                with chain(directory, ['--fork-url', rpc.url, '--fork-block-number', str(fork_height)]) as observer:
-                    with boundary(observer_dir, observer, genesis_path, comet_url) as (observer_url, observer_refused):
-                        bundle = directory / 'bundle.pem'
-                        bundle.write_bytes((directory / 'ca.pem').read_bytes()
-                                           + (observer_dir / 'ca.pem').read_bytes())
-                        identity['rpc_origins'].append(observer_url)
-                        identity['ca_sha256'] = '0x' + hashlib.sha256(bundle.read_bytes()).hexdigest()
-                        identity_path.write_text(json.dumps(identity))
-                        disposable_rpc(observer_url, str(bundle), identity_path)
-                        authority = ed25519.Ed25519PrivateKey.generate()
-                        write_new(directory / 'attestor.key', authority.private_bytes_raw())
-                        profile = directory / 'custody.profile'
-                        previous_ca = os.environ.get('SSL_CERT_FILE')
-                        os.environ['SSL_CERT_FILE'] = str(bundle)
-                        try:
-                            create_profile(SimpleNamespace(rpc=[url, observer_url], ca_bundle=str(bundle),
-                                           disposable_identity=str(identity_path), chain_id=125, network_id=402,
-                                           vault=deployed['vault'], runtime_sha256=deployed['runtime_sha256'],
-                                           asset=deployed['asset'], confirmations=2,
-                                           attestor_key=str(directory / 'attestor.key'), output=str(profile)))
-                        finally:
-                            if previous_ca is None:
-                                del os.environ['SSL_CERT_FILE']
-                            else:
-                                os.environ['SSL_CERT_FILE'] = previous_ca
-                        builder = Path(os.environ.get('LAYERX_TEST_NATIVE_BIN_DIR', '/root/lx-lanes/native-bin')) / 'layerx-genesis-build'
-                        invocation = ['python3', str(ROOT / 'tests/bridge/custody_genesis.py'),
-                                      '--profile', str(profile), '--builder', str(builder)]
+    def test_real_signed_ca_verified_deployment_and_identity_refusals(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / 'qual-logs') as temporary:
+            directory = Path(temporary)
+            with owned_chain(directory, self.artifacts) as chain:
+                with boundaries(directory, chain, self.boundary_binary) as (origins, ca_path, identity_path):
+                    url, observer_url = origins
+                    ca = str(ca_path)
+                    identity = json.loads(identity_path.read_bytes())
+                    genesis = identity['genesis_sha256']
+                    denied = '0x' + PERSISTENT_GENESIS.hex()
+                    self.assertNotEqual(genesis, denied)
+                    self.assertEqual(identity['chain_id'], 125)
+                    self.assertEqual(identity['comet_chain_id'], PERSISTENT_COMET_CHAIN_ID)
+                    verified = disposable_rpc(url, ca, identity_path)
+                    observer = disposable_rpc(observer_url, ca, identity_path)
+                    self.assertEqual(verified.genesis_sha256, unhex(genesis, 32))
+                    self.assertEqual(observer.genesis_sha256, verified.genesis_sha256)
+                    self.assertEqual(genesis_document(verified, 'boundary'),
+                                     genesis_document(observer, 'boundary'))
+                    key_file = directory / 'signer.key'
+                    write_new(key_file, ('0x' + bytes(chain.account.key).hex()).encode())
+                    self.assertEqual(signer(verified, key_file), chain.account.address.lower())
+                    for endpoint in ('https://127.0.0.1:18545', 'https://localhost:19443'):
                         with self.assertRaises(ValueError):
-                            command(*invocation, '--output', str(directory / 'refused-genesis'))
-                        self.assertFalse((directory / 'refused-genesis').exists())
-                        command(*invocation, '--output', str(directory / 'genesis'), '--rpc', url,
-                                '--ca-bundle', str(bundle), '--disposable-identity', str(identity_path))
-                        self.assertTrue((directory / 'genesis/artifacts/genesis.manifest').is_file())
-
-                        evidence_args = ['python3', str(ROOT / 'tests/bridge/local_credit_evidence.py'),
-                                         '--rpc', url, '--rpc', observer_url, '--ca-bundle', str(bundle),
-                                         '--disposable-identity', str(identity_path), '--custody', str(output),
-                                         '--asset', deployed['asset'], '--attestor-key', str(directory / 'attestor.key'),
-                                         '--attestor-public-key', '0x' + authority.public_key().public_bytes(
-                                             Encoding.Raw, PublicFormat.Raw).hex(),
-                                         '--beneficiary-key', '0x' + actor_public.hex(),
-                                         '--network-id', '402', '--confirmations', '2']
-                        command(*evidence_args, '--output', str(directory / 'evidence'))
-                        produced_profile = (directory / 'evidence/custody.profile').read_bytes()
-                        self.assertEqual(produced_profile, profile.read_bytes())
-                        credit = (directory / 'evidence/custody.credit').read_bytes()
-                        self.assertEqual(len(credit), 427)
-                        self.assertEqual(credit[37:41], (402).to_bytes(4, 'big'))
+                            disposable_rpc(endpoint, ca, identity_path)
+                    with self.assertRaises(OSError):
+                        Rpc(url).call('eth_chainId', [])
+                    for field, value in [('genesis_sha256', denied), ('chain_id', 31337),
+                                         ('comet_chain_id', 'custody-disposable-1'),
+                                         ('comet_chain_id', 'wrong-chain'),
+                                         ('genesis_sha256', '0x' + 'ab' * 32),
+                                         ('ca_sha256', '0x' + '00' * 32),
+                                         ('rpc_origins', ['https://localhost:1'])]:
+                        identity_path.write_text(json.dumps({**identity, field: value}))
+                        with self.assertRaises(ValueError):
+                            disposable_rpc(url, ca, identity_path)
+                    identity_path.write_text(json.dumps(identity))
+                    os.chmod(key_file, 0o644)
+                    with self.assertRaises(ValueError):
+                        signer(verified, key_file)
+                    os.chmod(key_file, 0o600)
+                    for method in ('anvil_mine', 'evm_mine', 'eth_accounts', 'eth_sendTransaction'):
+                        with self.assertRaises(ValueError):
+                            verified.call(method, [])
+                    actor = ed25519.Ed25519PrivateKey.generate()
+                    actor_public = actor.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+                    name = ('agent:did:layerx:' + actor_public.hex() + ':main').encode()
+                    beneficiary = '0x' + hashlib.sha256(b'LX:ACCOUNT:v1' + len(name).to_bytes(4, 'big') + name).hexdigest()
+                    output = directory / 'custody.json'
+                    command('python3', str(ROOT / 'tests/bridge/deploy_local_custody.py'),
+                            '--allow-local-chain', '--rpc', url, '--ca-bundle', ca,
+                            '--disposable-identity', str(identity_path), '--key-file', str(key_file),
+                            '--asset', '0x' + hashlib.sha256(b'test asset').hexdigest(),
+                            '--beneficiary', beneficiary, '--amount', '1000000000000000000',
+                            '--output', str(output))
+                    deployed = json.loads(output.read_text())
+                    self.assertEqual(deployed['chain_id'], 125)
+                    self.assertEqual(deployed['comet_chain_id'], identity['comet_chain_id'])
+                    self.assertEqual(deployed['genesis_sha256'], genesis)
+                    code = unhex(verified.call('eth_getCode', [deployed['vault'], 'latest']))
+                    self.assertEqual(deployed['runtime_sha256'], '0x' + hashlib.sha256(code).hexdigest())
+                    self.assertEqual(int(verified.call('eth_getBalance', [deployed['token'], 'latest']), 16), 10 ** 18)
+                    authority = ed25519.Ed25519PrivateKey.generate()
+                    authority_path = directory / 'attestor.key'
+                    write_new(authority_path, authority.private_bytes_raw())
+                    profile = directory / 'custody.profile'
+                    history = directory / 'secrets/custody-history'
+                    create_profile(SimpleNamespace(rpc=origins, ca_bundle=ca,
+                        disposable_identity=str(identity_path), chain_id=125, network_id=402,
+                        vault=deployed['vault'], runtime_sha256=deployed['runtime_sha256'],
+                        asset=deployed['asset'], confirmations=2, attestor_key=str(authority_path),
+                        output=str(profile), vault_artifact=str(self.vault_artifact), history_state=str(history)))
+                    self.assertEqual(profile.read_bytes()[:5], b'LXBC2')
+                    invocation = ['python3', str(ROOT / 'tests/bridge/custody_genesis.py'),
+                                  '--profile', str(profile), '--builder', str(self.builder)]
+                    with self.assertRaises(ValueError):
+                        command(*invocation, '--output', str(directory / 'refused-genesis'))
+                    self.assertFalse((directory / 'refused-genesis').exists())
+                    command(*invocation, '--output', str(directory / 'genesis'), '--rpc', url,
+                            '--ca-bundle', ca, '--disposable-identity', str(identity_path))
+                    self.assertTrue((directory / 'genesis/artifacts/genesis.manifest').is_file())
+                    evidence_args = ['python3', str(ROOT / 'tests/bridge/local_credit_evidence.py'),
+                        '--rpc', url, '--rpc', observer_url, '--ca-bundle', ca,
+                        '--disposable-identity', str(identity_path), '--custody', str(output),
+                        '--asset', deployed['asset'], '--attestor-key', str(authority_path),
+                        '--attestor-public-key', '0x' + authority.public_key().public_bytes(
+                            Encoding.Raw, PublicFormat.Raw).hex(),
+                        '--beneficiary-key', '0x' + actor_public.hex(), '--network-id', '402',
+                        '--confirmations', '2', '--vault-artifact', str(self.vault_artifact),
+                        '--history-state', str(history)]
+                    command(*evidence_args, '--output', str(directory / 'evidence'))
+                    produced_profile = (directory / 'evidence/custody.profile').read_bytes()
+                    self.assertEqual(produced_profile, profile.read_bytes())
+                    credit = (directory / 'evidence/custody.credit').read_bytes()
+                    self.assertEqual(len(credit), 427)
+                    self.assertEqual(credit[:5], b'LXDC2')
+                    self.assertEqual(credit[37:41], (402).to_bytes(4, 'big'))
+                    authority.public_key().verify(credit[363:], b'LX:CUSTODY:CREDIT:v2' + credit[:363])
+                    with self.assertRaises(InvalidSignature):
                         authority.public_key().verify(credit[363:], b'LX:CUSTODY:CREDIT:v1' + credit[:363])
-                        for option, value in [('--asset', '0x' + '00' * 32),
-                                              ('--attestor-public-key', '0x' + '00' * 32),
-                                              ('--beneficiary-key', '0x' + '00' * 32),
-                                              ('--rpc', url)]:
-                            invalid = evidence_args.copy()
-                            selected = len(invalid) - 1 - invalid[::-1].index(option)
-                            invalid[selected + 1] = value
-                            rejected = directory / ('rejected-' + option[2:])
-                            with self.assertRaises(ValueError):
-                                command(*invalid, '--output', str(rejected))
-                            self.assertFalse((rejected / 'custody.credit').exists())
-                        self.assertEqual(refused, [])
-                        self.assertEqual(observer_refused, [])
+                    for option, value in [('--asset', '0x' + '00' * 32),
+                                          ('--attestor-public-key', '0x' + '00' * 32),
+                                          ('--beneficiary-key', '0x' + '00' * 32), ('--rpc', url)]:
+                        invalid = evidence_args.copy()
+                        selected = len(invalid) - 1 - invalid[::-1].index(option)
+                        invalid[selected + 1] = value
+                        rejected = directory / ('rejected-' + option[2:])
+                        with self.assertRaises(ValueError):
+                            command(*invalid, '--output', str(rejected))
+                        self.assertFalse((rejected / 'custody.credit').exists())
 
 
 if __name__ == '__main__':
