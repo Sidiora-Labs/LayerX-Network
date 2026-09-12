@@ -125,7 +125,9 @@ def owned_chain(work, artifacts):
         env = {key: value for key, value in os.environ.items() if not key.startswith('LAYERX_PAXEER_')}
         env.update(LAYERX_PAXEER_HOME=str(chain_home), LAYERX_PAXEER_CHAIN_ID='125',
                    LAYERX_PAXEER_DEPLOYER_ADDRESS=account.address,
-                   LAYERX_PAXEER_USDL_RUNTIME=str(runtime_file), GOMAXPROCS='4')
+                   LAYERX_PAXEER_USDL_RUNTIME=str(runtime_file))
+        env['GOMAXPROCS'] = str(min(4, int(env.get('GOMAXPROCS', '4'))))
+        assert int(env['GOMAXPROCS']) > 0
         for name, port in zip(('EVM', 'EVM_WS', 'RPC', 'P2P', 'GRPC', 'GRPC_WEB', 'API'), ports):
             env[f'LAYERX_PAXEER_{name}_PORT'] = str(port)
         with (work / 'paxd-init.log').open('w') as log:
