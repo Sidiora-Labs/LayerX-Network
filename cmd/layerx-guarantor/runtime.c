@@ -11,6 +11,7 @@
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_genesis.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_snapshot.h"
 #include <errno.h>
@@ -746,6 +747,18 @@ lxp_result gp_runtime_prepare(gp_runtime *runtime, const lxp_batch_body *body)
                              runtime->receipt_count < runtime->activity_count ||
                              runtime->receipt_count > runtime->activity_count + 1U))
         status = LXP_ERR_BATCH_GAP;
+    if (status == LXP_OK &&
+        lxp_kernel_uses_batch_maintenance(&runtime->kernel, runtime->protocol_version)) {
+        lxp_byte_span effects;
+        if (runtime->receipt_count != runtime->activity_count + 1U ||
+            !lxp_batch_maintenance_is_envelope(runtime->published_receipts[runtime->activity_count]))
+            return LXP_ERR_VERSION_UNSUPPORTED;
+        status = lxp_batch_maintenance_events(runtime->published_receipts[runtime->activity_count],
+            &body->header, &effects);
+        if (status == LXP_OK && (effects.length != events[runtime->activity_count].length ||
+            lxp_ct_memcmp(effects.bytes, events[runtime->activity_count].bytes, effects.length) != 0))
+            status = LXP_ERR_CONTEXT_MISMATCH;
+    }
     if (status == LXP_OK && runtime->activity_count) {
         void *allocated = NULL;
         lxp_batch_roots roots;

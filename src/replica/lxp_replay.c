@@ -151,22 +151,22 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
     maintenance_present = lxp_protocol_version_uses_occupancy(body->header.protocol_version);
     module_maintenance = lxp_kernel_uses_batch_maintenance(engine->kernel, body->header.protocol_version);
     event_count = activity_count + (module_maintenance ? 1U : 0U);
-    if (publication) {
+    if (publication || module_maintenance) {
         status = lxp_da_receipt_section_decode(body->receipts, arena,
             &published_receipts, &published_count,
             &published_events, &published_event_count);
-        if (status == LXP_OK && published_event_count != event_count)
-            status = LXP_ERR_BATCH_GAP;
         if (status != LXP_OK) return status;
         if (published_count != activity_count && published_count != activity_count + 1U)
             return LXP_ERR_BATCH_GAP;
         maintenance_present = published_count == activity_count + 1U;
         if (module_maintenance && !maintenance_present) return LXP_ERR_BATCH_GAP;
+        module_maintenance = maintenance_present &&
+            lxp_batch_maintenance_is_envelope(published_receipts[activity_count]);
+        event_count = activity_count + (module_maintenance ? 1U : 0U);
+        if (published_event_count != event_count) return LXP_ERR_BATCH_GAP;
         if (maintenance_present) {
             lxp_programs_occupancy_receipt record;
             lxp_byte_span system_events;
-            if (lxp_batch_maintenance_is_envelope(published_receipts[activity_count]) != module_maintenance)
-                return LXP_ERR_VERSION_UNSUPPORTED;
             status = lxp_batch_maintenance_events(published_receipts[activity_count],
                 &body->header, &system_events);
             if (status != LXP_OK) return status;
@@ -182,6 +182,18 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
                 record.global_sequence != body->header.last_sequence ||
                 record.parameter_version != parameter_version)
                 return LXP_ERR_CONTEXT_MISMATCH;
+        }
+        {
+            lxp_batch_roots published_roots;
+            status = lxp_batch_roots_compute(&(lxp_batch_root_inputs){activities,
+                activity_count, published_receipts, published_count, published_events,
+                published_event_count, NULL, 0U, NULL, 0U}, arena, &published_roots);
+            if (status != LXP_OK) return status;
+            if (lxp_ct_memcmp(published_roots.receipt_merkle_root,
+                    body->header.receipt_merkle_root, 32U) != 0 ||
+                lxp_ct_memcmp(published_roots.event_merkle_root,
+                    body->header.event_merkle_root, 32U) != 0)
+                return LXP_FATAL_REPLAY_DIVERGENCE;
         }
     }
     if (maintenance_present) {

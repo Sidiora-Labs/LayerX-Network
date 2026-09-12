@@ -3360,7 +3360,7 @@ $(BUILD_DIR)/tests/lxp_test_module_maintenance: tests/daemon/lxp_test_module_mai
 
 .PHONY: test-daemon-module-maintenance
 test-daemon-module-maintenance: $(BUILD_DIR)/tests/lxp_test_module_maintenance $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
-	python3 tests/daemon/withdraw-custody.py $(BUILD_DIR) --module-maintenance
+	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR) --module-maintenance
 
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
