@@ -1,3 +1,4 @@
+mod events;
 mod funding;
 mod required;
 use required::Required;
@@ -95,6 +96,7 @@ struct LocalRedis {
 }
 struct Gateway {
     _process: Daemon,
+    _event_processes: Vec<Daemon>,
     port: u16,
     signer_file: String,
 }
@@ -406,12 +408,18 @@ fn start_local_gateway(
     gateway_env.extend(gateway_upstream_environment(
         cluster, boundary, identity, authority, redis,
     ));
+    let events = events::Runtime::prepare(cluster, boundary);
+    events.configure(&mut gateway_env, certificates);
     let gateway_process = local_service(cluster, "layerx-gateway", gateway_port, &gateway_env);
-    Gateway {
+    let mut gateway = Gateway {
         _process: gateway_process,
+        _event_processes: Vec::new(),
         port: gateway_port,
         signer_file,
-    }
+    };
+    gateway._event_processes =
+        events.start(cluster, certificates, identity, authority, redis, &gateway);
+    gateway
 }
 
 fn gateway_upstream_environment(

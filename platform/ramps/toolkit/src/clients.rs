@@ -1013,15 +1013,12 @@ impl LayerxClient {
         }
         let facts: AuthorityBody =
             serde_json::from_slice(&authority.body).map_err(|_| RampError::Layerx)?;
-        if facts.activity_id != id
-            || facts.network_id != self.activity.network_id.to_string()
-            || facts.wire_version != self.activity.protocol_version.to_string()
-        {
-            return Err(RampError::Layerx);
-        }
-        if parse_hex32(&facts.sequencer_public_key)? != self.sequencer_authorization.public_key() {
-            return Err(RampError::Layerx);
-        }
+        facts.validate_context(
+            &id,
+            self.activity.network_id,
+            self.activity.protocol_version,
+            self.sequencer_authorization.public_key(),
+        )?;
         let mut evidence = ReceiptEvidence {
             activity_id: activity,
             canonical_receipt,
@@ -1538,6 +1535,25 @@ struct AuthorityBody {
     batch_evidence: Option<MaintainedBatchDocument>,
 }
 
+impl AuthorityBody {
+    fn validate_context(
+        &self,
+        activity_id: &str,
+        network_id: u32,
+        protocol_version: u16,
+        sequencer_public_key: [u8; 32],
+    ) -> Result<(), RampError> {
+        if self.activity_id != activity_id
+            || self.network_id != network_id.to_string()
+            || self.wire_version != protocol_version.to_string()
+            || parse_hex32(&self.sequencer_public_key)? != sequencer_public_key
+        {
+            return Err(RampError::Layerx);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod maintained_consumer_tests {
     use super::*;
@@ -1720,6 +1736,37 @@ mod authority_shape_tests {
         let capture: serde_json::Value =
             serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
         let document = capture["authority"].clone();
+        let mut facts: AuthorityBody = serde_json::from_value(document.clone())
+            .unwrap_or_else(|error| panic!("canonical authority: {error}"));
+        let activity = facts.activity_id.clone();
+        let network = facts
+            .network_id
+            .parse::<u32>()
+            .unwrap_or_else(|error| panic!("network: {error}"));
+        let protocol = facts
+            .wire_version
+            .parse::<u16>()
+            .unwrap_or_else(|error| panic!("protocol: {error}"));
+        let key =
+            parse_hex32(&facts.sequencer_public_key).unwrap_or_else(|error| panic!("key: {error}"));
+        assert!(facts
+            .validate_context(&activity, network, protocol, key)
+            .is_ok());
+        facts.network_id = network
+            .checked_add(1)
+            .unwrap_or_else(|| panic!("network exhausted"))
+            .to_string();
+        assert!(facts
+            .validate_context(&activity, network, protocol, key)
+            .is_err());
+        facts.network_id = network.to_string();
+        assert!(facts
+            .validate_context(&"00".repeat(32), network, protocol, key)
+            .is_err());
+        assert!(facts.validate_context(&activity, network, 0, key).is_err());
+        assert!(facts
+            .validate_context(&activity, network, protocol, [0; 32])
+            .is_err());
         assert!(serde_json::from_value::<AuthorityBody>(document.clone()).is_ok());
         let mut historical = document.clone();
         historical
