@@ -940,6 +940,7 @@ dependencies = [
  "layerx-sdk",
  "layerx-types",
  "layerx-wire",
+ "native-tls",
  "serde_json",
  "sha2",
 ]

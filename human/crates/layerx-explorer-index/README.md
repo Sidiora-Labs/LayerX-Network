@@ -6,6 +6,8 @@ Program ingestion combines verified registry records with current protocol balan
 
 The program projection borrows verified balances; it preserves the proof checks while avoiding an unnecessary clone. Public fallible interfaces document their refusal conditions.
 
+The program service requires `LAYERX_EXPLORER_AUTHORITY_CA_DER` to name a readable DER certificate file, at most 64 KiB. This CA authenticates both HTTPS endpoints configured by `LAYERX_EXPLORER_NODE_ENDPOINT` and `LAYERX_EXPLORER_AUTHORITY_ENDPOINT`. The authority endpoint must identify a separate replica, bound by `LAYERX_EXPLORER_AUTHORITY_REPLICA_ID`; the CA does not replace the signed protocol evidence or sequencer trust history. Missing, empty, oversized or malformed CA input refuses startup.
+
 Qualification commands from the repository root:
 
 ```sh
