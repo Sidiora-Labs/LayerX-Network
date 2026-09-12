@@ -216,7 +216,7 @@ export function describeSpend(result: AgentSpendResult): ToolJsonObject {
   if (result.kind === "verified") {
     return {
       kind: result.kind,
-      submissionRef: result.submission.submission_ref,
+      ...(result.submission === undefined ? {} : { submissionRef: result.submission.submission_ref }),
       receiptDigest: toHex(result.verification.receiptDigest),
       level: result.verification.level,
       reservationState: result.reservation.state,

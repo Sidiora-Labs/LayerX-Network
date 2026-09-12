@@ -193,3 +193,83 @@ fn independent_implementation_can_enumerate_vectors() {
         );
     }
 }
+
+#[test]
+fn independent_verifier_accepts_real_native_send_and_refuses_substitutions() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../platform/sdk/conformance/fixtures/receipt-positive-v2.json"
+    ))
+    .expect("native fixture");
+    let decode = |value: &str| -> Vec<u8> {
+        assert_eq!(value.len() % 2, 0);
+        (0..value.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&value[index..index + 2], 16).expect("hex"))
+            .collect()
+    };
+    let field = |name: &str| -> [u8; 32] {
+        decode(
+            fixture["authorized_batch"][name]
+                .as_str()
+                .expect("authority field"),
+        )
+        .try_into()
+        .expect("32 bytes")
+    };
+    let trusted = AuthorizedBatch::new(
+        field("batch_id_hex"),
+        field("asset_hex"),
+        field("previous_state_root_hex"),
+        field("resulting_state_root_hex"),
+        field("sequencer_public_key_hex"),
+    );
+    let canonical = decode(
+        fixture["canonical_receipt_hex"]
+            .as_str()
+            .expect("native receipt"),
+    );
+    let portable = PortableReceipt::export(&canonical, &trusted).expect("export native receipt");
+    let bytes = portable.to_json().expect("portable encoding");
+    let verifier = IndependentVerifier::new("independent-native-receipt");
+    let outcome = verifier
+        .verify_vector_against_trusted_batch(
+            std::str::from_utf8(&bytes).expect("JSON UTF-8"),
+            &trusted,
+        )
+        .expect("independent verification");
+    assert_eq!(
+        outcome.receipt_digest.to_vec(),
+        decode(
+            fixture["expected"]["receipt_digest_hex"]
+                .as_str()
+                .expect("receipt digest")
+        )
+    );
+    for index in [0, canonical.len() / 2, canonical.len() - 1] {
+        let mut altered = canonical.clone();
+        altered[index] ^= 1;
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("portable JSON");
+        document["canonicalReceipt"] = serde_json::json!(URL_SAFE_NO_PAD.encode(altered));
+        assert!(verifier
+            .verify_vector_against_trusted_batch(&document.to_string(), &trusted)
+            .is_err());
+    }
+    for name in [
+        "receiptDigest",
+        "batchId",
+        "asset",
+        "previousStateRoot",
+        "resultingStateRoot",
+        "sequencerPublicKey",
+    ] {
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("portable JSON");
+        document[name] = serde_json::json!(URL_SAFE_NO_PAD.encode([0x91; 32]));
+        assert!(verifier
+            .verify_vector_against_trusted_batch(&document.to_string(), &trusted)
+            .is_err());
+    }
+}

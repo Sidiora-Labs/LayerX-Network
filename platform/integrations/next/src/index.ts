@@ -160,7 +160,7 @@ export interface LayerXResource {
 }
 
 export interface LayerXResourceHandler {
-  release(request: Request): Promise<LayerXResource>;
+  release(request: Request, idempotencyKey: string): Promise<LayerXResource>;
 }
 
 export interface LayerXWebhookHandlerConsumer {
@@ -415,7 +415,7 @@ function createResourceHandler(runtime: LayerXSellerRuntime): RouteHandler {
       decision = await runtime.seller.handle(
         runtime.principal,
         request.headers.get(PAYMENT_SIGNATURE_HEADER) ?? undefined,
-        () => runtime.resources.release(request),
+        (idempotencyKey) => runtime.resources.release(request, idempotencyKey),
       );
     } catch (error) {
       if (error instanceof MiddlewareError) {

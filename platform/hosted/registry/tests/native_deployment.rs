@@ -1010,7 +1010,26 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
         "journal",
     );
     must(journal.append(&evidence), "append");
+    for step in [
+        layerx_platform_registry::WriteStep::WriteProof,
+        layerx_platform_registry::WriteStep::WriteRecord,
+        layerx_platform_registry::WriteStep::SyncTemporary,
+        layerx_platform_registry::WriteStep::Commit,
+    ] {
+        assert!(journal
+            .clone()
+            .interrupt_before(step)
+            .export_pair(&evidence)
+            .is_err());
+        assert!(!cluster.root.join("journal/pairs").exists());
+    }
     must(journal.export_pair(&evidence), "pair");
+    assert!(journal
+        .clone()
+        .interrupt_before(layerx_platform_registry::WriteStep::SyncDirectory)
+        .export_pair(&evidence)
+        .is_err());
+    must(journal.export_pair(&evidence), "recovered pair");
     for (suffix, expected) in [
         ("admission", proof.canonical_encoding()),
         ("deployment", evidence.record().canonical_encoding()),
