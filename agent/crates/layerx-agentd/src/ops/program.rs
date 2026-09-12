@@ -214,8 +214,7 @@ pub struct EmulatorProgramSimulationTransport {
 }
 
 #[cfg(test)]
-#[path = "../../../../../platform/tests/support/tls_boundary.rs"]
-mod tls_boundary;
+use crate::outbound_tls::tls_boundary;
 
 #[test]
 fn simulation_tls_checks_the_actual_server_identity() {

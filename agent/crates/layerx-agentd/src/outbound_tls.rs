@@ -41,7 +41,7 @@ pub(crate) fn system(endpoint: &str) -> Option<TlsConfig> {
 
 #[cfg(test)]
 #[path = "../../../../platform/tests/support/tls_boundary.rs"]
-mod tls_boundary;
+pub(crate) mod tls_boundary;
 
 #[test]
 fn private_ca_checks_the_actual_server_identity() {
