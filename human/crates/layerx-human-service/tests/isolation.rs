@@ -640,3 +640,66 @@ fn audit_entries_are_append_only() {
     assert_eq!(entry.bytes(), b"one");
     assert_eq!(entry.written_at(), 1);
 }
+
+#[test]
+fn principal_transaction_commits_history_notification_and_audit_together() {
+    let root = directory("principal-transaction");
+    let map = tenancy(&[("alice", "tenant-a")]);
+    let (mut store, digest) = install_and_open(&root, &map, retention_uniform(1_000));
+    let owner = principal("alice");
+    let mut scope = store
+        .principal(&owner)
+        .unwrap_or_else(|error| panic!("{error}"));
+    scope
+        .put(Table::Cache, row_key("original"), 1, vec![1])
+        .unwrap_or_else(|error| panic!("{error}"));
+    let apply =
+        |scope: &mut layerx_human_service::store::PrincipalScope<'_>| -> Result<(), StoreError> {
+            scope.put(Table::Journeys, row_key("binding"), 2, vec![2])?;
+            scope.put(Table::Notifications, row_key("notification"), 2, vec![3])?;
+            scope.append_audit(
+                row_key("audit"),
+                2,
+                vec![4],
+                AuditDisposition::Exportable {
+                    evidence: vec![EvidenceRef::new(Table::Journeys, row_key("binding"))],
+                },
+            )
+        };
+    let result: Result<(), StoreError> = scope.transaction(|staged| {
+        apply(staged)?;
+        Err(StoreError::Corrupt("refused transition"))
+    });
+    assert!(result.is_err());
+    assert!(scope.keys(Table::Journeys).is_empty());
+    assert!(scope.keys(Table::Notifications).is_empty());
+    assert!(scope.audit_keys().is_empty());
+    let pending = root.join("principals/alice/store.bin.tmp");
+    fs::create_dir(&pending).unwrap_or_else(|error| panic!("{error}"));
+    assert!(scope.transaction(apply).is_err());
+    assert!(scope.keys(Table::Journeys).is_empty());
+    assert!(scope.audit_keys().is_empty());
+    fs::remove_dir(&pending).unwrap_or_else(|error| panic!("{error}"));
+    scope
+        .transaction(apply)
+        .unwrap_or_else(|error| panic!("{error}"));
+    drop(scope);
+    drop(store);
+    let mut reopened = PrincipalStore::open(&root, retention_uniform(1_000), digest)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let scope = reopened
+        .principal(&owner)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(scope.keys(Table::Journeys), vec![row_key("binding")]);
+    assert_eq!(
+        scope.keys(Table::Notifications),
+        vec![row_key("notification")]
+    );
+    assert_eq!(scope.audit_keys(), vec![row_key("audit")]);
+    assert_eq!(
+        scope
+            .get(Table::Cache, &row_key("original"))
+            .map(|row| row.bytes().to_vec()),
+        Some(vec![1])
+    );
+}

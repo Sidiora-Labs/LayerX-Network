@@ -179,35 +179,7 @@ pub fn verify(
             fact.registered_settlement_reference.as_deref(),
         )
         .map_err(|error| ExportVerificationError::Checkpoint { index, error })?;
-        let header =
-            layerx_wire::receipt::decode_batch_header(fact.certificate.checkpoint().header_bytes())
-                .map_err(|_| ExportVerificationError::CheckpointUnavailable { index })?;
-        if fact.availability.is_empty() || fact.availability.len() > 4096 {
-            return Err(ExportVerificationError::CheckpointUnavailable { index });
-        }
-        let chunks = fact
-            .availability
-            .iter()
-            .map(|(chunk, proof)| {
-                verify_chunk(
-                    chunk.clone(),
-                    proof,
-                    header.batch_number(),
-                    &header.data_availability_root(),
-                )
-                .map_err(|error| ExportVerificationError::Availability { index, error })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        reassemble(
-            &chunks,
-            RootCommitments {
-                activity: header.activity_merkle_root(),
-                receipt: header.receipt_merkle_root(),
-                event: header.event_merkle_root(),
-                oracle: header.oracle_root(),
-            },
-        )
-        .map_err(|error| ExportVerificationError::Availability { index, error })?;
+        verify_availability(fact, index)?;
         achieved_levels.push(report.level());
     }
     let known: BTreeSet<_> = receipt_digests.iter().copied().collect();
@@ -232,6 +204,39 @@ pub fn verify(
         achieved_levels,
         derived_aggregates_are_protocol_facts: false,
     })
+}
+
+fn verify_availability(fact: &CheckpointFact, index: usize) -> Result<(), ExportVerificationError> {
+    let header =
+        layerx_wire::receipt::decode_batch_header(fact.certificate.checkpoint().header_bytes())
+            .map_err(|_| ExportVerificationError::CheckpointUnavailable { index })?;
+    if fact.availability.is_empty() || fact.availability.len() > 4096 {
+        return Err(ExportVerificationError::CheckpointUnavailable { index });
+    }
+    let chunks = fact
+        .availability
+        .iter()
+        .map(|(chunk, proof)| {
+            verify_chunk(
+                chunk.clone(),
+                proof,
+                header.batch_number(),
+                &header.data_availability_root(),
+            )
+            .map_err(|error| ExportVerificationError::Availability { index, error })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    reassemble(
+        &chunks,
+        RootCommitments {
+            activity: header.activity_merkle_root(),
+            receipt: header.receipt_merkle_root(),
+            event: header.event_merkle_root(),
+            oracle: header.oracle_root(),
+        },
+    )
+    .map_err(|error| ExportVerificationError::Availability { index, error })?;
+    Ok(())
 }
 
 fn require_statement(statement: &str) -> Result<(), ExportVerificationError> {
