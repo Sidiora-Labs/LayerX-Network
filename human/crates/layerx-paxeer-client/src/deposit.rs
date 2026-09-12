@@ -1785,7 +1785,6 @@ impl DepositProof {
             account_address_for_protocol(reserve, self.protocol_version).map_err(|_| refusal())?;
         if receipt.activity_id() != expected_activity_id
             || receipt.protocol_version() != self.protocol_version
-            || receipt.network_id() != self.network_id
             || receipt.module_id() != 8
             || receipt.module_version() != 1
             || receipt.operation() != 1
