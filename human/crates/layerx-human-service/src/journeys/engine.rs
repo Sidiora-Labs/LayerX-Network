@@ -557,7 +557,9 @@ impl JourneyEngine {
             if record.plan_digest != plan_digest || record.journey_id != plan.journey_id.as_str() {
                 return Err(JourneyError::IdempotencyConflict);
             }
-            return Ok(Self { record });
+            let engine = Self { record };
+            engine.repair_events(scope)?;
+            return Ok(engine);
         }
         let transitions = vec![TransitionRecord {
             sequence: 1,

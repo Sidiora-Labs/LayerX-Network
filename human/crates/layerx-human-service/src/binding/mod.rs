@@ -708,6 +708,16 @@ impl BindingJourney {
         now: u64,
         trace: &TraceId,
     ) -> Result<ActiveBinding, BindingError> {
+        scope.transaction(|scope| self.finalize_staged(scope, receipt, now, trace))
+    }
+
+    fn finalize_staged(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        receipt: &AgentBindingReceipt,
+        now: u64,
+        trace: &TraceId,
+    ) -> Result<ActiveBinding, BindingError> {
         let pending = pending(scope)?.ok_or(BindingError::NoPendingBinding)?;
         if receipt.submission_id != pending.submission_id {
             return Err(BindingError::ReceiptSubmissionMismatch);

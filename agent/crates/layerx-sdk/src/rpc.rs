@@ -488,6 +488,7 @@ pub struct RpcClient {
     agent: ureq::Agent,
     endpoint: url::Url,
     credential: Option<LayerXKeyCredential>,
+    subscription_tls: Option<native_tls::TlsConnector>,
     next_id: AtomicU64,
 }
 
@@ -556,7 +557,7 @@ impl RpcClient {
         let endpoint =
             crate::programs::http::validate_endpoint(endpoint).map_err(RpcError::Configuration)?;
         let roots = crate::tls::system_roots(endpoint.as_str()).map_err(RpcError::Configuration)?;
-        Self::connect_with_roots(endpoint.as_str(), credential, roots)
+        Self::connect_with_roots(endpoint.as_str(), credential, roots, None)
     }
 
     /// Connects with one explicitly trusted DER root certificate.
@@ -571,10 +572,18 @@ impl RpcClient {
             return Err(RpcError::InvalidRequest);
         }
         let certificate = ureq::tls::Certificate::from_der(ca_der).to_owned();
+        let subscription_tls = native_tls::TlsConnector::builder()
+            .disable_built_in_roots(true)
+            .add_root_certificate(
+                native_tls::Certificate::from_der(ca_der).map_err(|_| RpcError::InvalidRequest)?,
+            )
+            .build()
+            .map_err(|_| RpcError::InvalidRequest)?;
         Self::connect_with_roots(
             endpoint,
             credential,
             ureq::tls::RootCerts::new_with_certs(&[certificate]),
+            Some(subscription_tls),
         )
     }
 
@@ -582,6 +591,7 @@ impl RpcClient {
         endpoint: &str,
         credential: Option<LayerXKeyCredential>,
         roots: ureq::tls::RootCerts,
+        subscription_tls: Option<native_tls::TlsConnector>,
     ) -> Result<Self, RpcError> {
         let mut endpoint =
             crate::programs::http::validate_endpoint(endpoint).map_err(RpcError::Configuration)?;
@@ -608,6 +618,7 @@ impl RpcClient {
             agent,
             endpoint,
             credential,
+            subscription_tls,
             next_id: AtomicU64::new(1),
         })
     }
@@ -686,6 +697,7 @@ impl RpcClient {
         crate::rpc_subscription::connect(
             &self.endpoint,
             self.credential.as_ref(),
+            self.subscription_tls.clone(),
             topic,
             account,
             None,
@@ -707,6 +719,7 @@ impl RpcClient {
         crate::rpc_subscription::connect(
             &self.endpoint,
             self.credential.as_ref(),
+            self.subscription_tls.clone(),
             topic,
             account,
             Some(cursor),

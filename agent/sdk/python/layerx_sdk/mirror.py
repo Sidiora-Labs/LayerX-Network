@@ -83,6 +83,8 @@ class MirrorVerifier:
                                     stderr=subprocess.DEVNULL, timeout=self._timeout, check=False)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise MirrorVerificationError(MirrorErrorCode.UNAVAILABLE) from error
+        if result.returncode != 0:
+            raise MirrorVerificationError(MirrorErrorCode.UNAVAILABLE)
         if len(result.stdout) > 1_048_576:
             raise MirrorVerificationError(MirrorErrorCode.BOUNDS)
         try:
@@ -94,6 +96,8 @@ class MirrorVerifier:
             value = response["verification"]
             if not isinstance(value, dict) or value.get("provenance") not in ("Canonical", "Reorged") or value.get("checkpointLevel") != "unavailable":
                 raise ValueError("invalid verification response")
+            if _decimal(value["batchNumber"]) != batch_number:
+                raise ValueError("verification batch mismatch")
             return MirrorVerification(_text(value["level"], 64), _decimal(value["batchNumber"]), _digest(value["headerDigest"]),
                 _digest(value["evidenceDigest"]), _text(value["sourceId"], 64), _text(value["target"], 2048),
                 _text(value["canonicalPosition"], 2048), value["provenance"], _optional_decimal(value.get("latestBatch")),

@@ -63,6 +63,7 @@ export async function* subscribeRpc(endpoint: URL, authorization: string | undef
   const socket = new WebSocket(url, { headers: authorization === undefined ? {} : { authorization }, handshakeTimeout: 30000, maxPayload: 9 * 1048576, followRedirects: false, perMessageDeflate: false });
   const queue: SubscriptionEvent[] = [];
   let subscription: string | undefined;
+  let lastCursor = cursor;
   let failure: unknown;
   let wake: (() => void) | undefined;
   let settleCancel: (() => void) | undefined;
@@ -84,7 +85,10 @@ export async function* subscribeRpc(endpoint: URL, authorization: string | undef
       if (subscription === undefined) { subscription = subscriptionAcknowledgement(value, requestId); clearTimeout(timer); resolveReady(); return; }
       if (object(value) && value.id === cancelId) { unsubscribeAcknowledgement(value, cancelId); settleCancel?.(); return; }
       if (queue.length >= 16) throw new Error("Subscription queue overflow; reconcile through reads");
-      queue.push(subscriptionNotification(value, subscription));
+      const event = subscriptionNotification(value, subscription);
+      if (lastCursor !== undefined && event.cursor <= lastCursor) throw new Error("Subscription cursor regression or duplicate; reconcile through reads");
+      queue.push(event);
+      lastCursor = event.cursor;
       wake?.();
     } catch (error) { fail(error); }
   });

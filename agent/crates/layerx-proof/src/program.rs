@@ -324,6 +324,9 @@ fn verified_terminal_outcome(
             }
             match candidate_outcome {
                 CandidateTerminalOutcome::Success { code, response } => {
+                    if *code != outcome.result_code() {
+                        return terminal_failure();
+                    }
                     let response = ProgramCallResponse::new(*code, response).map_err(|_| {
                         ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal)
                     })?;

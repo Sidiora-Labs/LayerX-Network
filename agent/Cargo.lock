@@ -866,6 +866,7 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "native-tls",
  "rustls-native-certs",
  "serde_json",
  "sha2",

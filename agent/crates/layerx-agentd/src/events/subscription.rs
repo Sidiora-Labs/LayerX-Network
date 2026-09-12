@@ -631,6 +631,15 @@ impl Store {
         target: &SubscriptionTarget,
         reason: Termination,
     ) -> Result<(), SubscriptionError> {
+        self.require_unbound_target(target)?;
+        self.revoke_inner(target, reason)
+    }
+
+    pub(super) fn revoke_inner(
+        &mut self,
+        target: &SubscriptionTarget,
+        reason: Termination,
+    ) -> Result<(), SubscriptionError> {
         if reason == Termination::Deleted {
             return Err(SubscriptionError::Corrupt);
         }
