@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
 	"github.com/sidiora-labs/paxeer-network/consensus/crypto/merkle"
+	cometjson "github.com/sidiora-labs/paxeer-network/consensus/libs/json"
 	"github.com/sidiora-labs/paxeer-network/consensus/light"
 	"github.com/sidiora-labs/paxeer-network/consensus/rpc/coretypes"
 	"github.com/sidiora-labs/paxeer-network/consensus/types"
@@ -140,7 +141,7 @@ func genesisValidators(genesisBytes []byte, expected Expected, now time.Time) (*
 		return nil, nil, errors.New("genesis identity")
 	}
 	var genesis types.GenesisDoc
-	if err := json.Unmarshal(genesisBytes, &genesis); err != nil {
+	if err := cometjson.Unmarshal(genesisBytes, &genesis); err != nil {
 		return nil, nil, err
 	}
 	if genesis.ChainID != expected.CometChainID || genesis.InitialHeight != 1 || genesis.GenesisTime.IsZero() ||
