@@ -2596,6 +2596,7 @@ lxp_result lxp_kernel_prepare_activity(
             module_ctx.protocol_version = activity->protocol_version;
             module_ctx.batch_number = execution->batch_number;
             module_ctx.verified_receipts = &work->verified_receipts;
+            module_ctx.allowance = execution->allowance;
             status = snapshot_bind_call_admission(
                 &module_ctx, work, execution, prepared->activity_id,
                 activity->fee_limit, activity->activity_type);
@@ -2792,6 +2793,7 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
             module_ctx.protocol_version = activity->protocol_version;
             module_ctx.batch_number = execution->batch_number;
             module_ctx.verified_receipts = &candidate->verified_receipts;
+            module_ctx.allowance = execution->allowance;
             status = snapshot_bind_call_admission(
                 &module_ctx, candidate, execution, prepared->activity_id,
                 activity->fee_limit, activity->activity_type);
@@ -4572,6 +4574,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         if (status == LXP_OK) module_ctx.batch_number = execution->batch_number;
         if (status == LXP_OK)
             module_ctx.verified_receipts = execution->verified_receipts;
+        if (status == LXP_OK) module_ctx.allowance = execution->allowance;
         if (status == LXP_OK)
             (void)memcpy(module_ctx.activity_id, canonical_activity_id, 32U);
         if (status == LXP_OK &&

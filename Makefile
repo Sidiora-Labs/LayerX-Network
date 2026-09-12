@@ -68,7 +68,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-state-root \
 	test-replay-golden test-replay-golden-local \
 	test-ledger-accounts test-ledger-transfer test-ledger-set test-ledger-send \
-	test-ledger-receive \
+	test-ledger-receive test-ledger-send-allowance \
 	test-ledger-receipt \
 	test-asset-registry \
 	test-asset-balance \
@@ -266,7 +266,7 @@ test-harness: $(BUILD_DIR)/tests/lxp_test_harness
 list-tests: $(BUILD_DIR)/tests/lxp_test_harness
 	$(BUILD_DIR)/tests/lxp_test_harness --list
 
-test: test-state-diff test-da-verified test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-daemon-lni-account test-arena test-harness test-codec \
+test: test-state-diff test-da-verified test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-daemon-lni-account test-daemon-allowance test-arena test-harness test-codec \
 	test-codec-limits test-codec-version test-codec-vectors fuzz-codec-smoke \
 	test-crypto-suite test-arith-u128 test-arith-u256 test-arith-rounding \
 	test-arith-property test-arith-nofloat test-log test-log-durability \
@@ -390,6 +390,15 @@ $(BUILD_DIR)/tests/test_receive: tests/ledger/test_receive.c \
 
 test-ledger-receive: $(BUILD_DIR)/tests/test_receive
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_receive
+
+$(BUILD_DIR)/tests/test_send_allowance: tests/ledger/test_send_allowance.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+test-ledger-send-allowance: $(BUILD_DIR)/tests/test_send_allowance
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_send_allowance
 
 $(BUILD_DIR)/tests/test_receipt: tests/ledger/test_receipt.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -1253,6 +1262,7 @@ LAYERXD_SOURCES = \
 	cmd/layerxd/lxp_daemon_finality_authority.c \
 	cmd/layerxd/lxp_daemon_batch_wal.c \
 	cmd/layerxd/lxp_daemon_artifact.c \
+	cmd/layerxd/lxp_daemon_allowance.c \
 	cmd/layerxd/lxp_daemon_process.c \
 	cmd/layerxd/lxp_daemon_authority_replica.c \
 	cmd/layerxd/lxp_daemon_replica.c \
@@ -2950,7 +2960,8 @@ specgen-lint:
 
 core-test-all: test test-kernel test-module-ctx test-dispatch test-receipts \
 	test-state-root test-ledger-accounts test-ledger-transfer test-ledger-set \
-	test-ledger-send test-ledger-receive test-ledger-receipt test-asset-registry \
+	test-ledger-send test-ledger-receive test-ledger-send-allowance \
+	test-ledger-receipt test-asset-registry \
 	test-asset-balance test-asset-transfer test-asset-deposit test-asset-withdraw \
 	test-asset-reserve test-escrow-open test-escrow-capture test-escrow-timeout \
 	test-escrow-dispute test-escrow-invariants test-budget-create test-budget-period \
@@ -3372,6 +3383,19 @@ $(BUILD_DIR)/tests/lxp_test_lni_account: tests/daemon/lxp_test_lni_account.c \
 
 test-daemon-lni-account: $(BUILD_DIR)/tests/lxp_test_lni_account
 	python3 tests/daemon/lni-account.py $(BUILD_DIR)/tests/lxp_test_lni_account
+
+.PHONY: test-daemon-allowance
+$(BUILD_DIR)/tests/lxp_test_daemon_allowance: tests/daemon/lxp_test_daemon_allowance.c \
+        cmd/layerxd/lxp_daemon_allowance.h cmd/layerxd/lxp_daemon_allowance.c \
+        $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) tests/daemon/lxp_test_daemon_allowance.c \
+		cmd/layerxd/lxp_daemon_allowance.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+test-daemon-allowance: $(BUILD_DIR)/tests/lxp_test_daemon_allowance
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_daemon_allowance
 
 .PHONY: beta-qualify-focused
 beta-qualify-focused:
