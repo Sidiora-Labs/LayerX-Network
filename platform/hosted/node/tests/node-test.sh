@@ -7,6 +7,10 @@
 # Runs as root (or with CAP_SETUID) so the LNI client can present a uid that
 # differs from the daemon uid, as the LNI requires. Override the client
 # identity with LAYERX_NODE_TEST_CLIENT_UID / LAYERX_NODE_TEST_CLIENT_GID.
+# The supervisors need socat: LAYERX_TEST_SOCAT_BIN names it, otherwise the
+# first socat on PATH is used. The genesis metadata the bootstrap requires is
+# built from tests/support/lxgb_metadata.py over the beta asset and the
+# treasury key generated here.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
@@ -16,6 +20,7 @@ LAYERXD="$NATIVE_BIN_DIR/layerxd"
 GENESIS_BUILD="$NATIVE_BIN_DIR/layerx-genesis-build"
 CARGO=${PLATFORM_CARGO:-cargo}
 NETWORK_ID=${LAYERX_NODE_TEST_NETWORK_ID:-4242}
+ASSET_ID=b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898
 PROGRAM_PORT=${LAYERX_NODE_TEST_PROGRAM_PORT:-19401}
 REPLICA_PORT=${LAYERX_NODE_TEST_REPLICA_PORT:-19402}
 
@@ -24,9 +29,16 @@ fail() { log "FAIL: $*"; exit 1; }
 
 [ -x "$LAYERXD" ] || fail "$LAYERXD missing; run make layerxd"
 [ -x "$GENESIS_BUILD" ] || fail "$GENESIS_BUILD missing; run make layerx-genesis-build"
-for tool in socat openssl setpriv od sha256sum; do
+for tool in openssl setpriv od sha256sum jq python3; do
     command -v "$tool" >/dev/null || fail "$tool is required"
 done
+if [ -n "${LAYERX_TEST_SOCAT_BIN:-}" ]; then
+    SOCAT=$LAYERX_TEST_SOCAT_BIN
+    [ -f "$SOCAT" ] && [ -x "$SOCAT" ] || fail "socat_invalid: LAYERX_TEST_SOCAT_BIN=$SOCAT is not an executable file"
+else
+    SOCAT=$(command -v socat || true)
+    [ -n "$SOCAT" ] || fail "socat_missing: no socat executable on PATH; set LAYERX_TEST_SOCAT_BIN"
+fi
 [ "$(id -u)" -eq 0 ] || fail "must run as root so the LNI client can present a distinct uid"
 CLIENT_UID=${LAYERX_NODE_TEST_CLIENT_UID:-$(id -u nobody)}
 CLIENT_GID=${LAYERX_NODE_TEST_CLIENT_GID:-$(id -g nobody)}
@@ -76,6 +88,20 @@ umask 077
 openssl rand 32 > "$WORK/sequencer.key"
 openssl rand 32 > "$WORK/treasury.key"
 umask 022
+TREASURY_PUBLIC=$({ printf '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x70\x04\x22\x04\x20'; cat "$WORK/treasury.key"; } \
+    | openssl pkey -inform DER -pubout -outform DER | tail -c 32 | od -An -v -tx1 | tr -d ' \n')
+[ ${#TREASURY_PUBLIC} -eq 64 ] || fail "could not derive the treasury public key"
+METADATA="$WORK/genesis-metadata.lxgb"
+python3 - "$ROOT/tests/support/lxgb_metadata.py" "$ASSET_ID" "$TREASURY_PUBLIC" "$METADATA" <<'LXGB' || fail "could not build the genesis metadata"
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location('lxgb_metadata', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.check()
+with open(sys.argv[4], 'wb') as output:
+    output.write(module.metadata(bytes.fromhex(sys.argv[2]), bytes.fromhex(sys.argv[3]), os.urandom(32)))
+LXGB
+chmod 0644 "$METADATA"
 
 as_client() {
     setpriv --reuid="$CLIENT_UID" --regid="$CLIENT_GID" --clear-groups "$@"
@@ -102,13 +128,13 @@ expect_contains() {
 
 log "starting the replica supervisor"
 bash "$NODE_DIR/supervisor.sh" --role replica --data-dir "$DATA" --run-dir "$RUN" \
-    --layerxd "$LAYERXD" > "$WORK/replica.log" 2>&1 &
+    --layerxd "$LAYERXD" --socat "$SOCAT" > "$WORK/replica.log" 2>&1 &
 REPLICA_PID=$!
 
 log "starting the sequencer supervisor (bootstraps $DATA)"
 bash "$NODE_DIR/supervisor.sh" --role sequencer --data-dir "$DATA" --run-dir "$RUN" \
-    --layerxd "$LAYERXD" -- \
-    --network-id "$NETWORK_ID" \
+    --layerxd "$LAYERXD" --socat "$SOCAT" -- \
+    --network-id "$NETWORK_ID" --asset "$ASSET_ID" --genesis-metadata "$METADATA" \
     --sequencer-key "$WORK/sequencer.key" --treasury-key "$WORK/treasury.key" \
     --lni-uid "$CLIENT_UID" --lni-gid "$CLIENT_GID" \
     --program-port "$PROGRAM_PORT" --replica-port "$REPLICA_PORT" \
@@ -124,6 +150,8 @@ set -a
 . "$DATA/node.env"
 set +a
 [ "$LAYERX_NODE_NETWORK_ID" = "$NETWORK_ID" ] || fail "node.env network id mismatch"
+[ "$LAYERX_NODE_ASSET_ID" = "$ASSET_ID" ] || fail "node.env asset id mismatch"
+[ "$LAYERX_NODE_TREASURY_PUBLIC_KEY" = "$TREASURY_PUBLIC" ] || fail "node.env treasury public key mismatch"
 [ "$(stat -c %a "$RUN")" = 750 ] || fail "run directory is not mode 0750"
 [ "$(stat -c %g "$RUN")" = "$CLIENT_GID" ] || fail "run directory group is not the LNI gid"
 [ "$(stat -c %s "$DATA/genesis/genesis.registration")" = 82 ] || fail "bootstrap registration missing"

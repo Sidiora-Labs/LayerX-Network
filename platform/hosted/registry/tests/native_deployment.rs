@@ -1,3 +1,6 @@
+#[path = "../../../../tests/support/lxgb_metadata.rs"]
+mod lxgb_metadata;
+
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::preparation::{preparation_state, PreparationStateContext};
@@ -390,10 +393,10 @@ struct Genesis {
     receipt_state_root: [u8; 32],
 }
 
-fn genesis_request(asset: &[u8; 32], sequencer_key: &[u8; 32]) -> Vec<u8> {
-    let mut request = Vec::with_capacity(512);
+fn genesis_request(asset: &[u8; 32], sequencer_key: &[u8; 32], issuer_key: &[u8; 32]) -> Vec<u8> {
+    let mut request = Vec::with_capacity(1024);
     request.extend_from_slice(b"LXGB");
-    request.push(1);
+    request.push(2);
     request.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
     request.extend_from_slice(&NETWORK_ID.to_be_bytes());
     request.extend_from_slice(&now_ms().to_be_bytes());
@@ -428,10 +431,16 @@ fn genesis_request(asset: &[u8; 32], sequencer_key: &[u8; 32]) -> Vec<u8> {
         request.extend_from_slice(&value.to_be_bytes());
     }
     assert_eq!(request.len(), 395, "LXGB request length");
+    lxgb_metadata::append(&mut request, asset, issuer_key, &random32());
     request
 }
 
-fn build_genesis(root: &Path, builder: &Path, sequencer_seed: &[u8; 32]) -> Genesis {
+fn build_genesis(
+    root: &Path,
+    builder: &Path,
+    sequencer_seed: &[u8; 32],
+    treasury_key: &[u8; 32],
+) -> Genesis {
     let directory = root.join("genesis");
     make_dir(&directory, 0o755);
     let asset = random32();
@@ -440,7 +449,7 @@ fn build_genesis(root: &Path, builder: &Path, sequencer_seed: &[u8; 32]) -> Gene
         .to_bytes();
     write(
         &directory.join("request.lxgb"),
-        &genesis_request(&asset, &sequencer_key),
+        &genesis_request(&asset, &sequencer_key, treasury_key),
         0o600,
     );
     write(&directory.join("signer.key"), sequencer_seed, 0o600);
@@ -527,7 +536,7 @@ fn start_cluster(with_sequencer: bool) -> Cluster {
     let treasury_key = SigningKey::from_bytes(&treasury_seed)
         .verifying_key()
         .to_bytes();
-    let genesis = build_genesis(&root, &builder, &sequencer_seed);
+    let genesis = build_genesis(&root, &builder, &sequencer_seed, &treasury_key);
     let replica_token = token();
     let program_token = token();
     let replica_port = free_port();

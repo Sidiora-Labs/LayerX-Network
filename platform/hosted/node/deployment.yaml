@@ -120,6 +120,8 @@ spec:
             - $(LAYERX_NODE_NETWORK_ID)
             - --asset
             - $(LAYERX_NODE_ASSET_ID)
+            - --genesis-metadata
+            - /run/layerx/genesis/metadata.lxgb
             - --replica-id
             - $(LAYERX_NODE_REPLICA_ID)
             - --sequencer-key
@@ -150,6 +152,7 @@ spec:
             - {name: data, mountPath: /var/lib/layerx}
             - {name: run, mountPath: /run/layerx}
             - {name: keys, mountPath: /run/layerx/keys, readOnly: true}
+            - {name: genesis-metadata, mountPath: /run/layerx/genesis/metadata.lxgb, subPath: metadata.lxgb, readOnly: true}
             - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
             - {name: settlement, mountPath: /run/layerx/settlement, readOnly: true}
             - {name: tmp, mountPath: /tmp}
@@ -799,6 +802,7 @@ spec:
         - {name: run, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
         - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
         - {name: keys, secret: {secretName: layerx-node-keys, defaultMode: 0440, items: [{key: sequencer.key, path: sequencer.key}]}}
+        - {name: genesis-metadata, configMap: {name: layerx-node-genesis-metadata, defaultMode: 0444, items: [{key: metadata.lxgb, path: metadata.lxgb}]}}
         - {name: treasury-material, secret: {secretName: layerx-node-keys, defaultMode: 0440, items: [{key: treasury.key, path: treasury.key}]}}
         - {name: tokens, secret: {secretName: layerx-node-tokens, defaultMode: 0440}}
         - {name: settlement, configMap: {name: layerx-node-settlement, optional: true}}
