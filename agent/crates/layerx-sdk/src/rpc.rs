@@ -35,8 +35,9 @@ fn rpc_system_tls_checks_the_actual_server_identity() {
     tls_boundary::qualify(
         "rpc::rpc_system_tls_checks_the_actual_server_identity",
         |endpoint| {
+            let uppercase = endpoint.replacen("https://", "HTTPS://", 1);
             let client =
-                RpcClient::connect(endpoint, None).map_err(|error| format!("{error:?}"))?;
+                RpcClient::connect(&uppercase, None).map_err(|error| format!("{error:?}"))?;
             client
                 .agent
                 .get(format!("{endpoint}/livez"))
@@ -552,8 +553,10 @@ impl RpcClient {
         endpoint: &str,
         credential: Option<LayerXKeyCredential>,
     ) -> Result<Self, RpcError> {
-        let roots = crate::tls::system_roots(endpoint).map_err(RpcError::Configuration)?;
-        Self::connect_with_roots(endpoint, credential, roots)
+        let endpoint =
+            crate::programs::http::validate_endpoint(endpoint).map_err(RpcError::Configuration)?;
+        let roots = crate::tls::system_roots(endpoint.as_str()).map_err(RpcError::Configuration)?;
+        Self::connect_with_roots(endpoint.as_str(), credential, roots)
     }
 
     /// Connects with one explicitly trusted DER root certificate.

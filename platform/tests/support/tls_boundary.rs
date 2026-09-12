@@ -48,6 +48,74 @@ fn certificates(directory: &Path) {
             "subjectAltName=DNS:localhost",
         ],
     );
+    fs::rename(directory.join("key.pem"), directory.join("ca-key.pem"))
+        .unwrap_or_else(|error| panic!("retain root signing key: {error}"));
+    openssl(
+        directory,
+        &[
+            "req",
+            "-new",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
+            "-nodes",
+            "-keyout",
+            "key.pem",
+            "-out",
+            "server.csr",
+            "-subj",
+            "/CN=localhost",
+        ],
+    );
+    fs::write(directory.join("server.ext"), "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost\n")
+        .unwrap_or_else(|error| panic!("server certificate extensions: {error}"));
+    openssl(
+        directory,
+        &[
+            "x509",
+            "-req",
+            "-in",
+            "server.csr",
+            "-CA",
+            "cert.pem",
+            "-CAkey",
+            "ca-key.pem",
+            "-CAcreateserial",
+            "-out",
+            "server.pem",
+            "-days",
+            "1",
+            "-extfile",
+            "server.ext",
+        ],
+    );
+    openssl(
+        directory,
+        &[
+            "x509",
+            "-in",
+            "server.pem",
+            "-outform",
+            "DER",
+            "-out",
+            "server.der",
+        ],
+    );
+    openssl(
+        directory,
+        &[
+            "pkcs8",
+            "-topk8",
+            "-nocrypt",
+            "-in",
+            "ca-key.pem",
+            "-outform",
+            "DER",
+            "-out",
+            "ca-key.der",
+        ],
+    );
     openssl(
         directory,
         &[
@@ -94,7 +162,7 @@ fn certificates(directory: &Path) {
     );
 }
 
-fn start(directory: &Path) -> (Boundary, u16) {
+fn start(directory: &Path, certificate: &str, key: &str) -> (Boundary, u16) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .unwrap_or_else(|error| panic!("reserve boundary port: {error}"));
     let address = listener
@@ -128,12 +196,9 @@ fn start(directory: &Path) -> (Boundary, u16) {
         .env("LAYERX_PAXEER_NODE_URL", "http://127.0.0.1:1")
         .env(
             "LAYERX_PAXEER_BOUNDARY_TLS_CERT_DER",
-            directory.join("cert.der"),
+            directory.join(certificate),
         )
-        .env(
-            "LAYERX_PAXEER_BOUNDARY_TLS_KEY_DER",
-            directory.join("key.der"),
-        )
+        .env("LAYERX_PAXEER_BOUNDARY_TLS_KEY_DER", directory.join(key))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -186,19 +251,31 @@ pub fn qualify(test_name: &str, probe: impl Fn(&str) -> Result<Vec<u8>, String>)
         .unwrap_or_else(|error| panic!("empty trust fixture: {error}"));
     fs::write(directory.join("empty-cert.der"), [])
         .unwrap_or_else(|error| panic!("empty DER fixture: {error}"));
-    let (_boundary, port) = start(&directory);
+    let (_boundary, port) = start(&directory, "server.der", "key.der");
+    let (_ca_boundary, ca_port) = start(&directory, "cert.der", "ca-key.der");
     for (case, host, roots) in [
         ("trusted", "localhost", "cert.pem"),
         ("unrelated-root", "localhost", "other-cert.pem"),
         ("wrong-hostname", "127.0.0.1", "cert.pem"),
         ("missing-roots", "localhost", "missing-cert.pem"),
         ("empty-roots", "localhost", "empty-cert.pem"),
+        ("ca-as-server", "localhost", "cert.pem"),
     ] {
         let output = Command::new(
             std::env::current_exe().unwrap_or_else(|error| panic!("test executable: {error}")),
         )
         .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
-        .env("LAYERX_TLS_QUAL_ENDPOINT", format!("https://{host}:{port}"))
+        .env(
+            "LAYERX_TLS_QUAL_ENDPOINT",
+            format!(
+                "https://{host}:{}",
+                if case == "ca-as-server" {
+                    ca_port
+                } else {
+                    port
+                }
+            ),
+        )
         .env("LAYERX_TLS_QUAL_EXPECT", case)
         .env(
             "LAYERX_TLS_QUAL_CA_DER",
