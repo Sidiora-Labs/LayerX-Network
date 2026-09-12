@@ -79,6 +79,14 @@ fn validate(body: &[u8]) -> Result<Validated, Response> {
     if body.len() > MAX_COMET_REQUEST {
         return Err(refusal(413, "body_too_large", None));
     }
+    if body
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        != Some(b'{')
+    {
+        return Err(rpc_error(&Value::Null, -32600, "invalid Comet request"));
+    }
     let request: RpcRequest<'_> = serde_json::from_slice(body)
         .map_err(|_| rpc_error(&Value::Null, -32600, "invalid Comet request"))?;
     let id: Value = serde_json::from_str(request.id.get())
@@ -89,6 +97,9 @@ fn validate(body: &[u8]) -> Result<Validated, Response> {
         return Err(rpc_error(&Value::Null, -32600, "invalid Comet request"));
     }
     let invalid = || rpc_error(&id, -32602, "invalid Comet parameters");
+    if !request.params.get().starts_with('{') {
+        return Err(invalid());
+    }
     let method = match request.method {
         "commit" => {
             if serde_json::from_str::<EmptyParams>(request.params.get()).is_ok() {
@@ -162,6 +173,14 @@ impl From<NodeFailure> for Failure {
 }
 
 fn reply(body: &[u8], id: &Value) -> Result<Value, Failure> {
+    if body
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        != Some(b'{')
+    {
+        return Err(NodeFailure::Invalid.into());
+    }
     let envelope: RpcReply<'_> = serde_json::from_slice(body).map_err(|_| NodeFailure::Invalid)?;
     let actual_id: Value =
         serde_json::from_str(envelope.id.get()).map_err(|_| NodeFailure::Invalid)?;
@@ -378,7 +397,11 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":1.5,"method":"commit","params":{}}"#,
             r#"{"jsonrpc":"2.0","id":1,"method":"commit","params":{},"extra":true}"#,
             r#"[{"jsonrpc":"2.0","id":1,"method":"commit","params":{}}]"#,
+            r#"["2.0",1,"commit",{}]"#,
             r#"{"jsonrpc":"2.0","id":1,"method":"commit","params":[]}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"commit","params":["1"]}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"validators","params":["1","1","100"]}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"abci_query","params":["/store/evm/key","0x08","1",true]}"#,
         ] {
             assert!(validate(body.as_bytes()).is_err(), "accepted {body}");
         }
