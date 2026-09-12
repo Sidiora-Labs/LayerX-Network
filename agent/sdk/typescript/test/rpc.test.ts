@@ -69,3 +69,13 @@ await assert.rejects(feeClient.subscribeFrom("receipts",-1n).next());
 const cancellation = new AbortController(); cancellation.abort();
 await assert.rejects(feeClient.subscribe("receipts",undefined,cancellation.signal).next());
 await assert.rejects(feeClient.subscribeFrom("receipts",41n,undefined,cancellation.signal).next());
+
+const { SubscriptionContinuity } = await import("../src/rpc-subscription.js");
+const receiptContinuity = new SubscriptionContinuity("receipts", 40n);
+receiptContinuity.accept({cursor: 41n, result: {}});
+for (const cursor of [40n, 41n, 43n]) assert.throws(() => receiptContinuity.accept({cursor, result: {}}));
+receiptContinuity.accept({cursor: 42n, result: {}});
+const accountContinuity = new SubscriptionContinuity("account", 40n);
+accountContinuity.accept({cursor: 45n, result: {}});
+assert.throws(() => accountContinuity.accept({cursor: 45n, result: {}}));
+assert.throws(() => new SubscriptionContinuity("checkpoints", 40n).accept({cursor: 40n, result: {}}));

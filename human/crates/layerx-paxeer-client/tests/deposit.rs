@@ -903,7 +903,7 @@ fn protocol_three_custody_proof_binds_native_beneficiary_and_selected_version() 
         .with_native_credit(attested.clone())
         .unwrap_or_else(|error| panic!("native ingress: {error:?}"));
     let compiled = bound
-        .compile_credit(&reserve, &recipient, &registry())
+        .compile_credit(&reserve, &recipient, &bridge_registry())
         .unwrap_or_else(|error| panic!("native compile: {error:?}"));
     assert_eq!(compiled.payload().as_bytes(), attested.canonical_bytes());
     let encoded = layerx_paxeer_client::wire::encode_deposit_proof(&bound, 4096)

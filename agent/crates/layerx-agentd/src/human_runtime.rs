@@ -2810,16 +2810,63 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
             .status(id)
             .ok_or(HumanOperationError::Refused)?
             .clone();
+        if status.state == SubmissionState::Submitted {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| HumanOperationError::Unavailable)?;
+            self.outbox
+                .transition(
+                    &mut store,
+                    id,
+                    SubmissionState::Unknown,
+                    "recover durable submission before receipt resolution",
+                    None,
+                )
+                .map_err(|_| HumanOperationError::Unavailable)?;
+        }
         if matches!(
             status.state,
-            SubmissionState::Acknowledged | SubmissionState::Unknown
+            SubmissionState::Submitted | SubmissionState::Acknowledged | SubmissionState::Unknown
         ) {
             match self.receipt_by_idempotency_key(peer, id, status.activity_id) {
                 Ok(_) | Err(HumanOperationError::Unavailable) => {}
                 Err(error) => return Err(error),
             }
         }
-        Self::observation(self.outbox.status(id).ok_or(HumanOperationError::Refused)?)
+        let current = self.outbox.status(id).ok_or(HumanOperationError::Refused)?;
+        if let Some(evidence) = current.evidence {
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| HumanOperationError::Unavailable)?;
+            let served = crate::receipt::serve(
+                &store,
+                TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?,
+                crate::receipt::ReceiptLookupKey::Idempotency(id),
+            )
+            .map_err(|_| HumanOperationError::Unavailable)?;
+            let decoded = layerx_wire::receipt::decode(&served.canonical_bytes)
+                .map_err(|_| HumanOperationError::Refused)?;
+            let unsigned = layerx_wire::receipt::encode_unsigned(&decoded)
+                .map_err(|_| HumanOperationError::Refused)?;
+            let digest = layerx_wire::hash::receipt_digest(&unsigned)
+                .map_err(|_| HumanOperationError::Refused)?;
+            if digest != evidence.receipt_ref()
+                || served.metadata.activity_id != current.activity_id
+                || served.metadata.idempotency_key != id
+                || (served.metadata.result.code.raw() == 0)
+                    != (current.state == SubmissionState::Executed)
+            {
+                return Err(HumanOperationError::Refused);
+            }
+            self.last_verified_receipt = Some((
+                id,
+                served.metadata.result.code.raw(),
+                served.metadata.global_sequence,
+            ));
+        }
+        Self::observation(current)
     }
 
     fn receipt_by_idempotency_key(
