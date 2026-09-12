@@ -870,13 +870,7 @@ fn assert_registrar_principal_and_mint_refusals(
         format!("{{\"tenant\":\"beta\",\"sub\":\"{REGISTRAR_SUB}\"}}"),
         format!("{{\"sub\":\"{REGISTRAR_SUB}\",\"ttl_seconds\":60}}"),
     ] {
-        let minted = fixture.request(
-            server,
-            "POST",
-            "/v1/sessions",
-            Some(registrar),
-            Some(&body),
-        );
+        let minted = fixture.request(server, "POST", "/v1/sessions", Some(registrar), Some(&body));
         assert_eq!(minted.status, 403, "{}", minted.body);
         assert_eq!(minted.body, SERVICE_NOT_PERMITTED);
     }
