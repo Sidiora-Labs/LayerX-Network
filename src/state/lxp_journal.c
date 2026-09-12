@@ -58,7 +58,7 @@ struct lxp_state_publication_guard {
     bool published;
 };
 
-static atomic_uint_fast64_t snapshot_lineage = ATOMIC_VAR_INIT(UINT64_C(1));
+static atomic_uint_fast64_t snapshot_lineage = UINT64_C(1);
 
 static uint64_t next_snapshot_lineage(void)
 {
