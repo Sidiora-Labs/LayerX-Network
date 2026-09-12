@@ -1761,7 +1761,8 @@ static lxp_result fail_stop_submit_daemon(lxp_daemon *daemon,
 
 static lxp_result lni_principal(
     const lx_account_registry *accounts, const lxp_activity *activity,
-    uint8_t principal_id[32], lxp_u128 *fee_balance)
+    const uint8_t account_key[32], uint8_t principal_id[32],
+    lxp_u128 *fee_balance)
 {
     static const uint8_t prefix[] = "agent:";
     static const uint8_t suffix[] = ":main";
@@ -1770,7 +1771,8 @@ static lxp_result lni_principal(
     size_t length;
     size_t index;
     lxp_result status;
-    if (accounts == NULL || activity == NULL || principal_id == NULL ||
+    if (accounts == NULL || activity == NULL || account_key == NULL ||
+        principal_id == NULL ||
         fee_balance == NULL || activity->actor_did.bytes == NULL ||
         activity->actor_did.length == 0U ||
         activity->authority.length != 32U ||
@@ -1792,8 +1794,7 @@ static lxp_result lni_principal(
         if (lxp_ct_memcmp(account->id, account_id, 32U) != 0) continue;
         if (account->kind != LX_ACCOUNT_AGENT_MAIN ||
             !account->has_authority_key ||
-            lxp_ct_memcmp(account->authority_key,
-                          activity->authority.bytes, 32U) != 0)
+            lxp_ct_memcmp(account->authority_key, account_key, 32U) != 0)
             return LXP_ERR_BAD_SIGNATURE;
         *fee_balance = account->balance;
         break;
@@ -1838,7 +1839,9 @@ static lxp_result program_admission_decode(
         status = lxp_bridge_credit_verify(&profile, &credit, owner->network_id,
                                           activity->protocol_version, nullifier);
         if (status == LXP_OK)
-            status = lni_principal(owner->kernel->state->accounts, activity, principal, &balance);
+            status = lni_principal(owner->kernel->state->accounts, activity,
+                                   activity->authority.bytes, principal,
+                                   &balance);
         if (status == LXP_OK &&
             (lxp_ct_memcmp(nullifier, activity->idempotency_key, 32U) != 0 ||
              lxp_ct_memcmp(principal, credit.bytes + 107U, 32U) != 0 ||
@@ -1998,7 +2001,7 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
         else
             status = lni_principal(
                 server->owner->kernel->state->accounts, &activity,
-                principal_id, &fee_balance);
+                activity.authority.bytes, principal_id, &fee_balance);
         if (status == LXP_OK &&
             lxp_u128_cmp(fee_balance, activity.fee_limit) < 0)
             status = LXP_ERR_FEE_UNPAYABLE;
@@ -2750,7 +2753,7 @@ lxp_result lxp_daemon_lni_simulate(
 {
     lxp_activity activity;
     lxp_kernel_execution execution;
-    lxp_authority_scope scope;
+    lxp_authority_grant grant;
     lxp_authority_resolved authority;
     lxp_byte_span canonical_activity;
     lxp_byte_span encoded_receipt = {NULL, 0U};
@@ -2763,12 +2766,11 @@ lxp_result lxp_daemon_lni_simulate(
     uint8_t sequencer_public_key[32];
     uint8_t principal_id[32];
     uint8_t batch_id[32] = {0};
-    uint8_t grant_id[32] = {0};
     uint8_t previous_state_root[32];
     lxp_u128 fee_balance = {0U, 0U};
     uint32_t parameter_version = 0U;
     uint64_t batch_number = 0U;
-    uint64_t timestamp = 0U;
+    uint64_t batch_timestamp = 0U;
     uint64_t global_sequence;
     pthread_t prior_writer;
     bool writer_bound = false;
@@ -2822,8 +2824,8 @@ lxp_result lxp_daemon_lni_simulate(
         owner->kernel->state->writer = pthread_self();
         writer_bound = true;
     }
-    if (status == LXP_OK) status = wall_clock_milliseconds(&timestamp);
     if (status == LXP_OK) {
+        batch_timestamp = owner->latest_sealed_timestamp;
         global_sequence = owner->kernel->state->next_sequence;
         status = lxp_identity_resolve(owner->identities,
                                       activity.actor_did.bytes,
@@ -2832,43 +2834,33 @@ lxp_result lxp_daemon_lni_simulate(
     if (status == LXP_OK &&
         owner->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_governance_identity_refresh(owner->kernel, identity);
-    if (status == LXP_OK &&
-        (activity.authority.length != 32U ||
-         !lxp_identity_key_valid(identity, activity.authority.bytes,
-                                 timestamp, global_sequence)))
+    if (status == LXP_OK && activity.authority.length != 32U)
         status = LXP_ERR_BAD_SIGNATURE;
     if (status == LXP_OK)
-        status = lni_principal(owner->programs_runtime->accounts,
-                                      &activity, principal_id, &fee_balance);
+        status = lxp_authority_resolve_activity(
+            owner->kernel, identity, &activity,
+            lxp_identity_key_valid(identity, activity.authority.bytes,
+                                   batch_timestamp, global_sequence),
+            true, batch_timestamp, UINT64_C(300000), global_sequence, &grant,
+            &authority);
+    if (status == LXP_OK)
+        status = lni_principal(owner->programs_runtime->accounts, &activity,
+                               grant.kind == LXP_AUTHORITY_OWNER ?
+                                   grant.key : identity->primary_key,
+                               principal_id, &fee_balance);
     if (status == LXP_OK)
         status = simulation_schedule(owner->kernel, &parameter_version,
                                      &fees);
     if (status == LXP_OK)
         status = simulation_batch_number(owner->receipt_authority,
                                          &batch_number);
-    if (status == LXP_OK) {
-        (void)memset(&scope, 0, sizeof(scope));
-        scope.module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
-        scope.activity_ordinal_min = 1U;
-        scope.activity_ordinal_max = 10U;
-        scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
-        scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
-        scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
-        (void)memset(&authority, 0, sizeof(authority));
-        (void)memcpy(authority.actor, identity->did_id, 32U);
+    if (status == LXP_OK)
         (void)memcpy(authority.principal, principal_id, 32U);
-        authority.kind = LXP_AUTHORITY_OWNER;
-        (void)memcpy(authority.verified_key, activity.authority.bytes, 32U);
-        authority.scope = &scope;
-        status = lxp_authority_hash(authority.kind, grant_id,
-                                    authority.verified_key,
-                                    authority.authority_hash);
-    }
     if (status == LXP_OK) {
         (void)memset(&execution, 0, sizeof(execution));
         execution.network_id = owner->network_id;
         execution.batch_number = batch_number;
-        execution.batch_timestamp_ms = owner->latest_sealed_timestamp;
+        execution.batch_timestamp_ms = batch_timestamp;
         execution.maximum_timestamp_window = UINT64_C(300000);
         execution.epoch = owner->kernel->epoch;
         execution.global_sequence = global_sequence;
