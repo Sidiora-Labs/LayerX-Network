@@ -90,6 +90,16 @@ pub fn authenticate_gateway_key(
     Ok(record)
 }
 
+/// # Errors
+/// Refuses a principal lookup unless the durable gateway key authenticates.
+pub fn gateway_principal(
+    store: &RedisStore,
+    authorization: &str,
+) -> Result<serde_json::Value, AccessError> {
+    let record = authenticate_gateway_key(store, authorization)?;
+    Ok(serde_json::json!({"ok": true, "result": {"principal_digest": record.principal_digest}}))
+}
+
 /// Domain-separated hexadecimal SHA-256 used by hosted ingress reservation
 /// and audit identities.
 #[must_use]

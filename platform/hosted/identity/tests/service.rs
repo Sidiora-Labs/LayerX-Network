@@ -10,8 +10,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-const SERVICES: [&str; 8] = [
+const SERVICES: [&str; 9] = [
     "gateway",
+    "registry",
     "webhooks",
     "dashboard",
     "faucet",
@@ -1303,4 +1304,137 @@ fn sessions_belong_to_the_tenant_of_their_principal() {
     let still_refused = create_principal(&fixture, &server, &cross_tenant_claim());
     assert_eq!(still_refused.status, 409, "{}", still_refused.body);
     assert_tenant_binding(&fixture, &server, &alpha_token, ALPHA_SUB, SIGNER_KEY);
+}
+
+#[test]
+fn registry_resolver_authenticates_and_retains_authority_across_restart() {
+    use sha2::{Digest, Sha256};
+    let fixture = fixture("publication-resolver");
+    let state_dir = fixture.root.join("state");
+    let server = fixture.spawn(&state_dir);
+    let _ = provision(&fixture, &server);
+    let key = "publication-key:resolver-integration-only";
+    let headers = [("LayerX-Key", key)];
+    let resolve = |server: &Server, token: Option<&str>, body: Option<&str>| {
+        fixture.request_with_headers(
+            server,
+            "GET",
+            "/internal/v1/principal",
+            token,
+            body,
+            &headers,
+        )
+    };
+    assert_eq!(resolve(&server, None, None).status, 401);
+    assert_eq!(
+        resolve(&server, Some(&token_for("gateway")), None).status,
+        403
+    );
+    assert_eq!(
+        resolve(&server, Some(&token_for("registry")), None).status,
+        404
+    );
+    let body = format!("{{\"sub\":\"{SUB}\",\"revoked\":false}}");
+    let bind = fixture.request_with_headers(
+        &server,
+        "POST",
+        "/v1/publication-keys",
+        Some(&token_for("provisioning")),
+        Some(&body),
+        &headers,
+    );
+    assert_eq!(bind.status, 200);
+    assert_eq!(
+        resolve(
+            &server,
+            Some(&token_for("registry")),
+            Some("{\"principal_digest\":\"foreign\"}")
+        )
+        .status,
+        400
+    );
+    let expected = format!("{:x}", Sha256::digest(SUB.as_bytes()));
+    assert_eq!(
+        json(&resolve(&server, Some(&token_for("registry")), None))["result"]["principal_digest"],
+        expected
+    );
+    registry_client_resolves(&fixture, &server, key, &expected);
+    drop(server);
+    let server = fixture.spawn(&state_dir);
+    assert_eq!(
+        json(&resolve(&server, Some(&token_for("registry")), None))["result"]["principal_digest"],
+        expected
+    );
+    let revoke = format!("{{\"sub\":\"{SUB}\",\"revoked\":true}}");
+    assert_eq!(
+        fixture
+            .request_with_headers(
+                &server,
+                "POST",
+                "/v1/publication-keys",
+                Some(&token_for("provisioning")),
+                Some(&revoke),
+                &headers
+            )
+            .status,
+        200
+    );
+    assert_eq!(
+        resolve(&server, Some(&token_for("registry")), None).status,
+        404
+    );
+    assert_eq!(
+        fixture
+            .request_with_headers(
+                &server,
+                "POST",
+                "/v1/publication-keys",
+                Some(&token_for("provisioning")),
+                Some(&body),
+                &headers
+            )
+            .status,
+        409
+    );
+    drop(server);
+    let server = fixture.spawn(&state_dir);
+    assert_eq!(
+        resolve(&server, Some(&token_for("registry")), None).status,
+        404
+    );
+}
+
+fn registry_client_resolves(fixture: &Fixture, server: &Server, key: &str, expected: &str) {
+    use layerx_platform_internal::gateway_http::{Client, Endpoint};
+    use layerx_platform_internal::principal::PrincipalClient;
+    use native_tls::Identity;
+    use zeroize::Zeroizing;
+    openssl(&[
+        "pkcs12",
+        "-export",
+        "-inkey",
+        &fixture.root.join("server.key").to_string_lossy(),
+        "-in",
+        &fixture.root.join("server.crt").to_string_lossy(),
+        "-out",
+        &fixture.root.join("client.p12").to_string_lossy(),
+        "-passout",
+        "pass:integration-only",
+    ]);
+    let identity = Identity::from_pkcs12(
+        &fs::read(fixture.root.join("client.p12")).unwrap_or_else(|error| panic!("{error}")),
+        "integration-only",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let client = PrincipalClient::new(
+        Client::new(
+            Certificate::from_der(&fixture.ca_der).unwrap_or_else(|error| panic!("{error}")),
+            identity,
+        ),
+        Endpoint::parse(&format!("https://localhost:{}", server.port))
+            .unwrap_or_else(|error| panic!("{error}")),
+        Zeroizing::new(token_for("registry")),
+    );
+    assert_eq!(client.resolve(key).as_deref(), Ok(expected));
+    assert!(client.resolve("unknown-publication-key").is_err());
 }

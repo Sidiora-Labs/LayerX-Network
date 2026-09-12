@@ -24,12 +24,13 @@ pub struct ReservationRequest<'a> {
 }
 
 use crate::pay_timing;
+use layerx_platform_internal::producer::{Health, Outbox, Pending, MAX_PENDING};
 use native_tls::{Certificate, TlsConnector, TlsStream};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -79,6 +80,7 @@ impl RedisEndpoint {
 }
 
 pub struct RedisStore {
+    pub producer_health: Arc<Health>,
     endpoint: RedisEndpoint,
     ca: Certificate,
     username: Zeroizing<String>,
@@ -172,6 +174,7 @@ impl RedisStore {
         password: Zeroizing<String>,
     ) -> Self {
         Self {
+            producer_health: Arc::new(Health::default()),
             endpoint,
             ca,
             username,
@@ -562,7 +565,106 @@ impl RedisStore {
     /// # Errors
     /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn complete(&self, request: Completion<'_>) -> Result<(), String> {
+        self.complete_inner(request, None)
+    }
+
+    /// # Errors
+    /// Refuses malformed verified receipts or failure to atomically retain the fact.
+    pub fn complete_verified(&self, request: Completion<'_>) -> Result<(), String> {
+        use layerx_platform_internal::{
+            events::Fact,
+            producer::{event_id, Observation},
+            secret::{hex, unhex},
+        };
+        let bytes =
+            unhex(request.receipt_hex).ok_or_else(|| "invalid verified receipt".to_owned())?;
+        let decoded = layerx_wire::receipt::decode(&bytes)
+            .map_err(|_| "invalid verified receipt".to_owned())?;
+        let receipt = decoded
+            .protocol()
+            .ok_or_else(|| "protocol receipt required".to_owned())?;
+        let resource = hex(&receipt.activity_id());
+        let current = match self.command(&["HGET", "gateway:events:sequences", &resource])? {
+            Resp::Bulk(None) => 0,
+            Resp::Bulk(Some(bytes)) => std::str::from_utf8(&bytes)
+                .map_err(|_| "invalid producer counter")?
+                .parse::<u64>()
+                .map_err(|_| "invalid producer counter")?,
+            _ => return Err("invalid producer counter response".to_owned()),
+        };
+        let sequence = if current == 0 { 1 } else { current };
+        let pending = Pending::new(Observation {
+            kind: "payment".to_owned(),
+            id: event_id("payment", &resource, sequence),
+            principal: None,
+            principal_digest: Some(request.principal_digest.to_owned()),
+            resource: resource.clone(),
+            sequence,
+            source_sequence: receipt.global_sequence(),
+            occurred_at: receipt.timestamp(),
+            facts: vec![Fact {
+                name: "result_code".to_owned(),
+                value: receipt.result_code().to_string(),
+            }],
+            activity_id: Some(resource),
+            amount: Some(receipt.amount().to_string()),
+            asset: Some(hex(&receipt.asset())),
+        })?;
+        self.complete_observed(request, &pending)
+    }
+
+    /// # Errors
+    /// Refuses mismatched payment identity, queue overflow and durable completion failures.
+    pub fn complete_observed(
+        &self,
+        request: Completion<'_>,
+        pending: &Pending,
+    ) -> Result<(), String> {
+        pending.validate()?;
+        if pending.observed
+            || pending.observation.kind != "payment"
+            || request.activity_id != Some(pending.observation.resource.as_str())
+            || pending.observation.principal_digest.as_deref() != Some(request.principal_digest)
+            || request.receipt_hex.is_empty()
+            || request.state == "pending"
+        {
+            return Err("gateway observation does not bind completion".to_owned());
+        }
+        let receipt = layerx_platform_internal::secret::unhex(request.receipt_hex)
+            .ok_or_else(|| "gateway observation receipt is malformed".to_owned())?;
+        let decoded = layerx_wire::receipt::decode(&receipt)
+            .map_err(|_| "gateway observation receipt is malformed".to_owned())?;
+        let receipt = decoded
+            .protocol()
+            .ok_or_else(|| "gateway observation requires a protocol receipt".to_owned())?;
+        let observation = &pending.observation;
+        if observation.resource != layerx_platform_internal::secret::hex(&receipt.activity_id())
+            || observation.source_sequence != receipt.global_sequence()
+            || observation.occurred_at != receipt.timestamp()
+            || observation.amount.as_deref() != Some(receipt.amount().to_string().as_str())
+            || observation.asset.as_deref()
+                != Some(layerx_platform_internal::secret::hex(&receipt.asset()).as_str())
+            || !observation.facts.iter().any(|fact| {
+                fact.name == "result_code" && fact.value == receipt.result_code().to_string()
+            })
+        {
+            return Err("gateway observation differs from its receipt".to_owned());
+        }
+        self.complete_inner(request, Some(pending))
+    }
+
+    fn complete_inner(
+        &self,
+        request: Completion<'_>,
+        pending: Option<&Pending>,
+    ) -> Result<(), String> {
         let complete_started = Instant::now();
+        let event_id = pending.map_or("", |pending| pending.observation.id.as_str());
+        let event = pending
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| "gateway observation encoding failed".to_owned())?
+            .unwrap_or_default();
         let Completion {
             idempotency_scope,
             request_digest,
@@ -587,12 +689,16 @@ impl RedisStore {
             let response = self.command(&[
                 "EVAL",
                 COMPLETE_SCRIPT,
-                "5",
+                "9",
                 &idem,
                 "gateway:pending",
                 "gateway:audit",
                 "gateway:audit:head",
                 &owner,
+                "gateway:events:pending",
+                "gateway:events:queue",
+                "gateway:events:observations",
+                "gateway:events:sequences",
                 request_digest,
                 state,
                 response_hex,
@@ -602,11 +708,24 @@ impl RedisStore {
                 &chain,
                 bind_owner,
                 principal_digest,
+                event_id,
+                &event,
+                &MAX_PENDING.to_string(),
+                pending.map_or("", |entry| entry.observation.resource.as_str()),
+                &pending
+                    .map_or(0, |entry| entry.observation.sequence - 1)
+                    .to_string(),
+                &pending
+                    .map_or(0, |entry| entry.observation.sequence)
+                    .to_string(),
             ])?;
             pay_timing("gateway.store.complete.transaction", command_started);
             let tag = array_tag(response)?;
             if tag == "audit_retry" {
                 continue;
+            }
+            if tag == "overflow" {
+                self.producer_health.overflow();
             }
             let result = if tag == "completed" {
                 Ok(())
@@ -867,6 +986,76 @@ impl RedisStore {
     }
 }
 
+impl Outbox for RedisStore {
+    fn pending(&self) -> Result<Option<Pending>, String> {
+        let response = self.command(&[
+            "EVAL",
+            EVENT_PENDING_SCRIPT,
+            "2",
+            "gateway:events:queue",
+            "gateway:events:pending",
+        ])?;
+        match response {
+            Resp::Bulk(None) => Ok(None),
+            Resp::Bulk(Some(bytes)) => {
+                let pending: Pending = serde_json::from_slice(&bytes)
+                    .map_err(|_| "gateway event queue is corrupt".to_owned())?;
+                pending.validate()?;
+                Ok(Some(pending))
+            }
+            _ => Err("gateway event queue response is invalid".to_owned()),
+        }
+    }
+
+    fn acknowledge(&self, id: &str, observed: bool) -> Result<(), String> {
+        let mut pending = self
+            .pending()?
+            .ok_or_else(|| "gateway event queue is empty".to_owned())?;
+        if pending.observation.id != id || pending.observed == observed {
+            return Err("gateway event acknowledgement is out of order".to_owned());
+        }
+        let previous = serde_json::to_string(&pending).map_err(|error| error.to_string())?;
+        pending.observed = true;
+        let next = if observed {
+            serde_json::to_string(&pending).map_err(|error| error.to_string())?
+        } else {
+            String::new()
+        };
+        let result = self.command(&[
+            "EVAL",
+            EVENT_ACK_SCRIPT,
+            "2",
+            "gateway:events:queue",
+            "gateway:events:pending",
+            id,
+            &previous,
+            &next,
+        ])?;
+        if matches!(result, Resp::Integer(1)) {
+            Ok(())
+        } else {
+            Err("gateway event acknowledgement conflicted".to_owned())
+        }
+    }
+}
+
+const EVENT_PENDING_SCRIPT: &str = r"
+local id = redis.call('LINDEX', KEYS[1], 0)
+if not id then return false end
+local body = redis.call('HGET', KEYS[2], id)
+if not body then return redis.error_reply('event queue body missing') end
+return body
+";
+
+const EVENT_ACK_SCRIPT: &str = r"
+if redis.call('LINDEX', KEYS[1], 0) ~= ARGV[1] then return 0 end
+if redis.call('HGET', KEYS[2], ARGV[1]) ~= ARGV[2] then return 0 end
+if ARGV[3] == '' then
+ redis.call('LPOP', KEYS[1]); redis.call('HDEL', KEYS[2], ARGV[1])
+else redis.call('HSET', KEYS[2], ARGV[1], ARGV[3]) end
+return 1
+";
+
 const ISSUE_SCRIPT: &str = r"
 local current = redis.call('GET', KEYS[4]) or ''
 if current ~= ARGV[12] then return {'audit_retry'} end
@@ -941,13 +1130,26 @@ return {outcome}
 
 const COMPLETE_SCRIPT: &str = r"
 if redis.call('HGET', KEYS[1], 'digest') ~= ARGV[1] then return {'conflict'} end
-if redis.call('HGET', KEYS[1], 'state') ~= 'pending' then return {'completed'} end
+local stored_event = redis.call('HGET', KEYS[8], ARGV[10])
+if ARGV[10] ~= '' and stored_event and stored_event ~= ARGV[11] then return {'conflict'} end
+if redis.call('HGET', KEYS[1], 'state') ~= 'pending' then
+ if ARGV[10] ~= '' and not stored_event then return {'conflict'} end
+ return {'completed'}
+end
+if ARGV[10] ~= '' and not stored_event and (redis.call('HGET', KEYS[9], ARGV[13]) or '0') ~= ARGV[14] then return {'conflict'} end
+if ARGV[10] ~= '' and not stored_event and redis.call('LLEN', KEYS[7]) >= tonumber(ARGV[12]) then return {'overflow'} end
 local previous = redis.call('GET', KEYS[4]) or ''
 if previous ~= ARGV[6] then return {'audit_retry'} end
 if ARGV[8] == '1' then
  local owner = redis.call('GET', KEYS[5])
  if owner and owner ~= ARGV[9] then return {'conflict'} end
  redis.call('SET', KEYS[5], ARGV[9], 'KEEPTTL')
+end
+if ARGV[10] ~= '' and not stored_event then
+ redis.call('HSET', KEYS[9], ARGV[13], ARGV[15])
+ redis.call('HSET', KEYS[8], ARGV[10], ARGV[11])
+ redis.call('HSET', KEYS[6], ARGV[10], ARGV[11])
+ redis.call('RPUSH', KEYS[7], ARGV[10])
 end
 redis.call('HSET', KEYS[1], 'state', ARGV[2], 'response', ARGV[3], 'receipt', ARGV[4]); if ARGV[2] ~= 'pending' then redis.call('SREM', KEYS[2], KEYS[1]) end
 redis.call('XADD', KEYS[3], '*', 'previous', ARGV[6], 'chain', ARGV[7], 'event', ARGV[5], 'outcome', ARGV[2]); redis.call('SET', KEYS[4], ARGV[7])

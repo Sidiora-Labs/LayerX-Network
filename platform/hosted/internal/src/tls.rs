@@ -142,6 +142,22 @@ pub struct Upstream {
 }
 
 impl Upstream {
+    #[must_use]
+    pub fn new(
+        origin: Origin,
+        ca: Certificate,
+        identity: Option<Identity>,
+        token: Option<Zeroizing<String>>,
+    ) -> Self {
+        Self {
+            origin,
+            ca,
+            identity,
+            token,
+            cookie: None,
+        }
+    }
+
     /// Builds the client from `<prefix>_UPSTREAM_URL`, `<prefix>_UPSTREAM_CA_DER`,
     /// the optional `<prefix>_UPSTREAM_TOKEN_FILE` and the optional
     /// `<prefix>_UPSTREAM_CLIENT_IDENTITY_PKCS12` plus its
@@ -222,6 +238,17 @@ impl Upstream {
             ));
         }
         self.request("GET", path, &[], Some((header, credential)))
+    }
+
+    /// # Errors
+    /// Refuses transport failures and malformed responses.
+    pub fn post(&self, path: &str, body: &[u8]) -> Result<UpstreamResponse, UpstreamFailure> {
+        self.request("POST", path, body, None)
+    }
+
+    #[must_use]
+    pub fn authenticated_producer(&self) -> bool {
+        self.identity.is_some() && self.token.is_some() && self.cookie.is_none()
     }
 
     fn request(

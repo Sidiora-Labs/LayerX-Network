@@ -14,6 +14,11 @@ const READY_MARKER_FILE: &str = "ready.marker";
 const MAX_RECORD_BYTES: usize = 64 * 1024;
 const MAX_JOURNAL_RECORDS: usize = 1_000_000;
 
+/// Prefix of the refusal [`Journal::open`] returns when another holder already
+/// owns the advisory lock on the journal file. A caller that shares one journal
+/// directory with a concurrent process may retry an open that carries it.
+pub const LOCK_REFUSAL: &str = "journal lock";
+
 /// The open journal.
 pub struct Journal {
     directory: PathBuf,
@@ -45,7 +50,7 @@ impl Journal {
             .open(&path)
             .map_err(|error| error.to_string())?;
         file.try_lock()
-            .map_err(|error| format!("journal lock: {error}"))?;
+            .map_err(|error| format!("{LOCK_REFUSAL}: {error}"))?;
         sync_directory(directory)?;
         let mut records = 0_usize;
         if path.exists() {

@@ -11,6 +11,7 @@ const READY_MARKER_FILE: &str = "ready.marker";
 const MAX_RECORD_BYTES: usize = 64 * 1024;
 pub const MAX_SESSIONS_PER_PRINCIPAL: usize = 4096;
 pub const SUBJECT_TENANT_CONFLICT: &str = "principal subject belongs to another tenant";
+pub const PUBLICATION_KEY_BINDING_REFUSED: &str = "publication key binding refused";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,24 +42,36 @@ pub struct StoredSession {
 enum Record {
     Principal(Principal),
     Session(StoredSession),
-    Revoke { session_id: String, revoked_at: u64 },
+    PublicationKey {
+        digest: String,
+        sub: String,
+        revoked: bool,
+    },
+    Revoke {
+        session_id: String,
+        revoked_at: u64,
+    },
 }
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Snapshot {
+    #[serde(default)]
+    publication_keys: BTreeMap<String, (String, bool)>,
     principals: BTreeMap<String, BTreeMap<String, Principal>>,
     sessions: BTreeMap<String, StoredSession>,
 }
 
 #[derive(Serialize)]
 struct SnapshotView<'a> {
+    publication_keys: &'a BTreeMap<String, (String, bool)>,
     principals: &'a BTreeMap<String, BTreeMap<String, Principal>>,
     sessions: &'a BTreeMap<String, StoredSession>,
 }
 
 #[derive(Default)]
 struct State {
+    publication_keys: BTreeMap<String, (String, bool)>,
     principals: BTreeMap<String, BTreeMap<String, Principal>>,
     sessions: BTreeMap<String, StoredSession>,
     subject_tenants: BTreeMap<String, String>,
@@ -83,11 +96,15 @@ impl State {
             }
             state.insert_session(session)?;
         }
+        for (digest, (sub, revoked)) in snapshot.publication_keys {
+            state.bind_publication_key(digest, sub, revoked)?;
+        }
         Ok(state)
     }
 
     const fn view(&self) -> SnapshotView<'_> {
         SnapshotView {
+            publication_keys: &self.publication_keys,
             principals: &self.principals,
             sessions: &self.sessions,
         }
@@ -129,6 +146,36 @@ impl State {
         Ok(())
     }
 
+    fn publication_principal(&self, digest: &str) -> Option<&Principal> {
+        let (sub, revoked) = self.publication_keys.get(digest)?;
+        if *revoked {
+            return None;
+        }
+        let tenant = self.subject_tenants.get(sub)?;
+        self.principal(tenant, sub)
+    }
+
+    fn publication_binding_refused(&self, digest: &str, sub: &str, revoked: bool) -> bool {
+        !self.subject_tenants.contains_key(sub)
+            || self
+                .publication_keys
+                .get(digest)
+                .is_some_and(|(owner, disabled)| owner != sub || (*disabled && !revoked))
+    }
+
+    fn bind_publication_key(
+        &mut self,
+        digest: String,
+        sub: String,
+        revoked: bool,
+    ) -> Result<(), String> {
+        if self.publication_binding_refused(&digest, &sub, revoked) {
+            return Err(PUBLICATION_KEY_BINDING_REFUSED.to_owned());
+        }
+        self.publication_keys.insert(digest, (sub, revoked));
+        Ok(())
+    }
+
     fn live_sessions(&self, tenant: &str, sub: &str) -> usize {
         self.sessions
             .values()
@@ -150,6 +197,8 @@ pub struct Store {
 }
 
 impl Store {
+    /// # Errors
+    /// Refuses an unreadable or inconsistent durable store.
     pub fn open(directory: &Path) -> Result<Self, String> {
         fs::create_dir_all(directory).map_err(|error| format!("state directory: {error}"))?;
         let snapshot_path = directory.join(SNAPSHOT_FILE);
@@ -201,6 +250,35 @@ impl Store {
         self.state.sessions.get(session_id)
     }
 
+    #[must_use]
+    pub fn publication_principal(&self, digest: &str) -> Option<&Principal> {
+        self.state.publication_principal(digest)
+    }
+
+    /// # Errors
+    /// Refuses unknown subjects, changed ownership, revoked key resurrection, or durable write failure.
+    pub fn bind_publication_key(
+        &mut self,
+        digest: String,
+        sub: String,
+        revoked: bool,
+    ) -> Result<(), String> {
+        if self
+            .state
+            .publication_binding_refused(&digest, &sub, revoked)
+        {
+            return Err(PUBLICATION_KEY_BINDING_REFUSED.to_owned());
+        }
+        self.append(&Record::PublicationKey {
+            digest: digest.clone(),
+            sub: sub.clone(),
+            revoked,
+        })?;
+        self.state.bind_publication_key(digest, sub, revoked)
+    }
+
+    /// # Errors
+    /// Refuses unavailable durable storage or an oversized record.
     pub fn put_principal(&mut self, principal: Principal) -> Result<(), String> {
         if self.state.subject_conflict(&principal) {
             return Err(SUBJECT_TENANT_CONFLICT.to_owned());
@@ -209,6 +287,8 @@ impl Store {
         self.state.insert_principal(principal)
     }
 
+    /// # Errors
+    /// Refuses unknown principals, duplicate sessions, session bounds, or durable write failure.
     pub fn put_session(&mut self, session: StoredSession) -> Result<(), String> {
         if self
             .state
@@ -231,6 +311,8 @@ impl Store {
         self.state.insert_session(session)
     }
 
+    /// # Errors
+    /// Refuses durable write failure.
     pub fn revoke_session(
         &mut self,
         session_id: &str,
@@ -252,6 +334,8 @@ impl Store {
         Ok(Some(revoked_at))
     }
 
+    /// # Errors
+    /// Refuses missing or replaced durable storage and a prior failed write.
     pub fn check_available(&self) -> Result<(), String> {
         if self.failed {
             return Err("journal write failed; restart required".to_owned());
@@ -268,6 +352,8 @@ impl Store {
         Ok(())
     }
 
+    /// # Errors
+    /// Refuses unavailable storage or a failed durable readiness probe.
     pub fn probe_writable(&self) -> Result<(), String> {
         self.check_available()?;
         let temporary = self.directory.join(format!("{READY_MARKER_FILE}.tmp"));
@@ -306,6 +392,13 @@ impl Store {
 
 fn apply(state: &mut State, record: Record) -> Result<(), String> {
     match record {
+        Record::PublicationKey {
+            digest,
+            sub,
+            revoked,
+        } => state
+            .bind_publication_key(digest, sub, revoked)
+            .map_err(|_| "journal publication key binding invalid".to_owned()),
         Record::Principal(principal) => state.insert_principal(principal).map_err(|error| {
             if error == SUBJECT_TENANT_CONFLICT {
                 "journal principal binds one subject to two tenants".to_owned()
