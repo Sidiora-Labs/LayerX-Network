@@ -650,7 +650,7 @@ static int maintenance_admission(int *descriptor, const signer *key, bool recove
     return 0;
 }
 
-static int availability_batches(int descriptor, const signer *key)
+static int availability_batches(int *descriptor, const signer *key)
 {
     uint8_t deploy[112] = {1U};
     uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[33] = {1U};
@@ -665,9 +665,9 @@ static int availability_batches(int descriptor, const signer *key)
         REQUIRE(build_activity(key, sequence, LX_PROGRAMS_DEPLOY, 0U,
             deploy, sizeof(deploy), encoded, sizeof(encoded), &length) == 0);
         REQUIRE(lxp_activity_id(encoded, length, activity_id) == LXP_OK);
-        REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST,
+        REQUIRE(send_request(*descriptor, LNI_MINOR, SUBMIT_REQUEST,
             sequence * 2U + 1U, encoded, length) == 0);
-        REQUIRE(expect_ack(descriptor, sequence * 2U + 1U,
+        REQUIRE(expect_ack(*descriptor, sequence * 2U + 1U,
             encoded, length, activity_id) == 0);
         if (sequence == 0U) {
             for (size_t i = 0U; i < 32U; ++i) (void)printf("%02x", activity_id[i]);
@@ -676,9 +676,9 @@ static int availability_batches(int descriptor, const signer *key)
         (void)memcpy(query + 1U, activity_id, 32U);
         for (unsigned attempt = 0U; attempt < 200U; ++attempt) {
             wire_envelope response;
-            REQUIRE(send_request(descriptor, LNI_MINOR, 5U,
+            REQUIRE(send_request(*descriptor, LNI_MINOR, 5U,
                 sequence * 2U + 2U, query, sizeof(query)) == 0);
-            REQUIRE(receive_envelope(descriptor, &response) == 0);
+            REQUIRE(receive_envelope(*descriptor, &response) == 0);
             REQUIRE(response.tag == 6U && response.correlation_id == sequence * 2U + 2U);
             if (response.payload_length != 0U) {
                 lxp_receipt receipt;
@@ -694,6 +694,7 @@ static int availability_batches(int descriptor, const signer *key)
         }
         REQUIRE(found);
     }
+    REQUIRE(maintenance_head(descriptor, 18U, 9U) == 0);
     return 0;
 }
 
@@ -878,7 +879,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc == 3 && strcmp(argv[2], "--availability-batches") == 0) {
-        REQUIRE(availability_batches(descriptor, &key) == 0);
+        REQUIRE(availability_batches(&descriptor, &key) == 0);
         REQUIRE(close(descriptor) == 0);
         return 0;
     }
