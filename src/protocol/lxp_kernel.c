@@ -143,7 +143,13 @@ lxp_result lxp_kernel_bind_ledger_admission(
         ctx->ledger_admission.activity_type = activity_type;
         (void)memcpy(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U);
         (void)memcpy(ctx->ledger_admission.account_id, authority->principal, 32U);
-        if (activity_type == LX_ASSET_ACCOUNT_OPEN) {
+        if (activity_type == LX_ASSET_WITHDRAW) {
+            (void)memcpy(ctx->ledger_admission.actor, authority->actor, 32U);
+            (void)memcpy(ctx->ledger_admission.verified_key,
+                         authority->verified_key, 32U);
+        }
+        if (activity_type == LX_ASSET_ACCOUNT_OPEN ||
+            activity_type == LX_ASSET_WITHDRAW) {
             status = lxp_ctx_account_find(ctx, authority->principal, &account);
             if (status != LXP_OK &&
                 status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE)
@@ -207,10 +213,14 @@ lxp_result lxp_kernel_withdraw_execution_sequence(
         facts->activity_type != LX_ASSET_WITHDRAW ||
         authority->kind != LXP_AUTHORITY_OWNER ||
         lxp_ct_memcmp(facts->activity_binding, ctx->activity_id, 32U) != 0 ||
-        lxp_ct_memcmp(facts->account_id, account_id, 32U) != 0 ||
-        lxp_ct_memcmp(facts->account_id, authority->principal, 32U) != 0 ||
         lxp_ct_memcmp(facts->actor, authority->actor, 32U) != 0 ||
         lxp_ct_memcmp(facts->verified_key, authority->verified_key, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    if (lxp_ct_is_zero(facts->account_id, 32U) &&
+        lxp_ct_is_zero(authority->principal, 32U) && !facts->account_present)
+        return LXP_OK;
+    if (lxp_ct_memcmp(facts->account_id, account_id, 32U) != 0 ||
+        lxp_ct_memcmp(facts->account_id, authority->principal, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
     status = lxp_ctx_account_find(ctx, account_id, &account);
     if (status != LXP_OK) return status;
