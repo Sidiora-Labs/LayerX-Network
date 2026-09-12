@@ -48,6 +48,54 @@ fn certificates(directory: &Path) {
             "subjectAltName=DNS:localhost",
         ],
     );
+    server_certificate(directory);
+    openssl(
+        directory,
+        &[
+            "req",
+            "-x509",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
+            "-nodes",
+            "-keyout",
+            "other-key.pem",
+            "-out",
+            "other-cert.pem",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=unrelated-root",
+        ],
+    );
+    openssl(
+        directory,
+        &[
+            "x509",
+            "-in",
+            "other-cert.pem",
+            "-outform",
+            "DER",
+            "-out",
+            "other-cert.der",
+        ],
+    );
+    openssl(
+        directory,
+        &[
+            "x509", "-in", "cert.pem", "-outform", "DER", "-out", "cert.der",
+        ],
+    );
+    openssl(
+        directory,
+        &[
+            "pkcs8", "-topk8", "-nocrypt", "-in", "key.pem", "-outform", "DER", "-out", "key.der",
+        ],
+    );
+}
+
+fn server_certificate(directory: &Path) {
     fs::rename(directory.join("key.pem"), directory.join("ca-key.pem"))
         .unwrap_or_else(|error| panic!("retain root signing key: {error}"));
     openssl(
@@ -114,50 +162,6 @@ fn certificates(directory: &Path) {
             "DER",
             "-out",
             "ca-key.der",
-        ],
-    );
-    openssl(
-        directory,
-        &[
-            "req",
-            "-x509",
-            "-newkey",
-            "ec",
-            "-pkeyopt",
-            "ec_paramgen_curve:P-256",
-            "-nodes",
-            "-keyout",
-            "other-key.pem",
-            "-out",
-            "other-cert.pem",
-            "-days",
-            "1",
-            "-subj",
-            "/CN=unrelated-root",
-        ],
-    );
-    openssl(
-        directory,
-        &[
-            "x509",
-            "-in",
-            "other-cert.pem",
-            "-outform",
-            "DER",
-            "-out",
-            "other-cert.der",
-        ],
-    );
-    openssl(
-        directory,
-        &[
-            "x509", "-in", "cert.pem", "-outform", "DER", "-out", "cert.der",
-        ],
-    );
-    openssl(
-        directory,
-        &[
-            "pkcs8", "-topk8", "-nocrypt", "-in", "key.pem", "-outform", "DER", "-out", "key.der",
         ],
     );
 }
