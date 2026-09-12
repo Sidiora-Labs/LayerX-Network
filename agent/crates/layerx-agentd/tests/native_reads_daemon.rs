@@ -43,8 +43,7 @@ fn connect(socket: &Path) -> Client {
     .unwrap_or_else(|error| panic!("real daemon connection: {error:?}"))
 }
 
-fn probe(socket: &Path, stage: &str, work: &Path) {
-    let mut client = connect(socket);
+fn prepare_stage(client: &mut Client, stage: &str, work: &Path) {
     if stage == "retained" {
         let signed = client
             .batch_header(1, 1)
@@ -101,6 +100,11 @@ fn probe(socket: &Path, stage: &str, work: &Path) {
             1
         );
     }
+}
+
+fn probe(socket: &Path, stage: &str, work: &Path) {
+    let mut client = connect(socket);
+    prepare_stage(&mut client, stage, work);
     let key = SigningKey::from_bytes(&[0x11; 32]);
     let did =
         Did::new(format!("did:layerx:{}", hex::encode(key.verifying_key().as_bytes())).as_bytes())
@@ -119,6 +123,10 @@ fn probe(socket: &Path, stage: &str, work: &Path) {
             .map_or(true, |value| value["complete"] != true));
         return;
     }
+    finalized_reads(&mut route, work);
+}
+
+fn finalized_reads(route: &mut NativeReadRoute, work: &Path) {
     let activity = fs::read_to_string(work.join("availability-activity-id"))
         .unwrap_or_else(|error| panic!("activity: {error}"));
     let activity = activity.trim();
@@ -161,6 +169,10 @@ fn probe(socket: &Path, stage: &str, work: &Path) {
             .unwrap_or_else(|| panic!("protocol receipt"))
             .from(),
     );
+    history_reads(route, &account);
+}
+
+fn history_reads(route: &mut NativeReadRoute, account: &str) {
     let mut page = route
         .read(&format!("/v1/reads/history/{account}?limit=2"))
         .unwrap_or_else(|error| panic!("history first page: {error:?}"));
