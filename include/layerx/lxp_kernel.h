@@ -207,6 +207,21 @@ lxp_result lxp_kernel_create(lxp_kernel *kernel, lxp_state_store *state,
                              lxp_state_journal *journal,
                              const void *parameter_set, uint64_t epoch);
 lxp_result lxp_kernel_set_epoch(lxp_kernel *kernel, uint64_t epoch);
+/* Advances the kernel epoch through the module epoch hooks. Every module
+ * registered for the departing epoch observes epoch_end and every module
+ * registered for the arriving epoch observes epoch_begin, each on a mutable
+ * context sealed at timestamp_ms, inside one state journal opened at the
+ * next global sequence. A hook failure rolls back every staged write, the
+ * journal and the epoch; success commits them together, consumes the
+ * sequence and recomputes current_state_root. Because every hook stages its
+ * writes before any of them commits, their additions are charged against one
+ * shared budget: a transition whose hooks would together carry the module
+ * table or the blob store past its capacity refuses with
+ * LXP_ERR_ARENA_EXHAUSTED before the journal commits. An equal epoch refuses
+ * with LXP_ERR_IDEMPOTENT_REPLAY and a lower one with
+ * LXP_ERR_TIMESTAMP_REGRESSION. */
+lxp_result lxp_kernel_epoch_transition(lxp_kernel *kernel, uint64_t epoch,
+                                       uint64_t timestamp_ms, lxp_arena *arena);
 lxp_result lxp_kernel_set_capabilities(
     lxp_kernel *kernel, lxp_kernel_parameter_reader read_parameter,
     lxp_kernel_transfer_applier apply_transfer_set);

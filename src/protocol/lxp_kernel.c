@@ -1114,6 +1114,182 @@ lxp_result lxp_kernel_set_epoch(lxp_kernel *kernel, uint64_t epoch)
     return LXP_OK;
 }
 
+/* One module context driven through an epoch hook. Contexts are heap-held so
+ * that every module registered for the departing and the arriving epoch can
+ * stay staged until the single journal of the transition commits. */
+typedef struct epoch_hook_run {
+    lxp_module_ctx ctx;
+    lxp_effect_buffer effects;
+} epoch_hook_run;
+
+/* The capacity guarantee a module context takes in prepare_commit is measured
+ * against the kernel tables as they stand, and those tables do not move until
+ * the commit loop at the end of the transition runs. A transition stages every
+ * run before it commits any of them, so the runs are charged against one
+ * shared budget here: each run's non-deleted staged entries are counted as
+ * additions, which is conservative because an entry that overwrites a
+ * committed key consumes no new slot. */
+typedef struct epoch_hook_budget {
+    size_t module_kv;
+    size_t blobs;
+    size_t blob_bytes;
+} epoch_hook_budget;
+
+static lxp_result epoch_hook_budget_charge(const lxp_kernel *kernel,
+                                           const lxp_module_ctx *ctx,
+                                           epoch_hook_budget *budget)
+{
+    size_t i;
+    for (i = 0U; i < ctx->staged_count; ++i)
+        if (!ctx->staged[i].deleted) ++budget->module_kv;
+    for (i = 0U; i < ctx->staged_blob_count; ++i) {
+        if (ctx->staged_blobs[i].deleted) continue;
+        ++budget->blobs;
+        if (SIZE_MAX - budget->blob_bytes < ctx->staged_blobs[i].length)
+            return LXP_ERR_OVERFLOW;
+        budget->blob_bytes += ctx->staged_blobs[i].length;
+    }
+    if (kernel->module_kv_count > (size_t)LXP_KERNEL_MAX_MODULE_KV ||
+        kernel->blob_count > (size_t)LXP_KERNEL_MAX_BLOBS ||
+        kernel->blob_total_bytes > (size_t)LXP_KERNEL_MAX_BLOB_TOTAL_BYTES)
+        return LXP_FATAL_INVARIANT;
+    if (budget->module_kv >
+            (size_t)LXP_KERNEL_MAX_MODULE_KV - kernel->module_kv_count ||
+        budget->blobs > (size_t)LXP_KERNEL_MAX_BLOBS - kernel->blob_count ||
+        budget->blob_bytes > (size_t)LXP_KERNEL_MAX_BLOB_TOTAL_BYTES -
+                                 kernel->blob_total_bytes)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    return LXP_OK;
+}
+
+static lxp_result epoch_hook_run_invoke(lxp_kernel *kernel, uint16_t module_id,
+                                        uint64_t epoch, uint64_t timestamp_ms,
+                                        uint64_t global_sequence,
+                                        lxp_arena *arena, bool begin,
+                                        epoch_hook_run **runs, size_t *count,
+                                        epoch_hook_budget *budget)
+{
+    const lxp_module_registration *registration;
+    lxp_module_epoch_fn hook;
+    epoch_hook_run *run;
+    lxp_result status;
+    status = lxp_kernel_module_by_id(kernel, module_id, epoch, &registration);
+    if (status == LXP_ERR_MODULE_DISABLED) return LXP_OK;
+    if (status != LXP_OK) return status;
+    hook = begin ? registration->iface->epoch_begin :
+                   registration->iface->epoch_end;
+    if (hook == NULL) return LXP_FATAL_INVARIANT;
+    if (*count >= 2U * (size_t)LXP_MODULE_RESERVED_COUNT)
+        return LXP_FATAL_INVARIANT;
+    run = (epoch_hook_run *)calloc(1U, sizeof(*run));
+    if (run == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    status = lxp_module_ctx_init(&run->ctx, kernel, module_id, timestamp_ms,
+                                 epoch, global_sequence, UINT64_MAX, arena,
+                                 true);
+    if (status == LXP_OK) status = lxp_effect_buffer_init(&run->effects);
+    if (status == LXP_OK)
+        status = lxp_module_ctx_bind_effects(&run->ctx, &run->effects);
+    if (status != LXP_OK) {
+        free(run);
+        return status;
+    }
+    runs[(*count)++] = run;
+    status = hook(&run->ctx, epoch, timestamp_ms);
+    if (status != LXP_OK) return status;
+    status = lxp_module_ctx_prepare_commit(&run->ctx);
+    if (status != LXP_OK) return status;
+    return epoch_hook_budget_charge(kernel, &run->ctx, budget);
+}
+
+static void epoch_hook_runs_rollback(epoch_hook_run **runs, size_t count)
+{
+    while (count != 0U) lxp_module_ctx_rollback(&runs[--count]->ctx);
+}
+
+static void epoch_hook_runs_free(epoch_hook_run **runs, size_t count)
+{
+    size_t i;
+    for (i = 0U; i < count; ++i) free(runs[i]);
+}
+
+lxp_result lxp_kernel_epoch_transition(lxp_kernel *kernel, uint64_t epoch,
+                                       uint64_t timestamp_ms, lxp_arena *arena)
+{
+    epoch_hook_run *runs[2U * (size_t)LXP_MODULE_RESERVED_COUNT];
+    epoch_hook_budget budget = { 0U, 0U, 0U };
+    size_t run_count = 0U;
+    size_t i;
+    size_t mark;
+    uint16_t module_id;
+    uint64_t previous;
+    uint64_t global_sequence;
+    lxp_result status;
+    if (kernel == NULL || kernel->state == NULL || kernel->journal == NULL ||
+        arena == NULL || timestamp_ms == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    if (epoch < kernel->epoch) return LXP_ERR_TIMESTAMP_REGRESSION;
+    if (epoch == kernel->epoch) return LXP_ERR_IDEMPOTENT_REPLAY;
+    if (kernel->publication_poisoned || kernel->batch_publication_pending ||
+        kernel->journal->open)
+        return LXP_FATAL_INVARIANT;
+    previous = kernel->epoch;
+    global_sequence = kernel->state->next_sequence;
+    if (global_sequence == UINT64_MAX) return LXP_ERR_OVERFLOW;
+    mark = lxp_arena_mark(arena);
+    status = lxp_state_journal_open(kernel->state, global_sequence,
+                                    kernel->journal);
+    if (status != LXP_OK) return status;
+    if (kernel->state->accounts != NULL)
+        status = lxp_state_journal_require_account_root(kernel->journal);
+    for (module_id = 1U;
+         status == LXP_OK && module_id <= LXP_MODULE_RESERVED_COUNT;
+         ++module_id)
+        status = epoch_hook_run_invoke(kernel, module_id, previous,
+                                       timestamp_ms, global_sequence, arena,
+                                       false, runs, &run_count, &budget);
+    if (status == LXP_OK) kernel->epoch = epoch;
+    for (module_id = 1U;
+         status == LXP_OK && module_id <= LXP_MODULE_RESERVED_COUNT;
+         ++module_id)
+        status = epoch_hook_run_invoke(kernel, module_id, epoch, timestamp_ms,
+                                       global_sequence, arena, true, runs,
+                                       &run_count, &budget);
+    if (status == LXP_OK) {
+        status = lxp_state_journal_commit(kernel->journal);
+        if (status != LXP_OK && !kernel->journal->open) {
+            /* The sequence is consumed: the staged module writes belong to
+             * it and must land, exactly as the occupancy finalizer treats a
+             * journal that closed while reporting a failure. */
+            lxp_result committed = LXP_OK;
+            for (i = 0U; i < run_count && committed == LXP_OK; ++i)
+                committed = lxp_module_ctx_commit(&runs[i]->ctx);
+            if (committed == LXP_OK)
+                committed = lxp_state_root(kernel, kernel->current_state_root);
+            epoch_hook_runs_free(runs, run_count);
+            (void)lxp_arena_reset(arena, mark);
+            return committed == LXP_OK ? status : LXP_FATAL_INVARIANT;
+        }
+    }
+    if (status != LXP_OK) {
+        epoch_hook_runs_rollback(runs, run_count);
+        if (kernel->journal->open)
+            (void)lxp_state_journal_rollback(kernel->journal);
+        kernel->epoch = previous;
+        epoch_hook_runs_free(runs, run_count);
+        (void)lxp_arena_reset(arena, mark);
+        return status;
+    }
+    for (i = 0U; i < run_count && status == LXP_OK; ++i)
+        status = lxp_module_ctx_commit(&runs[i]->ctx);
+    if (status == LXP_OK)
+        status = lxp_state_root(kernel, kernel->current_state_root);
+    epoch_hook_runs_free(runs, run_count);
+    (void)lxp_arena_reset(arena, mark);
+    /* The journal has committed: a module write that fails to land after it
+     * leaves the kernel inconsistent with the consumed sequence. */
+    return status == LXP_OK ? LXP_OK : LXP_FATAL_INVARIANT;
+}
+
 lxp_result lxp_kernel_set_capabilities(
     lxp_kernel *kernel, lxp_kernel_parameter_reader read_parameter,
     lxp_kernel_transfer_applier apply_transfer_set)
