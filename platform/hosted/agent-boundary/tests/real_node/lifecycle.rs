@@ -496,7 +496,7 @@ fn verify_lifecycle_maintenance(
     authorization: &SequencerAuthorization,
     authority: &AuthorizedBatch,
 ) -> AuthorizedBatch {
-    assert_eq!(field(identity, "kind"), "occupancy_maintenance_v2");
+    assert_eq!(field(identity, "kind"), "batch_maintenance_v1");
     let decode_proof = |value: &serde_json::Value| {
         let wire = must(
             decode_merkle_proof(&unhex(field(value, "receipt_proof_hex"))),

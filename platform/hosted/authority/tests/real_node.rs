@@ -220,7 +220,12 @@ fn genesis_request(asset: &[u8; 32], guarantor_key: &[u8; 33]) -> Vec<u8> {
         request.extend_from_slice(&value.to_be_bytes());
     }
     let issuer = SigningKey::from_bytes(&random32());
-    lxgb_metadata::append(&mut request, asset, &issuer.verifying_key().to_bytes(), &random32());
+    lxgb_metadata::append(
+        &mut request,
+        asset,
+        &issuer.verifying_key().to_bytes(),
+        &random32(),
+    );
     request
 }
 
@@ -1514,7 +1519,7 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
         decode_proof(&served_evidence.receipt_proof),
         "served activity proof",
     );
-    let BatchIdentityEvidence::OccupancyMaintenanceV2 {
+    let BatchIdentityEvidence::BatchMaintenanceV1 {
         receipt: maintenance_bytes,
         proof: maintenance_path,
     } = &served_evidence.batch_identity
@@ -1596,7 +1601,7 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
         "independent inclusion verification",
     );
     let header = inclusion.header().header();
-    let BatchIdentityEvidence::OccupancyMaintenanceV2 {
+    let BatchIdentityEvidence::BatchMaintenanceV1 {
         receipt,
         proof: maintenance_proof,
     } = &evidence.batch_identity
@@ -1614,10 +1619,14 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
         ),
         "independent maintenance inclusion verification",
     );
-    let maintenance = must(
-        layerx_wire::maintenance::decode_occupancy_maintenance(receipt),
+    let envelope = must(
+        layerx_wire::batch_maintenance::decode_batch_maintenance(receipt),
         "maintenance record",
     );
+    assert_eq!(envelope.protocol_version, header.protocol_version());
+    assert_eq!(envelope.epoch, header.epoch());
+    assert_eq!(envelope.timestamp_ms, header.timestamp_ms());
+    let maintenance = &envelope.occupancy;
     assert_eq!(maintenance.batch_number, header.batch_number());
     assert_eq!(maintenance.global_sequence, header.last_sequence());
     assert_eq!(

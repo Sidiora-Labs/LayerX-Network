@@ -221,7 +221,12 @@ fn genesis_request(
         request.extend_from_slice(&value.to_be_bytes());
     }
     let issuer = SigningKey::from_bytes(&random32());
-    lxgb_metadata::append(&mut request, asset, &issuer.verifying_key().to_bytes(), &random32());
+    lxgb_metadata::append(
+        &mut request,
+        asset,
+        &issuer.verifying_key().to_bytes(),
+        &random32(),
+    );
     request
 }
 
@@ -796,7 +801,6 @@ fn verify_maintenance_attachment(
     inclusion: &layerx_proof::inclusion::InclusionEvidence,
     inputs: &ReplicaInclusionInputs<'_>,
 ) -> (u64, [u8; 32]) {
-    assert_eq!(identity["kind"].as_str(), Some("occupancy_maintenance_v2"));
     let field = |name| {
         must(
             hex::decode(
@@ -828,6 +832,11 @@ fn verify_maintenance_attachment(
         .protocol()
         .unwrap_or_else(|| panic!("activity protocol"));
     let header = inclusion.header().header();
+    if header.protocol_version() == 3 {
+        assert_eq!(identity["kind"].as_str(), Some("batch_maintenance_v1"));
+    } else {
+        assert_eq!(identity["kind"].as_str(), Some("occupancy_maintenance_v2"));
+    }
     let activity = must(
         layerx_proof::receipt::authorized_maintained_activity_batch(
             &submitted.receipt,
@@ -849,10 +858,19 @@ fn verify_maintenance_attachment(
         ),
         "authenticated maintenance transition",
     );
-    let maintenance = must(
-        layerx_wire::maintenance::decode_occupancy_maintenance(&maintenance_bytes),
+    let record = must(
+        layerx_wire::batch_maintenance::decode_maintenance(&maintenance_bytes),
         "maintenance receipt",
     );
+    must(record.verify_header(header), "maintenance header binding");
+    assert_eq!(
+        matches!(
+            record,
+            layerx_wire::batch_maintenance::MaintenanceReceipt::Batch(_)
+        ),
+        header.protocol_version() == 3
+    );
+    let maintenance = record.occupancy();
     assert_eq!(
         header.resulting_state_root(),
         maintenance.resulting_state_root

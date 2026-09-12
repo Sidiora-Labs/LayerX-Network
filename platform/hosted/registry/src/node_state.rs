@@ -622,9 +622,16 @@ fn head_identity(
     receipt: &[u8],
     evidence: &BatchEvidence,
 ) -> Result<([u8; 32], [u8; 32], bool), String> {
-    if receipt.starts_with(b"LXP/programs/occupancy-receipt/v2\0") {
+    let identity_kind = if receipt.starts_with(layerx_wire::batch_maintenance::DOMAIN) {
+        Some("batch_maintenance_v1")
+    } else if receipt.starts_with(b"LXP/programs/occupancy-receipt/v2\0") {
+        Some("occupancy_maintenance_v2")
+    } else {
+        None
+    };
+    if let Some(identity_kind) = identity_kind {
         let identity = &evidence.batch_identity;
-        if field(identity, "kind")? != "occupancy_maintenance_v2"
+        if field(identity, "kind")? != identity_kind
             || hex::decode(field(identity, "receipt_hex")?).map_err(|error| error.to_string())?
                 != receipt
         {
@@ -644,6 +651,11 @@ fn head_identity(
         }
         let header = layerx_wire::receipt::decode_batch_header(&evidence.header)
             .map_err(|_| "maintenance header is invalid".to_owned())?;
+        let record = layerx_wire::batch_maintenance::decode_maintenance(receipt)
+            .map_err(|_| "maintenance receipt is invalid".to_owned())?;
+        record
+            .verify_header(&header)
+            .map_err(|_| "maintenance header binding is invalid".to_owned())?;
         let last_activity = header
             .last_sequence()
             .checked_sub(1)

@@ -36,6 +36,7 @@ const REGISTER_RESPONSE_TAG: u16 = 29;
 const WIRE_VERSION: u16 = 1;
 const MAX_RECEIPT_BYTES: usize = 4_096;
 const MAINTENANCE_WIRE_VERSION: u16 = 2;
+const BATCH_MAINTENANCE_WIRE_VERSION: u16 = 3;
 const MAX_MAINTENANCE_BYTES: usize =
     b"LXP/programs/occupancy-receipt/v2\0".len() + 374 + 256 * 81 + 65_536;
 const MAX_VALIDITY_PROOF_BYTES: usize = 1_048_576;
@@ -673,8 +674,10 @@ fn account_proof_bundle(
             parameter_version,
         )
         .map_err(EvidenceError::Account)?;
-        let maintenance = decode_occupancy_maintenance(&decoded.proof.receipt_bytes)
-            .map_err(|_| EvidenceError::Receipt)?;
+        let record =
+            layerx_wire::batch_maintenance::decode_maintenance(&decoded.proof.receipt_bytes)
+                .map_err(|_| EvidenceError::Receipt)?;
+        let maintenance = record.occupancy();
         let mut request = Vec::with_capacity(35);
         request.extend_from_slice(&WIRE_VERSION.to_be_bytes());
         request.push(3);
@@ -922,7 +925,11 @@ pub(crate) fn decode_nested_evidence(
 ) -> Result<DecodedNestedEvidence, EvidenceError> {
     let mut reader = Reader::new(bytes);
     let wire_version = reader.u16()?;
-    if !matches!(wire_version, WIRE_VERSION | MAINTENANCE_WIRE_VERSION) || reader.u8()? != 2 {
+    if !matches!(
+        wire_version,
+        WIRE_VERSION | MAINTENANCE_WIRE_VERSION | BATCH_MAINTENANCE_WIRE_VERSION
+    ) || reader.u8()? != 2
+    {
         return Err(EvidenceError::Malformed);
     }
     let selector = RootSelector::decode(&mut reader)?;
@@ -947,6 +954,16 @@ pub(crate) fn decode_nested_evidence(
         (
             AccountEvidenceKind::Maintenance {
                 parameter_version: maintenance.parameter_version,
+            },
+            bytes.to_vec(),
+        )
+    } else if wire_version == BATCH_MAINTENANCE_WIRE_VERSION {
+        let bytes = reader.length_prefixed(layerx_wire::batch_maintenance::MAX_BYTES)?;
+        let maintenance = layerx_wire::batch_maintenance::decode_batch_maintenance(bytes)
+            .map_err(|_| EvidenceError::Receipt)?;
+        (
+            AccountEvidenceKind::Maintenance {
+                parameter_version: maintenance.occupancy.parameter_version,
             },
             bytes.to_vec(),
         )

@@ -623,7 +623,7 @@ fn funding_activity_batch(
         );
         return authority;
     };
-    assert_eq!(field(identity, "kind"), "occupancy_maintenance_v2");
+    assert_eq!(field(identity, "kind"), "batch_maintenance_v1");
     let decode_proof = |value: &serde_json::Value| {
         let wire = must(
             decode_merkle_proof(&unhex(field(value, "receipt_proof_hex"))),
@@ -660,10 +660,14 @@ fn funding_activity_batch(
         ),
         "authenticated funding maintenance",
     );
-    let record = must(
-        layerx_wire::maintenance::decode_occupancy_maintenance(&maintenance),
+    let envelope = must(
+        layerx_wire::batch_maintenance::decode_batch_maintenance(&maintenance),
         "funding maintenance",
     );
+    assert_eq!(envelope.protocol_version, header.protocol_version());
+    assert_eq!(envelope.epoch, header.epoch());
+    assert_eq!(envelope.timestamp_ms, header.timestamp_ms());
+    let record = &envelope.occupancy;
     assert_eq!(header.resulting_state_root(), record.resulting_state_root);
     assert_eq!(protocol.resulting_state_root(), record.previous_state_root);
     assert_eq!(activity.resulting_state_root(), record.previous_state_root);
@@ -908,7 +912,7 @@ fn maintained_program_journal_rejects_missing_corrupt_and_substituted_attachment
         must(serde_json::from_slice(&original), "maintained journal JSON");
     assert_eq!(
         document["program_execution"]["evidence"]["batch_identity"]["kind"],
-        "occupancy_maintenance_v2"
+        "batch_maintenance_v1"
     );
     for case in 0..5 {
         let mut corrupted = document.clone();

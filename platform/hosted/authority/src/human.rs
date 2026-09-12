@@ -1139,14 +1139,17 @@ fn native_complete_suffix(start: &Verified, evidence: &[Verified]) -> Result<(),
         previous_root = Some(header.resulting_state_root());
         let begin = header.first_sequence().max(start.facts.global_sequence);
         let last = header.last_sequence();
-        let maintenance = first
+        let identity_kind = first
             .record
             .replica_document
             .get("batch_evidence")
             .and_then(|e| e.get("batch_identity"))
             .and_then(|e| e.get("kind"))
-            .and_then(Value::as_str)
-            == Some("occupancy_maintenance_v2");
+            .and_then(Value::as_str);
+        let maintenance = matches!(
+            identity_kind,
+            Some("occupancy_maintenance_v2" | "batch_maintenance_v1")
+        );
         let end = if maintenance {
             last.checked_sub(1).ok_or_else(refused)?
         } else {

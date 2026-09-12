@@ -146,9 +146,16 @@ fn verify_batch_identity(
         layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 {
             receipt,
             ..
+        }
+        | layerx_platform_authority::BatchIdentityEvidence::BatchMaintenanceV1 {
+            receipt, ..
         } => {
-            let maintenance = layerx_wire::maintenance::decode_occupancy_maintenance(receipt)
-                .required("authenticated occupancy maintenance");
+            let record = layerx_wire::batch_maintenance::decode_maintenance(receipt)
+                .required("authenticated maintenance");
+            record
+                .verify_header(header)
+                .required("maintenance header binding");
+            let maintenance = record.occupancy();
             assert_eq!(protocol.previous_state_root(), facts.previous_state_root);
             assert_eq!(
                 protocol.resulting_state_root(),
@@ -242,7 +249,9 @@ fn verify_selected_program_state(
         layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 {
             receipt,
             proof,
-        } => {
+        }
+        | layerx_platform_authority::BatchIdentityEvidence::BatchMaintenanceV1 { receipt, proof } =>
+        {
             let Ok(activity_proof) = layerx_proof::merkle::decode_proof(&evidence.receipt_proof)
             else {
                 return false;
@@ -278,7 +287,9 @@ fn evidence_batch_id(
         layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 {
             receipt,
             proof,
-        } => {
+        }
+        | layerx_platform_authority::BatchIdentityEvidence::BatchMaintenanceV1 { receipt, proof } =>
+        {
             let maintenance_proof =
                 layerx_proof::merkle::decode_proof(proof).required("maintenance inclusion proof");
             layerx_proof::inclusion::verify_receipt(
@@ -296,16 +307,20 @@ fn evidence_batch_id(
                 .required("maintained batch activity count");
             assert_eq!(maintenance_proof.leaf_index(), activity_count);
             assert_eq!(maintenance_proof.leaf_count(), activity_count + 1);
-            Some(
-                layerx_wire::maintenance::decode_occupancy_maintenance(receipt)
-                    .required("canonical occupancy maintenance record"),
-            )
+            let record = layerx_wire::batch_maintenance::decode_maintenance(receipt)
+                .required("canonical maintenance record");
+            record
+                .verify_header(header)
+                .required("maintenance header binding");
+            Some(record)
         }
     };
     layerx_wire::hash::receipt_execution_batch_id_for_evidence(
         protocol,
         header,
-        maintenance.as_ref(),
+        maintenance
+            .as_ref()
+            .map(layerx_wire::batch_maintenance::MaintenanceReceipt::occupancy),
     )
     .required("header-derived execution batch identity")
 }
