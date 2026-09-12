@@ -13680,6 +13680,30 @@ observed = "Revision 2c63df665c732ca040b718888f70ab78b50052fb: make CC=clang-18 
 assumption = "CARGO_TARGET_DIR=/root/lx-lanes/day/Q1/.lane-target; CARGO_BUILD_JOBS=4; MAKEFLAGS=-j4 PROGRAMS_TARGET_DIR=/root/lx-lanes/day/Q1/.lane-target/programs PROGRAMS_RUNTIME_LIB=/root/lx-lanes/day/Q1/.lane-target/programs/debug/liblayerx_programs_sandbox.a. Native compiler and test qualification only; Rust workspace, cluster and release gates remain pending. Swift clang 21 compilation passed the corrected source but its ThreadSanitizer runtime failed to link libdispatch symbols; native-clang-prefix-final.log retains that exit-2 toolchain result at the same revision. Clang 18 matches the CI toolchain."
 severity = "note"
 
+[observation.4.1.9900]
+task = "4.1"
+file = "agent; tests/support/lxgb_metadata.rs; programs/crates/layerx-programs-runtime"
+symbol = "agent_strict_lint_repair"
+observed = "Revision b0a5da6dd364dc208895fdd29dfca168cd5ac476: make agent-lint exited 0, including strict workspace all-target Clippy and the dependency policy; cd agent && cargo fmt --all -- --check exited 0. At preceding source revision a2424365b3f0a6d9ac36d02264848b090d237398, cargo test --locked --manifest-path agent/Cargo.toml -p layerx-client --test supply_receipt exited 0, and env TMPDIR=/tmp/lxp-q2a cargo test --locked --manifest-path agent/Cargo.toml -p layerx-mcp --test daemon_bound exited 0, seven tests. The only subsequent source change is rustfmt output in native authority fixtures and Programs transfer paths. Renamed ambiguous locals, retained every binding assertion in helper functions, and replaced unchecked metadata lengths with checked conversions. The pinned metadata byte count and digest assertions remain unchanged. Exact commands, revisions, outputs and exits: /root/lx-lanes/day/Q2/qual-logs/{agent-lint-formatted-source,agent-format-clean,supply-receipt,mcp-binding-tests}.{command,sha,started,log,exit}."
+assumption = "CARGO_TARGET_DIR=/root/lx-lanes/day/Q2/.lane-target; CARGO_BUILD_JOBS=4. Focused test, formatting and lint evidence only; the full workspace test failure is recorded separately."
+severity = "note"
+
+[observation.1.2.9900]
+task = "1.2"
+file = "agent/crates/layerx-agentd/tests/budget_create.rs; agent/crates/layerx-agentd/tests/support/mod.rs"
+symbol = "agent_budget_receipt_qualification"
+observed = "Revision a2424365b3f0a6d9ac36d02264848b090d237398: env TMPDIR=/tmp/lxp-q2a make agent-test exited 2. budget_create ran seven tests; five passed. verified_creation_without_a_proven_object_effect_fails_closed returned UnverifiedReceipt instead of ProtocolObjectEffectUnavailable; receipt_for_another_canonical_activity_cannot_create_or_cache_a_budget returned UnverifiedReceipt instead of ReceiptActivityMismatch. Both production checks and all test assertions remain intact. Exact command, revision, output and exit: /root/lx-lanes/day/Q2/qual-logs/agent-workspace-tests-short-path.{command,sha,started,log,exit}. Earlier attempts at the same revision failed because the separate daemon user could not traverse the private temporary directory, then because a longer accessible path exceeded the Unix socket path bound; their outputs remain in agent-workspace-tests and agent-workspace-tests-accessible."
+assumption = "The complete agent workspace suite has not passed. Receipt fixture and verifier binding require reconciliation without accepting unauthenticated receipts or weakening refusal assertions."
+severity = "blocker"
+
+[observation.1.2.9901]
+task = "1.2"
+file = "agent/crates/layerx-mcp/tests/daemon_bound.rs; agent/crates/layerx-agentd/src/budget/create.rs"
+symbol = "agent_live_journey_evidence_gap"
+observed = "Source inspection at revision a2424365b3f0a6d9ac36d02264848b090d237398: daemon_bound uses BoundaryIdentity with stored identity values and agent_daemon supplies fixed responses through a test TCP listener. Its passing unit assertions do not prove a real running agentd enrolment-to-MCP journey. create_protocol_budget also returns ProtocolObjectEffectUnavailable after every successful verified receipt and never persists a created protocol budget. Native grant issuance alone cannot close that daemon consumer path."
+assumption = "Observation 1.2.4500 remains unclosed pending a real daemon-backed enrolment and MCP journey. A successful protocol budget needs a verified creation effect and persisted object binding. Existing tests and checks are retained."
+severity = "blocker"
+
 [observation.2.2.9800]
 task = "2.2"
 file = "src/modules/governance/lxp_governance.c cmd/layerxd/lxp_daemon_lni.c spec/layerx-protocol/spec.kvx"
