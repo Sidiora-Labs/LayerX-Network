@@ -791,6 +791,36 @@ fn assert_published_binding(
     body
 }
 
+fn assert_served_binding(root: &Path, issued: &enrolment::PublishedBinding, endpoint: &str) {
+    let binding = Binding::open(&issued.binding).unwrap_or_else(|error| panic!("open: {error:?}"));
+    assert_eq!(binding.mode(), DeploymentMode::Full);
+    assert_eq!(binding.tenant(), "tenant-a");
+    assert_eq!(binding.store(), root.join("store").as_path());
+    assert_eq!(binding.session_generation(), issued.session_generation);
+    assert_eq!(binding.agent_endpoint(), endpoint);
+    let mut session = binding
+        .open_session()
+        .unwrap_or_else(|error| panic!("open session: {}", error.detail()));
+    let program = "cc".repeat(32);
+    let responses = exchange(
+        &mut session,
+        &[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "balance.get", "arguments": {"program": program}},
+            }),
+        ],
+    );
+    assert_eq!(responses.len(), 3);
+    assert_daemon_handshake(&responses[0], &responses[1]);
+    assert_daemon_read(&responses[2], &program);
+}
+
 #[test]
 fn daemon_enrolment_writes_the_binding_the_served_path_opens() {
     let root = directory("enrolment");
@@ -869,33 +899,7 @@ fn daemon_enrolment_writes_the_binding_the_served_path_opens() {
     );
     drop(store);
 
-    let binding = Binding::open(&issued.binding).unwrap_or_else(|error| panic!("open: {error:?}"));
-    assert_eq!(binding.mode(), DeploymentMode::Full);
-    assert_eq!(binding.tenant(), "tenant-a");
-    assert_eq!(binding.store(), root.join("store").as_path());
-    assert_eq!(binding.session_generation(), issued.session_generation);
-    assert_eq!(binding.agent_endpoint(), endpoint);
-    let mut session = binding
-        .open_session()
-        .unwrap_or_else(|error| panic!("open session: {}", error.detail()));
-    let program = "cc".repeat(32);
-    let responses = exchange(
-        &mut session,
-        &[
-            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
-            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
-            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-            json!({
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {"name": "balance.get", "arguments": {"program": program}},
-            }),
-        ],
-    );
-    assert_eq!(responses.len(), 3);
-    assert_daemon_handshake(&responses[0], &responses[1]);
-    assert_daemon_read(&responses[2], &program);
+    assert_served_binding(&root, &issued, &endpoint);
     let _ = fs::remove_dir_all(root);
 }
 
