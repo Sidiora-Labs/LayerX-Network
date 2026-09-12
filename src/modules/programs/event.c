@@ -19,10 +19,14 @@ static const uint8_t legacy_outcome_domain[OUTCOME_DOMAIN_BYTES] = {
     'L', 'X', 'C', 'O'
 };
 static const uint8_t outcome_domain[OUTCOME_DOMAIN_BYTES] = { 'L', 'X', 'M', 'O' };
-static const uint8_t topic_domain[TOPIC_DOMAIN_BYTES] =
+static const uint8_t topic_domain[] =
     "LayerX/programs/event-topic/v1";
-static const uint8_t data_domain[DATA_DOMAIN_BYTES] =
+static const uint8_t data_domain[] =
     "LayerX/programs/event-data/v1";
+_Static_assert(sizeof(topic_domain) == TOPIC_DOMAIN_BYTES + 1U,
+               "event topic domain length");
+_Static_assert(sizeof(data_domain) == DATA_DOMAIN_BYTES + 1U,
+               "event data domain length");
 
 static void write_u16(uint8_t out[2], uint16_t value)
 {
@@ -166,10 +170,10 @@ lxp_result lxp_programs_emit_guest_event(
         (event->topic == NULL && event->topic_length != 0U) ||
         (event->data == NULL && event->data_length != 0U))
         return LXP_ERR_NON_CANONICAL;
-    status = digest(topic_domain, sizeof(topic_domain), event->topic,
+    status = digest(topic_domain, TOPIC_DOMAIN_BYTES, event->topic,
                     event->topic_length, topic_digest);
     if (status == LXP_OK)
-        status = digest(data_domain, sizeof(data_domain), event->data,
+        status = digest(data_domain, DATA_DOMAIN_BYTES, event->data,
                         event->data_length, data_digest);
     if (status != LXP_OK) return status;
     (void)memcpy(body + offset, guest_domain, sizeof(guest_domain));
