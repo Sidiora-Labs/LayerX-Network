@@ -17,6 +17,7 @@ layerx-programs-protocol-adapter.workspace = true
 layerx-agentd.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
+native-tls = "=0.2.15"
 
 [dev-dependencies]
 k256.workspace = true
