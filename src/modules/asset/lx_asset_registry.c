@@ -492,13 +492,14 @@ static lxp_result module_execute(lxp_module_ctx *ctx,
     lxp_grant_state grant;
     lxp_result status;
     if (ctx == NULL || value == NULL) return LXP_ERR_UNKNOWN_ACTIVITY;
-    if (value->ordinal == 2U || value->ordinal == 3U)
+    if (value->ordinal == lxp_activity_type_ordinal(LX_ASSET_WITHDRAW))
         return module_execute_impl(ctx, activity, authority, decoded, effects);
     if (value->send_present) id = value->send.asset;
     else {
         if (value->typed == NULL) return LXP_ERR_NON_CANONICAL;
         switch (value->ordinal) {
         case 1U: id = value->typed->registration.asset_id; break;
+        case 2U: case 3U: id = value->typed->pause.asset_id; break;
         case 4U: id = value->typed->account_open.asset_id; break;
         case 6U: id = value->typed->receive.asset; break;
         case 7U: id = value->typed->grant.asset; break;
