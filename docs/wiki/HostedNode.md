@@ -154,7 +154,16 @@ default is
 `402`, network name `layerx-testnet`, replica id
 `6c61796572782d626574612d726563656970742d617574686f726974792d3031`,
 and Paxeer relay port `18545`
-(`platform/hosted/node/deployment.yaml:2-9`).
+(`platform/hosted/node/deployment.yaml:2-9`). The sequencer
+arguments name the metadata suffix as `--genesis-metadata`
+`/run/layerx/genesis/metadata.lxgb`, a `subPath` mount of key
+`metadata.lxgb` of ConfigMap `layerx-node-genesis-metadata`, so
+the bootstrap sees a regular file rather than the ConfigMap
+symlink it refuses (`platform/hosted/node/deployment.yaml:123-124`;
+`platform/hosted/node/deployment.yaml:155`;
+`platform/hosted/node/deployment.yaml:805`). Bring-up publishes
+that ConfigMap from the authoritative Asset records before the
+node manifest is applied.
 
 `--custody-profile` must name a readable regular file that is
 not a symlink and is exactly 207 bytes
@@ -196,6 +205,13 @@ salt, cap, pause and supply. The fresh empty genesis builder requires zero
 circulating supply and custody issuer kind; it validates the records and
 schedule before signing. Do not invent salts for an existing asset. The
 metadata file must be kept outside a data directory discarded with `--force`.
+Its length must exceed 219 bytes and may not exceed
+`16384 - 314 - 81 * certificate_threshold`, the builder limit
+`GENESIS_BUILD_REQUEST_MAX_BYTES` less the fixed request body for the
+guarantor count the settlement document carries; the bound is checked once
+that count is known, before any directory is created
+(`platform/hosted/node/bootstrap.sh:306-311`;
+`cmd/layerx-genesis/lxp_genesis_build_cli.c:18`).
 The same suffix is required by `prepare-beta.py --genesis-metadata FILE` and
 `tests/bridge/custody_genesis.py --genesis-metadata FILE`. Version-1 decoding
 remains available for existing signed artifacts; it cannot restore omitted
@@ -515,6 +531,7 @@ Sequencer container (`platform/hosted/node/deployment.yaml:32-76`):
 | `/run/layerx` | emptyDir Memory 16Mi |
 | `/run/layerx/keys/sequencer.key` | Secret `layerx-node-keys` |
 | `/run/layerx/keys/treasury.key` | Secret `layerx-node-keys` |
+| `/run/layerx/genesis/metadata.lxgb` | ConfigMap `layerx-node-genesis-metadata` key `metadata.lxgb`, `subPath` mount |
 | `/run/layerx/tokens/program-token` | Secret `layerx-node-tokens` |
 | `/run/layerx/tokens/replica-token` | Secret `layerx-node-tokens` |
 | `/run/layerx/settlement/settlement.env` | ConfigMap `layerx-node-settlement` |
@@ -566,10 +583,22 @@ the NetworkPolicy.
 (`platform/Makefile.inc:140-142`). That script requires root
 so the LNI client can present a uid other than the daemon
 (`platform/hosted/node/tests/node-test.sh:7-9`;
-`platform/hosted/node/tests/node-test.sh:29-32`). It proves:
+`platform/hosted/node/tests/node-test.sh:29-32`). It resolves
+socat from `LAYERX_TEST_SOCAT_BIN` or, when that is unset, from
+`PATH`, refusing with `socat_invalid` or `socat_missing`
+otherwise, and passes it to both supervisors as `--socat`
+(`platform/hosted/node/tests/node-test.sh:35-40`). It builds the
+LXGB v2 metadata suffix with `tests/support/lxgb_metadata.py`
+over the beta asset and the treasury public key it generates,
+keeps that file outside the data directory so the supervisor
+reset can bootstrap again from it, and passes `--asset` and
+`--genesis-metadata` to the sequencer supervisor
+(`platform/hosted/node/tests/node-test.sh:91-104`;
+`platform/hosted/node/tests/node-test.sh:135-137`). It proves:
 
-- `node.env` network id, run directory mode `0750` and LNI
-  gid, LXGR length `82`, treasury identity line
+- `node.env` network id, asset id, treasury public key, run
+  directory mode `0750` and LNI gid, LXGR length `82`, treasury
+  identity line
   (`platform/hosted/node/tests/node-test.sh:125-130`)
 - LNI handshake as the client uid: network id, role
   `Sequencer`, sequencer public key, `AccountRead`

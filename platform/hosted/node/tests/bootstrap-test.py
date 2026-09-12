@@ -5,12 +5,27 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[4]
 BIN = Path(os.environ.get('LAYERX_TEST_NATIVE_BIN_DIR', ROOT / 'build/bin'))
+sys.path.insert(0, str(ROOT / 'tests/support'))
+from lxgb_metadata import metadata  # noqa: E402
+
+ASSET = bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898')
+PKCS8_PREFIX = bytes.fromhex('302e020100300506032b657004220420')
+
+
+def public_key_of(seed):
+    encoded = subprocess.run(
+        ['openssl', 'pkey', '-inform', 'DER', '-pubout', '-outform', 'DER'],
+        input=PKCS8_PREFIX + seed, stdout=subprocess.PIPE, check=True).stdout
+    if len(encoded) != 44:
+        raise ValueError('unexpected ed25519 SubjectPublicKeyInfo length %d' % len(encoded))
+    return encoded[12:]
 
 
 class BootstrapTest(unittest.TestCase):
@@ -19,15 +34,21 @@ class BootstrapTest(unittest.TestCase):
         document['finality_policy']['certificate_threshold'] = threshold
         policy = work / 'settlement.json'
         policy.write_text(json.dumps(document))
+        seeds = {}
         for name in ('sequencer', 'treasury'):
             key = work / (name + '.key')
-            key.write_bytes(os.urandom(32))
+            seeds[name] = os.urandom(32)
+            key.write_bytes(seeds[name])
             key.chmod(0o600)
+        genesis_metadata = work / 'metadata'
+        genesis_metadata.write_bytes(metadata(ASSET, public_key_of(seeds['treasury']), os.urandom(32)))
         env = {k: v for k, v in os.environ.items() if not k.startswith('LAYERX_')}
         process = subprocess.Popen([
             'bash', str(ROOT / 'platform/hosted/node/bootstrap.sh'),
             '--data-dir', str(work / 'data'), '--run-dir', str(work / 'run'),
-            '--network-id', '4242', '--sequencer-key', str(work / 'sequencer.key'),
+            '--network-id', '4242', '--asset', ASSET.hex(),
+            '--genesis-metadata', str(genesis_metadata),
+            '--sequencer-key', str(work / 'sequencer.key'),
             '--treasury-key', str(work / 'treasury.key'),
             '--lni-uid', str(os.getuid() + 1),
             '--settlement-env', str(work / 'settlement.env'),
