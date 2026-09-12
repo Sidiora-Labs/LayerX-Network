@@ -1777,45 +1777,15 @@ impl DepositProof {
             .ok_or(DepositFailure::CreditRefused(
                 CreditFault::BridgeProofIngressUnavailable,
             ))?;
-        let refusal = || DepositFailure::CreditRefused(CreditFault::NativeReceipt);
-        let verified =
-            layerx_proof::receipt::verify(receipt_bytes, batch).map_err(|_| refusal())?;
-        let receipt = verified.receipt().protocol().ok_or_else(refusal)?;
-        let reserve_id =
-            account_address_for_protocol(reserve, self.protocol_version).map_err(|_| refusal())?;
-        if receipt.activity_id() != expected_activity_id
-            || receipt.protocol_version() != self.protocol_version
-            || receipt.module_id() != 8
-            || receipt.module_version() != 1
-            || receipt.operation() != 1
-            || receipt.asset() != self.custody.asset.bytes()
-            || receipt.amount() != self.custody.amount.value()
-            || receipt.from() != reserve_id
-            || receipt.to() != self.custody.beneficiary
-        {
-            return Err(refusal());
-        }
-        let payload_hash = Sha256::digest(credit.canonical_bytes());
-        let expected = [
-            &credit.canonical_bytes()[43..139],
-            &credit.canonical_bytes()[191..207],
-            &credit.canonical_bytes()[5..37],
-            &payload_hash[..],
-        ]
-        .concat();
-        let mut bound = receipt.effects().iter().filter(|effect| {
-            effect.module_id() == 8 && effect.event_type() == 1 && !effect.monetary()
-        });
-        let event = bound.next().ok_or_else(refusal)?;
-        if bound.next().is_some() || event.body().len() != 208 || event.body()[..176] != expected {
-            return Err(refusal());
-        }
-        let issued = u128::from_be_bytes(event.body()[176..192].try_into().map_err(|_| refusal())?);
-        let next = u128::from_be_bytes(event.body()[192..208].try_into().map_err(|_| refusal())?);
-        if issued.checked_add(self.custody.amount.value()) != Some(next) {
-            return Err(refusal());
-        }
-        Ok(())
+        let reserve_id = account_address_for_protocol(reserve, self.protocol_version)
+            .map_err(|_| DepositFailure::CreditRefused(CreditFault::NativeReceipt))?;
+        verify_native_credit_receipt(
+            credit,
+            receipt_bytes,
+            batch,
+            expected_activity_id,
+            reserve_id,
+        )
     }
 
     /// # Errors
@@ -1857,6 +1827,58 @@ impl DepositProof {
         self.native_credit.as_deref()
     }
 }
+fn verify_native_credit_receipt(
+    credit: &crate::AttestedNativeCustodyCredit,
+    receipt_bytes: &[u8],
+    batch: &AuthorizedBatch,
+    expected_activity_id: [u8; 32],
+    reserve_id: [u8; 32],
+) -> Result<(), DepositFailure> {
+    let refusal = || DepositFailure::CreditRefused(CreditFault::NativeReceipt);
+    let verified = layerx_proof::receipt::verify(receipt_bytes, batch).map_err(|_| refusal())?;
+    let receipt = verified.receipt().protocol().ok_or_else(refusal)?;
+    if receipt.activity_id() != expected_activity_id
+        || receipt.protocol_version() != 3
+        || receipt.module_id() != 8
+        || receipt.module_version() != 1
+        || receipt.operation() != 0
+    {
+        return Err(refusal());
+    }
+    let balance_event = receipt.effects().get(2).ok_or_else(refusal)?;
+    if balance_event.module_id() != 8
+        || balance_event.event_type() != 2
+        || balance_event.body().get(..32) != Some(reserve_id.as_slice())
+    {
+        return Err(refusal());
+    }
+    let payload_hash = Sha256::digest(credit.canonical_bytes());
+    let expected = [
+        &credit.canonical_bytes()[43..139],
+        &credit.canonical_bytes()[191..207],
+        &credit.canonical_bytes()[5..37],
+        &payload_hash[..],
+    ]
+    .concat();
+    let mut bound = receipt
+        .effects()
+        .iter()
+        .filter(|effect| effect.module_id() == 8 && effect.event_type() == 1 && !effect.monetary());
+    let event = bound.next().ok_or_else(refusal)?;
+    if bound.next().is_some() || event.body().len() != 208 || event.body()[..176] != expected {
+        return Err(refusal());
+    }
+    let issued = u128::from_be_bytes(event.body()[176..192].try_into().map_err(|_| refusal())?);
+    let next = u128::from_be_bytes(event.body()[192..208].try_into().map_err(|_| refusal())?);
+    if issued.checked_add(credit.custody().amount.value()) != Some(next) {
+        return Err(refusal());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "deposit_native_tests.rs"]
+mod native_receipt_tests;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DepositNativeError {
