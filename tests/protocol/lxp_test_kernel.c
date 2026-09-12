@@ -9,6 +9,33 @@ static size_t end_calls;
 static uint64_t last_begin_epoch;
 static uint64_t last_end_epoch;
 static lxp_result begin_status = LXP_OK;
+static size_t stage_bulk;
+static size_t bulk_serial;
+
+/* Stages `count` module writes under keys no earlier hook has used, so each
+ * one is a genuine addition to the kernel's committed table rather than an
+ * overwrite of a slot it already holds. */
+static lxp_result stage_distinct_keys(lxp_module_ctx *ctx, size_t count)
+{
+    uint8_t key[9];
+    uint8_t value[1];
+    size_t i;
+    size_t digit;
+    value[0] = 1U;
+    key[0] = (uint8_t)'k';
+    for (i = 0U; i < count; ++i) {
+        size_t serial = bulk_serial;
+        lxp_result status;
+        for (digit = sizeof(key); digit > 1U; --digit) {
+            key[digit - 1U] = (uint8_t)('0' + (int)(serial % 10U));
+            serial /= 10U;
+        }
+        ++bulk_serial;
+        status = lxp_ctx_kv_put(ctx, key, sizeof(key), value, sizeof(value));
+        if (status != LXP_OK) return status;
+    }
+    return LXP_OK;
+}
 
 static lxp_result genesis(lxp_module_ctx *ctx, const uint8_t *manifest,
                           size_t length)
@@ -55,7 +82,9 @@ static lxp_result execute(lxp_module_ctx *ctx, const lxp_activity *activity,
 
 /* Records every epoch hook the kernel drives. epoch_begin stages one module
  * write keyed "epoch" so that the test can see the transition commit it and a
- * failing transition roll it back. */
+ * failing transition roll it back; while stage_bulk is set both hooks instead
+ * stage that many fresh keys, which is how the capacity checks fill the
+ * kernel's table and then ask one transition to overrun it. */
 static lxp_result epoch_hook(lxp_module_ctx *ctx, uint64_t number,
                              uint64_t timestamp, bool begin)
 {
@@ -65,14 +94,16 @@ static lxp_result epoch_hook(lxp_module_ctx *ctx, uint64_t number,
     if (ctx == NULL || number != lxp_ctx_epoch(ctx) ||
         timestamp != lxp_ctx_batch_timestamp_ms(ctx))
         return LXP_ERR_TIMESTAMP_REGRESSION;
-    if (!begin) {
+    if (begin) {
+        ++begin_calls;
+        last_begin_epoch = number;
+        if (begin_status != LXP_OK) return begin_status;
+    } else {
         ++end_calls;
         last_end_epoch = number;
-        return LXP_OK;
     }
-    ++begin_calls;
-    last_begin_epoch = number;
-    if (begin_status != LXP_OK) return begin_status;
+    if (stage_bulk != 0U) return stage_distinct_keys(ctx, stage_bulk);
+    if (!begin) return LXP_OK;
     for (i = 0U; i < 8U; ++i)
         value[i] = (uint8_t)(number >> ((7U - i) * 8U));
     return lxp_ctx_kv_put(ctx, key, sizeof(key) - 1U, value, sizeof(value));
@@ -180,6 +211,51 @@ static int transition_checks(lxp_kernel *kernel, lxp_state_store *store,
     return 0;
 }
 
+/* Both hooks of a transition stage their writes before either of them
+ * commits, so the capacity guarantee each context takes against the kernel's
+ * current table is not enough on its own. Three transitions carry the table to
+ * 385 of its 512 entries; the fourth stages 64 additions in each hook, so each
+ * hook clears its own guarantee against the 127 entries that remain while the
+ * pair would drive the table one entry past its end. The transition has to
+ * refuse before the journal commits and leave the epoch, the sequence, the
+ * table and the root exactly as they were. */
+static int capacity_checks(lxp_kernel *kernel, lxp_state_store *store,
+                           lxp_state_journal *journal)
+{
+    static uint8_t arena_bytes[16384];
+    lxp_arena arena;
+    uint8_t root[32];
+    uint8_t held[32];
+    uint64_t epoch = kernel->epoch;
+    uint64_t sequence = store->next_sequence;
+    size_t fill;
+    if (lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK)
+        return 1;
+    stage_bulk = 64U;
+    for (fill = 0U; fill < 3U; ++fill) {
+        ++epoch;
+        if (lxp_kernel_epoch_transition(kernel, epoch, 300U, &arena) !=
+                LXP_OK ||
+            kernel->epoch != epoch || journal->open)
+            return 1;
+    }
+    if (kernel->module_kv_count != 385U ||
+        store->next_sequence != sequence + 3U ||
+        lxp_state_root(kernel, held) != LXP_OK ||
+        memcmp(kernel->current_state_root, held, 32U) != 0)
+        return 1;
+    if (lxp_kernel_epoch_transition(kernel, epoch + 1U, 400U, &arena) !=
+            LXP_ERR_ARENA_EXHAUSTED ||
+        kernel->epoch != epoch || kernel->module_kv_count != 385U ||
+        store->next_sequence != sequence + 3U || journal->open ||
+        lxp_state_root(kernel, root) != LXP_OK ||
+        memcmp(root, held, 32U) != 0 ||
+        memcmp(kernel->current_state_root, held, 32U) != 0)
+        return 1;
+    stage_bulk = 0U;
+    return 0;
+}
+
 int main(void)
 {
     static const uint32_t v1_types[] = { UINT32_C(0x00010001),
@@ -234,6 +310,7 @@ int main(void)
         lxp_kernel_set_epoch(&kernel, 3U) != LXP_ERR_TIMESTAMP_REGRESSION ||
         kernel.epoch != 4U) return 1;
     if (transition_checks(&kernel, &store, &journal) != 0) return 1;
+    if (capacity_checks(&kernel, &store, &journal) != 0) return 1;
     if (lxp_state_store_destroy(&store) != LXP_OK) return 1;
     return 0;
 }

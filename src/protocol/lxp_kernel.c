@@ -1122,11 +1122,52 @@ typedef struct epoch_hook_run {
     lxp_effect_buffer effects;
 } epoch_hook_run;
 
+/* The capacity guarantee a module context takes in prepare_commit is measured
+ * against the kernel tables as they stand, and those tables do not move until
+ * the commit loop at the end of the transition runs. A transition stages every
+ * run before it commits any of them, so the runs are charged against one
+ * shared budget here: each run's non-deleted staged entries are counted as
+ * additions, which is conservative because an entry that overwrites a
+ * committed key consumes no new slot. */
+typedef struct epoch_hook_budget {
+    size_t module_kv;
+    size_t blobs;
+    size_t blob_bytes;
+} epoch_hook_budget;
+
+static lxp_result epoch_hook_budget_charge(const lxp_kernel *kernel,
+                                           const lxp_module_ctx *ctx,
+                                           epoch_hook_budget *budget)
+{
+    size_t i;
+    for (i = 0U; i < ctx->staged_count; ++i)
+        if (!ctx->staged[i].deleted) ++budget->module_kv;
+    for (i = 0U; i < ctx->staged_blob_count; ++i) {
+        if (ctx->staged_blobs[i].deleted) continue;
+        ++budget->blobs;
+        if (SIZE_MAX - budget->blob_bytes < ctx->staged_blobs[i].length)
+            return LXP_ERR_OVERFLOW;
+        budget->blob_bytes += ctx->staged_blobs[i].length;
+    }
+    if (kernel->module_kv_count > (size_t)LXP_KERNEL_MAX_MODULE_KV ||
+        kernel->blob_count > (size_t)LXP_KERNEL_MAX_BLOBS ||
+        kernel->blob_total_bytes > (size_t)LXP_KERNEL_MAX_BLOB_TOTAL_BYTES)
+        return LXP_FATAL_INVARIANT;
+    if (budget->module_kv >
+            (size_t)LXP_KERNEL_MAX_MODULE_KV - kernel->module_kv_count ||
+        budget->blobs > (size_t)LXP_KERNEL_MAX_BLOBS - kernel->blob_count ||
+        budget->blob_bytes > (size_t)LXP_KERNEL_MAX_BLOB_TOTAL_BYTES -
+                                 kernel->blob_total_bytes)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    return LXP_OK;
+}
+
 static lxp_result epoch_hook_run_invoke(lxp_kernel *kernel, uint16_t module_id,
                                         uint64_t epoch, uint64_t timestamp_ms,
                                         uint64_t global_sequence,
                                         lxp_arena *arena, bool begin,
-                                        epoch_hook_run **runs, size_t *count)
+                                        epoch_hook_run **runs, size_t *count,
+                                        epoch_hook_budget *budget)
 {
     const lxp_module_registration *registration;
     lxp_module_epoch_fn hook;
@@ -1155,7 +1196,9 @@ static lxp_result epoch_hook_run_invoke(lxp_kernel *kernel, uint16_t module_id,
     runs[(*count)++] = run;
     status = hook(&run->ctx, epoch, timestamp_ms);
     if (status != LXP_OK) return status;
-    return lxp_module_ctx_prepare_commit(&run->ctx);
+    status = lxp_module_ctx_prepare_commit(&run->ctx);
+    if (status != LXP_OK) return status;
+    return epoch_hook_budget_charge(kernel, &run->ctx, budget);
 }
 
 static void epoch_hook_runs_rollback(epoch_hook_run **runs, size_t count)
@@ -1173,6 +1216,7 @@ lxp_result lxp_kernel_epoch_transition(lxp_kernel *kernel, uint64_t epoch,
                                        uint64_t timestamp_ms, lxp_arena *arena)
 {
     epoch_hook_run *runs[2U * (size_t)LXP_MODULE_RESERVED_COUNT];
+    epoch_hook_budget budget = { 0U, 0U, 0U };
     size_t run_count = 0U;
     size_t i;
     size_t mark;
@@ -1202,14 +1246,14 @@ lxp_result lxp_kernel_epoch_transition(lxp_kernel *kernel, uint64_t epoch,
          ++module_id)
         status = epoch_hook_run_invoke(kernel, module_id, previous,
                                        timestamp_ms, global_sequence, arena,
-                                       false, runs, &run_count);
+                                       false, runs, &run_count, &budget);
     if (status == LXP_OK) kernel->epoch = epoch;
     for (module_id = 1U;
          status == LXP_OK && module_id <= LXP_MODULE_RESERVED_COUNT;
          ++module_id)
         status = epoch_hook_run_invoke(kernel, module_id, epoch, timestamp_ms,
                                        global_sequence, arena, true, runs,
-                                       &run_count);
+                                       &run_count, &budget);
     if (status == LXP_OK) {
         status = lxp_state_journal_commit(kernel->journal);
         if (status != LXP_OK && !kernel->journal->open) {
