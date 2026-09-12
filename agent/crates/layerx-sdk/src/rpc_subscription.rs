@@ -197,7 +197,7 @@ fn receive_json(
         }
         let stream = match socket.get_mut() {
             MaybeTlsStream::Plain(stream) => stream,
-            MaybeTlsStream::NativeTls(stream) => stream.get_ref(),
+            MaybeTlsStream::Rustls(stream) => &stream.sock,
             _ => return Err(RpcError::Transport),
         };
         stream

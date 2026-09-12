@@ -2280,16 +2280,46 @@ fn agent_evidence_digest(
 }
 
 impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
+    fn terminal_receipt_evidence(
+        &self,
+        receipt_evidence: &layerx_client::evidence::VerifiedProofBundle,
+        authority: &AuthorizedBatch,
+    ) -> Result<crate::protocol_evidence::VerifiedReceiptEvidence, HumanOperationError> {
+        let layerx_client::evidence::VerifiedProofBundle::Receipt {
+            canonical_bytes,
+            proof,
+            signed_header,
+            ..
+        } = receipt_evidence
+        else {
+            return Err(HumanOperationError::Refused);
+        };
+        let raw = crate::protocol_evidence::RawReceiptEvidence::new(
+            canonical_bytes.clone(),
+            proof.clone(),
+            signed_header.canonical_bytes.clone(),
+            signed_header.signature,
+        );
+        let node = self.node.handshake().node();
+        let terminal = crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized(
+            &raw,
+            authority,
+            node.protocol_version,
+            node.network_id,
+        )
+        .map_err(|_| HumanOperationError::Refused)?;
+        Ok(terminal)
+    }
+
     fn augment_receipt_evidence(
         &mut self,
         peer: &HumanPeer,
         idempotency_key: [u8; 32],
-        expected_activity_id: [u8; 32],
-        receipt_bytes: &[u8],
         tenant: TenantId,
         mut served: crate::receipt::ServedReceipt,
         authority: &AuthorizedBatch,
     ) -> Result<crate::receipt::ServedReceipt, HumanOperationError> {
+        let expected_activity_id = served.metadata.activity_id;
         let registry = self.authority.registry(peer).map_err(map_core)?;
         let correlation = u64::from_be_bytes(
             idempotency_key[..8]
@@ -2315,34 +2345,11 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
                         .outbox
                         .exact_signed_bytes(idempotency_key)
                         .map_err(|_| HumanOperationError::Refused)?
-                    || receipt_evidence.canonical_bytes() != receipt_bytes
+                    || receipt_evidence.canonical_bytes() != served.canonical_bytes
                 {
                     return Err(HumanOperationError::Refused);
                 }
-                let layerx_client::evidence::VerifiedProofBundle::Receipt {
-                    canonical_bytes,
-                    proof,
-                    signed_header,
-                    ..
-                } = &receipt_evidence
-                else {
-                    return Err(HumanOperationError::Refused);
-                };
-                let raw = crate::protocol_evidence::RawReceiptEvidence::new(
-                    canonical_bytes.clone(),
-                    proof.clone(),
-                    signed_header.canonical_bytes.clone(),
-                    signed_header.signature,
-                );
-                let node = self.node.handshake().node();
-                let terminal =
-                    crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized(
-                        &raw,
-                        authority,
-                        node.protocol_version,
-                        node.network_id,
-                    )
-                    .map_err(|_| HumanOperationError::Refused)?;
+                let terminal = self.terminal_receipt_evidence(&receipt_evidence, authority)?;
                 let terminal_state = if terminal.result_code() == 0 {
                     SubmissionState::Executed
                 } else {
@@ -2949,8 +2956,6 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                 served = self.augment_receipt_evidence(
                     peer,
                     idempotency_key,
-                    expected_activity_id,
-                    receipt.canonical_bytes(),
                     tenant,
                     served,
                     &authority,

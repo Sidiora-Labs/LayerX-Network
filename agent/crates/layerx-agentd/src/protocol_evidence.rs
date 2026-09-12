@@ -964,9 +964,9 @@ impl VerifiedReceiptEvidence {
             None,
         )
         .map_err(ReceiptEvidenceError::Policy)?;
-        let verifier = ProtocolEvidenceVerifier::new(protocol_version, network_id, vec![sequencer])
+        let policy = ProtocolEvidenceVerifier::new(protocol_version, network_id, vec![sequencer])
             .map_err(ReceiptEvidenceError::Policy)?;
-        let verified = verifier.verify_receipt(raw)?;
+        let verified = policy.verify_receipt(raw)?;
         let protocol = verified
             .verified
             .receipt()

@@ -96,7 +96,7 @@ pub enum ExportVerificationError {
     },
     Availability {
         index: usize,
-        error: AvailabilityFailure,
+        error: Box<AvailabilityFailure>,
     },
     Checkpoint {
         index: usize,
@@ -223,7 +223,10 @@ fn verify_availability(fact: &CheckpointFact, index: usize) -> Result<(), Export
                 header.batch_number(),
                 &header.data_availability_root(),
             )
-            .map_err(|error| ExportVerificationError::Availability { index, error })
+            .map_err(|error| ExportVerificationError::Availability {
+                index,
+                error: Box::new(error),
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
     reassemble(
@@ -235,7 +238,10 @@ fn verify_availability(fact: &CheckpointFact, index: usize) -> Result<(), Export
             oracle: header.oracle_root(),
         },
     )
-    .map_err(|error| ExportVerificationError::Availability { index, error })?;
+    .map_err(|error| ExportVerificationError::Availability {
+        index,
+        error: Box::new(error),
+    })?;
     Ok(())
 }
 
