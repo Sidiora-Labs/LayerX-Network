@@ -3,6 +3,7 @@
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_ledger.h"
+#include "layerx/lxp_module.h"
 #include "layerx/lxp_transfer.h"
 
 #include <openssl/evp.h>
