@@ -61,6 +61,8 @@
 #   --replica-id HEX64      Receipt-authority replica id. Default: derived from
 #                           the sequencer public key.
 #   --genesis-timestamp-ms T  Genesis timestamp in milliseconds. Default: now.
+#   --enable-module NAME    Enable escrow, budget, stream, service or perps in
+#                           the signed genesis parameters. Repeat for each module.
 #   --migrations FILE       History migration SQL. Default: repository
 #                           migrations/0007_history_index.sql or
 #                           /opt/layerx/migrations/0007_history_index.sql.
@@ -179,6 +181,7 @@ LAYERXD=""
 GENESIS_BUILD=""
 CUSTODY_PROFILE=""
 GENESIS_METADATA=""
+GENESIS_MODULES=()
 SETTLEMENT_ENV=""
 SETTLEMENT_DOCUMENT=${LAYERX_PAXEER_SETTLEMENT_JSON:-}
 FORCE=0
@@ -202,6 +205,16 @@ while [ $# -gt 0 ]; do
         --replica-token-file) REPLICA_TOKEN_FILE=$2; shift 2 ;;
         --replica-id) REPLICA_ID=$2; shift 2 ;;
         --genesis-timestamp-ms) GENESIS_TIMESTAMP_MS=$2; shift 2 ;;
+        --enable-module)
+            case "${2:-}" in
+                escrow|budget|stream|service|perps) ;;
+                *) fail "--enable-module requires escrow, budget, stream, service or perps" ;;
+            esac
+            for module in "${GENESIS_MODULES[@]}"; do
+                [ "$module" != "$2" ] || fail "--enable-module repeats $2"
+            done
+            GENESIS_MODULES+=("$2")
+            shift 2 ;;
         --migrations) MIGRATIONS=$2; shift 2 ;;
         --layerxd) LAYERXD=$2; shift 2 ;;
         --genesis-build) GENESIS_BUILD=$2; shift 2 ;;
@@ -314,7 +327,7 @@ if [ -z "$SETTLEMENT_DOCUMENT" ]; then
 fi
 GUARANTOR_COUNT=$(jq -er '.finality_policy.certificate_threshold | select(type == "number" and . == floor and . >= 1 and . <= 32)' "$SETTLEMENT_DOCUMENT") \
     || fail "certificate threshold must be an integer in 1..32 (LXP_GENESIS_MAX_GUARANTORS)"
-GENESIS_METADATA_MAX_BYTES=$((16384 - 314 - 81 * GUARANTOR_COUNT))
+GENESIS_METADATA_MAX_BYTES=$((16384 - 314 - 81 * GUARANTOR_COUNT - 66 * ${#GENESIS_MODULES[@]}))
 GENESIS_METADATA_BYTES=$(stat -c %s "$GENESIS_METADATA")
 [ "$GENESIS_METADATA_BYTES" -gt 219 ] && [ "$GENESIS_METADATA_BYTES" -le "$GENESIS_METADATA_MAX_BYTES" ] \
     || fail "genesis metadata length is outside request bounds: $GENESIS_METADATA_BYTES bytes, expected 220..$GENESIS_METADATA_MAX_BYTES with $GUARANTOR_COUNT guarantors"
@@ -469,6 +482,9 @@ fi
 PARAMETER_KEY=$(printf 'parameter-version' | bin_to_hex)
 PARAMETER_KEY="$PARAMETER_KEY$(printf '0%.0s' $(seq 1 $(( 64 - ${#PARAMETER_KEY} ))))"
 PARAMETER_VALUE="$(printf '0%.0s' $(seq 1 56))00000001"
+if [ "${#GENESIS_MODULES[@]}" -gt 0 ]; then
+    mapfile -t GENESIS_MODULES < <(printf '%s\n' "${GENESIS_MODULES[@]}" | LC_ALL=C sort)
+fi
 REQUEST="$DATA_DIR/work/genesis-request.lxgb"
 {
     printf 'LXGB'
@@ -476,7 +492,14 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     hex_to_bin "$(be_hex 3 2)"
     hex_to_bin "$(be_hex "$NETWORK_ID" 4)"
     hex_to_bin "$(be_hex "$GENESIS_TIMESTAMP_MS" 8)"
-    hex_to_bin "$(be_hex 1 2)"
+    hex_to_bin "$(be_hex "$((1 + ${#GENESIS_MODULES[@]}))" 2)"
+    for module in "${GENESIS_MODULES[@]}"; do
+        module_key=$(printf 'module-enable:%s' "$module" | bin_to_hex)
+        module_key="$module_key$(printf '0%.0s' $(seq 1 $((64 - ${#module_key}))))"
+        hex_to_bin "$(be_hex 7 2)"
+        hex_to_bin "$module_key"
+        hex_to_bin "$PARAMETER_VALUE"
+    done
     hex_to_bin "$(be_hex 7 2)"
     hex_to_bin "$PARAMETER_KEY"
     hex_to_bin "$PARAMETER_VALUE"
@@ -496,7 +519,7 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     for demand in 100 1 1 10 1 1000; do hex_to_bin "$(be_hex "$demand" 8)"; done
     cat "$GENESIS_METADATA"
 } > "$REQUEST"
-[ "$(stat -c %s "$REQUEST")" -eq "$((314 + 81 * GUARANTOR_COUNT + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
+[ "$(stat -c %s "$REQUEST")" -eq "$((314 + 81 * GUARANTOR_COUNT + 66 * ${#GENESIS_MODULES[@]} + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
 
 SIGNER_KEY="$DATA_DIR/work/genesis-signer.key"
 hex_to_bin "$SEQUENCER_PRIVATE" > "$SIGNER_KEY"

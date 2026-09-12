@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from custody_chain import Chain, from_environment, govern as custody_govern
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,36 +28,24 @@ r = load('publication_chain', ROOT / 'tests/daemon/finality-authority-chain.py')
 
 
 def govern(chain, timelock, target, signature, *args):
-    data = r.run('cast', 'calldata', signature, *args)
-    def execute(destination, encoded):
-        nonce = int(chain.rpc('eth_call', [{'to': timelock, 'data': r.run('cast', 'calldata', 'operationNonce()')}, 'latest']), 16)
-        salt = p.hx(p.sha((destination + encoded + str(nonce)).encode()))
-        delay = int(chain.rpc('eth_call', [{'to': timelock, 'data': r.run('cast', 'calldata', 'minDelay()')}, 'latest']), 16)
-        chain.send(timelock, 'schedule(address,uint256,bytes,bytes32,uint64)', destination, '0', encoded, salt, str(delay))
-        chain.rpc('evm_increaseTime', [delay + 1])
-        chain.rpc('evm_mine', [])
-        chain.send(timelock, 'execute(address,uint256,bytes,bytes32,uint256)', destination, '0', encoded, salt, str(nonce))
-    execute(timelock, r.run('cast', 'calldata', 'setCallPermission(address,bytes4,bool)', target, data[:10], 'true'))
-    execute(target, data)
+    custody_govern(chain, timelock, target, signature, *args)
 
 
 def setup(work, url):
-    chain = r.Chain(int(url.rsplit(':', 1)[1]))
-    artifacts = ROOT / 'build/withdraw-contracts/artifacts'
+    chain = from_environment(url)
+    admin = chain.account.address
+    artifacts = Path(os.environ['LAYERX_TEST_CUSTODY_ARTIFACTS'])
     custody = json.loads(Path(os.environ['LAYERX_TEST_PUBLICATION_CUSTODY_FILE']).read_text())
     vault = custody['vault']
-    token = json.loads((artifacts / 'BetaUsdl.sol/BetaUsdl.json').read_text())
-    chain.rpc('anvil_setCode', [r.USDL, token['deployedBytecode']['object']])
-    chain.rpc('anvil_setStorageAt', [r.USDL, '0x' + '00' * 32, '0x' + '00' * 12 + r.ADMIN[2:]])
     bond = chain.deploy(json.loads((artifacts / 'GuarantorBond.sol/GuarantorBond.json').read_text()),
         'constructor(address,address,address,address,bytes32,uint16,uint32,uint32,uint64,bytes32,uint192)',
-        [r.ADMIN, r.ADMIN, r.USDL, vault, r.run('cast', 'keccak', 'USDL'), '3', '77', '1000', '86400', r.word('a1'), str(1 << 128)])
-    chain.send(r.USDL, 'mint(address,uint256)', r.ADMIN, '2000')
+        [admin, admin, r.USDL, vault, r.run('cast', 'keccak', 'USDL'), '3', '77', '1000', '86400', r.word('a1'), str(1 << 128)])
+    chain.send(r.USDL, 'mint(address,uint256)', admin, '2000')
     chain.send(r.USDL, 'approve(address,uint256)', bond, '2000')
     for index in (1, 2):
         account = s.Account.from_key(index.to_bytes(32, 'big'))
         identifier = '0x' + index.to_bytes(32, 'big').hex()
-        chain.send(bond, 'activateGuarantor(bytes32,address,address,uint64,uint64)', identifier, account.address, r.ADMIN, '1', str(index))
+        chain.send(bond, 'activateGuarantor(bytes32,address,address,uint64,uint64)', identifier, account.address, admin, '1', str(index))
         chain.send(bond, 'depositBond(bytes32,uint256)', identifier, '1000')
     request = (work / 'data/genesis/paxeer-registration-request.lxrr').read_bytes()
     registry = chain.deploy(json.loads((artifacts / 'CheckpointRegistry.sol/CheckpointRegistry.json').read_text()),
@@ -65,13 +54,15 @@ def setup(work, url):
          '0x' + request[9:41].hex(), '0x' + request[41:73].hex(), r.word('a2'), str(1 << 128)])
     manager = chain.deploy(json.loads((artifacts / 'CheckpointChallengeManager.sol/CheckpointChallengeManager.json').read_text()),
         'constructor(address,address,address,address,uint64,uint128,bytes32,uint192)',
-        [registry, bond, r.ADMIN, r.ADMIN, '3600', '1', r.word('a5'), str(1 << 128)])
+        [registry, bond, admin, admin, '3600', '1', r.word('a5'), str(1 << 128)])
     chain.send(bond, 'setSlashingAuthority(address)', manager)
     govern(chain, custody['timelock'], vault, 'setGuarantorBond(address)', bond)
     authority = Ed25519PrivateKey.from_private_bytes(bytes([0x77]) * 32).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     govern(chain, custody['timelock'], vault, 'setDepositRootAuthority(bytes32)', '0x' + authority.hex())
     (work / 'data/genesis/genesis.registration').write_bytes(b'LXGR\x01' + (77).to_bytes(4, 'big') + bytes(8) + request[41:73] * 2 + b'\x01')
-    (work / 'publication-chain.json').write_text(json.dumps({'bond': bond, 'registry': registry, 'vault': vault}))
+    (work / 'publication-chain.json').write_text(json.dumps({'bond': bond, 'registry': registry, 'vault': vault, 'chain_id': 125}))
+    module = load('publication_custody', ROOT / 'tests/daemon/withdraw-custody.py')
+    module.write_settlement(work, chain, bond, registry)
 
 
 def decode_header(encoded):
@@ -94,15 +85,15 @@ def decode_header(encoded):
     return out
 
 
-def replay(native, work, count):
+def replay(native, work, count, build):
     state = work / f'replay-{count}'
     exports = work / f'exports-{count}'
     state.mkdir(mode=0o700)
     exports.mkdir(mode=0o755)
     with (work / f'replay-{count}.log').open('w') as log:
-        subprocess.run(['bash', '-c', 'set -a\nsource "$1"\nexec "$2" "$3" "$4" "$5" "$6"', 'replay',
-            str(native / 'data/sequencer.env'), str(ROOT / 'build/tests/lxp_test_guarantor_runtime'),
-            str(native / 'data/sequencer.conf'), str(state), str(native / 'data/checkpoints/da-bodies.log'), str(count)],
+        subprocess.run(['bash', '-c', 'source platform/hosted/node/sequencer-env.sh\nlayerx_sequencer_environment "$1"\nset -a\nsource "$7"\nexec "$2" "$3" "$4" "$5" "$6"', 'replay',
+            str(native / 'data/sequencer.env'), str(build / 'tests/lxp_test_guarantor_runtime'),
+            str(native / 'data/sequencer.conf'), str(state), str(native / 'data/checkpoints/da-bodies.log'), str(count), str(native / 'settlement.env')],
             cwd=ROOT, env=os.environ | {'LAYERX_TEST_PUBLICATION_EXPORT_DIR': str(exports)}, stdout=log, stderr=log, check=True, timeout=120)
     return json.loads((exports / f'{count}.json').read_text())
 
@@ -113,12 +104,12 @@ def certificate(export, chain_config, url, submitter, state, inputs):
     attestations = []
     for index in (1, 2):
         account = s.Account.from_key(index.to_bytes(32, 'big'))
-        fields = [h[0], h[1], 31337, chain_config['bond'], h[2], digest, digest, index.to_bytes(32, 'big'), h[3], h[11], True, True, 31, h[13]]
+        fields = [h[0], h[1], chain_config['chain_id'], chain_config['bond'], h[2], digest, digest, index.to_bytes(32, 'big'), h[3], h[11], True, True, 31, h[13]]
         sig = s.keys.PrivateKey(bytes(account.key)).sign_msg_hash(s.hashlib.sha256(b'LXP/v2/guarantor-attestation\0' + s.encode_packed(s.ATTESTATION_TYPES[:14], fields)).digest())
         attestations.append(fields + [account.address, sig.r.to_bytes(32, 'big'), sig.s.to_bytes(32, 'big'), sig.v + 27])
     def encoded(values):
         return [p.hx(v) if isinstance(v, bytes) else v for v in values]
-    return dict(rpc_url=url, chain_id=31337, settlement_contract=chain_config['bond'], checkpoint_registry=chain_config['registry'],
+    return dict(rpc_url=url, chain_id=chain_config['chain_id'], settlement_contract=chain_config['bond'], checkpoint_registry=chain_config['registry'],
         header=encoded(h), checkpoint_id=p.hx(digest), validity_proof='0x', attestations=[encoded(a) for a in attestations],
         submitter_key_file=str(submitter), publication_state_dir=str(state), publication_inputs_dir=str(inputs), native_facts=export['native_facts'])
 
@@ -155,6 +146,7 @@ def publish(request, work, label):
 
 
 def drive(work, env, url):
+    build = Path(env['LAYERX_TEST_CUSTODY_BUILD_DIR'])
     subprocess.run(['cargo', 'build', '--locked', '--manifest-path', 'human/Cargo.toml', '-p', 'layerx-paxeer-client', '--example', 'native_publication_fetch'], cwd=ROOT, check=True)
     anchor_dir = work / 'anchor'
     anchor_dir.mkdir(mode=0o755)
@@ -169,14 +161,12 @@ def drive(work, env, url):
     fd = os.open(submitter_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w') as output:
         output.write('0x' + bytes(submitter.key).hex())
-    chain = r.Chain(int(url.rsplit(':', 1)[1]))
-    funding = chain.rpc('eth_sendTransaction', [{'from': r.ADMIN, 'to': submitter.address, 'value': hex(10 ** 21)}])
-    funding_deadline = time.monotonic() + 30
-    while chain.rpc('eth_getTransactionReceipt', [funding]) is None and time.monotonic() < funding_deadline:
-        time.sleep(.1)
-    assert chain.rpc('eth_getTransactionReceipt', [funding]) is not None
+    chain = Chain(env['LAYERX_TEST_CUSTODY_CHAIN_FILE'])
+    assert chain.url == url
+    chain.transaction('0x', submitter.address, value=10 ** 21)
+    rust_target = Path(os.environ.get('CARGO_TARGET_DIR', ROOT / 'human/target'))
     with (work / 'admission-publication.log').open('w') as log:
-        process = subprocess.Popen(['bash', 'tests/daemon/program-admission.sh', 'build', '--withdraw'], cwd=ROOT, env=env, stdout=log, stderr=log)
+        process = subprocess.Popen(['bash', 'tests/daemon/program-admission.sh', env['LAYERX_TEST_CUSTODY_BUILD_DIR'], '--withdraw'], cwd=ROOT, env=env, stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 90
             while not Path(str(anchor_path) + '.ready').exists():
@@ -185,7 +175,7 @@ def drive(work, env, url):
                 time.sleep(.1)
             native = next(work.glob('lxp-program-admission-*'))
             chain_config = json.loads((native / 'publication-chain.json').read_text())
-            first = certificate(replay(native, work, 1), chain_config, url, submitter_path, state, inputs)
+            first = certificate(replay(native, work, 1, build), chain_config, url, submitter_path, state, inputs)
             auth = authorize(first, inputs, chain_config['vault'])
             rpc = s.RPC(url)
             s.register(rpc, first)
@@ -217,14 +207,14 @@ def drive(work, env, url):
             authority_public = p.hx(Ed25519PrivateKey.from_private_bytes(bytes([0x77]) * 32).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
             first_fields = [url, chain_config['registry'], chain_config['vault'], first['checkpoint_id'], p.hx(b1['account']), p.hx(b1['asset']), p.hx(bytes([0x31]) * 20), p.hx(d1['identity']), p.hx(d1['payer']), str(d1['nonce']), str(int.from_bytes(d1['amount'], 'big')), str(int.from_bytes(b1['amount'], 'big')), authority_public]
             with (work / 'rust-deposit-balance-fetch.log').open('w') as output:
-                subprocess.run([str(ROOT / 'human/target/debug/examples/native_publication_fetch'), '--deposit-balance-only', *first_fields], cwd=ROOT, stdout=output, stderr=output, check=True, timeout=120)
+                subprocess.run([str(rust_target / 'debug/examples/native_publication_fetch'), '--deposit-balance-only', *first_fields], cwd=ROOT, stdout=output, stderr=output, check=True, timeout=120)
             before = int(rpc.call('eth_getTransactionCount', [submitter.address, 'latest']), 16)
             duplicate_first = publish(first, work, 'publication-1-retry')
             assert duplicate_first['already_registered'] and duplicate_first['publication']['version'] == 2
             assert int(rpc.call('eth_getTransactionCount', [submitter.address, 'latest']), 16) == before
             print('first native checkpoint: real deposit and signed balance Rust fetch passed', flush=True)
             assert process.wait(timeout=120) == 0
-            second = certificate(replay(native, work, 2), chain_config, url, submitter_path, state, inputs)
+            second = certificate(replay(native, work, 2, build), chain_config, url, submitter_path, state, inputs)
             authorize(second, inputs, chain_config['vault'])
             observations = {'first_epoch': h1[2], 'second_epoch': second['header'][2], 'registered_epoch': rpc.view(chain_config['registry'], 'finalisedEpoch()')[0], 'first_batch': h1[3], 'second_batch': second['header'][3], 'withdrawal_count': len(second['native_facts']['withdrawals']), 'first_checkpoint': first['checkpoint_id'], 'second_checkpoint': second['checkpoint_id']}
             p.atomic_json(work / 'checkpoint-order-observed.json', observations)
@@ -243,7 +233,7 @@ def drive(work, env, url):
             withdrawal_account = p.sha(b'LX:ACCOUNT:v1' + len(namespace).to_bytes(4, 'big') + namespace)
             fields = [url, chain_config['registry'], chain_config['vault'], second['checkpoint_id'], p.hx(b['account']), p.hx(b['asset']), p.hx(w['recipient']), p.hx(w['identity']), p.hx(withdrawal_account), p.hx(d['identity']), p.hx(d['payer']), str(d['nonce']), str(int.from_bytes(d['amount'], 'big')), str(int.from_bytes(w['amount'], 'big')), str(int.from_bytes(b['amount'], 'big')), first['checkpoint_id'], p.hx(Ed25519PrivateKey.from_private_bytes(bytes([0x77]) * 32).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))]
             with (work / 'rust-native-fetch.log').open('w') as output:
-                subprocess.run([str(ROOT / 'human/target/debug/examples/native_publication_fetch'), *fields], cwd=ROOT, stdout=output, stderr=output, check=True, timeout=120)
+                subprocess.run([str(rust_target / 'debug/examples/native_publication_fetch'), *fields], cwd=ROOT, stdout=output, stderr=output, check=True, timeout=120)
             print('real custody CREDIT and WITHDRAW independently replayed; owner and separate deposit authority signatures published; all three Rust native v2 fetch consumers passed; retry sent no transactions', flush=True)
         finally:
             if process.poll() is None:
