@@ -6,12 +6,14 @@
 #include "layerx/lxp_authority.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_fee.h"
+#include "layerx/lxp_genesis.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_receipt.h"
 #include "layerx/lxp_state.h"
+#include "layerx/programs.h"
 
 #include <openssl/evp.h>
 #include <stdio.h>
@@ -38,6 +40,7 @@ typedef struct fixture {
     lx_asset_record asset;
     lxp_transfer_asset_state asset_state;
     lx_stream_runtime runtime;
+    lx_programs_transfer_runtime programs_runtime;
     lxp_arena arena;
     uint8_t arena_bytes[4U * 1024U * 1024U];
     uint64_t parameters;
@@ -169,6 +172,58 @@ static int fixture_init(fixture *f)
     f->identity->revocation_sequence = 1U;
     f->fees.version = 1U;
     f->fees.multiplier_basis_points = 10000U;
+    return 0;
+}
+
+static int fixture_programs(fixture *f)
+{
+    lxp_genesis_manifest manifest = {0};
+    lx_programs_metering_schedule metering = {0};
+    lx_programs_fee_genesis_parameters fees = {0};
+    size_t index;
+    (void)memcpy(manifest.signer_public_key, f->owner_public, 32U);
+    metering.version = LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1;
+    for (index = 0U; index < 5U; ++index)
+        metering.coefficients[index] = 1U;
+    metering.coefficients[5] = 8U;
+    metering.coefficients[6] = 8U;
+    metering.coefficients[7] = 64U;
+    metering.coefficients[8] = 8U;
+    metering.activation_batch = 1U;
+    metering.authority_kind = LX_PROGRAMS_METERING_AUTHORITY_GENESIS;
+    CHECK(lxp_hash_payload(manifest.signer_public_key, 32U,
+                           metering.authority_digest) == LXP_OK);
+    fees.schedule = (lx_programs_fee_schedule){
+        1U, 1U, 1U, 2U, 4U, 1U, 1U, 1U
+    };
+    (void)memcpy(fees.occupancy_asset_id, f->asset.asset_id, 32U);
+    fees.target_occupancy_byte_batches = 3U;
+    fees.response_denominator = 1U;
+    fees.maximum_change_numerator = 1U;
+    fees.maximum_change_denominator = 1U;
+    fees.minimum_fee_units_per_occupancy_byte_batch = 1U;
+    fees.maximum_fee_units_per_occupancy_byte_batch = 10U;
+    CHECK(lxp_programs_metering_genesis_append(&manifest, &metering) == LXP_OK);
+    CHECK(lxp_programs_metering_genesis_materialize(&manifest, &f->kernel) ==
+          LXP_OK);
+    CHECK(lxp_programs_fee_genesis_append(&manifest, &fees) == LXP_OK);
+    CHECK(lxp_programs_fee_genesis_materialize(&manifest, &f->kernel) == LXP_OK);
+    f->programs_runtime.accounts = &f->accounts;
+    f->programs_runtime.assets = &f->asset_state;
+    f->programs_runtime.asset_count = 1U;
+    f->programs_runtime.fee_schedule = fees.schedule;
+    (void)memcpy(f->programs_runtime.occupancy_asset_id, f->asset.asset_id, 32U);
+    f->programs_runtime.resolve_metering_schedule =
+        lxp_programs_metering_resolve_runtime;
+    f->programs_runtime.metering_schedule_context = &f->kernel;
+    f->programs_runtime.resolve_occupancy_parameters =
+        lxp_programs_fee_governance_resolve_runtime;
+    f->programs_runtime.occupancy_parameter_context = &f->kernel;
+    CHECK(lxp_kernel_register_module(&f->kernel,
+                                     programs_module_registration_v4()) ==
+          LXP_OK);
+    CHECK(lxp_kernel_bind_module_runtime(&f->kernel, LXP_MODULE_PROGRAMS,
+                                         &f->programs_runtime) == LXP_OK);
     return 0;
 }
 
@@ -558,8 +613,119 @@ static int allowance_end_to_end(void)
     return 0;
 }
 
+static int allowance_private_candidates(void)
+{
+    fixture *live = (fixture *)calloc(1U, sizeof(*live));
+    fixture *replay = (fixture *)calloc(1U, sizeof(*replay));
+    lxp_authority_grant grant;
+    lxp_authority_grant replay_grant;
+    lxp_authority_grant stale;
+    lxp_authority_grant loaded;
+    lxp_authority_resolved resolved;
+    lxp_authority_resolved replay_resolved;
+    lxp_authority_resolved stale_resolved;
+    lxp_transfer_allowance allowance;
+    lxp_kernel_execution execution;
+    lxp_kernel_prepared_batch *prepared = NULL;
+    const lxp_kernel *settled;
+    const lxp_receipt *receipts;
+    signer delegate;
+    uint8_t grant_id[32];
+    uint8_t base_root[32];
+    uint8_t candidate_root[32];
+    CHECK(live != NULL && replay != NULL);
+    CHECK(fixture_init(live) == 0 && fixture_init(replay) == 0);
+    CHECK(fixture_programs(live) == 0 && fixture_programs(replay) == 0);
+    metered_grant(live, &grant, live->delegate_public, 6U);
+    CHECK(seed_grant(live, &grant) == 0);
+    metered_grant(replay, &replay_grant, replay->delegate_public, 6U);
+    CHECK(seed_grant(replay, &replay_grant) == 0);
+    (void)memcpy(grant_id, grant.grant_id, 32U);
+    delegate = (signer){delegate_seed, live->delegate_public};
+    CHECK(build_activity(live, 31U, live->streams[0], 30U, &delegate) == 0);
+    CHECK(resolve(live, &grant, &resolved) == 0);
+    stale = grant;
+    stale_resolved = resolved;
+    stale_resolved.scope = &stale.scope;
+    CHECK(prepare_execution(live, &grant, &resolved, &allowance,
+                             &execution) == 0);
+    execution.recorded_metering_schedule_version = 1U;
+    execution.recorded_fee_schedule_version = 1U;
+    (void)memcpy(base_root, live->kernel.current_state_root, 32U);
+    CHECK(lxp_kernel_prepare_serial_activity_batch(
+              &live->kernel, &live->activity, &execution, &prepared) == LXP_OK);
+    CHECK(prepared != NULL && lxp_kernel_prepared_batch_count(prepared) == 1U);
+    receipts = lxp_kernel_prepared_batch_receipts(prepared);
+    CHECK(receipts != NULL && receipts[0].result_code == LXP_OK);
+    settled = lxp_kernel_prepared_batch_settled_kernel(prepared);
+    CHECK(lxp_authority_grant_load(settled, grant_id, &loaded) == LXP_OK);
+    CHECK(loaded.scope.spent_total.hi == 0U && loaded.scope.spent_total.lo == 30U);
+    CHECK(lxp_u128_is_zero(grant.scope.spent_total));
+    CHECK(lxp_u128_is_zero(stale.scope.spent_total));
+    CHECK(balance_is(live->payer, 100U) && balance_is(live->streams[0], 0U));
+    CHECK(persisted_spent(live, grant_id, false, 0U) == 0);
+    CHECK(memcmp(live->kernel.current_state_root, base_root, 32U) == 0);
+    (void)memcpy(candidate_root, receipts[0].resulting_state_root, 32U);
+    lxp_kernel_prepared_batch_destroy(prepared);
+    prepared = NULL;
+    CHECK(lxp_u128_is_zero(grant.scope.spent_total));
+    CHECK(build_activity(replay, 31U, replay->streams[0], 30U, &delegate) == 0);
+    CHECK(resolve(replay, &replay_grant, &replay_resolved) == 0);
+    CHECK(execute(replay, &replay_grant, &replay_resolved, LXP_OK) == 0);
+    CHECK(memcmp(candidate_root, replay->receipt.resulting_state_root, 32U) == 0);
+    CHECK(execute(live, &grant, &resolved, LXP_OK) == 0);
+    CHECK(persisted_spent(live, grant_id, true, 30U) == 0);
+    CHECK(build_activity(live, 32U, live->streams[1], 30U, &delegate) == 0);
+    CHECK(prepare_execution(live, &stale, &stale_resolved, &allowance,
+                             &execution) == 0);
+    execution.recorded_metering_schedule_version = 1U;
+    execution.recorded_fee_schedule_version = 1U;
+    CHECK(lxp_kernel_prepare_serial_activity_batch(
+              &live->kernel, &live->activity, &execution, &prepared) == LXP_OK);
+    receipts = lxp_kernel_prepared_batch_receipts(prepared);
+    CHECK(receipts != NULL && receipts[0].result_code == LXP_OK);
+    settled = lxp_kernel_prepared_batch_settled_kernel(prepared);
+    CHECK(lxp_authority_grant_load(settled, grant_id, &loaded) == LXP_OK);
+    CHECK(loaded.scope.spent_total.hi == 0U && loaded.scope.spent_total.lo == 60U);
+    CHECK(lxp_u128_is_zero(stale.scope.spent_total));
+    CHECK(persisted_spent(live, grant_id, true, 30U) == 0);
+    CHECK(balance_is(live->payer, 70U) && balance_is(live->streams[1], 0U));
+    CHECK(build_activity(replay, 32U, replay->streams[1], 30U, &delegate) == 0);
+    CHECK(resolve(replay, &replay_grant, &replay_resolved) == 0);
+    CHECK(execute(replay, &replay_grant, &replay_resolved, LXP_OK) == 0);
+    CHECK(memcmp(receipts[0].resulting_state_root,
+                  replay->receipt.resulting_state_root, 32U) == 0);
+    lxp_kernel_prepared_batch_destroy(prepared);
+    prepared = NULL;
+    CHECK(lxp_u128_is_zero(stale.scope.spent_total));
+    stale.scope.maximum_total.lo = 700U;
+    CHECK(lxp_kernel_prepare_serial_activity_batch(
+              &live->kernel, &live->activity, &execution, &prepared) ==
+          LXP_ERR_CONTEXT_MISMATCH);
+    CHECK(prepared == NULL && lxp_u128_is_zero(stale.scope.spent_total));
+    stale.scope.maximum_total.lo = 70U;
+    allowance.grant_id[0] ^= 1U;
+    CHECK(lxp_kernel_prepare_serial_activity_batch(
+              &live->kernel, &live->activity, &execution, &prepared) ==
+          LXP_ERR_AUTH_ALLOWANCE);
+    CHECK(prepared == NULL);
+    (void)memcpy(allowance.grant_id, grant_id, 32U);
+    live->identity->revocation_sequence = 2U;
+    CHECK(lxp_kernel_prepare_serial_activity_batch(
+              &live->kernel, &live->activity, &execution, &prepared) ==
+          LXP_ERR_AUTH_REVOKED);
+    CHECK(prepared == NULL && lxp_u128_is_zero(stale.scope.spent_total));
+    CHECK(persisted_spent(live, grant_id, true, 30U) == 0);
+    CHECK(lxp_state_store_destroy(&live->state) == LXP_OK);
+    CHECK(lxp_state_store_destroy(&replay->state) == LXP_OK);
+    free(live);
+    free(replay);
+    return 0;
+}
+
 int main(void)
 {
     if (allowance_end_to_end() != 0) return 1;
+    if (allowance_private_candidates() != 0) return 1;
     return 0;
 }

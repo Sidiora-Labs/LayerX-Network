@@ -610,6 +610,84 @@ static lxp_result level_token_identity(uint8_t chain[32],
     return LXP_OK;
 }
 
+typedef struct kernel_private_allowance {
+    lxp_transfer_allowance allowance;
+    lxp_authority_scope scope;
+    lxp_authority_resolved authority;
+} kernel_private_allowance;
+
+static lxp_result kernel_private_execution_bind(
+    const lxp_kernel *kernel, const lxp_identity_store *identities,
+    const lxp_kernel_execution *execution,
+    lxp_kernel_execution *private_execution,
+    kernel_private_allowance *private_allowance)
+{
+    const lxp_transfer_allowance *allowance = execution->allowance;
+    lxp_authority_grant committed;
+    lxp_authority_scope expected;
+    const lxp_identity *identity = NULL;
+    uint8_t authority_hash[32];
+    size_t index;
+    lxp_result status;
+    *private_execution = *execution;
+    if (allowance == NULL)
+        return execution->authority != NULL &&
+                   (execution->authority->kind ==
+                        LXP_AUTHORITY_DELEGATED_CAPABILITY ||
+                    execution->authority->kind ==
+                        LXP_AUTHORITY_BUDGET_ALLOWANCE) ?
+                   LXP_ERR_AUTH_ALLOWANCE : LXP_OK;
+    if (allowance->scope == NULL || execution->authority == NULL ||
+        allowance->kind != execution->authority->kind ||
+        memcmp(allowance->grantor, execution->authority->principal, 32U) != 0 ||
+        !lxp_authority_scope_equal(allowance->scope,
+                                   execution->authority->scope))
+        return LXP_ERR_CONTEXT_MISMATCH;
+    private_allowance->allowance = *allowance;
+    private_allowance->scope = *allowance->scope;
+    private_allowance->authority = *execution->authority;
+    if (allowance->kind == LXP_AUTHORITY_DELEGATED_CAPABILITY ||
+        allowance->kind == LXP_AUTHORITY_BUDGET_ALLOWANCE) {
+        status = lxp_authority_grant_load(kernel, allowance->grant_id,
+                                          &committed);
+        if (status == LXP_ERR_UNKNOWN_FIELD) return LXP_ERR_AUTH_ALLOWANCE;
+        if (status != LXP_OK) return status;
+        expected = *allowance->scope;
+        expected.spent_total = committed.scope.spent_total;
+        expected.spent_this_period = committed.scope.spent_this_period;
+        expected.period_start = committed.scope.period_start;
+        if (committed.kind != allowance->kind ||
+            memcmp(committed.grantee, execution->authority->actor, 32U) != 0 ||
+            memcmp(committed.key, execution->authority->verified_key, 32U) != 0 ||
+            !lxp_authority_scope_equal(&committed.scope, &expected))
+            return LXP_ERR_CONTEXT_MISMATCH;
+        for (index = 0U; index < identities->count; ++index)
+            if (memcmp(identities->identities[index].did_id,
+                        committed.grantor, 32U) == 0) {
+                identity = &identities->identities[index];
+                break;
+            }
+        if (identity == NULL) return LXP_ERR_UNKNOWN_DID;
+        status = lxp_authority_is_live(&committed,
+                                       identity->revocation_sequence,
+                                       execution->batch_timestamp_ms,
+                                       execution->global_sequence);
+        if (status != LXP_OK) return status;
+        status = lxp_authority_hash(committed.kind, committed.grant_id,
+                                     committed.key, authority_hash);
+        if (status != LXP_OK) return status;
+        if (memcmp(authority_hash, execution->authority->authority_hash,
+                    sizeof(authority_hash)) != 0)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        private_allowance->scope = committed.scope;
+    }
+    private_allowance->allowance.scope = &private_allowance->scope;
+    private_allowance->authority.scope = &private_allowance->scope;
+    private_execution->allowance = &private_allowance->allowance;
+    private_execution->authority = &private_allowance->authority;
+    return LXP_OK;
+}
+
 static lxp_result kernel_execution_binding(
     const lxp_kernel_execution *execution, uint8_t binding[32])
 {
@@ -654,6 +732,27 @@ static lxp_result kernel_execution_binding(
     BIND_U64(execution->authority->kind);
     BIND_BYTES(execution->authority->verified_key, 32U);
     BIND_BYTES(execution->authority->authority_hash, 32U);
+    BIND_U64(execution->allowance != NULL ? 1U : 0U);
+    if (execution->allowance != NULL) {
+        const lxp_transfer_allowance *allowance = execution->allowance;
+        const lxp_authority_scope *scope = allowance->scope;
+        if (scope == NULL) return LXP_ERR_CONTEXT_MISMATCH;
+        BIND_U64(allowance->kind);
+        BIND_BYTES(allowance->grantor, 32U);
+        BIND_BYTES(allowance->grant_id, 32U);
+        BIND_U64(scope->module_mask);
+        BIND_U64(scope->activity_ordinal_min);
+        BIND_U64(scope->activity_ordinal_max);
+        BIND_BYTES(scope->asset_id, 32U);
+        lxp_u128_to_be(scope->maximum_per_activity, scalar);
+        BIND_BYTES(scalar, sizeof(scalar));
+        lxp_u128_to_be(scope->maximum_total, scalar);
+        BIND_BYTES(scalar, sizeof(scalar));
+        BIND_U64(scope->period_length);
+        lxp_u128_to_be(scope->maximum_per_period, scalar);
+        BIND_BYTES(scalar, sizeof(scalar));
+        BIND_BYTES(scope->purpose_hash, 32U);
+    }
 #undef BIND_BYTES
 #undef BIND_U64
     return LXP_OK;
@@ -1273,11 +1372,58 @@ lxp_result lxp_kernel_canonical_ledger_apply(
     return status;
 }
 
+static lxp_result program_spend_allowance_prepare(
+    const lxp_transfer_set *set, lxp_transfer_set *authorized,
+    lxp_transfer_source_authority authorities[LXP_MAX_TRANSFER_SET_LEGS],
+    lxp_authority_scope *scope)
+{
+    const lxp_transfer_allowance *allowance = set->context.allowance;
+    lxp_authorization_kind declared;
+    size_t index;
+    lxp_result status;
+    if (allowance == NULL) return LXP_OK;
+    if (allowance->scope == NULL) return LXP_ERR_AUTH_ALLOWANCE;
+    switch (allowance->kind) {
+    case LXP_AUTHORITY_OWNER: declared = LXP_AUTH_OWNER; break;
+    case LXP_AUTHORITY_SESSION_KEY: declared = LXP_AUTH_SESSION_KEY; break;
+    case LXP_AUTHORITY_DELEGATED_CAPABILITY:
+        declared = LXP_AUTH_DELEGATED_CAPABILITY;
+        break;
+    case LXP_AUTHORITY_BUDGET_ALLOWANCE:
+        declared = LXP_AUTH_BUDGET_ALLOWANCE;
+        break;
+    default: return LXP_ERR_AUTH_SCOPE;
+    }
+    *scope = *allowance->scope;
+    for (index = 0U; index < set->leg_count; ++index) {
+        const lxp_transfer_leg *leg = &set->legs[index];
+        const lxp_transfer_source_authority *authority;
+        status = program_spend_leg_authority(set, leg, &authority);
+        if (status != LXP_OK) return status;
+        if (authority->debit_authority_kind == LXP_AUTH_PROGRAM_SPEND)
+            continue;
+        if (authority->protocol_system_capability ||
+            memcmp(leg->from->id, allowance->grantor, 32U) != 0)
+            return LXP_ERR_UNAUTHORIZED_DEBIT;
+        if (authority->debit_authority_kind != declared)
+            return LXP_ERR_AUTH_SCOPE;
+        status = lxp_authority_charge_debit(scope, allowance->kind,
+            leg->asset_id, set->context.origin_module_id, leg->amount,
+            set->context.batch_timestamp);
+        if (status != LXP_OK) return status;
+    }
+    for (index = 0U; index < set->context.source_authority_count; ++index)
+        authorities[index].debit_authority_kind = LXP_AUTH_OWNER;
+    authorized->context.allowance = NULL;
+    return LXP_OK;
+}
+
 lxp_result lxp_kernel_apply_transfer_set(
     lxp_kernel *kernel, const lxp_transfer_set *set, lxp_receipt *receipt)
 {
     lxp_transfer_set authorized;
     lxp_transfer_source_authority authorities[LXP_MAX_TRANSFER_SET_LEGS];
+    lxp_authority_scope charged_scope;
     lxp_result status;
     size_t index;
     bool program_spend = false;
@@ -1304,7 +1450,13 @@ lxp_result lxp_kernel_apply_transfer_set(
         return LXP_ERR_BALANCE_BYPASS;
     status = program_spend_authorized_set(set, &authorized, authorities);
     if (status != LXP_OK) return status;
-    return kernel->apply_transfer_set(kernel, &authorized, receipt);
+    status = program_spend_allowance_prepare(set, &authorized, authorities,
+                                             &charged_scope);
+    if (status != LXP_OK) return status;
+    status = kernel->apply_transfer_set(kernel, &authorized, receipt);
+    if (status == LXP_OK && set->context.allowance != NULL)
+        *set->context.allowance->scope = charged_scope;
+    return status;
 }
 
 lxp_result lxp_kernel_register_module(lxp_kernel *kernel,
@@ -2490,6 +2642,7 @@ lxp_result lxp_kernel_prepare_activity(
     lxp_prepared_transition *prepared = NULL;
     const lxp_module_registration *registration;
     lxp_kernel_execution private_execution;
+    kernel_private_allowance private_allowance;
     lxp_identity *identity;
     const uint8_t *prior_receipt;
     size_t prior_receipt_length;
@@ -2530,13 +2683,18 @@ lxp_result lxp_kernel_prepare_activity(
         lxp_kernel_batch_snapshot_destroy(work);
         return LXP_ERR_ARENA_EXHAUSTED;
     }
-    private_execution = *execution;
+    status = kernel_private_execution_bind(&work->kernel, &work->identities,
+                                            execution,
+                                            &private_execution,
+                                            &private_allowance);
+    if (status != LXP_OK) goto done;
     private_execution.fee_parameters = &work->fee_parameters;
     private_execution.identities = &work->identities;
     private_execution.verified_receipts = &work->verified_receipts;
     private_execution.arena = worker_arena;
     private_execution.sequencer_private_key = NULL;
     private_execution.canonical_events_out = NULL;
+    execution = &private_execution;
     status = lxp_module_version_for_epoch(
         &work->kernel, LXP_MODULE_PROGRAMS, execution->epoch,
         execution->recorded_module_version, &registration);
@@ -2723,6 +2881,8 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
     lxp_byte_span *canonical_events)
 {
     lxp_kernel_batch_snapshot *candidate = NULL;
+    lxp_kernel_execution private_execution;
+    kernel_private_allowance private_allowance;
     const lxp_module_registration *registration;
     lxp_module_ctx module_ctx;
     lxp_effect_buffer effects;
@@ -2740,6 +2900,12 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
         return LXP_ERR_NON_CANONICAL;
     if (canonical_events != NULL)
         *canonical_events = (lxp_byte_span){NULL, 0U};
+    status = kernel_private_execution_bind(&snapshot->kernel,
+                                            &snapshot->identities, execution,
+                                            &private_execution,
+                                            &private_allowance);
+    if (status != LXP_OK) return status;
+    execution = &private_execution;
     status = kernel_execution_binding(execution, execution_binding);
     if (status != LXP_OK) return status;
     if (prepared->protocol_version != activity->protocol_version ||
@@ -3360,6 +3526,7 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
 {
     lxp_kernel_prepared_batch *batch = NULL;
     lxp_kernel_execution private_execution;
+    kernel_private_allowance private_allowance;
     kernel_staged_commit record;
     const lx_programs_transfer_runtime *runtime;
     uint8_t receipt_digest[32];
@@ -3402,7 +3569,12 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
     if (status == LXP_OK)
         status = lxp_kernel_batch_snapshot_begin_level(batch->settled);
     if (status != LXP_OK) goto done;
-    private_execution = *execution;
+    status = kernel_private_execution_bind(&batch->settled->kernel,
+                                            &batch->settled->identities,
+                                            execution,
+                                            &private_execution,
+                                            &private_allowance);
+    if (status != LXP_OK) goto done;
     private_execution.arena = &arena;
     private_execution.identities = &batch->settled->identities;
     private_execution.verified_receipts = &batch->settled->verified_receipts;
@@ -4428,6 +4600,17 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         execution->authority == NULL || execution->fee_parameters == NULL ||
         execution->arena == NULL || execution->batch_number == 0U)
         return LXP_ERR_NON_CANONICAL;
+    if ((execution->authority->kind == LXP_AUTHORITY_DELEGATED_CAPABILITY ||
+         execution->authority->kind == LXP_AUTHORITY_BUDGET_ALLOWANCE) &&
+        (execution->allowance == NULL || execution->allowance->scope == NULL))
+        return LXP_ERR_AUTH_ALLOWANCE;
+    if (execution->allowance != NULL &&
+        (execution->allowance->kind != execution->authority->kind ||
+         memcmp(execution->allowance->grantor,
+                 execution->authority->principal, 32U) != 0 ||
+         !lxp_authority_scope_equal(execution->allowance->scope,
+                                    execution->authority->scope)))
+        return LXP_ERR_CONTEXT_MISMATCH;
     if (kernel->publication_poisoned) return LXP_FATAL_INVARIANT;
     if (lxp_activity_module_id(activity->activity_type) ==
             LXP_MODULE_PROGRAMS &&

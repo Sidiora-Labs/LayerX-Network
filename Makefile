@@ -3154,6 +3154,16 @@ $(BUILD_DIR)/tests/programs_call_activity: tests/programs/test_call_activity.c \
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
+$(BUILD_DIR)/tests/programs_metered_call: tests/programs/test_metered_call.c \
+		tests/programs/test_call_activity.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-programs-metered-call
+test-programs-metered-call: $(BUILD_DIR)/tests/programs_metered_call
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_metered_call
+
 .PHONY: programs-native-lifecycle-fixtures programs-check-native-lifecycle-fixtures
 programs-native-lifecycle-fixtures: $(BUILD_DIR)/tests/programs_call_activity
 	python3 platform/sdk/conformance/fixtures/generate_native_lifecycle_fixtures.py --encoder $<
@@ -3211,6 +3221,7 @@ programs-core-test: $(BUILD_DIR)/tests/programs_registration \
 		$(BUILD_DIR)/tests/programs_lifecycle \
 		$(BUILD_DIR)/tests/programs_monetary_law \
 		$(BUILD_DIR)/tests/programs_call_activity \
+		$(BUILD_DIR)/tests/programs_metered_call \
 		$(BUILD_DIR)/tests/programs_occupancy_batch \
 		$(BUILD_DIR)/tests/programs_metering_schedule \
 		$(BUILD_DIR)/tests/programs_fee_governance \
@@ -3220,6 +3231,7 @@ programs-core-test: $(BUILD_DIR)/tests/programs_registration \
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_lifecycle
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_monetary_law
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_call_activity
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_metered_call
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_occupancy_batch
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_metering_schedule
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_fee_governance
@@ -3340,6 +3352,14 @@ test-lni-version-parity:
 $(BUILD_DIR)/tests/lxp_test_program_admission: tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+$(BUILD_DIR)/tests/lxp_test_metered_allowance: tests/daemon/lxp_test_metered_allowance.c tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-daemon-metered-allowance
+test-daemon-metered-allowance: $(BUILD_DIR)/tests/lxp_test_metered_allowance $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py --metered-allowance
 
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build

@@ -83,6 +83,13 @@ typedef struct lxp_authority_envelope {
 
 struct lxp_kernel;
 struct lxp_identity;
+struct lxp_transfer_allowance;
+
+bool lxp_authority_scope_equal(const lxp_authority_scope *left,
+                                const lxp_authority_scope *right);
+void lxp_authority_allowance_bind(lxp_authority_grant *grant,
+                                  const lxp_authority_resolved *authority,
+                                  struct lxp_transfer_allowance *allowance);
 
 lxp_result lxp_grant_decode(const uint8_t *bytes, size_t length,
                             lxp_authority_grant *grant);

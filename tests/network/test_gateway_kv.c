@@ -136,7 +136,7 @@ static int world_init(
     world->payer->has_authority_key = true;
     world->environment = (lxp_send_environment){
         &world->accounts, &world->transfer_asset, 1U,
-        &world->sends, 100U, 42U, LXP_PROTOCOL_VERSION
+        &world->sends, 100U, 42U, LXP_PROTOCOL_VERSION, NULL
     };
     if (lxp_meter_init(
             &world->meter, UINT64_MAX, storage_ceiling,

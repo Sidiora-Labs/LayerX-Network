@@ -165,7 +165,7 @@ static int world_init(
     world->payer->has_authority_key = true;
     world->environment = (lxp_send_environment){
         &world->accounts, &world->transfer_asset, 1U,
-        &world->sends, timestamp, 42U, LXP_PROTOCOL_VERSION
+        &world->sends, timestamp, 42U, LXP_PROTOCOL_VERSION, NULL
     };
     world->settlement.assets = &world->assets;
     world->settlement.send_environment = &world->environment;
@@ -376,6 +376,54 @@ int main(void)
     if (lxp_gateway_state_root(
             &gateway.accounts, gateway.invoices, empty_state_root) != LXP_OK)
         return 1;
+    {
+        lxp_send delegated = send;
+        lxp_authority_scope scope;
+        lxp_authority_scope scope_before;
+        lxp_transfer_allowance allowance;
+        (void)memset(&scope, 0, sizeof(scope));
+        (void)memset(&allowance, 0, sizeof(allowance));
+        scope.module_mask = UINT64_C(1);
+        scope.activity_ordinal_min = 1U;
+        scope.activity_ordinal_max = 7U;
+        (void)memcpy(scope.asset_id, send.asset, 32U);
+        scope.maximum_per_activity.lo = 50U;
+        scope.maximum_total.lo = 70U;
+        scope.purpose_hash[0] = 1U;
+        scope_before = scope;
+        allowance.scope = &scope;
+        allowance.kind = LXP_AUTHORITY_DELEGATED_CAPABILITY;
+        (void)memcpy(allowance.grantor, gateway.payer->id, 32U);
+        allowance.grant_id[0] = 1U;
+        delegated.authorization.kind = LXP_AUTH_DELEGATED_CAPABILITY;
+        if (sign_send(payer_private_key, &delegated, payer_public_key) != 0)
+            return 1;
+        gateway.environment.allowance = &allowance;
+        for (boundary = LXP_GATEWAY_AFTER_BALANCE_WRITE;
+             boundary <= LXP_GATEWAY_AFTER_INVOICE_WRITE;
+             boundary = (lxp_gateway_transaction_boundary)
+                 ((unsigned)boundary + 1U)) {
+            uint8_t rolled_back_root[32];
+            size_t mark = lxp_arena_mark(&arena_a);
+            lxp_gateway_send_test_fail_after(boundary);
+            if (lxp_gateway_send_settle(
+                    &requirement, &delegated, &gateway.settlement,
+                    &gateway_receipt) != LXP_ERR_IO ||
+                !lxp_authority_scope_equal(&scope, &scope_before) ||
+                memcmp(gateway.payer, &payer_before,
+                       sizeof(payer_before)) != 0 ||
+                memcmp(gateway.payee, &payee_before,
+                       sizeof(payee_before)) != 0 ||
+                gateway.sends.count != 0U || gateway.invoices->count != 0U ||
+                gateway.invoices->kv.count != 0U ||
+                lxp_arena_mark(&arena_a) != mark ||
+                lxp_gateway_state_root(&gateway.accounts, gateway.invoices,
+                                        rolled_back_root) != LXP_OK ||
+                memcmp(rolled_back_root, empty_state_root, 32U) != 0)
+                return 1;
+        }
+        gateway.environment.allowance = NULL;
+    }
     for (boundary = LXP_GATEWAY_AFTER_BALANCE_WRITE;
          boundary <= LXP_GATEWAY_AFTER_INVOICE_WRITE;
          boundary = (lxp_gateway_transaction_boundary)((unsigned)boundary + 1U)) {

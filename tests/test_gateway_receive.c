@@ -188,11 +188,11 @@ static int world_init(
     world->receive_environment = (lxp_receive_environment){
         &world->accounts, &world->transfer_asset, 1U, &world->grants,
         &world->receive_idempotency, 100U, 1U, 42U,
-        LXP_PROTOCOL_VERSION
+        LXP_PROTOCOL_VERSION, NULL
     };
     world->send_environment = (lxp_send_environment){
         &world->accounts, &world->transfer_asset, 1U,
-        &world->send_idempotency, 100U, 42U, LXP_PROTOCOL_VERSION
+        &world->send_idempotency, 100U, 42U, LXP_PROTOCOL_VERSION, NULL
     };
     world->receive_context = (lxp_gateway_receive_context){
         &world->assets, &world->receive_environment, world->invoices,
@@ -362,6 +362,55 @@ int main(void)
         world.grants.count != 0U || world.payer->balance.lo != 100U ||
         world.service->balance.lo != 0U)
         return 1;
+    {
+        lxp_receive delegated = receive;
+        lxp_authority_scope scope;
+        lxp_authority_scope scope_before;
+        lxp_transfer_allowance allowance;
+        (void)memset(&scope, 0, sizeof(scope));
+        (void)memset(&allowance, 0, sizeof(allowance));
+        scope.module_mask = UINT64_C(1);
+        scope.activity_ordinal_min = 1U;
+        scope.activity_ordinal_max = 7U;
+        (void)memcpy(scope.asset_id, receive.asset, 32U);
+        scope.maximum_per_activity.lo = 50U;
+        scope.maximum_total.lo = 70U;
+        scope.purpose_hash[0] = 1U;
+        scope_before = scope;
+        allowance.scope = &scope;
+        allowance.kind = LXP_AUTHORITY_DELEGATED_CAPABILITY;
+        (void)memcpy(allowance.grantor, world.payer->id, 32U);
+        allowance.grant_id[0] = 1U;
+        delegated.receiver_authorization.kind = LXP_AUTH_DELEGATED_CAPABILITY;
+        if (sign_receive(service_private_key, &delegated) != 0) return 1;
+        world.receive_environment.allowance = &allowance;
+        for (boundary = LXP_GATEWAY_AFTER_GRANT_WRITE;
+             boundary <= LXP_GATEWAY_AFTER_INVOICE_WRITE;
+             boundary = (lxp_gateway_transaction_boundary)
+                 ((unsigned)boundary + 1U)) {
+            uint8_t rolled_back_root[32];
+            size_t mark = lxp_arena_mark(&arena);
+            lxp_gateway_receive_test_fail_after(boundary);
+            if (lxp_gateway_receive_claim(
+                    &requirement, &delegated, &world.receive_context,
+                    &receive_receipt) != LXP_ERR_IO ||
+                !lxp_authority_scope_equal(&scope, &scope_before) ||
+                memcmp(world.payer, &payer_before,
+                       sizeof(payer_before)) != 0 ||
+                memcmp(world.service, &service_before,
+                       sizeof(service_before)) != 0 ||
+                world.grants.count != 0U ||
+                world.receive_idempotency.count != 0U ||
+                world.invoices->count != 0U ||
+                world.invoices->kv.count != 0U ||
+                lxp_arena_mark(&arena) != mark ||
+                lxp_gateway_state_root(&world.accounts, world.invoices,
+                                        rolled_back_root) != LXP_OK ||
+                memcmp(rolled_back_root, empty_state_root, 32U) != 0)
+                return 1;
+        }
+        world.receive_environment.allowance = NULL;
+    }
     for (boundary = LXP_GATEWAY_AFTER_GRANT_WRITE;
          boundary <= LXP_GATEWAY_AFTER_INVOICE_WRITE;
          boundary = (lxp_gateway_transaction_boundary)((unsigned)boundary + 1U)) {

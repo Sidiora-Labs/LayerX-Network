@@ -6,6 +6,7 @@
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_protocol.h"
+#include "layerx/lxp_transfer.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,38 @@
 static lxp_result write_amount(lxp_codec_writer *writer, lxp_u128 amount)
 {
     return lxp_codec_write_u128(writer, amount);
+}
+
+bool lxp_authority_scope_equal(const lxp_authority_scope *left,
+                                const lxp_authority_scope *right)
+{
+    return left != NULL && right != NULL &&
+           left->module_mask == right->module_mask &&
+           left->activity_ordinal_min == right->activity_ordinal_min &&
+           left->activity_ordinal_max == right->activity_ordinal_max &&
+           memcmp(left->asset_id, right->asset_id, 32U) == 0 &&
+           lxp_u128_cmp(left->maximum_per_activity,
+                        right->maximum_per_activity) == 0 &&
+           lxp_u128_cmp(left->maximum_total, right->maximum_total) == 0 &&
+           lxp_u128_cmp(left->spent_total, right->spent_total) == 0 &&
+           left->period_length == right->period_length &&
+           lxp_u128_cmp(left->maximum_per_period,
+                        right->maximum_per_period) == 0 &&
+           lxp_u128_cmp(left->spent_this_period,
+                        right->spent_this_period) == 0 &&
+           left->period_start == right->period_start &&
+           memcmp(left->purpose_hash, right->purpose_hash, 32U) == 0;
+}
+
+void lxp_authority_allowance_bind(lxp_authority_grant *grant,
+                                  const lxp_authority_resolved *authority,
+                                  lxp_transfer_allowance *allowance)
+{
+    (void)memset(allowance, 0, sizeof(*allowance));
+    allowance->scope = &grant->scope;
+    allowance->kind = grant->kind;
+    (void)memcpy(allowance->grantor, authority->principal, 32U);
+    (void)memcpy(allowance->grant_id, grant->grant_id, 32U);
 }
 
 static lxp_result validate_grant(const lxp_authority_grant *grant)

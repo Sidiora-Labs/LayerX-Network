@@ -286,6 +286,7 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     lxp_u128 principal_balance = {0U, 0U};
     lxp_authority_grant grant;
     lxp_authority_resolved authority;
+    lxp_transfer_allowance allowance;
     lxp_kernel_execution execution;
     lxp_byte_span encoded_receipt;
     uint8_t activity_id[32];
@@ -382,6 +383,8 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     execution.signature_valid = true;
     execution.identities = &process->identities;
     execution.authority = &authority;
+    lxp_authority_allowance_bind(&grant, &authority, &allowance);
+    execution.allowance = &allowance;
     execution.fee_parameters = &process->fees;
     execution.fee_balance = principal_balance;
     execution.gas_limit = UINT64_MAX;

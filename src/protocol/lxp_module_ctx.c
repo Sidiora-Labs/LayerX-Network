@@ -57,6 +57,9 @@ struct lxp_prepared_module_transition {
     lxp_module_blob blobs[LXP_KERNEL_MAX_STAGED_BLOBS];
     size_t blob_count;
     bool allowance_charged;
+    lxp_authority_kind allowance_kind;
+    uint8_t allowance_grantor[32];
+    uint8_t allowance_grant_id[32];
     lxp_authority_scope allowance_before;
     lxp_authority_scope allowance_after;
     bool allowance_record_staged;
@@ -65,26 +68,6 @@ struct lxp_prepared_module_transition {
     lxp_module_kv_change allowance_record;
     uint8_t allowance_record_before[LXP_MODULE_MAX_VALUE_BYTES];
 };
-
-static bool scope_equal(const lxp_authority_scope *left,
-                        const lxp_authority_scope *right)
-{
-    return left->module_mask == right->module_mask &&
-           left->activity_ordinal_min == right->activity_ordinal_min &&
-           left->activity_ordinal_max == right->activity_ordinal_max &&
-           memcmp(left->asset_id, right->asset_id, 32U) == 0 &&
-           lxp_u128_cmp(left->maximum_per_activity,
-                        right->maximum_per_activity) == 0 &&
-           lxp_u128_cmp(left->maximum_total, right->maximum_total) == 0 &&
-           lxp_u128_cmp(left->spent_total, right->spent_total) == 0 &&
-           left->period_length == right->period_length &&
-           lxp_u128_cmp(left->maximum_per_period,
-                        right->maximum_per_period) == 0 &&
-           lxp_u128_cmp(left->spent_this_period,
-                        right->spent_this_period) == 0 &&
-           left->period_start == right->period_start &&
-           memcmp(left->purpose_hash, right->purpose_hash, 32U) == 0;
-}
 
 static lxp_result asset_staged_record(const lxp_module_ctx *ctx,
     const uint8_t id[32], lx_asset_record *record)
@@ -1457,11 +1440,7 @@ static lxp_result allowance_continues_committed(
     if (status == LXP_ERR_UNKNOWN_FIELD) return LXP_ERR_AUTH_ALLOWANCE;
     if (status != LXP_OK) return status;
     if (committed.kind != allowance->kind ||
-        lxp_u128_cmp(committed.scope.spent_total,
-                     allowance->scope->spent_total) != 0 ||
-        lxp_u128_cmp(committed.scope.spent_this_period,
-                     allowance->scope->spent_this_period) != 0 ||
-        committed.scope.period_start != allowance->scope->period_start)
+        !lxp_authority_scope_equal(&committed.scope, allowance->scope))
         return LXP_ERR_CONTEXT_MISMATCH;
     return LXP_OK;
 }
@@ -1475,18 +1454,21 @@ static lxp_result allowance_continues_committed(
  * built it. */
 static lxp_result bind_allowance(
     lxp_module_ctx *ctx, lxp_transfer_set *emitted,
-    lxp_transfer_source_authority authorities[LXP_MAX_TRANSFER_SET_LEGS])
+    lxp_transfer_source_authority authorities[LXP_MAX_TRANSFER_SET_LEGS],
+    lxp_transfer_allowance *bound_allowance)
 {
     lxp_transfer_allowance *allowance = ctx->allowance;
     lxp_authorization_kind declared;
+    uint8_t principal[32];
     size_t principal_legs = 0U;
     size_t i;
     bool bound;
     lxp_result status;
-    if (allowance == NULL || allowance->scope == NULL ||
-        emitted->context.allowance != NULL ||
-        emitted->context.protocol_system_capability)
-        return LXP_OK;
+    if (allowance == NULL) return LXP_OK;
+    if (allowance->scope == NULL) return LXP_ERR_AUTH_ALLOWANCE;
+    if (emitted->context.allowance != NULL &&
+        emitted->context.allowance != allowance)
+        return LXP_ERR_CONTEXT_MISMATCH;
     if (emitted->leg_count > LXP_MAX_TRANSFER_SET_LEGS ||
         emitted->context.source_authorities == NULL ||
         emitted->context.source_authority_count == 0U ||
@@ -1494,15 +1476,49 @@ static lxp_result bind_allowance(
         return LXP_ERR_NON_CANONICAL;
     status = allowance_declared_kind(allowance->kind, &declared);
     if (status != LXP_OK) return status;
+    (void)memcpy(principal, allowance->grantor, 32U);
+    if (ctx->module_id == LXP_MODULE_PROGRAMS &&
+        ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+        ctx->ledger_admission.bound) {
+        const lx_programs_transfer_runtime *runtime = lxp_ctx_module_runtime(ctx);
+        lx_account *principal_account = NULL;
+        if (runtime == NULL) return LXP_ERR_MODULE_DISABLED;
+        for (i = 0U; i < emitted->leg_count; ++i) {
+            lx_account *account;
+            if (emitted->legs[i].from->kind == LX_ACCOUNT_MODULE_VALUE)
+                continue;
+            status = lxp_kernel_program_payment_account(runtime->accounts,
+                allowance->grantor, emitted->legs[i].asset_id,
+                ctx->protocol_version, &account);
+            if (status != LXP_OK) return status;
+            if (account != emitted->legs[i].from)
+                return LXP_ERR_UNAUTHORIZED_DEBIT;
+            if (principal_account != NULL && principal_account != account)
+                return LXP_ERR_ASSET_MISMATCH;
+            principal_account = account;
+        }
+        if (principal_account != NULL)
+            (void)memcpy(principal, principal_account->id, 32U);
+    }
     for (i = 0U; i < emitted->leg_count; ++i)
-        if (memcmp(emitted->legs[i].from->id, allowance->grantor, 32U) == 0)
+        if (memcmp(emitted->legs[i].from->id, principal, 32U) == 0)
             ++principal_legs;
-    bound = principal_legs == emitted->leg_count;
+    if (emitted->context.protocol_system_capability)
+        return principal_legs != 0U && allowance_metered(allowance->kind) ?
+                   LXP_ERR_AUTH_ALLOWANCE : LXP_OK;
+    if (principal_legs == 0U) return LXP_OK;
+    bound = true;
     for (i = 0U; bound && i < emitted->context.source_authority_count; ++i) {
         const lxp_transfer_source_authority *authority =
             &emitted->context.source_authorities[i];
+        if (memcmp(authority->authorized_from, principal, 32U) != 0) {
+            bound = ctx->module_id == LXP_MODULE_PROGRAMS &&
+                emitted->context.program_spend_token != 0U &&
+                authority->debit_authority_kind == LXP_AUTH_PROGRAM_SPEND &&
+                !authority->protocol_system_capability;
+            continue;
+        }
         if (authority->protocol_system_capability ||
-            memcmp(authority->authorized_from, allowance->grantor, 32U) != 0 ||
             (authority->debit_authority_kind != LXP_AUTH_OWNER &&
              authority->debit_authority_kind != declared))
             bound = false;
@@ -1514,15 +1530,37 @@ static lxp_result bind_allowance(
         status = allowance_continues_committed(ctx, allowance);
         if (status != LXP_OK) return status;
     }
+    if (allowance_metered(allowance->kind)) {
+        lxp_u128 activity_amount = {0U, 0U};
+        if (ctx->allowance_charged) {
+            status = lxp_u128_sub(allowance->scope->spent_total,
+                                  ctx->allowance_before.spent_total,
+                                  &activity_amount);
+            if (status != LXP_OK) return status;
+        }
+        for (i = 0U; i < emitted->leg_count; ++i) {
+            if (memcmp(emitted->legs[i].from->id, principal, 32U) != 0)
+                continue;
+            status = lxp_u128_add(activity_amount, emitted->legs[i].amount,
+                                  &activity_amount);
+            if (status != LXP_OK) return status;
+        }
+        if (lxp_u128_cmp(activity_amount,
+                         allowance->scope->maximum_per_activity) > 0)
+            return LXP_ERR_GRANT_EXHAUSTED;
+    }
     (void)memcpy(authorities, emitted->context.source_authorities,
                  emitted->context.source_authority_count *
                      sizeof(authorities[0]));
     for (i = 0U; i < emitted->context.source_authority_count; ++i)
-        authorities[i].debit_authority_kind = declared;
+        if (memcmp(authorities[i].authorized_from, principal, 32U) == 0)
+            authorities[i].debit_authority_kind = declared;
     emitted->context.source_authorities = authorities;
     if (emitted->context.debit_authority_kind == LXP_AUTH_OWNER)
         emitted->context.debit_authority_kind = declared;
-    emitted->context.allowance = allowance;
+    *bound_allowance = *allowance;
+    (void)memcpy(bound_allowance->grantor, principal, 32U);
+    emitted->context.allowance = bound_allowance;
     if (!ctx->allowance_charged) {
         ctx->allowance_before = *allowance->scope;
         ctx->allowance_charged = true;
@@ -1560,6 +1598,7 @@ static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
 {
     lxp_transfer_set emitted;
     lxp_transfer_source_authority bound_authorities[LXP_MAX_TRANSFER_SET_LEGS];
+    lxp_transfer_allowance bound_allowance;
     size_t i;
     if (ctx == NULL || set == NULL || receipt == NULL)
         return LXP_ERR_NON_CANONICAL;
@@ -1619,7 +1658,8 @@ static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
             ctx->module_id != LXP_MODULE_PROGRAMS)
             return LXP_ERR_UNAUTHORIZED_DEBIT;
     {
-        lxp_result status = bind_allowance(ctx, &emitted, bound_authorities);
+        lxp_result status = bind_allowance(ctx, &emitted, bound_authorities,
+                                          &bound_allowance);
         if (status == LXP_OK)
             status = lxp_kernel_apply_transfer_set(ctx->kernel, &emitted,
                                                    receipt);
@@ -2176,6 +2216,9 @@ lxp_result lxp_module_ctx_export_prepared(
             return LXP_FATAL_INVARIANT;
         }
         result->allowance_charged = true;
+        result->allowance_kind = ctx->allowance->kind;
+        (void)memcpy(result->allowance_grantor, ctx->allowance->grantor, 32U);
+        (void)memcpy(result->allowance_grant_id, ctx->allowance->grant_id, 32U);
         result->allowance_before = ctx->allowance_before;
         result->allowance_after = *ctx->allowance->scope;
     }
@@ -2272,16 +2315,29 @@ lxp_result lxp_module_ctx_import_prepared(
     if (prepared->allowance_charged &&
         (ctx->allowance == NULL || ctx->allowance->scope == NULL ||
          ctx->allowance_charged ||
-         !scope_equal(ctx->allowance->scope, &prepared->allowance_before)))
+         ctx->allowance->kind != prepared->allowance_kind ||
+         memcmp(ctx->allowance->grantor, prepared->allowance_grantor, 32U) != 0 ||
+         memcmp(ctx->allowance->grant_id, prepared->allowance_grant_id, 32U) != 0 ||
+         !lxp_authority_scope_equal(ctx->allowance->scope,
+                                    &prepared->allowance_before)))
         return LXP_ERR_CONTEXT_MISMATCH;
     if (prepared->allowance_record_staged) {
         uint8_t expected[LXP_AUTHORITY_CHARGE_RECORD_BYTES];
+        uint8_t expected_key[LXP_AUTHORITY_CHARGE_RECORD_KEY_BYTES];
         size_t location;
         bool existed;
+        lxp_result status;
+        if (!prepared->allowance_charged)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        lxp_authority_charge_record_key(ctx->allowance->grant_id, expected_key);
+        status = allowance_continues_committed(ctx, ctx->allowance);
+        if (status != LXP_OK) return status;
         if (!prepared->allowance_charged ||
             prepared->allowance_record.deleted ||
             prepared->allowance_record.key_length !=
                 LXP_AUTHORITY_CHARGE_RECORD_KEY_BYTES ||
+            memcmp(prepared->allowance_record.key, expected_key,
+                    sizeof(expected_key)) != 0 ||
             prepared->allowance_record.value_length !=
                 LXP_AUTHORITY_CHARGE_RECORD_BYTES ||
             prepared->allowance_record_before_length >

@@ -822,6 +822,7 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
     lxp_activity activity;
     lxp_authority_grant grant;
     lxp_authority_resolved authority;
+    lxp_transfer_allowance allowance;
     lxp_kernel_execution execution;
     lxp_receipt receipt;
     lxp_byte_span canonical_activity;
@@ -877,6 +878,10 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
     execution.signature_valid = true;
     execution.identities = &emulator->identities;
     execution.authority = &authority;
+    if (status == LXP_OK) {
+        lxp_authority_allowance_bind(&grant, &authority, &allowance);
+        execution.allowance = &allowance;
+    }
     execution.fee_parameters = &emulator->fee_parameters;
     execution.fee_balance = (lxp_u128){ UINT64_MAX, UINT64_MAX };
     if (status == LXP_OK && emulator->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {

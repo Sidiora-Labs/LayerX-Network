@@ -2755,6 +2755,7 @@ lxp_result lxp_daemon_lni_simulate(
     lxp_kernel_execution execution;
     lxp_authority_grant grant;
     lxp_authority_resolved authority;
+    lxp_transfer_allowance allowance;
     lxp_byte_span canonical_activity;
     lxp_byte_span encoded_receipt = {NULL, 0U};
     lxp_batch_roots roots;
@@ -2870,6 +2871,8 @@ lxp_result lxp_daemon_lni_simulate(
         execution.signature_valid = true;
         execution.identities = owner->identities;
         execution.authority = &authority;
+        lxp_authority_allowance_bind(&grant, &authority, &allowance);
+        execution.allowance = &allowance;
         execution.fee_parameters = &fees;
         execution.fee_balance = fee_balance;
         execution.gas_limit = UINT64_MAX;
