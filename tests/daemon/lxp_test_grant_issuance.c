@@ -77,6 +77,7 @@ static int grant_maintenance_head(int descriptor, uint64_t sequence, uint64_t ba
     struct sockaddr_un address;
     socklen_t address_length = sizeof(address);
     REQUIRE(getpeername(descriptor, (struct sockaddr *)&address, &address_length) == 0);
+    REQUIRE(close(descriptor) == 0);
     for (unsigned int attempt = 0U; attempt < 200U; ++attempt) {
         wire_envelope response;
         int current = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -87,8 +88,14 @@ static int grant_maintenance_head(int descriptor, uint64_t sequence, uint64_t ba
         bool reached = load_u64(response.payload + 11U) == sequence &&
                        load_u64(response.payload + 19U) == batch;
         release_envelope(&response);
+        if (reached) {
+            if (current != descriptor) {
+                REQUIRE(dup2(current, descriptor) == descriptor);
+                REQUIRE(close(current) == 0);
+            }
+            return 0;
+        }
         REQUIRE(close(current) == 0);
-        if (reached) return 0;
         const struct timespec pause = {0, 50000000L};
         REQUIRE(nanosleep(&pause, NULL) == 0);
     }
