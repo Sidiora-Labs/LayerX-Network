@@ -225,6 +225,9 @@ fn spawn(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(must(fs::File::create(&stderr), "stderr file")));
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        command.env("LAYERX_PAY_TIMING", "1");
+    }
     if daemon_identity {
         command.uid(DAEMON_UID).gid(DAEMON_GID);
     }

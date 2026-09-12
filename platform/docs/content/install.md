@@ -62,6 +62,12 @@ layerx payment test --from "$LAYERX_SOURCE" --to "$LAYERX_DESTINATION" \
 
 That performs a real quote and a real commit against the active endpoint and prints the journey. If it works, your language quickstart will work.
 
+Native `layerx wallet` and `layerx token` commands are a separate surface,
+documented in the [CLI wallet quickstart](../../cli/README.md#wallet-quickstart).
+Wallet creation on the emulator registers a local DID. Token writes require
+authenticated identity reads and verified receipts; Send awaits the shared
+debit-authorization signing API. Hosted wallet creation remains unavailable.
+
 ## Five-minute agent-runtime installation
 
 MCP and A2A use the hosted gateway, not the emulator. Create or import the Ed25519 key already bound to your funded account, select the hosted environment, and keep the source account and asset identifiers nearby.

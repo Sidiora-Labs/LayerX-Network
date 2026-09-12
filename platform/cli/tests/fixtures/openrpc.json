@@ -1,0 +1,697 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "LayerX public JSON-RPC",
+    "version": "0.1.0",
+    "description": "Public JSON-RPC reads, authenticated activity submission and scoped WebSocket subscriptions. Native DID enumeration, asset listing/detail and canonical fee estimation forward to authenticated core reads; unavailable evidence is returned explicitly and balances, metadata or fees are never fabricated."
+  },
+  "methods": [
+    {
+      "name": "lx_register",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "signer_public_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "registration_signature",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Creates one self-service identity principal in the beta tenant. Both arguments are lowercase hexadecimal: a 32-byte Ed25519 signer public key and its 64-byte signature over SHA-256(len-prefixed \"layerx-register-binding-v1\", tenant, signer_public_key). The subject is derived as beta.<first 16 bytes of SHA-256(len-prefixed \"layerx-register-subject-v1\", tenant, signer_public_key)>, so registration is idempotent and cannot name another key holder's principal. The result is the identity principal record: tenant, sub, allowed_signer_public_keys, account and audiences. Malformed arguments are -32602; a signature that does not prove possession of the named key is -32002; the per-minute self-registration budget is -32005; an unconfigured or unavailable identity service is -32001 with a machine-readable data.code.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32002,
+          "message": "Registration refused"
+        },
+        {
+          "code": -32001,
+          "message": "Registration unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Registration unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_requestFunds",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "did",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^did:[0-9A-Za-z._:-]+$",
+            "maxLength": 512
+          }
+        },
+        {
+          "name": "signer_public_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      ],
+      "result": {
+        "name": "claim",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Claims one testnet faucet grant for the authenticated identity principal and proxies it to the faucet service. Requires the same bearer identity session used to provision gateway keys; the signer public key must be one the session authorises, so a principal cannot fund a key it does not hold. The faucet bounds claims per principal per window, and the gateway derives the faucet idempotency key from SHA-256(len-prefixed \"layerx-faucet-claim-v1\", principal, did, signer_public_key), so a repeated request returns the same grant instead of a second one. The result is the faucet claim record: funded, funding_id, transaction_id, decimal-string amount and network; a claim whose evidence is incomplete is -32603 and is never reported as funded. Malformed arguments are -32602; a missing session, an unauthorised signer key or a faucet refusal is -32002; the per-minute claim budget and faucet quotas are -32005; a faucet that is unconfigured, unavailable or still settling is -32001 with a machine-readable data.code.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32002,
+          "message": "Faucet claim refused"
+        },
+        {
+          "code": -32001,
+          "message": "Faucet claim unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Faucet claim unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getAccount",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Reads one account by 32-byte hexadecimal account id through the public core account read. Returns name, asset_id, balance, next_sequence, frozen, and authenticated node evidence. Invalid selectors are JSON-RPC -32602. Missing or unverifiable evidence is -32001; the public read rate limit is -32005.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getBalance",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Same core account read as lx_getAccount. Clients that need only the current units use balance and asset_id from that object.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getBalances",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "did",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Enumerates the complete bounded DID account list from LNI minor 5 committed account reads. Returns did, accounts with canonical values, native proof material and freshness, and verification=authenticated_node_snapshot. No independently verified completeness or finality claim. Unavailable or invalid native evidence returns -32001.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getReceipt",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "activity_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Reads the verified receipt for a 32-byte hexadecimal activity id. A successful result includes receipt bytes and result_code. Missing evidence is JSON-RPC -32001. An admission acknowledgement is never returned as success.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getActivityStatus",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "activity_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Same receipt read as lx_getReceipt. Activity status is the receipt result state (completed, refused, or the upstream pending/unavailable refusal), not a separate status document.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getBatchHeader",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "batch_number",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Reads a sequencer-signed batch header by nonzero decimal batch number. Leading zeros and the value 0 are invalid parameters.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getCheckpoint",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "checkpoint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Reads checkpoint evidence by 32-byte hexadecimal checkpoint id. The all-zero identifier is refused.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getNodeInfo",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Handshake node information: protocol_version, network_id, chain_head_sequence, latest_sealed_batch, latest_finalised_checkpoint, authorised_sequencer_key, and advertised capabilities.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getSequence",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        },
+        {
+          "name": "selector",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "identity"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "snapshot",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "One account_id argument reads account next_sequence. With [did, \"identity\"], reads identity.next_sequence from the authenticated native preparation snapshot for envelope signing. Account and identity sequences are independent.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getProof",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "kind",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "activity",
+              "receipt",
+              "account"
+            ]
+          }
+        },
+        {
+          "name": "activity_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        },
+        {
+          "name": "account_id",
+          "required": false,
+          "description": "Required only when kind is account.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        }
+      ],
+      "result": {
+        "name": "proof",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Verified proof with canonical value and signed batch header. kind activity or receipt takes the activity id. kind account requires activity_id and account_id. Account proofs export the exact verified native proof bytes without reconstruction.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_sendActivity",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "canonical_hex",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^([0-9a-fA-F]{2})+$",
+            "maxLength": 1048576,
+            "description": "At most 1048576 hexadecimal characters encoding 524288 bytes. The full JSON request including envelope, parameters and batch overhead remains subject to the 8388608-byte HTTP request bound; ingress may impose a smaller body bound."
+          }
+        },
+        {
+          "name": "commitment",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "executed",
+              "batched",
+              "finalised"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "outcome",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Requires an activity:write gateway key and the existing route scope for Programs activities. Admits strictly canonical Asset register (1), account_open (4), send (5), receive (6), grant_issue (7), grant_revoke (8), mint (10) and burn (11), plus Programs deploy (1), upgrade (2), call (3), transfer (5), account registration (6) and wind-down (7). Asset pause/unpause (2/3) are excluded and Asset ordinal 9 is reserved and refused. Uses activity-ID outer deduplication and preserves signed protocol idempotency. Returns a verified receipt for executed, verified inclusion for batched, and an exact matching verified checkpoint header for finalised; returns JSON-RPC -32001 with state=pending and requested_commitment when evidence is absent after the bounded wait; no success result or commitment downgrade is returned. An admission acknowledgement never establishes execution.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32002,
+          "message": "Insufficient scope"
+        },
+        {
+          "code": -32001,
+          "message": "Submission unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_subscribe",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "topic",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "receipts",
+              "checkpoints",
+              "account"
+            ]
+          }
+        },
+        {
+          "name": "account_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "description": "Required for account subscriptions only."
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "description": "Last delivered receipt-feed position for this topic, taken from params.cursor of the last notification received before the connection was lost. Positional: for account subscriptions it follows account_id."
+        }
+      ],
+      "result": {
+        "name": "subscription",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "description": "Authenticated GET /rpc/ws upgrade using Authorization: LayerX-Key. receipt:read scope for receipts; state:read for checkpoints and account. Server notifications use lx_subscription with params.subscription, params.result and params.cursor. params.cursor is the receipt-feed position last delivered on that subscription, as a canonical decimal string. At most 32 connections, 8 subscriptions per connection and 16 queued receipt wakes. Slow consumers and feed loss close with 1013; key revocation closes with 1008. Reconnect by subscribing again with the cursor of the last notification: receipt subscriptions replay every event after it, checkpoint and account subscriptions replay the current snapshot once, and events replayed on resume are delivered before any live event. The resume window is 16 positions; a wider gap is refused with -32005 and a cursor ahead of chain_head_sequence with -32602, and the subscription is not created. Reconcile through reads after a refused resume. Ping every 5 seconds, idle deadline 60 seconds, connection lifetime one hour. Browser Origin requests are refused. Core requires LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE matching the gateway component token. Receipts originate from authenticated native commit waits; checkpoints and account snapshots refresh on wakes, checkpoints also on bounded wait expiry."
+    },
+    {
+      "name": "lx_unsubscribe",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "subscription",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "description": "Identifier returned by lx_subscribe on this connection."
+        }
+      ],
+      "result": {
+        "name": "cancelled",
+        "schema": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        }
+      },
+      "description": "Cancels one subscription on the WebSocket connection that created it and stops its notifications; other subscriptions keep their identifiers and cursors. WebSocket only: over POST /rpc it returns -32004. An identifier that is not active on this connection returns -32602.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32004,
+          "message": "WebSocket required"
+        }
+      ]
+    },
+    {
+      "name": "lx_listAssets",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Returns assets, observed_head_sequence, state_root and verification=authenticated_committed_snapshot from typed LNI minor-5 AssetRead. The complete native list is bounded to 64 records; unsupported or unavailable evidence returns -32001. Snapshot authentication is not an independent Merkle proof.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getAsset",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "asset_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Returns asset metadata, observed_head_sequence, state_root and verification=authenticated_committed_snapshot from typed LNI minor-5 AssetRead. Unknown assets or unavailable evidence return -32001. Amounts are decimal strings and identifiers and custody_reference are hexadecimal.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_estimateFee",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "canonical_hex",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^([0-9a-fA-F]{2})+$",
+            "maxLength": 1048576,
+            "description": "At most 1048576 hexadecimal characters encoding 524288 bytes. The full JSON request including envelope, parameters and batch overhead remains subject to the 8388608-byte HTTP request bound; ingress may impose a smaller body bound."
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Strictly decodes any activity admitted by lx_sendActivity and returns fee as a decimal string, parameter_version, canonical_schedule as hexadecimal, canonical_bytes, observed_head_sequence, state_root and verification=authenticated_committed_snapshot from native FeeEstimate. The native committed schedule determines the canonical-envelope price for Asset 1/2/3/4/5/6/7/8/10/11 and Programs 1/2/3/5/6/7. A schedule requiring unavailable execution or storage units fails closed with -32001. Asset ordinal 9 is reserved and refused. This estimate does not reserve a fee or prove execution.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    }
+  ]
+}

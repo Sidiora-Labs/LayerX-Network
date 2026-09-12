@@ -149,7 +149,7 @@ The missing agentd endpoint is recorded in the bring-up missing-input list.
 HTTP against those origins uses the cluster CA. Hosted smoke passes
 `--cacert "$LAYERX_TEST_CA_FILE"` (`platform/hosted/testnet/tests/hosted-smoke.sh:7,
 32-33`). The CLI HTTP client builds a ureq agent with a 30s timeout and no CA
-flag (`platform/cli/src/http.rs:39-47`).
+flag (`platform/cli/src/http.rs:41-49`).
 
 Node network id is `402` (`platform/hosted/node/deployment.yaml:5`;
 `platform/hosted/testnet/src/lib.rs:4`). Node asset id is
@@ -225,8 +225,8 @@ For hosts without an OS Secret Service, first follow the
 Keep the store selection and passphrase environment available for all commands.
 
 The developer CLI binary is `layerx` (`platform/cli/Cargo.toml:11-13`;
-`platform/cli/src/main.rs:30-31`). Global `--json` emits one JSON object
-`{ok, kind, message, data}` (`platform/cli/src/main.rs:33-38`;
+`platform/cli/src/main.rs:31-32`). Global `--json` emits one JSON object
+`{ok, kind, message, data}` (`platform/cli/src/main.rs:34-39`;
 `platform/cli/src/output.rs:18-30`).
 
 ```sh
@@ -234,11 +234,11 @@ layerx key create quickstart
 ```
 
 `name` is 1–128 ASCII alnum/`-`/`_` (`platform/cli/src/credential.rs:294-303`).
-`--did` is optional (`platform/cli/src/main.rs:116-119`). Without it the DID
+`--did` is optional (`platform/cli/src/main.rs:131-134`). Without it the DID
 is `did:layerx:` plus the 64-hex public key
 (`platform/cli/src/credential.rs:122`). Human output is `Created key {name} in
 credential storage` plus JSON `{name, did, public_key}`
-(`platform/cli/src/main.rs:790-793`). `--json` sets `kind` to `key.created`.
+(`platform/cli/src/main.rs:831-834`). `--json` sets `kind` to `key.created`.
 
 The seed is 32 OS-random bytes stored in the selected credential backend.
 The default OS backend uses keyring service `dev.layerx.cli`
@@ -251,12 +251,12 @@ Store the cluster session token (do not print the file contents):
 tr -d '\r\n' < "$LAYERX_TEST_AUTH_TOKEN_FILE" | layerx auth set --environment testnet
 ```
 
-`auth set` reads stdin and saves it (`platform/cli/src/main.rs:138-143,
+`auth set` reads stdin and saves it (`platform/cli/src/main.rs:153-158,
 858-865`). Human output is `Saved {environment} API token in credential storage` with data `{environment, secret_storage:
 operating-system-credential-store}` by default, or
 `secret_storage: encrypted-file-credential-store` for the file backend.
 `kind` is `auth.saved`.
-`--environment` optional; else current (`platform/cli/src/main.rs:1354-1360`).
+`--environment` optional; else current (`platform/cli/src/main.rs:1421-1449`).
 Bring-up mints that token as `ses_` plus 32 hex, `.`, 64 hex when the source
 is identity-provisioning (`platform/hosted/tests/beta-cluster.sh:1020-1026`).
 
@@ -267,7 +267,7 @@ supplied together or omitted together (`platform/cli/src/emulator.rs:751-791`).
 The anchor is 32-byte hex Ed25519 (`platform/cli/src/emulator.rs:821-824`).
 `up` writes `sequencer_public_key` into `build/beta-cluster/identity`
 (`platform/hosted/tests/beta-cluster.sh:1157`). For `testnet`, sequencer
-identity is not probed (`platform/cli/src/main.rs:730-764`).
+identity is not probed (`platform/cli/src/main.rs:771-805`).
 
 ```sh
 layerx environment use testnet \
@@ -277,11 +277,11 @@ layerx environment use testnet \
 ```
 
 Human output is `Using LayerX {name}` with data `{name, endpoint, network_id,
-sequencer_trust_anchor}` (`platform/cli/src/main.rs:772-779`). `kind` is
+sequencer_trust_anchor}` (`platform/cli/src/main.rs:813-820`). `kind` is
 `environment.selected`.
 
 `layerx auth status --environment testnet` prints whether a token exists
-without printing it (`platform/cli/src/main.rs:144-148, 867-878`).
+without printing it (`platform/cli/src/main.rs:159-163, 908-919`).
 
 Hosted account create is a different command: `--email`, `--display-name`,
 `--idempotency-key`; `--initial-amount` must be `0`
@@ -293,7 +293,7 @@ not include `/v1/accounts` (`platform/hosted/gateway/src/lib.rs:809-881`).
 
 ## 4. Request funds from the faucet
 
-There is no `layerx faucet` command (`platform/cli/src/main.rs:44-84`). The
+There is no `layerx faucet` command (`platform/cli/src/main.rs:53-99`). The
 faucet claim route is `POST /v1/faucet/claims`
 (`platform/hosted/faucet/src/main.rs:1025`).
 
@@ -344,9 +344,9 @@ Testnet control admits the funding journey at `GET /v1/journeys/funding`
 
 ## 5. Deploy a program
 
-There is no `layerx programs` command (`platform/cli/src/main.rs:44-84`).
+There is no `layerx programs` command (`platform/cli/src/main.rs:53-99`).
 The command is `layerx program deploy <artifact>`
-(`platform/cli/src/main.rs:248-257, 1054-1070`;
+(`platform/cli/src/main.rs:263-272, 1101-1117`;
 `platform/cli/src/programs.rs:245-279`).
 
 From the faucet-funded credential, scaffold and compile a WASM artifact:
@@ -358,10 +358,10 @@ layerx --json program build --manifest-path quickstart-program/Cargo.toml
 
 `name` is a lowercase Cargo package name, 1–64, digits/`-`, not starting
 with `-` (`platform/cli/src/scaffold.rs:52-62`). `--directory` default `.`
-(`platform/cli/src/main.rs:86-91`). `--json` `kind` is `project.created`
-(`platform/cli/src/main.rs:498-501`). `program build` `--manifest-path`
+(`platform/cli/src/main.rs:101-106`). `--json` `kind` is `project.created`
+(`platform/cli/src/main.rs:543-547`). `program build` `--manifest-path`
 default `Cargo.toml`; `--artifact` optional
-(`platform/cli/src/main.rs:226-232, 1036-1043`). Without `--artifact` the
+(`platform/cli/src/main.rs:241-247, 1083-1090`). Without `--artifact` the
 Rust toolchain must produce exactly one `.wasm` under
 `target/wasm32-unknown-unknown/release`
 (`platform/cli/src/programs.rs:176-213, 1976-1995`). `--json` `kind` is
@@ -385,11 +385,11 @@ layerx --json program deploy \
 
 Required lifecycle flags: `--program-id`, `--idempotency-key`,
 `--account-sequence`, `--not-before-ms`, `--expires-at-ms`,
-`--previous-state-root` (`platform/cli/src/main.rs:282-300, 1409-1475`).
+`--previous-state-root` (`platform/cli/src/main.rs:297-315, 1503-1569`).
 `--key` optional (else the configured default)
-(`platform/cli/src/main.rs:289, 656-670, 993`). `--fee-limit` default `0`
-(`platform/cli/src/main.rs:296-297`). `--upgrade-authority` and
-`--interface` optional (`platform/cli/src/main.rs:251-254`). Without
+(`platform/cli/src/main.rs:304, 697-711, 1034`). `--fee-limit` default `0`
+(`platform/cli/src/main.rs:311-312`). `--upgrade-authority` and
+`--interface` optional (`platform/cli/src/main.rs:266-269`). Without
 `--upgrade-authority` the policy is immutable
 (`platform/cli/src/programs.rs:263-269`). `--interface` is canonical
 encoded interface bytes, not KVX source
@@ -400,12 +400,12 @@ encoded interface bytes, not KVX source
 `platform/cli/src/encoding.rs:29-33`). `--idempotency-key` is 32-byte hex
 at submit time (`platform/cli/src/programs.rs:952`); clap and
 `validate_idempotency_key` also admit 16–128 alnum/`-`/`_`
-(`platform/cli/src/http.rs:366-377`). Hosted `POST /v1/programs/deploy`
+(`platform/cli/src/http.rs:388-399`). Hosted `POST /v1/programs/deploy`
 requires `Idempotency-Key` of 64 lowercase hex
 (`platform/hosted/gateway/src/main.rs:1535-1545, 829-833`). Validity
 `expires_at_ms - not_before_ms` must be in `(0, 300000]`
 (`platform/cli/src/programs.rs:944-950`). There is no CLI command that
-reads the current state root (`platform/cli/src/main.rs:44-84`). Hosted
+reads the current state root (`platform/cli/src/main.rs:53-99`). Hosted
 `GET /v1/state` is `503` `principal_state_proof_unavailable`
 (`platform/hosted/gateway/src/lib.rs:816`;
 `platform/hosted/gateway/src/main.rs:2275`).
@@ -413,7 +413,7 @@ reads the current state root (`platform/cli/src/main.rs:44-84`). Hosted
 The command POSTs canonical signed bytes to `/v1/programs/deploy`
 (`platform/cli/src/programs.rs:436-442`). `--json` `kind` is
 `program.lifecycle`; human text is `Programs lifecycle outcome on
-{environment}` (`platform/cli/src/main.rs:1021-1025`). On a completed
+{environment}` (`platform/cli/src/main.rs:1064-1068`). On a completed
 receipt the data object has `activity_id`, `receipt` (hex), `result_code`,
 `outcome.status` `completed` or `refused`,
 `verified_previous_state_root`, `verified_resulting_state_root`,
@@ -424,7 +424,7 @@ call_graph}, trace}` (`platform/hosted/gateway/src/main.rs:1883-1911`).
 `state` is `completed` when `result_code == 0`, else `refused`.
 
 `active_client` sends the stored session as `Authorization: Bearer`
-(`platform/cli/src/main.rs:1348-1351`; `platform/cli/src/http.rs:222-228`).
+(`platform/cli/src/main.rs:1415-1418`; `platform/cli/src/http.rs:240-246`).
 Hosted `POST /v1/programs/deploy` authenticates `LayerX-Key` with scope
 `program:call` (`platform/hosted/gateway/src/lib.rs:813`;
 `platform/hosted/gateway/src/main.rs:1077-1080, 1144-1153, 2413-2415`).
@@ -448,12 +448,12 @@ layerx --json payment test \
 
 `--from`, `--to`, `--currency` (alias `--asset`), `--amount` (>0),
 `--idempotency-key` (16–128 alnum/`-`/`_`) are required
-(`platform/cli/src/main.rs:179-192`; `platform/cli/src/payment.rs:5-14`;
-`platform/cli/src/http.rs:366-377`). The command POSTs `/v1/moves/quote` then
+(`platform/cli/src/main.rs:194-207`; `platform/cli/src/payment.rs:5-14`;
+`platform/cli/src/http.rs:388-399`). The command POSTs `/v1/moves/quote` then
 `/v1/moves` with `{quote_id}` (`platform/cli/src/payment.rs:23-32`). It
 reads `quote_id` from `/result/quote_id` (`platform/cli/src/payment.rs:24-27`).
 `--json` `kind` is `payment.started`; `data` has `quote`, `journey`,
-`idempotency_key` (`platform/cli/src/main.rs:950-953`;
+`idempotency_key` (`platform/cli/src/main.rs:991-994`;
 `platform/cli/src/payment.rs:33-37`). It does not run `verify_outcome`
 (`platform/cli/src/payment.rs:5-37`). These two routes are Human-plane
 operations (`human/schema/human-api/movement.kvx:116-131`). The emulator serves
@@ -476,7 +476,7 @@ session scheme for `/v1/keys` (`platform/hosted/gateway/src/main.rs:972-981,
 path, not a hosted production-gateway payment command. Use the
 `lx_sendActivity` public RPC path for hosted canonical payment activities.
 
-There is no `layerx activity` command (`platform/cli/src/main.rs:44-84`).
+There is no `layerx activity` command (`platform/cli/src/main.rs:53-99`).
 MCP/A2A `activity.submit` POSTs JSON `{"activity": <hex>}` to
 `/v1/activities` (`platform/cli/src/toolset.rs:341-344`). That route
 requires scope `activity:write` (`platform/hosted/gateway/src/main.rs:1072-1087`).
@@ -508,8 +508,8 @@ success for a completed non-program activity is `{ok: true, result, trace}`
 layerx --json receipt get <id>
 ```
 
-`id` is path-safe: 1–256 alnum/`-`/`_`/`:`/`.` (`platform/cli/src/http.rs:352-363`;
-`platform/cli/src/main.rs:197-198, 956-964`). The command GETs
+`id` is path-safe: 1–256 alnum/`-`/`_`/`:`/`.` (`platform/cli/src/http.rs:372-383`;
+`platform/cli/src/main.rs:212-213, 997-1005`). The command GETs
 `/v1/receipts/{id}` on the active endpoint. Human output is `Read receipt {id}
 from {environment}`. `--json` `kind` is `receipt.read`; `data` is the GET body.
 
@@ -550,9 +550,9 @@ layerx --json receipt verify \
   --sequencer-public-key "$sequencer_key"
 ```
 
-All six flags are required (`platform/cli/src/main.rs:199-217, 966-978`).
+All six flags are required (`platform/cli/src/main.rs:214-232, 1007-1019`).
 The check is local; it does not contact the endpoint
-(`platform/cli/src/main.rs:970-982`). The file is hex text or raw bytes
+(`platform/cli/src/main.rs:1011-1023`). The file is hex text or raw bytes
 (`platform/cli/src/receipt.rs:54-64`). The five hex flags become
 `AuthorizedBatch`; the call is `layerx_proof::receipt::verify_outcome`
 (`platform/cli/src/receipt.rs:25-34`).
@@ -561,7 +561,7 @@ On success the data object has `verified` `true`, `verification_level`
 (wire rank), `receipt_digest`, `activity_id`, `batch_id`, `result_code`,
 `canonical_bytes` (length) (`platform/cli/src/receipt.rs:43-51`). `--json`
 wraps that as `ok` `true`, `kind` `receipt.verified`
-(`platform/cli/src/main.rs:970-972`; `platform/cli/src/output.rs:20-25`).
+(`platform/cli/src/main.rs:1011-1013`; `platform/cli/src/output.rs:20-25`).
 Smoke asserts `.ok == true and .kind == "receipt.verified" and
 .data.verified == true` (`platform/hosted/testnet/tests/hosted-smoke.sh:144-148`).
 
@@ -572,11 +572,12 @@ Failure text is `receipt verification failed at {:?}`
 
 ## 9. Observe finality against the Paxeer boundary
 
-There is no CLI command that opens a `layerxd` node RPC. The CLI talks HTTP
-to the active environment endpoint (`platform/cli/src/main.rs:44-84, 1344-1347`;
-`platform/cli/src/http.rs:22-47`). `layerx receipt verify` is local
-`layerx_proof` against caller-supplied batch facts
-(`platform/cli/src/receipt.rs:4, 25-34`).
+The CLI talks HTTP to the active environment endpoint
+(`platform/cli/src/main.rs:1420-1424`; `platform/cli/src/http.rs:24-50`).
+`layerx --rpc <url> wallet|token …` POSTs JSON-RPC 2.0 to the gateway `/rpc`
+surface (`platform/cli/src/rpc.rs:14-15, 29-36`). That is not a `layerxd` node
+admin socket. `layerx receipt verify` is local `layerx_proof` against
+caller-supplied batch facts (`platform/cli/src/receipt.rs:4, 25-34`).
 
 The Paxeer boundary is `$LAYERX_PAXEER_BOUNDARY_URL` (default
 `https://localhost:19449`). Routes (`platform/hosted/paxeer/src/main.rs:477-493`):

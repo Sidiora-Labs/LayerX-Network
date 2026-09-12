@@ -7,6 +7,7 @@ use crate::limits::{MAX_ACCOUNT_NAME_BYTES, MAX_DID_BYTES};
 pub enum AccountNamespace {
     /// `agent:<did>:main`.
     AgentMain,
+    /// `agent:<did>:asset:<lowercase hex64>`.
     AgentAsset,
     /// `agent:<did>:budget:<id>`.
     AgentBudget,
@@ -174,4 +175,47 @@ fn parse_agent(agent: &str) -> Result<AccountNamespace, AccountError> {
         }
     }
     Err(AccountError::UnknownNamespace)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn per_asset_namespace_is_exact() {
+        let valid = format!("agent:did:layerx:alice:asset:{}", "ab".repeat(32));
+        assert_eq!(
+            AccountId::parse(&valid).map(|a| a.namespace()),
+            Ok(AccountNamespace::AgentAsset)
+        );
+        for asset in [
+            "ab".repeat(31),
+            "ab".repeat(33),
+            "AB".repeat(32),
+            "gg".repeat(32),
+            format!("{}:extra", "ab".repeat(32)),
+        ] {
+            assert!(AccountId::parse(&format!("agent:did:layerx:alice:asset:{asset}")).is_err());
+        }
+        assert!(AccountId::parse(&format!("agent::asset:{}", "ab".repeat(32))).is_err());
+        assert!(AccountId::parse(&format!(
+            "agent:{}:asset:{}",
+            "a".repeat(MAX_DID_BYTES + 1),
+            "ab".repeat(32)
+        ))
+        .is_err());
+        for did in [
+            "did:layerx:budget:alice",
+            "did:layerx:escrow:alice",
+            "did:layerx:margin:alice",
+        ] {
+            assert_eq!(
+                AccountId::parse(&format!("agent:{did}:asset:{}", "ab".repeat(32)))
+                    .map(|a| a.namespace()),
+                Ok(AccountNamespace::AgentAsset)
+            );
+        }
+        assert!(AccountId::parse("agent:did:layerx:alice:main").is_ok());
+        assert!(AccountId::parse("agent:did:layerx:alice:unknown:abc").is_err());
+    }
 }

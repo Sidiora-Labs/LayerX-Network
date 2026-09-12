@@ -12183,3 +12183,251 @@ symbol = "asset ordinal 9"
 observed = "docs/wiki/Modules.md:73 states that ordinal 9 is reserved for withdraw and is not defined on the Asset module, docs/wiki/Assets.md:48 lists ordinal 9 as reserved with no public payload, and docs/wiki/PublicRpc.md:151 lists the admitted native Asset ordinals without 9. src/modules/asset/lx_asset_registry.c:11-16 advertises LX_ASSET_WITHDRAW and lines 322, 380-385 and 419-420 decode, validate and execute it, and cmd/layerxd/lxp_daemon_process.c:570-588 admits it natively; only the hosted submission path at platform/hosted/core/src/main.rs:714 refuses it. The module description is therefore wrong about the module table and the native admission list, while the hosted-admission statement is accurate. These documents are outside the paths of the change that resolved 6.11.2602 through 6.11.2604, so they are unchanged here."
 assumption = "Modules.md should describe ordinal 9 as advertised and dispatched by the module with a 108-byte payload, admitted natively and refused only by the hosted submission path, and Assets.md should carry the withdraw payload shape. The correction belongs to the documentation owner."
 severity = "suspect"
+
+[observation.6.11.6414]
+task = "6.11"
+file = "agent/crates/layerx-types/src/account.rs agent/crates/layerx-wire/src/hash.rs agent/crates/layerx-crypto/src/disclosure.rs platform/cli/src/account.rs platform/hosted/gateway/src/lib.rs"
+symbol = "AccountId::parse account_id_for_protocol semantics create production_route"
+observed = "Per-asset account names are absent from the closed account namespace and protocol-3 hash validator. The disclosure signer supports Asset SEND and RECEIVE but refuses new asset ordinals as UnsupportedActivity. Hosted CLI account creation submits only email and display_name to the Human account endpoint; it does not register the local signing DID and main account. The gateway route set lacks the specified lx_* RPC surface and typed wallet query/commitment contracts. Source excerpts are retained in qual-logs/pay3/integration-blockers.log."
+assumption = "Wallet registration, per-asset sending, token mutation and commitment verification require the owning account, disclosure and gateway interfaces. CLI-local payload fixtures do not establish signing, execution, receipt verification or public testnet compatibility. No signer bypass, acknowledgement success, account namespace widening or invented RPC evidence schema is introduced."
+severity = "blocker"
+
+[observation.6.11.6416]
+task = "6.11"
+file = "platform/cli/src/wallet_encoding.rs platform/cli/tests/wallet_encoding.rs platform/cli/tests/fixtures/wallet-assets-v1.json"
+symbol = "AssetOperation::encode asset_id canonical_asset_vectors"
+observed = "CLI-local native asset register, account-open, grant-revoke, mint and burn encoders match retained big-endian fixtures, including a UTF-8 name, maximum supply cap and amounts above u64. Boundary and zero-amount refusal tests pass. cargo fmt --manifest-path platform/cli/Cargo.toml --check, cargo clippy --manifest-path platform/cli/Cargo.toml --all-targets -- -D warnings, cargo test --manifest-path platform/cli/Cargo.toml --test wallet_encoding and cargo test --manifest-path platform/cli/Cargo.toml each exit 0. Logs: qual-logs/pay3/fmt-qualified.log, clippy-qualified.log, wallet-encoding.log and test-private-profile.log, with sibling exit files and exact environment setup in commands.txt."
+assumption = "Qualification uses worktree-local SQLite and real GNOME Keyring packages plus umask 077. Earlier attempts exposed missing sqlite3.h, missing gnome-keyring-daemon and writable temporary profile ancestors; these environment requirements were supplied without changing existing checks. This is payload qualification only: wallet commands, disclosed signing of new ordinals, RPC commitment verification and their quickstart remain incomplete pending the recorded shared interfaces. Cluster and image gates were not run; cg is unavailable."
+severity = "note"
+
+[observation.6.11.6418]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/disclosure.rs platform/hosted/gateway/openrpc.json platform/cli/src/wallet.rs"
+symbol = "decode_send source_sequence payment_preflight"
+observed = "The merged disclosure decoder requires Send payload sequence == activity.account_sequence. The required envelope sequence is identity.next_sequence while the Send payload uses source account next_sequence. The public RPC snapshot cb795071935210c39e14c77d1361dc5f27e9bea5 specifies lx_getSequence(account_id) as an account read and contains no identity sequence read, identity registration, asset metadata/listing, or DID history method. Existing emulator GET /v1/state exposes account sequences and a global sequence, not the actor identity sequence. Raw contracts: qual-logs/pay3/openrpc.json and qual-logs/pay3/rpc-source.rs."
+assumption = "Send must retain separate sequences and complete disclosure. Writes remain refused before signing until an authenticated identity sequence interface and a compatible Send disclosure decoder exist. No account or global sequence may substitute for the identity sequence."
+severity = "blocker"
+
+[observation.6.11.6419]
+task = "6.11"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "observation.6.11.130"
+observed = "make beta-ledger-check exits 2 after merging 074a399173b4632b4dfbcc160787720a2172f71f: file, symbol, observed, assumption and severity occur twice in observation.6.11.130. The appended record has no section header. Raw output: qual-logs/pay3/rpc-ledger.log."
+assumption = "The inherited records are preserved under append-only ownership. The qualification owner must restore a distinct section header for the second record before the aggregate ledger gate can pass."
+severity = "blocker"
+
+[observation.6.11.6420]
+task = "6.11"
+file = "platform/cli/src/wallet_send.rs agent/crates/layerx-crypto/src/disclosure.rs agent/crates/layerx-crypto/src/signer.rs src/ledger/lxp_send.c"
+symbol = "Send::prepare decode_send SigningRequest::new lxp_send_authorization_message"
+observed = "The CLI-local Send payload and authorization-message encoders match the real native lxp_send.c encoder in a compiled differential fixture. The unsigned envelope retains identity sequence 17 while the payload retains source sequence 72623859790382856. The shared decode_send still rejects unequal sequences. SigningRequest requires a validated Disclosure and provides no public request constructor for the separate native Send debit-authorization preimage. Source evidence: qual-logs/pay3/pay3c-signing-boundary.log."
+assumption = "The local encoder does not change the signer boundary or supply identity state. Send submission requires separate-sequence disclosure support and a disclosed native debit-authorization signing API. Token submission requires an authenticated identity.next_sequence read. No account sequence substitution or raw-key signer bypass is authorized by the local encoder grant."
+severity = "blocker"
+
+[observation.6.11.6421]
+task = "6.11"
+file = "platform/cli/src/wallet.rs platform/cli/src/config.rs agent/crates/layerx-client/src/evidence.rs"
+symbol = "verify_receipt check_checkpoint_bytes checked_checkpoint"
+observed = "Wallet receipt verifies the sequencer signature and requested activity ID but has no batched/finalised wait pipeline. The retained public RPC implementation exports receipt inclusion with signed_header and proof fields, and checkpoint/context canonical bytes. The existing checkpoint verification functions for those raw bytes are private; its public checkpoint entry point requires FrameTransport. CLI configuration contains a sequencer key pin but no independently configured sequencer identity, authorized batch range, or guarantor authority. Source evidence: qual-logs/pay3/pay3c-core-public-reads.rs and qual-logs/pay3/pay3c-checkpoint-boundary.log."
+assumption = "Commitment waiting remains incomplete. Complete CLI trust configuration and receipt/header/proof binding, then consume an exposed verifier for canonical checkpoint/context material with independently configured authority. A response commitment label or admission acknowledgement cannot establish any verification level. Wallet write confirmation cannot be qualified before the required identity and signing interfaces are available."
+severity = "blocker"
+
+[observation.6.11.6425]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/signer.rs agent/crates/layerx-crypto/src/payments.rs agent/crates/layerx-sdk/src/wallet.rs platform/cli/src/wallet.rs"
+symbol = "SigningRequest sign_disclosed Wallet::send"
+observed = "Revision 98733556 supplies transport disclosure version 3 and independently disclosed identity and source sequences. The public signer still accepts only a request whose digest matches a complete activity Disclosure. It exports no separate native Send debit-authorization signing entry point. The shared Payment enum has no Send variant; Wallet::send takes an already authorized canonical payload. Source inventory: qual-logs/pay3/pay3d-signer-api.log and pay3d-signer-exports.log."
+assumption = "Send and token transfer cannot construct the inner authorization through the required shared signer. Supply a public disclosed native debit-authorization API and shared Send encoder. The CLI-local Send encoder remains a differential fixture; raw private-key signing is not a substitute for the missing boundary."
+severity = "blocker"
+
+[observation.6.11.6426]
+task = "6.11"
+file = "platform/cli/src/rpc.rs agent/crates/layerx-sdk/src/rpc.rs platform/hosted/gateway/openrpc.json"
+symbol = "positional_requests_match_published_contract RpcClient::call"
+observed = "Token info and list now issue lx_getAsset and lx_listAssets instead of rejecting them before transport. The retained positional_requests_match_published_contract test asserts that lx_getAsset with a valid identifier must fail local request construction. The focused contract test exits 101 at that unchanged assertion. Evidence: qual-logs/pay3/pay3d-item3-contract.log. The SDK has no typed asset metadata or enumeration methods; these two reads use the CLI RPC transport."
+assumption = "The requested token-info route and the inherited negative contract assertion conflict. The assertion remains intact. The gateway and SDK owners must publish the extended asset-read contract, and authority is required to replace the obsolete negative expectation with positive coverage. Other wallet command and native differential tests pass; this does not qualify public RPC execution."
+severity = "blocker"
+
+[observation.6.11.6427]
+task = "6.11"
+file = "platform/cli/src/wallet.rs platform/cli/src/rpc.rs platform/cli/README.md"
+symbol = "execute_payment wallet_receipt read_policy rpc_error"
+observed = "Token registration, mint, burn and account opening prepare canonical shared payments, print disclosure before shared signing, submit through the SDK and require verified receipt commitments bound to the locally computed activity ID. RPC receipt waits accept independently supplied sequencer scope and checkpoint context pins. DID listing errors retain code, message and data. Formatting and all-target Clippy with -D warnings exit 0. cargo test --manifest-path platform/cli/Cargo.toml --no-fail-fast exits 101 solely at the retained lx_getAsset local-rejection assertion; all other tests pass, including the real encrypted credential store, emulator wallet paths, native Send differential fixture, policy bounds and error-preservation tests. Logs: qual-logs/pay3/pay3d-final-fmt.log, pay3d-final-clippy.log, pay3d-final-test.log and pay3d-readme-syntax.log."
+assumption = "Send and token transfer still require the missing shared debit-authorization API. Token metadata/list reads use the CLI RPC transport because typed SDK methods are absent. These source and local-test results do not establish successful integrated public-RPC token execution or finality. Workspace Cargo.lock dependency regeneration is outside the owned CLI crate and is requested separately. No cluster, image or persistent-chain gates were run."
+severity = "blocker"
+
+[observation.6.11.6428]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/wallet.rs platform/cli/src/wallet.rs platform/cli/tests/fixtures/openrpc.json"
+symbol = "prepare_payload execute_payment transfer"
+observed = "The published gateway OpenRPC snapshot dfbb7bf42241a74b2a59fe61323250f7b2865a0e specifies lx_getSequence(account_id) as a source-account snapshot. SDK prepare_payload calls get_sequence with options.actor DID and requires authenticated_node_snapshot identity state. The published gateway rejects that selector, so token create, mint, burn and open-account cannot reach signing through this contract. The CLI preserves upstream refusal; it does not substitute source-account sequence for identity.next_sequence. Raw comparison: qual-logs/pay3/pay3e-identity-contract.log. Independent disclosure source 7 and envelope 19 signing and byte-substitution refusal pass in qual-logs/pay3/pay3e-independent-sequences.log."
+assumption = "A separately specified authenticated identity-sequence read must be coordinated between gateway and SDK owners. Send additionally requires the queued inner debit-authorization signer and shared encoder. Funded unequal-sequence CLI SEND and live token execution have not run."
+severity = "blocker"
+
+[observation.6.11.6429]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/payments.rs agent/crates/layerx-mcp/src/tools/write.rs platform/cli/README.md"
+symbol = "encode_grant PaymentTool"
+observed = "Shared ordinal-6 Receive still emits the legacy 0x5201 structure without the canonical 733-byte authorization and payer grant; encode_grant still uses structure_header(0x2001) instead of the required 346-byte ordinal-7 payer grant. No Receive or IssueGrant CLI write is enabled; current CLI payment construction uses Register, OpenAccount, Mint and Burn. Asset 9 remains reserved. MCP payment tools expose wallet.send, token.create, token.mint and token.transfer; burn, open-account, info and list are absent from that surface. README explicitly documents the smaller MCP surface. Evidence: qual-logs/pay3/pay3e-payment-codecs.log and pay3e-mcp-surface.log."
+assumption = "Signer/native/payment integration owners must correct ordinals 6 and 7 with differential interoperability evidence before enabling those shared write paths. Missing MCP operations require existing daemon signing/read and scope enforcement; CLI/MCP parity is not established."
+severity = "blocker"
+
+[observation.6.11.6430]
+task = "6.11"
+file = "platform/cli/src/rpc.rs platform/cli/src/rpc_subscription.rs platform/cli/src/wallet.rs platform/cli/tests/fixtures/openrpc.json platform/Cargo.lock"
+symbol = "positional_requests_match_published_contract subscribe wallet_receipt"
+observed = "The retained OpenRPC fixture is refreshed verbatim from dfbb7bf42241a74b2a59fe61323250f7b2865a0e. Existing assertion logic is retained, with valid lx_getAsset moved to positive inputs and missing asset arguments retained as negative inputs. Fee estimation and authenticated receipt/checkpoint/account WebSocket requests use the published transport. Subscription identifiers and notifications are correlated; notifications are explicitly unverified and establish no commitment. HTTP subscription requests, missing credentials, malformed responses and upstream errors fail closed. Wallet history is hidden from help and retains wallet_history_unavailable. The CLI SDK and WebSocket dependencies are recorded in platform/Cargo.lock. Final format, all-target Clippy with -D warnings, locked full CLI tests and ledger check pass; SDK exact-checkpoint/wrong-header and ack-refusal tests pass. Logs: qual-logs/pay3/pay3e-final-fmt.log, pay3e-final-clippy.log, pay3e-final-test.log, pay3e-final-ledger.log, pay3e-rpc-focused.log and pay3e-sdk-evidence.log."
+assumption = "Hosted DID registration/history have no published backend. Live authenticated gateway fee/asset reads, subscription delivery and token execution remain unqualified. No public deployment, cluster or image gate is implied by local tests."
+severity = "note"
+
+[observation.6.11.6400]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/wallet.rs platform/cli/src/rpc.rs platform/cli/src/wallet.rs platform/cli/tests/fixtures/openrpc.json"
+symbol = "get_sequence prepare_payload execute_write positional_requests_match_published_contract"
+observed = "The SDK get_sequence method at a1cb3cda still emits one selector argument, while the public OpenRPC description at 75049011 requires DID plus identity selector for identity.next_sequence. The CLI explicitly sends lx_getSequence with [did, identity], requires matching DID, authenticated_node_snapshot and canonical decimal next_sequence, and uses shared envelope/disclosure signing plus SDK submission and commitment verification. Source-account sequence remains independently read and bound. The retained contract first-parameter schema still says hex64 despite its described DID identity form. Single-DID requests remain refused."
+assumption = "SDK Wallet callers require a separate typed identity-sequence method and the published schema must express the conditional selector. Account sequence cannot substitute for identity sequence."
+severity = "blocker"
+
+[observation.6.11.6401]
+task = "6.11"
+file = "platform/Cargo.lock agent/crates/layerx-sdk/Cargo.toml platform/cli/src/wallet.rs agent/crates/layerx-mcp/src/tools/write.rs"
+symbol = "create_wallet WalletCommand::History sdk_rpc"
+observed = "The merged SDK adds tungstenite 0.30.0 and requires a platform workspace lock refresh outside the CLI path. The generated lock is retained only as an untracked review artifact. Public DID registration, main-account creation and DID history remain absent from the published RPC contract; CLI typed refusals remain and history is hidden from working help. MCP payment operations still omit burn, open-account, asset info and asset list."
+assumption = "Workspace lock maintenance, published authenticated registration/history schemas and MCP scope-preserving implementations require their owning paths. No funded authenticated public Send, deployed topic delivery or cluster/image qualification is established by local fixture tests."
+severity = "blocker"
+
+[observation.6.11.6402]
+task = "6.11"
+file = "platform/cli/src/wallet.rs platform/cli/src/wallet_send.rs platform/cli/src/wallet_signing.rs platform/cli/src/wallet_encoding.rs platform/cli/tests/wallet_send.rs platform/cli/tests/fixtures/native-send.c"
+symbol = "execute_write prepare_send PreparedPayment::from_send Send::encode native_send_and_authorization_bytes_match"
+observed = "CLI Send and token transfer use the disclosed shared native debit signer, then the shared canonical envelope encoder with an independently authenticated identity sequence. Token writes use the shared Payment codec; local duplicate Send, registration and envelope byte encoders are removed. The shared wire account-name builder is used. Typed SDK balance, asset and fee reads retain upstream errors; typed submission errors are not consumed as admission success. Activity identifiers are derived locally from signed bytes and output before submission. Success requires SDK receipt verification at the requested commitment. The native C differential fixture now signs its original large-amount and sequence vector with OpenSSL Ed25519; Rust compares the complete bytes and authorization message, verifies the signed envelope, and retains every bound and binding refusal. Receive and payer-grant fixtures remain 733 and 346 bytes. CLI full tests, fmt --check and all-target Clippy with -D warnings pass. Crypto, SDK, wire and types full tests, fmt --check and all-target Clippy pass from the agent workspace. Evidence: qual-logs/pay3/pay3f-tests-final.log, pay3f-wallet-fixtures.log, pay3f-cli-fmt-final.log, pay3f-cli-clippy-final.log, pay3f-agent-tests.log, pay3f-agent-fmt.log and pay3f-agent-clippy.log."
+assumption = "Qualification uses the generated platform lock retained outside version control pending workspace-owner integration. The published contract fixture is verbatim 75049011. No funded public Send, authenticated deployed token execution or live subscription delivery is implied by local qualification."
+severity = "note"
+
+[observation.6.11.6403]
+task = "6.11"
+file = "platform/Cargo.lock platform/cli/tests/wallet_commands.rs agent/crates/layerx-sdk/src/rpc_verification.rs"
+symbol = "unpublished_registration_and_history_preserve_local_keys acknowledgement_is_not_inclusion finality_requires_the_exact_trusted_context_and_header"
+observed = "The added CLI command test confirms unpublished registration and history return their typed errors without changing local key metadata. SDK evidence tests retain acknowledgement refusal and exact trusted-context/header finality checks. After passing source qualification with the generated lock, the tracked platform lock was restored. cargo check --manifest-path platform/cli/Cargo.toml --locked exits 101 because that lock needs an update. Generated lock and binary patch remain in qual-logs/pay3/pay3f-platform-Cargo.lock and pay3f-platform-lock.patch. Scoped cargo clean exits zero; worktree target size is recorded in pay3f-disk.log. Logs: pay3f-wallet-commands-final.log, pay3f-sdk-verification.log, pay3f-locked-check.log and pay3f-clean.log."
+assumption = "The workspace lock update is required before locked reproducibility can be claimed. Source test success is not a public deployment or funded execution claim."
+severity = "blocker"
+
+[observation.6.11.6404]
+task = "6.11"
+file = "platform/cli/src/wallet.rs platform/cli/src/wallet_signing.rs platform/hosted/gateway/src/rpc.rs platform/hosted/core/src/main.rs"
+symbol = "execute_write prepare_send lx_sendActivity lx_getReceipt"
+observed = "A disposable funded network-7332 stack returns the treasury's authenticated main account d5a7ff07a1824a000e52864b5284a64803deaee6856e82f70ca34379b3796147, Asset 3673832cc4f73f988b740811de43a356827a596cb00e727b7db388a225e22336, balance 100000000000000 and account next_sequence 0. The exact wallet send command uses recipient did:layerx:ce7bffe9a3a06a58e0b622e55ffc42eaab22162dd8ec8a93663e22b16b3d49df, amount 1, fee-limit 1000, wait executed and the independently authenticated identity next_sequence 1. It signs activity c45cddee34ef1d82444d5ac884987b1367d5c1ca7225eacf21ce6db7ad2659a2, but lx_sendActivity returns -32001 with requested_commitment executed, state pending and upstream state unknown. Separate `layerx wallet receipt c45cddee34ef1d82444d5ac884987b1367d5c1ca7225eacf21ce6db7ad2659a2 --wait executed` and `--wait batched` commands both exit 1 after preserving the exact activity id; no receipt, batch id or commitment is returned. The exact open-account command for the funded Asset signs activity 4f9fbd79a898cdedc953fef1706c7704dcecafd4736a1c26030ba5e22a87d8a2 and receives activity_refused because the only registered Asset is already bound to the main account. Evidence: qual-logs/pay3/pay3g-funded-wallet-balance-2.log, pay3g-funded-wallet-send-executed-2.log, pay3g-funded-wallet-receipt-executed-2.log, pay3g-funded-wallet-receipt-batched-2.log and pay3g-funded-wallet-open-account-2.log."
+assumption = "The CLI prints the locally derived activity id before submission and does not treat admission, pending or unknown state as success. Executed and batched receipt evidence and creation of a distinct per-asset account remain blocked by the hosted execution path; no receipt or commitment identifier exists to record."
+severity = "blocker"
+
+[observation.6.11.6405]
+task = "6.11"
+file = "platform/cli/src/main.rs platform/cli/src/programs.rs programs/sdk/rust/examples/token-lxt20/README.md platform/hosted/gateway/src/main.rs platform/hosted/core/src/main.rs"
+symbol = "program_client deploy discover_call_head render_call_result"
+observed = "The locked wasm32 build of the LXT-20 example exits 0 and is byte-identical to programs/fixtures/pay5/token-lxt20.wasm. The scoped gateway transport submits the fixture and its code-bound interface for immutable program 5555555555555555555555555555555555555555555555555555555555555555 with account sequence 1, fee limit 1000 and zero previous root. The gateway admits activity 7df9ec38dab259576ce92219b2dd5ade9134796b884dc6a23083700fc4c7339d but returns outcome unknown without a receipt. Registry discovery then returns HTTP 503 program_registry_invalid or program_registry_unavailable. The initialize call uses the README calldata 4c581400012000000000 and stops before signing or submission because no authenticated active program head exists; therefore no gateway outcome or response hex exists to decode under the README bounded-bytes contract. Evidence: qual-logs/pay3/pay3g-lxt20-build-locked.log, pay3g-funded-lxt20-deploy-2.log, pay3g-funded-lxt20-discover-2.log and pay3g-funded-lxt20-initialize-call-2.log."
+assumption = "Artifact validation and admitted signed deployment bytes do not establish deployment. The registry, execution receipt and response decoder must receive real authenticated committed evidence before an LXT-20 outcome can be reported."
+severity = "blocker"
+
+[observation.6.11.6406]
+task = "6.11"
+file = "platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/src/rpc.rs platform/hosted/core/src/main.rs"
+symbol = "payer_grant send_payment lx_sendActivity lx_getReceipt"
+observed = "The disposable funded 402 qualification signs canonical Asset ordinal-7 payer grant fb1c691efc84309761d4813169d1b99bd72e931b28754e1ca42708b4de08d443 as activity 4237fbf0dc747dfb7524df3d7c1e34c058829b12f8ca02674575ebb95d5419e0 at identity sequence 1 and submits it through authenticated gateway JSON-RPC. The exact command is the locked local test `local_gateway_grant_draw_and_subscription_renewal_latency --exact --nocapture`. The test exits 101 at its bounded lx_getReceipt deadline because no executed receipt is published; no draw, batch inclusion or recurring renewal executes. Evidence: qual-logs/pay3/pay3g-funded-harness-grant-build-locked.log and pay3g-funded-payer-grant.log."
+assumption = "The signed grant and retained activity id establish attempted real issuance only. Without its sequencer-signed receipt, the grant is not claimed issued and no acknowledgement is reclassified as success."
+severity = "blocker"
+
+[observation.6.11.6407]
+task = "6.11"
+file = "platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/public_reads.rs platform/hosted/core/src/main.rs platform/cli/src/rpc.rs"
+symbol = "request public_reads RpcClient"
+observed = "Authenticated wallet commands expose a gateway-to-core idle-connection failure: a first lx_getBalances or lx_getSequence after credential-store key derivation can return JSON-RPC -32001 with component_unavailable while twenty immediate repeated lx_getSequence calls pass. Keeping real authenticated reads active during the CLI unlock interval permits the same wallet command to consume valid snapshots. The core boundary records unexpected end of file for the failing connection. Evidence: qual-logs/pay3/pay3g-funded-sequence-read-stability-2.log, pay3g-funded-wallet-balance-2.log, pay3g-funded-wallet-send-executed-2.log and the disposable stack boundary stderr."
+assumption = "The gateway HTTP client must discard or retry a stale pre-request keep-alive before exposing component_unavailable. The CLI retains the typed upstream error and does not add an unverified fallback."
+severity = "blocker"
+
+[observation.6.11.6408]
+task = "6.11"
+file = "platform/hosted/gateway/openrpc.json platform/cli/src/wallet.rs"
+symbol = "create_wallet WalletCommand::History"
+observed = "The merged published OpenRPC contract contains no authenticated DID registration, main-account opening or DID activity-history method. Wallet create and history therefore retain typed not-published refusals, and history remains outside the advertised working help surface. The funded qualification uses the disposable stack principal and main account created by its local gateway lifecycle setup rather than claiming hosted registration coverage."
+assumption = "Publish authenticated request and response schemas for DID registration, main-account creation and DID-scoped history before enabling those hosted commands. Emulator registration does not qualify the hosted contract."
+severity = "blocker"
+
+[observation.6.11.6431]
+task = "6.11"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "observation.6.11.130"
+observed = "Re-checked on the current base: observation.6.11.130 now carries a single well formed record with one section header and one occurrence of each key, and make CC=gcc beta-ledger-check exits 0 over 48 gate records and 1307 observation records. The duplicated-key condition recorded in observation.6.11.6419 is no longer reproducible. Evidence: qual-logs/c2/26.log, qual-logs/c2/ledger-pre.log."
+assumption = "observation.6.11.6419 is superseded and no longer blocks the aggregate ledger gate. The record is kept because it is append-only."
+severity = "note"
+
+[observation.6.11.6432]
+task = "6.11"
+file = "cmd/layerx-genesis/lxp_genesis_build_cli.c tests/test_genesis_manifest.c"
+symbol = "lxp_genesis_builder_cli_main build_artifacts"
+observed = "build/bin/layerx-genesis-build returns 1 and writes nothing to stdout or stderr for a genesis request produced by the real-node fixtures, because lxp_genesis_builder_cli_main collapses every build_artifacts failure into exit 1 without reporting the lxp_result. The same builder path fails in tree: make CC=gcc test-genesis-bootstrap stops at tests/test_genesis_manifest.c line 203, where asset ordinal 9 resolves through lxp_kernel_module_for_activity although the manifest test requires it not to, and at line 301 on check_version(LXP_PROTOCOL_VERSION_STATE_COMMITMENT). The native, programs and Makefile trees are byte identical to the branch base, so the failure is inherited. Evidence: qual-logs/c2/4.log, qual-logs/c2/genesis-repro.log, qual-logs/c2/genesis-repro2.log."
+assumption = "The genesis builder CLI must surface the failing lxp_result, and the genesis module table and the state-commitment protocol version must agree with tests/test_genesis_manifest.c before any gate that builds a real genesis can pass."
+severity = "blocker"
+
+[observation.6.11.6433]
+task = "6.11"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs platform/hosted/agent-boundary/tests/real_node.rs"
+symbol = "command budget_create real_node"
+observed = "Every Rust workspace test that stands up a real node fails on the genesis builder described in observation.6.11.6432. In the agent workspace cargo test --workspace fails with 5 failures in layerx-agentd test budget_create: the first panics at crates/layerx-agentd/tests/support/real_authority.rs line 145 on layerx-genesis-build, and the remaining four report a poisoned fixture lock at line 1437. In the platform workspace cargo test --workspace --features layerx-platform-cli/test-credential-store fails only in layerx-platform-agent-boundary test real_node, 12 failures, each panicking at hosted/agent-boundary/tests/real_node.rs line 142 on the same builder. All other platform test binaries, including the wallet and token command suites of this branch, pass in the same run. Evidence: qual-logs/c2/11.log, qual-logs/c2/15.log."
+assumption = "The shared fixture lock should not be poisoned by a failed external command, so that the first real cause is reported once instead of as four secondary panics. The underlying builder defect is tracked by observation.6.11.6432."
+severity = "blocker"
+
+[observation.6.11.6434]
+task = "6.11"
+file = "tests/modules/test_asset_withdraw_activity.c"
+symbol = "test_asset_withdraw_activity"
+observed = "make CC=gcc test-asset-withdraw-activity exits 1 on the branch base. The binary prints case 0 line 151, the CHECK(status == LXP_OK && result == LXP_OK) that follows a withdraw dispatch for mode 0, so the dispatch is refused where the case expects it to commit. The native tree is byte identical to the branch base. Evidence: qual-logs/c2/4.log."
+assumption = "Either the withdraw activity dispatch or the mode 0 expectation in the test is stale; both are left as written."
+severity = "blocker"
+
+[observation.6.11.6435]
+task = "6.11"
+file = "tests/support/lxgb_metadata.rs agent/crates/layerx-agentd/tests/support/real_authority.rs platform/hosted/authority/tests/real_node.rs programs/crates/layerx-programs-runtime/src/ffi_call.rs programs/crates/layerx-programs-runtime/src/ffi_transfer.rs"
+symbol = "append real_authority ffi_call ffi_transfer"
+observed = "cargo fmt --all --check exits 1 in both the agent and the platform workspace on files that are byte identical to the branch base and to upstream: the shared test support module tests/support/lxgb_metadata.rs, agent/crates/layerx-agentd/tests/support/real_authority.rs line 221, platform/hosted/authority/tests/real_node.rs and the two programs runtime FFI modules. No file owned by this branch appears in either diff list. Evidence: qual-logs/c2/9.log, qual-logs/c2/13.log."
+assumption = "The shared test support files are expected to be rustfmt clean under the pinned toolchain; the reformatting belongs to the owners of those paths."
+severity = "note"
+
+[observation.6.11.6436]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/payments.rs tests/support/lxgb_metadata.rs"
+symbol = "decode append"
+observed = "cargo clippy --workspace --all-targets -- -D warnings exits 101 in both Rust workspaces on inherited code. In the agent workspace layerx-crypto fails to compile because pub fn decode at crates/layerx-crypto/src/payments.rs line 403 trips clippy::too_many_lines with 109 of 100 lines. In the platform workspace layerx-platform-authority test real_node fails with four clippy::cast_possible_truncation errors raised inside the shared tests/support/lxgb_metadata.rs, at the two usize to u16 casts that length prefix the metadata record and the fee schedule. Neither file is changed by this branch. Evidence: qual-logs/c2/10.log, qual-logs/c2/14.log."
+assumption = "The pedantic lint set is enforced repository wide, so these two inherited sites have to be split or converted with try_from by their owners before either clippy gate can pass."
+severity = "note"
+
+[observation.6.11.6437]
+task = "6.11"
+file = "platform/middleware/conformance/pay6 platform/middleware/examples/public_rpc.py platform/hosted/gateway/tests/local/checkpoint_settlement.py"
+symbol = "ruff check"
+observed = "ruff check over agent/sdk/python, platform/middleware/conformance/pay6, platform/middleware/examples and platform/hosted/gateway/tests/local reports 30 errors and exits 1 on files this branch does not change: unsorted import blocks in ten modules, four C408 dict() literals, three B017 blind exception assertions, one RUF012 mutable class attribute, one UP012 redundant encode and one EXE001 shebang without the executable bit. agent/sdk/python itself is clean. Evidence: qual-logs/c2/22c.log."
+assumption = "The Python lint gate is expected to be clean repository wide; the fixes belong to the owners of the conformance and example packages."
+severity = "note"
+
+[observation.6.11.6438]
+task = "6.11"
+file = "platform/hosted/agent-boundary/tests/real_node/custody.rs tests/bridge/custody_credit.py"
+symbol = "AccountProofConnection custody producer"
+observed = "The custody producers of the agent-boundary real-node tests run tests/bridge/custody_credit.py, which imports Crypto.Hash.keccak. The interpreter reached through PATH at platform/hosted/agent-boundary/tests/real_node/custody.rs line 329, and the interpreter hard coded as /usr/bin/python3 at line 28, have no pycryptodome installed, so three of the twelve real-node failures report ModuleNotFoundError before any protocol assertion runs. A virtual environment carrying pycryptodome has to precede on PATH, and the hard coded absolute interpreter cannot be redirected that way at all. Evidence: qual-logs/c2/15.log."
+assumption = "The real-node custody tests need their Python dependency declared and resolved through one interpreter selection, not a mix of PATH lookup and an absolute path."
+severity = "note"
+
+[observation.6.11.6439]
+task = "6.11"
+file = "platform/emulator/build.rs Makefile"
+symbol = "PROGRAMS_TARGET_DIR programs-build"
+observed = "Running the platform workspace clippy gate inflates the worktree programs target directory to about 9.9G against about 2.1G for a plain native build, because platform/emulator/build.rs re-enters make build, which runs the nested cargo build into PROGRAMS_TARGET_DIR while the outer invocation is a clippy run, so the nested build produces a second complete artifact set beside the plain build and test artifacts, plus an incremental cache of about 1.8G. With the native, programs and platform gates in flight together the directory exhausted the device and make CC=gcc programs-test failed with No space left on device while linking layerx-programs-runtime test binaries; that run is recorded as void and rerun. Evidence: qual-logs/c2/8.log, qual-logs/c2/8r.log, qual-logs/c2/programs-clean.log."
+assumption = "The nested programs build should not inherit the outer invocation kind, so a lint run over the platform workspace does not duplicate the whole programs artifact set in the shared worktree target directory."
+severity = "note"
+
+[observation.6.11.6440]
+task = "6.11"
+file = "docs/wiki/Quickstart.md platform/cli/src/main.rs"
+symbol = "Faucet FaucetArgs"
+observed = "docs/wiki/Quickstart.md still states that the command line has no faucet command, while platform/cli/src/main.rs registers Faucet(faucet::FaucetArgs) at line 81 and dispatches it at line 554 over the module declared at line 14. The page is inherited unchanged at that point by this branch. Evidence: the Command enum and the dispatch arm named above."
+assumption = "The Quickstart page has to follow the command surface it documents; the correction belongs to the owner of the wiki pages."
+severity = "note"

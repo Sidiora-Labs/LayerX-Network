@@ -23,6 +23,7 @@ mod receipt;
 mod register;
 mod scaffold;
 mod toolset;
+mod wallet;
 mod workspace;
 
 use config::{Configuration, Environment};
@@ -38,12 +39,26 @@ struct Cli {
         help = "Emit one JSON object instead of human presentation"
     )]
     json: bool,
+    #[arg(
+        long,
+        global = true,
+        help = "Public gateway JSON-RPC endpoint ending in /rpc"
+    )]
+    rpc: Option<String>,
+    #[arg(long, global = true, help = "Stored gateway credential alias")]
+    gateway_credential: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage native wallet keys, accounts, transfers, and receipts.
+    #[command(subcommand)]
+    Wallet(wallet::WalletCommand),
+    /// Create and manage native tokens.
+    #[command(subcommand)]
+    Token(wallet::TokenCommand),
     /// Scaffold a deterministic Rust program project.
     New(NewArgs),
     /// Install, build, and test every repository module from one visual workspace.
@@ -489,8 +504,34 @@ pub const fn platform_cli() -> &'static str {
     "layerx-cli-v1"
 }
 
-fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String> {
+fn validate_wallet_transport(
+    command: &Command,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<(), String> {
+    if (rpc.is_some() || gateway.is_some())
+        && !matches!(
+            command,
+            Command::Wallet(_) | Command::Token(_) | Command::Program(_)
+        )
+    {
+        return Err(
+            "--rpc and --gateway-credential apply to wallet, token and program commands".into(),
+        );
+    }
+    Ok(())
+}
+
+fn run(
+    command: Command,
+    machine: bool,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<Option<CommandOutput>, String> {
+    validate_wallet_transport(&command, rpc, gateway)?;
     match command {
+        Command::Wallet(command) => wallet::run_wallet(command, rpc, gateway).map(Some),
+        Command::Token(command) => wallet::run_token(command, rpc, gateway).map(Some),
         Command::New(arguments) => Ok(Some(CommandOutput::new(
             "project.created",
             format!("Created LayerX program project {}", arguments.name),
@@ -505,7 +546,7 @@ fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String>
         Command::Faucet(arguments) => faucet::run(&arguments).map(Some),
         Command::Payment(command) => payment(command).map(Some),
         Command::Receipt(command) => receipt(command).map(Some),
-        Command::Program(command) => program(command).map(Some),
+        Command::Program(command) => program(command, rpc, gateway).map(Some),
         Command::Emulator(EmulatorCommand::Provision { force }) => Ok(Some(CommandOutput::new(
             "emulator.provisioned",
             "Provisioned the LayerX emulator sequencer identity under the profile directory",
@@ -970,13 +1011,15 @@ fn receipt(command: ReceiptCommand) -> Result<CommandOutput, String> {
 
 fn execute_program_lifecycle(
     signing: &ProgramLifecycleArgs,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
     operation: impl FnOnce(
         &http::Client,
         &programs::CallRequest<'_>,
     ) -> Result<serde_json::Value, String>,
 ) -> Result<CommandOutput, String> {
     let configuration = Configuration::load()?;
-    let (environment, client) = active_client(&configuration)?;
+    let (environment, client) = program_client(&configuration, rpc, gateway)?;
     let (_, active) = configuration.active_environment()?;
     let key_name = serving_key(&configuration, signing.key.as_deref())?;
     let actor_did = &configuration
@@ -1009,18 +1052,22 @@ fn execute_program_lifecycle(
     ))
 }
 
-fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
+fn program(
+    command: ProgramCommand,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<CommandOutput, String> {
     match command {
         ProgramCommand::Discover { program_id } => {
             let configuration = Configuration::load()?;
-            let (environment, client) = active_client(&configuration)?;
+            let (environment, client) = program_client(&configuration, rpc, gateway)?;
             Ok(CommandOutput::new(
                 "program.discovered",
                 format!("Discovered program {program_id} on {environment}"),
                 programs::discover(&client, &program_id)?,
             ))
         }
-        ProgramCommand::Interface(command) => program_interface(command),
+        ProgramCommand::Interface(command) => program_interface(command, rpc, gateway),
         ProgramCommand::Build {
             manifest_path,
             artifact,
@@ -1044,7 +1091,7 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
             upgrade_authority,
             interface,
             signing,
-        } => execute_program_lifecycle(&signing, |client, request| {
+        } => execute_program_lifecycle(&signing, rpc, gateway, |client, request| {
             programs::deploy(
                 client,
                 request,
@@ -1063,7 +1110,7 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
             interface,
             clear_interface,
             signing,
-        } => execute_program_lifecycle(&signing, |client, request| {
+        } => execute_program_lifecycle(&signing, rpc, gateway, |client, request| {
             programs::upgrade(
                 client,
                 request,
@@ -1077,10 +1124,10 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
                 &signing.previous_state_root,
             )
         }),
-        ProgramCommand::WindDown(command) => program_wind_down(command),
-        ProgramCommand::Call(arguments) => program_call(arguments),
-        ProgramCommand::Simulate(arguments) => program_simulate(arguments),
-        ProgramCommand::Registry(command) => program_registry(command),
+        ProgramCommand::WindDown(command) => program_wind_down(command, rpc, gateway),
+        ProgramCommand::Call(arguments) => program_call(arguments, rpc, gateway),
+        ProgramCommand::Simulate(arguments) => program_simulate(arguments, rpc, gateway),
+        ProgramCommand::Registry(command) => program_registry(command, rpc, gateway),
     }
 }
 
@@ -1109,9 +1156,13 @@ struct ProgramExecutionArgs {
     expires_at_ms: u64,
 }
 
-fn program_interface(command: ProgramInterfaceCommand) -> Result<CommandOutput, String> {
+fn program_interface(
+    command: ProgramInterfaceCommand,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<CommandOutput, String> {
     let configuration = Configuration::load()?;
-    let (environment, client) = active_client(&configuration)?;
+    let (environment, client) = program_client(&configuration, rpc, gateway)?;
     match command {
         ProgramInterfaceCommand::Get { program_id } => Ok(CommandOutput::new(
             "program.interface_read",
@@ -1130,7 +1181,11 @@ fn program_interface(command: ProgramInterfaceCommand) -> Result<CommandOutput, 
     }
 }
 
-fn program_wind_down(command: ProgramWindDownCommand) -> Result<CommandOutput, String> {
+fn program_wind_down(
+    command: ProgramWindDownCommand,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<CommandOutput, String> {
     use layerx_types::program_lifecycle::ProgramWindDownOperation;
     match command {
         ProgramWindDownCommand::Route {
@@ -1151,7 +1206,7 @@ fn program_wind_down(command: ProgramWindDownCommand) -> Result<CommandOutput, S
                 destination: encoding::fixed_hex("destination", &destination)?,
                 seed: &seed,
             };
-            execute_program_lifecycle(&signing, |client, request| {
+            execute_program_lifecycle(&signing, rpc, gateway, |client, request| {
                 programs::wind_down(client, request, operation, &signing.previous_state_root)
             })
         }
@@ -1164,12 +1219,12 @@ fn program_wind_down(command: ProgramWindDownCommand) -> Result<CommandOutput, S
                 exit_program: encoding::fixed_hex("exit program", &exit_program)?,
                 deadline_batch,
             };
-            execute_program_lifecycle(&signing, |client, request| {
+            execute_program_lifecycle(&signing, rpc, gateway, |client, request| {
                 programs::wind_down(client, request, operation, &signing.previous_state_root)
             })
         }
         ProgramWindDownCommand::Tombstone { signing } => {
-            execute_program_lifecycle(&signing, |client, request| {
+            execute_program_lifecycle(&signing, rpc, gateway, |client, request| {
                 programs::wind_down(
                     client,
                     request,
@@ -1182,16 +1237,20 @@ fn program_wind_down(command: ProgramWindDownCommand) -> Result<CommandOutput, S
             let operation = ProgramWindDownOperation::Exit {
                 account: encoding::fixed_hex("account", &account)?,
             };
-            execute_program_lifecycle(&signing, |client, request| {
+            execute_program_lifecycle(&signing, rpc, gateway, |client, request| {
                 programs::wind_down(client, request, operation, &signing.previous_state_root)
             })
         }
     }
 }
 
-fn program_registry(command: RegistryCommand) -> Result<CommandOutput, String> {
+fn program_registry(
+    command: RegistryCommand,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<CommandOutput, String> {
     let configuration = Configuration::load()?;
-    let (environment, client) = active_client(&configuration)?;
+    let (environment, client) = program_client(&configuration, rpc, gateway)?;
     match command {
         RegistryCommand::Get { program_id } => Ok(CommandOutput::new(
             "program.registry_read",
@@ -1217,7 +1276,11 @@ fn program_registry(command: RegistryCommand) -> Result<CommandOutput, String> {
     }
 }
 
-fn program_call(arguments: ProgramExecutionArgs) -> Result<CommandOutput, String> {
+fn program_call(
+    arguments: ProgramExecutionArgs,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<CommandOutput, String> {
     let ProgramExecutionArgs {
         program_id,
         native,
@@ -1233,7 +1296,7 @@ fn program_call(arguments: ProgramExecutionArgs) -> Result<CommandOutput, String
     } = arguments;
 
     let configuration = Configuration::load()?;
-    let (environment, client) = active_client(&configuration)?;
+    let (environment, client) = program_client(&configuration, rpc, gateway)?;
     let (_, active) = configuration.active_environment()?;
     let key_name = serving_key(&configuration, key.as_deref())?;
     let actor_did = configuration
@@ -1273,7 +1336,11 @@ fn program_call(arguments: ProgramExecutionArgs) -> Result<CommandOutput, String
     ))
 }
 
-fn program_simulate(arguments: ProgramExecutionArgs) -> Result<CommandOutput, String> {
+fn program_simulate(
+    arguments: ProgramExecutionArgs,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<CommandOutput, String> {
     let ProgramExecutionArgs {
         program_id,
         native,
@@ -1289,7 +1356,7 @@ fn program_simulate(arguments: ProgramExecutionArgs) -> Result<CommandOutput, St
     } = arguments;
 
     let configuration = Configuration::load()?;
-    let (environment, client) = active_client(&configuration)?;
+    let (environment, client) = program_client(&configuration, rpc, gateway)?;
     let (_, active) = configuration.active_environment()?;
     let key_name = serving_key(&configuration, key.as_deref())?;
     let actor_did = configuration
@@ -1335,6 +1402,28 @@ fn active_client(configuration: &Configuration) -> Result<(String, Client), Stri
     Ok((name.to_owned(), Client::new(&environment.endpoint, token)?))
 }
 
+fn program_client(
+    configuration: &Configuration,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<(String, Client), String> {
+    let (name, environment) = configuration.active_environment()?;
+    let endpoint = match rpc {
+        Some(value) => value.strip_suffix("/rpc").ok_or(
+            "program RPC override must name the published JSON-RPC endpoint ending in /rpc",
+        )?,
+        None => &environment.endpoint,
+    };
+    let client = match gateway {
+        Some(alias) => Client::new_gateway(
+            endpoint,
+            credential::gateway(alias)?.ok_or("gateway credential does not exist")?,
+        )?,
+        None => Client::new(endpoint, credential::token(name)?)?,
+    };
+    Ok((name.to_owned(), client))
+}
+
 fn selected_environment(
     configuration: &Configuration,
     selected: Option<String>,
@@ -1374,7 +1463,12 @@ fn emulator_arguments(arguments: EmulatorUpArgs) -> Vec<String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match run(cli.command, cli.json) {
+    match run(
+        cli.command,
+        cli.json,
+        cli.rpc.as_deref(),
+        cli.gateway_credential.as_deref(),
+    ) {
         Ok(Some(output)) => match output.emit(cli.json) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -1517,5 +1611,25 @@ mod program_arguments_tests {
     #[test]
     fn registry_list_is_not_a_cli_command() {
         assert!(Cli::try_parse_from(["layerx", "program", "registry", "list"]).is_err());
+    }
+
+    #[test]
+    fn program_commands_accept_the_published_rpc_and_gateway_transport() -> Result<(), String> {
+        let parsed = Cli::try_parse_from([
+            "layerx",
+            "--rpc",
+            "https://node.example/rpc",
+            "--gateway-credential",
+            "testnet:program",
+            "program",
+            "discover",
+            "1111111111111111111111111111111111111111111111111111111111111111",
+        ])
+        .map_err(|error| error.to_string())?;
+        validate_wallet_transport(
+            &parsed.command,
+            parsed.rpc.as_deref(),
+            parsed.gateway_credential.as_deref(),
+        )
     }
 }

@@ -19,6 +19,8 @@ pub struct Client {
 }
 
 impl Client {
+    /// # Errors
+    /// Refuses invalid request inputs, transport failures, or malformed responses.
     pub fn new(endpoint: &str, token: Option<Zeroizing<String>>) -> Result<Self, String> {
         let endpoint = endpoint.trim_end_matches('/');
         if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
@@ -47,6 +49,8 @@ impl Client {
         })
     }
 
+    /// # Errors
+    /// Refuses invalid request inputs, transport failures, or malformed responses.
     pub fn new_gateway(endpoint: &str, credential: Zeroizing<String>) -> Result<Self, String> {
         let (id, secret) = credential
             .split_once(':')
@@ -64,6 +68,8 @@ impl Client {
         Ok(client)
     }
 
+    /// # Errors
+    /// Refuses invalid request inputs, transport failures, or malformed responses.
     pub fn get(&self, path: &str) -> Result<Value, String> {
         let url = self.url(path)?;
         let mut request = self.agent.get(&url);
@@ -77,6 +83,8 @@ impl Client {
         decode(response, "GET", path)
     }
 
+    /// # Errors
+    /// Refuses invalid request inputs, transport failures, or malformed responses.
     pub fn get_with_body(&self, path: &str, selector: &Value) -> Result<Value, String> {
         let url = self.url(path)?;
         let encoded = serde_json::to_vec(selector)
@@ -99,6 +107,8 @@ impl Client {
         decode(response, "GET", path)
     }
 
+    /// # Errors
+    /// Refuses invalid request inputs, transport failures, or malformed responses.
     pub fn post(
         &self,
         path: &str,
@@ -120,6 +130,8 @@ impl Client {
         decode(response, "POST", path)
     }
 
+    /// # Errors
+    /// Refuses invalid request inputs, transport failures, or malformed responses.
     pub fn post_stateful(
         &self,
         path: &str,
@@ -144,6 +156,8 @@ impl Client {
         Ok(decode_stateful(response, "POST", path))
     }
 
+    /// # Errors
+    /// Refuses invalid request inputs, transport failures, or malformed responses.
     pub fn post_activity(
         &self,
         path: &str,
@@ -179,6 +193,8 @@ impl Client {
         }
     }
 
+    /// # Errors
+    /// Refuses invalid request inputs, transport failures, or malformed responses.
     pub fn post_sensitive<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -206,6 +222,8 @@ impl Client {
             .map_err(|error| format!("POST {path} returned invalid JSON: {error}"))
     }
 
+    /// # Errors
+    /// Refuses invalid request inputs, transport failures, or malformed responses.
     pub fn delete(&self, path: &str) -> Result<Value, String> {
         let url = self.url(path)?;
         let mut request = self.agent.delete(&url);
@@ -349,6 +367,8 @@ fn concise(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "response encoding failed".into())
 }
 
+/// # Errors
+/// Refuses values outside the accepted character and length bounds.
 pub fn validate_resource_id(value: &str, name: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > 256
@@ -363,6 +383,8 @@ pub fn validate_resource_id(value: &str, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// # Errors
+/// Refuses values outside the accepted character and length bounds.
 pub fn validate_idempotency_key(value: &str) -> Result<(), String> {
     if value.len() < 16
         || value.len() > 128

@@ -21,6 +21,7 @@ keyring-core.workspace = true
 layerx-mcp = { path = "../../agent/crates/layerx-mcp" }
 layerx-platform-emulator = { path = "../emulator" }
 layerx-programs-runtime = { path = "../../programs/crates/layerx-programs-runtime" }
+layerx-sdk = { path = "../../agent/crates/layerx-sdk" }
 layerx-crypto = { path = "../../agent/crates/layerx-crypto" }
 layerx-programs = { package = "layerx-programs-registry", path = "../../programs/crates/layerx-programs-registry" }
 layerx-program-sdk = { path = "../../programs/sdk/rust" }
@@ -35,7 +36,8 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 toml_edit = "=0.25.13"
-ureq.workspace = true
+ureq = { workspace = true, features = ["rustls"] }
+tungstenite = { version = "=0.28.0", features = ["native-tls"] }
 zeroize.workspace = true
 
 [lints]
