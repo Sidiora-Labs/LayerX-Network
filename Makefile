@@ -3578,3 +3578,13 @@ authority-grant-fixtures: $(BUILD_DIR)/tests/lxp_test_grant_issuance
 
 authority-grant-fixtures-check: $(BUILD_DIR)/tests/lxp_test_grant_issuance
 	python3 tests/daemon/grant-fixtures.py --encoder $< --check
+
+.PHONY: test-program-call-builders
+$(BUILD_DIR)/tests/test_call_builders: tests/programs/test_call_builders.c src/modules/programs/call.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+test-program-call-builders: $(BUILD_DIR)/tests/test_call_builders
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_call_builders
+
+test: test-program-call-builders

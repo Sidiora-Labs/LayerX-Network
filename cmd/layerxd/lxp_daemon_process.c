@@ -2612,10 +2612,11 @@ static void run_postcommit(postcommit_job *job,
         status = view->maintenance.length != 0U ?
             lxp_kernel_finalize_batch_publication_maintenance(
                 &process->kernel, activities, receipts, view->count,
-                view->maintenance, view->publication_digest) :
+                view->maintenance, &view->base, &view->settled, view->events,
+                view->publication_digest) :
             lxp_kernel_finalize_batch_publication_records(
                 &process->kernel, activities, receipts, view->count,
-                view->publication_digest);
+                &view->base, &view->settled, view->events, view->publication_digest);
     observer_us = pay_timing_us() - stage_started;
     if (status == LXP_OK)
         status = lxp_daemon_batch_wal_body(
@@ -3906,10 +3907,11 @@ static lxp_result recover_prepared_batch_wal(
         status = view->maintenance.length != 0U ?
             lxp_kernel_finalize_batch_publication_maintenance(
                 &process->kernel, activities, receipts, view->count,
-                view->maintenance, view->publication_digest) :
+                view->maintenance, &view->base, &view->settled, view->events,
+                view->publication_digest) :
             lxp_kernel_finalize_batch_publication_records(
                 &process->kernel, activities, receipts, view->count,
-                view->publication_digest);
+                &view->base, &view->settled, view->events, view->publication_digest);
     if (status == LXP_OK)
         status = ensure_batch_record(
             process, &header, view->canonical_header.bytes,

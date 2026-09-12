@@ -107,7 +107,12 @@ lxp_result lx_stream_close_execute(
     status = lx_stream_result_load(ctx, request->idempotency_key, &result,
                                    &found);
     if (status != LXP_OK) return status;
-    if (found) return lx_stream_result_receipt(&result, receipt);
+    if (found) {
+        if (request->stream_id == NULL || result.ordinal != 7U ||
+            memcmp(result.stream_id, request->stream_id, 32U) != 0)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        return lx_stream_result_receipt(&result, receipt);
+    }
     status = lifecycle_load(ctx, request, &record);
     if (status != LXP_OK) return status;
     status = close_accounts_check(request, &record);
@@ -132,6 +137,7 @@ lxp_result lx_stream_close_execute(
     (void)memset(&set, 0, sizeof(set));
     (void)memset(receipt, 0, sizeof(*receipt));
     result.ordinal = 7U;
+    (void)memcpy(result.stream_id, request->stream_id, 32U);
     result.paid = payment;
     result.refunded = refund;
     if (!lxp_u128_is_zero(payment)) {

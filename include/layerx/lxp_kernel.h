@@ -466,11 +466,15 @@ lxp_result lxp_kernel_restore_batch_publication_pending_maintenance(
 lxp_result lxp_kernel_finalize_batch_publication_records(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_receipt *receipts, size_t activity_count,
+    const lxp_kernel_batch_boundary *base,
+    const lxp_kernel_batch_boundary *final, const lxp_byte_span *events,
     const uint8_t fsynced_publication_digest[32]);
 lxp_result lxp_kernel_finalize_batch_publication_maintenance(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_receipt *receipts, size_t activity_count,
-    lxp_byte_span maintenance, const uint8_t fsynced_publication_digest[32]);
+    lxp_byte_span maintenance, const lxp_kernel_batch_boundary *base,
+    const lxp_kernel_batch_boundary *final, const lxp_byte_span *events,
+    const uint8_t fsynced_publication_digest[32]);
 /* Observer append is required to be durable and idempotent by canonical
  * activity/receipt identity.  Recovery persists or reconstructs this index;
  * replay after a crash between append and index persistence is therefore a

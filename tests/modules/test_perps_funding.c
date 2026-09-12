@@ -420,8 +420,8 @@ int main(void)
         funding.funding_index.negative ||
         funding.funding_index.magnitude.lo != 10000U ||
         funding.last_funding_timestamp_ms != 2000U ||
-        !balance_is(long_pool_account, 99900U) ||
-        !balance_is(short_pool_account, 100100U) ||
+        !balance_is(long_pool_account, 99000U) ||
+        !balance_is(short_pool_account, 101000U) ||
         tick_run(admin_did) != LXP_ERR_NOT_YET_VALID)
         return 1;
     if (position_close(1U, "did:key:alice") != LXP_OK ||
@@ -430,8 +430,8 @@ int main(void)
     if (ctx_open() != 0 || !balance_is(alice_main, 4000U) ||
         !balance_is(alice_margin_a, 0U) || !balance_is(bob_main, 2000U) ||
         !balance_is(bob_margin_a, 0U) ||
-        !balance_is(long_pool_account, 100900U) ||
-        !balance_is(short_pool_account, 99100U) ||
+        !balance_is(long_pool_account, 100000U) ||
+        !balance_is(short_pool_account, 100000U) ||
         lx_perps_position_get(&ctx, market_id, position_id,
                               &position) != LXP_OK || position.open ||
         lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||

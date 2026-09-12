@@ -203,6 +203,7 @@ typedef struct lxp_augmented_receipt {
     lxp_byte_span pre_checkpoint_receipt;
     lxp_byte_span canonical_activity;
     lxp_byte_span state_leaf;
+    lxp_merkle_proof receipt_inclusion_proof;
     lxp_merkle_proof activity_inclusion_proof;
     lxp_merkle_proof state_inclusion_proof;
     uint8_t checkpoint_id[32];
@@ -320,6 +321,7 @@ lxp_result lxp_receipt_augment(
     lxp_byte_span pre_checkpoint_receipt,
     lxp_byte_span canonical_activity,
     lxp_byte_span state_leaf,
+    const lxp_merkle_proof *receipt_inclusion_proof,
     const lxp_merkle_proof *activity_inclusion_proof,
     const lxp_merkle_proof *state_inclusion_proof,
     const lxp_guarantor_cert *guarantor_certificate,
