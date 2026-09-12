@@ -754,6 +754,73 @@ fn mode_of(path: &Path) -> u32 {
         & 0o777
 }
 
+fn assert_published_binding(
+    root: &Path,
+    bearer: &str,
+    issued: &enrolment::PublishedBinding,
+) -> String {
+    assert!(issued.created);
+    assert_eq!(issued.binding, root.join("mcp").join("binding.json"));
+    assert_eq!(issued.session_id, SessionId([0x0c; 32]));
+    assert_eq!(mode_of(&root.join("mcp")), 0o700);
+    assert_eq!(mode_of(&issued.binding), 0o600);
+    assert_eq!(mode_of(&issued.session_token_file), 0o600);
+    assert_eq!(mode_of(&issued.daemon_bearer_file), 0o600);
+    let body =
+        fs::read_to_string(&issued.binding).unwrap_or_else(|error| panic!("binding body: {error}"));
+    assert!(!body.contains(bearer));
+    let written: Value =
+        serde_json::from_str(&body).unwrap_or_else(|error| panic!("binding json: {error}"));
+    assert_eq!(
+        written
+            .pointer("/session_token_file")
+            .and_then(Value::as_str),
+        issued.session_token_file.to_str()
+    );
+    assert_eq!(
+        written
+            .pointer("/agent/bearer_file")
+            .and_then(Value::as_str),
+        issued.daemon_bearer_file.to_str()
+    );
+    assert_eq!(
+        written.pointer("/session_id").and_then(Value::as_str),
+        Some("0c".repeat(32).as_str())
+    );
+
+    body
+}
+
+fn assert_served_binding(root: &Path, issued: &enrolment::PublishedBinding, endpoint: &str) {
+    let binding = Binding::open(&issued.binding).unwrap_or_else(|error| panic!("open: {error:?}"));
+    assert_eq!(binding.mode(), DeploymentMode::Full);
+    assert_eq!(binding.tenant(), "tenant-a");
+    assert_eq!(binding.store(), root.join("store").as_path());
+    assert_eq!(binding.session_generation(), issued.session_generation);
+    assert_eq!(binding.agent_endpoint(), endpoint);
+    let mut session = binding
+        .open_session()
+        .unwrap_or_else(|error| panic!("open session: {}", error.detail()));
+    let program = "cc".repeat(32);
+    let responses = exchange(
+        &mut session,
+        &[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "balance.get", "arguments": {"program": program}},
+            }),
+        ],
+    );
+    assert_eq!(responses.len(), 3);
+    assert_daemon_handshake(&responses[0], &responses[1]);
+    assert_daemon_read(&responses[2], &program);
+}
+
 #[test]
 fn daemon_enrolment_writes_the_binding_the_served_path_opens() {
     let root = directory("enrolment");
@@ -794,7 +861,7 @@ fn daemon_enrolment_writes_the_binding_the_served_path_opens() {
         policy_version: "policy-v1".to_owned(),
         core_sequence: 50,
     };
-    let published = enrolment::enrol(
+    let issued = enrolment::enrol(
         &mut store,
         &mut sessions,
         &identity,
@@ -802,34 +869,7 @@ fn daemon_enrolment_writes_the_binding_the_served_path_opens() {
         &publisher,
     )
     .unwrap_or_else(|error| panic!("enrol: {error}"));
-    assert!(published.created);
-    assert_eq!(published.binding, root.join("mcp").join("binding.json"));
-    assert_eq!(published.session_id, SessionId([0x0c; 32]));
-    assert_eq!(mode_of(&root.join("mcp")), 0o700);
-    assert_eq!(mode_of(&published.binding), 0o600);
-    assert_eq!(mode_of(&published.session_token_file), 0o600);
-    assert_eq!(mode_of(&published.daemon_bearer_file), 0o600);
-    let body = fs::read_to_string(&published.binding)
-        .unwrap_or_else(|error| panic!("binding body: {error}"));
-    assert!(!body.contains(&bearer));
-    let written: Value =
-        serde_json::from_str(&body).unwrap_or_else(|error| panic!("binding json: {error}"));
-    assert_eq!(
-        written
-            .pointer("/session_token_file")
-            .and_then(Value::as_str),
-        published.session_token_file.to_str()
-    );
-    assert_eq!(
-        written
-            .pointer("/agent/bearer_file")
-            .and_then(Value::as_str),
-        published.daemon_bearer_file.to_str()
-    );
-    assert_eq!(
-        written.pointer("/session_id").and_then(Value::as_str),
-        Some("0c".repeat(32).as_str())
-    );
+    let body = assert_published_binding(&root, &bearer, &issued);
 
     let repeated = enrolment::enrol(
         &mut store,
@@ -845,7 +885,7 @@ fn daemon_enrolment_writes_the_binding_the_served_path_opens() {
     };
     let displaced = enrolment::enrol(&mut store, &mut sessions, &identity, other, &publisher);
     assert!(
-        matches!(displaced, Err(EnrolmentError::AlreadyPublished(ref path)) if *path == published.binding)
+        matches!(displaced, Err(EnrolmentError::AlreadyPublished(ref path)) if *path == issued.binding)
     );
     assert_eq!(
         sessions
@@ -854,40 +894,12 @@ fn daemon_enrolment_writes_the_binding_the_served_path_opens() {
         Some(false)
     );
     assert_eq!(
-        fs::read_to_string(&published.binding)
-            .unwrap_or_else(|error| panic!("binding body: {error}")),
+        fs::read_to_string(&issued.binding).unwrap_or_else(|error| panic!("binding body: {error}")),
         body
     );
     drop(store);
 
-    let binding =
-        Binding::open(&published.binding).unwrap_or_else(|error| panic!("open: {error:?}"));
-    assert_eq!(binding.mode(), DeploymentMode::Full);
-    assert_eq!(binding.tenant(), "tenant-a");
-    assert_eq!(binding.store(), root.join("store").as_path());
-    assert_eq!(binding.session_generation(), published.session_generation);
-    assert_eq!(binding.agent_endpoint(), endpoint);
-    let mut session = binding
-        .open_session()
-        .unwrap_or_else(|error| panic!("open session: {}", error.detail()));
-    let program = "cc".repeat(32);
-    let responses = exchange(
-        &mut session,
-        &[
-            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
-            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
-            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-            json!({
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {"name": "balance.get", "arguments": {"program": program}},
-            }),
-        ],
-    );
-    assert_eq!(responses.len(), 3);
-    assert_daemon_handshake(&responses[0], &responses[1]);
-    assert_daemon_read(&responses[2], &program);
+    assert_served_binding(&root, &issued, &endpoint);
     let _ = fs::remove_dir_all(root);
 }
 

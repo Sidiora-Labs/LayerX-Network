@@ -13680,6 +13680,30 @@ observed = "Revision 2c63df665c732ca040b718888f70ab78b50052fb: make CC=clang-18 
 assumption = "CARGO_TARGET_DIR=/root/lx-lanes/day/Q1/.lane-target; CARGO_BUILD_JOBS=4; MAKEFLAGS=-j4 PROGRAMS_TARGET_DIR=/root/lx-lanes/day/Q1/.lane-target/programs PROGRAMS_RUNTIME_LIB=/root/lx-lanes/day/Q1/.lane-target/programs/debug/liblayerx_programs_sandbox.a. Native compiler and test qualification only; Rust workspace, cluster and release gates remain pending. Swift clang 21 compilation passed the corrected source but its ThreadSanitizer runtime failed to link libdispatch symbols; native-clang-prefix-final.log retains that exit-2 toolchain result at the same revision. Clang 18 matches the CI toolchain."
 severity = "note"
 
+[observation.4.1.9900]
+task = "4.1"
+file = "agent; tests/support/lxgb_metadata.rs; programs/crates/layerx-programs-runtime"
+symbol = "agent_strict_lint_repair"
+observed = "Revision b0a5da6dd364dc208895fdd29dfca168cd5ac476: make agent-lint exited 0, including strict workspace all-target Clippy and the dependency policy; cd agent && cargo fmt --all -- --check exited 0. At preceding source revision a2424365b3f0a6d9ac36d02264848b090d237398, cargo test --locked --manifest-path agent/Cargo.toml -p layerx-client --test supply_receipt exited 0, and env TMPDIR=/tmp/lxp-q2a cargo test --locked --manifest-path agent/Cargo.toml -p layerx-mcp --test daemon_bound exited 0, seven tests. The only subsequent source change is rustfmt output in native authority fixtures and Programs transfer paths. Renamed ambiguous locals, retained every binding assertion in helper functions, and replaced unchecked metadata lengths with checked conversions. The pinned metadata byte count and digest assertions remain unchanged. Exact commands, revisions, outputs and exits: /root/lx-lanes/day/Q2/qual-logs/{agent-lint-formatted-source,agent-format-clean,supply-receipt,mcp-binding-tests}.{command,sha,started,log,exit}."
+assumption = "CARGO_TARGET_DIR=/root/lx-lanes/day/Q2/.lane-target; CARGO_BUILD_JOBS=4. Focused test, formatting and lint evidence only; the full workspace test failure is recorded separately."
+severity = "note"
+
+[observation.1.2.9900]
+task = "1.2"
+file = "agent/crates/layerx-agentd/tests/budget_create.rs; agent/crates/layerx-agentd/tests/support/mod.rs"
+symbol = "agent_budget_receipt_qualification"
+observed = "Revision a2424365b3f0a6d9ac36d02264848b090d237398: env TMPDIR=/tmp/lxp-q2a make agent-test exited 2. budget_create ran seven tests; five passed. verified_creation_without_a_proven_object_effect_fails_closed returned UnverifiedReceipt instead of ProtocolObjectEffectUnavailable; receipt_for_another_canonical_activity_cannot_create_or_cache_a_budget returned UnverifiedReceipt instead of ReceiptActivityMismatch. Both production checks and all test assertions remain intact. Exact command, revision, output and exit: /root/lx-lanes/day/Q2/qual-logs/agent-workspace-tests-short-path.{command,sha,started,log,exit}. Earlier attempts at the same revision failed because the separate daemon user could not traverse the private temporary directory, then because a longer accessible path exceeded the Unix socket path bound; their outputs remain in agent-workspace-tests and agent-workspace-tests-accessible."
+assumption = "The complete agent workspace suite has not passed. Receipt fixture and verifier binding require reconciliation without accepting unauthenticated receipts or weakening refusal assertions."
+severity = "blocker"
+
+[observation.1.2.9901]
+task = "1.2"
+file = "agent/crates/layerx-mcp/tests/daemon_bound.rs; agent/crates/layerx-agentd/src/budget/create.rs"
+symbol = "agent_live_journey_evidence_gap"
+observed = "Source inspection at revision a2424365b3f0a6d9ac36d02264848b090d237398: daemon_bound uses BoundaryIdentity with stored identity values and agent_daemon supplies fixed responses through a test TCP listener. Its passing unit assertions do not prove a real running agentd enrolment-to-MCP journey. create_protocol_budget also returns ProtocolObjectEffectUnavailable after every successful verified receipt and never persists a created protocol budget. Native grant issuance alone cannot close that daemon consumer path."
+assumption = "Observation 1.2.4500 remains unclosed pending a real daemon-backed enrolment and MCP journey. A successful protocol budget needs a verified creation effect and persisted object binding. Existing tests and checks are retained."
+severity = "blocker"
+
 [observation.2.2.9800]
 task = "2.2"
 file = "src/modules/governance/lxp_governance.c cmd/layerxd/lxp_daemon_lni.c spec/layerx-protocol/spec.kvx"
@@ -13726,4 +13750,20 @@ file = "spec/layerx-protocol/spec.kvx spec/layerx-protocol/requirements.md spec/
 symbol = "req.3.ac_11 generated requirements"
 observed = "The protocol grant contract and its generated requirements projection are updated. At revision aef94aceb8c24890678361dfa83210e3681e9e57, command go run . -root /root/lx-lanes/day/N10 -check from spec/specgen exited 1, reporting stale beta requirements, beta tasks and platform tasks only. The identical command against clean origin/main revision 01a51acd1e0987875c49e0581539c15fcff6d27d exited 1 for those three projections and the previous protocol requirements projection. The three unrelated generated outputs remain unchanged. Commands make beta-ledger-check and tools/ci/beta-report.sh --check each exited 0 before these observations were appended. Logs: qual-logs/qualified-render.log, qualified-ledger.log and qualified-report.log; baseline render log is /root/lx-lanes/day/N10B/qual-logs/render-baseline.log."
 assumption = "The remaining generated projections require regeneration with their owning specification updates. This observation does not claim a successful global render check."
+severity = "note"
+
+[observation.2.2.9806]
+task = "2.2"
+file = "src/modules/governance/lxp_governance.c cmd/layerxd/lxp_daemon_lni.c tests/daemon/lxp_test_grant_issuance.c agent/crates/layerx-crypto/tests/authority_grant.rs human/crates/layerx-intents/tests/authority_grant.rs"
+symbol = "issue_grant send_submit native_capability_and_budget_grants_compile_and_disclose_exactly"
+observed = "At revision 27d1b6941ea31c2ac9a4f7a92f9f40230e6d8371, after integrating main f9fdad1d77b54ca4e9ba3dcec558694d496f51d9, command env CARGO_TARGET_DIR=/root/lx-lanes/day/N10/.lane-target CARGO_BUILD_JOBS=2 MAKEFLAGS=-j2 TMPDIR=/root/lx-lanes/day/N10/qual-logs/tmp LAYERX_TEST_ADMISSION_LOG_DIR=/tmp make CC=gcc -j2 PROGRAMS_TARGET_DIR=/root/lx-lanes/day/N10/.lane-target/programs PROGRAMS_RUNTIME_LIB=/root/lx-lanes/day/N10/.lane-target/programs/debug/liblayerx_programs_sandbox.a test-daemon-grant-issuance authority-grant-fixtures-check test-module-registry exited 0. command env CARGO_TARGET_DIR=/root/lx-lanes/day/N10/.lane-target CARGO_BUILD_JOBS=2 TMPDIR=/root/lx-lanes/day/N10/qual-logs/tmp cargo test --manifest-path human/Cargo.toml --locked -p layerx-intents --test authority_grant exited 0. command env CARGO_TARGET_DIR=/root/lx-lanes/day/N10/.lane-target CARGO_BUILD_JOBS=2 TMPDIR=/root/lx-lanes/day/N10/qual-logs/tmp cargo test --manifest-path agent/Cargo.toml --locked -p layerx-crypto --test authority_grant exited 0. command make beta-ledger-check exited 0. command tools/ci/beta-report.sh --check exited 0. command git diff --check exited 0. command python3 /root/lx-handoff/tools/kvx_verify.py qual-logs/main.kvx spec/layerx-beta/qualification.kvx exited 0. The real daemon and authority replica retained canonical grant issuance, typed refusals, duplicate-key refusal, revocation and recovery after both processes restarted. Both native grant fixtures match the built encoder; Human grant compilation/disclosure and all three signing-grant tests passed. Exact commands, revisions, output and exits are retained in /root/lx-lanes/day/N10/qual-logs/integrated-*.json and integrated-*.log; daemon evidence is /tmp/lxp-program-admission-OjtqkO."
+assumption = "Focused integration qualification only. The complete native and Rust suites at aef94aceb8c24890678361dfa83210e3681e9e57 and the independently reproduced migration, Human send and generated projection blockers remain recorded in observations 2.2.9802 through 2.2.9805. This gate does not claim transfer charging, native fee delegation, hosted budget or release qualification."
+severity = "note"
+
+[observation.2.2.9950]
+task = "2.2"
+file = "src/ledger/lx_account_id.c; tests/ledger/test_account_id.c; tests/test_genesis_builder_cli.c"
+symbol = "lx_account_migrate_retired_issuance"
+observed = "Supersedes the migration failure in observation 2.2.9803. At revision ee2819620b5870359e9dfe687871ee0fdfc9f7b6, make CC=gcc test test-genesis-bootstrap exited 0. The historical signed snapshot and its existing migration, state-root and wrong-signer assertions remain intact. Retired issuance accounts are renamed even when the parser accepts their old name; migration checks a private account candidate before changing the caller. Focused tests preserve identifiers, balances, sequences, flags and authority fields, prove idempotence, and require asset mismatch, account-ID mismatch and malformed authority refusals without mutation. Exact command, revision, time, output and exit: /root/lx-lanes/day/Q3/qual-logs/migration-final-source.{command,sha,started,log,exit}. Earlier focused and integrated passes remain in issuance-migration-focused, genesis-migration-integrated and native-migration-regressions."
+assumption = "CARGO_TARGET_DIR=/root/lx-lanes/day/Q3/.lane-target; CARGO_BUILD_JOBS=4; TMPDIR=/root/lx-lanes/day/Q3/qual-logs/tmp; MAKEFLAGS=-j4 PROGRAMS_TARGET_DIR=/root/lx-lanes/day/Q3/.lane-target/programs PROGRAMS_RUNTIME_LIB=/root/lx-lanes/day/Q3/.lane-target/programs/debug/liblayerx_programs_sandbox.a. The genesis manifest was regenerated by the production builder in the prerequisite grant-issuance change. No historical snapshot bytes or failing assertions were edited. This evidence covers native migration and regressions, not the separate Human send or release gates."
 severity = "note"
