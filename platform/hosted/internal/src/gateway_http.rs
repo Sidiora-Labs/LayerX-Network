@@ -30,6 +30,9 @@ impl Endpoint {
         if authority.is_empty()
             || authority.contains(['@', '?', '#', '\\'])
             || path.contains(['?', '#', '\\'])
+            || value
+                .bytes()
+                .any(|byte| !byte.is_ascii() || byte.is_ascii_control() || byte == b' ')
         {
             return Err("component endpoint is not canonical".to_owned());
         }
@@ -43,7 +46,20 @@ impl Endpoint {
                 ))
             },
         )?;
-        if host.is_empty() || host.parse::<IpAddr>().is_ok() {
+        if host.is_empty()
+            || host.len() > 253
+            || host.parse::<IpAddr>().is_ok()
+            || port == 0
+            || host.split('.').any(|label| {
+                label.is_empty()
+                    || label.len() > 63
+                    || label.starts_with('-')
+                    || label.ends_with('-')
+                    || !label
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+        {
             return Err("component TLS endpoint must use a DNS name".to_owned());
         }
         let base_path = if path.is_empty() {
@@ -146,9 +162,7 @@ impl Client {
             content_type,
             body,
         } = *request;
-        if !path.starts_with('/') || path.contains(['?', '#', '\\']) || body.len() > MAX_RESPONSE {
-            return Err("outbound request exceeds its boundary".to_owned());
-        }
+        validate_outbound(endpoint, request)?;
         if authorization.is_empty()
             || authorization.len() > 4096
             || authorization
@@ -211,6 +225,36 @@ impl Client {
             |error| error.to_string(),
         ))
     }
+}
+
+fn valid_header_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 4096
+        && value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+}
+
+fn validate_outbound(endpoint: &Endpoint, request: &OutboundRequest<'_>) -> Result<(), String> {
+    let valid_path = |path: &str| {
+        path.len() <= 8192
+            && path.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+            && !path.contains(['?', '#', '\\'])
+    };
+    if !matches!(
+        request.method,
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+    ) || !request.path.starts_with('/')
+        || !valid_path(request.path)
+        || !valid_path(&endpoint.base_path)
+        || !valid_header_value(&endpoint.authority())
+        || !valid_header_value(request.content_type)
+        || request
+            .idempotency
+            .is_some_and(|value| !valid_header_value(value))
+        || request.body.len() > MAX_RESPONSE
+    {
+        return Err("outbound request exceeds its boundary".to_owned());
+    }
+    Ok(())
 }
 
 pub struct IncomingRequest {
@@ -381,4 +425,66 @@ pub fn write_response(stream: &mut impl Write, response: &OutgoingResponse) -> R
         .write_all(&response.body)
         .map_err(|error| error.to_string())?;
     stream.flush().map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod outbound_validation_tests {
+    use super::{validate_outbound, Endpoint, OutboundRequest};
+
+    #[test]
+    fn rejects_request_line_and_header_injection_before_transport() {
+        let endpoint = Endpoint::parse("https://core.layerx.test/base").expect("endpoint");
+        let request = OutboundRequest {
+            method: "POST",
+            path: "/v1/activities",
+            idempotency: Some("retry-1"),
+            content_type: "application/json",
+            body: b"{}",
+        };
+        assert!(validate_outbound(&endpoint, &request).is_ok());
+        for value in ["/v1/x HTTP/1.1", "/v1/x\r\nInjected: yes", "/v1/x\0"] {
+            assert!(validate_outbound(
+                &endpoint,
+                &OutboundRequest {
+                    path: value,
+                    ..request
+                }
+            )
+            .is_err());
+        }
+        for value in ["value\r\nInjected: yes", "value\0", ""] {
+            assert!(validate_outbound(
+                &endpoint,
+                &OutboundRequest {
+                    content_type: value,
+                    ..request
+                }
+            )
+            .is_err());
+            assert!(validate_outbound(
+                &endpoint,
+                &OutboundRequest {
+                    idempotency: Some(value),
+                    ..request
+                }
+            )
+            .is_err());
+        }
+        assert!(validate_outbound(
+            &endpoint,
+            &OutboundRequest {
+                method: "GET / HTTP/1.1\r\n",
+                ..request
+            }
+        )
+        .is_err());
+        for value in [
+            "https://core.test/ok\r\nInjected: yes",
+            "https://core.test /",
+            "https://core.test:0",
+            "https://-core.test",
+        ] {
+            assert!(Endpoint::parse(value).is_err());
+        }
+    }
 }

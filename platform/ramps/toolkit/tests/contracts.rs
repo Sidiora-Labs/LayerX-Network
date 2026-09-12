@@ -673,3 +673,49 @@ fn torn_tail_is_recovered_but_terminated_corruption_is_rejected() {
     drop(reopened);
     remove_journal(&path);
 }
+
+#[test]
+fn paxeer_observations_preserve_inclusion_and_confirmation_history() {
+    let path = journal_path("paxeer-monotonic");
+    let mut journal = open_journal(&path);
+    journal.plan_paxeer([5; 32], [1; 32], 10, 1).expect("plan");
+    let observe = |stage, block_hash, confirmations| PaxeerObservation {
+        operation_id: "operation-1",
+        transaction_hash: [6; 32],
+        stage,
+        block_hash,
+        confirmations,
+    };
+    journal
+        .observe_paxeer([5; 32], observe("confirming", Some([7; 32]), 2), 2)
+        .expect("included");
+    let before = journal_bytes(&path);
+    for observation in [
+        observe("confirming", Some([7; 32]), 1),
+        observe("final", Some([8; 32]), 3),
+        observe("unknown_stage", Some([7; 32]), 2),
+        observe("missing", None, 0),
+    ] {
+        assert!(journal.observe_paxeer([5; 32], observation, 3).is_err());
+        assert_eq!(journal_bytes(&path), before);
+    }
+    journal
+        .observe_paxeer([5; 32], observe("final", Some([7; 32]), 3), 3)
+        .expect("final");
+    assert!(journal
+        .observe_paxeer([5; 32], observe("confirming", Some([7; 32]), 4), 4)
+        .is_err());
+    journal
+        .observe_paxeer([5; 32], observe("displaced", Some([7; 32]), 0), 4)
+        .expect("reorg");
+    journal
+        .observe_paxeer([5; 32], observe("confirming", Some([8; 32]), 1), 5)
+        .expect("new inclusion");
+    drop(journal);
+    let reopened = open_journal(&path);
+    let recovered = reopened.paxeer(&[5; 32]).expect("recovered operation");
+    assert_eq!(recovered.block_hash, Some([8; 32]));
+    assert_eq!(recovered.confirmations, 1);
+    drop(reopened);
+    remove_journal(&path);
+}

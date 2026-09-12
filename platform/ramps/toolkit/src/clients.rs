@@ -1014,7 +1014,7 @@ impl LayerxClient {
         let facts: AuthorityBody =
             serde_json::from_slice(&authority.body).map_err(|_| RampError::Layerx)?;
         if facts.activity_id != id
-            || facts.network_id.is_empty()
+            || facts.network_id != self.activity.network_id.to_string()
             || facts.wire_version != self.activity.protocol_version.to_string()
         {
             return Err(RampError::Layerx);

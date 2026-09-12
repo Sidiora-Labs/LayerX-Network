@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
@@ -117,7 +117,7 @@ struct Response {
     retry_after: Option<u64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct FundingCommand {
     funding_id: String,
@@ -138,6 +138,14 @@ struct JournalEntry {
     status: u16,
     body: String,
     retry_after: Option<u64>,
+}
+
+#[derive(Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct PreparedFunding {
+    canonical: Vec<u8>,
+    activity_id: [u8; 32],
+    signer_public_key: [u8; 32],
 }
 
 struct ReceiptFacts {
@@ -1054,14 +1062,8 @@ fn receipt_route(config: &Config, activity_hex: &str) -> Response {
     if activity_hex.bytes().any(|byte| byte.is_ascii_uppercase()) {
         return refusal(400, "invalid_argument", None);
     }
-    let lookup = connect_raw(config).and_then(|(mut transport, handshake)| {
-        lookup_receipt_bytes(&mut transport, &handshake, activity_id, 1, false)
-    });
-    match lookup {
-        Ok(Some(bytes)) => success(&serde_json::json!({
-            "activity_id": activity_hex,
-            "receipt": hex_encode(&bytes),
-        })),
+    match await_receipt(config, activity_id, Duration::ZERO) {
+        Ok(Some(facts)) => success(&receipt_result(&facts)),
         Ok(None) => refusal(404, "not_found", None),
         Err(error) => {
             eprintln!("layerx-core-boundary: {error}");
@@ -1476,17 +1478,29 @@ fn journal_write(path: &Path, entry: &JournalEntry) -> Result<(), String> {
         .mode(0o600)
         .open(path)
         .map_err(|error| error.to_string())?;
-    let prior_len = file.metadata().map_err(|error| error.to_string())?.len();
-    if prior_len > 0 {
-        file.seek(SeekFrom::End(-1))
-            .map_err(|error| error.to_string())?;
-        let mut last = [0_u8; 1];
-        file.read_exact(&mut last)
-            .map_err(|error| error.to_string())?;
-        if last[0] != b'\n' {
+    let mut prior = Vec::new();
+    file.read_to_end(&mut prior)
+        .map_err(|error| error.to_string())?;
+    if prior.len() as u64 > MAX_JOURNAL_BYTES {
+        return Err("journal entry exceeds its bound".to_owned());
+    }
+    if !prior.is_empty() && !prior.ends_with(b"\n") {
+        if serde_json::from_slice::<JournalEntry>(&prior).is_ok() {
             bytes.insert(0, b'\n');
+        } else {
+            let committed = prior
+                .iter()
+                .rposition(|byte| *byte == b'\n')
+                .map_or(0, |position| position + 1);
+            if committed == 0 {
+                return Err("journal entry is corrupt: no complete record".to_owned());
+            }
+            file.set_len(committed as u64)
+                .map_err(|error| error.to_string())?;
+            prior.truncate(committed);
         }
     }
+    let prior_len = prior.len() as u64;
     if prior_len.saturating_add(bytes.len() as u64) > MAX_JOURNAL_BYTES {
         return Err("journal entry exceeds its bound".to_owned());
     }
@@ -1550,7 +1564,10 @@ fn stateful(
     }
     match prior {
         Ok(Some(entry)) if entry.request_digest == digest => {
-            if entry.status == 202 && program_lifecycle::ordinal(&request.path).is_some() {
+            if (entry.status == 202 && program_lifecycle::ordinal(&request.path).is_some())
+                || (scope == "fund"
+                    && (entry.status == 202 || entry.status == 409 || entry.status >= 500))
+            {
                 let response = execute();
                 if journal_write(
                     &path,
@@ -1741,35 +1758,69 @@ fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Res
         eprintln!("layerx-core-boundary: {error}");
         refusal(503, "node_unavailable", Some(5))
     })?;
-    let amount = u128::from(command.amount);
-    let actor = layerx_types::ids::Did::new(config.treasury_did.as_bytes())
-        .map_err(|_| refusal(503, "treasury_unavailable", Some(60)))?;
-    let identity_sequence = client
-        .preparation_state(&actor, 3)
-        .map_err(|error| {
-            eprintln!("layerx-core-boundary: treasury preparation failed: {error:?}");
-            refusal(503, "treasury_identity_unavailable", Some(5))
-        })?
-        .account_sequence;
-    let sequence = treasury_sequence(config, &mut client, amount)?;
-    let now = now_ms();
-    let signed = build_send_with_signer(
-        &config.treasury,
-        identity_sequence,
-        &SendRequest {
-            network_id: config.network_id,
-            source_did: config.treasury_did.clone(),
-            destination_did: command.did.clone(),
-            asset: config.treasury_asset,
-            amount,
-            account_sequence: sequence,
-            idempotency_key: send_idempotency(key),
-            not_before_ms: now.saturating_sub(60_000),
-            expires_at_ms: now.saturating_add(300_000),
-            fee_limit: config.fee_limit,
-        },
-    )
-    .map_err(send_refusal)?;
+    let stage_path = journal_path(config, "fund-canonical", key);
+    let command_bytes =
+        serde_json::to_vec(command).map_err(|_| refusal(503, "journal_unavailable", Some(5)))?;
+    let command_digest = hex_encode(&Sha256::digest(&command_bytes));
+    let staged =
+        journal_read(&stage_path).map_err(|_| refusal(503, "journal_unavailable", Some(5)))?;
+    let signed = if let Some(entry) = staged {
+        if entry.request_digest != command_digest {
+            return Err(refusal(409, "idempotency_conflict", None));
+        }
+        serde_json::from_str::<PreparedFunding>(&entry.body)
+            .map_err(|_| refusal(503, "journal_unavailable", Some(5)))?
+    } else {
+        let amount = u128::from(command.amount);
+        let actor = layerx_types::ids::Did::new(config.treasury_did.as_bytes())
+            .map_err(|_| refusal(503, "treasury_unavailable", Some(60)))?;
+        let identity_sequence = client
+            .preparation_state(&actor, 3)
+            .map_err(|error| {
+                eprintln!("layerx-core-boundary: treasury preparation failed: {error:?}");
+                refusal(503, "treasury_identity_unavailable", Some(5))
+            })?
+            .account_sequence;
+        let sequence = treasury_sequence(config, &mut client, amount)?;
+        let now = now_ms();
+        let signed = build_send_with_signer(
+            &config.treasury,
+            identity_sequence,
+            &SendRequest {
+                network_id: config.network_id,
+                source_did: config.treasury_did.clone(),
+                destination_did: command.did.clone(),
+                asset: config.treasury_asset,
+                amount,
+                account_sequence: sequence,
+                idempotency_key: send_idempotency(key),
+                not_before_ms: now.saturating_sub(60_000),
+                expires_at_ms: now.saturating_add(300_000),
+                fee_limit: config.fee_limit,
+            },
+        )
+        .map_err(send_refusal)?;
+        let staged = PreparedFunding {
+            canonical: signed.canonical,
+            activity_id: signed.activity_id,
+            signer_public_key: signed.signer_public_key,
+        };
+        journal_write(
+            &stage_path,
+            &JournalEntry {
+                request_digest: command_digest,
+                status: 202,
+                body: serde_json::to_string(&staged)
+                    .map_err(|_| refusal(503, "journal_unavailable", Some(5)))?,
+                retry_after: Some(5),
+            },
+        )
+        .map_err(|_| refusal(503, "journal_unavailable", Some(5)))?;
+        staged
+    };
+    if let Ok(Some(facts)) = await_receipt(config, signed.activity_id, Duration::ZERO) {
+        return funding_receipt_response(command, &facts);
+    }
     let (registry, _) =
         asset_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
     let submission = client
@@ -1796,21 +1847,7 @@ fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Res
     };
     let transaction_id = hex_encode(&activity_id);
     match await_receipt(config, activity_id, config.receipt_deadline) {
-        Ok(Some(facts)) if facts.result_code == 0 => Ok(json_response(
-            200,
-            &serde_json::json!({
-                "funding_id": command.funding_id,
-                "state": "funded",
-                "transaction_id": transaction_id,
-            }),
-        )),
-        Ok(Some(facts)) => {
-            eprintln!(
-                "layerx-core-boundary: funding {} refused by core with result {}",
-                command.funding_id, facts.result_code
-            );
-            Err(refusal(422, "send_refused", None))
-        }
+        Ok(Some(facts)) => funding_receipt_response(command, &facts),
         Ok(None) => Ok(json_response(
             202,
             &serde_json::json!({
@@ -1824,6 +1861,23 @@ fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Res
             Err(refusal(503, "receipt_unavailable", Some(5)))
         }
     }
+}
+
+fn funding_receipt_response(
+    command: &FundingCommand,
+    facts: &ReceiptFacts,
+) -> Result<Response, Response> {
+    if facts.result_code != 0 {
+        return Err(refusal(422, "send_refused", None));
+    }
+    Ok(json_response(
+        200,
+        &serde_json::json!({
+            "funding_id": command.funding_id,
+            "state": "funded",
+            "transaction_id": hex_encode(&facts.activity_id),
+        }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -2335,6 +2389,12 @@ mod journal_tests {
             .unwrap_or_else(|| panic!("journal is missing"));
         assert_eq!(recovered.status, 200);
         assert_eq!(recovered.body, "complete");
+        journal_write(&path, &entry(200, "reconciled"))
+            .unwrap_or_else(|error| panic!("repair torn tail: {error}"));
+        let reconciled = journal_read(&path)
+            .unwrap_or_else(|error| panic!("read repaired journal: {error}"))
+            .unwrap_or_else(|| panic!("repaired journal is missing"));
+        assert_eq!(reconciled.body, "reconciled");
 
         let legacy = serde_json::to_vec(&entry(202, "legacy"))
             .unwrap_or_else(|error| panic!("legacy journal: {error}"));

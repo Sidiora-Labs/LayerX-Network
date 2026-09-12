@@ -30,6 +30,7 @@ COPY --from=build /src/build/bin/layerx-module-registry /usr/local/bin/layerx-mo
 COPY --from=build /src/migrations/0007_history_index.sql /opt/layerx/migrations/0007_history_index.sql
 COPY --from=build /src/contracts/config/checkpoint-settlement.json /opt/layerx/checkpoint-settlement.json
 COPY --from=build /src/platform/hosted/node/bootstrap.sh /opt/layerx/bootstrap.sh
+COPY --from=build /src/platform/hosted/node/data_directory.py /opt/layerx/data_directory.py
 COPY --from=build /src/platform/hosted/node/supervisor.sh /opt/layerx/supervisor.sh
 COPY --from=build /src/platform/hosted/node/guarantor.sh /opt/layerx/guarantor.sh
 COPY --from=build /src/platform/hosted/node/checkpoint-authority.py /opt/layerx/checkpoint-authority.py

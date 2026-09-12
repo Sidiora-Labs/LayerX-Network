@@ -2045,7 +2045,11 @@ fn complete_lifecycle(
         .complete(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.request_digest,
-            state: "completed",
+            state: if protocol.result_code() == 0 {
+                "completed"
+            } else {
+                "refused"
+            },
             response_hex: &hex(result.to_string().as_bytes()),
             receipt_hex: &hex(&receipt),
             activity_id: Some(&operation.submitted_activity_id),
