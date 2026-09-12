@@ -45,6 +45,12 @@ pub fn fetch(entry: &ArtifactManifestEntry, destination: &Path) -> Result<(), St
 
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::NativeTls)
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
         .timeout_global(Some(TIMEOUT))
         .http_status_as_error(false)
         .build()
@@ -180,4 +186,17 @@ fn run(command: &mut Command, what: &str) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ))
     }
+}
+
+#[cfg(test)]
+#[path = "../../tests/support/tls_boundary.rs"]
+mod tls_boundary;
+
+#[test]
+fn artifact_fetch_uses_system_trust_and_checks_server_identity() {
+    let module = module_path!().split_once("::").map_or("", |(_, module)| module);
+    let test_name = format!("{module}::artifact_fetch_uses_system_trust_and_checks_server_identity");
+    tls_boundary::qualify(&test_name, |endpoint| {
+        get(&format!("{endpoint}/livez"), 1024, "boundary liveness")
+    });
 }

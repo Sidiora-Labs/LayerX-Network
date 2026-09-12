@@ -217,6 +217,12 @@ impl EmulatorProgramSimulationTransport {
     #[must_use]
     pub fn connect(endpoint: &str) -> Self {
         let config = ureq::Agent::config_builder()
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .provider(ureq::tls::TlsProvider::NativeTls)
+                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                    .build(),
+            )
             .http_status_as_error(false)
             .build();
         Self {

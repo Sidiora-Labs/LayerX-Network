@@ -39,6 +39,12 @@ impl Client {
             }
         }
         let config = ureq::Agent::config_builder()
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .provider(ureq::tls::TlsProvider::NativeTls)
+                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                    .build(),
+            )
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
             .build();
