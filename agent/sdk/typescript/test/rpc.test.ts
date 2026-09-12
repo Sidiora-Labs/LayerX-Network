@@ -79,3 +79,10 @@ const accountContinuity = new SubscriptionContinuity("account", 40n);
 accountContinuity.accept({cursor: 45n, result: {}});
 assert.throws(() => accountContinuity.accept({cursor: 45n, result: {}}));
 assert.throws(() => new SubscriptionContinuity("checkpoints", 40n).accept({cursor: 40n, result: {}}));
+
+const { decodeMirrorProcessResult } = await import("../src/node-mirror.js");
+const mirrorOutput = JSON.stringify({ok:true,verification:{level:"receipt-verified",batchNumber:"3",headerDigest:"11".repeat(32),evidenceDigest:"22".repeat(32),sourceId:"source",target:"mirror",canonicalPosition:"3",provenance:"Canonical",latestBatch:null,batchLag:"0",failoverCount:0,agreeingSources:1,checkpointLevel:"unavailable"}});
+assert.equal(decodeMirrorProcessResult(0,null,mirrorOutput,3n).batchNumber,3n);
+assert.throws(() => decodeMirrorProcessResult(1,null,mirrorOutput,3n));
+assert.throws(() => decodeMirrorProcessResult(null,"SIGTERM",mirrorOutput,3n));
+assert.throws(() => decodeMirrorProcessResult(0,null,mirrorOutput,4n));

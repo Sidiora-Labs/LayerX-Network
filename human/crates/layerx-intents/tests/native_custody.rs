@@ -31,7 +31,7 @@ fn recipient() -> AccountId {
     checked(AccountId::parse(&format!("agent:did:layerx:{key}:main")))
 }
 
-fn credit(payload: [u8; 427]) -> NativeCustodyCredit {
+fn credit(payload: &[u8; 427]) -> NativeCustodyCredit {
     checked(NativeCustodyCredit::new(
         payload,
         checked(AccountId::parse("system:paxeer-reserve")),
@@ -79,7 +79,7 @@ fn disclosure(value: &NativeCustodyCredit) -> Disclosure {
 
 #[test]
 fn native_credit_preserves_real_attestation_and_all_disclosed_bytes() {
-    let value = credit(*CREDIT);
+    let value = credit(CREDIT);
     let intent = Intent::v1(IntentKind::NativeCustodyCredit(value.clone()));
     let compiled = checked(compile(&intent, &registry()));
     assert_eq!(
@@ -100,7 +100,7 @@ fn native_credit_preserves_real_attestation_and_all_disclosed_bytes() {
         let mut changed = *CREDIT;
         changed[index] ^= 1;
         if let Ok(changed) =
-            NativeCustodyCredit::new(changed, value.reserve().clone(), value.recipient().clone())
+            NativeCustodyCredit::new(&changed, value.reserve().clone(), value.recipient().clone())
         {
             let changed = Intent::v1(IntentKind::NativeCustodyCredit(changed));
             assert!(
@@ -124,10 +124,10 @@ fn native_credit_preserves_real_attestation_and_all_disclosed_bytes() {
 fn native_credit_refuses_wrong_accounts_and_semantic_substitution() {
     let reserve = checked(AccountId::parse("system:paxeer-reserve"));
     let wrong = checked(AccountId::parse("agent:did:layerx:another:main"));
-    assert!(NativeCustodyCredit::new(*CREDIT, reserve, wrong).is_err());
+    assert!(NativeCustodyCredit::new(CREDIT, reserve, wrong).is_err());
     let fees = checked(AccountId::parse("system:fees"));
-    assert!(NativeCustodyCredit::new(*CREDIT, fees, recipient()).is_err());
-    let value = credit(*CREDIT);
+    assert!(NativeCustodyCredit::new(CREDIT, fees, recipient()).is_err());
+    let value = credit(CREDIT);
     let intent = Intent::v1(IntentKind::NativeCustodyCredit(value.clone()));
     let agent = disclosure(&value);
     let mut changed = agent.clone();

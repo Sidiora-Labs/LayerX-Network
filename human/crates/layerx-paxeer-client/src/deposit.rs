@@ -1729,7 +1729,7 @@ impl DepositProof {
                 CreditFault::BridgeProofIngressUnavailable,
             ))?;
         let native = layerx_intents::NativeCustodyCredit::new(
-            *credit.canonical_bytes(),
+            credit.canonical_bytes(),
             reserve.clone(),
             recipient.clone(),
         )

@@ -8,7 +8,7 @@ use crate::{IntentError, IntentErrorReason, IntentField};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeCustodyCredit {
-    payload: [u8; 427],
+    payload: Box<[u8; 427]>,
     reserve: AccountId,
     recipient: AccountId,
     asset: AssetId,
@@ -21,7 +21,7 @@ impl NativeCustodyCredit {
     /// # Errors
     /// Refuses malformed native credit bytes, invalid value, or account bindings.
     pub fn new(
-        payload: [u8; 427],
+        payload: &[u8; 427],
         reserve: AccountId,
         recipient: AccountId,
     ) -> Result<Self, IntentError> {
@@ -55,7 +55,7 @@ impl NativeCustodyCredit {
         digest.update(deposit_id);
         let nullifier = digest.finalize().into();
         Ok(Self {
-            payload,
+            payload: Box::new(*payload),
             reserve,
             recipient,
             asset,
@@ -66,7 +66,7 @@ impl NativeCustodyCredit {
     }
 
     #[must_use]
-    pub const fn payload(&self) -> &[u8; 427] {
+    pub fn payload(&self) -> &[u8; 427] {
         &self.payload
     }
 
