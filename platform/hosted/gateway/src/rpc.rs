@@ -174,13 +174,13 @@ fn read_response(id: &Value, upstream: &OutgoingResponse) -> Value {
             json!({"jsonrpc":"2.0","id":id,"result":body["result"]})
         }
         Ok(body) => {
-            let code = match upstream.status {
-                400 | 415 => -32602,
-                401 | 403 => -32002,
-                429 => -32005,
-                _ => -32001,
+            let (code, message) = match upstream.status {
+                400 | 415 => (-32602, "Invalid params"),
+                401 | 403 => (-32002, "Insufficient scope"),
+                429 => (-32005, "Read unavailable"),
+                _ => (-32001, "Read unavailable"),
             };
-            let mut refusal = error(id, code, "Read unavailable");
+            let mut refusal = error(id, code, message);
             refusal["error"]["data"] = body;
             refusal
         }
@@ -572,11 +572,20 @@ mod tests {
             fee_params(Some(&json!(["ab".repeat(512 * 1024 + 1)]))),
             Err(-32602)
         );
-        for (status, code) in [(404, -32001), (503, -32001), (429, -32005)] {
+        for (status, code, message) in [
+            (400, -32602, "Invalid params"),
+            (415, -32602, "Invalid params"),
+            (401, -32002, "Insufficient scope"),
+            (403, -32002, "Insufficient scope"),
+            (404, -32001, "Read unavailable"),
+            (503, -32001, "Read unavailable"),
+            (429, -32005, "Read unavailable"),
+        ] {
             let answer =
                 read_response(&json!(7), &response(status, "capability_unavailable", None));
             assert_eq!(answer["id"], 7);
             assert_eq!(answer["error"]["code"], code);
+            assert_eq!(answer["error"]["message"], message);
             assert!(answer.get("result").is_none());
         }
         assert_eq!(
