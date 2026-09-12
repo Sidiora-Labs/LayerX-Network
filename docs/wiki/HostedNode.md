@@ -210,7 +210,7 @@ Its length must exceed 219 bytes and may not exceed
 `GENESIS_BUILD_REQUEST_MAX_BYTES` less the fixed request body for the
 guarantor count the settlement document carries; the bound is checked once
 that count is known, before any directory is created
-(`platform/hosted/node/bootstrap.sh:306-311`;
+(`platform/hosted/node/bootstrap.sh:307-312`;
 `cmd/layerx-genesis/lxp_genesis_build_cli.c:18`).
 The same suffix is required by `prepare-beta.py --genesis-metadata FILE` and
 `tests/bridge/custody_genesis.py --genesis-metadata FILE`. Version-1 decoding
@@ -583,11 +583,11 @@ the NetworkPolicy.
 (`platform/Makefile.inc:140-142`). That script requires root
 so the LNI client can present a uid other than the daemon
 (`platform/hosted/node/tests/node-test.sh:7-9`;
-`platform/hosted/node/tests/node-test.sh:29-32`). It resolves
+`platform/hosted/node/tests/node-test.sh:42-45`). It resolves
 socat from `LAYERX_TEST_SOCAT_BIN` or, when that is unset, from
 `PATH`, refusing with `socat_invalid` or `socat_missing`
 otherwise, and passes it to both supervisors as `--socat`
-(`platform/hosted/node/tests/node-test.sh:35-40`). It builds the
+(`platform/hosted/node/tests/node-test.sh:35-41`). It builds the
 LXGB v2 metadata suffix with `tests/support/lxgb_metadata.py`
 over the beta asset and the treasury public key it generates,
 keeps that file outside the data directory so the supervisor
@@ -599,23 +599,23 @@ reset can bootstrap again from it, and passes `--asset` and
 - `node.env` network id, asset id, treasury public key, run
   directory mode `0750` and LNI gid, LXGR length `82`, treasury
   identity line
-  (`platform/hosted/node/tests/node-test.sh:125-130`)
+  (`platform/hosted/node/tests/node-test.sh:152-160`)
 - LNI handshake as the client uid: network id, role
   `Sequencer`, sequencer public key, `AccountRead`
-  (`platform/hosted/node/tests/node-test.sh:133-139`)
+  (`platform/hosted/node/tests/node-test.sh:163-169`)
 - `layerxctl read-state` `evidence=authenticated_node_snapshot`
-  (`platform/hosted/node/tests/node-test.sh:141-146`)
+  (`platform/hosted/node/tests/node-test.sh:171-176`)
 - treasury balance equals `LAYERX_NODE_TREASURY_BALANCE`
-  (`platform/hosted/node/tests/node-test.sh:148-153`)
+  (`platform/hosted/node/tests/node-test.sh:178-183`)
 - a signed SEND is `acknowledged` and a repeated canonical
   submit is byte-identical
-  (`platform/hosted/node/tests/node-test.sh:155-171`)
+  (`platform/hosted/node/tests/node-test.sh:185-201`)
 - supervisor `status` is `running` generation `1`; `reset`
   rebuilds genesis (new manifest inode, empty checkpoints)
   and generation `2`
-  (`platform/hosted/node/tests/node-test.sh:173-195`)
+  (`platform/hosted/node/tests/node-test.sh:203-225`)
 - stopping the supervisors removes `supervisor.sock` and
   leaves no `layerxd` processes
-  (`platform/hosted/node/tests/node-test.sh:197-206`)
+  (`platform/hosted/node/tests/node-test.sh:227-238`)
 
 [Home](Home.md)

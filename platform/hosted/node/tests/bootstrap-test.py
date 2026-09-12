@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import struct
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[4]
 BIN = Path(os.environ.get('LAYERX_TEST_NATIVE_BIN_DIR', ROOT / 'build/bin'))
-sys.path.insert(0, str(ROOT / 'tests/support'))
-from lxgb_metadata import metadata  # noqa: E402
+LXGB_SPEC = importlib.util.spec_from_file_location('lxgb_metadata', ROOT / 'tests/support/lxgb_metadata.py')
+lxgb_metadata = importlib.util.module_from_spec(LXGB_SPEC)
+LXGB_SPEC.loader.exec_module(lxgb_metadata)
 
 ASSET = bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898')
 PKCS8_PREFIX = bytes.fromhex('302e020100300506032b657004220420')
@@ -41,7 +42,7 @@ class BootstrapTest(unittest.TestCase):
             key.write_bytes(seeds[name])
             key.chmod(0o600)
         genesis_metadata = work / 'metadata'
-        genesis_metadata.write_bytes(metadata(ASSET, public_key_of(seeds['treasury']), os.urandom(32)))
+        genesis_metadata.write_bytes(lxgb_metadata.metadata(ASSET, public_key_of(seeds['treasury']), os.urandom(32)))
         env = {k: v for k, v in os.environ.items() if not k.startswith('LAYERX_')}
         process = subprocess.Popen([
             'bash', str(ROOT / 'platform/hosted/node/bootstrap.sh'),
