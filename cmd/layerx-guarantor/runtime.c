@@ -302,9 +302,11 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
          expected->module_id != LXP_MODULE_GOVERNANCE &&
          !(process->custody_credit_enabled && expected->module_id == LXP_MODULE_BRIDGE)) ||
         expected->module_version == 0U ||
-        expected->parameter_version != process->parameter_version ||
-        process->fees.version != expected->parameter_version)
+        expected->parameter_version != process->parameter_version)
         return LXP_ERR_VERSION_UNSUPPORTED;
+    status = lxp_fee_replay_schedule_verify(&process->kernel,
+        expected->parameter_version, &process->fees);
+    if (status != LXP_OK) return status;
     status = lxp_activity_decode(canonical_activity, activity_length, activity);
     if (status == LXP_OK && activity->protocol_version != process->protocol_version)
         status = LXP_ERR_VERSION_UNSUPPORTED;

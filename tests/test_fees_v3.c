@@ -1,5 +1,6 @@
 #include "layerx/lxp_fee.h"
 #include "layerx/lx_asset.h"
+#include "layerx/lxp_module_ctx.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -105,8 +106,100 @@ static int canonical_withdrawal(const char *output)
     return 0;
 }
 
+static lxp_result commit_governance_value(lxp_kernel *kernel,
+    const uint8_t key[32], const uint8_t *value, size_t length)
+{
+    static lxp_module_ctx context;
+    uint8_t storage[4096];
+    lxp_arena arena;
+    lxp_result status = lxp_arena_init(&arena, storage, sizeof(storage));
+    if (status == LXP_OK)
+        status = lxp_module_ctx_init(&context, kernel, LXP_MODULE_GOVERNANCE,
+            900U, 1U, 1U, 1000U, &arena, true);
+    if (status == LXP_OK)
+        status = lxp_ctx_kv_put(&context, key, 32U, value, length);
+    if (status == LXP_OK) status = lxp_module_ctx_commit(&context);
+    if (status == LXP_OK) status = lxp_state_root(kernel, kernel->current_state_root);
+    return status;
+}
+
+static int committed_replay_binding(void)
+{
+    static const uint8_t parameter_key[32] = "parameter-version";
+    static const uint8_t fee_key[32] = "fee.schedule";
+    static lxp_kernel kernel;
+    static lxp_state_store store;
+    static lxp_state_journal journal;
+    static lxp_param_table parameters;
+    lxp_fee_params schedule = {0}, stale;
+    uint8_t parameter_value[32] = {0};
+    uint8_t encoded[LXP_FEE_PARAMS_V3_BYTES];
+    size_t length;
+    int result = 1;
+    if (lxp_state_store_init(&store, 0U) != LXP_OK) return 1;
+    if (lxp_param_table_init(&parameters) != LXP_OK ||
+        lxp_kernel_create(&kernel, &store, &journal, &parameters, 1U) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, lxp_governance_module_iface()) != LXP_OK)
+        goto done;
+    schedule.version = 1U;
+    schedule.multiplier_basis_points = 10000U;
+    if (lxp_fee_replay_schedule_verify(&kernel, 1U, &schedule) != LXP_ERR_VERSION_UNSUPPORTED)
+        goto done;
+    parameter_value[31] = 1U;
+    if (commit_governance_value(&kernel, parameter_key, parameter_value, sizeof(parameter_value)) != LXP_OK)
+        goto done;
+    for (uint16_t version = 1U; version <= 3U; ++version) {
+        schedule.version = version;
+        schedule.asset_price_count = version == 1U ? 0U :
+            version == 2U ? LXP_ASSET_FEE_PRICE_COUNT : LXP_ASSET_FEE_PRICE_COUNT_V3;
+        if (lxp_fee_params_encode(&schedule, encoded, sizeof(encoded), &length) != LXP_OK ||
+            commit_governance_value(&kernel, fee_key, encoded, length) != LXP_OK ||
+            lxp_fee_replay_schedule_verify(&kernel, 1U, &schedule) != LXP_OK ||
+            lxp_fee_replay_schedule_verify(&kernel, 2U, &schedule) != LXP_ERR_VERSION_UNSUPPORTED)
+            goto done;
+        stale = schedule;
+        stale.base_fee.lo = 1U;
+        if (lxp_fee_replay_schedule_verify(&kernel, 1U, &stale) != LXP_ERR_VERSION_UNSUPPORTED)
+            goto done;
+    }
+    stale = schedule;
+    schedule.asset_prices[LXP_ASSET_FEE_PRICE_COUNT].lo = 17U;
+    if (lxp_fee_replay_schedule_verify(&kernel, 1U, &schedule) != LXP_ERR_VERSION_UNSUPPORTED ||
+        lxp_fee_params_encode(&schedule, encoded, sizeof(encoded), &length) != LXP_OK ||
+        commit_governance_value(&kernel, fee_key, encoded, length) != LXP_OK ||
+        lxp_fee_replay_schedule_verify(&kernel, 1U, &schedule) != LXP_OK ||
+        lxp_fee_replay_schedule_verify(&kernel, 1U, &stale) != LXP_ERR_VERSION_UNSUPPORTED)
+        goto done;
+    parameter_value[31] = 2U;
+    if (commit_governance_value(&kernel, parameter_key, parameter_value, sizeof(parameter_value)) != LXP_OK ||
+        lxp_fee_replay_schedule_verify(&kernel, 1U, &schedule) != LXP_ERR_VERSION_UNSUPPORTED ||
+        lxp_fee_replay_schedule_verify(&kernel, 2U, &schedule) != LXP_OK ||
+        lxp_fee_replay_schedule_verify(&kernel, 2U, &stale) != LXP_ERR_VERSION_UNSUPPORTED ||
+        lxp_fee_replay_schedule_verify(&kernel, 0U, &schedule) != LXP_ERR_VERSION_UNSUPPORTED ||
+        lxp_fee_replay_schedule_verify(&kernel, UINT16_MAX + 1U, &schedule) != LXP_ERR_VERSION_UNSUPPORTED)
+        goto done;
+    parameter_value[0] = 1U;
+    if (commit_governance_value(&kernel, parameter_key, parameter_value, sizeof(parameter_value)) != LXP_OK ||
+        lxp_fee_replay_schedule_verify(&kernel, 2U, &schedule) != LXP_ERR_VERSION_UNSUPPORTED)
+        goto done;
+    parameter_value[0] = 0U;
+    if (commit_governance_value(&kernel, parameter_key, parameter_value, sizeof(parameter_value) - 1U) != LXP_OK ||
+        lxp_fee_replay_schedule_verify(&kernel, 2U, &schedule) != LXP_ERR_VERSION_UNSUPPORTED ||
+        commit_governance_value(&kernel, parameter_key, parameter_value, sizeof(parameter_value)) != LXP_OK ||
+        commit_governance_value(&kernel, fee_key, encoded, length - 1U) != LXP_OK ||
+        lxp_fee_replay_schedule_verify(&kernel, 2U, &schedule) != LXP_ERR_NON_CANONICAL ||
+        commit_governance_value(&kernel, fee_key, encoded, length) != LXP_OK ||
+        lxp_fee_replay_schedule_verify(&kernel, 2U, &schedule) != LXP_OK)
+        goto done;
+    result = 0;
+done:
+    if (lxp_state_store_destroy(&store) != LXP_OK) return 1;
+    return result;
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 2) return 1;
-    return named_withdrawal() != 0 || canonical_withdrawal(argc == 2 ? argv[1] : NULL) != 0;
+    return named_withdrawal() != 0 || canonical_withdrawal(argc == 2 ? argv[1] : NULL) != 0 ||
+        committed_replay_binding() != 0;
 }

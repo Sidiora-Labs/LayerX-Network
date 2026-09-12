@@ -81,6 +81,8 @@ lxp_result lxp_fee_params_decode(const uint8_t *bytes, size_t length,
 struct lxp_kernel;
 lxp_result lxp_fee_committed_schedule(const struct lxp_kernel *kernel,
     uint32_t parameter_version, lxp_fee_params *schedule);
+lxp_result lxp_fee_replay_schedule_verify(const struct lxp_kernel *kernel,
+    uint32_t parameter_version, const lxp_fee_params *cached);
 lxp_result lxp_fee_compute(const lxp_fee_params *parameters,
                            uint32_t activity_type, lxp_fee_meter meter,
                            lxp_u128 *fee);
