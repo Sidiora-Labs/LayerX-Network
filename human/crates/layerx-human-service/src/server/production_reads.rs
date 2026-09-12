@@ -201,18 +201,7 @@ fn evidence_get(
     let cache_key = crate::store::RowKey::new(format!("state-proof-{}", hex(&expected)))
         .map_err(|_| ApiFailure::invalid_request(Some("evidence_id")))?;
     if let Some(row) = scope.get(crate::store::Table::Cache, &cache_key) {
-        use sha2::Digest as _;
-        if sha2::Sha256::digest(row.bytes())[..] != expected
-            || row.bytes().get(..5) != Some(b"LXHB1")
-        {
-            return Err(ApiFailure::upstream_degraded());
-        }
-        let (class, verification) = match row.bytes().get(5) {
-            Some(4) => ("checkpoint-proof", "checkpoint-finalised"),
-            Some(1..=3) => ("layerx-receipt", "receipt-verified"),
-            Some(5) => ("checkpoint-proof", "settlement-anchored"),
-            _ => return Err(ApiFailure::upstream_degraded()),
-        };
+        let (class, verification) = cached_balance_verification(row.bytes(), expected)?;
         return Ok(response(
             json!({"evidence_id": id, "class": class, "verification": verification,
             "content_type": "application/vnd.layerx.state-proof", "bytes_base64": STANDARD.encode(row.bytes())}),
@@ -490,5 +479,56 @@ fn stage_state(value: crate::activity::detail::StageState) -> &'static str {
         crate::activity::detail::StageState::Current => "processing",
         crate::activity::detail::StageState::Upcoming => "getting-ready",
         crate::activity::detail::StageState::Failed => "refused",
+    }
+}
+
+fn cached_balance_verification(
+    bytes: &[u8],
+    expected: [u8; 32],
+) -> Result<(&'static str, &'static str), ApiFailure> {
+    if Sha256::digest(bytes)[..] != expected || bytes.get(..5) != Some(b"LXHB1") {
+        return Err(ApiFailure::upstream_degraded());
+    }
+    match bytes.get(5) {
+        Some(1..=3) => Ok(("layerx-receipt", "receipt-verified")),
+        Some(4) => Ok(("checkpoint-proof", "checkpoint-finalised")),
+        Some(5) => Ok(("checkpoint-proof", "settlement-anchored")),
+        _ => Err(ApiFailure::upstream_degraded()),
+    }
+}
+
+#[cfg(test)]
+mod balance_evidence_tests {
+    use super::cached_balance_verification;
+    use sha2::{Digest as _, Sha256};
+
+    #[test]
+    fn cached_balance_preserves_achieved_level_and_authenticates_the_label() {
+        for (rank, class, verification) in [
+            (1, "layerx-receipt", "receipt-verified"),
+            (2, "layerx-receipt", "receipt-verified"),
+            (3, "layerx-receipt", "receipt-verified"),
+            (4, "checkpoint-proof", "checkpoint-finalised"),
+            (5, "checkpoint-proof", "settlement-anchored"),
+        ] {
+            let mut bytes = b"LXHB1".to_vec();
+            bytes.push(rank);
+            bytes.extend_from_slice(b"verified balance evidence");
+            let digest = Sha256::digest(&bytes).into();
+            assert_eq!(
+                cached_balance_verification(&bytes, digest).ok(),
+                Some((class, verification))
+            );
+            bytes[5] = if rank == 5 { 4 } else { rank + 1 };
+            assert!(cached_balance_verification(&bytes, digest).is_err());
+        }
+        for bytes in [
+            b"legacy evidence".as_slice(),
+            b"LXHB1",
+            b"LXHB1\0",
+            b"LXHB1\x06",
+        ] {
+            assert!(cached_balance_verification(bytes, Sha256::digest(bytes).into()).is_err());
+        }
     }
 }

@@ -271,7 +271,9 @@ impl NativeReadRoute {
     ) -> Result<Value, NativeReadError> {
         let mut items = Vec::new();
         let mut size = 0_usize;
-        let mut next = page.cursor.map(|cursor| cursor.next_sequence());
+        let mut next = page
+            .cursor
+            .map(layerx_client::read::HistoryCursor::next_sequence);
         let mut scanned = 0_usize;
         for item in page.items {
             let selected = match item.kind {
@@ -393,7 +395,7 @@ fn history_query(query: &str) -> Result<(u16, Option<&str>), NativeReadError> {
                         .ok()
                         .filter(|value| *value <= 256)
                         .ok_or(NativeReadError::InvalidRequest)?,
-                )
+                );
             }
             "cursor" if cursor.is_none() => {
                 digest(value)?;

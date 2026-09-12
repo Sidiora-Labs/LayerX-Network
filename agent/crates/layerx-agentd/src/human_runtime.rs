@@ -2255,6 +2255,10 @@ fn decode_capability_action(
     }
 }
 
+fn persisted_terminal_receipt_matches(canonical: &[u8], expected: [u8; 32]) -> bool {
+    Sha256::digest(canonical)[..] == expected
+}
+
 fn agent_evidence_digest(
     action_key: [u8; 32],
     object_id: [u8; 32],
@@ -2853,13 +2857,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                 crate::receipt::ReceiptLookupKey::Idempotency(id),
             )
             .map_err(|_| HumanOperationError::Unavailable)?;
-            let decoded = layerx_wire::receipt::decode(&served.canonical_bytes)
-                .map_err(|_| HumanOperationError::Refused)?;
-            let unsigned = layerx_wire::receipt::encode_unsigned(&decoded)
-                .map_err(|_| HumanOperationError::Refused)?;
-            let digest = layerx_wire::hash::receipt_digest(&unsigned)
-                .map_err(|_| HumanOperationError::Refused)?;
-            if digest != evidence.receipt_ref()
+            if !persisted_terminal_receipt_matches(&served.canonical_bytes, evidence.receipt_ref())
                 || served.metadata.activity_id != current.activity_id
                 || served.metadata.idempotency_key != id
                 || (served.metadata.result.code.raw() == 0)
@@ -3901,5 +3899,96 @@ mod owner_authority_tests {
                 "accepted {reference:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_recovery_tests {
+    use super::persisted_terminal_receipt_matches;
+    use crate::protocol_evidence::{RawReceiptEvidence, VerifiedReceiptEvidence};
+    use layerx_proof::merkle::Proof;
+    use layerx_proof::receipt::AuthorizedBatch;
+
+    fn decode(value: &str) -> Vec<u8> {
+        value
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|bytes| {
+                u8::from_str_radix(
+                    std::str::from_utf8(bytes)
+                        .unwrap_or_else(|error| panic!("fixture hex: {error}")),
+                    16,
+                )
+                .unwrap_or_else(|error| panic!("fixture hex: {error}"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn restarted_terminal_uses_the_authenticated_signed_receipt_reference() {
+        let value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../platform/hosted/authority/tests/fixtures/real-program-deploy-receipt.json"
+        ))
+        .unwrap_or_else(|error| panic!("committed receipt: {error}"));
+        let field = |name: &str| {
+            decode(
+                value[name]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("fixture field {name}")),
+            )
+        };
+        let canonical = field("receipt_hex");
+        let header_bytes = field("header_hex");
+        let header = layerx_wire::receipt::decode_batch_header(&header_bytes)
+            .unwrap_or_else(|error| panic!("header: {error:?}"));
+        let receipt = layerx_wire::receipt::decode(&canonical)
+            .unwrap_or_else(|error| panic!("receipt: {error:?}"));
+        let protocol = receipt
+            .protocol()
+            .unwrap_or_else(|| panic!("protocol receipt"));
+        let authority = AuthorizedBatch::new(
+            protocol.batch_id(),
+            protocol.asset(),
+            header.previous_state_root(),
+            header.resulting_state_root(),
+            field("sequencer_public_key_hex")
+                .try_into()
+                .unwrap_or_else(|_| panic!("public key width")),
+        );
+        assert_eq!(value["proof_count"], 1);
+        assert_eq!(value["proof_index"], 0);
+        let raw = RawReceiptEvidence::new(
+            canonical.clone(),
+            Proof::new(0, 1, Vec::new()).unwrap_or_else(|error| panic!("proof: {error:?}")),
+            header_bytes,
+            field("header_signature_hex")
+                .try_into()
+                .unwrap_or_else(|_| panic!("signature width")),
+        );
+        let terminal = VerifiedReceiptEvidence::verify_authorized(
+            &raw,
+            &authority,
+            header.protocol_version(),
+            header.network_id(),
+        )
+        .unwrap_or_else(|error| panic!("real terminal receipt: {error:?}"));
+        assert!(persisted_terminal_receipt_matches(
+            &canonical,
+            terminal.receipt_ref()
+        ));
+        let unsigned = layerx_wire::receipt::encode_unsigned(&receipt)
+            .unwrap_or_else(|error| panic!("unsigned receipt: {error:?}"));
+        let protocol_digest = layerx_wire::hash::receipt_digest(&unsigned)
+            .unwrap_or_else(|error| panic!("protocol digest: {error:?}"));
+        assert!(!persisted_terminal_receipt_matches(
+            &canonical,
+            protocol_digest
+        ));
+        let mut altered = canonical;
+        altered[10] ^= 1;
+        assert!(!persisted_terminal_receipt_matches(
+            &altered,
+            terminal.receipt_ref()
+        ));
     }
 }

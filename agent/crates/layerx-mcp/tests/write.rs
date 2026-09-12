@@ -378,7 +378,10 @@ fn incomplete_success_transcripts_never_become_executed() {
             |_| WriteTranscript {
                 stages: ORDINARY_WRITE_STAGES[..length].to_vec(),
                 submission: Ok(submission(
-                    SubmissionState::Executed,
+                    SubmissionState::Executed {
+                        receipt_ref: ReceiptRef::new("receipt-1")
+                            .unwrap_or_else(|error| panic!("receipt ref: {error:?}")),
+                    },
                     Level::SequencerSigned,
                 )),
                 receipt: None,
