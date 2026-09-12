@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_daemon.h"
 #include "lxp_daemon_maintenance_json.h"
 
@@ -243,7 +244,7 @@ static lxp_result put_receipt_document(
     uint64_t sequence, timestamp;
     lxp_result status;
     if (evidence->format_version == 3U) {
-        status = lxp_programs_occupancy_receipt_decode(
+        status = lxp_batch_maintenance_occupancy_decode(
             evidence->canonical_receipt.bytes,
             evidence->canonical_receipt.length, &maintenance);
         if (status != LXP_OK) return status;
@@ -717,7 +718,7 @@ lxp_result lxp_daemon_protocol_owner_attach(
             scratch, &evidence);
         if (status == LXP_OK && evidence.format_version == 3U) {
             lxp_programs_occupancy_receipt maintenance;
-            status = lxp_programs_occupancy_receipt_decode(
+            status = lxp_batch_maintenance_occupancy_decode(
                 evidence.canonical_receipt.bytes, evidence.canonical_receipt.length,
                 &maintenance);
             if (status == LXP_OK &&

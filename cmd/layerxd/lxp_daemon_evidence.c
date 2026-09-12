@@ -1,3 +1,4 @@
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_daemon.h"
 #include "lxp_daemon_deployment.h"
 
@@ -523,6 +524,22 @@ static lxp_result state_proof_verify(const uint8_t leaf[32],
     return status;
 }
 
+static lxp_result account_maintenance_decode(uint16_t version, lxp_byte_span encoded,
+    const lxp_batch_header *header, lxp_programs_occupancy_receipt *record)
+{
+    if (version == 2U)
+        return lxp_programs_occupancy_receipt_decode(encoded.bytes, encoded.length, record);
+    if (version == 3U) {
+        lxp_byte_span events;
+        lxp_result status;
+        if (!lxp_batch_maintenance_is_envelope(encoded)) return LXP_ERR_VERSION_UNSUPPORTED;
+        status = lxp_batch_maintenance_events(encoded, header, &events);
+        if (status != LXP_OK) return status;
+        return lxp_batch_maintenance_occupancy_decode(encoded.bytes, encoded.length, record);
+    }
+    return LXP_ERR_VERSION_UNSUPPORTED;
+}
+
 static lxp_result verify_account_evidence(
     const lxp_daemon_account_evidence *evidence, uint32_t network_id,
     lxp_arena *arena)
@@ -547,11 +564,10 @@ static lxp_result verify_account_evidence(
         return LXP_ERR_NON_CANONICAL;
     status = verify_signed_header(&evidence->signed_header, network_id,
                                   arena, &header);
-    if (status == LXP_OK && evidence->format_version == 2U) {
+    if (status == LXP_OK && (evidence->format_version == 2U || evidence->format_version == 3U)) {
         lxp_programs_occupancy_receipt maintenance;
-        status = lxp_programs_occupancy_receipt_decode(
-            evidence->canonical_receipt.bytes, evidence->canonical_receipt.length,
-            &maintenance);
+        status = account_maintenance_decode(evidence->format_version, evidence->canonical_receipt,
+            &header, &maintenance);
         if (status == LXP_OK)
             status = lxp_hash_sha256(evidence->canonical_receipt.bytes,
                 evidence->canonical_receipt.length, digest);
@@ -718,7 +734,8 @@ static lxp_result encode_account_payload(
         evidence->account_leaf_value_length > UINT16_MAX ||
         evidence->canonical_receipt.length > UINT32_MAX)
         return LXP_ERR_NON_CANONICAL;
-    status = writer_u16(&writer, evidence->format_version == 2U ? 2U : EVIDENCE_WIRE_VERSION);
+    status = writer_u16(&writer, evidence->format_version == 3U ? 3U :
+        evidence->format_version == 2U ? 2U : EVIDENCE_WIRE_VERSION);
     if (status == LXP_OK) status = writer_bytes(&writer, evidence->account_id, 32U);
     if (status == LXP_OK) status = writer_bytes(&writer, evidence->receipt_digest, 32U);
     if (status == LXP_OK) status = writer_u64(&writer, evidence->observed_sequence);
@@ -755,7 +772,7 @@ static lxp_result decode_account_payload(
         return LXP_ERR_NON_CANONICAL;
     (void)memset(evidence, 0, sizeof(*evidence));
     status = reader_u16(&reader, &version);
-    if (status == LXP_OK && version != EVIDENCE_WIRE_VERSION && version != 2U)
+    if (status == LXP_OK && version != EVIDENCE_WIRE_VERSION && version != 2U && version != 3U)
         status = LXP_ERR_VERSION_UNSUPPORTED;
     evidence->format_version = status == LXP_OK ? version : 0U;
     if (status == LXP_OK) status = reader_copy(&reader, evidence->account_id, 32U);
@@ -774,7 +791,7 @@ static lxp_result decode_account_payload(
     if (status == LXP_OK) status = read_state_proof(&reader, &evidence->account_tree_proof);
     if (status == LXP_OK) status = read_state_proof(&reader, &evidence->universal_root_proof);
     if (status == LXP_OK) status = reader_u32(&reader, &receipt_length);
-    if (status == LXP_OK && (receipt_length == 0U || receipt_length > (version == 2U ? LXP_MAX_ACTIVITY_BYTES : LXP_STATE_MAX_RECEIPT_BYTES))) status = LXP_ERR_LENGTH_LIMIT;
+    if (status == LXP_OK && (receipt_length == 0U || receipt_length > (version == 3U ? LXP_BATCH_MAINTENANCE_MAX_BYTES : version == 2U ? LXP_MAX_ACTIVITY_BYTES : LXP_STATE_MAX_RECEIPT_BYTES))) status = LXP_ERR_LENGTH_LIMIT;
     if (status == LXP_OK) status = reader_take(&reader, receipt_length, &receipt);
     if (status == LXP_OK) status = lxp_arena_alloc(arena, receipt_length, _Alignof(uint64_t), &copy);
     if (status == LXP_OK) {
@@ -2104,10 +2121,9 @@ static lxp_result account_evidence_publish_batch(
     mark = lxp_arena_mark(arena);
     status = lxp_batch_header_decode(canonical_header.bytes,
                                      canonical_header.length, &header);
-    if (status == LXP_OK && format_version == 2U) {
+    if (status == LXP_OK && (format_version == 2U || format_version == 3U)) {
         lxp_programs_occupancy_receipt maintenance;
-        status = lxp_programs_occupancy_receipt_decode(
-            canonical_head_receipt.bytes, canonical_head_receipt.length, &maintenance);
+        status = account_maintenance_decode(format_version, canonical_head_receipt, &header, &maintenance);
         if (status == LXP_OK)
             status = lxp_hash_sha256(canonical_head_receipt.bytes,
                 canonical_head_receipt.length, receipt_digest);
@@ -2164,7 +2180,7 @@ static lxp_result account_evidence_publish_batch(
         size_t item_mark = lxp_arena_mark(arena);
         status = account_evidence_build(
             format_version, kernel, store->network_id, accounts->accounts[index].id,
-            receipt_digest, format_version == 2U ? header.timestamp_ms : receipt.timestamp,
+            receipt_digest, (format_version == 2U || format_version == 3U) ? header.timestamp_ms : receipt.timestamp,
             canonical_head_receipt,
             head_receipt_proof, authorization, canonical_header,
             header_signature, &paths, arena, &evidence);
@@ -2199,7 +2215,8 @@ lxp_result lxp_daemon_account_evidence_publish_batch_maintenance(
     lxp_byte_span canonical_header, const uint8_t header_signature[64],
     lxp_arena *arena)
 {
-    return account_evidence_publish_batch(2U, store, kernel,
+    return account_evidence_publish_batch(
+        lxp_batch_maintenance_is_envelope(canonical_head_receipt) ? 3U : 2U, store, kernel,
         canonical_head_receipt, head_receipt_proof, authorization,
         canonical_header, header_signature, arena);
 }
@@ -2447,7 +2464,8 @@ lxp_result lxp_daemon_account_evidence_wire_encode(
     if (status != LXP_OK) return status;
     proof = (uint8_t *)allocation;
     writer = (evidence_writer){proof, proof_length, 0U};
-    status = writer_u16(&writer, evidence->format_version == 2U ? 2U : EVIDENCE_WIRE_VERSION);
+    status = writer_u16(&writer, evidence->format_version == 3U ? 3U :
+        evidence->format_version == 2U ? 2U : EVIDENCE_WIRE_VERSION);
     if (status == LXP_OK) status = writer_u8(&writer, 2U);
     if (status == LXP_OK) status = writer_u8(&writer, selector_kind);
     if (status == LXP_OK && selector_kind == 2U)
@@ -2638,6 +2656,7 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
     size_t count = 0U;
     size_t receipt_count = 0U;
     bool has_maintenance = false;
+    size_t event_count = 0U;
     lxp_programs_occupancy_receipt maintenance;
     size_t index;
     size_t mark;
@@ -2762,7 +2781,7 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
     if (status == LXP_OK && has_maintenance) {
         if (activities[count].bytes != NULL) status = LXP_ERR_LOG_CORRUPT;
         if (status == LXP_OK)
-            status = lxp_programs_occupancy_receipt_decode(
+            status = lxp_batch_maintenance_occupancy_decode(
                 receipts[count].bytes, receipts[count].length, &maintenance);
         if (status == LXP_OK &&
             (maintenance.batch_number != header.batch_number ||
@@ -2828,10 +2847,17 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
                            header.resulting_state_root, 32U) != 0 ||
          (has_maintenance && maintenance.parameter_version != decoded[0].parameter_version)))
         status = LXP_FATAL_REPLAY_DIVERGENCE;
+    event_count = count;
+    if (status == LXP_OK && has_maintenance) {
+        lxp_byte_span maintenance_events;
+        status = lxp_batch_maintenance_events(receipts[count], &header, &maintenance_events);
+        if (status == LXP_OK && maintenance_events.length != 0U)
+            events[event_count++] = maintenance_events;
+    }
     if (status == LXP_OK)
         status = lxp_batch_roots_compute(
             &(lxp_batch_root_inputs){activities, count, receipts, receipt_count,
-                                     events, count, NULL, 0U, NULL, 0U},
+                                     events, event_count, NULL, 0U, NULL, 0U},
             arena, &roots);
     if (status == LXP_OK) {
         lxp_batch_body body;
@@ -2841,7 +2867,7 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
             status = lxp_replay_section_encode(activities, count, arena, &body.activities);
         if (status == LXP_OK)
             status = lxp_da_receipt_section_encode(receipts, receipt_count,
-                                                   events, count, arena, &body.receipts);
+                                                   events, event_count, arena, &body.receipts);
         if (status == LXP_OK)
             status = lxp_batch_availability_root(&body, arena, roots.data_availability_root);
     }

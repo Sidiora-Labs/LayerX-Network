@@ -57,5 +57,7 @@ lx_escrow_runtime *lx_escrow_require_runtime(lxp_module_ctx *ctx);
 lxp_result lx_escrow_resolve_account(lx_escrow_runtime *runtime,
                                      const uint8_t id[32],
                                      lx_account **account);
+lxp_result lx_escrow_resolve_asset(lxp_module_ctx *ctx,
+    const uint8_t asset_id[32], const lx_asset_record **asset);
 
 #endif

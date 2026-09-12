@@ -166,6 +166,7 @@ lxp_result lx_escrow_timeout_execute(lxp_module_ctx *ctx,
                                      lxp_receipt *receipt);
 lxp_result lx_escrow_epoch_begin(lxp_module_ctx *ctx, uint64_t epoch,
                                  uint64_t timestamp);
+lxp_result lx_escrow_batch_maintenance(lxp_module_ctx *ctx, bool *complete);
 lxp_result lx_escrow_receipt_replay(lxp_module_ctx *ctx,
                                     const uint8_t key[32],
                                     lxp_receipt *receipt, bool *found);

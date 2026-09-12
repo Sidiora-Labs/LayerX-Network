@@ -450,6 +450,12 @@ lxp_result lxp_kernel_batch_publication_digest(
 lxp_result lxp_kernel_prepare_batch_maintenance(
     lxp_kernel_prepared_batch *batch, const lxp_activity *activities,
     const lxp_kernel_execution *executions);
+bool lxp_kernel_uses_batch_maintenance(const lxp_kernel *kernel,
+    uint16_t protocol_version);
+struct lxp_replay_activity_output;
+lxp_result lxp_kernel_finalize_batch_maintenance(lxp_kernel *kernel,
+    uint16_t protocol_version, const lxp_kernel_execution *execution,
+    lxp_byte_span expected, struct lxp_replay_activity_output *output);
 lxp_byte_span lxp_kernel_prepared_batch_maintenance(
     const lxp_kernel_prepared_batch *batch);
 lxp_result lxp_kernel_batch_publication_digest_maintenance(

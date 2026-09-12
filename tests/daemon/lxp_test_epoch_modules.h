@@ -58,7 +58,7 @@ static inline void epoch_fixture_asset(lx_asset_record *asset)
  * builder writes it: a governance parameter keyed module-enable:<name> whose
  * last byte is 1. */
 static inline lxp_result epoch_fixture_enable(epoch_fixture *fixture,
-                                              uint16_t module_id)
+                                              uint16_t module_id, bool enabled)
 {
     lxp_genesis_parameter *parameter;
     lxp_result status;
@@ -71,7 +71,7 @@ static inline lxp_result epoch_fixture_enable(epoch_fixture *fixture,
     parameter->module_id = LXP_MODULE_GOVERNANCE;
     status = lxp_genesis_module_enable_key(module_id, parameter->key);
     if (status != LXP_OK) return status;
-    parameter->value[31] = 1U;
+    parameter->value[31] = enabled ? 1U : 0U;
     ++fixture->manifest.parameter_count;
     return LXP_OK;
 }
@@ -91,8 +91,12 @@ static inline lxp_result epoch_fixture_open(epoch_fixture *fixture,
         LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
     fixture->manifest.network_id = EPOCH_FIXTURE_NETWORK_ID;
     fixture->manifest.genesis_timestamp_ms = 1U;
-    for (i = 0U; status == LXP_OK && i < enabled_count; ++i)
-        status = epoch_fixture_enable(fixture, enabled[i]);
+    for (i = LXP_MODULE_ESCROW; status == LXP_OK && i <= LXP_MODULE_PERPS; ++i) {
+        bool active = false;
+        for (size_t j = 0U; j < enabled_count; ++j)
+            if (enabled[j] == i) active = true;
+        status = epoch_fixture_enable(fixture, (uint16_t)i, active);
+    }
     if (status == LXP_OK)
         status = lxp_genesis_module_plan_resolve(&fixture->manifest,
                                                  &fixture->plan);

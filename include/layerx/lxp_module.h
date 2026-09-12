@@ -4,6 +4,7 @@
 #include "layerx/lxp_activity.h"
 #include "layerx/lxp_arena.h"
 #include "layerx/lxp_authority.h"
+#include "layerx/lxp_ledger.h"
 #include "layerx/lxp_result.h"
 
 #include <stdbool.h>
@@ -115,6 +116,13 @@ lxp_result lxp_ctx_asset_account_stage(
 lxp_result lxp_ctx_account_stage_module_value(
     lxp_module_ctx *ctx, const uint8_t account_id[32],
     const uint8_t asset_id[32], lx_account **account, bool *created);
+lxp_result lxp_ctx_account_stage_module_custody(lxp_module_ctx *ctx,
+    const lxp_activity *activity, const uint8_t object_id[32],
+    const uint8_t asset_id[32], const uint8_t presented_id[32], lx_account **account);
+lxp_result lxp_ctx_account_stage_perps_market(lxp_module_ctx *ctx,
+    const lxp_activity *activity, const uint8_t market_id[32],
+    const uint8_t administrator[32], const uint8_t asset_id[32],
+    const uint8_t presented_id[32], lx_account_kind kind, bool stage);
 lxp_result lxp_ctx_account_find(lxp_module_ctx *ctx,
                                 const uint8_t account_id[32],
                                 lx_account **account);

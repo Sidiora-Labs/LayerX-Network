@@ -1,3 +1,4 @@
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_daemon.h"
 
 #include "layerx/lxp_batch_identity.h"
@@ -148,13 +149,18 @@ static lxp_result validate_publication(
         if (store == NULL || proof == NULL || arena == NULL ||
             metadata == NULL || header == NULL || digest == NULL)
             return LXP_ERR_NON_CANONICAL;
-        status = lxp_programs_occupancy_receipt_decode(
+        status = lxp_batch_maintenance_occupancy_decode(
             receipt_bytes, receipt_length, &maintenance);
         if (status == LXP_OK)
             status = lxp_batch_header_decode(header_bytes, header_length, header);
         if (status == LXP_OK)
             status = lxp_batch_verify_signature(header, header_signature, 64U,
                 &store->authorization, arena);
+        if (status == LXP_OK) {
+            lxp_byte_span events;
+            status = lxp_batch_maintenance_events((lxp_byte_span){receipt_bytes, receipt_length},
+                header, &events);
+        }
         if (status == LXP_OK &&
             (!lxp_protocol_version_uses_occupancy(header->protocol_version) ||
              header->first_sequence == 0U || header->last_sequence <= header->first_sequence ||

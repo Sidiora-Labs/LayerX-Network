@@ -1,4 +1,5 @@
 #include "lx_escrow_internal.h"
+#include "../asset/committed.h"
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -411,6 +412,22 @@ lxp_result lx_escrow_resolve_account(lx_escrow_runtime *runtime,
             return LXP_OK;
         }
     return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+}
+
+lxp_result lx_escrow_resolve_asset(lxp_module_ctx *ctx,
+    const uint8_t asset_id[32], const lx_asset_record **asset)
+{
+    lx_escrow_runtime *runtime;
+    lx_asset_record *record;
+    lxp_result status;
+    if (ctx == NULL || asset_id == NULL || asset == NULL) return LXP_ERR_NON_CANONICAL;
+    if (ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        return lxp_module_committed_asset(ctx, asset_id, asset);
+    runtime = lx_escrow_require_runtime(ctx);
+    if (runtime == NULL) return LXP_ERR_MODULE_DISABLED;
+    status = lx_asset_lookup(runtime->assets, asset_id, &record);
+    if (status == LXP_OK) *asset = record;
+    return status;
 }
 
 lxp_result lx_escrow_settle(lxp_module_ctx *ctx,

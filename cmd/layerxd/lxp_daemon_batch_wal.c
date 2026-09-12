@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
+#include "layerx/lxp_maintenance.h"
 #include "lxp_daemon_batch_wal.h"
 
 #include "layerx/lxp_batch_identity.h"
@@ -209,9 +210,10 @@ static lxp_result wal_digest(const uint8_t *bytes, size_t body_length,
 static lxp_result spans_root(const lxp_byte_span *spans, size_t count,
                              uint8_t root[32])
 {
-    uint8_t hashes[LXP_DAEMON_BATCH_WAL_MAX_ITEMS][32];
+    uint8_t hashes[LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U][32];
     size_t level_count=count,i;
     lxp_result status=LXP_OK;
+    if (count == 0U || count > LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U) return LXP_ERR_LENGTH_LIMIT;
     for(i=0U;i<count && status==LXP_OK;++i)
         status=lxp_merkle_leaf_hash(spans[i].bytes,spans[i].length,hashes[i]);
     while(status==LXP_OK && level_count>1U) {
@@ -324,7 +326,7 @@ static lxp_result validate_canonical_items(
     }
     if (status == LXP_OK && in->maintenance.length != 0U) {
         lxp_programs_occupancy_receipt maintenance;
-        status = lxp_programs_occupancy_receipt_decode(
+        status = lxp_batch_maintenance_occupancy_decode(
             in->maintenance.bytes, in->maintenance.length, &maintenance);
         if (status == LXP_OK &&
             (!lxp_protocol_version_uses_occupancy(in->protocol_version) ||
@@ -352,6 +354,9 @@ lxp_result lxp_daemon_batch_wal_body(
 {
     lxp_batch_body built = {0};
     lxp_byte_span receipts[LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U];
+    lxp_byte_span events[LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U];
+    lxp_byte_span maintenance_events;
+    size_t event_count;
     lxp_state_diff_entry *entries;
     size_t count, entry_count, i, mark;
     uint8_t root[32];
@@ -367,13 +372,17 @@ lxp_result lxp_daemon_batch_wal_body(
     count = in->count;
     for (i = 0U; i < count; ++i) receipts[i] = in->receipts[i];
     if (in->maintenance.length != 0U) receipts[count++] = in->maintenance;
+    event_count = in->count;
+    for (i = 0U; i < event_count; ++i) events[i] = in->events[i];
+    if (status == LXP_OK) status = lxp_batch_maintenance_events(in->maintenance, &built.header, &maintenance_events);
+    if (status == LXP_OK && maintenance_events.length != 0U) events[event_count++] = maintenance_events;
     if (status == LXP_OK)
         status = lxp_replay_section_encode(in->activities, in->count, arena, &built.activities);
     if (status == LXP_OK)
-        status = lxp_da_receipt_section_encode(receipts, count, in->events,
-                                               in->count, arena, &built.receipts);
+        status = lxp_da_receipt_section_encode(receipts, count, events,
+                                               event_count, arena, &built.receipts);
     if (status == LXP_OK)
-        status = lxp_replay_section_encode(in->events, in->count, arena, &built.events);
+        status = lxp_replay_section_encode(events, event_count, arena, &built.events);
     if (status == LXP_OK)
         status = lxp_replay_section_encode(NULL, 0U, arena, &built.oracle_inputs);
     built.state_diff = in->state_diff;
@@ -415,6 +424,9 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in, bool lega
     size_t payload_bytes = 0U;
     uint8_t activity_root[32],event_root[32],empty_root[32],publication[32];
     lxp_result status;
+    lxp_byte_span events[LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U];
+    lxp_byte_span maintenance_events;
+    size_t event_count;
     if (in==NULL || in->count==0U || in->count>LXP_DAEMON_BATCH_WAL_MAX_ITEMS ||
         in->activities==NULL || in->receipts==NULL || in->events==NULL ||
         ((in->terminal_payloads == NULL) != (in->call_graphs == NULL)) ||
@@ -502,8 +514,13 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in, bool lega
         for (j = proof->depth; j < LXP_MERKLE_MAX_DEPTH; ++j)
             if (!lxp_ct_is_zero(proof->siblings[j], 32U)) return LXP_ERR_NON_CANONICAL;
     }
+    event_count = in->count;
+    for (i = 0U; i < event_count; ++i) events[i] = in->events[i];
+    status = lxp_batch_maintenance_events(in->maintenance, &header, &maintenance_events);
+    if (status != LXP_OK) return status;
+    if (maintenance_events.length != 0U) events[event_count++] = maintenance_events;
     if(spans_root(in->activities,in->count,activity_root)!=LXP_OK ||
-       spans_root(in->events,in->count,event_root)!=LXP_OK ||
+       spans_root(events,event_count,event_root)!=LXP_OK ||
        lxp_merkle_leaf_hash(NULL,0U,empty_root)!=LXP_OK ||
        lxp_ct_memcmp(activity_root,header.activity_merkle_root,32U)!=0 ||
        lxp_ct_memcmp(event_root,header.event_merkle_root,32U)!=0 ||

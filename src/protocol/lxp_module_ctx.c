@@ -3,6 +3,7 @@
 #include "layerx/lxp_transfer.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_identity.h"
 #include "layerx/lxp_bridge_credit.h"
 #include "layerx/programs.h"
 
@@ -559,6 +560,175 @@ lxp_result lxp_ctx_asset_account_stage(
     if (status != LXP_OK) return status;
     registration.expected_count = ctx->kernel->state->accounts->count +
                                   ctx->staged_account_count;
+    ctx->staged_accounts[ctx->staged_account_count] = registration;
+    *account = &ctx->staged_accounts[ctx->staged_account_count++].account;
+    return LXP_OK;
+}
+
+lxp_result lxp_ctx_account_stage_perps_market(lxp_module_ctx *ctx,
+    const lxp_activity *activity, const uint8_t market_id[32],
+    const uint8_t administrator[32], const uint8_t asset_id[32],
+    const uint8_t presented_id[32], lx_account_kind kind, bool stage)
+{
+    static const uint8_t hex[] = "0123456789abcdef";
+    lx_account_registration registration = {0};
+    lx_account *candidate = &registration.account;
+    lx_account *existing;
+    const char *prefix;
+    const char *suffix;
+    lxp_byte_span encoded;
+    uint8_t actor[32], activity_id[32];
+    size_t cursor, mark;
+    lxp_result status;
+    if (ctx == NULL || activity == NULL || market_id == NULL || administrator == NULL ||
+        asset_id == NULL || presented_id == NULL || (stage && !ctx->mutable) || ctx->arena == NULL ||
+        ctx->kernel == NULL || ctx->kernel->state == NULL || ctx->kernel->state->accounts == NULL ||
+        ctx->kernel->journal == NULL || !ctx->kernel->journal->open ||
+        ctx->kernel->journal->store != ctx->kernel->state ||
+        ctx->kernel->journal->global_sequence != ctx->global_sequence ||
+        ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        activity->protocol_version != ctx->protocol_version || ctx->module_id != LXP_MODULE_PERPS ||
+        activity->activity_type != ((uint32_t)LXP_MODULE_PERPS << 16U | 1U) ||
+        lxp_ct_is_zero(market_id, 32U) || lxp_ct_is_zero(asset_id, 32U) ||
+        lxp_ct_is_zero(ctx->activity_id, 32U))
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    switch (kind) {
+    case LX_ACCOUNT_SYSTEM_LIQUIDITY: prefix = "system:liquidity:"; suffix = ""; break;
+    case LX_ACCOUNT_SYSTEM_FUNDING_LONG: prefix = "system:funding:"; suffix = ":long"; break;
+    case LX_ACCOUNT_SYSTEM_FUNDING_SHORT: prefix = "system:funding:"; suffix = ":short"; break;
+    default: return LXP_ERR_UNAUTHORIZED_DEBIT;
+    }
+    status = lxp_did_id_derive(activity->actor_did.bytes, activity->actor_did.length, actor);
+    if (status == LXP_OK && lxp_ct_memcmp(actor, administrator, 32U) != 0)
+        status = LXP_ERR_UNAUTHORIZED_DEBIT;
+    mark = lxp_arena_mark(ctx->arena);
+    if (status == LXP_OK) status = lxp_activity_verify_payload_hash(activity);
+    if (status == LXP_OK) status = lxp_activity_verify_signature(activity);
+    if (status == LXP_OK) status = lxp_activity_encode(activity, ctx->arena, &encoded);
+    if (status == LXP_OK) status = lxp_activity_id(encoded.bytes, encoded.length, activity_id);
+    if (status == LXP_OK && lxp_ct_memcmp(activity_id, ctx->activity_id, 32U) != 0)
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (lxp_arena_reset(ctx->arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    if (status != LXP_OK) return status;
+    cursor = strlen(prefix);
+    (void)memcpy(candidate->name, prefix, cursor);
+    for (size_t i = 0U; i < 32U; ++i) {
+        candidate->name[cursor++] = hex[market_id[i] >> 4U];
+        candidate->name[cursor++] = hex[market_id[i] & 15U];
+    }
+    (void)memcpy(candidate->name + cursor, suffix, strlen(suffix));
+    cursor += strlen(suffix);
+    candidate->name_length = (uint16_t)cursor;
+    candidate->kind = kind;
+    candidate->has_asset = true;
+    (void)memcpy(candidate->asset_id, asset_id, 32U);
+    candidate->created_at_sequence = ctx->global_sequence;
+    status = lx_account_id_from_string(candidate->name, cursor, candidate->id);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(candidate->id, presented_id, 32U) != 0)
+        return LXP_ERR_ACCOUNT_ID_MISMATCH;
+    status = lxp_ctx_account_find(ctx, candidate->id, &existing);
+    if (status == LXP_OK) {
+        status = lx_account_validate_canonical(existing);
+        if (status != LXP_OK) return status;
+        return existing->kind == kind && existing->name_length == cursor &&
+            memcmp(existing->name, candidate->name, cursor) == 0 && existing->has_asset &&
+            lxp_ct_memcmp(existing->asset_id, asset_id, 32U) == 0 && !existing->has_authority_key &&
+            lxp_u128_is_zero(existing->balance) ? LXP_OK : LXP_ERR_CONTEXT_MISMATCH;
+    }
+    if (status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) return status;
+    status = lx_account_validate_canonical(candidate);
+    if (status != LXP_OK || !stage) return status;
+    if (ctx->staged_account_count == LXP_MODULE_MAX_STAGED_ACCOUNTS)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    status = lxp_state_journal_require_account_root(ctx->kernel->journal);
+    if (status != LXP_OK) return status;
+    registration.expected_count = ctx->kernel->state->accounts->count + ctx->staged_account_count;
+    ctx->staged_accounts[ctx->staged_account_count++] = registration;
+    return LXP_OK;
+}
+
+lxp_result lxp_ctx_account_stage_module_custody(lxp_module_ctx *ctx,
+    const lxp_activity *activity, const uint8_t object_id[32],
+    const uint8_t asset_id[32], const uint8_t presented_id[32], lx_account **account)
+{
+    static const uint8_t hex[] = "0123456789abcdef";
+    lx_account_registration registration;
+    lx_account *candidate = &registration.account;
+    lx_account *existing;
+    const char *segment;
+    lx_account_kind kind;
+    lxp_byte_span encoded;
+    uint8_t activity_id[32];
+    size_t cursor;
+    size_t mark;
+    lxp_result status;
+    if (ctx == NULL || activity == NULL || object_id == NULL || asset_id == NULL ||
+        presented_id == NULL || account == NULL || !ctx->mutable || ctx->arena == NULL || ctx->kernel == NULL ||
+        ctx->kernel->state == NULL || ctx->kernel->state->accounts == NULL ||
+        ctx->kernel->journal == NULL || !ctx->kernel->journal->open ||
+        ctx->kernel->journal->store != ctx->kernel->state ||
+        ctx->kernel->journal->global_sequence != ctx->global_sequence ||
+        ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        activity->protocol_version != ctx->protocol_version ||
+        activity->activity_type != ((uint32_t)ctx->module_id << 16U | 1U) ||
+        lxp_ct_is_zero(object_id, 32U) || lxp_ct_is_zero(asset_id, 32U) ||
+        lxp_ct_is_zero(ctx->activity_id, 32U) || activity->actor_did.bytes == NULL ||
+        activity->actor_did.length == 0U || activity->actor_did.length > LX_ACCOUNT_NAME_MAX - 78U)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    switch (ctx->module_id) {
+    case LXP_MODULE_ESCROW: segment = ":escrow:"; kind = LX_ACCOUNT_AGENT_ESCROW; break;
+    case LXP_MODULE_BUDGET: segment = ":budget:"; kind = LX_ACCOUNT_AGENT_BUDGET; break;
+    case LXP_MODULE_STREAM: segment = ":stream:"; kind = LX_ACCOUNT_AGENT_STREAM; break;
+    default: return LXP_ERR_UNAUTHORIZED_DEBIT;
+    }
+    mark = lxp_arena_mark(ctx->arena);
+    status = lxp_activity_verify_payload_hash(activity);
+    if (status == LXP_OK) status = lxp_activity_verify_signature(activity);
+    if (status == LXP_OK) status = lxp_activity_encode(activity, ctx->arena, &encoded);
+    if (status == LXP_OK) status = lxp_activity_id(encoded.bytes, encoded.length, activity_id);
+    if (status == LXP_OK && lxp_ct_memcmp(activity_id, ctx->activity_id, 32U) != 0)
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (lxp_arena_reset(ctx->arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    if (status != LXP_OK) return status;
+    (void)memset(&registration, 0, sizeof(registration));
+    (void)memcpy(candidate->name, "agent:", 6U);
+    (void)memcpy(candidate->name + 6U, activity->actor_did.bytes, activity->actor_did.length);
+    cursor = 6U + activity->actor_did.length;
+    (void)memcpy(candidate->name + cursor, segment, 8U);
+    cursor += 8U;
+    for (size_t i = 0U; i < 32U; ++i) {
+        candidate->name[cursor++] = hex[object_id[i] >> 4U];
+        candidate->name[cursor++] = hex[object_id[i] & 15U];
+    }
+    candidate->name_length = (uint16_t)cursor;
+    candidate->kind = kind;
+    candidate->has_asset = true;
+    (void)memcpy(candidate->asset_id, asset_id, 32U);
+    candidate->created_at_sequence = ctx->global_sequence;
+    status = lx_account_id_from_string(candidate->name, cursor, candidate->id);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(candidate->id, presented_id, 32U) != 0)
+        return LXP_ERR_ACCOUNT_ID_MISMATCH;
+    status = lxp_ctx_account_find(ctx, candidate->id, &existing);
+    if (status == LXP_OK) {
+        status = lx_account_validate_canonical(existing);
+        if (status != LXP_OK) return status;
+        if (existing->kind != kind || existing->name_length != cursor ||
+            memcmp(existing->name, candidate->name, cursor) != 0 ||
+            !existing->has_asset || lxp_ct_memcmp(existing->asset_id, asset_id, 32U) != 0 ||
+            existing->has_authority_key || !lxp_u128_is_zero(existing->balance))
+            return LXP_ERR_CONTEXT_MISMATCH;
+        *account = existing;
+        return LXP_OK;
+    }
+    if (status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) return status;
+    if (ctx->staged_account_count == LXP_MODULE_MAX_STAGED_ACCOUNTS)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    status = lx_account_validate_canonical(candidate);
+    if (status == LXP_OK) status = lxp_state_journal_require_account_root(ctx->kernel->journal);
+    if (status != LXP_OK) return status;
+    registration.expected_count = ctx->kernel->state->accounts->count + ctx->staged_account_count;
     ctx->staged_accounts[ctx->staged_account_count] = registration;
     *account = &ctx->staged_accounts[ctx->staged_account_count++].account;
     return LXP_OK;

@@ -31,6 +31,34 @@ typedef struct lxp_daemon_module_runtimes {
     bool enabled[LXP_MODULE_RESERVED_COUNT + 1U];
 } lxp_daemon_module_runtimes;
 
+static inline bool lxp_daemon_gated_module(uint16_t module_id)
+{
+    return module_id == LXP_MODULE_ESCROW || module_id == LXP_MODULE_BUDGET ||
+           module_id == LXP_MODULE_STREAM || module_id == LXP_MODULE_SERVICE ||
+           module_id == LXP_MODULE_PERPS;
+}
+
+static inline bool lxp_daemon_gated_activity_supported(
+    const lxp_kernel *kernel, uint32_t activity_type)
+{
+    const lxp_module_registration *registration;
+    return kernel != NULL &&
+           lxp_daemon_gated_module((uint16_t)(activity_type >> 16U)) &&
+           lxp_kernel_module_for_activity(kernel, activity_type, kernel->epoch,
+                                           &registration) == LXP_OK;
+}
+
+static inline uint32_t lxp_daemon_gated_module_version(
+    const lxp_kernel *kernel, uint16_t module_id)
+{
+    const lxp_module_registration *registration;
+    if (kernel == NULL || !lxp_daemon_gated_module(module_id) ||
+        lxp_kernel_module_by_id(kernel, module_id, kernel->epoch,
+                                &registration) != LXP_OK)
+        return 0U;
+    return registration->abi_version;
+}
+
 static inline lxp_result lxp_daemon_module_enabled(const lxp_kernel *kernel,
                                                    uint16_t module_id,
                                                    bool *enabled)

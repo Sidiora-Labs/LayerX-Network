@@ -1,3 +1,4 @@
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_replica.h"
 #include "layerx/lxp_da.h"
 #include "layerx/lxp_crypto.h"
@@ -91,6 +92,8 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
     lxp_byte_span *published_events = NULL;
     size_t published_event_count = 0U;
     bool maintenance_present;
+    bool module_maintenance;
+    size_t event_count;
     size_t i;
     void *memory;
     uint32_t parameter_version;
@@ -146,19 +149,31 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
     if (body->header.last_sequence < body->header.first_sequence)
         return LXP_ERR_BATCH_GAP;
     maintenance_present = lxp_protocol_version_uses_occupancy(body->header.protocol_version);
+    module_maintenance = lxp_kernel_uses_batch_maintenance(engine->kernel, body->header.protocol_version);
+    event_count = activity_count + (module_maintenance ? 1U : 0U);
     if (publication) {
         status = lxp_da_receipt_section_decode(body->receipts, arena,
             &published_receipts, &published_count,
             &published_events, &published_event_count);
-        if (status == LXP_OK && published_event_count != activity_count)
+        if (status == LXP_OK && published_event_count != event_count)
             status = LXP_ERR_BATCH_GAP;
         if (status != LXP_OK) return status;
         if (published_count != activity_count && published_count != activity_count + 1U)
             return LXP_ERR_BATCH_GAP;
         maintenance_present = published_count == activity_count + 1U;
+        if (module_maintenance && !maintenance_present) return LXP_ERR_BATCH_GAP;
         if (maintenance_present) {
             lxp_programs_occupancy_receipt record;
-            status = lxp_programs_occupancy_receipt_decode(
+            lxp_byte_span system_events;
+            if (lxp_batch_maintenance_is_envelope(published_receipts[activity_count]) != module_maintenance)
+                return LXP_ERR_VERSION_UNSUPPORTED;
+            status = lxp_batch_maintenance_events(published_receipts[activity_count],
+                &body->header, &system_events);
+            if (status != LXP_OK) return status;
+            if (module_maintenance && (system_events.length != published_events[activity_count].length ||
+                lxp_ct_memcmp(system_events.bytes, published_events[activity_count].bytes, system_events.length) != 0))
+                return LXP_ERR_CONTEXT_MISMATCH;
+            status = lxp_batch_maintenance_occupancy_decode(
                 published_receipts[activity_count].bytes,
                 published_receipts[activity_count].length, &record);
             if (status != LXP_OK) return status;
@@ -197,9 +212,9 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
                              _Alignof(lxp_byte_span), &memory);
     if (status != LXP_OK) return status;
     result->encoded_receipts = (lxp_byte_span *)memory;
-    if (activity_count != 0U) {
+    if (event_count != 0U) {
         status = lxp_arena_alloc(arena,
-                                 activity_count * sizeof(lxp_byte_span),
+                                 event_count * sizeof(lxp_byte_span),
                                  _Alignof(lxp_byte_span), &memory);
         if (status != LXP_OK) return status;
         result->encoded_events = (lxp_byte_span *)memory;
@@ -226,8 +241,13 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
             parameter_version, body->header.last_sequence, current_root,
             arena, &result->batch_maintenance_output);
         if (status != LXP_OK) return status;
-        if (result->batch_maintenance_output.canonical_events.length != 0U)
+        if (module_maintenance) {
+            if (result->batch_maintenance_output.canonical_events.length == 0U)
+                return LXP_FATAL_INVARIANT;
+            result->encoded_events[activity_count] = result->batch_maintenance_output.canonical_events;
+        } else if (result->batch_maintenance_output.canonical_events.length != 0U) {
             return LXP_FATAL_INVARIANT;
+        }
         result->encoded_batch_maintenance_receipt =
             result->batch_maintenance_output.canonical_receipt;
         status = result->encoded_batch_maintenance_receipt.length != 0U ? LXP_OK : LXP_ERR_NON_CANONICAL;
@@ -254,11 +274,11 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
     if (status != LXP_OK) return status;
     status = lxp_da_receipt_section_encode(result->encoded_receipts,
                                        receipt_count, result->encoded_events,
-                                       activity_count, arena,
+                                       event_count, arena,
                                        &result->canonical_receipt_section);
     if (status == LXP_OK)
         status = lxp_replay_section_encode(result->encoded_events,
-                                           activity_count, arena,
+                                           event_count, arena,
                                            &result->canonical_event_section);
     if (status != LXP_OK) return status;
     status = lxp_replay_section_decode(&body->oracle_inputs, arena, &oracles,
@@ -267,7 +287,7 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
     root_inputs = (lxp_batch_root_inputs){
         activities, activity_count,
         result->encoded_receipts, receipt_count,
-        result->encoded_events, activity_count,
+        result->encoded_events, event_count,
         oracles, oracle_count,
         NULL, 0U
     };

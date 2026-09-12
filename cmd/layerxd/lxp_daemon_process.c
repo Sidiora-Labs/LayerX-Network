@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_daemon.h"
 
@@ -1092,12 +1093,17 @@ static bool terminal_rejection_module_supported(
     return module_id == LXP_MODULE_PROGRAMS ||
            module_id == LXP_MODULE_ASSET ||
            module_id == LXP_MODULE_GOVERNANCE ||
+           lxp_daemon_gated_module_version(&process->kernel, module_id) != 0U ||
            (process->custody_credit_enabled &&
             module_id == LXP_MODULE_BRIDGE);
 }
 
-static uint16_t recorded_module_version_for(uint32_t activity_type)
+static uint32_t recorded_module_version_for(
+    const lxp_daemon_process *process, uint32_t activity_type)
 {
+    uint16_t module_id = lxp_activity_module_id(activity_type);
+    if (lxp_daemon_gated_module(module_id))
+        return lxp_daemon_gated_module_version(&process->kernel, module_id);
     return (uint16_t)((activity_type == LXP_BRIDGE_CREDIT ||
                        lxp_governance_activity(activity_type)) ? 1U :
                       (asset_activity_supported(activity_type) ?
@@ -1157,6 +1163,7 @@ static lxp_result replay_execute_activity(
     if ((expected->module_id != LXP_MODULE_PROGRAMS &&
          expected->module_id != LXP_MODULE_ASSET &&
          expected->module_id != LXP_MODULE_GOVERNANCE &&
+         lxp_daemon_gated_module_version(&process->kernel, expected->module_id) == 0U &&
          !(process->custody_credit_enabled && expected->module_id == LXP_MODULE_BRIDGE)) ||
         expected->module_version == 0U ||
         expected->parameter_version != process->parameter_version ||
@@ -1176,6 +1183,7 @@ static lxp_result replay_execute_activity(
     if (status == LXP_OK &&
         lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS &&
         !asset_activity_supported(activity->activity_type) &&
+        !lxp_daemon_gated_activity_supported(&process->kernel, activity->activity_type) &&
         !lxp_governance_activity(activity->activity_type) &&
         !(process->custody_credit_enabled && activity->activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
@@ -1183,7 +1191,10 @@ static lxp_result replay_execute_activity(
         (expected->module_id != lxp_activity_module_id(activity->activity_type) ||
          (asset_activity_supported(activity->activity_type) &&
           expected->module_version != lx_asset_module_iface()->abi_version) ||
-         (activity->activity_type == LXP_BRIDGE_CREDIT && expected->module_version != 1U)))
+         (activity->activity_type == LXP_BRIDGE_CREDIT && expected->module_version != 1U) ||
+         (lxp_daemon_gated_module(expected->module_id) &&
+          expected->module_version != lxp_daemon_gated_module_version(
+              &process->kernel, expected->module_id))))
         status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK)
         status = lxp_identity_resolve(&process->identities,
@@ -1219,7 +1230,7 @@ static lxp_result replay_execute_activity(
             expected->module_id !=
                 lxp_activity_module_id(activity->activity_type) ||
             expected->module_version !=
-                recorded_module_version_for(activity->activity_type) ||
+                recorded_module_version_for(process, activity->activity_type) ||
             expected->program_outcome.present)
             return refusal;
         status = lxp_activity_id(canonical_activity, activity_length,
@@ -1723,7 +1734,7 @@ static lxp_result reconcile_snapshot_evidence(lxp_daemon_process *process)
     }
     if (status == LXP_OK && maintenance_present) {
         lxp_programs_occupancy_receipt record;
-        status = lxp_programs_occupancy_receipt_decode(receipt_bytes, receipt_length, &record);
+        status = lxp_batch_maintenance_occupancy_decode(receipt_bytes, receipt_length, &record);
         if (status == LXP_OK &&
             (!lxp_protocol_version_uses_occupancy(process->protocol_version) ||
              record.global_sequence != target || maintenance_timestamp == 0U ||
@@ -1899,7 +1910,7 @@ static lxp_result replay_canonical_after_snapshot(
                 header.global_sequence != expected_sequence || expected_sequence == UINT64_MAX)
                 status = LXP_ERR_LOG_CORRUPT;
             if (status == LXP_OK)
-                status = lxp_programs_occupancy_receipt_decode(body + 13U,
+                status = lxp_batch_maintenance_occupancy_decode(body + 13U,
                     header.body_length - 13U, &recorded);
             if (status == LXP_OK &&
                 (recorded.global_sequence != expected_sequence ||
@@ -1915,11 +1926,36 @@ static lxp_result replay_canonical_after_snapshot(
                  lxp_ct_memcmp(authority.canonical_receipt.bytes, body + 13U,
                      header.body_length - 13U) != 0))
                 status = LXP_FATAL_REPLAY_DIVERGENCE;
-            if (status == LXP_OK)
+            if (status == LXP_OK && lxp_batch_maintenance_is_envelope(
+                    (lxp_byte_span){body + 13U, header.body_length - 13U})) {
+                lxp_kernel_execution execution = {0};
+                lxp_replay_activity_output output;
+                lxp_batch_header signed_header;
+                lxp_byte_span events;
+                status = lxp_batch_header_decode(authority.canonical_header.bytes,
+                    authority.canonical_header.length, &signed_header);
+                if (status == LXP_OK) status = lxp_batch_maintenance_events(
+                    (lxp_byte_span){body + 13U, header.body_length - 13U}, &signed_header, &events);
+                execution.batch_number = recorded.batch_number;
+                execution.batch_timestamp_ms = timestamp;
+                execution.epoch = process->kernel.epoch;
+                execution.global_sequence = recorded.global_sequence;
+                execution.parameter_version = recorded.parameter_version;
+                execution.recorded_fee_schedule_version = recorded.schedule_version;
+                execution.identities = &process->identities;
+                execution.verified_receipts = &process->verified_receipts;
+                execution.fee_parameters = &process->fees;
+                execution.arena = &process->execution_arena;
+                if (status == LXP_OK) status = lxp_kernel_finalize_batch_maintenance(&process->kernel,
+                    process->protocol_version, &execution,
+                    (lxp_byte_span){body + 13U, header.body_length - 13U}, &output);
+                if (status == LXP_OK) encoded = output.canonical_receipt;
+            } else if (status == LXP_OK) {
                 status = lxp_programs_finalize_occupancy_batch_selected(&process->kernel,
                     process->protocol_version, recorded.schedule_version,
                     recorded.batch_number, timestamp, recorded.global_sequence,
                     recorded.parameter_version, &process->execution_arena, &replayed, &encoded);
+            }
             if (status == LXP_OK &&
                 (encoded.length != header.body_length - 13U ||
                  lxp_ct_memcmp(encoded.bytes, body + 13U, encoded.length) != 0))
@@ -2130,7 +2166,7 @@ static lxp_result publish_canonical_batch(
     lxp_batch_header header;
     lxp_batch_seal_input seal;
     lxp_byte_span canonical_header;
-    lxp_byte_span projected_events[LXP_DAEMON_MAX_BATCH_ACTIVITIES] = {{0}};
+    lxp_byte_span projected_events[LXP_DAEMON_MAX_BATCH_ACTIVITIES + 1U] = {{0}};
     const lxp_byte_span *root_events = NULL;
     size_t root_event_count = 0U;
     uint8_t header_signature[64];
@@ -2161,7 +2197,7 @@ static lxp_result publish_canonical_batch(
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < activity_count; ++i) combined[i] = receipts[i];
     if (maintenance.length != 0U) {
-        status = lxp_programs_occupancy_receipt_decode(maintenance.bytes, maintenance.length, &maintenance_record);
+        status = lxp_batch_maintenance_occupancy_decode(maintenance.bytes, maintenance.length, &maintenance_record);
         if (status != LXP_OK) return status;
         if (!checkpoint_persisted || maintenance_record.batch_number != batch_number ||
             maintenance_record.global_sequence == 0U ||
@@ -2210,6 +2246,15 @@ static lxp_result publish_canonical_batch(
     if (events != NULL) {
         root_events = projected_events;
         root_event_count = activity_count;
+    }
+    if (maintenance.length != 0U) {
+        lxp_byte_span maintenance_events;
+        status = lxp_batch_maintenance_events(maintenance, NULL, &maintenance_events);
+        if (status != LXP_OK) return status;
+        if (maintenance_events.length != 0U) {
+            if (events == NULL) return LXP_ERR_NON_CANONICAL;
+            projected_events[root_event_count++] = maintenance_events;
+        }
     }
     if (lxp_ct_memcmp(
             maintenance.length != 0U ? maintenance_record.resulting_state_root :
@@ -2943,6 +2988,7 @@ static lxp_result apply_canonical_activity(
     if (status == LXP_OK &&
         lxp_activity_module_id(activity.activity_type) != LXP_MODULE_PROGRAMS &&
         !asset_activity_supported(activity.activity_type) &&
+        !lxp_daemon_gated_activity_supported(&process->kernel, activity.activity_type) &&
         !lxp_governance_activity(activity.activity_type) &&
         !(process->custody_credit_enabled && activity.activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
@@ -3006,7 +3052,7 @@ static lxp_result apply_canonical_activity(
         execution.epoch = process->kernel.epoch;
         execution.global_sequence = global_sequence;
         execution.recorded_module_version =
-            recorded_module_version_for(activity.activity_type);
+            recorded_module_version_for(process, activity.activity_type);
         execution.recorded_fee_schedule_version = 0U;
         execution.parameter_version = process->parameter_version;
         execution.signature_valid = true;
@@ -3055,10 +3101,8 @@ static lxp_result apply_canonical_activity(
     execution.maximum_timestamp_window = UINT64_C(300000);
     execution.epoch = process->kernel.epoch;
     execution.global_sequence = global_sequence;
-    execution.recorded_module_version = (activity.activity_type == LXP_BRIDGE_CREDIT ||
-        lxp_governance_activity(activity.activity_type)) ?
-        1U : (asset_activity_supported(activity.activity_type) ?
-        lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
+    execution.recorded_module_version =
+        recorded_module_version_for(process, activity.activity_type);
     execution.recorded_fee_schedule_version = 0U;
     execution.parameter_version = process->parameter_version;
     execution.signature_valid = true;
@@ -3143,6 +3187,9 @@ static lxp_result commit_prepared_batch_wal(
     lxp_merkle_proof proofs[LXP_DAEMON_MAX_BATCH_ACTIVITIES + 1U];
     uint8_t receipt_hashes[LXP_DAEMON_MAX_BATCH_ACTIVITIES + 1U][32];
     lxp_byte_span combined[LXP_DAEMON_MAX_BATCH_ACTIVITIES + 1U];
+    lxp_byte_span combined_events[LXP_DAEMON_MAX_BATCH_ACTIVITIES + 1U];
+    lxp_byte_span maintenance_events;
+    size_t event_count = count;
     lxp_byte_span maintenance = lxp_kernel_prepared_batch_maintenance(owned_prepared);
     size_t receipt_count = count + (maintenance.length != 0U ? 1U : 0U);
     uint8_t proof_root[32];
@@ -3171,9 +3218,13 @@ static lxp_result commit_prepared_batch_wal(
         return LXP_ERR_LENGTH_LIMIT;
     for (i = 0U; i < count; ++i) combined[i] = receipts[i];
     if (maintenance.length != 0U) combined[count] = maintenance;
+    for (i = 0U; i < count; ++i) combined_events[i] = events[i];
+    status = lxp_batch_maintenance_events(maintenance, NULL, &maintenance_events);
+    if (status != LXP_OK) return status;
+    if (maintenance_events.length != 0U) combined_events[event_count++] = maintenance_events;
     status = lxp_batch_roots_compute(
         &(lxp_batch_root_inputs){activities, count, combined, receipt_count,
-                                 events, count, NULL, 0U, NULL, 0U},
+                                 combined_events, event_count, NULL, 0U, NULL, 0U},
         &process->execution_arena, &roots);
     for (i = 0U; status == LXP_OK && i < receipt_count; ++i)
         status = lxp_merkle_leaf_hash(combined[i].bytes, combined[i].length,
@@ -3212,7 +3263,7 @@ static lxp_result commit_prepared_batch_wal(
         status = lxp_da_body_from_kernels(
             &header, lxp_kernel_prepared_batch_base_kernel(owned_prepared),
             lxp_kernel_prepared_batch_settled_kernel(owned_prepared),
-            activities, count, combined, receipt_count, events, count,
+            activities, count, combined, receipt_count, combined_events, event_count,
             NULL, 0U, &process->execution_arena,
             &process->prepared_availability_body);
     if (status == LXP_OK)
@@ -3429,6 +3480,7 @@ static lxp_result apply_canonical_batch(
         if (status == LXP_OK &&
             lxp_activity_module_id(activities[i].activity_type) != LXP_MODULE_PROGRAMS &&
             !asset_activity_supported(activities[i].activity_type) &&
+        !lxp_daemon_gated_activity_supported(&process->kernel, activities[i].activity_type) &&
             !lxp_governance_activity(activities[i].activity_type) &&
             !(process->custody_credit_enabled && activities[i].activity_type == LXP_BRIDGE_CREDIT))
             status = LXP_ERR_UNKNOWN_ACTIVITY;
@@ -3455,10 +3507,8 @@ static lxp_result apply_canonical_batch(
         executions[i].maximum_timestamp_window = UINT64_C(300000);
         executions[i].epoch = process->kernel.epoch;
         executions[i].global_sequence = sequence;
-        executions[i].recorded_module_version = (activities[i].activity_type == LXP_BRIDGE_CREDIT ||
-            lxp_governance_activity(activities[i].activity_type)) ?
-            1U : (asset_activity_supported(activities[i].activity_type) ?
-            lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
+        executions[i].recorded_module_version =
+            recorded_module_version_for(process, activities[i].activity_type);
         executions[i].parameter_version = process->parameter_version;
         executions[i].signature_valid = true;
         executions[i].identities = &process->identities;
@@ -3729,10 +3779,27 @@ static lxp_result redo_prepared_batch_wal(
             &activity, &replayed);
     if (status == LXP_OK && view->maintenance.length != 0U) {
         (void)memset(&maintenance, 0, sizeof(maintenance));
-        status = lxp_programs_replay_finalize(
-            &process->kernel, header, view->parameter_version,
-            view->last_sequence, process->kernel.current_state_root,
-            &process->execution_arena, &maintenance);
+        if (lxp_batch_maintenance_is_envelope(view->maintenance)) {
+            lxp_kernel_execution execution = {0};
+            execution.batch_number = header->batch_number;
+            execution.batch_timestamp_ms = header->timestamp_ms;
+            execution.epoch = header->epoch;
+            execution.global_sequence = view->last_sequence;
+            execution.parameter_version = view->parameter_version;
+            execution.recorded_fee_schedule_version = view->fee_schedule_version;
+            execution.recorded_metering_schedule_version = view->metering_schedule_version;
+            execution.identities = &process->identities;
+            execution.verified_receipts = &process->verified_receipts;
+            execution.fee_parameters = &process->fees;
+            execution.arena = &process->execution_arena;
+            status = lxp_kernel_finalize_batch_maintenance(&process->kernel,
+                header->protocol_version, &execution, view->maintenance, &maintenance);
+        } else {
+            status = lxp_programs_replay_finalize(
+                &process->kernel, header, view->parameter_version,
+                view->last_sequence, process->kernel.current_state_root,
+                &process->execution_arena, &maintenance);
+        }
         if (status == LXP_OK &&
             (maintenance.canonical_receipt.length !=
                  view->maintenance.length ||
@@ -3995,11 +4062,12 @@ static lxp_result recover_ranged_batch_authority(
 {
     lxp_byte_span activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES] = {{0}};
     lxp_byte_span receipts[LXP_DAEMON_MAX_BATCH_ACTIVITIES + 1U] = {{0}};
-    lxp_byte_span events[LXP_DAEMON_MAX_BATCH_ACTIVITIES] = {{0}};
+    lxp_byte_span events[LXP_DAEMON_MAX_BATCH_ACTIVITIES + 1U] = {{0}};
     lxp_receipt *decoded;
     uint8_t receipt_hashes[LXP_DAEMON_MAX_BATCH_ACTIVITIES + 1U][32];
     lxp_programs_occupancy_receipt maintenance;
     bool has_maintenance = false;
+    size_t event_count;
     size_t receipt_count;
     uint8_t signature[64];
     lxp_batch_roots roots;
@@ -4065,7 +4133,7 @@ static lxp_result recover_ranged_batch_authority(
                     !lxp_protocol_version_uses_occupancy(header->protocol_version)) {
                     status = LXP_ERR_LOG_CORRUPT;
                 } else {
-                    status = lxp_programs_occupancy_receipt_decode(
+                    status = lxp_batch_maintenance_occupancy_decode(
                         body + 13U, record.body_length - 13U, &maintenance);
                     if (status == LXP_OK &&
                         (maintenance.batch_number != header->batch_number ||
@@ -4103,7 +4171,7 @@ static lxp_result recover_ranged_batch_authority(
     if (status == LXP_OK && (count == 0U || count > LXP_DAEMON_MAX_BATCH_ACTIVITIES))
         status = LXP_ERR_LOG_CORRUPT;
     if (status == LXP_OK && has_maintenance) {
-        status = lxp_programs_occupancy_receipt_decode(
+        status = lxp_batch_maintenance_occupancy_decode(
             receipts[count].bytes, receipts[count].length, &maintenance);
         if (status == LXP_OK)
             status = lxp_merkle_leaf_hash(receipts[count].bytes,
@@ -4164,10 +4232,17 @@ static lxp_result recover_ranged_batch_authority(
                            header->resulting_state_root, 32U) != 0 ||
          (has_maintenance && maintenance.parameter_version != decoded[0].parameter_version)))
         status = LXP_FATAL_REPLAY_DIVERGENCE;
+    event_count = count;
+    if (status == LXP_OK && has_maintenance) {
+        lxp_byte_span maintenance_events;
+        status = lxp_batch_maintenance_events(receipts[count], header, &maintenance_events);
+        if (status == LXP_OK && maintenance_events.length != 0U)
+            events[event_count++] = maintenance_events;
+    }
     if (status == LXP_OK)
         status = lxp_batch_roots_compute(
             &(lxp_batch_root_inputs){activities, count, receipts, receipt_count,
-                                     events, count, NULL, 0U, NULL, 0U},
+                                     events, event_count, NULL, 0U, NULL, 0U},
             &process->owner_scratch, &roots);
     if (status == LXP_OK) {
         lxp_batch_body body;
@@ -4184,7 +4259,7 @@ static lxp_result recover_ranged_batch_authority(
                                                    &body.activities);
             if (status == LXP_OK)
                 status = lxp_da_receipt_section_encode(receipts, receipt_count,
-                    events, count, &process->owner_scratch, &body.receipts);
+                    events, event_count, &process->owner_scratch, &body.receipts);
             if (status == LXP_OK)
                 status = lxp_batch_availability_root(&body, &process->owner_scratch,
                                                      roots.data_availability_root);

@@ -1,6 +1,8 @@
 #ifndef LAYERX_LX_STREAM_EXECUTION_H
 #define LAYERX_LX_STREAM_EXECUTION_H
 
+#include "../asset/committed.h"
+
 static void stream_put_u64(uint8_t bytes[8], uint64_t value)
 {
     size_t i;
@@ -14,6 +16,16 @@ static lxp_result stream_asset_state(lxp_module_ctx *ctx,
     const lx_stream_runtime *runtime =
         (const lx_stream_runtime *)lxp_ctx_module_runtime(ctx);
     size_t i;
+    if (ctx == NULL || asset_id == NULL || state == NULL) return LXP_ERR_NON_CANONICAL;
+    if (ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        const lx_asset_record *record;
+        lxp_result status = lxp_module_committed_asset(ctx, asset_id, &record);
+        if (status != LXP_OK) return status;
+        status = lx_asset_transfer_state(record, state);
+        if (status != LXP_OK) return status;
+        if (!state->registered) return LXP_ERR_ASSET_MISMATCH;
+        return state->paused ? LXP_ERR_ASSET_PAUSED : LXP_OK;
+    }
     if (runtime == NULL || runtime->assets == NULL ||
         runtime->asset_count == 0U)
         return LXP_ERR_ASSET_MISMATCH;
@@ -133,6 +145,7 @@ static lxp_result stream_event_close(lxp_module_ctx *ctx,
 }
 
 static lxp_result stream_execute_open(lxp_module_ctx *ctx,
+                                      const lxp_activity *activity,
                                       const lxp_authority_resolved *authority,
                                       const lx_stream_open_payload *payload)
 {
@@ -147,6 +160,11 @@ static lxp_result stream_execute_open(lxp_module_ctx *ctx,
     (void)memset(&receipt, 0, sizeof(receipt));
     request.record = payload->record;
     (void)memcpy(request.record.payer, authority->principal, 32U);
+    if (ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        status = lxp_ctx_account_stage_module_custody(ctx, activity, request.record.stream_id,
+            request.record.asset_id, request.record.stream_account, &stream_account);
+        if (status != LXP_OK) return status;
+    }
     status = stream_parties(ctx, &request.record, &payer, &stream_account,
                             &recipient);
     if (status != LXP_OK) return status;
@@ -342,7 +360,7 @@ static lxp_result stream_execute_typed(lxp_module_ctx *ctx,
         lxp_ct_is_zero(authority->principal, 32U))
         return LXP_ERR_UNAUTHORIZED_DEBIT;
     switch (value->ordinal) {
-    case 1U: return stream_execute_open(ctx, authority, &value->typed->open);
+    case 1U: return stream_execute_open(ctx, activity, authority, &value->typed->open);
     case 2U: return stream_execute_top_up(ctx, authority,
                                           &value->typed->amount);
     case 3U: return stream_execute_meter(ctx, &value->typed->meter);

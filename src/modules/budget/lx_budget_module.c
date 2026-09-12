@@ -1,4 +1,5 @@
 #include "layerx/lx_budget.h"
+#include "../asset/committed.h"
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_identity.h"
@@ -47,6 +48,11 @@ static lxp_result budget_asset_state(lxp_module_ctx *ctx,
         state == NULL || ctx->kernel->module_kv_count >
                              LXP_KERNEL_MAX_MODULE_KV)
         return LXP_ERR_NON_CANONICAL;
+    if (ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        const lx_asset_record *record;
+        lxp_result status = lxp_module_committed_asset(ctx, asset_id, &record);
+        return status == LXP_OK ? lx_asset_transfer_state(record, state) : status;
+    }
     for (i = 0U; i < ctx->kernel->module_kv_count; ++i) {
         const lxp_module_kv_entry *entry = &ctx->kernel->module_kv[i];
         lx_asset_record record;
@@ -245,9 +251,11 @@ static lxp_result budget_execute_create(lxp_module_ctx *ctx,
     if (status == LXP_OK) return LXP_ERR_SEQUENCE_REUSED;
     if (status != LXP_ERR_UNKNOWN_FIELD) return status;
     status = budget_capacity(ctx);
-    if (status == LXP_OK)
-        status = lxp_ctx_account_find(ctx, payload->budget_account,
-                                      &budget_account);
+    if (status == LXP_OK && ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_ctx_account_stage_module_custody(ctx, activity, payload->budget_id,
+            payload->asset_id, payload->budget_account, &budget_account);
+    else if (status == LXP_OK)
+        status = lxp_ctx_account_find(ctx, payload->budget_account, &budget_account);
     if (status != LXP_OK) return status;
     if (budget_account->kind != LX_ACCOUNT_AGENT_BUDGET ||
         !budget_name_binds_actor(budget_account, activity, ":budget:", 8U,

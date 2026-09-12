@@ -2,6 +2,7 @@
 #define LXP_DAEMON_MAINTENANCE_JSON_H
 
 #include "layerx/lxp_daemon.h"
+#include "layerx/lxp_maintenance.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -51,8 +52,10 @@ static lxp_result maintenance_identity_json(
                 maintenance.canonical_receipt.length, receipt_hex);
             maintenance_hex(maintenance_writer.bytes, maintenance_writer.length, maintenance_proof_hex);
             length = snprintf(identity_json, identity_capacity,
-                ",\"batch_identity\":{\"kind\":\"occupancy_maintenance_v2\","
-                "\"receipt_hex\":\"%s\",\"receipt_proof_hex\":\"%s\"}", receipt_hex, maintenance_proof_hex);
+                ",\"batch_identity\":{\"kind\":\"%s\","
+                "\"receipt_hex\":\"%s\",\"receipt_proof_hex\":\"%s\"}",
+                lxp_batch_maintenance_is_envelope(maintenance.canonical_receipt) ?
+                    "batch_maintenance_v1" : "occupancy_maintenance_v2", receipt_hex, maintenance_proof_hex);
             if (length < 0 || (size_t)length >= identity_capacity)
                 status = LXP_ERR_LENGTH_LIMIT;
             else identity_length = (size_t)length;
