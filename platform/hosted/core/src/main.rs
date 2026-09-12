@@ -11,8 +11,8 @@ use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds}
 use layerx_client::read::ReadError;
 use layerx_client::submit::{Submission, SubmitError};
 use layerx_platform_core::{
-    asset_registry, build_send_with_identity_sequence, fixed_hex, hex_decode, hex_encode,
-    main_account, parse_seed, treasury_did, SendRequest,
+    asset_registry, build_send_with_signer, did_for_public_key, fixed_hex, hex_decode, hex_encode,
+    main_account, SendError, SendRequest, SocketSigner, TreasurySigner as _,
 };
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
@@ -85,7 +85,7 @@ struct Config {
     replica: NodeEndpoint,
     replica_token: Zeroizing<String>,
     admin_token: Zeroizing<String>,
-    treasury_seed: Zeroizing<[u8; 32]>,
+    treasury: SocketSigner,
     treasury_did: String,
     treasury_asset: [u8; 32],
     sequencer_id: [u8; 32],
@@ -256,8 +256,9 @@ fn config() -> Result<Config, String> {
     if network_id == 0 {
         return Err("LAYERX_CORE_NETWORK_ID must be non-zero".to_owned());
     }
-    let seed_text = read_secret("LAYERX_CORE_TREASURY_KEY_FILE")?;
-    let treasury_seed = Zeroizing::new(parse_seed(&seed_text)?);
+    let treasury =
+        SocketSigner::connect(Path::new(&required("LAYERX_CORE_TREASURY_SIGNER_SOCKET")?))
+            .map_err(|error| format!("LAYERX_CORE_TREASURY_SIGNER_SOCKET: {error}"))?;
     let treasury_asset = fixed_hex::<32>(
         "LAYERX_CORE_TREASURY_ASSET",
         &required("LAYERX_CORE_TREASURY_ASSET")?,
@@ -298,8 +299,8 @@ fn config() -> Result<Config, String> {
         replica: parse_node_url(&required("LAYERX_CORE_REPLICA_URL")?)?,
         replica_token: read_secret("LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE")?,
         admin_token: read_secret("LAYERX_CORE_ADMIN_TOKEN_FILE")?,
-        treasury_did: treasury_did(&treasury_seed),
-        treasury_seed,
+        treasury_did: did_for_public_key(&treasury.public_key()),
+        treasury,
         treasury_asset,
         sequencer_id,
         supervisor_socket: PathBuf::from(required("LAYERX_CORE_SUPERVISOR_SOCKET")?),
@@ -1739,8 +1740,8 @@ fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Res
         .account_sequence;
     let sequence = treasury_sequence(config, &mut client, amount)?;
     let now = now_ms();
-    let signed = build_send_with_identity_sequence(
-        &config.treasury_seed,
+    let signed = build_send_with_signer(
+        &config.treasury,
         identity_sequence,
         &SendRequest {
             network_id: config.network_id,
@@ -1755,9 +1756,15 @@ fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Res
             fee_limit: config.fee_limit,
         },
     )
-    .map_err(|error| {
-        eprintln!("layerx-core-boundary: send construction: {error}");
-        refusal(422, "send_unbuildable", None)
+    .map_err(|error| match error {
+        SendError::Signer(reason) => {
+            eprintln!("layerx-core-boundary: treasury signer: {reason}");
+            refusal(503, "treasury_signer_unavailable", Some(5))
+        }
+        SendError::Invalid(reason) => {
+            eprintln!("layerx-core-boundary: send construction: {reason}");
+            refusal(422, "send_unbuildable", None)
+        }
     })?;
     let (registry, _) =
         asset_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;

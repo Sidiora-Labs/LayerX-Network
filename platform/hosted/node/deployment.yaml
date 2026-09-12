@@ -279,6 +279,7 @@ spec:
               set +a
               : "${LAYERX_CORE_SEQUENCER_ID:?generated sequencer identity is required}"
               : "${LAYERX_CORE_TREASURY_ASSET:?generated treasury asset is required}"
+              : "${LAYERX_CORE_TREASURY_SIGNER_SOCKET:?treasury signer socket is required}"
               exec /usr/local/bin/layerx-core-boundary
           securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           env:
@@ -298,7 +299,6 @@ spec:
             - {name: LAYERX_CORE_REPLICA_URL, value: "http://127.0.0.1:9402"}
             - {name: LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE, value: /run/layerx/tokens/replica-token}
             - {name: LAYERX_CORE_ADMIN_TOKEN_FILE, value: /run/layerx/backend-admin/token}
-            - {name: LAYERX_CORE_TREASURY_KEY_FILE, value: /run/layerx/keys/treasury.key}
             - {name: LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE, value: /run/layerx/gateway-component/token}
             - {name: LAYERX_CORE_STATE_DIR, value: /var/lib/layerx/core}
           ports: [{name: core-tls, containerPort: 9443}, {name: core-admin-tls, containerPort: 9444}]
@@ -308,7 +308,6 @@ spec:
           volumeMounts:
             - {name: data, mountPath: /var/lib/layerx}
             - {name: run, mountPath: /run/layerx}
-            - {name: treasury-material, mountPath: /run/layerx/keys, readOnly: true}
             - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
             - {name: backend-admin, mountPath: /run/layerx/backend-admin, readOnly: true}
             - {name: gateway-component, mountPath: /run/layerx/gateway-component, readOnly: true}

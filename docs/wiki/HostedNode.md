@@ -598,8 +598,8 @@ Sequencer container (`platform/hosted/node/deployment.yaml:32-76`):
 | --- | --- |
 | `/var/lib/layerx` | PVC `data` (50Gi) |
 | `/run/layerx` | emptyDir Memory 16Mi |
-| `/run/layerx/keys/sequencer.key` | Secret `layerx-node-keys` |
-| `/run/layerx/keys/treasury.key` | Secret `layerx-node-keys` |
+| `/run/layerx/keys/sequencer.key` | Secret `layerx-node-keys` (`layerxd` container only) |
+| `/run/layerx/treasury/treasury.key` | Secret `layerx-node-keys` (`treasury-signer` container only; the `core-boundary` container mounts no treasury material and signs over `/run/layerx/node/treasury-signer.sock` from `LAYERX_CORE_TREASURY_SIGNER_SOCKET` in `core.env`) |
 | `/run/layerx/genesis/metadata.lxgb` | ConfigMap `layerx-node-genesis-metadata` key `metadata.lxgb`, `subPath` mount |
 | `/run/layerx/tokens/program-token` | Secret `layerx-node-tokens` |
 | `/run/layerx/tokens/replica-token` | Secret `layerx-node-tokens` |
