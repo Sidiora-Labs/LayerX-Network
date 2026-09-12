@@ -188,6 +188,7 @@ def main():
                         with (exported/'state-credit.json').open('x') as output:
                             json.dump(fixture_request, output, sort_keys=True, separators=(',', ':'))
                             output.write('\n')
+                    execution_credit = work/'credit'
                     if os.environ.get('LAYERX_CUSTODY_HISTORY_WINDOW') == '1':
                         run(sys.executable, 'tests/bridge/comet_history.py', *pair,
                             '--history-state', history, '--evidence', work/'credit.proof.json',
@@ -195,7 +196,16 @@ def main():
                             '--transaction', custody['transaction'], '--beneficiary', '0x'+beneficiary,
                             '--beneficiary-key', '0x'+public.hex(), '--expected-amount', str(amount),
                             '--attestor-key', work/'attestor', '--output', work/'credit-after-window')
-                    run(build / 'tests/bridge/sign-credit', work / 'profile', work / 'credit', did, work / 'actor',
+                        execution_credit = work/'credit-after-window'
+                        if os.environ.get('LAYERX_CUSTODY_WINDOW_FIXTURE_DIR'):
+                            exported = Path(os.environ['LAYERX_CUSTODY_WINDOW_FIXTURE_DIR'])
+                            exported.mkdir(parents=True, exist_ok=True)
+                            for source, name in ((work/'profile', 'custody.profile'),
+                                                 (execution_credit, 'custody.credit'),
+                                                 (work/'credit-after-window.history.json', 'history.json')):
+                                with (exported/name).open('xb') as output:
+                                    output.write(source.read_bytes())
+                    run(build / 'tests/bridge/sign-credit', work / 'profile', execution_credit, did, work / 'actor',
                         '0', str(int(time.time() * 1000)), work / 'activity')
                     (work / 'activity').chmod(0o644)
                     env = os.environ | {'LAYERX_TEST_WITHDRAW_PROFILE': str(work / 'profile'),

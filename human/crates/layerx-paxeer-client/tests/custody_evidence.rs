@@ -139,3 +139,38 @@ fn real_comet_state_credit_preserves_typed_evidence_and_refusals() {
         );
     }
 }
+
+#[test]
+fn real_comet_state_credit_after_history_pruning() {
+    use layerx_paxeer_client::{
+        AttestedNativeCustodyCredit, NativeCustodyEvidence, NativeCustodyExpectation,
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap_or_else(|| panic!("repository root"));
+    let fixtures = root.join("tests/fixtures/custody/paxeer-state-v2/history-window");
+    let profile =
+        std::fs::read(fixtures.join("custody.profile")).unwrap_or_else(|error| panic!("{error}"));
+    let credit =
+        std::fs::read(fixtures.join("custody.credit")).unwrap_or_else(|error| panic!("{error}"));
+    let expected = NativeCustodyExpectation {
+        network_id: u32::from_be_bytes(profile[201..205].try_into().expect("network")),
+        beneficiary: credit[107..139].try_into().expect("beneficiary"),
+        owner_key: credit[139..171].try_into().expect("owner"),
+    };
+    let decoded = AttestedNativeCustodyCredit::verify(&profile, &credit, expected)
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    match decoded.evidence() {
+        NativeCustodyEvidence::CometState {
+            state_height,
+            finalized_state_height,
+            ..
+        } => {
+            assert!(*state_height > 8192);
+            assert!(*finalized_state_height >= *state_height);
+        }
+        NativeCustodyEvidence::EthereumReceipt { .. } => panic!("Comet state evidence required"),
+    }
+    assert_eq!(decoded.canonical_bytes().as_slice(), credit.as_slice());
+}
