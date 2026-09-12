@@ -83,7 +83,7 @@ impl Runtime {
             gateway,
             core_port: self.core_port,
         };
-        let key = event_key(&context);
+        let key = local_secret(&cluster.root, "event-api-key", &event_key(&context));
         let credentials = local_secret(
             &cluster.root,
             "event-credentials.json",
