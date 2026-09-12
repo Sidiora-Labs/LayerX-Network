@@ -2080,7 +2080,11 @@ fn word_address(address: EvmAddress) -> [u8; 32] {
     word
 }
 
-pub(crate) fn derive_deposit_id(chain_id: u64, vault: EvmAddress, custody: &CustodyDeposit) -> [u8; 32] {
+pub(crate) fn derive_deposit_id(
+    chain_id: u64,
+    vault: EvmAddress,
+    custody: &CustodyDeposit,
+) -> [u8; 32] {
     let mut amount_word = [0_u8; 32];
     amount_word[16..].copy_from_slice(&custody.amount.to_be_bytes());
     let mut domain_word = [0_u8; 32];
