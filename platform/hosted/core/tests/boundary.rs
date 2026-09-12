@@ -3133,16 +3133,32 @@ fn receipt_proof_batch(answer: &HttpAnswer, cluster: &Cluster, activity: &str) -
     let document = json(answer);
     let result = &document["result"];
     let text = |value: &serde_json::Value| {
-        value.as_str().unwrap_or_else(|| panic!("proof field is not text: {value}")).to_owned()
+        value
+            .as_str()
+            .unwrap_or_else(|| panic!("proof field is not text: {value}"))
+            .to_owned()
     };
     assert_eq!(result["kind"], "receipt");
     assert_eq!(result["activity_id"], activity);
-    let canonical = must(hex_decode(&text(&result["canonical_value"])), "receipt bytes");
-    let receipt = must(layerx_wire::receipt::decode(&canonical), "canonical receipt");
+    let canonical = must(
+        hex_decode(&text(&result["canonical_value"])),
+        "receipt bytes",
+    );
+    let receipt = must(
+        layerx_wire::receipt::decode(&canonical),
+        "canonical receipt",
+    );
     assert_eq!(hex_encode(&receipt.activity_id()), activity);
     let proof = &result["proof"];
     let number = |field: &str| {
-        must(u32::try_from(proof[field].as_u64().unwrap_or_else(|| panic!("missing {field}"))), field)
+        must(
+            u32::try_from(
+                proof[field]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("missing {field}")),
+            ),
+            field,
+        )
     };
     let siblings = proof["siblings"]
         .as_array()
@@ -3155,15 +3171,36 @@ fn receipt_proof_batch(answer: &HttpAnswer, cluster: &Cluster, activity: &str) -
         "receipt proof",
     );
     let signed_header = &result["signed_header"];
-    assert_eq!(signed_header["public_key"], hex_encode(&cluster.sequencer_key));
-    assert_eq!(signed_header["sequencer_id"], hex_encode(&cluster.sequencer_id));
-    let header = must(hex_decode(&text(&signed_header["canonical_header"])), "header bytes");
-    let signature = must(fixed_hex("signature", &text(&signed_header["signature"])), "header signature");
+    assert_eq!(
+        signed_header["public_key"],
+        hex_encode(&cluster.sequencer_key)
+    );
+    assert_eq!(
+        signed_header["sequencer_id"],
+        hex_encode(&cluster.sequencer_id)
+    );
+    let header = must(
+        hex_decode(&text(&signed_header["canonical_header"])),
+        "header bytes",
+    );
+    let signature = must(
+        fixed_hex("signature", &text(&signed_header["signature"])),
+        "header signature",
+    );
     let authorization = layerx_proof::inclusion::SequencerAuthorization::new(
-        cluster.sequencer_id, cluster.sequencer_key, 1, LAST_BATCH,
+        cluster.sequencer_id,
+        cluster.sequencer_key,
+        1,
+        LAST_BATCH,
     );
     let verified = must(
-        layerx_proof::inclusion::verify_receipt(&canonical, &proof, &header, &signature, &authorization),
+        layerx_proof::inclusion::verify_receipt(
+            &canonical,
+            &proof,
+            &header,
+            &signature,
+            &authorization,
+        ),
         "authenticated receipt inclusion",
     );
     let header = verified.header().header();
@@ -3180,19 +3217,35 @@ fn wait_for_published_receipt(boundary: &Boundary, cluster: &Cluster, activity: 
             break receipt_proof_batch(&proof, cluster, activity);
         }
         assert_refusal(&proof, 503, "proof_evidence_unavailable");
-        assert!(Instant::now() < deadline, "receipt proof was not published: {}", proof.body);
+        assert!(
+            Instant::now() < deadline,
+            "receipt proof was not published: {}",
+            proof.body
+        );
         thread::sleep(Duration::from_millis(10));
     };
     loop {
         let gate = ConnectionGate::new(1);
-        let mut transport = must(Uds::connect(&cluster.lni_socket, &gate, lni_limits()), "LNI connect");
-        let handshake = must(perform(&mut transport, &handshake_config(), None), "LNI handshake");
-        assert_eq!(handshake.node().authorised_sequencer_key, cluster.sequencer_key);
+        let mut transport = must(
+            Uds::connect(&cluster.lni_socket, &gate, lni_limits()),
+            "LNI connect",
+        );
+        let handshake = must(
+            perform(&mut transport, &handshake_config(), None),
+            "LNI handshake",
+        );
+        assert_eq!(
+            handshake.node().authorised_sequencer_key,
+            cluster.sequencer_key
+        );
         let published = handshake.node().latest_sealed_batch;
         if published >= batch {
             return;
         }
-        assert!(Instant::now() < deadline, "receipt batch {batch} was not sealed; published {published}");
+        assert!(
+            Instant::now() < deadline,
+            "receipt batch {batch} was not sealed; published {published}"
+        );
         thread::sleep(Duration::from_millis(10));
     }
 }
