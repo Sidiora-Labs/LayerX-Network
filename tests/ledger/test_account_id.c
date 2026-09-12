@@ -43,6 +43,70 @@ static void decode_hex(const char *hex, uint8_t out[32])
                            nibble(hex[i * 2U + 1U]));
 }
 
+static int retired_issuance_migration(void)
+{
+    static const uint8_t hex[] = "0123456789abcdef";
+    lx_account retired = {0};
+    lx_account expected;
+    lx_account current;
+    lx_account invalid;
+    lx_account before;
+    uint8_t current_name[LX_ASSET_ISSUANCE_NAME_BYTES];
+    bool renamed = false;
+    retired.asset_id[0] = 3U;
+    retired.has_asset = true;
+    retired.kind = LX_ACCOUNT_MODULE_VALUE;
+    retired.balance.lo = 17U;
+    retired.next_sequence = 42U;
+    retired.created_at_sequence = 7U;
+    retired.frozen = true;
+    retired.has_open_reference = true;
+    retired.has_authority_key = true;
+    retired.authority_key[0] = 9U;
+    retired.name_length = 79U;
+    (void)memcpy(retired.name, "asset:", 6U);
+    for (size_t i = 0U; i < 32U; ++i) {
+        retired.name[6U + i * 2U] = hex[retired.asset_id[i] >> 4U];
+        retired.name[7U + i * 2U] = hex[retired.asset_id[i] & 15U];
+    }
+    (void)memcpy(retired.name + 70U, ":issuance", 9U);
+    if (lx_asset_issuance_name(retired.asset_id, current_name, retired.id) != LXP_OK ||
+        lx_account_validate_canonical(&retired) != LXP_OK)
+        return 1;
+    expected = retired;
+    (void)memset(expected.name, 0, sizeof(expected.name));
+    (void)memcpy(expected.name, current_name, sizeof(current_name));
+    expected.name_length = (uint16_t)sizeof(current_name);
+    current = retired;
+    if (lx_account_migrate_retired_issuance(&current, &renamed) != LXP_OK ||
+        !renamed || memcmp(&current, &expected, sizeof(current)) != 0 ||
+        lx_account_migrate_retired_issuance(&current, &renamed) != LXP_OK ||
+        renamed || memcmp(&current, &expected, sizeof(current)) != 0)
+        return 1;
+    invalid = retired;
+    invalid.asset_id[0] ^= 1U;
+    before = invalid;
+    renamed = true;
+    if (lx_account_migrate_retired_issuance(&invalid, &renamed) != LXP_ERR_ASSET_MISMATCH ||
+        renamed || memcmp(&invalid, &before, sizeof(invalid)) != 0)
+        return 1;
+    invalid = retired;
+    invalid.id[0] ^= 1U;
+    before = invalid;
+    renamed = true;
+    if (lx_account_migrate_retired_issuance(&invalid, &renamed) != LXP_ERR_ACCOUNT_ID_MISMATCH ||
+        renamed || memcmp(&invalid, &before, sizeof(invalid)) != 0)
+        return 1;
+    invalid = retired;
+    invalid.has_authority_key = false;
+    before = invalid;
+    renamed = true;
+    if (lx_account_migrate_retired_issuance(&invalid, &renamed) != LXP_ERR_NON_CANONICAL ||
+        renamed || memcmp(&invalid, &before, sizeof(invalid)) != 0)
+        return 1;
+    return 0;
+}
+
 int main(void)
 {
     lx_account_registry registry;
@@ -59,6 +123,7 @@ int main(void)
     const char *lazy = "agent:did:key:bob:budget:food";
     const char *system = "system:fees";
 
+    if (retired_issuance_migration() != 0) return 1;
     for (i = 0U; i < sizeof(vectors) / sizeof(vectors[0]); ++i) {
         lx_account_kind kind;
         decode_hex(vectors[i].identifier, expected);

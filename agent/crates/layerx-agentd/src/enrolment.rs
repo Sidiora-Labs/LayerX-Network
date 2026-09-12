@@ -430,7 +430,7 @@ pub fn enrol(
     };
     drop(issued);
     match publisher.publish(&enrolment) {
-        Ok(published) => Ok(published),
+        Ok(binding) => Ok(binding),
         Err(error) => match session::close(store, sessions, &tenant, request.session_id) {
             Ok(()) => Err(error),
             Err(_) => Err(EnrolmentError::OrphanedSession(

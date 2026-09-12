@@ -48,7 +48,7 @@ pub struct ToolDefinition {
     pub evidence: &'static str,
 }
 
-/// The one faucet tool definition every LayerX MCP surface serves.
+/// The one faucet tool definition every `LayerX` MCP surface serves.
 pub const FAUCET_REQUEST: ToolDefinition = ToolDefinition {
     name: "faucet.request",
     kind: ToolKind::Write,

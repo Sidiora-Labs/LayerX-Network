@@ -373,6 +373,11 @@ int main(void)
         (void)memcpy(asset.name, "Test asset", 10U); asset.name_length = 10U;
         asset.decimals = 6U; asset.custody_kind = LX_ASSET_CUSTODY_PAXEER;
         asset.issuer_kind = 2U; asset.issuer_did32[0] = 7U; asset.salt[0] = 9U;
+        if (lx_asset_record_encode(&asset, encoded, sizeof(encoded),
+                                    &encoded_length) != LXP_ERR_NON_CANONICAL)
+            return 1;
+        asset.custody_reference_length = 32U;
+        asset.custody_reference[31] = 7U;
         schedule.version = 2U; schedule.multiplier_basis_points = 10000U;
         schedule.asset_price_count = LXP_ASSET_FEE_PRICE_COUNT;
         for (size_t i = 0U; i < LXP_ASSET_FEE_PRICE_COUNT; ++i) schedule.asset_prices[i].lo = i + 1U;

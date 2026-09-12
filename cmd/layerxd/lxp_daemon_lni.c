@@ -1891,12 +1891,15 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                               int64_t deadline)
 {
     lxp_activity activity;
+    lxp_authority_grant grant;
+    lxp_authority_resolved authority;
     lxp_identity *identity = NULL;
     uint8_t activity_id[32];
     uint64_t timestamp;
     uint64_t expected_sequence;
     bool known = false;
     bool submitted = false;
+    bool authority_checked = false;
     lxp_result status;
     if (request->proof_length != 0U || request->payload_length == 0U ||
         request->payload_length > LXP_MAX_ACTIVITY_BYTES)
@@ -1965,11 +1968,16 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
     if (status == LXP_OK &&
         server->owner->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_governance_identity_refresh(server->owner->kernel, identity);
-    if (status == LXP_OK &&
-        (activity.authority.length != 32U ||
-         !lxp_identity_key_valid(identity, activity.authority.bytes,
-                                 timestamp, expected_sequence)))
-        status = LXP_ERR_BAD_SIGNATURE;
+    if (status == LXP_OK) {
+        authority_checked = true;
+        status = lxp_authority_resolve_activity(
+            server->owner->kernel, identity, &activity,
+            activity.authority.length == 32U &&
+                lxp_identity_key_valid(identity, activity.authority.bytes,
+                                        timestamp, expected_sequence),
+            true, timestamp, UINT64_C(300000), expected_sequence,
+            &grant, &authority);
+    }
     if (status == LXP_ERR_BAD_SIGNATURE || status == LXP_ERR_UNKNOWN_DID ||
         status == LXP_ERR_IDENTITY_FROZEN) {
         lxp_result unlock_status = pthread_mutex_unlock(
@@ -1978,6 +1986,12 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
         return authentication_refusal(
             server, descriptor, request, credential,
             status, deadline);
+    }
+    if (status != LXP_OK && authority_checked) {
+        if (pthread_mutex_unlock(&server->owner->mutex) != 0)
+            return LXP_FATAL_INVARIANT;
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 4U, status, deadline);
     }
     if (status != LXP_OK)
         goto unlock_owner;
@@ -2001,7 +2015,8 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
         else
             status = lni_principal(
                 server->owner->kernel->state->accounts, &activity,
-                activity.authority.bytes, principal_id, &fee_balance);
+                grant.kind == LXP_AUTHORITY_OWNER ? grant.key :
+                    identity->primary_key, principal_id, &fee_balance);
         if (status == LXP_OK &&
             lxp_u128_cmp(fee_balance, activity.fee_limit) < 0)
             status = LXP_ERR_FEE_UNPAYABLE;
