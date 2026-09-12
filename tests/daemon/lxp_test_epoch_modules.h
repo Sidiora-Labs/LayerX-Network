@@ -56,7 +56,7 @@ static inline void epoch_fixture_asset(lx_asset_record *asset)
 
 /* Sets the genesis module-enable flag of one gated module the way the genesis
  * builder writes it: a governance parameter keyed module-enable:<name> whose
- * last byte is 1. */
+ * last byte is the explicit enabled or disabled value. */
 static inline lxp_result epoch_fixture_enable(epoch_fixture *fixture,
                                               uint16_t module_id, bool enabled)
 {

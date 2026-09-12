@@ -124,7 +124,8 @@ int main(void)
                    LX_SERVICE_AGREEMENT_ACCEPTED);
     agreement.accepted_sequence = 7U;
     if (lx_service_agreement_put(&ctx, &agreement) != LXP_OK ||
-        lxp_module_ctx_commit(&ctx) != LXP_OK)
+        lxp_module_ctx_commit(&ctx) != LXP_OK ||
+        lxp_state_root(&fixture.kernel, fixture.kernel.current_state_root) != LXP_OK)
         return fail("seed 0x14");
     sequence = fixture.state.next_sequence;
     if (lxp_state_root(&fixture.kernel, root_before) != LXP_OK)
@@ -199,7 +200,9 @@ int main(void)
                        LX_SERVICE_AGREEMENT_DELIVERED);
         if (lx_service_agreement_put(&ctx, &agreement) != LXP_OK)
             return fail("backlog put");
-        if ((i % 32U) == 31U && lxp_module_ctx_commit(&ctx) != LXP_OK)
+        if ((i % 32U) == 31U &&
+            (lxp_module_ctx_commit(&ctx) != LXP_OK ||
+             lxp_state_root(&fixture.kernel, fixture.kernel.current_state_root) != LXP_OK))
             return fail("backlog commit");
     }
     if (lxp_state_root(&fixture.kernel, root_before) != LXP_OK)
@@ -225,7 +228,8 @@ int main(void)
                    LX_SERVICE_DEFAULT_ACCEPT, LX_SERVICE_AGREEMENT_ACCEPTED);
     agreement.accepted_sequence = fixture.state.next_sequence;
     if (lx_service_agreement_put(&ctx, &agreement) != LXP_OK ||
-        lxp_module_ctx_commit(&ctx) != LXP_OK)
+        lxp_module_ctx_commit(&ctx) != LXP_OK ||
+        lxp_state_root(&fixture.kernel, fixture.kernel.current_state_root) != LXP_OK)
         return fail("explicit acceptance");
     if (lxp_kernel_epoch_transition(&fixture.kernel, 4U, 1400U,
                                     &fixture.arena) != LXP_OK ||

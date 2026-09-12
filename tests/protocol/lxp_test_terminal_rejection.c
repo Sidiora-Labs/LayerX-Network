@@ -2,6 +2,7 @@
 #include "lxp_daemon_batch_wal.h"
 #include "layerx/lxp_daemon.h"
 #include "layerx/lxp_genesis.h"
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lx_asset.h"
 #include <unistd.h>
 #define main terminal_rejection_activity_fixture_main
@@ -538,6 +539,7 @@ static int terminal_maintenance_case(void)
     lxp_kernel_execution execution;
     lxp_kernel_prepared_batch *prepared = NULL;
     lxp_programs_occupancy_receipt sweep;
+    lxp_batch_maintenance envelope;
     lxp_batch_roots roots;
     lxp_byte_span canonical, maintenance;
     const lxp_receipt *decoded;
@@ -565,8 +567,18 @@ static int terminal_maintenance_case(void)
     CHECK(lxp_kernel_prepare_batch_maintenance(prepared, &activity, &execution) == LXP_OK);
     maintenance = lxp_kernel_prepared_batch_maintenance(prepared);
     CHECK(maintenance.bytes != NULL && maintenance.length != 0U);
+    CHECK(lxp_batch_maintenance_decode(maintenance.bytes, maintenance.length,
+                                       &envelope) == LXP_OK);
+    CHECK(envelope.protocol_version == activity.protocol_version);
+    CHECK(envelope.epoch == execution.epoch);
+    CHECK(envelope.batch_number == execution.batch_number);
+    CHECK(envelope.timestamp_ms == execution.batch_timestamp_ms);
+    CHECK(envelope.global_sequence == first_sequence + 1U);
+    CHECK(envelope.parameter_version == execution.parameter_version);
     CHECK(lxp_programs_occupancy_receipt_decode(maintenance.bytes,
-                                                maintenance.length, &sweep) == LXP_OK);
+                                                maintenance.length, &sweep) != LXP_OK);
+    CHECK(lxp_programs_occupancy_receipt_decode(envelope.occupancy.bytes,
+                                                envelope.occupancy.length, &sweep) == LXP_OK);
     decoded = lxp_kernel_prepared_batch_receipts(prepared);
     CHECK(decoded != NULL);
     CHECK(decoded[0].result_code == LXP_ERR_SEQUENCE_MISMATCH);
