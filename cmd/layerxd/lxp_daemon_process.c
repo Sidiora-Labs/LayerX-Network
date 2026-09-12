@@ -5346,8 +5346,6 @@ static lxp_result open_process(lxp_daemon_process *process,
         status = lxp_programs_fee_governance_resolve_runtime(
             &process->kernel, 0U, &fee_schedule, occupancy_asset_id);
     }
-    if (status == LXP_OK) stage = "replica recovery";
-    if (status == LXP_OK) status = replicate_authority_history(process);
     bearer = required_environment("LAYERX_NODE_PROGRAM_BEARER_TOKEN");
     if (status == LXP_OK) stage = "protocol owner";
     if (status == LXP_OK)
@@ -5360,7 +5358,12 @@ static lxp_result open_process(lxp_daemon_process *process,
             &process->owner_scratch, replay_canonical_after_snapshot,
             process, (const uint8_t *)bearer,
             bearer == NULL ? 0U : strlen(bearer));
-    if (status == LXP_OK) process->owner.protocol_version = process->protocol_version;
+    if (status == LXP_OK) {
+        process->owner.protocol_version = process->protocol_version;
+        configuration->start_sequence = process->state.next_sequence;
+        stage = "replica recovery";
+        status = replicate_authority_history(process);
+    }
     if (status == LXP_OK) stage = "evidence binding";
     if (status == LXP_OK)
         status = lxp_daemon_protocol_owner_bind_evidence(
