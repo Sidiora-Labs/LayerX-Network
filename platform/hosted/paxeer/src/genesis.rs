@@ -1,6 +1,4 @@
-use super::{
-    refusal, transport, NodeEndpoint, NodeFailure, Response, NODE_IO_TIMEOUT,
-};
+use super::{refusal, transport, NodeEndpoint, NodeFailure, Response, NODE_IO_TIMEOUT};
 use serde_json::{value::RawValue, Value};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

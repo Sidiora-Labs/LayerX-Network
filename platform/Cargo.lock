@@ -1606,6 +1606,7 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "rustls",
+ "serde",
  "serde_json",
  "zeroize",
 ]

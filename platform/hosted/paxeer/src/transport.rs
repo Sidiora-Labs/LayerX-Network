@@ -54,13 +54,18 @@ pub(super) fn request(
     let body = body.unwrap_or_default();
     write!(stream, "{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", node.address, body.len())
         .map_err(|_| NodeFailure::Unreachable)?;
-    stream.write_all(body).map_err(|_| NodeFailure::Unreachable)?;
+    stream
+        .write_all(body)
+        .map_err(|_| NodeFailure::Unreachable)?;
     stream.flush().map_err(|_| NodeFailure::Unreachable)?;
-    let mut response = read_http_message(&mut stream, maximum, true)
-        .map_err(|_| NodeFailure::Invalid)?;
-    let mut start = response.headers.get("").ok_or(NodeFailure::Invalid)?.split_whitespace();
-    if start.next() != Some("HTTP/1.1") || start.next() != Some("200")
-        || Instant::now() >= deadline
+    let mut response =
+        read_http_message(&mut stream, maximum, true).map_err(|_| NodeFailure::Invalid)?;
+    let mut start = response
+        .headers
+        .get("")
+        .ok_or(NodeFailure::Invalid)?
+        .split_whitespace();
+    if start.next() != Some("HTTP/1.1") || start.next() != Some("200") || Instant::now() >= deadline
     {
         return Err(NodeFailure::Invalid);
     }

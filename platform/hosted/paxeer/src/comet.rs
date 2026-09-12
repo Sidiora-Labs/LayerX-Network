@@ -1,4 +1,6 @@
-use super::{refusal, rpc_error, transport, NodeEndpoint, NodeFailure, Request, Response, NODE_IO_TIMEOUT};
+use super::{
+    refusal, rpc_error, transport, NodeEndpoint, NodeFailure, Request, Response, NODE_IO_TIMEOUT,
+};
 use serde::Deserialize;
 use serde_json::{value::RawValue, Value};
 use std::time::Instant;
@@ -92,12 +94,14 @@ fn validate(body: &[u8]) -> Result<Validated, Response> {
             if serde_json::from_str::<EmptyParams>(request.params.get()).is_ok() {
                 Method::Commit(None)
             } else {
-                let params: HeightParams<'_> = serde_json::from_str(request.params.get()).map_err(|_| invalid())?;
+                let params: HeightParams<'_> =
+                    serde_json::from_str(request.params.get()).map_err(|_| invalid())?;
                 Method::Commit(Some(decimal(params.height).ok_or_else(invalid)?))
             }
         }
         "validators" => {
-            let params: ValidatorParams<'_> = serde_json::from_str(request.params.get()).map_err(|_| invalid())?;
+            let params: ValidatorParams<'_> =
+                serde_json::from_str(request.params.get()).map_err(|_| invalid())?;
             let height = decimal(params.height).ok_or_else(invalid)?;
             let page = decimal(params.page).ok_or_else(invalid)?;
             if page > MAX_VALIDATOR_PAGE || params.per_page != "100" {
@@ -106,26 +110,42 @@ fn validate(body: &[u8]) -> Result<Validated, Response> {
             Method::Validators { height, page }
         }
         "abci_query" => {
-            let params: QueryParams<'_> = serde_json::from_str(request.params.get()).map_err(|_| invalid())?;
-            let height = decimal(params.height).filter(|height| *height < i64::MAX as u64).ok_or_else(invalid)?;
+            let params: QueryParams<'_> =
+                serde_json::from_str(request.params.get()).map_err(|_| invalid())?;
+            let height = decimal(params.height)
+                .filter(|height| *height < i64::MAX as u64)
+                .ok_or_else(invalid)?;
             let digits = params.data.strip_prefix("0x").ok_or_else(invalid)?;
-            if params.path != "/store/evm/key" || !params.prove || digits.is_empty()
-                || digits.len() > 256 || !digits.len().is_multiple_of(2)
-                || !digits.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            if params.path != "/store/evm/key"
+                || !params.prove
+                || digits.is_empty()
+                || digits.len() > 256
+                || !digits.len().is_multiple_of(2)
+                || !digits
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             {
                 return Err(invalid());
             }
             Method::Query(height)
         }
-        _ => return Err(rpc_error(&id, -32601, "method is not relayed by the Comet boundary")),
+        _ => {
+            return Err(rpc_error(
+                &id,
+                -32601,
+                "method is not relayed by the Comet boundary",
+            ))
+        }
     };
     let mut params: Value = serde_json::from_str(request.params.get()).map_err(|_| invalid())?;
     if matches!(method, Method::Query(_)) {
         let data = params["data"].as_str().ok_or_else(invalid)?;
         params["data"] = Value::String(data[2..].to_owned());
     }
-    let body = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": request.method, "params": params})
-        .to_string().into_bytes();
+    let body =
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": request.method, "params": params})
+            .to_string()
+            .into_bytes();
     Ok(Validated { id, method, body })
 }
 
@@ -143,8 +163,12 @@ impl From<NodeFailure> for Failure {
 
 fn reply(body: &[u8], id: &Value) -> Result<Value, Failure> {
     let envelope: RpcReply<'_> = serde_json::from_slice(body).map_err(|_| NodeFailure::Invalid)?;
-    let actual_id: Value = serde_json::from_str(envelope.id.get()).map_err(|_| NodeFailure::Invalid)?;
-    if envelope.jsonrpc != "2.0" || &actual_id != id || !(envelope.result.is_some() ^ envelope.error.is_some()) {
+    let actual_id: Value =
+        serde_json::from_str(envelope.id.get()).map_err(|_| NodeFailure::Invalid)?;
+    if envelope.jsonrpc != "2.0"
+        || &actual_id != id
+        || !(envelope.result.is_some() ^ envelope.error.is_some())
+    {
         return Err(NodeFailure::Invalid.into());
     }
     let result = envelope.result.ok_or(Failure::Unavailable)?;
@@ -156,22 +180,49 @@ fn reply(body: &[u8], id: &Value) -> Result<Value, Failure> {
 }
 
 fn commit_height(result: &Value, canonical: bool) -> Result<u64, Failure> {
-    let is_canonical = result.get("canonical").and_then(Value::as_bool).ok_or(NodeFailure::Invalid)?;
+    let is_canonical = result
+        .get("canonical")
+        .and_then(Value::as_bool)
+        .ok_or(NodeFailure::Invalid)?;
     if canonical && !is_canonical {
         return Err(Failure::Unavailable);
     }
-    let height = result.pointer("/signed_header/header/height").and_then(Value::as_str).and_then(decimal)
+    let height = result
+        .pointer("/signed_header/header/height")
+        .and_then(Value::as_str)
+        .and_then(decimal)
         .ok_or(NodeFailure::Invalid)?;
-    if result.pointer("/signed_header/commit/height").and_then(Value::as_str).and_then(decimal) != Some(height) {
+    if result
+        .pointer("/signed_header/commit/height")
+        .and_then(Value::as_str)
+        .and_then(decimal)
+        != Some(height)
+    {
         return Err(NodeFailure::Invalid.into());
     }
     Ok(height)
 }
 
-fn committed_height(node: &NodeEndpoint, id: &Value, height: Option<u64>, deadline: Instant) -> Result<u64, Failure> {
-    let params = height.map_or_else(|| serde_json::json!({}), |height| serde_json::json!({"height": height.to_string()}));
-    let body = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "commit", "params": params}).to_string();
-    let bytes = transport::request(node, "/", Some(body.as_bytes()), MAX_COMET_RESPONSE, deadline)?;
+fn committed_height(
+    node: &NodeEndpoint,
+    id: &Value,
+    height: Option<u64>,
+    deadline: Instant,
+) -> Result<u64, Failure> {
+    let params = height.map_or_else(
+        || serde_json::json!({}),
+        |height| serde_json::json!({"height": height.to_string()}),
+    );
+    let body =
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "commit", "params": params})
+            .to_string();
+    let bytes = transport::request(
+        node,
+        "/",
+        Some(body.as_bytes()),
+        MAX_COMET_RESPONSE,
+        deadline,
+    )?;
     let observed = commit_height(&reply(&bytes, id)?, height.is_some())?;
     if height.is_some_and(|height| observed != height) {
         return Err(NodeFailure::Invalid.into());
@@ -188,30 +239,66 @@ fn validate_result(method: &Method, result: &Value) -> Result<(), Failure> {
             }
         }
         Method::Validators { height, page } => {
-            let count = result.get("count").and_then(Value::as_str).and_then(decimal).ok_or(NodeFailure::Invalid)?;
-            let total = result.get("total").and_then(Value::as_str).and_then(decimal).ok_or(NodeFailure::Invalid)?;
-            let validators = result.get("validators").and_then(Value::as_array).ok_or(NodeFailure::Invalid)?;
+            let count = result
+                .get("count")
+                .and_then(Value::as_str)
+                .and_then(decimal)
+                .ok_or(NodeFailure::Invalid)?;
+            let total = result
+                .get("total")
+                .and_then(Value::as_str)
+                .and_then(decimal)
+                .ok_or(NodeFailure::Invalid)?;
+            let validators = result
+                .get("validators")
+                .and_then(Value::as_array)
+                .ok_or(NodeFailure::Invalid)?;
             let offset = (page - 1) * 100;
-            if result.get("block_height").and_then(Value::as_str).and_then(decimal) != Some(*height)
-                || total > MAX_VALIDATOR_PAGE * 100 || offset >= total
-                || count != (total - offset).min(100) || count != validators.len() as u64
+            if result
+                .get("block_height")
+                .and_then(Value::as_str)
+                .and_then(decimal)
+                != Some(*height)
+                || total > MAX_VALIDATOR_PAGE * 100
+                || offset >= total
+                || count != (total - offset).min(100)
+                || count != validators.len() as u64
             {
                 return Err(NodeFailure::Invalid.into());
             }
         }
         Method::Query(height) => {
             let query = result.get("response").ok_or(NodeFailure::Invalid)?;
-            if query.get("height").and_then(Value::as_str).and_then(decimal) != Some(*height) {
+            if query
+                .get("height")
+                .and_then(Value::as_str)
+                .and_then(decimal)
+                != Some(*height)
+            {
                 return Err(NodeFailure::Invalid.into());
             }
-            if query.get("code").is_some_and(|code| code.as_u64() != Some(0)) {
+            if query
+                .get("code")
+                .is_some_and(|code| code.as_u64() != Some(0))
+            {
                 return Err(Failure::Unavailable);
             }
-            let ops = query.pointer("/proof_ops/ops").and_then(Value::as_array).ok_or(Failure::ProofUnsupported)?;
-            if ops.len() != 2 || ops[0].get("type").and_then(Value::as_str) != Some("ics23:iavl")
+            let ops = query
+                .pointer("/proof_ops/ops")
+                .and_then(Value::as_array)
+                .ok_or(Failure::ProofUnsupported)?;
+            if ops.len() != 2
+                || ops[0].get("type").and_then(Value::as_str) != Some("ics23:iavl")
                 || ops[1].get("type").and_then(Value::as_str) != Some("ics23:simple")
-                || ops.iter().any(|op| op.get("data").and_then(Value::as_str).is_none_or(str::is_empty)
-                    || op.get("key").and_then(Value::as_str).is_none_or(str::is_empty))
+                || ops.iter().any(|op| {
+                    op.get("data")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty)
+                        || op
+                            .get("key")
+                            .and_then(Value::as_str)
+                            .is_none_or(str::is_empty)
+                })
             {
                 return Err(Failure::ProofUnsupported);
             }
@@ -245,7 +332,12 @@ pub(super) fn response(node: &NodeEndpoint, request: &Request) -> Response {
         Err(response) => return response,
     };
     match fetch(node, &validated) {
-        Ok(body) => Response { status: 200, body, retry_after: None, genesis_sha256: None },
+        Ok(body) => Response {
+            status: 200,
+            body,
+            retry_after: None,
+            genesis_sha256: None,
+        },
         Err(Failure::Node(NodeFailure::Unreachable)) => refusal(503, "comet_unavailable", Some(5)),
         Err(Failure::Node(NodeFailure::Invalid)) => refusal(502, "comet_response_invalid", Some(5)),
         Err(Failure::Unavailable) => refusal(503, "comet_evidence_unavailable", Some(5)),
@@ -269,7 +361,10 @@ mod tests {
         assert_eq!(upstream["id"], "proof");
         assert_eq!(upstream["params"]["prove"], true);
         assert!(validate(br#"{"jsonrpc":"2.0","id":7,"method":"commit","params":{}}"#).is_ok());
-        assert!(validate(br#"{"jsonrpc":"2.0","id":7,"method":"commit","params":{"height":"1"}}"#).is_ok());
+        assert!(
+            validate(br#"{"jsonrpc":"2.0","id":7,"method":"commit","params":{"height":"1"}}"#)
+                .is_ok()
+        );
         assert!(validate(br#"{"jsonrpc":"2.0","id":7,"method":"validators","params":{"height":"1","page":"1","per_page":"100"}}"#).is_ok());
     }
 
@@ -291,8 +386,16 @@ mod tests {
 
     #[test]
     fn mutable_and_unproved_queries_are_refused() {
-        for method in ["broadcast_tx_sync", "broadcast_evidence", "unsafe_flush_mempool", "abci_info", "status", "genesis"] {
-            let body = serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}).to_string();
+        for method in [
+            "broadcast_tx_sync",
+            "broadcast_evidence",
+            "unsafe_flush_mempool",
+            "abci_info",
+            "status",
+            "genesis",
+        ] {
+            let body =
+                serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}).to_string();
             assert!(validate(body.as_bytes()).is_err(), "accepted {method}");
         }
         let body = r#"{"jsonrpc":"2.0","id":1,"method":"abci_query","params":{"path":"/store/evm/key","data":"0x08ab","height":"17","prove":true}}"#;
@@ -312,7 +415,16 @@ mod tests {
 
     #[test]
     fn heights_pages_and_request_bytes_are_bounded() {
-        for height in ["0", "-1", "01", "+1", "1.0", "1e1", " 1", "9223372036854775808"] {
+        for height in [
+            "0",
+            "-1",
+            "01",
+            "+1",
+            "1.0",
+            "1e1",
+            " 1",
+            "9223372036854775808",
+        ] {
             let body = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"commit","params":{"height":height}}).to_string();
             assert!(validate(body.as_bytes()).is_err(), "accepted {height}");
         }
@@ -322,7 +434,8 @@ mod tests {
             r#"{"height":"1","page":"1","per_page":"101"}"#,
             r#"{"height":"1","height":"2","page":"1","per_page":"100"}"#,
         ] {
-            let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"validators","params":{params}}}"#);
+            let body =
+                format!(r#"{{"jsonrpc":"2.0","id":1,"method":"validators","params":{params}}}"#);
             assert!(validate(body.as_bytes()).is_err());
         }
         let body = br#"{"jsonrpc":"2.0","id":1,"method":"commit","params":{}}"#;
