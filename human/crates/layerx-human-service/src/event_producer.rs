@@ -141,43 +141,36 @@ mod tests {
             store: Arc::clone(&store),
             health: health(),
         };
-        let journal = crate::server::stream_journal::StreamJournal::new(
-            [1; 32],
-            layerx_proof::checkpoint::SettlementDomain::new(31337, [2; 20]),
-        );
         {
             let mut store = store.lock().unwrap_or_else(|error| panic!("{error}"));
             let mut scope = store
                 .principal(&principal)
                 .unwrap_or_else(|error| panic!("{error}"));
-            journal
-                .append(
-                    &mut scope,
-                    "notification:one",
-                    "notification",
-                    100,
-                    serde_json::json!({"notification":{}}),
-                )
-                .unwrap_or_else(|_| panic!("notification append"));
+            crate::server::stream_journal::StreamJournal::append(
+                &mut scope,
+                "notification:one",
+                "notification",
+                100,
+                serde_json::json!({"notification":{}}),
+            )
+            .unwrap_or_else(|_| panic!("notification append"));
             let body = serde_json::json!({"approval":{"approval_id":"approval-one","agent_id":"agent-one","state":"pending","created_at":100}});
-            journal
-                .append(
-                    &mut scope,
-                    "approval:one:pending",
-                    "approval-created",
-                    101,
-                    body.clone(),
-                )
-                .unwrap_or_else(|_| panic!("approval append"));
-            journal
-                .append(
-                    &mut scope,
-                    "approval:one:pending",
-                    "approval-created",
-                    101,
-                    body,
-                )
-                .unwrap_or_else(|_| panic!("approval retry"));
+            crate::server::stream_journal::StreamJournal::append(
+                &mut scope,
+                "approval:one:pending",
+                "approval-created",
+                101,
+                body.clone(),
+            )
+            .unwrap_or_else(|_| panic!("approval append"));
+            crate::server::stream_journal::StreamJournal::append(
+                &mut scope,
+                "approval:one:pending",
+                "approval-created",
+                101,
+                body,
+            )
+            .unwrap_or_else(|_| panic!("approval retry"));
             assert_eq!(
                 state(&scope)
                     .unwrap_or_else(|error| panic!("{error}"))

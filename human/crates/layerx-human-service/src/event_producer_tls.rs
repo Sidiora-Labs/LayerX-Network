@@ -643,11 +643,16 @@ fn event_store(
             "scope",
         );
         enqueue_journey(&mut scope);
-        let journal = crate::server::stream_journal::StreamJournal::new(
-            [1; 32],
-            layerx_proof::checkpoint::SettlementDomain::new(31337, [2; 20]),
+        required(
+            crate::server::stream_journal::StreamJournal::append(
+                &mut scope,
+                "approval:r29:pending",
+                "approval-created",
+                102,
+                json!({"approval":{"approval_id":"approval-r29", "agent_id":"agent-r29", "state":"pending", "created_at":102}}),
+            ),
+            "approval transition",
         );
-        required(journal.append(&mut scope, "approval:r29:pending", "approval-created", 102, json!({"approval":{"approval_id":"approval-r29", "agent_id":"agent-r29", "state":"pending", "created_at":102}})), "approval transition");
     }
     let health = Arc::new(Health::default());
     let outbox = Arc::new(super::HumanOutbox {
