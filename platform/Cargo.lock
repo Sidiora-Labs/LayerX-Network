@@ -1454,6 +1454,7 @@ dependencies = [
  "getrandom 0.4.3",
  "keyring",
  "keyring-core",
+ "layerx-agentd",
  "layerx-crypto",
  "layerx-mcp",
  "layerx-platform-emulator",

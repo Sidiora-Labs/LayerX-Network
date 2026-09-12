@@ -9,9 +9,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
+use layerx_agentd::budget::{LimitConfig, LimitId, LimitScope};
 use layerx_agentd::capability::{Capability, CapabilityDimensions, CapabilityId, RateCeiling};
+use layerx_agentd::enrolment::{
+    self, BindingMode, BindingPublisher, DaemonSurface, EnrolmentError, EnrolmentRequest,
+};
 use layerx_agentd::identity::{
-    register, CoreIdentity, IdentityError, IdentityResolver, ProtocolAuthority,
+    register, CoreIdentity, IdentityError, IdentityRecord, IdentityResolver, ProtocolAuthority,
 };
 use layerx_agentd::session::{open, OpenRequest, SessionId, SessionRegistry};
 use layerx_agentd::store::{Store, TenantId};
@@ -72,8 +76,8 @@ impl IdentityResolver for BoundaryIdentity {
     }
 }
 
-/// Persists one real capability and one real open session, returning its bearer token.
-fn enrol(root: &Path) -> [u8; 32] {
+/// Persists one real capability and registers one real identity carrying its grant.
+fn daemon_records(store: &mut Store) -> (Capability, IdentityRecord) {
     let tenant = TenantId::new("tenant-a").unwrap_or_else(|error| panic!("tenant: {error}"));
     let capability = Capability::new(
         CapabilityId([9; 32]),
@@ -92,11 +96,38 @@ fn enrol(root: &Path) -> [u8; 32] {
         },
     )
     .unwrap_or_else(|error| panic!("capability: {error:?}"));
+    capability
+        .persist(store)
+        .unwrap_or_else(|error| panic!("capability persist: {error:?}"));
+    let authority = ProtocolAuthority::CapabilityGrant(capability.id.0);
+    let mut boundary = BoundaryIdentity(CoreIdentity {
+        canonical_bytes: b"model-identity".to_vec(),
+        head_sequence: 10,
+        revocation_sequence: 1,
+        verification_level: VerificationLevel::STATE_PROVEN,
+        frozen: false,
+        authorities: vec![authority],
+    });
+    let identity = register(
+        store,
+        tenant,
+        Did::new(b"did:layerx:model").unwrap_or_else(|error| panic!("DID: {error:?}")),
+        &mut boundary,
+    )
+    .unwrap_or_else(|error| panic!("identity: {error:?}"));
+    (capability, identity)
+}
+
+/// Persists one real capability and one real open session, returning its bearer token.
+fn enrol(root: &Path) -> [u8; 32] {
+    let mut store =
+        Store::open(root.join("store")).unwrap_or_else(|error| panic!("store: {error}"));
+    let (capability, identity) = daemon_records(&mut store);
     let request = OpenRequest {
         session_id: SessionId([7; 32]),
         token_id: [8; 32],
-        tenant: tenant.clone(),
-        agent: Did::new(b"did:layerx:model").unwrap_or_else(|error| panic!("DID: {error:?}")),
+        tenant: identity.tenant().clone(),
+        agent: identity.did().clone(),
         authority: ProtocolAuthority::CapabilityGrant(capability.id.0),
         permitted_activity_types: BTreeSet::from([7]),
         scopes: served()
@@ -107,26 +138,6 @@ fn enrol(root: &Path) -> [u8; 32] {
         opening_client: "mcp".to_owned(),
         policy_version: "policy-v1".to_owned(),
     };
-    let mut store =
-        Store::open(root.join("store")).unwrap_or_else(|error| panic!("store: {error}"));
-    capability
-        .persist(&mut store)
-        .unwrap_or_else(|error| panic!("capability persist: {error:?}"));
-    let mut boundary = BoundaryIdentity(CoreIdentity {
-        canonical_bytes: b"model-identity".to_vec(),
-        head_sequence: 10,
-        revocation_sequence: 1,
-        verification_level: VerificationLevel::STATE_PROVEN,
-        frozen: false,
-        authorities: vec![request.authority.clone()],
-    });
-    let identity = register(
-        &mut store,
-        request.tenant.clone(),
-        request.agent.clone(),
-        &mut boundary,
-    )
-    .unwrap_or_else(|error| panic!("identity: {error:?}"));
     let mut sessions = SessionRegistry::default();
     let credential = open(&mut store, &mut sessions, &identity, request, 50)
         .unwrap_or_else(|error| panic!("session: {error:?}"))
@@ -733,6 +744,150 @@ fn the_protocol_socket_refuses_every_unprotected_endpoint_and_serves_an_admitted
             .map(Vec::len),
         Some(21)
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+fn mode_of(path: &Path) -> u32 {
+    fs::symlink_metadata(path)
+        .unwrap_or_else(|error| panic!("metadata {}: {error}", path.display()))
+        .mode()
+        & 0o777
+}
+
+#[test]
+fn daemon_enrolment_writes_the_binding_the_served_path_opens() {
+    let root = directory("enrolment");
+    let bearer = "d".repeat(48);
+    let endpoint = agent_daemon(bearer.clone());
+    let mut store =
+        Store::open(root.join("store")).unwrap_or_else(|error| panic!("store: {error}"));
+    let (capability, identity) = daemon_records(&mut store);
+    let surface = DaemonSurface::new(&endpoint, bearer.clone(), [0xcc; 32])
+        .unwrap_or_else(|error| panic!("surface: {error}"));
+    let publisher = BindingPublisher::new(
+        root.join("mcp"),
+        root.join("store"),
+        root.join("audit"),
+        surface,
+        LimitConfig {
+            id: LimitId([0x0a; 16]),
+            name: "mcp".to_owned(),
+            scope: LimitScope::Tenant([1; 32]),
+            ceiling: 1_000,
+            consumed: 0,
+        },
+        Duration::from_millis(5_000),
+        BindingMode::Full,
+    )
+    .unwrap_or_else(|error| panic!("publisher: {error}"));
+    let mut sessions = SessionRegistry::default();
+    let request = EnrolmentRequest {
+        session_id: SessionId([0x0c; 32]),
+        capability_id: capability.id,
+        permitted_activity_types: BTreeSet::from([7]),
+        scopes: served()
+            .iter()
+            .map(|tool| tool.required_scope.to_owned())
+            .collect(),
+        expiry_sequence: 300,
+        opening_client: "mcp".to_owned(),
+        policy_version: "policy-v1".to_owned(),
+        core_sequence: 50,
+    };
+    let published = enrolment::enrol(
+        &mut store,
+        &mut sessions,
+        &identity,
+        request.clone(),
+        &publisher,
+    )
+    .unwrap_or_else(|error| panic!("enrol: {error}"));
+    assert!(published.created);
+    assert_eq!(published.binding, root.join("mcp").join("binding.json"));
+    assert_eq!(published.session_id, SessionId([0x0c; 32]));
+    assert_eq!(mode_of(&root.join("mcp")), 0o700);
+    assert_eq!(mode_of(&published.binding), 0o600);
+    assert_eq!(mode_of(&published.session_token_file), 0o600);
+    assert_eq!(mode_of(&published.daemon_bearer_file), 0o600);
+    let body = fs::read_to_string(&published.binding)
+        .unwrap_or_else(|error| panic!("binding body: {error}"));
+    assert!(!body.contains(&bearer));
+    let written: Value =
+        serde_json::from_str(&body).unwrap_or_else(|error| panic!("binding json: {error}"));
+    assert_eq!(
+        written
+            .pointer("/session_token_file")
+            .and_then(Value::as_str),
+        published.session_token_file.to_str()
+    );
+    assert_eq!(
+        written
+            .pointer("/agent/bearer_file")
+            .and_then(Value::as_str),
+        published.daemon_bearer_file.to_str()
+    );
+    assert_eq!(
+        written.pointer("/session_id").and_then(Value::as_str),
+        Some("0c".repeat(32).as_str())
+    );
+
+    let repeated = enrolment::enrol(
+        &mut store,
+        &mut sessions,
+        &identity,
+        request.clone(),
+        &publisher,
+    );
+    assert!(matches!(repeated, Err(EnrolmentError::Session(_))));
+    let other = EnrolmentRequest {
+        session_id: SessionId([0x0d; 32]),
+        ..request
+    };
+    let displaced = enrolment::enrol(&mut store, &mut sessions, &identity, other, &publisher);
+    assert!(
+        matches!(displaced, Err(EnrolmentError::AlreadyPublished(ref path)) if *path == published.binding)
+    );
+    assert_eq!(
+        sessions
+            .get(identity.tenant(), SessionId([0x0d; 32]))
+            .map(|record| record.open),
+        Some(false)
+    );
+    assert_eq!(
+        fs::read_to_string(&published.binding)
+            .unwrap_or_else(|error| panic!("binding body: {error}")),
+        body
+    );
+    drop(store);
+
+    let binding =
+        Binding::open(&published.binding).unwrap_or_else(|error| panic!("open: {error:?}"));
+    assert_eq!(binding.mode(), DeploymentMode::Full);
+    assert_eq!(binding.tenant(), "tenant-a");
+    assert_eq!(binding.store(), root.join("store").as_path());
+    assert_eq!(binding.session_generation(), published.session_generation);
+    assert_eq!(binding.agent_endpoint(), endpoint);
+    let mut session = binding
+        .open_session()
+        .unwrap_or_else(|error| panic!("open session: {}", error.detail()));
+    let program = "cc".repeat(32);
+    let responses = exchange(
+        &mut session,
+        &[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "balance.get", "arguments": {"program": program}},
+            }),
+        ],
+    );
+    assert_eq!(responses.len(), 3);
+    assert_daemon_handshake(&responses[0], &responses[1]);
+    assert_daemon_read(&responses[2], &program);
     let _ = fs::remove_dir_all(root);
 }
 
