@@ -3366,7 +3366,7 @@ $(BUILD_DIR)/tests/lxp_test_metered_allowance: tests/daemon/lxp_test_metered_all
 
 .PHONY: test-daemon-metered-allowance
 test-daemon-metered-allowance: $(BUILD_DIR)/tests/lxp_test_metered_allowance $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
-	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py --metered-allowance
+	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR) --metered-allowance
 
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
