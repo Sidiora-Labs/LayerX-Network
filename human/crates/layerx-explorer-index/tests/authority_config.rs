@@ -54,8 +54,8 @@ fn refusal(ca: Option<&Path>, expected: &str) -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn missing_unreadable_empty_oversized_and_malformed_ca_refuse_startup(
-) -> Result<(), Box<dyn Error>> {
+fn missing_unreadable_empty_oversized_and_malformed_ca_refuse_startup() -> Result<(), Box<dyn Error>>
+{
     let directory = Directory::create()?;
     refusal(None, "LAYERX_EXPLORER_AUTHORITY_CA_DER is required")?;
     refusal(
