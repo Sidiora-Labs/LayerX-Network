@@ -109,9 +109,6 @@ func (m Migrator) Migrate5To6(ctx sdk.Context) error {
 		bz := m.keeper.cdc.MustMarshal(&newVotePenaltyCounter)
 		store.Set(iter.Key(), bz)
 	}
-	if err := iter.Error(); err != nil {
-		return err
-	}
 	err := iter.Close()
 	closed = true
 	if err != nil {
