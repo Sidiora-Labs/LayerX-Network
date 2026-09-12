@@ -592,18 +592,32 @@ differ from replica address/port
 
 ## Mounted paths and env
 
-Sequencer container (`platform/hosted/node/deployment.yaml:32-76`):
+Sequencer container `layerxd` (`platform/hosted/node/deployment.yaml:151-158`):
 
 | Path | Source |
 | --- | --- |
 | `/var/lib/layerx` | PVC `data` (50Gi) |
 | `/run/layerx` | emptyDir Memory 16Mi |
 | `/run/layerx/keys/sequencer.key` | Secret `layerx-node-keys` (`layerxd` container only) |
-| `/run/layerx/treasury/treasury.key` | Secret `layerx-node-keys` (`treasury-signer` container only; the `core-boundary` container mounts no treasury material and signs over `/run/layerx/node/treasury-signer.sock` from `LAYERX_CORE_TREASURY_SIGNER_SOCKET` in `core.env`) |
 | `/run/layerx/genesis/metadata.lxgb` | ConfigMap `layerx-node-genesis-metadata` key `metadata.lxgb`, `subPath` mount |
 | `/run/layerx/tokens/program-token` | Secret `layerx-node-tokens` |
 | `/run/layerx/tokens/replica-token` | Secret `layerx-node-tokens` |
 | `/run/layerx/settlement/settlement.env` | ConfigMap `layerx-node-settlement` |
+
+Treasury signer container `treasury-signer`
+(`platform/hosted/node/deployment.yaml:179-181`):
+
+| Path | Source |
+| --- | --- |
+| `/run/layerx` | emptyDir Memory 16Mi, shared with `layerxd`; carries the signer socket `/run/layerx/node/treasury-signer.sock` |
+| `/run/layerx/treasury/treasury.key` | Secret `layerx-node-keys` key `treasury.key` through volume `treasury-material`, read-only (`platform/hosted/node/deployment.yaml:805`) |
+
+That is the pod's only mount of treasury key material. The
+`core-boundary` container mounts none and signs over
+`/run/layerx/node/treasury-signer.sock`, which it takes from
+`LAYERX_CORE_TREASURY_SIGNER_SOCKET` in `core.env`
+(`platform/hosted/node/deployment.yaml:282`;
+`platform/hosted/core/src/main.rs:259-261`).
 
 Env from ConfigMap `layerx-node-config`:
 `LAYERX_NODE_NETWORK_ID`, `LAYERX_NODE_ASSET_ID`,

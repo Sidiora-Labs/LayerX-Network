@@ -2004,6 +2004,26 @@ fn core_takes_the_treasury_identity_from_the_signer_socket() {
         matches!(outage, Err(SendError::Signer(_))),
         "a stopped signer is reported as a signer failure: {outage:?}"
     );
+    assert_eq!(
+        boundary.core.get("/livez").status,
+        200,
+        "the core outlives its treasury signer"
+    );
+    assert_eq!(
+        boundary.admin.get("/livez").status,
+        200,
+        "the admin plane outlives its treasury signer"
+    );
+    let (orphan_did, orphan_key) = recipient();
+    assert_refusal(
+        &boundary.admin_post(
+            "/admin/v1/testnet/fund",
+            "fund-signer-down",
+            &funding_body(&orphan_did, &orphan_key, 25),
+        ),
+        422,
+        "node_unavailable",
+    );
     drop(boundary);
     drop(cluster);
 }

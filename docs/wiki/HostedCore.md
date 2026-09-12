@@ -46,7 +46,7 @@ The hosted testnet treats core as dependency `Core` and the admin listener as `C
 | `LAYERX_CORE_REPLICA_URL` | Parsed by the same `parse_node_url` as the node URL; the error strings in that function name `LAYERX_CORE_NODE_URL` (`platform/hosted/core/src/main.rs:225-245, 298`) |
 | `LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE` | Bearer secret for replica HTTP (`platform/hosted/core/src/main.rs:299`) |
 | `LAYERX_CORE_ADMIN_TOKEN_FILE` | Admin `Authorization: Bearer` secret (`platform/hosted/core/src/main.rs:300`) |
-| `LAYERX_CORE_TREASURY_KEY_FILE` | 32-byte hex Ed25519 seed (`platform/hosted/core/src/main.rs:259-260`) |
+| `LAYERX_CORE_TREASURY_SIGNER_SOCKET` | Absolute unix socket of the treasury signer; connected at startup, the treasury public key and DID come from its `public-key` answer and startup fails before either listener opens when it is unset or unreachable (`platform/hosted/core/src/main.rs:259-261`, `platform/hosted/core/src/main.rs:302`, `platform/hosted/core/src/custody.rs`) |
 | `LAYERX_CORE_TREASURY_ASSET` | Non-zero 32-byte hex asset id (`platform/hosted/core/src/main.rs:261-267`) |
 | `LAYERX_CORE_SEQUENCER_ID` | 32-byte hex sequencer id (`platform/hosted/core/src/main.rs:268-271`) |
 | `LAYERX_CORE_SUPERVISOR_SOCKET` | Unix socket for admin reset (`platform/hosted/core/src/main.rs:305`) |
@@ -54,7 +54,7 @@ The hosted testnet treats core as dependency `Core` and the admin listener as `C
 | `LAYERX_CORE_FEE_LIMIT` | SEND fee limit; default `1000` (`platform/hosted/core/src/main.rs:307`) |
 | `LAYERX_CORE_RECEIPT_DEADLINE_MS` | Receipt poll deadline; default `15000` (`platform/hosted/core/src/main.rs:308-311`) |
 
-Secret files are read, trailing CR/LF stripped, and refused when empty or longer than 4096 bytes (`platform/hosted/core/src/main.rs:152-162`). Node and replica URLs must be plaintext `http://` on `127.0.0.1` or `localhost` with a port and no path (`platform/hosted/core/src/main.rs:225-245`).
+Secret files are read, trailing CR/LF stripped, and refused when empty or longer than 4096 bytes (`platform/hosted/core/src/main.rs:152-162`). The treasury seed is not one of them: the core reads no treasury key material at all and asks the signer socket for every signature, bounding each reply at 4096 bytes and verifying the answer under the public key the socket announced at connect (`platform/hosted/core/src/custody.rs:25`, `platform/hosted/core/src/custody.rs:127-165`, `platform/hosted/core/src/custody.rs:218-243`). Node and replica URLs must be plaintext `http://` on `127.0.0.1` or `localhost` with a port and no path (`platform/hosted/core/src/main.rs:225-245`).
 
 ---
 
@@ -304,6 +304,7 @@ Core-plane refusals keep the status in this table. Admin-plane rows that start a
 | `reset_failed` | 503 then 422 | 30 | (`platform/hosted/core/src/main.rs:1635-1637`) |
 | `treasury_unavailable` | 503 then 422 | 60 | (`platform/hosted/core/src/main.rs:1436-1437`) |
 | `treasury_identity_unavailable` | 503 then 422 | 5 | preparation snapshot for the treasury identity sequence (`platform/hosted/core/src/main.rs:1733-1738`) |
+| `treasury_signer_unavailable` | 503 then 422 | 5 | treasury signer refused, answered out of contract or was unreachable while signing the funding SEND (`platform/hosted/core/src/main.rs:1670-1681`, `platform/hosted/core/src/main.rs:1772`) |
 | `invalid_asset_symbol` | 502 | never | committed asset record with a symbol outside 1..=16 ASCII bytes (`platform/hosted/core/src/public_reads.rs:62-73`) |
 
 ---

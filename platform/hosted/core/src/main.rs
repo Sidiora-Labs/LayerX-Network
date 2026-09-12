@@ -1667,6 +1667,19 @@ fn send_idempotency(key: &str) -> [u8; 32] {
     digest.finalize().into()
 }
 
+fn send_refusal(error: SendError) -> Response {
+    match error {
+        SendError::Signer(reason) => {
+            eprintln!("layerx-core-boundary: treasury signer: {reason}");
+            refusal(503, "treasury_signer_unavailable", Some(5))
+        }
+        SendError::Invalid(reason) => {
+            eprintln!("layerx-core-boundary: send construction: {reason}");
+            refusal(422, "send_unbuildable", None)
+        }
+    }
+}
+
 fn treasury_sequence(config: &Config, client: &mut Client, amount: u128) -> Result<u64, Response> {
     let treasury = main_account(&config.treasury_did)
         .map_err(|_| refusal(503, "treasury_unavailable", Some(60)))?;
@@ -1756,16 +1769,7 @@ fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Res
             fee_limit: config.fee_limit,
         },
     )
-    .map_err(|error| match error {
-        SendError::Signer(reason) => {
-            eprintln!("layerx-core-boundary: treasury signer: {reason}");
-            refusal(503, "treasury_signer_unavailable", Some(5))
-        }
-        SendError::Invalid(reason) => {
-            eprintln!("layerx-core-boundary: send construction: {reason}");
-            refusal(422, "send_unbuildable", None)
-        }
-    })?;
+    .map_err(send_refusal)?;
     let (registry, _) =
         asset_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
     let submission = client
@@ -2343,5 +2347,53 @@ mod journal_tests {
         assert_eq!(migrated.status, 200);
         assert_eq!(migrated.body, "migrated");
         fs::remove_file(&path).unwrap_or_else(|error| panic!("remove journal: {error}"));
+    }
+}
+
+#[cfg(test)]
+mod fund_refusal_tests {
+    use super::{admin_result, send_refusal, Response};
+    use layerx_platform_core::SendError;
+
+    fn code(response: &Response) -> String {
+        let document: serde_json::Value = serde_json::from_str(&response.body)
+            .unwrap_or_else(|error| panic!("refusal body {}: {error}", response.body));
+        document["error"]["code"]
+            .as_str()
+            .unwrap_or_else(|| panic!("refusal body {}", response.body))
+            .to_owned()
+    }
+
+    #[test]
+    fn a_treasury_signer_outage_is_a_retryable_refusal_the_admin_plane_delivers_as_422() {
+        let refused = send_refusal(SendError::Signer(
+            "treasury signer socket /run/layerx/node/treasury-signer.sock is not available"
+                .to_owned(),
+        ));
+        assert_eq!(refused.status, 503);
+        assert_eq!(refused.retry_after, Some(5));
+        assert_eq!(code(&refused), "treasury_signer_unavailable");
+        let delivered = admin_result(refused);
+        assert_eq!(
+            delivered.status, 422,
+            "every admin 5xx is delivered as 422: {}",
+            delivered.body
+        );
+        assert_eq!(delivered.retry_after, Some(5));
+        assert_eq!(code(&delivered), "treasury_signer_unavailable");
+    }
+
+    #[test]
+    fn an_unbuildable_send_is_a_terminal_refusal_on_both_planes() {
+        let refused = send_refusal(SendError::Invalid(
+            "amount exceeds the fee limit".to_owned(),
+        ));
+        assert_eq!(refused.status, 422);
+        assert_eq!(refused.retry_after, None);
+        assert_eq!(code(&refused), "send_unbuildable");
+        let delivered = admin_result(refused);
+        assert_eq!(delivered.status, 422);
+        assert_eq!(delivered.retry_after, None);
+        assert_eq!(code(&delivered), "send_unbuildable");
     }
 }
