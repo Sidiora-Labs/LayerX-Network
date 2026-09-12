@@ -988,3 +988,44 @@ fn hex(bytes: &[u8]) -> String {
     }
     text
 }
+
+#[test]
+fn repeated_start_repairs_initial_progress_after_restart() {
+    use layerx_human_service::store::Table;
+    let fixture = Fixture::new("initial-progress-repair");
+    let plan = fixture.plan();
+    let mut store = fixture.store();
+    let mut scope = store
+        .principal(&fixture.principal)
+        .unwrap_or_else(|error| panic!("scope: {error}"));
+    let original = JourneyEngine::start(&mut scope, &plan, &registry(), 100)
+        .unwrap_or_else(|error| panic!("start: {error}"));
+    let id = JourneyId::new("jrn_crashjourney").unwrap_or_else(|error| panic!("id: {error}"));
+    let expected =
+        JourneyEngine::stream_events(&scope, &id).unwrap_or_else(|error| panic!("events: {error}"));
+    assert_eq!(expected.len(), 1);
+    for key in scope.keys(Table::Journeys) {
+        if key.as_str().starts_with("jstream-") || key.as_str().starts_with("jnotify-") {
+            assert!(scope
+                .remove(Table::Journeys, &key)
+                .unwrap_or_else(|error| panic!("remove progress: {error}")));
+        }
+    }
+    drop(scope);
+    drop(store);
+    let mut store = fixture.store();
+    let mut scope = store
+        .principal(&fixture.principal)
+        .unwrap_or_else(|error| panic!("reopen scope: {error}"));
+    let repeated = JourneyEngine::start(&mut scope, &plan, &registry(), 200)
+        .unwrap_or_else(|error| panic!("retry: {error}"));
+    assert_eq!(repeated.status().ok(), original.status().ok());
+    assert_eq!(
+        JourneyEngine::stream_events(&scope, &id).ok(),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        JourneyEngine::notification_events(&scope, &id).ok(),
+        Some(expected)
+    );
+}
