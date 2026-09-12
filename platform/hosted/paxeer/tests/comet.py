@@ -3,7 +3,7 @@ import json
 import time
 
 
-def qualify(raw_request, comet_port):
+def qualify(raw_request, comet_port, evidence_path):
     def payload(method, params, identifier='comet-proof'):
         return json.dumps(dict(jsonrpc='2.0', id=identifier, method=method, params=params))
 
@@ -43,14 +43,16 @@ def qualify(raw_request, comet_port):
     assert body == upstream('validators', params)
     key = '0885fcd13735f4309833a503ee804ea32395851479'
     params = dict(path='/store/evm/key', data='0x' + key, height=height, prove=True)
+    expected = upstream('abci_query', params | {'data': key})
+    evidence_path.write_bytes(expected)
     status, reply, body = query('abci_query', params)
     assert status == 200, reply
     response = reply['result']['response']
     assert response['height'] == height and response.get('code', 0) == 0, reply
     assert response['value'], reply
-    assert [op['type'] for op in response['proof_ops']['ops']] == ['ics23:iavl', 'ics23:simple'], reply
-    assert all(op['data'] and op['key'] for op in response['proof_ops']['ops']), reply
-    assert body == upstream('abci_query', params | {'data': key})
+    assert [op['type'] for op in response['proofOps']['ops']] == ['ics23:iavl', 'ics23:simple'], reply
+    assert all(op['data'] and op['key'] for op in response['proofOps']['ops']), reply
+    assert body == expected
     future = str(2**63 - 2)
     status, reply, _ = query('abci_query', params | {'height': future})
     assert status == 503 and reply['error']['code'] == 'comet_evidence_unavailable', reply

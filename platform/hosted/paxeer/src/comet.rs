@@ -303,7 +303,7 @@ fn validate_result(method: &Method, result: &Value) -> Result<(), Failure> {
                 return Err(Failure::Unavailable);
             }
             let ops = query
-                .pointer("/proof_ops/ops")
+                .pointer("/proofOps/ops")
                 .and_then(Value::as_array)
                 .ok_or(Failure::ProofUnsupported)?;
             if ops.len() != 2
