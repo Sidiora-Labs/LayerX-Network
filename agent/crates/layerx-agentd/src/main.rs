@@ -317,9 +317,9 @@ fn publish_mcp_binding(
         .map_err(|error| format!("the agent sessions are unrestorable: {error:?}"))?;
     let session_id = configured.request.session_id;
     if sessions.get(&tenant_id, session_id).is_some() {
-        let published = enrolment::published_session(&publisher.binding_path())
+        let bound_session = enrolment::published_session(&publisher.binding_path())
             .map_err(|error| format!("the published MCP binding is unusable: {error}"))?;
-        if published == Some(session_id) {
+        if bound_session == Some(session_id) {
             return Ok(());
         }
         return Err(
