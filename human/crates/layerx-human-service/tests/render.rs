@@ -89,7 +89,31 @@ fn nonzero_key(mut key: [u8; 32]) -> [u8; 32] {
 }
 
 fn send_intent(recipient_marker: u64, amount: u128, asset: [u8; 32], key: [u8; 32]) -> Intent {
+    let signer = layerx_crypto::local::LocalSigner::new([0x31; 32]);
     let key = nonzero_key(key);
+    let debit = layerx_crypto::send::SendDebit {
+        from: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:approval-render:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("source account: {error:?}")),
+        to: layerx_wire::hash::account_id_for_protocol(
+            &recipient(recipient_marker),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("destination account: {error:?}")),
+        asset,
+        amount,
+        source_sequence: ACCOUNT_SEQUENCE,
+        idempotency_key: key,
+        expires_at: 900,
+        context_hash: [0x55; 32],
+        conditions: Vec::new(),
+        authorization_kind: SendAuthorizationKind::Owner as u8,
+        network_id: NETWORK_ID,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+    };
+
     let send = LxpSend::new(
         owner(),
         recipient(recipient_marker),
@@ -99,10 +123,14 @@ fn send_intent(recipient_marker: u64, amount: u128, asset: [u8; 32], key: [u8; 3
         IdempotencyKey::new(key),
         TimestampSeconds::from_u64(900),
         ContextHash::new([0x55; 32]),
-        SendAuthorization::new(
-            SendAuthorizationKind::Owner,
-            PublicKey::new([0x31; 32]),
-            AuthorizationSignature::new([0x41; 64]),
+        support::sign_send(
+            &signer,
+            &debit,
+            SendAuthorization::new(
+                SendAuthorizationKind::Owner,
+                PublicKey::new([0x31; 32]),
+                AuthorizationSignature::new([0x41; 64]),
+            ),
         ),
         NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
         ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)

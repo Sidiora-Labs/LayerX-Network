@@ -526,7 +526,7 @@ fn withdrawal_receipt(
 ) -> ReceiptMaterial {
     let fields = ReceiptFields {
         activity_id,
-        batch_id: support::execution_batch_id([0x41; 32], activity_id, 1),
+        batch_id: support::committed_execution_batch_id([0x41; 32], [0x81; 32], 1),
         key,
         from,
         to,
