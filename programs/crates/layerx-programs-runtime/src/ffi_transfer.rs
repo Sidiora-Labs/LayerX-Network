@@ -66,7 +66,10 @@ impl Drop for ActiveProgramSpendGuard {
     fn drop(&mut self) {
         ACTIVE_PROGRAM_SPEND.with(|active| {
             let mut active = active.borrow_mut();
-            if active.as_ref().is_some_and(|batch| batch.token == self.token) {
+            if active
+                .as_ref()
+                .is_some_and(|batch| batch.token == self.token)
+            {
                 *active = None;
             }
         });
