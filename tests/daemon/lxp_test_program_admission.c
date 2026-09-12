@@ -692,7 +692,11 @@ static int availability_batches(int *descriptor, const signer *key)
             release_envelope(&response);
             { struct timespec pause = {0, 10000000L}; (void)nanosleep(&pause, NULL); }
         }
+        if (!found)
+            (void)fprintf(stderr, "availability receipt missing for account sequence %llu\n",
+                          (unsigned long long)sequence);
         REQUIRE(found);
+        REQUIRE(maintenance_head(descriptor, sequence * 2U + 2U, sequence + 1U) == 0);
     }
     REQUIRE(maintenance_head(descriptor, 18U, 9U) == 0);
     return 0;
