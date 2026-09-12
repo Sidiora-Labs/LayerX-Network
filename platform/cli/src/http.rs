@@ -271,9 +271,11 @@ fn system_roots(endpoint: &str) -> Result<ureq::tls::RootCerts, String> {
         if loaded.certs.is_empty() || !loaded.errors.is_empty() {
             return Err("system TLS trust roots are unavailable or invalid".into());
         }
-        certificates.extend(loaded.certs.iter().map(|certificate| {
-            ureq::tls::Certificate::from_der(certificate.as_ref()).to_owned()
-        }));
+        certificates.extend(
+            loaded.certs.iter().map(|certificate| {
+                ureq::tls::Certificate::from_der(certificate.as_ref()).to_owned()
+            }),
+        );
     }
     Ok(ureq::tls::RootCerts::new_with_certs(&certificates))
 }

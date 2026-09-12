@@ -218,7 +218,10 @@ impl EmulatorProgramSimulationTransport {
     /// Refuses unavailable or invalid system trust roots for HTTPS.
     pub fn connect(endpoint: &str) -> Result<Self, ProgramOperationError> {
         let config = ureq::Agent::config_builder()
-            .tls_config(crate::outbound_tls::system(endpoint).ok_or(ProgramOperationError::InvalidRequest)?)
+            .tls_config(
+                crate::outbound_tls::system(endpoint)
+                    .ok_or(ProgramOperationError::InvalidRequest)?,
+            )
             .http_status_as_error(false)
             .build();
         Ok(Self {

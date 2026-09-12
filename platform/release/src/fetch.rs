@@ -48,9 +48,11 @@ fn agent() -> Result<ureq::Agent, String> {
     if loaded.certs.is_empty() || !loaded.errors.is_empty() {
         return Err("system TLS trust roots are unavailable or invalid".into());
     }
-    let certificates = loaded.certs.iter().map(|certificate| {
-        ureq::tls::Certificate::from_der(certificate.as_ref()).to_owned()
-    }).collect::<Vec<_>>();
+    let certificates = loaded
+        .certs
+        .iter()
+        .map(|certificate| ureq::tls::Certificate::from_der(certificate.as_ref()).to_owned())
+        .collect::<Vec<_>>();
     Ok(ureq::Agent::config_builder()
         .tls_config(
             ureq::tls::TlsConfig::builder()

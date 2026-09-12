@@ -68,7 +68,18 @@ fn certificates(directory: &Path) {
             "/CN=unrelated-root",
         ],
     );
-    openssl(directory, &["x509", "-in", "other-cert.pem", "-outform", "DER", "-out", "other-cert.der"]);
+    openssl(
+        directory,
+        &[
+            "x509",
+            "-in",
+            "other-cert.pem",
+            "-outform",
+            "DER",
+            "-out",
+            "other-cert.der",
+        ],
+    );
     openssl(
         directory,
         &[
@@ -171,8 +182,10 @@ pub fn qualify(test_name: &str, probe: impl Fn(&str) -> Result<Vec<u8>, String>)
     let empty_roots = directory.join("empty-roots");
     fs::create_dir(&empty_roots).unwrap_or_else(|error| panic!("empty root directory: {error}"));
     certificates(&directory);
-    fs::write(directory.join("empty-cert.pem"), []).unwrap_or_else(|error| panic!("empty trust fixture: {error}"));
-    fs::write(directory.join("empty-cert.der"), []).unwrap_or_else(|error| panic!("empty DER fixture: {error}"));
+    fs::write(directory.join("empty-cert.pem"), [])
+        .unwrap_or_else(|error| panic!("empty trust fixture: {error}"));
+    fs::write(directory.join("empty-cert.der"), [])
+        .unwrap_or_else(|error| panic!("empty DER fixture: {error}"));
     let (_boundary, port) = start(&directory);
     for (case, host, roots) in [
         ("trusted", "localhost", "cert.pem"),
@@ -186,8 +199,11 @@ pub fn qualify(test_name: &str, probe: impl Fn(&str) -> Result<Vec<u8>, String>)
         )
         .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
         .env("LAYERX_TLS_QUAL_ENDPOINT", format!("https://{host}:{port}"))
-            .env("LAYERX_TLS_QUAL_EXPECT", case)
-            .env("LAYERX_TLS_QUAL_CA_DER", directory.join(roots).with_extension("der"))
+        .env("LAYERX_TLS_QUAL_EXPECT", case)
+        .env(
+            "LAYERX_TLS_QUAL_CA_DER",
+            directory.join(roots).with_extension("der"),
+        )
         .env("SSL_CERT_FILE", directory.join(roots))
         .env("SSL_CERT_DIR", &empty_roots)
         .output()

@@ -32,22 +32,44 @@ mod tls_boundary;
 
 #[test]
 fn rpc_system_tls_checks_the_actual_server_identity() {
-    tls_boundary::qualify("rpc::rpc_system_tls_checks_the_actual_server_identity", |endpoint| {
-        let client = RpcClient::connect(endpoint, None).map_err(|error| format!("{error:?}"))?;
-        client.agent.get(format!("{endpoint}/livez")).call()
-            .map_err(|error| error.to_string())?.body_mut().read_to_vec().map_err(|error| error.to_string())
-    });
+    tls_boundary::qualify(
+        "rpc::rpc_system_tls_checks_the_actual_server_identity",
+        |endpoint| {
+            let client =
+                RpcClient::connect(endpoint, None).map_err(|error| format!("{error:?}"))?;
+            client
+                .agent
+                .get(format!("{endpoint}/livez"))
+                .call()
+                .map_err(|error| error.to_string())?
+                .body_mut()
+                .read_to_vec()
+                .map_err(|error| error.to_string())
+        },
+    );
 }
 
 #[test]
 fn rpc_private_ca_tls_checks_the_actual_server_identity() {
-    tls_boundary::qualify("rpc::rpc_private_ca_tls_checks_the_actual_server_identity", |endpoint| {
-        let ca = std::fs::read(std::env::var("LAYERX_TLS_QUAL_CA_DER").map_err(|error| error.to_string())?)
+    tls_boundary::qualify(
+        "rpc::rpc_private_ca_tls_checks_the_actual_server_identity",
+        |endpoint| {
+            let ca = std::fs::read(
+                std::env::var("LAYERX_TLS_QUAL_CA_DER").map_err(|error| error.to_string())?,
+            )
             .map_err(|error| error.to_string())?;
-        let client = RpcClient::connect_with_ca_der(endpoint, None, &ca).map_err(|error| format!("{error:?}"))?;
-        client.agent.get(format!("{endpoint}/livez")).call()
-            .map_err(|error| error.to_string())?.body_mut().read_to_vec().map_err(|error| error.to_string())
-    });
+            let client = RpcClient::connect_with_ca_der(endpoint, None, &ca)
+                .map_err(|error| format!("{error:?}"))?;
+            client
+                .agent
+                .get(format!("{endpoint}/livez"))
+                .call()
+                .map_err(|error| error.to_string())?
+                .body_mut()
+                .read_to_vec()
+                .map_err(|error| error.to_string())
+        },
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
