@@ -22,6 +22,24 @@ static const uint8_t metered_asset[32] = {
     0x46,0x39,0x0d,0xe0,0xfc,0x62,0x77,0x0f,0xc1,0x97,0xdd,0x87,0xb1,0x8c,0xd8,0x98
 };
 static const uint8_t metered_program[32] = {0x49U};
+static const char *metered_state_path;
+
+static int metered_simulation_evidence(const wire_envelope *response)
+{
+    char path[4096];
+    const char *suffixes[] = {"simulation-payload", "simulation-proof"};
+    const uint8_t *bytes[] = {response->payload, response->proof};
+    const size_t lengths[] = {response->payload_length, response->proof_length};
+    for (size_t i = 0U; i < 2U; ++i) {
+        int length = snprintf(path, sizeof(path), "%s.%s", metered_state_path,
+                              suffixes[i]);
+        REQUIRE(length > 0 && (size_t)length < sizeof(path));
+        FILE *output = fopen(path, "wbx");
+        REQUIRE(output != NULL && fwrite(bytes[i], 1U, lengths[i], output) == lengths[i] &&
+                fflush(output) == 0 && fsync(fileno(output)) == 0 && fclose(output) == 0);
+    }
+    return 0;
+}
 
 static int metered_identity(signer *owner)
 {
@@ -371,16 +389,21 @@ static int metered_simulate(int descriptor, const signer *delegate, metered_run 
     REQUIRE(receive_envelope(descriptor, &response) == 0);
     REQUIRE(response.tag == 31U && response.correlation_id == 611U);
     REQUIRE(response.payload_length >= 46U && response.proof_length == 242U);
+    REQUIRE(metered_simulation_evidence(&response) == 0);
     REQUIRE(load_u16(response.payload) == 1U && load_u16(response.proof) == 1U);
     REQUIRE(memcmp(response.payload + 2U, id, 32U) == 0 && memcmp(response.proof + 34U, id, 32U) == 0);
     uint32_t receipt_length = load_u32(response.payload + 34U);
     REQUIRE(receipt_length <= response.payload_length - 46U);
     REQUIRE(lxp_receipt_decode(response.payload + 38U, receipt_length, true, &receipt) == LXP_OK);
-    REQUIRE(receipt.result_code == LXP_OK && receipt.program_outcome.present &&
-            receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS);
     REQUIRE(signer_init(&sequencer, 0x22U) == 0);
     REQUIRE(lxp_arena_init(&receipt_arena, receipt_storage, sizeof(receipt_storage)) == LXP_OK);
     REQUIRE(lxp_receipt_verify(&receipt, sequencer.public_key, &receipt_arena) == LXP_OK);
+    if (receipt.result_code != LXP_OK)
+        (void)fprintf(stderr, "metered simulation receipt result=%d terminal=%u outcome=%d\n",
+                      receipt.result_code, (unsigned)receipt.program_outcome.terminal_kind,
+                      receipt.program_outcome.result_code);
+    REQUIRE(receipt.result_code == LXP_OK && receipt.program_outcome.present &&
+            receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS);
     REQUIRE(metered_transfer(&receipt, LXP_OK) == 0);
     REQUIRE(memcmp(receipt.activity_id, id, 32U) == 0);
     size_t cursor = 38U + receipt_length;
@@ -516,6 +539,7 @@ int main(int argc, char **argv)
     signer owner;
     FILE *state;
     REQUIRE(argc == 4 && strlen(argv[1]) < sizeof(address.sun_path));
+    metered_state_path = argv[3];
     bool recovered = strcmp(argv[2], "--metered-allowance-recovered") == 0;
     REQUIRE(recovered || strcmp(argv[2], "--metered-allowance") == 0);
     REQUIRE(metered_identity(&owner) == 0);
