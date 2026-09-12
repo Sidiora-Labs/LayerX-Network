@@ -5,7 +5,13 @@ use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        encoded.push(char::from(DIGITS[usize::from(byte & 15)]));
+    }
+    encoded
 }
 
 fn registration() -> Result<(String, String), String> {
