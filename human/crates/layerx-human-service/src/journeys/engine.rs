@@ -1230,7 +1230,13 @@ impl JourneyEngine {
                 transition.observed_at,
                 &bytes,
             )?;
-            put_stream_progress(scope, &progress, transition.observed_at)?;
+            put_stream_progress(
+                scope,
+                &progress,
+                self.record.kind,
+                self.record.legs.len(),
+                transition.observed_at,
+            )?;
         }
         Ok(())
     }
@@ -1493,6 +1499,8 @@ fn put_exact(
 fn put_stream_progress(
     scope: &mut PrincipalScope<'_>,
     progress: &JourneyProgress,
+    kind: JourneyKind,
+    legs: usize,
     now: u64,
 ) -> Result<(), JourneyError> {
     let source = format!("journey:{}:{}", progress.journey_id(), progress.sequence());
@@ -1518,23 +1526,58 @@ fn put_stream_progress(
     let event = serde_json::json!({"sequence":sequence,"source":source,"kind":"journey-progress","observed_at":now,"payload":{}});
     let event_bytes = serde_json::to_vec(&event)
         .map_err(|_| JourneyError::Corrupt("stream event cannot be encoded"))?;
-    scope.put(
-        Table::Stream,
-        RowKey::new(format!("stream-event-{sequence:016x}"))?,
+    let state = match progress.phase() {
+        JourneyPhase::Compiled | JourneyPhase::Preparing | JourneyPhase::Prepared => {
+            "getting-ready"
+        }
+        JourneyPhase::Signed => "sending",
+        JourneyPhase::StillChecking => "still-checking",
+        JourneyPhase::ReceiptVerified if progress.leg() + 1 == legs => "done",
+        JourneyPhase::Submitted | JourneyPhase::ReceiptVerified => "processing",
+        JourneyPhase::Refused => "refused",
+    };
+    let kind =
+        serde_json::to_value(kind).map_err(|_| JourneyError::Corrupt("journey kind encoding"))?;
+    let kind = kind
+        .as_str()
+        .ok_or(JourneyError::Corrupt("journey kind encoding"))?;
+    let observation = layerx_platform_internal::producer::Observation {
+        kind: "journey".to_owned(),
+        id: String::new(),
+        principal: Some(scope.principal().as_str().to_owned()),
+        principal_digest: None,
+        resource: progress.journey_id().to_owned(),
+        sequence: 0,
+        source_sequence: sequence,
+        occurred_at: now,
+        facts: [
+            ("kind", kind.to_owned()),
+            ("state", state.to_owned()),
+            ("updated_at", now.to_string()),
+        ]
+        .into_iter()
+        .map(|(name, value)| layerx_platform_internal::events::Fact {
+            name: name.to_owned(),
+            value,
+        })
+        .collect(),
+        activity_id: None,
+        amount: None,
+        asset: None,
+    };
+    let outbox = crate::event_producer::enqueue_row(scope, &source, observation)?;
+    scope.put_batch(
         now,
-        event_bytes,
-    )?;
-    scope.put(
-        Table::Stream,
-        source_key,
-        now,
-        sequence.to_be_bytes().to_vec(),
-    )?;
-    scope.put(
-        Table::Stream,
-        head_key,
-        now,
-        sequence.to_be_bytes().to_vec(),
+        vec![
+            (
+                Table::Stream,
+                RowKey::new(format!("stream-event-{sequence:016x}"))?,
+                event_bytes,
+            ),
+            (Table::Stream, source_key, sequence.to_be_bytes().to_vec()),
+            (Table::Stream, head_key, sequence.to_be_bytes().to_vec()),
+            outbox,
+        ],
     )?;
     Ok(())
 }

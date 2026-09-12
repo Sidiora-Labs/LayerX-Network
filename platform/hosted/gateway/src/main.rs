@@ -63,7 +63,7 @@ struct Config {
     faucet: Option<rpc_faucet::Faucet>,
     registry: Endpoint,
     registry_token: Zeroizing<String>,
-    store: RedisStore,
+    store: Arc<RedisStore>,
     sequencer_authorization: layerx_proof::inclusion::SequencerAuthorization,
     key_provisioning_key: Zeroizing<[u8; 32]>,
     network_id: String,
@@ -604,7 +604,7 @@ fn config() -> Result<Config, String> {
                 .map_err(|_| "gateway program registry URL is required")?,
         )?,
         registry_token: read_secret("LAYERX_GATEWAY_PROGRAM_REGISTRY_TOKEN_FILE")?,
-        store: RedisStore::new(
+        store: Arc::new(RedisStore::new(
             RedisEndpoint::parse(
                 &env::var("LAYERX_GATEWAY_REDIS_URL")
                     .map_err(|_| "gateway Redis URL is required")?,
@@ -612,7 +612,7 @@ fn config() -> Result<Config, String> {
             ca,
             read_secret("LAYERX_GATEWAY_REDIS_USERNAME_FILE")?,
             read_secret("LAYERX_GATEWAY_REDIS_PASSWORD_FILE")?,
-        ),
+        )),
         sequencer_authorization,
         key_provisioning_key,
         network_id: protocol.network_id,
@@ -2148,7 +2148,7 @@ fn complete_activity(
     let persist_started = Instant::now();
     if config
         .store
-        .complete(Completion {
+        .complete_verified(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.request_digest,
             state: "completed",
@@ -2526,6 +2526,28 @@ fn program_registry_ready(config: &Config) -> bool {
         && status["service"].as_str() == Some("program-registry")
 }
 
+fn principal_route(config: &Config, request: &IncomingRequest, trace_id: &str) -> OutgoingResponse {
+    request
+        .headers
+        .get("authorization")
+        .ok_or(AccessError::Unauthenticated)
+        .and_then(|authorization| {
+            layerx_platform_gateway::gateway_principal(&config.store, authorization)
+        })
+        .map_or_else(
+            |error| match error {
+                AccessError::Unauthenticated => response(401, "api_key_required", None),
+                AccessError::PersistenceUnavailable => {
+                    response(503, "persistence_unavailable", Some(5))
+                }
+            },
+            |mut value| {
+                value["trace"] = serde_json::Value::String(trace_id.to_owned());
+                json_response(200, &value)
+            },
+        )
+}
+
 fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     let program_request = programs_request_path(&request.method, &request.path);
     let trace_id = trace(request);
@@ -2543,19 +2565,7 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         return result;
     }
     if request.method == "GET" && request.path == "/internal/v1/principal" {
-        return authenticate_key(config, request).map_or_else(
-            |refused| refused,
-            |record| {
-                json_response(
-                    200,
-                    &serde_json::json!({
-                        "ok": true,
-                        "result": { "principal_digest": record.principal_digest },
-                        "trace": trace_id,
-                    }),
-                )
-            },
-        );
+        return principal_route(config, request, &trace_id);
     }
     if request.method == "GET" && request.path == "/livez" {
         return json_response(
@@ -2568,7 +2578,17 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         );
     }
     if request.method == "GET" && request.path == "/readyz" {
+        if !config.store.producer_health.ready() {
+            return response(503, "event_producer_unavailable", Some(5));
+        }
         return gateway_readiness(config);
+    }
+    if request.method == "GET" && request.path == "/metrics" {
+        let (failures, overflow) = config.store.producer_health.metrics();
+        return json_response(
+            200,
+            &serde_json::json!({"event_producer_failures": failures, "event_producer_overflow": overflow}),
+        );
     }
     if request.method == "GET" && request.path == "/v1/status" {
         return gateway_status(config);
@@ -2676,6 +2696,10 @@ fn serve(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
 
 fn run() -> Result<(), String> {
     let config = Arc::new(config()?);
+    layerx_platform_internal::producer::Client::from_environment(&["payment"])?.spawn(
+        Arc::downgrade(&config.store),
+        Arc::clone(&config.store.producer_health),
+    )?;
     let listener = TcpListener::bind(config.listen).map_err(|error| error.to_string())?;
     for incoming in listener.incoming() {
         let tcp = incoming.map_err(|error| error.to_string())?;
@@ -3427,7 +3451,7 @@ fn complete_activity_refusal(
     );
     if config
         .store
-        .complete(Completion {
+        .complete_verified(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.request_digest,
             state: "refused_409",

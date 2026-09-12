@@ -13,7 +13,7 @@ use crate::secret::{
 };
 use crate::tls::Upstream;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Journey,
     Approval,
@@ -32,6 +32,15 @@ impl Kind {
             "payments" => Ok(Self::Payment),
             "programs" => Ok(Self::Program),
             _ => Err("invalid source kind".to_owned()),
+        }
+    }
+    #[must_use]
+    pub const fn singular(self) -> &'static str {
+        match self {
+            Self::Journey => "journey",
+            Self::Approval => "approval",
+            Self::Payment => "payment",
+            Self::Program => "program",
         }
     }
     fn route(self, resource: &str) -> String {
@@ -58,14 +67,14 @@ impl Kind {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Fact {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Record {
     pub id: String,
@@ -82,21 +91,62 @@ pub struct Record {
     pub asset: Option<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Stored {
+    Producer { record: Record, observation: String },
+    Legacy(Record),
+}
+
+pub struct ProducerCredential {
+    pub token: Zeroizing<String>,
+    pub allow_principal_digest: bool,
+}
+
 struct Store {
     journal: Journal,
     records: BTreeMap<String, Record>,
     sequences: BTreeMap<(String, String), u64>,
+    observations: BTreeMap<String, Vec<u8>>,
 }
 impl Store {
     fn open(directory: &Path) -> Result<Self, String> {
         let mut records = Vec::new();
-        let journal = Journal::open::<Record>(directory, |record| records.push(record))?;
+        let journal = Journal::open::<Stored>(directory, |record| records.push(record))?;
         let mut store = Self {
             journal,
             records: BTreeMap::new(),
             sequences: BTreeMap::new(),
+            observations: BTreeMap::new(),
         };
-        for record in records {
+        for stored in records {
+            let record = match stored {
+                Stored::Legacy(record) => record,
+                Stored::Producer {
+                    record,
+                    observation,
+                } => {
+                    let decoded: crate::producer::Observation = serde_json::from_str(&observation)
+                        .map_err(|_| "invalid producer journal observation".to_owned())?;
+                    decoded.validate()?;
+                    if decoded.record(record.principal.clone()) != record
+                        || decoded
+                            .principal
+                            .as_ref()
+                            .is_some_and(|principal| principal != &record.principal)
+                        || decoded
+                            .principal_digest
+                            .as_ref()
+                            .is_some_and(|digest| principal_digest(&record.principal) != *digest)
+                    {
+                        return Err("producer journal observation mismatch".to_owned());
+                    }
+                    store
+                        .observations
+                        .insert(record.id.clone(), observation.into_bytes());
+                    record
+                }
+            };
             if !valid_hex(&record.id, 32)
                 || !valid_principal(&record.principal)
                 || !valid_identifier(&record.subject, 128)
@@ -125,6 +175,31 @@ impl Store {
         );
         self.records.insert(record.id.clone(), record);
     }
+    fn append_produced(&mut self, record: Record, body: &[u8]) -> Result<Record, u16> {
+        if let Some(previous) = self.records.get(&record.id) {
+            return if self
+                .observations
+                .get(&record.id)
+                .is_some_and(|bytes| bytes == body)
+            {
+                Ok(previous.clone())
+            } else {
+                Err(409)
+            };
+        }
+        if record.subject_sequence != self.next(&record).map_err(|_| 503_u16)? {
+            return Err(409);
+        }
+        self.journal
+            .append(&Stored::Producer {
+                record: record.clone(),
+                observation: std::str::from_utf8(body).map_err(|_| 400_u16)?.to_owned(),
+            })
+            .map_err(|_| 503_u16)?;
+        self.observations.insert(record.id.clone(), body.to_vec());
+        self.index(record.clone());
+        Ok(record)
+    }
     fn append(&mut self, mut record: Record) -> Result<Record, String> {
         if let Some(previous) = self.records.get(&record.id) {
             return Ok(previous.clone());
@@ -141,6 +216,7 @@ pub struct Service {
     upstream: Upstream,
     credentials: BTreeMap<String, Zeroizing<String>>,
     token: Zeroizing<String>,
+    producers: Vec<ProducerCredential>,
     store: Mutex<Store>,
 }
 
@@ -175,9 +251,67 @@ impl Service {
             upstream,
             credentials,
             token,
+            producers: Vec::new(),
             store: Mutex::new(Store::open(directory)?),
         })
     }
+    /// # Errors
+    /// Refuses duplicate credentials and digest authority outside the payment source.
+    pub fn with_producers(mut self, producers: Vec<ProducerCredential>) -> Result<Self, String> {
+        if producers.len() > 3
+            || producers.iter().enumerate().any(|(index, credential)| {
+                credential.token.is_empty()
+                    || credential.token.as_str() == self.token.as_str()
+                    || (credential.allow_principal_digest
+                        && !matches!(self.kind, Kind::Payment | Kind::Program))
+                    || producers[..index]
+                        .iter()
+                        .any(|other| other.token == credential.token)
+            })
+        {
+            return Err("invalid producer credentials".to_owned());
+        }
+        self.producers = producers;
+        Ok(self)
+    }
+
+    fn observe_produced(
+        &self,
+        body: &[u8],
+        credential: &ProducerCredential,
+    ) -> Result<Record, u16> {
+        let observation: crate::producer::Observation =
+            serde_json::from_slice(body).map_err(|_| 400_u16)?;
+        observation.validate().map_err(|_| 400_u16)?;
+        if body.len() > crate::producer::MAX_OBSERVATION_BYTES {
+            return Err(400);
+        }
+        if observation.kind != self.kind.singular() {
+            return Err(403);
+        }
+        let principal = match (&observation.principal, &observation.principal_digest) {
+            (Some(principal), None) => principal.clone(),
+            (None, Some(digest)) if credential.allow_principal_digest => {
+                let mut matches = self
+                    .credentials
+                    .keys()
+                    .filter(|principal| principal_digest(principal) == *digest);
+                let principal = matches.next().ok_or(403_u16)?.clone();
+                if matches.next().is_some() {
+                    return Err(403);
+                }
+                principal
+            }
+            _ => return Err(403),
+        };
+        self.bind(&principal).map_err(|_| 403_u16)?;
+        let record = observation.record(principal);
+        self.store
+            .lock()
+            .map_err(|_| 503_u16)?
+            .append_produced(record, body)
+    }
+
     fn fetch(&self, principal: &str, path: &str) -> Result<Value, String> {
         let credential = self
             .credentials
@@ -249,6 +383,26 @@ impl Service {
                 if ready { 200 } else { 503 },
                 &serde_json::json!({"ready":ready}),
             );
+        }
+        if request.method == "POST"
+            && request.path == "/internal/v1/observe"
+            && request.json_body()
+            && request.peer_verified
+        {
+            if let Some(credential) = self
+                .producers
+                .iter()
+                .find(|credential| request.bearer_matches(&credential.token))
+            {
+                return self
+                    .observe_produced(&request.body, credential)
+                    .map_or_else(
+                        |status| {
+                            refusal(status, "observation_refused", (status == 503).then_some(5))
+                        },
+                        |record| json(200, &record),
+                    );
+            }
         }
         if !request.peer_verified || !request.bearer_matches(&self.token) {
             return refusal(401, "unauthorized", None);
@@ -363,6 +517,83 @@ fn derive(kind: Kind, principal: &str, resource: &str, snapshot: &Value) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn producer_observation(sequence: u64) -> crate::producer::Observation {
+        crate::producer::Observation {
+            kind: "journey".to_owned(),
+            id: crate::producer::event_id("journey", "journey-one", sequence),
+            principal: Some("principal-one".to_owned()),
+            principal_digest: None,
+            resource: "journey-one".to_owned(),
+            sequence,
+            source_sequence: 17,
+            occurred_at: 123,
+            facts: vec![Fact {
+                name: "state".to_owned(),
+                value: "processing".to_owned(),
+            }],
+            activity_id: None,
+            amount: None,
+            asset: None,
+        }
+    }
+
+    #[test]
+    fn producer_retries_require_identical_bytes_after_restart() {
+        let directory =
+            std::env::temp_dir().join(format!("layerx-produced-events-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let first = producer_observation(1);
+        let bytes = first.encode().unwrap_or_else(|error| panic!("{error}"));
+        let record = first.record("principal-one".to_owned());
+        let mut store = Store::open(&directory).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            store.append_produced(record.clone(), &bytes),
+            Ok(record.clone())
+        );
+        assert_eq!(
+            store.append_produced(record.clone(), &bytes),
+            Ok(record.clone())
+        );
+        assert_eq!(store.journal.len(), 1);
+        let mut changed = record.clone();
+        changed.facts[0].value = "refused".to_owned();
+        let mut changed_body = first.clone();
+        changed_body.facts[0].value = "refused".to_owned();
+        assert_eq!(
+            store.append_produced(
+                changed,
+                &changed_body
+                    .encode()
+                    .unwrap_or_else(|error| panic!("{error}"))
+            ),
+            Err(409)
+        );
+        let spaced = serde_json::to_vec_pretty(&first).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(store.append_produced(record.clone(), &spaced), Err(409));
+        let third = producer_observation(3);
+        assert_eq!(
+            store.append_produced(
+                third.record("principal-one".to_owned()),
+                &third.encode().unwrap_or_else(|error| panic!("{error}"))
+            ),
+            Err(409)
+        );
+        drop(store);
+        let mut store = Store::open(&directory).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(store.append_produced(record.clone(), &bytes), Ok(record));
+        assert_eq!(store.journal.len(), 1);
+        let second = producer_observation(2);
+        assert!(store
+            .append_produced(
+                second.record("principal-one".to_owned()),
+                &second.encode().unwrap_or_else(|error| panic!("{error}"))
+            )
+            .is_ok());
+        assert_eq!(store.journal.len(), 2);
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap_or_else(|error| panic!("{error}"));
+    }
+
     #[test]
     fn source_credentials_cannot_be_reassigned_to_a_foreign_principal() {
         let human = serde_json::json!({"active":true,"sub":"principal-one"});

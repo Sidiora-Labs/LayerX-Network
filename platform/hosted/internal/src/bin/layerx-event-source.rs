@@ -6,6 +6,37 @@ use std::process::ExitCode;
 
 use layerx_platform_internal::{events, http, secret, tls};
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProducerFile {
+    token_file: String,
+    allow_principal_digest: bool,
+}
+
+fn producers() -> Result<Vec<events::ProducerCredential>, String> {
+    let Ok(path) = std::env::var("LAYERX_EVENTS_PRODUCERS_FILE") else {
+        return Ok(Vec::new());
+    };
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| file.take(16_385).read_to_end(&mut bytes))
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > 16_384 {
+        return Err("producer configuration exceeds bound".to_owned());
+    }
+    let entries: Vec<ProducerFile> =
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    entries
+        .into_iter()
+        .map(|entry| {
+            Ok(events::ProducerCredential {
+                token: secret::read_secret_file(Path::new(&entry.token_file))?,
+                allow_principal_digest: entry.allow_principal_digest,
+            })
+        })
+        .collect()
+}
+
 fn run() -> Result<(), String> {
     let prefix = "LAYERX_EVENTS";
     let listen = secret::required_env("LAYERX_EVENTS_LISTEN")?
@@ -37,7 +68,8 @@ fn run() -> Result<(), String> {
         credentials,
         secret::read_token("LAYERX_EVENTS_TOKEN_FILE")?,
         Path::new(&state),
-    )?;
+    )?
+    .with_producers(producers()?)?;
     http::serve(
         "layerx-event-source",
         listen,

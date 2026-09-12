@@ -19,6 +19,7 @@ version = "0.1.0"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+layerx-platform-internal = { path = "../platform/hosted/internal" }
 base64 = "=0.22.1"
 getrandom = "=0.3.4"
 layerx-agent-api = { path = "../agent/crates/layerx-agent-api" }

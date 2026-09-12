@@ -169,6 +169,7 @@ spec:
             - {name: LAYERX_EVENTS_KIND, value: "journeys"}
             - {name: LAYERX_EVENTS_UPSTREAM_URL, value: "https://layerx-human.layerx-testnet.svc:9443"}
             - {name: LAYERX_EVENTS_UPSTREAM_CA_DER, value: "/run/layerx/upstream-ca.der"}
+            - {name: LAYERX_EVENTS_PRODUCERS_FILE, value: "/run/layerx/producers.json"}
             - {name: LAYERX_EVENTS_CREDENTIALS_FILE, value: "/run/layerx/credentials.json"}
           ports: [{name: https, containerPort: 9443}]
           readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, timeoutSeconds: 30, periodSeconds: 10}
@@ -241,6 +242,7 @@ spec:
             - {name: LAYERX_EVENTS_KIND, value: "payments"}
             - {name: LAYERX_EVENTS_UPSTREAM_URL, value: "https://layerx-gateway.layerx-testnet.svc"}
             - {name: LAYERX_EVENTS_UPSTREAM_CA_DER, value: "/run/layerx/upstream-ca.der"}
+            - {name: LAYERX_EVENTS_PRODUCERS_FILE, value: "/run/layerx/producers.json"}
             - {name: LAYERX_EVENTS_CREDENTIALS_FILE, value: "/run/layerx/credentials.json"}
           ports: [{name: https, containerPort: 9443}]
           readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, timeoutSeconds: 30, periodSeconds: 10}
@@ -313,6 +315,7 @@ spec:
             - {name: LAYERX_EVENTS_KIND, value: "approvals"}
             - {name: LAYERX_EVENTS_UPSTREAM_URL, value: "https://layerx-human.layerx-testnet.svc:9443"}
             - {name: LAYERX_EVENTS_UPSTREAM_CA_DER, value: "/run/layerx/upstream-ca.der"}
+            - {name: LAYERX_EVENTS_PRODUCERS_FILE, value: "/run/layerx/producers.json"}
             - {name: LAYERX_EVENTS_CREDENTIALS_FILE, value: "/run/layerx/credentials.json"}
           ports: [{name: https, containerPort: 9443}]
           readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, timeoutSeconds: 30, periodSeconds: 10}
@@ -385,6 +388,7 @@ spec:
             - {name: LAYERX_EVENTS_KIND, value: "programs"}
             - {name: LAYERX_EVENTS_UPSTREAM_URL, value: "https://layerx-gateway.layerx-testnet.svc"}
             - {name: LAYERX_EVENTS_UPSTREAM_CA_DER, value: "/run/layerx/upstream-ca.der"}
+            - {name: LAYERX_EVENTS_PRODUCERS_FILE, value: "/run/layerx/producers.json"}
             - {name: LAYERX_EVENTS_CREDENTIALS_FILE, value: "/run/layerx/credentials.json"}
           ports: [{name: https, containerPort: 9443}]
           readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, timeoutSeconds: 30, periodSeconds: 10}
@@ -455,3 +459,51 @@ apiVersion: v1
 kind: Service
 metadata: {name: authority, namespace: layerx-internal}
 spec: {type: ExternalName, externalName: internal-authority.layerx-testnet.svc.cluster.local, ports: [{name: https, port: 443}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: payment-producer, namespace: layerx-internal}
+spec:
+  podSelector: {matchLabels: {app: layerx-internal-payments}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-gateway}}
+      ports: [{protocol: TCP, port: 9443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: program-producer, namespace: layerx-internal}
+spec:
+  podSelector: {matchLabels: {app: layerx-internal-programs}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-program-registry}}
+      ports: [{protocol: TCP, port: 9443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: journey-producer, namespace: layerx-internal}
+spec:
+  podSelector: {matchLabels: {app: layerx-internal-journeys}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-node}}
+      ports: [{protocol: TCP, port: 9443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: approval-producer, namespace: layerx-internal}
+spec:
+  podSelector: {matchLabels: {app: layerx-internal-approvals}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-node}}
+      ports: [{protocol: TCP, port: 9443}]

@@ -95,6 +95,7 @@ pub enum Table {
     Telemetry,
     Cache,
     Stream,
+    EventOutbox,
 }
 
 impl Table {
@@ -106,6 +107,7 @@ impl Table {
             Self::Telemetry => 4,
             Self::Cache => 5,
             Self::Stream => 7,
+            Self::EventOutbox => 8,
         }
     }
 
@@ -117,6 +119,7 @@ impl Table {
             4 => Ok(Self::Telemetry),
             5 => Ok(Self::Cache),
             7 => Ok(Self::Stream),
+            8 => Ok(Self::EventOutbox),
             _ => Err(StoreError::Corrupt("unknown table code")),
         }
     }
@@ -567,6 +570,34 @@ impl PrincipalScope<'_> {
                     }
                 }
             }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// # Errors
+    /// Refuses duplicate or pinned rows and rolls back a failed durable batch.
+    pub fn put_batch(
+        &mut self,
+        written_at: u64,
+        rows: Vec<(Table, RowKey, Vec<u8>)>,
+    ) -> Result<(), StoreError> {
+        let mut keys = BTreeSet::new();
+        if rows.iter().any(|(table, key, _)| {
+            !keys.insert((*table, key.clone())) || self.state.pinned(*table, key)
+        }) {
+            return Err(StoreError::EvidencePinned);
+        }
+        let previous = self.state.clone();
+        for (table, key, bytes) in rows {
+            self.state
+                .tables
+                .entry(table)
+                .or_default()
+                .insert(key, Row { written_at, bytes });
+        }
+        if let Err(error) = self.persist() {
+            self.state = previous;
             return Err(error);
         }
         Ok(())

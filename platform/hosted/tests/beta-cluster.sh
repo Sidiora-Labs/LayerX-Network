@@ -440,6 +440,8 @@ ca_generate() {
     issue_cert guarantor-2 layerx-guarantor-2 serverAuth,clientAuth "DNS:localhost,IP:127.0.0.1"
     issue_client_identity gateway-client layerx-gateway
     issue_client_identity developer-client layerx-developer
+    issue_client_identity registry-event-client layerx-registry-events
+    issue_client_identity human-event-client layerx-human-events
     if [ -n "${LAYERX_BETA_SEQUENCER_KEY_FILE:-}" ]; then
         [ -r "$LAYERX_BETA_SEQUENCER_KEY_FILE" ] || fail "LAYERX_BETA_SEQUENCER_KEY_FILE=$LAYERX_BETA_SEQUENCER_KEY_FILE is not readable"
         (umask 077; cp "$LAYERX_BETA_SEQUENCER_KEY_FILE" "$CA_DIR/sequencer.key")
@@ -537,6 +539,11 @@ secrets_generate() {
     write_token "$d/registry-request.token"
     write_token "$d/registry-publication.token"
     write_token "$d/registry-authority.token"
+    write_token "$d/registry-identity.token"
+    local producer
+    for producer in gateway registry human; do
+        write_token "$d/$producer-event-producer.token"
+    done
     write_token "$d/provisioning.key"
     write_token "$d/cursor.key"
     printf 'layerx-faucet' > "$d/faucet-redis.username"
@@ -571,6 +578,7 @@ secrets_generate() {
     mkdir -p "$d/identity-tokens"
     chmod 0700 "$d/identity-tokens"
     cp "$d/gateway-identity.token" "$d/identity-tokens/gateway"
+    cp "$d/registry-identity.token" "$d/identity-tokens/registry"
     cp "$d/developer-identity.token" "$d/identity-tokens/webhooks"
     cp "$d/identity-client.token" "$d/identity-tokens/faucet"
     local service
@@ -766,16 +774,36 @@ secrets_apply() {
     apply_secret "$INTERNAL_NAMESPACE" layerx-internal-kms-runtime \
         --from-file=server.der="$c/internal-kms/cert.der" --from-file=server-key.der="$c/internal-kms/key.der" \
         --from-file=ca.der="$c/ca.der" --from-file=token="$s/developer-kms.token" --from-file=seal-secret="$s/internal-kms-seal.key"
+    local producer client
+    local -a identity_material
+    for producer in gateway registry human; do
+        client="$producer-event-client"
+        if [ "$producer" = gateway ]; then client=gateway-client; fi
+        identity_material=()
+        if [ "$producer" = registry ]; then identity_material+=(--from-file=identity-token="$s/registry-identity.token"); fi
+        apply_secret "$ns" "layerx-$producer-event-producer" \
+            --from-file=ca.der="$c/ca.der" --from-file=client.p12="$c/$client/client.p12" \
+            --from-file=password="$c/$client/password" --from-file=token="$s/$producer-event-producer.token" \
+            --from-file=webhook-token="$s/developer-source-trigger.token" \
+            "${identity_material[@]}"
+    done
     local service token
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then
         printf '{}\n' > "$s/human-credentials.json"
     fi
     for service in journeys payments approvals programs; do
         token=${service%s}
+        producer=human
+        if [ "$service" = payments ]; then producer=gateway; fi
+        if [ "$service" = programs ]; then producer=registry; fi
+        local allow_digest=false
+        if [ "$producer" != human ]; then allow_digest=true; fi
+        (umask 077; printf '[{"token_file":"/run/layerx/producer-token","allow_principal_digest":%s}]\n' "$allow_digest" > "$s/$service-producers.json")
         apply_secret "$INTERNAL_NAMESPACE" "layerx-internal-$service-runtime" \
             --from-file=server.der="$c/internal-$service/cert.der" --from-file=server-key.der="$c/internal-$service/key.der" \
             --from-file=ca.der="$c/ca.der" --from-file=upstream-ca.der="$c/ca.der" --from-file=token="$s/developer-$token.token" \
-            --from-file=credentials.json="$s/human-credentials.json"
+            --from-file=credentials.json="$s/human-credentials.json" \
+            --from-file=producers.json="$s/$service-producers.json" --from-file=producer-token="$s/$producer-event-producer.token"
     done
     MISSING_INPUTS+=("Authenticated Human principal cookies for journeys/approvals require the passkey assertion and session.open ceremony; credential maps remain empty")
     apply_secret "$ns" layerx-human-tls --from-file=server.crt.der="$c/human/cert.der" \
@@ -1475,7 +1503,7 @@ identity_provision() {
 }
 
 internal_principals_provision() {
-    local service scope status dir="$WORK_DIR/internal-principals"
+    local service scope status producer dir="$WORK_DIR/internal-principals"
     mkdir -p "$dir"
     chmod 0700 "$dir"
     for service in payments programs; do
@@ -1491,8 +1519,21 @@ internal_principals_provision() {
         [ "$status" = 201 ] || [ "$status" = 200 ] || fail "gateway refused $service principal key with status $status"
         (umask 077; jq -er '.key | select(.authorization_scheme == "LayerX-Key") | .id + ":" + .secret' \
             "$dir/$service-response.json" > "$dir/$service.credential")
+        if [ "$service" = programs ]; then
+            (umask 077; jq -n --arg sub "$TEST_SOURCE_DID" '{sub: $sub, revoked: false}' > "$dir/publication-binding.json")
+            status=$(curl --silent --show-error --max-time 30 --cacert "$CA_DIR/ca.crt" \
+                --header "Authorization: Bearer $(cat "$SECRETS_DIR/identity-tokens/provisioning")" \
+                --header "LayerX-Key: $(cat "$dir/$service.credential")" --header 'Content-Type: application/json' \
+                --data-binary "@$dir/publication-binding.json" --output "$dir/publication-binding.response.json" \
+                --write-out '%{http_code}' "$IDENTITY_URL/v1/publication-keys")
+            [ "$status" = 200 ] || fail "identity refused program publication key binding with status $status"
+        fi
         (umask 077; jq -n --arg sub "$TEST_SOURCE_DID" '{($sub): "/run/layerx/principal.credential"}' > "$dir/credentials.json")
+        producer=gateway
+        if [ "$service" = programs ]; then producer=registry; fi
         apply_secret "$INTERNAL_NAMESPACE" "layerx-internal-$service-runtime" \
+            --from-file=producers.json="$SECRETS_DIR/$service-producers.json" \
+            --from-file=producer-token="$SECRETS_DIR/$producer-event-producer.token" \
             --from-file=server.der="$CA_DIR/internal-$service/cert.der" --from-file=server-key.der="$CA_DIR/internal-$service/key.der" \
             --from-file=ca.der="$CA_DIR/ca.der" --from-file=upstream-ca.der="$CA_DIR/ca.der" \
             --from-file=token="$SECRETS_DIR/developer-${service%s}.token" \

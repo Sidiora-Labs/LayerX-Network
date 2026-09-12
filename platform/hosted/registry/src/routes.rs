@@ -64,6 +64,7 @@ struct Completed {
 /// and never answers a read from its own projection alone.
 pub struct Registrar {
     registry: Registry,
+    event_outbox: crate::event_producer::ProgramOutbox,
     journal: FileDeploymentJournal,
     deployment_lni_socket: Option<std::path::PathBuf>,
     program_state: FileProgramStateJournal,
@@ -131,6 +132,7 @@ impl Registrar {
         .map_err(|error| format!("sequencer trust history is unavailable: {error}"))?;
         let mut registrar = Self {
             registry: Registry::new(),
+            event_outbox: crate::event_producer::ProgramOutbox::new(&config.journal),
             journal: FileDeploymentJournal::open(config.journal.clone())?,
             deployment_lni_socket: config.deployment_lni_socket.clone(),
             program_state: FileProgramStateJournal::open(config.journal.join("program-state"))?,
@@ -271,7 +273,12 @@ impl Registrar {
             },
             ("POST", "/__registry/deployments") => self.ingest_deployment(&request.body, deadline),
             ("POST", "/__registry/head") => self.ingest_head(now),
-            ("POST", "/__registry/sources") => self.ingest_source(&request.body, deadline),
+            ("POST", "/__registry/sources") => {
+                if let Err(response) = self.publication_principal(request) {
+                    return response;
+                }
+                self.ingest_source(&request.body, deadline)
+            }
             (
                 _,
                 "/healthz" | "/__registry/deployments" | "/__registry/head" | "/__registry/sources",
@@ -636,6 +643,10 @@ impl Registrar {
                 "request must carry source_uri and a thirty-two byte hexadecimal source_digest",
             );
         };
+        let principal = match self.publication_principal(request) {
+            Ok(principal) => principal,
+            Err(response) => return response,
+        };
         let scoped = scoped_key(program, key);
         let digest = request_digest(program, &source_uri, &source_digest);
         if let Some(record) = self.idempotency.get(&scoped) {
@@ -652,6 +663,23 @@ impl Registrar {
             };
         }
         let response = self.reproduce(program, &source_uri, source_digest);
+        if response.status == 200 {
+            let read = self.read(&hex::encode(&program.bytes()), now);
+            if read.status != 200 {
+                return read;
+            }
+            if self
+                .event_outbox
+                .enqueue_publication(&read.body, &principal, now)
+                .is_err()
+            {
+                return refusal(
+                    503,
+                    "program_event_unavailable",
+                    "verified program publication could not be queued",
+                );
+            }
+        }
         if response.status != 503 {
             self.remember(scoped, digest, &response, now);
         }
@@ -831,6 +859,33 @@ impl Registrar {
         self.current_head = None;
         self.quarantined = loaded.quarantined;
         Ok(())
+    }
+
+    fn publication_principal(&self, request: &Request) -> Result<String, Response> {
+        let result = request
+            .headers
+            .get("layerx-key")
+            .ok_or_else(|| "publication key missing".to_owned())
+            .and_then(|key| {
+                layerx_platform_internal::principal::PrincipalClient::from_environment(
+                    "LAYERX_REGISTRY_IDENTITY",
+                )?
+                .resolve(key)
+            });
+        result.map_err(|_| {
+            if self.event_outbox.unbound().is_err() {
+                return refusal(
+                    503,
+                    "program_event_store_unavailable",
+                    "unbound principal counter could not be persisted",
+                );
+            }
+            refusal(
+                403,
+                "publication_principal_unresolved",
+                "identity could not resolve the publication key",
+            )
+        })
     }
 
     fn ingest_head(&mut self, now: u64) -> Response {

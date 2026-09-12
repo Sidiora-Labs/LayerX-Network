@@ -6,6 +6,7 @@
 mod auth;
 mod builder;
 pub mod deployment;
+pub mod event_producer;
 mod http;
 mod journal;
 mod mirror;

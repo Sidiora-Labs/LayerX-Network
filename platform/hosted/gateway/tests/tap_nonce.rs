@@ -313,3 +313,163 @@ fn redis_unreachable(mut process: RedisProcess) -> ! {
         .unwrap_or_else(|error| panic!("test Redis child must be reaped: {error}"));
     panic!("real Redis server did not become reachable")
 }
+
+#[test]
+fn payment_outbox_commits_with_completion_and_retains_acknowledgements() {
+    use layerx_platform_gateway::store::{Completion, KeyRecord, Reservation, ReservationRequest};
+    use layerx_platform_internal::events::Fact;
+    use layerx_platform_internal::producer::{event_id, Observation, Outbox, Pending};
+    use layerx_platform_internal::secret::{hex, sha256_hex, unhex};
+
+    let redis = RedisProcess::start();
+    let store = redis.store();
+    let document: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/maintained-authority.json"))
+            .unwrap_or_else(|error| panic!("receipt fixture: {error}"));
+    let receipt_hex = document["receipt_hex"]
+        .as_str()
+        .unwrap_or_else(|| panic!("receipt fixture bytes missing"));
+    let receipt_bytes = unhex(receipt_hex).unwrap_or_else(|| panic!("invalid receipt hex"));
+    let decoded = layerx_wire::receipt::decode(&receipt_bytes)
+        .unwrap_or_else(|error| panic!("receipt decode: {error:?}"));
+    let receipt = decoded
+        .protocol()
+        .unwrap_or_else(|| panic!("protocol receipt required"));
+    let resource = hex(&receipt.activity_id());
+    let principal = sha256_hex(b"payment-principal");
+    let key = KeyRecord {
+        key_id: "payment-key".to_owned(),
+        principal_digest: principal.clone(),
+        salt: "payment-salt".to_owned(),
+        secret_digest: sha256_hex(b"test-key"),
+        signer_public_key: "11".repeat(32),
+        scopes: "activity:submit".to_owned(),
+        quota_requests: 100,
+        quota_window_seconds: 60,
+        epoch: 1,
+        disabled: false,
+    };
+    store
+        .issue_key(&key, "payment-key-issued")
+        .unwrap_or_else(|error| panic!("key persistence: {error}"));
+    let reserved = store
+        .reserve(
+            &key,
+            ReservationRequest {
+                idempotency_scope: "payment-operation",
+                request_digest: "payment-request",
+                now: 100,
+                retention_seconds: 3600,
+                activity_id: &resource,
+                protocol_idempotency_key: "payment-idempotency",
+                principal_digest: &principal,
+                audit_event: "payment-reserved",
+                continuation: "",
+            },
+        )
+        .unwrap_or_else(|error| panic!("reservation: {error}"));
+    assert!(matches!(reserved, Reservation::Reserved));
+    let observation = Observation {
+        kind: "payment".to_owned(),
+        id: event_id("payment", &resource, 1),
+        principal: None,
+        principal_digest: Some(principal.clone()),
+        resource: resource.clone(),
+        sequence: 1,
+        source_sequence: receipt.global_sequence(),
+        occurred_at: receipt.timestamp(),
+        facts: vec![Fact {
+            name: "result_code".to_owned(),
+            value: receipt.result_code().to_string(),
+        }],
+        activity_id: Some(resource.clone()),
+        amount: Some(receipt.amount().to_string()),
+        asset: Some(hex(&receipt.asset())),
+    };
+    let pending = Pending::new(observation).unwrap_or_else(|error| panic!("observation: {error}"));
+    let completion = Completion {
+        idempotency_scope: "payment-operation",
+        request_digest: "payment-request",
+        state: "completed",
+        response_hex: "7b7d",
+        receipt_hex,
+        activity_id: Some(&resource),
+        principal_digest: &principal,
+        audit_event: "payment-completed",
+    };
+    assert!(store
+        .complete_observed(
+            Completion {
+                principal_digest: "foreign",
+                ..completion
+            },
+            &pending
+        )
+        .is_err());
+    assert!(store
+        .pending()
+        .unwrap_or_else(|error| panic!("pending: {error}"))
+        .is_none());
+    store
+        .complete_observed(completion, &pending)
+        .unwrap_or_else(|error| panic!("atomic completion: {error}"));
+    drop(store);
+    assert_payment_restart(&redis, &pending, completion, receipt_hex);
+}
+
+fn assert_payment_restart(
+    redis: &RedisProcess,
+    pending: &layerx_platform_internal::producer::Pending,
+    completion: layerx_platform_gateway::store::Completion<'_>,
+    receipt_hex: &str,
+) {
+    use layerx_platform_internal::producer::{Outbox, Pending};
+    let store = redis.store();
+    assert_eq!(
+        store
+            .pending()
+            .unwrap_or_else(|error| panic!("pending: {error}")),
+        Some(pending.clone())
+    );
+    assert_eq!(
+        store
+            .operation("payment-operation")
+            .unwrap_or_else(|error| panic!("operation: {error}"))
+            .unwrap_or_else(|| panic!("operation missing"))
+            .receipt,
+        receipt_hex
+    );
+    assert!(store.acknowledge(&pending.observation.id, false).is_err());
+    assert!(store.acknowledge(&"00".repeat(32), true).is_err());
+    store
+        .acknowledge(&pending.observation.id, true)
+        .unwrap_or_else(|error| panic!("sink acknowledgement: {error}"));
+    drop(store);
+    let store = redis.store();
+    let mut observed = pending.clone();
+    observed.observed = true;
+    assert_eq!(
+        store
+            .pending()
+            .unwrap_or_else(|error| panic!("pending: {error}")),
+        Some(observed)
+    );
+    store
+        .acknowledge(&pending.observation.id, false)
+        .unwrap_or_else(|error| panic!("webhook acknowledgement: {error}"));
+    store
+        .complete_observed(completion, pending)
+        .unwrap_or_else(|error| panic!("identical completion retry: {error}"));
+    assert!(store
+        .pending()
+        .unwrap_or_else(|error| panic!("pending: {error}"))
+        .is_none());
+    let mut changed = pending.observation.clone();
+    "altered".clone_into(&mut changed.facts[0].value);
+    let changed =
+        Pending::new(changed).unwrap_or_else(|error| panic!("changed observation: {error}"));
+    assert!(store.complete_observed(completion, &changed).is_err());
+}
+
+#[path = "support/payment_events.rs"]
+mod payment_events;

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
@@ -12,15 +12,21 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use layerx_agentd::audit::Redacted;
 use layerx_agentd::budget::{LimitConfig, LimitId, LimitScope};
+use layerx_agentd::capability::CapabilityId;
+use layerx_agentd::enrolment::{
+    self, BindingMode, BindingPublisher, DaemonSurface, EnrolmentRequest,
+};
 use layerx_agentd::human::{HumanListenerConfig, HumanPeer, HumanUnixServer};
 use layerx_agentd::human_runtime::{
     HumanAuthorityBoundary, ProductionHumanOperations, RemoteHumanAuthority, UnifiedAgentOwner,
 };
+use layerx_agentd::identity::{self, CoreIdentity, IdentityError, IdentityResolver};
 use layerx_agentd::read::{
     LayerxdProgramBalanceReader, ProgramAuthority, ProgramBalanceRead, ProgramBalanceReadRoute,
 };
+use layerx_agentd::session::{SessionId, SessionRegistry};
 use layerx_agentd::session_keys::SessionKeyRegistry;
-use layerx_agentd::store::Store;
+use layerx_agentd::store::{Store, TenantId};
 use layerx_client::client::{ClientConfig, ReconnectPolicy};
 use layerx_client::lni::handshake::HandshakeConfig;
 use layerx_client::lni::schema::Version;
@@ -30,6 +36,7 @@ use layerx_programs::{
     hex, DeploymentProof, DeploymentRecord, ProgramId, ProgramLifecycle,
     ProtocolDeploymentVerifier, Registry,
 };
+use layerx_types::ids::Did;
 
 mod human_owner_mode;
 mod human_peer_config;
@@ -51,11 +58,21 @@ struct Config {
     probe_program: ProgramId,
 }
 
+fn optional(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.is_empty())
+}
+
 fn required(name: &str) -> Result<String, String> {
-    env::var(name)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{name} is required"))
+    optional(name).ok_or_else(|| format!("{name} is required"))
+}
+
+fn absolute_path(name: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(required(name)?);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(format!("{name} must be an absolute path"))
+    }
 }
 
 fn read_ca(name: &str) -> Result<Vec<u8>, String> {
@@ -115,6 +132,210 @@ fn verified_limit() -> Result<LimitConfig, String> {
             .parse()
             .map_err(|_| "human limit consumed is invalid")?,
     })
+}
+
+struct McpEnrolment {
+    root: PathBuf,
+    audit_root: PathBuf,
+    peer_uid: u32,
+    did: Did,
+    request: EnrolmentRequest,
+    limit: LimitConfig,
+    deadline: Duration,
+    mode: BindingMode,
+}
+
+struct McpBoot {
+    surface: DaemonSurface,
+    enrolment: McpEnrolment,
+}
+
+struct ResolvedIdentity {
+    did: Did,
+    observation: CoreIdentity,
+}
+
+impl IdentityResolver for ResolvedIdentity {
+    fn resolve(&mut self, did: &Did) -> Result<Option<CoreIdentity>, IdentityError> {
+        if did == &self.did {
+            Ok(Some(self.observation.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+fn mcp_activity_types() -> Result<BTreeSet<u16>, String> {
+    let mut values = BTreeSet::new();
+    for entry in required("LAYERX_AGENT_MCP_ACTIVITY_TYPES")?.split(',') {
+        let value = entry
+            .trim()
+            .parse()
+            .map_err(|_| "LAYERX_AGENT_MCP_ACTIVITY_TYPES lists an invalid activity type")?;
+        if !values.insert(value) {
+            return Err("LAYERX_AGENT_MCP_ACTIVITY_TYPES repeats an activity type".to_owned());
+        }
+    }
+    Ok(values)
+}
+
+fn mcp_scopes() -> Result<BTreeSet<String>, String> {
+    let mut values = BTreeSet::new();
+    for entry in required("LAYERX_AGENT_MCP_SCOPES")?.split(',') {
+        let value = entry.trim();
+        if value.is_empty() {
+            return Err("LAYERX_AGENT_MCP_SCOPES lists an empty scope".to_owned());
+        }
+        if !values.insert(value.to_owned()) {
+            return Err("LAYERX_AGENT_MCP_SCOPES repeats a scope".to_owned());
+        }
+    }
+    Ok(values)
+}
+
+fn mcp_limit() -> Result<LimitConfig, String> {
+    let scope_bytes = parse_hex("LAYERX_AGENT_MCP_LIMIT_SCOPE_ID")?;
+    let scope = match required("LAYERX_AGENT_MCP_LIMIT_SCOPE")?.as_str() {
+        "tenant" => LimitScope::Tenant(scope_bytes),
+        "agent" => LimitScope::Agent(scope_bytes),
+        "session" => LimitScope::Session(scope_bytes),
+        "capability" => LimitScope::Capability(scope_bytes),
+        "counterparty" => LimitScope::Counterparty(scope_bytes),
+        _ => return Err("LAYERX_AGENT_MCP_LIMIT_SCOPE is invalid".to_owned()),
+    };
+    Ok(LimitConfig {
+        id: LimitId(parse_hex("LAYERX_AGENT_MCP_LIMIT_ID")?),
+        name: required("LAYERX_AGENT_MCP_LIMIT_NAME")?,
+        scope,
+        ceiling: required("LAYERX_AGENT_MCP_LIMIT_CEILING")?
+            .parse()
+            .map_err(|_| "LAYERX_AGENT_MCP_LIMIT_CEILING is invalid")?,
+        consumed: required("LAYERX_AGENT_MCP_LIMIT_CONSUMED")?
+            .parse()
+            .map_err(|_| "LAYERX_AGENT_MCP_LIMIT_CONSUMED is invalid")?,
+    })
+}
+
+/// Reads the model context protocol enrolment this daemon publishes at boot, when one is
+/// configured. `LAYERX_AGENT_MCP_BINDING_ROOT` selects the binding directory and every other
+/// key is then required.
+fn mcp_enrolment() -> Result<Option<McpEnrolment>, String> {
+    if optional("LAYERX_AGENT_MCP_BINDING_ROOT").is_none() {
+        return Ok(None);
+    }
+    let mode = match required("LAYERX_AGENT_MCP_MODE")?.as_str() {
+        "full" => BindingMode::Full,
+        "read-only" => BindingMode::ReadOnly,
+        _ => return Err("LAYERX_AGENT_MCP_MODE is invalid".to_owned()),
+    };
+    Ok(Some(McpEnrolment {
+        root: absolute_path("LAYERX_AGENT_MCP_BINDING_ROOT")?,
+        audit_root: absolute_path("LAYERX_AGENT_MCP_AUDIT_ROOT")?,
+        peer_uid: required("LAYERX_AGENT_MCP_PEER_UID")?
+            .parse()
+            .map_err(|_| "LAYERX_AGENT_MCP_PEER_UID is invalid")?,
+        did: Did::new(required("LAYERX_AGENT_MCP_AGENT_DID")?.as_bytes())
+            .map_err(|_| "LAYERX_AGENT_MCP_AGENT_DID is invalid")?,
+        request: EnrolmentRequest {
+            session_id: SessionId(parse_digest("LAYERX_AGENT_MCP_SESSION_ID")?),
+            capability_id: CapabilityId(parse_digest("LAYERX_AGENT_MCP_CAPABILITY_ID")?),
+            permitted_activity_types: mcp_activity_types()?,
+            scopes: mcp_scopes()?,
+            expiry_sequence: parse_u64("LAYERX_AGENT_MCP_EXPIRY_SEQUENCE")?,
+            opening_client: required("LAYERX_AGENT_MCP_OPENING_CLIENT")?,
+            policy_version: required("LAYERX_AGENT_MCP_POLICY_VERSION")?,
+            core_sequence: parse_u64("LAYERX_AGENT_MCP_CORE_SEQUENCE")?,
+        },
+        limit: mcp_limit()?,
+        deadline: Duration::from_millis(parse_u64("LAYERX_AGENT_MCP_DEADLINE_MS")?),
+        mode,
+    }))
+}
+
+fn mcp_boot(config: &Config, enrolment: McpEnrolment) -> Result<McpBoot, String> {
+    let surface = DaemonSurface::new(
+        &config.listen,
+        config.bearer.clone(),
+        config.probe_program.bytes(),
+    )
+    .map_err(|error| format!("the MCP daemon surface is invalid: {error}"))?;
+    Ok(McpBoot { surface, enrolment })
+}
+
+/// Publishes the binding document one model context protocol session reads.
+///
+/// The agent identity is resolved through the configured human authority, registered against
+/// the daemon store, and enrolled into a capability-grant session whose token reaches disk only
+/// inside the operator-protected files beside the document. A daemon that already opened the
+/// configured session keeps the document it published rather than opening a second session.
+fn publish_mcp_binding(
+    authority: &mut RemoteHumanAuthority,
+    peers: &BTreeMap<u32, (String, String)>,
+    shared_store: &Arc<Mutex<Store>>,
+    store_path: &Path,
+    boot: McpBoot,
+) -> Result<(), String> {
+    let McpBoot {
+        surface,
+        enrolment: configured,
+    } = boot;
+    let (principal, tenant) = peers
+        .get(&configured.peer_uid)
+        .ok_or("LAYERX_AGENT_MCP_PEER_UID names no configured human peer")?;
+    let peer = HumanPeer {
+        uid: configured.peer_uid,
+        principal: principal.clone(),
+        tenant: tenant.clone(),
+    };
+    let tenant_id = TenantId::new(tenant.clone())
+        .map_err(|error| format!("the MCP peer tenant is invalid: {error:?}"))?;
+    let observation = authority
+        .core_identity(&peer, &configured.did)
+        .map_err(|error| format!("the MCP agent identity is unverified: {error:?}"))?;
+    let publisher = BindingPublisher::new(
+        configured.root,
+        store_path.to_path_buf(),
+        configured.audit_root,
+        surface,
+        configured.limit,
+        configured.deadline,
+        configured.mode,
+    )
+    .map_err(|error| format!("the MCP binding publisher is invalid: {error}"))?;
+    let mut resolver = ResolvedIdentity {
+        did: configured.did.clone(),
+        observation,
+    };
+    let mut store = shared_store
+        .lock()
+        .map_err(|_| "the agent store is unavailable".to_owned())?;
+    let identity = identity::register(&mut store, tenant_id.clone(), configured.did, &mut resolver)
+        .map_err(|error| format!("the MCP agent identity is unusable: {error:?}"))?;
+    let mut sessions = SessionRegistry::default();
+    sessions
+        .restore_tenant(&store, &tenant_id)
+        .map_err(|error| format!("the agent sessions are unrestorable: {error:?}"))?;
+    let session_id = configured.request.session_id;
+    if sessions.get(&tenant_id, session_id).is_some() {
+        let published = enrolment::published_session(&publisher.binding_path())
+            .map_err(|error| format!("the published MCP binding is unusable: {error}"))?;
+        if published == Some(session_id) {
+            return Ok(());
+        }
+        return Err(
+            "LAYERX_AGENT_MCP_SESSION_ID names an open session without its binding document"
+                .to_owned(),
+        );
+    }
+    enrolment::enrol(
+        &mut store,
+        &mut sessions,
+        &identity,
+        configured.request,
+        &publisher,
+    )
+    .map_err(|error| format!("MCP enrolment failed: {error}"))?;
+    Ok(())
 }
 
 fn human_lni_limits(deadline: Duration) -> Result<Limits, String> {
@@ -194,7 +415,7 @@ fn connect_human_authority(
     Ok(authority)
 }
 
-fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
+fn start_human_owner(mcp: Option<McpBoot>) -> Result<mpsc::Receiver<Result<(), String>>, String> {
     let peers = human_peers()?;
     let deadline = Duration::from_millis(parse_u64("LAYERX_AGENT_HUMAN_DEADLINE_MS")?);
     let human_limits = human_lni_limits(deadline)?;
@@ -219,11 +440,14 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
         return Err("human daemon paths must be absolute".to_owned());
     }
     let node = connect_human_node(node_path, node_limits)?;
-    let authority = connect_human_authority(deadline, &peers)?;
+    let mut authority = connect_human_authority(deadline, &peers)?;
     let shared_store =
-        Arc::new(Mutex::new(Store::open(store_path).map_err(|error| {
+        Arc::new(Mutex::new(Store::open(&store_path).map_err(|error| {
             format!("human store is unavailable: {error}")
         })?));
+    if let Some(boot) = mcp {
+        publish_mcp_binding(&mut authority, &peers, &shared_store, &store_path, boot)?;
+    }
     let operations = ProductionHumanOperations::new(
         authority,
         node,
@@ -494,7 +718,10 @@ fn serve_connection(
 }
 
 fn serve(config: Config) -> Result<(), String> {
-    let human = start_human_owner()?;
+    let mcp = mcp_enrolment()?
+        .map(|enrolment| mcp_boot(&config, enrolment))
+        .transpose()?;
+    let human = start_human_owner(mcp)?;
     let verifier = ProtocolDeploymentVerifier::from_protected_history(
         Path::new(&config.sequencer_trust_history),
         config.staleness_ms,

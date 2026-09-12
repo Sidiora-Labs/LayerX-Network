@@ -78,24 +78,61 @@ impl StreamJournal {
         let bytes = serde_json::to_vec(&event).map_err(|_| ApiFailure::upstream_degraded())?;
         let event_key = RowKey::new(format!("stream-event-{sequence:016x}"))
             .map_err(|error| store_failure(&error))?;
+        let mut rows = vec![
+            (Table::Stream, event_key, bytes),
+            (Table::Stream, source_key, sequence.to_be_bytes().to_vec()),
+            (Table::Stream, head_key, sequence.to_be_bytes().to_vec()),
+        ];
+        if kind.starts_with("approval-") {
+            let value = event
+                .payload
+                .get("approval")
+                .ok_or_else(ApiFailure::upstream_degraded)?;
+            let resource = value
+                .get("approval_id")
+                .and_then(Value::as_str)
+                .ok_or_else(ApiFailure::upstream_degraded)?;
+            let state = value
+                .get("state")
+                .and_then(Value::as_str)
+                .ok_or_else(ApiFailure::upstream_degraded)?;
+            let facts = ["agent_id", "state", "created_at"]
+                .into_iter()
+                .map(|name| {
+                    let value = value.get(name).ok_or_else(ApiFailure::upstream_degraded)?;
+                    Ok(layerx_platform_internal::events::Fact {
+                        name: name.to_owned(),
+                        value: value
+                            .as_str()
+                            .map_or_else(|| value.to_string(), str::to_owned),
+                    })
+                })
+                .collect::<Result<Vec<_>, ApiFailure>>()?;
+            let observation = layerx_platform_internal::producer::Observation {
+                kind: "approval".to_owned(),
+                id: String::new(),
+                principal: Some(scope.principal().as_str().to_owned()),
+                principal_digest: None,
+                resource: resource.to_owned(),
+                sequence: 0,
+                source_sequence: sequence,
+                occurred_at: observed_at,
+                facts,
+                activity_id: None,
+                amount: None,
+                asset: None,
+            };
+            rows.push(
+                crate::event_producer::enqueue_row(
+                    scope,
+                    &format!("approval:{resource}:{state}"),
+                    observation,
+                )
+                .map_err(|error| store_failure(&error))?,
+            );
+        }
         scope
-            .put(Table::Stream, event_key, observed_at, bytes)
-            .map_err(|error| store_failure(&error))?;
-        scope
-            .put(
-                Table::Stream,
-                source_key,
-                observed_at,
-                sequence.to_be_bytes().to_vec(),
-            )
-            .map_err(|error| store_failure(&error))?;
-        scope
-            .put(
-                Table::Stream,
-                head_key,
-                observed_at,
-                sequence.to_be_bytes().to_vec(),
-            )
+            .put_batch(observed_at, rows)
             .map_err(|error| store_failure(&error))
     }
 

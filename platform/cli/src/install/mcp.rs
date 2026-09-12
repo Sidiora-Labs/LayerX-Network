@@ -1,62 +1,62 @@
+use std::collections::BTreeMap;
+use std::env;
+use std::path::{Path, PathBuf};
+
+use layerx_mcp::binding::Binding;
 use layerx_mcp::server::DeploymentMode;
 use serde_json::{json, Value};
 
 use crate::config;
-use crate::config::Configuration;
-use crate::encoding::fixed_hex;
 use crate::toolset;
 
-use super::{
-    apply, executable, hosts, report, select, variables, FileTransaction, Registration, SERVER_NAME,
-};
+use super::{apply, executable, hosts, report, FileTransaction, Registration, SERVER_NAME};
 
 pub struct Request {
-    pub environment: Option<String>,
     pub hosts: Vec<String>,
-    pub key: Option<String>,
     pub read_only: bool,
-    pub token_stdin: bool,
-    pub rotate: bool,
-    pub source_account: Option<String>,
-    pub asset: Option<String>,
+    pub daemon_binding: Option<PathBuf>,
 }
 
 /// Installs and registers the daemon-bound `LayerX` model context protocol server.
-pub fn platform_install_mcp(
-    configuration: &mut Configuration,
-    request: &Request,
-) -> Result<Value, String> {
-    let payment = payment_binding(request)?;
-    let mode = if request.read_only {
-        DeploymentMode::ReadOnly
-    } else {
-        DeploymentMode::Full
-    };
-    let tools = toolset::daemon_surface(mode)?;
-    let daemon_binding = daemon_binding_path()?;
-    let command = executable()?;
-    let mut variables = variables()?;
+///
+/// The installed launch line names the binding document that agent-daemon enrolment wrote; the
+/// installer opens that document exactly as the served path does and refuses when it is absent,
+/// so a registration never points at a catalogue the daemon will not serve. No gateway key,
+/// environment, or payment flag takes part: the daemon holds every credential the tools need.
+///
+/// Returns the agent-daemon endpoint the registration is bound to and the recorded document.
+///
+/// # Errors
+///
+/// Returns the operator message when no host is selected, when the binding document cannot be
+/// opened, or when a registration cannot be published.
+pub fn platform_install_mcp(request: &Request) -> Result<(String, Value), String> {
     let selected_hosts = hosts(&request.hosts)?;
     if selected_hosts.is_empty() {
         return Err("no agent runtime was selected for installation".into());
     }
-    let selection = select(
-        configuration,
-        super::SelectionRequest {
-            environment: request.environment.clone(),
-            key: request.key.clone(),
-            fallback_key: "mcp",
-            token_stdin: request.token_stdin,
-            component: "mcp",
-            read_only: request.read_only,
-            rotate: request.rotate,
-        },
-    )?;
-    variables.insert(
-        "LAYERX_GATEWAY_KEY_ID".to_owned(),
-        selection.gateway_key_id.clone(),
-    );
-    let arguments = launch_arguments(&daemon_binding, request.read_only);
+    let daemon_binding = match &request.daemon_binding {
+        Some(explicit) => absolute_binding_path(explicit)?,
+        None => daemon_binding_path()?,
+    };
+    let binding = Binding::open(&daemon_binding).map_err(|error| {
+        format!(
+            "the daemon binding document at {} could not be used: {}; agent-daemon enrolment writes it before the MCP server is installed",
+            daemon_binding.display(),
+            error.detail()
+        )
+    })?;
+    let mode = if request.read_only {
+        DeploymentMode::ReadOnly
+    } else {
+        binding.mode()
+    };
+    let tools = toolset::daemon_surface(mode)?;
+    let command = executable()?;
+    let variables: BTreeMap<String, String> = BTreeMap::new();
+    let agent_endpoint = binding.agent_endpoint().to_owned();
+    let binding_path = path_text(&daemon_binding)?;
+    let arguments = launch_arguments(&binding_path, request.read_only);
     let descriptors = tools
         .iter()
         .copied()
@@ -76,17 +76,19 @@ pub fn platform_install_mcp(
         ));
     }
     let (registrations, changed) = publish_registrations(&pending)?;
-    Ok(json!({
+    let document = json!({
         "component": "mcp",
         "transport": "stdio",
-        "environment": selection.environment,
-        "endpoint": selection.endpoint,
-        "network_id": selection.network_id,
+        "authorization": "agent-daemon",
         "deployment_mode": toolset::mode_name(mode),
-        "daemon_binding": daemon_binding,
-        "account_binding": payment
-            .as_ref()
-            .map(|(source, asset)| json!({"source_account": source, "asset": asset})),
+        "daemon_binding": {
+            "path": binding_path,
+            "tenant": binding.tenant(),
+            "declared_mode": toolset::mode_name(binding.mode()),
+            "agent_endpoint": &agent_endpoint,
+            "store": path_text(binding.store())?,
+            "session_generation": binding.session_generation(),
+        },
         "server": {
             "name": SERVER_NAME,
             "command": command,
@@ -95,11 +97,11 @@ pub fn platform_install_mcp(
         },
         "tools": descriptors,
         "scopes": toolset::scopes(&tools),
-        "credentials": selection.credentials(),
         "registrations": registrations,
         "changed": changed,
         "idempotent": true,
-    }))
+    });
+    Ok((agent_endpoint, document))
 }
 
 fn publish_registrations(
@@ -143,39 +145,36 @@ fn publish_registrations(
     Ok((registrations, changed))
 }
 
-pub(super) fn payment_binding(request: &Request) -> Result<Option<(String, String)>, String> {
-    if request.read_only {
-        if request.source_account.is_some() || request.asset.is_some() {
-            return Err("--source-account and --asset are not accepted in read-only mode".into());
-        }
-        return Ok(None);
-    }
-    let source = request.source_account.as_deref().ok_or_else(|| {
-        "payment-capable installation requires --source-account <64-hex account id>".to_owned()
-    })?;
-    let asset = request.asset.as_deref().ok_or_else(|| {
-        "payment-capable installation requires --asset <64-hex asset id>".to_owned()
-    })?;
-    fixed_hex::<32>("source account", source)?;
-    fixed_hex::<32>("asset", asset)?;
-    Ok(Some((
-        source.to_ascii_lowercase(),
-        asset.to_ascii_lowercase(),
-    )))
-}
-
 /// Resolves the daemon binding document the served path reads, beside the CLI configuration.
-fn daemon_binding_path() -> Result<String, String> {
+fn daemon_binding_path() -> Result<PathBuf, String> {
     let configuration = config::path()?;
     let directory = configuration
         .parent()
         .ok_or_else(|| "the CLI configuration path has no parent directory".to_owned())?;
-    directory
-        .join("mcp")
-        .join("binding.json")
-        .to_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "the daemon binding path is not valid UTF-8".to_owned())
+    Ok(directory.join("mcp").join("binding.json"))
+}
+
+/// Anchors an operator-supplied binding path so the installed launch line never depends on the
+/// working directory of the runtime that starts the server.
+fn absolute_binding_path(explicit: &Path) -> Result<PathBuf, String> {
+    if explicit.as_os_str().is_empty() {
+        return Err("--daemon-binding requires a path".into());
+    }
+    if explicit.is_absolute() {
+        return Ok(explicit.to_path_buf());
+    }
+    let current = env::current_dir()
+        .map_err(|error| format!("the current directory is not available: {error}"))?;
+    Ok(current.join(explicit))
+}
+
+fn path_text(path: &Path) -> Result<String, String> {
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        format!(
+            "the path {} is not valid UTF-8 and cannot be written into a launch line",
+            path.display()
+        )
+    })
 }
 
 fn launch_arguments(daemon_binding: &str, read_only: bool) -> Vec<String> {

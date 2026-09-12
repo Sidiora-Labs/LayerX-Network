@@ -759,6 +759,7 @@ fn table_code(table: Table) -> u8 {
         Table::Telemetry => 4,
         Table::Cache => 5,
         Table::Stream => 7,
+        Table::EventOutbox => 8,
     }
 }
 
@@ -770,6 +771,7 @@ fn table_from_code(code: u8) -> Result<Table, ArchiveError> {
         4 => Ok(Table::Telemetry),
         5 => Ok(Table::Cache),
         7 => Ok(Table::Stream),
+        8 => Ok(Table::EventOutbox),
         _ => Err(ArchiveError::Corrupt("archive evidence table is invalid")),
     }
 }

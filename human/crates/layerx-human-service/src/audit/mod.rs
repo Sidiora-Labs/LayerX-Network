@@ -43,6 +43,7 @@ const fn table_code(table: Table) -> u8 {
         Table::Telemetry => 4,
         Table::Cache => 5,
         Table::Stream => 7,
+        Table::EventOutbox => 8,
     }
 }
 
@@ -54,6 +55,7 @@ fn table_from_code(value: u8) -> Result<Table, AuditError> {
         4 => Ok(Table::Telemetry),
         5 => Ok(Table::Cache),
         7 => Ok(Table::Stream),
+        8 => Ok(Table::EventOutbox),
         _ => Err(AuditError::Corrupt("unknown evidence table code")),
     }
 }
