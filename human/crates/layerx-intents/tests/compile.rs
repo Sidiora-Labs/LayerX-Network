@@ -1,7 +1,10 @@
 use layerx_agentd::prepare::{
     prepare_activity, verify_disclosure_binding, CorePreparationBoundary, CorePreparationState,
-    CoreStateError, PreparationDefaults, PrepareRequest,
+    CoreStateError, DisclosureBindingError, PreparationDefaults, PrepareError, PrepareRequest,
 };
+use layerx_crypto::disclosure::DisclosureError;
+use layerx_crypto::send::SendDebit;
+use layerx_crypto::signer::{LocalSigner, Signer};
 use layerx_intents::{
     compile, BridgeDepositCredit, BridgeWithdrawRequest, BudgetCreate, BudgetDefund, BudgetFund,
     CompileErrorReason, CompileField, DidRegistration, DisclosureCheck, DisclosureCheckError,
@@ -23,6 +26,30 @@ use layerx_types::payload::{
 };
 use layerx_wire::hash;
 use proptest::prelude::*;
+use std::future::Future;
+use std::pin::pin;
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
+
+struct ThreadWake(std::thread::Thread);
+
+impl Wake for ThreadWake {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
+fn run<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => std::thread::park(),
+        }
+    }
+}
 
 struct RecordedCoreBoundary {
     state: CorePreparationState,
@@ -89,11 +116,29 @@ fn recipient() -> AccountId {
 }
 
 fn send_intent(entropy: [u8; 32]) -> Intent {
-    let mut public_key = entropy;
-    public_key[0] |= 1;
-    let mut signature = [0_u8; 64];
-    signature[..32].copy_from_slice(&entropy);
-    signature[32..].copy_from_slice(&entropy);
+    let signer = LocalSigner::new(entropy);
+    let debit = SendDebit {
+        from: hash::account_id(&owner()).unwrap_or_else(|error| panic!("from: {error:?}")),
+        to: hash::account_id(&recipient()).unwrap_or_else(|error| panic!("to: {error:?}")),
+        asset: [2; 32],
+        amount: u128::from(entropy[0]) + 1,
+        source_sequence: 7,
+        idempotency_key: entropy,
+        expires_at: 1_010,
+        context_hash: [5; 32],
+        conditions: Vec::new(),
+        authorization_kind: 1,
+        network_id: 77,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+    };
+    let message = debit
+        .authorization_message()
+        .unwrap_or_else(|error| panic!("authorization message: {error:?}"));
+    let request = debit
+        .signing_request(&message)
+        .unwrap_or_else(|error| panic!("signing request: {error:?}"));
+    let signature = run(signer.sign(request))
+        .unwrap_or_else(|error| panic!("authorization signature: {error:?}"));
     let send = LxpSend::new(
         owner(),
         recipient(),
@@ -105,8 +150,8 @@ fn send_intent(entropy: [u8; 32]) -> Intent {
         ContextHash::new([5; 32]),
         SendAuthorization::new(
             SendAuthorizationKind::Owner,
-            PublicKey::new(public_key),
-            AuthorizationSignature::new(signature),
+            PublicKey::new(signer.public_key()),
+            AuthorizationSignature::new(*signature.as_bytes()),
         ),
         NetworkId::new(77).unwrap_or_else(|error| panic!("network: {error:?}")),
         ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
@@ -145,30 +190,37 @@ fn compiled_send_is_accepted_by_prepare_and_disclosed_field_for_field() {
             module_registry: registry.clone(),
         },
     };
-    let prepared = prepare_activity(
-        &mut boundary,
-        PreparationDefaults {
-            timestamp_span: 20,
-            fee_limit: Amount::from_u128(9),
-            maximum_payload_bytes: 1_024,
-        },
-        PrepareRequest {
-            actor: did(),
-            authority: Authority::owner(b"human-owner")
-                .unwrap_or_else(|error| panic!("authority: {error:?}")),
-            activity_type: compiled.activity_type(),
-            expected_account_sequence: Some(7),
-            timestamp_bound: Some(
-                TimestampBound::new(995, 1_010)
-                    .unwrap_or_else(|error| panic!("timestamp: {error:?}")),
-            ),
-            fee_limit: None,
-            idempotency_key: IdempotencyKey::new([4; 32]),
-            payload: compiled.payload().as_bytes().to_vec(),
-            declared_payload_limit: 1_024,
-        },
-    )
-    .unwrap_or_else(|error| panic!("prepare: {error:?}"));
+    let defaults = PreparationDefaults {
+        timestamp_span: 20,
+        fee_limit: Amount::from_u128(9),
+        maximum_payload_bytes: 1_024,
+    };
+    let request = PrepareRequest {
+        actor: did(),
+        authority: Authority::owner(&LocalSigner::new([4; 32]).public_key())
+            .unwrap_or_else(|error| panic!("authority: {error:?}")),
+        activity_type: compiled.activity_type(),
+        expected_account_sequence: Some(7),
+        timestamp_bound: Some(
+            TimestampBound::new(995, 1_010).unwrap_or_else(|error| panic!("timestamp: {error:?}")),
+        ),
+        fee_limit: None,
+        idempotency_key: IdempotencyKey::new([4; 32]),
+        payload: compiled.payload().as_bytes().to_vec(),
+        declared_payload_limit: 1_024,
+    };
+    let mut forged = request.clone();
+    let authorization = forged.payload.len() - 167;
+    forged.payload[authorization + 33..authorization + 129].fill(4);
+    forged.payload[authorization + 33] |= 1;
+    assert_eq!(
+        prepare_activity(&mut boundary, defaults, forged),
+        Err(PrepareError::Disclosure(DisclosureBindingError::Decode(
+            DisclosureError::MalformedPayload
+        )))
+    );
+    let prepared = prepare_activity(&mut boundary, defaults, request)
+        .unwrap_or_else(|error| panic!("prepare: {error:?}"));
 
     let from = hash::account_id(&owner()).unwrap_or_else(|error| panic!("from hash: {error:?}"));
     let to = hash::account_id(&recipient()).unwrap_or_else(|error| panic!("to hash: {error:?}"));
