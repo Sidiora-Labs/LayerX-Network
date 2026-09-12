@@ -3346,6 +3346,21 @@ test-program-simulate: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR
 	bash tests/daemon/program-admission.sh $(BUILD_DIR) simulate
 
 BRIDGE_PYTHON ?= python3
+PAXEER_GO ?= go
+PAXEER_GO_JOBS ?= 4
+.PHONY: custody-proof-build
+custody-proof-build:
+	@mkdir -p $(BUILD_DIR)/bin
+	cd paxeer-network && $(PAXEER_GO) build -mod=readonly -buildvcs=true -p $(PAXEER_GO_JOBS) -o $(abspath $(BUILD_DIR)/bin/layerx-custody-proof) ./daemon/layerx-custody-proof
+
+$(BUILD_DIR)/tests/bridge/test-comet-credit: tests/bridge/test_comet_credit.c tests/bridge/files.h $(LIBRARY) $(PROGRAMS_RUNTIME_LIB)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-comet-credit
+test-comet-credit: $(BUILD_DIR)/tests/bridge/test-comet-credit
+	$(BUILD_DIR)/tests/bridge/test-comet-credit tests/fixtures/custody/paxeer-state-v2/custody.profile tests/fixtures/custody/paxeer-state-v2/custody.credit
+
 .PHONY: test-bridge-credit
 test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
 	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR)
