@@ -12,7 +12,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 use zeroize::Zeroize;
 
+mod comet;
 mod genesis;
+mod transport;
 
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
@@ -489,6 +491,12 @@ fn route(config: &Config, request: &Request) -> Response {
     }
     if request.method == "POST" && request.path == "/" {
         return relay(config, request);
+    }
+    if request.method == "POST" && request.path == "/comet" {
+        return config.comet.as_ref().map_or_else(
+            || refusal(404, "not_found", None),
+            |node| comet::response(node, request),
+        );
     }
     refusal(404, "not_found", None)
 }
