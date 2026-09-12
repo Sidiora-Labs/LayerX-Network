@@ -40,9 +40,7 @@ fn production_installation_never_falls_back_to_emulator_routes() {
         &[
             "--json",
             "install",
-            "mcp",
-            "--host",
-            "layerx",
+            "a2a",
             "--source-account",
             &source,
             "--asset",
@@ -53,24 +51,42 @@ fn production_installation_never_falls_back_to_emulator_routes() {
 }
 
 #[test]
-fn undocumented_runtime_alias_is_rejected_before_credentials_are_touched() {
-    let source = "11".repeat(32);
-    let asset = "22".repeat(32);
+fn undocumented_runtime_alias_is_rejected_before_the_binding_is_read() {
+    let output = run("host", &["--json", "install", "mcp", "--host", "claude"]);
+    let detail = error(&output);
+    assert!(detail.contains("claude-code"));
+    assert!(!detail.contains("binding.json"));
+}
+
+#[test]
+fn mcp_installation_takes_no_gateway_key_or_payment_flags() {
+    for flag in ["--key", "--environment", "--source-account", "--asset"] {
+        let output = run(
+            "flags",
+            &[
+                "--json", "install", "mcp", "--host", "layerx", flag, "value",
+            ],
+        );
+        assert!(error(&output).contains(flag), "{flag} was accepted");
+    }
+    for flag in ["--token-stdin", "--rotate"] {
+        let output = run(
+            "switches",
+            &["--json", "install", "mcp", "--host", "layerx", flag],
+        );
+        assert!(error(&output).contains(flag), "{flag} was accepted");
+    }
+}
+
+#[test]
+fn mcp_installation_refuses_without_the_daemon_binding_document() {
     let output = run(
-        "host",
-        &[
-            "--json",
-            "install",
-            "mcp",
-            "--host",
-            "claude",
-            "--source-account",
-            &source,
-            "--asset",
-            &asset,
-        ],
+        "unenrolled",
+        &["--json", "install", "mcp", "--host", "layerx"],
     );
-    assert!(error(&output).contains("claude-code"));
+    let detail = error(&output);
+    assert!(detail.contains("binding.json"));
+    assert!(detail.contains("agent-daemon enrolment"));
 }
 
 #[test]

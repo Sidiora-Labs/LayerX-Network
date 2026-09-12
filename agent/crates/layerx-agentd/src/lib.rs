@@ -11,6 +11,7 @@ pub mod capability;
 pub mod compat;
 pub mod config;
 pub mod degraded;
+pub mod enrolment;
 pub mod events;
 pub mod export;
 pub mod finality;

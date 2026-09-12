@@ -40,5 +40,8 @@ ureq = { workspace = true, features = ["rustls"] }
 tungstenite = { version = "=0.28.0", features = ["native-tls"] }
 zeroize.workspace = true
 
+[dev-dependencies]
+layerx-agentd = { path = "../../agent/crates/layerx-agentd" }
+
 [lints]
 workspace = true
