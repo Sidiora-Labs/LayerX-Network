@@ -20,7 +20,7 @@ def main():
     parser.add_argument('--disposable-identity')
     args = parser.parse_args()
     profile = Path(args.profile).read_bytes()
-    require(len(profile) == 207 and profile[:5] == b'LXBC1' and profile[205:] == big(3, 2),
+    require(len(profile) == 207 and profile[:5] in (b'LXBC1', b'LXBC2') and profile[205:] == big(3, 2),
             'protocol-three custody profile required')
     chain_id = int.from_bytes(profile[5:13], "big")
     if chain_id == 125 or args.disposable_identity:
