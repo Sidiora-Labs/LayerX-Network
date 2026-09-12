@@ -1437,7 +1437,8 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
     if (lxp_state_store_init(&state, 1U) != LXP_OK ||
         lxp_identity_register(&identities, did, sizeof(did) - 1U,
                               primary_key, &identity) != LXP_OK ||
-        lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        lxp_kernel_create(&kernel, &state, &journal, &parameters,
+                         post_upgrade_batch_regression ? 1U : 0U) != LXP_OK ||
         install_metering_v1(&kernel) != LXP_OK ||
         lxp_kernel_register_module(&kernel, module) !=
             LXP_OK ||
@@ -1469,6 +1470,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
             return artifact_fixture_failure(protocol_version, __LINE__);
     }
     execution.network_id = 7U;
+    execution.epoch = kernel.epoch;
     execution.batch_number = 1U;
     execution.batch_timestamp_ms = 10U;
     execution.maximum_timestamp_window = 100U;
