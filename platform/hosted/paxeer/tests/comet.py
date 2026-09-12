@@ -45,7 +45,18 @@ def qualify(raw_request, comet_port, evidence_path):
     params = dict(path='/store/evm/key', data='0x' + key, height=height, prove=True)
     expected = upstream('abci_query', params | {'data': key})
     evidence_path.write_bytes(expected)
+    context = {
+        'latest': json.loads(upstream('commit', {})),
+        'anchor': json.loads(upstream('commit', {'height': str(int(height) + 1)})),
+    }
     status, reply, body = query('abci_query', params)
+    context['boundary_status'] = status
+    context['boundary_reply'] = reply
+    if status != 200:
+        context['query_after'] = json.loads(upstream('abci_query', params | {'data': key}))
+        context['latest_after'] = json.loads(upstream('commit', {}))
+        context['anchor_after'] = json.loads(upstream('commit', {'height': str(int(height) + 1)}))
+    evidence_path.with_suffix('.context.json').write_text(json.dumps(context, indent=2) + '\n')
     assert status == 200, reply
     response = reply['result']['response']
     assert response['height'] == height and response.get('code', 0) == 0, reply
