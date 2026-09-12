@@ -1441,7 +1441,7 @@ pub struct DepositProof {
     inclusion_proof: Proof,
     leaf_hash: [u8; 32],
     nullifier: [u8; 32],
-    native_credit: Option<crate::AttestedNativeCustodyCredit>,
+    native_credit: Option<Box<crate::AttestedNativeCustodyCredit>>,
 }
 
 impl DepositProof {
@@ -1848,13 +1848,13 @@ impl DepositProof {
                 return Err(DepositFailure::CreditRefused(CreditFault::NativeBinding));
             }
         }
-        self.native_credit = Some(credit);
+        self.native_credit = Some(Box::new(credit));
         Ok(self)
     }
 
     #[must_use]
-    pub const fn native_credit(&self) -> Option<&crate::AttestedNativeCustodyCredit> {
-        self.native_credit.as_ref()
+    pub fn native_credit(&self) -> Option<&crate::AttestedNativeCustodyCredit> {
+        self.native_credit.as_deref()
     }
 }
 

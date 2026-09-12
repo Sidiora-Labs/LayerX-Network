@@ -614,6 +614,10 @@ fn assert_unbound_subscription_refused(
 ) {
     assert!(subscriptions.list(subscription_scope).is_empty());
     assert!(matches!(
+        subscriptions.revoke(target, Termination::SessionRevoked),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
         subscriptions.get(target),
         Err(SubscriptionError::AuthorizationRequired)
     ));
