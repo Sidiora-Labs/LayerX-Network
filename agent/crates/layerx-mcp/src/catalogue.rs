@@ -1,5 +1,6 @@
 //! Descriptions, argument schemas and strict argument validation for the daemon-bound catalogue.
 
+use layerx_types::limits::MAX_DID_BYTES;
 use serde_json::{json, Map, Value};
 
 use crate::server::{catalogue, DeploymentMode, ToolDefinition, ToolKind};
@@ -28,6 +29,7 @@ enum Shape {
     Bounded(u64),
     Symbol,
     Decimals,
+    Did,
 }
 
 impl Shape {
@@ -39,6 +41,7 @@ impl Shape {
             Self::Reference | Self::Symbol => None,
             Self::Unsigned | Self::Bounded(_) => Some("^[0-9]+$"),
             Self::Decimals => Some("^([0-9]|1[0-8])$"),
+            Self::Did => Some("^did:[0-9A-Za-z._:-]+$"),
         }
     }
 
@@ -51,6 +54,7 @@ impl Shape {
             Self::Unsigned | Self::Bounded(_) => 39,
             Self::Symbol => 32,
             Self::Decimals => 2,
+            Self::Did => MAX_DID_BYTES,
         }
     }
 }
@@ -176,6 +180,10 @@ const GRANT_DRAW: [Field; 3] = [
     required("amount", Shape::Unsigned),
     required("idempotency_key", Shape::Hex32),
 ];
+const FAUCET_REQUEST: [Field; 2] = [
+    required("did", Shape::Did),
+    required("public_key", Shape::Hex32),
+];
 const NONE: [Field; 0] = [];
 
 fn fields(name: &str) -> &'static [Field] {
@@ -200,6 +208,7 @@ fn fields(name: &str) -> &'static [Field] {
         b"token.transfer" => &TOKEN_TRANSFER,
         b"grant.issue" => &GRANT_ISSUE,
         b"grant.draw" => &GRANT_DRAW,
+        b"faucet.request" => &FAUCET_REQUEST,
         _ => &NONE,
     }
 }
@@ -242,6 +251,9 @@ pub fn description(name: &str) -> Option<&'static str> {
         b"token.transfer" => "Transfer one asset amount through the ordinary daemon submission path.",
         b"grant.issue" => "Issue one spending grant through the ordinary daemon submission path.",
         b"grant.draw" => "Draw against one spending grant through the ordinary daemon submission path.",
+        b"faucet.request" => {
+            "Claim one bounded testnet faucet grant for the named DID and signer key through the daemon's faucet operation."
+        }
         _ => return None,
     })
 }
@@ -346,6 +358,19 @@ fn check(field: &Field, text: &str) -> Result<(), ArgumentError> {
                 .map_err(|_| ArgumentError::Malformed(field.name))?;
             if parsed == 0 || parsed > bound {
                 return Err(ArgumentError::OutOfRange(field.name));
+            }
+        }
+        Shape::Did => {
+            let well_formed = text
+                .strip_prefix("did:")
+                .and_then(|rest| rest.split_once(':'))
+                .is_some_and(|(method, identifier)| !method.is_empty() && !identifier.is_empty());
+            if !well_formed
+                || !text.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.')
+                })
+            {
+                return Err(ArgumentError::Malformed(field.name));
             }
         }
     }

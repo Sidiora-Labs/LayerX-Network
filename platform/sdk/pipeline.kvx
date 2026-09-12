@@ -4,7 +4,7 @@ outputs = ["agent-api-rust", "agent-rust", "agent-typescript", "agent-python", "
 
 [source.agent-api]
 root = "agent/schema/agent-api"
-digest = "3fd1d5e3eab80db91d419ab5e5fd215a3ea596d063f5bf8c697d552b9958177f"
+digest = "3a4399dfdd0e2a292bae03070b0a189990b8dc51cd62784e771a7ee4cfbab005"
 
 [source.human-api]
 root = "human/schema/human-api"
@@ -19,7 +19,7 @@ language = "rust"
 root = "agent/crates/layerx-agent-api/src"
 
 [files.agent-api-rust]
-"operation_generated.rs" = "b4f5d901ed269bfaa5437e6767f1fb4aa6c9b69795df7b359f5228f18c10b168"
+"operation_generated.rs" = "38c7acd30bcf40540968c51e45acdf8c389e53ddde6aeb5963b09893f8dc6aec"
 
 [output.agent-rust]
 language = "rust"
@@ -34,7 +34,7 @@ language = "typescript"
 root = "agent/sdk/typescript/src/generated"
 
 [files.agent-typescript]
-"client.ts" = "968f428ab50d2a33ddf805ddfe08793d266c39b52889bdbc7c80250ebc878990"
+"client.ts" = "be49c7a9d4670703d35614538c26f477395f2327e37882fb8d770dadeb96cb99"
 "guarantees.md" = "16a010803f8a34b36a0101965f577d7884c6f05b6d5713054fb33e50ab9fff86"
 "mirror.ts" = "6f7c1968e536eec01b9a9fe91bd4f9f70fc5e9973ea0b4c908ae56af170e0b79"
 "receipt.ts" = "5ab22834d888c225291915392b0d7a3c7a79004ac56e86729fc42729e235bdf3"
@@ -45,11 +45,11 @@ root = "agent/sdk/python/layerx_sdk/generated"
 
 [files.agent-python]
 "__init__.py" = "5542bf19c9f1b61d1a0a9cb748dc1f0062a9a8df1a3db4b1e525cb8dbd1f6e34"
-"client.py" = "14c6b213149e80b59b433be5c1b21ee57d0774931757bc01e86b57cc1463d74a"
-"client.pyi" = "ec9ee367ccd09961ac6402bb0059367d0c5c5e4da9fe1ef022c9bf7b8f6ad87d"
+"client.py" = "137dc705e1aef9b36405ed80994c5e3468b29a6635dd306cd305aece6b3a665a"
+"client.pyi" = "9d4282cd580d55f306657ca063cedec5da768cbe807f20d26d75c0fdf0dd608e"
 "guarantees.md" = "16a010803f8a34b36a0101965f577d7884c6f05b6d5713054fb33e50ab9fff86"
 "mirror.py" = "03af926da7d418275b407896b98966ad87eea3dc1ea140afdc2376c17d575ed3"
-"mirror.pyi" = "ac018d858e019b806197a32b2b5c6b85b290018831c3fa638a20df89e3db2771"
+"mirror.pyi" = "8cc2faef1d16e4768c62b7ce2bf87c4556ea391e3fec92a5704c8917cd154719"
 "receipt.py" = "de5b6405754fab76c7eff8ba90f49aa48da68fb4e660f90644e4f591648ac65e"
 "receipt.pyi" = "5922febf76f0fc2df90bb207700c6ec45eff3fadf3c5542ba2541c03bb8c1623"
 
@@ -73,7 +73,7 @@ language = "go"
 root = "platform/sdk/go"
 
 [files.platform-go]
-"generated.go" = "4baccff4f8c472eb9f1f1dc0c4e74d9074bd4a8034fa5b4513c2ab96a82c7b52"
+"generated.go" = "3ef5114932045c0468340a2609f4d2ad8afd500e687a2cc95291d66afcb1489f"
 "mirror_generated.go" = "50e24c574ac570b429db96116f52b4279e66a5e92f2fb273d847988067c45876"
 "receipt_generated.go" = "9f85988f797c7dc6a9fdb214c420718d4438a87b2df7593e5d831b7f9a97bc72"
 "program_lifecycle_generated.go" = "67423319c2900714f1e8be16e64b251237a641753c2541cbcf12ad6de38261f7"
@@ -86,7 +86,7 @@ root = "platform/sdk/jvm"
 "pom.xml" = "43d9af46728bf4507ea4eaa2ba6b6cc779559085f27862b78f26d01a09e975a1"
 "src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "d9bc0cebf33f5658b68ddbe0cbec467eb87c82753e5d46039efa995e3500dfc5"
 "src/main/java/com/sidiora/layerx/sdk/ProgramLifecycleRoutes.java" = "037a8b228781e81ba7490a8db5a59a6990597827084fa5771f420ce420cc8636"
-"src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "9585af576199f88b772114a61e0247f29ee10fa8603321ae7cc026eb558c6bb1"
+"src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "a0a7531eab11dc2281734a47c77b332833511eb3f3942766d57e6eb7063875bd"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "ccc622d4cd8dcf303a0af1a9d6b32449a7d07ed766a0b91245fa768f99dca2e7"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedMirror.java" = "facf45b2da6828d41371b36bc0f2119f643d7b45003dead0c9590a9b0f0b6b8f"
 "src/main/java/com/sidiora/layerx/sdk/IdempotencyKey.java" = "2cfba7826e4bb7a6f0d4af63530f43c7aece547cf9f64ff1664b781cc431f6a4"
@@ -111,7 +111,7 @@ language = "kvx"
 root = "platform/sdk/conformance"
 
 [files.platform-conformance]
-"jvm.kvx" = "acb09cb6ec2d590d48efd95e901794afb8df96af180a7e2db1e0dce8d8e5a85b"
+"jvm.kvx" = "6839c02860857fa5c8d12fc25689ee15a34bf5e37efb05ad14105c9cc7890bdb"
 "run-jvm.sh" = "d0d7af078a37f823bf65745680479a10a89c90a77043b7359db9bc591ef59c3d"
 "mirror-v2.json" = "030c9b16aa72eec19aee23fcc2a79b2828112b238194f0cc31b50046bcd6bfdb"
 
@@ -120,7 +120,7 @@ language = "swift"
 root = "platform/sdk/swift/Sources/LayerXSDK/Generated"
 
 [files.platform-swift]
-"OperationCatalog.swift" = "5b7c99716562117d327b0860e0a25c2e275b6b4eef3b504928d3d04faa46df92"
+"OperationCatalog.swift" = "6807f5ed0619c417d27486b4df079176a7a44407a74dca2e93038cd9cb9dce86"
 "MirrorSchema.swift" = "422548e15055091d839d085c9115343774125d83a7a6c986ce2f4803164db1a1"
 "ReceiptContract.swift" = "00482fdaf04a26a008f664472742964707e1ba5dfa7f439f85c5d67dc3ef00a6"
 "ProgramLifecycleRoutes.swift" = "431e7e3a0d7118742963ab2b36826511f72429efacf3a771bfd1e84f98c1073b"
@@ -130,7 +130,7 @@ language = "csharp"
 root = "platform/sdk/dotnet/Generated"
 
 [files.platform-dotnet]
-"OperationCatalog.cs" = "94e04c60b5cb66400926d7c55efce6e06cc433858a386087f4bcca21c293502c"
+"OperationCatalog.cs" = "6055a11fa8e80bcb3666f6a4caef6a65f66d9439dc52bb57c1abc9d2389056a8"
 "MirrorSchema.cs" = "16cf74fc85cd4a93cd9b394dddc59ef3bdd73a9ab2e23ee83879ae3a529f81ce"
 "ReceiptContract.cs" = "839ed8af3a44c5eadaabefb484ca47839a9ac0ca1297369c50715cfca27cb6bf"
 "ProgramLifecycleRoutes.cs" = "f925a1354cbc8fd985f60d614a6898eb4ef25cbd2ffc54e629eeebbb9f32b2c8"
@@ -140,4 +140,4 @@ language = "json"
 root = "platform/sdk/conformance"
 
 [files.platform-portable-conformance]
-"operations.json" = "34cc6a86c37b1b2d3a85aec4757702232f0f489a2d51d9b0aea4ebb40e01dce2"
+"operations.json" = "85b4adf403b4bbd241dace7060864c1a620092ec05a91469f394c320a42a3ff7"

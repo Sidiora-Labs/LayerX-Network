@@ -21,6 +21,7 @@ public enum PlatformOperation
     AgentCapabilityList,
     AgentCapabilityRevoke,
     AgentExportOffline,
+    AgentFaucetClaim,
     AgentPrepare,
     AgentProgramActivity,
     AgentProgramCall,
@@ -154,6 +155,7 @@ public static class GeneratedOperationCatalog
             PlatformOperation.AgentCapabilityList => new(PlatformPlane.Agent, "capability.list", SdkHttpMethod.Post, "", "object", "AuthorityResponse<CapabilityRecords>", false, false),
             PlatformOperation.AgentCapabilityRevoke => new(PlatformPlane.Agent, "capability.revoke", SdkHttpMethod.Post, "", "object", "AuthorityResponse<CapabilityRecord>", true, false),
             PlatformOperation.AgentExportOffline => new(PlatformPlane.Agent, "export.offline", SdkHttpMethod.Post, "", "object", "VerifiedRead<OfflineExport>", false, false),
+            PlatformOperation.AgentFaucetClaim => new(PlatformPlane.Agent, "faucet.claim", SdkHttpMethod.Post, "", "object", "FaucetGrant", false, false),
             PlatformOperation.AgentPrepare => new(PlatformPlane.Agent, "prepare", SdkHttpMethod.Post, "", "PrepareRequest", "Prepared", true, false),
             PlatformOperation.AgentProgramActivity => new(PlatformPlane.Agent, "program.activity", SdkHttpMethod.Get, "/v1/programs/activities/{activity_id}", "ProgramActivitySelector", "ProgramSubmission", false, false),
             PlatformOperation.AgentProgramCall => new(PlatformPlane.Agent, "program.call", SdkHttpMethod.Post, "/v1/programs/call", "ProgramCallRequest", "ProgramSubmission", true, false),
@@ -270,7 +272,7 @@ public static class GeneratedOperationCatalog
 
     public static SdkMetadata platform_sdk_dotnet()
     {
-        return new("LayerX.Sdk", "0.1.0", 49, 78);
+        return new("LayerX.Sdk", "0.1.0", 50, 78);
     }
 }
 
@@ -308,6 +310,8 @@ public static class GeneratedPlatformClientExtensions
         client.MutateAsync(PlatformOperation.AgentCapabilityRevoke, request, idempotencyKey, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentExportOfflineAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.AgentExportOffline, request, pathParameters, cancellationToken);
+    public static Task<JsonValue> AgentFaucetClaimAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.ReadAsync(PlatformOperation.AgentFaucetClaim, request, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentPrepareAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.MutateAsync(PlatformOperation.AgentPrepare, request, idempotencyKey, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentProgramActivityAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>

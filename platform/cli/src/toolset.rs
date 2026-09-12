@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_mcp::catalogue;
-use layerx_mcp::server::{DeploymentMode, ToolDefinition, ToolKind};
+use layerx_mcp::server::{DeploymentMode, ToolDefinition, ToolKind, FAUCET_REQUEST};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
@@ -36,13 +36,7 @@ const SERVED: [ToolDefinition; 3] = [
         mutation: "canonical Asset SEND through the hosted gateway",
         evidence: "verified receipt or an honest pending, unknown, or refused state",
     },
-    ToolDefinition {
-        name: "faucet.request",
-        kind: ToolKind::Write,
-        required_scope: "faucet:claim",
-        mutation: "one bounded testnet faucet grant through the hosted gateway",
-        evidence: "the faucet claim the gateway confirmed as funded, or an honest refusal",
-    },
+    FAUCET_REQUEST,
 ];
 
 pub struct Runtime {

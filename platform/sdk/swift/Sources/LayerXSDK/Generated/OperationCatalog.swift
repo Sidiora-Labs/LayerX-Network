@@ -17,6 +17,7 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
     case agentCapabilityList = "agent:capability.list"
     case agentCapabilityRevoke = "agent:capability.revoke"
     case agentExportOffline = "agent:export.offline"
+    case agentFaucetClaim = "agent:faucet.claim"
     case agentPrepare = "agent:prepare"
     case agentProgramActivity = "agent:program.activity"
     case agentProgramCall = "agent:program.call"
@@ -147,6 +148,7 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
         case .agentCapabilityList: return OperationDescriptor(plane: .agent, name: "capability.list", method: .post, path: "", requestType: "object", responseType: "AuthorityResponse<CapabilityRecords>", requiresIdempotency: false, bodyless: false)
         case .agentCapabilityRevoke: return OperationDescriptor(plane: .agent, name: "capability.revoke", method: .post, path: "", requestType: "object", responseType: "AuthorityResponse<CapabilityRecord>", requiresIdempotency: true, bodyless: false)
         case .agentExportOffline: return OperationDescriptor(plane: .agent, name: "export.offline", method: .post, path: "", requestType: "object", responseType: "VerifiedRead<OfflineExport>", requiresIdempotency: false, bodyless: false)
+        case .agentFaucetClaim: return OperationDescriptor(plane: .agent, name: "faucet.claim", method: .post, path: "", requestType: "object", responseType: "FaucetGrant", requiresIdempotency: false, bodyless: false)
         case .agentPrepare: return OperationDescriptor(plane: .agent, name: "prepare", method: .post, path: "", requestType: "PrepareRequest", responseType: "Prepared", requiresIdempotency: true, bodyless: false)
         case .agentProgramActivity: return OperationDescriptor(plane: .agent, name: "program.activity", method: .get, path: "/v1/programs/activities/{activity_id}", requestType: "ProgramActivitySelector", responseType: "ProgramSubmission", requiresIdempotency: false, bodyless: false)
         case .agentProgramCall: return OperationDescriptor(plane: .agent, name: "program.call", method: .post, path: "/v1/programs/call", requestType: "ProgramCallRequest", responseType: "ProgramSubmission", requiresIdempotency: true, bodyless: false)
@@ -310,6 +312,9 @@ public extension PlatformClient {
     }
     func agentExportOffline(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.agentExportOffline, request: request, pathParameters: pathParameters)
+    }
+    func agentFaucetClaim(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await read(.agentFaucetClaim, request: request, pathParameters: pathParameters)
     }
     func agentPrepare(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await mutate(.agentPrepare, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
@@ -646,6 +651,6 @@ public extension PlatformClient {
     }
 }
 
-private let sdkMetadata = SDKMetadata(name: "LayerXSDK", version: "0.1.0", agentOperations: 49, humanOperations: 78)
+private let sdkMetadata = SDKMetadata(name: "LayerXSDK", version: "0.1.0", agentOperations: 50, humanOperations: 78)
 
 public func platform_sdk_swift() -> SDKMetadata { sdkMetadata }

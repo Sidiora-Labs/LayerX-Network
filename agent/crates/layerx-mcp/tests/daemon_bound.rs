@@ -277,7 +277,7 @@ fn exchange(
 #[test]
 fn the_served_catalogue_is_the_daemon_catalogue_and_every_tool_is_fully_described() {
     let full = catalogue::surface(DeploymentMode::Full);
-    assert_eq!(full.len(), 20);
+    assert_eq!(full.len(), 21);
     assert_eq!(full.as_slice(), served());
     let read_only = catalogue::surface(DeploymentMode::ReadOnly);
     assert!(!read_only.is_empty());
@@ -453,12 +453,12 @@ fn assert_daemon_handshake(initialize: &Value, listed: &Value) {
         .pointer("/result/_meta/layerx~1write_tools")
         .and_then(Value::as_u64)
         .unwrap_or_default();
-    assert_eq!(reads.saturating_add(writes), 20);
+    assert_eq!(reads.saturating_add(writes), 21);
     let tools = listed
         .pointer("/result/tools")
         .and_then(Value::as_array)
         .unwrap_or_else(|| panic!("tools absent"));
-    assert_eq!(tools.len(), 20);
+    assert_eq!(tools.len(), 21);
 }
 
 fn assert_daemon_read(read: &Value, program: &str) {
@@ -731,7 +731,7 @@ fn the_protocol_socket_refuses_every_unprotected_endpoint_and_serves_an_admitted
             .pointer("/result/tools")
             .and_then(Value::as_array)
             .map(Vec::len),
-        Some(20)
+        Some(21)
     );
     let _ = fs::remove_dir_all(root);
 }
