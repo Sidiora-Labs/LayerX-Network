@@ -73,6 +73,73 @@ fn rpc_private_ca_tls_checks_the_actual_server_identity() {
     );
 }
 
+#[test]
+fn rpc_subscription_private_ca_checks_the_actual_server_identity() {
+    use std::io::{Read as _, Write as _};
+    tls_boundary::qualify(
+        "rpc::rpc_subscription_private_ca_checks_the_actual_server_identity",
+        |endpoint| {
+            let ca = std::fs::read(
+                std::env::var("LAYERX_TLS_QUAL_CA_DER").map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            let client = RpcClient::connect_with_ca_der(endpoint, None, &ca)
+                .map_err(|error| format!("{error:?}"))?;
+            let endpoint = url::Url::parse(endpoint).map_err(|error| error.to_string())?;
+            let name = endpoint.host_str().ok_or("missing TLS host")?.to_owned();
+            let host = rustls::pki_types::ServerName::try_from(name.clone())
+                .map_err(|error| error.to_string())?;
+            let configuration = client
+                .subscription_tls
+                .ok_or("missing subscription trust")?;
+            let connection = rustls::ClientConnection::new(configuration, host)
+                .map_err(|error| error.to_string())?;
+            let socket =
+                std::net::TcpStream::connect(("127.0.0.1", endpoint.port().ok_or("missing port")?))
+                    .map_err(|error| error.to_string())?;
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .map_err(|error| error.to_string())?;
+            let mut stream = rustls::StreamOwned::new(connection, socket);
+            stream
+                .write_all(
+                    format!("GET /livez HTTP/1.1\r\nHost: {name}\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
+                .map_err(|error| error.to_string())?;
+            let mut header = Vec::new();
+            while !header.ends_with(b"\r\n\r\n") {
+                if header.len() >= 8192 {
+                    return Err("HTTP header limit".to_owned());
+                }
+                let mut byte = [0];
+                stream
+                    .read_exact(&mut byte)
+                    .map_err(|error| error.to_string())?;
+                header.push(byte[0]);
+            }
+            let text = std::str::from_utf8(&header).map_err(|error| error.to_string())?;
+            let length = text
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .ok_or("missing content length")?;
+            if length > 8192 {
+                return Err("HTTP body limit".to_owned());
+            }
+            let mut body = vec![0; length];
+            stream
+                .read_exact(&mut body)
+                .map_err(|error| error.to_string())?;
+            Ok(body)
+        },
+    );
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Commitment {
     Executed,
@@ -488,7 +555,7 @@ pub struct RpcClient {
     agent: ureq::Agent,
     endpoint: url::Url,
     credential: Option<LayerXKeyCredential>,
-    subscription_tls: Option<native_tls::TlsConnector>,
+    subscription_tls: Option<std::sync::Arc<rustls::ClientConfig>>,
     next_id: AtomicU64,
 }
 
@@ -572,18 +639,22 @@ impl RpcClient {
             return Err(RpcError::InvalidRequest);
         }
         let certificate = ureq::tls::Certificate::from_der(ca_der).to_owned();
-        let subscription_tls = native_tls::TlsConnector::builder()
-            .disable_built_in_roots(true)
-            .add_root_certificate(
-                native_tls::Certificate::from_der(ca_der).map_err(|_| RpcError::InvalidRequest)?,
-            )
-            .build()
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(rustls::pki_types::CertificateDer::from(ca_der.to_vec()))
             .map_err(|_| RpcError::InvalidRequest)?;
+        let subscription_tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|_| RpcError::InvalidRequest)?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
         Self::connect_with_roots(
             endpoint,
             credential,
             ureq::tls::RootCerts::new_with_certs(&[certificate]),
-            Some(subscription_tls),
+            Some(std::sync::Arc::new(subscription_tls)),
         )
     }
 
@@ -591,7 +662,7 @@ impl RpcClient {
         endpoint: &str,
         credential: Option<LayerXKeyCredential>,
         roots: ureq::tls::RootCerts,
-        subscription_tls: Option<native_tls::TlsConnector>,
+        subscription_tls: Option<std::sync::Arc<rustls::ClientConfig>>,
     ) -> Result<Self, RpcError> {
         let mut endpoint =
             crate::programs::http::validate_endpoint(endpoint).map_err(RpcError::Configuration)?;

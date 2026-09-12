@@ -107,7 +107,7 @@ fn parameters(
 pub(crate) fn connect(
     endpoint: &url::Url,
     credential: Option<&LayerXKeyCredential>,
-    tls: Option<native_tls::TlsConnector>,
+    tls: Option<std::sync::Arc<rustls::ClientConfig>>,
     topic: SubscriptionTopic,
     account: Option<[u8; 32]>,
     cursor: Option<u64>,
@@ -171,7 +171,7 @@ pub(crate) fn connect(
         request,
         stream,
         Some(config),
-        tls.map(tungstenite::Connector::NativeTls),
+        tls.map(tungstenite::Connector::Rustls),
     )
     .map_err(|_| RpcError::Transport)?;
     socket
