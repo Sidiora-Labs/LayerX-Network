@@ -232,6 +232,87 @@ fn strings(value: Option<&Value>) -> Vec<String> {
         .collect()
 }
 
+fn assert_installed_catalogue(root: &Path, binding_path: &Path) {
+    let mut server = layerx(root)
+        .args(["mcp", "serve", "--daemon-binding"])
+        .arg(binding_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("installed server should start: {error}"));
+    let program = "cc".repeat(32);
+    {
+        let mut stdin = server
+            .stdin
+            .take()
+            .unwrap_or_else(|| panic!("server stdin absent"));
+        let requests = [
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}".to_owned(),
+            format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"balance.get\",\"arguments\":{{\"program\":\"{program}\"}}}}}}"
+            ),
+        ];
+        for request in requests {
+            writeln!(stdin, "{request}").unwrap_or_else(|error| panic!("request: {error}"));
+        }
+    }
+    let output = server
+        .wait_with_output()
+        .unwrap_or_else(|error| panic!("server exit: {error}"));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap_or_else(|error| panic!("response: {error}"))
+        })
+        .collect::<Vec<Value>>();
+    assert_eq!(responses.len(), 3);
+    assert_eq!(
+        responses[0]
+            .pointer("/result/_meta/layerx~1binding")
+            .and_then(Value::as_str),
+        Some("agent-daemon")
+    );
+    assert_eq!(
+        responses[0]
+            .pointer("/result/_meta/layerx~1deployment_mode")
+            .and_then(Value::as_str),
+        Some("full")
+    );
+    assert_eq!(
+        responses[1]
+            .pointer("/result/tools")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(catalogue().len())
+    );
+    assert_eq!(
+        responses[2]
+            .pointer("/result/isError")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        responses[2]
+            .pointer("/result/structuredContent/result/program")
+            .and_then(Value::as_str),
+        Some(program.as_str())
+    );
+    assert_eq!(
+        responses[2]
+            .pointer("/result/structuredContent/result/freshness/observed_sequence")
+            .and_then(Value::as_u64),
+        Some(OBSERVED_SEQUENCE)
+    );
+}
+
 #[test]
 fn a_fresh_install_serves_the_catalogue_through_the_daemon_without_a_gateway_key() {
     let root = isolated("journey");
@@ -332,84 +413,7 @@ fn a_fresh_install_serves_the_catalogue_through_the_daemon_without_a_gateway_key
         Some(false)
     );
 
-    let mut server = layerx(&root)
-        .args(["mcp", "serve", "--daemon-binding"])
-        .arg(&binding_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|error| panic!("installed server should start: {error}"));
-    let program = "cc".repeat(32);
-    {
-        let mut stdin = server
-            .stdin
-            .take()
-            .unwrap_or_else(|| panic!("server stdin absent"));
-        let requests = [
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}".to_owned(),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}".to_owned(),
-            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}".to_owned(),
-            format!(
-                "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"balance.get\",\"arguments\":{{\"program\":\"{program}\"}}}}}}"
-            ),
-        ];
-        for request in requests {
-            writeln!(stdin, "{request}").unwrap_or_else(|error| panic!("request: {error}"));
-        }
-    }
-    let output = server
-        .wait_with_output()
-        .unwrap_or_else(|error| panic!("server exit: {error}"));
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let responses = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|line| {
-            serde_json::from_str::<Value>(line).unwrap_or_else(|error| panic!("response: {error}"))
-        })
-        .collect::<Vec<Value>>();
-    assert_eq!(responses.len(), 3);
-    assert_eq!(
-        responses[0]
-            .pointer("/result/_meta/layerx~1binding")
-            .and_then(Value::as_str),
-        Some("agent-daemon")
-    );
-    assert_eq!(
-        responses[0]
-            .pointer("/result/_meta/layerx~1deployment_mode")
-            .and_then(Value::as_str),
-        Some("full")
-    );
-    assert_eq!(
-        responses[1]
-            .pointer("/result/tools")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(catalogue().len())
-    );
-    assert_eq!(
-        responses[2]
-            .pointer("/result/isError")
-            .and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        responses[2]
-            .pointer("/result/structuredContent/result/program")
-            .and_then(Value::as_str),
-        Some(program.as_str())
-    );
-    assert_eq!(
-        responses[2]
-            .pointer("/result/structuredContent/result/freshness/observed_sequence")
-            .and_then(Value::as_u64),
-        Some(OBSERVED_SEQUENCE)
-    );
+    assert_installed_catalogue(&root, &binding_path);
     let _ = fs::remove_dir_all(root);
 }
 
