@@ -39,6 +39,17 @@
 # default 3600), validates it with bootstrap.sh --check-settlement and exports
 # its five values to `layerxd --serve` before starting it.
 #
+# Environment files are never sourced: every KEY=VALUE line is validated and
+# exported one at a time, and a LAYERX_NODE_SEQUENCER_PRIVATE_KEY line is
+# refused. sequencer.env names the sequencer seed file as
+# LAYERX_NODE_SEQUENCER_KEY_FILE (the bootstrap --sequencer-key path). Before a
+# generation is published the sequencer supervisor checks that the file's
+# public key equals LAYERX_NODE_SEQUENCER_PUBLIC_KEY; when it starts
+# `layerxd --serve` it reads the seed through a read-only descriptor it opens
+# itself and exports LAYERX_NODE_SEQUENCER_PRIVATE_KEY only into the
+# environment of the daemon process it execs. The seed is never copied into
+# the data directory and never appears on a command line.
+#
 # A daemon that exits on its own ends the supervisor with status 1 so the pod
 # restarts it against the retained data directory.
 set -euo pipefail
@@ -142,6 +153,83 @@ LAYERXD=$(resolve_binary "$LAYERXD" layerxd)
 DAEMON_PID=""
 SOCAT=${SOCAT:-$(command -v socat || true)}
 [ -n "$SOCAT" ] && [ -x "$SOCAT" ] || fail "socat is required for daemon readiness and the supervisor socket"
+if [ "$ROLE" = sequencer ]; then
+    command -v openssl >/dev/null || fail "openssl is required to bind the sequencer seed"
+    command -v od >/dev/null || fail "od is required to bind the sequencer seed"
+fi
+
+bin_to_hex() { od -An -v -tx1 | tr -d ' \n'; }
+
+hex_to_bin() {
+    local hex=$1 i
+    for ((i = 0; i < ${#hex}; i += 2)); do
+        printf "\\$(printf '%03o' "0x${hex:i:2}")"
+    done
+}
+
+public_key_hex() {
+    # ed25519 public key from a 32-byte seed via the PKCS#8 wrapper openssl reads.
+    { hex_to_bin "302e020100300506032b657004220420"; hex_to_bin "$1"; } \
+        | openssl pkey -inform DER -pubout -outform DER | tail -c 32 | bin_to_hex
+}
+
+load_environment() {
+    # load_environment NAME < lines -> exports every validated KEY=VALUE line
+    local name=$1 line key
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        [[ $line =~ ^(LAYERX_[A-Z0-9_]+)=([^[:cntrl:]]*)$ ]] \
+            || fail "$name carries a line that is not a LAYERX_* KEY=VALUE pair: ${line%%=*}"
+        key=${BASH_REMATCH[1]}
+        [ "$key" != LAYERX_NODE_SEQUENCER_PRIVATE_KEY ] \
+            || fail "$name must not carry LAYERX_NODE_SEQUENCER_PRIVATE_KEY; the supervisor delivers the seed from LAYERX_NODE_SEQUENCER_KEY_FILE"
+        export "$line"
+    done
+}
+
+SEQUENCER_SEED=""
+
+sequencer_seed_hex() {
+    # sequencer_seed_hex FILE -> SEQUENCER_SEED holds the 64 hex character seed
+    # read through a private read-only descriptor; FILE holds 32 raw bytes or
+    # 64 hex characters, the same forms bootstrap.sh --sequencer-key accepts.
+    local file=$1 size descriptor
+    SEQUENCER_SEED=""
+    [[ $file = /* ]] || fail "LAYERX_NODE_SEQUENCER_KEY_FILE must be an absolute path"
+    [ -f "$file" ] || fail "sequencer key file is not a regular file: $file"
+    [ -r "$file" ] || fail "sequencer key file is not readable: $file"
+    size=$(stat -L -c %s "$file")
+    [ "$size" -le 128 ] || fail "sequencer key file must hold 32 raw bytes or 64 hex characters: $file"
+    exec {descriptor}<"$file" || fail "sequencer key file could not be opened: $file"
+    if [ "$size" -eq 32 ]; then
+        SEQUENCER_SEED=$(bin_to_hex <&"$descriptor")
+    else
+        SEQUENCER_SEED=$(tr -d ' \t\r\n' <&"$descriptor" | tr 'A-F' 'a-f')
+    fi
+    exec {descriptor}<&-
+    [[ $SEQUENCER_SEED =~ ^[0-9a-f]{64}$ ]] \
+        || fail "sequencer key file must hold 32 raw bytes or 64 hex characters: $file"
+}
+
+check_sequencer_environment() {
+    # check_sequencer_environment ENV_FILE -> refuses a seed carried in the
+    # file and binds the named key file to the published sequencer public key
+    local env_file=$1 key_file public_key derived
+    [ -r "$env_file" ] || fail "environment file missing: $env_file"
+    if grep -q '^LAYERX_NODE_SEQUENCER_PRIVATE_KEY=' "$env_file"; then
+        fail "$env_file must not carry LAYERX_NODE_SEQUENCER_PRIVATE_KEY; the supervisor delivers the seed from LAYERX_NODE_SEQUENCER_KEY_FILE"
+    fi
+    key_file=$(sed -n 's/^LAYERX_NODE_SEQUENCER_KEY_FILE=//p' "$env_file" | tail -n 1)
+    [ -n "$key_file" ] || fail "LAYERX_NODE_SEQUENCER_KEY_FILE missing from $env_file"
+    public_key=$(sed -n 's/^LAYERX_NODE_SEQUENCER_PUBLIC_KEY=//p' "$env_file" | tail -n 1)
+    [[ $public_key =~ ^[0-9a-f]{64}$ ]] || fail "LAYERX_NODE_SEQUENCER_PUBLIC_KEY missing from $env_file"
+    sequencer_seed_hex "$key_file"
+    derived=$(public_key_hex "$SEQUENCER_SEED")
+    SEQUENCER_SEED=""
+    [ "$derived" = "$public_key" ] \
+        || fail "the sequencer key file $key_file does not match the bound sequencer public key"
+    log "sequencer seed bound from $key_file"
+}
 
 publish_core_environment() {
     local sequencer_id asset_id lni_gid temporary signer_socket
@@ -201,13 +289,15 @@ start_daemon() {
         wait_for_settlement "$env_file"
     fi
     (
-        set -a
-        # shellcheck disable=SC1090
-        . "$env_file"
+        load_environment "$env_file" < "$env_file"
         if [ -n "${SETTLEMENT_LINES:-}" ]; then
-            eval "$SETTLEMENT_LINES"
+            load_environment "the settlement environment" <<< "$SETTLEMENT_LINES"
         fi
-        set +a
+        if [ "$mode" = --serve ]; then
+            sequencer_seed_hex "${LAYERX_NODE_SEQUENCER_KEY_FILE:-}"
+            export LAYERX_NODE_SEQUENCER_PRIVATE_KEY="$SEQUENCER_SEED"
+            SEQUENCER_SEED=""
+        fi
         exec "$LAYERXD" "$mode" "$config"
     ) &
     DAEMON_PID=$!
@@ -244,7 +334,7 @@ wait_for_file() {
 
 wait_for_daemon_ready() (
     local env_file=$1 mode=$2 seconds=$3 address port bearer path expected response deadline unknown body record page
-    . "$env_file"
+    load_environment "$env_file" < "$env_file"
     if [ "$mode" = --serve ]; then
         address=$LAYERX_NODE_PROGRAM_ADDRESS
         port=$LAYERX_NODE_PROGRAM_PORT
@@ -387,6 +477,7 @@ if [ ! -r "$DATA_DIR/node.env" ]; then
     log "bootstrapping $DATA_DIR"
     run_bootstrap --force "${BOOTSTRAP_ARGS[@]}"
 fi
+check_sequencer_environment "$DATA_DIR/sequencer.env"
 GENERATION=$((GENERATION + 1))
 publish_generation "$GENERATION"
 start_daemon "$DATA_DIR/sequencer.env" --serve "$DATA_DIR/sequencer.conf"
@@ -416,6 +507,10 @@ perform_reset() {
     if ! run_bootstrap --force "${BOOTSTRAP_ARGS[@]}"; then
         : > "$RUN_DIR/reset-failed.$id"
         fail "reset $id: bootstrap failed"
+    fi
+    if ! (check_sequencer_environment "$DATA_DIR/sequencer.env"); then
+        : > "$RUN_DIR/reset-failed.$id"
+        fail "reset $id: the sequencer seed could not be bound"
     fi
     GENERATION=$((GENERATION + 1))
     publish_generation "$GENERATION"

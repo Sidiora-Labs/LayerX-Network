@@ -128,7 +128,7 @@ Outputs under the data directory
 | `secrets/treasury-key.hex` | Treasury seed hex |
 | `secrets/guarantor-key.pem` | secp256k1 guarantor private key |
 | `sequencer.conf` / `replica.conf` | Eight-line `layerxd` configurations; both pass `layerxd --check-config` (`platform/hosted/node/bootstrap.sh:449-455`) |
-| `sequencer.env` / `replica.env` | Daemon environments |
+| `sequencer.env` / `replica.env` | Daemon environments, mode `0600`; `sequencer.env` names the sequencer seed file as `LAYERX_NODE_SEQUENCER_KEY_FILE` and never carries the seed |
 | `node.env` | Published node facts, mode `0644` |
 | `treasury.json` | Treasury DID, public key, account, asset, genesis balance, network id (`platform/hosted/node/bootstrap.sh:543-546`) |
 
@@ -339,13 +339,16 @@ values before `layerxd --serve`
 | `LAYERX_NODE_REPLICA_ENV` | `{data}/replica.env` |
 
 `sequencer.env` additionally carries snapshot, manifest,
-registration, identities, logs, history database, sequencer
-keys, batch range `1`..`18446744073709551615`, replica
+registration, identities, logs, history database, the sequencer
+id and public key, `LAYERX_NODE_SEQUENCER_KEY_FILE` (the
+`--sequencer-key` path, absolute, outside the data directory),
+batch range `1`..`18446744073709551615`, replica
 address/port/id/token, program address/port/token, LNI socket,
 allowed uid/gid, `LAYERX_NODE_LNI_FRAME_BYTES=1212416`, and
 `LAYERX_NODE_LNI_DEADLINE_MS=2000`, or
 `LAYERX_NODE_SETTLEMENT_ENV` in place of the five settlement
 keys (`platform/hosted/node/bootstrap.sh:457-494`).
+
 `replica.env` carries replica log, replica id, sequencer id
 and public key, batch range, bearer token, and
 `LAYERX_AUTHORITY_ADDRESS=127.0.0.1` plus port
@@ -358,6 +361,56 @@ and public key, batch range, bearer token, and
 writes `1212416` (`platform/hosted/node/bootstrap.sh:492`).
 `cmd/layerxd/lni.env.example:23` writes `1146902`. Those two
 values differ.
+
+---
+
+## Sequencer seed delivery
+
+The sequencer seed is read by `bootstrap.sh` once, to sign the
+genesis request, and is not copied under the data directory:
+the temporary signer key under `work/` is deleted after
+`layerx-genesis-build` returns and `sequencer.env` records only
+the key file path. `--sequencer-key` must name a readable
+regular file outside the data directory (also after resolving
+symlinks), because `--force` and the supervisor reset discard
+that directory.
+
+The supervisor never sources an environment file with
+`set -a`. `load_environment` validates every line as a
+`LAYERX_*` `KEY=VALUE` pair without control characters, exports
+it, and refuses a `LAYERX_NODE_SEQUENCER_PRIVATE_KEY` line.
+Before the sequencer supervisor publishes a generation (first
+start, restart against a retained data directory, and every
+reset) `check_sequencer_environment` refuses a seed line in
+`sequencer.env`, reads the seed named by
+`LAYERX_NODE_SEQUENCER_KEY_FILE` (32 raw bytes or 64 hex
+characters) through a read-only descriptor it opens itself, and
+refuses to continue unless the derived public key equals
+`LAYERX_NODE_SEQUENCER_PUBLIC_KEY`. When it starts
+`layerxd --serve` it reads the seed the same way inside the
+subshell that execs the daemon and exports
+`LAYERX_NODE_SEQUENCER_PRIVATE_KEY` there only; the daemon
+reads that variable (`cmd/layerxd/lxp_daemon_process.c`,
+`cmd/layerxd/lxp_daemon_lni.c`). The seed never appears on a
+command line, in the supervisor's own environment, in
+`node.env`, `replica.env`, `core.env`, or the guarantor
+identity directories.
+
+Refusals, all exit `1` before a generation is published:
+`must not carry LAYERX_NODE_SEQUENCER_PRIVATE_KEY`,
+`LAYERX_NODE_SEQUENCER_KEY_FILE missing`, `sequencer key file is
+not a regular file`, `sequencer key file must hold 32 raw bytes
+or 64 hex characters`, `does not match the bound sequencer
+public key`.
+
+The pod keeps `shareProcessNamespace: true`
+(`platform/hosted/node/deployment.yaml:28`): the LNI peer
+credential check refuses a `SO_PEERCRED` pid of `0`, which is
+what a sibling container in its own pid namespace reports, so
+the boundary containers must share the daemon's pid namespace.
+Processes with the daemon's uid in that namespace can therefore
+still read the daemon environment; the daemon container is the
+only one that mounts `/run/layerx/keys/sequencer.key`.
 
 ---
 

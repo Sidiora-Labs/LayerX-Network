@@ -168,6 +168,26 @@ expect_contains "$HANDSHAKE" '"role":"Sequencer"'
 expect_contains "$HANDSHAKE" "\"sequencer_public_key\":\"$LAYERX_NODE_SEQUENCER_PUBLIC_KEY\""
 expect_contains "$HANDSHAKE" 'AccountRead'
 
+log "sequencer seed reaches only the daemon environment"
+SEQUENCER_SEED_HEX=$(od -An -v -tx1 "$WORK/sequencer.key" | tr -d ' \n')
+DAEMON_PID=$(pgrep -f "$LAYERXD --serve $DATA/" | head -n 1)
+[ -n "$DAEMON_PID" ] || fail "layerxd --serve pid not found"
+if grep -q '^LAYERX_NODE_SEQUENCER_PRIVATE_KEY=' "$DATA/sequencer.env"; then
+    fail "sequencer.env carries LAYERX_NODE_SEQUENCER_PRIVATE_KEY"
+fi
+[ "$(sed -n 's/^LAYERX_NODE_SEQUENCER_KEY_FILE=//p' "$DATA/sequencer.env")" = "$WORK/sequencer.key" ] \
+    || fail "sequencer.env does not name the sequencer key file"
+COPIES=$(grep -rlD skip --exclude=sequencer.key -- "$SEQUENCER_SEED_HEX" "$WORK" || true)
+[ -z "$COPIES" ] || fail "the sequencer seed was copied outside its key file: $COPIES"
+tr '\0' '\n' < "/proc/$DAEMON_PID/environ" | grep -qx "LAYERX_NODE_SEQUENCER_PRIVATE_KEY=$SEQUENCER_SEED_HEX" \
+    || fail "the layerxd --serve environment does not carry the sequencer seed"
+if tr '\0' '\n' < "/proc/$DAEMON_PID/cmdline" | grep -q -- "$SEQUENCER_SEED_HEX"; then
+    fail "the sequencer seed appears on the layerxd command line"
+fi
+if tr '\0' '\n' < "/proc/$SEQUENCER_PID/environ" | grep -q '^LAYERX_NODE_SEQUENCER_PRIVATE_KEY='; then
+    fail "the sequencer supervisor environment carries the sequencer seed"
+fi
+
 log "operator state read over the real LNI"
 OPERATOR_STATE=$(as_client "$WORK/layerxctl" read-state --socket "$LAYERX_NODE_LNI_SOCKET" \
     --network-id "$NETWORK_ID" --protocol-version 3 --actor "$LAYERX_NODE_TREASURY_DID")
