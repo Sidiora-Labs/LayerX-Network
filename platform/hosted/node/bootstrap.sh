@@ -84,12 +84,13 @@
 #   genesis/genesis.manifest, genesis/00000000000000000000.lxs,
 #   genesis/paxeer-registration-request.lxrr, genesis/paxeer-deployment-descriptor.lxgd,
 #   genesis/genesis.registration (LXGR bootstrap registration),
+#   genesis/genesis-request.lxgb (the LXGB v2 request layerx-genesis-build consumed),
 #   identities.txt, checkpoints/, logs/, replica/, secrets/{program-token,replica-token},
 #   sequencer.conf, replica.conf, sequencer.env, replica.env, node.env, treasury.json
 set -euo pipefail
 
 usage() {
-    sed -n '2,88p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,89p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -500,6 +501,8 @@ REGISTRATION_REQUEST="$GENESIS_DIR/paxeer-registration-request.lxrr"
 for artifact in "$MANIFEST" "$SNAPSHOT" "$REGISTRATION_REQUEST" "$GENESIS_DIR/paxeer-deployment-descriptor.lxgd"; do
     [ -s "$artifact" ] || fail "genesis artifact missing: $artifact"
 done
+RETAINED_REQUEST="$GENESIS_DIR/genesis-request.lxgb"
+mv "$REQUEST" "$RETAINED_REQUEST"
 [ "$(stat -c %s "$REGISTRATION_REQUEST")" -eq 73 ] || fail "registration request has an unexpected length"
 GENESIS_STATE_ROOT=$(tail -c +10 "$REGISTRATION_REQUEST" | head -c 32 | bin_to_hex)
 GENESIS_RECEIPT_STATE_ROOT=$(tail -c 32 "$REGISTRATION_REQUEST" | bin_to_hex)

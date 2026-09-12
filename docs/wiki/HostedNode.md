@@ -118,6 +118,7 @@ Outputs under the data directory
 | `genesis/paxeer-registration-request.lxrr` | LXRR v1, length `73` (`platform/hosted/node/bootstrap.sh:416`) |
 | `genesis/paxeer-deployment-descriptor.lxgd` | LXGD descriptor |
 | `genesis/genesis.registration` | LXGR v1 self-registration, length `82`, written only when `--custody-profile` is absent (`platform/hosted/node/bootstrap.sh:420-434`) |
+| `genesis/genesis-request.lxgb` | The LXGB v2 genesis request `layerx-genesis-build` consumed, moved out of the bootstrap scratch directory once the genesis artefacts exist so the request a genesis was built from stays auditable (`platform/hosted/node/bootstrap.sh:504-505`) |
 | `identities.txt` | One line `{treasury-did-hex}:{treasury-public-key}:0` (`platform/hosted/node/bootstrap.sh:438`) |
 | `checkpoints/` | Empty checkpoint directory |
 | `logs/` | `program-feed.log`, `canonical.log`, `receipt-authority.log`, `batch.log`, `evidence.log` |
