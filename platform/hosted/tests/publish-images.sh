@@ -14,6 +14,8 @@
 #   --phase push      push the immutable :<revision> tag of every image, verify
 #                     the registry manifest digest against the pushed image,
 #                     sign that digest and attach its SBOM attestation
+#   --phase verify    verify the recorded signatures, SBOMs and source provenance;
+#                     perform no registry writes or tag changes
 #   --phase promote   verify the signature, the SBOM attestation and the build
 #                     provenance of every published digest, then repoint the
 #                     release tag and the moving :beta tag and verify both
@@ -89,8 +91,8 @@ parse_arguments() {
             [ "$#" -ge 2 ] || { usage; exit 2; }
             [ -z "$MODE" ] || fail "only one mode may be given"
             case $2 in
-            push | promote) MODE=$2 ;;
-            *) fail "--phase must be push or promote" ;;
+            push | verify | promote) MODE=$2 ;;
+            *) fail "--phase must be push, verify or promote" ;;
             esac
             shift 2
             ;;
@@ -434,6 +436,21 @@ mode_push() {
         "${#IMAGE_REFS[@]}" "$PUBLISH_TAG" "$RELEASE_KIND" "$RELEASE_NAME"
 }
 
+mode_verify() {
+    local name
+    require_tools docker jq git cosign gh
+    export GITHUB_REPOSITORY=Sidiora-Labs/LayerX-Network
+    for name in "${IMAGE_NAMES[@]}"; do IMAGE_TARGETS[$name]="$REGISTRY_ORG/$name"; done
+    read_publication_record
+    resolve_release_binding
+    [ "$RELEASE_COMMIT" = "$RECORDED_COMMIT" ] \
+        || fail "publication and requested release revisions differ"
+    [ "$BUILD_REVISION" = "$PUBLISH_TAG" ] || fail "release images were built from a modified tree"
+    read_digests
+    verify_published
+    printf 'publish-images: verified %s immutable images at %s\n' "${#IMAGE_DIGESTS[@]}" "$RELEASE_COMMIT"
+}
+
 mode_promote() {
     local name
     require_tools docker jq git cosign gh
@@ -572,6 +589,7 @@ publish_images() {
     check) mode_check ;;
     dry-run) mode_dry_run ;;
     push) mode_push ;;
+    verify) mode_verify ;;
     promote) mode_promote ;;
     self-test) mode_self_test ;;
     *) fail "unhandled mode $MODE" ;;

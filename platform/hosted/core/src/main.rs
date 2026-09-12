@@ -1566,7 +1566,10 @@ fn stateful(
         Ok(Some(entry)) if entry.request_digest == digest => {
             if (entry.status == 202 && program_lifecycle::ordinal(&request.path).is_some())
                 || (scope == "fund"
-                    && (entry.status == 202 || entry.status == 409 || entry.status >= 500))
+                    && (entry.status == 202
+                        || entry.status == 409
+                        || entry.status >= 500
+                        || entry.retry_after.is_some()))
             {
                 let response = execute();
                 if journal_write(

@@ -1426,7 +1426,10 @@ fn cluster_producer(cluster: &Cluster, artifact: &Path) -> std::process::Output 
 fn cluster_producer_signs_built_program_for_live_treasury() {
     use layerx_types::program_lifecycle::NativeProgramDeploy;
     let cluster = start_cluster(true);
-    let artifact = repository_root().join("programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm");
+    let artifact = std::env::var_os("LAYERX_TEST_ESCROW_WASM").map_or_else(
+        || repository_root().join("programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"),
+        PathBuf::from,
+    );
     let sequence = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
     let output = cluster_producer(&cluster, &artifact);
     assert!(

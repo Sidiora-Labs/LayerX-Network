@@ -432,8 +432,8 @@ mod outbound_validation_tests {
     use super::{validate_outbound, Endpoint, OutboundRequest};
 
     #[test]
-    fn rejects_request_line_and_header_injection_before_transport() {
-        let endpoint = Endpoint::parse("https://core.layerx.test/base").expect("endpoint");
+    fn rejects_request_line_and_header_injection_before_transport() -> Result<(), String> {
+        let endpoint = Endpoint::parse("https://core.layerx.test/base")?;
         let request = OutboundRequest {
             method: "POST",
             path: "/v1/activities",
@@ -486,5 +486,6 @@ mod outbound_validation_tests {
         ] {
             assert!(Endpoint::parse(value).is_err());
         }
+        Ok(())
     }
 }
