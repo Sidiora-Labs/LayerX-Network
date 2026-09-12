@@ -214,21 +214,17 @@ pub struct EmulatorProgramSimulationTransport {
 }
 
 impl EmulatorProgramSimulationTransport {
-    #[must_use]
-    pub fn connect(endpoint: &str) -> Self {
+    /// # Errors
+    /// Refuses unavailable or invalid system trust roots for HTTPS.
+    pub fn connect(endpoint: &str) -> Result<Self, ProgramOperationError> {
         let config = ureq::Agent::config_builder()
-            .tls_config(
-                ureq::tls::TlsConfig::builder()
-                    .provider(ureq::tls::TlsProvider::NativeTls)
-                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-                    .build(),
-            )
+            .tls_config(crate::outbound_tls::system(endpoint).ok_or(ProgramOperationError::InvalidRequest)?)
             .http_status_as_error(false)
             .build();
-        Self {
+        Ok(Self {
             agent: config.into(),
             endpoint: endpoint.trim_end_matches('/').to_owned(),
-        }
+        })
     }
 }
 

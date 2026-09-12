@@ -260,6 +260,10 @@ impl HttpProgramTransport {
             return Err(ProgramOperationError::Authentication);
         }
         let config = ureq::Agent::config_builder()
+            .tls_config(ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::Rustls)
+                .root_certs(crate::tls::system_roots(endpoint.as_str())?)
+                .build())
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
             .max_redirects(0)
