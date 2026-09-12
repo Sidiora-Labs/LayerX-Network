@@ -1063,7 +1063,10 @@ fn receipt_route(config: &Config, activity_hex: &str) -> Response {
         return refusal(400, "invalid_argument", None);
     }
     match await_receipt(config, activity_id, Duration::ZERO) {
-        Ok(Some(facts)) => success(&receipt_result(&facts)),
+        Ok(Some(facts)) => success(&serde_json::json!({
+            "activity_id": activity_hex,
+            "receipt": hex_encode(&facts.canonical),
+        })),
         Ok(None) => refusal(404, "not_found", None),
         Err(error) => {
             eprintln!("layerx-core-boundary: {error}");

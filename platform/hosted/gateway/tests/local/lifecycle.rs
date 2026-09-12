@@ -127,6 +127,8 @@ fn start_local_identity(cluster: &Cluster, certificates: &Certificates) -> Local
     let gateway_token = token();
     for service in [
         "gateway",
+        "registry",
+        "registrar",
         "webhooks",
         "dashboard",
         "faucet",

@@ -508,11 +508,11 @@ impl FileDeploymentJournal {
     /// # Errors
     /// Refuses a differing committed projection and failed durable pair publication.
     pub fn export_pair(&self, evidence: &VerifiedDeploymentEvidence) -> Result<(), String> {
-        self.audit_projection(evidence)?;
         use nix::fcntl::{Flock, FlockArg};
         use rustix::fs::{renameat_with, RenameFlags, CWD};
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
+        self.audit_projection(evidence)?;
         let lock = OpenOptions::new()
             .read(true)
             .write(true)
