@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use layerx_types::verify::VerificationLevel;
 
+use crate::availability::{reassemble, verify_chunk, AvailabilityFailure, Chunk, RootCommitments};
 use crate::checkpoint::{
     verify_certificate, Certificate, CheckpointError, GuarantorKey, SettlementDomain,
 };
@@ -45,6 +46,7 @@ pub struct CheckpointFact {
     pub registered_checkpoint_id: [u8; 32],
     pub registered_settlement_reference: Option<Vec<u8>>,
     pub availability_obtained: bool,
+    pub availability: Vec<(Chunk, Proof)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +93,10 @@ pub enum ExportVerificationError {
     },
     CheckpointUnavailable {
         index: usize,
+    },
+    Availability {
+        index: usize,
+        error: AvailabilityFailure,
     },
     Checkpoint {
         index: usize,
@@ -173,6 +179,35 @@ pub fn verify(
             fact.registered_settlement_reference.as_deref(),
         )
         .map_err(|error| ExportVerificationError::Checkpoint { index, error })?;
+        let header =
+            layerx_wire::receipt::decode_batch_header(fact.certificate.checkpoint().header_bytes())
+                .map_err(|_| ExportVerificationError::CheckpointUnavailable { index })?;
+        if fact.availability.is_empty() || fact.availability.len() > 4096 {
+            return Err(ExportVerificationError::CheckpointUnavailable { index });
+        }
+        let chunks = fact
+            .availability
+            .iter()
+            .map(|(chunk, proof)| {
+                verify_chunk(
+                    chunk.clone(),
+                    proof,
+                    header.batch_number(),
+                    &header.data_availability_root(),
+                )
+                .map_err(|error| ExportVerificationError::Availability { index, error })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        reassemble(
+            &chunks,
+            RootCommitments {
+                activity: header.activity_merkle_root(),
+                receipt: header.receipt_merkle_root(),
+                event: header.event_merkle_root(),
+                oracle: header.oracle_root(),
+            },
+        )
+        .map_err(|error| ExportVerificationError::Availability { index, error })?;
         achieved_levels.push(report.level());
     }
     let known: BTreeSet<_> = receipt_digests.iter().copied().collect();
