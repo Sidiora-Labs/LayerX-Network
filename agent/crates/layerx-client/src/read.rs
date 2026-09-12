@@ -2,7 +2,9 @@
 
 use std::cmp::Ordering;
 
-use layerx_proof::inclusion::{verify_activity, InclusionError, SequencerAuthorization};
+use layerx_proof::inclusion::{
+    verify_activity, verify_receipt, InclusionError, SequencerAuthorization,
+};
 use layerx_proof::merkle::{MerkleError, Proof, MAX_DEPTH};
 use layerx_proof::state::{decode_account_value, AccountProofError};
 use layerx_types::amount::Amount;
@@ -585,8 +587,13 @@ pub fn history(
                         actual: sequence,
                     });
                 }
-                let achieved =
-                    verify_history_item(kind, response.canonical_payload, evidence_bytes, context)?;
+                let achieved = verify_history_item(
+                    kind,
+                    sequence,
+                    response.canonical_payload,
+                    evidence_bytes,
+                    context,
+                )?;
                 items.push(HistoryItem {
                     global_sequence: sequence,
                     kind,
@@ -642,6 +649,7 @@ fn history_metadata(bytes: &[u8]) -> Result<(HistoryKind, u64, &[u8]), ReadError
 
 fn verify_history_item(
     kind: HistoryKind,
+    sequence: u64,
     bytes: &[u8],
     proof_material: &[u8],
     context: ReadContext,
@@ -650,21 +658,62 @@ fn verify_history_item(
         require_level(context.requested, VerificationLevel::UNVERIFIED)?;
         return Ok(VerificationLevel::UNVERIFIED);
     }
-    if kind != HistoryKind::Activity {
-        return Err(ReadError::MissingEvidence {
-            requested: context.requested.level(),
-            achieved: VerificationLevel::UNVERIFIED,
-        });
-    }
     let bundle = ProofBundle::decode(proof_material)?;
-    let evidence = verify_activity(
-        bytes,
-        &bundle.proof,
-        &bundle.header,
-        &bundle.header_signature,
-        &context.sequencer_authorization,
-    )
-    .map_err(ReadError::Inclusion)?;
+    let header = decode_batch_header(&bundle.header).map_err(|_| ReadError::MalformedValue)?;
+    if header.protocol_version() != context.expected_protocol_version
+        || header.network_id() != context.expected_network_id
+        || header
+            .first_sequence()
+            .checked_add(u64::from(bundle.proof.leaf_index()))
+            != Some(sequence)
+        || sequence > header.last_sequence()
+    {
+        return Err(ReadError::SelectorMismatch);
+    }
+    let evidence = match kind {
+        HistoryKind::Activity => verify_activity(
+            bytes,
+            &bundle.proof,
+            &bundle.header,
+            &bundle.header_signature,
+            &context.sequencer_authorization,
+        )
+        .map_err(ReadError::Inclusion)?,
+        HistoryKind::Receipt => {
+            let recorded_sequence = if bytes.starts_with(b"LXP/programs/occupancy-receipt/v2\0") {
+                let record = layerx_wire::maintenance::decode_occupancy_maintenance(bytes)
+                    .map_err(|_| ReadError::MalformedValue)?;
+                if record.batch_number != header.batch_number() {
+                    return Err(ReadError::SelectorMismatch);
+                }
+                record.global_sequence
+            } else {
+                let receipt =
+                    layerx_wire::receipt::decode(bytes).map_err(|_| ReadError::MalformedValue)?;
+                receipt
+                    .protocol()
+                    .ok_or(ReadError::MalformedValue)?
+                    .global_sequence()
+            };
+            if recorded_sequence != sequence {
+                return Err(ReadError::SelectorMismatch);
+            }
+            verify_receipt(
+                bytes,
+                &bundle.proof,
+                &bundle.header,
+                &bundle.header_signature,
+                &context.sequencer_authorization,
+            )
+            .map_err(ReadError::Inclusion)?
+        }
+        HistoryKind::Event => {
+            return Err(ReadError::MissingEvidence {
+                requested: context.requested.level(),
+                achieved: VerificationLevel::UNVERIFIED,
+            })
+        }
+    };
     let achieved = evidence.level();
     require_level(context.requested, achieved)?;
     Ok(achieved)
