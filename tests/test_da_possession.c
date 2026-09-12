@@ -138,6 +138,29 @@ int main(void)
         return 1;
 
     if (snprintf(path, sizeof(path), "%s/%020llu.lxda", directory,
+                 (unsigned long long)body.header.batch_number) < 0)
+        return 1;
+    {
+        FILE *file = fopen(path, "r+b");
+        int original;
+        if (file == NULL || fseek(file, -1L, SEEK_END) != 0) return 1;
+        original = fgetc(file);
+        if (original == EOF || fseek(file, -1L, SEEK_END) != 0 ||
+            fputc(original ^ 1, file) == EOF || fflush(file) != 0 ||
+            fsync(fileno(file)) != 0)
+            return 1;
+        if (lxp_da_possession_verify(&store, &attestation,
+                checkpoint.header.data_availability_root, &arena) != LXP_ERR_ROOT_MISMATCH)
+            return 1;
+        if (fseek(file, -1L, SEEK_END) != 0 || fputc(original, file) == EOF ||
+            fflush(file) != 0 || fsync(fileno(file)) != 0 || fclose(file) != 0)
+            return 1;
+        if (lxp_da_possession_verify(&store, &attestation,
+                checkpoint.header.data_availability_root, &arena) != LXP_OK)
+            return 1;
+    }
+
+    if (snprintf(path, sizeof(path), "%s/%020llu.lxda", directory,
                  (unsigned long long)body.header.batch_number) < 0 ||
         unlink(path) != 0 ||
         lxp_da_possession_verify(
