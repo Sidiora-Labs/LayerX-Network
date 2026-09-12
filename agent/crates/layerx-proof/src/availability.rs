@@ -409,6 +409,11 @@ fn verify_bundle(chunks: &[VerifiedChunk]) -> Result<ReassemblyReport, Availabil
         {
             return Err(bundle_failure(chunks, AvailabilityCheck::ChunkOrder));
         }
+        if pair[0].chunk.class == pair[1].chunk.class
+            && pair[0].chunk.bytes.len() != MAX_CHUNK_BYTES
+        {
+            return Err(bundle_failure(chunks, AvailabilityCheck::ClassOffset));
+        }
     }
     if chunks.len() > MAX_CHUNKS
         || chunks.iter().enumerate().any(|(index, chunk)| {

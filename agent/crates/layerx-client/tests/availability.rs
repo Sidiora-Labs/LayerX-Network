@@ -420,6 +420,7 @@ fn provider_end_cannot_hide_authenticated_state_or_recovery_tails() {
             .iter()
             .position(|chunk| chunk.class == class)
             .unwrap_or_else(|| panic!("class absent"));
+        fixture.chunks[first].bytes = vec![b'd'; 65_536];
         let mut tail = fixture.chunks[first].clone();
         tail.class_offset =
             u64::try_from(tail.bytes.len()).unwrap_or_else(|error| panic!("offset: {error:?}"));
@@ -462,7 +463,7 @@ fn provider_end_cannot_hide_authenticated_state_or_recovery_tails() {
         let outcome = fetch(
             &mut providers,
             AvailabilitySelector::Batch(7),
-            context(&fixture, 4096, 8),
+            context(&fixture, 131_072, 8),
             |_| {},
         )
         .unwrap_or_else(|error| panic!("fetch: {error:?}"));

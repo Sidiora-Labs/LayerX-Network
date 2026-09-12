@@ -229,8 +229,9 @@ fn all_classes_do_not_prove_withheld_state_or_recovery_suffixes() {
             .iter()
             .position(|chunk| chunk.class == class)
             .unwrap_or_else(|| panic!("class absent"));
+        chunks[first].bytes = vec![b'd'; 65_536];
         let mut tail = chunks[first].clone();
-        tail.class_offset = 1;
+        tail.class_offset = 65_536;
         tail.bytes = b"unavailable-tail".to_vec();
         chunks.insert(first + 1, tail);
         for (index, chunk) in chunks.iter_mut().enumerate() {
@@ -424,4 +425,19 @@ fn individually_valid_proofs_cannot_disagree_about_bundle_leaf_count() {
             .check,
         AvailabilityCheck::BundleCompleteness
     );
+}
+
+#[test]
+fn authenticated_alternative_chunk_partition_is_noncanonical() {
+    let (mut chunks, _, _) = chunks();
+    let mut tail = chunks[4].clone();
+    tail.index = 5;
+    tail.class_offset = 1;
+    tail.bytes = b"noncanonical short partition".to_vec();
+    chunks.push(tail);
+    let (records, commitments) = records();
+    let failure = verify_reassembled(&verified(chunks), &records, commitments)
+        .err()
+        .unwrap_or_else(|| panic!("native canonical chunks require a full nonfinal chunk"));
+    assert_eq!(failure.check, AvailabilityCheck::ClassOffset);
 }

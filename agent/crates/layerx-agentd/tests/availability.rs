@@ -396,6 +396,15 @@ fn class_presence_precedes_decoding_and_complete_chunks_require_order() {
 #[test]
 fn withheld_recovery_tail_retains_evidence_without_emitting_complete_replay() {
     let mut fixture = fixture();
+    fixture.chunks[4].bytes = vec![b'r'; 65_536];
+    fixture.chunks[4].claimed_hash = availability_chunk_digest(
+        7,
+        4,
+        AvailabilityClass::Recovery as u8,
+        0,
+        &fixture.chunks[4].bytes,
+    )
+    .unwrap_or_else(|error| panic!("recovery digest: {error:?}"));
     let mut tail = fixture.chunks[4].clone();
     tail.index = 5;
     tail.class_offset =
@@ -430,6 +439,8 @@ fn withheld_recovery_tail_retains_evidence_without_emitting_complete_replay() {
         std::env::temp_dir().join(format!("layerx-availability-tail-{}", std::process::id()));
     let mut store = Store::open(&root).unwrap_or_else(|error| panic!("store: {error:?}"));
     let mut audit = AvailabilityAudit::default();
+    let mut request_context = context(&fixture, 100);
+    request_context.limits.maximum_bytes = 131_072;
     let outcome = availability(
         &mut store,
         &tenant(),
@@ -438,7 +449,7 @@ fn withheld_recovery_tail_retains_evidence_without_emitting_complete_replay() {
         &AvailabilityRequest {
             selector: AvailabilitySelector::Batch(7),
             checkpoint_id: [0x77; 32],
-            context: context(&fixture, 100),
+            context: request_context,
         },
         |_| {},
     )
