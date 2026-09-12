@@ -22,7 +22,7 @@ def run(args, success=True):
 expected = {'schema_version': 2, 'assets': [{'asset': asset, 'symbol': 'LXT',
              'currency': 'LXT', 'decimals': 18}], 'modules': [
              {'module': 1, 'ordinals': list(range(1, 12))},
-             {'module': 7, 'ordinals': [1, 2, 3, 5, 6]},
+             {'module': 7, 'ordinals': [1, 2, 3, 5, 6, 8]},
              {'module': 9, 'ordinals': list(range(1, 11))}]}
 assert json.loads(run(base)) == expected
 assert run(base) == run(base)
