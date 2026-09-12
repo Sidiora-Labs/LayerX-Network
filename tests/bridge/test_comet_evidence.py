@@ -4,6 +4,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import subprocess
 import unittest
 
 from comet_credit import verifier
@@ -25,6 +26,18 @@ class RealCometEvidence(unittest.TestCase):
         self.assertEqual(len(self.evidence['requests']), 2)
         for request, expected in zip(self.evidence['requests'], self.evidence['results'], strict=True):
             self.assertEqual(verifier(request), expected)
+
+    def test_cli_emits_one_json_document(self):
+        root = Path(__file__).resolve().parents[2]
+        binary = os.environ.get('LAYERX_CUSTODY_PROOF_BIN', str(root/'build/bin/layerx-custody-proof'))
+        command = [binary, '--history-state', os.environ['LAYERX_CUSTODY_HISTORY_STATE'],
+                   '--attestor-key', os.environ['LAYERX_CUSTODY_HISTORY_KEY']]
+        completed = subprocess.run(command, input=json.dumps(self.request()).encode(),
+                                   capture_output=True, timeout=120, check=False)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors='replace'))
+        self.assertTrue(completed.stdout.startswith(b'{'))
+        self.assertTrue(completed.stdout.endswith(b'}\n'))
+        self.assertEqual(json.loads(completed.stdout), self.evidence['results'][0])
 
     def test_genesis_and_chain_binding(self):
         self.refused(lambda r: r['expected'].__setitem__('genesis_sha256', '0x'+'01'*32))
