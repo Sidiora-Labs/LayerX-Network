@@ -138,9 +138,11 @@ impl Drop for Signer {
     fn drop(&mut self) {
         self.stop();
         if let Err(error) = fs::remove_dir_all(&self.root) {
-            if !thread::panicking() {
-                panic!("failed to remove {}: {error}", self.root.display());
-            }
+            assert!(
+                thread::panicking(),
+                "failed to remove {}: {error}",
+                self.root.display()
+            );
         }
     }
 }

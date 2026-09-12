@@ -111,28 +111,7 @@ pub fn request(method: &str, params: &Value) -> Result<Value, String> {
             };
             canonical_hex(canonical)?;
         }
-        "lx_subscribe" => match args.as_slice() {
-            [Value::String(topic)] if matches!(topic.as_str(), "receipts" | "checkpoints") => {}
-            [Value::String(topic), Value::String(cursor)]
-                if matches!(topic.as_str(), "receipts" | "checkpoints") =>
-            {
-                canonical_decimal(cursor, "subscription cursor")?;
-            }
-            [Value::String(topic), Value::String(account)] if topic == "account" => id32(account)?,
-            [Value::String(topic), Value::String(account), Value::String(cursor)]
-                if topic == "account" =>
-            {
-                id32(account)?;
-                canonical_decimal(cursor, "subscription cursor")?;
-            }
-            _ => {
-                return Err(
-                    "lx_subscribe requires receipts, checkpoints, or account with account_id, \
-                     each optionally followed by a cursor"
-                        .into(),
-                )
-            }
-        },
+        "lx_subscribe" => subscription_params(args)?,
         "lx_unsubscribe" => {
             let [Value::String(subscription)] = args.as_slice() else {
                 return Err("lx_unsubscribe requires one subscription identifier".into());
@@ -205,6 +184,32 @@ pub fn decode_response(method: &str, response: &Value) -> Result<Value, String> 
         .filter(|value| value.is_object())
         .cloned()
         .ok_or_else(|| format!("{method} returned a non-object result"))
+}
+
+fn subscription_params(args: &[Value]) -> Result<(), String> {
+    match args {
+        [Value::String(topic)] if matches!(topic.as_str(), "receipts" | "checkpoints") => {}
+        [Value::String(topic), Value::String(cursor)]
+            if matches!(topic.as_str(), "receipts" | "checkpoints") =>
+        {
+            canonical_decimal(cursor, "subscription cursor")?;
+        }
+        [Value::String(topic), Value::String(account)] if topic == "account" => id32(account)?,
+        [Value::String(topic), Value::String(account), Value::String(cursor)]
+            if topic == "account" =>
+        {
+            id32(account)?;
+            canonical_decimal(cursor, "subscription cursor")?;
+        }
+        _ => {
+            return Err(
+                "lx_subscribe requires receipts, checkpoints, or account with account_id, \
+                 each optionally followed by a cursor"
+                    .into(),
+            )
+        }
+    }
+    Ok(())
 }
 
 fn sequence_params(args: &[Value]) -> Result<(), String> {

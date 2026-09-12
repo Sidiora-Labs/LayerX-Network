@@ -147,16 +147,7 @@ pub fn build_send_with_signer(
     identity_sequence: u64,
     request: &SendRequest,
 ) -> Result<SignedSend, SendError> {
-    if request.amount == 0 {
-        return Err(SendError::Invalid(
-            "amount must be greater than zero".into(),
-        ));
-    }
-    if request.expires_at_ms <= request.not_before_ms {
-        return Err(SendError::Invalid(
-            "expiry must follow the validity start".into(),
-        ));
-    }
+    validate_send_request(request)?;
     let public_key = signer.public_key();
     let source = main_account(&request.source_did).map_err(SendError::Invalid)?;
     let destination = main_account(&request.destination_did).map_err(SendError::Invalid)?;
@@ -235,11 +226,11 @@ pub fn build_send_with_signer(
     layerx_crypto::ed25519::verify_digest(&public_key, &signature, &digest).map_err(|error| {
         SendError::Invalid(format!("send signature does not verify: {error:?}"))
     })?;
-    let signed = unsigned
+    let envelope = unsigned
         .attach_signature(Signature::new(&signature).map_err(|error| {
             SendError::Invalid(format!("send signature is invalid: {error:?}"))
         })?);
-    let canonical = layerx_wire::activity::encode_signed_envelope(&signed)
+    let canonical = layerx_wire::activity::encode_signed_envelope(&envelope)
         .map_err(|error| SendError::Invalid(format!("signed send is invalid: {error:?}")))?;
     let decoded = layerx_wire::activity::decode_signed(&canonical, &registry)
         .map_err(|error| SendError::Invalid(format!("signed send does not decode: {error:?}")))?;
@@ -253,6 +244,20 @@ pub fn build_send_with_signer(
         signer_public_key: public_key,
         idempotency_key: request.idempotency_key,
     })
+}
+
+fn validate_send_request(request: &SendRequest) -> Result<(), SendError> {
+    if request.amount == 0 {
+        return Err(SendError::Invalid(
+            "amount must be greater than zero".into(),
+        ));
+    }
+    if request.expires_at_ms <= request.not_before_ms {
+        return Err(SendError::Invalid(
+            "expiry must follow the validity start".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn disclosed_signature(
