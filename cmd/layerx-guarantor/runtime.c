@@ -3,6 +3,7 @@
 #include "../layerxd/lxp_daemon_batch_wal.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_activity.h"
+#include "layerx/lxp_batch_identity.h"
 #include "layerx/lxp_bridge_credit.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_daemon.h"
@@ -287,7 +288,6 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     lxp_authority_resolved authority;
     lxp_kernel_execution execution;
     lxp_byte_span encoded_receipt;
-    uint8_t batch_preimage[32U + 32U + 8U + 8U];
     uint8_t activity_id[32];
     lxp_result status;
     if (process == NULL || canonical_activity == NULL || canonical_receipt == NULL ||
@@ -350,12 +350,10 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     if (status != LXP_OK)
         return status;
     (void)memcpy(authority.principal, principal_id, 32U);
-    (void)memcpy(batch_preimage, process->kernel.current_state_root, 32U);
-    (void)memcpy(batch_preimage + 32U, activity_id, 32U);
-    write_u64_be(batch_preimage + 64U, global_sequence);
-    write_u64_be(batch_preimage + 72U, batch_number);
     (void)memset(&execution, 0, sizeof(execution));
-    status = lxp_hash_context_value(batch_preimage, sizeof(batch_preimage), execution.batch_id);
+    status = lxp_batch_identity_activity(
+        process->kernel.current_state_root, activity_id, global_sequence,
+        batch_number, execution.batch_id);
     if (status != LXP_OK)
         return status;
     if (!lxp_ct_is_zero(expected->activity_root, 32U)) {

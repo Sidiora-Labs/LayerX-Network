@@ -356,33 +356,80 @@ pub fn program_execution_batch_id(
     )
 }
 
-/// Selects the native execution identifier for an included receipt.
+/// Reports the last sequence a batch identifier commits to.
+///
+/// A maintained occupancy batch spends its final sequence on the maintenance
+/// record, which the committed range excludes; every other batch commits to
+/// its published last sequence.
 ///
 /// # Errors
-/// Refuses a Programs activity-root mismatch or an unrepresentable hash preimage.
-pub fn receipt_execution_batch_id(
+/// Refuses an unset first sequence, an inverted range, or a maintained batch
+/// that would commit to no sequence at all.
+pub fn committed_last_sequence(
+    first_sequence: u64,
+    last_sequence: u64,
+    maintenance_published: bool,
+) -> Result<u64, WireError> {
+    if first_sequence == 0
+        || last_sequence < first_sequence
+        || (maintenance_published && last_sequence == first_sequence)
+    {
+        return Err(WireError::known(KnownResult::NonCanonical, 0));
+    }
+    Ok(if maintenance_published {
+        last_sequence - 1
+    } else {
+        last_sequence
+    })
+}
+
+fn selected_execution_batch_id(
     receipt: &crate::receipt::ProtocolReceipt,
     header: &crate::receipt::BatchHeader,
+    maintenance_published: bool,
 ) -> Result<[u8; 32], WireError> {
-    if receipt.module_id() == 9 && receipt.operation() == 3 {
-        if receipt.activity_root() != header.activity_merkle_root() {
-            return Err(WireError::known(KnownResult::NonCanonical, 0));
-        }
-        program_execution_batch_id(
-            header.previous_state_root(),
-            header.activity_merkle_root(),
-            header.first_sequence(),
-            header.last_sequence(),
-            header.batch_number(),
-        )
-    } else {
-        execution_batch_id(
+    let bound = receipt.activity_root() != [0_u8; 32]
+        || (receipt.module_id() == 9 && receipt.operation() == 3);
+    if bound && receipt.activity_root() != header.activity_merkle_root() {
+        return Err(WireError::known(KnownResult::NonCanonical, 0));
+    }
+    if !bound && !maintenance_published {
+        return execution_batch_id(
             header.previous_state_root(),
             receipt.activity_id(),
             receipt.global_sequence(),
             header.batch_number(),
-        )
+        );
     }
+    program_execution_batch_id(
+        header.previous_state_root(),
+        header.activity_merkle_root(),
+        header.first_sequence(),
+        committed_last_sequence(
+            header.first_sequence(),
+            header.last_sequence(),
+            maintenance_published,
+        )?,
+        header.batch_number(),
+    )
+}
+
+/// Selects the native execution identifier for a receipt included in a batch
+/// that published no occupancy maintenance record.
+///
+/// A receipt the sequencer bound to a committed activity tree carries that
+/// tree as its activity root; such a receipt takes the committed identifier
+/// over the whole published range. A receipt with no bound activity root takes
+/// the scalar identifier over its own activity.
+///
+/// # Errors
+/// Refuses an activity-root mismatch, an unusable sequence range, or an
+/// unrepresentable hash preimage.
+pub fn receipt_execution_batch_id(
+    receipt: &crate::receipt::ProtocolReceipt,
+    header: &crate::receipt::BatchHeader,
+) -> Result<[u8; 32], WireError> {
+    selected_execution_batch_id(receipt, header, false)
 }
 
 /// Selects the maintained identity after the caller authenticates the header
@@ -415,13 +462,33 @@ pub fn receipt_execution_batch_id_maintenance(
     {
         return Err(WireError::known(KnownResult::NonCanonical, 0));
     }
-    program_execution_batch_id(
-        header.previous_state_root(),
-        header.activity_merkle_root(),
-        header.first_sequence(),
-        header.last_sequence() - 1,
-        header.batch_number(),
-    )
+    selected_execution_batch_id(receipt, header, true)
+}
+
+/// Selects the native execution identifier from the batch evidence class:
+/// `Some(record)` names a maintained occupancy batch whose final sequence
+/// carries the maintenance record, `None` a batch that published none. The
+/// caller authenticates the header, the receipt inclusion, and the
+/// maintenance leaf at the final sequence when the batch is maintained.
+///
+/// # Errors
+/// Refuses the same mismatches as the selector the evidence class names.
+pub fn receipt_execution_batch_id_for_evidence(
+    receipt: &crate::receipt::ProtocolReceipt,
+    header: &crate::receipt::BatchHeader,
+    maintenance: Option<&crate::maintenance::OccupancyMaintenance<'_>>,
+) -> Result<[u8; 32], WireError> {
+    match maintenance {
+        None => receipt_execution_batch_id(receipt, header),
+        Some(record) => {
+            let activity_count = header
+                .last_sequence()
+                .checked_sub(header.first_sequence())
+                .and_then(|count| u32::try_from(count).ok())
+                .ok_or_else(|| WireError::known(KnownResult::NonCanonical, 0))?;
+            receipt_execution_batch_id_maintenance(receipt, header, record, activity_count)
+        }
+    }
 }
 
 /// Computes the exact checkpoint identifier over canonical header bytes,

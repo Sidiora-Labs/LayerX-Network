@@ -5,6 +5,7 @@
 
 #include "layerx/lxp_activity.h"
 #include "layerx/lx_asset.h"
+#include "layerx/lxp_batch_identity.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_hash.h"
@@ -1132,7 +1133,6 @@ static lxp_result replay_execute_activity(
     lxp_authority_resolved authority;
     lxp_kernel_execution execution;
     lxp_byte_span encoded_receipt;
-    uint8_t batch_preimage[32U + 32U + 8U + 8U];
     uint8_t activity_id[32];
     bool decoded = false;
     lxp_result status;
@@ -1223,16 +1223,10 @@ static lxp_result replay_execute_activity(
                 &offered, 1U, process->kernel.current_state_root,
                 global_sequence, batch_number, &process->execution_arena,
                 &execution, &bound_roots, bound_batch_id);
-        else {
-            (void)memcpy(batch_preimage,
-                         process->kernel.current_state_root, 32U);
-            (void)memcpy(batch_preimage + 32U, activity_id, 32U);
-            write_u64_be(batch_preimage + 64U, global_sequence);
-            write_u64_be(batch_preimage + 72U, batch_number);
-            status = lxp_hash_context_value(batch_preimage,
-                                            sizeof(batch_preimage),
-                                            execution.batch_id);
-        }
+        else
+            status = lxp_batch_identity_activity(
+                process->kernel.current_state_root, activity_id,
+                global_sequence, batch_number, execution.batch_id);
         if (status != LXP_OK) return status;
         execution.network_id = process->network_id;
         execution.batch_number = batch_number;
@@ -1264,13 +1258,10 @@ static lxp_result replay_execute_activity(
         return status;
     }
     (void)memcpy(authority.principal, principal_id, 32U);
-    (void)memcpy(batch_preimage, process->kernel.current_state_root, 32U);
-    (void)memcpy(batch_preimage + 32U, activity_id, 32U);
-    write_u64_be(batch_preimage + 64U, global_sequence);
-    write_u64_be(batch_preimage + 72U, batch_number);
     (void)memset(&execution, 0, sizeof(execution));
-    status = lxp_hash_context_value(batch_preimage, sizeof(batch_preimage),
-                                    execution.batch_id);
+    status = lxp_batch_identity_activity(
+        process->kernel.current_state_root, activity_id, global_sequence,
+        batch_number, execution.batch_id);
     if (status != LXP_OK) return status;
     execution.network_id = process->network_id;
     execution.batch_number = batch_number;
@@ -2915,7 +2906,6 @@ static lxp_result apply_canonical_activity(
     lxp_byte_span canonical_events;
     lxp_byte_span activities[1];
     lxp_byte_span receipts[1];
-    uint8_t batch_preimage[32U + 32U + 8U + 8U];
     uint8_t activity_id[32];
     uint64_t timestamp;
     size_t mark;
@@ -2983,15 +2973,10 @@ static lxp_result apply_canonical_activity(
                                  activity_id);
         if (status == LXP_OK) status = current_time_ms(&timestamp);
         if (status == LXP_OK) {
-            (void)memcpy(batch_preimage,
-                         process->kernel.current_state_root, 32U);
-            (void)memcpy(batch_preimage + 32U, activity_id, 32U);
-            write_u64_be(batch_preimage + 64U, global_sequence);
-            write_u64_be(batch_preimage + 72U, process->next_batch);
             (void)memset(&execution, 0, sizeof(execution));
-            status = lxp_hash_context_value(batch_preimage,
-                                            sizeof(batch_preimage),
-                                            execution.batch_id);
+            status = lxp_batch_identity_activity(
+                process->kernel.current_state_root, activity_id,
+                global_sequence, process->next_batch, execution.batch_id);
         }
         if (status == LXP_OK) {
             base_accounts = malloc(sizeof(*base_accounts));
@@ -3051,13 +3036,10 @@ static lxp_result apply_canonical_activity(
         goto publish;
     }
     (void)memcpy(authority.principal, principal_id, 32U);
-    (void)memcpy(batch_preimage, process->kernel.current_state_root, 32U);
-    (void)memcpy(batch_preimage + 32U, activity_id, 32U);
-    write_u64_be(batch_preimage + 64U, global_sequence);
-    write_u64_be(batch_preimage + 72U, process->next_batch);
     (void)memset(&execution, 0, sizeof(execution));
-    status = lxp_hash_context_value(batch_preimage, sizeof(batch_preimage),
-                                    execution.batch_id);
+    status = lxp_batch_identity_activity(
+        process->kernel.current_state_root, activity_id, global_sequence,
+        process->next_batch, execution.batch_id);
     if (status != LXP_OK) goto finish;
     execution.network_id = process->network_id;
     execution.batch_number = process->next_batch;
