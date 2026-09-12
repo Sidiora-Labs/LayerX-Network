@@ -29,8 +29,11 @@ static const uint8_t parameter_version_key[32] = {
 
 static const uint8_t genesis_manifest_key[] = "genesis/manifest/v1";
 
-static const uint8_t module_enable_prefix[LXP_GENESIS_MODULE_ENABLE_PREFIX_BYTES] =
+static const uint8_t module_enable_prefix[] =
     "module-enable:";
+_Static_assert(sizeof(module_enable_prefix) ==
+                   LXP_GENESIS_MODULE_ENABLE_PREFIX_BYTES + 1U,
+               "module enable prefix length");
 
 /* The single genesis module registration table.  Every genesis consumer - the
  * protocol state root, the genesis builder, the daemon, the guarantor runtime

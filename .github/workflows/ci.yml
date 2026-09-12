@@ -47,6 +47,8 @@ jobs:
         run: >-
           sudo apt-get update && sudo apt-get install --yes
           build-essential clang libssl-dev libsqlite3-dev ripgrep
+      - name: Install pinned guest toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal --target wasm32-unknown-unknown
       - name: Build and test
         env:
           CC: ${{ matrix.compiler }}
