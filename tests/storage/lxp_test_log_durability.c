@@ -158,7 +158,7 @@ int main(void)
             lxp_log_write_boundary(&log) != LXP_OK ||
             group.descriptor_count != 1U || close(group.descriptors[0]) != 0 ||
             lxp_durability_group_commit(&group) != LXP_ERR_IO || group.active ||
-            log.durable_offset != 0U || log.durable_generation != 1U ||
+            log.durable_offset != 0U || log.durable_generation != 0U ||
             lxp_log_durable_head(&log, &durable) != LXP_OK || durable != UINT64_MAX ||
             lxp_log_close(&log) != LXP_OK ||
             snprintf(path, sizeof(path), "%s/%020u.lxp", directory, 0U) < 0 ||
