@@ -31,7 +31,8 @@ static void write64(uint8_t *p, uint64_t v)
 bool lxp_governance_activity(uint32_t type)
 {
     return type == 0x00070001U || type == 0x00070002U ||
-           type == 0x00070003U || type == 0x00070005U || type == 0x00070006U;
+           type == 0x00070003U || type == 0x00070005U || type == 0x00070006U ||
+           type == 0x00070008U;
 }
 
 lxp_result lxp_governance_identity_refresh(const lxp_kernel *kernel,
@@ -68,7 +69,7 @@ static lxp_result decode(lxp_module_ctx *ctx, uint16_t ordinal,
     void *memory = NULL;
     if (bytes == NULL || decoded == NULL || length < 4U || length > 1024U ||
         !lxp_governance_activity(0x00070000U | ordinal) || bytes[0] != 0x71U ||
-        bytes[1] != ordinal || bytes[2] != (ordinal == 5U ? 1U : 0U))
+        bytes[1] != ordinal || bytes[2] != ((ordinal == 5U || ordinal == 8U) ? 1U : 0U))
         return LXP_ERR_NON_CANONICAL;
     uint16_t fields = bytes[3];
     if ((ordinal == 1U && (fields != 2U || length != 68U)) ||
@@ -76,7 +77,8 @@ static lxp_result decode(lxp_module_ctx *ctx, uint16_t ordinal,
         (ordinal == 3U && !((fields == 3U && length == 70U) ||
                             (fields == 5U && length == 86U))) ||
         (ordinal == 5U && (fields != 3U || length < 52U)) ||
-        (ordinal == 6U && (fields != 3U || length != 45U)))
+        (ordinal == 6U && (fields != 3U || length != 45U)) ||
+        (ordinal == 8U && (fields != 1U || length < 9U)))
         return LXP_ERR_NON_CANONICAL;
     lxp_result result = lxp_ctx_arena_alloc(ctx, sizeof(*p), _Alignof(governance_payload), &memory);
     if (result != LXP_OK) return result;
@@ -205,6 +207,73 @@ static lxp_result session(lxp_module_ctx *ctx, const governance_payload *p,
     return LXP_OK;
 }
 
+static lxp_result grant_scope_validate(lxp_module_ctx *ctx,
+                                        const lxp_authority_grant *grant)
+{
+    lxp_authority_envelope envelope;
+    const lxp_authority_scope *scope = &grant->scope;
+    lxp_result status = lxp_authority_envelope_declare(ctx->kernel, ctx->epoch,
+                                                       &envelope);
+    if (status != LXP_OK) return status;
+    if ((scope->module_mask & ~envelope.module_mask) != 0U ||
+        scope->activity_ordinal_min < envelope.activity_ordinal_min ||
+        scope->activity_ordinal_max > envelope.activity_ordinal_max ||
+        !lxp_u128_is_zero(scope->spent_total) ||
+        !lxp_u128_is_zero(scope->spent_this_period) ||
+        (!lxp_u128_is_zero(scope->maximum_total) &&
+         lxp_u128_cmp(scope->maximum_per_activity, scope->maximum_total) > 0) ||
+        (scope->period_length == 0U &&
+         (!lxp_u128_is_zero(scope->maximum_per_period) || scope->period_start != 0U)) ||
+        (scope->period_length != 0U &&
+         (scope->period_start != grant->not_before ||
+          lxp_u128_cmp(scope->maximum_per_activity, scope->maximum_per_period) > 0)))
+        return LXP_ERR_AUTH_SCOPE;
+    return LXP_OK;
+}
+
+static lxp_result issue_grant(lxp_module_ctx *ctx, const governance_payload *p,
+                               const lxp_authority_resolved *authority,
+                               const uint8_t state[STATE_BYTES])
+{
+    lxp_codec_reader reader;
+    lxp_byte_span body, encoded;
+    lxp_authority_grant grant, prior_grant;
+    uint8_t key[33] = {5U};
+    lxp_result status = lxp_codec_reader_init(&reader, p->bytes + 4U, p->length - 4U);
+    if (status == LXP_OK) status = lxp_codec_read_bytes(&reader, &body, 1024U);
+    if (status == LXP_OK) status = lxp_codec_finish(&reader);
+    if (status == LXP_OK) status = lxp_grant_decode(body.bytes, body.length, &grant);
+    if (status != LXP_OK) return status;
+    if ((grant.kind != LXP_AUTHORITY_DELEGATED_CAPABILITY &&
+         grant.kind != LXP_AUTHORITY_BUDGET_ALLOWANCE) ||
+        memcmp(grant.grantor, authority->actor, 32U) != 0 ||
+        memcmp(grant.grantee, authority->actor, 32U) != 0 ||
+        !lxp_ed25519_pubkey_is_canonical(grant.key) ||
+        memcmp(grant.key, authority->verified_key, 32U) == 0 ||
+        grant.grantor_revocation_sequence != read64(state + REVOCATION) ||
+        grant.not_after == UINT64_MAX ||
+        grant.not_after <= lxp_ctx_batch_timestamp_ms(ctx) || grant.revoked ||
+        grant.revoked_at_sequence != 0U ||
+        !lxp_ct_is_zero(grant.grantor_signature, sizeof(grant.grantor_signature)))
+        return LXP_ERR_AUTH_SCOPE;
+    status = grant_scope_validate(ctx, &grant);
+    if (status == LXP_OK) status = lxp_grant_encode(&grant, ctx->arena, &encoded);
+    if (status != LXP_OK) return status;
+    if (encoded.length != body.length || memcmp(encoded.bytes, body.bytes, body.length) != 0)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_authority_grant_lookup(ctx->kernel, grant.grantor, grant.key, &prior_grant);
+    if (status == LXP_OK) return LXP_ERR_SEQUENCE_REUSED;
+    if (status != LXP_ERR_UNKNOWN_FIELD) return status;
+    status = lxp_grant_id_compute(&grant, key + 1U);
+    if (status == LXP_OK) status = lxp_ctx_kv_put(ctx, key, sizeof(key), body.bytes, body.length);
+    if (status == LXP_OK) status = lxp_ctx_emit_event(ctx, 0x7148U, key + 1U, 32U);
+    if (status == LXP_OK) status = lxp_ctx_emit_event(ctx, 0x7108U, body.bytes,
+                                                    body.length < 256U ? body.length : 256U);
+    if (status == LXP_OK && body.length > 256U)
+        status = lxp_ctx_emit_event(ctx, 0x7128U, body.bytes + 256U, body.length - 256U);
+    return status;
+}
+
 static lxp_result execute(lxp_module_ctx *ctx, const lxp_activity *activity,
                            const lxp_authority_resolved *authority, const void *decoded,
                            lxp_effect_buffer *effects)
@@ -260,6 +329,9 @@ static lxp_result execute(lxp_module_ctx *ctx, const lxp_activity *activity,
     } else if (p->ordinal == 5U) {
         status = session(ctx, p, authority, state);
         if (status != LXP_OK) return status;
+    } else if (p->ordinal == 8U) {
+        status = issue_grant(ctx, p, authority, state);
+        if (status != LXP_OK) return status;
     } else if (p->ordinal == 6U) {
         uint8_t key[33];
         uint8_t revoked[41];
@@ -309,8 +381,8 @@ static lxp_result root(lxp_module_ctx *ctx, uint8_t digest[32])
 }
 const lxp_module_iface *lxp_governance_module_iface(void)
 {
-    static const uint32_t types[] = {0x00070001U, 0x00070002U, 0x00070003U, 0x00070005U, 0x00070006U};
-    static const lxp_module_iface iface = {LXP_MODULE_GOVERNANCE, 1U, "governance", types, 5U,
+    static const uint32_t types[] = {0x00070001U, 0x00070002U, 0x00070003U, 0x00070005U, 0x00070006U, 0x00070008U};
+    static const lxp_module_iface iface = {LXP_MODULE_GOVERNANCE, 1U, "governance", types, 6U,
         genesis, decode, validate, execute, epoch, epoch, root, NULL};
     return &iface;
 }

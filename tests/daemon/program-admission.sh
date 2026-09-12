@@ -96,7 +96,13 @@ for ((attempt=0; attempt<200; attempt++)); do
     kill -0 "$sequencer_pid"
     sleep 0.1
 done
-cp "$build_dir/tests/lxp_test_program_admission" "$work/client"
+if [[ ${2:-} == --grant-issuance ]]; then
+    cp "$build_dir/tests/lxp_test_grant_issuance" "$work/client"
+    mkdir "$work/grants"
+    chown 4021:4021 "$work/grants"
+else
+    cp "$build_dir/tests/lxp_test_program_admission" "$work/client"
+fi
 chmod 0755 "$work/client"
 if [[ ${2:-} == --owner-authority ]]; then
     export LAYERX_TEST_OWNER_AUTHORITY_SOCKET="$runtime/layerxd.lni.sock"
@@ -116,6 +122,8 @@ elif [[ ${2:-} == --post-lxip ]]; then
     export LAYERX_TEST_OWNER_AUTHORITY_SOCKET="$runtime/layerxd.lni.sock"
     "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/post-lxip.py "$work"
     exit 0
+elif [[ ${2:-} == --grant-issuance ]]; then
+    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --grant-issuance "$work/grants/state"
 elif [[ ${2:-} == --maintenance-crash ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --maintenance-queue
     printf G >&"$apply_gate_fd"
@@ -165,7 +173,7 @@ else
     kill -0 "$sequencer_pid"
 fi
 
-if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw ]]; then
+if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw || ${2:-} == --grant-issuance ]]; then
     if [[ -n "$sequencer_pid" ]]; then
         kill -KILL "$sequencer_pid"
         wait "$sequencer_pid" || true
@@ -227,10 +235,14 @@ else:
 PYWAIT
     recovered_mode=--maintenance-recovered
     if [[ ${2:-} == --withdraw ]]; then recovered_mode=--withdraw-recovered; fi
-    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$recovered_mode"
+    if [[ ${2:-} == --grant-issuance ]]; then
+        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --grant-issuance-recovered "$work/grants/state"
+    else
+        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$recovered_mode"
+    fi
     kill -0 "$sequencer_pid"
     kill -0 "$replica_pid"
-    if [[ ${2:-} != --withdraw ]]; then
+    if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance ]]; then
         (set -a; source "$work/data/replica.env"; python3 tests/daemon/maintenance-evidence.py)
     fi
 fi

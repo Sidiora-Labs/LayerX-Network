@@ -89,6 +89,7 @@ pub enum CompileField {
 pub enum CompileErrorReason {
     Wire(WireError),
     Payload(PayloadError),
+    AuthorityGrant(layerx_crypto::authority_grant::GrantError),
 }
 
 /// Canonical compilation failure naming the exact intent field.
@@ -184,6 +185,14 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
                 encoder.bytes(value.ownership_signature.as_bytes(), 128),
             )?;
             finish(registry, ModuleId::Governance, 4, encoder)
+        }
+        IntentKind::AuthorityGrant(value) => {
+            let payload = value.payload().map_err(|error| CompileError {
+                field: CompileField::AuthorityGrant,
+                reason: CompileErrorReason::AuthorityGrant(error),
+            })?;
+            fixed(&mut encoder, &payload, CompileField::AuthorityGrant)?;
+            finish(registry, ModuleId::Governance, 8, encoder)
         }
         IntentKind::SessionGrant(value) => {
             header(&mut encoder, 0x7105, 1)?;

@@ -250,6 +250,26 @@ pub fn did_id(did: &Did) -> Result<[u8; 32], WireError> {
     )
 }
 
+/// Derives a DID identifier for an explicitly selected protocol.
+///
+/// # Errors
+/// Rejects unsupported protocols and lengths outside the canonical native bound.
+pub fn did_id_for_protocol(did: &Did, protocol: u16) -> Result<[u8; 32], WireError> {
+    match protocol {
+        1 | 2 => did_id(did),
+        crate::limits::STATE_COMMITMENT_PROTOCOL_VERSION => {
+            let bytes = did.as_bytes();
+            let length = u16::try_from(bytes.len())
+                .map_err(|_| WireError::known(KnownResult::LengthLimit, 0))?;
+            let mut input = Vec::with_capacity(2 + bytes.len());
+            input.extend_from_slice(&length.to_be_bytes());
+            input.extend_from_slice(bytes);
+            domain(Domain::DidId, &CanonicalBytes::from_wire(input))
+        }
+        _ => Err(WireError::known(KnownResult::VersionUnsupported, 0)),
+    }
+}
+
 /// Hashes canonical leaf bytes under the protocol Merkle-leaf domain.
 ///
 /// This entry point exists for independent proof verification. It does not

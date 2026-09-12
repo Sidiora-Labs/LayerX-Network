@@ -21,7 +21,7 @@ fn little_endian_less(left: &[u8; 32], right: &[u8; 32]) -> bool {
     false
 }
 
-fn public_key_is_canonical(public_key: &[u8; 32]) -> bool {
+pub(crate) fn public_key_is_canonical(public_key: &[u8; 32]) -> bool {
     let mut y = *public_key;
     y[31] &= 0x7f;
     if y.iter().all(|byte| *byte == 0) || (y[0] == 1 && y[1..].iter().all(|byte| *byte == 0)) {
