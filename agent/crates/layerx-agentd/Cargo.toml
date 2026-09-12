@@ -24,8 +24,8 @@ zeroize = "=1.9.0"
 getrandom = "=0.3.4"
 
 [dev-dependencies]
-native-tls = "=0.2.15"
-openssl = "=0.10.73"
+native-tls = "=0.2.18"
+openssl = "=0.10.81"
 ed25519-dalek = "=2.2.0"
 k256 = { version = "=0.13.4", default-features = false, features = ["ecdsa", "std"] }
 

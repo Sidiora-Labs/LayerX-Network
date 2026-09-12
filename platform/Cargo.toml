@@ -36,7 +36,7 @@ ed25519-dalek = "=2.2.0"
 getrandom = "=0.4.3"
 keyring = "=4.1.6"
 keyring-core = "=1.0.0"
-native-tls = "=0.2.15"
+native-tls = "=0.2.18"
 rustix = { version = "=1.1.4", features = ["fs", "process"] }
 layerx-fiat = { path = "../interop/crates/layerx-fiat" }
 layerx-proof = { path = "../agent/crates/layerx-proof" }
