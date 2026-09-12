@@ -16,7 +16,8 @@ use layerx_client::lni::simulate::{
 };
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_platform_core::{
-    build_send, fixed_hex, hex_decode, hex_encode, treasury_did, SendRequest,
+    build_send, build_send_with_signer, did_for_public_key, fixed_hex, hex_decode, hex_encode,
+    treasury_did, SendError, SendRequest, SocketSigner, TreasurySigner as _,
 };
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
@@ -76,6 +77,14 @@ fn repository_root() -> PathBuf {
         || panic!("repository root above {}", manifest.display()),
         Path::to_path_buf,
     )
+}
+
+/// The core boundary binary under test. Both qualification harnesses that reuse
+/// this fixture rewrite the `CARGO_BIN_EXE_layerx-core-boundary` token into a
+/// quoted absolute path and require exactly one textual occurrence of it, so
+/// every spawn site goes through this helper.
+fn core_binary() -> &'static Path {
+    Path::new(env!("CARGO_BIN_EXE_layerx-core-boundary"))
 }
 
 fn free_port() -> u16 {
@@ -1364,13 +1373,67 @@ fn start_cluster(with_sequencer: bool) -> Cluster {
 
 struct Boundary {
     process: Daemon,
+    signer: Daemon,
+    signer_socket: PathBuf,
     core: Http,
     admin: Http,
     admin_token: String,
     supervisor_socket: PathBuf,
 }
 
-fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
+/// Starts the real treasury signer over the cluster's treasury seed; the core
+/// boundary under test never sees that seed, only this socket.
+fn start_treasury_signer(cluster: &Cluster) -> (Daemon, PathBuf) {
+    let secrets = cluster.root.join("secrets");
+    make_dir(&secrets, 0o700);
+    let key = secrets.join("treasury.key");
+    write(&key, &cluster.treasury_seed, 0o600);
+    let socket = cluster.root.join("run").join("treasury-signer.sock");
+    let program = repository_root().join("platform/hosted/node/signer/signer.py");
+    assert!(program.is_file(), "{} is missing", program.display());
+    let mut signer = spawn(
+        Path::new("python3"),
+        &[
+            &text(&program),
+            "--socket",
+            &text(&socket),
+            "--allowed-uid",
+            &effective_uid().to_string(),
+            "--provider",
+            "file",
+            "--key-file",
+            &text(&key),
+        ],
+        &BTreeMap::new(),
+        false,
+        cluster.root.join("treasury-signer.stderr"),
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if UnixStream::connect(&socket).is_ok() {
+            break;
+        }
+        if let Ok(Some(status)) = signer.child.try_wait() {
+            panic!(
+                "treasury signer exited early with {status}: {}",
+                signer.diagnostics()
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "treasury signer socket did not appear: {}",
+            signer.diagnostics()
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+    (signer, socket)
+}
+
+fn boundary_environment(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    signer_socket: &Path,
+) -> (BTreeMap<&'static str, String>, u16, u16, String) {
     let secrets = cluster.root.join("secrets");
     make_dir(&secrets, 0o700);
     let admin_token = token();
@@ -1382,11 +1445,6 @@ fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
     write(
         &secrets.join("program-token"),
         cluster.program_token.as_bytes(),
-        0o600,
-    );
-    write(
-        &secrets.join("treasury-key.hex"),
-        hex_encode(&cluster.treasury_seed).as_bytes(),
         0o600,
     );
     write(
@@ -1430,10 +1488,7 @@ fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
         "LAYERX_CORE_ADMIN_TOKEN_FILE",
         text(&secrets.join("admin-token")),
     );
-    env.insert(
-        "LAYERX_CORE_TREASURY_KEY_FILE",
-        text(&secrets.join("treasury-key.hex")),
-    );
+    env.insert("LAYERX_CORE_TREASURY_SIGNER_SOCKET", text(signer_socket));
     env.insert("LAYERX_CORE_TREASURY_ASSET", hex_encode(&cluster.asset));
     env.insert(
         "LAYERX_CORE_SEQUENCER_ID",
@@ -1442,8 +1497,20 @@ fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
     env.insert("LAYERX_CORE_SUPERVISOR_SOCKET", text(&supervisor_socket));
     env.insert("LAYERX_CORE_STATE_DIR", text(&state));
     env.insert("LAYERX_CORE_RECEIPT_DEADLINE_MS", "20000".to_owned());
+    (env, core_port, admin_port, admin_token)
+}
+
+fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
+    let (signer, signer_socket) = start_treasury_signer(cluster);
+    let (env, core_port, admin_port, admin_token) =
+        boundary_environment(cluster, certificates, &signer_socket);
+    assert!(
+        !env.contains_key("LAYERX_CORE_TREASURY_KEY_FILE"),
+        "the core boundary is started without any treasury key material"
+    );
+    let supervisor_socket = cluster.root.join("run").join("supervisor.sock");
     let mut process = spawn(
-        Path::new(env!("CARGO_BIN_EXE_layerx-core-boundary")),
+        core_binary(),
         &[],
         &env,
         false,
@@ -1457,6 +1524,8 @@ fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
     );
     Boundary {
         process,
+        signer,
+        signer_socket,
         core: Http {
             port: core_port,
             ca: ca.clone(),
@@ -1802,6 +1871,161 @@ fn admin_dependency_refusals_are_four_xx_and_survive_restart() {
         422,
         "supervisor_unavailable",
     );
+}
+
+fn wait_for_exit(daemon: &mut Daemon, what: &str) -> std::process::ExitStatus {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Ok(Some(status)) = daemon.child.try_wait() {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{what} did not exit: {}",
+            daemon.diagnostics()
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn core_refuses_to_start_without_the_treasury_signer_socket() {
+    let cluster = start_cluster(false);
+    let certificates = certificates(&cluster.root);
+    let absent = cluster.root.join("run").join("absent-treasury-signer.sock");
+    assert!(!absent.exists());
+    let (env, core_port, _, _) = boundary_environment(&cluster, &certificates, &absent);
+    let mut refused = spawn(
+        core_binary(),
+        &[],
+        &env,
+        false,
+        cluster.root.join("boundary-absent-socket.stderr"),
+    );
+    let status = wait_for_exit(&mut refused, "core boundary without a signer socket");
+    assert_eq!(status.code(), Some(2), "{}", refused.diagnostics());
+    let diagnostics = refused.diagnostics();
+    assert!(
+        diagnostics.contains("LAYERX_CORE_TREASURY_SIGNER_SOCKET")
+            && diagnostics.contains("is not available"),
+        "{diagnostics}"
+    );
+    assert!(
+        TcpStream::connect(("127.0.0.1", core_port)).is_err(),
+        "a core without its treasury signer must not serve"
+    );
+
+    let mut env = env;
+    env.remove("LAYERX_CORE_TREASURY_SIGNER_SOCKET");
+    let mut unset = spawn(
+        core_binary(),
+        &[],
+        &env,
+        false,
+        cluster.root.join("boundary-unset-socket.stderr"),
+    );
+    let status = wait_for_exit(&mut unset, "core boundary without a signer variable");
+    assert_eq!(status.code(), Some(2), "{}", unset.diagnostics());
+    assert!(
+        unset
+            .diagnostics()
+            .contains("LAYERX_CORE_TREASURY_SIGNER_SOCKET is required"),
+        "{}",
+        unset.diagnostics()
+    );
+}
+
+#[test]
+fn core_takes_the_treasury_identity_from_the_signer_socket() {
+    let cluster = start_cluster(false);
+    let certificates = certificates(&cluster.root);
+    let mut boundary = start_boundary(&cluster, &certificates);
+    let signer = must(
+        SocketSigner::connect(&boundary.signer_socket),
+        "treasury signer client",
+    );
+    assert_eq!(
+        did_for_public_key(&signer.public_key()),
+        cluster.treasury_did,
+        "the signer serves the cluster's treasury identity"
+    );
+    let treasury_key = hex_encode(&signer.public_key());
+    let self_funding = funding_body(&cluster.treasury_did, &treasury_key, 25);
+    assert_refusal(
+        &boundary.admin_post(
+            "/admin/v1/testnet/fund",
+            "fund-treasury-self",
+            &self_funding,
+        ),
+        400,
+        "invalid_argument",
+    );
+    let (did, public_key) = recipient();
+    assert_refusal(
+        &boundary.admin_post(
+            "/admin/v1/testnet/fund",
+            "fund-other-1",
+            &funding_body(&did, &public_key, 25),
+        ),
+        422,
+        "node_unavailable",
+    );
+    let request = SendRequest {
+        network_id: NETWORK_ID,
+        source_did: cluster.treasury_did.clone(),
+        destination_did: did,
+        asset: cluster.asset,
+        amount: 5,
+        account_sequence: 0,
+        idempotency_key: random32(),
+        not_before_ms: now_ms() - 1_000,
+        expires_at_ms: now_ms() + 60_000,
+        fee_limit: 1_000,
+    };
+    let over_socket = must(
+        build_send_with_signer(&signer, 7, &request),
+        "send signed over the socket",
+    );
+    let in_process = must(
+        layerx_platform_core::build_send_with_identity_sequence(
+            &cluster.treasury_seed,
+            7,
+            &request,
+        ),
+        "send signed in process",
+    );
+    assert_eq!(
+        over_socket.canonical, in_process.canonical,
+        "the socket signer produces the bytes the seed holder produces"
+    );
+    boundary.signer.stop();
+    let outage = build_send_with_signer(&signer, 8, &request);
+    assert!(
+        matches!(outage, Err(SendError::Signer(_))),
+        "a stopped signer is reported as a signer failure: {outage:?}"
+    );
+    assert_eq!(
+        boundary.core.get("/livez").status,
+        200,
+        "the core outlives its treasury signer"
+    );
+    assert_eq!(
+        boundary.admin.get("/livez").status,
+        200,
+        "the admin plane outlives its treasury signer"
+    );
+    let (orphan_did, orphan_key) = recipient();
+    assert_refusal(
+        &boundary.admin_post(
+            "/admin/v1/testnet/fund",
+            "fund-signer-down",
+            &funding_body(&orphan_did, &orphan_key, 25),
+        ),
+        422,
+        "node_unavailable",
+    );
+    drop(boundary);
+    drop(cluster);
 }
 
 fn assert_client_certificates(core: &Http, certificates: &Certificates) {

@@ -1,7 +1,14 @@
 //! Canonical treasury SEND construction shared by the core boundary binary and
-//! its real-node tests.
+//! its real-node tests, together with the treasury signer boundary the binary
+//! signs through.
 
-use ed25519_dalek::{Signer as _, SigningKey};
+mod custody;
+
+pub use custody::{did_for_public_key, SeedSigner, SendError, SocketSigner, TreasurySigner};
+
+use ed25519_dalek::SigningKey;
+use layerx_crypto::signer::SigningRequest;
+use layerx_crypto::SignatureMessage;
 use layerx_intents::{compile, Intent, IntentKind, LxpSend};
 use layerx_types::account::AccountId;
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
@@ -102,7 +109,8 @@ pub fn domain_hash(domain: Domain, bytes: &[u8]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-/// Builds, compiles with layerx-intents and signs one SEND from the treasury.
+/// Builds, compiles with layerx-intents and signs one SEND from a seed held
+/// in process.
 ///
 /// # Errors
 ///
@@ -111,7 +119,8 @@ pub fn build_send(seed: &[u8; 32], request: &SendRequest) -> Result<SignedSend, 
     build_send_with_identity_sequence(seed, request.account_sequence, request)
 }
 
-/// Builds one SEND whose actor sequence is independent of its source-account sequence.
+/// Builds one SEND from a seed held in process whose actor sequence is
+/// independent of its source-account sequence.
 ///
 /// # Errors
 ///
@@ -121,16 +130,36 @@ pub fn build_send_with_identity_sequence(
     identity_sequence: u64,
     request: &SendRequest,
 ) -> Result<SignedSend, String> {
+    build_send_with_signer(&SeedSigner::new(seed), identity_sequence, request)
+        .map_err(|error| error.to_string())
+}
+
+/// Builds one SEND whose two signatures come from `signer`, which may hold the
+/// treasury identity in process or reach it over the treasury signer socket.
+///
+/// # Errors
+///
+/// Returns [`SendError::Signer`] when the signer refuses or cannot be reached
+/// and [`SendError::Invalid`] for every construction, compilation or encoding
+/// failure.
+pub fn build_send_with_signer(
+    signer: &dyn TreasurySigner,
+    identity_sequence: u64,
+    request: &SendRequest,
+) -> Result<SignedSend, SendError> {
     if request.amount == 0 {
-        return Err("amount must be greater than zero".into());
+        return Err(SendError::Invalid(
+            "amount must be greater than zero".into(),
+        ));
     }
     if request.expires_at_ms <= request.not_before_ms {
-        return Err("expiry must follow the validity start".into());
+        return Err(SendError::Invalid(
+            "expiry must follow the validity start".into(),
+        ));
     }
-    let signing_key = SigningKey::from_bytes(seed);
-    let public_key = signing_key.verifying_key().to_bytes();
-    let source = main_account(&request.source_did)?;
-    let destination = main_account(&request.destination_did)?;
+    let public_key = signer.public_key();
+    let source = main_account(&request.source_did).map_err(SendError::Invalid)?;
+    let destination = main_account(&request.destination_did).map_err(SendError::Invalid)?;
     let context = send_context_hash(
         &source,
         &destination,
@@ -138,11 +167,13 @@ pub fn build_send_with_identity_sequence(
         request.amount,
         &request.idempotency_key,
     );
-    let authorization = send_authorization(&signing_key, &source, &destination, request, &context)?;
+    let authorization = send_authorization(signer, &source, &destination, request, &context)?;
     let from = AccountId::parse(&format!("agent:{}:main", request.source_did))
-        .map_err(|error| format!("source account is invalid: {error:?}"))?;
-    let to = AccountId::parse(&format!("agent:{}:main", request.destination_did))
-        .map_err(|error| format!("destination account is invalid: {error:?}"))?;
+        .map_err(|error| SendError::Invalid(format!("source account is invalid: {error:?}")))?;
+    let to =
+        AccountId::parse(&format!("agent:{}:main", request.destination_did)).map_err(|error| {
+            SendError::Invalid(format!("destination account is invalid: {error:?}"))
+        })?;
     let intent = LxpSend::new(
         from,
         to,
@@ -158,23 +189,26 @@ pub fn build_send_with_identity_sequence(
             AuthorizationSignature::new(authorization),
         ),
         NetworkId::new(request.network_id)
-            .map_err(|error| format!("network id is invalid: {error:?}"))?,
-        ProtocolVersion::new(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION)
-            .map_err(|error| format!("protocol version is invalid: {error:?}"))?,
+            .map_err(|error| SendError::Invalid(format!("network id is invalid: {error:?}")))?,
+        ProtocolVersion::new(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION).map_err(
+            |error| SendError::Invalid(format!("protocol version is invalid: {error:?}")),
+        )?,
     )
-    .map_err(|error| format!("send intent is invalid: {error:?}"))?;
-    let (registry, activity_type) = asset_registry()?;
+    .map_err(|error| SendError::Invalid(format!("send intent is invalid: {error:?}")))?;
+    let (registry, activity_type) = asset_registry().map_err(SendError::Invalid)?;
     let compiled = compile(&Intent::v1(IntentKind::LxpSend(intent)), &registry)
-        .map_err(|error| format!("send intent does not compile: {error:?}"))?;
+        .map_err(|error| SendError::Invalid(format!("send intent does not compile: {error:?}")))?;
     if compiled.activity_type() != activity_type {
-        return Err("compiled intent is not an asset send".into());
+        return Err(SendError::Invalid(
+            "compiled intent is not an asset send".into(),
+        ));
     }
     let actor = Did::new(request.source_did.as_bytes())
-        .map_err(|error| format!("source DID is invalid: {error:?}"))?;
+        .map_err(|error| SendError::Invalid(format!("source DID is invalid: {error:?}")))?;
     let authority = Authority::owner(&public_key)
-        .map_err(|error| format!("owner authority is invalid: {error:?}"))?;
+        .map_err(|error| SendError::Invalid(format!("owner authority is invalid: {error:?}")))?;
     let timestamp = TimestampBound::new(request.not_before_ms, request.expires_at_ms)
-        .map_err(|error| format!("timestamp bound is invalid: {error:?}"))?;
+        .map_err(|error| SendError::Invalid(format!("timestamp bound is invalid: {error:?}")))?;
     let mut builder = EnvelopeBuilder::new();
     builder
         .protocol_version(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION)
@@ -188,26 +222,29 @@ pub fn build_send_with_identity_sequence(
         .and_then(|value| value.fee_limit(Amount::from_u128(request.fee_limit)))
         .and_then(|value| value.payload_hash(compiled.payload_hash()))
         .and_then(|value| value.payload(compiled.payload().clone()))
-        .map_err(|error| format!("send envelope is invalid: {error:?}"))?;
+        .map_err(|error| SendError::Invalid(format!("send envelope is invalid: {error:?}")))?;
     let unsigned = builder
         .build()
-        .map_err(|error| format!("send envelope is incomplete: {error:?}"))?;
-    let unsigned_bytes = layerx_wire::activity::encode_unsigned_envelope(&unsigned)
-        .map_err(|error| format!("send signing bytes are invalid: {error:?}"))?;
+        .map_err(|error| SendError::Invalid(format!("send envelope is incomplete: {error:?}")))?;
+    let unsigned_bytes =
+        layerx_wire::activity::encode_unsigned_envelope(&unsigned).map_err(|error| {
+            SendError::Invalid(format!("send signing bytes are invalid: {error:?}"))
+        })?;
     let digest = domain_hash(Domain::SignaturePreimage, &unsigned_bytes);
-    let signature = disclosed_signature(seed, &unsigned_bytes, &registry)?;
-    layerx_crypto::ed25519::verify_digest(&public_key, &signature, &digest)
-        .map_err(|error| format!("send signature does not verify: {error:?}"))?;
-    let signed = unsigned.attach_signature(
-        Signature::new(&signature)
-            .map_err(|error| format!("send signature is invalid: {error:?}"))?,
-    );
+    let signature = disclosed_signature(signer, &unsigned_bytes, &registry, request.network_id)?;
+    layerx_crypto::ed25519::verify_digest(&public_key, &signature, &digest).map_err(|error| {
+        SendError::Invalid(format!("send signature does not verify: {error:?}"))
+    })?;
+    let signed = unsigned
+        .attach_signature(Signature::new(&signature).map_err(|error| {
+            SendError::Invalid(format!("send signature is invalid: {error:?}"))
+        })?);
     let canonical = layerx_wire::activity::encode_signed_envelope(&signed)
-        .map_err(|error| format!("signed send is invalid: {error:?}"))?;
+        .map_err(|error| SendError::Invalid(format!("signed send is invalid: {error:?}")))?;
     let decoded = layerx_wire::activity::decode_signed(&canonical, &registry)
-        .map_err(|error| format!("signed send does not decode: {error:?}"))?;
+        .map_err(|error| SendError::Invalid(format!("signed send does not decode: {error:?}")))?;
     let activity_id = layerx_wire::hash::activity_id(&decoded)
-        .map_err(|error| format!("send activity id is invalid: {error:?}"))?;
+        .map_err(|error| SendError::Invalid(format!("send activity id is invalid: {error:?}")))?;
     Ok(SignedSend {
         canonical,
         activity_id,
@@ -219,32 +256,38 @@ pub fn build_send_with_identity_sequence(
 }
 
 fn disclosed_signature(
-    seed: &[u8; 32],
+    signer: &dyn TreasurySigner,
     canonical: &[u8],
     registry: &ModuleRegistry,
-) -> Result<[u8; 64], String> {
+    network_id: u32,
+) -> Result<[u8; 64], SendError> {
     let disclosure = layerx_crypto::disclosure::bind(canonical, registry)
-        .map_err(|error| format!("send disclosure is invalid: {error:?}"))?;
-    let local_key = layerx_crypto::signer::LocalSigner::new(*seed);
-    let mut future =
-        layerx_crypto::signer::sign_disclosed(&local_key, canonical, &disclosure, registry);
-    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-    let signature = match std::future::Future::poll(future.as_mut(), &mut context) {
-        std::task::Poll::Ready(result) => *result
-            .map_err(|error| format!("send signer refused: {error:?}"))?
-            .as_bytes(),
-        std::task::Poll::Pending => return Err("local signer unexpectedly pending".into()),
-    };
+        .map_err(|error| SendError::Invalid(format!("send disclosure is invalid: {error:?}")))?;
+    let message = SignatureMessage::new(
+        Domain::SignaturePreimage,
+        layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
+        network_id,
+        canonical,
+    )
+    .map_err(|error| SendError::Invalid(format!("send signing scope is invalid: {error:?}")))?;
+    let request = SigningRequest::new(message, &disclosure)
+        .map_err(|error| SendError::Invalid(format!("send disclosure does not bind: {error:?}")))?;
+    let signature = signer
+        .sign_digest(&request.message().digest())
+        .map_err(SendError::Signer)?;
+    layerx_crypto::ed25519::verify(&signer.public_key(), &signature, request.message()).map_err(
+        |error| SendError::Signer(format!("treasury signature does not verify: {error:?}")),
+    )?;
     Ok(signature)
 }
 
 fn send_authorization(
-    signing_key: &SigningKey,
+    signer: &dyn TreasurySigner,
     source: &[u8; 32],
     destination: &[u8; 32],
     request: &SendRequest,
     context: &[u8; 32],
-) -> Result<[u8; 64], String> {
+) -> Result<[u8; 64], SendError> {
     let mut authorization = Encoder::new(512);
     authorization
         .u16(0x5301)
@@ -262,9 +305,11 @@ fn send_authorization(
         .and_then(|()| authorization.fixed(context))
         .and_then(|()| authorization.u32(request.network_id))
         .and_then(|()| authorization.u16(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION))
-        .map_err(|error| format!("send authorization is too large: {error:?}"))?;
+        .map_err(|error| {
+            SendError::Invalid(format!("send authorization is too large: {error:?}"))
+        })?;
     let digest = domain_hash(Domain::SignaturePreimage, &authorization.finish());
-    Ok(signing_key.sign(&digest).to_bytes())
+    signer.sign_digest(&digest).map_err(SendError::Signer)
 }
 
 /// Encodes bytes as lowercase hexadecimal.
@@ -317,18 +362,8 @@ fn hex_nibble(byte: u8) -> Result<u8, String> {
     }
 }
 
-/// Parses an Ed25519 seed given as 64 hexadecimal characters.
-///
-/// # Errors
-///
-/// Returns a description when the text is not a 32-byte hex seed.
-pub fn parse_seed(text: &str) -> Result<[u8; 32], String> {
-    fixed_hex::<32>("treasury seed", text.trim())
-}
-
 /// Derives the beta treasury DID `did:layerx:<public key hex>` from a seed.
 #[must_use]
 pub fn treasury_did(seed: &[u8; 32]) -> String {
-    let public_key = SigningKey::from_bytes(seed).verifying_key().to_bytes();
-    format!("did:layerx:{}", hex_encode(&public_key))
+    did_for_public_key(&SigningKey::from_bytes(seed).verifying_key().to_bytes())
 }
