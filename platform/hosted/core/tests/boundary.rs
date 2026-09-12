@@ -79,6 +79,14 @@ fn repository_root() -> PathBuf {
     )
 }
 
+/// The core boundary binary under test. Both qualification harnesses that reuse
+/// this fixture rewrite the `CARGO_BIN_EXE_layerx-core-boundary` token into a
+/// quoted absolute path and require exactly one textual occurrence of it, so
+/// every spawn site goes through this helper.
+fn core_binary() -> &'static Path {
+    Path::new(env!("CARGO_BIN_EXE_layerx-core-boundary"))
+}
+
 fn free_port() -> u16 {
     static ALLOCATED: OnceLock<Mutex<BTreeSet<u16>>> = OnceLock::new();
     loop {
@@ -1502,7 +1510,7 @@ fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
     );
     let supervisor_socket = cluster.root.join("run").join("supervisor.sock");
     let mut process = spawn(
-        Path::new(env!("CARGO_BIN_EXE_layerx-core-boundary")),
+        core_binary(),
         &[],
         &env,
         false,
@@ -1888,7 +1896,7 @@ fn core_refuses_to_start_without_the_treasury_signer_socket() {
     assert!(!absent.exists());
     let (env, core_port, _, _) = boundary_environment(&cluster, &certificates, &absent);
     let mut refused = spawn(
-        Path::new(env!("CARGO_BIN_EXE_layerx-core-boundary")),
+        core_binary(),
         &[],
         &env,
         false,
@@ -1910,7 +1918,7 @@ fn core_refuses_to_start_without_the_treasury_signer_socket() {
     let mut env = env;
     env.remove("LAYERX_CORE_TREASURY_SIGNER_SOCKET");
     let mut unset = spawn(
-        Path::new(env!("CARGO_BIN_EXE_layerx-core-boundary")),
+        core_binary(),
         &[],
         &env,
         false,
