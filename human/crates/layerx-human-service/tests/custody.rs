@@ -66,8 +66,13 @@ fn account(value: &str) -> AccountId {
     AccountId::parse(value).unwrap_or_else(|error| panic!("account: {error:?}"))
 }
 
-fn send_intent(public_key: [u8; 32], seed: [u8; 32], amount: u128, idempotency: u8) -> Intent {
-    let signer = layerx_crypto::local::LocalSigner::new(seed);
+fn send_intent(
+    public_key: [u8; 32],
+    signing_key: [u8; 32],
+    amount: u128,
+    idempotency: u8,
+) -> Intent {
+    let signer = layerx_crypto::local::LocalSigner::new(signing_key);
     assert_eq!(
         layerx_crypto::signer::Signer::public_key(&signer),
         public_key
