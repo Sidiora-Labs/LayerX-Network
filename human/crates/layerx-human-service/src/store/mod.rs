@@ -353,9 +353,6 @@ impl PrincipalState {
         });
         let pins = self.pins();
         for (table, rows) in &mut self.tables {
-            if *table == Table::EventOutbox {
-                continue;
-            }
             let period = policy.period(*table);
             rows.retain(|key, row| {
                 if !retention::elapsed(now, row.written_at, period) {

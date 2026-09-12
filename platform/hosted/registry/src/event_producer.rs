@@ -1,11 +1,20 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use layerx_platform_internal::journal::Journal;
+use layerx_platform_internal::journal::{Journal, LOCK_REFUSAL};
 use layerx_platform_internal::producer::{
     Client, Health, Observation, Outbox, Pending, QueueState,
 };
 use serde::{Deserialize, Serialize};
+
+/// Longest a caller waits for the advisory journal lock another holder owns.
+/// The delivery worker polls the same directory once a second and the request
+/// worker runs in its own process, so a verified publication must outwait the
+/// replay of a neighbouring holder rather than be refused.
+const LOCK_WAIT: Duration = Duration::from_secs(5);
+/// Pause between attempts to take a contended journal lock.
+const LOCK_RETRY: Duration = Duration::from_millis(10);
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +33,7 @@ enum Entry {
 
 pub struct ProgramOutbox {
     directory: PathBuf,
+    gate: Mutex<()>,
     pub health: Arc<Health>,
 }
 
@@ -91,8 +101,35 @@ impl ProgramOutbox {
     pub fn new(directory: &Path) -> Self {
         Self {
             directory: directory.join("event-outbox"),
+            gate: Mutex::new(()),
             health: Arc::new(Health::default()),
         }
+    }
+
+    /// Runs one journal operation while this process holds the outbox to
+    /// itself, retrying the exclusive open for [`LOCK_WAIT`] while another
+    /// holder owns the advisory lock. The journal is closed, and the lock
+    /// released, before the caller sees the answer.
+    fn with_journal<T>(
+        &self,
+        action: impl FnOnce(&mut Journal, QueueState, u64, u64) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "program journal gate is unavailable".to_owned())?;
+        let deadline = Instant::now()
+            .checked_add(LOCK_WAIT)
+            .ok_or("program journal deadline is invalid")?;
+        let (mut journal, state, unbound, overflow) = loop {
+            match self.open() {
+                Err(error) if error.starts_with(LOCK_REFUSAL) && Instant::now() < deadline => {
+                    std::thread::sleep(LOCK_RETRY);
+                }
+                result => break result?,
+            }
+        };
+        action(&mut journal, state, unbound, overflow)
     }
 
     fn open(&self) -> Result<(Journal, QueueState, u64, u64), String> {
@@ -132,53 +169,54 @@ impl ProgramOutbox {
 
     /// # Errors
     /// Refuses an unavailable or full journal and changed publication retries.
-    pub fn enqueue(&self, transition: &str, mut observation: Observation) -> Result<(), String> {
-        let (mut journal, mut state, _, _) = self.open()?;
-        if let Some(previous) = state.retained(transition) {
-            observation.sequence = previous.sequence;
-            observation.id.clone_from(&previous.id);
-            observation.occurred_at = previous.occurred_at;
-            return if observation == *previous {
-                Ok(())
-            } else {
-                Err("publication retry differs".to_owned())
-            };
-        }
-        if state.full() {
-            journal.append(&Entry::Overflow)?;
-            self.health.overflow();
-            return Err("program event queue full".to_owned());
-        }
-        let observation = state.enqueue(transition, observation)?;
-        journal.append(&Entry::Enqueue {
-            transition: transition.to_owned(),
-            observation: Box::new(observation),
+    pub fn enqueue(&self, transition: &str, observation: Observation) -> Result<(), String> {
+        self.with_journal(move |journal, mut state, _, _| {
+            let mut observation = observation;
+            if let Some(previous) = state.retained(transition) {
+                observation.sequence = previous.sequence;
+                observation.id.clone_from(&previous.id);
+                observation.occurred_at = previous.occurred_at;
+                return if observation == *previous {
+                    Ok(())
+                } else {
+                    Err("publication retry differs".to_owned())
+                };
+            }
+            if state.full() {
+                journal.append(&Entry::Overflow)?;
+                self.health.overflow();
+                return Err("program event queue full".to_owned());
+            }
+            let observation = state.enqueue(transition, observation)?;
+            journal.append(&Entry::Enqueue {
+                transition: transition.to_owned(),
+                observation: Box::new(observation),
+            })
         })
     }
 
     /// # Errors
     /// Refuses failure to durably count an unresolved publication principal.
     pub fn unbound(&self) -> Result<(), String> {
-        let (mut journal, _, _, _) = self.open()?;
-        journal.append(&Entry::Unbound)
+        self.with_journal(|journal, _, _, _| journal.append(&Entry::Unbound))
     }
 
     /// # Errors
     /// Refuses unavailable durable metrics.
     pub fn unbound_count(&self) -> Result<u64, String> {
-        self.open().map(|(_, _, count, _)| count)
+        self.with_journal(|_, _, count, _| Ok(count))
     }
 
     /// # Errors
     /// Refuses unavailable durable metrics.
     pub fn overflow_count(&self) -> Result<u64, String> {
-        self.open().map(|(_, _, _, count)| count)
+        self.with_journal(|_, _, _, count| Ok(count))
     }
 
     /// # Errors
     /// Refuses incomplete producer credentials or an unavailable journal.
     pub fn start(self: &Arc<Self>) -> Result<(), String> {
-        self.open()?;
+        self.with_journal(|_, _, _, _| Ok(()))?;
         Client::from_environment(&["program"])?
             .spawn(Arc::downgrade(self), Arc::clone(&self.health))
     }
@@ -186,14 +224,15 @@ impl ProgramOutbox {
 
 impl Outbox for ProgramOutbox {
     fn pending(&self) -> Result<Option<Pending>, String> {
-        self.open().map(|(_, state, _, _)| state.pending())
+        self.with_journal(|_, state, _, _| Ok(state.pending()))
     }
     fn acknowledge(&self, id: &str, observed: bool) -> Result<(), String> {
-        let (mut journal, mut state, _, _) = self.open()?;
-        state.acknowledge(id, observed)?;
-        journal.append(&Entry::Acknowledge {
-            id: id.to_owned(),
-            observed,
+        self.with_journal(|journal, mut state, _, _| {
+            state.acknowledge(id, observed)?;
+            journal.append(&Entry::Acknowledge {
+                id: id.to_owned(),
+                observed,
+            })
         })
     }
 }

@@ -3971,6 +3971,8 @@ impl ProductionComponents {
             },
             sequence,
             json!({"approval": {"approval_id": value["approval_id"], "state": state,
+                "state_copy_key": value["state_copy_key"], "money_moved": value["money_moved"],
+                "moved_copy_key": value["moved_copy_key"], "evidence": value["evidence"],
                 "agent_id": hold.held_activity.actor.as_str(), "created_at": hold.created_at_sequence}}),
         )?;
         Ok(BackendResponse {

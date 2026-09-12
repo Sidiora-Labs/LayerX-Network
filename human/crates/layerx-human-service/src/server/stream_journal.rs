@@ -92,6 +92,10 @@ impl StreamJournal {
                 .get("approval_id")
                 .and_then(Value::as_str)
                 .ok_or_else(ApiFailure::upstream_degraded)?;
+            let state = value
+                .get("state")
+                .and_then(Value::as_str)
+                .ok_or_else(ApiFailure::upstream_degraded)?;
             let facts = ["agent_id", "state", "created_at"]
                 .into_iter()
                 .map(|name| {
@@ -121,7 +125,7 @@ impl StreamJournal {
             rows.push(
                 crate::event_producer::enqueue_row(
                     scope,
-                    &format!("approval:{resource}:{}", value["state"]),
+                    &format!("approval:{resource}:{state}"),
                     observation,
                 )
                 .map_err(|error| store_failure(&error))?,

@@ -40,6 +40,7 @@ fn identity(root: &Path, tls: &transport::Tls) -> (IdentityServer, PrincipalClie
         "testnet",
         "ramp",
         "provisioning",
+        "registrar",
     ] {
         fs::write(tokens.join(service), format!("{service}-integration-token"))
             .unwrap_or_else(|error| panic!("service token: {error:?}"));
@@ -89,7 +90,7 @@ fn identity(root: &Path, tls: &transport::Tls) -> (IdentityServer, PrincipalClie
         .unwrap_or_else(|error| panic!("identity endpoint: {error:?}"));
     let client = gateway_http::Client::new(tls.ca.clone(), tls.identity.clone());
     for (path, body, key) in [
-        ("/v1/principals", serde_json::json!({"sub":"program-principal", "allowed_signer_public_keys":["ab".repeat(32)]}).to_string(), None),
+        ("/v1/principals", serde_json::json!({"tenant":"beta", "sub":"program-principal", "allowed_signer_public_keys":["ab".repeat(32)]}).to_string(), None),
         ("/v1/publication-keys", serde_json::json!({"sub":"program-principal", "revoked":false}).to_string(), Some("program-key:publication-integration")),
     ] {
         let response = client.request_with_principal(&endpoint, "Bearer provisioning-integration-token", &gateway_http::OutboundRequest { method:"POST", path, idempotency:None, content_type:"application/json", body:body.as_bytes() }, None, key).unwrap_or_else(|error| panic!("provisioning response: {error:?}"));
