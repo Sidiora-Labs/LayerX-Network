@@ -89,6 +89,7 @@ pub enum IntentKind {
     EvmPayoutBinding(EvmPayoutBinding),
     /// Agent authority: grant a scoped, expiring protocol session.
     SessionGrant(SessionGrant),
+    AuthorityGrant(layerx_crypto::authority_grant::AuthorityGrant),
     /// Agent authority: revoke an existing protocol session.
     SessionRevoke(SessionRevoke),
     /// Move money: compile an asset-module 402LXP send.
@@ -117,6 +118,7 @@ impl IntentKind {
             | Self::KeyRotation(_)
             | Self::RecoveryRegistration(_)
             | Self::EvmPayoutBinding(_)
+            | Self::AuthorityGrant(_)
             | Self::SessionGrant(_)
             | Self::SessionRevoke(_) => ModuleId::Governance,
             Self::LxpSend(_) | Self::LxpReceive(_) | Self::BridgeWithdrawRequest(_) => {
