@@ -130,7 +130,10 @@ def main():
     def start(role):
         log = (work / f'{role}.log').open('ab')
         logs.append(log)
-        command = 'set -a; source "$1"; export LAYERX_PAY_TIMING=1; exec "$2" "$3" "$4"'
+        if role == 'sequencer':
+            command = f'source "{ROOT / "platform/hosted/node/sequencer-env.sh"}"; layerx_sequencer_environment "$1"; export LAYERX_PAY_TIMING=1; exec "$2" "$3" "$4"'
+        else:
+            command = 'set -a; source "$1"; export LAYERX_PAY_TIMING=1; exec "$2" "$3" "$4"'
         process = subprocess.Popen(['bash', '-c', command, 'pay1', str(work / f'data/{role}.env'),
                                     str(native / 'layerxd'), '--serve' if role == 'sequencer' else '--authority-replica',
                                     str(work / f'data/{role}.conf')], cwd=ROOT, stdout=log, stderr=log)

@@ -21,7 +21,12 @@
 #   --network-id N          Decimal network id, 1..4294967295.
 #   --genesis-metadata FILE LXGB v2 suffix: canonical Asset records and named fees.
 #   --sequencer-key FILE    Sequencer ed25519 seed: 32 raw bytes or 64 hex
-#                           characters. Signs genesis and every batch.
+#                           characters. Signs genesis and every batch. FILE
+#                           must lie outside DATA_DIR; it is read here once to
+#                           sign genesis and its path is recorded in
+#                           sequencer.env as LAYERX_NODE_SEQUENCER_KEY_FILE.
+#                           The seed itself is never written into DATA_DIR:
+#                           the supervisor reads FILE when it starts layerxd.
 #   --treasury-key FILE     Treasury ed25519 seed (same format). The treasury
 #                           DID did:layerx:<public-key-hex> is registered as
 #                           an identity so the admin plane can sign from it.
@@ -216,6 +221,9 @@ case "$GENESIS_METADATA" in "$(readlink -m "$DATA_DIR")"/*) fail "genesis metada
 [ -n "$RUN_DIR" ] || fail "--run-dir is required"
 [ -n "$NETWORK_ID" ] || fail "--network-id is required"
 [ -n "$SEQUENCER_KEY_FILE" ] || fail "--sequencer-key is required"
+[[ $SEQUENCER_KEY_FILE = /* ]] || SEQUENCER_KEY_FILE="$PWD/$SEQUENCER_KEY_FILE"
+[ -f "$SEQUENCER_KEY_FILE" ] && [ -r "$SEQUENCER_KEY_FILE" ] || fail "--sequencer-key must name a readable regular file: $SEQUENCER_KEY_FILE"
+[[ $SEQUENCER_KEY_FILE != *[[:cntrl:]]* ]] || fail "--sequencer-key path must not contain control characters"
 if [ -n "$TREASURY_KEY_FILE" ]; then
     [ -z "$TREASURY_SIGNER_SOCKET" ] \
         || fail "--treasury-key and --treasury-signer-socket are exclusive"
@@ -408,6 +416,8 @@ mkdir -p "$RUN_DIR"
 RUN_DIR=$(readlink -f "$RUN_DIR")
 [ "$DATA_DIR" != "$RUN_DIR" ] || fail "--data-dir and --run-dir must differ"
 case "$RUN_DIR" in "$DATA_DIR"/*) fail "--run-dir must not be inside --data-dir" ;; esac
+case "$SEQUENCER_KEY_FILE" in "$DATA_DIR"/*) fail "the sequencer key file must be outside the data directory: $SEQUENCER_KEY_FILE" ;; esac
+case "$(readlink -f "$SEQUENCER_KEY_FILE")" in "$DATA_DIR"/*) fail "the sequencer key file must be outside the data directory: $SEQUENCER_KEY_FILE" ;; esac
 if [ "$FORCE" -eq 1 ]; then
     find "$DATA_DIR" -mindepth 1 -delete
 fi
@@ -568,7 +578,7 @@ LAYERX_NODE_HISTORY_DATABASE=$DATA_DIR/history.sqlite
 LAYERX_NODE_HISTORY_MIGRATIONS=$MIGRATIONS
 LAYERX_NODE_SEQUENCER_ID=$SEQUENCER_ID
 LAYERX_NODE_SEQUENCER_PUBLIC_KEY=$SEQUENCER_PUBLIC
-LAYERX_NODE_SEQUENCER_PRIVATE_KEY=$SEQUENCER_PRIVATE
+LAYERX_NODE_SEQUENCER_KEY_FILE=$SEQUENCER_KEY_FILE
 LAYERX_NODE_FIRST_BATCH=1
 LAYERX_NODE_LAST_BATCH=$LAST_BATCH
 LAYERX_NODE_AUTHORITY_REPLICA_ADDRESS=127.0.0.1
