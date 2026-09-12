@@ -139,6 +139,17 @@ struct lxp_module_ctx {
         LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
     size_t transfer_snapshot_count;
     bool transfer_applied;
+    /* The live allowance the executing authority draws against. Every
+     * principal-sourced transfer set the module emits presents it to the
+     * ledger; the pre-charge scope is kept so an unwind restores it. A
+     * charged metered scope stages its charge record, written under the
+     * governance module beside the grant it continues when the transition
+     * commits. */
+    struct lxp_transfer_allowance *allowance;
+    lxp_authority_scope allowance_before;
+    bool allowance_charged;
+    lxp_module_kv_change allowance_record;
+    bool allowance_record_staged;
     bool commit_prepared;
 #ifdef LXP_TESTING
     unsigned int bridge_credit_fail_stage;
@@ -305,6 +316,10 @@ typedef struct lxp_kernel_execution {
     bool signature_valid;
     lxp_identity_store *identities;
     const lxp_authority_resolved *authority;
+    /* The resolved grant's live scope, presented to the ledger by every
+     * transfer set the activity's module emits from the principal. NULL only
+     * when the caller resolved no grant. */
+    struct lxp_transfer_allowance *allowance;
     const lxp_fee_params *fee_parameters;
     lxp_fee_meter fee_meter;
     lxp_u128 fee_balance;

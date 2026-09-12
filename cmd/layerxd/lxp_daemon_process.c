@@ -12,6 +12,8 @@
 #include "layerx/lxp_genesis.h"
 #include "layerx/lxp_bridge_credit.h"
 #include "layerx/lxp_snapshot.h"
+#include "layerx/lxp_transfer.h"
+#include "lxp_daemon_allowance.h"
 #include "lxp_daemon_artifact.h"
 #include "lxp_daemon_batch_wal.h"
 #include "lxp_daemon_lni_internal.h"
@@ -1131,6 +1133,7 @@ static lxp_result replay_execute_activity(
     lxp_u128 principal_balance = {0U, 0U};
     lxp_authority_grant grant;
     lxp_authority_resolved authority;
+    lxp_transfer_allowance allowance;
     lxp_kernel_execution execution;
     lxp_byte_span encoded_receipt;
     uint8_t activity_id[32];
@@ -1258,6 +1261,7 @@ static lxp_result replay_execute_activity(
         return status;
     }
     (void)memcpy(authority.principal, principal_id, 32U);
+    lxp_daemon_live_allowance(&grant, &authority, &allowance);
     (void)memset(&execution, 0, sizeof(execution));
     status = lxp_batch_identity_activity(
         process->kernel.current_state_root, activity_id, global_sequence,
@@ -1280,6 +1284,7 @@ static lxp_result replay_execute_activity(
     execution.signature_valid = true;
     execution.identities = &process->identities;
     execution.authority = &authority;
+    execution.allowance = &allowance;
     execution.fee_parameters = &process->fees;
     execution.fee_balance = principal_balance;
     execution.gas_limit = UINT64_MAX;
@@ -2900,6 +2905,7 @@ static lxp_result apply_canonical_activity(
     lxp_u128 principal_balance = {0U, 0U};
     lxp_authority_grant grant;
     lxp_authority_resolved authority;
+    lxp_transfer_allowance allowance;
     lxp_kernel_execution execution;
     lxp_receipt receipt;
     lxp_byte_span canonical_receipt;
@@ -3056,6 +3062,8 @@ static lxp_result apply_canonical_activity(
     execution.signature_valid = true;
     execution.identities = &process->identities;
     execution.authority = &authority;
+    lxp_daemon_live_allowance(&grant, &authority, &allowance);
+    execution.allowance = &allowance;
     execution.fee_parameters = &process->fees;
     execution.fee_balance = principal_balance;
     execution.gas_limit = UINT64_MAX;
@@ -3317,6 +3325,7 @@ static lxp_result apply_canonical_batch(
     lxp_kernel_execution executions[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_authority_grant grants[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_authority_resolved authorities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_transfer_allowance allowances[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_byte_span canonical_activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_byte_span canonical_receipts[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_batch_roots scheduling_roots;
@@ -3440,6 +3449,10 @@ static lxp_result apply_canonical_batch(
                     identity->primary_key, principal_id, &principal_balance);
         if (status == LXP_OK)
             (void)memcpy(authorities[i].principal, principal_id, 32U);
+        (void)memset(&allowances[i], 0, sizeof(allowances[i]));
+        if (status == LXP_OK)
+            lxp_daemon_live_allowance(&grants[i], &authorities[i],
+                                      &allowances[i]);
         (void)memset(&executions[i], 0, sizeof(executions[i]));
         executions[i].network_id = process->network_id;
         executions[i].batch_number = process->next_batch;
@@ -3455,6 +3468,7 @@ static lxp_result apply_canonical_batch(
         executions[i].signature_valid = true;
         executions[i].identities = &process->identities;
         executions[i].authority = &authorities[i];
+        executions[i].allowance = &allowances[i];
         executions[i].fee_parameters = &process->fees;
         executions[i].fee_balance = principal_balance;
         executions[i].gas_limit = UINT64_MAX;

@@ -341,6 +341,7 @@ lxp_result lxp_send_execute(const lxp_send *send,
         send->authorization.kind == LXP_AUTH_PROTOCOL_MODULE;
     context.debit_authority_kind =
         (lxp_authorization_kind)send->authorization.kind;
+    context.allowance = environment->allowance;
     status = lxp_apply_transfer_set(&leg, 1U, &context, &set_result);
     if (status != LXP_OK) return status;
     (void)memset(receipt, 0, sizeof(*receipt));
