@@ -433,7 +433,7 @@ on how deploy reaches the gateway. The CLI command that issues a gateway
 key is `layerx install a2a`
 (`platform/cli/src/install/mod.rs:603-632`); `layerx install mcp` binds
 to the agent daemon and issues no key
-(`platform/cli/src/install/mcp.rs:26-51`).
+(`platform/cli/src/install/mcp.rs:33-56`).
 
 ---
 
@@ -489,7 +489,7 @@ which POSTs `/v1/keys` with the stored session
 requires `--source-account` and `--asset` as 64-hex
 (`platform/cli/src/install/a2a.rs:357-376`). `layerx install mcp` takes
 neither: it binds to the agent daemon and issues no key
-(`platform/cli/src/install/mcp.rs:26-51`). There is no other CLI
+(`platform/cli/src/install/mcp.rs:33-56`). There is no other CLI
 key-issue command. The HTTP issue body is `{signer_public_key, scopes, quota_requests,
 quota_window_seconds}` (`platform/hosted/gateway/src/main.rs:77-84`). Success
 JSON includes `ok`, `key.id`, `key.secret`, `key.authorization_scheme`

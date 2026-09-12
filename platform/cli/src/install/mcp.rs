@@ -23,7 +23,14 @@ pub struct Request {
 /// installer opens that document exactly as the served path does and refuses when it is absent,
 /// so a registration never points at a catalogue the daemon will not serve. No gateway key,
 /// environment, or payment flag takes part: the daemon holds every credential the tools need.
-pub fn platform_install_mcp(request: &Request) -> Result<Value, String> {
+///
+/// Returns the agent-daemon endpoint the registration is bound to and the recorded document.
+///
+/// # Errors
+///
+/// Returns the operator message when no host is selected, when the binding document cannot be
+/// opened, or when a registration cannot be published.
+pub fn platform_install_mcp(request: &Request) -> Result<(String, Value), String> {
     let selected_hosts = hosts(&request.hosts)?;
     if selected_hosts.is_empty() {
         return Err("no agent runtime was selected for installation".into());
@@ -46,9 +53,8 @@ pub fn platform_install_mcp(request: &Request) -> Result<Value, String> {
     };
     let tools = toolset::daemon_surface(mode)?;
     let command = executable()?;
-    // The served path reads only the binding document named on its launch line; no CLI
-    // configuration or gateway credential reaches the process environment.
     let variables: BTreeMap<String, String> = BTreeMap::new();
+    let agent_endpoint = binding.agent_endpoint().to_owned();
     let binding_path = path_text(&daemon_binding)?;
     let arguments = launch_arguments(&binding_path, request.read_only);
     let descriptors = tools
@@ -70,7 +76,7 @@ pub fn platform_install_mcp(request: &Request) -> Result<Value, String> {
         ));
     }
     let (registrations, changed) = publish_registrations(&pending)?;
-    Ok(json!({
+    let document = json!({
         "component": "mcp",
         "transport": "stdio",
         "authorization": "agent-daemon",
@@ -79,7 +85,7 @@ pub fn platform_install_mcp(request: &Request) -> Result<Value, String> {
             "path": binding_path,
             "tenant": binding.tenant(),
             "declared_mode": toolset::mode_name(binding.mode()),
-            "agent_endpoint": binding.agent_endpoint(),
+            "agent_endpoint": &agent_endpoint,
             "store": path_text(binding.store())?,
             "session_generation": binding.session_generation(),
         },
@@ -94,7 +100,8 @@ pub fn platform_install_mcp(request: &Request) -> Result<Value, String> {
         "registrations": registrations,
         "changed": changed,
         "idempotent": true,
-    }))
+    });
+    Ok((agent_endpoint, document))
 }
 
 fn publish_registrations(

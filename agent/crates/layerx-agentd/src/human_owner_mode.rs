@@ -1,6 +1,6 @@
 use super::{
-    config, connect_human_authority, connect_human_node, human_lni_limits, human_peers, parse_u64,
-    required, response, serve, start_human_owner, HEADER_LIMIT,
+    config, connect_human_authority, connect_human_node, human_lni_limits, human_peers, optional,
+    parse_u64, required, response, serve, start_human_owner, HEADER_LIMIT,
 };
 use std::env;
 use std::io::Read;
@@ -74,7 +74,13 @@ fn serve_human_owner() -> Result<(), String> {
     if bearer == required("LAYERX_AGENT_HUMAN_AUTHORITY_BEARER")? {
         return Err("human health and authority credentials must be distinct".to_owned());
     }
-    let human = start_human_owner()?;
+    if optional("LAYERX_AGENT_MCP_BINDING_ROOT").is_some() {
+        return Err(
+            "LAYERX_AGENT_MCP_BINDING_ROOT requires the full agent mode, which serves the program endpoint and probe program the binding names"
+                .to_owned(),
+        );
+    }
+    let human = start_human_owner(None)?;
     let listener = TcpListener::bind(listen)
         .map_err(|error| format!("human health listener failed: {error}"))?;
     listener

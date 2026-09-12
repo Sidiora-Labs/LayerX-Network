@@ -441,6 +441,33 @@ pub fn enrol(
     }
 }
 
+/// Returns the session a published binding document names, when one is already published.
+///
+/// A daemon that restarts after a successful enrolment reads the session back from its store
+/// rather than opening a second one; this reports which session the published document belongs
+/// to so that boot can refuse a document that names a different one.
+///
+/// # Errors
+///
+/// Returns `AlreadyPublished` for a path that is not a regular file, a document larger than the
+/// served path's bound, or one that is not JSON; `Io` for a read failure; and `Encoding` when the
+/// document carries no `session_id` of 32 hexadecimal bytes.
+pub fn published_session(path: &Path) -> Result<Option<SessionId>, EnrolmentError> {
+    let Some(document) = read_document(path)? else {
+        return Ok(None);
+    };
+    let encoded =
+        document
+            .get("session_id")
+            .and_then(Value::as_str)
+            .ok_or(EnrolmentError::Encoding(
+                "the published binding names no session",
+            ))?;
+    let session = hex::decode_digest(encoded)
+        .map_err(|_| EnrolmentError::Encoding("the published binding names an invalid session"))?;
+    Ok(Some(SessionId(session)))
+}
+
 fn fresh_token() -> Result<Zeroizing<[u8; 32]>, EnrolmentError> {
     let mut token = Zeroizing::new([0_u8; 32]);
     for _ in 0..TOKEN_ATTEMPTS {

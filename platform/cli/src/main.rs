@@ -617,14 +617,14 @@ fn install(command: InstallCommand) -> Result<CommandOutput, String> {
                 read_only: arguments.read_only,
                 daemon_binding: arguments.daemon_binding,
             };
-            let data = install::mcp::platform_install_mcp(&request)?;
-            let message = format!(
-                "Installed the LayerX model context protocol server bound to the agent daemon at {}",
-                data.pointer("/daemon_binding/agent_endpoint")
-                    .and_then(Value::as_str)
-                    .unwrap_or("its enrolled endpoint")
-            );
-            Ok(CommandOutput::new("install.mcp", message, data))
+            let (endpoint, data) = install::mcp::platform_install_mcp(&request)?;
+            Ok(CommandOutput::new(
+                "install.mcp",
+                format!(
+                    "Installed the LayerX model context protocol server bound to the agent daemon at {endpoint}"
+                ),
+                data,
+            ))
         }
         InstallCommand::A2a(arguments) => {
             let mut configuration = Configuration::load()?;
