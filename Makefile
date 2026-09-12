@@ -3349,6 +3349,12 @@ $(BUILD_DIR)/tests/lxp_test_program_admission: tests/daemon/lxp_test_program_adm
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR)
 
+.PHONY: test-daemon-withdrawal
+test-daemon-withdrawal: $(BUILD_DIR)/tests/lxp_test_program_admission \
+		$(BUILD_DIR)/tests/lxp_test_guarantor_runtime $(BUILD_DIR)/tests/bridge/sign-credit \
+		$(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR)
+
 .PHONY: test-program-simulate
 test-program-simulate: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR) simulate

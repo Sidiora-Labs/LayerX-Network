@@ -915,6 +915,8 @@ int main(int argc, char **argv)
                      strcmp(argv[2], "--withdraw-recovered") == 0)) {
         REQUIRE(withdraw_admission(descriptor, &key,
             strcmp(argv[2], "--withdraw-recovered") == 0) == 0);
+        if (strcmp(argv[2], "--withdraw-recovered") == 0)
+            REQUIRE(maintenance_head(&descriptor, 4U, 2U) == 0);
         REQUIRE(close(descriptor) == 0);
         return 0;
     }

@@ -284,6 +284,15 @@ PYWAIT
     else
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$recovered_mode"
     fi
+    if [[ ${2:-} == --withdraw ]]; then
+        mkdir -m 0700 "$work/guarantor-replay"
+        (source platform/hosted/node/sequencer-env.sh
+         layerx_sequencer_environment "$work/data/sequencer.env"
+         "$build_dir/tests/lxp_test_guarantor_runtime" "$work/data/sequencer.conf" \
+             "$work/guarantor-replay" "$work/data/checkpoints/da-bodies.log" 2) \
+             > "$work/guarantor-replay.log" 2>&1
+        cat "$work/guarantor-replay.log"
+    fi
     kill -0 "$sequencer_pid"
     kill -0 "$replica_pid"
     if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance && ${2:-} != --module-maintenance && ${2:-} != --metered-allowance ]]; then
