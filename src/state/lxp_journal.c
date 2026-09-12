@@ -919,6 +919,8 @@ lxp_result lxp_state_journal_commit(lxp_state_journal *journal)
     if (status != LXP_OK) return status;
     if (journal->global_sequence != journal->store->next_sequence)
         return LXP_ERR_SEQUENCE_GAP;
+    if (journal->global_sequence == UINT64_MAX)
+        return LXP_ERR_SEQUENCE_EXHAUSTED;
     for (i = 0U; i < journal->count; ++i) {
         size_t location = find_cell(journal->store, journal->staged[i].key);
         if (location == journal->store->count) ++new_cells;
