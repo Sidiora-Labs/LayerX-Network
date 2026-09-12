@@ -227,7 +227,7 @@ are refused; these types do not accept opaque event payloads.
 | `0x00010006` | 6 | RECEIVE | Existing canonical `lxp_receive` encoding. Executes a payer-grant draw with recipient, asset, caps, expiry, purpose and revocation checks. |
 | `0x00010007` | 7 | GRANT_ISSUE | Existing canonical payer-grant encoding. Verifies payer authority and persists the grant in module KV. |
 | `0x00010008` | 8 | GRANT_REVOKE | `u16=1`, grant id32, revocation sequence u64. Persists revocation at the executing global sequence. |
-| `0x00010009` | 9 | RESERVED | No payload or execution defined here; settlement owner reserves WITHDRAW. |
+| `0x00010009` | 9 | WITHDRAW | Existing canonical settlement-owned withdrawal request. Debits the actor through the custody transfer primitive and records the withdrawal nullifier; requires fee parameter encoding 3 for named pricing. |
 | `0x0001000a` | 10 | MINT | `u16=1`, asset id32, destination account32, amount u128. Issuer only; positive amount; checked supply and cap; existing account of the asset required. |
 | `0x0001000b` | 11 | BURN | `u16=1`, asset id32, source account32, amount u128. Source owner only; positive amount and sufficient balance. |
 

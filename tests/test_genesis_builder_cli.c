@@ -272,6 +272,65 @@ static int signed_snapshot_migration_fixture(const char *base)
     return 0;
 }
 
+static int withdrawal_genesis(const request_writer *legacy, const char *base,
+    const char *key_path, const lxp_fee_params *legacy_schedule,
+    const uint8_t previous_root[32])
+{
+    static uint8_t arena_bytes[4U * 1024U * 1024U];
+    static lxp_genesis_manifest manifest;
+    request_writer request = *legacy;
+    lxp_fee_params schedule = *legacy_schedule;
+    uint8_t bytes[LXP_FEE_PARAMS_V3_BYTES];
+    uint8_t manifest_bytes[LXP_GENESIS_MAX_ENCODED_BYTES];
+    uint8_t root[32];
+    size_t length;
+    lxp_arena arena;
+    lxp_snapshot_manifest_record snapshot_manifest;
+    lxp_byte_span snapshot;
+    char input[192], output[192], path[224];
+    request.length -= 2U + LXP_FEE_PARAMS_V2_BYTES;
+    schedule.version = 3U;
+    schedule.asset_price_count = LXP_ASSET_FEE_PRICE_COUNT_V3;
+    schedule.asset_prices[LXP_ASSET_FEE_PRICE_COUNT] = (lxp_u128){0U, 17U};
+    if (lxp_fee_params_encode(&schedule, bytes, sizeof(bytes), &length) != LXP_OK ||
+        append_u16(&request, (uint16_t)length) != 0 || append(&request, bytes, length) != 0 ||
+        snprintf(input, sizeof(input), "%s/request-v3.lxgb", base) < 0 ||
+        snprintf(output, sizeof(output), "%s/artifacts-v3", base) < 0 ||
+        write_file(input, request.bytes, request.length, 0600) != 0 ||
+        lxp_genesis_build_artifacts(input, key_path, output) != LXP_OK ||
+        snprintf(path, sizeof(path), "%s/genesis.manifest", output) < 0 ||
+        read_file(path, manifest_bytes, sizeof(manifest_bytes), &length) != 0 ||
+        lxp_genesis_parse(manifest_bytes, length, LXP_GENESIS_INPUT_MANIFEST, &manifest) != LXP_OK ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_genesis_verify_signature(&manifest, &arena) != LXP_OK ||
+        lxp_genesis_state_root(&manifest, &arena, root) != LXP_OK ||
+        memcmp(root, manifest.genesis_state_root, 32U) != 0 ||
+        memcmp(root, previous_root, 32U) == 0 ||
+        lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        snprintf(path, sizeof(path), "%s/00000000000000000000.lxs", output) < 0 ||
+        lxp_snapshot_store_read(path, &arena, &snapshot_manifest, &snapshot) != LXP_OK ||
+        memcmp(snapshot_manifest.canonical_state_root, root, 32U) != 0 ||
+        memcmp(snapshot_manifest.receipt_state_root, manifest.genesis_receipt_state_root, 32U) != 0)
+        return 1;
+    bool found = false;
+    for (size_t i = 0U; i < manifest.module_value_count; ++i) {
+        const lxp_genesis_module_value *value = &manifest.module_values[i];
+        if (value->module_id == LXP_MODULE_GOVERNANCE && memcmp(value->key, "fee.schedule", 12U) == 0) {
+            lxp_fee_params actual;
+            if (found || value->value_length != LXP_FEE_PARAMS_V3_BYTES ||
+                lxp_fee_params_decode(value->value, value->value_length, &actual) != LXP_OK ||
+                memcmp(&actual, &schedule, sizeof(schedule)) != 0) return 1;
+            found = true;
+        }
+    }
+    if (!found) return 1;
+    static const char *const names[] = {"genesis.manifest", "00000000000000000000.lxs",
+        "paxeer-registration-request.lxrr", "paxeer-deployment-descriptor.lxgd"};
+    for (size_t i = 0U; i < 4U; ++i)
+        if (snprintf(path, sizeof(path), "%s/%s", output, names[i]) < 0 || unlink(path) != 0) return 1;
+    return rmdir(output) != 0 || unlink(input) != 0;
+}
+
 int main(void)
 {
     static uint8_t arena_bytes[4 * 1024 * 1024];
@@ -413,6 +472,7 @@ int main(void)
             }
         }
         if (!found_asset || !found_fee) return 1;
+        if (withdrawal_genesis(&request, base, key_path, &schedule, manifest.genesis_state_root) != 0) return 1;
         static const char *const names[] = {"genesis.manifest", "00000000000000000000.lxs",
             "paxeer-registration-request.lxrr", "paxeer-deployment-descriptor.lxgd"};
         for (size_t i = 0U; i < 4U; ++i) {

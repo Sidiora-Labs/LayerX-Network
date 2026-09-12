@@ -1074,8 +1074,16 @@ $(BUILD_DIR)/tests/test_fees: tests/test_fees.c $(LIBRARY) \
 		$(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -ldl -lm -o $@
 
-test-fees: $(BUILD_DIR)/tests/test_fees
+$(BUILD_DIR)/tests/test_fees_v3: tests/test_fees_v3.c $(LIBRARY) \
+        $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-fees: $(BUILD_DIR)/tests/test_fees $(BUILD_DIR)/tests/test_fees_v3
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_fees
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_fees_v3
 
 $(BUILD_DIR)/tests/test_metering: tests/test_metering.c fuzz/fuzz_meter.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -3340,6 +3348,12 @@ $(BUILD_DIR)/tests/lxp_test_program_admission: tests/daemon/lxp_test_program_adm
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR)
+
+.PHONY: test-daemon-withdrawal
+test-daemon-withdrawal: $(BUILD_DIR)/tests/lxp_test_program_admission \
+		$(BUILD_DIR)/tests/lxp_test_guarantor_runtime $(BUILD_DIR)/tests/bridge/sign-credit \
+		$(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR)
 
 .PHONY: test-program-simulate
 test-program-simulate: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
