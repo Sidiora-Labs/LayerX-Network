@@ -170,7 +170,17 @@ fn did_accounts(config: &Config, did: &str) -> Response {
         return refusal(503, "did_account_listing_unavailable", Some(5));
     }
     let mut accounts = Vec::with_capacity(values.len());
+    let mut listing = (
+        VerificationLevel::SETTLEMENT_ANCHORED,
+        "settlement_anchored",
+    );
     for value in values {
+        let Some(verification) = verification_label(value.achieved()) else {
+            return refusal(503, "did_account_listing_unavailable", Some(5));
+        };
+        if value.achieved().compare(listing.0) == std::cmp::Ordering::Less {
+            listing = (value.achieved(), verification);
+        }
         let bytes = value.canonical_bytes();
         let Some(length) = bytes
             .get(..2)
@@ -202,11 +212,11 @@ fn did_accounts(config: &Config, did: &str) -> Response {
             "canonical_value": hex_encode(bytes), "proof_material": hex_encode(value.proof_material()),
             "observed_head_sequence": value.freshness().observed_head_sequence.to_string(),
             "batch_number": value.freshness().batch_number.to_string(),
-            "verification": "state_proven"
+            "verification": verification
         }));
     }
     success(&serde_json::json!({"did": did, "accounts": accounts,
-        "verification": "authenticated_node_snapshot"}))
+        "verification": listing.1}))
 }
 
 fn estimate_fee(config: &Config, body: &[u8]) -> Response {

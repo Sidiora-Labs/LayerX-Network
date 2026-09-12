@@ -12,7 +12,7 @@ use layerx_client::evidence::verification_label;
 use layerx_proof::merkle::{build_proof, Proof};
 use layerx_proof::state::{decode_account_value, NestedAccountProof};
 use layerx_sdk::rpc::{RpcClient, RpcError};
-use layerx_sdk::rpc_verification::{AccountPolicy, VerifiedRpcAccount};
+use layerx_sdk::rpc_verification::{AccountPolicy, VerifiedRpcAccount, VerifiedRpcBalances};
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{batch_header_digest, receipt_digest};
 use layerx_wire::limits::PROTOCOL_VERSION;
@@ -584,6 +584,258 @@ fn rpc_account_and_balance_reads_verify_before_returning() {
             ("lx_getAccount".to_owned(), selector.clone()),
             ("lx_getBalance".to_owned(), selector.clone()),
             ("lx_getAccount".to_owned(), selector),
+        ]
+    );
+}
+
+const LISTED_DID: &str = "did:layerx:alice";
+
+/// Encodes the exact canonical value the account registry commits for an
+/// agent-owned account holding one asset.
+fn agent_fixture(name: &[u8], kind: u8, balance: u128, next_sequence: u64) -> Fixture {
+    let length = u32::try_from(name.len()).unwrap_or_else(|_| panic!("account name length"));
+    let mut identity = b"LX:ACCOUNT:v1".to_vec();
+    identity.extend_from_slice(&length.to_be_bytes());
+    identity.extend_from_slice(name);
+    let account_id: [u8; 32] = Sha256::digest(identity).into();
+    let mut canonical_value = Vec::with_capacity(103 + name.len());
+    canonical_value.extend_from_slice(
+        &u16::try_from(name.len())
+            .unwrap_or_else(|_| panic!("account name length"))
+            .to_be_bytes(),
+    );
+    canonical_value.extend_from_slice(name);
+    canonical_value.push(kind);
+    canonical_value.extend_from_slice(&balance.to_be_bytes());
+    canonical_value.extend_from_slice(&[0x22; 32]);
+    canonical_value.push(1);
+    canonical_value.extend_from_slice(&next_sequence.to_be_bytes());
+    canonical_value.extend_from_slice(&3_u64.to_be_bytes());
+    canonical_value.push(0);
+    canonical_value.push(0);
+    canonical_value.extend_from_slice(&[0; 32]);
+    canonical_value.push(0);
+    let sequencer = SigningKey::from_bytes(&[0x51; 32]);
+    let sequencer_key = sequencer.verifying_key().to_bytes();
+    let proof = nested_fixture(account_id, &canonical_value, &sequencer);
+    Fixture {
+        account_id,
+        canonical_value,
+        proof_material: exported_evidence(&proof, sequencer_key),
+        sequencer_key,
+    }
+}
+
+/// Builds the two accounts a DID listing serves, in ascending identifier order.
+fn listed_fixtures(did: &str) -> Vec<Fixture> {
+    let mut fixtures = vec![
+        agent_fixture(format!("agent:{did}:main").as_bytes(), 1, 250, 4),
+        agent_fixture(format!("agent:{did}:budget:ops").as_bytes(), 2, 75, 1),
+    ];
+    fixtures.sort_by(|left, right| left.account_id.cmp(&right.account_id));
+    fixtures
+}
+
+/// Builds the exact result object the core DID account listing serves.
+fn served_listing(did: &str, fixtures: &[Fixture]) -> Value {
+    json!({
+        "did": did,
+        "accounts": fixtures.iter().map(served).collect::<Vec<_>>(),
+        "verification": "state_proven"
+    })
+}
+
+#[test]
+fn served_did_listing_is_reproduced_entry_by_entry() {
+    let fixtures = listed_fixtures(LISTED_DID);
+    let sequencer_key = fixtures[0].sequencer_key;
+    let listing = served_listing(LISTED_DID, &fixtures);
+    let verified =
+        VerifiedRpcBalances::from_rpc_result(&listing, LISTED_DID, &policy(sequencer_key))
+            .unwrap_or_else(|error| panic!("served listing refused: {error:?}"));
+    assert_eq!(verified.did(), LISTED_DID);
+    assert_eq!(verified.accounts().len(), fixtures.len());
+    assert_eq!(verification_label(verified.level()), Some("state_proven"));
+    for (account, fixture) in verified.accounts().iter().zip(&fixtures) {
+        assert_eq!(account.evidence().account().account_id, fixture.account_id);
+        assert_eq!(account.canonical_bytes(), fixture.canonical_value);
+        assert_eq!(account.proof_material(), fixture.proof_material);
+        assert!(account
+            .evidence()
+            .account()
+            .name
+            .starts_with(b"agent:did:layerx:alice:"));
+        assert_eq!(account.evidence().batch_number(), BATCH_NUMBER);
+    }
+    let balances: Vec<u128> = verified
+        .accounts()
+        .iter()
+        .map(|account| account.evidence().account().balance())
+        .collect();
+    let expected: Vec<u128> = fixtures
+        .iter()
+        .map(|fixture| {
+            decode_account_value(fixture.account_id, &fixture.canonical_value)
+                .unwrap_or_else(|error| panic!("canonical account: {error:?}"))
+                .balance()
+        })
+        .collect();
+    assert_eq!(balances, expected);
+    assert_eq!(balances.iter().sum::<u128>(), 325);
+}
+
+#[test]
+fn did_listings_the_proofs_do_not_establish_are_refused() {
+    let fixtures = listed_fixtures(LISTED_DID);
+    let pinned = policy(fixtures[0].sequencer_key);
+    let listing = served_listing(LISTED_DID, &fixtures);
+
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&listing, "did:layerx:bob", &pinned),
+        Err(RpcError::Verification)
+    ));
+
+    let mut without_did = listing.clone();
+    assert!(without_did
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("served listing is an object"))
+        .remove("did")
+        .is_some());
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&without_did, LISTED_DID, &pinned),
+        Err(RpcError::Verification)
+    ));
+
+    let mut empty = listing.clone();
+    empty["accounts"] = json!([]);
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&empty, LISTED_DID, &pinned),
+        Err(RpcError::Verification)
+    ));
+
+    let mut not_a_list = listing.clone();
+    not_a_list["accounts"] = json!({});
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&not_a_list, LISTED_DID, &pinned),
+        Err(RpcError::InvalidResponse)
+    ));
+
+    let mut reversed = listing.clone();
+    reversed["accounts"] = json!(fixtures.iter().rev().map(served).collect::<Vec<_>>());
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&reversed, LISTED_DID, &pinned),
+        Err(RpcError::Verification)
+    ));
+
+    let mut duplicated = listing.clone();
+    duplicated["accounts"] = json!([served(&fixtures[0]), served(&fixtures[0])]);
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&duplicated, LISTED_DID, &pinned),
+        Err(RpcError::Verification)
+    ));
+
+    for label in [
+        json!("authenticated_node_snapshot"),
+        json!("checkpoint_finalised"),
+        json!("unverified"),
+        Value::Null,
+    ] {
+        let mut relabelled = listing.clone();
+        relabelled["verification"] = label.clone();
+        assert!(
+            matches!(
+                VerifiedRpcBalances::from_rpc_result(&relabelled, LISTED_DID, &pinned),
+                Err(RpcError::Verification)
+            ),
+            "listing label {label} was accepted"
+        );
+    }
+
+    let mut understated = listing.clone();
+    understated["accounts"][0]["balance"] = json!("1");
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&understated, LISTED_DID, &pinned),
+        Err(RpcError::Verification)
+    ));
+
+    let mut relabelled_entry = listing.clone();
+    relabelled_entry["accounts"][1]["verification"] = json!("checkpoint_finalised");
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&relabelled_entry, LISTED_DID, &pinned),
+        Err(RpcError::Verification)
+    ));
+
+    let foreign = agent_fixture(b"agent:did:layerx:bob:main", 1, 250, 4);
+    let mut owners = fixtures
+        .iter()
+        .chain(std::iter::once(&foreign))
+        .collect::<Vec<_>>();
+    owners.sort_by(|left, right| left.account_id.cmp(&right.account_id));
+    let mut mixed = listing.clone();
+    mixed["accounts"] = json!(owners
+        .iter()
+        .map(|fixture| served(fixture))
+        .collect::<Vec<_>>());
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&mixed, LISTED_DID, &pinned),
+        Err(RpcError::Verification)
+    ));
+
+    let program = fixture();
+    let mut foreign_kind = listing.clone();
+    foreign_kind["accounts"] = json!([served(&program)]);
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&foreign_kind, LISTED_DID, &pinned),
+        Err(RpcError::Verification)
+    ));
+
+    assert!(matches!(
+        VerifiedRpcBalances::from_rpc_result(&listing, LISTED_DID, &policy([0x7a; 32])),
+        Err(RpcError::Verification)
+    ));
+}
+
+#[test]
+fn rpc_balances_read_verifies_before_returning() {
+    let fixtures = listed_fixtures(LISTED_DID);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|error| panic!("bind: {error}"));
+    let port = listener
+        .local_addr()
+        .unwrap_or_else(|error| panic!("local address: {error}"))
+        .port();
+    let mut relabelled = served_listing(LISTED_DID, &fixtures);
+    relabelled["verification"] = json!("authenticated_node_snapshot");
+    let (calls, observed) = channel();
+    let server = serve(
+        listener,
+        vec![served_listing(LISTED_DID, &fixtures), relabelled],
+        calls,
+    );
+
+    let client = RpcClient::connect(&format!("http://127.0.0.1:{port}/rpc"), None)
+        .unwrap_or_else(|error| panic!("connect: {error:?}"));
+    let policy = policy(fixtures[0].sequencer_key);
+    let balances = client
+        .verified_balances(LISTED_DID, &policy)
+        .unwrap_or_else(|error| panic!("verified balances: {error:?}"));
+    assert_eq!(balances.did(), LISTED_DID);
+    assert_eq!(balances.accounts().len(), fixtures.len());
+    assert!(matches!(
+        client.verified_balances(LISTED_DID, &policy),
+        Err(RpcError::Verification)
+    ));
+    assert!(matches!(
+        client.verified_balances("", &policy),
+        Err(RpcError::InvalidRequest)
+    ));
+
+    assert!(server.join().is_ok(), "the server thread panicked");
+    let recorded: Vec<(String, Value)> = observed.iter().collect();
+    assert_eq!(
+        recorded,
+        vec![
+            ("lx_getBalances".to_owned(), json!([LISTED_DID])),
+            ("lx_getBalances".to_owned(), json!([LISTED_DID])),
         ]
     );
 }

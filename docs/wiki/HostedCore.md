@@ -76,7 +76,7 @@ Served on the core plane (`platform/hosted/core/src/main.rs:1158-1256`). Query s
 | `GET` | `/v1/state` | none | wrapped relay of `/v1/protocol/account-state/head` (`platform/hosted/core/src/main.rs:1229-1238`) |
 | `GET` | `/v1/accounts/{id}` or `/balance` | nonzero 32-byte hex account id | account snapshot with canonical value and native proof material |
 | `GET` | `/v1/dids/{did}/sequence` | valid DID | authenticated identity sequence snapshot |
-| `GET` | `/v1/dids/{did}/accounts` | valid DID | complete bounded LNI minor-5 account enumeration requested at `VerificationLevel::STATE_PROVEN`; each entry carries `verification: "state_proven"` (`platform/hosted/core/src/public_reads.rs:134-206`) |
+| `GET` | `/v1/dids/{did}/accounts` | valid DID | complete bounded LNI minor-5 account enumeration requested at `VerificationLevel::STATE_PROVEN`; each entry carries the `verification` label its own proof achieved and the listing carries the weakest of them; an empty or unproven listing is `503 did_account_listing_unavailable` (`platform/hosted/core/src/public_reads.rs:134-217`) |
 | `GET` | `/v1/assets` or `/v1/assets/{id}` | no selector or one nonzero Asset id | complete bounded list or one version-3 record; a record whose `symbol` is outside 1..=16 ASCII bytes is `502 invalid_asset_symbol` (`platform/hosted/core/src/public_reads.rs:62-131`) |
 | `POST` | `/v1/fees/estimate` | JSON `canonical_hex` | committed-schedule estimate or typed unavailable refusal |
 | `GET` | `/v1/node-info` | none | protocol/network handshake and current heads |
