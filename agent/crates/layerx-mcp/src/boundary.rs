@@ -139,6 +139,32 @@ impl AgentSurface {
         }
     }
 
+    /// # Errors
+    /// Returns the authenticated daemon refusal or malformed response without fabricating evidence.
+    pub fn native_read(&self, path: &str) -> Result<Value, BoundaryRefusal> {
+        if !path.starts_with("/v1/reads/")
+            || !path
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"/?=&_-".contains(&byte))
+        {
+            return Err(BoundaryRefusal::Malformed(
+                "invalid native read path".to_owned(),
+            ));
+        }
+        let (status, body) = self.get(path)?;
+        match status {
+            200 => serde_json::from_str(&body)
+                .map_err(|_| BoundaryRefusal::Malformed("invalid native read result".to_owned())),
+            401 => Err(BoundaryRefusal::Unauthorized),
+            400 | 413 => Err(BoundaryRefusal::Malformed(
+                "the daemon refused the read selector or result bound".to_owned(),
+            )),
+            _ => Err(BoundaryRefusal::Unavailable(
+                "verified native evidence is unavailable".to_owned(),
+            )),
+        }
+    }
+
     fn get(&self, path: &str) -> Result<(u16, String), BoundaryRefusal> {
         let mut stream = TcpStream::connect(&self.endpoint)
             .map_err(|error| BoundaryRefusal::Unavailable(error.kind().to_string()))?;
@@ -303,6 +329,37 @@ impl ToolBoundary for ProgramReads {
                     fields.insert("evidence".to_owned(), json!(tool.evidence));
                 }
                 Ok(envelope)
+            }
+            "receipt.get" | "proof.get" => {
+                let kind = if tool.name == "receipt.get" {
+                    "receipt"
+                } else {
+                    "proof"
+                };
+                self.surface.native_read(&format!(
+                    "/v1/reads/{kind}/{}",
+                    text(arguments, "activity_id")?
+                ))
+            }
+            "checkpoint.get" => self.surface.native_read(&format!(
+                "/v1/reads/checkpoint/{}",
+                text(arguments, "sequence")?
+            )),
+            "availability.get" => self.surface.native_read(&format!(
+                "/v1/reads/availability/{}",
+                text(arguments, "batch")?
+            )),
+            "history.list" => {
+                let mut path = format!(
+                    "/v1/reads/history/{}?limit={}",
+                    text(arguments, "account")?,
+                    text(arguments, "limit")?
+                );
+                if let Some(cursor) = arguments.get("cursor").and_then(Value::as_str) {
+                    path.push_str("&cursor=");
+                    path.push_str(cursor);
+                }
+                self.surface.native_read(&path)
             }
             other => Err(BoundaryRefusal::NotServed(static_name(other))),
         }

@@ -4,6 +4,7 @@
 mod compiler;
 mod disclosure;
 pub mod golden;
+mod native_custody;
 mod reject;
 #[cfg(feature = "test-vectors")]
 pub mod vectors;
@@ -11,6 +12,7 @@ mod vocabulary;
 
 pub use compiler::{compile, CompileError, CompileErrorReason, CompileField, CompiledIntent};
 pub use disclosure::{DisclosureCheck, DisclosureCheckError, DisclosureField};
+pub use native_custody::NativeCustodyCredit;
 pub use reject::{inspect_intent, IntentHeader, IntentKindTag, RejectReason, RejectedIntent};
 
 /// Names of the committed, scheduled fuzz surfaces shipped by this crate.

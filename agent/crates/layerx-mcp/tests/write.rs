@@ -365,3 +365,26 @@ fn exported_payment_and_wait_paths_refuse_unrelated_scopes_before_execution() {
     ));
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn incomplete_success_transcripts_never_become_executed() {
+    for length in 0..ORDINARY_WRITE_STAGES.len() {
+        let root = directory("incomplete-success");
+        let (mut server, _, _) = server(&root);
+        let outcome = execute(
+            &mut server,
+            50,
+            b"{}".to_vec(),
+            |_| WriteTranscript {
+                stages: ORDINARY_WRITE_STAGES[..length].to_vec(),
+                submission: Ok(submission(
+                    SubmissionState::Executed,
+                    Level::SequencerSigned,
+                )),
+                receipt: None,
+            },
+            0,
+        );
+        assert!(matches!(outcome, Err(WriteToolError::InvalidTranscript)));
+    }
+}

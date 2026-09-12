@@ -201,8 +201,20 @@ fn evidence_get(
     let cache_key = crate::store::RowKey::new(format!("state-proof-{}", hex(&expected)))
         .map_err(|_| ApiFailure::invalid_request(Some("evidence_id")))?;
     if let Some(row) = scope.get(crate::store::Table::Cache, &cache_key) {
+        use sha2::Digest as _;
+        if sha2::Sha256::digest(row.bytes())[..] != expected
+            || row.bytes().get(..5) != Some(b"LXHB1")
+        {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        let (class, verification) = match row.bytes().get(5) {
+            Some(4) => ("checkpoint-proof", "checkpoint-finalised"),
+            Some(1..=3) => ("layerx-receipt", "receipt-verified"),
+            Some(5) => ("checkpoint-proof", "settlement-anchored"),
+            _ => return Err(ApiFailure::upstream_degraded()),
+        };
         return Ok(response(
-            json!({"evidence_id": id, "class": "checkpoint-proof", "verification": "checkpoint-finalised",
+            json!({"evidence_id": id, "class": class, "verification": verification,
             "content_type": "application/vnd.layerx.state-proof", "bytes_base64": STANDARD.encode(row.bytes())}),
         ));
     }

@@ -324,6 +324,9 @@ fn verified_terminal_outcome(
             }
             match candidate_outcome {
                 CandidateTerminalOutcome::Success { code, response } => {
+                    if *code != outcome.result_code() {
+                        return terminal_failure();
+                    }
                     let response = ProgramCallResponse::new(*code, response).map_err(|_| {
                         ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal)
                     })?;
@@ -559,4 +562,67 @@ fn candidate_matches(
         && candidate.fee == outcome.fee_schedule_version()
         && candidate.metering == outcome.metering_schedule_version()
         && usage_matches(candidate.usage, outcome)
+}
+
+#[cfg(test)]
+mod terminal_binding_tests {
+    use super::*;
+
+    fn bytes(field: &str) -> Vec<u8> {
+        let document = include_str!(
+            "../../../../platform/sdk/conformance/fixtures/receipt-programs-executed-v4.json"
+        );
+        let marker = format!("\"{field}\": \"");
+        let (_, rest) = document
+            .split_once(&marker)
+            .unwrap_or_else(|| panic!("{field}"));
+        let value = rest.split('"').next().unwrap_or_else(|| panic!("{field}"));
+        value
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                u8::from_str_radix(
+                    std::str::from_utf8(pair).unwrap_or_else(|error| panic!("{error}")),
+                    16,
+                )
+                .unwrap_or_else(|error| panic!("{error}"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn successful_terminal_code_is_bound_to_the_signed_outcome() {
+        let receipt = layerx_wire::receipt::decode(&bytes("canonical_receipt_hex"))
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let outcome = receipt
+            .protocol()
+            .and_then(layerx_wire::receipt::ProtocolReceipt::program_outcome)
+            .unwrap_or_else(|| panic!("Programs outcome"));
+        let raw = bytes("terminal_payload_hex");
+        let (detail, _) = layerx_wire::receipt::decode_applied_terminal(&raw)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let mut terminal =
+            decode_terminal_payload(outcome.terminal_kind(), outcome.abi_version(), detail)
+                .unwrap_or_else(|error| panic!("{error:?}"));
+        let program: [u8; 32] = bytes("program_id_hex")
+            .try_into()
+            .unwrap_or_else(|_| panic!("program"));
+        assert!(verified_terminal_outcome(&terminal, program, outcome).is_ok());
+        let TerminalDetail::Execution(ExecutionTerminal::CandidateV4 {
+            outcome: CandidateTerminalOutcome::Success { code, .. },
+            ..
+        }) = &mut terminal.detail
+        else {
+            panic!("success terminal");
+        };
+        *code = code
+            .checked_add(1)
+            .unwrap_or_else(|| panic!("terminal code"));
+        assert_eq!(
+            verified_terminal_outcome(&terminal, program, outcome)
+                .err()
+                .map(|error| error.check),
+            Some(ProgramExecutionCheck::Terminal)
+        );
+    }
 }

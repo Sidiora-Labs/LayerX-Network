@@ -427,6 +427,9 @@ fn decode_bridge_deposit_credit(
     payload: &[u8],
     activity: &Activity,
 ) -> Result<SendSemantics, DisclosureError> {
+    if payload.starts_with(b"LXDC1") || payload.starts_with(b"LXDC2") {
+        return decode_native_custody_credit(payload, activity);
+    }
     let mut decoder = Decoder::new(payload, 0);
     if decoder.u16()? != BRIDGE_DEPOSIT_CREDIT_WIRE_TAG
         || decoder.u16()? != BRIDGE_DEPOSIT_CREDIT_FIELD_COUNT
@@ -442,6 +445,56 @@ fn decode_bridge_deposit_credit(
     let idempotency_key = fixed(&mut decoder)?;
     decoder.finish()?;
     if idempotency_key != activity.idempotency_key() || amount == 0 || from == to {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    Ok(SendSemantics {
+        from,
+        to,
+        asset,
+        amount,
+        sequence: activity.account_sequence(),
+        idempotency_key,
+        expires_at: activity.timestamp_bound().not_after,
+    })
+}
+
+fn decode_native_custody_credit(
+    payload: &[u8],
+    activity: &Activity,
+) -> Result<SendSemantics, DisclosureError> {
+    if payload.len() != 427
+        || activity.protocol_version() != 3
+        || payload[37..41] != activity.network_id().to_be_bytes()
+        || payload[41..43] != activity.protocol_version().to_be_bytes()
+    {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    let field = |start: usize| -> Result<[u8; 32], DisclosureError> {
+        payload[start..start + 32]
+            .try_into()
+            .map_err(|_| DisclosureError::MalformedPayload)
+    };
+    let reserve = layerx_types::account::AccountId::parse("system:paxeer-reserve")
+        .map_err(|_| DisclosureError::MalformedPayload)?;
+    let from = hash::account_id_for_protocol(&reserve, activity.protocol_version())?;
+    let to = field(107)?;
+    let asset = field(75)?;
+    let amount = u128::from_be_bytes(
+        payload[191..207]
+            .try_into()
+            .map_err(|_| DisclosureError::MalformedPayload)?,
+    );
+    let mut nullifier = Sha256::new();
+    nullifier.update(b"LX:DEPOSIT:NULLIFIER:v1");
+    nullifier.update(field(43)?);
+    let idempotency_key: [u8; 32] = nullifier.finalize().into();
+    if from == to
+        || to == [0; 32]
+        || asset == [0; 32]
+        || amount == 0
+        || idempotency_key != activity.idempotency_key()
+        || activity.authority() != &payload[139..171]
+    {
         return Err(DisclosureError::MalformedPayload);
     }
     Ok(SendSemantics {
@@ -882,6 +935,11 @@ struct DisclosureFields {
 }
 
 impl Disclosure {
+    #[must_use]
+    pub fn canonical_payload(&self) -> &[u8] {
+        self.activity.payload()
+    }
+
     #[must_use]
     pub const fn envelope_sequence(&self) -> u64 {
         self.activity.account_sequence()

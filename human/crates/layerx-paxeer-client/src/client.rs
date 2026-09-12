@@ -618,7 +618,7 @@ impl PaxeerClient {
                     url: endpoint.url.clone(),
                     fault: EndpointFault::UnexpectedValue { detail },
                 })?;
-                if canonical.is_some_and(|block| block.number != included.block.number) {
+                if canonical != Some(included.block) {
                     return Err(EndpointFailure {
                         url: endpoint.url.clone(),
                         fault: EndpointFault::InconsistentObservation,

@@ -55,7 +55,14 @@ fn receipt_bytes(signature: Option<[u8; 64]>) -> Vec<u8> {
     encoder.finish()
 }
 
-fn header_bytes(state_root: [u8; 32], activity_root: [u8; 32], sequencer_id: [u8; 32]) -> Vec<u8> {
+fn header_bytes(
+    state_root: [u8; 32],
+    activity_root: [u8; 32],
+    sequencer_id: [u8; 32],
+    receipt_root: [u8; 32],
+    availability_root: [u8; 32],
+    empty_root: [u8; 32],
+) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
     assert_eq!(
         encoder.structure_header_version(0x1701, layerx_wire::limits::PROTOCOL_VERSION),
@@ -74,10 +81,10 @@ fn header_bytes(state_root: [u8; 32], activity_root: [u8; 32], sequencer_id: [u8
             7 => assert_eq!(encoder.bytes(&[7; 32], 32), Ok(())),
             8 => assert_eq!(encoder.bytes(&state_root, 32), Ok(())),
             9 => assert_eq!(encoder.bytes(&activity_root, 32), Ok(())),
-            10 => assert_eq!(encoder.bytes(&[10; 32], 32), Ok(())),
-            11 => assert_eq!(encoder.bytes(&[11; 32], 32), Ok(())),
-            12 => assert_eq!(encoder.bytes(&[12; 32], 32), Ok(())),
-            13 => assert_eq!(encoder.bytes(&[13; 32], 32), Ok(())),
+            10 => assert_eq!(encoder.bytes(&receipt_root, 32), Ok(())),
+            11 => assert_eq!(encoder.bytes(&empty_root, 32), Ok(())),
+            12 => assert_eq!(encoder.bytes(&availability_root, 32), Ok(())),
+            13 => assert_eq!(encoder.bytes(&empty_root, 32), Ok(())),
             14 => assert_eq!(encoder.u64(1_000), Ok(())),
             15 => assert_eq!(encoder.bytes(&sequencer_id, 32), Ok(())),
             _ => panic!("unreachable header field"),
@@ -101,7 +108,12 @@ fn guarantor_key(value: u8) -> (SigningKey, [u8; 33], [u8; 32]) {
     (signing, public, identifier)
 }
 
-fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -> Attestation {
+fn attestation(
+    checkpoint: [u8; 32],
+    guarantor_id: [u8; 32],
+    key: &SigningKey,
+    availability_root: [u8; 32],
+) -> Attestation {
     let settlement_contract = [0x55; 20];
     let mut message = [0_u8; 189];
     message[..2].copy_from_slice(&layerx_wire::limits::PROTOCOL_VERSION.to_be_bytes());
@@ -113,7 +125,7 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
     message[74..106].copy_from_slice(&checkpoint);
     message[106..138].copy_from_slice(&guarantor_id);
     message[138..146].copy_from_slice(&8_u64.to_be_bytes());
-    message[146..178].copy_from_slice(&[12; 32]);
+    message[146..178].copy_from_slice(&availability_root);
     message[178] = 1;
     message[179] = 1;
     message[180] = 0x1f;
@@ -135,7 +147,7 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
         checkpoint,
         guarantor_id,
         8,
-        [12; 32],
+        availability_root,
         true,
         true,
         0x1f,
@@ -144,6 +156,63 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
         signature.to_bytes().into(),
         27 + u8::from(recovery_id),
     )
+}
+
+fn availability(
+    activity: &[u8],
+    receipt: &[u8],
+) -> (
+    Vec<(
+        layerx_proof::availability::Chunk,
+        layerx_proof::merkle::Proof,
+    )>,
+    [u8; 32],
+) {
+    use layerx_proof::availability::{AvailabilityClass, Chunk};
+    use layerx_proof::merkle::build_leaf_hash_proof;
+    use layerx_wire::hash::availability_chunk_digest;
+    let mut activities = Encoder::new(4096);
+    activities.sequence_length(1, 65_535).unwrap();
+    activities.bytes(activity, 4096).unwrap();
+    let mut receipts = Encoder::new(4096);
+    receipts.u8(1).unwrap();
+    receipts.bytes(receipt, 4096).unwrap();
+    let mut oracle = Encoder::new(4096);
+    oracle.sequence_length(0, 65_535).unwrap();
+    let sections = [
+        (AvailabilityClass::Activities, activities.finish()),
+        (AvailabilityClass::Receipts, receipts.finish()),
+        (AvailabilityClass::Oracle, oracle.finish()),
+        (AvailabilityClass::StateDiff, vec![0]),
+        (AvailabilityClass::Recovery, vec![0]),
+    ];
+    let chunks = sections
+        .into_iter()
+        .enumerate()
+        .map(|(index, (class, bytes))| {
+            let index = u32::try_from(index).unwrap();
+            let claimed_hash = availability_chunk_digest(8, index, class as u8, 0, &bytes).unwrap();
+            Chunk {
+                batch_number: 8,
+                index,
+                class,
+                class_offset: 0,
+                bytes,
+                claimed_hash,
+            }
+        })
+        .collect::<Vec<_>>();
+    let hashes = chunks
+        .iter()
+        .map(|chunk| chunk.claimed_hash)
+        .collect::<Vec<_>>();
+    let root = build_leaf_hash_proof(&hashes, 0).unwrap().1;
+    let proven = chunks
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| (chunk, build_leaf_hash_proof(&hashes, index).unwrap().0))
+        .collect();
+    (proven, root)
 }
 
 fn artifact() -> OfflineExport {
@@ -174,7 +243,17 @@ fn artifact() -> OfflineExport {
         .unwrap_or_else(|error| panic!("activity proof: {error:?}"));
     let sequencer_key = EdSigningKey::from_bytes(&[7; 32]);
     let sequencer_id = sequencer_key.verifying_key().to_bytes();
-    let header = header_bytes(state_root, activity_root, sequencer_id);
+    let (availability, availability_root) = availability(&activity, &receipt_bytes);
+    let receipt_root = layerx_proof::merkle::root(&[receipt_bytes.as_slice()]).unwrap();
+    let empty_root = layerx_proof::merkle::root(&[]).unwrap();
+    let header = header_bytes(
+        state_root,
+        activity_root,
+        sequencer_id,
+        receipt_root,
+        availability_root,
+        empty_root,
+    );
     let header_hash =
         batch_header_digest(&header).unwrap_or_else(|error| panic!("header hash: {error:?}"));
     let header_signature = sequencer_key.sign(&header_hash).to_bytes();
@@ -187,7 +266,12 @@ fn artifact() -> OfflineExport {
     let mut bonded_set = Vec::new();
     for value in 1..=2 {
         let (key, public, guarantor_id) = guarantor_key(value);
-        attestations.push(attestation(checkpoint_identifier, guarantor_id, &key));
+        attestations.push(attestation(
+            checkpoint_identifier,
+            guarantor_id,
+            &key,
+            availability_root,
+        ));
         bonded_set.push(GuarantorKey::new(guarantor_id, public, true));
     }
 
@@ -215,6 +299,7 @@ fn artifact() -> OfflineExport {
             registered_checkpoint_id: checkpoint_identifier,
             registered_settlement_reference: None,
             availability_obtained: true,
+            availability,
         }],
         derived_aggregates: vec![DerivedAggregate {
             label: "local spend summary, not a protocol fact".to_owned(),
@@ -271,5 +356,28 @@ fn hostile_export_changes_and_unknown_aggregate_contributors_fail() {
             aggregate: 0,
             digest
         }) if digest == [0x99; 32]
+    ));
+}
+
+#[test]
+fn offline_checkpoint_requires_complete_authenticated_availability() {
+    let domain = SettlementDomain::new(31_337, [0x55; 20]);
+    let mut missing = artifact();
+    missing.checkpoints[0].availability.clear();
+    assert!(matches!(
+        verify_export(&missing, domain),
+        Err(ExportVerificationError::CheckpointUnavailable { index: 0 })
+    ));
+    let mut altered = artifact();
+    altered.checkpoints[0].availability[0].0.bytes[0] ^= 1;
+    assert!(matches!(
+        verify_export(&altered, domain),
+        Err(ExportVerificationError::Availability { index: 0, .. })
+    ));
+    let mut withheld = artifact();
+    withheld.checkpoints[0].availability.pop();
+    assert!(matches!(
+        verify_export(&withheld, domain),
+        Err(ExportVerificationError::Availability { index: 0, .. })
     ));
 }

@@ -412,6 +412,19 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
             )?;
             finish(registry, ModuleId::Bridge, 1, encoder)
         }
+        IntentKind::NativeCustodyCredit(value) => {
+            if intent.version() != IntentVersion::V1 {
+                return Err(CompileError::wire(
+                    CompileField::Version,
+                    WireError {
+                        result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                        offset: 0,
+                    },
+                ));
+            }
+            fixed(&mut encoder, value.payload(), CompileField::DepositProof)?;
+            finish(registry, ModuleId::Bridge, 1, encoder)
+        }
         IntentKind::BridgeWithdrawRequest(value) => {
             if intent.version() != IntentVersion::V2 {
                 return Err(CompileError::wire(

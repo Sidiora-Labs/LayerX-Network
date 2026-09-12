@@ -43,6 +43,7 @@ pub enum NativeCustodyEvidence {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttestedNativeCustodyCredit {
     payload: [u8; 427],
+    profile: [u8; 207],
     custody: CustodyDeposit,
     evidence: NativeCustodyEvidence,
 }
@@ -216,9 +217,23 @@ impl AttestedNativeCustodyCredit {
             .map_err(|_| NativeCustodyError::Signature)?;
         Ok(Self {
             payload: field(credit, 0)?,
+            profile: field(profile, 0)?,
             custody,
             evidence,
         })
+    }
+
+    #[must_use]
+    pub const fn profile_bytes(&self) -> &[u8; 207] {
+        &self.profile
+    }
+
+    #[must_use]
+    pub fn nullifier(&self) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        hash.update(b"LX:DEPOSIT:NULLIFIER:v1");
+        hash.update(self.custody.deposit_id);
+        hash.finalize().into()
     }
 
     #[must_use]

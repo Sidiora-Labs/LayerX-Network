@@ -4158,6 +4158,8 @@ impl ProductionComponents {
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let mut material =
             Vec::with_capacity(4 + balance.canonical_bytes.len() + balance.proof_material.len());
+        material.extend_from_slice(b"LXHB1");
+        material.push(balance.verification);
         material.extend_from_slice(
             &u32::try_from(balance.observed_at.len())
                 .map_err(|_| ApiFailure::upstream_degraded())?
@@ -4244,6 +4246,8 @@ impl ProductionComponents {
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let mut material =
             Vec::with_capacity(4 + balance.canonical_bytes.len() + balance.proof_material.len());
+        material.extend_from_slice(b"LXHB1");
+        material.push(balance.verification);
         material.extend_from_slice(
             &u32::try_from(balance.observed_at.len())
                 .map_err(|_| ApiFailure::upstream_degraded())?

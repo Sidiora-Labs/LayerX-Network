@@ -173,7 +173,16 @@ where
     server
         .execute_committed(core_sequence, name, validated_arguments, |invocation| {
             let transcript = executor(invocation);
-            let result = if transcript_matches(&transcript.stages, &ORDINARY_WRITE_STAGES) {
+            let result = if transcript.stages == ORDINARY_WRITE_STAGES
+                || (transcript_matches(&transcript.stages, &ORDINARY_WRITE_STAGES)
+                    && transcript.submission.as_ref().is_err_and(|failure| {
+                        matches!(
+                            failure.class,
+                            FailureClass::Refused | FailureClass::Protocol
+                        )
+                    })
+                    && transcript.receipt.is_none())
+            {
                 classify_transcript(transcript, unknown_age_ms)
             } else {
                 Err(WriteToolError::InvalidTranscript)
