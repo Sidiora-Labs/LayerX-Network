@@ -41,15 +41,17 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "scripts"
   ],
   "bin": {
     "layerx-mcp-server": "./dist/mcp-server.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/patch-dependencies.mjs && tsc -p tsconfig.json",
     "test": "npm run build && node test/a2a-store.test.mjs",
-    "integration:real": "node examples/agent-runtime/index.mjs"
+    "integration:real": "node examples/agent-runtime/index.mjs",
+    "postinstall": "node scripts/patch-dependencies.mjs"
   },
   "dependencies": {
     "@a2a-js/sdk": "1.0.1",

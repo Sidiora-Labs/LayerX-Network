@@ -47,7 +47,7 @@ impl Drop for Funding {
         for node in &mut self.nodes {
             node.stop();
         }
-        if !thread::panicking() {
+        if !thread::panicking() && std::env::var_os("LAYERX_TEST_RETAIN_STATE").is_none() {
             let _ = fs::remove_dir_all(&self.root);
         }
     }
@@ -756,7 +756,7 @@ fn start_checkpoint_settlement(
             text(&genesis.directory),
         ])
         .env_clear()
-        .env("PATH", "/root/.foundry/bin:/usr/bin:/bin")
+        .env("PATH", std::env::var_os("PATH").required("test tool PATH"))
         .current_dir(&repository)
         .stdin(Stdio::null())
         .stdout(Stdio::from(must(
