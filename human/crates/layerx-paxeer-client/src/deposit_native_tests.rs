@@ -30,7 +30,7 @@ fn signed(unsigned: &[u8], key: &SigningKey) -> Vec<u8> {
 }
 
 #[test]
-fn real_native_credit_receipt_binds_attestation_and_supply_after_restart() {
+fn real_native_credit_receipt_binds_attestation_supply_and_authority() {
     let credit = AttestedNativeCustodyCredit::verify(
         PROFILE,
         CREDIT,
@@ -58,11 +58,6 @@ fn real_native_credit_receipt_binds_attestation_and_supply_after_restart() {
     let canonical = signed(RECEIPT, &key);
     assert_eq!(
         verify_native_credit_receipt(&credit, &canonical, &authorized, activity_id, reserve),
-        Ok(())
-    );
-    let reopened = canonical.clone();
-    assert_eq!(
-        verify_native_credit_receipt(&credit, &reopened, &authorized, activity_id, reserve),
         Ok(())
     );
     let mut wrong = activity_id;
