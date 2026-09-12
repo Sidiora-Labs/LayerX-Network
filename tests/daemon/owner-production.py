@@ -129,7 +129,11 @@ def run(work, asset, rpc_port):
     sequencer = None
     try:
         for role, option in (('replica', '--authority-replica'), ('sequencer', '--serve')):
-            launched = start(['bash', '-c', 'set -a; source "$1"; exec "$2" "$3" "$4"', 'owner-production',
+            if role == 'sequencer':
+                launcher = f'source "{repo / "platform/hosted/node/sequencer-env.sh"}"; layerx_sequencer_environment "$1"; exec "$2" "$3" "$4"'
+            else:
+                launcher = 'set -a; source "$1"; exec "$2" "$3" "$4"'
+            launched = start(['bash', '-c', launcher, 'owner-production',
                    str(work / f'node/{role}.env'), str(repo / 'build/bin/layerxd'), option,
                    str(work / f'node/{role}.conf')], role, env)
             if role == 'sequencer':

@@ -22,6 +22,19 @@ def read_env(path):
     return dict(line.split("=", 1) for line in path.read_text().splitlines() if line)
 
 
+def sequencer_seed_hex(env):
+    if "LAYERX_NODE_SEQUENCER_PRIVATE_KEY" in env:
+        raise RuntimeError("sequencer.env must not carry LAYERX_NODE_SEQUENCER_PRIVATE_KEY; the seed is read from LAYERX_NODE_SEQUENCER_KEY_FILE")
+    key_file = Path(env["LAYERX_NODE_SEQUENCER_KEY_FILE"])
+    if not key_file.is_absolute() or not key_file.is_file():
+        raise RuntimeError(f"LAYERX_NODE_SEQUENCER_KEY_FILE must name an absolute regular file: {key_file}")
+    content = key_file.read_bytes()
+    seed = content.hex() if len(content) == 32 else "".join(content.decode("ascii").split()).lower()
+    if len(seed) != 64 or any(character not in "0123456789abcdef" for character in seed):
+        raise RuntimeError(f"sequencer key file must hold 32 raw bytes or 64 hex characters: {key_file}")
+    return seed
+
+
 def client_identity():
     os.setgroups([ROOT.stat().st_gid])
     os.setgid(4021)
@@ -147,7 +160,8 @@ def main():
             with socket.create_connection(("127.0.0.1", replica_port), timeout=1):
                 return True
         await_condition(replica_ready, [anvil, replica], "real receipt authority")
-        daemon_env = os.environ | read_env(work / "data/sequencer.env") | settlement
+        sequencer_env = read_env(work / "data/sequencer.env")
+        daemon_env = os.environ | sequencer_env | {"LAYERX_NODE_SEQUENCER_PRIVATE_KEY": sequencer_seed_hex(sequencer_env)} | settlement
         daemon = launch([str(native / "layerxd"), "--serve", str(work / "data/sequencer.conf")], "daemon.log", env=daemon_env)
         lni_socket = str(runtime / "layerxd.lni.sock")
         await_condition(lambda: Path(lni_socket).is_socket(), [anvil, replica, daemon], "real sequencer LNI")

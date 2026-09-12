@@ -396,6 +396,22 @@ command line, in the supervisor's own environment, in
 `node.env`, `replica.env`, `core.env`, or the guarantor
 identity directories.
 
+Callers outside the supervisor that start `layerxd --serve`
+from a bootstrap-generated `sequencer.env` (the daemon test
+scripts under `tests/daemon/`) source
+`platform/hosted/node/sequencer-env.sh` and call
+`layerx_sequencer_environment <sequencer.env>` in the subshell
+that execs the daemon instead of `set -a; source`. The helper
+exports the `LAYERX_*` lines with the same validation, refuses a
+seed line, reads the key file named by
+`LAYERX_NODE_SEQUENCER_KEY_FILE` and exports
+`LAYERX_NODE_SEQUENCER_PRIVATE_KEY` for the exec'd daemon only.
+`tests/daemon/guarantor-integration.py` performs the same
+derivation in Python before it launches the daemon. Tools that
+only replay the checkpoint log with `sequencer.env` sourced
+(`tests/daemon/guarantor-publication-chain.py`) never read the
+seed and are unaffected.
+
 Refusals, all exit `1` before a generation is published:
 `must not carry LAYERX_NODE_SEQUENCER_PRIVATE_KEY`,
 `LAYERX_NODE_SEQUENCER_KEY_FILE missing`, `sequencer key file is
