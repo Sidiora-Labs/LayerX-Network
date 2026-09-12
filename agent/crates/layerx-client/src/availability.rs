@@ -3,10 +3,12 @@
 use std::time::Duration;
 
 use layerx_proof::availability::{
-    verify_chunk, verify_reassembled, AvailabilityCheck, AvailabilityClass, AvailabilityFailure,
-    Chunk, ClassReport, ReassembledRecords, ReassemblyReport, RootCommitments, VerifiedChunk,
+    reassemble, verify_chunk, AvailabilityCheck, AvailabilityClass, AvailabilityFailure,
+    Chunk, ClassReport, ReassemblyReport, RootCommitments, VerifiedChunk,
 };
 use layerx_proof::merkle::{Proof, MAX_DEPTH};
+
+pub use layerx_proof::availability::AvailabilityRecords;
 
 use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
 use crate::lni::transport::{FrameTransport, TransportError};
@@ -229,38 +231,6 @@ impl AvailabilityResult {
     }
 }
 
-/// Exact owned record streams recovered from a complete availability result.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AvailabilityRecords {
-    pub activities: Vec<Vec<u8>>,
-    pub receipts: Vec<Vec<u8>>,
-    pub events: Vec<Vec<u8>>,
-    pub oracle_inputs: Vec<Vec<u8>>,
-}
-
-impl AvailabilityRecords {
-    fn verify(
-        &self,
-        chunks: &[VerifiedChunk],
-        commitments: RootCommitments,
-    ) -> Result<ReassemblyReport, AvailabilityFailure> {
-        let activities: Vec<_> = self.activities.iter().map(Vec::as_slice).collect();
-        let receipts: Vec<_> = self.receipts.iter().map(Vec::as_slice).collect();
-        let events: Vec<_> = self.events.iter().map(Vec::as_slice).collect();
-        let oracle_inputs: Vec<_> = self.oracle_inputs.iter().map(Vec::as_slice).collect();
-        verify_reassembled(
-            chunks,
-            &ReassembledRecords {
-                activities: &activities,
-                receipts: &receipts,
-                events: &events,
-                oracle_inputs: &oracle_inputs,
-            },
-            commitments,
-        )
-    }
-}
-
 /// Complete single-provider result or all provider-attributed partials.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FetchOutcome {
@@ -404,16 +374,8 @@ where
                         ProviderFailure::UnexpectedResponse,
                     ));
                 }
-                let records = Sections::from_chunks(&chunks).map_err(|failure| {
-                    report(provider, &chunks, ProviderFailure::Reassembly(failure))
-                });
-                let records = records?.into_records();
-                let verified =
-                    records
-                        .verify(&chunks, context.record_roots)
-                        .map_err(|failure| {
-                            report(provider, &chunks, ProviderFailure::Reassembly(failure))
-                        })?;
+                let (records, verified) = reassemble(&chunks, context.record_roots)
+                    .map_err(|failure| report(provider, &chunks, ProviderFailure::Reassembly(failure)))?;
                 return Ok(AvailabilityResult {
                     provider: provider.to_owned(),
                     chunks,
@@ -561,92 +523,6 @@ fn decode_chunk(bytes: &[u8], metadata: &[u8]) -> Result<(Chunk, Proof), Provide
     ))
 }
 
-struct Sections {
-    activities: Vec<Vec<u8>>,
-    receipts: Vec<Vec<u8>>,
-    events: Vec<Vec<u8>>,
-    oracle: Vec<Vec<u8>>,
-}
-
-impl Sections {
-    fn from_chunks(chunks: &[VerifiedChunk]) -> Result<Self, AvailabilityFailure> {
-        let classes = class_report(chunks);
-        if !classes.missing.is_empty() {
-            return Err(AvailabilityFailure {
-                check: AvailabilityCheck::MissingClass,
-                classes,
-                ..malformed(chunks)
-            });
-        }
-        let activities = section_bytes(chunks, AvailabilityClass::Activities);
-        let receipts = section_bytes(chunks, AvailabilityClass::Receipts);
-        let oracle = section_bytes(chunks, AvailabilityClass::Oracle);
-        let activities = decode_records(&activities, false).map_err(|()| malformed(chunks))?;
-        let receipt_records = decode_records(&receipts, true).map_err(|()| malformed(chunks))?;
-        let mut verified_receipts = Vec::new();
-        let mut events = Vec::new();
-        for (kind, bytes) in receipt_records {
-            match kind {
-                1 => verified_receipts.push(bytes),
-                2 => events.push(bytes),
-                _ => return Err(malformed(chunks)),
-            }
-        }
-        let oracle = decode_records(&oracle, false)
-            .map_err(|()| malformed(chunks))?
-            .into_iter()
-            .map(|(_, bytes)| bytes)
-            .collect();
-        Ok(Self {
-            activities: activities.into_iter().map(|(_, bytes)| bytes).collect(),
-            receipts: verified_receipts,
-            events,
-            oracle,
-        })
-    }
-
-    fn into_records(self) -> AvailabilityRecords {
-        AvailabilityRecords {
-            activities: self.activities,
-            receipts: self.receipts,
-            events: self.events,
-            oracle_inputs: self.oracle,
-        }
-    }
-}
-
-fn section_bytes(chunks: &[VerifiedChunk], class: AvailabilityClass) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    for chunk in chunks.iter().filter(|chunk| chunk.chunk().class == class) {
-        bytes.extend_from_slice(&chunk.chunk().bytes);
-    }
-    bytes
-}
-
-fn decode_records(bytes: &[u8], tagged: bool) -> Result<Vec<(u8, Vec<u8>)>, ()> {
-    let mut reader = RecordReader::new(bytes);
-    let count = if tagged { None } else { Some(reader.u32()?) };
-    let mut records = Vec::new();
-    let mut previous_kind = 1;
-    while !reader.finished() {
-        let kind = if tagged { reader.u8()? } else { 0 };
-        if tagged && (kind < previous_kind || kind > 2) {
-            return Err(());
-        }
-        if tagged {
-            previous_kind = kind;
-        }
-        let length = usize::try_from(reader.u32()?).map_err(|_| ())?;
-        records.push((kind, reader.bytes(length)?.to_vec()));
-    }
-    if let Some(count) = count {
-        if usize::try_from(count).map_err(|_| ())? != records.len() {
-            return Err(());
-        }
-    }
-    Ok(records)
-}
-
 fn malformed(chunks: &[VerifiedChunk]) -> AvailabilityFailure {
     AvailabilityFailure {
         check: AvailabilityCheck::ChunkOrder,
@@ -709,65 +585,3 @@ impl<'a> Reader<'a> {
     }
 }
 
-struct RecordReader<'a> {
-    bytes: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> RecordReader<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, offset: 0 }
-    }
-
-    const fn finished(&self) -> bool {
-        self.offset == self.bytes.len()
-    }
-
-    fn bytes(&mut self, length: usize) -> Result<&'a [u8], ()> {
-        let end = self.offset.checked_add(length).ok_or(())?;
-        let value = self.bytes.get(self.offset..end).ok_or(())?;
-        self.offset = end;
-        Ok(value)
-    }
-
-    fn u8(&mut self) -> Result<u8, ()> {
-        let bytes: [u8; 1] = self.bytes(1)?.try_into().map_err(|_| ())?;
-        Ok(u8::from_be_bytes(bytes))
-    }
-
-    fn u32(&mut self) -> Result<u32, ()> {
-        let bytes: [u8; 4] = self.bytes(4)?.try_into().map_err(|_| ())?;
-        Ok(u32::from_be_bytes(bytes))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::decode_records;
-    use crate::availability::Sections;
-    use layerx_wire::encode::Encoder;
-
-    #[test]
-    fn counted_sequences_and_tagged_receipts_remain_canonical() {
-        let mut sequence = Encoder::new(1024);
-        assert_eq!(sequence.sequence_length(1, 1), Ok(()));
-        assert_eq!(sequence.bytes(b"activity", 1024), Ok(()));
-        let bytes = sequence.finish();
-        assert_eq!(
-            decode_records(&bytes, false),
-            Ok(vec![(0, b"activity".to_vec())])
-        );
-        assert_eq!(decode_records(&bytes[4..], false), Err(()));
-        assert_eq!(decode_records(&[], false), Err(()));
-        let mut wrong_count = bytes.clone();
-        wrong_count[..4].copy_from_slice(&2_u32.to_be_bytes());
-        assert_eq!(decode_records(&wrong_count, false), Err(()));
-        let mut receipts = Encoder::new(1024);
-        for (kind, record) in [(2, b"event".as_slice()), (1, b"receipt".as_slice())] {
-            assert_eq!(receipts.u8(kind), Ok(()));
-            assert_eq!(receipts.bytes(record, 1024), Ok(()));
-        }
-        assert_eq!(decode_records(&receipts.finish(), true), Err(()));
-        assert!(Sections::from_chunks(&[]).is_err());
-    }
-}
