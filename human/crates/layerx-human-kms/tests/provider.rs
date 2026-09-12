@@ -48,10 +48,18 @@ impl Host {
         let mut seal = [0; 32];
         getrandom::fill(&mut seal).map_err(|error| std::io::Error::other(error.to_string()))?;
         fs::write(host.root.join("seal"), seal)?;
-        let modules: Vec<_> = registry()?.registrations().iter().map(|module| {
-            let kinds: Vec<_> = module.activity_types().iter().map(|kind| kind.value()).collect();
-            serde_json::json!({"module_id":module.module() as u16,"activity_types":kinds})
-        }).collect();
+        let modules: Vec<_> = registry()?
+            .registrations()
+            .iter()
+            .map(|module| {
+                let kinds: Vec<_> = module
+                    .activity_types()
+                    .iter()
+                    .map(|kind| kind.value())
+                    .collect();
+                serde_json::json!({"module_id":module.module() as u16,"activity_types":kinds})
+            })
+            .collect();
         fs::write(
             host.root.join("registry.json"),
             serde_json::to_vec(
@@ -419,13 +427,17 @@ fn atomic_rotation_lost_response_restart_and_tombstones() -> Result<()> {
 fn registry() -> Result<layerx_types::payload::ModuleRegistry> {
     use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
     checked(ModuleRegistry::new(&[
-        checked(ModuleRegistration::new(ModuleId::Asset, &[
-            checked(ActivityType::new(ModuleId::Asset, 1))?,
-            checked(ActivityType::new(ModuleId::Asset, 5))?,
-        ]))?,
-        checked(ModuleRegistration::new(ModuleId::Governance, &[
-            checked(ActivityType::new(ModuleId::Governance, 8))?,
-        ]))?,
+        checked(ModuleRegistration::new(
+            ModuleId::Asset,
+            &[
+                checked(ActivityType::new(ModuleId::Asset, 1))?,
+                checked(ActivityType::new(ModuleId::Asset, 5))?,
+            ],
+        ))?,
+        checked(ModuleRegistration::new(
+            ModuleId::Governance,
+            &[checked(ActivityType::new(ModuleId::Governance, 8))?],
+        ))?,
     ]))
 }
 
@@ -462,7 +474,11 @@ fn canonical_send(public: [u8; 32], network: u32, signature: [u8; 64]) -> Result
     unsigned_payload(public, network, compiled.payload().clone())
 }
 
-fn unsigned_payload(public: [u8; 32], network: u32, payload: layerx_types::payload::Payload) -> Result<Vec<u8>> {
+fn unsigned_payload(
+    public: [u8; 32],
+    network: u32,
+    payload: layerx_types::payload::Payload,
+) -> Result<Vec<u8>> {
     use layerx_types::activity::{Authority, EnvelopeBuilder, TimestampBound};
     use layerx_types::amount::Amount;
     use layerx_types::ids::{Did, IdempotencyKey};
@@ -478,7 +494,9 @@ fn unsigned_payload(public: [u8; 32], network: u32, payload: layerx_types::paylo
     checked(builder.fee_limit(Amount::from_u128(1)))?;
     checked(builder.payload_hash(checked(layerx_wire::hash::payload_hash_for(&payload))?))?;
     checked(builder.payload(payload))?;
-    checked(layerx_wire::activity::encode_unsigned_envelope(&checked(builder.build())?))
+    checked(layerx_wire::activity::encode_unsigned_envelope(&checked(
+        builder.build(),
+    )?))
 }
 
 fn encoded_disclosure(disclosure: &layerx_crypto::disclosure::Disclosure) -> Result<Vec<u8>> {
@@ -545,8 +563,12 @@ fn authorize_canonical_send(host: &Host, binding: [u8; 32], handle: &[u8]) -> Re
         principal: "alice".into(),
         tenant: "tenant".into(),
         binding_digest: binding,
-        from: checked(layerx_wire::hash::account_id(&checked(AccountId::parse("agent:did:layerx:alice:main"))?))?,
-        to: checked(layerx_wire::hash::account_id(&checked(AccountId::parse("agent:did:layerx:recipient:main"))?))?,
+        from: checked(layerx_wire::hash::account_id(&checked(AccountId::parse(
+            "agent:did:layerx:alice:main",
+        ))?))?,
+        to: checked(layerx_wire::hash::account_id(&checked(AccountId::parse(
+            "agent:did:layerx:recipient:main",
+        ))?))?,
         asset: [3; 32],
         amount: 10,
         sequence: 7,
@@ -575,11 +597,19 @@ fn canonical_signing_and_disclosure_refusals() -> Result<()> {
     let (handle, public) = facts(&host.call(&request(1, binding, &[], None)?)?)?;
     let signature = authorize_canonical_send(&host, binding, &handle)?;
     let canonical = canonical_send(public, 77, signature)?;
-    let disclosure = encoded_disclosure(&checked(layerx_crypto::disclosure::bind(&canonical, &registry()?))?)?;
+    let disclosure = encoded_disclosure(&checked(layerx_crypto::disclosure::bind(
+        &canonical,
+        &registry()?,
+    ))?)?;
     let forged = canonical_send(public, 77, [6; 64])?;
-    assert!(matches!(layerx_crypto::disclosure::bind(&forged, &registry()?),
-        Err(layerx_crypto::disclosure::DisclosureError::MalformedPayload)));
-    assert_eq!(host.call(&signing_request(binding, &handle, &forged, &disclosure)?.0)?[7], 1);
+    assert!(matches!(
+        layerx_crypto::disclosure::bind(&forged, &registry()?),
+        Err(layerx_crypto::disclosure::DisclosureError::MalformedPayload)
+    ));
+    assert_eq!(
+        host.call(&signing_request(binding, &handle, &forged, &disclosure)?.0)?[7],
+        1
+    );
     let (bytes, digest) = signing_request(binding, &handle, &canonical, &disclosure)?;
     let response = host.call(&bytes)?;
     assert_eq!(response[7], 0);
@@ -635,19 +665,29 @@ fn monetary_payloads() -> Result<Vec<layerx_types::payload::Payload>> {
         issuer_kind: 1,
         custody_ref: Vec::new(),
     });
-    let mut payloads = vec![checked(Payload::new(&registry()?,
+    let mut payloads = vec![checked(Payload::new(
+        &registry()?,
         checked(ActivityType::new(ModuleId::Asset, 1))?,
-        &checked(registration.encode(actor.as_bytes()))?))?];
+        &checked(registration.encode(actor.as_bytes()))?,
+    ))?];
     for bytes in [
-        include_bytes!("../../../../agent/crates/layerx-crypto/tests/fixtures/authority-grant-capability.bin").as_slice(),
-        include_bytes!("../../../../agent/crates/layerx-crypto/tests/fixtures/authority-grant-budget.bin").as_slice(),
+        include_bytes!(
+            "../../../../agent/crates/layerx-crypto/tests/fixtures/authority-grant-capability.bin"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../agent/crates/layerx-crypto/tests/fixtures/authority-grant-budget.bin"
+        )
+        .as_slice(),
     ] {
         let mut grant = checked(AuthorityGrant::decode(bytes))?;
         grant.grantor = issuer;
         grant.grantee = issuer;
-        payloads.push(checked(Payload::new(&registry()?,
+        payloads.push(checked(Payload::new(
+            &registry()?,
             checked(ActivityType::new(ModuleId::Governance, 8))?,
-            &checked(grant.payload())?))?);
+            &checked(grant.payload())?,
+        ))?);
     }
     Ok(payloads)
 }
@@ -667,12 +707,23 @@ fn monetary_roles_are_bound_by_the_real_provider_before_and_after_restart() -> R
         for payload in &payloads {
             let canonical = unsigned_payload(public, 77, payload.clone())?;
             let disclosure = checked(bind(&canonical, &registry()?))?;
-            let roles: Vec<_> = disclosure.amounts.iter().map(|amount| amount.role).collect();
+            let roles: Vec<_> = disclosure
+                .amounts
+                .iter()
+                .map(|amount| amount.role)
+                .collect();
             if disclosure.payment.is_some() {
                 assert_eq!(roles, [AmountRole::SupplyCap]);
                 assert_eq!(disclosure.amounts[0].value, 1000);
             } else {
-                assert_eq!(roles, [AmountRole::PerDrawMaximum, AmountRole::GrantAllowance, AmountRole::SpendingLimit]);
+                assert_eq!(
+                    roles,
+                    [
+                        AmountRole::PerDrawMaximum,
+                        AmountRole::GrantAllowance,
+                        AmountRole::SpendingLimit
+                    ]
+                );
                 assert_eq!(disclosure.amounts[0].value, 10);
                 assert_eq!(disclosure.amounts[1].value, 30);
             }
@@ -681,18 +732,34 @@ fn monetary_roles_are_bound_by_the_real_provider_before_and_after_restart() -> R
             let response = host.call(&request)?;
             assert_eq!(response[7], 0);
             assert_eq!(response.len(), 72);
-            checked(ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
-                .verify(&digest, &response[8..]))?;
-            let start = 1 + 4 + 4 + disclosure.actor.len() + 4 + disclosure.authority.len()
-                + 4 + 33 * disclosure.counterparties.len() + 4;
-            let expected: &[u8] = if disclosure.payment.is_some() { &[3] } else { &[4, 5, 2] };
+            checked(
+                ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
+                    .verify(&digest, &response[8..]),
+            )?;
+            let start = 1
+                + 4
+                + 4
+                + disclosure.actor.len()
+                + 4
+                + disclosure.authority.len()
+                + 4
+                + 33 * disclosure.counterparties.len()
+                + 4;
+            let expected: &[u8] = if disclosure.payment.is_some() {
+                &[3]
+            } else {
+                &[4, 5, 2]
+            };
             for (index, code) in expected.iter().enumerate() {
                 let offset = start + index * 17;
                 assert_eq!(encoded[offset], *code);
                 for mutation in [offset, offset + 16] {
                     let mut changed = encoded.clone();
                     changed[mutation] ^= 0x80;
-                    assert_eq!(host.call(&signing_request(binding, &handle, &canonical, &changed)?.0)?[7], 1);
+                    assert_eq!(
+                        host.call(&signing_request(binding, &handle, &canonical, &changed)?.0)?[7],
+                        1
+                    );
                 }
             }
         }
