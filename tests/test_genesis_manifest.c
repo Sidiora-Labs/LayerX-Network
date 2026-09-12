@@ -193,15 +193,26 @@ static int check_version(uint16_t protocol_version)
     REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
                               &snapshot_manifest, &kernel) == LXP_OK);
     if (protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
-        static const uint16_t ordinals[] = {1U, 4U, 6U, 7U, 8U, 10U, 11U};
-        const lxp_module_registration *entry;
-        for (size_t i = 0U; i < sizeof(ordinals) / sizeof(ordinals[0]); ++i) {
-            REQUIRE(lxp_kernel_module_for_activity(&kernel,
-                ((uint32_t)LXP_MODULE_ASSET << 16U) | ordinals[i], kernel.epoch, &entry) == LXP_OK);
+        static const uint32_t asset_activity_types[] = {
+            LX_ASSET_REGISTER, LX_ASSET_PAUSE, LX_ASSET_UNPAUSE,
+            LX_ASSET_ACCOUNT_OPEN, LX_ASSET_SEND, LX_ASSET_RECEIVE,
+            LX_ASSET_GRANT_ISSUE, LX_ASSET_GRANT_REVOKE, LX_ASSET_WITHDRAW,
+            LX_ASSET_MINT, LX_ASSET_BURN};
+        const size_t asset_activity_count =
+            sizeof(asset_activity_types) / sizeof(asset_activity_types[0]);
+        const lxp_module_registration *entry = NULL;
+        for (size_t i = 0U; i < asset_activity_count; ++i) {
+            REQUIRE(lxp_kernel_module_for_activity(
+                &kernel, asset_activity_types[i], kernel.epoch, &entry) == LXP_OK);
             REQUIRE(entry != NULL);
+            REQUIRE(entry->module_id == LXP_MODULE_ASSET);
+            REQUIRE(entry->abi_version == lx_asset_module_iface()->abi_version);
         }
+        REQUIRE(entry->activity_type_count == asset_activity_count);
         REQUIRE(lxp_kernel_module_for_activity(&kernel,
-            ((uint32_t)LXP_MODULE_ASSET << 16U) | 9U, kernel.epoch, &entry) != LXP_OK);
+            (uint32_t)LXP_MODULE_ASSET << 16U, kernel.epoch, &entry) != LXP_OK);
+        REQUIRE(lxp_kernel_module_for_activity(&kernel,
+            (uint32_t)LX_ASSET_BURN + 1U, kernel.epoch, &entry) != LXP_OK);
     }
     REQUIRE(accounts.count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT);
     REQUIRE(memcmp(kernel.current_state_root,
