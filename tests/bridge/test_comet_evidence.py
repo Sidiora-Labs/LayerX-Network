@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+import tempfile
 import unittest
 
 from comet_credit import verifier
@@ -38,6 +40,16 @@ class RealCometEvidence(unittest.TestCase):
         self.assertTrue(completed.stdout.startswith(b'{'))
         self.assertTrue(completed.stdout.endswith(b'}\n'))
         self.assertEqual(json.loads(completed.stdout), self.evidence['results'][0])
+
+    def test_python_key_reader_refuses_fifo_before_reading(self):
+        with tempfile.TemporaryDirectory(prefix='custody-key-fifo-') as directory:
+            path = Path(directory)/'authority'
+            os.mkfifo(path, 0o600)
+            completed = subprocess.run([sys.executable, '-c',
+                'import sys; from custody_credit import read_key; read_key(sys.argv[1])', str(path)],
+                cwd=Path(__file__).resolve().parent, capture_output=True, timeout=3, check=False)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(b'key must be a private regular file', completed.stderr)
 
     def test_genesis_and_chain_binding(self):
         self.refused(lambda r: r['expected'].__setitem__('genesis_sha256', '0x'+'01'*32))
