@@ -3692,7 +3692,7 @@ static lxp_result redo_prepared_batch_wal(
     const lxp_batch_header *header)
 {
     lxp_activity activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
-    lxp_receipt expected[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_receipt *expected;
     lxp_kernel_execution executions[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_authority_grant grants[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_authority_resolved authorities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
@@ -3705,9 +3705,10 @@ static lxp_result redo_prepared_batch_wal(
     if (process == NULL || view == NULL || header == NULL ||
         view->count == 0U || view->count > LXP_DAEMON_MAX_BATCH_ACTIVITIES)
         return LXP_ERR_NON_CANONICAL;
+    expected = calloc(view->count, sizeof(*expected));
+    if (expected == NULL) return LXP_ERR_ARENA_EXHAUSTED;
     mark = lxp_arena_mark(&process->execution_arena);
     (void)memset(activities, 0, sizeof(activities));
-    (void)memset(expected, 0, sizeof(expected));
     (void)memset(executions, 0, sizeof(executions));
     (void)memset(grants, 0, sizeof(grants));
     (void)memset(authorities, 0, sizeof(authorities));
@@ -3809,6 +3810,7 @@ static lxp_result redo_prepared_batch_wal(
             &process->identities, prepared, view->publication_digest);
     lxp_kernel_prepared_batch_destroy(prepared);
     (void)lxp_arena_reset(&process->execution_arena, mark);
+    free(expected);
     return status;
 }
 
