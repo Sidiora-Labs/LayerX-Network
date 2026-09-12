@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-const SERVICES: [&str; 7] = [
+const SERVICES: [&str; 8] = [
     "gateway",
     "webhooks",
     "dashboard",
@@ -18,7 +18,20 @@ const SERVICES: [&str; 7] = [
     "testnet",
     "ramp",
     "provisioning",
+    "registrar",
 ];
+const INTROSPECTING_SERVICES: [&str; 6] = [
+    "gateway",
+    "webhooks",
+    "dashboard",
+    "faucet",
+    "testnet",
+    "ramp",
+];
+const REGISTRAR_SUB: &str = "did:key:z6mkregistrar-principal";
+const REGISTRAR_ACCOUNT: &str = "agent:did:key:z6mkregistrar-principal:main";
+const SERVICE_NOT_PERMITTED: &str =
+    "{\"error\":{\"code\":\"service_not_permitted\",\"retry\":\"never\"}}";
 const SIGNER_KEY: &str = "1f2e3d4c5b6a79880123456789abcdef1f2e3d4c5b6a79880123456789abcdef";
 const OTHER_SIGNER_KEY: &str = "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9";
 const SUB: &str = "did:key:z6mkbeta-principal_1";
@@ -202,8 +215,9 @@ fn token_for(service: &str) -> String {
 }
 
 impl Fixture {
-    fn spawn(&self, state_dir: &Path) -> Server {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_layerx-identity"))
+    fn command(&self, state_dir: &Path) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_layerx-identity"));
+        command
             .env_clear()
             .env("LAYERX_IDENTITY_LISTEN", "127.0.0.1:0")
             .env(
@@ -226,7 +240,26 @@ impl Fixture {
             .env("LAYERX_IDENTITY_SESSION_TTL_SECONDS", "3600")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    }
+
+    fn boot_refusal(&self, state_dir: &Path) -> String {
+        let output = self
+            .command(state_dir)
+            .output()
+            .unwrap_or_else(|error| panic!("run: {error}"));
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "layerx-identity must refuse to boot"
+        );
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    }
+
+    fn spawn(&self, state_dir: &Path) -> Server {
+        let mut child = self
+            .command(state_dir)
             .spawn()
             .unwrap_or_else(|error| panic!("spawn: {error}"));
         let stderr = child.stderr.take().unwrap_or_else(|| panic!("stderr pipe"));
@@ -685,26 +718,26 @@ fn wrong_service_tokens_are_refused() {
         Some(&body),
     );
     assert_eq!(unknown.status, 401);
-    let provisioning_introspect = fixture.request(
-        &server,
-        "POST",
-        "/v1/sessions/introspect",
-        Some(&token_for("provisioning")),
-        Some(&body),
-    );
-    assert_eq!(provisioning_introspect.status, 403);
-    assert_eq!(
-        provisioning_introspect.body,
-        "{\"error\":{\"code\":\"service_not_permitted\",\"retry\":\"never\"}}"
-    );
-    for service in [
-        "gateway",
-        "webhooks",
-        "dashboard",
-        "faucet",
-        "testnet",
-        "ramp",
+    for (service, path) in [
+        ("provisioning", "/v1/sessions/introspect"),
+        ("provisioning", "/v1/introspect"),
+        ("registrar", "/v1/sessions/introspect"),
+        ("registrar", "/v1/introspect"),
     ] {
+        let refused = fixture.request(
+            &server,
+            "POST",
+            path,
+            Some(&token_for(service)),
+            Some(&body),
+        );
+        assert_eq!(
+            refused.status, 403,
+            "{service} must not introspect at {path}"
+        );
+        assert_eq!(refused.body, SERVICE_NOT_PERMITTED);
+    }
+    for service in INTROSPECTING_SERVICES {
         let principal = fixture.request(
             &server,
             "POST",
@@ -735,6 +768,30 @@ fn wrong_service_tokens_are_refused() {
         );
         assert_eq!(revoke.status, 403, "{service} must not revoke sessions");
     }
+    let registrar_session = fixture.request(
+        &server,
+        "POST",
+        "/v1/sessions",
+        Some(&token_for("registrar")),
+        Some(&format!("{{\"sub\":\"{SUB}\"}}")),
+    );
+    assert_eq!(
+        registrar_session.status, 403,
+        "the registrar must not mint sessions"
+    );
+    assert_eq!(registrar_session.body, SERVICE_NOT_PERMITTED);
+    let registrar_revoke = fixture.request(
+        &server,
+        "DELETE",
+        &format!("/v1/sessions/{session_id}"),
+        Some(&token_for("registrar")),
+        None,
+    );
+    assert_eq!(
+        registrar_revoke.status, 403,
+        "the registrar must not revoke sessions"
+    );
+    assert_eq!(registrar_revoke.body, SERVICE_NOT_PERMITTED);
     let still_active = introspect(&fixture, &server, "faucet", "/v1/introspect", &token);
     assert_eq!(
         still_active.body,
@@ -764,6 +821,157 @@ fn wrong_service_tokens_are_refused() {
         Some("{\"tenant\":\"beta\",\"sub\":\"did:key:other\",\"allowed_signer_public_keys\":[\"abc\"]}"),
     );
     assert_eq!(invalid_key.status, 400);
+}
+
+#[test]
+fn the_registrar_creates_principals_and_only_provisioning_mints_their_sessions() {
+    let fixture = fixture("registrar");
+    let state = fixture.root.join("state");
+    let server = fixture.spawn(&state);
+    let registrar = token_for("registrar");
+    let principal = format!(
+        "{{\"tenant\":\"beta\",\"sub\":\"{REGISTRAR_SUB}\",\"allowed_signer_public_keys\":[\"{SIGNER_KEY}\"],\"account\":\"{REGISTRAR_ACCOUNT}\",\"audiences\":[\"ramp-reference\"]}}"
+    );
+    let created = fixture.request(
+        &server,
+        "POST",
+        "/v1/principals",
+        Some(&registrar),
+        Some(&principal),
+    );
+    assert_eq!(created.status, 200, "{}", created.body);
+    assert_eq!(created.body, principal);
+    let conflict = fixture.request(
+        &server,
+        "POST",
+        "/v1/principals",
+        Some(&registrar),
+        Some(
+            &serde_json::json!({
+                "tenant": "rival",
+                "sub": REGISTRAR_SUB,
+                "allowed_signer_public_keys": [OTHER_SIGNER_KEY]
+            })
+            .to_string(),
+        ),
+    );
+    assert_eq!(conflict.status, 409, "{}", conflict.body);
+    assert_eq!(
+        conflict.body,
+        "{\"error\":{\"code\":\"subject_tenant_conflict\",\"retry\":\"never\"}}"
+    );
+    for body in [
+        format!("{{\"sub\":\"{REGISTRAR_SUB}\"}}"),
+        format!("{{\"tenant\":\"beta\",\"sub\":\"{REGISTRAR_SUB}\"}}"),
+        format!("{{\"sub\":\"{REGISTRAR_SUB}\",\"ttl_seconds\":60}}"),
+    ] {
+        let minted = fixture.request(
+            &server,
+            "POST",
+            "/v1/sessions",
+            Some(&registrar),
+            Some(&body),
+        );
+        assert_eq!(minted.status, 403, "{}", minted.body);
+        assert_eq!(minted.body, SERVICE_NOT_PERMITTED);
+    }
+    let journal = fs::read_to_string(state.join("journal.log")).unwrap_or_default();
+    assert!(
+        journal.contains("\"Principal\"") && journal.contains(REGISTRAR_SUB),
+        "the registrar's principal reaches the journal: {journal}"
+    );
+    assert!(
+        !journal.contains("\"Session\""),
+        "the registrar's refused mints leave no session record: {journal}"
+    );
+    let session = fixture.request(
+        &server,
+        "POST",
+        "/v1/sessions",
+        Some(&token_for("provisioning")),
+        Some(&format!("{{\"sub\":\"{REGISTRAR_SUB}\"}}")),
+    );
+    assert_eq!(session.status, 200, "{}", session.body);
+    let value = json(&session);
+    assert_eq!(value["tenant"], "beta");
+    assert_eq!(value["sub"], REGISTRAR_SUB);
+    let token = value["token"].as_str().unwrap_or_default().to_owned();
+    let session_id = value["session_id"].as_str().unwrap_or_default().to_owned();
+    let gateway = introspect(
+        &fixture,
+        &server,
+        "gateway",
+        "/v1/sessions/introspect",
+        &token,
+    );
+    assert_eq!(
+        gateway.body,
+        format!(
+            "{{\"active\":true,\"sub\":\"{REGISTRAR_SUB}\",\"allowed_signer_public_keys\":[\"{SIGNER_KEY}\"]}}"
+        )
+    );
+    let ramp = introspect(&fixture, &server, "ramp", "/v1/introspect", &token);
+    assert_eq!(json(&ramp)["principal_id"], REGISTRAR_SUB);
+    assert_eq!(json(&ramp)["account"], REGISTRAR_ACCOUNT);
+    for path in ["/v1/sessions/introspect", "/v1/introspect"] {
+        let refused = fixture.request(
+            &server,
+            "POST",
+            path,
+            Some(&registrar),
+            Some(&format!("{{\"token\":\"{token}\"}}")),
+        );
+        assert_eq!(refused.status, 403, "{}", refused.body);
+        assert_eq!(refused.body, SERVICE_NOT_PERMITTED);
+    }
+    let revoke = fixture.request(
+        &server,
+        "DELETE",
+        &format!("/v1/sessions/{session_id}"),
+        Some(&registrar),
+        None,
+    );
+    assert_eq!(revoke.status, 403, "{}", revoke.body);
+    assert_eq!(revoke.body, SERVICE_NOT_PERMITTED);
+    let still_active = introspect(&fixture, &server, "faucet", "/v1/introspect", &token);
+    assert_eq!(
+        still_active.body,
+        format!("{{\"active\":true,\"sub\":\"{REGISTRAR_SUB}\"}}")
+    );
+    let revoked = fixture.request(
+        &server,
+        "DELETE",
+        &format!("/v1/sessions/{session_id}"),
+        Some(&token_for("provisioning")),
+        None,
+    );
+    assert_eq!(revoked.status, 200, "{}", revoked.body);
+    assert_inactive(&fixture, &server, &token);
+}
+
+#[test]
+fn boot_requires_a_distinct_registrar_token() {
+    let fixture = fixture("registrar-token");
+    let state = fixture.root.join("state");
+    let registrar = fixture.root.join("tokens").join("registrar");
+    fs::remove_file(&registrar).unwrap_or_else(|error| panic!("remove registrar token: {error}"));
+    let missing = fixture.boot_refusal(&state);
+    assert!(
+        missing.contains("service token for registrar"),
+        "boot names the missing registrar token: {missing}"
+    );
+    fs::write(&registrar, format!("{}\n", token_for("provisioning")))
+        .unwrap_or_else(|error| panic!("write registrar token: {error}"));
+    let duplicate = fixture.boot_refusal(&state);
+    assert!(
+        duplicate.contains("service token for registrar duplicates another service"),
+        "boot refuses a registrar token equal to the provisioning token: {duplicate}"
+    );
+    fs::write(&registrar, format!("{}\n", token_for("registrar")))
+        .unwrap_or_else(|error| panic!("restore registrar token: {error}"));
+    let server = fixture.spawn(&state);
+    let ready = fixture.request(&server, "GET", "/readyz", None, None);
+    assert_eq!(ready.status, 200, "{}", ready.body);
 }
 
 #[test]

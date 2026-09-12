@@ -560,7 +560,7 @@ secrets_generate() {
     cp "$d/developer-identity.token" "$d/identity-tokens/webhooks"
     cp "$d/identity-client.token" "$d/identity-tokens/faucet"
     local service
-    for service in dashboard testnet ramp provisioning; do
+    for service in dashboard testnet ramp provisioning registrar; do
         write_token "$d/identity-tokens/$service"
     done
     write_token "$d/identity-store.key"

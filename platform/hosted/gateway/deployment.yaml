@@ -124,7 +124,7 @@ spec:
         - {name: component, secret: {secretName: layerx-gateway-component-client}}
         - {name: authority, secret: {secretName: layerx-gateway-authority-client}}
         - {name: identity, secret: {secretName: layerx-gateway-identity-client}}
-        - {name: identity-provisioning, secret: {secretName: layerx-identity-service-tokens, items: [{key: provisioning, path: token}]}}
+        - {name: identity-provisioning, secret: {secretName: layerx-identity-service-tokens, items: [{key: registrar, path: token}]}}
         - {name: faucet, secret: {secretName: layerx-gateway-faucet-client}}
         - {name: registry, secret: {secretName: layerx-program-registry-request-client}}
         - {name: redis, secret: {secretName: layerx-gateway-redis-client}}
