@@ -501,7 +501,9 @@ Response:
 Use `lx_getBalance` with a concrete 32-byte account ID for the proven public
 balance read. `lx_getBalances` requires the native DID-account listing to
 decode every returned account namespace and requests it at state-proven level,
-so each returned entry carries `verification: "state_proven"`. A response with
-JSON-RPC code `-32001` and core code `did_account_listing_unavailable` means
-that evidence could not be decoded or that the node holds no state proof for
-the listing; the gateway does not invent a partial account list.
+so each returned entry carries `verification: "state_proven"` and its state
+proof material. A response with JSON-RPC code `-32001` and core code
+`did_account_listing_unavailable` means that evidence could not be decoded,
+that the node holds no state proof for the listing, or that the node reported
+a listing with no entries, which carries no proof of absence; the gateway does
+not invent a partial or an empty account list.

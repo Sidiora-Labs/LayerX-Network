@@ -176,9 +176,10 @@ returned by the write
 (`platform/hosted/gateway/tests/local/lifecycle.rs:971-988, 1777-1885`).
 
 `lx_getBalances` fails closed if the native DID-account listing cannot be fully
-decoded. JSON-RPC code `-32001` with
+decoded or comes back with no entries, because an empty listing carries no proof
+of absence. JSON-RPC code `-32001` with
 `error.data.error.code == "did_account_listing_unavailable"` is unavailable
-evidence, not a partial balance list.
+evidence, not a partial or empty balance list.
 
 ## Error and recovery contract
 

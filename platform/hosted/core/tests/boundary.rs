@@ -2230,6 +2230,11 @@ fn supervised_files(root: &Path, builder: &Path, keys: [&[u8; 32]; 2], tokens: [
         );
         write(&root.join(name), &bytes, 0o755);
     }
+    let settlement = must(
+        fs::read(repository_root().join("contracts/config/checkpoint-settlement.json")),
+        "settlement document source",
+    );
+    write(&root.join("checkpoint-settlement.json"), &settlement, 0o644);
     must(
         fs::hard_link(builder, root.join("layerx-genesis-build")),
         "link genesis builder",
@@ -2340,6 +2345,10 @@ fn start_supervised_cluster() -> Cluster {
             text(&root.join("bootstrap-replica.token")),
         ),
         ("--genesis-build", text(&root.join("layerx-genesis-build"))),
+        (
+            "--settlement-document",
+            text(&root.join("checkpoint-settlement.json")),
+        ),
         ("--migrations", text(&migrations)),
         ("--asset", hex_encode(&asset)),
         ("--program-port", program_port.to_string()),
