@@ -1788,6 +1788,10 @@ fn prepare_funding(
                 refusal(503, "treasury_identity_unavailable", Some(5))
             })?
             .account_sequence;
+        client.reconnect().map_err(|error| {
+            eprintln!("layerx-core-boundary: treasury authority refresh failed: {error:?}");
+            refusal(503, "treasury_identity_unavailable", Some(5))
+        })?;
         let sequence = treasury_sequence(config, client, amount)?;
         let now = now_ms();
         let signed = build_send_with_signer(

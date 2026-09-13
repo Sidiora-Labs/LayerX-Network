@@ -705,8 +705,9 @@ fn assert_program_simulation(boundary: &Boundary, cluster: &Cluster) {
         execution["program_id"],
         serde_json::json!(hex_encode(&program_id))
     );
-    assert_eq!(execution["terminal_payload"], serde_json::json!(""));
-    assert_eq!(execution["call_graph"], serde_json::json!(""));
+    for field in ["terminal_payload", "call_graph"] {
+        assert!(!execution[field].as_str().unwrap_or_default().is_empty());
+    }
     let receipt_hex = execution["receipt"]
         .as_str()
         .unwrap_or_else(|| panic!("receipt hex"));
@@ -720,6 +721,24 @@ fn assert_program_simulation(boundary: &Boundary, cluster: &Cluster) {
         .unwrap_or_else(|| panic!("protocol receipt"));
     assert!(protocol.result_code() < 0);
     assert_eq!(protocol.module_id(), 9);
+    let outcome = protocol
+        .program_outcome()
+        .unwrap_or_else(|| panic!("refusal outcome"));
+    for (field, expected) in [
+        ("terminal_payload", outcome.terminal_payload_root()),
+        ("call_graph", outcome.call_graph_root()),
+    ] {
+        let bytes = must(
+            layerx_platform_core::hex_decode(
+                execution[field]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("refusal artifact")),
+            ),
+            "refusal artifact bytes",
+        );
+        let digest: [u8; 32] = Sha256::digest(bytes).into();
+        assert_eq!(digest, expected);
+    }
     assert_eq!(
         execution["activity_id"],
         serde_json::json!(hex_encode(&protocol.activity_id()))
