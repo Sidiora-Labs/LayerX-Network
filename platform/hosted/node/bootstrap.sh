@@ -20,6 +20,7 @@
 #                           data directory.
 #   --network-id N          Decimal network id, 1..4294967295.
 #   --genesis-metadata FILE LXGB v2 suffix: canonical Asset records and named fees.
+#   --withdrawal-fee PRICE Commit an explicit v3 withdrawal price, preserving existing fees.
 #   --sequencer-key FILE    Sequencer ed25519 seed: 32 raw bytes or 64 hex
 #                           characters. Signs genesis and every batch. FILE
 #                           must lie outside DATA_DIR; it is read here once to
@@ -182,6 +183,7 @@ LAYERXD=""
 GENESIS_BUILD=""
 CUSTODY_PROFILE=""
 GENESIS_METADATA=""
+WITHDRAWAL_FEE=""
 GENESIS_MODULES=()
 SETTLEMENT_ENV=""
 SETTLEMENT_DOCUMENT=${LAYERX_PAXEER_SETTLEMENT_JSON:-}
@@ -209,6 +211,7 @@ while [ $# -gt 0 ]; do
         --treasury-signer-socket) TREASURY_SIGNER_SOCKET=$2; shift 2 ;;
         --asset) ASSET_ID=$2; shift 2 ;;
         --genesis-metadata) GENESIS_METADATA=$2; shift 2 ;;
+        --withdrawal-fee) WITHDRAWAL_FEE=$2; shift 2 ;;
         --treasury-balance) TREASURY_BALANCE=$2; shift 2 ;;
         --program-port) PROGRAM_PORT=$2; shift 2 ;;
         --replica-port) REPLICA_PORT=$2; shift 2 ;;
@@ -244,6 +247,10 @@ fi
 
 [ -n "$GENESIS_METADATA" ] && [ -f "$GENESIS_METADATA" ] && [ ! -L "$GENESIS_METADATA" ] && [ -r "$GENESIS_METADATA" ] || fail "--genesis-metadata requires an authoritative LXGB v2 metadata file"
 GENESIS_METADATA=$(readlink -f "$GENESIS_METADATA")
+if [ -n "$WITHDRAWAL_FEE" ]; then
+    python3 "$SCRIPT_DIR/genesis_fees.py" "$GENESIS_METADATA" "$WITHDRAWAL_FEE" --check \
+        || fail "invalid withdrawal fee configuration"
+fi
 case "$GENESIS_METADATA" in "$(readlink -m "$DATA_DIR")"/*) fail "genesis metadata must be outside the data directory" ;; esac
 [ -n "$DATA_DIR" ] || fail "--data-dir is required"
 [ -n "$RUN_DIR" ] || fail "--run-dir is required"
@@ -461,6 +468,13 @@ SUPERVISOR_SOCKET="$RUN_DIR/supervisor.sock"
 
 umask 077
 mkdir -p "$DATA_DIR/checkpoints" "$DATA_DIR/logs" "$DATA_DIR/replica" "$DATA_DIR/secrets" "$DATA_DIR/work"
+if [ -n "$WITHDRAWAL_FEE" ]; then
+    python3 "$SCRIPT_DIR/genesis_fees.py" "$GENESIS_METADATA" "$WITHDRAWAL_FEE" \
+        > "$DATA_DIR/work/withdrawal-metadata.lxgb" || fail "withdrawal metadata generation failed"
+    GENESIS_METADATA="$DATA_DIR/work/withdrawal-metadata.lxgb"
+    [ "$(stat -c %s "$GENESIS_METADATA")" -le "$GENESIS_METADATA_MAX_BYTES" ] \
+        || fail "withdrawal metadata exceeds the genesis request bound"
+fi
 GUARANTOR_KEY_FILE="$DATA_DIR/secrets/guarantor-key.pem"
 GUARANTOR_ENTRIES=()
 declare -A GUARANTOR_KEYS=()

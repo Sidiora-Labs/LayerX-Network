@@ -4,6 +4,7 @@
 #include "layerx/lxp_authority.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_ledger.h"
@@ -407,6 +408,8 @@ static int check_public_fixture(void)
     lxp_snapshot_manifest_record snapshot_manifest, changed;
     lxp_byte_span snapshot;
     lxp_genesis_bootstrap_registration registration = {0};
+    lxp_fee_params fee_schedule;
+    bool fee_authority = false;
     bool enabled = false;
     REQUIRE(fixture_read("sequencer.public", public_key, sizeof(public_key), &length) == 0 && length == sizeof(public_key));
     REQUIRE(fixture_read("genesis.manifest", manifest_bytes, sizeof(manifest_bytes), &length) == 0);
@@ -426,6 +429,10 @@ static int check_public_fixture(void)
     REQUIRE(lxp_kernel_create(&kernel, &state, &journal, &manifest, 1U) == LXP_OK);
     REQUIRE(lxp_genesis_module_plan_register(&plan, &kernel) == LXP_OK);
     REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length, &snapshot_manifest, &kernel) == LXP_OK);
+    REQUIRE(lxp_fee_committed_schedule(&kernel, 1U, &fee_schedule) == LXP_OK);
+    REQUIRE(fee_schedule.version == 3U && fee_schedule.asset_price_count == 11U);
+    REQUIRE(lxp_u128_is_zero(fee_schedule.asset_prices[10]));
+    REQUIRE(lxp_authority_allowance_policy(&kernel, &fee_authority) == LXP_OK && fee_authority);
     REQUIRE(accounts.count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT + 1U);
     REQUIRE(lxp_state_root(&kernel, root) == LXP_OK);
     REQUIRE(memcmp(root, manifest.genesis_state_root, 32U) == 0);

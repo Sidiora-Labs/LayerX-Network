@@ -1,6 +1,7 @@
 mod program_accounts;
 mod program_lifecycle;
 mod public_reads;
+mod withdrawal;
 
 use layerx_client::client::{Client, ClientConfig, ReconnectPolicy};
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
@@ -822,10 +823,15 @@ fn submit_activity(
             return Err(refusal(400, "program_route_mismatch", None));
         }
     }
-    validate_submission_payload(canonical, &activity, &decode_registry)
-        .map_err(SubmissionValidationError::response)?;
-    let registry =
-        submission_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
+    let registry = if activity.activity_type().module() == ModuleId::Asset
+        && activity.activity_type().ordinal() == 9
+    {
+        withdrawal::registry(config, &activity)?
+    } else {
+        validate_submission_payload(canonical, &activity, &decode_registry)
+            .map_err(SubmissionValidationError::response)?;
+        submission_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?
+    };
     pay_timing("core.submit.validate", validate_started);
     let signer = signer_key(activity.authority())
         .ok_or_else(|| refusal(400, "authority_unsupported", None))?;

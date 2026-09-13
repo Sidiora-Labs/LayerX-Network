@@ -11,7 +11,7 @@ import tempfile
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from lxgb_metadata import metadata
+from lxgb_metadata import metadata, metadata_withdrawal
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -33,13 +33,14 @@ def main():
     public = signer.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     issuer = ed25519.Ed25519PrivateKey.generate().public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     asset = bytes.fromhex(producer.BETA_ASSET_ID)
-    suffix = metadata(asset, issuer, os.urandom(32))
+    salt = os.urandom(32)
     members = []
     for index in range(1, 4):
         member = ec.generate_private_key(ec.SECP256K1()).public_key()
         members.append({'guarantor_id': index.to_bytes(32, 'big').hex(),
                         'public_key': member.public_bytes(Encoding.X962, PublicFormat.CompressedPoint).hex()})
     for name, modules in (('previous', ()), ('current', producer.genesis_modules())):
+        suffix = (metadata if name == 'previous' else metadata_withdrawal)(asset, issuer, salt)
         request = producer.genesis_request(members, 77, asset.hex(), 1700000000000, suffix, modules)
         request_path = work / (name + '.lxgb')
         request_path.write_bytes(request)
@@ -58,6 +59,8 @@ def main():
     assert len(roots) == len(previous) == 73 and roots[:9] == previous[:9] == b'LXRR\x01' + (77).to_bytes(4, 'big')
     assert roots[9:41] != previous[9:41] and roots[41:] != previous[41:]
     expected = {'protocol_version': 3, 'network_id': 77, 'modules': list(producer.genesis_modules()),
+                'native_fee_schedule_version': 3, 'native_fee_authority_version': 2,
+                'withdrawal_price': 0,
                 'canonical_state_root': roots[9:41].hex(), 'receipt_state_root': roots[41:].hex(),
                 'previous_canonical_state_root': previous[9:41].hex(),
                 'previous_receipt_state_root': previous[41:].hex(),

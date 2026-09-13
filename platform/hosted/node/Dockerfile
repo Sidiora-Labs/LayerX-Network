@@ -31,6 +31,7 @@ COPY --from=build /src/migrations/0007_history_index.sql /opt/layerx/migrations/
 COPY --from=build /src/contracts/config/checkpoint-settlement.json /opt/layerx/checkpoint-settlement.json
 COPY --from=build /src/platform/hosted/node/bootstrap.sh /opt/layerx/bootstrap.sh
 COPY --from=build /src/platform/hosted/node/genesis-modules.conf /opt/layerx/genesis-modules.conf
+COPY --from=build /src/platform/hosted/node/genesis_fees.py /opt/layerx/genesis_fees.py
 COPY --from=build /src/platform/hosted/node/supervisor.sh /opt/layerx/supervisor.sh
 COPY --from=build /src/platform/hosted/node/guarantor.sh /opt/layerx/guarantor.sh
 COPY --from=build /src/platform/hosted/node/checkpoint-authority.py /opt/layerx/checkpoint-authority.py

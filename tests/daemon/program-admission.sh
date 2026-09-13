@@ -43,8 +43,8 @@ for _ in range(3):
     ports.append(str(sock.getsockname()[1]))
 (root / 'ports').write_text(' '.join(ports) + '\n')
 issuer = Ed25519PrivateKey.from_private_bytes(bytes([0x11]) * 32).public_key().public_bytes_raw()
-emit_metadata = metadata_withdrawal if sys.argv[2] == '--withdraw' else metadata
-(root / 'metadata').write_bytes(emit_metadata(bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'), issuer, os.urandom(32)))
+emit_metadata = metadata_withdrawal if sys.argv[2] in ('--withdraw', '--paid-withdrawal') else metadata
+(root / 'metadata').write_bytes(emit_metadata(bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'), issuer, os.urandom(32), *([17] if sys.argv[2] == '--paid-withdrawal' else [])))
 PY
 read -r program_port replica_port rpc_port < "$work/ports"
 mkfifo "$work/replica-ready"
@@ -58,7 +58,7 @@ bootstrap_extra=()
 bootstrap_environment=(env)
 custody_mode=0
 case ${2:-} in
-    --withdraw|--module-maintenance|--metered-allowance) custody_mode=1 ;;
+    --withdraw|--module-maintenance|--metered-allowance|--paid-withdrawal) custody_mode=1 ;;
 esac
 if [[ $custody_mode == 1 ]]; then
     bootstrap_extra+=(--custody-profile "$LAYERX_TEST_WITHDRAW_PROFILE" --settlement-env "$work/settlement.env")
@@ -134,13 +134,14 @@ for attempt in range(200):
 else:
     raise SystemExit("daemon did not accept LNI connections")
 PYWAIT
-if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --paid-withdrawal ]]; then
     client_name=${2#--}
     client_name=${client_name//-/_}
     cp "$build_dir/tests/lxp_test_$client_name" "$work/client"
     mkdir "$work/scenario"
     chown 4021:4021 "$work/scenario"
     scenario_state="$work/scenario"
+    if [[ ${2:-} == --paid-withdrawal ]]; then scenario_state="$work/scenario/state"; fi
     if [[ ${2:-} == --metered-allowance ]]; then
         scenario_state="$work/scenario/state"
         install -m 0600 -o 4021 -g 4021 "$work/data/secrets/program-token" "$work/scenario/program-token"
@@ -178,7 +179,7 @@ elif [[ ${2:-} == --post-lxip ]]; then
     exit 0
 elif [[ ${2:-} == --grant-issuance ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --grant-issuance "$work/grants/state"
-elif [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+elif [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --paid-withdrawal ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$2" "$scenario_state"
 elif [[ ${2:-} == --maintenance-crash ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --maintenance-queue
@@ -229,7 +230,7 @@ else
     kill -0 "$sequencer_pid"
 fi
 
-if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw || ${2:-} == --grant-issuance || ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw || ${2:-} == --grant-issuance || ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --paid-withdrawal ]]; then
     if [[ -n "$sequencer_pid" ]]; then
         kill -KILL "$sequencer_pid"
         wait "$sequencer_pid" || true
@@ -291,19 +292,21 @@ else:
 PYWAIT
     recovered_mode=--maintenance-recovered
     if [[ ${2:-} == --withdraw ]]; then recovered_mode=--withdraw-recovered; fi
-    if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+    if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --paid-withdrawal ]]; then
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$2-recovered" "$scenario_state"
     elif [[ ${2:-} == --grant-issuance ]]; then
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --grant-issuance-recovered "$work/grants/state"
     else
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$recovered_mode"
     fi
-    if [[ ${2:-} == --withdraw ]]; then
+    if [[ ${2:-} == --withdraw || ${2:-} == --paid-withdrawal ]]; then
+        replay_batches=2
+        if [[ ${2:-} == --paid-withdrawal ]]; then replay_batches=5; fi
         mkdir -m 0700 "$work/guarantor-replay"
         (source platform/hosted/node/sequencer-env.sh
          layerx_sequencer_environment "$work/data/sequencer.env"
          "$build_dir/tests/lxp_test_guarantor_runtime" "$work/data/sequencer.conf" \
-             "$work/guarantor-replay" "$work/data/checkpoints/da-bodies.log" 2) \
+             "$work/guarantor-replay" "$work/data/checkpoints/da-bodies.log" "$replay_batches") \
              > "$work/guarantor-replay.log" 2>&1
         cat "$work/guarantor-replay.log"
     fi
@@ -337,7 +340,7 @@ PYN9WAIT
         kill -0 "$sequencer_pid"
         kill -0 "$replica_pid"
     fi
-    if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance && ${2:-} != --module-maintenance && ${2:-} != --metered-allowance ]]; then
+    if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance && ${2:-} != --module-maintenance && ${2:-} != --metered-allowance && ${2:-} != --paid-withdrawal ]]; then
         (set -a; source "$work/data/replica.env"; python3 tests/daemon/maintenance-evidence.py)
     fi
 fi
