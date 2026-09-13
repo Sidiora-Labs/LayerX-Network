@@ -469,7 +469,7 @@ impl InventoryRebalancer<'_> {
             return Err(RampError::Conflict);
         }
         let report = tracker.poll();
-        let (mut stage, block_hash) = match report.stage() {
+        let (stage, block_hash) = match report.stage() {
             FinalityStage::Announced => ("announced", None),
             FinalityStage::Missing { .. } => ("missing", None),
             FinalityStage::Pooled { .. } => ("pooled", None),
@@ -479,15 +479,6 @@ impl InventoryRebalancer<'_> {
             FinalityStage::Final { inclusion, .. } => ("final", Some(inclusion.block.hash)),
             FinalityStage::Displaced { lost, .. } => ("displaced", Some(lost.block.hash)),
         };
-        if block_hash.is_some()
-            && self
-                .journal
-                .paxeer(&idempotency_key)
-                .and_then(|snapshot| snapshot.block_hash)
-                .is_some_and(|previous| Some(previous) != block_hash)
-        {
-            stage = "displaced";
-        }
         self.journal.observe_paxeer(
             idempotency_key,
             PaxeerObservation {

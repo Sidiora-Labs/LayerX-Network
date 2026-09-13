@@ -473,7 +473,11 @@ impl Projection {
                 return Err(RampError::Conflict);
             }
         }
-        if stage == "displaced" && snapshot.block_hash.is_none() {
+        if stage == "displaced"
+            && (snapshot.block_hash.is_none()
+                || block_hash != snapshot.block_hash
+                || confirmations != 0)
+        {
             return Err(RampError::Conflict);
         }
         snapshot.operation_id = Some(operation_id.to_owned());

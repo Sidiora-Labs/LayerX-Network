@@ -697,6 +697,9 @@ fn paxeer_observations_preserve_inclusion_and_confirmation_history() {
         observe("final", Some([8; 32]), 3),
         observe("unknown_stage", Some([7; 32]), 2),
         observe("missing", None, 0),
+        observe("displaced", Some([8; 32]), 0),
+        observe("displaced", Some([7; 32]), 1),
+        observe("displaced", None, 0),
     ] {
         assert!(journal.observe_paxeer([5; 32], observation, 3).is_err());
         assert_eq!(journal_bytes(&path), before);
