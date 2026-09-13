@@ -23,7 +23,14 @@ command -v jq >/dev/null
 command -v openssl >/dev/null
 command -v "$LAYERX_BIN" >/dev/null
 work=$(mktemp -d "${TMPDIR:-/tmp}/layerx-hosted-smoke.XXXXXX")
-trap 'rm -rf -- "$work"' EXIT HUP INT TERM
+cleanup() {
+  if test -n "${LAYERX_TEST_RETAIN_STATE:-}"; then
+    printf '%s\n' "retained hosted smoke evidence at $work"
+  else
+    rm -rf -- "$work"
+  fi
+}
+trap cleanup EXIT HUP INT TERM
 chmod 0700 "$work"
 auth_config="$work/auth.curl"
 chmod 0600 "$auth_config"
