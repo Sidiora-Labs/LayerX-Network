@@ -73,6 +73,7 @@ func TestCoinbase(t *testing.T) {
 
 func TestGasPrice(t *testing.T) {
 	resObj := sendRequestGood(t, "gasPrice")
+	require.Nil(t, resObj["error"], "gas price RPC refused: %v", resObj["error"])
 	Ctx = Ctx.WithBlockHeight(8)
 	result := resObj["result"].(string)
 	onePointOneGwei := "0x4190ab00"
