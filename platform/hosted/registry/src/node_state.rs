@@ -709,7 +709,7 @@ fn parse_maintenance(value: &Value) -> Result<Option<ProtocolHeadMaintenanceProo
     }
     let mut remaining = 16 * 1024 * 1024;
     let mut decode = |encoded: &str| {
-        if encoded.len() % 2 != 0 || encoded.len() / 2 > remaining {
+        if !encoded.len().is_multiple_of(2) || encoded.len() / 2 > remaining {
             return Err("maintenance receipt bytes exceed their bound".to_owned());
         }
         remaining -= encoded.len() / 2;
