@@ -16,10 +16,9 @@ use layerx_platform_gateway::store::{
     ReservationRequest,
 };
 use layerx_platform_gateway::{
-    AccessError, AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota,
-    VerifiedSubmission, authenticate_gateway_key, pay_timing, production_route,
-    verify_activity_operation, verify_program_operation, verify_program_simulation_operation,
-    verify_submission,
+    authenticate_gateway_key, pay_timing, production_route, verify_activity_operation,
+    verify_program_operation, verify_program_simulation_operation, verify_submission, AccessError,
+    AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota, VerifiedSubmission,
 };
 use layerx_types::amount::Amount;
 use layerx_types::intent::{
@@ -36,8 +35,8 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;

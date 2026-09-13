@@ -3,7 +3,6 @@ use super::*;
 pub fn configure(
     cluster: &Cluster,
     certificates: &Certificates,
-    boundary: &Boundary,
     identity: &LocalIdentity,
     authority: &LocalAuthority,
     environment: &mut BTreeMap<&'static str, String>,
@@ -25,7 +24,7 @@ pub fn configure(
         .collect();
     let config = serde_json::json!({
         "root": cluster.root, "listen_port": port,
-        "node_url": format!("https://localhost:{}", boundary.core.port),
+        "node_url": format!("http://127.0.0.1:{}", cluster.program_port),
         "node_token_file": local_secret(&cluster.root, "registry-node-token", &cluster.program_token),
         "authority_url": format!("https://localhost:{}", authority.port),
         "authority_token_file": authority.token_file,
