@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::Shutdown;
@@ -22,7 +23,10 @@ impl Directory {
     fn new() -> Result<Self> {
         let mut unique = [0; 16];
         getrandom::fill(&mut unique)?;
-        let name: String = unique.iter().map(|value| format!("{value:02x}")).collect();
+        let mut name = String::with_capacity(32);
+        for byte in unique {
+            write!(name, "{byte:02x}")?;
+        }
         let root = std::env::temp_dir().join(format!("lxc-test-{name}"));
         fs::create_dir(&root)?;
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;

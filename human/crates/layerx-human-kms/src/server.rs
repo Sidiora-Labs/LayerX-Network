@@ -18,7 +18,7 @@ impl Drop for Permit {
 }
 pub(crate) fn run(
     config: Config,
-    clock: Arc<dyn layerx_types::clock::Clock>,
+    clock: &Arc<dyn layerx_types::clock::Clock>,
 ) -> std::result::Result<(), String> {
     let store = Arc::new(Mutex::new(Store::open(&config)?));
     let listener = TcpListener::bind(config.listen).map_err(|_| "KMS listener unavailable")?;
@@ -39,7 +39,7 @@ pub(crate) fn run(
         let permit = Permit(Arc::clone(&active));
         let config = Arc::clone(&config);
         let store = Arc::clone(&store);
-        let clock = Arc::clone(&clock);
+        let clock = Arc::clone(clock);
         thread::Builder::new()
             .name("human-kms".into())
             .spawn(move || {

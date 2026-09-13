@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs::{self, DirBuilder};
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
@@ -76,10 +77,10 @@ impl Server {
         if generation == [0; 16] {
             return Err(io::Error::other("invalid clock generation"));
         }
-        let name: String = generation
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let mut name = String::with_capacity(32);
+        for byte in generation {
+            write!(name, "{byte:02x}").map_err(io::Error::other)?;
+        }
         let directory = root.join(format!("lxc-{name}"));
         DirBuilder::new().mode(0o700).create(&directory)?;
         let socket = directory.join("clock.sock");

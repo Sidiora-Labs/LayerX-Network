@@ -12,7 +12,7 @@ mod wire;
 /// # Errors
 /// Refuses invalid policy, TLS identity, protected storage or listener failure.
 pub fn run_from_environment(
-    clock: std::sync::Arc<dyn layerx_types::clock::Clock>,
+    clock: &std::sync::Arc<dyn layerx_types::clock::Clock>,
 ) -> Result<(), String> {
     rustls::crypto::ring::default_provider()
         .install_default()
