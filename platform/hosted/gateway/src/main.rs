@@ -2329,18 +2329,13 @@ fn complete_activity(
     let Ok(mut result) = serde_json::from_slice::<serde_json::Value>(&result) else {
         return response(503, "receipt_encoding_failed", Some(5));
     };
-    if let Some(object) = result.as_object_mut() {
-        object.insert(
-            "idempotency_key".to_owned(),
-            serde_json::Value::String(operation.protocol_idempotency.clone()),
-        );
-        if operation.program_call {
-            object.insert(
-                "retained_signed_activity".to_owned(),
-                serde_json::Value::String(operation.retained_signed_activity.clone()),
-            );
-        }
-    }
+    retain_submission_binding(
+        &mut result,
+        &operation.protocol_idempotency,
+        operation
+            .program_call
+            .then_some(operation.retained_signed_activity.as_str()),
+    );
     let Ok(stored_result) = serde_json::to_vec(&result) else {
         return response(503, "receipt_encoding_failed", Some(5));
     };
@@ -3798,6 +3793,25 @@ fn complete_pending_lifecycle(
     program_terminal_response(config, result, trace_id, false)
 }
 
+fn retain_submission_binding(
+    result: &mut serde_json::Value,
+    idempotency: &str,
+    signed_activity: Option<&str>,
+) {
+    if let Some(object) = result.as_object_mut() {
+        object.insert(
+            "idempotency_key".to_owned(),
+            serde_json::Value::String(idempotency.to_owned()),
+        );
+        if let Some(signed) = signed_activity {
+            object.insert(
+                "retained_signed_activity".to_owned(),
+                serde_json::Value::String(signed.to_owned()),
+            );
+        }
+    }
+}
+
 fn complete_pending_program(
     config: &Config,
     record: &KeyRecord,
@@ -3811,16 +3825,11 @@ fn complete_pending_program(
         Ok(value) => value,
         Err(_) => return response(503, "receipt_encoding_failed", Some(5)),
     };
-    if let Some(object) = result.as_object_mut() {
-        object.insert(
-            "idempotency_key".to_owned(),
-            serde_json::Value::String(operation.idempotency_key.clone()),
-        );
-        object.insert(
-            "retained_signed_activity".to_owned(),
-            serde_json::Value::String(operation.continuation.clone()),
-        );
-    }
+    retain_submission_binding(
+        &mut result,
+        &operation.idempotency_key,
+        Some(&operation.continuation),
+    );
     let Ok(stored_result) = serde_json::to_vec(&result) else {
         return response(503, "receipt_encoding_failed", Some(5));
     };

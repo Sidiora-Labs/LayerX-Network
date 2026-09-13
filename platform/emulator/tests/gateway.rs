@@ -614,6 +614,22 @@ struct LifecycleRequest<'a> {
     program: layerx_types::intent::ProgramId,
     sequence: usize,
 }
+impl LifecycleRequest<'_> {
+    fn payload_hash(&self) -> Result<[u8; 32], String> {
+        use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+        let kind = ActivityType::new(ModuleId::Programs, self.ordinal)
+            .map_err(|error| format!("{error:?}"))?;
+        let registration = ModuleRegistration::new(ModuleId::Programs, &[kind])
+            .map_err(|error| format!("{error:?}"))?;
+        let registry =
+            ModuleRegistry::new(&[registration]).map_err(|error| format!("{error:?}"))?;
+        let activity = layerx_wire::activity::decode_signed(self.bytes, &registry)
+            .map_err(|error| format!("{error:?}"))?;
+        assert_eq!(activity.payload(), self.payload);
+        layerx_wire::hash::payload_hash(&activity).map_err(|error| format!("{error:?}"))
+    }
+}
+
 mod lifecycle_checks {
     use super::*;
 
@@ -744,11 +760,7 @@ mod lifecycle_checks {
                     sequencer_public_key: public,
                     previous_state_root: protocol.previous_state_root(),
                     activity_id: expected_id,
-                    payload_hash: layerx_wire::hash::domain(
-                        layerx_wire::hash::Domain::PayloadHash,
-                        &layerx_wire::hash::CanonicalBytes::from_wire(input.payload.to_vec()),
-                    )
-                    .map_err(|error| format!("{error:?}"))?,
+                    payload_hash: input.payload_hash()?,
                     program_id: program.bytes(),
                     guest_abi_version: 2,
                 },
@@ -804,11 +816,7 @@ mod lifecycle_checks {
                     sequencer_public_key: public,
                     previous_state_root: protocol.previous_state_root(),
                     activity_id: expected_id,
-                    payload_hash: layerx_wire::hash::domain(
-                        layerx_wire::hash::Domain::PayloadHash,
-                        &layerx_wire::hash::CanonicalBytes::from_wire(input.payload.to_vec()),
-                    )
-                    .map_err(|error| format!("{error:?}"))?,
+                    payload_hash: input.payload_hash()?,
                     program_id: program.bytes(),
                     guest_abi_version: 2,
                 },
