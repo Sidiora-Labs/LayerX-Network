@@ -9,8 +9,7 @@ use layerx_crypto::local::LocalSigner;
 use layerx_crypto::session::{issue_session_key, IssuedSessionKey, SessionKeyRequest};
 use layerx_crypto::signer::{sign_disclosed, SignError, Signer};
 use layerx_types::activity::{ActivityBuildError, Authority};
-use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistry};
-use layerx_wire::decode::Decoder;
+use layerx_types::payload::{ActivityType, ModuleRegistry};
 use layerx_wire::WireError;
 
 use crate::prepare::{
@@ -105,7 +104,8 @@ impl ProvisionedSessionKey {
         if signer.public_key() != issued.session_public_key {
             return Err(SigningError::KeyMismatch);
         }
-        if issued.permitted_activity_types.is_empty()
+        if issued.purpose != layerx_crypto::session::SessionPurpose::Activity
+            || issued.permitted_activity_types.is_empty()
             || issued.expires_at == 0
             || issued.revocation_sequence == 0
         {
@@ -168,85 +168,41 @@ pub fn validate_issued_session(
     revocation_sequence: u64,
     permitted_ordinals: &[u16],
 ) -> Result<IssuedSessionKey, SigningError> {
-    let mut decoder = Decoder::new(registration_payload, 0);
-    decoder
-        .structure_header(0x2001)
-        .map_err(SigningError::Wire)?;
-    if decoder.u8().map_err(SigningError::Wire)? != 1
-        || decoder.bytes(32).map_err(SigningError::Wire)? != grantor
-        || decoder.bytes(32).map_err(SigningError::Wire)? != grantor
-        || decoder.u8().map_err(SigningError::Wire)? != 2
-        || decoder.bytes(32).map_err(SigningError::Wire)? != session_public_key
+    let issued = layerx_crypto::session::decode_session_key(registration_payload)
+        .map_err(|_| SigningError::InvalidProvisioning)?;
+    if issued.purpose != layerx_crypto::session::SessionPurpose::Activity {
+        return Err(SigningError::InvalidProvisioning);
+    }
+    let allowed: BTreeSet<_> = issued
+        .permitted_activity_types
+        .iter()
+        .map(|kind| kind.ordinal())
+        .collect();
+    let transferred: BTreeSet<_> = permitted_ordinals.iter().copied().collect();
+    if issued.session_public_key != session_public_key
+        || issued.expires_at != expires_at
+        || issued.revocation_sequence != revocation_sequence
+        || transferred.len() != permitted_ordinals.len()
+        || allowed != transferred
     {
         return Err(SigningError::InvalidProvisioning);
     }
-    let module_mask = decoder.u64().map_err(SigningError::Wire)?;
-    let ordinal_min = decoder.u16().map_err(SigningError::Wire)?;
-    let ordinal_max = decoder.u16().map_err(SigningError::Wire)?;
-    let zero32 = [0_u8; 32];
-    if module_mask == 0
-        || ordinal_min == 0
-        || ordinal_max < ordinal_min
-        || decoder.bytes(32).map_err(SigningError::Wire)? != zero32
-        || decoder.u128().map_err(SigningError::Wire)? != 0
-        || decoder.u128().map_err(SigningError::Wire)? != 0
-        || decoder.u128().map_err(SigningError::Wire)? != 0
-        || decoder.u64().map_err(SigningError::Wire)? != 0
-        || decoder.u128().map_err(SigningError::Wire)? != 0
-        || decoder.u128().map_err(SigningError::Wire)? != 0
-        || decoder.u64().map_err(SigningError::Wire)? != 0
-        || decoder.bytes(32).map_err(SigningError::Wire)? != zero32
-        || decoder.u64().map_err(SigningError::Wire)? != not_before
-        || decoder.u64().map_err(SigningError::Wire)? != expires_at
-        || decoder.u64().map_err(SigningError::Wire)? != revocation_sequence
-        || decoder.u8().map_err(SigningError::Wire)? != 0
-        || decoder.u64().map_err(SigningError::Wire)? != 0
-        || decoder.bytes(64).map_err(SigningError::Wire)? != [0_u8; 64]
-    {
-        return Err(SigningError::InvalidProvisioning);
-    }
-    decoder.finish().map_err(SigningError::Wire)?;
-
-    let expected_ordinals: BTreeSet<_> = (ordinal_min..=ordinal_max).collect();
-    let transferred_ordinals: BTreeSet<_> = permitted_ordinals.iter().copied().collect();
-    if permitted_ordinals.len() != transferred_ordinals.len()
-        || transferred_ordinals != expected_ordinals
-    {
-        return Err(SigningError::InvalidProvisioning);
-    }
-    let mut activities = Vec::new();
-    let mut known_mask = 0_u64;
-    for module_value in 1_u16..64 {
-        let bit = 1_u64 << module_value;
-        if module_mask & bit == 0 {
-            continue;
-        }
-        let module =
-            ModuleId::from_u16(module_value).map_err(|_| SigningError::InvalidProvisioning)?;
-        known_mask |= bit;
-        for ordinal in ordinal_min..=ordinal_max {
-            activities.push(
-                ActivityType::new(module, ordinal)
-                    .map_err(|_| SigningError::InvalidProvisioning)?,
-            );
-        }
-    }
-    if known_mask != module_mask {
-        return Err(SigningError::InvalidProvisioning);
-    }
-    let issued = issue_session_key(&SessionKeyRequest {
+    let mut expected = issue_session_key(&SessionKeyRequest {
         grantor,
         session_public_key,
         not_before,
         expires_at: Some(expires_at),
-        permitted_activity_types: activities,
+        permitted_activity_types: issued.permitted_activity_types.clone(),
         revocation_sequence: Some(revocation_sequence),
+        fee_budget: issued.fee_budget,
+        purpose: issued.purpose,
     })
     .map_err(|_| SigningError::InvalidProvisioning)?;
-    if issued.registration_payload != registration_payload {
+    if expected.registration_payload != registration_payload {
         return Err(SigningError::InvalidProvisioning);
     }
-    Ok(issued)
+    expected.registration_payload = issued.registration_payload;
+    Ok(expected)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -123,6 +123,17 @@ impl CompileError {
 /// core-negotiated module registry refuses the value.
 #[allow(clippy::too_many_lines)]
 pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledIntent, CompileError> {
+    if intent.version() == IntentVersion::V3
+        && !matches!(intent.kind(), IntentKind::SessionGrant(_))
+    {
+        return Err(CompileError::wire(
+            CompileField::Version,
+            WireError {
+                result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                offset: 0,
+            },
+        ));
+    }
     let mut encoder = Encoder::new(MAX_PAYLOAD_BYTES);
     match intent.kind() {
         IntentKind::DidRegistration(value) => {
@@ -195,11 +206,48 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
             finish(registry, ModuleId::Governance, 8, encoder)
         }
         IntentKind::SessionGrant(value) => {
-            header(&mut encoder, 0x7105, 1)?;
+            if intent.version() != IntentVersion::V3 {
+                if value.registration_payload.get(4) != Some(&1) || value.replacement.is_some() {
+                    return Err(CompileError::wire(
+                        CompileField::Version,
+                        WireError {
+                            result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                            offset: 0,
+                        },
+                    ));
+                }
+                header(&mut encoder, 0x7105, 1)?;
+                wire(
+                    CompileField::SessionGrant,
+                    encoder.bytes(&value.registration_payload, 1024),
+                )?;
+                return finish(registry, ModuleId::Governance, 5, encoder);
+            }
+            header(
+                &mut encoder,
+                0x7105,
+                if value.replacement.is_some() {
+                    0x0205
+                } else {
+                    0x0103
+                },
+            )?;
             wire(
                 CompileField::SessionGrant,
                 encoder.bytes(&value.registration_payload, 1024),
             )?;
+            wire(
+                CompileField::SessionGrant,
+                encoder.u64(value.expiry_sequence),
+            )?;
+            wire(
+                CompileField::SessionGrant,
+                encoder.bytes(&value.action_key, 32),
+            )?;
+            if let Some((predecessor, commitment)) = value.replacement {
+                wire(CompileField::SessionGrant, encoder.bytes(&predecessor, 32))?;
+                wire(CompileField::SessionGrant, encoder.bytes(&commitment, 32))?;
+            }
             finish(registry, ModuleId::Governance, 5, encoder)
         }
         IntentKind::SessionRevoke(value) => {

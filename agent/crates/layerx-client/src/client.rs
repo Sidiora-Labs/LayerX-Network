@@ -451,6 +451,38 @@ impl Client {
         balance(transport, account_id, asset_id, context)
     }
 
+    /// # Errors
+    /// Refuses unavailable native policy, stale snapshots and malformed asset metadata.
+    pub fn native_fee_policy(
+        &mut self,
+        correlation_id: u64,
+    ) -> Result<crate::payments::CommittedSnapshot<crate::payments::NativeFeePolicy>, ReadError>
+    {
+        let context = crate::payments::SnapshotContext {
+            interface_version: self.handshake.node().interface_version,
+            correlation_id,
+            minimum_sequence: self.head().chain_sequence,
+        };
+        let transport = self.transport.as_mut().ok_or(ReadError::Disconnected)?;
+        crate::payments::native_fee_policy(transport, context)
+    }
+
+    /// # Errors
+    /// Refuses unbound or unavailable committed session state.
+    pub fn session_fee_state(
+        &mut self,
+        correlation_id: u64,
+        grant_id: [u8; 32],
+    ) -> Result<crate::payments::CommittedSnapshot<Vec<u8>>, ReadError> {
+        let context = crate::payments::SnapshotContext {
+            interface_version: self.handshake.node().interface_version,
+            correlation_id,
+            minimum_sequence: self.head().chain_sequence,
+        };
+        let transport = self.transport.as_mut().ok_or(ReadError::Disconnected)?;
+        crate::payments::session_fee_state(transport, grant_id, context)
+    }
+
     /// Retrieves exact proof-gated account bytes.
     ///
     /// # Errors

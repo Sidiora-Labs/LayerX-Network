@@ -291,6 +291,8 @@ impl AgentCreationContract for InProcessAgentLayer {
                 .into();
         let session_public_key = LocalSigner::new(session_seed).public_key();
         let issued = issue_session_key(&SessionKeyRequest {
+            fee_budget: None,
+            purpose: layerx_crypto::session::SessionPurpose::Activity,
             grantor: Sha256::digest(request.did.as_bytes()).into(),
             session_public_key,
             not_before: 1_000,

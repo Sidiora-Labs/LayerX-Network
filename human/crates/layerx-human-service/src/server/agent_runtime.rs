@@ -38,6 +38,9 @@ const APPROVAL_GET: u8 = 10;
 const APPROVAL_APPROVE: u8 = 11;
 const APPROVAL_REJECT: u8 = 12;
 const BALANCE: u8 = 6;
+const NATIVE_FEE_POLICY: u8 = 39;
+const SESSION_FEE_STATE: u8 = 40;
+const SESSION_SEED_PREPARE: u8 = 41;
 const HEAD: u8 = 7;
 const EVIDENCE: u8 = 8;
 const ACCOUNT_SEQUENCE: u8 = 13;
@@ -77,6 +80,13 @@ pub struct AgentRuntime {
 pub struct AgentApprovalPage {
     pub approvals: Vec<crate::approvals::AgentApprovalRecord>,
     pub next_cursor: Option<[u8; 32]>,
+}
+
+pub struct NativeFeePolicy {
+    pub version: u8,
+    pub asset_id: [u8; 32],
+    pub currency: String,
+    pub decimals: u8,
 }
 
 pub struct VerifiedBalance {
@@ -154,7 +164,7 @@ impl AgentSessionSeed {
             Ok(Self(Zeroizing::new(seed)))
         }
     }
-    fn expose(&self) -> &[u8; 32] {
+    pub(crate) fn expose(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -1185,6 +1195,73 @@ impl AgentRuntime {
     }
     /// # Errors
     /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
+    pub fn prepare_session_seed(
+        &mut self,
+        agent: &str,
+        action_key: [u8; 32],
+        request_digest: [u8; 32],
+    ) -> Result<AgentSessionSeed, AgentBoundaryError> {
+        let mut writer = Writer::new(SESSION_SEED_PREPARE);
+        writer.text(agent)?;
+        writer.fixed(&action_key);
+        writer.fixed(&request_digest);
+        let mut reader = self.exchange(&writer.finish())?;
+        let seed = AgentSessionSeed::new(reader.fixed()?)?;
+        reader.finish()?;
+        Ok(seed)
+    }
+
+    /// # Errors
+    /// Refuses unbound or unavailable committed session state.
+    pub fn session_fee_state(
+        &mut self,
+        grant_id: [u8; 32],
+    ) -> Result<layerx_crypto::session::SessionFeeState, AgentBoundaryError> {
+        let mut writer = Writer::new(SESSION_FEE_STATE);
+        writer.fixed(&grant_id);
+        let mut reader = self.exchange(&writer.finish())?;
+        let bytes = reader.bytes()?;
+        let sequence = reader.u64()?;
+        let root: [u8; 32] = reader.fixed()?;
+        reader.finish()?;
+        let state = layerx_crypto::session::SessionFeeState::decode(grant_id, &bytes)
+            .map_err(|_| AgentBoundaryError::CorruptResponse)?;
+        if root == [0; 32] || state.revoked_at_sequence > sequence {
+            return Err(AgentBoundaryError::CorruptResponse);
+        }
+        Ok(state)
+    }
+
+    /// # Errors
+    /// Refuses unavailable or malformed native fee metadata.
+    pub fn native_fee_policy(&mut self) -> Result<NativeFeePolicy, AgentBoundaryError> {
+        let mut reader = self.exchange(&Writer::new(NATIVE_FEE_POLICY).finish())?;
+        let value = NativeFeePolicy {
+            version: reader.u8()?,
+            asset_id: reader.fixed()?,
+            currency: reader.text()?,
+            decimals: reader.u8()?,
+        };
+        let _sequence = reader.u64()?;
+        let root: [u8; 32] = reader.fixed()?;
+        reader.finish()?;
+        if !matches!(value.version, 1 | 2)
+            || value.asset_id == [0; 32]
+            || root == [0; 32]
+            || value.currency.is_empty()
+            || !value
+                .currency
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric())
+            || value.decimals > 38
+        {
+            return Err(AgentBoundaryError::CorruptResponse);
+        }
+        Ok(value)
+    }
+
+    /// # Errors
+    /// Refuses unavailable or unauthenticated balance evidence.
     pub fn balance(&mut self) -> Result<VerifiedBalance, AgentBoundaryError> {
         let mut reader = self.exchange(&Writer::new(BALANCE).finish())?;
         let value = VerifiedBalance {

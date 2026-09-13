@@ -1093,6 +1093,8 @@ impl<C: AgentSessionContract, E: SessionEntropySource> SessionKeyProvisioner<C, 
         let entropy = self.entropy.next_session_entropy()?;
         let session_public_key = LocalSigner::new(*entropy.0).public_key();
         let issued = issue_session_key(&SessionKeyRequest {
+            fee_budget: None,
+            purpose: layerx_crypto::session::SessionPurpose::Activity,
             grantor: identity.protocol_identity,
             session_public_key,
             not_before: identity.protocol_time,

@@ -171,9 +171,13 @@ fn schedule_protocol_effects(
         let Ok(declaration) = crate::AccessDeclaration::canonical_decode(declaration_bytes) else {
             return Err(NON_CANONICAL);
         };
-        let Ok(reachable) =
-            CapabilitySet::admitted_schedule_accesses(capabilities, program, principal)
-        else {
+        let canonical_payload = unsafe { schedule_span(call.canonical_payload) }?;
+        let Ok(reachable) = CapabilitySet::admitted_schedule_accesses(
+            capabilities,
+            program,
+            principal,
+            canonical_payload,
+        ) else {
             return Err(NON_CANONICAL);
         };
         let writes: Vec<_> = declaration

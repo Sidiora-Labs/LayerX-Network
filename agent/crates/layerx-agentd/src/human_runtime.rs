@@ -1025,6 +1025,52 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
     fn balance(&mut self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
         self.lock_operations()?.balance(peer)
     }
+    fn native_fee_policy(
+        &mut self,
+        _peer: &HumanPeer,
+    ) -> Result<HumanResponse, HumanOperationError> {
+        self.lock_operations()?.native_fee_policy()
+    }
+    fn session_seed_prepare(
+        &mut self,
+        peer: &HumanPeer,
+        agent: &str,
+        action_key: [u8; 32],
+        request_digest: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError> {
+        if action_key == [0; 32] || request_digest == [0; 32] || Did::new(agent.as_bytes()).is_err()
+        {
+            return Err(HumanOperationError::Refused);
+        }
+        let mut namespace = Vec::new();
+        for part in [
+            peer.tenant.as_bytes(),
+            peer.principal.as_bytes(),
+            agent.as_bytes(),
+        ] {
+            namespace.extend(
+                u32::try_from(part.len())
+                    .map_err(|_| HumanOperationError::Refused)?
+                    .to_be_bytes(),
+            );
+            namespace.extend(part);
+        }
+        namespace.extend(action_key);
+        let seed = self
+            .session_keys
+            .prepare_seed(&namespace, request_digest)
+            .map_err(|_| HumanOperationError::Refused)?;
+        let mut out = Encoder::new();
+        out.fixed(seed.as_ref());
+        out.finish()
+    }
+    fn session_fee_state(
+        &mut self,
+        _peer: &HumanPeer,
+        grant_id: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError> {
+        self.lock_operations()?.session_fee_state(grant_id)
+    }
     fn head(&self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
         self.lock_operations()?.head(peer)
     }
@@ -2027,9 +2073,12 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
         {
             return Err(HumanOperationError::Refused);
         }
-        let (authenticated_account, _, _, _, account_age, maximum_account_age, _) =
+        let did = Did::new(request.agent.as_bytes()).map_err(|_| HumanOperationError::Refused)?;
+        let grantor = layerx_wire::hash::did_id_for_protocol(&did, 3)
+            .map_err(|_| HumanOperationError::Refused)?;
+        let (_, _, _, _, account_age, maximum_account_age, _) =
             self.lock_operations()?.authority.balance_context(peer)?;
-        if request.grantor != authenticated_account
+        if request.grantor != grantor
             || maximum_account_age == 0
             || account_age > maximum_account_age
         {
@@ -2065,7 +2114,6 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
         )
         .map_err(|_| HumanOperationError::Refused)?;
         drop(provisioned);
-        let did = Did::new(request.agent.as_bytes()).map_err(|_| HumanOperationError::Refused)?;
         let identity = self
             .lock_operations()?
             .authority
@@ -2074,18 +2122,22 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
         if identity.frozen
             || identity.head_sequence == 0
             || identity.revocation_sequence != request.grant_revocation_sequence
-            || identity.canonical_bytes.is_empty()
+            || identity.canonical_bytes.len() != 223
+            || !identity.canonical_bytes.starts_with(b"LXGI1")
+            || identity.canonical_bytes[5..37] != grantor
             || identity.verification_level < VerificationLevel::CHECKPOINT_FINALISED
             || !identity.authorities.contains(&owner_authority(request)?)
         {
             return Err(HumanOperationError::Refused);
         }
         let attestation = self.lock_operations()?.authority.lease_attestation(peer)?;
-        let (not_before, expiry) = attestation.map(
+        let (_, expiry) = attestation.map(
             request.lease_not_before_unix_ms,
             request.lease_not_after_unix_ms,
         )?;
-        if not_before != request.grant_not_before || expiry != request.grant_expires_at {
+        if request.lease_not_before_unix_ms < request.grant_not_before
+            || request.lease_not_after_unix_ms > request.grant_expires_at
+        {
             return Err(HumanOperationError::Refused);
         }
         Ok((identity, expiry, attestation.observed_head_sequence))
@@ -2585,6 +2637,39 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         out.finish()
     }
 
+    fn session_fee_state(
+        &mut self,
+        grant_id: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError> {
+        let snapshot = self
+            .node
+            .session_fee_state(40, grant_id)
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        let mut out = Encoder::new();
+        out.bytes(&snapshot.value)?;
+        out.u64(snapshot.observed_sequence);
+        out.fixed(&snapshot.state_root);
+        out.finish()
+    }
+
+    fn native_fee_policy(&mut self) -> Result<HumanResponse, HumanOperationError> {
+        let snapshot = self
+            .node
+            .native_fee_policy(39)
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        let policy = snapshot.value;
+        let currency =
+            std::str::from_utf8(&policy.asset.symbol).map_err(|_| HumanOperationError::Refused)?;
+        let mut out = Encoder::new();
+        out.u8(policy.version);
+        out.fixed(&policy.asset.asset_id);
+        out.text(currency)?;
+        out.u8(policy.asset.decimals);
+        out.u64(snapshot.observed_sequence);
+        out.fixed(&snapshot.state_root);
+        out.finish()
+    }
+
     fn balance(&mut self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
         let (
             account,
@@ -3047,6 +3132,28 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
     }
     fn balance(&mut self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
         ProductionHumanOperations::balance(self, peer)
+    }
+    fn native_fee_policy(
+        &mut self,
+        _peer: &HumanPeer,
+    ) -> Result<HumanResponse, HumanOperationError> {
+        ProductionHumanOperations::native_fee_policy(self)
+    }
+    fn session_seed_prepare(
+        &mut self,
+        _: &HumanPeer,
+        _: &str,
+        _: [u8; 32],
+        _: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError> {
+        Err(HumanOperationError::Unavailable)
+    }
+    fn session_fee_state(
+        &mut self,
+        _peer: &HumanPeer,
+        grant_id: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError> {
+        ProductionHumanOperations::session_fee_state(self, grant_id)
     }
     fn head(&self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
         ProductionHumanOperations::head(self, peer)

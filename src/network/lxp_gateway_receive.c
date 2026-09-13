@@ -20,6 +20,8 @@ typedef struct receive_transaction {
     lxp_meter_ctx meter_before;
     bool meter_present;
     lxp_send_store *window_backup;
+    lxp_authority_scope allowance_before;
+    bool allowance_present;
 } receive_transaction;
 
 #ifdef LXP_TESTING
@@ -77,6 +79,9 @@ static lxp_result receive_transaction_abort(
     context->invoices->count = transaction->invoice_count;
     if (transaction->meter_present && context->meter != NULL)
         *context->meter = transaction->meter_before;
+    if (transaction->allowance_present)
+        *context->receive_environment->allowance->scope =
+            transaction->allowance_before;
     arena_reset = lxp_arena_reset(context->arena, transaction->arena_mark);
     (void)memset(receipt, 0, sizeof(*receipt));
     return rollback == LXP_OK && kv_rollback == LXP_OK &&
@@ -333,6 +338,12 @@ static lxp_result gateway_receive_claim_locked(
         transaction.grant_index = (size_t)(existing_grant -
             context->receive_environment->grants->grants);
         transaction.grant_before = *existing_grant;
+    }
+    if (context->receive_environment->allowance != NULL &&
+        context->receive_environment->allowance->scope != NULL) {
+        transaction.allowance_before =
+            *context->receive_environment->allowance->scope;
+        transaction.allowance_present = true;
     }
     status = lxp_journal_open(&leg, 1U, &transaction.balances);
     if (status != LXP_OK) return status;

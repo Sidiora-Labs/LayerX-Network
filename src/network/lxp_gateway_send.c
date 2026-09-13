@@ -19,6 +19,8 @@ typedef struct send_transaction {
     lxp_meter_ctx meter_before;
     bool meter_present;
     lxp_send_store *window_backup;
+    lxp_authority_scope allowance_before;
+    bool allowance_present;
 } send_transaction;
 
 enum {
@@ -102,6 +104,9 @@ static lxp_result send_transaction_abort(
     context->invoices->count = transaction->invoice_count;
     if (transaction->meter_present && context->meter != NULL)
         *context->meter = transaction->meter_before;
+    if (transaction->allowance_present)
+        *context->send_environment->allowance->scope =
+            transaction->allowance_before;
     arena_reset = lxp_arena_reset(context->arena, transaction->arena_mark);
     (void)memset(receipt, 0, sizeof(*receipt));
     return rollback == LXP_OK && kv_rollback == LXP_OK &&
@@ -515,6 +520,12 @@ static lxp_result gateway_send_settle_locked(
     if (context->meter != NULL) {
         transaction.meter_before = *context->meter;
         transaction.meter_present = true;
+    }
+    if (context->send_environment->allowance != NULL &&
+        context->send_environment->allowance->scope != NULL) {
+        transaction.allowance_before =
+            *context->send_environment->allowance->scope;
+        transaction.allowance_present = true;
     }
     status = lxp_journal_open(&leg, 1U, &transaction.balances);
     if (status != LXP_OK) return status;

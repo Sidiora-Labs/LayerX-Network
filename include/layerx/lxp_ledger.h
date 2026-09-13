@@ -189,6 +189,10 @@ typedef struct lxp_send_environment {
     uint64_t batch_timestamp;
     uint32_t network_id;
     uint16_t protocol_version;
+    /* The resolved grant the debit draws against, or NULL when the caller
+     * resolved none; a declared delegated or budget debit is refused without
+     * it. */
+    struct lxp_transfer_allowance *allowance;
 } lxp_send_environment;
 
 typedef struct lxp_payer_grant {
@@ -247,6 +251,7 @@ typedef struct lxp_receive_environment {
     uint64_t global_sequence;
     uint32_t network_id;
     uint16_t protocol_version;
+    struct lxp_transfer_allowance *allowance;
 } lxp_receive_environment;
 
 typedef struct lx_account_index_entry {

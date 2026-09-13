@@ -117,6 +117,8 @@ fn send_payload() -> Vec<u8> {
 fn issued(seed: [u8; 32], permitted: ActivityType, expires_at: u64) -> IssuedSessionKey {
     let public_key = LocalSigner::new(seed).public_key();
     issue_session_key(&SessionKeyRequest {
+        fee_budget: None,
+        purpose: layerx_crypto::session::SessionPurpose::Activity,
         grantor: [1; 32],
         session_public_key: public_key,
         not_before: 900,
@@ -236,4 +238,29 @@ fn session_key_self_signing_is_distinct_and_audited() {
     assert_eq!(signed.audit.disclosure_digest, prepared.disclosure_digest);
     assert_eq!(signed.canonical_bytes, prepared.canonical_bytes);
     assert_ne!(signed.signature, [0; 64]);
+}
+
+#[test]
+fn authentication_only_sessions_cannot_be_imported_as_native_signers() {
+    let seed = [0xa6; 32];
+    let mut authentication = issue_session_key(&SessionKeyRequest {
+        grantor: [1; 32],
+        session_public_key: LocalSigner::new(seed).public_key(),
+        not_before: 900,
+        expires_at: Some(1_100),
+        permitted_activity_types: Vec::new(),
+        revocation_sequence: Some(5),
+        fee_budget: None,
+        purpose: layerx_crypto::session::SessionPurpose::Authentication,
+    })
+    .unwrap_or_else(|error| panic!("issue authentication key: {error:?}"));
+    assert!(matches!(
+        ProvisionedSessionKey::new(seed, authentication.clone()),
+        Err(SigningError::InvalidProvisioning)
+    ));
+    authentication.permitted_activity_types.push(send_type());
+    assert!(matches!(
+        ProvisionedSessionKey::new(seed, authentication),
+        Err(SigningError::InvalidProvisioning)
+    ));
 }

@@ -141,7 +141,15 @@ if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
     mkdir "$work/scenario"
     chown 4021:4021 "$work/scenario"
     scenario_state="$work/scenario"
-    if [[ ${2:-} == --metered-allowance ]]; then scenario_state="$work/scenario/state"; fi
+    if [[ ${2:-} == --metered-allowance ]]; then
+        scenario_state="$work/scenario/state"
+        install -m 0600 -o 4021 -g 4021 "$work/data/secrets/program-token" "$work/scenario/program-token"
+        export LAYERX_TEST_METERED_PROGRAM_PORT="$program_port"
+        export LAYERX_TEST_METERED_PROGRAM_TOKEN_FILE="$work/scenario/program-token"
+        export LAYERX_TEST_METERED_ARTIFACT_SCRIPT="$work/metered-artifacts.py"
+        cp "$root/tests/daemon/metered-artifacts.py" "$LAYERX_TEST_METERED_ARTIFACT_SCRIPT"
+        chmod 0644 "$LAYERX_TEST_METERED_ARTIFACT_SCRIPT"
+    fi
 elif [[ ${2:-} == --grant-issuance ]]; then
     cp "$build_dir/tests/lxp_test_grant_issuance" "$work/client"
     mkdir "$work/grants"
@@ -301,6 +309,34 @@ PYWAIT
     fi
     kill -0 "$sequencer_pid"
     kill -0 "$replica_pid"
+    if [[ ${2:-} == --metered-allowance ]]; then
+        kill -KILL "$sequencer_pid" "$replica_pid"
+        wait "$sequencer_pid" || true
+        wait "$replica_pid" || true
+        sequencer_pid= replica_pid=
+        (set -a; source "$work/data/replica.env"; export LAYERX_AUTHORITY_READY_FD="$replica_ready_fd"; exec "$native_bin/layerxd" --authority-replica "$work/data/replica.conf") >> "$work/replica.log" 2>&1 &
+        replica_pid=$!
+        IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
+        [[ "$replica_ready" == R ]]
+        (source platform/hosted/node/sequencer-env.sh; layerx_sequencer_environment "$work/data/sequencer.env"; exec "$native_bin/layerxd" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
+        sequencer_pid=$!
+        python3 - "$runtime/layerxd.lni.sock" "$sequencer_pid" <<'PYN9WAIT'
+import os, socket, sys, time
+for attempt in range(200):
+    os.kill(int(sys.argv[2]), 0)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(sys.argv[1])
+        break
+    except OSError:
+        time.sleep(0.1)
+else:
+    raise SystemExit("replacement replay daemon did not accept LNI connections")
+PYN9WAIT
+        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --metered-session-recovered "$scenario_state.session-replacement"
+        kill -0 "$sequencer_pid"
+        kill -0 "$replica_pid"
+    fi
     if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance && ${2:-} != --module-maintenance && ${2:-} != --metered-allowance ]]; then
         (set -a; source "$work/data/replica.env"; python3 tests/daemon/maintenance-evidence.py)
     fi

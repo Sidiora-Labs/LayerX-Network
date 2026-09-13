@@ -449,6 +449,7 @@ lxp_result lxp_receive_execute(const lxp_receive *receive,
     context.batch_timestamp = environment->batch_timestamp;
     context.debit_authority_kind =
         (lxp_authorization_kind)receive->receiver_authorization.kind;
+    context.allowance = environment->allowance;
     status = lxp_apply_transfer_set(&leg, 1U, &context, &set_result);
     if (status != LXP_OK) { *state = original_state; return status; }
     if (state->grant.has_reference) state->invoice_settled = true;

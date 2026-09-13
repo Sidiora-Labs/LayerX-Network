@@ -24,12 +24,23 @@ pub struct GrantScope {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeFeeBudget {
+    pub asset: [u8; 32],
+    pub maximum_per_activity: u128,
+    pub maximum_total: u128,
+    pub period_length: u64,
+    pub maximum_per_period: u128,
+    pub period_start: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthorityGrant {
     pub grantor: [u8; 32],
     pub grantee: [u8; 32],
     pub kind: GrantKind,
     pub delegate_key: [u8; 32],
     pub scope: GrantScope,
+    pub fee_budget: Option<NativeFeeBudget>,
     pub not_before: u64,
     pub not_after: u64,
     pub revocation_sequence: u64,
@@ -124,6 +135,59 @@ impl GrantScope {
     }
 }
 
+impl NativeFeeBudget {
+    pub(crate) fn validate(&self, not_before: u64) -> Result<(), GrantError> {
+        if self.asset == [0; 32]
+            || self.maximum_per_activity == 0
+            || self.maximum_total == 0
+            || self.maximum_per_activity > self.maximum_total
+            || (self.period_length == 0 && (self.period_start != 0 || self.maximum_per_period != 0))
+            || (self.period_length != 0
+                && (self.period_start != not_before
+                    || self.maximum_per_period == 0
+                    || self.maximum_per_activity > self.maximum_per_period))
+        {
+            return Err(GrantError::Invalid);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn encode(&self, encoder: &mut Encoder) -> Result<(), GrantError> {
+        encoder.bytes(&self.asset, 32)?;
+        encoder.u128(self.maximum_per_activity)?;
+        encoder.u128(self.maximum_total)?;
+        encoder.u128(0)?;
+        encoder.u64(self.period_length)?;
+        encoder.u128(self.maximum_per_period)?;
+        encoder.u128(0)?;
+        encoder.u64(self.period_start)?;
+        Ok(())
+    }
+
+    pub(crate) fn decode(decoder: &mut Decoder<'_>) -> Result<Self, GrantError> {
+        let asset = fixed(decoder)?;
+        let maximum_per_activity = decoder.u128()?;
+        let maximum_total = decoder.u128()?;
+        if decoder.u128()? != 0 {
+            return Err(GrantError::Invalid);
+        }
+        let period_length = decoder.u64()?;
+        let maximum_per_period = decoder.u128()?;
+        if decoder.u128()? != 0 {
+            return Err(GrantError::Invalid);
+        }
+        let period_start = decoder.u64()?;
+        Ok(Self {
+            asset,
+            maximum_per_activity,
+            maximum_total,
+            period_length,
+            maximum_per_period,
+            period_start,
+        })
+    }
+}
+
 impl AuthorityGrant {
     /// # Errors
     /// Refuses unbounded grants, invalid delegates and inconsistent spend scopes.
@@ -137,7 +201,11 @@ impl AuthorityGrant {
         {
             return Err(GrantError::Invalid);
         }
-        self.scope.validate(self.not_before)
+        self.scope.validate(self.not_before)?;
+        if let Some(fee) = self.fee_budget {
+            fee.validate(self.not_before)?;
+        }
+        Ok(())
     }
 
     /// # Errors
@@ -146,7 +214,7 @@ impl AuthorityGrant {
         self.validate()?;
         let mut encoder = Encoder::new(1024);
         encoder.structure_header(0x2001)?;
-        encoder.u8(1)?;
+        encoder.u8(if self.fee_budget.is_some() { 2 } else { 1 })?;
         encoder.bytes(&self.grantor, 32)?;
         encoder.bytes(&self.grantee, 32)?;
         encoder.u8(self.kind as u8)?;
@@ -158,6 +226,9 @@ impl AuthorityGrant {
         encoder.u8(0)?;
         encoder.u64(0)?;
         encoder.bytes(&[0; 64], 64)?;
+        if let Some(fee) = self.fee_budget {
+            fee.encode(&mut encoder)?;
+        }
         Ok(encoder.finish())
     }
 
@@ -166,7 +237,8 @@ impl AuthorityGrant {
     pub fn decode(bytes: &[u8]) -> Result<Self, GrantError> {
         let mut decoder = Decoder::new(bytes, 0);
         decoder.structure_header(0x2001)?;
-        if decoder.u8()? != 1 {
+        let version = decoder.u8()?;
+        if !matches!(version, 1 | 2) {
             return Err(GrantError::Invalid);
         }
         let grantor = fixed(&mut decoder)?;
@@ -184,6 +256,11 @@ impl AuthorityGrant {
         if decoder.u8()? != 0 || decoder.u64()? != 0 || fixed::<64>(&mut decoder)? != [0; 64] {
             return Err(GrantError::Invalid);
         }
+        let fee_budget = if version == 2 {
+            Some(NativeFeeBudget::decode(&mut decoder)?)
+        } else {
+            None
+        };
         decoder.finish()?;
         let grant = Self {
             grantor,
@@ -191,6 +268,7 @@ impl AuthorityGrant {
             kind,
             delegate_key,
             scope,
+            fee_budget,
             not_before,
             not_after,
             revocation_sequence,

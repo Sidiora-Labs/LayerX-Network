@@ -497,6 +497,9 @@ fi
 PARAMETER_KEY=$(printf 'parameter-version' | bin_to_hex)
 PARAMETER_KEY="$PARAMETER_KEY$(printf '0%.0s' $(seq 1 $(( 64 - ${#PARAMETER_KEY} ))))"
 PARAMETER_VALUE="$(printf '0%.0s' $(seq 1 56))00000001"
+FEE_AUTHORITY_KEY=$(printf 'native-fee-authority-version' | bin_to_hex)
+FEE_AUTHORITY_KEY="$FEE_AUTHORITY_KEY$(printf '0%.0s' $(seq 1 $((64 - ${#FEE_AUTHORITY_KEY}))))"
+FEE_AUTHORITY_VALUE="$(printf '0%.0s' $(seq 1 62))02"
 if [ "${#GENESIS_MODULES[@]}" -gt 0 ]; then
     mapfile -t GENESIS_MODULES < <(printf '%s\n' "${GENESIS_MODULES[@]}" | LC_ALL=C sort)
 fi
@@ -507,7 +510,7 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     hex_to_bin "$(be_hex 3 2)"
     hex_to_bin "$(be_hex "$NETWORK_ID" 4)"
     hex_to_bin "$(be_hex "$GENESIS_TIMESTAMP_MS" 8)"
-    hex_to_bin "$(be_hex "$((1 + ${#GENESIS_MODULES[@]}))" 2)"
+    hex_to_bin "$(be_hex "$((2 + ${#GENESIS_MODULES[@]}))" 2)"
     for module in "${GENESIS_MODULES[@]}"; do
         module_key=$(printf 'module-enable:%s' "$module" | bin_to_hex)
         module_key="$module_key$(printf '0%.0s' $(seq 1 $((64 - ${#module_key}))))"
@@ -515,6 +518,9 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
         hex_to_bin "$module_key"
         hex_to_bin "$PARAMETER_VALUE"
     done
+    hex_to_bin "$(be_hex 7 2)"
+    hex_to_bin "$FEE_AUTHORITY_KEY"
+    hex_to_bin "$FEE_AUTHORITY_VALUE"
     hex_to_bin "$(be_hex 7 2)"
     hex_to_bin "$PARAMETER_KEY"
     hex_to_bin "$PARAMETER_VALUE"
@@ -534,7 +540,7 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     for demand in 100 1 1 10 1 1000; do hex_to_bin "$(be_hex "$demand" 8)"; done
     cat "$GENESIS_METADATA"
 } > "$REQUEST"
-[ "$(stat -c %s "$REQUEST")" -eq "$((314 + 81 * GUARANTOR_COUNT + 66 * ${#GENESIS_MODULES[@]} + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
+[ "$(stat -c %s "$REQUEST")" -eq "$((380 + 81 * GUARANTOR_COUNT + 66 * ${#GENESIS_MODULES[@]} + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
 
 SIGNER_KEY="$DATA_DIR/work/genesis-signer.key"
 hex_to_bin "$SEQUENCER_PRIVATE" > "$SIGNER_KEY"

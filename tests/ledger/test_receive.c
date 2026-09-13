@@ -143,7 +143,7 @@ int main(void)
     (void)memcpy(asset.asset_id, asset_id, 32U);
     asset.registered = true;
     environment = (lxp_receive_environment){ &accounts, &asset, 1U, &grants,
-        &idempotency, 10U, 1U, 7U, LXP_PROTOCOL_VERSION };
+        &idempotency, 10U, 1U, 7U, LXP_PROTOCOL_VERSION, NULL };
     if (lxp_receive_execute(&receive, &environment, &receipt) !=
         LXP_ERR_NO_PAYER_GRANT) return 1;
     if (lxp_grant_store_put(&grants, &grant, from) != LXP_OK ||
@@ -249,7 +249,7 @@ int main(void)
         (void)memcpy(bulk.receiver_authorization.signed_context_hash,
                      bulk.context_hash, 32U);
         spilling_environment = (lxp_receive_environment){ &accounts, &asset,
-            1U, &grants, &spilling, 10U, 1U, 7U, LXP_PROTOCOL_VERSION };
+            1U, &grants, &spilling, 10U, 1U, 7U, LXP_PROTOCOL_VERSION, NULL };
         (void)memset(&oldest, 0, sizeof(oldest));
         (void)memset(&oldest_receive, 0, sizeof(oldest_receive));
         for (index = 0U; index < beyond; ++index) {

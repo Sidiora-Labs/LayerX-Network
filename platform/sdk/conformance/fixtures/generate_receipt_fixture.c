@@ -145,7 +145,7 @@ static int world_init(
     world->environment = (lxp_send_environment){
         &world->accounts, &world->transfer_asset, 1U,
         &world->sends, fixture_timestamp_ms, FIXTURE_NETWORK_ID,
-        LXP_PROTOCOL_VERSION
+        LXP_PROTOCOL_VERSION, NULL
     };
     world->settlement.assets = &world->assets;
     world->settlement.send_environment = &world->environment;

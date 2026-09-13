@@ -304,3 +304,60 @@ mod tests {
         }
     }
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeFeePolicy {
+    pub version: u8,
+    pub asset: AssetMetadata,
+}
+
+/// # Errors
+/// Refuses an unavailable policy, mismatched snapshot, malformed registry record or trailing bytes.
+pub fn native_fee_policy(
+    transport: &mut dyn FrameTransport,
+    context: SnapshotContext,
+) -> Result<CommittedSnapshot<NativeFeePolicy>, ReadError> {
+    let response = request(transport, 32, &[0, 1, 3], context)?;
+    let mut bytes = response.value.as_slice();
+    if u16::from_be_bytes(fixed(&mut bytes)?) != 1 {
+        return Err(ReadError::MalformedValue);
+    }
+    let version = take(&mut bytes, 1)?[0];
+    if !matches!(version, 1 | 2) {
+        return Err(ReadError::MalformedValue);
+    }
+    let length = usize::from(u16::from_be_bytes(fixed(&mut bytes)?));
+    let asset = metadata(take(&mut bytes, length)?)?;
+    if asset.asset_id == [0; 32]
+        || asset.decimals > 38
+        || asset.symbol.is_empty()
+        || !asset.symbol.iter().all(u8::is_ascii_alphanumeric)
+        || !bytes.is_empty()
+    {
+        return Err(ReadError::MalformedValue);
+    }
+    Ok(CommittedSnapshot {
+        observed_sequence: response.observed_sequence,
+        state_root: response.state_root,
+        value: NativeFeePolicy { version, asset },
+    })
+}
+
+/// Reads the original session grant and its committed fee replacement state.
+/// # Errors
+/// Refuses unbound, malformed or unavailable committed state.
+pub fn session_fee_state(
+    transport: &mut dyn FrameTransport,
+    grant_id: [u8; 32],
+    context: SnapshotContext,
+) -> Result<CommittedSnapshot<Vec<u8>>, ReadError> {
+    if grant_id == [0; 32] {
+        return Err(ReadError::SelectorMismatch);
+    }
+    let mut payload = vec![0, 1];
+    payload.extend_from_slice(&grant_id);
+    let snapshot = request(transport, 36, &payload, context)?;
+    layerx_crypto::session::SessionFeeState::decode(grant_id, &snapshot.value)
+        .map_err(|_| ReadError::MalformedValue)?;
+    Ok(snapshot)
+}

@@ -13,7 +13,6 @@ use layerx_types::intent::{
 #[cfg(test)]
 use layerx_types::intent::{AuthorizationSignature, SendAuthorizationKind};
 use layerx_types::payload::ModuleId;
-use layerx_wire::decode::Decoder;
 
 const MAX_SESSION_GRANT_BYTES: usize = 1024;
 
@@ -25,6 +24,7 @@ const MAX_SESSION_GRANT_BYTES: usize = 1024;
 pub enum IntentVersion {
     V1 = 1,
     V2 = 2,
+    V3 = 3,
 }
 
 impl IntentVersion {
@@ -56,6 +56,14 @@ impl Intent {
     pub const fn v2(kind: IntentKind) -> Self {
         Self {
             version: IntentVersion::V2,
+            kind,
+        }
+    }
+
+    #[must_use]
+    pub const fn v3(kind: IntentKind) -> Self {
+        Self {
+            version: IntentVersion::V3,
             kind,
         }
     }
@@ -139,6 +147,9 @@ impl IntentKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionGrant {
     pub(crate) registration_payload: Vec<u8>,
+    pub(crate) expiry_sequence: u64,
+    pub(crate) action_key: [u8; 32],
+    pub(crate) replacement: Option<([u8; 32], [u8; 32])>,
 }
 
 impl SessionGrant {
@@ -148,11 +159,47 @@ impl SessionGrant {
     ///
     /// Refuses anything other than the exact bounded canonical session-key
     /// authority grant emitted by `layerx-crypto`.
-    pub fn new(registration_payload: Vec<u8>) -> Result<Self, IntentError> {
+    pub fn new(
+        registration_payload: Vec<u8>,
+        expiry_sequence: u64,
+        action_key: [u8; 32],
+    ) -> Result<Self, IntentError> {
         validate_session_grant(&registration_payload)?;
+        if expiry_sequence == 0 || action_key == [0; 32] {
+            return Err(IntentError {
+                field: IntentField::SessionGrant,
+                reason: IntentErrorReason::Zero,
+            });
+        }
         Ok(Self {
             registration_payload,
+            expiry_sequence,
+            action_key,
+            replacement: None,
         })
+    }
+    /// # Errors
+    /// Refuses an unbound predecessor, missing fee budget or authentication-only grant.
+    pub fn replacing(
+        mut self,
+        predecessor_grant_id: [u8; 32],
+        expected_charge_state: [u8; 32],
+    ) -> Result<Self, IntentError> {
+        let grant = layerx_crypto::session::decode_session_key(&self.registration_payload)
+            .map_err(|_| IntentError {
+                field: IntentField::SessionGrant,
+                reason: IntentErrorReason::InvalidCanonicalEncoding,
+            })?;
+        if predecessor_grant_id == [0; 32]
+            || expected_charge_state == [0; 32]
+            || predecessor_grant_id == grant.grant_id
+            || grant.fee_budget.is_none()
+            || grant.purpose != layerx_crypto::session::SessionPurpose::Activity
+        {
+            return Err(IntentError::zero(IntentField::SessionGrant));
+        }
+        self.replacement = Some((predecessor_grant_id, expected_charge_state));
+        Ok(self)
     }
 }
 
@@ -980,54 +1027,9 @@ fn validate_session_grant(bytes: &[u8]) -> Result<(), IntentError> {
     if bytes.len() > MAX_SESSION_GRANT_BYTES {
         return Err(invalid());
     }
-    let mut decoder = Decoder::new(bytes, 0);
-    decoder.structure_header(0x2001).map_err(|_| invalid())?;
-    if decoder.u8().map_err(|_| invalid())? != 1 {
-        return Err(invalid());
-    }
-    let grantor = decoder.bytes(32).map_err(|_| invalid())?;
-    let grantee = decoder.bytes(32).map_err(|_| invalid())?;
-    if grantor == [0; 32]
-        || grantee != grantor
-        || decoder.u8().map_err(|_| invalid())? != 2
-        || decoder.bytes(32).map_err(|_| invalid())? == [0; 32]
-    {
-        return Err(invalid());
-    }
-    let module_mask = decoder.u64().map_err(|_| invalid())?;
-    let ordinal_min = decoder.u16().map_err(|_| invalid())?;
-    let ordinal_max = decoder.u16().map_err(|_| invalid())?;
-    if module_mask == 0
-        || module_mask & !0x03fe != 0
-        || ordinal_min == 0
-        || ordinal_min > ordinal_max
-    {
-        return Err(invalid());
-    }
-    if decoder.bytes(32).map_err(|_| invalid())? != [0; 32]
-        || decoder.u128().map_err(|_| invalid())? != 0
-        || decoder.u128().map_err(|_| invalid())? != 0
-        || decoder.u128().map_err(|_| invalid())? != 0
-        || decoder.u64().map_err(|_| invalid())? != 0
-        || decoder.u128().map_err(|_| invalid())? != 0
-        || decoder.u128().map_err(|_| invalid())? != 0
-        || decoder.u64().map_err(|_| invalid())? != 0
-        || decoder.bytes(32).map_err(|_| invalid())? != [0; 32]
-    {
-        return Err(invalid());
-    }
-    let not_before = decoder.u64().map_err(|_| invalid())?;
-    let not_after = decoder.u64().map_err(|_| invalid())?;
-    if not_after == 0
-        || not_after <= not_before
-        || decoder.u64().map_err(|_| invalid())? == 0
-        || decoder.u8().map_err(|_| invalid())? != 0
-        || decoder.u64().map_err(|_| invalid())? != 0
-        || decoder.bytes(64).map_err(|_| invalid())? != [0; 64]
-    {
-        return Err(invalid());
-    }
-    decoder.finish().map_err(|_| invalid())
+    layerx_crypto::session::decode_session_key(bytes)
+        .map(|_| ())
+        .map_err(|_| invalid())
 }
 
 fn movement(from: &AccountId, to: &AccountId, amount: Amount) -> Result<(), IntentError> {
