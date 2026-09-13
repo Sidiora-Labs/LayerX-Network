@@ -147,6 +147,8 @@ static lxp_result durable_receipt_facts(
         (lxp_daemon_protocol_owner *)context;
     lxp_daemon_receipt_evidence evidence;
     lxp_receipt receipt;
+    lxp_programs_occupancy_receipt maintenance;
+    lxp_batch_header header;
     size_t mark;
     lxp_result status;
     if (owner == NULL || receipt_digest == NULL || facts == NULL ||
@@ -157,20 +159,37 @@ static lxp_result durable_receipt_facts(
     status = lxp_daemon_receipt_authority_lookup(
         owner->receipt_authority, receipt_digest, owner->scratch,
         &evidence);
-    if (status == LXP_OK)
+    if (status == LXP_OK && evidence.format_version == 3U) {
+        status = lxp_programs_occupancy_receipt_decode(
+            evidence.canonical_receipt.bytes,
+            evidence.canonical_receipt.length, &maintenance);
+        if (status == LXP_OK)
+            status = lxp_batch_header_decode(evidence.canonical_header.bytes,
+                evidence.canonical_header.length, &header);
+        if (status == LXP_OK) {
+            (void)memset(facts, 0, sizeof(*facts));
+            (void)memcpy(facts->receipt_digest, receipt_digest, 32U);
+            facts->result_code = LXP_OK;
+            facts->global_sequence = maintenance.global_sequence;
+            facts->timestamp = header.timestamp_ms;
+            (void)memcpy(facts->resulting_state_root,
+                         maintenance.resulting_state_root, 32U);
+        }
+    } else if (status == LXP_OK) {
         status = lxp_receipt_decode(
             evidence.canonical_receipt.bytes,
             evidence.canonical_receipt.length, true, &receipt);
-    if (status == LXP_OK) {
-        (void)memset(facts, 0, sizeof(*facts));
-        (void)memcpy(facts->receipt_digest, receipt_digest, 32U);
-        facts->result_code = receipt.result_code;
-        facts->global_sequence = receipt.global_sequence;
-        facts->timestamp = receipt.timestamp;
-        (void)memcpy(facts->asset, receipt.asset, 32U);
-        facts->amount = receipt.amount;
-        (void)memcpy(facts->resulting_state_root,
-                     receipt.resulting_state_root, 32U);
+        if (status == LXP_OK) {
+            (void)memset(facts, 0, sizeof(*facts));
+            (void)memcpy(facts->receipt_digest, receipt_digest, 32U);
+            facts->result_code = receipt.result_code;
+            facts->global_sequence = receipt.global_sequence;
+            facts->timestamp = receipt.timestamp;
+            (void)memcpy(facts->asset, receipt.asset, 32U);
+            facts->amount = receipt.amount;
+            (void)memcpy(facts->resulting_state_root,
+                         receipt.resulting_state_root, 32U);
+        }
     }
     (void)lxp_arena_reset(owner->scratch, mark);
     if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
