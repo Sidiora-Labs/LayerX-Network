@@ -291,7 +291,7 @@ def decode_and_verify_program_terminal(
         if decoded["graph"] != call_graph:
             _fail("candidate call graph")
         if decoded["outcome"] == "success":
-            if decoded["code"] != receipt.result_code:
+            if receipt.result_code != 0:
                 _fail("candidate response result code")
             outcome = {"kind": "completed", "code": decoded["code"], "response": cast(bytes, decoded["response"]).hex()}
             successful = True
