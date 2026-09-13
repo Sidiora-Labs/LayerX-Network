@@ -1980,8 +1980,9 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
     if (status == LXP_OK && !known)
         status = committed_activity_present(server->owner, activity_id,
                                             &known);
-    if (status == LXP_OK)
-        status = wall_clock_milliseconds(&timestamp);
+    if (status != LXP_OK) goto unlock_owner;
+    status = wall_clock_milliseconds(&timestamp);
+    if (status != LXP_OK) goto unlock_owner;
     if (status == LXP_OK &&
         pthread_mutex_lock(&server->daemon->mutex) != 0)
         status = LXP_ERR_IO;
