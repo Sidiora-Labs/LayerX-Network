@@ -495,7 +495,7 @@ static int metered_fee_capacity(void)
     size_t retries = 0U;
     uint64_t sequence;
     METERED_CHECK(f != NULL && metered_fixture_init(f, 4U, true) == 0);
-    while (f->kernel.module_kv_count < LXP_KERNEL_MAX_MODULE_KV - 1U) {
+    while (f->kernel.module_kv_count < LXP_KERNEL_MAX_MODULE_KV - 4U) {
         size_t index = f->kernel.module_kv_count++;
         lxp_module_kv_entry *entry = &f->kernel.module_kv[index];
         (void)memset(entry, 0, sizeof(*entry));
@@ -514,7 +514,7 @@ static int metered_fee_capacity(void)
     METERED_CHECK(lxp_kernel_prepare_activity_batch(&f->kernel, &f->activity,
         &f->execution, 1U, 1U, &prepared, &retries) == LXP_ERR_ARENA_EXHAUSTED);
     METERED_CHECK(prepared == NULL && f->state.next_sequence == sequence);
-    METERED_CHECK(f->kernel.module_kv_count == LXP_KERNEL_MAX_MODULE_KV - 1U);
+    METERED_CHECK(f->kernel.module_kv_count == LXP_KERNEL_MAX_MODULE_KV - 4U);
     METERED_CHECK(memcmp(root, f->kernel.current_state_root, 32U) == 0);
     METERED_CHECK(lxp_u128_cmp(f->actor->balance, actor_balance) == 0);
     METERED_CHECK(f->payee->balance.lo == 0U && f->source->balance.lo == 40U);
