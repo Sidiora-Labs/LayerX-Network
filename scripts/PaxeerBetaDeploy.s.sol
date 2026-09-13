@@ -30,6 +30,7 @@ interface PaxeerBetaVm {
 }
 
 contract PaxeerBetaDeploy {
+    bool public constant IS_SCRIPT = true;
     PaxeerBetaVm private constant vm = PaxeerBetaVm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     error InvalidPhase();
