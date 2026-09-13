@@ -2396,7 +2396,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
                     layerx_types::verify::VerificationLevel::BATCH_INCLUDED,
                     next.checked_add(10_000)
                         .ok_or(HumanOperationError::Refused)?,
-                    authorization.clone(),
+                    *authorization,
                 )
                 .map_err(|_| HumanOperationError::Unavailable)?;
             if u64::try_from(page.items.len()).ok() != Some(expected)
