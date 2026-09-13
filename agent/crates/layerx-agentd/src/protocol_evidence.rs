@@ -942,6 +942,66 @@ pub struct VerifiedReceiptEvidence {
 }
 
 impl VerifiedReceiptEvidence {
+    pub(crate) fn verify_authorized_maintained(
+        raw: &RawReceiptEvidence,
+        activity_batch: &AuthorizedBatch,
+        evidence: &layerx_proof::receipt::MaintainedOutcomeEvidence<'_>,
+        protocol_version: u16,
+        network_id: u32,
+    ) -> Result<Self, ReceiptEvidenceError> {
+        let header = decode_batch_header(raw.canonical_header())
+            .map_err(|_| ReceiptEvidenceError::Policy(VerifierPolicyError::HeaderDecode))?;
+        if header.protocol_version() != protocol_version
+            || header.network_id() != network_id
+            || evidence.header != raw.canonical_header()
+            || evidence.header_signature != &raw.header_signature
+            || evidence.activity_proof != &raw.proof
+            || evidence.authorization.public_key() != activity_batch.sequencer_public_key()
+        {
+            return Err(ReceiptEvidenceError::BatchIdentity);
+        }
+        let sealed_batch = AuthorizedBatch::new(
+            activity_batch.batch_id(),
+            activity_batch.asset(),
+            activity_batch.previous_state_root(),
+            header.resulting_state_root(),
+            activity_batch.sequencer_public_key(),
+        );
+        let authenticated = layerx_proof::receipt::authorized_maintained_activity_batch(
+            &raw.canonical_receipt,
+            &sealed_batch,
+            evidence,
+        )
+        .map_err(|_| ReceiptEvidenceError::BatchIdentity)?;
+        if authenticated != *activity_batch {
+            return Err(ReceiptEvidenceError::BatchIdentity);
+        }
+        let verified = verify_outcome(&raw.canonical_receipt, &authenticated)
+            .map_err(ReceiptEvidenceError::Receipt)?;
+        let inclusion = verify_receipt_inclusion(
+            &raw.canonical_receipt,
+            &raw.proof,
+            &raw.canonical_header,
+            &raw.header_signature,
+            evidence.authorization,
+        )
+        .map_err(ReceiptEvidenceError::Inclusion)?;
+        let protocol = verified
+            .receipt()
+            .protocol()
+            .ok_or(ReceiptEvidenceError::BatchIdentity)?;
+        Ok(Self {
+            receipt_ref: Sha256::digest(verified.canonical_bytes()).into(),
+            activity_id: protocol.activity_id(),
+            global_sequence: protocol.global_sequence(),
+            result_code: protocol.result_code(),
+            amount: protocol.amount(),
+            module_id: protocol.module_id(),
+            operation: protocol.operation(),
+            verified,
+            inclusion,
+        })
+    }
     pub(crate) fn verify_authorized(
         raw: &RawReceiptEvidence,
         batch: &AuthorizedBatch,
@@ -1108,3 +1168,7 @@ impl VerifiedStateEvidence {
         self.observed_head_sequence
     }
 }
+
+#[cfg(test)]
+#[path = "protocol_evidence_native_tests.rs"]
+mod native_terminal_tests;
