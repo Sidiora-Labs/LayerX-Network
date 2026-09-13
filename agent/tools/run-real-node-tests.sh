@@ -19,7 +19,7 @@ export TMPDIR=/tmp
 for executable in forge cast anvil; do
     command -v "$executable" >/dev/null
 done
-python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; from Crypto.Hash import keccak"
+python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; from Crypto.Hash import keccak; from eth_account import Account; from eth_utils import to_checksum_address"
 
 make -j4 CC=gcc \
     LXP_REVISION="$(git rev-parse HEAD)" \
