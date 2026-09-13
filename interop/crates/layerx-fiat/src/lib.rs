@@ -419,7 +419,12 @@ impl FiatAdapter {
             TranslationStatus::ReceiptVerified { receipt_digest } => {
                 return Ok(completed_state(facts.class, receipt_digest));
             }
-            _ => {}
+            TranslationStatus::Pending => {}
+            TranslationStatus::Translated => {
+                return Err(fail(FiatError::Gateway(GatewayError::Corrupt(
+                    "Fiat state-changing translation was read-only",
+                ))));
+            }
         }
         let intent = FiatIntent {
             kind,
