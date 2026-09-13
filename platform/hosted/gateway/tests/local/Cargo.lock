@@ -693,6 +693,7 @@ dependencies = [
  "layerx-platform-core",
  "layerx-programs-registry",
  "layerx-proof",
+ "layerx-sdk",
  "layerx-types",
  "layerx-wire",
  "native-tls",

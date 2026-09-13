@@ -96,6 +96,7 @@ struct LocalRedis {
     password: String,
 }
 struct Gateway {
+    environment: BTreeMap<&'static str, String>,
     _process: Daemon,
     _event_processes: Vec<Daemon>,
     _registry_process: Option<Daemon>,
@@ -438,6 +439,7 @@ fn start_gateway_runtime(
     });
     let gateway_process = local_service(cluster, "layerx-gateway", gateway_port, &gateway_env);
     let mut gateway = Gateway {
+        environment: gateway_env,
         _process: gateway_process,
         _event_processes: Vec::new(),
         _registry_process: None,
@@ -2654,7 +2656,7 @@ fn local_gateway_program_custody_journey() {
     let identity = start_local_identity(&cluster, &certificates);
     let authority = start_local_authority(&cluster, &certificates);
     let redis = start_local_redis(&cluster, &certificates);
-    let gateway = start_gateway_runtime(
+    let mut gateway = start_gateway_runtime(
         &cluster,
         &certificates,
         &boundary,
@@ -2741,6 +2743,35 @@ fn local_gateway_program_custody_journey() {
         assert_eq!(digest, expected);
     }
     assert_eq!(result["after"]["balance"], "1");
+    let sdk_request = cluster.root.join("lifecycle-sdk-request.json");
+    write(&sdk_request, &serde_json::to_vec(&serde_json::json!({
+        "endpoint": format!("https://localhost:{}", gateway.port),
+        "key_id": key["key"]["id"], "key_secret": key["key"]["secret"],
+        "sequencer": hex_encode(&cluster.sequencer_key),
+        "signed_activity": hex_encode(&fs::read(output.join("refused-deploy.lxa")).required("signed refused deployment")),
+        "payload": hex_encode(&fs::read(output.join("refused-deploy-payload.bin")).required("deployment payload")),
+        "receipt": result["refused_deployment"]["receipt"],
+    })).required("private lifecycle SDK request"), 0o600);
+    for restarted in [false, true] {
+        if restarted {
+            gateway._process.stop();
+            gateway._process = local_service(
+                &cluster,
+                "layerx-gateway",
+                gateway.port,
+                &gateway.environment,
+            );
+        }
+        let status = Command::new(env!("CARGO_BIN_EXE_gateway-lifecycle-sdk-verify"))
+            .arg(&sdk_request)
+            .env("SSL_CERT_FILE", certificates.path("ca.pem"))
+            .status()
+            .required("real SDK lifecycle recovery");
+        assert!(
+            status.success(),
+            "SDK refusal recovery after restart={restarted}"
+        );
+    }
 }
 
 fn assert_wallet_receipt_verifier(

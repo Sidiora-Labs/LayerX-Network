@@ -1850,10 +1850,14 @@ fn reserve_activity(
                 let Ok(result) = serde_json::from_slice::<serde_json::Value>(&result) else {
                     return Err(response(503, "persistence_unavailable", Some(5)));
                 };
-                return Err(json_response(
-                    200,
-                    &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
-                ));
+                return Err(if operation.program_mutation {
+                    program_terminal_response(config, result, trace_id, true)
+                } else {
+                    json_response(
+                        200,
+                        &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
+                    )
+                });
             }
             if let Some(status) = state
                 .strip_prefix("refused_")
@@ -2146,6 +2150,55 @@ fn complete_lifecycle(
     {
         return response(503, "persistence_unavailable", Some(5));
     }
+    program_terminal_response(config, result, trace_id, true)
+}
+
+fn program_terminal_response(
+    config: &Config,
+    mut result: serde_json::Value,
+    trace_id: &str,
+    mutation: bool,
+) -> OutgoingResponse {
+    let Some(receipt_hex) = result.get("receipt").and_then(serde_json::Value::as_str) else {
+        return response(503, "receipt_encoding_failed", Some(5));
+    };
+    let Ok(receipt) = decode_hex(receipt_hex, 1_048_576) else {
+        return response(503, "receipt_encoding_failed", Some(5));
+    };
+    let Ok(verified) = layerx_proof::receipt::verify_sequencer_signature(
+        &receipt,
+        config.sequencer_authorization.public_key(),
+    ) else {
+        return response(502, "receipt_verification_failed", None);
+    };
+    let Some(protocol) = verified.protocol() else {
+        return response(502, "receipt_verification_failed", None);
+    };
+    let result_code = protocol.result_code();
+    let activity_id = hex(&protocol.activity_id());
+    let state = result.get("state").and_then(serde_json::Value::as_str);
+    if result
+        .get("activity_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(activity_id.as_str())
+        || if result_code == 0 {
+            !matches!(state, Some("completed" | "executed"))
+        } else {
+            state != Some("refused")
+        }
+    {
+        return response(502, "receipt_verification_failed", None);
+    }
+    if mutation && result_code != 0 {
+        return json_response(
+            409,
+            &serde_json::json!({"ok": false, "error": {
+                "code": "program_call_refused", "protocol_result_code": result_code,
+                "retry": "never", "activity_id": activity_id, "receipt": hex(&receipt)
+            }, "trace": trace_id}),
+        );
+    }
+    result["result_code"] = serde_json::json!(result_code);
     json_response(
         200,
         &serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
@@ -2261,10 +2314,14 @@ fn complete_activity(
         return response(503, "persistence_unavailable", Some(5));
     }
     pay_timing("gateway.complete.persist", persist_started);
-    let response = json_response(
-        200,
-        &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
-    );
+    let response = if operation.program_mutation {
+        program_terminal_response(config, result, trace_id, true)
+    } else {
+        json_response(
+            200,
+            &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
+        )
+    };
     pay_timing("gateway.complete.total", total_started);
     response
 }
@@ -3344,10 +3401,7 @@ fn read_program_receipt(
             serde_json::Value::String(idempotency),
         );
     }
-    json_response(
-        200,
-        &serde_json::json!({"ok":true,"result":value,"trace":trace_id}),
-    )
+    program_terminal_response(config, value, trace_id, false)
 }
 
 fn read_program_activity(
@@ -3398,10 +3452,7 @@ fn read_program_activity(
         Ok(value) => value,
         Err(_) => return response(503, "persistence_unavailable", Some(5)),
     };
-    json_response(
-        200,
-        &serde_json::json!({"ok":true,"result":value,"trace":trace_id}),
-    )
+    program_terminal_response(config, value, trace_id, false)
 }
 
 fn render_program_interface(
@@ -3694,10 +3745,7 @@ fn complete_pending_lifecycle(
     {
         return response(503, "persistence_unavailable", Some(5));
     }
-    json_response(
-        200,
-        &serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
-    )
+    program_terminal_response(config, result, trace_id, false)
 }
 
 fn complete_pending_program(
@@ -3747,10 +3795,7 @@ fn complete_pending_program(
     {
         return response(503, "persistence_unavailable", Some(5));
     }
-    json_response(
-        200,
-        &serde_json::json!({"ok":true,"result":result,"trace":trace_id}),
-    )
+    program_terminal_response(config, result, trace_id, false)
 }
 
 #[cfg(test)]

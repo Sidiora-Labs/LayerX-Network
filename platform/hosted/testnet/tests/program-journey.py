@@ -69,13 +69,13 @@ def main():
             os.fsync(handle.fileno())
         return path
 
-    def request(route, document, ordinal=None, key_id=None):
+    def request(route, document, ordinal=None, key_id=None, refused=False, method="POST"):
         nonlocal counter
         counter += 1
         body = document if isinstance(document, bytes) else json.dumps(document).encode()
         body_path = write(f'{counter:02d}-request.bin', body)
         command = ['curl', '--fail-with-body', '--silent', '--show-error', '--max-time', '120',
-                   '--cacert', str(args.ca), '--config', str(args.auth_config), '--request', 'POST',
+                   '--cacert', str(args.ca), '--config', str(args.auth_config), '--request', method,
                    args.gateway.rstrip('/') + route, '--header',
                    'Content-Type: ' + ('application/octet-stream' if ordinal else 'application/json'),
                    '--data-binary', '@' + str(body_path)]
@@ -83,10 +83,15 @@ def main():
             command += ['--header', 'Idempotency-Key: ' + key_id]
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         write(f'{counter:02d}-response.json', result.stdout)
-        assert result.returncode == 0, f'Programs request failed: {result.stdout.decode()}'
         value = json.loads(result.stdout)
+        if refused:
+            assert result.returncode == 22, value
+            assert value['class'] == 'PolicyRefusal' and value['retriability'] == 'Terminal', value
+            assert isinstance(value['protocol_result_code'], int) and value['protocol_result_code'] != 0, value
+            return value
+        assert result.returncode == 0, f'Programs request failed: {result.stdout.decode()}'
         assert 'error' not in value and value.get('ok', True) is True, value
-        return value['result']
+        return value['result'] if 'result' in value else value['value']
 
     def submit(route, canonical, ordinal, key_id):
         deadline = time.monotonic() + 120
@@ -127,9 +132,24 @@ def main():
     deployed = submit('/v1/programs/deploy', canonical, 1, key_id)
     assert deployed['state'] == 'completed' and deployed['receipt'], deployed
     duplicate, duplicate_key = signed(1, deploy)
-    refused = submit('/v1/programs/deploy', duplicate, 1, duplicate_key)
+    write('refused-deploy.lxa', duplicate)
+    write('refused-deploy-payload.bin', deploy)
+    refusal = request('/v1/programs/deploy', duplicate, 1, duplicate_key, refused=True)
+    duplicate_id = hashlib.sha256(b'LXP/v1/activity-id\0' + duplicate).hexdigest()
+    selector = {'idempotency_key': duplicate_key, 'expected_activity_id': duplicate_id,
+                'requested_verification_level': 'sequencer-signed'}
+    route = '/v1/programs/receipts/by-idempotency/' + duplicate_key
+    refused = request(route, selector, method='GET')
+    assert refused['result_code'] == refusal['protocol_result_code'], (refused, refusal)
     assert refused['state'] == 'refused' and refused['receipt'], refused
-    assert submit('/v1/programs/deploy', duplicate, 1, duplicate_key) == refused
+    replay_refusal = request('/v1/programs/deploy', duplicate, 1, duplicate_key, refused=True)
+    assert replay_refusal['protocol_result_code'] == refusal['protocol_result_code']
+    assert request(route, selector, method='GET') == refused
+    activity_refused = request('/v1/programs/activities/' + duplicate_id,
+                              {'activity_id': duplicate_id, 'requested_verification_level': 'sequencer-signed'},
+                              method='GET')
+    assert activity_refused['state'] == 'refused' and activity_refused['receipt'] == refused['receipt']
+    assert activity_refused['result_code'] == refusal['protocol_result_code']
     seed = os.urandom(16)
     account = hashlib.sha256(b'LayerX/programs/program-account/v1\0' + program + blob(seed)).digest()
     register = program + b'LXPA1' + asset + blob(seed)
