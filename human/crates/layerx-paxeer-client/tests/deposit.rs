@@ -793,6 +793,63 @@ fn deposit_failures_remain_typed_at_each_boundary() {
     ));
 }
 
+fn native_attestation(
+    proof: &layerx_paxeer_client::DepositProof,
+) -> layerx_paxeer_client::AttestedNativeCustodyCredit {
+    let attestor = SigningKey::from_bytes(&[0x55; 32]);
+    let owner = SigningKey::from_bytes(&[0x66; 32]);
+    let reserve =
+        AccountId::parse("system:paxeer-reserve").unwrap_or_else(|error| panic!("{error:?}"));
+    let mut profile = Vec::new();
+    profile.extend_from_slice(b"LXBC1");
+    profile.extend_from_slice(&proof.chain_id().to_be_bytes());
+    profile.extend_from_slice(&proof.vault().bytes());
+    profile.extend_from_slice(&[1; 32]);
+    profile.extend_from_slice(&attestor.verifying_key().to_bytes());
+    profile.extend_from_slice(&proof.custody().asset.bytes());
+    profile.extend_from_slice(
+        &layerx_paxeer_client::account_address_for_protocol(&reserve, 3)
+            .unwrap_or_else(|error| panic!("{error:?}")),
+    );
+    profile.extend_from_slice(&1_u64.to_be_bytes());
+    profile.extend_from_slice(&[2; 32]);
+    profile.extend_from_slice(&proof.network_id().to_be_bytes());
+    profile.extend_from_slice(&3_u16.to_be_bytes());
+    assert_eq!(profile.len(), 207);
+    let mut credit = Vec::new();
+    credit.extend_from_slice(b"LXDC1");
+    credit.extend_from_slice(&Sha256::digest(&profile));
+    credit.extend_from_slice(&profile[201..207]);
+    credit.extend_from_slice(&proof.custody().deposit_id);
+    credit.extend_from_slice(&proof.custody().asset.bytes());
+    credit.extend_from_slice(&proof.custody().beneficiary);
+    credit.extend_from_slice(&owner.verifying_key().to_bytes());
+    credit.extend_from_slice(&proof.custody().payer.bytes());
+    credit.extend_from_slice(&proof.custody().amount.to_be_bytes());
+    credit.extend_from_slice(&proof.custody().nonce.to_be_bytes());
+    credit.extend_from_slice(&proof.inclusion().block.number.to_be_bytes());
+    credit.extend_from_slice(&proof.inclusion().block.hash);
+    credit.extend_from_slice(&[3; 32]);
+    credit.extend_from_slice(&proof.inclusion().block.number.to_be_bytes());
+    credit.extend_from_slice(&proof.inclusion().block.hash);
+    credit.extend_from_slice(&proof.transaction().bytes());
+    credit.extend_from_slice(&0_u32.to_be_bytes());
+    assert_eq!(credit.len(), 363);
+    let mut message = b"LX:CUSTODY:CREDIT:v1".to_vec();
+    message.extend_from_slice(&credit);
+    credit.extend_from_slice(&attestor.sign(&message).to_bytes());
+    layerx_paxeer_client::AttestedNativeCustodyCredit::verify(
+        &profile,
+        &credit,
+        layerx_paxeer_client::NativeCustodyExpectation {
+            network_id: proof.network_id(),
+            beneficiary: proof.custody().beneficiary,
+            owner_key: owner.verifying_key().to_bytes(),
+        },
+    )
+    .unwrap_or_else(|error| panic!("{error:?}"))
+}
+
 #[test]
 fn protocol_three_custody_proof_binds_native_beneficiary_and_selected_version() {
     let anvil = Anvil::launch();
@@ -840,6 +897,27 @@ fn protocol_three_custody_proof_binds_native_beneficiary_and_selected_version() 
             CreditFault::BridgeProofIngressUnavailable
         ))
     );
+    let attested = native_attestation(&proof);
+    let bound = proof
+        .clone()
+        .with_native_credit(attested.clone())
+        .unwrap_or_else(|error| panic!("native ingress: {error:?}"));
+    let compiled = bound
+        .compile_credit(&reserve, &recipient, &bridge_registry())
+        .unwrap_or_else(|error| panic!("native compile: {error:?}"));
+    assert_eq!(compiled.payload().as_bytes(), attested.canonical_bytes());
+    let encoded = layerx_paxeer_client::wire::encode_deposit_proof(&bound, 4096)
+        .unwrap_or_else(|error| panic!("native wire: {error:?}"));
+    let restored = layerx_paxeer_client::wire::decode_deposit_proof(&encoded, 4096)
+        .unwrap_or_else(|error| panic!("native restart: {error:?}"));
+    assert_eq!(restored, bound);
+    assert_eq!(restored.idempotency_key(), proof.idempotency_key());
+    for offset in encoded.len() - 427..encoded.len() {
+        let mut changed = encoded.clone();
+        changed[offset] ^= 1;
+        assert!(layerx_paxeer_client::wire::decode_deposit_proof(&changed, 4096).is_err());
+    }
+
     let mut wrong_signature = published;
     wrong_signature.registration.signature[0] ^= 1;
     assert!(verifier.obtain(&report, vault, wrong_signature).is_err());

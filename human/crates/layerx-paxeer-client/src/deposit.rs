@@ -204,6 +204,9 @@ pub enum CreditFault {
     ReserveNamespace,
     /// Core exposes no activity ingress carrying the complete C custody proof.
     BridgeProofIngressUnavailable,
+    NativeBinding,
+    NativeCompilation,
+    NativeReceipt,
     AgentContract(ContractError),
     /// The recipient name has no beneficiary address under the protocol
     /// version the signed custody registration binds.
@@ -867,6 +870,9 @@ fn encode_credit_fault(out: &mut Vec<u8>, fault: &CreditFault) -> Result<(), Dep
             out.push(4);
             out.extend_from_slice(&protocol_version.to_be_bytes());
         }
+        CreditFault::NativeBinding => out.push(5),
+        CreditFault::NativeCompilation => out.push(6),
+        CreditFault::NativeReceipt => out.push(7),
         CreditFault::ReserveNamespace => out.push(1),
         CreditFault::BridgeProofIngressUnavailable => out.push(2),
         CreditFault::AgentContract(error) => {
@@ -893,6 +899,9 @@ fn decode_credit_fault(reader: &mut DepositReader<'_>) -> Result<CreditFault, De
             beneficiary: reader.array()?,
             recipient: reader.array()?,
         }),
+        5 => Ok(CreditFault::NativeBinding),
+        6 => Ok(CreditFault::NativeCompilation),
+        7 => Ok(CreditFault::NativeReceipt),
         1 => Ok(CreditFault::ReserveNamespace),
         2 => Ok(CreditFault::BridgeProofIngressUnavailable),
         3 => Ok(CreditFault::AgentContract(match reader.u8()? {
@@ -1194,6 +1203,7 @@ impl DepositProofVerifier {
             inclusion_proof: published.inclusion_proof,
             leaf_hash: leaf,
             nullifier,
+            native_credit: None,
         })
     }
 
@@ -1431,6 +1441,7 @@ pub struct DepositProof {
     inclusion_proof: Proof,
     leaf_hash: [u8; 32],
     nullifier: [u8; 32],
+    native_credit: Option<Box<crate::AttestedNativeCustodyCredit>>,
 }
 
 impl DepositProof {
@@ -1580,6 +1591,7 @@ impl DepositProof {
             inclusion_proof,
             leaf_hash: computed_leaf,
             nullifier,
+            native_credit: None,
         })
     }
 
@@ -1710,9 +1722,21 @@ impl DepositProof {
                 },
             ));
         }
-        Err(DepositFailure::CreditRefused(
-            CreditFault::BridgeProofIngressUnavailable,
-        ))
+        let credit = self
+            .native_credit
+            .as_ref()
+            .ok_or(DepositFailure::CreditRefused(
+                CreditFault::BridgeProofIngressUnavailable,
+            ))?;
+        let native = layerx_intents::NativeCustodyCredit::new(
+            credit.canonical_bytes(),
+            reserve.clone(),
+            recipient.clone(),
+        )
+        .map_err(|_| DepositFailure::CreditRefused(CreditFault::NativeBinding))?;
+        Ok(Intent::v1(layerx_intents::IntentKind::NativeCustodyCredit(
+            native,
+        )))
     }
 
     /// Compiles the deposit-credit intent into the canonical payload admitted
@@ -1727,11 +1751,8 @@ impl DepositProof {
         recipient: &AccountId,
         registry: &ModuleRegistry,
     ) -> Result<CompiledIntent, DepositFailure> {
-        let _ = registry;
-        self.credit_intent(reserve, recipient)
-            .and(Err(DepositFailure::CreditRefused(
-                CreditFault::BridgeProofIngressUnavailable,
-            )))
+        layerx_intents::compile(&self.credit_intent(reserve, recipient)?, registry)
+            .map_err(|_| DepositFailure::CreditRefused(CreditFault::NativeCompilation))
     }
 
     /// Refuses receipt acceptance until Core exposes a complete-proof activity
@@ -1749,29 +1770,115 @@ impl DepositProof {
         reserve: &AccountId,
         recipient: &AccountId,
     ) -> Result<(), DepositFailure> {
-        let _ = (receipt_bytes, batch, expected_activity_id);
-        if reserve.namespace() != AccountNamespace::SystemPaxeerReserve {
-            return Err(DepositFailure::CreditRefused(CreditFault::ReserveNamespace));
+        self.credit_intent(reserve, recipient)?;
+        let credit = self
+            .native_credit
+            .as_ref()
+            .ok_or(DepositFailure::CreditRefused(
+                CreditFault::BridgeProofIngressUnavailable,
+            ))?;
+        let reserve_id = account_address_for_protocol(reserve, self.protocol_version)
+            .map_err(|_| DepositFailure::CreditRefused(CreditFault::NativeReceipt))?;
+        verify_native_credit_receipt(
+            credit,
+            receipt_bytes,
+            batch,
+            expected_activity_id,
+            reserve_id,
+        )
+    }
+
+    /// # Errors
+    /// Refuses a native attestation that differs from the independently verified deposit.
+    pub fn with_native_credit(
+        mut self,
+        credit: crate::AttestedNativeCustodyCredit,
+    ) -> Result<Self, DepositFailure> {
+        let profile = credit.profile_bytes();
+        if credit.custody() != &self.custody
+            || credit.nullifier() != self.nullifier
+            || profile[5..13] != self.chain_id.to_be_bytes()
+            || profile[13..33] != self.vault.bytes()
+            || profile[201..205] != self.network_id.to_be_bytes()
+            || self.protocol_version != 3
+        {
+            return Err(DepositFailure::CreditRefused(CreditFault::NativeBinding));
         }
-        let recipient_address = account_address_for_protocol(recipient, self.protocol_version)
-            .map_err(|_| {
-                DepositFailure::CreditRefused(CreditFault::RecipientNotDerivable {
-                    protocol_version: self.protocol_version,
-                })
-            })?;
-        if recipient_address != self.custody.beneficiary {
-            return Err(DepositFailure::CreditRefused(
-                CreditFault::BeneficiaryMismatch {
-                    beneficiary: self.custody.beneficiary,
-                    recipient: recipient_address,
-                },
-            ));
+        if let crate::NativeCustodyEvidence::EthereumReceipt {
+            inclusion_height,
+            block_hash,
+            transaction_hash,
+            ..
+        } = credit.evidence()
+        {
+            if *inclusion_height != self.inclusion.block.number
+                || *block_hash != self.inclusion.block.hash
+                || *transaction_hash != self.transaction.bytes()
+            {
+                return Err(DepositFailure::CreditRefused(CreditFault::NativeBinding));
+            }
         }
-        Err(DepositFailure::CreditRefused(
-            CreditFault::BridgeProofIngressUnavailable,
-        ))
+        self.native_credit = Some(Box::new(credit));
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn native_credit(&self) -> Option<&crate::AttestedNativeCustodyCredit> {
+        self.native_credit.as_deref()
     }
 }
+fn verify_native_credit_receipt(
+    credit: &crate::AttestedNativeCustodyCredit,
+    receipt_bytes: &[u8],
+    batch: &AuthorizedBatch,
+    expected_activity_id: [u8; 32],
+    reserve_id: [u8; 32],
+) -> Result<(), DepositFailure> {
+    let refusal = || DepositFailure::CreditRefused(CreditFault::NativeReceipt);
+    let verified = layerx_proof::receipt::verify(receipt_bytes, batch).map_err(|_| refusal())?;
+    let receipt = verified.receipt().protocol().ok_or_else(refusal)?;
+    if receipt.activity_id() != expected_activity_id
+        || receipt.protocol_version() != 3
+        || receipt.module_id() != 8
+        || receipt.module_version() != 1
+        || receipt.operation() != 0
+    {
+        return Err(refusal());
+    }
+    let balance_event = receipt.effects().get(2).ok_or_else(refusal)?;
+    if balance_event.module_id() != 8
+        || balance_event.event_type() != 2
+        || balance_event.body().get(..32) != Some(reserve_id.as_slice())
+    {
+        return Err(refusal());
+    }
+    let payload_hash = Sha256::digest(credit.canonical_bytes());
+    let expected = [
+        &credit.canonical_bytes()[43..139],
+        &credit.canonical_bytes()[191..207],
+        &credit.canonical_bytes()[5..37],
+        &payload_hash[..],
+    ]
+    .concat();
+    let mut bound = receipt
+        .effects()
+        .iter()
+        .filter(|effect| effect.module_id() == 8 && effect.event_type() == 1 && !effect.monetary());
+    let event = bound.next().ok_or_else(refusal)?;
+    if bound.next().is_some() || event.body().len() != 208 || event.body()[..176] != expected {
+        return Err(refusal());
+    }
+    let issued = u128::from_be_bytes(event.body()[176..192].try_into().map_err(|_| refusal())?);
+    let next = u128::from_be_bytes(event.body()[192..208].try_into().map_err(|_| refusal())?);
+    if issued.checked_add(credit.custody().amount.value()) != Some(next) {
+        return Err(refusal());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "deposit_native_tests.rs"]
+mod native_receipt_tests;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DepositNativeError {

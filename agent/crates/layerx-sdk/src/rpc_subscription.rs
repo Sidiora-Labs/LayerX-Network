@@ -107,6 +107,7 @@ fn parameters(
 pub(crate) fn connect(
     endpoint: &url::Url,
     credential: Option<&LayerXKeyCredential>,
+    tls: Option<std::sync::Arc<rustls::ClientConfig>>,
     topic: SubscriptionTopic,
     account: Option<[u8; 32]>,
     cursor: Option<u64>,
@@ -166,8 +167,13 @@ pub(crate) fn connect(
         .max_message_size(Some(9 * 1_048_576))
         .max_frame_size(Some(9 * 1_048_576))
         .max_write_buffer_size(262_144);
-    let (mut socket, _) = tungstenite::client_tls_with_config(request, stream, Some(config), None)
-        .map_err(|_| RpcError::Transport)?;
+    let (mut socket, _) = tungstenite::client_tls_with_config(
+        request,
+        stream,
+        Some(config),
+        tls.map(tungstenite::Connector::Rustls),
+    )
+    .map_err(|_| RpcError::Transport)?;
     socket
         .send(Message::Text(
             json!({"jsonrpc":"2.0", "id":SUBSCRIBE_ID, "method":"lx_subscribe", "params":params})
@@ -191,7 +197,7 @@ fn receive_json(
         }
         let stream = match socket.get_mut() {
             MaybeTlsStream::Plain(stream) => stream,
-            MaybeTlsStream::NativeTls(stream) => stream.get_ref(),
+            MaybeTlsStream::Rustls(stream) => &stream.sock,
             _ => return Err(RpcError::Transport),
         };
         stream

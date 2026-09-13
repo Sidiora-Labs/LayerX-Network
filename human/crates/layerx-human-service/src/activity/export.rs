@@ -1085,6 +1085,11 @@ fn evidence_size(
                     .len()
                     .saturating_mul(256),
             )?;
+            for (chunk, proof) in &checkpoint.availability {
+                size = checked_add(size, chunk.bytes.len())?;
+                size = checked_add(size, encode_proof(proof).len())?;
+                size = checked_add(size, 96)?;
+            }
             size = checked_add(size, checkpoint.bonded_set.len().saturating_mul(96))?;
             size = checked_add(
                 size,

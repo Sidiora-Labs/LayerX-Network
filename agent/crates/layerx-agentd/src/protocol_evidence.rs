@@ -942,6 +942,41 @@ pub struct VerifiedReceiptEvidence {
 }
 
 impl VerifiedReceiptEvidence {
+    pub(crate) fn verify_authorized(
+        raw: &RawReceiptEvidence,
+        batch: &AuthorizedBatch,
+        protocol_version: u16,
+        network_id: u32,
+    ) -> Result<Self, ReceiptEvidenceError> {
+        let header = decode_batch_header(raw.canonical_header())
+            .map_err(|_| ReceiptEvidenceError::Policy(VerifierPolicyError::HeaderDecode))?;
+        if header.previous_state_root() != batch.previous_state_root()
+            || header.resulting_state_root() != batch.resulting_state_root()
+        {
+            return Err(ReceiptEvidenceError::BatchIdentity);
+        }
+        let sequencer = TrustedSequencer::new(
+            header.sequencer_id(),
+            batch.sequencer_public_key(),
+            header.epoch(),
+            header.batch_number(),
+            header.batch_number(),
+            None,
+        )
+        .map_err(ReceiptEvidenceError::Policy)?;
+        let policy = ProtocolEvidenceVerifier::new(protocol_version, network_id, vec![sequencer])
+            .map_err(ReceiptEvidenceError::Policy)?;
+        let verified = policy.verify_receipt(raw)?;
+        let protocol = verified
+            .verified
+            .receipt()
+            .protocol()
+            .ok_or(ReceiptEvidenceError::BatchIdentity)?;
+        if protocol.batch_id() != batch.batch_id() || protocol.asset() != batch.asset() {
+            return Err(ReceiptEvidenceError::BatchIdentity);
+        }
+        Ok(verified)
+    }
     #[must_use]
     pub const fn receipt_ref(&self) -> [u8; 32] {
         self.receipt_ref

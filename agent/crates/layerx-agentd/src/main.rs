@@ -22,7 +22,8 @@ use layerx_agentd::human_runtime::{
 };
 use layerx_agentd::identity::{self, CoreIdentity, IdentityError, IdentityResolver};
 use layerx_agentd::read::{
-    LayerxdProgramBalanceReader, ProgramAuthority, ProgramBalanceRead, ProgramBalanceReadRoute,
+    LayerxdProgramBalanceReader, NativeReadRoute, ProgramAuthority, ProgramBalanceRead,
+    ProgramBalanceReadRoute,
 };
 use layerx_agentd::session::{SessionId, SessionRegistry};
 use layerx_agentd::session_keys::SessionKeyRegistry;
@@ -657,6 +658,7 @@ fn serve_connection(
     bearer: &str,
     probe_program: ProgramId,
     route: &mut ProgramBalanceReadRoute,
+    native: &mut Option<NativeReadRoute>,
 ) -> Result<(), String> {
     let mut bytes = [0_u8; HEADER_LIMIT];
     let mut length = 0_usize;
@@ -696,6 +698,22 @@ fn serve_connection(
             Err(_) => response(stream, 503, "{\"ready\":false}"),
         };
     }
+    if path.starts_with("/v1/reads/") {
+        let Some(reader) = native.as_mut() else {
+            return response(stream, 404, "{\"error\":\"not_found\"}");
+        };
+        return match reader.read(path) {
+            Ok(value) => response(stream, 200, &value.to_string()),
+            Err(
+                layerx_agentd::read::NativeReadError::InvalidRequest
+                | layerx_agentd::read::NativeReadError::CursorMismatch,
+            ) => response(stream, 400, "{\"error\":\"invalid_read\"}"),
+            Err(layerx_agentd::read::NativeReadError::ResultTooLarge) => {
+                response(stream, 413, "{\"error\":\"read_too_large\"}")
+            }
+            Err(_) => response(stream, 503, "{\"error\":\"verified_read_unavailable\"}"),
+        };
+    }
     let Some(program_text) = path
         .strip_prefix("/v1/programs/")
         .and_then(|value| value.strip_suffix("/balances"))
@@ -720,6 +738,24 @@ fn serve_connection(
 fn serve(config: Config) -> Result<(), String> {
     let mcp = mcp_enrolment()?
         .map(|enrolment| mcp_boot(&config, enrolment))
+        .transpose()?;
+    let mut native = mcp
+        .as_ref()
+        .map(|boot| {
+            let limits = human_lni_limits(boot.enrolment.deadline)?;
+            let limits = Limits {
+                maximum_frame_bytes: limits
+                    .maximum_frame_bytes
+                    .max(layerx_client::evidence::MINIMUM_FINALITY_FRAME_BYTES),
+                ..limits
+            };
+            let client = connect_human_node(
+                PathBuf::from(required("LAYERX_AGENT_HUMAN_NODE_LNI")?),
+                limits,
+            )?;
+            NativeReadRoute::new(client, boot.enrolment.did.clone(), config.bearer.clone())
+                .map_err(|error| format!("native read route is invalid: {error:?}"))
+        })
         .transpose()?;
     let human = start_human_owner(mcp)?;
     let verifier = ProtocolDeploymentVerifier::from_protected_history(
@@ -775,6 +811,7 @@ fn serve(config: Config) -> Result<(), String> {
             &config.bearer,
             config.probe_program,
             &mut route,
+            &mut native,
         );
     }
 }

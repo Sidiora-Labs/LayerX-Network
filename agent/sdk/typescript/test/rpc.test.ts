@@ -69,3 +69,20 @@ await assert.rejects(feeClient.subscribeFrom("receipts",-1n).next());
 const cancellation = new AbortController(); cancellation.abort();
 await assert.rejects(feeClient.subscribe("receipts",undefined,cancellation.signal).next());
 await assert.rejects(feeClient.subscribeFrom("receipts",41n,undefined,cancellation.signal).next());
+
+const { SubscriptionContinuity } = await import("../src/rpc-subscription.js");
+const receiptContinuity = new SubscriptionContinuity("receipts", 40n);
+receiptContinuity.accept({cursor: 41n, result: {}});
+for (const cursor of [40n, 41n, 43n]) assert.throws(() => receiptContinuity.accept({cursor, result: {}}));
+receiptContinuity.accept({cursor: 42n, result: {}});
+const accountContinuity = new SubscriptionContinuity("account", 40n);
+accountContinuity.accept({cursor: 45n, result: {}});
+assert.throws(() => accountContinuity.accept({cursor: 45n, result: {}}));
+assert.throws(() => new SubscriptionContinuity("checkpoints", 40n).accept({cursor: 40n, result: {}}));
+
+const { decodeMirrorProcessResult } = await import("../src/node-mirror.js");
+const mirrorOutput = JSON.stringify({ok:true,verification:{level:"receipt-verified",batchNumber:"3",headerDigest:"11".repeat(32),evidenceDigest:"22".repeat(32),sourceId:"source",target:"mirror",canonicalPosition:"3",provenance:"Canonical",latestBatch:null,batchLag:"0",failoverCount:0,agreeingSources:1,checkpointLevel:"unavailable"}});
+assert.equal(decodeMirrorProcessResult(0,null,mirrorOutput,3n).batchNumber,3n);
+assert.throws(() => decodeMirrorProcessResult(1,null,mirrorOutput,3n));
+assert.throws(() => decodeMirrorProcessResult(null,"SIGTERM",mirrorOutput,3n));
+assert.throws(() => decodeMirrorProcessResult(0,null,mirrorOutput,4n));

@@ -708,170 +708,177 @@ impl BindingJourney {
         now: u64,
         trace: &TraceId,
     ) -> Result<ActiveBinding, BindingError> {
-        let pending = pending(scope)?.ok_or(BindingError::NoPendingBinding)?;
-        if receipt.submission_id != pending.submission_id {
-            return Err(BindingError::ReceiptSubmissionMismatch);
-        }
-        let verified = verify(&receipt.canonical_receipt, &receipt.authorized_batch)
-            .map_err(|failure| BindingError::ReceiptVerification(failure.check))?;
-        let protocol = verified
-            .receipt()
-            .protocol()
-            .ok_or(BindingError::CorruptState)?;
-        if protocol.activity_id() != pending.activity_id {
-            return Err(BindingError::ReceiptActivityMismatch);
-        }
-        if protocol.operation() != GOVERNANCE_BINDING_OPERATION {
-            return Err(BindingError::ReceiptOperationMismatch);
-        }
-        let receipt_destination = protocol.to();
-        if receipt_destination[..12] != [0; 12] || receipt_destination[12..] != pending.address {
-            return Err(BindingError::ReceiptAddressMismatch);
-        }
-        let receipt_digest = verified
-            .evidence()
-            .receipt_digest()
-            .ok_or(BindingError::CorruptState)?;
-        let candidate_binding = ActiveBinding {
-            address: pending.address,
-            network_id: pending.network_id,
-            activity_id: pending.activity_id,
-            receipt_digest,
-            activated_at: now,
-        };
-        let candidate_history = BindingHistory {
-            binding: candidate_binding.clone(),
-            statement: pending.statement.clone(),
-            canonical_receipt: verified.canonical_bytes().to_vec(),
-            rebind: pending.rebind,
-        };
-        let history_key = history_key(receipt_digest)?;
-        let history = match get_json::<BindingHistory>(scope, Table::Journeys, &history_key)? {
-            Some(existing)
-                if existing.binding.address == candidate_binding.address
-                    && existing.binding.network_id == candidate_binding.network_id
-                    && existing.binding.activity_id == candidate_binding.activity_id
-                    && existing.binding.receipt_digest == candidate_binding.receipt_digest
-                    && existing.statement == candidate_history.statement
-                    && existing.canonical_receipt == candidate_history.canonical_receipt
-                    && existing.rebind == candidate_history.rebind =>
+        scope.transaction(|scope| {
+            let pending = pending(scope)?.ok_or(BindingError::NoPendingBinding)?;
+            if receipt.submission_id != pending.submission_id {
+                return Err(BindingError::ReceiptSubmissionMismatch);
+            }
+            let verified = verify(&receipt.canonical_receipt, &receipt.authorized_batch)
+                .map_err(|failure| BindingError::ReceiptVerification(failure.check))?;
+            let protocol = verified
+                .receipt()
+                .protocol()
+                .ok_or(BindingError::CorruptState)?;
+            if protocol.activity_id() != pending.activity_id {
+                return Err(BindingError::ReceiptActivityMismatch);
+            }
+            if protocol.operation() != GOVERNANCE_BINDING_OPERATION {
+                return Err(BindingError::ReceiptOperationMismatch);
+            }
+            let receipt_destination = protocol.to();
+            if receipt_destination[..12] != [0; 12] || receipt_destination[12..] != pending.address
             {
-                existing
+                return Err(BindingError::ReceiptAddressMismatch);
             }
-            Some(_) => return Err(BindingError::CorruptState),
-            None => {
-                put_json(
-                    scope,
-                    Table::Journeys,
-                    history_key.clone(),
-                    now,
-                    &candidate_history,
-                )?;
-                candidate_history
-            }
-        };
-        let binding = history.binding.clone();
-
-        let mut audit = AuditChain::open(scope)?;
-        let prior_entries = audit.entries(scope)?;
-        if !prior_entries.iter().any(|entry| {
-            matches!(
-                entry.event(),
-                AuditEvent::IdentityLifecycle {
-                    event: IdentityEvent::WalletBinding,
-                    receipt_digest: existing,
-                } if *existing == receipt_digest
-            ) && entry.evidence().iter().any(|evidence| {
-                evidence.table() == Table::Journeys && evidence.key() == &history_key
-            })
-        }) {
-            audit.append(
-                scope,
-                now,
-                trace,
-                &AuditEvent::IdentityLifecycle {
-                    event: IdentityEvent::WalletBinding,
-                    receipt_digest,
-                },
-                &[EvidenceRef::new(Table::Journeys, history_key)],
-            )?;
-        }
-        if pending.rebind {
-            let ceremony_digest = pending.step_up_digest.ok_or(BindingError::CorruptState)?;
-            if !prior_entries.iter().any(|entry| {
-                matches!(
-                    entry.event(),
-                    AuditEvent::SecurityChange {
-                        change: SecurityChangeKind::WalletRebinding,
-                        step_up: AuditStepUpEvidence::Fresh {
-                            ceremony_digest: existing,
-                        },
-                    } if *existing == ceremony_digest
-                )
-            }) {
-                audit.append(
-                    scope,
-                    now,
-                    trace,
-                    &AuditEvent::SecurityChange {
-                        change: SecurityChangeKind::WalletRebinding,
-                        step_up: AuditStepUpEvidence::Fresh { ceremony_digest },
-                    },
-                    &[],
-                )?;
-            }
-            let notification_key = notification_key(receipt_digest)?;
-            let notification = SecurityNotification {
-                class: "security".to_owned(),
-                message: format!(
-                    "Your payout wallet is now {}. Review this change if you did not make it.",
-                    checksum_address(pending.address)
-                ),
-                deep_link: "/app/settings/wallet".to_owned(),
-                action_copy_key: "notification.action.review-wallet".to_owned(),
+            let receipt_digest = verified
+                .evidence()
+                .receipt_digest()
+                .ok_or(BindingError::CorruptState)?;
+            let candidate_binding = ActiveBinding {
+                address: pending.address,
+                network_id: pending.network_id,
+                activity_id: pending.activity_id,
                 receipt_digest,
-                created_at: binding.activated_at,
+                activated_at: now,
             };
-            match get_json::<SecurityNotification>(scope, Table::Notifications, &notification_key)?
-            {
-                Some(existing) if existing == notification => {}
+            let candidate_history = BindingHistory {
+                binding: candidate_binding.clone(),
+                statement: pending.statement.clone(),
+                canonical_receipt: verified.canonical_bytes().to_vec(),
+                rebind: pending.rebind,
+            };
+            let history_key = history_key(receipt_digest)?;
+            let history = match get_json::<BindingHistory>(scope, Table::Journeys, &history_key)? {
+                Some(existing)
+                    if existing.binding.address == candidate_binding.address
+                        && existing.binding.network_id == candidate_binding.network_id
+                        && existing.binding.activity_id == candidate_binding.activity_id
+                        && existing.binding.receipt_digest == candidate_binding.receipt_digest
+                        && existing.statement == candidate_history.statement
+                        && existing.canonical_receipt == candidate_history.canonical_receipt
+                        && existing.rebind == candidate_history.rebind =>
+                {
+                    existing
+                }
                 Some(_) => return Err(BindingError::CorruptState),
-                None => put_json(
-                    scope,
-                    Table::Notifications,
-                    notification_key.clone(),
-                    now,
-                    &notification,
-                )?,
-            }
+                None => {
+                    put_json(
+                        scope,
+                        Table::Journeys,
+                        history_key.clone(),
+                        now,
+                        &candidate_history,
+                    )?;
+                    candidate_history
+                }
+            };
+            let binding = history.binding.clone();
+
+            let mut audit = AuditChain::open(scope)?;
+            let prior_entries = audit.entries(scope)?;
             if !prior_entries.iter().any(|entry| {
                 matches!(
                     entry.event(),
-                    AuditEvent::NotificationDispatch {
-                        class: NotificationClass::Security,
-                        channel: NotificationChannel::InApp,
-                    }
+                    AuditEvent::IdentityLifecycle {
+                        event: IdentityEvent::WalletBinding,
+                        receipt_digest: existing,
+                    } if *existing == receipt_digest
                 ) && entry.evidence().iter().any(|evidence| {
-                    evidence.table() == Table::Notifications && evidence.key() == &notification_key
+                    evidence.table() == Table::Journeys && evidence.key() == &history_key
                 })
             }) {
                 audit.append(
                     scope,
                     now,
                     trace,
-                    &AuditEvent::NotificationDispatch {
-                        class: NotificationClass::Security,
-                        channel: NotificationChannel::InApp,
+                    &AuditEvent::IdentityLifecycle {
+                        event: IdentityEvent::WalletBinding,
+                        receipt_digest,
                     },
-                    &[EvidenceRef::new(Table::Notifications, notification_key)],
+                    &[EvidenceRef::new(Table::Journeys, history_key)],
                 )?;
             }
-        }
+            if pending.rebind {
+                let ceremony_digest = pending.step_up_digest.ok_or(BindingError::CorruptState)?;
+                if !prior_entries.iter().any(|entry| {
+                    matches!(
+                        entry.event(),
+                        AuditEvent::SecurityChange {
+                            change: SecurityChangeKind::WalletRebinding,
+                            step_up: AuditStepUpEvidence::Fresh {
+                                ceremony_digest: existing,
+                            },
+                        } if *existing == ceremony_digest
+                    )
+                }) {
+                    audit.append(
+                        scope,
+                        now,
+                        trace,
+                        &AuditEvent::SecurityChange {
+                            change: SecurityChangeKind::WalletRebinding,
+                            step_up: AuditStepUpEvidence::Fresh { ceremony_digest },
+                        },
+                        &[],
+                    )?;
+                }
+                let notification_key = notification_key(receipt_digest)?;
+                let notification = SecurityNotification {
+                    class: "security".to_owned(),
+                    message: format!(
+                        "Your payout wallet is now {}. Review this change if you did not make it.",
+                        checksum_address(pending.address)
+                    ),
+                    deep_link: "/app/settings/wallet".to_owned(),
+                    action_copy_key: "notification.action.review-wallet".to_owned(),
+                    receipt_digest,
+                    created_at: binding.activated_at,
+                };
+                match get_json::<SecurityNotification>(
+                    scope,
+                    Table::Notifications,
+                    &notification_key,
+                )? {
+                    Some(existing) if existing == notification => {}
+                    Some(_) => return Err(BindingError::CorruptState),
+                    None => put_json(
+                        scope,
+                        Table::Notifications,
+                        notification_key.clone(),
+                        now,
+                        &notification,
+                    )?,
+                }
+                if !prior_entries.iter().any(|entry| {
+                    matches!(
+                        entry.event(),
+                        AuditEvent::NotificationDispatch {
+                            class: NotificationClass::Security,
+                            channel: NotificationChannel::InApp,
+                        }
+                    ) && entry.evidence().iter().any(|evidence| {
+                        evidence.table() == Table::Notifications
+                            && evidence.key() == &notification_key
+                    })
+                }) {
+                    audit.append(
+                        scope,
+                        now,
+                        trace,
+                        &AuditEvent::NotificationDispatch {
+                            class: NotificationClass::Security,
+                            channel: NotificationChannel::InApp,
+                        },
+                        &[EvidenceRef::new(Table::Notifications, notification_key)],
+                    )?;
+                }
+            }
 
-        // This is deliberately last: no unverified or incompletely audited binding becomes active.
-        put_json(scope, Table::Cache, row_key(ACTIVE_KEY)?, now, &binding)?;
-        scope.remove(Table::Journeys, &row_key(PENDING_KEY)?)?;
-        Ok(binding)
+            // This is deliberately last: no unverified or incompletely audited binding becomes active.
+            put_json(scope, Table::Cache, row_key(ACTIVE_KEY)?, now, &binding)?;
+            scope.remove(Table::Journeys, &row_key(PENDING_KEY)?)?;
+            Ok(binding)
+        })
     }
 
     /// Reads the state while preserving the old active value during a rebind.

@@ -847,7 +847,27 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         peer: &HumanPeer,
         submission_ref: &str,
     ) -> Result<HumanResponse, HumanOperationError> {
-        self.lock_operations()?.track(peer, submission_ref)
+        let mut operations = self.lock_operations()?;
+        let response = operations.track(peer, submission_ref)?;
+        if let Some((key, result_code, sequence)) = operations.last_verified_receipt.take() {
+            let tenant =
+                TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| HumanOperationError::Unavailable)?;
+            self.approval_queue
+                .settle_verified(
+                    &tenant,
+                    key,
+                    result_code,
+                    sequence,
+                    &mut store,
+                    &self.budgets,
+                )
+                .map_err(|_| HumanOperationError::Unavailable)?;
+        }
+        Ok(response)
     }
     fn receipt_by_idempotency_key(
         &mut self,
@@ -2235,6 +2255,10 @@ fn decode_capability_action(
     }
 }
 
+fn persisted_terminal_receipt_matches(canonical: &[u8], expected: [u8; 32]) -> bool {
+    Sha256::digest(canonical)[..] == expected
+}
+
 fn agent_evidence_digest(
     action_key: [u8; 32],
     object_id: [u8; 32],
@@ -2260,15 +2284,46 @@ fn agent_evidence_digest(
 }
 
 impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
+    fn terminal_receipt_evidence(
+        &self,
+        receipt_evidence: &layerx_client::evidence::VerifiedProofBundle,
+        authority: &AuthorizedBatch,
+    ) -> Result<crate::protocol_evidence::VerifiedReceiptEvidence, HumanOperationError> {
+        let layerx_client::evidence::VerifiedProofBundle::Receipt {
+            canonical_bytes,
+            proof,
+            signed_header,
+            ..
+        } = receipt_evidence
+        else {
+            return Err(HumanOperationError::Refused);
+        };
+        let raw = crate::protocol_evidence::RawReceiptEvidence::new(
+            canonical_bytes.clone(),
+            proof.clone(),
+            signed_header.canonical_bytes.clone(),
+            signed_header.signature,
+        );
+        let node = self.node.handshake().node();
+        let terminal = crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized(
+            &raw,
+            authority,
+            node.protocol_version,
+            node.network_id,
+        )
+        .map_err(|_| HumanOperationError::Refused)?;
+        Ok(terminal)
+    }
+
     fn augment_receipt_evidence(
         &mut self,
         peer: &HumanPeer,
         idempotency_key: [u8; 32],
-        expected_activity_id: [u8; 32],
-        receipt_bytes: &[u8],
         tenant: TenantId,
         mut served: crate::receipt::ServedReceipt,
+        authority: &AuthorizedBatch,
     ) -> Result<crate::receipt::ServedReceipt, HumanOperationError> {
+        let expected_activity_id = served.metadata.activity_id;
         let registry = self.authority.registry(peer).map_err(map_core)?;
         let correlation = u64::from_be_bytes(
             idempotency_key[..8]
@@ -2294,10 +2349,16 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
                         .outbox
                         .exact_signed_bytes(idempotency_key)
                         .map_err(|_| HumanOperationError::Refused)?
-                    || receipt_evidence.canonical_bytes() != receipt_bytes
+                    || receipt_evidence.canonical_bytes() != served.canonical_bytes
                 {
                     return Err(HumanOperationError::Refused);
                 }
+                let terminal = self.terminal_receipt_evidence(&receipt_evidence, authority)?;
+                let terminal_state = if terminal.result_code() == 0 {
+                    SubmissionState::Executed
+                } else {
+                    SubmissionState::Failed
+                };
                 let evidence_batch = activity_evidence
                     .signed_header()
                     .batch_number()
@@ -2332,6 +2393,29 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
                         crate::receipt::ReceiptLookupKey::Idempotency(idempotency_key),
                     )
                     .map_err(|_| HumanOperationError::Unavailable)?;
+                    let status = self
+                        .outbox
+                        .status(idempotency_key)
+                        .ok_or(HumanOperationError::Refused)?;
+                    if status.state.terminal() {
+                        if status.state != terminal_state
+                            || status.evidence.is_none_or(|evidence| {
+                                evidence.receipt_ref() != terminal.receipt_ref()
+                            })
+                        {
+                            return Err(HumanOperationError::Refused);
+                        }
+                    } else {
+                        self.outbox
+                            .transition(
+                                &mut store,
+                                idempotency_key,
+                                terminal_state,
+                                "canonical receipt and signed inclusion verified",
+                                Some(terminal),
+                            )
+                            .map_err(|_| HumanOperationError::Unavailable)?;
+                    }
                 }
             }
             (Err(error), _) | (_, Err(error)) if evidence_unavailable(&error) => {}
@@ -2723,6 +2807,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         peer: &HumanPeer,
         submission_ref: &str,
     ) -> Result<HumanResponse, HumanOperationError> {
+        self.last_verified_receipt = None;
         let id = *self
             .submissions
             .get(&(
@@ -2731,7 +2816,62 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                 submission_ref.to_owned(),
             ))
             .ok_or(HumanOperationError::Refused)?;
-        Self::observation(self.outbox.status(id).ok_or(HumanOperationError::Refused)?)
+        let status = self
+            .outbox
+            .status(id)
+            .ok_or(HumanOperationError::Refused)?
+            .clone();
+        if status.state == SubmissionState::Submitted {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| HumanOperationError::Unavailable)?;
+            self.outbox
+                .transition(
+                    &mut store,
+                    id,
+                    SubmissionState::Unknown,
+                    "recover durable submission before receipt resolution",
+                    None,
+                )
+                .map_err(|_| HumanOperationError::Unavailable)?;
+        }
+        if matches!(
+            status.state,
+            SubmissionState::Submitted | SubmissionState::Acknowledged | SubmissionState::Unknown
+        ) {
+            match self.receipt_by_idempotency_key(peer, id, status.activity_id) {
+                Ok(_) | Err(HumanOperationError::Unavailable) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let current = self.outbox.status(id).ok_or(HumanOperationError::Refused)?;
+        if let Some(evidence) = current.evidence {
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| HumanOperationError::Unavailable)?;
+            let served = crate::receipt::serve(
+                &store,
+                TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?,
+                crate::receipt::ReceiptLookupKey::Idempotency(id),
+            )
+            .map_err(|_| HumanOperationError::Unavailable)?;
+            if !persisted_terminal_receipt_matches(&served.canonical_bytes, evidence.receipt_ref())
+                || served.metadata.activity_id != current.activity_id
+                || served.metadata.idempotency_key != id
+                || (served.metadata.result.code.raw() == 0)
+                    != (current.state == SubmissionState::Executed)
+            {
+                return Err(HumanOperationError::Refused);
+            }
+            self.last_verified_receipt = Some((
+                id,
+                served.metadata.result.code.raw(),
+                served.metadata.global_sequence,
+            ));
+        }
+        Self::observation(current)
     }
 
     fn receipt_by_idempotency_key(
@@ -2814,10 +2954,9 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                 served = self.augment_receipt_evidence(
                     peer,
                     idempotency_key,
-                    expected_activity_id,
-                    receipt.canonical_bytes(),
                     tenant,
                     served,
+                    &authority,
                 )?;
                 self.last_verified_receipt = Some((
                     idempotency_key,
@@ -3760,5 +3899,96 @@ mod owner_authority_tests {
                 "accepted {reference:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_recovery_tests {
+    use super::persisted_terminal_receipt_matches;
+    use crate::protocol_evidence::{RawReceiptEvidence, VerifiedReceiptEvidence};
+    use layerx_proof::merkle::Proof;
+    use layerx_proof::receipt::AuthorizedBatch;
+
+    fn decode(value: &str) -> Vec<u8> {
+        value
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|bytes| {
+                u8::from_str_radix(
+                    std::str::from_utf8(bytes)
+                        .unwrap_or_else(|error| panic!("fixture hex: {error}")),
+                    16,
+                )
+                .unwrap_or_else(|error| panic!("fixture hex: {error}"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn restarted_terminal_uses_the_authenticated_signed_receipt_reference() {
+        let value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../platform/hosted/authority/tests/fixtures/real-program-deploy-receipt.json"
+        ))
+        .unwrap_or_else(|error| panic!("committed receipt: {error}"));
+        let field = |name: &str| {
+            decode(
+                value[name]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("fixture field {name}")),
+            )
+        };
+        let canonical = field("receipt_hex");
+        let header_bytes = field("header_hex");
+        let header = layerx_wire::receipt::decode_batch_header(&header_bytes)
+            .unwrap_or_else(|error| panic!("header: {error:?}"));
+        let receipt = layerx_wire::receipt::decode(&canonical)
+            .unwrap_or_else(|error| panic!("receipt: {error:?}"));
+        let protocol = receipt
+            .protocol()
+            .unwrap_or_else(|| panic!("protocol receipt"));
+        let authority = AuthorizedBatch::new(
+            protocol.batch_id(),
+            protocol.asset(),
+            header.previous_state_root(),
+            header.resulting_state_root(),
+            field("sequencer_public_key_hex")
+                .try_into()
+                .unwrap_or_else(|_| panic!("public key width")),
+        );
+        assert_eq!(value["proof_count"], 1);
+        assert_eq!(value["proof_index"], 0);
+        let raw = RawReceiptEvidence::new(
+            canonical.clone(),
+            Proof::new(0, 1, Vec::new()).unwrap_or_else(|error| panic!("proof: {error:?}")),
+            header_bytes,
+            field("header_signature_hex")
+                .try_into()
+                .unwrap_or_else(|_| panic!("signature width")),
+        );
+        let terminal = VerifiedReceiptEvidence::verify_authorized(
+            &raw,
+            &authority,
+            header.protocol_version(),
+            header.network_id(),
+        )
+        .unwrap_or_else(|error| panic!("real terminal receipt: {error:?}"));
+        assert!(persisted_terminal_receipt_matches(
+            &canonical,
+            terminal.receipt_ref()
+        ));
+        let unsigned = layerx_wire::receipt::encode_unsigned(&receipt)
+            .unwrap_or_else(|error| panic!("unsigned receipt: {error:?}"));
+        let protocol_digest = layerx_wire::hash::receipt_digest(&unsigned)
+            .unwrap_or_else(|error| panic!("protocol digest: {error:?}"));
+        assert!(!persisted_terminal_receipt_matches(
+            &canonical,
+            protocol_digest
+        ));
+        let mut altered = canonical;
+        altered[10] ^= 1;
+        assert!(!persisted_terminal_receipt_matches(
+            &altered,
+            terminal.receipt_ref()
+        ));
     }
 }

@@ -547,7 +547,7 @@ impl DeliveryEngine {
     /// subscription failure raised while reading the terminal state or persisting the revocation.
     pub fn stop_revoked(&mut self, reason: Termination) -> Result<(), DeliveryError> {
         if self.subscriptions.termination(&self.target)? != Some(reason) {
-            self.subscriptions.revoke(&self.target, reason)?;
+            self.subscriptions.revoke_inner(&self.target, reason)?;
         }
         self.buffer.clear();
         Ok(())

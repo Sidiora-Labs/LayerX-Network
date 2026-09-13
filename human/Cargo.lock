@@ -1015,6 +1015,7 @@ dependencies = [
  "layerx-types",
  "layerx-wire",
  "proptest",
+ "sha2",
 ]
 
 [[package]]
@@ -1136,6 +1137,7 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustls",
  "rustls-native-certs",
  "serde_json",
  "sha2",
@@ -2008,8 +2010,10 @@ dependencies = [
  "http",
  "httparse",
  "log",
- "native-tls",
  "rand 0.9.5",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "sha1",
  "thiserror",
 ]

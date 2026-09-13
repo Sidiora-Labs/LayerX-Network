@@ -8,10 +8,12 @@ mod balances;
 mod checkpoint_impl;
 #[path = "history.rs"]
 mod historical;
+mod native;
 #[path = "program_balances.rs"]
 mod program_balances_impl;
 #[path = "program_node.rs"]
 mod program_node;
+pub use native::{NativeReadError, NativeReadRoute};
 
 pub use available::{
     availability, AvailabilityAudit, AvailabilityFailure, AvailabilityRead, AvailabilityRequest,

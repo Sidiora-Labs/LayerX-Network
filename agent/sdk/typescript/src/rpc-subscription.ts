@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import { JsonRpcError } from "./rpc.js";
+import { decodeBatchHeader } from "./verifier.js";
 
 export type SubscriptionTopic = "receipts" | "checkpoints" | "account";
 
@@ -53,6 +54,29 @@ export function subscriptionSelector(topic: SubscriptionTopic, account?: string,
   return cursor === undefined ? selector : [...selector, cursor.toString()];
 }
 
+export class SubscriptionContinuity {
+  private lastCheckpointBatch: bigint | undefined;
+  private lastCheckpointId: string | undefined;
+
+  public constructor(private readonly topic: SubscriptionTopic, private lastCursor?: bigint) {}
+
+  public accept(event: SubscriptionEvent): void {
+    if (this.lastCursor !== undefined && event.cursor < this.lastCursor) throw new Error("Subscription cursor regression; reconcile through reads");
+    if (this.topic === "checkpoints") {
+      const header = event.result.canonical_header;
+      const checkpoint = event.result.checkpoint_id;
+      if (typeof header !== "string" || !/^[0-9a-f]{708}$/u.test(header) || typeof checkpoint !== "string" || !/^[0-9a-f]{64}$/u.test(checkpoint)) throw new Error("Invalid checkpoint notification");
+      const batch = decodeBatchHeader(Buffer.from(header, "hex")).batchNumber;
+      if ((this.lastCheckpointBatch !== undefined && batch <= this.lastCheckpointBatch) || checkpoint === this.lastCheckpointId) throw new Error("Checkpoint regression or duplicate; reconcile through reads");
+      this.lastCheckpointBatch = batch;
+      this.lastCheckpointId = checkpoint;
+    } else if (this.lastCursor !== undefined && (event.cursor === this.lastCursor || (this.topic === "receipts" && event.cursor !== this.lastCursor + 1n))) {
+      throw new Error("Subscription cursor discontinuity; reconcile through reads");
+    }
+    this.lastCursor = event.cursor;
+  }
+}
+
 export async function* subscribeRpc(endpoint: URL, authorization: string | undefined, requestId: string, topic: SubscriptionTopic, account?: string, cursor?: bigint, signal?: AbortSignal): AsyncGenerator<SubscriptionEvent> {
   const params = subscriptionSelector(topic, account, cursor);
   if (signal?.aborted) throw new Error("Subscription cancelled");
@@ -63,6 +87,7 @@ export async function* subscribeRpc(endpoint: URL, authorization: string | undef
   const socket = new WebSocket(url, { headers: authorization === undefined ? {} : { authorization }, handshakeTimeout: 30000, maxPayload: 9 * 1048576, followRedirects: false, perMessageDeflate: false });
   const queue: SubscriptionEvent[] = [];
   let subscription: string | undefined;
+  const continuity = new SubscriptionContinuity(topic, cursor);
   let failure: unknown;
   let wake: (() => void) | undefined;
   let settleCancel: (() => void) | undefined;
@@ -84,7 +109,9 @@ export async function* subscribeRpc(endpoint: URL, authorization: string | undef
       if (subscription === undefined) { subscription = subscriptionAcknowledgement(value, requestId); clearTimeout(timer); resolveReady(); return; }
       if (object(value) && value.id === cancelId) { unsubscribeAcknowledgement(value, cancelId); settleCancel?.(); return; }
       if (queue.length >= 16) throw new Error("Subscription queue overflow; reconcile through reads");
-      queue.push(subscriptionNotification(value, subscription));
+      const event = subscriptionNotification(value, subscription);
+      continuity.accept(event);
+      queue.push(event);
       wake?.();
     } catch (error) { fail(error); }
   });
