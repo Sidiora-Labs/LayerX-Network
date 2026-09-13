@@ -167,19 +167,7 @@ fn every_reclaim_mechanism_uses_real_agent_receipts_and_projects_activity() {
             "jrn_reclaimgrant",
             0x73,
             ReclaimMechanism::ReceiveUnderPayerGrant(PayerGrantRoute {
-                receive: layerx_intents::NativeReceive::new(&support::receive::signed_receive(
-                    &support::receive::SignedReceiveRequest {
-                        from: &account("agent:did:layerx:worker:main"),
-                        to: &account("agent:did:layerx:human:main"),
-                        asset: [0x33; 32],
-                        amount: 1,
-                        sequence: ACCOUNT_SEQUENCE,
-                        idempotency_key: [0x73; 32],
-                        network_id: NETWORK_ID,
-                        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
-                    },
-                ))
-                .unwrap_or_else(|error| panic!("signed receive: {error:?}")),
+                receive: signed_reclaim_receive(),
             }),
         ),
     ];
@@ -278,4 +266,20 @@ fn reclaim_contract_is_closed_to_returns_and_rejects_conflicting_reuse() {
         Reclaim::start(&mut scope, &conflict, &registry(), 500),
         Err(ReclaimError::IdempotencyConflict)
     ));
+}
+
+fn signed_reclaim_receive() -> layerx_intents::NativeReceive {
+    layerx_intents::NativeReceive::new(&support::receive::signed_receive(
+        &support::receive::SignedReceiveRequest {
+            from: &account("agent:did:layerx:worker:main"),
+            to: &account("agent:did:layerx:human:main"),
+            asset: [0x33; 32],
+            amount: 1,
+            sequence: ACCOUNT_SEQUENCE,
+            idempotency_key: [0x73; 32],
+            network_id: NETWORK_ID,
+            protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        },
+    ))
+    .unwrap_or_else(|error| panic!("signed receive: {error:?}"))
 }
