@@ -1,5 +1,6 @@
 mod events;
 mod funding;
+mod registry_runtime;
 mod required;
 use required::Required;
 
@@ -97,6 +98,7 @@ struct LocalRedis {
 struct Gateway {
     _process: Daemon,
     _event_processes: Vec<Daemon>,
+    _registry_process: Option<Daemon>,
     port: u16,
     signer_file: String,
 }
@@ -109,13 +111,14 @@ fn local_gateway_lifecycle() {
     let identity = start_local_identity(&cluster, &certificates);
     let authority = start_local_authority(&cluster, &certificates);
     let redis = start_local_redis(&cluster, &certificates);
-    let gateway = start_local_gateway(
+    let gateway = start_gateway_runtime(
         &cluster,
         &certificates,
         &boundary,
         &identity,
         &authority,
         &redis,
+        true,
     );
     let key = issue_local_key(&certificates, &gateway, &identity);
     run_lifecycle_script(&cluster, &certificates, &gateway, &authority, &key);
@@ -322,6 +325,26 @@ fn start_local_gateway(
     authority: &LocalAuthority,
     redis: &LocalRedis,
 ) -> Gateway {
+    start_gateway_runtime(
+        cluster,
+        certificates,
+        boundary,
+        identity,
+        authority,
+        redis,
+        false,
+    )
+}
+
+fn start_gateway_runtime(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    boundary: &Boundary,
+    identity: &LocalIdentity,
+    authority: &LocalAuthority,
+    redis: &LocalRedis,
+    registry: bool,
+) -> Gateway {
     let password_file = local_secret(&cluster.root, "client-password", &token());
     let pkcs12 = certificates.path("gateway-client.p12");
     command(
@@ -409,15 +432,29 @@ fn start_local_gateway(
     ));
     let events = events::Runtime::prepare(cluster, boundary);
     events.configure(&mut gateway_env, certificates);
+    let registry_config = registry.then(|| {
+        registry_runtime::configure(
+            cluster,
+            certificates,
+            boundary,
+            identity,
+            authority,
+            &mut gateway_env,
+        )
+    });
     let gateway_process = local_service(cluster, "layerx-gateway", gateway_port, &gateway_env);
     let mut gateway = Gateway {
         _process: gateway_process,
         _event_processes: Vec::new(),
+        _registry_process: None,
         port: gateway_port,
         signer_file,
     };
     gateway._event_processes =
         events.start(cluster, certificates, identity, authority, redis, &gateway);
+    if let Some((path, port)) = registry_config {
+        gateway._registry_process = Some(registry_runtime::start(cluster, &path, port));
+    }
     gateway
 }
 
@@ -2619,13 +2656,14 @@ fn local_gateway_program_custody_journey() {
     let identity = start_local_identity(&cluster, &certificates);
     let authority = start_local_authority(&cluster, &certificates);
     let redis = start_local_redis(&cluster, &certificates);
-    let gateway = start_local_gateway(
+    let gateway = start_gateway_runtime(
         &cluster,
         &certificates,
         &boundary,
         &identity,
         &authority,
         &redis,
+        true,
     );
     let key = issue_local_scoped_key(
         &certificates,

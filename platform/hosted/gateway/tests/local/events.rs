@@ -3,6 +3,7 @@ use super::*;
 pub struct Runtime {
     core_port: u16,
     payment_port: u16,
+    program_port: u16,
     webhook_port: u16,
     producer_token: String,
     webhook_token: String,
@@ -23,6 +24,7 @@ impl Runtime {
         Self {
             core_port: boundary.core.port,
             payment_port: free_port(),
+            program_port: free_port(),
             webhook_port: free_port(),
             producer_token: local_secret(&cluster.root, "payment-producer-token", &token()),
             webhook_token: local_secret(&cluster.root, "payment-webhook-token", &token()),
@@ -36,6 +38,7 @@ impl Runtime {
     ) {
         for (prefix, port, token_file) in [
             ("PAYMENT", self.payment_port, &self.producer_token),
+            ("PROGRAM", self.program_port, &self.producer_token),
             ("WEBHOOKS", self.webhook_port, &self.webhook_token),
         ] {
             let names = match prefix {
@@ -45,6 +48,13 @@ impl Runtime {
                     "LAYERX_EVENTS_PAYMENT_UPSTREAM_TOKEN_FILE",
                     "LAYERX_EVENTS_PAYMENT_UPSTREAM_CLIENT_IDENTITY_PKCS12",
                     "LAYERX_EVENTS_PAYMENT_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE",
+                ],
+                "PROGRAM" => [
+                    "LAYERX_EVENTS_PROGRAM_UPSTREAM_URL",
+                    "LAYERX_EVENTS_PROGRAM_UPSTREAM_CA_DER",
+                    "LAYERX_EVENTS_PROGRAM_UPSTREAM_TOKEN_FILE",
+                    "LAYERX_EVENTS_PROGRAM_UPSTREAM_CLIENT_IDENTITY_PKCS12",
+                    "LAYERX_EVENTS_PROGRAM_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE",
                 ],
                 _ => [
                     "LAYERX_EVENTS_WEBHOOKS_UPSTREAM_URL",
@@ -94,6 +104,8 @@ impl Runtime {
         for kind in ["payment", "program", "journey", "approval"] {
             let port = if kind == "payment" {
                 self.payment_port
+            } else if kind == "program" {
+                self.program_port
             } else {
                 free_port()
             };
