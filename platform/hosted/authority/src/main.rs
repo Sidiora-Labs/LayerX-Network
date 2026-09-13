@@ -634,6 +634,13 @@ fn checkpoint_header(
     config: &Config,
     batch: u64,
 ) -> Result<layerx_client::evidence::VerifiedCheckpoint, ()> {
+    checkpoint_for(config, Some(batch))
+}
+
+fn checkpoint_for(
+    config: &Config,
+    batch: Option<u64>,
+) -> Result<layerx_client::evidence::VerifiedCheckpoint, ()> {
     use layerx_client::evidence::{checkpoint, CheckpointSelector, EvidenceContext};
     let limits = Limits {
         maximum_frame_bytes: LNI_FRAME_BYTES,
@@ -655,7 +662,7 @@ fn checkpoint_header(
     }
     let verified = checkpoint(
         &mut transport,
-        CheckpointSelector::Batch(batch),
+        CheckpointSelector::Batch(batch.unwrap_or(handshake.node().latest_sealed_batch)),
         EvidenceContext {
             interface_version: Version::V1_3,
             correlation_id: CORRELATION.fetch_add(1, Ordering::AcqRel),
@@ -665,6 +672,15 @@ fn checkpoint_header(
         },
     )
     .map_err(|_| ())?;
+    if batch.is_none() {
+        let header = layerx_wire::receipt::decode_batch_header(verified.canonical_header())
+            .map_err(|_| ())?;
+        if header.last_sequence() != handshake.node().chain_head_sequence
+            || header.batch_number() != handshake.node().latest_sealed_batch
+        {
+            return Err(());
+        }
+    }
     Ok(verified)
 }
 

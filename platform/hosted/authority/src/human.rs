@@ -18,6 +18,8 @@ use zeroize::Zeroizing;
 
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 
+mod session_membership;
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Policy {
@@ -553,6 +555,16 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
             item.checkpoint = super::checkpoint_header(config, item.facts.batch_number).ok();
         }
     }
+    if name == "identity" {
+        let current = super::checkpoint_for(config, None)
+            .map_err(|()| unavailable("identity_head_checkpoint_unavailable"))?;
+        let latest = evidence
+            .last()
+            .ok_or_else(|| unavailable("identity_state_proof_unavailable"))?;
+        if current.canonical_header() != latest.header {
+            return Err(unavailable("identity_head_evidence_incomplete"));
+        }
+    }
     match name {
         "core-clock" => clock(&evidence, human.horizon),
         "balance-context" => balance_context(p, &human.registry_path, &evidence, config),
@@ -845,29 +857,12 @@ fn policy_route(
         return native_capability_scope(identity, params, item, evidence, head);
     }
     if name == "identity" {
-        let state = native_identity_state(item, &identity.did)?;
+        let (state, authorities) = session_membership::current(identity, item, evidence, p)?;
         let revision = native_u64(&state, 69)?;
-        if identity.frozen
-            || identity.revocation_sequence != revision
-            || identity.authorities.len() != 1
-            || identity.authorities[0].kind != "primary_key"
-            || identity.authorities[0].id != hex::encode(&state[37..69])
-        {
-            return Err(unavailable("identity_state_proof_unavailable"));
-        }
-        native_complete_suffix(item, evidence)?;
-        for later in evidence
-            .iter()
-            .filter(|e| e.facts.global_sequence > item.facts.global_sequence)
-        {
-            if native_identity_state(later, &identity.did).is_ok() {
-                return Err(unavailable("identity_state_proof_unavailable"));
-            }
-        }
         return Ok(json(
             200,
             &value!({
-                "authorities": identity.authorities,
+                "authorities": authorities,
                 "canonical_core_bytes": hex::encode(&state),
                 "head_sequence": head, "revocation_sequence": revision,
                 "frozen": false, "verification_level": "checkpoint_finalised"

@@ -297,7 +297,6 @@ def hosted(work, config, environment, launch, service):
     reader.take(6)
     reference = dict(activity_id=reader.span(32).hex(), receipt_digest=digest(b'receipt', raw[:-69] + b'\0').hex())
     identity = registration['identity']
-    identity['evidence'] = reference
     scope = dict(authority=registration['authority'], action_key=session['action_key'], capability_id=session['grant_id'],
         activity_types=[5], counterparties=[], assets=[], amount_ceiling='0', expiry_sequence=session['expiry_sequence'],
         enforceable_dimensions=[], evidence=reference)
@@ -349,7 +348,33 @@ def hosted(work, config, environment, launch, service):
             time.sleep(0.2)
     assert result['verification'] == 4 and result['expiry_sequence'] == session['expiry_sequence']
     assert result['action_key'] == session['action_key'] and result['canonical_core_bytes'] == session['summary']
-    assert query('identity', {})['verification_level'] == 'checkpoint_finalised'
+    current_identity = query('identity', {})
+    assert current_identity['verification_level'] == 'checkpoint_finalised'
+    assert current_identity['authorities'] == [
+        dict(kind='primary_key', id=registration['authority']),
+        dict(kind='session_key', id=session['grant_id'])]
+    assert current_identity['revocation_sequence'] == identity['revocation_sequence']
+    assert current_identity['head_sequence'] >= session['sequence']
+    current_state = bytes.fromhex(current_identity['canonical_core_bytes'])
+    assert len(current_state) == 223 and current_state[:5] == b'LXGI1'
+    assert int.from_bytes(current_state[215:223], 'big') == session['sequence']
+    session_record = authority_root / (reference['activity_id'] + '.json')
+    held_record = root / 'session-membership-withheld.json'
+    session_record.rename(held_record)
+    try:
+        try:
+            query('identity', {})
+            raise AssertionError('identity accepted incomplete session registration history')
+        except urllib.error.HTTPError as error:
+            assert error.code == 503
+    finally:
+        held_record.rename(session_record)
+    assert query('identity', {})['authorities'] == current_identity['authorities']
+    try:
+        query('identity', dict(principal='another-principal'))
+        raise AssertionError('session membership crossed principal binding')
+    except urllib.error.HTTPError as error:
+        assert error.code == 403
     for recovery in ('true', 'false'):
         assert query('key-policy', dict(recovery=recovery))['verification'] == 4
     for field in ('authority', 'action_key', 'capability_id'):
@@ -360,4 +385,4 @@ def hosted(work, config, environment, launch, service):
             raise AssertionError('mismatched capability binding accepted')
         except urllib.error.HTTPError as error:
             assert error.code == 403
-    print('real checkpoint-finalised identity, key policies and committed capability action/expiry verified positively; mismatched bindings refused', flush=True)
+    print('real checkpoint-finalised identity, session membership, key policies and committed capability action/expiry verified positively; incomplete history and mismatched principal/bindings refused', flush=True)

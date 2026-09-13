@@ -1349,6 +1349,7 @@ dependencies = [
  "getrandom 0.4.3",
  "layerx-agentd",
  "layerx-client",
+ "layerx-crypto",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
