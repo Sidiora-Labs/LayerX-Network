@@ -10,15 +10,14 @@ set -eu
 : "${LAYERX_TEST_DESTINATION_DID:?LAYERX_TEST_DESTINATION_DID is required}"
 : "${LAYERX_TEST_ASSET:?LAYERX_TEST_ASSET is required}"
 : "${LAYERX_TEST_AMOUNT:?LAYERX_TEST_AMOUNT is required}"
-: "${LAYERX_TEST_PROGRAM_ACTIVITY_FILE:?A real signed ProgramCall activity file is required}"
-: "${LAYERX_TEST_PROGRAM_IDEMPOTENCY_KEY:?The signed ProgramCall idempotency key is required}"
+: "${LAYERX_TEST_SOURCE_KEY_FILE:?LAYERX_TEST_SOURCE_KEY_FILE is required}"
+: "${LAYERX_TEST_ESCROW_WASM:?The built reference escrow WASM is required}"
 : "${LAYERX_BIN:=layerx}"
 test -r "$LAYERX_TEST_AUTH_TOKEN_FILE"
 test -r "$LAYERX_TEST_CA_FILE"
-test -f "$LAYERX_TEST_PROGRAM_ACTIVITY_FILE"
-test ! -L "$LAYERX_TEST_PROGRAM_ACTIVITY_FILE"
-test -s "$LAYERX_TEST_PROGRAM_ACTIVITY_FILE"
-printf '%s' "$LAYERX_TEST_PROGRAM_IDEMPOTENCY_KEY" | grep -Eq '^[0-9a-f]{64}$'
+test -f "$LAYERX_TEST_ESCROW_WASM"
+test ! -L "$LAYERX_TEST_ESCROW_WASM"
+test -s "$LAYERX_TEST_ESCROW_WASM"
 command -v jq >/dev/null
 command -v openssl >/dev/null
 command -v "$LAYERX_BIN" >/dev/null
@@ -33,6 +32,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 chmod 0700 "$work"
 auth_config="$work/auth.curl"
+: > "$auth_config"
 chmod 0600 "$auth_config"
 printf 'header = "Authorization: Bearer %s"\n' \
   "$(tr -d '\r\n' < "$LAYERX_TEST_AUTH_TOKEN_FILE")" > "$auth_config"
@@ -162,6 +162,13 @@ jq -e '.ok == true and .kind == "receipt.verified" and .data.verified == true' \
 printf '%s\n' "receipt inspection journey: batch $batch_id receipt $receipt_id independently verified"
 
 admit_journey programs
+python3 "$(dirname "$0")/program-journey.py" --gateway "$LAYERX_GATEWAY_URL" \
+  --ca "$LAYERX_TEST_CA_FILE" --auth-config "$auth_config" --signer "$LAYERX_TEST_SOURCE_KEY_FILE" \
+  --did "$LAYERX_TEST_SOURCE_DID" --asset "$LAYERX_TEST_ASSET" \
+  --network-id "$(jq -er '.network_id' "$work/parameters.json")" \
+  --wasm "$LAYERX_TEST_ESCROW_WASM" --output "$work/program-custody"
+LAYERX_TEST_PROGRAM_ACTIVITY_FILE="$work/program-custody/call.lxa"
+LAYERX_TEST_PROGRAM_IDEMPOTENCY_KEY=$(cat "$work/program-custody/call-idempotency-key")
 curl --fail --silent --show-error --max-time 120 --cacert "$LAYERX_TEST_CA_FILE" \
   --config "$auth_config" --request POST "$LAYERX_GATEWAY_URL/v1/programs/call" \
   --header 'Content-Type: application/octet-stream' \

@@ -348,6 +348,17 @@ fn signed_program_activity(
     ordinal: u16,
     bytes: &[u8],
 ) -> Vec<u8> {
+    signed_program_activity_with_fee(seed, did, sequence, ordinal, bytes, 0)
+}
+
+fn signed_program_activity_with_fee(
+    seed: &[u8; 32],
+    did: &str,
+    sequence: u64,
+    ordinal: u16,
+    bytes: &[u8],
+    fee_limit: u128,
+) -> Vec<u8> {
     let signing_key = SigningKey::from_bytes(seed);
     let public_key = signing_key.verifying_key().to_bytes();
     let activity_type = must(
@@ -383,7 +394,7 @@ fn signed_program_activity(
                 ))
             })
             .and_then(|value| value.idempotency_key(IdempotencyKey::new(random32())))
-            .and_then(|value| value.fee_limit(Amount::from_u128(0)))
+            .and_then(|value| value.fee_limit(Amount::from_u128(fee_limit)))
             .and_then(|value| value.payload_hash(payload_hash))
             .and_then(|value| value.payload(payload))
             .map(|_| ()),

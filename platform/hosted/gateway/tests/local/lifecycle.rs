@@ -103,7 +103,7 @@ struct Gateway {
 
 #[test]
 fn local_gateway_lifecycle() {
-    let cluster = start_cluster(true);
+    let (cluster, _funding) = funding::start();
     let certificates = certificates(&cluster.root);
     let boundary = start_boundary(&cluster, &certificates);
     establish_receipt_head(&boundary, &cluster);
@@ -790,12 +790,13 @@ fn local_manifest(cluster: &Cluster) -> PathBuf {
     .into_iter()
     .enumerate()
     {
-        let signed = signed_program_activity(
+        let signed = signed_program_activity_with_fee(
             &cluster.treasury_seed,
             &cluster.treasury_did,
             first_sequence + u64::try_from(index).required("index"),
             ordinal,
             &payload,
+            1_000_000_000_000,
         );
         let kind = ActivityType::new(ModuleId::Programs, ordinal).required("ordinal");
         let registry = ModuleRegistry::new(&[
@@ -2536,4 +2537,100 @@ fn local_funding_recovers_a_submitted_operation_after_restart() {
         409,
         "idempotency_conflict",
     );
+}
+
+#[test]
+fn local_gateway_program_custody_journey() {
+    let (cluster, _funding) = funding::start();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let key = issue_local_scoped_key(
+        &certificates,
+        &gateway,
+        &identity,
+        &["activity:write", "program:call"],
+    );
+    let config = cluster.root.join("program-journey.curl");
+    write(
+        &config,
+        format!(
+            "header = \"Authorization: LayerX-Key {}:{}\"\n",
+            key["key"]["id"].as_str().required("key id"),
+            key["key"]["secret"].as_str().required("key secret"),
+        )
+        .as_bytes(),
+        0o600,
+    );
+    let signer = cluster.root.join("program-journey.signer");
+    write(&signer, &cluster.treasury_seed, 0o600);
+    let artifact = std::env::var_os("LAYERX_TEST_ESCROW_WASM").required("built escrow WASM");
+    let output = cluster.root.join("program-custody-journey");
+    let status = Command::new(
+        std::env::var_os("LAYERX_TEST_PYTHON").required("qualified Python with cryptography"),
+    )
+    .arg(repository_root().join("platform/hosted/testnet/tests/program-journey.py"))
+    .arg("--gateway")
+    .arg(format!("https://localhost:{}", gateway.port))
+    .arg("--ca")
+    .arg(certificates.path("ca.pem"))
+    .arg("--auth-config")
+    .arg(config)
+    .arg("--signer")
+    .arg(signer)
+    .arg("--did")
+    .arg(&cluster.treasury_did)
+    .arg("--asset")
+    .arg(hex_encode(&cluster.asset))
+    .arg("--network-id")
+    .arg(NETWORK_ID.to_string())
+    .arg("--wasm")
+    .arg(artifact)
+    .arg("--output")
+    .arg(&output)
+    .status()
+    .required("real funded Programs journey");
+    assert!(status.success(), "real Programs journey failed: {status}");
+    let result: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("result.json")).required("Programs evidence"))
+            .required("Programs evidence JSON");
+    let bytes = layerx_platform_core::hex_decode(
+        result["result"]["receipt"]
+            .as_str()
+            .required("Programs receipt"),
+    )
+    .required("Programs receipt bytes");
+    let receipt = layerx_proof::receipt::verify_sequencer_signature(&bytes, cluster.sequencer_key)
+        .required("real Programs signature");
+    let protocol = receipt.protocol().required("Programs protocol");
+    assert_eq!(protocol.result_code(), 0);
+    assert_eq!((protocol.module_id(), protocol.operation()), (9, 3));
+    let outcome = protocol
+        .program_outcome()
+        .required("committed Programs outcome");
+    for (field, expected) in [
+        ("terminal_payload", outcome.terminal_payload_root()),
+        ("call_graph", outcome.call_graph_root()),
+    ] {
+        let bytes = layerx_platform_core::hex_decode(
+            result["result"][field]
+                .as_str()
+                .required("committed artifact"),
+        )
+        .required("artifact bytes");
+        assert!(!bytes.is_empty());
+        let digest: [u8; 32] = Sha256::digest(bytes).into();
+        assert_eq!(digest, expected);
+    }
+    assert_eq!(result["after"]["balance"], "1");
 }

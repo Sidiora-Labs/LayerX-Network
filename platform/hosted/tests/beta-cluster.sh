@@ -1193,8 +1193,8 @@ registry_deployment_produce() (
     set -euo pipefail
     umask 077
     local input="$WORK_DIR/human-evidence-input" temporary producer
-    local artifact="$REPO_ROOT/programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
-    make -C "$REPO_ROOT" programs-reference-escrow >&2
+    local artifact="$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
+    CARGO_TARGET_DIR="$WORK_DIR/program-target" make -C "$REPO_ROOT" programs-reference-escrow >&2
     mkdir -p "$input"
     [ ! -e "$input/program-deployment.lxa" ] && [ ! -L "$input/program-deployment.lxa" ] || fail 'deployment input exists; reconcile before retry'
     temporary=$(mktemp "$input/.program-deployment.XXXXXXXX")
@@ -1754,6 +1754,7 @@ env_write() {
         printf 'export LAYERX_TEST_DESTINATION_DID=%s\n' "$TEST_DESTINATION_DID"
         printf 'export LAYERX_TEST_ASSET=%s\n' "$NODE_ASSET_ID"
         printf 'export LAYERX_TEST_AMOUNT=%s\n' "$TEST_AMOUNT"
+        printf 'export LAYERX_TEST_ESCROW_WASM=%s\n' "$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
         printf 'export LAYERX_GATEWAY_CA_FILE=%s\n' "$CA_DIR/ca.crt"
         printf 'export WEBHOOKS_URL=%s\n' "$DEVELOPER_URL"
         printf 'export LAYERX_AGENT_BOUNDARY_URL=%s\n' "$AGENT_URL"

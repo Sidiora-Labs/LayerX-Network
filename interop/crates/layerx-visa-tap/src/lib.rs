@@ -622,7 +622,7 @@ pub fn bind_verified_agent(
 
 /// Derives display evidence from a verified credential without consuming its nonce.
 /// # Errors
-/// Refuses an absent or mismatched LayerX agent.
+/// Refuses an absent or mismatched `LayerX` agent.
 pub fn verified_agent_binding(
     layerx_agent: [u8; 32],
     verified: &VerifiedTrustedAgent,

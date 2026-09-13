@@ -3567,7 +3567,11 @@ fn complete_pending_lifecycle(
         .complete(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.digest,
-            state: "completed",
+            state: if result_code == 0 {
+                "completed"
+            } else {
+                "refused"
+            },
             response_hex: &hex(result.to_string().as_bytes()),
             receipt_hex: &hex(receipt),
             activity_id: Some(&operation.activity_id),
