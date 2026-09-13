@@ -11,6 +11,8 @@
 #include <time.h>
 #include <unistd.h>
 
+enum { LNI_INTERFACE_MAJOR = 1, LNI_INTERFACE_MINOR = 5 };
+
 static uint64_t get(const uint8_t *p, size_t n)
 {
     uint64_t value = 0U;
@@ -100,8 +102,8 @@ static lxp_result request(lxp_guarantor_lni *c, uint16_t tag, lxp_byte_span payl
     if (bytes == NULL)
         return LXP_ERR_IO;
     put(bytes, size, 4U);
-    put(bytes + 4U, 1U, 2U);
-    put(bytes + 6U, 4U, 2U);
+    put(bytes + 4U, LNI_INTERFACE_MAJOR, 2U);
+    put(bytes + 6U, LNI_INTERFACE_MINOR, 2U);
     put(bytes + 8U, tag, 2U);
     put(bytes + 10U, tag == 1U ? c->correlation : ++c->correlation, 8U);
     put(bytes + 18U, payload.length, 4U);
@@ -133,7 +135,9 @@ static lxp_result response(lxp_guarantor_lni *c, lxp_arena *arena, uint16_t *tag
     status = transfer(c->fd, bytes, size, false, deadline);
     if (status != LXP_OK)
         return status;
-    if (get(bytes, 2U) != 1U || get(bytes + 2U, 2U) != 4U || get(bytes + 6U, 8U) != c->correlation)
+    if (get(bytes, 2U) != LNI_INTERFACE_MAJOR ||
+        get(bytes + 2U, 2U) != LNI_INTERFACE_MINOR ||
+        get(bytes + 6U, 8U) != c->correlation)
         return LXP_ERR_MALFORMED_ENVELOPE;
     *tag = (uint16_t)get(bytes + 4U, 2U);
     plen = (size_t)get(bytes + 14U, 4U);
