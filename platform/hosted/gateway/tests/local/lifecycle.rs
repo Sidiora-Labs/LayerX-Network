@@ -2299,11 +2299,19 @@ fn assert_committed_fee_reads(
     .required("signed estimate activity");
     assert_canonical_fee(read, &signed.canonical, 4);
     for (ordinal, fixture) in ASSET_FEE_FIXTURES {
-        assert_canonical_fee(
-            read,
-            &signed_fee_activity(ModuleId::Asset, ordinal, &fee_fixture(fixture)),
-            0,
-        );
+        let canonical = signed_fee_activity(ModuleId::Asset, ordinal, &fee_fixture(fixture));
+        if ordinal == 6 {
+            assert_eq!(
+                read(
+                    "lx_estimateFee",
+                    serde_json::json!([hex_encode(&canonical)])
+                )["error"]["code"],
+                -32602
+            );
+            assert_canonical_fee(read, &signed_receive_fee_activity(cluster, funding), 0);
+        } else {
+            assert_canonical_fee(read, &canonical, 0);
+        }
     }
     let program = signed_program_call(&cluster.treasury_seed, &cluster.treasury_did, 1, random32());
     assert_canonical_fee(read, &program, 0);
@@ -2430,16 +2438,40 @@ fn signed_fee_activity(module: ModuleId, ordinal: u16, payload_bytes: &[u8]) -> 
         .and_then(|value| value.payload(payload))
         .required("fee envelope fields");
     let unsigned = builder.build().required("fee envelope");
-    let canonical = layerx_wire::activity::encode_unsigned_envelope(&unsigned)
-        .required("fee unsigned encoding");
-    layerx_crypto::disclosure::bind(&canonical, &registry)
-        .unwrap_or_else(|error| panic!("fee disclosure {module:?}/{ordinal}: {error:?}"));
     let preimage = layerx_wire::sign::preimage_unsigned(&unsigned).required("fee signing preimage");
     let signature = key.sign(preimage.as_bytes()).to_bytes();
     layerx_wire::activity::encode_signed_envelope(
         &unsigned.attach_signature(Signature::new(&signature).required("fee signature")),
     )
     .required("signed fee activity")
+}
+
+fn signed_receive_fee_activity(cluster: &Cluster, funding: &funding::Funding) -> Vec<u8> {
+    let grant = funding::payer_grant(&funding::GrantRequest {
+        payer_seed: &cluster.treasury_seed,
+        payer_did: &cluster.treasury_did,
+        recipient_did: &funding.recipient_did,
+        asset: cluster.asset,
+        per_draw_maximum: 1,
+        allowance: 1,
+        recurring_window: None,
+        expiration: now_ms() + 60_000,
+        purpose_hash: random32(),
+        revocation_sequence: 0,
+    })
+    .required("fee payer grant");
+    let key = random32();
+    let receive = funding::receive(&funding.recipient_seed, &grant, 1, key, 1)
+        .required("fee Receive authorization");
+    funding::payment(
+        &funding.recipient_seed,
+        &funding.recipient_did,
+        1,
+        key,
+        &receive,
+    )
+    .required("signed fee Receive")
+    .canonical
 }
 
 fn program_lifecycle_fee_payloads() -> [(u16, Vec<u8>); 3] {

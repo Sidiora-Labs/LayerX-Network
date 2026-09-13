@@ -2071,6 +2071,14 @@ fn complete_lifecycle(
     )
 }
 
+fn terminal_state(result_code: i32) -> &'static str {
+    if result_code == 0 {
+        "completed"
+    } else {
+        "refused"
+    }
+}
+
 fn complete_activity(
     config: &Config,
     record: &KeyRecord,
@@ -2155,11 +2163,7 @@ fn complete_activity(
         .complete_verified(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.request_digest,
-            state: if verified_result_code == 0 {
-                "completed"
-            } else {
-                "refused"
-            },
+            state: terminal_state(verified_result_code),
             response_hex: &hex(&stored_result),
             receipt_hex: &hex(&receipt),
             activity_id: Some(&component.activity_id.to_ascii_lowercase()),
