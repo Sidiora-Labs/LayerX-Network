@@ -1013,6 +1013,9 @@ impl LayerxClient {
         }
         let facts: AuthorityBody =
             serde_json::from_slice(&authority.body).map_err(|_| RampError::Layerx)?;
+        if decode_hex(&facts.receipt, MAX_BODY_BYTES)? != canonical_receipt {
+            return Err(RampError::Layerx);
+        }
         facts.validate_context(
             &id,
             self.activity.network_id,
@@ -1536,6 +1539,8 @@ fn present_maintained<'de, D: serde::Deserializer<'de>>(
 #[serde(deny_unknown_fields)]
 struct AuthorityBody {
     activity_id: String,
+    receipt: String,
+    protocol_network_id: u32,
     batch_id: String,
     asset: String,
     previous_state_root: String,
@@ -1556,7 +1561,8 @@ impl AuthorityBody {
         sequencer_public_key: [u8; 32],
     ) -> Result<(), RampError> {
         if self.activity_id != activity_id
-            || self.network_id != network_id.to_string()
+            || self.network_id.is_empty()
+            || self.protocol_network_id != network_id
             || self.wire_version != protocol_version.to_string()
             || parse_hex32(&self.sequencer_public_key)? != sequencer_public_key
         {
@@ -1747,14 +1753,22 @@ mod authority_shape_tests {
         let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{error}"));
         let capture: serde_json::Value =
             serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
-        let document = capture["authority"].clone();
+        let mut document = capture["authority"].clone();
+        let header_bytes = decode_hex(
+            document["batch_evidence"]["header_hex"]
+                .as_str()
+                .unwrap_or_else(|| panic!("header")),
+            MAX_BODY_BYTES,
+        )
+        .unwrap_or_else(|error| panic!("header bytes: {error:?}"));
+        let header = layerx_wire::receipt::decode_batch_header(&header_bytes)
+            .unwrap_or_else(|error| panic!("header: {error:?}"));
+        document["protocol_network_id"] = serde_json::json!(header.network_id());
+        document["receipt"] = capture["receipt_hex"].clone();
         let mut facts: AuthorityBody = serde_json::from_value(document.clone())
             .unwrap_or_else(|error| panic!("canonical authority: {error}"));
         let activity = facts.activity_id.clone();
-        let network = facts
-            .network_id
-            .parse::<u32>()
-            .unwrap_or_else(|error| panic!("network: {error}"));
+        let network = facts.protocol_network_id;
         let protocol = facts
             .wire_version
             .parse::<u16>()
@@ -1764,14 +1778,13 @@ mod authority_shape_tests {
         assert!(facts
             .validate_context(&activity, network, protocol, key)
             .is_ok());
-        facts.network_id = network
+        facts.protocol_network_id = network
             .checked_add(1)
-            .unwrap_or_else(|| panic!("network exhausted"))
-            .to_string();
+            .unwrap_or_else(|| panic!("network exhausted"));
         assert!(facts
             .validate_context(&activity, network, protocol, key)
             .is_err());
-        facts.network_id = network.to_string();
+        facts.protocol_network_id = network;
         assert!(facts
             .validate_context(&"00".repeat(32), network, protocol, key)
             .is_err());

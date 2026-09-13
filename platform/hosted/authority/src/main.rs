@@ -754,6 +754,11 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
             Ok(evidence) => evidence,
             Err(error) => return evidence_refusal(&error),
         };
+    if layerx_wire::receipt::decode_batch_header(&evidence.header).map_or(true, |header| {
+        header.network_id() != config.protocol_network_id
+    }) {
+        return refusal(503, "receipt_network_mismatch", Some(5));
+    }
     match authorized_batch_by_activity(activity_id, &receipt, &evidence, &config.authorization) {
         Ok(facts) => {
             if config
@@ -772,6 +777,7 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
                 "resulting_state_root": hex::encode(&facts.resulting_state_root),
                 "sequencer_public_key": hex::encode(&facts.sequencer_public_key),
                 "network_id": config.network_id,
+                "protocol_network_id": config.protocol_network_id,
                 "wire_version": config.wire_version,
             });
             if matches!(
@@ -825,6 +831,7 @@ fn readiness(config: &Config) -> Response {
     let body = serde_json::json!({
         "ready": ready,
         "network_id": config.network_id,
+                "protocol_network_id": config.protocol_network_id,
         "wire_version": config.wire_version,
     });
     let mut response = json(if ready { 200 } else { 503 }, &body);

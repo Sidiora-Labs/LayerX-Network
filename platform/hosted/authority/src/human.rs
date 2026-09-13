@@ -549,7 +549,7 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
         if response.status != 200 {
             return Ok(response);
         }
-        let document: Value = serde_json::from_str(&response.body)
+        let document: Value = serde_json::from_slice(&response.body)
             .map_err(|_| unavailable("state_evidence_refused"))?;
         let receipt = document["receipt"]
             .as_str()
