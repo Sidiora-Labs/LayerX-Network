@@ -1116,9 +1116,7 @@ impl JourneyEngine {
             .protocol()
             .ok_or(JourneyError::ReceiptShape)?;
         let leg = &self.record.legs[index];
-        if receipt.activity_id() != expected_activity_id
-            || receipt.operation() != leg.expected_operation
-        {
+        if receipt.activity_id() != expected_activity_id || !receipt_matches_leg(receipt, leg) {
             return Err(JourneyError::ReceiptMismatch);
         }
         let canonical = verified.canonical_bytes().to_vec();
@@ -1241,6 +1239,26 @@ impl JourneyEngine {
             )?;
         }
         Ok(())
+    }
+}
+
+fn receipt_matches_leg(receipt: &layerx_wire::receipt::ProtocolReceipt, leg: &LegRecord) -> bool {
+    let native_credit = leg.activity_type == 0x0008_0001
+        && leg.payload.len() == 427
+        && matches!(leg.payload.get(..5), Some(b"LXDC1" | b"LXDC2"));
+    if native_credit {
+        receipt.module_id() == 8
+            && receipt.module_version() == 1
+            && receipt.operation() == 0
+            && (receipt.result_code() != 0
+                || receipt.effects().get(1).is_some_and(|event| {
+                    event.body().get(144..176) == Some(&Sha256::digest(&leg.payload)[..])
+                        && event.body().get(..96) == leg.payload.get(43..139)
+                        && event.body().get(96..112) == leg.payload.get(191..207)
+                        && event.body().get(112..144) == leg.payload.get(5..37)
+                }))
+    } else {
+        receipt.operation() == leg.expected_operation
     }
 }
 

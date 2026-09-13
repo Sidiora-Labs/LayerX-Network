@@ -3,20 +3,20 @@
 use std::cmp::Ordering;
 
 use layerx_proof::inclusion::{
-    verify_activity, verify_receipt, InclusionError, SequencerAuthorization,
+    InclusionError, SequencerAuthorization, verify_activity, verify_receipt,
 };
-use layerx_proof::merkle::{MerkleError, Proof, MAX_DEPTH};
-use layerx_proof::state::{decode_account_value, AccountProofError};
+use layerx_proof::merkle::{MAX_DEPTH, MerkleError, Proof};
+use layerx_proof::state::{AccountProofError, decode_account_value};
 use layerx_types::amount::Amount;
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::receipt::decode_batch_header;
 
 use crate::evidence::{
-    decode_nested_evidence, AccountEvidenceKind, DecodedNestedEvidence, EvidenceError, RootSelector,
+    AccountEvidenceKind, DecodedNestedEvidence, EvidenceError, RootSelector, decode_nested_evidence,
 };
 use crate::head::Head;
 use crate::lni::refusal::decode_core_refusal;
-use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
+use crate::lni::schema::{Envelope, SchemaError, Version, decode_envelope, encode_envelope};
 use crate::lni::transport::{FrameTransport, TransportError};
 
 const ACCOUNT_READ_REQUEST_TAG: u16 = 7;
@@ -219,6 +219,14 @@ pub enum ReadError {
     },
     MalformedValue,
     SelectorMismatch,
+    StateSelectorMismatch,
+    AccountBindingMismatch,
+    SequencerBindingMismatch,
+    AuthorityRangeMismatch,
+    HeadMismatch {
+        expected_batch: u64,
+        actual_batch: u64,
+    },
     Evidence(MerkleError),
     Inclusion(InclusionError),
     ProductionEvidence(EvidenceError),
@@ -387,12 +395,17 @@ fn verify_state_value(
         context.expected_network_id,
     )
     .map_err(ReadError::ProductionEvidence)?;
-    if decoded.selector != context.root_selector
-        || decoded.proof.account_id != expected_account
-        || decoded.signed_header.public_key != context.handshake_sequencer_key
-        || decoded.signed_header.response_authorization() != context.sequencer_authorization
-    {
-        return Err(ReadError::SelectorMismatch);
+    if decoded.selector != context.root_selector {
+        return Err(ReadError::StateSelectorMismatch);
+    }
+    if decoded.proof.account_id != expected_account {
+        return Err(ReadError::AccountBindingMismatch);
+    }
+    if decoded.signed_header.public_key != context.handshake_sequencer_key {
+        return Err(ReadError::SequencerBindingMismatch);
+    }
+    if decoded.signed_header.response_authorization() != context.sequencer_authorization {
+        return Err(ReadError::AuthorityRangeMismatch);
     }
     let header = decode_batch_header(&decoded.signed_header.canonical_bytes)
         .map_err(|_| ReadError::MalformedValue)?;
@@ -405,7 +418,10 @@ fn verify_state_value(
     }
     match context.root_selector {
         RootSelector::Latest if header.batch_number() != context.head.sealed_batch => {
-            return Err(ReadError::SelectorMismatch);
+            return Err(ReadError::HeadMismatch {
+                expected_batch: context.head.sealed_batch,
+                actual_batch: header.batch_number(),
+            });
         }
         RootSelector::Latest | RootSelector::Batch(_) | RootSelector::Checkpoint(_) => {}
     }
@@ -531,7 +547,12 @@ pub fn history(
     cursor: Option<HistoryCursor>,
     context: ReadContext,
 ) -> Result<HistoryPage, ReadError> {
-    if page_bound == 0 || end_sequence < start_sequence {
+    if page_bound == 0
+        || page_bound > 256
+        || start_sequence == 0
+        || end_sequence < start_sequence
+        || end_sequence == u64::MAX
+    {
         return Err(ReadError::PageBound);
     }
     let expected_start = if let Some(cursor) = cursor {
@@ -539,6 +560,7 @@ pub fn history(
             || cursor.head_sequence != context.head.chain_sequence
             || cursor.checkpoint != context.head.finalised_checkpoint
             || cursor.next_sequence < start_sequence
+            || cursor.next_sequence > end_sequence
         {
             return Err(ReadError::UnexpectedResponse);
         }
@@ -575,18 +597,7 @@ pub fn history(
                     return Err(ReadError::PageBound);
                 }
                 let (kind, sequence, evidence_bytes) = history_metadata(response.proof_material)?;
-                if sequence < expected {
-                    return Err(ReadError::HistoryRepetition {
-                        previous: expected.saturating_sub(1),
-                        actual: sequence,
-                    });
-                }
-                if sequence > expected {
-                    return Err(ReadError::HistoryGap {
-                        expected,
-                        actual: sequence,
-                    });
-                }
+                validate_history_sequence(expected, sequence, end_sequence)?;
                 let achieved = verify_history_item(
                     kind,
                     sequence,
@@ -603,7 +614,11 @@ pub fn history(
                 expected = expected.checked_add(1).ok_or(ReadError::PageBound)?;
             }
             HISTORY_END_TAG => {
+                if !response.proof_material.is_empty() {
+                    return Err(ReadError::MalformedValue);
+                }
                 let next = decode_history_end(response.canonical_payload)?;
+                validate_history_progress(expected_start, next, end_sequence)?;
                 if next != expected {
                     return Err(if next < expected {
                         ReadError::HistoryRepetition {
@@ -628,6 +643,38 @@ pub fn history(
             _ => return Err(ReadError::UnexpectedResponse),
         }
     }
+}
+
+fn validate_history_sequence(expected: u64, sequence: u64, end: u64) -> Result<(), ReadError> {
+    if sequence > end {
+        return Err(ReadError::SelectorMismatch);
+    }
+    if sequence < expected {
+        return Err(ReadError::HistoryRepetition {
+            previous: expected.saturating_sub(1),
+            actual: sequence,
+        });
+    }
+    if sequence > expected {
+        return Err(ReadError::HistoryGap {
+            expected,
+            actual: sequence,
+        });
+    }
+    Ok(())
+}
+
+fn validate_history_progress(start: u64, next: u64, end: u64) -> Result<(), ReadError> {
+    if next <= start {
+        return Err(ReadError::HistoryRepetition {
+            previous: start,
+            actual: next,
+        });
+    }
+    if next > end.checked_add(1).ok_or(ReadError::PageBound)? {
+        return Err(ReadError::SelectorMismatch);
+    }
+    Ok(())
 }
 
 fn history_metadata(bytes: &[u8]) -> Result<(HistoryKind, u64, &[u8]), ReadError> {
@@ -711,7 +758,7 @@ fn verify_history_item(
             return Err(ReadError::MissingEvidence {
                 requested: context.requested.level(),
                 achieved: VerificationLevel::UNVERIFIED,
-            })
+            });
         }
     };
     let achieved = evidence.level();
@@ -897,4 +944,40 @@ pub fn did_accounts(
     }
     reader.finish()?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod history_bounds_tests {
+    use super::{ReadError, validate_history_progress, validate_history_sequence};
+    #[test]
+    fn authenticated_history_must_stay_within_selector_and_make_progress() {
+        assert_eq!(validate_history_sequence(10, 10, 12), Ok(()));
+        assert_eq!(validate_history_sequence(12, 12, 12), Ok(()));
+        assert_eq!(
+            validate_history_sequence(13, 13, 12),
+            Err(ReadError::SelectorMismatch)
+        );
+        assert!(matches!(
+            validate_history_sequence(11, 10, 12),
+            Err(ReadError::HistoryRepetition { .. })
+        ));
+        assert!(matches!(
+            validate_history_sequence(10, 11, 12),
+            Err(ReadError::HistoryGap { .. })
+        ));
+        assert_eq!(validate_history_progress(10, 11, 12), Ok(()));
+        assert_eq!(validate_history_progress(10, 13, 12), Ok(()));
+        assert!(matches!(
+            validate_history_progress(10, 10, 12),
+            Err(ReadError::HistoryRepetition { .. })
+        ));
+        assert_eq!(
+            validate_history_progress(10, 14, 12),
+            Err(ReadError::SelectorMismatch)
+        );
+        assert_eq!(
+            validate_history_progress(10, u64::MAX, u64::MAX),
+            Err(ReadError::PageBound)
+        );
+    }
 }

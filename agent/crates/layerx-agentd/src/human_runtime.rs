@@ -2285,7 +2285,7 @@ fn agent_evidence_digest(
 
 impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
     fn terminal_receipt_evidence(
-        &self,
+        &mut self,
         receipt_evidence: &layerx_client::evidence::VerifiedProofBundle,
         authority: &AuthorizedBatch,
     ) -> Result<crate::protocol_evidence::VerifiedReceiptEvidence, HumanOperationError> {
@@ -2304,6 +2304,11 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             signed_header.canonical_bytes.clone(),
             signed_header.signature,
         );
+        let header = layerx_wire::receipt::decode_batch_header(&signed_header.canonical_bytes)
+            .map_err(|_| HumanOperationError::Refused)?;
+        if header.protocol_version() == 3 && header.first_sequence() < header.last_sequence() {
+            return self.maintained_terminal_receipt(&raw, authority, &header);
+        }
         let node = self.node.handshake().node();
         let terminal = crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized(
             &raw,
@@ -2313,6 +2318,81 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         )
         .map_err(|_| HumanOperationError::Refused)?;
         Ok(terminal)
+    }
+
+    fn maintained_terminal_receipt(
+        &mut self,
+        raw: &crate::protocol_evidence::RawReceiptEvidence,
+        authority: &AuthorizedBatch,
+        header: &layerx_wire::receipt::BatchHeader,
+    ) -> Result<crate::protocol_evidence::VerifiedReceiptEvidence, HumanOperationError> {
+        use layerx_client::availability::{
+            AvailabilitySelector, FetchContext, FetchOutcome, RetrievalLimits,
+        };
+        use layerx_proof::availability::RootCommitments;
+        let node = self.node.handshake().node().clone();
+        let context = FetchContext {
+            interface_version: node.interface_version,
+            correlation_id: header
+                .batch_number()
+                .checked_add(10_000)
+                .ok_or(HumanOperationError::Refused)?,
+            expected_batch_number: header.batch_number(),
+            data_availability_root: header.data_availability_root(),
+            record_roots: RootCommitments {
+                activity: header.activity_merkle_root(),
+                receipt: header.receipt_merkle_root(),
+                event: header.event_merkle_root(),
+                oracle: header.oracle_root(),
+            },
+            limits: RetrievalLimits {
+                maximum_bytes: 96 * 1024,
+                maximum_chunks: 256,
+                deadline: std::time::Duration::from_secs(10),
+            },
+        };
+        let FetchOutcome::Complete(available) = self
+            .node
+            .fetch_availability(
+                AvailabilitySelector::Batch(header.batch_number()),
+                context,
+                |_| {},
+            )
+            .map_err(|_| HumanOperationError::Unavailable)?
+        else {
+            return Err(HumanOperationError::Unavailable);
+        };
+        let receipts = &available.records().receipts;
+        let maintenance = receipts.last().ok_or(HumanOperationError::Refused)?;
+        let leaves: Vec<_> = receipts.iter().map(Vec::as_slice).collect();
+        let (proof, root) = layerx_proof::merkle::build_proof(&leaves, receipts.len() - 1)
+            .map_err(|_| HumanOperationError::Refused)?;
+        if root != header.receipt_merkle_root() {
+            return Err(HumanOperationError::Refused);
+        }
+        let authorization = layerx_proof::inclusion::SequencerAuthorization::new(
+            header.sequencer_id(),
+            authority.sequencer_public_key(),
+            header.batch_number(),
+            header.batch_number(),
+        );
+        let header_signature = raw.header_signature();
+        let evidence = layerx_proof::receipt::MaintainedOutcomeEvidence {
+            header: raw.canonical_header(),
+            header_signature: &header_signature,
+            activity_proof: raw.proof(),
+            maintenance,
+            maintenance_proof: &proof,
+            authorization: &authorization,
+        };
+        crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized_maintained(
+            raw,
+            authority,
+            &evidence,
+            node.protocol_version,
+            node.network_id,
+        )
+        .map_err(|_| HumanOperationError::Refused)
     }
 
     fn augment_receipt_evidence(
@@ -3925,7 +4005,7 @@ mod terminal_recovery_tests {
     }
 
     #[test]
-    fn restarted_terminal_uses_the_authenticated_signed_receipt_reference() {
+    fn terminal_recovery_checks_the_authenticated_signed_receipt_reference() {
         let value: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../platform/hosted/authority/tests/fixtures/real-program-deploy-receipt.json"
         ))

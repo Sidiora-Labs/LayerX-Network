@@ -29,6 +29,7 @@ use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
 
 pub mod evidence_node;
+pub mod receive;
 
 use evidence_node::{EvidenceNode, FRAME_BYTES};
 
