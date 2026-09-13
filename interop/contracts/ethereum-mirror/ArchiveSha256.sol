@@ -61,7 +61,7 @@ library ArchiveSha256 {
         return bytes32(result);
     }
 
-    function rotate(uint32 value, uint256 bits) private pure returns (uint32) {
+    function rotate(uint32 value, uint32 bits) private pure returns (uint32) {
         return (value >> bits) | (value << (32 - bits));
     }
 

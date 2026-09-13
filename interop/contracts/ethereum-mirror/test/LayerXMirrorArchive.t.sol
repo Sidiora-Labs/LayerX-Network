@@ -101,7 +101,7 @@ contract LayerXMirrorArchiveTest {
         require(digest == sha256(payload) && finalized, "maximum chunk digest mismatch");
     }
 
-    function testFailedAppendDoesNotAdvanceDigest() public {
+    function testRefusedAppendDoesNotAdvanceDigest() public {
         LayerXMirrorArchive archive = new LayerXMirrorArchive(address(this));
         bytes memory first = payloadOfLength(63);
         bytes memory second = payloadOfLength(65);
