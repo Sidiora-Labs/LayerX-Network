@@ -100,7 +100,7 @@ struct Gateway {
     _process: Daemon,
     _event_processes: Vec<Daemon>,
     _registry_process: Option<Daemon>,
-    _registry_boundary: Option<Daemon>,
+    _component_process: Daemon,
     port: u16,
     signer_file: String,
 }
@@ -434,8 +434,17 @@ fn start_gateway_runtime(
     ));
     let events = events::Runtime::prepare(cluster, boundary);
     events.configure(&mut gateway_env, certificates);
+    let (component_port, registry_token, component_process) =
+        registry_runtime::configure_component(cluster, certificates, &mut gateway_env);
     let registry_config = registry.then(|| {
-        registry_runtime::configure(cluster, certificates, identity, authority, &mut gateway_env)
+        registry_runtime::configure(
+            cluster,
+            certificates,
+            identity,
+            authority,
+            &mut gateway_env,
+            (component_port, &registry_token),
+        )
     });
     let gateway_process = local_service(cluster, "layerx-gateway", gateway_port, &gateway_env);
     let mut gateway = Gateway {
@@ -443,14 +452,13 @@ fn start_gateway_runtime(
         _process: gateway_process,
         _event_processes: Vec::new(),
         _registry_process: None,
-        _registry_boundary: None,
+        _component_process: component_process,
         port: gateway_port,
         signer_file,
     };
     gateway._event_processes =
         events.start(cluster, certificates, identity, authority, redis, &gateway);
-    if let Some((path, port, node)) = registry_config {
-        gateway._registry_boundary = Some(node);
+    if let Some((path, port)) = registry_config {
         gateway._registry_process = Some(registry_runtime::start(cluster, &path, port));
     }
     gateway
@@ -473,14 +481,6 @@ fn gateway_upstream_environment(
         (
             "LAYERX_GATEWAY_PUBLIC_CORE_URL",
             format!("https://localhost:{}", boundary.core.port),
-        ),
-        (
-            "LAYERX_GATEWAY_COMPONENT_URL",
-            format!("https://localhost:{}", boundary.core.port),
-        ),
-        (
-            "LAYERX_GATEWAY_COMPONENT_TOKEN_FILE",
-            local_secret(&cluster.root, "component-token", &cluster.program_token),
         ),
         (
             "LAYERX_GATEWAY_AUTHORITY_URL",

@@ -6,12 +6,11 @@ pub fn configure(
     identity: &LocalIdentity,
     authority: &LocalAuthority,
     environment: &mut BTreeMap<&'static str, String>,
-) -> (PathBuf, u16, Daemon) {
+    node: (u16, &str),
+) -> (PathBuf, u16) {
     let port = free_port();
     let request_token = local_secret(&cluster.root, "registry-request-token", &token());
-    let node_port = free_port();
-    let node_token = local_secret(&cluster.root, "registry-boundary-token", &token());
-    let node = start_agent_boundary(cluster, certificates, node_port, &node_token);
+    let (node_port, node_token) = node;
 
     environment.insert(
         "LAYERX_GATEWAY_PROGRAM_REGISTRY_URL",
@@ -58,15 +57,22 @@ pub fn configure(
             .as_slice(),
         0o600,
     );
-    (path, port, node)
+    (path, port)
 }
 
-fn start_agent_boundary(
+pub fn configure_component(
     cluster: &Cluster,
     certificates: &Certificates,
-    port: u16,
-    registry_token: &str,
-) -> Daemon {
+    gateway_environment: &mut BTreeMap<&'static str, String>,
+) -> (u16, String, Daemon) {
+    let port = free_port();
+    let gateway_token = local_secret(&cluster.root, "boundary-gateway-token", &token());
+    let registry_token = local_secret(&cluster.root, "registry-boundary-token", &token());
+    gateway_environment.insert(
+        "LAYERX_GATEWAY_COMPONENT_URL",
+        format!("https://localhost:{port}"),
+    );
+    gateway_environment.insert("LAYERX_GATEWAY_COMPONENT_TOKEN_FILE", gateway_token.clone());
     let environment = BTreeMap::from([
         ("LAYERX_AGENT_BOUNDARY_LISTEN", format!("127.0.0.1:{port}")),
         (
@@ -81,13 +87,10 @@ fn start_agent_boundary(
             "LAYERX_AGENT_BOUNDARY_CLIENT_CA_DER",
             text(&certificates.path("ca.der")),
         ),
-        (
-            "LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE",
-            local_secret(&cluster.root, "registry-boundary-gateway-token", &token()),
-        ),
+        ("LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE", gateway_token),
         (
             "LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE",
-            registry_token.to_owned(),
+            registry_token.clone(),
         ),
         (
             "LAYERX_AGENT_BOUNDARY_WEBHOOK_TOKEN_FILE",
@@ -119,7 +122,8 @@ fn start_agent_boundary(
         ),
         ("LAYERX_AGENT_BOUNDARY_NETWORK_ID", NETWORK_ID.to_string()),
     ]);
-    local_service(cluster, "layerx-agent-boundary", port, &environment)
+    let process = local_service(cluster, "layerx-agent-boundary", port, &environment);
+    (port, registry_token, process)
 }
 
 pub fn start(cluster: &Cluster, config: &Path, port: u16) -> Daemon {
