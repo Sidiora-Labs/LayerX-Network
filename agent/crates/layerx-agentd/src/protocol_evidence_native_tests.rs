@@ -215,7 +215,9 @@ fn prove_terminal_recovery(activity: &[u8], credit: &[u8], terminal: &VerifiedRe
         .unwrap_or_else(|| panic!("restored terminal status"));
     assert_eq!(status.state, SubmissionState::Executed);
     assert_eq!(
-        status.evidence.map(|evidence| evidence.receipt_ref()),
+        status
+            .evidence
+            .map(crate::outbox::ReceiptEvidence::receipt_ref),
         Some(terminal.receipt_ref())
     );
     assert_eq!(checked(restored.exact_signed_bytes(id)), activity);

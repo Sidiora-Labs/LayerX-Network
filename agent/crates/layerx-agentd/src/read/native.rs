@@ -1,11 +1,11 @@
 use std::time::{Duration, Instant};
 
-use layerx_client::Client;
 use layerx_client::availability::{
     AvailabilitySelector, FetchContext, FetchOutcome, RetrievalLimits,
 };
 use layerx_client::evidence::{CheckpointSelector, ProofBundleSelector, VerifiedProofBundle};
 use layerx_client::read::{HistoryKind, HistoryPage};
+use layerx_client::Client;
 use layerx_programs::hex;
 use layerx_proof::availability::RootCommitments;
 use layerx_proof::inclusion::SequencerAuthorization;
@@ -14,11 +14,11 @@ use layerx_types::account::AccountId;
 use layerx_types::ids::Did;
 use layerx_types::payload::ModuleRegistry;
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::activity::{Activity, decode_signed};
+use layerx_wire::activity::{decode_signed, Activity};
 use layerx_wire::hash;
-use layerx_wire::receipt::ProtocolReceipt;
 use layerx_wire::receipt::decode_batch_header;
-use serde_json::{Value, json};
+use layerx_wire::receipt::ProtocolReceipt;
+use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
@@ -42,12 +42,18 @@ pub struct NativeReadRoute {
     cursor_key: Zeroizing<String>,
     correlation: u64,
     deadline: Instant,
+    clock: fn() -> Instant,
 }
 
 impl NativeReadRoute {
     /// # Errors
     /// Rejects an empty actor or a cursor authentication key below the bearer bound.
-    pub fn new(client: Client, actor: Did, cursor_key: String) -> Result<Self, NativeReadError> {
+    pub fn new(
+        client: Client,
+        actor: Did,
+        cursor_key: String,
+        clock: fn() -> Instant,
+    ) -> Result<Self, NativeReadError> {
         if actor.as_bytes().is_empty() || cursor_key.len() < 32 {
             return Err(NativeReadError::InvalidRequest);
         }
@@ -56,12 +62,13 @@ impl NativeReadRoute {
             actor,
             cursor_key: Zeroizing::new(cursor_key),
             correlation: 10_000,
-            deadline: Instant::now(),
+            deadline: clock(),
+            clock,
         })
     }
 
     fn next_id(&mut self) -> Result<u64, NativeReadError> {
-        if Instant::now() >= self.deadline {
+        if (self.clock)() >= self.deadline {
             return Err(NativeReadError::Unavailable);
         }
         self.correlation = self
@@ -80,7 +87,7 @@ impl NativeReadRoute {
         let (kind, selector) = path
             .split_once('/')
             .ok_or(NativeReadError::InvalidRequest)?;
-        self.deadline = Instant::now()
+        self.deadline = (self.clock)()
             .checked_add(Duration::from_secs(10))
             .ok_or(NativeReadError::Unavailable)?;
         self.client

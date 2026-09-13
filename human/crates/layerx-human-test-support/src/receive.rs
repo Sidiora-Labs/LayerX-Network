@@ -19,6 +19,7 @@ fn checked<T, E: std::fmt::Debug>(value: Result<T, E>) -> T {
     value.unwrap_or_else(|error| panic!("signed receive fixture: {error:?}"))
 }
 
+#[must_use]
 pub fn signed_receive(request: &SignedReceiveRequest<'_>) -> Vec<u8> {
     let payer = SigningKey::from_bytes(&[0x71; 32]);
     let receiver = SigningKey::from_bytes(&[0x51; 32]);
@@ -31,24 +32,24 @@ pub fn signed_receive(request: &SignedReceiveRequest<'_>) -> Vec<u8> {
         request.protocol_version,
     ));
     let purpose_hash = [0x64; 32];
-    let mut content = Encoder::new(250);
+    let mut grant_fields = Encoder::new(250);
     for field in [from, to, request.asset] {
-        checked(content.fixed(&field));
+        checked(grant_fields.fixed(&field));
     }
-    checked(content.u128(request.amount));
-    checked(content.u128(request.amount));
-    checked(content.u8(0));
-    checked(content.u64(0));
-    checked(content.u64(10_000));
-    checked(content.fixed(&purpose_hash));
-    checked(content.u8(0));
-    checked(content.fixed(&[0; 32]));
-    checked(content.u64(0));
-    checked(content.fixed(&payer.verifying_key().to_bytes()));
+    checked(grant_fields.u128(request.amount));
+    checked(grant_fields.u128(request.amount));
+    checked(grant_fields.u8(0));
+    checked(grant_fields.u64(0));
+    checked(grant_fields.u64(10_000));
+    checked(grant_fields.fixed(&purpose_hash));
+    checked(grant_fields.u8(0));
+    checked(grant_fields.fixed(&[0; 32]));
+    checked(grant_fields.u64(0));
+    checked(grant_fields.fixed(&payer.verifying_key().to_bytes()));
     let mut hasher = Sha256::new();
     hasher.update(Domain::AuthorityHash.tag());
     hasher.update(b"LXP:GRANT:v1");
-    hasher.update(content.finish());
+    hasher.update(grant_fields.finish());
     let id: [u8; 32] = hasher.finalize().into();
     let grant = Grant {
         id,
