@@ -218,7 +218,8 @@ static lxp_result parse_request(
             if (status == LXP_OK && schedule_length > sizeof(value->value)) status = LXP_ERR_LENGTH_LIMIT;
             if (status == LXP_OK) status = reader_copy(&reader, value->value, schedule_length);
             if (status == LXP_OK) status = lxp_fee_params_decode(value->value, schedule_length, &schedule);
-            if (status == LXP_OK && schedule.version != 2U) status = LXP_ERR_VERSION_UNSUPPORTED;
+            if (status == LXP_OK && schedule.version != 2U && schedule.version != 3U)
+                status = LXP_ERR_VERSION_UNSUPPORTED;
             if (status == LXP_OK) {
                 value->module_id = LXP_MODULE_GOVERNANCE;
                 value->value_length = schedule_length;

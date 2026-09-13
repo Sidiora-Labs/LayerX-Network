@@ -1150,8 +1150,6 @@ static lxp_result replay_execute_activity(
     uint8_t activity_id[32];
     bool decoded = false;
     lxp_result status;
-    uint8_t fee_wire[LXP_FEE_PARAMS_V2_BYTES];
-    size_t fee_wire_length;
     if (process == NULL || canonical_activity == NULL ||
         canonical_receipt == NULL || activity == NULL || receipt == NULL ||
         expected == NULL ||
@@ -1172,7 +1170,8 @@ static lxp_result replay_execute_activity(
         process->programs.fee_schedule.version !=
             expected->parameter_version)
         return LXP_ERR_VERSION_UNSUPPORTED;
-    status = lxp_fee_params_encode(&process->fees, fee_wire, sizeof(fee_wire), &fee_wire_length);
+    status = lxp_fee_replay_schedule_verify(&process->kernel,
+        expected->parameter_version, &process->fees);
     if (status != LXP_OK) return status;
     status = lxp_activity_decode(canonical_activity, activity_length, activity);
     if (status == LXP_OK &&

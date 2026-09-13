@@ -4,28 +4,49 @@
 #include <stddef.h>
 #include <string.h>
 
-static const uint16_t asset_ordinals[LXP_ASSET_FEE_PRICE_COUNT] =
-    {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 10U, 11U};
+static const uint16_t asset_ordinals[LXP_ASSET_FEE_PRICE_MAX] =
+    {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 10U, 11U, 9U};
 
-const char *lxp_asset_fee_name(size_t index)
+static size_t asset_price_count(uint16_t version)
 {
-    static const char *const names[LXP_ASSET_FEE_PRICE_COUNT] = {
+    if (version == 2U) return LXP_ASSET_FEE_PRICE_COUNT;
+    if (version == 3U) return LXP_ASSET_FEE_PRICE_COUNT_V3;
+    return 0U;
+}
+
+const char *lxp_asset_fee_name_for_version(uint16_t version, size_t index)
+{
+    static const char *const names[LXP_ASSET_FEE_PRICE_MAX] = {
         "fee.asset.register", "fee.asset.pause", "fee.asset.unpause",
         "fee.asset.account_open", "fee.asset.send", "fee.asset.receive",
         "fee.asset.grant_issue", "fee.asset.grant_revoke", "fee.asset.mint",
-        "fee.asset.burn"
+        "fee.asset.burn", "fee.asset.withdraw"
     };
-    return index < LXP_ASSET_FEE_PRICE_COUNT ? names[index] : NULL;
+    return index < asset_price_count(version) ? names[index] : NULL;
+}
+
+const char *lxp_asset_fee_name(size_t index)
+{
+    return lxp_asset_fee_name_for_version(2U, index);
 }
 
 static bool fee_version_valid(const lxp_fee_params *parameters)
 {
-    if (parameters->version == 2U)
-        return parameters->asset_price_count == LXP_ASSET_FEE_PRICE_COUNT;
-    if (parameters->version != 1U || parameters->asset_price_count != 0U) return false;
-    for (size_t i = 0U; i < LXP_ASSET_FEE_PRICE_COUNT; ++i)
+    size_t count = asset_price_count(parameters->version);
+    if ((parameters->version != 1U && count == 0U) ||
+        parameters->asset_price_count != count) return false;
+    if (parameters->version == 3U &&
+        parameters->asset_prices[LXP_ASSET_FEE_PRICE_COUNT].hi != 0U) return false;
+    for (size_t i = count; i < LXP_ASSET_FEE_PRICE_MAX; ++i)
         if (!lxp_u128_is_zero(parameters->asset_prices[i])) return false;
     return true;
+}
+
+static size_t fee_parameter_bytes(uint16_t version)
+{
+    if (version == 3U) return LXP_FEE_PARAMS_V3_BYTES;
+    if (version == 2U) return LXP_FEE_PARAMS_V2_BYTES;
+    return LXP_FEE_PARAMS_V1_BYTES;
 }
 
 lxp_result lxp_fee_params_encode(const lxp_fee_params *parameters,
@@ -38,17 +59,20 @@ lxp_result lxp_fee_params_encode(const lxp_fee_params *parameters,
         parameters == NULL ? (lxp_u128){0U, 0U} : parameters->per_storage_unit};
     if (parameters == NULL || bytes == NULL || length == NULL) return LXP_ERR_NON_CANONICAL;
     if (!fee_version_valid(parameters)) return LXP_ERR_VERSION_UNSUPPORTED;
-    size_t required = parameters->version == 2U ?
-        (size_t)LXP_FEE_PARAMS_V2_BYTES : (size_t)LXP_FEE_PARAMS_V1_BYTES;
+    size_t required = fee_parameter_bytes(parameters->version);
     if (capacity < required) return LXP_ERR_LENGTH_LIMIT;
     bytes[0] = 0U; bytes[1] = (uint8_t)parameters->version;
     for (size_t i = 0U; i < 5U; ++i) (void)lxp_u128_to_be(components[i], bytes + 2U + 16U * i);
     for (size_t i = 0U; i < 4U; ++i)
         bytes[82U + i] = (uint8_t)(parameters->multiplier_basis_points >> (24U - 8U * i));
-    if (parameters->version == 2U) {
-        bytes[86] = LXP_ASSET_FEE_PRICE_COUNT;
+    if (parameters->version == 2U || parameters->version == 3U) {
+        bytes[86] = parameters->asset_price_count;
         for (size_t i = 0U; i < LXP_ASSET_FEE_PRICE_COUNT; ++i)
             (void)lxp_u128_to_be(parameters->asset_prices[i], bytes + 87U + 16U * i);
+        if (parameters->version == 3U)
+            for (size_t i = 0U; i < 8U; ++i)
+                bytes[LXP_FEE_PARAMS_V2_BYTES + i] = (uint8_t)(
+                    parameters->asset_prices[LXP_ASSET_FEE_PRICE_COUNT].lo >> (56U - 8U * i));
     }
     *length = required;
     return LXP_OK;
@@ -60,9 +84,9 @@ lxp_result lxp_fee_params_decode(const uint8_t *bytes, size_t length,
     lxp_fee_params decoded = {0};
     if (bytes == NULL || parameters == NULL || length < 2U || bytes[0] != 0U)
         return LXP_ERR_NON_CANONICAL;
-    if (bytes[1] != 1U && bytes[1] != 2U) return LXP_ERR_VERSION_UNSUPPORTED;
-    if (length != (size_t)(bytes[1] == 2U ?
-            LXP_FEE_PARAMS_V2_BYTES : LXP_FEE_PARAMS_V1_BYTES))
+    if (bytes[1] != 1U && bytes[1] != 2U && bytes[1] != 3U)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    if (length != fee_parameter_bytes(bytes[1]))
         return LXP_ERR_NON_CANONICAL;
     decoded.version = bytes[1];
     (void)lxp_u128_from_be(bytes + 2U, &decoded.base_fee);
@@ -72,10 +96,15 @@ lxp_result lxp_fee_params_decode(const uint8_t *bytes, size_t length,
     (void)lxp_u128_from_be(bytes + 66U, &decoded.per_storage_unit);
     for (size_t i = 0U; i < 4U; ++i)
         decoded.multiplier_basis_points = (decoded.multiplier_basis_points << 8U) | bytes[82U + i];
-    if (decoded.version == 2U) {
+    if (decoded.version == 2U || decoded.version == 3U) {
         decoded.asset_price_count = bytes[86];
         for (size_t i = 0U; i < LXP_ASSET_FEE_PRICE_COUNT; ++i)
             (void)lxp_u128_from_be(bytes + 87U + 16U * i, &decoded.asset_prices[i]);
+        if (decoded.version == 3U)
+            for (size_t i = 0U; i < 8U; ++i)
+                decoded.asset_prices[LXP_ASSET_FEE_PRICE_COUNT].lo =
+                    (decoded.asset_prices[LXP_ASSET_FEE_PRICE_COUNT].lo << 8U) |
+                    bytes[LXP_FEE_PARAMS_V2_BYTES + i];
     }
     if (!fee_version_valid(&decoded)) return LXP_ERR_VERSION_UNSUPPORTED;
     *parameters = decoded;
@@ -121,11 +150,12 @@ lxp_result lxp_fee_compute(const lxp_fee_params *parameters,
         return LXP_OK;
     }
     total = parameters->base_fee;
-    if (parameters->version == 2U && lxp_activity_module_id(activity_type) == LXP_MODULE_ASSET) {
+    if ((parameters->version == 2U || parameters->version == 3U) &&
+        lxp_activity_module_id(activity_type) == LXP_MODULE_ASSET) {
         size_t index;
-        for (index = 0U; index < LXP_ASSET_FEE_PRICE_COUNT; ++index)
+        for (index = 0U; index < parameters->asset_price_count; ++index)
             if (asset_ordinals[index] == lxp_activity_type_ordinal(activity_type)) break;
-        if (index == LXP_ASSET_FEE_PRICE_COUNT) return LXP_ERR_UNKNOWN_ACTIVITY;
+        if (index == parameters->asset_price_count) return LXP_ERR_UNKNOWN_ACTIVITY;
         status = lxp_u128_add(total, parameters->asset_prices[index], &total);
     } else {
         status = add_component(&total, parameters->per_activity_type_unit, activity_type);
