@@ -198,6 +198,9 @@ fn independent_implementation_can_enumerate_vectors() {
 fn independent_verifier_accepts_real_native_send_and_refuses_substitutions() -> Result<(), String> {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine as _;
+    use std::io::Write as _;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../platform/sdk/conformance/fixtures/receipt-positive-v2.json"
     ))
@@ -238,6 +241,40 @@ fn independent_verifier_accepts_real_native_send_and_refuses_substitutions() -> 
     let bytes = portable
         .to_json()
         .map_err(|error| format!("portable encoding: {error}"))?;
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut python =
+        Command::new(std::env::var_os("LAYERX_TEST_PYTHON").unwrap_or_else(|| "python3".into()))
+            .arg(directory.join("tests/python_portable_verifier.py"))
+            .arg(
+                directory
+                    .join("../../../platform/sdk/conformance/fixtures/receipt-positive-v2.json"),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("independent Python verifier: {error}"))?;
+    python
+        .stdin
+        .take()
+        .ok_or("independent verifier stdin")?
+        .write_all(&bytes)
+        .map_err(|error| format!("portable verifier input: {error}"))?;
+    let output = python
+        .wait_with_output()
+        .map_err(|error| format!("independent verifier completion: {error}"))?;
+    assert!(
+        output.status.success(),
+        "Python receipt verification failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let independent: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("independent verification report: {error}"))?;
+    assert_eq!(
+        independent["receipt_digest"],
+        fixture["expected"]["receipt_digest_hex"]
+    );
+    assert_eq!(independent["mutations_refused"], 14);
     let verifier = IndependentVerifier::new("independent-native-receipt");
     let outcome = verifier
         .verify_vector_against_trusted_batch(
