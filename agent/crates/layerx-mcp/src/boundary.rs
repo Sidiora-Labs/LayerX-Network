@@ -4,7 +4,7 @@ use std::io::{Read as _, Write as _};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use zeroize::Zeroizing;
 
 use crate::server::ToolDefinition;

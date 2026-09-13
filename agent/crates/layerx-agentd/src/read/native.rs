@@ -1,11 +1,11 @@
 use std::time::{Duration, Instant};
 
-use layerx_client::Client;
 use layerx_client::availability::{
     AvailabilitySelector, FetchContext, FetchOutcome, RetrievalLimits,
 };
 use layerx_client::evidence::{CheckpointSelector, ProofBundleSelector, VerifiedProofBundle};
 use layerx_client::read::{HistoryKind, HistoryPage};
+use layerx_client::Client;
 use layerx_programs::hex;
 use layerx_proof::availability::RootCommitments;
 use layerx_proof::inclusion::SequencerAuthorization;
@@ -14,11 +14,11 @@ use layerx_types::account::AccountId;
 use layerx_types::ids::Did;
 use layerx_types::payload::ModuleRegistry;
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::activity::{Activity, decode_signed};
+use layerx_wire::activity::{decode_signed, Activity};
 use layerx_wire::hash;
-use layerx_wire::receipt::ProtocolReceipt;
 use layerx_wire::receipt::decode_batch_header;
-use serde_json::{Value, json};
+use layerx_wire::receipt::ProtocolReceipt;
+use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
