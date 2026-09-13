@@ -3,7 +3,7 @@ import { cookies, headers } from "next/headers";
 import { copyEntry } from "../../copy/catalog";
 import { verifiedWebSession } from "../auth/server-session";
 import { Onboarding } from "../journeys/onboarding/onboarding";
-import { PlaneRouteAction } from "../kit";
+import { PlaneRouteAction } from "../kit/plane-route-action";
 import { selectServerShell } from "../shell/server";
 
 export default async function RootPage({

@@ -6,11 +6,7 @@ import {
   FreshnessDisplay,
   verificationLabel,
 } from "../../../../explorer/components";
-import {
-  ExplorerLink,
-  ExplorerTable,
-  ExplorerVerificationBadge,
-} from "../../../../kit";
+import { ExplorerLink, ExplorerTable, ExplorerVerificationBadge } from "../../../../kit/explorer";
 
 export default async function AccountPage({
   params,

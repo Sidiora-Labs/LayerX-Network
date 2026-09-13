@@ -5,11 +5,7 @@ import {
   ExplorerUnavailable,
   verificationLabel,
 } from "../../../../explorer/components";
-import {
-  ExplorerFreshness,
-  ExplorerTable,
-  ExplorerVerificationBadge,
-} from "../../../../kit";
+import { ExplorerFreshness, ExplorerTable, ExplorerVerificationBadge } from "../../../../kit/explorer";
 
 export default async function ProgramPage({
   params,

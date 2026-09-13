@@ -6,7 +6,7 @@ import {
   FreshnessDisplay,
   verificationLabel,
 } from "../../../explorer/components";
-import { ExplorerLink, ExplorerTable, ExplorerVerificationBadge } from "../../../kit";
+import { ExplorerLink, ExplorerTable, ExplorerVerificationBadge } from "../../../kit/explorer";
 
 export default async function CheckpointsPage({
   searchParams,

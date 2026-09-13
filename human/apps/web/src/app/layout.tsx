@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 import { copyEntry } from "../../copy/catalog";
 import { WebVitalsRum } from "../perf/web-vitals-rum";
-import { ApplicationStateBoundary } from "../states";
+import { ApplicationStateBoundary } from "../states/application";
 
 import "./globals.css";
 

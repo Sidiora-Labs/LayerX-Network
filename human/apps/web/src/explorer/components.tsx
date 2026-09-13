@@ -2,11 +2,8 @@ import type { ReactNode } from "react";
 
 import { copyEntry } from "../../copy/catalog";
 import { formatCopy } from "../../copy/format";
-import {
-  ExplorerFreshness as ExplorerFreshnessView,
-  ExplorerNavigation,
-  ScreenCard,
-} from "../kit";
+import { ExplorerFreshness as ExplorerFreshnessView, ExplorerNavigation } from "../kit/explorer";
+import { ScreenCard } from "../kit/surface";
 import type { ExplorerFreshness, ExplorerVerificationLevel, MirrorVerificationProvenance } from "./model";
 
 const EXPLORER_NAVIGATION = [

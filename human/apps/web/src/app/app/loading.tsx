@@ -1,5 +1,5 @@
 import { copyEntry } from "../../../copy/catalog";
-import { PerformanceLoadingCard } from "../../kit";
+import { PerformanceLoadingCard } from "../../kit/performance";
 
 export default function AppLoading() {
   return (
