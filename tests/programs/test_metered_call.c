@@ -485,6 +485,65 @@ static int metered_legacy_replay(void)
     return 0;
 }
 
+static int metered_fee_capacity(void)
+{
+    metered_fixture *f = calloc(1U, sizeof(*f));
+    lxp_kernel_prepared_batch *prepared = NULL;
+    lxp_authority_grant loaded;
+    uint8_t root[32];
+    lxp_u128 actor_balance;
+    size_t retries = 0U;
+    uint64_t sequence;
+    METERED_CHECK(f != NULL && metered_fixture_init(f, 4U, true) == 0);
+    while (f->kernel.module_kv_count < LXP_KERNEL_MAX_MODULE_KV - 1U) {
+        size_t index = f->kernel.module_kv_count++;
+        lxp_module_kv_entry *entry = &f->kernel.module_kv[index];
+        (void)memset(entry, 0, sizeof(*entry));
+        entry->module_id = LXP_MODULE_GOVERNANCE;
+        entry->key_length = 9U;
+        entry->key[0] = 0xf0U;
+        write_u64(entry->key + 1U, (uint64_t)index);
+        entry->value_length = 1U;
+        entry->value[0] = 1U;
+    }
+    METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
+    (void)memcpy(root, f->kernel.current_state_root, 32U);
+    actor_balance = f->actor->balance;
+    sequence = f->state.next_sequence;
+    METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length, 0x50U, true) == 0);
+    METERED_CHECK(lxp_kernel_prepare_activity_batch(&f->kernel, &f->activity,
+        &f->execution, 1U, 1U, &prepared, &retries) == LXP_ERR_ARENA_EXHAUSTED);
+    METERED_CHECK(prepared == NULL && f->state.next_sequence == sequence);
+    METERED_CHECK(f->kernel.module_kv_count == LXP_KERNEL_MAX_MODULE_KV - 1U);
+    METERED_CHECK(memcmp(root, f->kernel.current_state_root, 32U) == 0);
+    METERED_CHECK(lxp_u128_cmp(f->actor->balance, actor_balance) == 0);
+    METERED_CHECK(f->payee->balance.lo == 0U && f->source->balance.lo == 40U);
+    METERED_CHECK(lxp_authority_grant_load(&f->kernel, f->grant_id, &loaded) == LXP_OK);
+    METERED_CHECK(lxp_u128_is_zero(loaded.scope.spent_total) &&
+        lxp_u128_is_zero(loaded.fee_budget.spent_total));
+    --f->kernel.module_kv_count;
+    METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
+    METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length, 0x50U, true) == 0);
+    METERED_CHECK(lxp_kernel_prepare_activity_batch(&f->kernel, &f->activity,
+        &f->execution, 1U, 1U, &prepared, &retries) == LXP_OK);
+    const lxp_kernel *settled = lxp_kernel_prepared_batch_settled_kernel(prepared);
+    const lxp_receipt *receipts = lxp_kernel_prepared_batch_receipts(prepared);
+    METERED_CHECK(settled != NULL && settled->module_kv_count == LXP_KERNEL_MAX_MODULE_KV);
+    METERED_CHECK(receipts != NULL && receipts[0].result_code == LXP_OK);
+    METERED_CHECK(lxp_authority_grant_load(settled, f->grant_id, &loaded) == LXP_OK);
+    METERED_CHECK(loaded.scope.spent_total.lo == 4U && loaded.scope.spent_total.hi == 0U);
+    METERED_CHECK(!lxp_u128_is_zero(loaded.fee_budget.spent_total) &&
+        lxp_u128_cmp(loaded.fee_budget.spent_total, receipts[0].fee_charged) == 0);
+    lxp_kernel_prepared_batch_destroy(prepared);
+    METERED_CHECK(f->state.next_sequence == sequence &&
+        lxp_u128_cmp(f->actor->balance, actor_balance) == 0);
+    while (f->kernel.blob_count != 0U)
+        free(f->kernel.blobs[--f->kernel.blob_count].bytes);
+    METERED_CHECK(lxp_state_store_destroy(&f->state) == LXP_OK);
+    free(f);
+    return 0;
+}
+
 int main(void)
 {
     metered_fixture *f = calloc(1U, sizeof(*f));
@@ -493,6 +552,7 @@ int main(void)
     uint8_t root[32];
     uint64_t sequence;
     METERED_CHECK(metered_legacy_replay() == 0);
+    METERED_CHECK(metered_fee_capacity() == 0);
     METERED_CHECK(f != NULL && metered_fixture_init(f, 4U, true) == 0);
     f->source->frozen = true;
     METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);

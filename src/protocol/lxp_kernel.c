@@ -3143,6 +3143,10 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
         if (status == LXP_OK && fee_transaction == NULL)
             status = LXP_FATAL_INVARIANT;
     }
+    if (status == LXP_OK && fee_transaction_open && module_ctx_initialized) {
+        module_ctx.commit_prepared = false;
+        status = lxp_module_ctx_prepare_commit(&module_ctx);
+    }
     if (status == LXP_OK) {
         (void)memset(receipt, 0, sizeof(*receipt));
         receipt->protocol_version = prepared->protocol_version;
