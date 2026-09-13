@@ -260,16 +260,6 @@ static int metered_fixture_init(metered_fixture *f, uint64_t activity_limit,
     f->parameters = 1U;
     METERED_CHECK(lxp_kernel_create(&f->kernel, &f->state, &f->journal,
                                      &f->parameters, 0U) == LXP_OK);
-    if (enforce_allowances) {
-        lxp_module_kv_entry *policy = &f->kernel.module_kv[f->kernel.module_kv_count++];
-        (void)memset(policy, 0, sizeof(*policy));
-        policy->module_id = LXP_MODULE_GOVERNANCE;
-        policy->key_length = 32U;
-        (void)memcpy(policy->key, LXP_NATIVE_FEE_AUTHORITY_PARAMETER,
-                     sizeof(LXP_NATIVE_FEE_AUTHORITY_PARAMETER) - 1U);
-        policy->value_length = 32U;
-        policy->value[31] = 2U;
-    }
     METERED_CHECK(install_metering_v1(&f->kernel) == LXP_OK);
     METERED_CHECK(lxp_kernel_register_module(&f->kernel,
                     programs_module_registration_v4()) == LXP_OK);
@@ -295,6 +285,16 @@ static int metered_fixture_init(metered_fixture *f, uint64_t activity_limit,
     fees.maximum_fee_units_per_occupancy_byte_batch = 10U;
     METERED_CHECK(lxp_programs_fee_genesis_append(&manifest, &fees) == LXP_OK);
     METERED_CHECK(lxp_programs_fee_genesis_materialize(&manifest, &f->kernel) == LXP_OK);
+    if (enforce_allowances) {
+        lxp_module_kv_entry *policy = &f->kernel.module_kv[f->kernel.module_kv_count++];
+        (void)memset(policy, 0, sizeof(*policy));
+        policy->module_id = LXP_MODULE_GOVERNANCE;
+        policy->key_length = 32U;
+        (void)memcpy(policy->key, LXP_NATIVE_FEE_AUTHORITY_PARAMETER,
+                     sizeof(LXP_NATIVE_FEE_AUTHORITY_PARAMETER) - 1U);
+        policy->value_length = 32U;
+        policy->value[31] = 2U;
+    }
     METERED_CHECK(lxp_kernel_bind_module_runtime(&f->kernel, LXP_MODULE_PROGRAMS,
                                                   &f->runtime) == LXP_OK);
     METERED_CHECK(lxp_programs_bind_fee_transaction(&f->kernel) == LXP_OK);
