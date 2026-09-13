@@ -50,6 +50,7 @@ fn actual_daemon_terminal_requires_the_complete_maintained_transition() {
         &raw,
         &authority,
         &evidence,
+        &[raw.canonical_receipt().to_vec()],
         header.protocol_version(),
         header.network_id(),
     ));
@@ -68,17 +69,12 @@ fn actual_daemon_terminal_requires_the_complete_maintained_transition() {
         header.network_id()
     )
     .is_err());
-    let wrong = AuthorizedBatch::new(
-        authority.batch_id(),
-        authority.asset(),
-        authority.previous_state_root(),
-        header.resulting_state_root(),
-        public,
-    );
+    let wrong = replace_terminal_root(authority, header.resulting_state_root());
     assert!(VerifiedReceiptEvidence::verify_authorized_maintained(
         &raw,
         &wrong,
         &evidence,
+        &[raw.canonical_receipt().to_vec()],
         header.protocol_version(),
         header.network_id()
     )
@@ -87,6 +83,7 @@ fn actual_daemon_terminal_requires_the_complete_maintained_transition() {
         &raw,
         &authority,
         &evidence,
+        &[raw.canonical_receipt().to_vec()],
         header.protocol_version(),
         header.network_id() + 1
     )
@@ -101,6 +98,7 @@ fn actual_daemon_terminal_requires_the_complete_maintained_transition() {
         &raw,
         &authority,
         &bad_evidence,
+        &[raw.canonical_receipt().to_vec()],
         header.protocol_version(),
         header.network_id()
     )
@@ -222,4 +220,14 @@ fn prove_terminal_recovery(activity: &[u8], credit: &[u8], terminal: &VerifiedRe
     );
     assert_eq!(checked(restored.exact_signed_bytes(id)), activity);
     assert!(restored.bytes_for_transmission(id).is_err());
+}
+
+fn replace_terminal_root(authority: AuthorizedBatch, root: [u8; 32]) -> AuthorizedBatch {
+    AuthorizedBatch::new(
+        authority.batch_id(),
+        authority.asset(),
+        authority.previous_state_root(),
+        root,
+        authority.sequencer_public_key(),
+    )
 }

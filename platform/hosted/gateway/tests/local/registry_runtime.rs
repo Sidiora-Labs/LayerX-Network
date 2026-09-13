@@ -29,7 +29,7 @@ pub fn configure(
         "node_token_file": local_secret(&cluster.root, "registry-node-token", &cluster.program_token),
         "authority_url": format!("https://localhost:{}", authority.port),
         "authority_token_file": authority.token_file,
-        "replica_id": hex_encode(&cluster.replica_id),
+        "replica_id": hex_encode(&sha256(&[b"layerx-authority-replica:", hex_encode(&cluster.sequencer_key).as_bytes()])),
         "sequencer_id": hex_encode(&cluster.sequencer_id),
         "sequencer_public_key": hex_encode(&cluster.sequencer_key),
         "network_id": NETWORK_ID, "epoch": verified_epoch(cluster),
