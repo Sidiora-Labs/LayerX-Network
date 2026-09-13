@@ -88,6 +88,17 @@ def main():
         assert 'error' not in value and value.get('ok', True) is True, value
         return value['result']
 
+    def submit(route, canonical, ordinal, key_id):
+        deadline = time.monotonic() + 120
+        while True:
+            value = request(route, canonical, ordinal, key_id)
+            if value.get('state') not in ('unknown', 'pending'):
+                return value
+            assert time.monotonic() < deadline, {
+                'state': value.get('state'), 'activity_id': value.get('activity_id'),
+            }
+            time.sleep(0.1)
+
     def rpc(method, params):
         return request('/rpc', {'jsonrpc': '2.0', 'id': counter + 1, 'method': method, 'params': params})
 
@@ -113,12 +124,12 @@ def main():
     program = os.urandom(32)
     deploy = program + struct.pack('>HBB', 2, 0, 0) + bytes(32) + hashlib.sha256(wasm).digest() + blob(wasm)
     canonical, key_id = signed(1, deploy)
-    deployed = request('/v1/programs/deploy', canonical, 1, key_id)
+    deployed = submit('/v1/programs/deploy', canonical, 1, key_id)
     assert deployed['state'] == 'completed' and deployed['receipt'], deployed
     duplicate, duplicate_key = signed(1, deploy)
-    refused = request('/v1/programs/deploy', duplicate, 1, duplicate_key)
+    refused = submit('/v1/programs/deploy', duplicate, 1, duplicate_key)
     assert refused['state'] == 'refused' and refused['receipt'], refused
-    assert request('/v1/programs/deploy', duplicate, 1, duplicate_key) == refused
+    assert submit('/v1/programs/deploy', duplicate, 1, duplicate_key) == refused
     seed = os.urandom(16)
     account = hashlib.sha256(b'LayerX/programs/program-account/v1\0' + program + blob(seed)).digest()
     register = program + b'LXPA1' + asset + blob(seed)
@@ -138,10 +149,10 @@ def main():
     canonical, key_id = signed(3, call)
     write('call.lxa', canonical)
     write('call-idempotency-key', key_id.encode())
-    executed = request('/v1/programs/call', canonical, 3, key_id)
+    executed = submit('/v1/programs/call', canonical, 3, key_id)
     assert executed['state'] == 'executed' and executed['result_code'] == 0, executed
     assert executed['receipt'] and executed['terminal_payload'] and executed['call_graph'], executed
-    replayed = request('/v1/programs/call', canonical, 3, key_id)
+    replayed = submit('/v1/programs/call', canonical, 3, key_id)
     assert replayed == executed, (executed, replayed)
     after = rpc('lx_getBalance', [account.hex()])
     assert int(after['balance']) == 1, after

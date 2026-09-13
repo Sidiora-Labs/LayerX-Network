@@ -106,7 +106,6 @@ fn local_gateway_lifecycle() {
     let (cluster, _funding) = funding::start();
     let certificates = certificates(&cluster.root);
     let boundary = start_boundary(&cluster, &certificates);
-    establish_receipt_head(&boundary, &cluster);
     let identity = start_local_identity(&cluster, &certificates);
     let authority = start_local_authority(&cluster, &certificates);
     let redis = start_local_redis(&cluster, &certificates);
@@ -2057,28 +2056,46 @@ fn ws_send(stream: &mut impl Write, body: &serde_json::Value) {
     stream.flush().required("flush");
 }
 
-fn ws_receive(stream: &mut impl Read) -> serde_json::Value {
-    let mut header = [0; 2];
-    stream.read_exact(&mut header).required("WS header");
-    assert_eq!(header[0], 0x81, "expected text frame");
-    assert_eq!(header[1] & 128, 0);
-    let length = match header[1] {
-        126 => {
-            let mut n = [0; 2];
-            stream.read_exact(&mut n).required("length");
-            usize::from(u16::from_be_bytes(n))
+fn ws_receive(stream: &mut (impl Read + Write)) -> serde_json::Value {
+    loop {
+        let mut header = [0; 2];
+        stream.read_exact(&mut header).required("WS header");
+        assert_eq!(header[1] & 128, 0);
+        if header[0] == 0x89 {
+            assert!(header[1] <= 125, "control frame length");
+            let mut body = vec![0; usize::from(header[1])];
+            stream.read_exact(&mut body).required("ping payload");
+            let mask = [1, 2, 3, 4];
+            let mut pong = vec![0x8a, 128 | header[1]];
+            pong.extend_from_slice(&mask);
+            pong.extend(
+                body.iter()
+                    .enumerate()
+                    .map(|(index, byte)| byte ^ mask[index % 4]),
+            );
+            stream.write_all(&pong).required("pong frame");
+            stream.flush().required("pong flush");
+            continue;
         }
-        127 => {
-            let mut n = [0; 8];
-            stream.read_exact(&mut n).required("length");
-            usize::try_from(u64::from_be_bytes(n)).required("length")
-        }
-        n => usize::from(n),
-    };
-    assert!(length <= 1024 * 1024);
-    let mut body = vec![0; length];
-    stream.read_exact(&mut body).required("WS body");
-    serde_json::from_slice(&body).required("WS JSON")
+        assert_eq!(header[0], 0x81, "expected text frame");
+        let length = match header[1] {
+            126 => {
+                let mut n = [0; 2];
+                stream.read_exact(&mut n).required("length");
+                usize::from(u16::from_be_bytes(n))
+            }
+            127 => {
+                let mut n = [0; 8];
+                stream.read_exact(&mut n).required("length");
+                usize::try_from(u64::from_be_bytes(n)).required("length")
+            }
+            n => usize::from(n),
+        };
+        assert!(length <= 1024 * 1024);
+        let mut body = vec![0; length];
+        stream.read_exact(&mut body).required("WS body");
+        return serde_json::from_slice(&body).required("WS JSON");
+    }
 }
 
 impl Http {
