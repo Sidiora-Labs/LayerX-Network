@@ -216,6 +216,7 @@ static int metered_activity(metered_fixture *f, uint32_t type,
     f->execution.recorded_fee_schedule_version = 1U;
     f->execution.parameter_version = 1U;
     f->execution.signature_valid = true;
+    f->execution.sequencer_private_key = executed_sequencer_seed;
     f->execution.identities = &f->identities;
     f->execution.authority = &f->authority;
     f->execution.allowance = &f->allowance;
@@ -501,6 +502,27 @@ int main(void)
             lxp_u128_is_zero(loaded.fee_budget.spent_total));
         METERED_CHECK(memcmp(live_root, f->kernel.current_state_root, 32U) == 0 &&
             lxp_u128_cmp(live_balance, f->actor->balance) == 0);
+        {
+            uint8_t legacy_call[sizeof(f->call)];
+            (void)memcpy(legacy_call, f->call, f->call_length);
+            write_u16(legacy_call + 32U, 1U);
+            METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, legacy_call,
+                f->call_length, 0x40U, true) == 0);
+            prepared = NULL;
+            METERED_CHECK(lxp_kernel_prepare_activity_batch(&f->kernel, &f->activity,
+                &f->execution, 1U, 1U, &prepared, &retries) == LXP_OK);
+            receipts = lxp_kernel_prepared_batch_receipts(prepared);
+            METERED_CHECK(receipts != NULL && receipts[0].result_code == LXP_ERR_NON_CANONICAL &&
+                receipts[0].program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_FAILURE);
+            METERED_CHECK(lxp_ct_is_zero(receipts[0].transfer_set_root, 32U));
+            METERED_CHECK(lxp_authority_grant_load(lxp_kernel_prepared_batch_settled_kernel(prepared),
+                f->grant_id, &loaded) == LXP_OK && lxp_u128_is_zero(loaded.scope.spent_total));
+            lxp_kernel_prepared_batch_destroy(prepared);
+            METERED_CHECK(memcmp(live_root, f->kernel.current_state_root, 32U) == 0 &&
+                lxp_u128_cmp(live_balance, f->actor->balance) == 0);
+            METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length,
+                2U, true) == 0);
+        }
     }
     METERED_CHECK(lxp_kernel_execute_activity(&f->kernel, &f->activity,
                     &f->execution, &f->receipt) == LXP_OK);
