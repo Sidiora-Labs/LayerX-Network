@@ -1,6 +1,6 @@
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import type { EvidenceRef, Journey, JourneyStage, JourneyState } from "../../api/index.ts";
-import type { StatusKey } from "../../kit/index.ts";
+import type { StatusKey } from "../../kit/model";
 
 export const ONBOARDING_DECISION_LIMIT = 3;
 export const CREATE_ACCOUNT_DECISIONS = 2;

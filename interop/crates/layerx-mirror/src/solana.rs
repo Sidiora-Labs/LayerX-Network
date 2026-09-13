@@ -19,10 +19,10 @@ use crate::{archive_commitment, Archive, ArchiveCommitment, MirrorCursor};
 
 const SYSTEM_PROGRAM: [u8; 32] = [0; 32];
 const PDA_MARKER: &[u8] = b"ProgramDerivedAddress";
-const MANIFEST_MAGIC: &[u8; 8] = b"LXMMAN02";
-const CHUNK_MAGIC: &[u8; 8] = b"LXMCHK02";
+const MANIFEST_MAGIC: &[u8; 8] = b"LXMMAN03";
+const CHUNK_MAGIC: &[u8; 8] = b"LXMCHK03";
 const INSTRUCTION_MAGIC: &[u8; 4] = b"LXMA";
-const INSTRUCTION_VERSION: u16 = 2;
+const INSTRUCTION_VERSION: u16 = 3;
 const MAX_TRANSACTION_BYTES: usize = 1232;
 const MIN_CHUNK_BYTES: usize = 128;
 const MAX_CHUNK_BYTES: usize = 720;
@@ -1219,7 +1219,7 @@ fn decode_manifest(
     commitment: ArchiveCommitment,
     publisher: [u8; 32],
 ) -> Result<Manifest, SolanaError> {
-    if bytes.len() != 8 + 32 + 32 + 4 + 8 + 32 + 8 + 4 + 32 + 32 + 32 + 8 + 4 + 1
+    if bytes.len() != 334
         || &bytes[..8] != MANIFEST_MAGIC
         || bytes[8..40] != *commitment.as_bytes()
         || bytes[40..72] != publisher
@@ -1260,7 +1260,14 @@ fn decode_manifest(
         1 => true,
         _ => return Err(SolanaError::Retrieval),
     };
-    if received != length || next_chunk != chunk_count || expected_chain != observed_chain {
+    let tail_length = usize::from(bytes[333]);
+    if tail_length >= 64
+        || tail_length != received % 64
+        || bytes[269 + tail_length..333].iter().any(|byte| *byte != 0)
+        || received != length
+        || next_chunk != chunk_count
+        || expected_chain != observed_chain
+    {
         return Err(SolanaError::Retrieval);
     }
     Ok(Manifest {
@@ -1443,4 +1450,65 @@ fn base58_digit(value: u8) -> Option<u8> {
         .iter()
         .position(|candidate| *candidate == value)
         .and_then(|index| u8::try_from(index).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_manifest, stages, Archive, SolanaError};
+    use crate::{archive_commitment, NodeHead};
+    use sha2::{Digest, Sha256};
+
+    const ARCHIVE: &[u8] =
+        include_bytes!("../../../contracts/solana-mirror/tests/fixtures/native.archive");
+    const MANIFEST: &[u8] =
+        include_bytes!("../../../contracts/solana-mirror/tests/fixtures/finalized.manifest");
+    const PUBLISHER: &[u8; 32] =
+        include_bytes!("../../../contracts/solana-mirror/tests/fixtures/publisher.public");
+
+    #[test]
+    fn publisher_and_reader_match_real_runtime_manifest() -> Result<(), String> {
+        let commitment = archive_commitment(ARCHIVE);
+        let decoded = decode_manifest(MANIFEST, commitment, *PUBLISHER)
+            .map_err(|error| format!("runtime manifest: {error:?}"))?;
+        assert!(decoded.finalized);
+        assert_eq!(decoded.length, ARCHIVE.len());
+        assert_eq!(decoded.chunk_count, 8);
+        assert_eq!(decoded.digest, <[u8; 32]>::from(Sha256::digest(ARCHIVE)));
+        let archive = Archive::from_spool(
+            ARCHIVE.to_vec(),
+            NodeHead {
+                latest_sealed_batch: 1,
+                latest_finalised_checkpoint: None,
+            },
+        )
+        .map_err(|error| format!("native archive: {error:?}"))?;
+        let instructions =
+            stages(&archive, 720).map_err(|error| format!("publisher instructions: {error:?}"))?;
+        assert_eq!(instructions.len(), 10);
+        assert_eq!(&instructions[0].data[..7], b"LXMA\0\x03\x01");
+        assert_eq!(&instructions[0].data[7..39], &MANIFEST[8..40]);
+        assert_eq!(&instructions[0].data[39..], &MANIFEST[72..192]);
+        assert_eq!(&instructions[9].data[..7], b"LXMA\0\x03\x03");
+        for (index, chunk) in ARCHIVE.chunks(720).enumerate() {
+            let encoded = &instructions[index + 1].data;
+            assert_eq!(&encoded[..7], b"LXMA\0\x03\x02");
+            assert_eq!(&encoded[45..45 + chunk.len()], chunk);
+            assert_eq!(&encoded[45 + chunk.len()..], &Sha256::digest(chunk)[..]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reader_refuses_manifest_identity_and_progress_substitution() {
+        let commitment = archive_commitment(ARCHIVE);
+        for index in [0, 8, 40, 123, 127, 160, 231, 235, 236, 332, 333] {
+            let mut changed = MANIFEST.to_vec();
+            changed[index] ^= 0x80;
+            assert!(matches!(
+                decode_manifest(&changed, commitment, *PUBLISHER),
+                Err(SolanaError::Retrieval)
+            ));
+        }
+        assert!(decode_manifest(&MANIFEST[..237], commitment, *PUBLISHER).is_err());
+    }
 }

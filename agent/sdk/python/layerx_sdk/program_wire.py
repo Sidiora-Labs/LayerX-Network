@@ -10,8 +10,8 @@ from .native_capabilities import (
     NativeProgramSpend,
     decode_native_capability_set,
 )
-from .native_program_call import encode_native_program_call
-from .verifier import ProgramReceiptOutcome
+from .native_program_call import decode_native_program_call, encode_native_program_call
+from .verifier import ProgramReceiptOutcome, ProtocolReceipt
 
 _ACTIVITY_DOMAIN = b"LXP/v1/activity-id\0"
 _PAYLOAD_DOMAIN = b"LXP/v1/payload-hash\0"
@@ -21,12 +21,15 @@ _EXECUTION_V3 = b"LXP/program-execution/v3\0"
 _EXECUTION_V4 = b"LXP/program-execution/v4\0"
 _OCCUPANCY = b"LXP/program-execution-with-occupancy/v1\0"
 _AUTHORITY = b"LXP/program-execution-with-transfer-authority/v2\0"
+_PRE_RUNTIME = b"LXP/v1/context-hash\0LXP/programs/pre-runtime-failure/v1\0"
+_EMPTY_CALL_GRAPH = b"LXP/v1/context-hash\0LXP/programs/empty-call-graph/v1\0"
 _FAILURE = b"LXP/programs/failure-detail/v1\0"
 _RESOURCE = b"LXP/programs/resource-detail/v1\0"
 _SETTLEMENT = b"LXP/programs/settlement-failure/v1\0"
 _CALLBACK = b"LXP/programs/callback-failure/v1\0"
 _TRANSFER_SET_V1 = b"LayerX/programs/402LXP/transfer-set/v1\0"
 _TRANSFER_SET_V2 = b"LayerX/programs/402LXP/transfer-set/v2\0"
+_ACCOUNT_BOUND_SET = b"LayerX/programs/402LXP/account-bound-set/v1\0"
 _PROGRAM_AUTHORITY = b"LayerX/programs/402LXP/program-authority/v1\0"
 _PROGRAM_FUNDING = b"LayerX/programs/402LXP/program-funding/v1\0"
 _PROGRAM_ACCOUNT = b"LayerX/programs/program-account/v1\0"
@@ -99,8 +102,21 @@ def bind_signed_program_lifecycle(canonical: bytes, payload: bytes | None, ordin
     return DecodedSignedProgramCall(sha256(_ACTIVITY_DOMAIN + canonical).hexdigest(), key, not_before, not_after, bytes(canonical))
 
 
-def decode_signed_program_call(call: object, expected_idempotency_key: str | None = None) -> DecodedSignedProgramCall:
-    canonical = bytes(call.signed_activity)
+@dataclass(frozen=True)
+class _SignedCallEnvelope:
+    canonical: bytes
+    protocol_version: int
+    not_before: int
+    not_after: int
+    idempotency: bytes
+    fee_limit: int
+    payload_hash: bytes
+    payload: bytes
+
+
+def _signed_call_envelope(canonical: bytes) -> _SignedCallEnvelope:
+    if not isinstance(canonical, bytes) or not 0 < len(canonical) <= 1_048_576:
+        _fail("signed activity bounds")
     reader = _Reader(canonical)
     envelope_version = reader.u16()
     if envelope_version not in (1, 2, 3) or reader.u16() != 0x1001 or reader.byte() != 12:
@@ -126,24 +142,63 @@ def decode_signed_program_call(call: object, expected_idempotency_key: str | Non
         _fail("signed activity bounds")
     if payload_hash != sha256(_PAYLOAD_DOMAIN + payload).digest():
         _fail("signed activity payload hash")
+    return _SignedCallEnvelope(canonical, envelope_version, not_before, not_after,
+                               idempotency, envelope_fee_limit, payload_hash, payload)
+
+
+def bind_retained_program_call(canonical: bytes, expected_activity: str,
+                               expected_program: str, expected_protocol: int) -> tuple[bytes, int, str]:
+    envelope = _signed_call_envelope(canonical)
+    if (envelope.protocol_version != expected_protocol
+            or sha256(_ACTIVITY_DOMAIN + canonical).hexdigest() != expected_activity):
+        _fail("retained call activity binding")
+    if envelope.protocol_version == 3 or (
+            envelope.protocol_version == 2 and not envelope.payload.startswith(_CALL_DOMAIN)):
+        native = decode_native_program_call(envelope.payload)
+        program, abi = native.program_id.hex(), native.guest_abi
+    else:
+        reader = _Reader(envelope.payload)
+        if reader.fixed(len(_CALL_DOMAIN)) != _CALL_DOMAIN:
+            _fail("program call domain")
+        program = reader.fixed(32).hex()
+        if reader.u64() == 0:
+            _fail("program call budget")
+        reader.u128()
+        count = reader.u16()
+        if count > 5:
+            _fail("program call capabilities")
+        prior = 0
+        for _ in range(count):
+            current = reader.byte()
+            if not prior < current <= 5:
+                _fail("program call capability tag")
+            prior = current
+        reader.sized_u32(1_048_576)
+        reader.end()
+        abi = 1
+    if program != expected_program or program == "0" * 64:
+        _fail("retained call program binding")
+    return envelope.payload_hash, abi, envelope.idempotency.hex()
+
+
+def decode_signed_program_call(call: object, expected_idempotency_key: str | None = None) -> DecodedSignedProgramCall:
+    canonical = bytes(call.signed_activity)
+    envelope = _signed_call_envelope(canonical)
     native = getattr(call, "native_call", None)
     if native is not None:
-        if (envelope_version != 3 or envelope_fee_limit != call.fee_limit
+        if (envelope.protocol_version != 3 or envelope.fee_limit != call.fee_limit
                 or native.program_id.hex() != call.program_id or native.calldata != call.calldata
                 or native.resources[0] != call.fuel or call.capabilities
-                or payload != encode_native_program_call(native)):
+                or envelope.payload != encode_native_program_call(native)):
             _fail("native signed activity binding")
     else:
-        _decode_call_payload(payload, call)
-    key = idempotency.hex()
+        _decode_call_payload(envelope.payload, call)
+    key = envelope.idempotency.hex()
     if expected_idempotency_key is not None and key != expected_idempotency_key:
         _fail("signed activity idempotency")
     return DecodedSignedProgramCall(
-        sha256(_ACTIVITY_DOMAIN + canonical).hexdigest(),
-        key,
-        not_before,
-        not_after,
-        canonical,
+        sha256(_ACTIVITY_DOMAIN + canonical).hexdigest(), key,
+        envelope.not_before, envelope.not_after, canonical,
     )
 
 
@@ -175,11 +230,15 @@ def decode_and_verify_program_terminal(
     expected_program_id: str,
     receipt: ProgramReceiptOutcome,
     protocol_version: int,
+    *, protocol: ProtocolReceipt | None = None, expected_payload_hash: bytes | None = None,
 ) -> DecodedProgramTerminal:
     if not call_graph or sha256(call_graph).digest() != receipt.call_graph_root:
         _fail("program call graph root")
     if not terminal_payload or len(terminal_payload) > 1_048_576 or sha256(terminal_payload).digest() != receipt.terminal_payload_root:
         _fail("program terminal root")
+    if terminal_payload.startswith(_PRE_RUNTIME):
+        return _verify_pre_runtime(terminal_payload, call_graph, receipt, protocol_version,
+                                   protocol, expected_payload_hash)
     inner = terminal_payload
     if receipt.encoding_version == 4:
         domain = b"LXP/programs/terminal-applied-legs/v1\0"
@@ -232,6 +291,8 @@ def decode_and_verify_program_terminal(
         if decoded["graph"] != call_graph:
             _fail("candidate call graph")
         if decoded["outcome"] == "success":
+            if receipt.result_code != 0:
+                _fail("candidate response result code")
             outcome = {"kind": "completed", "code": decoded["code"], "response": cast(bytes, decoded["response"]).hex()}
             successful = True
         elif decoded["outcome"] == "failure":
@@ -285,13 +346,54 @@ def decode_and_verify_program_terminal(
     if authorization is not None:
         if not authorization or authority_root != receipt.transfer_root:
             _fail("transfer authority root")
-        if receipt.encoding_version == 4 and not authorization.startswith(_TRANSFER_SET_V2):
-            _fail("V2 transfer authority required")
-        _verify_authorization_root(authorization, cast(bytes, authority_root))
+        _verify_authorization_root(authorization, cast(bytes, authority_root),
+                                   require_v2=receipt.encoding_version == 4)
     if protocol_version not in (1, 2, 3):
         _fail("program receipt protocol")
     return DecodedProgramTerminal(outcome, usage if usage is not None else _receipt_usage(receipt),
         "recorded_terminal_root_not_locally_reconstructable" if recorded else "reconstructed")
+
+
+def _verify_pre_runtime(terminal: bytes, graph: bytes, outcome: ProgramReceiptOutcome,
+                        protocol_version: int, protocol: ProtocolReceipt | None,
+                        expected_payload_hash: bytes | None) -> DecodedProgramTerminal:
+    if protocol is None or expected_payload_hash is None or len(expected_payload_hash) != 32:
+        _fail("pre-runtime original call binding required")
+    reader = _Reader(terminal[len(_PRE_RUNTIME):])
+    activity = reader.fixed(32)
+    payload_hash = reader.fixed(32)
+    result = reader.i32()
+    module = reader.u32()
+    parameter = reader.u32()
+    encoding, applied = 3, bytes(32)
+    if reader.remaining():
+        encoding = reader.byte()
+        if encoding != 4:
+            _fail("pre-runtime encoding")
+        applied = reader.fixed(32)
+    reader.end()
+    if (result >= 0 or activity != protocol.activity_id or payload_hash != expected_payload_hash
+            or result != protocol.result_code or result != outcome.result_code
+            or module != protocol.module_version or parameter != protocol.parameter_version
+            or encoding != outcome.encoding_version or protocol.module_id != 9 or protocol.operation != 3
+            or protocol.protocol_version != protocol_version or protocol.program_outcome != outcome
+            or outcome.terminal_kind != 2 or outcome.runtime_version != 1
+            or (protocol_version, encoding) not in ((2, 3), (3, 4))
+            or outcome.memory_bytes or outcome.storage_read_bytes
+            or outcome.output_values or outcome.output_bytes):
+        _fail("pre-runtime receipt binding")
+    empty = sha256(b"").digest() if encoding == 4 else bytes(32)
+    if applied != empty or outcome.applied_legs_digest != empty or outcome.transfer_root != bytes(32):
+        _fail("pre-runtime transfer authority")
+    if (outcome.occupancy_asset_id != bytes(32) or outcome.occupancy_evidence_digest != bytes(32)
+            or outcome.occupancy_transfer_root != bytes(32)
+            or outcome.occupancy_byte_batches or outcome.occupancy_fee_units):
+        _fail("pre-runtime occupancy")
+    if graph != _EMPTY_CALL_GRAPH:
+        _fail("pre-runtime call graph")
+    return DecodedProgramTerminal(
+        {"kind": "refused", "failure": {"kind": "guest_refused", "code": result}},
+        _receipt_usage(outcome), "reconstructed")
 
 
 def _verify_applied_legs(encoded: bytes, expected: bytes) -> None:
@@ -502,9 +604,17 @@ def _usage(cpu: int, memory: int, read: int, write: int, values: int, output: in
     return {"cpu_fuel": str(cpu), "memory_bytes": str(memory), "storage_read_bytes": str(read), "storage_write_bytes": str(write), "output_values": values, "output_bytes": str(output), "fee_units": str(fee)}
 
 
-def _verify_authorization_root(encoded: bytes, expected: bytes) -> None:
+def _verify_authorization_root(encoded: bytes, expected: bytes, *, require_v2: bool = False) -> None:
+    names: _Reader | None = None
+    if encoded.startswith(_ACCOUNT_BOUND_SET):
+        names = _Reader(encoded[len(_ACCOUNT_BOUND_SET):])
+        encoded = names.sized_u32(1_048_576)
+        if encoded.startswith(_ACCOUNT_BOUND_SET):
+            _fail("nested account-bound transfer authorization")
     reader = _Reader(encoded)
     candidate = encoded.startswith(_TRANSFER_SET_V2)
+    if require_v2 and not candidate:
+        _fail("V2 transfer authority required")
     domain = _TRANSFER_SET_V2 if candidate else _TRANSFER_SET_V1
     if reader.fixed(len(domain)) != domain:
         _fail("transfer authorization domain")
@@ -557,11 +667,39 @@ def _verify_authorization_root(encoded: bytes, expected: bytes) -> None:
             _fail("program transfer authority")
         if funding is not None and (funding["owner"] != program or funding["destination"] != to or funding["asset"] != asset):
             _fail("program funding authority")
+        if names is not None:
+            name = names.fixed(names.u16())
+            if authority is not None:
+                if name:
+                    _fail("program source account name")
+            else:
+                source = _principal_payment_account(principal, asset, name)
         total = _checked_u128_add(total, amount, "transfer total")
         kernel_legs.append(b"\0" + source + to + asset + amount.to_bytes(16, "big") + (1).to_bytes(2, "big"))
     reader.end()
+    if names is not None:
+        names.end()
     if _merkle_root(kernel_legs) != expected:
         _fail("transfer authorization root")
+
+
+def _principal_payment_account(principal: bytes, asset: bytes, name: bytes) -> bytes:
+    allowed = b"abcdefghijklmnopqrstuvwxyz0123456789._-:"
+    if len(name) > 512 or any(byte not in allowed for byte in name) or b"::" in name or not name.startswith(b"agent:"):
+        _fail("principal payment account name")
+    tail = name[len(b"agent:"):]
+    if tail.endswith(b":main"):
+        did = tail[:-len(b":main")]
+    elif len(tail) >= 71 and tail[-71:] == b":asset:" + asset.hex().encode("ascii"):
+        did = tail[:-71]
+    else:
+        _fail("principal payment account asset")
+    if not did or did.startswith(b":") or did.endswith(b":"):
+        _fail("principal payment account DID")
+    owner = sha256(b"LXP/v1/did-id\0" + len(did).to_bytes(2, "big") + did).digest()
+    if owner != principal:
+        _fail("principal payment account authority")
+    return sha256(_ACCOUNT_DERIVATION + len(name).to_bytes(4, "big") + name).digest()
 
 
 def _decode_program_authority(encoded: bytes) -> Mapping[str, object]:

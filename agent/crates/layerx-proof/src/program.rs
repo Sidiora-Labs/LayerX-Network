@@ -2,7 +2,7 @@
 
 use layerx_programs_runtime::terminal::{
     decode_terminal_payload, CandidateTerminalOutcome, DecodedTerminal, ExecutionTerminal,
-    TerminalDetail,
+    FailureTerminal, PreRuntimeFailure, TerminalDetail, EMPTY_CALL_GRAPH, PRE_RUNTIME_FAILURE,
 };
 use layerx_programs_runtime::{BudgetMeterRefusal, OccupancySettlement, ProgramFailure};
 use layerx_types::intent::{
@@ -44,6 +44,7 @@ pub struct ProgramExecutionExpectation {
     pub sequencer_public_key: [u8; 32],
     pub previous_state_root: [u8; 32],
     pub activity_id: [u8; 32],
+    pub payload_hash: [u8; 32],
     pub program_id: [u8; 32],
     pub guest_abi_version: u16,
 }
@@ -52,6 +53,7 @@ pub struct ProgramExecutionExpectation {
 pub struct AuthorizedProgramExecutionExpectation {
     pub authority: AuthorizedBatch,
     pub activity_id: [u8; 32],
+    pub payload_hash: [u8; 32],
     pub program_id: [u8; 32],
     pub guest_abi_version: u16,
 }
@@ -174,6 +176,7 @@ pub fn verify_program_execution(
         terminal_payload,
         call_graph,
         expected.activity_id,
+        expected.payload_hash,
         expected.program_id,
         expected.guest_abi_version,
     )
@@ -189,7 +192,7 @@ pub fn verify_authorized_program_execution(
     receipt: &[u8],
     terminal_payload: &[u8],
     call_graph: &[u8],
-    expected: AuthorizedProgramExecutionExpectation,
+    expected: &AuthorizedProgramExecutionExpectation,
 ) -> Result<VerifiedProgramExecution, ProgramExecutionVerificationFailure> {
     let verified = verify_program_outcome(receipt, &expected.authority)
         .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Receipt))?;
@@ -198,6 +201,7 @@ pub fn verify_authorized_program_execution(
         terminal_payload,
         call_graph,
         expected.activity_id,
+        expected.payload_hash,
         expected.program_id,
         expected.guest_abi_version,
     )
@@ -208,6 +212,7 @@ fn verify_program_execution_receipt(
     terminal_payload: &[u8],
     call_graph: &[u8],
     expected_activity_id: [u8; 32],
+    expected_payload_hash: [u8; 32],
     expected_program_id: [u8; 32],
     expected_guest_abi_version: u16,
 ) -> Result<VerifiedProgramExecution, ProgramExecutionVerificationFailure> {
@@ -234,7 +239,8 @@ fn verify_program_execution_receipt(
             ProgramExecutionCheck::TerminalPayload,
         ));
     }
-    let terminal_payload = if outcome.encoding_version() == 4 {
+    let pre_runtime = terminal_payload.starts_with(PRE_RUNTIME_FAILURE);
+    let terminal_detail = if outcome.encoding_version() == 4 && !pre_runtime {
         let (detail, legs) = layerx_wire::receipt::decode_applied_terminal(terminal_payload)
             .map_err(|_| {
                 ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal)
@@ -258,12 +264,18 @@ fn verify_program_execution_receipt(
     let terminal = decode_terminal_payload(
         outcome.terminal_kind(),
         outcome.abi_version(),
-        terminal_payload,
+        terminal_detail,
     )
     .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal))?;
+    if let TerminalDetail::Failure(FailureTerminal::PreRuntime(failure)) = &terminal.detail {
+        if !pre_runtime {
+            return terminal_failure();
+        }
+        verify_pre_runtime(failure, protocol, expected_payload_hash, call_graph)?;
+    }
     verify_terminal_commitments(&terminal, call_graph, protocol.protocol_version(), outcome)?;
     let (typed_outcome, authenticated_failure, authenticated_resource) =
-        verified_terminal_outcome(&terminal, expected_program_id, outcome)?;
+        verified_terminal_outcome(&terminal, terminal_payload, expected_program_id, outcome)?;
     Ok(VerifiedProgramExecution {
         result_code: outcome.result_code(),
         fee_units: outcome.fee_units(),
@@ -283,6 +295,68 @@ fn verify_program_execution_receipt(
     })
 }
 
+fn verify_pre_runtime(
+    failure: &PreRuntimeFailure,
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+    expected_payload_hash: [u8; 32],
+    graph: &[u8],
+) -> Result<(), ProgramExecutionVerificationFailure> {
+    let outcome = protocol
+        .program_outcome()
+        .ok_or_else(|| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Receipt))?;
+    if failure.activity_id != protocol.activity_id()
+        || failure.payload_hash != expected_payload_hash
+        || failure.result_code != protocol.result_code()
+        || failure.result_code != outcome.result_code()
+        || failure.module_version != protocol.module_version()
+        || failure.parameter_version != protocol.parameter_version()
+        || failure.encoding_version != outcome.encoding_version()
+        || protocol.module_id() != 9
+        || protocol.operation() != 3
+        || outcome.terminal_kind() != 2
+        || outcome.runtime_version() != 1
+        || !matches!(
+            (protocol.protocol_version(), outcome.encoding_version()),
+            (2, 3) | (3, 4)
+        )
+        || outcome.memory_bytes() != 0
+        || outcome.storage_read_bytes() != 0
+        || outcome.output_values() != 0
+        || outcome.output_bytes() != 0
+    {
+        return terminal_failure();
+    }
+    let empty_digest = if outcome.encoding_version() == 4 {
+        Sha256::digest([]).into()
+    } else {
+        [0; 32]
+    };
+    if failure.applied_legs_digest != empty_digest
+        || outcome.applied_legs_digest() != empty_digest
+        || outcome.transfer_root() != [0; 32]
+    {
+        return Err(ProgramExecutionVerificationFailure::at(
+            ProgramExecutionCheck::TransferAuthority,
+        ));
+    }
+    if outcome.occupancy_asset_id() != [0; 32]
+        || outcome.occupancy_evidence_digest() != [0; 32]
+        || outcome.occupancy_transfer_root() != [0; 32]
+        || outcome.occupancy_byte_batches() != 0
+        || outcome.occupancy_fee_units() != 0
+    {
+        return Err(ProgramExecutionVerificationFailure::at(
+            ProgramExecutionCheck::Occupancy,
+        ));
+    }
+    if graph != EMPTY_CALL_GRAPH {
+        return Err(ProgramExecutionVerificationFailure::at(
+            ProgramExecutionCheck::CallGraph,
+        ));
+    }
+    Ok(())
+}
+
 type TerminalOutcome = (
     ProgramCallOutcome,
     Option<ProgramFailure>,
@@ -295,11 +369,36 @@ fn guest_refused(outcome: &ProgramOutcome) -> ProgramCallOutcome {
     })
 }
 
+fn verify_terminal_representation(
+    terminal: &DecodedTerminal,
+    raw: &[u8],
+    outcome: &ProgramOutcome,
+) -> Result<(), ProgramExecutionVerificationFailure> {
+    if <[u8; 32]>::from(Sha256::digest(raw)) != outcome.terminal_payload_root() {
+        return terminal_failure();
+    }
+    let detail = if outcome.encoding_version() == 4 && !raw.starts_with(PRE_RUNTIME_FAILURE) {
+        layerx_wire::receipt::decode_applied_terminal(raw)
+            .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal))?
+            .0
+    } else {
+        raw
+    };
+    let canonical = decode_terminal_payload(outcome.terminal_kind(), outcome.abi_version(), detail)
+        .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal))?;
+    if &canonical != terminal {
+        return terminal_failure();
+    }
+    Ok(())
+}
+
 fn verified_terminal_outcome(
     terminal: &DecodedTerminal,
+    raw: &[u8],
     expected_program: [u8; 32],
     outcome: &ProgramOutcome,
 ) -> Result<TerminalOutcome, ProgramExecutionVerificationFailure> {
+    verify_terminal_representation(terminal, raw, outcome)?;
     match &terminal.detail {
         TerminalDetail::Execution(ExecutionTerminal::CandidateV4 {
             program,
@@ -324,7 +423,7 @@ fn verified_terminal_outcome(
             }
             match candidate_outcome {
                 CandidateTerminalOutcome::Success { code, response } => {
-                    if *code != outcome.result_code() {
+                    if outcome.result_code() != 0 {
                         return terminal_failure();
                     }
                     let response = ProgramCallResponse::new(*code, response).map_err(|_| {
@@ -607,7 +706,7 @@ mod terminal_binding_tests {
         let program: [u8; 32] = bytes("program_id_hex")
             .try_into()
             .unwrap_or_else(|_| panic!("program"));
-        assert!(verified_terminal_outcome(&terminal, program, outcome).is_ok());
+        assert!(verified_terminal_outcome(&terminal, &raw, program, outcome).is_ok());
         let TerminalDetail::Execution(ExecutionTerminal::CandidateV4 {
             outcome: CandidateTerminalOutcome::Success { code, .. },
             ..
@@ -619,7 +718,7 @@ mod terminal_binding_tests {
             .checked_add(1)
             .unwrap_or_else(|| panic!("terminal code"));
         assert_eq!(
-            verified_terminal_outcome(&terminal, program, outcome)
+            verified_terminal_outcome(&terminal, &raw, program, outcome)
                 .err()
                 .map(|error| error.check),
             Some(ProgramExecutionCheck::Terminal)

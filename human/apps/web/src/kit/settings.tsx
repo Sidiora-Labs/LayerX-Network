@@ -1,17 +1,10 @@
 "use client";
 
-import {
-  Card,
-  Input,
-  List,
-  ListItem,
-  SectionHeader,
-  SegmentedControl,
-  Switch,
-  type InputProps,
-  type ListItemProps,
-  type SegmentedControlProps,
-} from "@layerx/ui";
+import { Card } from "@layerx/ui/components/card";
+import { Input, type InputProps } from "@layerx/ui/components/input";
+import { List, ListItem, SectionHeader, type ListItemProps } from "@layerx/ui/components/list";
+import { SegmentedControl, type SegmentedControlProps } from "@layerx/ui/components/segmented-control";
+import { Switch } from "@layerx/ui/components/switch";
 import type { ComponentProps, ReactNode } from "react";
 
 export function SettingsSection({

@@ -91,13 +91,7 @@ pub fn send_context_hash(
     amount: u128,
     idempotency: &[u8; 32],
 ) -> [u8; 32] {
-    let mut bytes = Vec::with_capacity(144);
-    bytes.extend_from_slice(source);
-    bytes.extend_from_slice(destination);
-    bytes.extend_from_slice(asset);
-    bytes.extend_from_slice(&amount.to_be_bytes());
-    bytes.extend_from_slice(idempotency);
-    domain_hash(Domain::ContextHash, &bytes)
+    layerx_crypto::send::send_context_hash(source, destination, asset, amount, idempotency)
 }
 
 /// Hashes bytes under one canonical wire domain tag.

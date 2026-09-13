@@ -22,6 +22,16 @@ Makefile text eol=lf
 *.lxv binary
 *.vsix binary
 
+interop/crates/layerx-mirror/tests/fixtures/native-publisher/*.header binary
+interop/crates/layerx-mirror/tests/fixtures/native-publisher/*.lxda binary
+interop/crates/layerx-mirror/tests/fixtures/native-publisher/*.signature binary
+interop/crates/layerx-mirror/tests/fixtures/native-publisher/sequencer.* binary
+programs/crates/layerx-programs-registry/tests/fixtures/maintained-head/header binary
+programs/crates/layerx-programs-registry/tests/fixtures/maintained-head/header.signature binary
+programs/crates/layerx-programs-registry/tests/fixtures/maintained-head/*.receipt binary
+programs/crates/layerx-programs-registry/tests/fixtures/maintained-head/receipt binary
+programs/crates/layerx-programs-registry/tests/fixtures/maintained-head/sequencer.public binary
+
 Cargo.lock -diff
 **/Cargo.lock -diff
 package-lock.json -diff

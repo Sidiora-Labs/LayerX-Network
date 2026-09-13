@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../../../copy/catalog";
+import { copyEntry } from "../../../../../copy/runtime";
 import { batchRecord } from "../../../../explorer/client";
 import {
   ExplorerFrame,
@@ -7,11 +7,7 @@ import {
   FreshnessDisplay,
   verificationLabel,
 } from "../../../../explorer/components";
-import {
-  ExplorerLink,
-  ExplorerTable,
-  ExplorerVerificationBadge,
-} from "../../../../kit";
+import { ExplorerLink, ExplorerTable, ExplorerVerificationBadge } from "../../../../kit/explorer";
 
 export default async function BatchPage({
   params,

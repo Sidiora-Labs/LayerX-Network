@@ -1,4 +1,4 @@
-import { copyEntry } from "./catalog.ts";
+import { copyEntry } from "./runtime.ts";
 
 export type CopyValue = string | number;
 export type CopyValues = Readonly<Record<string, CopyValue>>;

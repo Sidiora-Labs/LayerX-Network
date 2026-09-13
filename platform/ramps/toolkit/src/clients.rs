@@ -1013,15 +1013,15 @@ impl LayerxClient {
         }
         let facts: AuthorityBody =
             serde_json::from_slice(&authority.body).map_err(|_| RampError::Layerx)?;
-        if facts.activity_id != id
-            || facts.network_id.is_empty()
-            || facts.wire_version != self.activity.protocol_version.to_string()
-        {
+        if decode_hex(&facts.receipt, MAX_BODY_BYTES)? != canonical_receipt {
             return Err(RampError::Layerx);
         }
-        if parse_hex32(&facts.sequencer_public_key)? != self.sequencer_authorization.public_key() {
-            return Err(RampError::Layerx);
-        }
+        facts.validate_context(
+            &id,
+            self.activity.network_id,
+            self.activity.protocol_version,
+            self.sequencer_authorization.public_key(),
+        )?;
         let mut evidence = ReceiptEvidence {
             activity_id: activity,
             canonical_receipt,
@@ -1449,6 +1449,8 @@ enum MaintainedIdentityDocument {
     OccupancyMaintenanceV2 {
         receipt_hex: String,
         receipt_proof_hex: String,
+        #[serde(default)]
+        activity_receipts_hex: Vec<String>,
     },
 }
 
@@ -1498,10 +1500,19 @@ impl MaintainedBatchDocument {
         let MaintainedIdentityDocument::OccupancyMaintenanceV2 {
             receipt_hex,
             receipt_proof_hex,
+            activity_receipts_hex,
         } = &self.batch_identity;
         let maintenance = bytes(receipt_hex)?;
         let maintenance_proof = proof(receipt_proof_hex)?;
-        layerx_proof::receipt::authorized_maintained_activity_batch(
+        let receipts = if activity_receipts_hex.is_empty() {
+            vec![receipt.to_vec()]
+        } else {
+            activity_receipts_hex
+                .iter()
+                .map(|value| bytes(value))
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        layerx_proof::receipt::authorized_maintained_activity_batch_chain(
             receipt,
             facts,
             &layerx_proof::receipt::MaintainedOutcomeEvidence {
@@ -1512,6 +1523,7 @@ impl MaintainedBatchDocument {
                 maintenance_proof: &maintenance_proof,
                 authorization,
             },
+            &receipts,
         )
         .map_err(|_| "maintained evidence verification")
     }
@@ -1527,6 +1539,8 @@ fn present_maintained<'de, D: serde::Deserializer<'de>>(
 #[serde(deny_unknown_fields)]
 struct AuthorityBody {
     activity_id: String,
+    receipt: String,
+    protocol_network_id: u32,
     batch_id: String,
     asset: String,
     previous_state_root: String,
@@ -1536,6 +1550,26 @@ struct AuthorityBody {
     wire_version: String,
     #[serde(default, deserialize_with = "present_maintained")]
     batch_evidence: Option<MaintainedBatchDocument>,
+}
+
+impl AuthorityBody {
+    fn validate_context(
+        &self,
+        activity_id: &str,
+        network_id: u32,
+        protocol_version: u16,
+        sequencer_public_key: [u8; 32],
+    ) -> Result<(), RampError> {
+        if self.activity_id != activity_id
+            || self.network_id.is_empty()
+            || self.protocol_network_id != network_id
+            || self.wire_version != protocol_version.to_string()
+            || parse_hex32(&self.sequencer_public_key)? != sequencer_public_key
+        {
+            return Err(RampError::Layerx);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1719,7 +1753,45 @@ mod authority_shape_tests {
         let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{error}"));
         let capture: serde_json::Value =
             serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
-        let document = capture["authority"].clone();
+        let mut document = capture["authority"].clone();
+        let header_bytes = decode_hex(
+            document["batch_evidence"]["header_hex"]
+                .as_str()
+                .unwrap_or_else(|| panic!("header")),
+            MAX_BODY_BYTES,
+        )
+        .unwrap_or_else(|error| panic!("header bytes: {error:?}"));
+        let header = layerx_wire::receipt::decode_batch_header(&header_bytes)
+            .unwrap_or_else(|error| panic!("header: {error:?}"));
+        document["protocol_network_id"] = serde_json::json!(header.network_id());
+        document["receipt"] = capture["receipt_hex"].clone();
+        let mut facts: AuthorityBody = serde_json::from_value(document.clone())
+            .unwrap_or_else(|error| panic!("canonical authority: {error}"));
+        let activity = facts.activity_id.clone();
+        let network = facts.protocol_network_id;
+        let protocol = facts
+            .wire_version
+            .parse::<u16>()
+            .unwrap_or_else(|error| panic!("protocol: {error}"));
+        let key = parse_hex32(&facts.sequencer_public_key)
+            .unwrap_or_else(|error| panic!("key: {error:?}"));
+        assert!(facts
+            .validate_context(&activity, network, protocol, key)
+            .is_ok());
+        facts.protocol_network_id = network
+            .checked_add(1)
+            .unwrap_or_else(|| panic!("network exhausted"));
+        assert!(facts
+            .validate_context(&activity, network, protocol, key)
+            .is_err());
+        facts.protocol_network_id = network;
+        assert!(facts
+            .validate_context(&"00".repeat(32), network, protocol, key)
+            .is_err());
+        assert!(facts.validate_context(&activity, network, 0, key).is_err());
+        assert!(facts
+            .validate_context(&activity, network, protocol, [0; 32])
+            .is_err());
         assert!(serde_json::from_value::<AuthorityBody>(document.clone()).is_ok());
         let mut historical = document.clone();
         historical

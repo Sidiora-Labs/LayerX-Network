@@ -1,4 +1,4 @@
-import { copyEntry, human_copy_catalog } from "../../../copy/catalog.ts";
+import { copyEntry, human_copy_catalog } from "../../../copy/runtime.ts";
 import { formatCopy } from "../../../copy/format.ts";
 import {
   HumanApiDecodeError,

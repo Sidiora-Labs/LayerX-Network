@@ -15,6 +15,7 @@ lxp_result lxp_receipt_match_requirement(
 lxp_result lxp_receipt_verify_checkpointed(
     const lxp_receipt *receipt,
     const lxp_augmented_receipt *augmented,
+    const uint8_t sequencer_public_key[32],
     const lxp_guarantor_key_record *guarantor_keys,
     size_t guarantor_key_count,
     const uint8_t registered_checkpoint_id[32],

@@ -217,7 +217,7 @@ int main(void)
             (lxp_byte_span){paxeer_reference, sizeof(paxeer_reference)},
             &augmented) != LXP_OK ||
         lxp_receipt_verify_checkpointed(
-            &receipt, &augmented, keys, 3U, checkpoint_id,
+            &receipt, &augmented, sequencer_public_key, keys, 3U, checkpoint_id,
             (lxp_byte_span){paxeer_reference, sizeof(paxeer_reference)},
             &arena) != LXP_OK ||
         memcmp(&receipt, &original, sizeof(receipt)) != 0)
@@ -233,15 +233,78 @@ int main(void)
         (void)memcpy(altered_receipt, altered_encoded.bytes, altered_encoded.length);
         altered.pre_checkpoint_receipt = (lxp_byte_span){altered_receipt, altered_encoded.length};
         if (lxp_arena_reset(&arena, mark) != LXP_OK) return 1;
-        if (lxp_receipt_verify_checkpointed(&tampered, &altered, keys, 3U, checkpoint_id,
+        if (lxp_receipt_verify_checkpointed(&tampered, &altered, sequencer_public_key,
+              keys, 3U, checkpoint_id,
               (lxp_byte_span){paxeer_reference, sizeof(paxeer_reference)}, &arena) !=
             LXP_ERR_ROOT_MISMATCH || lxp_arena_reset(&arena, mark) != LXP_OK) return 1;
+    }
+    {
+        static const uint8_t other_private_key[32] = {4U};
+        uint8_t other_public_key[32];
+        if (ed25519_public_key(other_private_key, other_public_key) != 0 ||
+            lxp_receipt_verify_checkpointed(
+                &receipt, &augmented, other_public_key, keys, 3U, checkpoint_id,
+                (lxp_byte_span){paxeer_reference, sizeof(paxeer_reference)},
+                &arena) != LXP_ERR_BAD_SIGNATURE ||
+            lxp_receipt_verify_checkpointed(
+                &receipt, &augmented, NULL, keys, 3U, checkpoint_id,
+                (lxp_byte_span){paxeer_reference, sizeof(paxeer_reference)},
+                &arena) != LXP_ERR_NON_CANONICAL)
+            return 1;
+    }
+    {
+        uint8_t altered_receipt[LXP_MAX_ACTIVITY_BYTES];
+        uint8_t altered_hashes[1][32];
+        uint8_t altered_checkpoint_id[32];
+        lxp_byte_span altered_encoded;
+        lxp_checkpoint_certificate altered_checkpoint = checkpoint;
+        lxp_guarantor_attestation altered_attestations[3];
+        lxp_guarantor_cert altered_certificate;
+        lxp_augmented_receipt altered = augmented;
+        lxp_receipt tampered = receipt;
+        size_t verified_signatures = 0U;
+        tampered.sequencer_signature[0] ^= 1U;
+        mark = lxp_arena_mark(&arena);
+        if (lxp_receipt_encode(&tampered, true, &arena, &altered_encoded) != LXP_OK)
+            return 1;
+        (void)memcpy(altered_receipt, altered_encoded.bytes, altered_encoded.length);
+        altered.pre_checkpoint_receipt =
+            (lxp_byte_span){altered_receipt, altered_encoded.length};
+        if (lxp_arena_reset(&arena, mark) != LXP_OK ||
+            lxp_merkle_leaf_hash(altered_receipt, altered_encoded.length,
+                                  altered_hashes[0]) != LXP_OK ||
+            lxp_merkle_proof_generate((const uint8_t (*)[32])altered_hashes,
+                1U, 0U, &arena, &altered.receipt_inclusion_proof,
+                altered_checkpoint.header.receipt_merkle_root) != LXP_OK)
+            return 1;
+        for (i = 0U; i < 3U; ++i) {
+            if (lxp_guarantor_attest(&guarantors[i], &altered_checkpoint,
+                    true, true, 2000U + i, &arena,
+                    &altered_attestations[i]) != LXP_OK)
+                return 1;
+        }
+        if (lxp_guarantor_cert_assemble(&altered_checkpoint, altered_attestations,
+                3U, 2U, &altered_certificate) != LXP_OK ||
+            lxp_guarantor_cert_verify(&altered_certificate, keys, 3U,
+                &arena, &verified_signatures) != LXP_OK ||
+            verified_signatures != 3U ||
+            lxp_checkpoint_certificate_hash(&altered_checkpoint, &arena,
+                altered_checkpoint_id) != LXP_OK)
+            return 1;
+        altered.guarantor_certificate = &altered_certificate;
+        (void)memcpy(altered.checkpoint_id, altered_checkpoint_id, 32U);
+        if (lxp_receipt_verify_checkpointed(&tampered, &altered,
+                sequencer_public_key, keys, 3U, altered_checkpoint_id,
+                (lxp_byte_span){paxeer_reference, sizeof(paxeer_reference)},
+                &arena) != LXP_ERR_BAD_SIGNATURE ||
+            lxp_arena_reset(&arena, mark) != LXP_OK)
+            return 1;
     }
     (void)memcpy(altered_reference, paxeer_reference,
                  sizeof(paxeer_reference));
     altered_reference[0] ^= 1U;
     if (lxp_receipt_verify_checkpointed(
-            &receipt, &augmented, keys, 3U, checkpoint_id,
+            &receipt, &augmented, sequencer_public_key, keys, 3U, checkpoint_id,
             (lxp_byte_span){altered_reference, sizeof(altered_reference)},
             &arena) != LXP_ERR_ROOT_MISMATCH)
         return 1;

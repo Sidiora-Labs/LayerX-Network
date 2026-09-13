@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type SyntheticEvent } from "react";
 
-import { copyEntry } from "../../copy/catalog";
+import { copyEntry } from "../../copy/runtime";
 import { formatCopy } from "../../copy/format";
 import {
   humanApi,
@@ -14,16 +14,9 @@ import {
   type Profile,
   type WalletBinding,
 } from "../api";
-import {
-  InlineNotice,
-  KitButton,
-  ScreenCard,
-  SettingsRow,
-  SettingsSection,
-  SettingsSegmentedControl,
-  SettingsSwitch,
-  SettingsTextInput,
-} from "../kit";
+import { InlineNotice, ScreenCard } from "../kit/surface";
+import { KitButton } from "../kit/control";
+import { SettingsRow, SettingsSection, SettingsSegmentedControl, SettingsSwitch, SettingsTextInput } from "../kit/settings";
 import { errorPresentation, ErrorSurface } from "../states/error";
 import { LoadingSurface, OfflineSurface } from "../states/surfaces";
 import {

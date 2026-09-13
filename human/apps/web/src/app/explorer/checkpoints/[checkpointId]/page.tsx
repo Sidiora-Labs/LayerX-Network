@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../../../copy/catalog";
+import { copyEntry } from "../../../../../copy/runtime";
 import { checkpointRecord } from "../../../../explorer/client";
 import {
   ExplorerFrame,
@@ -7,7 +7,7 @@ import {
   FreshnessDisplay,
   verificationLabel,
 } from "../../../../explorer/components";
-import { ExplorerTable, ExplorerVerificationBadge } from "../../../../kit";
+import { ExplorerTable, ExplorerVerificationBadge } from "../../../../kit/explorer";
 
 export default async function CheckpointPage({
   params,

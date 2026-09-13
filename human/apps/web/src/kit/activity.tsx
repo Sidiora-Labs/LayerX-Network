@@ -1,6 +1,9 @@
 "use client";
 
-import { Badge, Button, Card, List, ListItem } from "@layerx/ui";
+import { Badge } from "@layerx/ui/components/badge";
+import { Button } from "@layerx/ui/components/button";
+import { Card } from "@layerx/ui/components/card";
+import { List, ListItem } from "@layerx/ui/components/list";
 import { useMemo, useState, type ReactNode } from "react";
 
 export interface ActivityFeedRow {

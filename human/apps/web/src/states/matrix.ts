@@ -1,4 +1,4 @@
-import { copyEntry } from "../../copy/catalog.ts";
+import { copyEntry } from "../../copy/runtime.ts";
 
 export const REQUIRED_SCREEN_STATES = [
   "loading",

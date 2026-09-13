@@ -388,10 +388,19 @@ pub fn run_wallet(
             let did = selected_did(&config, did.as_deref())?;
             let transport = Transport::new(&config, rpc, gateway)?;
             let result = if rpc.is_some() {
-                let balances = sdk_rpc(&config, rpc, gateway)?
-                    .get_balances(&did)
-                    .map_err(rpc_error)?
-                    .into_value();
+                let environment = config.active_environment()?.1;
+                let policy = layerx_sdk::rpc_verification::AccountPolicy {
+                    protocol_version: 3,
+                    network_id: environment.network_id,
+                    sequencer_key: fixed_hex(
+                        "sequencer public key",
+                        environment.sequencer_trust_anchor.as_deref().ok_or(
+                            "configure a sequencer trust anchor before verifying account balances",
+                        )?,
+                    )?,
+                };
+                let balances =
+                    verified_account_snapshot(&sdk_rpc(&config, rpc, gateway)?, &did, &policy)?;
                 if let Some(asset) = asset {
                     filter_rpc_balances(balances, &did, fixed_hex::<32>("asset", &asset)?)?
                 } else {
@@ -669,6 +678,11 @@ fn execute_write(
     use layerx_platform_cli::wallet_signing::{PreparedPayment, SigningFacts};
     let owner = metadata(config, key)?;
     let policy = read_policy(Some(&write.receipt_policy), config)?;
+    let account_policy = layerx_sdk::rpc_verification::AccountPolicy {
+        protocol_version: policy.protocol_version,
+        network_id: policy.network_id,
+        sequencer_key: policy.sequencer.public_key(),
+    };
     if matches!(write.wait, Commitment::Finalised)
         && policy.trusted_checkpoint_context_digest.is_none()
     {
@@ -712,15 +726,15 @@ fn execute_write(
     let prepared = match request {
         WriteRequest::Payment(payment) => PreparedPayment::new(payment, &facts)?,
         WriteRequest::Send { asset, to, amount } => {
-            let to = destination(&client, &to, asset)?;
-            prepare_send(&client, &signer, &facts, asset, to, amount)?
+            let to = destination(&client, &to, asset, &account_policy)?;
+            prepare_send(&client, &signer, &facts, asset, to, amount, &account_policy)?
         }
         WriteRequest::Mint { asset, to, amount } => {
-            let to = destination(&client, &to, asset)?;
+            let to = destination(&client, &to, asset, &account_policy)?;
             PreparedPayment::new(&Payment::Mint { asset, to, amount }, &facts)?
         }
         WriteRequest::Burn { asset, amount } => {
-            let from = account_for_asset(&client, facts.actor, asset)?;
+            let from = account_for_asset(&client, facts.actor, asset, &account_policy)?;
             PreparedPayment::new(
                 &Payment::Burn {
                     asset,
@@ -761,12 +775,15 @@ fn prepare_send(
     asset: [u8; 32],
     to: [u8; 32],
     amount: u128,
+    policy: &layerx_sdk::rpc_verification::AccountPolicy,
 ) -> Result<layerx_platform_cli::wallet_signing::PreparedPayment, String> {
-    let from = account_for_asset(client, facts.actor, asset)?;
+    let from = account_for_asset(client, facts.actor, asset, policy)?;
     if from == to {
         return Err("source and destination accounts must differ".into());
     }
     let snapshot = client.get_account(&hex_encode(&from)).map_err(rpc_error)?;
+    layerx_sdk::rpc_verification::VerifiedRpcAccount::from_rpc_result(&snapshot, from, policy)
+        .map_err(rpc_error)?;
     if snapshot["account_id"] != hex_encode(&from) {
         return Err("source account snapshot mismatch".into());
     }
@@ -785,7 +802,13 @@ fn prepare_send(
         source_sequence,
         idempotency_key: facts.idempotency_key,
         expires_at: facts.expires_at_ms,
-        context_hash: [0; 32],
+        context_hash: layerx_crypto::send::send_context_hash(
+            &from,
+            &to,
+            &asset,
+            amount,
+            &facts.idempotency_key,
+        ),
         conditions: Vec::new(),
         authorization_kind: 1,
         network_id: facts.network_id,
@@ -1032,7 +1055,7 @@ fn account(did: &str, asset: &[u8; 32]) -> Result<String, String> {
 }
 
 fn validated_account_records<'a>(snapshot: &'a Value, did: &str) -> Result<&'a [Value], String> {
-    if snapshot["did"] != did || snapshot["verification"] != "authenticated_node_snapshot" {
+    if snapshot["did"] != did || snapshot["verification"] != "state_proven" {
         return Err(
             "wallet_accounts_unavailable: authenticated DID snapshot binding missing".into(),
         );
@@ -1099,9 +1122,22 @@ fn account_for_asset(
     client: &layerx_sdk::rpc::RpcClient,
     did: &str,
     asset: [u8; 32],
+    policy: &layerx_sdk::rpc_verification::AccountPolicy,
 ) -> Result<[u8; 32], String> {
-    let snapshot = client.get_balances(did).map_err(rpc_error)?.into_value();
+    let snapshot = verified_account_snapshot(client, did, policy)?;
     account_for_asset_in_snapshot(&snapshot, did, asset)
+}
+
+fn verified_account_snapshot(
+    client: &layerx_sdk::rpc::RpcClient,
+    did: &str,
+    policy: &layerx_sdk::rpc_verification::AccountPolicy,
+) -> Result<Value, String> {
+    let snapshot = client.get_balances(did).map_err(rpc_error)?.into_value();
+    layerx_sdk::rpc_verification::VerifiedRpcBalances::from_rpc_result(&snapshot, did, policy)
+        .map_err(rpc_error)?;
+    validated_account_records(&snapshot, did)?;
+    Ok(snapshot)
 }
 
 fn account_for_asset_in_snapshot(
@@ -1175,9 +1211,10 @@ fn destination(
     client: &layerx_sdk::rpc::RpcClient,
     to: &str,
     asset: [u8; 32],
+    policy: &layerx_sdk::rpc_verification::AccountPolicy,
 ) -> Result<[u8; 32], String> {
     if to.starts_with("did:") {
-        account_for_asset(client, to, asset)
+        account_for_asset(client, to, asset, policy)
     } else {
         fixed_hex("destination account", to)
     }
@@ -1244,7 +1281,7 @@ mod tests {
         let mut snapshot = json!({
             "did": did,
             "accounts": [],
-            "verification": "authenticated_node_snapshot",
+            "verification": "state_proven",
         });
         snapshot["accounts"] = Value::Array(accounts);
         snapshot
@@ -1411,6 +1448,8 @@ mod tests {
 
         let mut wrong_verification = account_snapshot(did, vec![good]);
         wrong_verification["verification"] = json!("unverified");
+        assert!(validated_account_records(&wrong_verification, did).is_err());
+        wrong_verification["verification"] = json!("authenticated_node_snapshot");
         assert!(validated_account_records(&wrong_verification, did).is_err());
     }
 

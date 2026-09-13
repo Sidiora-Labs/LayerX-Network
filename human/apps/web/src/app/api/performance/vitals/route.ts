@@ -6,6 +6,7 @@ import {
 } from "../../../../api/performance-sink";
 import { RUM_SERIES_CAPACITY } from "../../../../perf/budgets";
 import { parseRedactedWebVital } from "../../../../perf/rum-store";
+import { requestHasWebOrigin } from "../../../../security/origin";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -16,22 +17,6 @@ const NO_STORE_HEADERS = { "cache-control": "no-store" } as const;
 type BoundedBody =
   | Readonly<{ accepted: true; body: string }>
   | Readonly<{ accepted: false; status: 400 | 413 }>;
-
-function requestIsSameOrigin(request: Request): boolean {
-  if (request.headers.get("sec-fetch-site") !== "same-origin") {
-    return false;
-  }
-  const origin = request.headers.get("origin");
-  if (origin === null) {
-    return false;
-  }
-  try {
-    const parsed = new URL(origin);
-    return parsed.origin === origin && parsed.origin === new URL(request.url).origin;
-  } catch {
-    return false;
-  }
-}
 
 function requestIsJson(request: Request): boolean {
   const contentType = request.headers.get("content-type");
@@ -94,7 +79,7 @@ async function boundedBody(request: Request): Promise<BoundedBody> {
 }
 
 export async function POST(request: Request) {
-  if (!requestIsSameOrigin(request)) {
+  if (!requestHasWebOrigin(request, process.env.LAYERX_HUMAN_WEB_ORIGIN)) {
     await cancelBody(request);
     return NextResponse.json({ accepted: false }, { status: 403, headers: NO_STORE_HEADERS });
   }

@@ -137,6 +137,7 @@ struct AuthorityResponse {
     resulting_state_root: String,
     sequencer_public_key: String,
     network_id: String,
+    protocol_network_id: u32,
     wire_version: String,
     #[serde(
         default,
@@ -445,6 +446,14 @@ fn program_head(
         return Err(response(404, "unknown_program", None));
     }
     if upstream.status != 200 || upstream.content_type != "application/json" {
+        if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+            let detail: serde_json::Value =
+                serde_json::from_slice(&upstream.body).unwrap_or(serde_json::Value::Null);
+            eprintln!(
+                "program_registry_head_refusal status={} error={}",
+                upstream.status, detail["error"]
+            );
+        }
         return Err(response(503, "program_registry_invalid", Some(5)));
     }
     let document: serde_json::Value = serde_json::from_slice(&upstream.body)
@@ -1238,6 +1247,7 @@ fn authority_response(
         .map_err(|_| response(503, "authority_invalid", Some(5)))?;
     if !facts.activity_id.eq_ignore_ascii_case(activity_id)
         || facts.network_id != config.network_id
+        || facts.protocol_network_id != config.protocol_network_id
         || facts.wire_version != config.wire_version
     {
         return Err(response(503, "authority_mismatch", Some(5)));
@@ -1345,6 +1355,7 @@ fn verified_program_result(
     terminal_payload_hex: &str,
     call_graph_hex: &str,
     head: ProgramHead,
+    signed_activity: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>, i32), OutgoingResponse> {
     let expected_activity =
         parse_hex32(activity_id).map_err(|_| response(503, "component_invalid", Some(5)))?;
@@ -1354,6 +1365,30 @@ fn verified_program_result(
         .map_err(|_| response(503, "component_invalid", Some(5)))?;
     let call_graph = decode_hex(call_graph_hex, 1_048_576)
         .map_err(|_| response(503, "component_invalid", Some(5)))?;
+    let activity = decode_signed(signed_activity, &config.modules)
+        .map_err(|_| response(503, "program_activity_invalid", Some(5)))?;
+    let program_id = if activity.protocol_version() == 3 {
+        let call = layerx_types::program_call::NativeProgramCall::decode(activity.payload())
+            .map_err(|_| response(503, "program_activity_invalid", Some(5)))?;
+        if call.guest_abi != head.abi_version {
+            return Err(response(503, "program_activity_invalid", Some(5)));
+        }
+        call.callee().bytes()
+    } else {
+        ProgramCall::from_canonical_payload(activity.payload())
+            .map_err(|_| response(503, "program_activity_invalid", Some(5)))?
+            .callee()
+            .bytes()
+    };
+    if layerx_wire::hash::activity_id(&activity)
+        .map_err(|_| response(503, "program_activity_invalid", Some(5)))?
+        != expected_activity
+        || program_id != head.program_id
+    {
+        return Err(response(503, "program_activity_invalid", Some(5)));
+    }
+    let payload_hash = layerx_wire::hash::payload_hash(&activity)
+        .map_err(|_| response(503, "program_activity_invalid", Some(5)))?;
     let facts = authority(config, activity_id, &receipt)?;
     let verified = verify_program_operation(
         &receipt,
@@ -1363,6 +1398,7 @@ fn verified_program_result(
         &config.sequencer_authorization.public_key(),
         layerx_platform_gateway::ProgramExpectation {
             activity_id: expected_activity,
+            payload_hash,
             program_id: head.program_id,
             guest_abi_version: head.abi_version,
         },
@@ -1441,7 +1477,14 @@ fn program_simulation(
     let Ok(document): Result<serde_json::Value, _> = serde_json::from_slice(&upstream.body) else {
         return response(503, "component_invalid", Some(5));
     };
+    let Ok(activity) = decode_signed(&canonical, &config.modules) else {
+        return response(400, "invalid_program_call", None);
+    };
+    let Ok(payload_hash) = layerx_wire::hash::payload_hash(&activity) else {
+        return response(400, "invalid_program_call", None);
+    };
     let expected = SimulationExpectation {
+        payload_hash,
         activity_id: submission.activity_id(),
         program_id,
         abi_version: head.abi_version,
@@ -1453,6 +1496,7 @@ fn program_simulation(
 }
 
 struct SimulationExpectation {
+    payload_hash: [u8; 32],
     activity_id: [u8; 32],
     program_id: [u8; 32],
     abi_version: u16,
@@ -1505,6 +1549,7 @@ fn render_simulation(
         config.sequencer_authorization.public_key(),
         layerx_platform_gateway::ProgramExpectation {
             activity_id: expected.activity_id,
+            payload_hash: expected.payload_hash,
             program_id: expected.program_id,
             guest_abi_version: expected.abi_version,
         },
@@ -1828,7 +1873,7 @@ fn reserve_activity(
             {
                 return Err(response(409, "idempotency_conflict", None));
             }
-            if state == "completed" {
+            if matches!(state.as_str(), "completed" | "refused") {
                 let limit = if operation.program_mutation {
                     MAX_REQUEST
                 } else {
@@ -1840,9 +1885,8 @@ fn reserve_activity(
                 let Ok(result) = serde_json::from_slice::<serde_json::Value>(&result) else {
                     return Err(response(503, "persistence_unavailable", Some(5)));
                 };
-                return Err(json_response(
-                    200,
-                    &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
+                return Err(activity_terminal_response(
+                    config, operation, result, trace_id,
                 ));
             }
             if let Some(status) = state
@@ -2002,6 +2046,67 @@ fn submit_activity(
     response
 }
 
+fn publish_lifecycle(
+    config: &Config,
+    canonical_hex: &str,
+    activity_id: &str,
+    receipt: &[u8],
+) -> Result<(), OutgoingResponse> {
+    let canonical = decode_hex(canonical_hex, 1_048_576)
+        .map_err(|_| response(503, "persistence_unavailable", Some(5)))?;
+    let activity = decode_signed(&canonical, &config.modules)
+        .map_err(|_| response(503, "persistence_unavailable", Some(5)))?;
+    if activity.activity_type().module() != ModuleId::Programs {
+        return Err(response(502, "lifecycle_binding_invalid", None));
+    }
+    if !matches!(activity.activity_type().ordinal(), 1 | 2) {
+        return Ok(());
+    }
+    let digest = layerx_wire::receipt::decode(receipt)
+        .and_then(|receipt| layerx_wire::receipt::encode_unsigned(&receipt))
+        .and_then(|unsigned| layerx_wire::hash::receipt_digest(&unsigned))
+        .map_err(|_| response(502, "receipt_verification_failed", None))?;
+    let upstream = config
+        .client
+        .request(
+            &config.registry,
+            config.registry_token.as_str(),
+            &http::OutboundRequest {
+                method: "POST",
+                path: "/__registry/deployments",
+                idempotency: Some(activity_id),
+                content_type: "application/octet-stream",
+                body: &canonical,
+            },
+        )
+        .map_err(|error| {
+            if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+                eprintln!("program_registry_transport_failure: {error}");
+            }
+            response(503, "program_registry_unavailable", Some(5))
+        })?;
+    if upstream.status != 200 || upstream.content_type != "application/json" {
+        if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+            let detail: serde_json::Value =
+                serde_json::from_slice(&upstream.body).unwrap_or(serde_json::Value::Null);
+            eprintln!(
+                "program_registry_refusal status={} error={}",
+                upstream.status, detail["error"]
+            );
+        }
+        return Err(response(503, "program_registry_unavailable", Some(5)));
+    }
+    let published: serde_json::Value = serde_json::from_slice(&upstream.body)
+        .map_err(|_| response(503, "program_registry_invalid", Some(5)))?;
+    if published["activity_id"] != activity_id
+        || published["receipt_digest"] != hex(&digest)
+        || published["state"] != "deployed"
+    {
+        return Err(response(503, "program_registry_invalid", Some(5)));
+    }
+    Ok(())
+}
+
 fn complete_lifecycle(
     config: &Config,
     record: &KeyRecord,
@@ -2035,6 +2140,16 @@ fn complete_lifecycle(
     let Some(protocol) = decoded.protocol() else {
         return response(502, "receipt_verification_failed", None);
     };
+    if protocol.result_code() == 0 {
+        if let Err(error) = publish_lifecycle(
+            config,
+            &operation.retained_signed_activity,
+            &operation.submitted_activity_id,
+            &receipt,
+        ) {
+            return error;
+        }
+    }
     let result = serde_json::json!({
         "activity_id": operation.submitted_activity_id, "receipt": hex(&receipt),
         "state": if protocol.result_code() == 0 { "completed" } else { "refused" },
@@ -2045,7 +2160,11 @@ fn complete_lifecycle(
         .complete(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.request_digest,
-            state: "completed",
+            state: if protocol.result_code() == 0 {
+                "completed"
+            } else {
+                "refused"
+            },
             response_hex: &hex(result.to_string().as_bytes()),
             receipt_hex: &hex(&receipt),
             activity_id: Some(&operation.submitted_activity_id),
@@ -2061,10 +2180,83 @@ fn complete_lifecycle(
     {
         return response(503, "persistence_unavailable", Some(5));
     }
+    program_terminal_response(config, result, trace_id, true)
+}
+
+fn activity_terminal_response(
+    config: &Config,
+    operation: &ActivityOperation,
+    result: serde_json::Value,
+    trace_id: &str,
+) -> OutgoingResponse {
+    if operation.program_mutation {
+        program_terminal_response(config, result, trace_id, true)
+    } else {
+        json_response(
+            200,
+            &serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
+        )
+    }
+}
+
+fn program_terminal_response(
+    config: &Config,
+    mut result: serde_json::Value,
+    trace_id: &str,
+    mutation: bool,
+) -> OutgoingResponse {
+    let Some(receipt_hex) = result.get("receipt").and_then(serde_json::Value::as_str) else {
+        return response(503, "receipt_encoding_failed", Some(5));
+    };
+    let Ok(receipt) = decode_hex(receipt_hex, 1_048_576) else {
+        return response(503, "receipt_encoding_failed", Some(5));
+    };
+    let Ok(verified) = layerx_proof::receipt::verify_sequencer_signature(
+        &receipt,
+        config.sequencer_authorization.public_key(),
+    ) else {
+        return response(502, "receipt_verification_failed", None);
+    };
+    let Some(protocol) = verified.protocol() else {
+        return response(502, "receipt_verification_failed", None);
+    };
+    let result_code = protocol.result_code();
+    let activity_id = hex(&protocol.activity_id());
+    let state = result.get("state").and_then(serde_json::Value::as_str);
+    if result
+        .get("activity_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(activity_id.as_str())
+        || if result_code == 0 {
+            !matches!(state, Some("completed" | "executed"))
+        } else {
+            state != Some("refused")
+        }
+    {
+        return response(502, "receipt_verification_failed", None);
+    }
+    if mutation && result_code != 0 {
+        return json_response(
+            409,
+            &serde_json::json!({"ok": false, "error": {
+                "code": "program_call_refused", "protocol_result_code": result_code,
+                "retry": "never", "activity_id": activity_id, "receipt": hex(&receipt)
+            }, "trace": trace_id}),
+        );
+    }
+    result["result_code"] = serde_json::json!(result_code);
     json_response(
         200,
         &serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
     )
+}
+
+fn terminal_state(result_code: i32) -> &'static str {
+    if result_code == 0 {
+        "completed"
+    } else {
+        "refused"
+    }
 }
 
 fn complete_activity(
@@ -2115,6 +2307,7 @@ fn complete_activity(
                 &component.terminal_payload,
                 &component.call_graph,
                 head,
+                &operation.canonical,
             )
         },
     ) {
@@ -2136,12 +2329,13 @@ fn complete_activity(
     let Ok(mut result) = serde_json::from_slice::<serde_json::Value>(&result) else {
         return response(503, "receipt_encoding_failed", Some(5));
     };
-    if let Some(object) = result.as_object_mut() {
-        object.insert(
-            "idempotency_key".to_owned(),
-            serde_json::Value::String(operation.protocol_idempotency.clone()),
-        );
-    }
+    retain_submission_binding(
+        &mut result,
+        &operation.protocol_idempotency,
+        operation
+            .program_call
+            .then_some(operation.retained_signed_activity.as_str()),
+    );
     let Ok(stored_result) = serde_json::to_vec(&result) else {
         return response(503, "receipt_encoding_failed", Some(5));
     };
@@ -2151,7 +2345,7 @@ fn complete_activity(
         .complete_verified(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.request_digest,
-            state: "completed",
+            state: terminal_state(verified_result_code),
             response_hex: &hex(&stored_result),
             receipt_hex: &hex(&receipt),
             activity_id: Some(&component.activity_id.to_ascii_lowercase()),
@@ -2168,10 +2362,7 @@ fn complete_activity(
         return response(503, "persistence_unavailable", Some(5));
     }
     pay_timing("gateway.complete.persist", persist_started);
-    let response = json_response(
-        200,
-        &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
-    );
+    let response = activity_terminal_response(config, operation, result, trace_id);
     pay_timing("gateway.complete.total", total_started);
     response
 }
@@ -2384,18 +2575,30 @@ fn resolve_pending_program(
         Ok(value) => value,
         Err(error) => return error,
     };
-    let (verified, receipt, _) = match verified_program_result(
+    let Ok(canonical) = decode_hex(&operation.continuation, 1_048_576) else {
+        return response(503, "persistence_unavailable", Some(5));
+    };
+    let (verified, receipt, result_code) = match verified_program_result(
         config,
         &component.activity_id,
         &component.receipt,
         &component.terminal_payload,
         &component.call_graph,
         head,
+        &canonical,
     ) {
         Ok(value) => value,
         Err(error) => return error,
     };
-    complete_pending_program(config, record, operation, &verified, &receipt, trace_id)
+    complete_pending_program(
+        config,
+        record,
+        operation,
+        &verified,
+        &receipt,
+        result_code,
+        trace_id,
+    )
 }
 
 fn read_route(
@@ -3227,7 +3430,7 @@ fn read_program_receipt(
     if operation.state == "pending" {
         return resolve_pending_program(config, record, &operation, trace_id);
     }
-    if operation.state != "completed" {
+    if !matches!(operation.state.as_str(), "completed" | "refused") {
         return response(409, "program_call_refused", None);
     }
     let Ok(body) = decode_hex(&operation.response, MAX_REQUEST) else {
@@ -3243,10 +3446,7 @@ fn read_program_receipt(
             serde_json::Value::String(idempotency),
         );
     }
-    json_response(
-        200,
-        &serde_json::json!({"ok":true,"result":value,"trace":trace_id}),
-    )
+    program_terminal_response(config, value, trace_id, false)
 }
 
 fn read_program_activity(
@@ -3287,7 +3487,7 @@ fn read_program_activity(
     if operation.state == "pending" {
         return resolve_pending_program(config, record, &operation, trace_id);
     }
-    if operation.state != "completed" {
+    if !matches!(operation.state.as_str(), "completed" | "refused") {
         return response(409, "program_call_refused", None);
     }
     let Ok(body) = decode_hex(&operation.response, MAX_REQUEST) else {
@@ -3297,10 +3497,7 @@ fn read_program_activity(
         Ok(value) => value,
         Err(_) => return response(503, "persistence_unavailable", Some(5)),
     };
-    json_response(
-        200,
-        &serde_json::json!({"ok":true,"result":value,"trace":trace_id}),
-    )
+    program_terminal_response(config, value, trace_id, false)
 }
 
 fn render_program_interface(
@@ -3553,6 +3750,16 @@ fn complete_pending_lifecycle(
     result_code: i32,
     trace_id: &str,
 ) -> OutgoingResponse {
+    if result_code == 0 {
+        if let Err(error) = publish_lifecycle(
+            config,
+            &operation.continuation,
+            &operation.activity_id,
+            receipt,
+        ) {
+            return error;
+        }
+    }
     let result = serde_json::json!({
         "activity_id": operation.activity_id, "receipt": hex(receipt),
         "state": if result_code == 0 { "completed" } else { "refused" },
@@ -3563,7 +3770,11 @@ fn complete_pending_lifecycle(
         .complete(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.digest,
-            state: "completed",
+            state: if result_code == 0 {
+                "completed"
+            } else {
+                "refused"
+            },
             response_hex: &hex(result.to_string().as_bytes()),
             receipt_hex: &hex(receipt),
             activity_id: Some(&operation.activity_id),
@@ -3579,10 +3790,26 @@ fn complete_pending_lifecycle(
     {
         return response(503, "persistence_unavailable", Some(5));
     }
-    json_response(
-        200,
-        &serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
-    )
+    program_terminal_response(config, result, trace_id, false)
+}
+
+fn retain_submission_binding(
+    result: &mut serde_json::Value,
+    idempotency: &str,
+    signed_activity: Option<&str>,
+) {
+    if let Some(object) = result.as_object_mut() {
+        object.insert(
+            "idempotency_key".to_owned(),
+            serde_json::Value::String(idempotency.to_owned()),
+        );
+        if let Some(signed) = signed_activity {
+            object.insert(
+                "retained_signed_activity".to_owned(),
+                serde_json::Value::String(signed.to_owned()),
+            );
+        }
+    }
 }
 
 fn complete_pending_program(
@@ -3591,18 +3818,18 @@ fn complete_pending_program(
     operation: &OperationRecord,
     verified: &[u8],
     receipt: &[u8],
+    result_code: i32,
     trace_id: &str,
 ) -> OutgoingResponse {
     let mut result: serde_json::Value = match serde_json::from_slice(verified) {
         Ok(value) => value,
         Err(_) => return response(503, "receipt_encoding_failed", Some(5)),
     };
-    if let Some(object) = result.as_object_mut() {
-        object.insert(
-            "idempotency_key".to_owned(),
-            serde_json::Value::String(operation.idempotency_key.clone()),
-        );
-    }
+    retain_submission_binding(
+        &mut result,
+        &operation.idempotency_key,
+        Some(&operation.continuation),
+    );
     let Ok(stored_result) = serde_json::to_vec(&result) else {
         return response(503, "receipt_encoding_failed", Some(5));
     };
@@ -3611,7 +3838,11 @@ fn complete_pending_program(
         .complete(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.digest,
-            state: "completed",
+            state: if result_code == 0 {
+                "completed"
+            } else {
+                "refused"
+            },
             response_hex: &hex(&stored_result),
             receipt_hex: &hex(receipt),
             activity_id: Some(&operation.activity_id),
@@ -3627,10 +3858,7 @@ fn complete_pending_program(
     {
         return response(503, "persistence_unavailable", Some(5));
     }
-    json_response(
-        200,
-        &serde_json::json!({"ok":true,"result":result,"trace":trace_id}),
-    )
+    program_terminal_response(config, result, trace_id, false)
 }
 
 #[cfg(test)]
@@ -3953,6 +4181,17 @@ mod authority_shape_tests {
             serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
         let mut document = capture["authority"].clone();
         document["receipt"] = capture["receipt_hex"].clone();
+        let header = decode_hex(
+            capture["authority"]["batch_evidence"]["header_hex"]
+                .as_str()
+                .unwrap_or_else(|| panic!("header")),
+            1_048_576,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        document["protocol_network_id"] =
+            serde_json::json!(layerx_wire::receipt::decode_batch_header(&header)
+                .unwrap_or_else(|error| panic!("{error:?}"))
+                .network_id());
         assert!(serde_json::from_value::<AuthorityResponse>(document.clone()).is_ok());
         let mut historical = document.clone();
         historical

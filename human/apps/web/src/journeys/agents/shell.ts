@@ -3,6 +3,6 @@
 import { useShellSelection } from "../../shell/app-shell.tsx";
 import type { AgentsShell } from "./model.ts";
 
-export function useAgentsShell(_initial: AgentsShell): AgentsShell {
+export function useAgentsShell(): AgentsShell {
   return useShellSelection().shell;
 }

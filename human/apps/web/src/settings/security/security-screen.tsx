@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog";
+import { copyEntry } from "../../../copy/runtime";
 import { formatCopy } from "../../../copy/format";
 import {
   humanApi,
@@ -16,17 +16,11 @@ import {
   type StepUpEvidence,
   type TimedSecret,
 } from "../../api";
-import {
-  DeviceSessionList,
-  DesktopDetail,
-  InlineNotice,
-  KitButton,
-  MobileDetail,
-  ScreenCard,
-  SettingsRow,
-  SettingsSection,
-  SettingsTextInput,
-} from "../../kit";
+import { DeviceSessionList } from "../../kit/device-list";
+import { DesktopDetail, MobileDetail } from "../../kit/pattern-detail";
+import { InlineNotice, ScreenCard } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { SettingsRow, SettingsSection, SettingsTextInput } from "../../kit/settings";
 import {
   browserPasskeyAuthenticator,
   type PasskeyAuthenticator,

@@ -1,4 +1,4 @@
-import { human_copy_catalog } from "../../../copy/catalog.ts";
+import { human_copy_catalog } from "../../../copy/runtime.ts";
 
 export function custodyCopyKey(key: string, fallbackKey: string): string {
   if (human_copy_catalog().has(key)) {
