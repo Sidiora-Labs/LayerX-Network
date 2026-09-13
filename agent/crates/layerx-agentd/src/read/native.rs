@@ -11,11 +11,10 @@ use layerx_proof::availability::RootCommitments;
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::merkle::Proof;
 use layerx_types::account::AccountId;
-use layerx_types::activity::Envelope;
 use layerx_types::ids::Did;
 use layerx_types::payload::ModuleRegistry;
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::activity::decode_signed;
+use layerx_wire::activity::{decode_signed, Activity};
 use layerx_wire::hash;
 use layerx_wire::receipt::decode_batch_header;
 use layerx_wire::receipt::ProtocolReceipt;
@@ -456,8 +455,8 @@ fn proof_json(bundle: &VerifiedProofBundle, observed: u64) -> Result<Value, Nati
     )
 }
 
-fn actor_main_account(actor: &Did, protocol: u16) -> Result<[u8; 32], NativeReadError> {
-    let did = std::str::from_utf8(actor.as_bytes()).map_err(|_| NativeReadError::Verification)?;
+fn actor_main_account(actor: &[u8], protocol: u16) -> Result<[u8; 32], NativeReadError> {
+    let did = std::str::from_utf8(actor).map_err(|_| NativeReadError::Verification)?;
     let name = AccountId::parse(&format!("agent:{did}:main"))
         .map_err(|_| NativeReadError::Verification)?;
     hash::account_id_for_protocol(&name, protocol).map_err(|_| NativeReadError::Verification)
@@ -465,7 +464,7 @@ fn actor_main_account(actor: &Did, protocol: u16) -> Result<[u8; 32], NativeRead
 
 fn receipt_mentions_account(
     receipt: &ProtocolReceipt,
-    activity: &Envelope,
+    activity: &Activity,
     account: [u8; 32],
 ) -> Result<bool, NativeReadError> {
     if account == [0; 32] {
@@ -480,7 +479,7 @@ fn receipt_mentions_account(
     {
         return Ok(directly_named);
     }
-    let payload = activity.payload().as_bytes();
+    let payload = activity.payload();
     if payload.len() != 427 || !matches!(&payload[..5], b"LXDC1" | b"LXDC2") {
         return Err(NativeReadError::Verification);
     }
