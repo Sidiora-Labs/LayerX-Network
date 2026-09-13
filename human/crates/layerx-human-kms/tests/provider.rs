@@ -778,9 +778,38 @@ fn monetary_roles_are_bound_by_the_real_provider_before_and_after_restart() -> R
     Ok(())
 }
 
+fn recovery_authorization(
+    store: &Keystore,
+    principal: &PrincipalId,
+    key: &KeyId,
+    wallet: [u8; 20],
+    now: u64,
+) -> Result<layerx_human_service::custody::EvmPlanAuthorization> {
+    Ok(layerx_human_service::custody::EvmPlanAuthorization {
+        plan_id: [1; 32],
+        action_key: [2; 32],
+        tenant: "tenant".into(),
+        principal: "alice".into(),
+        binding_digest: store.evm_binding(principal, key)?.digest(),
+        wallet,
+        not_before: now,
+        not_after: now + 600,
+        transaction: layerx_human_service::custody::EvmTransaction {
+            chain_id: 31337,
+            nonce: 7,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: 2,
+            gas_limit: 21000,
+            to: [3; 20],
+            value: [0; 32],
+            calldata: vec![],
+        },
+    })
+}
+
 #[test]
 fn evm_authorization_nonce_dedup_and_acknowledgement_recovery() -> Result<()> {
-    use layerx_human_service::custody::{EvmAcknowledgement, EvmPlanAuthorization, EvmTransaction};
+    use layerx_human_service::custody::EvmAcknowledgement;
     let mut host = Host::new()?;
     let principal = PrincipalId::new("alice")?;
     let key = KeyId::new("primary")?;
@@ -796,26 +825,7 @@ fn evm_authorization_nonce_dedup_and_acknowledgement_recovery() -> Result<()> {
     let now = RuntimeClock::from_environment()?
         .sample(Duration::from_secs(1))?
         .unix_seconds();
-    let authorization = EvmPlanAuthorization {
-        plan_id: [1; 32],
-        action_key: [2; 32],
-        tenant: "tenant".into(),
-        principal: "alice".into(),
-        binding_digest: store.evm_binding(&principal, &key)?.digest(),
-        wallet,
-        not_before: now,
-        not_after: now + 600,
-        transaction: EvmTransaction {
-            chain_id: 31337,
-            nonce: 7,
-            max_priority_fee_per_gas: 1,
-            max_fee_per_gas: 2,
-            gas_limit: 21000,
-            to: [3; 20],
-            value: [0; 32],
-            calldata: vec![],
-        },
-    };
+    let authorization = recovery_authorization(&store, &principal, &key, wallet, now)?;
     assert!(store
         .sign_evm_action(&principal, &key, &authorization.action_key)
         .is_err());

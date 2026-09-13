@@ -284,7 +284,7 @@ fn human_journey_and_approval_cross_tls_and_recover_after_sink_loss() {
                 lifetime_seconds: 30,
                 maximum_outstanding: 32,
             },
-            required(
+            required::<Arc<layerx_client::runtime_clock::RuntimeClock>, _>(
                 layerx_client::runtime_clock::RuntimeClock::from_environment(),
                 "clock authority",
             ),
@@ -745,7 +745,7 @@ fn human_listener(tls: &transport::Tls, socket: &std::path::Path) -> transport::
                 allowed_origin: ORIGIN.to_owned(),
                 service_version: "integration".to_owned(),
             },
-            required(
+            required::<Arc<layerx_client::runtime_clock::RuntimeClock>, _>(
                 layerx_client::runtime_clock::RuntimeClock::from_environment(),
                 "clock authority",
             ),
