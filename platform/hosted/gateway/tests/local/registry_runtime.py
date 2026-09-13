@@ -11,15 +11,24 @@ import stat
 import struct
 import subprocess
 import sys
+import time
 
 
 def main():
+    started = time.monotonic()
+
+    def phase(name):
+        if os.environ.get("LAYERX_PAY_TIMING"):
+            print(f"registry_startup phase={name} elapsed_seconds={time.monotonic() - started:.3f}",
+                  file=sys.stderr, flush=True)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     os.setsid()
     config = json.loads(Path(args.config).read_text())
     root = Path(config["root"]).resolve(strict=True)
+    phase("configuration")
     runtime = root / "registry-runtime"
     runtime.mkdir(mode=0o750)
     os.chown(runtime, 0, 4030)
@@ -29,9 +38,11 @@ def main():
     image = subprocess.check_output(
         ["docker", "image", "inspect", "--format", "{{.Id}}",
          config["runtime_image"]], text=True).strip()
+    phase("image_inspected")
     isolation_digest = subprocess.check_output(
         ["docker", "run", "--rm", image, "sha256sum", "/usr/bin/bwrap"],
         text=True).split()[0]
+    phase("isolation_digest_verified")
     bins = Path(config["service_bin_dir"]).resolve(strict=True)
     supervisor = bins / "layerx-cgroup-exec"
     supervisor_digest = hashlib.sha256(supervisor.read_bytes()).hexdigest()
@@ -127,6 +138,7 @@ def main():
         command.extend(["--mount", f"type=bind,src={source},dst={target}" + (",readonly" if readonly else "")])
     command.extend(mounts)
     command.extend([image, "/bin/sh", entrypoint])
+    phase("protected_inputs_ready")
     process = None
 
     def stop(_signal, _frame):
@@ -136,6 +148,7 @@ def main():
     signal.signal(signal.SIGINT, stop)
     try:
         process = subprocess.Popen(command)
+        phase("runtime_launched")
         return process.wait()
     finally:
         subprocess.run(["docker", "stop", "--time", "5", name],
