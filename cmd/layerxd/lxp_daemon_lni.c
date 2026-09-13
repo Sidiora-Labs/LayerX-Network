@@ -1888,6 +1888,33 @@ static lxp_result program_admission_decode(
     return reset_status == LXP_OK ? status : reset_status;
 }
 
+static lxp_result admission_fee_reserve(lxp_daemon_lni_server *server,
+    const lxp_activity *activity, const lxp_authority_resolved *authority,
+    uint64_t timestamp)
+{
+    lxp_authority_grant grant;
+    lxp_result status = lxp_authority_fee_resolve(server->owner->kernel,
+        authority, activity, timestamp, activity->fee_limit, &grant);
+    if (status != LXP_OK || !grant.fee_budget.present) return status;
+    if (pthread_mutex_lock(&server->daemon->mutex) != 0) return LXP_ERR_IO;
+    for (size_t index = 0U; status == LXP_OK && index < server->daemon->queue_count; ++index) {
+        size_t at = (server->daemon->queue_head + index) % LXP_DAEMON_QUEUE_CAPACITY;
+        const lxp_daemon_activity *queued = &server->daemon->queue[at];
+        lxp_activity pending;
+        if (queued->global_sequence < server->owner->kernel->state->next_sequence) continue;
+        status = lxp_activity_decode(queued->bytes, queued->length, &pending);
+        if (status == LXP_OK && pending.authority.length == 32U &&
+            memcmp(pending.authority.bytes, grant.key, 32U) == 0 &&
+            pending.actor_did.length == activity->actor_did.length &&
+            memcmp(pending.actor_did.bytes, activity->actor_did.bytes, pending.actor_did.length) == 0)
+            status = lxp_authority_fee_charge(&grant.fee_budget, pending.fee_limit, timestamp);
+    }
+    if (status == LXP_OK)
+        status = lxp_authority_fee_charge(&grant.fee_budget, activity->fee_limit, timestamp);
+    if (pthread_mutex_unlock(&server->daemon->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
 static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                               const lni_envelope *request,
                               const struct ucred *credential,
@@ -2005,6 +2032,12 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                              LNI_SUBMIT_RESPONSE, request->correlation_id,
                              request->payload, request->payload_length,
                              activity_id, sizeof(activity_id), deadline);
+    }
+    status = admission_fee_reserve(server, &activity, &authority, timestamp);
+    if (status != LXP_OK) {
+        if (pthread_mutex_unlock(&server->owner->mutex) != 0) return LXP_FATAL_INVARIANT;
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 4U, status, deadline);
     }
     if (activity.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
         (activity.activity_type == LX_ASSET_SEND ||

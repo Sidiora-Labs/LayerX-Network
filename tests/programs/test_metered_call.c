@@ -304,6 +304,29 @@ static int metered_fixture_init(metered_fixture *f, uint64_t activity_limit)
     METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
     METERED_CHECK(metered_activity(f, LX_PROGRAMS_DEPLOY, payload, length, 1U,
                                    false) == 0);
+    {
+        lxp_kernel_prepared_batch *prepared = NULL;
+        lxp_authority_grant loaded;
+        size_t retries = 0U;
+        uint8_t live_root[32];
+        lxp_u128 live_balance = f->actor->balance;
+        (void)memcpy(live_root, f->kernel.current_state_root, 32U);
+        METERED_CHECK(lxp_kernel_prepare_activity_batch(&f->kernel, &f->activity,
+            &f->execution, 1U, 1U, &prepared, &retries) == LXP_OK);
+        METERED_CHECK(prepared != NULL && lxp_kernel_prepared_batch_count(prepared) == 1U);
+        const lxp_receipt *receipts = lxp_kernel_prepared_batch_receipts(prepared);
+        METERED_CHECK(receipts != NULL && receipts[0].result_code == LXP_ERR_PROGRAM_REFUSED &&
+            !lxp_u128_is_zero(receipts[0].fee_charged));
+        METERED_CHECK(lxp_authority_grant_load(lxp_kernel_prepared_batch_settled_kernel(prepared),
+            f->grant_id, &loaded) == LXP_OK);
+        METERED_CHECK(lxp_u128_cmp(loaded.fee_budget.spent_total, receipts[0].fee_charged) == 0);
+        METERED_CHECK(lxp_u128_is_zero(loaded.scope.spent_total));
+        lxp_kernel_prepared_batch_destroy(prepared);
+        METERED_CHECK(lxp_authority_grant_load(&f->kernel, f->grant_id, &loaded) == LXP_OK &&
+            lxp_u128_is_zero(loaded.fee_budget.spent_total));
+        METERED_CHECK(memcmp(live_root, f->kernel.current_state_root, 32U) == 0 &&
+            lxp_u128_cmp(live_balance, f->actor->balance) == 0);
+    }
     METERED_CHECK(lxp_kernel_execute_activity(&f->kernel, &f->activity,
                     &f->execution, &f->receipt) == LXP_OK);
     METERED_CHECK(f->receipt.result_code == LXP_OK);
@@ -342,6 +365,10 @@ static int metered_fixture_init(metered_fixture *f, uint64_t activity_limit)
     f->grant.not_before = 1U;
     f->grant.not_after = 1000U;
     f->grant.grantor_revocation_sequence = 1U;
+    f->grant.fee_budget.present = true;
+    (void)memcpy(f->grant.fee_budget.asset_id, f->asset.asset_id, 32U);
+    f->grant.fee_budget.maximum_per_activity = (lxp_u128){0U, 67108864U};
+    f->grant.fee_budget.maximum_total = (lxp_u128){0U, 268435456U};
     METERED_CHECK(lxp_grant_id_compute(&f->grant, f->grant.grant_id) == LXP_OK);
     (void)memcpy(f->grant_id, f->grant.grant_id, 32U);
     METERED_CHECK(lxp_grant_encode(&f->grant, &f->arena, &encoded) == LXP_OK);
@@ -382,10 +409,23 @@ static int metered_spent(const metered_fixture *f, uint64_t expected)
     return 0;
 }
 
+static int metered_fees(const metered_fixture *f, lxp_u128 *total)
+{
+    lxp_authority_grant loaded;
+    METERED_CHECK(!lxp_u128_is_zero(f->receipt.fee_charged));
+    METERED_CHECK(lxp_u128_add(*total, f->receipt.fee_charged, total) == LXP_OK);
+    METERED_CHECK(lxp_authority_grant_load(&f->kernel, f->grant_id, &loaded) == LXP_OK);
+    METERED_CHECK(loaded.fee_budget.present &&
+        lxp_u128_cmp(loaded.fee_budget.spent_total, *total) == 0 &&
+        lxp_u128_cmp(loaded.fee_budget.spent_this_period, *total) == 0);
+    return 0;
+}
+
 int main(void)
 {
     metered_fixture *f = calloc(1U, sizeof(*f));
     lxp_u128 actor_before;
+    lxp_u128 paid_fees = {0U, 0U};
     uint8_t root[32];
     uint64_t sequence;
     METERED_CHECK(f != NULL && metered_fixture_init(f, 4U) == 0);
@@ -399,6 +439,7 @@ int main(void)
     METERED_CHECK(f->receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_FAILURE);
     METERED_CHECK(f->payee->balance.lo == 0U && f->source->balance.lo == 40U);
     METERED_CHECK(metered_spent(f, 0U) == 0);
+    METERED_CHECK(metered_fees(f, &paid_fees) == 0);
     f->source->frozen = false;
     METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
     METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length,
@@ -411,6 +452,7 @@ int main(void)
     METERED_CHECK(actor_before.lo - f->actor->balance.lo ==
                   4U + f->receipt.fee_charged.lo);
     METERED_CHECK(metered_spent(f, 4U) == 0);
+    METERED_CHECK(metered_fees(f, &paid_fees) == 0);
     METERED_CHECK(lxp_u128_is_zero(f->grant.scope.spent_total));
     METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length,
                                    4U, true) == 0);
@@ -421,6 +463,7 @@ int main(void)
     METERED_CHECK(f->receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_FAILURE);
     METERED_CHECK(f->payee->balance.lo == 9U && f->source->balance.lo == 35U);
     METERED_CHECK(metered_spent(f, 4U) == 0);
+    METERED_CHECK(metered_fees(f, &paid_fees) == 0);
     METERED_CHECK(f->grant.scope.spent_total.lo == 4U);
     METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length,
                                    5U, true) == 0);
@@ -432,11 +475,17 @@ int main(void)
                     &f->execution, &f->receipt) == LXP_ERR_AUTH_SCOPE);
     METERED_CHECK(memcmp(root, f->kernel.current_state_root, 32U) == 0);
     METERED_CHECK(f->state.next_sequence == sequence);
+    {
+        lxp_authority_grant loaded;
+        METERED_CHECK(lxp_authority_grant_load(&f->kernel, f->grant_id, &loaded) == LXP_OK);
+        METERED_CHECK(lxp_u128_cmp(loaded.fee_budget.spent_total, paid_fees) == 0);
+    }
     METERED_CHECK(metered_spent(f, 4U) == 0);
     while (f->kernel.blob_count != 0U)
         free(f->kernel.blobs[--f->kernel.blob_count].bytes);
     METERED_CHECK(lxp_state_store_destroy(&f->state) == LXP_OK);
     free(f);
+    paid_fees = (lxp_u128){0U, 0U};
     f = calloc(1U, sizeof(*f));
     METERED_CHECK(f != NULL && metered_fixture_init(f, 3U) == 0);
     METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length,
@@ -447,6 +496,7 @@ int main(void)
     METERED_CHECK(f->receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_FAILURE);
     METERED_CHECK(f->payee->balance.lo == 0U && f->source->balance.lo == 40U);
     METERED_CHECK(metered_spent(f, 0U) == 0);
+    METERED_CHECK(metered_fees(f, &paid_fees) == 0);
     while (f->kernel.blob_count != 0U)
         free(f->kernel.blobs[--f->kernel.blob_count].bytes);
     METERED_CHECK(lxp_state_store_destroy(&f->state) == LXP_OK);

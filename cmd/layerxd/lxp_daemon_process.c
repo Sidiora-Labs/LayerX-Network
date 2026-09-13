@@ -3710,6 +3710,7 @@ static lxp_result redo_prepared_batch_wal(
     lxp_kernel_execution executions[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_authority_grant grants[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_authority_resolved authorities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_transfer_allowance allowances[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_kernel_prepared_batch *prepared = NULL;
     lxp_batch_roots roots;
     uint8_t batch_id[32];
@@ -3726,6 +3727,7 @@ static lxp_result redo_prepared_batch_wal(
     (void)memset(executions, 0, sizeof(executions));
     (void)memset(grants, 0, sizeof(grants));
     (void)memset(authorities, 0, sizeof(authorities));
+    (void)memset(allowances, 0, sizeof(allowances));
     for (size_t i = 0U; status == LXP_OK && i < view->count; ++i) {
         lxp_identity *identity = NULL;
         uint8_t principal[32];
@@ -3769,6 +3771,8 @@ static lxp_result redo_prepared_batch_wal(
                 grants[i].kind == LXP_AUTHORITY_OWNER ? grants[i].key : identity->primary_key,
                 principal, &balance);
         if (status == LXP_OK) (void)memcpy(authorities[i].principal, principal, 32U);
+        if (status == LXP_OK)
+            lxp_daemon_live_allowance(&grants[i], &authorities[i], &allowances[i]);
         executions[i].network_id = process->network_id;
         executions[i].batch_number = view->batch_number;
         executions[i].batch_timestamp_ms = view->timestamp_ms;
@@ -3782,6 +3786,7 @@ static lxp_result redo_prepared_batch_wal(
         executions[i].signature_valid = true;
         executions[i].identities = &process->identities;
         executions[i].authority = &authorities[i];
+        executions[i].allowance = &allowances[i];
         executions[i].fee_parameters = &process->fees;
         executions[i].fee_balance = balance;
         executions[i].gas_limit = UINT64_MAX;

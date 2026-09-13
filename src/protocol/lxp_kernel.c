@@ -1119,14 +1119,125 @@ lxp_result lxp_kernel_restore_commit_observer_pending(
     return LXP_OK;
 }
 
+typedef struct kernel_fee_transaction {
+    void *inner;
+    bool metered;
+    bool record_existed;
+    uint8_t key[33];
+    uint8_t before[72];
+} kernel_fee_transaction;
+
+static size_t kernel_fee_record_find(const lxp_kernel *kernel, const uint8_t key[33])
+{
+    for (size_t i = 0U; i < kernel->module_kv_count; ++i)
+        if (kernel->module_kv[i].module_id == LXP_MODULE_GOVERNANCE &&
+            kernel->module_kv[i].key_length == 33U &&
+            memcmp(kernel->module_kv[i].key, key, 33U) == 0) return i;
+    return kernel->module_kv_count;
+}
+
+static void kernel_fee_record_restore(lxp_kernel *kernel, const kernel_fee_transaction *token)
+{
+    size_t at;
+    if (!token->metered) return;
+    at = kernel_fee_record_find(kernel, token->key);
+    if (at == kernel->module_kv_count) {
+        kernel->publication_poisoned = true;
+        return;
+    }
+    if (token->record_existed) {
+        kernel->module_kv[at].value_length = sizeof(token->before);
+        (void)memcpy(kernel->module_kv[at].value, token->before, sizeof(token->before));
+    } else {
+        size_t tail = kernel->module_kv_count - at - 1U;
+        if (tail != 0U) (void)memmove(&kernel->module_kv[at], &kernel->module_kv[at + 1U],
+                                      tail * sizeof(kernel->module_kv[0]));
+        --kernel->module_kv_count;
+    }
+}
+
+static lxp_result kernel_fee_prepare(lxp_kernel *kernel, const lxp_activity *activity,
+    const lxp_kernel_execution *execution, lxp_u128 fee, void **transaction)
+{
+    lxp_authority_grant grant;
+    kernel_fee_transaction *token;
+    lxp_result status;
+    if (transaction == NULL || kernel->fee_transaction.prepare == NULL)
+        return LXP_FATAL_INVARIANT;
+    *transaction = NULL;
+    status = lxp_authority_fee_resolve(kernel, execution->authority, activity,
+        execution->batch_timestamp_ms, fee, &grant);
+    if (status != LXP_OK) return status;
+    token = calloc(1U, sizeof(*token));
+    if (token == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    if (grant.fee_budget.present) {
+        uint8_t value[72];
+        size_t at;
+        status = lxp_authority_fee_charge(&grant.fee_budget, fee, execution->batch_timestamp_ms);
+        if (status == LXP_OK) status = lxp_authority_fee_record_encode(&grant, value);
+        lxp_authority_fee_record_key(grant.grant_id, token->key);
+        at = kernel_fee_record_find(kernel, token->key);
+        if (status == LXP_OK && at == kernel->module_kv_count &&
+            at == LXP_KERNEL_MAX_MODULE_KV) status = LXP_ERR_ARENA_EXHAUSTED;
+        token->record_existed = at != kernel->module_kv_count;
+        if (status == LXP_OK && token->record_existed) {
+            if (kernel->module_kv[at].value_length != sizeof(token->before)) status = LXP_FATAL_INVARIANT;
+            else (void)memcpy(token->before, kernel->module_kv[at].value, sizeof(token->before));
+        }
+        if (status == LXP_OK) {
+            if (!token->record_existed) ++kernel->module_kv_count;
+            kernel->module_kv[at].module_id = LXP_MODULE_GOVERNANCE;
+            kernel->module_kv[at].key_length = sizeof(token->key);
+            kernel->module_kv[at].value_length = sizeof(value);
+            (void)memcpy(kernel->module_kv[at].key, token->key, sizeof(token->key));
+            (void)memcpy(kernel->module_kv[at].value, value, sizeof(value));
+            token->metered = true;
+        }
+    }
+    if (status == LXP_OK)
+        status = kernel->fee_transaction.prepare(kernel, activity, execution->authority, fee, &token->inner);
+    if (status == LXP_OK && token->inner == NULL) status = LXP_FATAL_INVARIANT;
+    if (status != LXP_OK) {
+        if (token->inner != NULL) kernel->fee_transaction.rollback(kernel, token->inner);
+        kernel_fee_record_restore(kernel, token);
+        free(token);
+        return status;
+    }
+    *transaction = token;
+    return LXP_OK;
+}
+
+static void kernel_fee_commit(lxp_kernel *kernel, void *transaction)
+{
+    kernel_fee_transaction *token = transaction;
+    kernel->fee_transaction.commit(kernel, token->inner);
+    free(token);
+}
+
+static void kernel_fee_rollback(lxp_kernel *kernel, void *transaction)
+{
+    kernel_fee_transaction *token = transaction;
+    kernel->fee_transaction.rollback(kernel, token->inner);
+    kernel_fee_record_restore(kernel, token);
+    free(token);
+}
+
+static lxp_result kernel_fee_admission(const lxp_kernel *kernel,
+    const lxp_activity *activity, const lxp_kernel_execution *execution)
+{
+    lxp_authority_grant grant;
+    return lxp_authority_fee_resolve(kernel, execution->authority, activity,
+        execution->batch_timestamp_ms, activity->fee_limit, &grant);
+}
+
 static void close_failed_fee_transaction(lxp_kernel *kernel,
                                          void *fee_transaction,
                                          lxp_result status)
 {
     if (lxp_result_is_fatal(status))
-        kernel->fee_transaction.commit(kernel, fee_transaction);
+        kernel_fee_commit(kernel, fee_transaction);
     else
-        kernel->fee_transaction.rollback(kernel, fee_transaction);
+        kernel_fee_rollback(kernel, fee_transaction);
 }
 
 lxp_result lxp_kernel_bind_module_runtime(lxp_kernel *kernel,
@@ -2750,6 +2861,8 @@ lxp_result lxp_kernel_prepare_activity(
             activity->actor_did.length, activity->idempotency_key,
             &prior_receipt, &prior_receipt_length);
     if (status != LXP_OK) goto done;
+    status = kernel_fee_admission(&work->kernel, activity, execution);
+    if (status != LXP_OK) goto done;
     admission_context = (lxp_admission_context){
         execution->network_id, execution->batch_timestamp_ms,
         execution->maximum_timestamp_window, identity->next_sequence,
@@ -2960,7 +3073,8 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
         lxp_ct_memcmp(prepared->execution_binding,
                       execution_binding, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
-    status = lxp_activity_encode(activity, execution->arena, &encoded);
+    status = kernel_fee_admission(&snapshot->kernel, activity, execution);
+    if (status == LXP_OK) status = lxp_activity_encode(activity, execution->arena, &encoded);
     if (status == LXP_OK) {
         uint8_t activity_id[32];
         status = lxp_activity_id(encoded.bytes, encoded.length, activity_id);
@@ -3016,8 +3130,7 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
         status = lxp_effect_buffer_init(&effects);
     }
     if (status == LXP_OK && !lxp_u128_is_zero(prepared->fee_charged)) {
-        status = candidate->kernel.fee_transaction.prepare(
-            &candidate->kernel, activity, execution->authority,
+        status = kernel_fee_prepare(&candidate->kernel, activity, execution,
             prepared->fee_charged, &fee_transaction);
         fee_transaction_open = status == LXP_OK;
         if (status == LXP_OK && fee_transaction == NULL)
@@ -3095,8 +3208,7 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
     if (status == LXP_OK && module_ctx_initialized)
         status = lxp_module_ctx_commit(&module_ctx);
     if (status == LXP_OK && fee_transaction_open) {
-        candidate->kernel.fee_transaction.commit(&candidate->kernel,
-                                                  fee_transaction);
+        kernel_fee_commit(&candidate->kernel, fee_transaction);
         fee_transaction_open = false;
         fee_transaction = NULL;
     }
@@ -3114,8 +3226,7 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
     }
     if (module_ctx_initialized) lxp_module_ctx_rollback(&module_ctx);
     if (fee_transaction_open)
-        candidate->kernel.fee_transaction.rollback(&candidate->kernel,
-                                                    fee_transaction);
+        kernel_fee_rollback(&candidate->kernel, fee_transaction);
     if (candidate != NULL && candidate->journal.open)
         (void)lxp_state_journal_rollback(&candidate->journal);
     lxp_kernel_batch_snapshot_destroy(candidate);
@@ -4767,6 +4878,8 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         return status == LXP_OK ? LXP_ERR_IDEMPOTENT_REPLAY : status;
     }
     if (status != LXP_OK) return status;
+    status = kernel_fee_admission(kernel, activity, execution);
+    if (status != LXP_OK) return status;
     admission_context = (lxp_admission_context){
         execution->network_id, execution->batch_timestamp_ms,
         execution->maximum_timestamp_window, identity->next_sequence,
@@ -4802,17 +4915,15 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     if (fee_policy.charge_fee && !programs_call)
         status = kernel->fee_transaction.prepare == NULL ?
                  LXP_FATAL_INVARIANT :
-                 kernel->fee_transaction.prepare(
-                     kernel, activity, execution->authority,
-                     fee_policy.fee_charged,
-                     &fee_transaction);
+                 kernel_fee_prepare(kernel, activity, execution,
+                     fee_policy.fee_charged, &fee_transaction);
     if (status == LXP_OK && fee_policy.charge_fee && !programs_call)
         fee_transaction_open = true;
     if (status == LXP_OK && fee_transaction_open && fee_transaction == NULL)
         status = LXP_FATAL_INVARIANT;
     if (status != LXP_OK) {
         if (fee_transaction_open)
-            kernel->fee_transaction.rollback(kernel, fee_transaction);
+            kernel_fee_rollback(kernel, fee_transaction);
         (void)lxp_state_journal_rollback(kernel->journal);
         return status;
     }
@@ -4937,10 +5048,8 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         if (status == LXP_OK && programs_call && fee_policy.charge_fee)
             status = kernel->fee_transaction.prepare == NULL ?
                      LXP_FATAL_INVARIANT :
-                     kernel->fee_transaction.prepare(
-                         kernel, activity, execution->authority,
-                         fee_policy.fee_charged,
-                         &fee_transaction);
+                     kernel_fee_prepare(kernel, activity, execution,
+                         fee_policy.fee_charged, &fee_transaction);
         if (status == LXP_OK && programs_call && fee_policy.charge_fee)
             fee_transaction_open = true;
         if (status == LXP_OK && fee_transaction_open &&
@@ -5060,7 +5169,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         return status;
     }
     if (fee_transaction_open)
-        kernel->fee_transaction.commit(kernel, fee_transaction);
+        kernel_fee_commit(kernel, fee_transaction);
     status = receipt_committed_state_check(kernel, receipt);
     if (status != LXP_OK) {
         kernel->publication_poisoned = true;

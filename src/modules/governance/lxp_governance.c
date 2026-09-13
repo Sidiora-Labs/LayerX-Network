@@ -1,6 +1,7 @@
 #include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/programs.h"
 #include <string.h>
 
 enum { STATE_BYTES = 223, DID = 5, PRIMARY = 37, REVOCATION = 69,
@@ -228,6 +229,14 @@ static lxp_result grant_scope_validate(lxp_module_ctx *ctx,
          (scope->period_start != grant->not_before ||
           lxp_u128_cmp(scope->maximum_per_activity, scope->maximum_per_period) > 0)))
         return LXP_ERR_AUTH_SCOPE;
+    if (grant->fee_budget.present) {
+        const lxp_authority_fee_budget *fee = &grant->fee_budget;
+        const lx_programs_transfer_runtime *runtime = ctx->kernel->module_runtime[LXP_MODULE_PROGRAMS];
+        if (runtime == NULL || memcmp(fee->asset_id, runtime->occupancy_asset_id, 32U) != 0 ||
+            !lxp_u128_is_zero(fee->spent_total) || !lxp_u128_is_zero(fee->spent_this_period) ||
+            (fee->period_length != 0U && fee->period_start != grant->not_before))
+            return LXP_ERR_AUTH_SCOPE;
+    }
     return LXP_OK;
 }
 
@@ -269,8 +278,11 @@ static lxp_result issue_grant(lxp_module_ctx *ctx, const governance_payload *p,
     if (status == LXP_OK) status = lxp_ctx_emit_event(ctx, 0x7148U, key + 1U, 32U);
     if (status == LXP_OK) status = lxp_ctx_emit_event(ctx, 0x7108U, body.bytes,
                                                     body.length < 256U ? body.length : 256U);
-    if (status == LXP_OK && body.length > 256U)
-        status = lxp_ctx_emit_event(ctx, 0x7128U, body.bytes + 256U, body.length - 256U);
+    for (size_t offset = 256U; status == LXP_OK && offset < body.length; offset += 256U) {
+        size_t remaining = body.length - offset;
+        status = lxp_ctx_emit_event(ctx, 0x7128U, body.bytes + offset,
+                                    remaining < 256U ? remaining : 256U);
+    }
     return status;
 }
 
@@ -339,15 +351,10 @@ static lxp_result execute(lxp_module_ctx *ctx, const lxp_activity *activity,
         (void)memcpy(key + 1U, p->bytes + 4U, 32U);
         status = lxp_ctx_kv_get(ctx, key, sizeof(key), &prior, &length);
         if (status != LXP_OK) return status;
-        lxp_codec_reader reader;
-        lxp_byte_span grantor;
-        uint8_t version;
-        status = lxp_codec_reader_init(&reader, prior, length);
-        if (status == LXP_OK) status = lxp_codec_read_struct_header(&reader, 0x2001U);
-        if (status == LXP_OK) status = lxp_codec_read_u8(&reader, &version);
-        if (status == LXP_OK) status = lxp_codec_read_bytes(&reader, &grantor, 32U);
-        if (status != LXP_OK || version != 1U || grantor.length != 32U ||
-            memcmp(grantor.bytes, authority->actor, 32U) != 0 ||
+        lxp_authority_grant stored_grant;
+        status = lxp_grant_decode(prior, length, &stored_grant);
+        if (status != LXP_OK ||
+            memcmp(stored_grant.grantor, authority->actor, 32U) != 0 ||
             read64(p->bytes + 37U) != sequence || p->bytes[36] == 0U || p->bytes[36] > 5U)
             return LXP_ERR_AUTH_SCOPE;
         (void)memcpy(revoked, p->bytes + 4U, sizeof(revoked));

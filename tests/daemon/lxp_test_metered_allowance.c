@@ -7,7 +7,7 @@ int program_admission_client_main(int argc, char **argv);
 #include "layerx/lxp_merkle.h"
 #include <sys/wait.h>
 
-enum { METERED_RECEIPTS = 16 };
+enum { METERED_RECEIPTS = 20 };
 
 typedef struct metered_run {
     uint64_t account_sequence;
@@ -412,6 +412,17 @@ static int metered_issue(int descriptor, const signer *owner, metered_run *run,
     grant.not_before = (uint64_t)now.tv_sec * 1000U - 60000U;
     grant.not_after = grant.not_before + 3600000U;
     grant.grantor_revocation_sequence = run->generation;
+    grant.fee_budget.present = seed != 0x49U;
+    (void)memcpy(grant.fee_budget.asset_id, metered_asset, 32U);
+    grant.fee_budget.maximum_per_activity = (lxp_u128){0U, 67108864U};
+    grant.fee_budget.maximum_total = (lxp_u128){0U, 536870912U};
+    if (seed == 0x47U) grant.fee_budget.maximum_total = grant.fee_budget.maximum_per_activity;
+    if (seed == 0x48U) {
+        grant.fee_budget.maximum_total = (lxp_u128){0U, 134217728U};
+        grant.fee_budget.period_length = 3600000U;
+        grant.fee_budget.period_start = grant.not_before;
+        grant.fee_budget.maximum_per_period = grant.fee_budget.maximum_per_activity;
+    }
     if (kind == LXP_AUTHORITY_BUDGET_ALLOWANCE) {
         grant.scope.period_length = 3600000U;
         grant.scope.period_start = grant.not_before;
@@ -427,7 +438,8 @@ static int metered_issue(int descriptor, const signer *owner, metered_run *run,
     (void)memcpy(payload, writer.bytes, writer.length);
     REQUIRE(metered_execute(descriptor, owner, run, 0x00070008U, payload,
                              writer.length, LXP_OK, &receipt) == 0);
-    REQUIRE(receipt.effects.count == 4U && receipt.effects.effects[0].event_type == 0x7148U);
+    REQUIRE(receipt.effects.count == 2U + (body.length + 255U) / 256U &&
+            receipt.effects.effects[0].event_type == 0x7148U);
     return 0;
 }
 
@@ -557,6 +569,25 @@ static int metered_simulate(int descriptor, const signer *delegate, metered_run 
     return 0;
 }
 
+static int metered_fee_refusals(int descriptor, metered_run *run,
+                                  const uint8_t *payload, size_t payload_length)
+{
+    uint8_t encoded[ACTIVITY_CAPACITY], root[32];
+    size_t length;
+    for (uint8_t seed = 0x47U; seed <= 0x49U; ++seed) {
+        signer delegate;
+        REQUIRE(signer_init(&delegate, seed) == 0);
+        REQUIRE(metered_encode(&delegate, run->account_sequence, LX_PROGRAMS_CALL,
+            0U, payload, payload_length, encoded, &length) == 0);
+        REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 620U, encoded, length) == 0);
+        REQUIRE(expect_error(descriptor, 620U, 4U,
+            seed == 0x49U ? LXP_ERR_AUTH_ALLOWANCE : LXP_ERR_GRANT_EXHAUSTED) == 0);
+        REQUIRE(metered_head(descriptor, 0U, root) == 0);
+        REQUIRE(memcmp(root, run->root, 32U) == 0);
+    }
+    return 0;
+}
+
 static int metered_initial(int descriptor, const signer *owner, metered_run *run)
 {
     uint8_t encoded[ACTIVITY_CAPACITY], payload[1024], wasm[512], destination[32];
@@ -624,6 +655,17 @@ static int metered_initial(int descriptor, const signer *owner, metered_run *run
                              length, LXP_OK, &receipt) == 0);
     REQUIRE(metered_execute(descriptor, &budget, run, LX_PROGRAMS_CALL, payload,
                              length, LXP_ERR_PROGRAM_REFUSED, &receipt) == 0);
+    REQUIRE(metered_issue(descriptor, owner, run, 0x47U, LXP_AUTHORITY_DELEGATED_CAPABILITY, true) == 0);
+    REQUIRE(metered_issue(descriptor, owner, run, 0x48U, LXP_AUTHORITY_DELEGATED_CAPABILITY, true) == 0);
+    REQUIRE(metered_issue(descriptor, owner, run, 0x49U, LXP_AUTHORITY_DELEGATED_CAPABILITY, false) == 0);
+    for (uint8_t seed = 0x47U; seed <= 0x48U; ++seed) {
+        signer fee_delegate;
+        REQUIRE(signer_init(&fee_delegate, seed) == 0);
+        REQUIRE(metered_execute(descriptor, &fee_delegate, run, LX_PROGRAMS_CALL,
+            payload, length, LXP_ERR_PROGRAM_REFUSED, &receipt) == 0);
+        REQUIRE(!lxp_u128_is_zero(receipt.fee_charged));
+    }
+    REQUIRE(metered_fee_refusals(descriptor, run, payload, length) == 0);
     puts("live signed capability and budget grants charge Programs transfers; simulation, repeated spending, exhaustion and asset mismatch verified");
     return 0;
 }
@@ -633,7 +675,7 @@ static int metered_recovered(int descriptor, metered_run *run)
     uint8_t root[32], destination[32], payload[512];
     lxp_receipt receipt;
     signer capability, budget;
-    REQUIRE(run->receipt_count == 12U && run->account_sequence == 12U);
+    REQUIRE(run->receipt_count == 17U && run->account_sequence == 17U);
     REQUIRE(metered_head(descriptor, 0U, root) == 0);
     REQUIRE(memcmp(root, run->root, 32U) == 0);
     for (size_t i = 0U; i < run->receipt_count; ++i)
@@ -645,6 +687,7 @@ static int metered_recovered(int descriptor, metered_run *run)
                              length, LXP_ERR_PROGRAM_REFUSED, &receipt) == 0);
     REQUIRE(metered_execute(descriptor, &budget, run, LX_PROGRAMS_CALL, payload,
                              length, LXP_ERR_PROGRAM_REFUSED, &receipt) == 0);
+    REQUIRE(metered_fee_refusals(descriptor, run, payload, length) == 0);
     puts("daemon and authority replica replay preserve authenticated roots, receipts and exhausted capability and budget scopes");
     return 0;
 }

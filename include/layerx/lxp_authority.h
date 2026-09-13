@@ -33,6 +33,18 @@ typedef struct lxp_authority_scope {
 } lxp_authority_scope;
 #define lxp_authority_scope lxp_authority_scope
 
+typedef struct lxp_authority_fee_budget {
+    bool present;
+    uint8_t asset_id[32];
+    lxp_u128 maximum_per_activity;
+    lxp_u128 maximum_total;
+    lxp_u128 spent_total;
+    uint64_t period_length;
+    lxp_u128 maximum_per_period;
+    lxp_u128 spent_this_period;
+    uint64_t period_start;
+} lxp_authority_fee_budget;
+
 typedef struct lxp_authority_grant {
     uint8_t grant_id[32];
     uint8_t grantor[32];
@@ -46,6 +58,7 @@ typedef struct lxp_authority_grant {
     bool revoked;
     uint64_t revoked_at_sequence;
     uint8_t grantor_signature[64];
+    lxp_authority_fee_budget fee_budget;
 } lxp_authority_grant;
 #define lxp_authority_grant lxp_authority_grant
 
@@ -69,6 +82,7 @@ typedef struct lxp_authority_resolved {
     uint8_t verified_key[32];
     const lxp_authority_scope *scope;
     uint8_t authority_hash[32];
+    uint8_t grant_id[32];
 } lxp_authority_resolved;
 #define lxp_authority_resolved lxp_authority_resolved
 
@@ -84,6 +98,15 @@ typedef struct lxp_authority_envelope {
 struct lxp_kernel;
 struct lxp_identity;
 struct lxp_transfer_allowance;
+
+lxp_result lxp_authority_fee_resolve(const struct lxp_kernel *kernel,
+    const lxp_authority_resolved *authority, const lxp_activity *activity,
+    uint64_t timestamp, lxp_u128 amount, lxp_authority_grant *grant);
+lxp_result lxp_authority_fee_charge(lxp_authority_fee_budget *budget,
+    lxp_u128 amount, uint64_t timestamp);
+void lxp_authority_fee_record_key(const uint8_t grant_id[32], uint8_t key[33]);
+lxp_result lxp_authority_fee_record_encode(const lxp_authority_grant *grant,
+    uint8_t value[72]);
 
 bool lxp_authority_scope_equal(const lxp_authority_scope *left,
                                 const lxp_authority_scope *right);
