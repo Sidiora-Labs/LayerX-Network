@@ -39,30 +39,30 @@ library ArchiveSha256 {
             function rotate(value, bits) -> rotated {
                 rotated := and(or(shr(bits, value), shl(sub(32, bits), value)), 0xffffffff)
             }
-            function transform(state, words, constants, blockPointer) {
+            function transform(statePointer, wordPointer, constantPointer, blockPointer) {
                 for { let i := 0 } lt(i, 16) { i := add(i, 1) } {
-                    mstore(add(words, mul(i, 32)), shr(224, mload(add(blockPointer, mul(i, 4)))))
+                    mstore(add(wordPointer, mul(i, 32)), shr(224, mload(add(blockPointer, mul(i, 4)))))
                 }
                 for { let i := 16 } lt(i, 64) { i := add(i, 1) } {
-                    let x := mload(add(words, mul(sub(i, 15), 32)))
-                    let y := mload(add(words, mul(sub(i, 2), 32)))
+                    let x := mload(add(wordPointer, mul(sub(i, 15), 32)))
+                    let y := mload(add(wordPointer, mul(sub(i, 2), 32)))
                     let s0 := xor(xor(rotate(x, 7), rotate(x, 18)), shr(3, x))
                     let s1 := xor(xor(rotate(y, 17), rotate(y, 19)), shr(10, y))
-                    let sum := add(add(mload(add(words, mul(sub(i, 16), 32))), s0), add(mload(add(words, mul(sub(i, 7), 32))), s1))
-                    mstore(add(words, mul(i, 32)), and(sum, 0xffffffff))
+                    let sum := add(add(mload(add(wordPointer, mul(sub(i, 16), 32))), s0), add(mload(add(wordPointer, mul(sub(i, 7), 32))), s1))
+                    mstore(add(wordPointer, mul(i, 32)), and(sum, 0xffffffff))
                 }
-                let a := mload(state)
-                let b := mload(add(state, 32))
-                let c := mload(add(state, 64))
-                let d := mload(add(state, 96))
-                let e := mload(add(state, 128))
-                let f := mload(add(state, 160))
-                let g := mload(add(state, 192))
-                let h := mload(add(state, 224))
+                let a := mload(statePointer)
+                let b := mload(add(statePointer, 32))
+                let c := mload(add(statePointer, 64))
+                let d := mload(add(statePointer, 96))
+                let e := mload(add(statePointer, 128))
+                let f := mload(add(statePointer, 160))
+                let g := mload(add(statePointer, 192))
+                let h := mload(add(statePointer, 224))
                 for { let i := 0 } lt(i, 64) { i := add(i, 1) } {
                     let s1 := xor(xor(rotate(e, 6), rotate(e, 11)), rotate(e, 25))
                     let choice := xor(and(e, f), and(not(e), g))
-                    let first := and(add(add(add(h, s1), choice), add(shr(224, mload(add(constants, mul(i, 4)))), mload(add(words, mul(i, 32))))), 0xffffffff)
+                    let first := and(add(add(add(h, s1), choice), add(shr(224, mload(add(constantPointer, mul(i, 4)))), mload(add(wordPointer, mul(i, 32))))), 0xffffffff)
                     let s0 := xor(xor(rotate(a, 2), rotate(a, 13)), rotate(a, 22))
                     let majority := xor(xor(and(a, b), and(a, c)), and(b, c))
                     let second := and(add(s0, majority), 0xffffffff)
@@ -75,14 +75,14 @@ library ArchiveSha256 {
                     b := a
                     a := and(add(first, second), 0xffffffff)
                 }
-                mstore(state, and(add(mload(state), a), 0xffffffff))
-                mstore(add(state, 32), and(add(mload(add(state, 32)), b), 0xffffffff))
-                mstore(add(state, 64), and(add(mload(add(state, 64)), c), 0xffffffff))
-                mstore(add(state, 96), and(add(mload(add(state, 96)), d), 0xffffffff))
-                mstore(add(state, 128), and(add(mload(add(state, 128)), e), 0xffffffff))
-                mstore(add(state, 160), and(add(mload(add(state, 160)), f), 0xffffffff))
-                mstore(add(state, 192), and(add(mload(add(state, 192)), g), 0xffffffff))
-                mstore(add(state, 224), and(add(mload(add(state, 224)), h), 0xffffffff))
+                mstore(statePointer, and(add(mload(statePointer), a), 0xffffffff))
+                mstore(add(statePointer, 32), and(add(mload(add(statePointer, 32)), b), 0xffffffff))
+                mstore(add(statePointer, 64), and(add(mload(add(statePointer, 64)), c), 0xffffffff))
+                mstore(add(statePointer, 96), and(add(mload(add(statePointer, 96)), d), 0xffffffff))
+                mstore(add(statePointer, 128), and(add(mload(add(statePointer, 128)), e), 0xffffffff))
+                mstore(add(statePointer, 160), and(add(mload(add(statePointer, 160)), f), 0xffffffff))
+                mstore(add(statePointer, 192), and(add(mload(add(statePointer, 192)), g), 0xffffffff))
+                mstore(add(statePointer, 224), and(add(mload(add(statePointer, 224)), h), 0xffffffff))
             }
             for { let i := 0 } lt(i, 8) { i := add(i, 1) } {
                 mstore(add(state, mul(i, 32)), and(shr(sub(224, mul(i, 32)), packed), 0xffffffff))
