@@ -18,6 +18,7 @@ import (
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	receiptstore "github.com/sidiora-labs/paxeer-network/storage/ledger_db/receipt"
 )
 
 const defaultPriorityFeePerGas = 1000000000 // 1gwei
@@ -398,6 +399,15 @@ func (i *InfoAPI) getRewards(block *coretypes.ResultBlock, baseFee *big.Int, rew
 		}
 		// okay to get from latest since receipt is immutable
 		receipt, err := i.keeper.GetReceipt(i.ctxProvider(LatestCtxHeight), ethtx.Hash())
+		if errors.Is(err, receiptstore.ErrNotFound) {
+			unconsumed, nonceErr := transactionNonceUnconsumed(i.keeper, i.ctxProvider, block, ethtx)
+			if nonceErr != nil {
+				return nil, nonceErr
+			}
+			if unconsumed {
+				continue
+			}
+		}
 		if err != nil {
 			return nil, fmt.Errorf("load receipt for %s: %w", ethtx.Hash().Hex(), err)
 		}
@@ -446,6 +456,15 @@ func (i *InfoAPI) getCongestionData(ctx context.Context, height *int64) (blockGa
 		}
 		// okay to get from latest since receipt is immutable
 		receipt, err := i.keeper.GetReceiptWithRetry(i.ctxProvider(LatestCtxHeight), ethtx.Hash(), 3)
+		if errors.Is(err, receiptstore.ErrNotFound) {
+			unconsumed, nonceErr := transactionNonceUnconsumed(i.keeper, i.ctxProvider, block, ethtx)
+			if nonceErr != nil {
+				return 0, nonceErr
+			}
+			if unconsumed {
+				continue
+			}
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -501,6 +520,15 @@ func (i *InfoAPI) CalculateGasUsedRatio(ctx context.Context, blockHeight int64) 
 		}
 		// okay to get from latest since receipt is immutable
 		receipt, err := i.keeper.GetReceiptWithRetry(i.ctxProvider(LatestCtxHeight), ethtx.Hash(), 3)
+		if errors.Is(err, receiptstore.ErrNotFound) {
+			unconsumed, nonceErr := transactionNonceUnconsumed(i.keeper, i.ctxProvider, block, ethtx)
+			if nonceErr != nil {
+				return 0, nonceErr
+			}
+			if unconsumed {
+				continue
+			}
+		}
 		if err != nil {
 			return 0, err
 		}
