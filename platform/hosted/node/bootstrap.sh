@@ -62,7 +62,8 @@
 #                           the sequencer public key.
 #   --genesis-timestamp-ms T  Genesis timestamp in milliseconds. Default: now.
 #   --enable-module NAME    Enable escrow, budget, stream, service or perps in
-#                           the signed genesis parameters. Repeat for each module.
+#                           the signed genesis parameters. All five are enabled
+#                           by default; explicit names select the enabled rows.
 #   --migrations FILE       History migration SQL. Default: repository
 #                           migrations/0007_history_index.sql or
 #                           /opt/layerx/migrations/0007_history_index.sql.
@@ -186,6 +187,18 @@ SETTLEMENT_ENV=""
 SETTLEMENT_DOCUMENT=${LAYERX_PAXEER_SETTLEMENT_JSON:-}
 FORCE=0
 
+enable_genesis_module() {
+    local module
+    case "$1" in
+        escrow|budget|stream|service|perps) ;;
+        *) fail "--enable-module requires escrow, budget, stream, service or perps" ;;
+    esac
+    for module in "${GENESIS_MODULES[@]}"; do
+        [ "$module" != "$1" ] || fail "--enable-module repeats $1"
+    done
+    GENESIS_MODULES+=("$1")
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --data-dir) DATA_DIR=$2; shift 2 ;;
@@ -206,14 +219,7 @@ while [ $# -gt 0 ]; do
         --replica-id) REPLICA_ID=$2; shift 2 ;;
         --genesis-timestamp-ms) GENESIS_TIMESTAMP_MS=$2; shift 2 ;;
         --enable-module)
-            case "${2:-}" in
-                escrow|budget|stream|service|perps) ;;
-                *) fail "--enable-module requires escrow, budget, stream, service or perps" ;;
-            esac
-            for module in "${GENESIS_MODULES[@]}"; do
-                [ "$module" != "$2" ] || fail "--enable-module repeats $2"
-            done
-            GENESIS_MODULES+=("$2")
+            enable_genesis_module "${2:-}"
             shift 2 ;;
         --migrations) MIGRATIONS=$2; shift 2 ;;
         --layerxd) LAYERXD=$2; shift 2 ;;
@@ -226,6 +232,15 @@ while [ $# -gt 0 ]; do
         *) fail "unknown argument $1" ;;
     esac
 done
+
+if [ "${#GENESIS_MODULES[@]}" -eq 0 ]; then
+    [ -f "$SCRIPT_DIR/genesis-modules.conf" ] && [ -r "$SCRIPT_DIR/genesis-modules.conf" ] \
+        || fail "public testnet genesis module configuration is unavailable"
+    while IFS= read -r module || [ -n "$module" ]; do
+        enable_genesis_module "$module"
+    done < "$SCRIPT_DIR/genesis-modules.conf"
+    [ "${#GENESIS_MODULES[@]}" -eq 5 ] || fail "public testnet genesis requires five configured modules"
+fi
 
 [ -n "$GENESIS_METADATA" ] && [ -f "$GENESIS_METADATA" ] && [ ! -L "$GENESIS_METADATA" ] && [ -r "$GENESIS_METADATA" ] || fail "--genesis-metadata requires an authoritative LXGB v2 metadata file"
 GENESIS_METADATA=$(readlink -f "$GENESIS_METADATA")

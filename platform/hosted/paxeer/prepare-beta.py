@@ -34,16 +34,27 @@ def keypair(directory, name):
     return address, '0x' + compressed.hex()
 
 
-def genesis_request(guarantors, network_id, asset_id, timestamp_ms, metadata):
+def genesis_modules():
+    modules = (ROOT.parent / 'node/genesis-modules.conf').read_text().splitlines()
+    if len(modules) != 5 or set(modules) != {'budget', 'escrow', 'perps', 'service', 'stream'}:
+        raise ValueError('invalid public testnet genesis module configuration')
+    return tuple(sorted(modules))
+
+
+def genesis_request(guarantors, network_id, asset_id, timestamp_ms, metadata, modules=None):
     if not 0 < network_id < 2**32 or not 0 < timestamp_ms < 2**64:
         raise ValueError('invalid genesis network or timestamp')
     asset = bytes.fromhex(asset_id.removeprefix('0x'))
     if len(asset) != 32 or not any(asset) or len(guarantors) != 3:
         raise ValueError('beta genesis requires one asset and three guarantors')
+    modules = genesis_modules() if modules is None else tuple(modules)
+    if len(modules) != len(set(modules)) or not set(modules) <= set(genesis_modules()):
+        raise ValueError('invalid genesis module selection')
     be = lambda value, width: value.to_bytes(width, 'big')
     request = bytearray(b'LXGB\x02' + be(BETA_PROTOCOL_VERSION, 2))
-    request += be(network_id, 4) + be(timestamp_ms, 8) + be(1, 2) + be(7, 2)
-    request += b'parameter-version'.ljust(32, b'\x00') + be(1, 32)
+    request += be(network_id, 4) + be(timestamp_ms, 8) + be(1 + len(modules), 2)
+    for key in sorted(['parameter-version', *('module-enable:' + module for module in modules)]):
+        request += be(7, 2) + key.encode().ljust(32, b'\x00') + be(1, 32)
     request += be(len(guarantors), 2)
     previous = bytes(32)
     for member in guarantors:

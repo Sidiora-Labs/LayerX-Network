@@ -86,18 +86,56 @@ static int module_valid(const lxp_module_iface *module)
     return 0;
 }
 
+static int module_enable(const char *name, bool enabled[LXP_MODULE_RESERVED_COUNT + 1U])
+{
+    size_t count = 0U;
+    const lxp_genesis_module_entry *table = lxp_genesis_module_table(&count);
+    for (size_t i = 0U; i < count; ++i) {
+        const lxp_module_iface *module = table[i].iface();
+        if (table[i].gate != LXP_GENESIS_MODULE_GATE_ENABLE_FLAG ||
+            module == NULL || module->name == NULL || strcmp(module->name, name) != 0) continue;
+        if (module_valid(module) || enabled[module->module_id]) return 1;
+        enabled[module->module_id] = true;
+        return 0;
+    }
+    return 1;
+}
+
+static int plan_enable(lxp_genesis_module_plan *plan,
+                        const bool enabled[LXP_MODULE_RESERVED_COUNT + 1U])
+{
+    size_t count = 0U;
+    const lxp_genesis_module_entry *table = lxp_genesis_module_table(&count);
+    for (size_t i = 0U; i < count; ++i) {
+        if (table[i].module_id > LXP_MODULE_RESERVED_COUNT) return 1;
+        if (!enabled[table[i].module_id]) continue;
+        bool present = false;
+        for (size_t j = 0U; j < plan->count; ++j)
+            present |= plan->modules[j]->module_id == table[i].module_id;
+        if (present) continue;
+        if (plan->count >= LXP_GENESIS_MODULE_TABLE_MAX) return 1;
+        plan->modules[plan->count++] = table[i].iface();
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *asset = NULL, *symbol = NULL, *currency = NULL, *profile_path = NULL;
     const char *socket_path = NULL, *actor = NULL;
     uint32_t decimals = 39U, network = 0U, protocol = 0U;
     unsigned seen = 0U;
+    bool enabled[LXP_MODULE_RESERVED_COUNT + 1U] = {false};
     bool read_node = argc > 1 && strcmp(argv[1], "read-node") == 0;
     if (argc < 2 || (!read_node && strcmp(argv[1], "generate") != 0)) goto refused;
     for (int i = 2; i < argc; i += 2) {
         unsigned bit;
         if (i + 1 == argc) goto refused;
         const char *key = argv[i], *value = argv[i + 1];
+        if (strcmp(key, "--enable-module") == 0) {
+            if (read_node || module_enable(value, enabled)) goto refused;
+            continue;
+        }
         if (strcmp(key, "--asset") == 0) { bit = 1U; asset = value; }
         else if (strcmp(key, "--symbol") == 0) { bit = 2U; symbol = value; }
         else if (strcmp(key, "--currency") == 0) { bit = 4U; currency = value; }
@@ -137,6 +175,7 @@ int main(int argc, char **argv)
     if (lxp_genesis_module_plan_default((uint16_t)protocol,
                                         profile_path != NULL, &plan) != LXP_OK)
         goto refused;
+    if (plan_enable(&plan, enabled)) goto refused;
     count = plan.count;
     for (size_t i = 0U; i < count; ++i) modules[i] = plan.modules[i];
     for (size_t i = 1U; i < count; ++i) {

@@ -364,11 +364,90 @@ static int check_perps_insurance(void)
     return 0;
 }
 
+static int fixture_read(const char *name, uint8_t *bytes, size_t capacity, size_t *length)
+{
+    char path[256];
+    int count = snprintf(path, sizeof(path), "tests/fixtures/public-testnet-genesis/%s", name);
+    REQUIRE(count > 0 && (size_t)count < sizeof(path));
+    FILE *file = fopen(path, "rb");
+    REQUIRE(file != NULL);
+    *length = fread(bytes, 1U, capacity, file);
+    REQUIRE(*length != 0U && fgetc(file) == EOF && !ferror(file) && fclose(file) == 0);
+    return 0;
+}
+
+static int check_public_fixture(void)
+{
+    static uint8_t arena_bytes[8388608U], manifest_bytes[LXP_GENESIS_MAX_ENCODED_BYTES];
+    static lxp_genesis_manifest manifest;
+    static lxp_state_store state;
+    static lxp_state_journal journal;
+    static lxp_kernel kernel;
+    static lx_account_registry accounts;
+    static const uint16_t expected_modules[] = {
+        LXP_MODULE_PROGRAMS, LXP_MODULE_ASSET, LXP_MODULE_GOVERNANCE,
+        LXP_MODULE_ESCROW, LXP_MODULE_BUDGET, LXP_MODULE_STREAM,
+        LXP_MODULE_SERVICE, LXP_MODULE_PERPS
+    };
+    uint8_t public_key[32], root[32];
+    size_t length;
+    lxp_arena arena;
+    lxp_genesis_module_plan plan;
+    lxp_snapshot_manifest_record snapshot_manifest, changed;
+    lxp_byte_span snapshot;
+    lxp_genesis_bootstrap_registration registration = {0};
+    bool enabled = false;
+    REQUIRE(fixture_read("sequencer.public", public_key, sizeof(public_key), &length) == 0 && length == sizeof(public_key));
+    REQUIRE(fixture_read("genesis.manifest", manifest_bytes, sizeof(manifest_bytes), &length) == 0);
+    REQUIRE(lxp_genesis_parse(manifest_bytes, length, LXP_GENESIS_INPUT_MANIFEST, &manifest) == LXP_OK);
+    REQUIRE(manifest.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT && manifest.network_id == 77U);
+    REQUIRE(memcmp(public_key, manifest.signer_public_key, 32U) == 0);
+    REQUIRE(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
+    REQUIRE(lxp_genesis_verify_signature(&manifest, &arena) == LXP_OK);
+    REQUIRE(lxp_snapshot_store_read("tests/fixtures/public-testnet-genesis/00000000000000000000.lxs",
+                                   &arena, &snapshot_manifest, &snapshot) == LXP_OK);
+    REQUIRE(lxp_genesis_module_plan_resolve(&manifest, &plan) == LXP_OK);
+    REQUIRE(plan.count == sizeof(expected_modules) / sizeof(expected_modules[0]));
+    for (size_t i = 0U; i < plan.count; ++i) REQUIRE(plan.modules[i]->module_id == expected_modules[i]);
+    REQUIRE(lx_account_registry_init(&accounts) == LXP_OK);
+    REQUIRE(lxp_state_store_init(&state, 1U) == LXP_OK);
+    REQUIRE(lxp_state_store_bind_accounts(&state, &accounts) == LXP_OK);
+    REQUIRE(lxp_kernel_create(&kernel, &state, &journal, &manifest, 1U) == LXP_OK);
+    REQUIRE(lxp_genesis_module_plan_register(&plan, &kernel) == LXP_OK);
+    REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length, &snapshot_manifest, &kernel) == LXP_OK);
+    REQUIRE(accounts.count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT + 1U);
+    REQUIRE(lxp_state_root(&kernel, root) == LXP_OK);
+    REQUIRE(memcmp(root, manifest.genesis_state_root, 32U) == 0);
+    REQUIRE(memcmp(root, snapshot_manifest.canonical_state_root, 32U) == 0);
+    REQUIRE(memcmp(kernel.current_state_root, manifest.genesis_receipt_state_root, 32U) == 0);
+    REQUIRE(memcmp(kernel.current_state_root, snapshot_manifest.receipt_state_root, 32U) == 0);
+    REQUIRE(memcmp(root, kernel.current_state_root, 32U) != 0);
+    registration.network_id = manifest.network_id;
+    memcpy(registration.settlement_anchor, manifest.genesis_receipt_state_root, 32U);
+    memcpy(registration.state_root, manifest.genesis_receipt_state_root, 32U);
+    registration.finalised = true;
+    REQUIRE(lxp_genesis_bootstrap_verify(&manifest, &registration, 77U, true,
+        &snapshot_manifest, &kernel, &arena, &enabled) == LXP_OK && enabled);
+    changed = snapshot_manifest;
+    changed.canonical_state_root[0] ^= 1U;
+    REQUIRE(lxp_genesis_bootstrap_verify(&manifest, &registration, 77U, true,
+        &changed, &kernel, &arena, &enabled) == LXP_ERR_ROOT_MISMATCH && !enabled);
+    changed = snapshot_manifest;
+    changed.receipt_state_root[0] ^= 1U;
+    REQUIRE(lxp_genesis_bootstrap_verify(&manifest, &registration, 77U, true,
+        &changed, &kernel, &arena, &enabled) == LXP_ERR_ROOT_MISMATCH && !enabled);
+    REQUIRE(memcmp(kernel.current_state_root, snapshot_manifest.receipt_state_root, 32U) == 0);
+    REQUIRE(lxp_state_root(&kernel, root) == LXP_OK && memcmp(root, snapshot_manifest.canonical_state_root, 32U) == 0);
+    REQUIRE(lxp_state_store_destroy(&state) == LXP_OK);
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(check_table() == 0);
     REQUIRE(check_defaults() == 0);
     REQUIRE(check_enable_flag() == 0);
     REQUIRE(check_perps_insurance() == 0);
+    REQUIRE(check_public_fixture() == 0);
     return 0;
 }

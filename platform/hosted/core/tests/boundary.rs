@@ -2457,6 +2457,11 @@ fn supervised_files(root: &Path, builder: &Path, keys: [&[u8; 32]; 2], tokens: [
         );
         write(&root.join(name), &bytes, 0o755);
     }
+    let modules = must(
+        fs::read(repository_root().join("platform/hosted/node/genesis-modules.conf")),
+        "public testnet genesis modules",
+    );
+    write(&root.join("genesis-modules.conf"), &modules, 0o644);
     let settlement = must(
         fs::read(repository_root().join("contracts/config/checkpoint-settlement.json")),
         "settlement document source",

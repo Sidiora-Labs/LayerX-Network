@@ -623,6 +623,10 @@ module_registry_generate() {
     decimals=$(sed -n 's/^ASSET_DECIMALS=//p' "$bootstrap")
     local -a args=(generate --network-id "$NODE_NETWORK_ID" --protocol-version 3
         --asset "$NODE_ASSET_ID" --symbol "$symbol" --currency "$currency" --decimals "$decimals")
+    local module
+    while IFS= read -r module || [ -n "$module" ]; do
+        args+=(--enable-module "$module")
+    done < "$REPO_ROOT/platform/hosted/node/genesis-modules.conf"
     local -a mounts=()
     if [ -n "$CUSTODY_PROFILE" ]; then
         mounts+=(--mount "type=bind,src=$(realpath "$CUSTODY_PROFILE"),dst=/run/custody.profile,readonly")

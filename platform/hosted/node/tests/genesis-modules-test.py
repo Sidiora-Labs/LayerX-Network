@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -73,6 +74,38 @@ class GenesisModulesTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(refusal, result.stderr)
                 self.assertFalse((work / 'data').exists())
+
+    def test_public_defaults_enable_every_runtime_and_match_the_registry(self):
+        modules = ('budget', 'escrow', 'perps', 'service', 'stream')
+        self.assertEqual((ROOT / 'platform/hosted/node/genesis-modules.conf').read_text().splitlines(), list(modules))
+        with tempfile.TemporaryDirectory(prefix='lxp-genesis-defaults-', dir='/tmp') as directory:
+            work = Path(directory)
+            result = self.bootstrap(work, ())
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            genesis = work / 'data/genesis'
+            request = genesis / 'genesis-request.lxgb'
+            data = request.read_bytes()
+            self.assertEqual(data[:7], b'LXGB\x02\x00\x03')
+            self.assertEqual(int.from_bytes(data[19:21], 'big'), 6)
+            keys = []
+            for index in range(6):
+                entry = data[21 + index * 66:21 + (index + 1) * 66]
+                self.assertEqual(entry[:2], b'\0\x07')
+                self.assertEqual(entry[34:], bytes(31) + b'\x01')
+                keys.append(entry[2:34])
+            self.assertEqual(keys, sorted([b'parameter-version'.ljust(32, b'\0')]
+                             + [('module-enable:' + name).encode().ljust(32, b'\0') for name in modules]))
+            rebuilt = work / 'rebuilt'
+            subprocess.run([str(BIN / 'layerx-genesis-build'), str(request), str(work / 'sequencer'), str(rebuilt)],
+                           cwd=ROOT, check=True, capture_output=True)
+            for name in ('genesis.manifest', '00000000000000000000.lxs',
+                         'paxeer-registration-request.lxrr', 'paxeer-deployment-descriptor.lxgd'):
+                self.assertEqual((genesis / name).read_bytes(), (rebuilt / name).read_bytes())
+            registry = subprocess.run([str(BIN / 'layerx-module-registry'), 'generate', '--network-id', '77',
+                '--protocol-version', '3', '--asset', ASSET.hex(), '--symbol', 'TST', '--currency', 'TST',
+                '--decimals', '6', *[arg for name in modules for arg in ('--enable-module', name)]],
+                cwd=ROOT, check=True, capture_output=True)
+            self.assertEqual([row['module'] for row in json.loads(registry.stdout)['modules']], [1, 2, 3, 4, 5, 6, 7, 9])
 
 
 if __name__ == '__main__':
