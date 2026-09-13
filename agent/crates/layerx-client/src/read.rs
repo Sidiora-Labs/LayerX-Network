@@ -3,20 +3,20 @@
 use std::cmp::Ordering;
 
 use layerx_proof::inclusion::{
-    verify_activity, verify_receipt, InclusionError, SequencerAuthorization,
+    InclusionError, SequencerAuthorization, verify_activity, verify_receipt,
 };
-use layerx_proof::merkle::{MerkleError, Proof, MAX_DEPTH};
-use layerx_proof::state::{decode_account_value, AccountProofError};
+use layerx_proof::merkle::{MAX_DEPTH, MerkleError, Proof};
+use layerx_proof::state::{AccountProofError, decode_account_value};
 use layerx_types::amount::Amount;
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::receipt::decode_batch_header;
 
 use crate::evidence::{
-    decode_nested_evidence, AccountEvidenceKind, DecodedNestedEvidence, EvidenceError, RootSelector,
+    AccountEvidenceKind, DecodedNestedEvidence, EvidenceError, RootSelector, decode_nested_evidence,
 };
 use crate::head::Head;
 use crate::lni::refusal::decode_core_refusal;
-use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
+use crate::lni::schema::{Envelope, SchemaError, Version, decode_envelope, encode_envelope};
 use crate::lni::transport::{FrameTransport, TransportError};
 
 const ACCOUNT_READ_REQUEST_TAG: u16 = 7;
@@ -219,6 +219,14 @@ pub enum ReadError {
     },
     MalformedValue,
     SelectorMismatch,
+    StateSelectorMismatch,
+    AccountBindingMismatch,
+    SequencerBindingMismatch,
+    AuthorityRangeMismatch,
+    HeadMismatch {
+        expected_batch: u64,
+        actual_batch: u64,
+    },
     Evidence(MerkleError),
     Inclusion(InclusionError),
     ProductionEvidence(EvidenceError),
@@ -387,12 +395,17 @@ fn verify_state_value(
         context.expected_network_id,
     )
     .map_err(ReadError::ProductionEvidence)?;
-    if decoded.selector != context.root_selector
-        || decoded.proof.account_id != expected_account
-        || decoded.signed_header.public_key != context.handshake_sequencer_key
-        || decoded.signed_header.response_authorization() != context.sequencer_authorization
-    {
-        return Err(ReadError::SelectorMismatch);
+    if decoded.selector != context.root_selector {
+        return Err(ReadError::StateSelectorMismatch);
+    }
+    if decoded.proof.account_id != expected_account {
+        return Err(ReadError::AccountBindingMismatch);
+    }
+    if decoded.signed_header.public_key != context.handshake_sequencer_key {
+        return Err(ReadError::SequencerBindingMismatch);
+    }
+    if decoded.signed_header.response_authorization() != context.sequencer_authorization {
+        return Err(ReadError::AuthorityRangeMismatch);
     }
     let header = decode_batch_header(&decoded.signed_header.canonical_bytes)
         .map_err(|_| ReadError::MalformedValue)?;
@@ -405,7 +418,10 @@ fn verify_state_value(
     }
     match context.root_selector {
         RootSelector::Latest if header.batch_number() != context.head.sealed_batch => {
-            return Err(ReadError::SelectorMismatch);
+            return Err(ReadError::HeadMismatch {
+                expected_batch: context.head.sealed_batch,
+                actual_batch: header.batch_number(),
+            });
         }
         RootSelector::Latest | RootSelector::Batch(_) | RootSelector::Checkpoint(_) => {}
     }
@@ -742,7 +758,7 @@ fn verify_history_item(
             return Err(ReadError::MissingEvidence {
                 requested: context.requested.level(),
                 achieved: VerificationLevel::UNVERIFIED,
-            })
+            });
         }
     };
     let achieved = evidence.level();
@@ -932,7 +948,7 @@ pub fn did_accounts(
 
 #[cfg(test)]
 mod history_bounds_tests {
-    use super::{validate_history_progress, validate_history_sequence, ReadError};
+    use super::{ReadError, validate_history_progress, validate_history_sequence};
     #[test]
     fn authenticated_history_must_stay_within_selector_and_make_progress() {
         assert_eq!(validate_history_sequence(10, 10, 12), Ok(()));
