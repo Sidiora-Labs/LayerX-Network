@@ -31,92 +31,68 @@ library ArchiveSha256 {
         return compress(state.words, padded, padded.length / 64);
     }
 
-    function compress(bytes32 packed, bytes memory input, uint256 blocks) private pure returns (bytes32) {
+    function compress(bytes32 packed, bytes memory input, uint256 blocks) private pure returns (bytes32 result) {
+        bytes memory constants = hex"428a2f9871374491b5c0fbcfe9b5dba53956c25b59f111f1923f82a4ab1c5ed5d807aa9812835b01243185be550c7dc372be5d7480deb1fe9bdc06a7c19bf174e49b69c1efbe47860fc19dc6240ca1cc2de92c6f4a7484aa5cb0a9dc76f988da983e5152a831c66db00327c8bf597fc7c6e00bf3d5a7914706ca63511429296727b70a852e1b21384d2c6dfc53380d13650a7354766a0abb81c2c92e92722c85a2bfe8a1a81a664bc24b8b70c76c51a3d192e819d6990624f40e3585106aa07019a4c1161e376c082748774c34b0bcb5391c0cb34ed8aa4a5b9cca4f682e6ff3748f82ee78a5636f84c878148cc7020890befffaa4506cebbef9a3f7c67178f2";
         uint32[8] memory state;
-        for (uint256 i = 0; i < 8; ++i) state[i] = uint32(uint256(packed) >> (224 - 32 * i));
         uint32[64] memory words;
-        uint32[64] memory constants = [
-            uint32(0x428a2f98), uint32(0x71374491), uint32(0xb5c0fbcf), uint32(0xe9b5dba5),
-            uint32(0x3956c25b), uint32(0x59f111f1), uint32(0x923f82a4), uint32(0xab1c5ed5),
-            uint32(0xd807aa98), uint32(0x12835b01), uint32(0x243185be), uint32(0x550c7dc3),
-            uint32(0x72be5d74), uint32(0x80deb1fe), uint32(0x9bdc06a7), uint32(0xc19bf174),
-            uint32(0xe49b69c1), uint32(0xefbe4786), uint32(0x0fc19dc6), uint32(0x240ca1cc),
-            uint32(0x2de92c6f), uint32(0x4a7484aa), uint32(0x5cb0a9dc), uint32(0x76f988da),
-            uint32(0x983e5152), uint32(0xa831c66d), uint32(0xb00327c8), uint32(0xbf597fc7),
-            uint32(0xc6e00bf3), uint32(0xd5a79147), uint32(0x06ca6351), uint32(0x14292967),
-            uint32(0x27b70a85), uint32(0x2e1b2138), uint32(0x4d2c6dfc), uint32(0x53380d13),
-            uint32(0x650a7354), uint32(0x766a0abb), uint32(0x81c2c92e), uint32(0x92722c85),
-            uint32(0xa2bfe8a1), uint32(0xa81a664b), uint32(0xc24b8b70), uint32(0xc76c51a3),
-            uint32(0xd192e819), uint32(0xd6990624), uint32(0xf40e3585), uint32(0x106aa070),
-            uint32(0x19a4c116), uint32(0x1e376c08), uint32(0x2748774c), uint32(0x34b0bcb5),
-            uint32(0x391c0cb3), uint32(0x4ed8aa4a), uint32(0x5b9cca4f), uint32(0x682e6ff3),
-            uint32(0x748f82ee), uint32(0x78a5636f), uint32(0x84c87814), uint32(0x8cc70208),
-            uint32(0x90befffa), uint32(0xa4506ceb), uint32(0xbef9a3f7), uint32(0xc67178f2)
-        ];
-        for (uint256 blockIndex = 0; blockIndex < blocks; ++blockIndex) {
-            transform(state, words, constants, input, blockIndex * 64);
-        }
-        uint256 result;
-        for (uint256 i = 0; i < 8; ++i) result |= uint256(state[i]) << (224 - 32 * i);
-        return bytes32(result);
-    }
-
-    function rotate(uint32 value, uint32 bits) private pure returns (uint32) {
-        return (value >> bits) | (value << (32 - bits));
-    }
-
-    function transform(
-        uint32[8] memory state,
-        uint32[64] memory words,
-        uint32[64] memory constants,
-        bytes memory input,
-        uint256 offset
-    ) private pure {
-        for (uint256 i = 0; i < 16; ++i) {
-            uint32 word;
-            assembly ("memory-safe") {
-                word := shr(224, mload(add(add(input, 32), add(offset, mul(i, 4)))))
+        assembly ("memory-safe") {
+            function rotate(value, bits) -> rotated {
+                rotated := and(or(shr(bits, value), shl(sub(32, bits), value)), 0xffffffff)
             }
-            words[i] = word;
-        }
-        unchecked {
-            for (uint256 i = 16; i < 64; ++i) {
-                uint32 s0 = rotate(words[i - 15], 7) ^ rotate(words[i - 15], 18) ^ (words[i - 15] >> 3);
-                uint32 s1 = rotate(words[i - 2], 17) ^ rotate(words[i - 2], 19) ^ (words[i - 2] >> 10);
-                words[i] = words[i - 16] + s0 + words[i - 7] + s1;
+            function transform(state, words, constants, blockPointer) {
+                for { let i := 0 } lt(i, 16) { i := add(i, 1) } {
+                    mstore(add(words, mul(i, 32)), shr(224, mload(add(blockPointer, mul(i, 4)))))
+                }
+                for { let i := 16 } lt(i, 64) { i := add(i, 1) } {
+                    let x := mload(add(words, mul(sub(i, 15), 32)))
+                    let y := mload(add(words, mul(sub(i, 2), 32)))
+                    let s0 := xor(xor(rotate(x, 7), rotate(x, 18)), shr(3, x))
+                    let s1 := xor(xor(rotate(y, 17), rotate(y, 19)), shr(10, y))
+                    let sum := add(add(mload(add(words, mul(sub(i, 16), 32))), s0), add(mload(add(words, mul(sub(i, 7), 32))), s1))
+                    mstore(add(words, mul(i, 32)), and(sum, 0xffffffff))
+                }
+                let a := mload(state)
+                let b := mload(add(state, 32))
+                let c := mload(add(state, 64))
+                let d := mload(add(state, 96))
+                let e := mload(add(state, 128))
+                let f := mload(add(state, 160))
+                let g := mload(add(state, 192))
+                let h := mload(add(state, 224))
+                for { let i := 0 } lt(i, 64) { i := add(i, 1) } {
+                    let s1 := xor(xor(rotate(e, 6), rotate(e, 11)), rotate(e, 25))
+                    let choice := xor(and(e, f), and(not(e), g))
+                    let first := and(add(add(add(h, s1), choice), add(shr(224, mload(add(constants, mul(i, 4)))), mload(add(words, mul(i, 32))))), 0xffffffff)
+                    let s0 := xor(xor(rotate(a, 2), rotate(a, 13)), rotate(a, 22))
+                    let majority := xor(xor(and(a, b), and(a, c)), and(b, c))
+                    let second := and(add(s0, majority), 0xffffffff)
+                    h := g
+                    g := f
+                    f := e
+                    e := and(add(d, first), 0xffffffff)
+                    d := c
+                    c := b
+                    b := a
+                    a := and(add(first, second), 0xffffffff)
+                }
+                mstore(state, and(add(mload(state), a), 0xffffffff))
+                mstore(add(state, 32), and(add(mload(add(state, 32)), b), 0xffffffff))
+                mstore(add(state, 64), and(add(mload(add(state, 64)), c), 0xffffffff))
+                mstore(add(state, 96), and(add(mload(add(state, 96)), d), 0xffffffff))
+                mstore(add(state, 128), and(add(mload(add(state, 128)), e), 0xffffffff))
+                mstore(add(state, 160), and(add(mload(add(state, 160)), f), 0xffffffff))
+                mstore(add(state, 192), and(add(mload(add(state, 192)), g), 0xffffffff))
+                mstore(add(state, 224), and(add(mload(add(state, 224)), h), 0xffffffff))
             }
-            uint32 a = state[0];
-            uint32 b = state[1];
-            uint32 c = state[2];
-            uint32 d = state[3];
-            uint32 e = state[4];
-            uint32 f = state[5];
-            uint32 g = state[6];
-            uint32 h = state[7];
-            for (uint256 i = 0; i < 64; ++i) {
-                uint32 s1 = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25);
-                uint32 choice = (e & f) ^ ((~e) & g);
-                uint32 first = h + s1 + choice + constants[i] + words[i];
-                uint32 s0 = rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22);
-                uint32 majority = (a & b) ^ (a & c) ^ (b & c);
-                uint32 second = s0 + majority;
-                h = g;
-                g = f;
-                f = e;
-                e = d + first;
-                d = c;
-                c = b;
-                b = a;
-                a = first + second;
+            for { let i := 0 } lt(i, 8) { i := add(i, 1) } {
+                mstore(add(state, mul(i, 32)), and(shr(sub(224, mul(i, 32)), packed), 0xffffffff))
             }
-            state[0] += a;
-            state[1] += b;
-            state[2] += c;
-            state[3] += d;
-            state[4] += e;
-            state[5] += f;
-            state[6] += g;
-            state[7] += h;
+            for { let i := 0 } lt(i, blocks) { i := add(i, 1) } {
+                transform(state, words, add(constants, 32), add(add(input, 32), mul(i, 64)))
+            }
+            for { let i := 0 } lt(i, 8) { i := add(i, 1) } {
+                result := or(result, shl(sub(224, mul(i, 32)), mload(add(state, mul(i, 32)))))
+            }
         }
     }
 }
