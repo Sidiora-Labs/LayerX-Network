@@ -1238,7 +1238,7 @@ fn render_call_result(
     )
     .map_err(|error| format!("program execution verification: {error:?}"))?;
     let detail = execution.terminal();
-    verify_terminal_commitments(&detail, &call_graph, protocol.protocol_version(), program)?;
+    verify_terminal_commitments(detail, &call_graph, protocol.protocol_version(), program)?;
     let outcome = render_terminal(&detail.detail, request.program_id, program, result_code)?;
     Ok(json!({
         "program_id": request.program_id,
