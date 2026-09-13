@@ -68,6 +68,20 @@ int main(void)
     report.divergence.produced[0] ^= 1U;
     if (lxp_divergence_report_verify(&report, public_key) !=
         LXP_ERR_BAD_SIGNATURE) return 1;
+    report.divergence.expected_length = sizeof(report.divergence.expected) + 1U;
+    if (lxp_divergence_report_verify(&report, public_key) !=
+        LXP_ERR_LENGTH_LIMIT) return 1;
+    report.divergence.expected_length = SIZE_MAX;
+    if (lxp_divergence_report_verify(&report, public_key) !=
+        LXP_ERR_LENGTH_LIMIT) return 1;
+    state.expected_length = sizeof(state.expected) + 1U;
+    if (lxp_divergence_report(&state, replica_id, private_key, &report) !=
+        LXP_ERR_LENGTH_LIMIT) return 1;
+    (void)memset(&state, 0, sizeof(state));
+    if (lxp_divergence_detect(&state, 1U, 1U, LXP_DIVERGENCE_RECEIPT,
+            (lxp_byte_span){expected, SIZE_MAX},
+            (lxp_byte_span){produced, SIZE_MAX}) != LXP_ERR_LENGTH_LIMIT ||
+        state.detected) return 1;
     (void)memset(&replica, 0, sizeof(replica));
     replica.execution_enabled = true;
     replica.acknowledgements_enabled = true;

@@ -49,7 +49,11 @@ func (h *EVMQueryHandler) HandleERC20TransferPayload(ctx sdk.Context, recipient 
 	if err != nil {
 		return nil, err
 	}
-	evmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(recipient))
+	recipientAddress, err := sdk.AccAddressFromBech32(recipient)
+	if err != nil {
+		return nil, err
+	}
+	evmAddr, found := h.k.GetEVMAddress(ctx, recipientAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(recipient)
 	}
@@ -204,11 +208,19 @@ func (h *EVMQueryHandler) HandleERC721TransferPayload(ctx sdk.Context, from stri
 	if err != nil {
 		return nil, err
 	}
-	fromEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(from))
+	fromAddress, err := sdk.AccAddressFromBech32(from)
+	if err != nil {
+		return nil, err
+	}
+	fromEvmAddr, found := h.k.GetEVMAddress(ctx, fromAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(from)
 	}
-	toEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(recipient))
+	recipientAddress, err := sdk.AccAddressFromBech32(recipient)
+	if err != nil {
+		return nil, err
+	}
+	toEvmAddr, found := h.k.GetEVMAddress(ctx, recipientAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(recipient)
 	}
@@ -228,7 +240,11 @@ func (h *EVMQueryHandler) HandleERC721ApprovePayload(ctx sdk.Context, spender st
 	spenderEvmAddr := common.Address{} // empty address if approval should be revoked (i.e. spender string is empty)
 	var err error
 	if spender != "" {
-		evmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(spender))
+		spenderAddress, err := sdk.AccAddressFromBech32(spender)
+		if err != nil {
+			return nil, err
+		}
+		evmAddr, found := h.k.GetEVMAddress(ctx, spenderAddress)
 		if !found {
 			return nil, types.NewAssociationMissingErr(spender)
 		}
@@ -251,7 +267,11 @@ func (h *EVMQueryHandler) HandleERC721ApprovePayload(ctx sdk.Context, spender st
 }
 
 func (h *EVMQueryHandler) HandleERC721SetApprovalAllPayload(ctx sdk.Context, to string, approved bool) ([]byte, error) {
-	evmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(to))
+	toAddress, err := sdk.AccAddressFromBech32(to)
+	if err != nil {
+		return nil, err
+	}
+	evmAddr, found := h.k.GetEVMAddress(ctx, toAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(to)
 	}
@@ -272,11 +292,19 @@ func (h *EVMQueryHandler) HandleERC20TransferFromPayload(ctx sdk.Context, owner 
 	if err != nil {
 		return nil, err
 	}
-	ownerEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(owner))
+	ownerAddress, err := sdk.AccAddressFromBech32(owner)
+	if err != nil {
+		return nil, err
+	}
+	ownerEvmAddr, found := h.k.GetEVMAddress(ctx, ownerAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(owner)
 	}
-	recipientEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(recipient))
+	recipientAddress, err := sdk.AccAddressFromBech32(recipient)
+	if err != nil {
+		return nil, err
+	}
+	recipientEvmAddr, found := h.k.GetEVMAddress(ctx, recipientAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(recipient)
 	}
@@ -293,7 +321,11 @@ func (h *EVMQueryHandler) HandleERC20ApprovePayload(ctx sdk.Context, spender str
 	if err != nil {
 		return nil, err
 	}
-	spenderEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(spender))
+	spenderAddress, err := sdk.AccAddressFromBech32(spender)
+	if err != nil {
+		return nil, err
+	}
+	spenderEvmAddr, found := h.k.GetEVMAddress(ctx, spenderAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(spender)
 	}
@@ -318,7 +350,11 @@ func (h *EVMQueryHandler) HandleERC20Allowance(ctx sdk.Context, contractAddress 
 	}
 
 	// Get the evm address of spender
-	spenderEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(spender))
+	spenderAddress, err := sdk.AccAddressFromBech32(spender)
+	if err != nil {
+		return nil, err
+	}
+	spenderEvmAddr, found := h.k.GetEVMAddress(ctx, spenderAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(spender)
 	}
@@ -391,11 +427,19 @@ func (h *EVMQueryHandler) HandleERC721IsApprovedForAll(ctx sdk.Context, caller s
 	if err != nil {
 		return nil, err
 	}
-	ownerEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(owner))
+	ownerAddress, err := sdk.AccAddressFromBech32(owner)
+	if err != nil {
+		return nil, err
+	}
+	ownerEvmAddr, found := h.k.GetEVMAddress(ctx, ownerAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(owner)
 	}
-	operatorEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(operator))
+	operatorAddress, err := sdk.AccAddressFromBech32(operator)
+	if err != nil {
+		return nil, err
+	}
+	operatorEvmAddr, found := h.k.GetEVMAddress(ctx, operatorAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(operator)
 	}
@@ -559,11 +603,19 @@ func (h *EVMQueryHandler) HandleERC1155TransferPayload(ctx sdk.Context, from str
 	if err != nil {
 		return nil, err
 	}
-	fromEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(from))
+	fromAddress, err := sdk.AccAddressFromBech32(from)
+	if err != nil {
+		return nil, err
+	}
+	fromEvmAddr, found := h.k.GetEVMAddress(ctx, fromAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(from)
 	}
-	toEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(recipient))
+	recipientAddress, err := sdk.AccAddressFromBech32(recipient)
+	if err != nil {
+		return nil, err
+	}
+	toEvmAddr, found := h.k.GetEVMAddress(ctx, recipientAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(recipient)
 	}
@@ -587,11 +639,19 @@ func (h *EVMQueryHandler) HandleERC1155BatchTransferPayload(ctx sdk.Context, fro
 	if len(tokenIds) != len(amounts) {
 		return nil, errors.New("mismatched argument lengths for tokenIds and amounts")
 	}
-	fromEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(from))
+	fromAddress, err := sdk.AccAddressFromBech32(from)
+	if err != nil {
+		return nil, err
+	}
+	fromEvmAddr, found := h.k.GetEVMAddress(ctx, fromAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(from)
 	}
-	toEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(recipient))
+	recipientAddress, err := sdk.AccAddressFromBech32(recipient)
+	if err != nil {
+		return nil, err
+	}
+	toEvmAddr, found := h.k.GetEVMAddress(ctx, recipientAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(recipient)
 	}
@@ -616,7 +676,11 @@ func (h *EVMQueryHandler) HandleERC1155BatchTransferPayload(ctx sdk.Context, fro
 }
 
 func (h *EVMQueryHandler) HandleERC1155SetApprovalAllPayload(ctx sdk.Context, to string, approved bool) ([]byte, error) {
-	evmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(to))
+	toAddress, err := sdk.AccAddressFromBech32(to)
+	if err != nil {
+		return nil, err
+	}
+	evmAddr, found := h.k.GetEVMAddress(ctx, toAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(to)
 	}
@@ -637,11 +701,19 @@ func (h *EVMQueryHandler) HandleERC1155IsApprovedForAll(ctx sdk.Context, caller 
 	if err != nil {
 		return nil, err
 	}
-	ownerEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(owner))
+	ownerAddress, err := sdk.AccAddressFromBech32(owner)
+	if err != nil {
+		return nil, err
+	}
+	ownerEvmAddr, found := h.k.GetEVMAddress(ctx, ownerAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(owner)
 	}
-	operatorEvmAddr, found := h.k.GetEVMAddress(ctx, sdk.MustAccAddressFromBech32(operator))
+	operatorAddress, err := sdk.AccAddressFromBech32(operator)
+	if err != nil {
+		return nil, err
+	}
+	operatorEvmAddr, found := h.k.GetEVMAddress(ctx, operatorAddress)
 	if !found {
 		return nil, types.NewAssociationMissingErr(operator)
 	}

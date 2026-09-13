@@ -388,14 +388,8 @@ impl ProductionComponents {
         let agent_purpose_catalog =
             PurposePresetCatalog::from_json(&read_nonempty(&config.agent_purpose_catalog)?)
                 .map_err(|_| "agent purpose catalog was refused".to_owned())?;
-        let store = Arc::new(Mutex::new(
-            PrincipalStore::open(
-                config.store_root,
-                config.retention,
-                TenancyDigest::new(config.tenancy_digest),
-            )
-            .map_err(|_| "principal store refused startup".to_owned())?,
-        ));
+        let store =
+            production_principal_store(config.store_root, config.retention, config.tenancy_digest)?;
         let auth_index = production_auth_index(config.auth_index_root, config.auth_index_key)?;
         let agent_contract = layerx_sdk::Client::daemon(
             config.agent_socket.clone(),
@@ -4164,6 +4158,8 @@ impl ProductionComponents {
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let mut material =
             Vec::with_capacity(4 + balance.canonical_bytes.len() + balance.proof_material.len());
+        material.extend_from_slice(b"LXHB1");
+        material.push(balance.verification);
         material.extend_from_slice(
             &u32::try_from(balance.observed_at.len())
                 .map_err(|_| ApiFailure::upstream_degraded())?
@@ -4250,6 +4246,8 @@ impl ProductionComponents {
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let mut material =
             Vec::with_capacity(4 + balance.canonical_bytes.len() + balance.proof_material.len());
+        material.extend_from_slice(b"LXHB1");
+        material.push(balance.verification);
         material.extend_from_slice(
             &u32::try_from(balance.observed_at.len())
                 .map_err(|_| ApiFailure::upstream_degraded())?
@@ -5403,6 +5401,16 @@ fn stored_rebinding_statement(
     )
     .map_err(|_| ApiFailure::upstream_degraded())?;
     Ok((statement, confirms))
+}
+
+fn production_principal_store(
+    root: PathBuf,
+    retention: RetentionPolicy,
+    tenancy_digest: [u8; 32],
+) -> Result<Arc<Mutex<PrincipalStore>>, String> {
+    PrincipalStore::open(root, retention, TenancyDigest::new(tenancy_digest))
+        .map(|store| Arc::new(Mutex::new(store)))
+        .map_err(|_| "principal store refused startup".to_owned())
 }
 
 fn production_auth_index(root: PathBuf, key: [u8; 32]) -> Result<AuthDiscoveryIndex, String> {

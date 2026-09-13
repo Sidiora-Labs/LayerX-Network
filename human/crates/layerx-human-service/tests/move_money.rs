@@ -563,7 +563,7 @@ fn receipt(activity_id: [u8; 32], marker: u8, specification: ReceiptSpec) -> Rec
     let previous = [marker.saturating_add(1); 32];
     let resulting = [marker.saturating_add(2); 32];
     let sequence = u64::from(marker);
-    let batch = support::execution_batch_id(previous, activity_id, sequence);
+    let batch = support::committed_execution_batch_id(previous, [0x81; 32], sequence);
     let signer = SigningKey::from_bytes(&[marker.saturating_add(4); 32]);
     let unsigned = encode_receipt(
         activity_id,
@@ -737,6 +737,34 @@ impl Fixture {
     }
 
     fn single_plan(&self, id: &str) -> MovePlan {
+        let signer = layerx_crypto::local::LocalSigner::new([0x51; 32]);
+        assert_eq!(
+            layerx_crypto::signer::Signer::public_key(&signer),
+            self.public_key
+        );
+        let debit = layerx_crypto::send::SendDebit {
+            from: layerx_wire::hash::account_id_for_protocol(
+                &account("agent:did:layerx:human:main"),
+                layerx_wire::limits::PROTOCOL_VERSION,
+            )
+            .unwrap_or_else(|error| panic!("source account: {error:?}")),
+            to: layerx_wire::hash::account_id_for_protocol(
+                &account("agent:did:layerx:worker:main"),
+                layerx_wire::limits::PROTOCOL_VERSION,
+            )
+            .unwrap_or_else(|error| panic!("destination account: {error:?}")),
+            asset: [0x33; 32],
+            amount: 90,
+            source_sequence: 7,
+            idempotency_key: [0x21; 32],
+            expires_at: 1_100,
+            context_hash: [0x55; 32],
+            conditions: Vec::new(),
+            authorization_kind: SendAuthorizationKind::Owner as u8,
+            network_id: NETWORK_ID,
+            protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        };
+
         let request = RouteRequest {
             source: Endpoint::Human(account("agent:did:layerx:human:main")),
             destination: Endpoint::Agent(account("agent:did:layerx:worker:main")),
@@ -745,10 +773,14 @@ impl Fixture {
                 idempotency_key: IdempotencyKey::new([0x21; 32]),
                 expires_at: TimestampSeconds::from_u64(1_100),
                 context_hash: ContextHash::new([0x55; 32]),
-                authorization: SendAuthorization::new(
-                    SendAuthorizationKind::Owner,
-                    PublicKey::new(self.public_key),
-                    AuthorizationSignature::new([0x77; 64]),
+                authorization: support::sign_send(
+                    &signer,
+                    &debit,
+                    SendAuthorization::new(
+                        SendAuthorizationKind::Owner,
+                        PublicKey::new(self.public_key),
+                        AuthorizationSignature::new([0x77; 64]),
+                    ),
                 ),
                 network_id: NetworkId::new(NETWORK_ID)
                     .unwrap_or_else(|error| panic!("network: {error:?}")),

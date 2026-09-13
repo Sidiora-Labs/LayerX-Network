@@ -454,6 +454,7 @@ impl PrincipalStore {
             tenant,
             directory,
             state,
+            deferred: false,
         })
     }
 
@@ -503,6 +504,7 @@ pub struct PrincipalScope<'a> {
     tenant: AgentTenantId,
     directory: PathBuf,
     state: PrincipalState,
+    deferred: bool,
 }
 
 impl PrincipalScope<'_> {
@@ -706,7 +708,35 @@ impl PrincipalScope<'_> {
         Ok(report)
     }
 
+    /// Commits a same-principal set of writes, removals and audit entries together.
+    /// # Errors
+    /// Preserves operation refusals and persistence failures without exposing staged state.
+    pub fn transaction<T, E>(
+        &mut self,
+        operation: impl FnOnce(&mut PrincipalScope<'_>) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<StoreError>,
+    {
+        let mut staged = PrincipalScope {
+            store: self.store,
+            principal: self.principal.clone(),
+            tenant: self.tenant.clone(),
+            directory: self.directory.clone(),
+            state: self.state.clone(),
+            deferred: true,
+        };
+        let result = operation(&mut staged)?;
+        staged.deferred = self.deferred;
+        staged.persist()?;
+        self.state = staged.state;
+        Ok(result)
+    }
+
     fn persist(&self) -> Result<(), StoreError> {
+        if self.deferred {
+            return Ok(());
+        }
         let bytes = encode_state(&self.state, self.store.version)?;
         codec::write_atomic(&self.directory, STORE_FILE, TEMP_FILE, &bytes)?;
         Ok(())

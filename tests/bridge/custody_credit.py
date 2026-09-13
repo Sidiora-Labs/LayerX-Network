@@ -345,7 +345,7 @@ def verified_receipts(rpcs, block):
 
 
 def read_key(path):
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(descriptor)
         require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_mode & 0o077 == 0,
@@ -401,6 +401,9 @@ def create_profile(args):
     rpcs, genesis = identity_rpcs(args)
     chain = [quantity(rpc.call("eth_chainId", [])) for rpc in rpcs]
     require(chain == [args.chain_id, args.chain_id] and args.chain_id > 0, "chain identity")
+    if args.chain_id == 125:
+        from comet_credit import create_profile as create_comet_profile
+        return create_comet_profile(args, rpcs, genesis)
     tip = common_finalized(rpcs)
     code = verified_code(rpcs, args.vault, tip)
     require(sha(code) == unhex(args.runtime_sha256, 32), "vault runtime pin")
@@ -419,6 +422,9 @@ def attest(args):
     rpcs, genesis = identity_rpcs(args)
     with open(args.profile, "rb") as source:
         profile = source.read(PROFILE_BYTES + 1)
+    if len(profile) == PROFILE_BYTES and profile[:5] == b"LXBC2":
+        from comet_credit import attest as attest_comet
+        return attest_comet(args, rpcs, genesis, profile)
     require(len(profile) == PROFILE_BYTES and profile[:5] == b"LXBC1", "profile layout")
     chain = int.from_bytes(profile[5:13], "big")
     require(all(quantity(rpc.call("eth_chainId", [])) == chain for rpc in rpcs), "chain identity")
@@ -501,6 +507,8 @@ def main():
     credit.add_argument("--beneficiary-key", required=True)
     credit.add_argument("--expected-amount", type=int, required=True)
     for command in (profile, credit):
+        command.add_argument("--vault-artifact")
+        command.add_argument("--history-state")
         command.add_argument("--ca-bundle")
         command.add_argument("--disposable-identity")
         command.add_argument("--rpc", action="append", required=True)

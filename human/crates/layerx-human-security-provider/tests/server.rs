@@ -517,3 +517,29 @@ fn protected_state_files_reject_symlinks_hardlinks_and_public_modes() {
         assert!(Store::open(&fixture.state(), &fixture.trust()).is_err());
     }
 }
+
+#[test]
+fn published_journal_recovers_head_and_owned_pending_write() {
+    let fixture = Fixture::new();
+    let server = fixture.start(uid());
+    let original_head = fs::read(fixture.state().join("head")).unwrap();
+    fixture
+        .client()
+        .begin_setup(&principal(), "Phone", 100)
+        .unwrap();
+    drop(server);
+    let committed_head = fs::read(fixture.state().join("head")).unwrap();
+    fs::write(fixture.state().join("head"), original_head).unwrap();
+    private(
+        &fixture.state().join("transaction.tmp"),
+        &committed_head[..17],
+    );
+    let recovered = Store::open(&fixture.state(), &fixture.trust()).unwrap();
+    assert_eq!(
+        fs::read(fixture.state().join("head")).unwrap(),
+        committed_head
+    );
+    assert!(!fixture.state().join("transaction.tmp").exists());
+    drop(recovered);
+    assert!(Store::open(&fixture.state(), &fixture.trust()).is_ok());
+}

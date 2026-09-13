@@ -602,6 +602,7 @@ lxp_result lx_asset_register(lx_asset_registry *registry,
         !issuer_valid(record) || record->decimals > 38U ||
         registry->count > LX_ASSET_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
+    if (sequence == UINT64_MAX) return LXP_ERR_SEQUENCE_EXHAUSTED;
     status = lxp_u128_add(registry->fees_charged, fee, &charged);
     if (status != LXP_OK) return status;
     registry->fees_charged = charged;

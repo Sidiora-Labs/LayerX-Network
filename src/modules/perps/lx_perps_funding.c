@@ -119,6 +119,9 @@ lxp_result lx_perps_funding_tick_execute(
     lxp_transfer_set set;
     lxp_transfer_source_authority source;
     lxp_u128 amount;
+    lxp_u128 accrued_rate;
+    lxp_u128 remainder;
+    lxp_u256 rate_product;
     lxp_i128 next_index;
     uint64_t timestamp;
     uint64_t elapsed;
@@ -151,9 +154,17 @@ lxp_result lx_perps_funding_tick_execute(
     if (request->funding_rate_bps.magnitude.hi != 0U ||
         request->funding_rate_bps.magnitude.lo > LXP_BASIS_POINTS_ONE)
         return LXP_ERR_PARAMETER_BOUNDS;
-    status = lxp_u128_mul_bps_ceil(
-        request->open_notional,
-        (uint32_t)request->funding_rate_bps.magnitude.lo, &amount);
+    status = lxp_u128_mul(request->funding_rate_bps.magnitude,
+                          (lxp_u128){0U, intervals}, &rate_product);
+    if (status == LXP_OK)
+        status = lxp_u256_div_floor(rate_product, (lxp_u128){0U, 1U},
+                                    &accrued_rate, &remainder);
+    if (status == LXP_OK)
+        status = lxp_u128_mul_div_floor(request->open_notional, accrued_rate,
+                                        (lxp_u128){0U, LXP_BASIS_POINTS_ONE},
+                                        &amount, &remainder);
+    if (status == LXP_OK && !lxp_u128_is_zero(remainder))
+        status = lxp_u128_add(amount, (lxp_u128){0U, 1U}, &amount);
     if (status != LXP_OK) return LXP_ERR_OVERFLOW;
     if (lxp_u128_is_zero(amount)) return LXP_ERR_ZERO_AMOUNT;
     (void)memset(&set, 0, sizeof(set));

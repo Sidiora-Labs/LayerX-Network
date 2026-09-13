@@ -31,7 +31,7 @@ rustix.workspace = true
 
 [dev-dependencies]
 layerx-human-test-support = { path = "../layerx-human-test-support" }
-native-tls = "=0.2.15"
+native-tls = "=0.2.18"
 ciborium = "=0.2.2"
 ed25519-dalek = "=2.2.0"
 layerx-agentd.workspace = true

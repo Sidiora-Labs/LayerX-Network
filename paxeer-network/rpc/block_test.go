@@ -20,7 +20,9 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/rpc"
+	"github.com/sidiora-labs/paxeer-network/rpc/rpcutils"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	banktypes "github.com/sidiora-labs/paxeer-network/sdk/x/bank/types"
@@ -96,6 +98,7 @@ func TestEncodeWasmExecuteMsg(t *testing.T) {
 	hash := common.BytesToHash(txHash[:])
 	testkeeper.MustMockReceipt(t, k, ctx, hash, &types.Receipt{
 		TransactionIndex: 1,
+		BlockNumber:      MockHeight8,
 		From:             fromEvmAddr.Hex(),
 		TxHashHex:        hash.Hex(),
 	})
@@ -231,6 +234,7 @@ func TestEncodeWasmExecuteMsg_GasUsedFromReceipt(t *testing.T) {
 	hash := common.BytesToHash(txHash[:])
 	testkeeper.MustMockReceipt(t, k, ctx, hash, &types.Receipt{
 		TransactionIndex: 1,
+		BlockNumber:      MockHeight8,
 		From:             fromEvmAddr.Hex(),
 		TxHashHex:        hash.Hex(),
 		GasUsed:          54321,
@@ -438,4 +442,47 @@ func TestEVMBlockValidationDifferentChains(t *testing.T) {
 		err = evmrpc.ValidateEVMBlockHeight(chainID, 79123880)
 		require.NoError(t, err, "Chain %s should not validate block heights", chainID)
 	}
+}
+
+func TestMissingEVMReceiptRequiresUnconsumedHistoricalNonce(t *testing.T) {
+	application := app.Setup(t, false, true, false)
+	k := &application.EvmKeeper
+	base := application.GetContextForDeliverTx(nil).WithBlockHeight(MockHeight8)
+	before, _ := base.WithBlockHeight(MockHeight8 - 1).CacheContext()
+	after, _ := base.CacheContext()
+	encoded, err := Encoder(Tx1)
+	require.NoError(t, err)
+	transaction, _ := Tx1.GetMsgs()[0].(*types.MsgEVMTransaction).AsTransaction()
+	require.NotNil(t, transaction)
+	header := mockBlockHeader(MockHeight8)
+	sender, err := rpcutils.RecoverEVMSender(transaction, MockHeight8, header.Time.Unix())
+	require.NoError(t, err)
+	k.SetNonce(before, sender, transaction.Nonce())
+	k.SetNonce(after, sender, transaction.Nonce()+1)
+	block := &coretypes.ResultBlock{
+		BlockID: MockBlockID,
+		Block: &tmtypes.Block{Header: header, Data: tmtypes.Data{Txs: []tmtypes.Tx{encoded}},
+			LastCommit: &tmtypes.Commit{Height: MockHeight8 - 1}},
+	}
+	contexts := func(height int64) sdk.Context {
+		if height == MockHeight8-1 {
+			return before
+		}
+		return after
+	}
+	encode := func() (map[string]interface{}, error) {
+		return evmrpc.EncodeTmBlock(contexts, func(int64) client.TxConfig { return TxConfig },
+			block, k, false, false, false, false, evmrpc.NewBlockCache(3000), &sync.Mutex{})
+	}
+	result, err := encode()
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "has no canonical receipt")
+	k.SetNonce(after, sender, transaction.Nonce())
+	result, err = encode()
+	require.NoError(t, err)
+	require.Empty(t, result["transactions"])
+	k.SetNonce(before, sender, transaction.Nonce()+1)
+	result, err = encode()
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "nonce regressed")
 }

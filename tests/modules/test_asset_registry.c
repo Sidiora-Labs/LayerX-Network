@@ -750,6 +750,31 @@ int main(void)
             LXP_OK || memcmp(decoded.asset_id, record.asset_id, 32U) != 0 ||
         strcmp(decoded.symbol, "USDC") != 0 ||
         decoded.custody_reference_length != 11U) return 1;
+    {
+        lx_asset_registry bounded;
+        lx_asset_record extra = record;
+        if (lx_asset_registry_init(&bounded, 0U) != LXP_OK) return 1;
+        for (size_t i = 0U; i < LX_ASSET_REGISTRY_CAPACITY; ++i) {
+            extra.asset_id[0] = (uint8_t)(i + 1U);
+            extra.asset_id[1] = (uint8_t)((i + 1U) >> 8U);
+            if (lx_asset_register(&bounded, &extra, i, (lxp_u128){0U, 1U}) != LXP_OK)
+                return 1;
+        }
+        extra.asset_id[0] = 0xffU;
+        extra.asset_id[1] = 0xffU;
+        if (lx_asset_register(&bounded, &extra, bounded.next_sequence,
+                (lxp_u128){0U, 1U}) != LXP_ERR_ARENA_EXHAUSTED ||
+            bounded.count != LX_ASSET_REGISTRY_CAPACITY ||
+            bounded.next_sequence != LX_ASSET_REGISTRY_CAPACITY + 1U ||
+            bounded.fees_charged.lo != LX_ASSET_REGISTRY_CAPACITY + 1U)
+            return 1;
+        bounded.next_sequence = UINT64_MAX;
+        if (lx_asset_register(&bounded, &extra, UINT64_MAX,
+                (lxp_u128){0U, 1U}) != LXP_ERR_SEQUENCE_EXHAUSTED ||
+            bounded.next_sequence != UINT64_MAX ||
+            bounded.fees_charged.lo != LX_ASSET_REGISTRY_CAPACITY + 1U)
+            return 1;
+    }
     encoded[encoded_length - 49U] = 0U;
     if (lx_asset_record_decode(encoded, encoded_length, &decoded) !=
         LXP_ERR_NON_CANONICAL) return 1;

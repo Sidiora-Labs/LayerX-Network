@@ -115,6 +115,34 @@ fn account(value: &str) -> AccountId {
 }
 
 fn send_intent(public_key: [u8; 32], amount: u128, key: u8) -> Intent {
+    let signer = layerx_crypto::local::LocalSigner::new([0x51; 32]);
+    assert_eq!(
+        layerx_crypto::signer::Signer::public_key(&signer),
+        public_key
+    );
+    let debit = layerx_crypto::send::SendDebit {
+        from: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:alice:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("source account: {error:?}")),
+        to: layerx_wire::hash::account_id_for_protocol(
+            &account("agent:did:layerx:recipient:main"),
+            layerx_wire::limits::PROTOCOL_VERSION,
+        )
+        .unwrap_or_else(|error| panic!("destination account: {error:?}")),
+        asset: [0x33; 32],
+        amount,
+        source_sequence: ACCOUNT_SEQUENCE,
+        idempotency_key: [key; 32],
+        expires_at: 1_010,
+        context_hash: [0x55; 32],
+        conditions: Vec::new(),
+        authorization_kind: SendAuthorizationKind::Owner as u8,
+        network_id: NETWORK_ID,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+    };
+
     let send = LxpSend::new(
         account("agent:did:layerx:alice:main"),
         account("agent:did:layerx:recipient:main"),
@@ -124,10 +152,14 @@ fn send_intent(public_key: [u8; 32], amount: u128, key: u8) -> Intent {
         IdempotencyKey::new([key; 32]),
         TimestampSeconds::from_u64(1_010),
         ContextHash::new([0x55; 32]),
-        SendAuthorization::new(
-            SendAuthorizationKind::Owner,
-            PublicKey::new(public_key),
-            AuthorizationSignature::new([0x77; 64]),
+        support::sign_send(
+            &signer,
+            &debit,
+            SendAuthorization::new(
+                SendAuthorizationKind::Owner,
+                PublicKey::new(public_key),
+                AuthorizationSignature::new([0x77; 64]),
+            ),
         ),
         NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
         ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
@@ -577,9 +609,9 @@ fn receipt(activity_id: [u8; 32], marker: u8, activity: ActivityType) -> Receipt
         activity_id,
         previous_state_root: [marker.saturating_add(1); 32],
         resulting_state_root: [marker.saturating_add(2); 32],
-        batch_id: support::execution_batch_id(
+        batch_id: support::committed_execution_batch_id(
             [marker.saturating_add(1); 32],
-            activity_id,
+            [0x81; 32],
             u64::from(marker),
         ),
         asset: [0x33; 32],
@@ -955,4 +987,45 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(text, "{byte:02x}");
     }
     text
+}
+
+#[test]
+fn repeated_start_repairs_initial_progress_after_restart() {
+    use layerx_human_service::store::Table;
+    let fixture = Fixture::new("initial-progress-repair");
+    let plan = fixture.plan();
+    let mut store = fixture.store();
+    let mut scope = store
+        .principal(&fixture.principal)
+        .unwrap_or_else(|error| panic!("scope: {error}"));
+    let original = JourneyEngine::start(&mut scope, &plan, &registry(), 100)
+        .unwrap_or_else(|error| panic!("start: {error}"));
+    let id = JourneyId::new("jrn_crashjourney").unwrap_or_else(|error| panic!("id: {error}"));
+    let expected =
+        JourneyEngine::stream_events(&scope, &id).unwrap_or_else(|error| panic!("events: {error}"));
+    assert_eq!(expected.len(), 1);
+    for key in scope.keys(Table::Journeys) {
+        if key.as_str().starts_with("jstream-") || key.as_str().starts_with("jnotify-") {
+            assert!(scope
+                .remove(Table::Journeys, &key)
+                .unwrap_or_else(|error| panic!("remove progress: {error}")));
+        }
+    }
+    drop(scope);
+    drop(store);
+    let mut store = fixture.store();
+    let mut scope = store
+        .principal(&fixture.principal)
+        .unwrap_or_else(|error| panic!("reopen scope: {error}"));
+    let repeated = JourneyEngine::start(&mut scope, &plan, &registry(), 200)
+        .unwrap_or_else(|error| panic!("retry: {error}"));
+    assert_eq!(repeated.status().ok(), original.status().ok());
+    assert_eq!(
+        JourneyEngine::stream_events(&scope, &id).ok(),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        JourneyEngine::notification_events(&scope, &id).ok(),
+        Some(expected)
+    );
 }

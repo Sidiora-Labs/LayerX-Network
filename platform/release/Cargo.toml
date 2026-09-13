@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 ureq.workspace = true
+rustls-native-certs.workspace = true
 
 [lints]
 workspace = true

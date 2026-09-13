@@ -121,19 +121,21 @@ fn original_client_provisions_resolves_and_replays_assertion_devices() -> Result
     let uid = rustix::process::geteuid().as_raw();
     let running = Running::start(&socket, &root, uid)?;
     let client = client(&socket)?;
-    client.probe().map_err(|e| format!("{e:?}"))?;
+    client
+        .probe()
+        .map_err(|error| format!("initial probe: {error:?}"))?;
     let account = client
         .provision("person@example.com", "Person", "key", 1)
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|error| format!("first provision: {error:?}"))?;
     let retry = client
         .provision("person@example.com", "Person", "key", 2)
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|error| format!("idempotent provision: {error:?}"))?;
     assert_eq!(account.principal, retry.principal);
     assert_eq!(account.onboarding, retry.onboarding);
     assert_eq!(
         client
             .resolve_email("person@example.com")
-            .map_err(|e| format!("{e:?}"))?,
+            .map_err(|error| format!("resolve provisioned email: {error:?}"))?,
         account.principal
     );
     assert!(client
@@ -149,23 +151,25 @@ fn original_client_provisions_resolves_and_replays_assertion_devices() -> Result
     state.bind_device(&account.principal, "assertion-1", device.clone())?;
     drop(state);
     let running = Running::start(&socket, &root, uid)?;
-    client.probe().map_err(|e| format!("{e:?}"))?;
+    client
+        .probe()
+        .map_err(|error| format!("restarted probe: {error:?}"))?;
     assert_eq!(
         client
             .device_for_assertion(&account.principal, "assertion-1")
-            .map_err(|e| format!("{e:?}"))?,
+            .map_err(|error| format!("resolve assertion after restart: {error:?}"))?,
         device
     );
     let other = client
         .provision("other@example.com", "Other", "other-key", 4)
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|error| format!("second provision: {error:?}"))?;
     assert!(client
         .device_for_assertion(&other.principal, "assertion-1")
         .is_err());
     assert_eq!(
         client
             .provision("person@example.com", "Person", "key", 5)
-            .map_err(|e| format!("{e:?}"))?
+            .map_err(|error| format!("replay first provision: {error:?}"))?
             .onboarding,
         account.onboarding
     );

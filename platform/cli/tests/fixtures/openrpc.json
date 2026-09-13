@@ -185,7 +185,7 @@
           "type": "object"
         }
       },
-      "description": "Enumerates the complete bounded DID account list from LNI minor 5 committed account reads. Returns did, accounts with canonical values, native proof material and freshness, and verification=authenticated_node_snapshot. No independently verified completeness or finality claim. Unavailable or invalid native evidence returns -32001.",
+      "description": "Enumerates the complete bounded DID account list from LNI minor 5 committed account reads requested at state-proven level. Returns did, accounts with canonical values, native proof material, freshness and a per-entry verification label, and a listing verification label naming the weakest level any entry achieved: state_proven, checkpoint_finalised or settlement_anchored. No independently verified completeness claim. An empty listing, unavailable or invalid native evidence returns -32001 with core code did_account_listing_unavailable.",
       "errors": [
         {
           "code": -32602,

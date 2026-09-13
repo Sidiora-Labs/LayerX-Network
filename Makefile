@@ -2288,8 +2288,15 @@ human-qualify:
 platform-qualify:
 	python3 tools/qualification/release_runner.py $@
 
-agent-test:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked --workspace
+PUBLIC_TLS_TEST_TARGET_DIR = $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(CURDIR)/platform/target)
+PUBLIC_TLS_TEST_BOUNDARY = $(PUBLIC_TLS_TEST_TARGET_DIR)/debug/layerx-paxeer-boundary
+
+.PHONY: public-tls-test-prerequisites
+public-tls-test-prerequisites:
+	cargo build --manifest-path platform/Cargo.toml --locked -p layerx-platform-paxeer-boundary --target-dir "$(PUBLIC_TLS_TEST_TARGET_DIR)"
+
+agent-test: public-tls-test-prerequisites
+	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked --workspace
 
 agent-lint:
 	$(AGENT_CARGO) clippy --manifest-path $(AGENT_MANIFEST) --locked --workspace --all-targets -- -D warnings
@@ -2800,8 +2807,8 @@ agent-qualify-wire: $(BUILD_DIR)/agent-wire-reference
 		$(CURDIR) $(CURDIR)/$(BUILD_DIR)/agent-wire-reference \
 		$(CURDIR)/agent/tools/wire-differential/target/debug/agent-wire-differential
 
-agent-test-sanitize:
-	sh agent/tools/run-sanitizers.sh
+agent-test-sanitize: public-tls-test-prerequisites
+	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" sh agent/tools/run-sanitizers.sh
 
 agent-check-boundary:
 	$(AGENT_CARGO) test --manifest-path agent/tools/boundary-check/Cargo.toml --locked
@@ -3371,6 +3378,21 @@ test-program-simulate: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR
 	bash tests/daemon/program-admission.sh $(BUILD_DIR) simulate
 
 BRIDGE_PYTHON ?= python3
+PAXEER_GO ?= go
+PAXEER_GO_JOBS ?= 4
+.PHONY: custody-proof-build
+custody-proof-build:
+	@mkdir -p $(BUILD_DIR)/bin
+	cd paxeer-network && $(PAXEER_GO) build -mod=readonly -buildvcs=true -p $(PAXEER_GO_JOBS) -o $(abspath $(BUILD_DIR)/bin/layerx-custody-proof) ./daemon/layerx-custody-proof
+
+$(BUILD_DIR)/tests/bridge/test-comet-credit: tests/bridge/test_comet_credit.c tests/bridge/files.h $(LIBRARY) $(PROGRAMS_RUNTIME_LIB)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-comet-credit
+test-comet-credit: $(BUILD_DIR)/tests/bridge/test-comet-credit
+	$(BUILD_DIR)/tests/bridge/test-comet-credit tests/fixtures/custody/paxeer-state-v2/custody.profile tests/fixtures/custody/paxeer-state-v2/custody.credit
+
 .PHONY: test-bridge-credit
 test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
 	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR)
@@ -3381,7 +3403,7 @@ test-daemon-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_program_admissi
 
 $(BUILD_DIR)/tests/lxp_test_maintenance_crash: tests/daemon/lxp_test_maintenance_crash.c $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) -Wl,--wrap=lxp_daemon_start_protocol_batch -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) -Wl,--wrap=lxp_daemon_start_protocol_batch -Wl,--wrap=lxp_fault_inject_point -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
 .PHONY: test-daemon-maintenance-crash
 test-daemon-maintenance-crash: $(BUILD_DIR)/tests/lxp_test_maintenance_crash $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
@@ -3588,3 +3610,13 @@ authority-grant-fixtures: $(BUILD_DIR)/tests/lxp_test_grant_issuance
 
 authority-grant-fixtures-check: $(BUILD_DIR)/tests/lxp_test_grant_issuance
 	python3 tests/daemon/grant-fixtures.py --encoder $< --check
+
+.PHONY: test-program-call-builders
+$(BUILD_DIR)/tests/test_call_builders: tests/programs/test_call_builders.c src/modules/programs/call.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+test-program-call-builders: $(BUILD_DIR)/tests/test_call_builders
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_call_builders
+
+test: test-program-call-builders

@@ -116,7 +116,7 @@ const HISTORY_LIST: [Field; 3] = [
 const RECEIPT_GET: [Field; 1] = [required("activity_id", Shape::Hex32)];
 const CHECKPOINT_GET: [Field; 1] = [required("sequence", Shape::Unsigned)];
 const PROOF_GET: [Field; 1] = [required("activity_id", Shape::Hex32)];
-const AVAILABILITY_GET: [Field; 1] = [required("batch", Shape::Hex32)];
+const AVAILABILITY_GET: [Field; 1] = [required("batch", Shape::Bounded(u64::MAX))];
 const WALLET_ACCOUNTS: [Field; 1] = [required("program", Shape::Hex32)];
 const WALLET_BALANCE: [Field; 3] = [
     required("program", Shape::Hex32),
@@ -224,10 +224,10 @@ pub fn description(name: &str) -> Option<&'static str> {
             "Page verified account history from the daemon under an explicit item bound and stable cursor."
         }
         b"receipt.get" => "Read the canonical receipt the daemon holds for one activity.",
-        b"checkpoint.get" => "Read one finalised checkpoint certificate held by the daemon.",
+        b"checkpoint.get" => "Read the finalised checkpoint certificate for one batch sequence through the daemon.",
         b"proof.get" => "Read the proof bundle the daemon holds for one activity.",
         b"availability.get" => {
-            "Read verified availability chunks and attributed availability failures for one batch."
+            "Read verified availability chunks and attributed failures for one decimal batch number."
         }
         b"wallet.accounts" => "List the verified accounts the daemon observes for one program.",
         b"wallet.balance" => "Read one verified account balance for one asset through the daemon.",

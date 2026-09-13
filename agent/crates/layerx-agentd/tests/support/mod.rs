@@ -29,7 +29,7 @@ use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::encode::Encoder;
-use layerx_wire::hash::{batch_header_digest, execution_batch_id, receipt_digest};
+use layerx_wire::hash::{batch_header_digest, program_execution_batch_id, receipt_digest};
 
 #[path = "../../../../tests/support/monotonic_clock.rs"]
 mod monotonic_clock;
@@ -346,9 +346,10 @@ pub fn raw_receipt_for_execution_batch(
     let key = SigningKey::from_bytes(&[0x3a; 32]);
     let previous_state_root = [0x21; 32];
     let resulting_state_root = [0x22; 32];
-    let batch_id = execution_batch_id(
+    let batch_id = program_execution_batch_id(
         previous_state_root,
-        activity_id,
+        [0x25; 32],
+        global_sequence,
         global_sequence,
         execution_batch_number,
     )

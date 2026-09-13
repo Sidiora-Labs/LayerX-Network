@@ -230,10 +230,11 @@ impl Store {
             .records
             .iter()
             .filter(|(_, record)| {
-                current_sequence
-                    >= record
-                        .created_sequence
-                        .saturating_add(self.retention.daemon_sequences)
+                matches!(record.state, RecordState::Settled(_))
+                    && current_sequence
+                        >= record
+                            .created_sequence
+                            .saturating_add(self.retention.daemon_sequences)
             })
             .map(|(key, _)| *key)
             .collect();

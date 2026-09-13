@@ -4,6 +4,7 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends bash jq coreutils && rm -rf /var/lib/apt/lists/*
 COPY platform/hosted/paxeer/init-chain.sh /opt/layerx/init-chain.sh
 COPY platform/hosted/paxeer/contracts/BetaUsdl.runtime.hex /opt/layerx/contracts/BetaUsdl.runtime.hex
+RUN install -d -m 0700 -o 4020 -g 4020 /var/lib/paxeer
 ENV HOME=/var/lib/paxeer
 USER 4020:4020
 ENTRYPOINT ["/usr/bin/paxd"]

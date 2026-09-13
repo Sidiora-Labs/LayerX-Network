@@ -289,6 +289,28 @@ int main(void)
     if (lxp_apply_transfer(&leg, &context, &result) !=
             LXP_ERR_SEQUENCE_EXHAUSTED || !unchanged(from, to, 100U, 40U) ||
         from->next_sequence != UINT64_MAX) return 1;
+    {
+        lxp_transfer_source_authority source;
+        (void)memset(&source, 0, sizeof(source));
+        (void)memcpy(source.authorized_from, from_id, 32U);
+        source.debit_authority_kind = LXP_AUTH_OWNER;
+        context.source_authorities = &source;
+        context.source_authority_count = 1U;
+        context.debit_authority_kind = LXP_AUTH_OCCUPANCY_RESPONSIBILITY;
+        context.actor_sequence = 7U;
+        leg.reason = LXP_REASON_PAYMENT;
+        if (lxp_ledger_bootstrap_balance(from, asset_id,
+                 (lxp_u128){0U, 100U}, 7U) != LXP_OK ||
+            lxp_apply_transfer(&leg, &context, &result) != LXP_OK ||
+            from->next_sequence != 8U) return 1;
+        source.debit_authority_kind = LXP_AUTH_OCCUPANCY_RESPONSIBILITY;
+        source.protocol_system_capability = true;
+        context.debit_authority_kind = LXP_AUTH_OWNER;
+        context.actor_sequence = 8U;
+        leg.reason = LXP_REASON_STORAGE_OCCUPANCY;
+        if (lxp_apply_transfer(&leg, &context, &result) != LXP_OK ||
+            from->next_sequence != 8U) return 1;
+    }
     if (allowance_checks() != 0) return 1;
     return 0;
 }

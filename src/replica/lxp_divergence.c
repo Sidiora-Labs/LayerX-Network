@@ -32,6 +32,9 @@ lxp_result lxp_divergence_detect(lxp_divergence_state *state,
         (produced.bytes == NULL && produced.length != 0U))
         return LXP_ERR_NON_CANONICAL;
     if (state->detected) return LXP_FATAL_REPLAY_DIVERGENCE;
+    if (expected.length > LXP_MAX_DIVERGENCE_VALUE_BYTES ||
+        produced.length > LXP_MAX_DIVERGENCE_VALUE_BYTES)
+        return LXP_ERR_LENGTH_LIMIT;
     equal = expected.length == produced.length &&
             lxp_ct_memcmp(expected.bytes, produced.bytes,
                           expected.length) == 0;
@@ -57,12 +60,17 @@ static lxp_result report_preimage(const lxp_divergence_report_record *report,
                                   size_t *length)
 {
     const lxp_divergence_state *state = &report->divergence;
-    size_t required = 8U + 8U + 1U + 4U + state->expected_length + 4U +
-                      state->produced_length + 32U;
+    size_t required;
     size_t offset = 0U;
-    if (!state->detected || state->expected_length > UINT32_MAX ||
-        state->produced_length > UINT32_MAX || required > capacity)
+    if (!state->detected ||
+        state->component < LXP_DIVERGENCE_RECEIPT ||
+        state->component > LXP_DIVERGENCE_STATE_ROOT ||
+        state->expected_length > sizeof(state->expected) ||
+        state->produced_length > sizeof(state->produced))
         return LXP_ERR_LENGTH_LIMIT;
+    required = 8U + 8U + 1U + 4U + state->expected_length + 4U +
+               state->produced_length + 32U;
+    if (required > capacity) return LXP_ERR_LENGTH_LIMIT;
     put_u64(bytes + offset, state->batch_number); offset += 8U;
     put_u64(bytes + offset, state->global_sequence); offset += 8U;
     bytes[offset++] = (uint8_t)state->component;

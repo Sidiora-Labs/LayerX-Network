@@ -699,6 +699,40 @@ fn every_introspection_shape_matches_its_consumer() {
     assert_inactive(&fixture, &server, "not-a-session-token");
 }
 
+fn assert_read_services_cannot_provision(fixture: &Fixture, server: &Server, session_id: &str) {
+    for service in INTROSPECTING_SERVICES {
+        let principal = fixture.request(
+            server,
+            "POST",
+            "/v1/principals",
+            Some(&token_for(service)),
+            Some(&format!(
+                "{{\"tenant\":\"beta\",\"sub\":\"{SUB}\",\"allowed_signer_public_keys\":[]}}"
+            )),
+        );
+        assert_eq!(
+            principal.status, 403,
+            "{service} must not provision principals"
+        );
+        let session = fixture.request(
+            server,
+            "POST",
+            "/v1/sessions",
+            Some(&token_for(service)),
+            Some(&format!("{{\"sub\":\"{SUB}\"}}")),
+        );
+        assert_eq!(session.status, 403, "{service} must not mint sessions");
+        let revoke = fixture.request(
+            server,
+            "DELETE",
+            &format!("/v1/sessions/{session_id}"),
+            Some(&token_for(service)),
+            None,
+        );
+        assert_eq!(revoke.status, 403, "{service} must not revoke sessions");
+    }
+}
+
 #[test]
 fn wrong_service_tokens_are_refused() {
     let fixture = fixture("wrong-service");
@@ -738,37 +772,7 @@ fn wrong_service_tokens_are_refused() {
         );
         assert_eq!(refused.body, SERVICE_NOT_PERMITTED);
     }
-    for service in INTROSPECTING_SERVICES {
-        let principal = fixture.request(
-            &server,
-            "POST",
-            "/v1/principals",
-            Some(&token_for(service)),
-            Some(&format!(
-                "{{\"tenant\":\"beta\",\"sub\":\"{SUB}\",\"allowed_signer_public_keys\":[]}}"
-            )),
-        );
-        assert_eq!(
-            principal.status, 403,
-            "{service} must not provision principals"
-        );
-        let session = fixture.request(
-            &server,
-            "POST",
-            "/v1/sessions",
-            Some(&token_for(service)),
-            Some(&format!("{{\"sub\":\"{SUB}\"}}")),
-        );
-        assert_eq!(session.status, 403, "{service} must not mint sessions");
-        let revoke = fixture.request(
-            &server,
-            "DELETE",
-            &format!("/v1/sessions/{session_id}"),
-            Some(&token_for(service)),
-            None,
-        );
-        assert_eq!(revoke.status, 403, "{service} must not revoke sessions");
-    }
+    assert_read_services_cannot_provision(&fixture, &server, &session_id);
     let registrar_session = fixture.request(
         &server,
         "POST",
@@ -824,29 +828,29 @@ fn wrong_service_tokens_are_refused() {
     assert_eq!(invalid_key.status, 400);
 }
 
-#[test]
-fn the_registrar_creates_principals_and_only_provisioning_mints_their_sessions() {
-    let fixture = fixture("registrar");
-    let state = fixture.root.join("state");
-    let server = fixture.spawn(&state);
-    let registrar = token_for("registrar");
+fn assert_registrar_principal_and_mint_refusals(
+    fixture: &Fixture,
+    server: &Server,
+    state: &Path,
+    registrar: &str,
+) {
     let principal = format!(
         "{{\"tenant\":\"beta\",\"sub\":\"{REGISTRAR_SUB}\",\"allowed_signer_public_keys\":[\"{SIGNER_KEY}\"],\"account\":\"{REGISTRAR_ACCOUNT}\",\"audiences\":[\"ramp-reference\"]}}"
     );
     let created = fixture.request(
-        &server,
+        server,
         "POST",
         "/v1/principals",
-        Some(&registrar),
+        Some(registrar),
         Some(&principal),
     );
     assert_eq!(created.status, 200, "{}", created.body);
     assert_eq!(created.body, principal);
     let conflict = fixture.request(
-        &server,
+        server,
         "POST",
         "/v1/principals",
-        Some(&registrar),
+        Some(registrar),
         Some(
             &serde_json::json!({
                 "tenant": "rival",
@@ -866,13 +870,7 @@ fn the_registrar_creates_principals_and_only_provisioning_mints_their_sessions()
         format!("{{\"tenant\":\"beta\",\"sub\":\"{REGISTRAR_SUB}\"}}"),
         format!("{{\"sub\":\"{REGISTRAR_SUB}\",\"ttl_seconds\":60}}"),
     ] {
-        let minted = fixture.request(
-            &server,
-            "POST",
-            "/v1/sessions",
-            Some(&registrar),
-            Some(&body),
-        );
+        let minted = fixture.request(server, "POST", "/v1/sessions", Some(registrar), Some(&body));
         assert_eq!(minted.status, 403, "{}", minted.body);
         assert_eq!(minted.body, SERVICE_NOT_PERMITTED);
     }
@@ -885,6 +883,15 @@ fn the_registrar_creates_principals_and_only_provisioning_mints_their_sessions()
         !journal.contains("\"Session\""),
         "the registrar's refused mints leave no session record: {journal}"
     );
+}
+
+#[test]
+fn the_registrar_creates_principals_and_only_provisioning_mints_their_sessions() {
+    let fixture = fixture("registrar");
+    let state = fixture.root.join("state");
+    let server = fixture.spawn(&state);
+    let registrar = token_for("registrar");
+    assert_registrar_principal_and_mint_refusals(&fixture, &server, &state, &registrar);
     let session = fixture.request(
         &server,
         "POST",

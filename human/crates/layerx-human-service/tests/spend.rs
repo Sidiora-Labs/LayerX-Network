@@ -257,7 +257,7 @@ fn signed_receipt(
         sequence,
         previous_state_root,
         resulting_state_root: Sha256::digest([b"after".as_slice(), &activity_id].concat()).into(),
-        batch_id: support::execution_batch_id(previous_state_root, activity_id, sequence),
+        batch_id: support::committed_execution_batch_id(previous_state_root, [0x81; 32], sequence),
         asset,
         amount,
         counterparty,
@@ -353,6 +353,13 @@ fn push_bytes(output: &mut Vec<u8>, value: &[u8]) {
     let length = u32::try_from(value.len()).unwrap_or_else(|_| panic!("receipt field overflow"));
     output.extend_from_slice(&length.to_be_bytes());
     output.extend_from_slice(value);
+}
+
+#[test]
+fn spend_receipt_binds_the_committed_activity_tree() {
+    let material = signed_receipt(WINDOW_START, [1; 32], 100, ASSET, COUNTERPARTY);
+    let authority = support::evidence_verifier(&SigningKey::from_bytes(&[0x84; 32]));
+    assert!(authority.verify_receipt(&material.evidence).is_ok());
 }
 
 #[test]

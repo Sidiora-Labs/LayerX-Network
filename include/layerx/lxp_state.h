@@ -66,6 +66,8 @@ lxp_result lxp_state_snapshot_create(lxp_state_store *source,
 lxp_result lxp_state_snapshot_clone(lxp_state_snapshot *source,
                                     lxp_state_snapshot **snapshot);
 void lxp_state_snapshot_destroy(lxp_state_snapshot *snapshot);
+lxp_result lxp_state_snapshot_restore(const lxp_state_snapshot *snapshot,
+                                      lxp_state_store *live);
 lxp_state_store *lxp_state_snapshot_store_for_prepare(
     lxp_state_snapshot *snapshot);
 const lxp_state_store *lxp_state_snapshot_store(

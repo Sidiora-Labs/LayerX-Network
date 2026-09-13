@@ -6,6 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/resource.h>
+#include <signal.h>
 
 int main(int argc, char **argv)
 {
@@ -82,7 +85,58 @@ int main(int argc, char **argv)
         assert(gp_runtime_oracle(runtime, (lxp_byte_span){(const uint8_t *)"oracle", 6U}, &valid) !=
                    LXP_OK &&
                !valid);
-        status = lxp_replay_batch_publication(engine, &body, initial_root, &arena, &replay);
+        {
+            char feed_path[4096];
+            struct stat before, staged, restored;
+            uint64_t sequence_before = engine->kernel->state->next_sequence;
+            uint8_t replayed_root[32];
+            int written = snprintf(feed_path, sizeof(feed_path), "%s/replay-feed.log", argv[2]);
+            assert(written > 0 && (size_t)written < sizeof(feed_path));
+            assert(stat(feed_path, &before) == 0);
+            assert(engine->transaction_begin != NULL && engine->transaction_finish != NULL);
+            assert(engine->transaction_begin(engine->context) == LXP_OK);
+            status = lxp_replay_batch_publication(engine, &body, initial_root, &arena, &replay);
+            if (status != LXP_OK) fprintf(stderr, "transaction replay batch=%lu refused: %d\n", batch, (int)status);
+            assert(status == LXP_OK);
+            memcpy(replayed_root, engine->kernel->current_state_root, 32U);
+            assert(stat(feed_path, &staged) == 0 && staged.st_size == before.st_size);
+            assert(engine->transaction_finish(engine->context, false) == LXP_OK);
+            assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+            assert(engine->kernel->state->next_sequence == sequence_before);
+            assert(stat(feed_path, &restored) == 0 && restored.st_size == before.st_size);
+            assert(gp_runtime_prepare(runtime, &body) == LXP_OK);
+            assert(engine->transaction_begin(engine->context) == LXP_OK);
+            status = lxp_replay_batch_publication(engine, &body, initial_root, &arena, &replay);
+            assert(status == LXP_OK);
+            assert(!memcmp(replayed_root, engine->kernel->current_state_root, 32U));
+            if (batch == 1U) {
+                struct rlimit original, limited;
+                struct sigaction previous, ignore = {0};
+                assert(getrlimit(RLIMIT_FSIZE, &original) == 0);
+                limited = original;
+                limited.rlim_cur = (rlim_t)before.st_size + 1U;
+                assert(limited.rlim_cur <= original.rlim_max);
+                ignore.sa_handler = SIG_IGN;
+                assert(sigemptyset(&ignore.sa_mask) == 0);
+                assert(sigaction(SIGXFSZ, &ignore, &previous) == 0);
+                assert(setrlimit(RLIMIT_FSIZE, &limited) == 0);
+                assert(engine->transaction_finish(engine->context, true) == LXP_ERR_IO);
+                assert(setrlimit(RLIMIT_FSIZE, &original) == 0);
+                assert(sigaction(SIGXFSZ, &previous, NULL) == 0);
+                assert(stat(feed_path, &staged) == 0 && staged.st_size == before.st_size + 1);
+                assert(engine->transaction_finish(engine->context, false) == LXP_OK);
+                assert(stat(feed_path, &restored) == 0 && restored.st_size == before.st_size);
+                assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+                assert(engine->kernel->state->next_sequence == sequence_before);
+                assert(gp_runtime_prepare(runtime, &body) == LXP_OK);
+                assert(engine->transaction_begin(engine->context) == LXP_OK);
+                status = lxp_replay_batch_publication(engine, &body, initial_root, &arena, &replay);
+                assert(status == LXP_OK);
+                assert(!memcmp(replayed_root, engine->kernel->current_state_root, 32U));
+            }
+            assert(engine->transaction_finish(engine->context, true) == LXP_OK);
+            assert(stat(feed_path, &restored) == 0 && restored.st_size >= before.st_size);
+        }
         if (status != LXP_OK)
             break;
         status = lxp_guarantor_recompute_roots(&body, &replay, &arena, &roots);

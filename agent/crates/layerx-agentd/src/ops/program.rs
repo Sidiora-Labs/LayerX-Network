@@ -213,16 +213,44 @@ pub struct EmulatorProgramSimulationTransport {
     endpoint: String,
 }
 
+#[cfg(test)]
+use crate::outbound_tls::tls_boundary;
+
+#[test]
+fn simulation_tls_checks_the_actual_server_identity() {
+    tls_boundary::qualify(
+        "ops::program::simulation_tls_checks_the_actual_server_identity",
+        |endpoint| {
+            let uppercase = endpoint.replacen("https://", "HTTPS://", 1);
+            let client = EmulatorProgramSimulationTransport::connect(&uppercase)
+                .map_err(|error| format!("{error:?}"))?;
+            client
+                .agent
+                .get(format!("{endpoint}/livez"))
+                .call()
+                .map_err(|error| error.to_string())?
+                .body_mut()
+                .read_to_vec()
+                .map_err(|error| error.to_string())
+        },
+    );
+}
+
 impl EmulatorProgramSimulationTransport {
-    #[must_use]
-    pub fn connect(endpoint: &str) -> Self {
+    /// # Errors
+    /// Refuses unavailable or invalid system trust roots for HTTPS.
+    pub fn connect(endpoint: &str) -> Result<Self, ProgramOperationError> {
         let config = ureq::Agent::config_builder()
+            .tls_config(
+                crate::outbound_tls::system(endpoint)
+                    .ok_or(ProgramOperationError::InvalidRequest)?,
+            )
             .http_status_as_error(false)
             .build();
-        Self {
+        Ok(Self {
             agent: config.into(),
             endpoint: endpoint.trim_end_matches('/').to_owned(),
-        }
+        })
     }
 }
 
