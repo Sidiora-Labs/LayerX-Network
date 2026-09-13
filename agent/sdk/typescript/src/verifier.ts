@@ -458,11 +458,15 @@ export function decodeBatchHeader(canonicalHeader: Uint8Array): BatchHeader {
     return verificationFailure();
   }
   const decoder = new Decoder(canonicalHeader);
-  if (decoder.u16() !== 1 || decoder.u16() !== 0x1701 || decoder.u8() !== 15) {
+  const envelopeVersion = decoder.u16();
+  if (![1, 2, 3].includes(envelopeVersion) || decoder.u16() !== 0x1701 || decoder.u8() !== 15) {
     return verificationFailure();
   }
   field(decoder, 1);
   const protocolVersion = decoder.u16();
+  if (protocolVersion !== envelopeVersion) {
+    return verificationFailure();
+  }
   field(decoder, 2);
   const networkId = decoder.u32();
   field(decoder, 3);
