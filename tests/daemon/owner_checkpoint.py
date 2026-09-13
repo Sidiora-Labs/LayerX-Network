@@ -133,6 +133,23 @@ def checkpoint(work, public, settlement, rpc, account, launch, ca_key, ca_cert, 
     assert rpc.call('eth_call', [dict(to=custody['vault'], data=calldata('guarantorBond()')), 'latest'])[-40:].lower() == bond[2:].lower()
     assert bytes.fromhex(rpc.call('eth_call', [dict(to=custody['vault'],
         data=calldata('depositRootAuthority()')), 'latest'])[2:]) == deposit_public
+    usdl_asset = '0x' + eth_hash(b'USDL').hex()
+    govern(rpc, account, custody['timelock'], custody['registry'],
+        calldata('registerAsset(bytes32,address,uint8,uint128,uint128)',
+            usdl_asset, usdl, 6, 1, 2 ** 128 - 1))
+    send(rpc, account, usdl, calldata('mint(address,uint256)', account, 1000))
+    send(rpc, account, usdl, calldata('approve(address,uint256)', custody['vault'], 1000))
+    owner = json.loads((work / 'human-evidence-input/owner-admission.json').read_text())
+    send(rpc, account, custody['vault'], calldata('deposit(bytes32,uint256,bytes32)',
+        usdl_asset, 1000, '0x' + owner['owner_account']))
+    for target, signature, args, expected in (
+        (usdl, 'balanceOf(address)', (custody['vault'],), 1000),
+        (custody['vault'], 'totalCustodied(bytes32)', (usdl_asset,), 1000),
+        (bond, 'custodiedValue()', (), 1000),
+        (bond, 'minimumBond()', (), 100),
+    ):
+        assert int(rpc.call('eth_call', [dict(to=target,
+            data=calldata(signature, *args)), 'latest']), 16) == expected
     inputs = work / 'checkpoint-publication-inputs'
     inputs.mkdir(mode=0o750)
     os.chown(inputs, 0, 4021)
