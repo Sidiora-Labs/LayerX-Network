@@ -744,6 +744,11 @@ mod lifecycle_checks {
                     sequencer_public_key: public,
                     previous_state_root: protocol.previous_state_root(),
                     activity_id: expected_id,
+                    payload_hash: layerx_wire::hash::domain(
+                        layerx_wire::hash::Domain::PayloadHash,
+                        &layerx_wire::hash::CanonicalBytes::from_wire(input.payload.to_vec()),
+                    )
+                    .map_err(|error| format!("{error:?}"))?,
                     program_id: program.bytes(),
                     guest_abi_version: 2,
                 },
@@ -799,6 +804,11 @@ mod lifecycle_checks {
                     sequencer_public_key: public,
                     previous_state_root: protocol.previous_state_root(),
                     activity_id: expected_id,
+                    payload_hash: layerx_wire::hash::domain(
+                        layerx_wire::hash::Domain::PayloadHash,
+                        &layerx_wire::hash::CanonicalBytes::from_wire(input.payload.to_vec()),
+                    )
+                    .map_err(|error| format!("{error:?}"))?,
                     program_id: program.bytes(),
                     guest_abi_version: 2,
                 },

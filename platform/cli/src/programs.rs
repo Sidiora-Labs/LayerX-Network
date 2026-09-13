@@ -6,8 +6,8 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_crypto::ed25519;
 use layerx_programs_runtime::access::AccessDeclaration;
 use layerx_programs_runtime::terminal::{
-    decode_terminal_payload, CandidateTerminalOutcome, ExecutionTerminal, FailureTerminal,
-    TerminalAttachment, TerminalDetail,
+    CandidateTerminalOutcome, ExecutionTerminal, FailureTerminal, TerminalAttachment,
+    TerminalDetail,
 };
 use layerx_programs_runtime::{
     BudgetMeterRefusal, BudgetResourceKind, OccupancySettlement, WasmEngine,
@@ -1216,18 +1216,28 @@ fn render_call_result(
         return Err("terminal payload does not match the signed receipt commitment".to_owned());
     }
     let result_code = program.result_code();
-    let detail = decode_terminal_payload(
-        program.terminal_kind(),
-        program.abi_version(),
-        &terminal_payload,
-    )
-    .map_err(|error| format!("program terminal detail is invalid: {error:?}"))?;
     let call_graph = hex_decode(
         "call graph",
         result["call_graph"]
             .as_str()
             .ok_or_else(|| "program response omitted authenticated call graph".to_owned())?,
     )?;
+    let execution = layerx_proof::program::verify_program_execution(
+        &receipt_bytes,
+        &terminal_payload,
+        &call_graph,
+        layerx_proof::program::ProgramExecutionExpectation {
+            sequencer_public_key: head.sequencer_public_key,
+            previous_state_root: head.state_root,
+            activity_id: expected_activity,
+            payload_hash: layerx_wire::hash::payload_hash(&activity)
+                .map_err(|error| format!("program payload hash: {error:?}"))?,
+            program_id: fixed_hex("program id", request.program_id)?,
+            guest_abi_version: head.abi_version,
+        },
+    )
+    .map_err(|error| format!("program execution verification: {error:?}"))?;
+    let detail = execution.terminal();
     verify_terminal_commitments(&detail, &call_graph, protocol.protocol_version(), program)?;
     let outcome = render_terminal(&detail.detail, request.program_id, program, result_code)?;
     Ok(json!({
@@ -1340,6 +1350,9 @@ fn render_terminal(
                     json!({"status":"refused","failure":{"kind":"resource","detail":render_resource_refusal(*resource),"result_code":result_code}})
                 }
             }
+        }
+        TerminalDetail::Failure(FailureTerminal::PreRuntime(failure)) => {
+            json!({"status":"refused","failure":{"kind":"pre_runtime","result_code":failure.result_code}})
         }
         TerminalDetail::Failure(FailureTerminal::Program(failure)) => {
             render_program_failure(failure, result_code)

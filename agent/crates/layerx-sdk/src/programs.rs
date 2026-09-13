@@ -401,6 +401,7 @@ impl VerifiedProgramInterface {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramExecutionEvidence {
+    pub payload_hash: [u8; 32],
     pub receipt: Vec<u8>,
     pub terminal_payload: Vec<u8>,
     pub call_graph: Vec<u8>,
@@ -645,6 +646,7 @@ pub fn verify_program_evidence(
         AuthorizedProgramExecutionExpectation {
             authority: evidence.authority,
             activity_id: evidence.activity_id,
+            payload_hash: evidence.payload_hash,
             program_id: evidence.program_id,
             guest_abi_version: evidence.guest_abi_version,
         },

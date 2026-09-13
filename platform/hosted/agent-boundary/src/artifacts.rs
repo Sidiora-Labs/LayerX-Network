@@ -109,6 +109,8 @@ pub(super) fn verify(
     receipt_bytes: &[u8],
     activity_id: [u8; 32],
     program_id: [u8; 32],
+    payload_hash: [u8; 32],
+    guest_abi_version: u16,
     network_id: u32,
 ) -> Result<(), String> {
     if stored.version != 1 {
@@ -150,9 +152,6 @@ pub(super) fn verify(
     if terminal.is_empty() || graph.is_empty() {
         return Err(error("missing execution artifacts"));
     }
-    let outcome = protocol
-        .program_outcome()
-        .ok_or_else(|| error("program outcome"))?;
     verify_authorized_program_execution(
         receipt_bytes,
         &terminal,
@@ -161,7 +160,8 @@ pub(super) fn verify(
             authority,
             activity_id,
             program_id,
-            guest_abi_version: outcome.abi_version(),
+            payload_hash,
+            guest_abi_version,
         },
     )
     .map_err(error)?;

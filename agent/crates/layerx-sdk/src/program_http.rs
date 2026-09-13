@@ -1020,6 +1020,7 @@ fn decode_simulation(
             .ok_or(ProgramOperationError::Decode)?,
         Some(ExecutionState::Simulated),
         trusted_sequencer_public_key,
+        request.signed_activity(),
     )?;
     if decoded.activity_id != request.bound_activity_id()
         || decoded.program_id != request.request_program()
@@ -1126,7 +1127,22 @@ fn decode_submission(
             retained_signed_activity: retained,
         });
     }
-    let decoded = decode_execution(value, None, expected.trusted_sequencer_public_key)?;
+    let retained = if let Some(signed) = expected.retained_signed_activity {
+        signed.to_vec()
+    } else {
+        bounded_hex(
+            object,
+            "retained_signed_activity",
+            MAX_SIGNED_ACTIVITY_BYTES,
+            None,
+        )?
+    };
+    let decoded = decode_execution(
+        value,
+        None,
+        expected.trusted_sequencer_public_key,
+        &retained,
+    )?;
     if !matches!(
         decoded.state,
         ExecutionState::Executed | ExecutionState::Refused
@@ -1170,6 +1186,7 @@ fn decode_execution(
     value: &Value,
     expected_state: Option<ExecutionState>,
     trusted_sequencer_public_key: [u8; 32],
+    signed_activity: &[u8],
 ) -> Result<DecodedExecution, ProgramOperationError> {
     let value = object(value)?;
     let state = match required_string(value, "state")? {
@@ -1214,7 +1231,39 @@ fn decode_execution(
     let output_bytes = decimal_u64(usage, "output_bytes")?;
     let fee_units = decimal_u128(usage, "fee_units")?;
     let outcome = value.get("outcome").ok_or(ProgramOperationError::Decode)?;
+    let registry = crate::program_lifecycle::programs_module_registry()?;
+    let activity = layerx_wire::activity::decode_signed(signed_activity, &registry)
+        .map_err(|_| ProgramOperationError::Decode)?;
+    if layerx_wire::hash::activity_id(&activity).map_err(|_| ProgramOperationError::Decode)?
+        != activity_id
+    {
+        return Err(ProgramOperationError::IdentityMismatch);
+    }
+    if activity.activity_type().module() != layerx_types::payload::ModuleId::Programs
+        || activity.activity_type().ordinal() != 3
+    {
+        return Err(ProgramOperationError::IdentityMismatch);
+    }
+    let bound_program = if activity.protocol_version() == 3 {
+        let call = layerx_types::program_call::NativeProgramCall::decode(activity.payload())
+            .map_err(|_| ProgramOperationError::Decode)?;
+        if call.guest_abi != guest_abi_version {
+            return Err(ProgramOperationError::IdentityMismatch);
+        }
+        call.callee().bytes()
+    } else {
+        layerx_types::intent::ProgramCall::from_canonical_payload(activity.payload())
+            .map_err(|_| ProgramOperationError::Decode)?
+            .callee()
+            .bytes()
+    };
+    if bound_program != program_id {
+        return Err(ProgramOperationError::IdentityMismatch);
+    }
+    let payload_hash =
+        layerx_wire::hash::payload_hash(&activity).map_err(|_| ProgramOperationError::Decode)?;
     let evidence = ProgramExecutionEvidence {
+        payload_hash,
         receipt,
         terminal_payload,
         call_graph,
@@ -1234,7 +1283,8 @@ fn decode_execution(
         .evidence()
         .receipt_digest()
         .ok_or(ProgramOperationError::Verification)?;
-    if protocol.module_version() != module_version
+    if protocol.protocol_version() != activity.protocol_version()
+        || protocol.module_version() != module_version
         || protocol.batch_id() != batch_id
         || protocol.global_sequence() != global_sequence
         || protocol.result_code() != result_code

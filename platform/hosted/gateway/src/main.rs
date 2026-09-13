@@ -1355,6 +1355,7 @@ fn verified_program_result(
     terminal_payload_hex: &str,
     call_graph_hex: &str,
     head: ProgramHead,
+    signed_activity: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>, i32), OutgoingResponse> {
     let expected_activity =
         parse_hex32(activity_id).map_err(|_| response(503, "component_invalid", Some(5)))?;
@@ -1364,6 +1365,30 @@ fn verified_program_result(
         .map_err(|_| response(503, "component_invalid", Some(5)))?;
     let call_graph = decode_hex(call_graph_hex, 1_048_576)
         .map_err(|_| response(503, "component_invalid", Some(5)))?;
+    let activity = decode_signed(signed_activity, &config.modules)
+        .map_err(|_| response(503, "program_activity_invalid", Some(5)))?;
+    let program_id = if activity.protocol_version() == 3 {
+        let call = layerx_types::program_call::NativeProgramCall::decode(activity.payload())
+            .map_err(|_| response(503, "program_activity_invalid", Some(5)))?;
+        if call.guest_abi != head.abi_version {
+            return Err(response(503, "program_activity_invalid", Some(5)));
+        }
+        call.callee().bytes()
+    } else {
+        ProgramCall::from_canonical_payload(activity.payload())
+            .map_err(|_| response(503, "program_activity_invalid", Some(5)))?
+            .callee()
+            .bytes()
+    };
+    if layerx_wire::hash::activity_id(&activity)
+        .map_err(|_| response(503, "program_activity_invalid", Some(5)))?
+        != expected_activity
+        || program_id != head.program_id
+    {
+        return Err(response(503, "program_activity_invalid", Some(5)));
+    }
+    let payload_hash = layerx_wire::hash::payload_hash(&activity)
+        .map_err(|_| response(503, "program_activity_invalid", Some(5)))?;
     let facts = authority(config, activity_id, &receipt)?;
     let verified = verify_program_operation(
         &receipt,
@@ -1373,6 +1398,7 @@ fn verified_program_result(
         &config.sequencer_authorization.public_key(),
         layerx_platform_gateway::ProgramExpectation {
             activity_id: expected_activity,
+            payload_hash,
             program_id: head.program_id,
             guest_abi_version: head.abi_version,
         },
@@ -1451,7 +1477,14 @@ fn program_simulation(
     let Ok(document): Result<serde_json::Value, _> = serde_json::from_slice(&upstream.body) else {
         return response(503, "component_invalid", Some(5));
     };
+    let Ok(activity) = decode_signed(&canonical, &config.modules) else {
+        return response(400, "invalid_program_call", None);
+    };
+    let Ok(payload_hash) = layerx_wire::hash::payload_hash(&activity) else {
+        return response(400, "invalid_program_call", None);
+    };
     let expected = SimulationExpectation {
+        payload_hash,
         activity_id: submission.activity_id(),
         program_id,
         abi_version: head.abi_version,
@@ -1463,6 +1496,7 @@ fn program_simulation(
 }
 
 struct SimulationExpectation {
+    payload_hash: [u8; 32],
     activity_id: [u8; 32],
     program_id: [u8; 32],
     abi_version: u16,
@@ -1515,6 +1549,7 @@ fn render_simulation(
         config.sequencer_authorization.public_key(),
         layerx_platform_gateway::ProgramExpectation {
             activity_id: expected.activity_id,
+            payload_hash: expected.payload_hash,
             program_id: expected.program_id,
             guest_abi_version: expected.abi_version,
         },
@@ -2272,6 +2307,7 @@ fn complete_activity(
                 &component.terminal_payload,
                 &component.call_graph,
                 head,
+                &operation.canonical,
             )
         },
     ) {
@@ -2298,6 +2334,12 @@ fn complete_activity(
             "idempotency_key".to_owned(),
             serde_json::Value::String(operation.protocol_idempotency.clone()),
         );
+        if operation.program_call {
+            object.insert(
+                "retained_signed_activity".to_owned(),
+                serde_json::Value::String(operation.retained_signed_activity.clone()),
+            );
+        }
     }
     let Ok(stored_result) = serde_json::to_vec(&result) else {
         return response(503, "receipt_encoding_failed", Some(5));
@@ -2538,6 +2580,9 @@ fn resolve_pending_program(
         Ok(value) => value,
         Err(error) => return error,
     };
+    let Ok(canonical) = decode_hex(&operation.continuation, 1_048_576) else {
+        return response(503, "persistence_unavailable", Some(5));
+    };
     let (verified, receipt, result_code) = match verified_program_result(
         config,
         &component.activity_id,
@@ -2545,6 +2590,7 @@ fn resolve_pending_program(
         &component.terminal_payload,
         &component.call_graph,
         head,
+        &canonical,
     ) {
         Ok(value) => value,
         Err(error) => return error,
@@ -3769,6 +3815,10 @@ fn complete_pending_program(
         object.insert(
             "idempotency_key".to_owned(),
             serde_json::Value::String(operation.idempotency_key.clone()),
+        );
+        object.insert(
+            "retained_signed_activity".to_owned(),
+            serde_json::Value::String(operation.continuation.clone()),
         );
     }
     let Ok(stored_result) = serde_json::to_vec(&result) else {
