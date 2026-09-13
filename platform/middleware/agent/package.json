@@ -17,7 +17,7 @@
     }
   },
   "files": ["dist"],
-  "scripts": { "build": "tsc -p tsconfig.json" },
+  "scripts": { "build": "tsc -p tsconfig.json", "test": "npm run build && node --test test/*.test.mjs" },
   "publishConfig": { "access": "public", "provenance": true },
   "dependencies": { "@sidiora/layerx-sdk": "0.1.0", "@sidiora/layerx-seller-middleware": "0.1.0" },
   "devDependencies": { "typescript": "5.9.2" },

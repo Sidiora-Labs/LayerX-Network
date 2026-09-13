@@ -946,6 +946,7 @@ impl VerifiedReceiptEvidence {
         raw: &RawReceiptEvidence,
         activity_batch: &AuthorizedBatch,
         evidence: &layerx_proof::receipt::MaintainedOutcomeEvidence<'_>,
+        receipts: &[Vec<u8>],
         protocol_version: u16,
         network_id: u32,
     ) -> Result<Self, ReceiptEvidenceError> {
@@ -963,14 +964,15 @@ impl VerifiedReceiptEvidence {
         let sealed_batch = AuthorizedBatch::new(
             activity_batch.batch_id(),
             activity_batch.asset(),
-            activity_batch.previous_state_root(),
+            header.previous_state_root(),
             header.resulting_state_root(),
             activity_batch.sequencer_public_key(),
         );
-        let authenticated = layerx_proof::receipt::authorized_maintained_activity_batch(
+        let authenticated = layerx_proof::receipt::authorized_maintained_activity_batch_chain(
             &raw.canonical_receipt,
             &sealed_batch,
             evidence,
+            receipts,
         )
         .map_err(|_| ReceiptEvidenceError::BatchIdentity)?;
         if authenticated != *activity_batch {

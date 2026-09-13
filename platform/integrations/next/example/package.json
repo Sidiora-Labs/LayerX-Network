@@ -7,7 +7,8 @@
     "dev": "next dev --port ${PORT:-8080}",
     "build": "next build",
     "start": "next start --port ${PORT:-8080}",
-    "scan": "layerx-scan-bundle .next/static public"
+    "scan": "layerx-scan-bundle .next/static public",
+    "test:fulfillment": "node --test test/fulfillment.test.mjs"
   },
   "dependencies": {
     "@sidiora/layerx-next": "0.1.0",

@@ -10,6 +10,7 @@ for fixture in (historical, maintained):
     if fixture is maintained:
         expected = fixture['authority']['batch_evidence']
         attachment = expected['batch_identity']['receipt_hex']
+        expected['batch_identity']['activity_receipts_hex'] = [fixture['receipt_hex']]
         key = fixture['sequencer_public_key']
     else:
         assert fixture['proof_index'] == 0 and fixture['proof_count'] == 1 and fixture['proof_siblings'] == []

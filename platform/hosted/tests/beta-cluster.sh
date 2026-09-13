@@ -128,7 +128,6 @@ revision() {
     case "${LAYERX_BETA_IMAGE_SOURCE:-build}" in
         build) ;;
         ghcr)
-            [ "$(cluster_mode)" = kind ] || fail "GHCR image source requires a kind cluster"
             rev=${LAYERX_BETA_IMAGE_TAG:-beta}
             [[ $rev =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]] || fail "invalid LAYERX_BETA_IMAGE_TAG"
             printf '%s' "$rev"
@@ -240,18 +239,28 @@ build_images() {
         docker build --file "$dockerfile" --tag "$ref" --label "$IMAGE_LABEL=$CLUSTER_NAME" "${build_args[@]}" - < "$WORK_DIR/context.tar" \
             > "$LOG_DIR/build-$name.log" 2>&1 || { tail -n 40 "$LOG_DIR/build-$name.log" >&2; fail "image build failed for $name (log $LOG_DIR/build-$name.log)"; }
         id=$(docker image inspect --format '{{.Id}}' "$ref")
+        if [ "$name" = paxd ]; then
+            docker run --rm --entrypoint /bin/bash "$ref" -c \
+                'test -r /opt/layerx/init-chain.sh && test -s /opt/layerx/contracts/BetaUsdl.runtime.hex && command -v paxd && command -v jq' \
+                > "$LOG_DIR/contents-$name.log" 2>&1 || fail "Paxeer initialization image is incomplete"
+        fi
         printf '%s %s %s %s\n' "$name" "$canonical" "$ref" "$id" >> "$WORK_DIR/images"
     done
 }
 
 pull_images() {
-    local name canonical dockerfile remote digest ref id
+    local name canonical dockerfile remote digest ref id expected publication candidate
+    publication=${LAYERX_BETA_PUBLICATION_DIR:?verified release publication directory is required for GHCR images}
+    candidate=${LAYERX_BETA_RELEASE_CANDIDATE:?the exact source revision of the GHCR images is required}
+    bash "$SCRIPT_DIR/publish-images.sh" --phase verify --release-candidate "$candidate" --output "$publication"
     mkdir -p "$LOG_DIR"
     : > "$WORK_DIR/images"
     for name in "${IMAGE_NAMES[@]}"; do
         read -r canonical dockerfile <<<"$(image_source "$name")"
         remote="ghcr.io/sidiora-labs/$name"
         digest=$(registry_image_digest "$remote:$REVISION")
+        expected=$(awk -v name="$name" -v repository="$remote" '$1 == name && $2 == repository {print $3}' "$publication/digests.txt")
+        [ "$digest" = "$expected" ] || fail "selected tag does not name the attested release image for $name"
         log "pulling $remote:$REVISION at $digest"
         docker pull "$remote@$digest" > "$LOG_DIR/pull-$name.log" 2>&1 \
             || fail "image pull failed for $name (log $LOG_DIR/pull-$name.log)"
@@ -309,16 +318,37 @@ cluster_create() {
 }
 
 load_images() {
-    local name canonical ref id
+    local name canonical ref id node normalized digest pin observed repository
+    : > "$WORK_DIR/image-pins"
     while read -r name canonical ref id; do
         if [ "$(cluster_mode)" = owner ]; then
-            [ -n "${LAYERX_BETA_IMAGE_REGISTRY:-}" ] || fail "LAYERX_BETA_IMAGE_REGISTRY is required to push images for an owner cluster"
-            log "pushing $ref"
-            docker push "$ref" > "$LOG_DIR/push-$name.log" 2>&1 || fail "docker push failed for $ref"
+            [ "${LAYERX_BETA_IMAGE_SOURCE:-build}" = ghcr ] \
+                || fail "owner clusters require release images published through the GHCR SBOM and attestation gate"
+            repository="ghcr.io/sidiora-labs/$name"
+            pin=$(docker image inspect "$ref" --format '{{json .RepoDigests}}' \
+                | jq -er --arg repository "$repository@" '[.[] | select(startswith($repository))] | unique | if length == 1 then .[0] else error("missing unique registry digest") end') \
+                || fail "no immutable GHCR reference for $name"
         else
             log "loading $ref into kind nodes"
-            "$TOOLS_DIR/kind" load docker-image --name "$CLUSTER_NAME" "$ref" > "$LOG_DIR/load-$name.log" 2>&1 || fail "kind load failed for $ref"
+            "$TOOLS_DIR/kind" load docker-image --name "$CLUSTER_NAME" "$ref" > "$LOG_DIR/load-$name.log" 2>&1 \
+                || fail "kind load failed for $ref"
+            normalized=$ref
+            case "${ref%%/*}" in *.*|*:*|localhost) ;; *) normalized="docker.io/$ref" ;; esac
+            digest=
+            for node in $(kind_nodes); do
+                observed=$(docker exec "$node" ctr -n k8s.io images ls \
+                    | awk -v reference="$normalized" '$1 == reference {print $3}')
+                [[ $observed =~ ^sha256:[0-9a-f]{64}$ ]] || fail "kind did not retain a manifest digest for $ref"
+                [ -z "$digest" ] || [ "$digest" = "$observed" ] || fail "kind nodes loaded different manifests for $ref"
+                digest=$observed
+                pin="${normalized%:*}@$digest"
+                docker exec "$node" ctr -n k8s.io images tag --force "$normalized" "$pin" > /dev/null \
+                    || fail "kind could not retain immutable reference $pin"
+            done
+            [ -n "$digest" ] || fail "no kind node loaded $ref"
         fi
+        [[ $pin =~ @sha256:[0-9a-f]{64}$ ]] || fail "invalid immutable image reference for $name"
+        printf '%s %s\n' "$name" "$pin" >> "$WORK_DIR/image-pins"
     done < "$WORK_DIR/images"
 }
 
@@ -887,7 +917,7 @@ secrets_apply() {
 }
 
 builder_release_publish() {
-    local ns="$TESTNET_NAMESPACE" ref digest bwrap_digest cgroup_digest sums
+    local ns="$TESTNET_NAMESPACE" ref deployment_ref digest bwrap_digest cgroup_digest sums
     ref=$(image_ref layerx-program-registry)
     sums=$(docker run --rm --entrypoint /bin/sh "$ref" -c 'sha256sum /usr/bin/bwrap /usr/bin/layerx-cgroup-exec')
     bwrap_digest=$(printf '%s\n' "$sums" | awk '$2 == "/usr/bin/bwrap" { print $1 }')
@@ -905,6 +935,8 @@ builder_release_publish() {
     printf '%s' "$digest" > "$SECRETS_DIR/environment-tree-digest"
     apply_configmap "$ns" layerx-program-builder-release --from-file=environment-tree-digest="$SECRETS_DIR/environment-tree-digest" \
         --from-file=bwrap-digest="$SECRETS_DIR/bwrap-digest" --from-file=cgroup-exec-digest="$SECRETS_DIR/cgroup-exec-digest"
+    deployment_ref=$(awk '$1 == "layerx-program-registry" {print $2}' "$WORK_DIR/image-pins")
+    [[ $deployment_ref =~ @sha256:[0-9a-f]{64}$ ]] || fail "missing immutable builder loader image"
     cat > "$MANIFESTS_DIR/builder-release.yaml" <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -920,7 +952,7 @@ spec:
   securityContext: {runAsNonRoot: true, runAsUser: 4030, runAsGroup: 4030, fsGroup: 4030}
   containers:
     - name: loader
-      image: $ref
+      image: $deployment_ref
       imagePullPolicy: $PULL_POLICY
       command: [sh, -c, "while [ ! -f /opt/layerx-builder/.sealed ]; do sleep 1; done"]
       securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
@@ -937,15 +969,20 @@ EOF
 }
 
 render_manifest() {
-    local src=$1 dst=$2 name canonical ref id
+    local src=$1 dst=$2 name canonical ref id pin
     cp "$src" "$dst"
     while read -r name canonical ref id; do
-        sed -i "s|image: $canonical\$|image: $ref|" "$dst"
+        pin=$ref
+        if [ "$id" != unbuilt ]; then
+            pin=$(awk -v name="$name" '$1 == name {print $2}' "$WORK_DIR/image-pins")
+            [[ $pin =~ @sha256:[0-9a-f]{64}$ ]] || fail "missing immutable deployment digest for $name"
+        fi
+        sed -i "s|image: $canonical\$|image: $pin|" "$dst"
     done < "$WORK_DIR/images"
     sed -i "s|imagePullPolicy: Always|imagePullPolicy: $PULL_POLICY|" "$dst"
     sed -i "s|developers\.layerx\.example|$DEVELOPER_HOST|g" "$dst"
-    if grep -q 'ghcr.io/' "$dst"; then
-        fail "rendered manifest $dst still references an unbuilt image: $(grep -o 'ghcr.io/[^ ]*' "$dst" | sort -u | tr '\n' ' ')"
+    if grep -E 'image: ghcr.io/[^@[:space:]]*:[^@[:space:]]+$' "$dst"; then
+        fail "rendered manifest $dst still references a mutable GHCR image"
     fi
 }
 
@@ -1062,6 +1099,9 @@ for document in documents:
     daemon = next(container for container in pod["containers"] if container["name"] == "layerxd")
     daemon["args"] += ["--custody-profile", "/run/layerx/custody.profile"]
     daemon["volumeMounts"].append({"name": "custody-profile", "mountPath": "/run/layerx/custody.profile", "subPath": "profile", "readOnly": True})
+    movement = next(container for container in pod["containers"] if container["name"] == "human-movement")
+    movement["env"].append({"name": "LAYERX_HUMAN_MOVEMENT_PROVIDER_CUSTODY_PROFILE", "value": "/run/layerx/custody.profile"})
+    movement["volumeMounts"].append({"name": "custody-profile", "mountPath": "/run/layerx/custody.profile", "subPath": "profile", "readOnly": True})
     pod["volumes"].append({"name": "custody-profile", "configMap": {"name": "layerx-node-custody-profile"}})
 with open(path, "w") as output:
     yaml.safe_dump_all(documents, output, sort_keys=False)
@@ -1153,8 +1193,8 @@ registry_deployment_produce() (
     set -euo pipefail
     umask 077
     local input="$WORK_DIR/human-evidence-input" temporary producer
-    local artifact="$REPO_ROOT/programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
-    make -C "$REPO_ROOT" programs-reference-escrow >&2
+    local artifact="$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
+    CARGO_TARGET_DIR="$WORK_DIR/program-target" make -C "$REPO_ROOT" programs-reference-escrow >&2
     mkdir -p "$input"
     [ ! -e "$input/program-deployment.lxa" ] && [ ! -L "$input/program-deployment.lxa" ] || fail 'deployment input exists; reconcile before retry'
     temporary=$(mktemp "$input/.program-deployment.XXXXXXXX")
@@ -1714,6 +1754,7 @@ env_write() {
         printf 'export LAYERX_TEST_DESTINATION_DID=%s\n' "$TEST_DESTINATION_DID"
         printf 'export LAYERX_TEST_ASSET=%s\n' "$NODE_ASSET_ID"
         printf 'export LAYERX_TEST_AMOUNT=%s\n' "$TEST_AMOUNT"
+        printf 'export LAYERX_TEST_ESCROW_WASM=%s\n' "$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
         printf 'export LAYERX_GATEWAY_CA_FILE=%s\n' "$CA_DIR/ca.crt"
         printf 'export WEBHOOKS_URL=%s\n' "$DEVELOPER_URL"
         printf 'export LAYERX_AGENT_BOUNDARY_URL=%s\n' "$AGENT_URL"
@@ -2028,6 +2069,7 @@ publish_images() {
         check) flags=(--check) ;;
         dry-run) flags=(--dry-run) ;;
         push) flags=(--phase push) ;;
+        verify) flags=(--phase verify) ;;
         promote) flags=(--phase promote) ;;
         self-test) flags=(--self-test) ;;
         "") fail "publish-images requires the caller to name its mode: check, dry-run, push, promote or self-test" ;;

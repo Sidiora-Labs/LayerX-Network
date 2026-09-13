@@ -137,6 +137,7 @@ struct AuthorityResponse {
     resulting_state_root: String,
     sequencer_public_key: String,
     network_id: String,
+    protocol_network_id: u32,
     wire_version: String,
     #[serde(
         default,
@@ -1238,6 +1239,7 @@ fn authority_response(
         .map_err(|_| response(503, "authority_invalid", Some(5)))?;
     if !facts.activity_id.eq_ignore_ascii_case(activity_id)
         || facts.network_id != config.network_id
+        || facts.protocol_network_id != config.protocol_network_id
         || facts.wire_version != config.wire_version
     {
         return Err(response(503, "authority_mismatch", Some(5)));
@@ -1828,7 +1830,7 @@ fn reserve_activity(
             {
                 return Err(response(409, "idempotency_conflict", None));
             }
-            if state == "completed" {
+            if matches!(state.as_str(), "completed" | "refused") {
                 let limit = if operation.program_mutation {
                     MAX_REQUEST
                 } else {
@@ -2002,6 +2004,52 @@ fn submit_activity(
     response
 }
 
+fn publish_lifecycle(
+    config: &Config,
+    canonical_hex: &str,
+    activity_id: &str,
+    receipt: &[u8],
+) -> Result<(), OutgoingResponse> {
+    let canonical = decode_hex(canonical_hex, 1_048_576)
+        .map_err(|_| response(503, "persistence_unavailable", Some(5)))?;
+    let activity = decode_signed(&canonical, &config.modules)
+        .map_err(|_| response(503, "persistence_unavailable", Some(5)))?;
+    if activity.activity_type().module() != ModuleId::Programs {
+        return Err(response(502, "lifecycle_binding_invalid", None));
+    }
+    if !matches!(activity.activity_type().ordinal(), 1 | 2) {
+        return Ok(());
+    }
+    let digest = layerx_wire::hash::receipt_digest(receipt)
+        .map_err(|_| response(502, "receipt_verification_failed", None))?;
+    let upstream = config
+        .client
+        .request(
+            &config.registry,
+            config.registry_token.as_str(),
+            &http::OutboundRequest {
+                method: "POST",
+                path: "/__registry/deployments",
+                idempotency: Some(activity_id),
+                content_type: "application/octet-stream",
+                body: &canonical,
+            },
+        )
+        .map_err(|_| response(503, "program_registry_unavailable", Some(5)))?;
+    if upstream.status != 200 || upstream.content_type != "application/json" {
+        return Err(response(503, "program_registry_unavailable", Some(5)));
+    }
+    let published: serde_json::Value = serde_json::from_slice(&upstream.body)
+        .map_err(|_| response(503, "program_registry_invalid", Some(5)))?;
+    if published["activity_id"] != activity_id
+        || published["receipt_digest"] != hex(&digest)
+        || published["state"] != "deployed"
+    {
+        return Err(response(503, "program_registry_invalid", Some(5)));
+    }
+    Ok(())
+}
+
 fn complete_lifecycle(
     config: &Config,
     record: &KeyRecord,
@@ -2035,6 +2083,16 @@ fn complete_lifecycle(
     let Some(protocol) = decoded.protocol() else {
         return response(502, "receipt_verification_failed", None);
     };
+    if protocol.result_code() == 0 {
+        if let Err(error) = publish_lifecycle(
+            config,
+            &operation.retained_signed_activity,
+            &operation.submitted_activity_id,
+            &receipt,
+        ) {
+            return error;
+        }
+    }
     let result = serde_json::json!({
         "activity_id": operation.submitted_activity_id, "receipt": hex(&receipt),
         "state": if protocol.result_code() == 0 { "completed" } else { "refused" },
@@ -2045,7 +2103,11 @@ fn complete_lifecycle(
         .complete(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.request_digest,
-            state: "completed",
+            state: if protocol.result_code() == 0 {
+                "completed"
+            } else {
+                "refused"
+            },
             response_hex: &hex(result.to_string().as_bytes()),
             receipt_hex: &hex(&receipt),
             activity_id: Some(&operation.submitted_activity_id),
@@ -2065,6 +2127,14 @@ fn complete_lifecycle(
         200,
         &serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
     )
+}
+
+fn terminal_state(result_code: i32) -> &'static str {
+    if result_code == 0 {
+        "completed"
+    } else {
+        "refused"
+    }
 }
 
 fn complete_activity(
@@ -2151,7 +2221,7 @@ fn complete_activity(
         .complete_verified(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.request_digest,
-            state: "completed",
+            state: terminal_state(verified_result_code),
             response_hex: &hex(&stored_result),
             receipt_hex: &hex(&receipt),
             activity_id: Some(&component.activity_id.to_ascii_lowercase()),
@@ -2384,7 +2454,7 @@ fn resolve_pending_program(
         Ok(value) => value,
         Err(error) => return error,
     };
-    let (verified, receipt, _) = match verified_program_result(
+    let (verified, receipt, result_code) = match verified_program_result(
         config,
         &component.activity_id,
         &component.receipt,
@@ -2395,7 +2465,15 @@ fn resolve_pending_program(
         Ok(value) => value,
         Err(error) => return error,
     };
-    complete_pending_program(config, record, operation, &verified, &receipt, trace_id)
+    complete_pending_program(
+        config,
+        record,
+        operation,
+        &verified,
+        &receipt,
+        result_code,
+        trace_id,
+    )
 }
 
 fn read_route(
@@ -3227,7 +3305,7 @@ fn read_program_receipt(
     if operation.state == "pending" {
         return resolve_pending_program(config, record, &operation, trace_id);
     }
-    if operation.state != "completed" {
+    if !matches!(operation.state.as_str(), "completed" | "refused") {
         return response(409, "program_call_refused", None);
     }
     let Ok(body) = decode_hex(&operation.response, MAX_REQUEST) else {
@@ -3287,7 +3365,7 @@ fn read_program_activity(
     if operation.state == "pending" {
         return resolve_pending_program(config, record, &operation, trace_id);
     }
-    if operation.state != "completed" {
+    if !matches!(operation.state.as_str(), "completed" | "refused") {
         return response(409, "program_call_refused", None);
     }
     let Ok(body) = decode_hex(&operation.response, MAX_REQUEST) else {
@@ -3553,6 +3631,16 @@ fn complete_pending_lifecycle(
     result_code: i32,
     trace_id: &str,
 ) -> OutgoingResponse {
+    if result_code == 0 {
+        if let Err(error) = publish_lifecycle(
+            config,
+            &operation.continuation,
+            &operation.activity_id,
+            receipt,
+        ) {
+            return error;
+        }
+    }
     let result = serde_json::json!({
         "activity_id": operation.activity_id, "receipt": hex(receipt),
         "state": if result_code == 0 { "completed" } else { "refused" },
@@ -3563,7 +3651,11 @@ fn complete_pending_lifecycle(
         .complete(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.digest,
-            state: "completed",
+            state: if result_code == 0 {
+                "completed"
+            } else {
+                "refused"
+            },
             response_hex: &hex(result.to_string().as_bytes()),
             receipt_hex: &hex(receipt),
             activity_id: Some(&operation.activity_id),
@@ -3591,6 +3683,7 @@ fn complete_pending_program(
     operation: &OperationRecord,
     verified: &[u8],
     receipt: &[u8],
+    result_code: i32,
     trace_id: &str,
 ) -> OutgoingResponse {
     let mut result: serde_json::Value = match serde_json::from_slice(verified) {
@@ -3611,7 +3704,11 @@ fn complete_pending_program(
         .complete(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.digest,
-            state: "completed",
+            state: if result_code == 0 {
+                "completed"
+            } else {
+                "refused"
+            },
             response_hex: &hex(&stored_result),
             receipt_hex: &hex(receipt),
             activity_id: Some(&operation.activity_id),

@@ -196,3 +196,44 @@ fn registry_rejects_legacy_and_invalid_asset_metadata() {
     }
     fs::remove_dir_all(root).unwrap_or_else(|e| panic!("cleanup: {e:?}"));
 }
+
+#[test]
+fn authorized_activity_uses_the_real_receipt_transition_before_maintenance() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../agent/tests/fixtures/custody/daemon-credit-receipt");
+    let bytes = fs::read(root.join("credit.receipt"))
+        .unwrap_or_else(|error| panic!("native receipt: {error}"));
+    let header_bytes =
+        fs::read(root.join("header")).unwrap_or_else(|error| panic!("native header: {error}"));
+    let header = decode_batch_header(&header_bytes)
+        .unwrap_or_else(|error| panic!("header decode: {error:?}"));
+    let receipt = decode(&bytes).unwrap_or_else(|error| panic!("receipt decode: {error:?}"));
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("native protocol"));
+    assert_ne!(
+        header.resulting_state_root(),
+        protocol.resulting_state_root()
+    );
+    let input = value!({
+        "batch_id": hex::encode(&protocol.batch_id()),
+        "asset": hex::encode(&protocol.asset()),
+        "previous_state_root": hex::encode(&header.previous_state_root()),
+        "resulting_state_root": hex::encode(&header.resulting_state_root())
+    });
+    let response = selected_activity_authority(input.clone(), &hex::encode(&bytes))
+        .unwrap_or_else(|_| panic!("authenticated activity projection"));
+    let output: Value =
+        serde_json::from_slice(&response.body).unwrap_or_else(|error| panic!("response: {error}"));
+    assert_eq!(
+        output["previous_state_root"],
+        hex::encode(&protocol.previous_state_root())
+    );
+    assert_eq!(
+        output["resulting_state_root"],
+        hex::encode(&protocol.resulting_state_root())
+    );
+    let mut mismatched = input;
+    mismatched["batch_id"] = value!(hex::encode(&[0; 32]));
+    assert!(selected_activity_authority(mismatched, &hex::encode(&bytes)).is_err());
+}

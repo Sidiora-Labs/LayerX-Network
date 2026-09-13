@@ -99,15 +99,15 @@ fn receipt_event(config: &Config, sequence: u64) -> Result<Option<Value>, String
 
 fn feed(config: &Config, mut sequence: u64) -> Result<(), String> {
     loop {
-        let (delivered, event) = match receipt_event(config, sequence)? {
-            Some(receipt) => {
-                let delivered = sequence;
-                sequence = sequence
-                    .checked_add(1)
-                    .ok_or("receipt sequence exhausted")?;
-                (delivered, receipt)
-            }
-            None => (sequence.saturating_sub(1), Value::Null),
+        let (delivered, event) = if let Some(receipt) = receipt_event(config, sequence)? {
+            let delivered = sequence;
+            sequence = sequence
+                .checked_add(1)
+                .ok_or("receipt sequence exhausted")?;
+            (delivered, receipt)
+        } else {
+            std::thread::sleep(Duration::from_millis(100));
+            (sequence.saturating_sub(1), Value::Null)
         };
         let mut hub = HUB
             .get_or_init(Mutex::default)

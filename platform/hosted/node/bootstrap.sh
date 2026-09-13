@@ -421,10 +421,9 @@ else
 fi
 [ "$PROGRAM_TOKEN" != "$REPLICA_TOKEN" ] || fail "program and replica tokens must differ"
 
-DATA_DIR=$(readlink -f "$DATA_DIR" 2>/dev/null || printf '%s' "$DATA_DIR")
-mkdir -p "$DATA_DIR"
-chmod 0700 "$DATA_DIR"
-DATA_DIR=$(readlink -f "$DATA_DIR")
+command -v python3 >/dev/null || fail "python3 is required for safe data directory preparation"
+DATA_DIR=$(python3 "$SCRIPT_DIR/data_directory.py" prepare "$DATA_DIR") \
+    || fail "data directory preparation was refused"
 mkdir -p "$RUN_DIR"
 RUN_DIR=$(readlink -f "$RUN_DIR")
 [ "$DATA_DIR" != "$RUN_DIR" ] || fail "--data-dir and --run-dir must differ"
@@ -432,7 +431,8 @@ case "$RUN_DIR" in "$DATA_DIR"/*) fail "--run-dir must not be inside --data-dir"
 case "$SEQUENCER_KEY_FILE" in "$DATA_DIR"/*) fail "the sequencer key file must be outside the data directory: $SEQUENCER_KEY_FILE" ;; esac
 case "$(readlink -f "$SEQUENCER_KEY_FILE")" in "$DATA_DIR"/*) fail "the sequencer key file must be outside the data directory: $SEQUENCER_KEY_FILE" ;; esac
 if [ "$FORCE" -eq 1 ]; then
-    find "$DATA_DIR" -mindepth 1 -delete
+    python3 "$SCRIPT_DIR/data_directory.py" clear "$DATA_DIR" \
+        || fail "data directory cleanup was refused"
 fi
 if [ -n "$(ls -A "$DATA_DIR")" ]; then
     fail "data directory is not empty: $DATA_DIR (pass --force to discard it)"

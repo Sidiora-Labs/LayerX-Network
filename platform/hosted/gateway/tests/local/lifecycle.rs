@@ -1,4 +1,6 @@
+mod events;
 mod funding;
+mod registry_runtime;
 mod required;
 use required::Required;
 
@@ -95,26 +97,28 @@ struct LocalRedis {
 }
 struct Gateway {
     _process: Daemon,
+    _event_processes: Vec<Daemon>,
+    _registry_process: Option<Daemon>,
     port: u16,
     signer_file: String,
 }
 
 #[test]
 fn local_gateway_lifecycle() {
-    let cluster = start_cluster(true);
+    let (cluster, _funding) = funding::start();
     let certificates = certificates(&cluster.root);
     let boundary = start_boundary(&cluster, &certificates);
-    establish_receipt_head(&boundary, &cluster);
     let identity = start_local_identity(&cluster, &certificates);
     let authority = start_local_authority(&cluster, &certificates);
     let redis = start_local_redis(&cluster, &certificates);
-    let gateway = start_local_gateway(
+    let gateway = start_gateway_runtime(
         &cluster,
         &certificates,
         &boundary,
         &identity,
         &authority,
         &redis,
+        true,
     );
     let key = issue_local_key(&certificates, &gateway, &identity);
     run_lifecycle_script(&cluster, &certificates, &gateway, &authority, &key);
@@ -127,6 +131,8 @@ fn start_local_identity(cluster: &Cluster, certificates: &Certificates) -> Local
     let gateway_token = token();
     for service in [
         "gateway",
+        "registry",
+        "registrar",
         "webhooks",
         "dashboard",
         "faucet",
@@ -319,6 +325,26 @@ fn start_local_gateway(
     authority: &LocalAuthority,
     redis: &LocalRedis,
 ) -> Gateway {
+    start_gateway_runtime(
+        cluster,
+        certificates,
+        boundary,
+        identity,
+        authority,
+        redis,
+        false,
+    )
+}
+
+fn start_gateway_runtime(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    boundary: &Boundary,
+    identity: &LocalIdentity,
+    authority: &LocalAuthority,
+    redis: &LocalRedis,
+    registry: bool,
+) -> Gateway {
     let password_file = local_secret(&cluster.root, "client-password", &token());
     let pkcs12 = certificates.path("gateway-client.p12");
     command(
@@ -404,12 +430,25 @@ fn start_local_gateway(
     gateway_env.extend(gateway_upstream_environment(
         cluster, boundary, identity, authority, redis,
     ));
+    let events = events::Runtime::prepare(cluster, boundary);
+    events.configure(&mut gateway_env, certificates);
+    let registry_config = registry.then(|| {
+        registry_runtime::configure(cluster, certificates, identity, authority, &mut gateway_env)
+    });
     let gateway_process = local_service(cluster, "layerx-gateway", gateway_port, &gateway_env);
-    Gateway {
+    let mut gateway = Gateway {
         _process: gateway_process,
+        _event_processes: Vec::new(),
+        _registry_process: None,
         port: gateway_port,
         signer_file,
+    };
+    gateway._event_processes =
+        events.start(cluster, certificates, identity, authority, redis, &gateway);
+    if let Some((path, port)) = registry_config {
+        gateway._registry_process = Some(registry_runtime::start(cluster, &path, port));
     }
+    gateway
 }
 
 fn gateway_upstream_environment(
@@ -621,7 +660,7 @@ fn run_lifecycle_script(
     let authority_port = authority.port;
     let authority_token_file = &authority.token_file;
     let signer_file = &gateway.signer_file;
-    let manifest = local_manifest(cluster);
+    let manifest = local_manifest(cluster, 1_000_000_000_000);
     let evidence_directory = cluster.root.join("gateway-offline-evidence");
     make_dir(&evidence_directory, 0o700);
     let authority_token =
@@ -713,7 +752,7 @@ fn run_lifecycle_script(
     }
 }
 
-fn local_manifest(cluster: &Cluster) -> PathBuf {
+fn local_manifest(cluster: &Cluster, fee_limit: u128) -> PathBuf {
     use layerx_types::program_lifecycle::{
         NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, ProgramUpgradePolicy,
         ProgramWindDownOperation,
@@ -780,12 +819,13 @@ fn local_manifest(cluster: &Cluster) -> PathBuf {
     .into_iter()
     .enumerate()
     {
-        let signed = signed_program_activity(
+        let signed = signed_program_activity_with_fee(
             &cluster.treasury_seed,
             &cluster.treasury_did,
             first_sequence + u64::try_from(index).required("index"),
             ordinal,
             &payload,
+            fee_limit,
         );
         let kind = ActivityType::new(ModuleId::Programs, ordinal).required("ordinal");
         let registry = ModuleRegistry::new(&[
@@ -811,6 +851,82 @@ fn local_manifest(cluster: &Cluster) -> PathBuf {
         0o600,
     );
     path
+}
+
+#[test]
+fn local_gateway_account_sequence_matches_authenticated_account() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let activity = hex_encode(&establish_receipt_head(&boundary, &cluster));
+    wait_for_published_receipt(&boundary, &cluster, &activity);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let account = layerx_types::account::AccountId::parse("system:fees").required("account name");
+    let account_id = layerx_wire::hash::account_id_for_protocol(&account, PROTOCOL_VERSION)
+        .required("account id");
+    let account_hex = hex_encode(&account_id);
+    let direct = boundary
+        .core
+        .get(&format!("/v1/accounts/{account_hex}/balance"));
+    assert_eq!(direct.status, 200, "{}", direct.body);
+    let rpc = local_rpc(
+        &http,
+        "",
+        "lx_getSequence",
+        &serde_json::json!([account_hex]),
+        false,
+    );
+    assert_eq!(rpc["result"], json(&direct)["result"]);
+    let value = &rpc["result"];
+    let canonical = hex_decode(
+        value["canonical_value"]
+            .as_str()
+            .required("canonical account"),
+    )
+    .required("account hex");
+    let material = hex_decode(value["proof_material"].as_str().required("account proof"))
+        .required("proof hex");
+    let proven = verify_account_evidence(
+        &canonical,
+        &material,
+        account_id,
+        None,
+        AccountEvidencePolicy {
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: NETWORK_ID,
+            handshake_sequencer_key: cluster.sequencer_key,
+            root_selector: RootSelector::Latest,
+        },
+    )
+    .required("independent account verification");
+    assert_eq!(
+        value["next_sequence"],
+        proven.account().next_sequence.to_string()
+    );
+    assert_eq!(value["verification"], "state_proven");
+    let malformed = local_rpc(
+        &http,
+        "",
+        "lx_getSequence",
+        &serde_json::json!(["ab"]),
+        false,
+    );
+    assert_eq!(malformed["error"]["code"], -32602);
 }
 
 #[test]
@@ -853,8 +969,8 @@ fn local_gateway_rpc() {
         call("lx_getNodeInfo", serde_json::json!([]), false)["result"]["network_id"],
         NETWORK_ID
     );
-    assert_unavailable_reads(&call);
-    let manifest = local_manifest(&cluster);
+    assert_unavailable_reads(&call, &cluster.asset);
+    let manifest = local_manifest(&cluster, 0);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(manifest).required("manifest")).required("manifest JSON");
     let signed = fs::read(manifest[0]["signed_file"].as_str().required("signed path"))
@@ -934,11 +1050,23 @@ fn local_rpc(
     result
 }
 
-fn assert_unavailable_reads(call: &impl Fn(&str, serde_json::Value, bool) -> serde_json::Value) {
+fn assert_unavailable_reads(
+    call: &impl Fn(&str, serde_json::Value, bool) -> serde_json::Value,
+    native_asset: &[u8; 32],
+) {
+    let listed = call("lx_listAssets", serde_json::json!([]), false);
+    let assets = listed["result"]["assets"]
+        .as_array()
+        .required("committed genesis assets");
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0]["asset_id"], hex_encode(native_asset));
+    assert_eq!(assets[0]["symbol"], "TST");
+    assert_eq!(
+        call("lx_estimateFee", serde_json::json!(["abcd"]), false)["error"]["code"],
+        -32602
+    );
     for (method, params) in [
-        ("lx_listAssets", serde_json::json!([])),
         ("lx_getAsset", serde_json::json!(["ab".repeat(32)])),
-        ("lx_estimateFee", serde_json::json!(["abcd"])),
         ("lx_getBalances", serde_json::json!(["did:layerx:alice"])),
     ] {
         assert_eq!(call(method, params, false)["error"]["code"], -32001);
@@ -1780,6 +1908,13 @@ fn local_gateway_successful_send_latency() {
         samples[9], samples[19]
     );
     print_payment_timings(&cluster);
+    assert_wallet_receipt_verifier(
+        &cluster,
+        &certificates,
+        &gateway,
+        &key,
+        &last_signed.as_ref().required("successful SEND").activity_id,
+    );
     assert_funded_commitments(
         &http,
         &authorization,
@@ -1963,34 +2098,53 @@ fn ws_send(stream: &mut impl Write, body: &serde_json::Value) {
     stream.flush().required("flush");
 }
 
-fn ws_receive(stream: &mut impl Read) -> serde_json::Value {
-    let mut header = [0; 2];
-    stream.read_exact(&mut header).required("WS header");
-    assert_eq!(header[0], 0x81, "expected text frame");
-    assert_eq!(header[1] & 128, 0);
-    let length = match header[1] {
-        126 => {
-            let mut n = [0; 2];
-            stream.read_exact(&mut n).required("length");
-            usize::from(u16::from_be_bytes(n))
+fn ws_receive(stream: &mut (impl Read + Write)) -> serde_json::Value {
+    loop {
+        let mut header = [0; 2];
+        stream.read_exact(&mut header).required("WS header");
+        assert_eq!(header[1] & 128, 0);
+        if header[0] == 0x89 {
+            assert!(header[1] <= 125, "control frame length");
+            let mut body = vec![0; usize::from(header[1])];
+            stream.read_exact(&mut body).required("ping payload");
+            let mask = [1, 2, 3, 4];
+            let mut pong = vec![0x8a, 128 | header[1]];
+            pong.extend_from_slice(&mask);
+            pong.extend(
+                body.iter()
+                    .enumerate()
+                    .map(|(index, byte)| byte ^ mask[index % 4]),
+            );
+            stream.write_all(&pong).required("pong frame");
+            stream.flush().required("pong flush");
+            continue;
         }
-        127 => {
-            let mut n = [0; 8];
-            stream.read_exact(&mut n).required("length");
-            usize::try_from(u64::from_be_bytes(n)).required("length")
-        }
-        n => usize::from(n),
-    };
-    assert!(length <= 1024 * 1024);
-    let mut body = vec![0; length];
-    stream.read_exact(&mut body).required("WS body");
-    serde_json::from_slice(&body).required("WS JSON")
+        assert_eq!(header[0], 0x81, "expected text frame");
+        let length = match header[1] {
+            126 => {
+                let mut n = [0; 2];
+                stream.read_exact(&mut n).required("length");
+                usize::from(u16::from_be_bytes(n))
+            }
+            127 => {
+                let mut n = [0; 8];
+                stream.read_exact(&mut n).required("length");
+                usize::try_from(u64::from_be_bytes(n)).required("length")
+            }
+            n => usize::from(n),
+        };
+        assert!(length <= 1024 * 1024);
+        let mut body = vec![0; length];
+        stream.read_exact(&mut body).required("WS body");
+        return serde_json::from_slice(&body).required("WS JSON");
+    }
 }
 
 impl Http {
     fn upgrade_request(&self, target: &str, headers: &[(&str, &str)]) -> HttpAnswer {
-        let mut request =
-            format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: Upgrade\r\n");
+        let mut request = format!(
+            "GET {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: Upgrade\r\n"
+        );
         for (name, value) in headers {
             must(write!(request, "{name}: {value}\r\n"), "format header");
         }
@@ -2137,7 +2291,7 @@ fn local_gateway_committed_payment_reads() {
     let assets = assets["result"]["assets"].as_array().required("assets");
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0]["asset_id"], hex_encode(&cluster.asset));
-    assert_eq!(assets[0]["symbol"], "TEST");
+    assert_eq!(assets[0]["symbol"], "TST");
     let detail = read(
         "lx_getAsset",
         serde_json::json!([hex_encode(&cluster.asset)]),
@@ -2176,11 +2330,19 @@ fn assert_committed_fee_reads(
     .required("signed estimate activity");
     assert_canonical_fee(read, &signed.canonical, 4);
     for (ordinal, fixture) in ASSET_FEE_FIXTURES {
-        assert_canonical_fee(
-            read,
-            &signed_fee_activity(ModuleId::Asset, ordinal, &fee_fixture(fixture)),
-            0,
-        );
+        let canonical = signed_fee_activity(ModuleId::Asset, ordinal, &fee_fixture(fixture));
+        if ordinal == 6 {
+            assert_eq!(
+                read(
+                    "lx_estimateFee",
+                    serde_json::json!([hex_encode(&canonical)])
+                )["error"]["code"],
+                -32602
+            );
+            assert_canonical_fee(read, &signed_receive_fee_activity(cluster, funding), 4);
+        } else {
+            assert_canonical_fee(read, &canonical, 0);
+        }
     }
     let program = signed_program_call(&cluster.treasury_seed, &cluster.treasury_did, 1, random32());
     assert_canonical_fee(read, &program, 0);
@@ -2315,6 +2477,34 @@ fn signed_fee_activity(module: ModuleId, ordinal: u16, payload_bytes: &[u8]) -> 
     .required("signed fee activity")
 }
 
+fn signed_receive_fee_activity(cluster: &Cluster, funding: &funding::Funding) -> Vec<u8> {
+    let grant = funding::payer_grant(&funding::GrantRequest {
+        payer_seed: &cluster.treasury_seed,
+        payer_did: &cluster.treasury_did,
+        recipient_did: &funding.recipient_did,
+        asset: cluster.asset,
+        per_draw_maximum: 1,
+        allowance: 1,
+        recurring_window: None,
+        expiration: now_ms() + 60_000,
+        purpose_hash: random32(),
+        revocation_sequence: 0,
+    })
+    .required("fee payer grant");
+    let key = random32();
+    let receive = funding::receive(&funding.recipient_seed, &grant, 1, key, 1)
+        .required("fee Receive authorization");
+    funding::payment(
+        &funding.recipient_seed,
+        &funding.recipient_did,
+        1,
+        key,
+        &receive,
+    )
+    .required("signed fee Receive")
+    .canonical
+}
+
 fn program_lifecycle_fee_payloads() -> [(u16, Vec<u8>); 3] {
     use layerx_types::program_lifecycle::{
         NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, ProgramUpgradePolicy,
@@ -2382,5 +2572,209 @@ fn assert_canonical_fee(
             .required("schedule")
             .len(),
         494
+    );
+}
+
+#[test]
+fn local_funding_recovers_a_submitted_operation_after_restart() {
+    let (cluster, funding) = funding::start();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let public_key = hex_encode(
+        &SigningKey::from_bytes(&funding.recipient_seed)
+            .verifying_key()
+            .to_bytes(),
+    );
+    let body = funding_body(&funding.recipient_did, &public_key, 25);
+    let key = "durable-funded-send";
+    let path = "/admin/v1/testnet/fund";
+    let first = boundary.admin_post(path, key, &body);
+    assert_eq!(first.status, 200, "{}", first.body);
+    let account = hex_encode(
+        &layerx_platform_core::main_account(&funding.recipient_did).required("recipient account"),
+    );
+    let balance_path = format!("/v1/accounts/{account}/balance");
+    let balance = boundary.core.get(&balance_path);
+    assert_eq!(balance.status, 200, "{}", balance.body);
+    let digest = hex_encode(&sha256(&[b"fund", &[0], key.as_bytes()]));
+    let journal = cluster
+        .root
+        .join("state/journal")
+        .join(format!("{digest}.json"));
+    let canonical_digest = hex_encode(&sha256(&[b"fund-canonical", &[0], key.as_bytes()]));
+    let canonical_path = cluster
+        .root
+        .join("state/journal")
+        .join(format!("{canonical_digest}.json"));
+    let canonical = fs::read(&canonical_path).required("durable canonical funding");
+    drop(boundary);
+    let complete = fs::read(&journal).required("complete funding journal");
+    fs::write(journal.with_extension("complete.json"), &complete)
+        .required("retain complete outcome");
+    let first_record = complete
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .required("pending journal record")
+        + 1;
+    let mut interrupted = complete[..first_record].to_vec();
+    interrupted.extend_from_slice(b"{\"request_digest\":");
+    fs::write(&journal, interrupted).required("interrupt result persistence");
+    fs::File::open(&journal)
+        .required("journal file")
+        .sync_all()
+        .required("persist interruption");
+    let boundary = start_boundary(&cluster, &certificates);
+    let recovered = boundary.admin_post(path, key, &body);
+    assert_eq!(recovered.status, 200, "{}", recovered.body);
+    assert_eq!(json(&recovered), json(&first));
+    assert_eq!(json(&boundary.core.get(&balance_path)), json(&balance));
+    assert_eq!(
+        fs::read(&canonical_path).required("recovered canonical funding"),
+        canonical
+    );
+    let mut conflicting: serde_json::Value =
+        serde_json::from_str(&body).required("funding request");
+    conflicting["amount"] = serde_json::json!(26);
+    assert_refusal(
+        &boundary.admin_post(path, key, &conflicting.to_string()),
+        409,
+        "idempotency_conflict",
+    );
+}
+
+#[test]
+fn local_gateway_program_custody_journey() {
+    let (cluster, _funding) = funding::start();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_gateway_runtime(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+        true,
+    );
+    let key = issue_local_scoped_key(
+        &certificates,
+        &gateway,
+        &identity,
+        &["activity:write", "program:call"],
+    );
+    let config = cluster.root.join("program-journey.curl");
+    write(
+        &config,
+        format!(
+            "header = \"Authorization: LayerX-Key {}:{}\"\n",
+            key["key"]["id"].as_str().required("key id"),
+            key["key"]["secret"].as_str().required("key secret"),
+        )
+        .as_bytes(),
+        0o600,
+    );
+    let signer = cluster.root.join("program-journey.signer");
+    write(&signer, &cluster.treasury_seed, 0o600);
+    let artifact = std::env::var_os("LAYERX_TEST_ESCROW_WASM").required("built escrow WASM");
+    let output = cluster.root.join("program-custody-journey");
+    let status = Command::new(
+        std::env::var_os("LAYERX_TEST_PYTHON").required("qualified Python with cryptography"),
+    )
+    .arg(repository_root().join("platform/hosted/testnet/tests/program-journey.py"))
+    .arg("--gateway")
+    .arg(format!("https://localhost:{}", gateway.port))
+    .arg("--ca")
+    .arg(certificates.path("ca.pem"))
+    .arg("--auth-config")
+    .arg(config)
+    .arg("--signer")
+    .arg(signer)
+    .arg("--did")
+    .arg(&cluster.treasury_did)
+    .arg("--asset")
+    .arg(hex_encode(&cluster.asset))
+    .arg("--network-id")
+    .arg(NETWORK_ID.to_string())
+    .arg("--wasm")
+    .arg(artifact)
+    .arg("--output")
+    .arg(&output)
+    .status()
+    .required("real funded Programs journey");
+    assert!(status.success(), "real Programs journey failed: {status}");
+    let result: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("result.json")).required("Programs evidence"))
+            .required("Programs evidence JSON");
+    let bytes = layerx_platform_core::hex_decode(
+        result["result"]["receipt"]
+            .as_str()
+            .required("Programs receipt"),
+    )
+    .required("Programs receipt bytes");
+    let receipt = layerx_proof::receipt::verify_sequencer_signature(&bytes, cluster.sequencer_key)
+        .required("real Programs signature");
+    let protocol = receipt.protocol().required("Programs protocol");
+    assert_eq!(protocol.result_code(), 0);
+    assert_eq!((protocol.module_id(), protocol.operation()), (9, 3));
+    let outcome = protocol
+        .program_outcome()
+        .required("committed Programs outcome");
+    for (field, expected) in [
+        ("terminal_payload", outcome.terminal_payload_root()),
+        ("call_graph", outcome.call_graph_root()),
+    ] {
+        let bytes = layerx_platform_core::hex_decode(
+            result["result"][field]
+                .as_str()
+                .required("committed artifact"),
+        )
+        .required("artifact bytes");
+        assert!(!bytes.is_empty());
+        let digest: [u8; 32] = Sha256::digest(bytes).into();
+        assert_eq!(digest, expected);
+    }
+    assert_eq!(result["after"]["balance"], "1");
+}
+
+fn assert_wallet_receipt_verifier(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    gateway: &Gateway,
+    key: &serde_json::Value,
+    activity: &[u8; 32],
+) {
+    let request = cluster.root.join("wallet-verifier-request.json");
+    write(&request, &serde_json::to_vec(&serde_json::json!({
+        "action": "wait", "activity_id": hex_encode(activity), "commitment": "executed", "timeout_ms": "30000",
+        "configuration": {
+            "endpoint": format!("https://localhost:{}/rpc", gateway.port),
+            "key_id": key["key"]["id"], "key_secret": key["key"]["secret"],
+            "ca_der": hex_encode(&certificates.ca_der), "protocol_version": PROTOCOL_VERSION.to_string(),
+            "network_id": NETWORK_ID.to_string(), "sequencer_id": hex_encode(&cluster.sequencer_id),
+            "sequencer_key": hex_encode(&cluster.sequencer_key), "first_batch": "1", "last_batch": u64::MAX.to_string(),
+        }
+    })).required("wallet verifier request"), 0o600);
+    let status = Command::new(std::env::var_os("LAYERX_TEST_PYTHON").required("qualified Python"))
+        .arg(repository_root().join("platform/hosted/testnet/tests/wallet-receipt-journey.py"))
+        .arg("--wallet")
+        .arg(local_binary("layerx-wallet-rpc"))
+        .arg("--request")
+        .arg(request)
+        .arg("--ca")
+        .arg(certificates.path("ca.pem"))
+        .arg("--certificate")
+        .arg(certificates.path("core.pem"))
+        .arg("--key")
+        .arg(certificates.path("core-key.pem"))
+        .arg("--output")
+        .arg(cluster.root.join("wallet-receipt-evidence.json"))
+        .status()
+        .required("actual wallet receipt verifier");
+    assert!(
+        status.success(),
+        "wallet receipt verification failed: {status}"
     );
 }

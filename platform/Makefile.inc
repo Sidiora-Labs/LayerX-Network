@@ -22,7 +22,7 @@ PLATFORM_MAVEN_REPOSITORY ?= $(HOME)/.m2/repository
 
 platform-policy-install:
 	@cargo deny --version >/dev/null || { echo "cargo-deny is required for Platform policy checks" >&2; exit 1; }
-	cargo deny fetch
+	cd platform && $(PLATFORM_CARGO) deny fetch
 
 platform-sample-preflight:
 	@command -v python3 >/dev/null || { echo "python3 is required for Platform samples" >&2; exit 1; }

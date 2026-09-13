@@ -2,8 +2,8 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_proof::inclusion::{InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::{build_proof, Proof};
 use layerx_proof::receipt::{
-    verify_outcome, verify_outcome_maintained, AuthorizedBatch, MaintainedOutcomeEvidence,
-    MaintainedOutcomeFailure, ReceiptCheck,
+    verify_outcome, verify_outcome_maintained, verify_outcome_maintained_chain, AuthorizedBatch,
+    MaintainedOutcomeEvidence, MaintainedOutcomeFailure, ReceiptCheck,
 };
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{batch_header_digest, program_execution_batch_id, receipt_digest};
@@ -240,7 +240,9 @@ impl Fixture {
         }
     }
     fn verify(&self) -> Result<layerx_proof::receipt::VerifiedReceipt, MaintainedOutcomeFailure> {
-        verify_outcome_maintained(&self.bytes, &self.authorised, &self.evidence())
+        let mut receipts = vec![self.bytes.clone()];
+        receipts.extend(self.following.clone());
+        verify_outcome_maintained_chain(&self.bytes, &self.authorised, &self.evidence(), &receipts)
     }
 }
 #[test]
@@ -248,6 +250,12 @@ fn maintained_transition_preserves_historical_endpoint_strength() {
     for count in [1, 2] {
         let fixture = Fixture::new(count);
         assert!(fixture.verify().is_ok());
+        if count > 1 {
+            assert_eq!(
+                verify_outcome_maintained(&fixture.bytes, &fixture.authorised, &fixture.evidence()),
+                Err(MaintainedOutcomeFailure::SequenceRange)
+            );
+        }
         assert_eq!(
             must(
                 verify_outcome(&fixture.bytes, &fixture.authorised)
@@ -302,6 +310,79 @@ fn maintained_roots_batch_and_inclusion_are_mandatory() {
         fixture.verify(),
         Err(MaintainedOutcomeFailure::Inclusion(
             InclusionError::HeaderSignature
+        ))
+    );
+}
+
+#[test]
+fn maintained_chain_authenticates_each_selected_transition_and_every_record() {
+    let fixture = Fixture::new(2);
+    let receipts = vec![fixture.bytes.clone(), fixture.following[0].clone()];
+    let leaves = [
+        receipts[0].as_slice(),
+        receipts[1].as_slice(),
+        &fixture.maintenance,
+    ];
+    let second_proof = must(build_proof(&leaves, 1)).0;
+    let evidence = MaintainedOutcomeEvidence {
+        activity_proof: &second_proof,
+        ..fixture.evidence()
+    };
+    let verified = must(verify_outcome_maintained_chain(
+        &receipts[1],
+        &fixture.authorised,
+        &evidence,
+        &receipts,
+    ));
+    let selected = must(
+        verified
+            .receipt()
+            .protocol()
+            .ok_or("selected protocol receipt"),
+    );
+    assert_eq!(selected.previous_state_root(), [3; 32]);
+    assert_eq!(selected.resulting_state_root(), [3; 32]);
+    for changed in [
+        vec![receipts[0].clone()],
+        vec![receipts[1].clone(), receipts[0].clone()],
+        vec![receipts[0].clone(), receipts[0].clone()],
+    ] {
+        assert!(verify_outcome_maintained_chain(
+            &receipts[1],
+            &fixture.authorised,
+            &evidence,
+            &changed
+        )
+        .is_err());
+    }
+    let mut broken_signature = Fixture::new(2);
+    let end = broken_signature.following[0].len();
+    broken_signature.following[0][end - 1] ^= 1;
+    broken_signature.seal(2);
+    assert_eq!(
+        broken_signature.verify(),
+        Err(MaintainedOutcomeFailure::Receipt(
+            ReceiptCheck::SequencerSignature
+        ))
+    );
+    let mut disconnected = fixture;
+    let decoded = must(layerx_wire::receipt::decode(&disconnected.bytes));
+    let mut following = fields();
+    following.sequence += 1;
+    following.activity_id = [2; 32];
+    following.previous_state_root = [99; 32];
+    following.batch_id = must(decoded.protocol().ok_or("protocol receipt")).batch_id();
+    let unsigned = encode_fields_version(&following, None, PROTOCOL_VERSION);
+    let signature = SigningKey::from_bytes(&[3; 32])
+        .sign(&must(receipt_digest(&unsigned)))
+        .to_bytes();
+    disconnected.following[0] =
+        encode_fields_version(&following, Some(signature), PROTOCOL_VERSION);
+    disconnected.seal(2);
+    assert_eq!(
+        disconnected.verify(),
+        Err(MaintainedOutcomeFailure::Receipt(
+            ReceiptCheck::PreviousStateRoot
         ))
     );
 }

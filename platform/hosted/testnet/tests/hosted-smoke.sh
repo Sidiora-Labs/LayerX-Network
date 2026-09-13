@@ -10,16 +10,29 @@ set -eu
 : "${LAYERX_TEST_DESTINATION_DID:?LAYERX_TEST_DESTINATION_DID is required}"
 : "${LAYERX_TEST_ASSET:?LAYERX_TEST_ASSET is required}"
 : "${LAYERX_TEST_AMOUNT:?LAYERX_TEST_AMOUNT is required}"
+: "${LAYERX_TEST_SOURCE_KEY_FILE:?LAYERX_TEST_SOURCE_KEY_FILE is required}"
+: "${LAYERX_TEST_ESCROW_WASM:?The built reference escrow WASM is required}"
 : "${LAYERX_BIN:=layerx}"
 test -r "$LAYERX_TEST_AUTH_TOKEN_FILE"
 test -r "$LAYERX_TEST_CA_FILE"
+test -f "$LAYERX_TEST_ESCROW_WASM"
+test ! -L "$LAYERX_TEST_ESCROW_WASM"
+test -s "$LAYERX_TEST_ESCROW_WASM"
 command -v jq >/dev/null
 command -v openssl >/dev/null
 command -v "$LAYERX_BIN" >/dev/null
 work=$(mktemp -d "${TMPDIR:-/tmp}/layerx-hosted-smoke.XXXXXX")
-trap 'rm -rf -- "$work"' EXIT HUP INT TERM
+cleanup() {
+  if test -n "${LAYERX_TEST_RETAIN_STATE:-}"; then
+    printf '%s\n' "retained hosted smoke evidence at $work"
+  else
+    rm -rf -- "$work"
+  fi
+}
+trap cleanup EXIT HUP INT TERM
 chmod 0700 "$work"
 auth_config="$work/auth.curl"
+: > "$auth_config"
 chmod 0600 "$auth_config"
 printf 'header = "Authorization: Bearer %s"\n' \
   "$(tr -d '\r\n' < "$LAYERX_TEST_AUTH_TOKEN_FILE")" > "$auth_config"
@@ -149,5 +162,38 @@ jq -e '.ok == true and .kind == "receipt.verified" and .data.verified == true' \
 printf '%s\n' "receipt inspection journey: batch $batch_id receipt $receipt_id independently verified"
 
 admit_journey programs
+python3 "$(dirname "$0")/program-journey.py" --gateway "$LAYERX_GATEWAY_URL" \
+  --ca "$LAYERX_TEST_CA_FILE" --auth-config "$auth_config" --signer "$LAYERX_TEST_SOURCE_KEY_FILE" \
+  --did "$LAYERX_TEST_SOURCE_DID" --asset "$LAYERX_TEST_ASSET" \
+  --network-id "$(jq -er '.network_id' "$work/parameters.json")" \
+  --wasm "$LAYERX_TEST_ESCROW_WASM" --output "$work/program-custody"
+LAYERX_TEST_PROGRAM_ACTIVITY_FILE="$work/program-custody/call.lxa"
+LAYERX_TEST_PROGRAM_IDEMPOTENCY_KEY=$(cat "$work/program-custody/call-idempotency-key")
+curl --fail --silent --show-error --max-time 120 --cacert "$LAYERX_TEST_CA_FILE" \
+  --config "$auth_config" --request POST "$LAYERX_GATEWAY_URL/v1/programs/call" \
+  --header 'Content-Type: application/octet-stream' \
+  --header "Idempotency-Key: $LAYERX_TEST_PROGRAM_IDEMPOTENCY_KEY" \
+  --data-binary "@$LAYERX_TEST_PROGRAM_ACTIVITY_FILE" > "$work/program-response.json"
+jq -e '.ok == true and .result.state == "executed" and .result.result_code == 0
+  and (.result.receipt | type == "string" and length > 0)
+  and (.result.terminal_payload | type == "string" and length > 0)
+  and (.result.call_graph | type == "string" and length > 0)' "$work/program-response.json" >/dev/null
+program_activity=$(jq -er '.result.activity_id' "$work/program-response.json")
+curl --fail --silent --show-error --max-time 30 --cacert "$LAYERX_TEST_CA_FILE" \
+  --config "$auth_config" "$LAYERX_GATEWAY_URL/v1/receipts/$program_activity" \
+  > "$work/program-receipt.json"
+jq -e --slurpfile submitted "$work/program-response.json" \
+  '.result.activity_id == $submitted[0].result.activity_id and .result.receipt == $submitted[0].result.receipt' \
+  "$work/program-receipt.json" >/dev/null
+jq -er '.result.receipt' "$work/program-receipt.json" > "$work/program-receipt.hex"
+"$LAYERX_BIN" --json receipt verify --receipt "$work/program-receipt.hex" \
+  --batch-id "$(jq -er '.result.authority.batch_id' "$work/program-receipt.json")" \
+  --asset "$(jq -er '.result.authority.asset' "$work/program-receipt.json")" \
+  --previous-state-root "$(jq -er '.result.authority.previous_state_root' "$work/program-receipt.json")" \
+  --resulting-state-root "$(jq -er '.result.authority.resulting_state_root' "$work/program-receipt.json")" \
+  --sequencer-public-key "$(jq -er '.result.authority.sequencer_public_key' "$work/program-receipt.json")" \
+  > "$work/program-verification.json"
+jq -e '.ok == true and .kind == "receipt.verified" and .data.verified == true' "$work/program-verification.json" >/dev/null
+printf '%s\n' "Programs journey: activity $program_activity executed and independently receipt-verified"
 printf '%s\n' "hosted payment $receipt_id was independently receipt-verified"
 printf '%s\n' "$cluster_identity"

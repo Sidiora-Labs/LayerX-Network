@@ -6,6 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolRequestSchema,
+  CallToolResultSchema,
   ListToolsRequestSchema,
   type CallToolResult,
   type Tool as McpTool,
@@ -549,7 +550,7 @@ export function createMcpIntegration(options: AgentIntegrationOptions): LayerXMc
     callToolEmbedded: async (name, input) => {
       await connectEmbedded();
       if (client === undefined) throw new AgentIntegrationError("service-refused");
-      return client.callTool({ name, arguments: input });
+      return CallToolResultSchema.parse(await client.callTool({ name, arguments: input }));
     },
     closeMcp: async () => {
       if (client !== undefined) await client.close();

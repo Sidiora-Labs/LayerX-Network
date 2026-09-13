@@ -211,13 +211,11 @@ fn module_offset(bytes: &[u8]) -> usize {
 }
 
 #[test]
-fn real_deploy_state_dispatch_preserves_generic_operation_refusal() {
+fn real_deploy_state_dispatch_verifies_the_generic_outcome() {
     let (bytes, authority) = state_fixture();
     assert_eq!(verify_authorized_receipt(&bytes, &authority), Ok(()));
-    let failure = verify_outcome(&bytes, &authority)
-        .err()
-        .unwrap_or_else(|| panic!("generic operation zero accepted"));
-    assert_eq!(failure.check, ReceiptCheck::Operation);
+    let outcome = must(verify_outcome(&bytes, &authority));
+    assert_eq!(outcome.receipt(), &must(decode(&bytes)));
     let wrong_roots = AuthorizedBatch::new(
         authority.batch_id(),
         authority.asset(),

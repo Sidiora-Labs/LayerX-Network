@@ -1437,9 +1437,8 @@ fn visa(
     operation: &str,
     execute: bool,
 ) -> Dispatch {
-    let body: VisaRequest = match direct_body(request) {
-        Ok(value) => value,
-        Err(()) => return Dispatch::error(400, "refused", "invalid_visa_tap_request"),
+    let Ok(body) = direct_body::<VisaRequest>(request) else {
+        return Dispatch::error(400, "refused", "invalid_visa_tap_request");
     };
     let Ok(tap) = TapRequest::parse(
         body.authority,
@@ -1487,6 +1486,20 @@ fn visa(
         Ok(binding) => binding,
         Err(refusal) => return refusal,
     };
+    if !execute {
+        let Ok(binding) = layerx_visa_tap::verified_agent_binding(layerx_agent, &verified) else {
+            return Dispatch::error(400, "refused", "visa_tap_refused");
+        };
+        return Dispatch::result(
+            200,
+            "completed",
+            json!({
+                "state": "credential-verified", "agent_id": binding.trusted_agent_id,
+                "layerx_agent": hex(&binding.layerx_agent),
+                "credential_evidence": hex(&binding.evidence_digest)
+            }),
+        );
+    }
     let replay_until = match verified
         .expires_at
         .checked_add(config.tap_clock_skew_seconds)
@@ -1515,24 +1528,13 @@ fn visa(
         consumed_at: observed_at,
         audit_event: &tap_audit,
     };
-    let intent =
-        match prepare_trusted_intent(principal, layerx_agent, &verified, &mut bindings, trace) {
-            Ok(value) => value,
-            Err(TapError::Replay) => return Dispatch::error(409, "refused", "visa_tap_replayed"),
-            Err(TapError::StorageRefused) => {
-                return Dispatch::error(503, "pending", "persistence_unavailable")
-            }
-            Err(_) => return Dispatch::error(400, "refused", "visa_tap_refused"),
-        };
-    if !execute {
-        return Dispatch::result(
-            200,
-            "completed",
-            json!({
-                "state": "credential-verified", "agent_id": intent.trusted_agent_id,
-                "layerx_agent": hex(&intent.layerx_agent), "credential_evidence": hex(&intent.credential_evidence)
-            }),
-        );
+    match prepare_trusted_intent(principal, layerx_agent, &verified, &mut bindings, trace) {
+        Ok(_) => {}
+        Err(TapError::Replay) => return Dispatch::error(409, "refused", "visa_tap_replayed"),
+        Err(TapError::StorageRefused) => {
+            return Dispatch::error(503, "pending", "persistence_unavailable")
+        }
+        Err(_) => return Dispatch::error(400, "refused", "visa_tap_refused"),
     }
     visa_execute(config, request, record, trace, activity_binding)
 }

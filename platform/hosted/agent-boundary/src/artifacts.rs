@@ -4,7 +4,7 @@ use layerx_proof::program::{
     verify_authorized_program_execution, AuthorizedProgramExecutionExpectation,
 };
 use layerx_proof::receipt::{
-    authorized_maintained_activity_batch, verify_program_outcome, verify_sequencer_signature,
+    authorized_maintained_activity_batch_chain, verify_program_outcome, verify_sequencer_signature,
     AuthorizedBatch, MaintainedOutcomeEvidence,
 };
 use layerx_wire::hash::{receipt_digest, receipt_execution_batch_id, Domain};
@@ -40,6 +40,8 @@ pub(super) enum BatchIdentity {
     OccupancyMaintenanceV2 {
         receipt_hex: String,
         receipt_proof_hex: String,
+        #[serde(default)]
+        activity_receipts_hex: Vec<String>,
     },
 }
 
@@ -222,6 +224,7 @@ fn authorized_activity_batch(
         BatchIdentity::OccupancyMaintenanceV2 {
             receipt_hex,
             receipt_proof_hex,
+            activity_receipts_hex,
         } => {
             let maintenance = canonical_hex(receipt_hex, MAX_ACTIVITY_BYTES)?;
             let wire_proof =
@@ -232,7 +235,15 @@ fn authorized_activity_batch(
                 wire_proof.siblings().to_vec(),
             )
             .map_err(error)?;
-            authorized_maintained_activity_batch(
+            let receipts = if activity_receipts_hex.is_empty() {
+                vec![receipt_bytes.to_vec()]
+            } else {
+                activity_receipts_hex
+                    .iter()
+                    .map(|value| canonical_hex(value, MAX_ACTIVITY_BYTES))
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            authorized_maintained_activity_batch_chain(
                 receipt_bytes,
                 &authority,
                 &MaintainedOutcomeEvidence {
@@ -243,6 +254,7 @@ fn authorized_activity_batch(
                     maintenance_proof: &maintenance_proof,
                     authorization: &authorization,
                 },
+                &receipts,
             )
             .map_err(error)
         }
