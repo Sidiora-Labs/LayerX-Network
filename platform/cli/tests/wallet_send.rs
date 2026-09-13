@@ -44,7 +44,7 @@ fn resign(send: &mut Send) -> Result<(), String> {
 fn native_send_and_authorization_bytes_match() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Path::new(env!("CARGO_MANIFEST_DIR"));
     let root = cli.join("../..");
-    let directory = tempfile::tempdir_in(root.join("platform/target"))?;
+    let directory = tempfile::tempdir()?;
     let binary = directory.path().join("native-send");
     let output = Command::new("cc")
         .args([
