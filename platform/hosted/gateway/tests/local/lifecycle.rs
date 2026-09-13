@@ -1867,6 +1867,13 @@ fn local_gateway_successful_send_latency() {
         samples[9], samples[19]
     );
     print_payment_timings(&cluster);
+    assert_wallet_receipt_verifier(
+        &cluster,
+        &certificates,
+        &gateway,
+        &key,
+        &last_signed.as_ref().required("successful SEND").activity_id,
+    );
     assert_funded_commitments(
         &http,
         &authorization,
@@ -2633,4 +2640,44 @@ fn local_gateway_program_custody_journey() {
         assert_eq!(digest, expected);
     }
     assert_eq!(result["after"]["balance"], "1");
+}
+
+fn assert_wallet_receipt_verifier(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    gateway: &Gateway,
+    key: &serde_json::Value,
+    activity: &[u8; 32],
+) {
+    let request = cluster.root.join("wallet-verifier-request.json");
+    write(&request, &serde_json::to_vec(&serde_json::json!({
+        "action": "wait", "activity_id": hex_encode(activity), "commitment": "executed", "timeout_ms": "30000",
+        "configuration": {
+            "endpoint": format!("https://localhost:{}/rpc", gateway.port),
+            "key_id": key["key"]["id"], "key_secret": key["key"]["secret"],
+            "ca_der": hex_encode(&certificates.ca_der), "protocol_version": PROTOCOL_VERSION.to_string(),
+            "network_id": NETWORK_ID.to_string(), "sequencer_id": hex_encode(&cluster.sequencer_id),
+            "sequencer_key": hex_encode(&cluster.sequencer_key), "first_batch": "1", "last_batch": u64::MAX.to_string(),
+        }
+    })).required("wallet verifier request"), 0o600);
+    let status = Command::new(std::env::var_os("LAYERX_TEST_PYTHON").required("qualified Python"))
+        .arg(repository_root().join("platform/hosted/testnet/tests/wallet-receipt-journey.py"))
+        .arg("--wallet")
+        .arg(local_binary("layerx-wallet-rpc"))
+        .arg("--request")
+        .arg(request)
+        .arg("--ca")
+        .arg(certificates.path("ca.pem"))
+        .arg("--certificate")
+        .arg(certificates.path("core.pem"))
+        .arg("--key")
+        .arg(certificates.path("core-key.pem"))
+        .arg("--output")
+        .arg(cluster.root.join("wallet-receipt-evidence.json"))
+        .status()
+        .required("actual wallet receipt verifier");
+    assert!(
+        status.success(),
+        "wallet receipt verification failed: {status}"
+    );
 }
