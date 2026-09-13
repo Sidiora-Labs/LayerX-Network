@@ -483,8 +483,11 @@ int main(void)
         uint8_t live_root[32];
         lxp_u128 live_balance = f->actor->balance;
         (void)memcpy(live_root, f->kernel.current_state_root, 32U);
-        METERED_CHECK(lxp_kernel_prepare_activity_batch(&f->kernel, &f->activity,
-            &f->execution, 1U, 1U, &prepared, &retries) == LXP_OK);
+        lxp_result prepared_result = lxp_kernel_prepare_activity_batch(&f->kernel,
+            &f->activity, &f->execution, 1U, 1U, &prepared, &retries);
+        if (prepared_result != LXP_OK)
+            (void)fprintf(stderr, "metered private batch result %d\n", prepared_result);
+        METERED_CHECK(prepared_result == LXP_OK);
         METERED_CHECK(prepared != NULL && lxp_kernel_prepared_batch_count(prepared) == 1U);
         const lxp_receipt *receipts = lxp_kernel_prepared_batch_receipts(prepared);
         METERED_CHECK(receipts != NULL && receipts[0].result_code == LXP_ERR_PROGRAM_REFUSED &&
