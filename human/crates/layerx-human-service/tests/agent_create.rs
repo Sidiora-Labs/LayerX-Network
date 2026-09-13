@@ -558,7 +558,7 @@ fn receipt(action: &ProtocolAction) -> ProtocolEvidence {
     hasher.update(&unsigned);
     let signature = signer.sign(&<[u8; 32]>::from(hasher.finalize()));
     let receipt_bytes = encode_receipt(&fields, Some(signature.to_bytes()));
-    ProtocolEvidence {
+    let evidence = ProtocolEvidence {
         signed_activity: owner.bytes,
         actor: owner.actor,
         owner_public_key: owner.public_key,
@@ -574,7 +574,9 @@ fn receipt(action: &ProtocolAction) -> ProtocolEvidence {
             signer.verifying_key().to_bytes(),
         ),
         verification_level: VerificationLevel::SEQUENCER_SIGNED,
-    }
+    };
+    canonical_owner::assert_outcome(&evidence, action.compiled.activity_type());
+    evidence
 }
 
 fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {

@@ -60,3 +60,22 @@ pub fn sign(payload: &Payload, action_key: [u8; 32], version: u16, network: u32)
         actor,
     }
 }
+
+pub fn assert_outcome(
+    evidence: &layerx_human_service::agents::ProtocolEvidence,
+    kind: layerx_types::payload::ActivityType,
+) {
+    checked(evidence.bound_activity(kind));
+    checked(layerx_proof::receipt::verify_native_owner_outcome(
+        &evidence.receipt_bytes,
+        &evidence.authorized_batch,
+        &layerx_proof::receipt::NativeOwnerOutcomeContext {
+            canonical_activity: &evidence.signed_activity,
+            actor: &evidence.actor,
+            action_key: evidence.action_key,
+            activity_type: kind,
+            owner_public_key: evidence.owner_public_key,
+            network_id: evidence.network_id,
+        },
+    ));
+}

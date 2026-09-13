@@ -746,7 +746,7 @@ fn protocol_receipt_for_payload(
     hasher.update(&unsigned);
     let signature = signer.sign(&<[u8; 32]>::from(hasher.finalize()));
     let receipt_bytes = encode_receipt(&fields, Some(signature.to_bytes()));
-    ProtocolEvidence {
+    let evidence = ProtocolEvidence {
         signed_activity: owner.bytes,
         actor: owner.actor,
         owner_public_key: owner.public_key,
@@ -762,7 +762,9 @@ fn protocol_receipt_for_payload(
             signer.verifying_key().to_bytes(),
         ),
         verification_level: VerificationLevel::CHECKPOINT_FINALISED,
-    }
+    };
+    canonical_owner::assert_outcome(&evidence, payload.activity_type());
+    evidence
 }
 
 fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
