@@ -2470,8 +2470,30 @@ static lxp_result synthesize_program_call_failure(
         (void)memcpy(failure_input + offset, outcome->applied_legs_digest, 32U);
         offset += 32U;
     }
-    return lxp_hash_domain(LXP_DOMAIN_CONTEXT_HASH, failure_input, offset,
-                           outcome->terminal_payload_root);
+    status = lxp_hash_domain(LXP_DOMAIN_CONTEXT_HASH, failure_input, offset,
+                             outcome->terminal_payload_root);
+    if (status == LXP_OK) {
+        static const uint8_t graph_domain[] = "LXP/programs/empty-call-graph/v1";
+        size_t domain_length = 0U;
+        const uint8_t *domain = lxp_domain_tag(LXP_DOMAIN_CONTEXT_HASH, &domain_length);
+        uint8_t *artifacts;
+        void *allocation = NULL;
+        if (domain == NULL || domain_length > LXP_MAX_ACTIVITY_BYTES - offset ||
+            domain_length > LXP_MAX_ACTIVITY_BYTES - sizeof(graph_domain))
+            return LXP_ERR_LENGTH_LIMIT;
+        status = lxp_arena_alloc(execution->arena,
+            domain_length + offset + domain_length + sizeof(graph_domain), 1U, &allocation);
+        if (status != LXP_OK) return status;
+        artifacts = allocation;
+        (void)memcpy(artifacts, domain, domain_length);
+        (void)memcpy(artifacts + domain_length, failure_input, offset);
+        outcome->terminal_payload = (lxp_byte_span){artifacts, domain_length + offset};
+        artifacts += domain_length + offset;
+        (void)memcpy(artifacts, domain, domain_length);
+        (void)memcpy(artifacts + domain_length, graph_domain, sizeof(graph_domain));
+        outcome->call_graph_payload = (lxp_byte_span){artifacts, domain_length + sizeof(graph_domain)};
+    }
+    return status;
 }
 
 void lxp_prepared_transition_destroy(lxp_prepared_transition *prepared)

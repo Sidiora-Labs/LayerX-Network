@@ -3,6 +3,8 @@
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_storage.h"
+#include "layerx/lxp_kernel.h"
+#include "layerx/programs.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -197,6 +199,64 @@ static lxp_result fixture_init(fee_fixture *fixture)
     return LXP_OK;
 }
 
+static int module_fee_principal_cases(void)
+{
+    fee_fixture fixture;
+    lxp_state_store state;
+    lxp_state_journal journal;
+    lxp_param_table parameters = {0};
+    lxp_kernel kernel;
+    lx_programs_transfer_runtime runtime = {0};
+    lxp_authority_resolved authority = {0};
+    lxp_activity activity = {0};
+    void *transaction = NULL;
+    uint8_t did_id[32];
+    if (fixture_init(&fixture) != LXP_OK ||
+        lxp_state_store_init(&state, 1U) != LXP_OK ||
+        lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        lxp_did_id_derive((const uint8_t *)"fee-replay", 10U, did_id) != LXP_OK)
+        return 1;
+    runtime.accounts = &fixture.registry;
+    runtime.assets = &fixture.asset;
+    runtime.asset_count = 1U;
+    (void)memcpy(runtime.occupancy_asset_id, fixture.asset_id, 32U);
+    if (lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS, &runtime) != LXP_OK)
+        return 1;
+    activity.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    activity.activity_type = LX_ASSET_SEND;
+    activity.fee_limit = (lxp_u128){0U, 7U};
+    (void)memcpy(authority.principal, fixture.actor->id, 32U);
+    if (kernel.fee_transaction.prepare(&kernel, &activity, &authority,
+            activity.fee_limit, &transaction) != LXP_OK || transaction == NULL ||
+        fixture.actor->balance.lo != 99993U || fixture.treasury->balance.lo != 57U)
+        return 1;
+    kernel.fee_transaction.rollback(&kernel, transaction);
+    if (fixture.actor->balance.lo != 100000U || fixture.treasury->balance.lo != 50U ||
+        fixture.actor->next_sequence != 0U || fixture.treasury->next_sequence != 0U)
+        return 1;
+    (void)memcpy(authority.principal, did_id, 32U);
+    transaction = NULL;
+    if (kernel.fee_transaction.prepare(&kernel, &activity, &authority,
+            activity.fee_limit, &transaction) != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE ||
+        transaction != NULL || fixture.actor->balance.lo != 100000U)
+        return 1;
+    activity.activity_type = LX_PROGRAMS_CALL;
+    if (kernel.fee_transaction.prepare(&kernel, &activity, &authority,
+            activity.fee_limit, &transaction) != LXP_OK || transaction == NULL ||
+        fixture.actor->balance.lo != 99993U || fixture.treasury->balance.lo != 57U)
+        return 1;
+    kernel.fee_transaction.commit(&kernel, transaction);
+    (void)memcpy(authority.principal, fixture.actor->id, 32U);
+    transaction = NULL;
+    if (kernel.fee_transaction.prepare(&kernel, &activity, &authority,
+            activity.fee_limit, &transaction) != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE ||
+        transaction != NULL || fixture.actor->balance.lo != 99993U ||
+        fixture.treasury->balance.lo != 57U)
+        return 1;
+    lx_account_registry_release(&fixture.registry);
+    return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
+}
+
 static lxp_result execute_wire(fee_fixture *fixture, const fee_wire *wire,
                                uint64_t sequence,
                                lxp_fee_replay_entry *entry)
@@ -367,7 +427,7 @@ int main(void)
     lxp_log log;
     replay_context replay_context_value;
     size_t i;
-    if (policy_boundaries() != 0 || fixture_init(&committed_fixture) != LXP_OK ||
+    if (module_fee_principal_cases() != 0 || policy_boundaries() != 0 || fixture_init(&committed_fixture) != LXP_OK ||
         mkdtemp(directory) == NULL ||
         lxp_log_segment_create(&log, directory, 0U, 16384U) != LXP_OK)
         return 1;
