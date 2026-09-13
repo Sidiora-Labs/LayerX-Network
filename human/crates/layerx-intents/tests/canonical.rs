@@ -27,7 +27,7 @@ fn original_native_receipts_keep_exact_bytes_and_signature_authority() {
             checked(checked(std::fs::read(path.join("sequencer.public"))).try_into());
         for name in names {
             let bytes = checked(std::fs::read(path.join(name)));
-            let verified = checked(verify_sequencer_signature(&bytes, &key));
+            let verified = checked(verify_sequencer_signature(&bytes, key));
             let decoded = checked(decode_receipt(&bytes));
             assert_eq!(verified, decoded);
             assert_eq!(checked(receipt_bytes(&decoded)), bytes);
@@ -38,7 +38,7 @@ fn original_native_receipts_keep_exact_bytes_and_signature_authority() {
             let mut changed = bytes.clone();
             let index = changed.len() - 1;
             changed[index] ^= 1;
-            assert!(verify_sequencer_signature(&changed, &key).is_err());
+            assert!(verify_sequencer_signature(&changed, key).is_err());
             let mut trailing = bytes.clone();
             trailing.push(0);
             assert!(decode_receipt(&trailing).is_err());
