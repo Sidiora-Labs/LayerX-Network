@@ -1806,7 +1806,7 @@ fn prepare_funding(
                 account_sequence: sequence,
                 idempotency_key: send_idempotency(key),
                 not_before_ms: now.saturating_sub(60_000),
-                expires_at_ms: now.saturating_add(300_000),
+                expires_at_ms: now.saturating_add(240_000),
                 fee_limit: config.fee_limit,
             },
         )
