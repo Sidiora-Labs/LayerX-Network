@@ -4,7 +4,7 @@ use layerx_crypto::ed25519;
 use layerx_proof::inclusion::{verify_state, InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::{build_proof, verify_path, MerkleError, Proof};
 use layerx_proof::receipt::{
-    authorized_maintained_activity_batch, verify_outcome, AuthorizedBatch,
+    authorized_maintained_activity_batch_chain, verify_outcome, AuthorizedBatch,
     MaintainedOutcomeEvidence, ReceiptCheck, VerifiedReceipt,
 };
 use layerx_wire::hash::batch_header_digest;
@@ -305,7 +305,7 @@ impl MirrorVerifier {
                 self.trust.first_batch_number,
                 self.trust.last_batch_number,
             );
-            return authorized_maintained_activity_batch(
+            return authorized_maintained_activity_batch_chain(
                 canonical,
                 &authorised,
                 &MaintainedOutcomeEvidence {
@@ -316,6 +316,7 @@ impl MirrorVerifier {
                     maintenance_proof: &maintenance_proof,
                     authorization: &authorization,
                 },
+                &self.archive.records.receipts[..leaves.len() - 1],
             )
             .map_err(|_| MirrorVerifyError::ReceiptBatchMismatch);
         }
