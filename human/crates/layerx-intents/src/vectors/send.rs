@@ -5,10 +5,10 @@ use layerx_wire::{encode::Encoder, WireError};
 /// Refuses a non-owner or conditional debit and retains every original encoder bound.
 pub fn owner_send_authorization(debit: &SendDebit) -> Result<Vec<u8>, WireError> {
     if debit.authorization_kind != 1 || !debit.conditions.is_empty() {
-        return Err(WireError::known(
-            layerx_types::result::KnownResult::NonCanonical,
-            0,
-        ));
+        return Err(WireError {
+            result: layerx_types::result::KnownResult::NonCanonical.into(),
+            offset: 0,
+        });
     }
     let mut message = Encoder::new(512);
     message.u16(0x5301)?;
