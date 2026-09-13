@@ -25,7 +25,7 @@ export const test = base.extend<{ productionServer: void }>({
       "start", "--hostname", "127.0.0.1", "--port", "3105",
     ], {
       cwd: WEB_ROOT,
-      env: { ...process.env, LAYERX_RUM_STORAGE_DIRECTORY: directory },
+      env: { ...process.env, LAYERX_RUM_STORAGE_DIRECTORY: path.join(directory, "records") },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const exited = new Promise<void>((resolve) => { child.once("close", () => { resolve(); }); });
