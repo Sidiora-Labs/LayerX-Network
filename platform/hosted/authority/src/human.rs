@@ -540,12 +540,22 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
             .iter()
             .find(|e| hex::encode(&e.facts.activity_id) == *activity)
         {
-            return Ok(json(
-                200,
-                &value!({"batch_id": hex::encode(&held.facts.batch_id), "asset": hex::encode(&held.facts.asset), "previous_state_root": hex::encode(&held.facts.previous_state_root), "resulting_state_root": hex::encode(&held.facts.resulting_state_root), "sequencer_public_key": hex::encode(&held.facts.sequencer_public_key)}),
-            ));
+            return selected_activity_authority(
+                value!({"batch_id": hex::encode(&held.facts.batch_id), "asset": hex::encode(&held.facts.asset), "sequencer_public_key": hex::encode(&held.facts.sequencer_public_key)}),
+                &held.record.receipt_hex,
+            );
         }
-        return Ok(by_activity(config, activity, false));
+        let response = by_activity(config, activity, false);
+        if response.status != 200 {
+            return Ok(response);
+        }
+        let document: Value = serde_json::from_str(&response.body)
+            .map_err(|_| unavailable("state_evidence_refused"))?;
+        let receipt = document["receipt"]
+            .as_str()
+            .ok_or_else(|| unavailable("state_evidence_refused"))?
+            .to_owned();
+        return selected_activity_authority(document, &receipt);
     }
     let mut evidence = human.evidence(config)?;
     if matches!(name, "identity" | "key-policy" | "capability-scope") {
@@ -559,6 +569,25 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
         "budget-state" => budget(p, &params["budget_id"], &evidence),
         _ => policy_route(name, &params, p, &evidence),
     }
+}
+
+fn selected_activity_authority(
+    mut document: Value,
+    receipt_hex: &str,
+) -> Result<Response, Response> {
+    let bytes = hex::decode(receipt_hex).map_err(|_| unavailable("state_evidence_refused"))?;
+    let receipt = decode(&bytes).map_err(|_| unavailable("state_evidence_refused"))?;
+    let protocol = receipt
+        .protocol()
+        .ok_or_else(|| unavailable("state_evidence_refused"))?;
+    if document["batch_id"].as_str() != Some(hex::encode(&protocol.batch_id()).as_str())
+        || document["asset"].as_str() != Some(hex::encode(&protocol.asset()).as_str())
+    {
+        return Err(unavailable("state_evidence_refused"));
+    }
+    document["previous_state_root"] = value!(hex::encode(&protocol.previous_state_root()));
+    document["resulting_state_root"] = value!(hex::encode(&protocol.resulting_state_root()));
+    Ok(json(200, &document))
 }
 
 fn authorize_activity(p: &PrincipalPolicy, activity: &str) -> Result<(), Response> {
