@@ -72,7 +72,7 @@ impl<B: HumanApiComponents> Router<B> {
     fn unix_seconds(&self) -> Result<u64, ApiFailure> {
         self.clock
             .sample(Duration::from_secs(1))
-            .map(|reading| reading.unix_seconds())
+            .map(layerx_types::clock::ClockReading::unix_seconds)
             .map_err(|_| ApiFailure::unavailable())
     }
 

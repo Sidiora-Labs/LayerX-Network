@@ -299,7 +299,7 @@ impl BoundHumanComponentServer {
 fn epoch_seconds(clock: &dyn layerx_types::clock::Clock) -> Result<u64, ComponentServerError> {
     clock
         .sample(Duration::from_secs(1))
-        .map(|reading| reading.unix_seconds())
+        .map(layerx_types::clock::ClockReading::unix_seconds)
         .map_err(|_| ComponentServerError::Protocol)
 }
 
