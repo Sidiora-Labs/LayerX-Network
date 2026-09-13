@@ -343,6 +343,7 @@ static lxp_result program_route(lxp_daemon_protocol_owner *owner,
         owner->feed_store.scanned_through_sequence, UINT64_MAX,
         owner->scratch, false);
     if (status == LXP_OK) {
+        context.protocol_version = owner->protocol_version;
         context.verified_receipts = owner->verified_receipts;
         status = lxp_programs_state_record_encode(
             &context, program_id, owner->feed_store.head_receipt_digest,
