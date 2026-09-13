@@ -315,29 +315,6 @@ static int metered_fixture_init(metered_fixture *f, uint64_t activity_limit,
     METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
     METERED_CHECK(metered_activity(f, LX_PROGRAMS_DEPLOY, payload, length, 1U,
                                    false) == 0);
-    {
-        lxp_kernel_prepared_batch *prepared = NULL;
-        lxp_authority_grant loaded;
-        size_t retries = 0U;
-        uint8_t live_root[32];
-        lxp_u128 live_balance = f->actor->balance;
-        (void)memcpy(live_root, f->kernel.current_state_root, 32U);
-        METERED_CHECK(lxp_kernel_prepare_activity_batch(&f->kernel, &f->activity,
-            &f->execution, 1U, 1U, &prepared, &retries) == LXP_OK);
-        METERED_CHECK(prepared != NULL && lxp_kernel_prepared_batch_count(prepared) == 1U);
-        const lxp_receipt *receipts = lxp_kernel_prepared_batch_receipts(prepared);
-        METERED_CHECK(receipts != NULL && receipts[0].result_code == LXP_ERR_PROGRAM_REFUSED &&
-            !lxp_u128_is_zero(receipts[0].fee_charged));
-        METERED_CHECK(lxp_authority_grant_load(lxp_kernel_prepared_batch_settled_kernel(prepared),
-            f->grant_id, &loaded) == LXP_OK);
-        METERED_CHECK(lxp_u128_cmp(loaded.fee_budget.spent_total, receipts[0].fee_charged) == 0);
-        METERED_CHECK(lxp_u128_is_zero(loaded.scope.spent_total));
-        lxp_kernel_prepared_batch_destroy(prepared);
-        METERED_CHECK(lxp_authority_grant_load(&f->kernel, f->grant_id, &loaded) == LXP_OK &&
-            lxp_u128_is_zero(loaded.fee_budget.spent_total));
-        METERED_CHECK(memcmp(live_root, f->kernel.current_state_root, 32U) == 0 &&
-            lxp_u128_cmp(live_balance, f->actor->balance) == 0);
-    }
     METERED_CHECK(lxp_kernel_execute_activity(&f->kernel, &f->activity,
                     &f->execution, &f->receipt) == LXP_OK);
     METERED_CHECK(f->receipt.result_code == LXP_OK);
@@ -497,6 +474,29 @@ int main(void)
     METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
     METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length,
                                    2U, true) == 0);
+    {
+        lxp_kernel_prepared_batch *prepared = NULL;
+        lxp_authority_grant loaded;
+        size_t retries = 0U;
+        uint8_t live_root[32];
+        lxp_u128 live_balance = f->actor->balance;
+        (void)memcpy(live_root, f->kernel.current_state_root, 32U);
+        METERED_CHECK(lxp_kernel_prepare_activity_batch(&f->kernel, &f->activity,
+            &f->execution, 1U, 1U, &prepared, &retries) == LXP_OK);
+        METERED_CHECK(prepared != NULL && lxp_kernel_prepared_batch_count(prepared) == 1U);
+        const lxp_receipt *receipts = lxp_kernel_prepared_batch_receipts(prepared);
+        METERED_CHECK(receipts != NULL && receipts[0].result_code == LXP_ERR_PROGRAM_REFUSED &&
+            !lxp_u128_is_zero(receipts[0].fee_charged));
+        METERED_CHECK(lxp_authority_grant_load(lxp_kernel_prepared_batch_settled_kernel(prepared),
+            f->grant_id, &loaded) == LXP_OK);
+        METERED_CHECK(lxp_u128_cmp(loaded.fee_budget.spent_total, receipts[0].fee_charged) == 0);
+        METERED_CHECK(lxp_u128_is_zero(loaded.scope.spent_total));
+        lxp_kernel_prepared_batch_destroy(prepared);
+        METERED_CHECK(lxp_authority_grant_load(&f->kernel, f->grant_id, &loaded) == LXP_OK &&
+            lxp_u128_is_zero(loaded.fee_budget.spent_total));
+        METERED_CHECK(memcmp(live_root, f->kernel.current_state_root, 32U) == 0 &&
+            lxp_u128_cmp(live_balance, f->actor->balance) == 0);
+    }
     METERED_CHECK(lxp_kernel_execute_activity(&f->kernel, &f->activity,
                     &f->execution, &f->receipt) == LXP_OK);
     METERED_CHECK(f->receipt.result_code == LXP_ERR_PROGRAM_REFUSED);
