@@ -114,7 +114,12 @@ lxp_result lx_stream_settle_execute(lxp_module_ctx *ctx,
     status = lx_stream_result_load(ctx, request->idempotency_key, &result,
                                    &found);
     if (status != LXP_OK) return status;
-    if (found) return lx_stream_result_receipt(&result, receipt);
+    if (found) {
+        if (request->stream_id == NULL || result.ordinal != 4U ||
+            memcmp(result.stream_id, request->stream_id, 32U) != 0)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        return lx_stream_result_receipt(&result, receipt);
+    }
     status = lx_stream_load(ctx, request->stream_id, &record);
     if (status != LXP_OK) return status;
     if (record.closed) return LXP_ERR_STREAM_CLOSED;
@@ -138,6 +143,7 @@ lxp_result lx_stream_settle_execute(lxp_module_ctx *ctx,
     (void)memset(&result, 0, sizeof(result));
     (void)memset(receipt, 0, sizeof(*receipt));
     result.ordinal = 4U;
+    (void)memcpy(result.stream_id, request->stream_id, 32U);
     if (lxp_u128_is_zero(amount)) {
         if (!lxp_u128_is_zero(unsettled)) {
             status = lx_stream_mark_underfunded(&record, timestamp, amount);

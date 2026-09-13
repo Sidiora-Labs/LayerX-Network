@@ -380,6 +380,23 @@ static int settle_flow(void)
     CHECK(record.accrued_total.lo == 20U && record.last_accrual_timestamp ==
           3000U);
 
+    if (settle(2U, 0x11U, 4000U, 4U, provider->id, &module_result) != 0)
+        return 1;
+    CHECK(module_result == LXP_ERR_CONTEXT_MISMATCH);
+    CHECK(observed.calls == 0U);
+    CHECK(stream_one->balance.lo == 20U && provider->balance.lo == 20U);
+
+    {
+        lx_stream_lifecycle_request close_request = {0};
+        lxp_authority_resolved close_authority = {0};
+        close_request.stream_id = id;
+        close_request.authority = &close_authority;
+        close_request.idempotency_key[0] = 0x11U;
+        CHECK(lx_stream_close_execute(&ctx, &close_request, &replayed) ==
+              LXP_ERR_CONTEXT_MISMATCH);
+        CHECK(observed.calls == 0U && !record.closed);
+    }
+
     /* The second settle exhausts custody exactly. */
     if (settle(1U, 0x12U, 5000U, 5U, payer->id, &module_result) != 0)
         return 1;

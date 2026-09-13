@@ -40,11 +40,21 @@ static lxp_result prepare_fee(lxp_kernel *kernel, const lxp_activity *activity,
     if (runtime == NULL || runtime->accounts == NULL ||
         runtime->assets == NULL || runtime->asset_count == 0U)
         return LXP_FATAL_INVARIANT;
-    status = lxp_kernel_program_payment_account(runtime->accounts,
-        authority->principal, runtime->occupancy_asset_id,
-        activity->protocol_version, &actor);
-    if (status != LXP_OK) return status;
-    if (!actor->has_asset) return LXP_ERR_ASSET_MISMATCH;
+    if (activity->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+        lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS) {
+        size_t slot = 0U;
+        status = lx_account_registry_index_lookup(runtime->accounts, authority->principal, &slot);
+        if (status != LXP_OK) return status;
+        actor = &runtime->accounts->accounts[slot];
+    } else {
+        status = lxp_kernel_program_payment_account(runtime->accounts,
+            authority->principal, runtime->occupancy_asset_id,
+            activity->protocol_version, &actor);
+        if (status != LXP_OK) return status;
+    }
+    if (!actor->has_asset ||
+        memcmp(actor->asset_id, runtime->occupancy_asset_id, 32U) != 0)
+        return LXP_ERR_ASSET_MISMATCH;
     status = lxp_fee_treasury_account(runtime->accounts, &treasury);
     if (status != LXP_OK) return status;
     token = (programs_fee_token *)malloc(sizeof(*token));

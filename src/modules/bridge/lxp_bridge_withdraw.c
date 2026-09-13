@@ -164,6 +164,9 @@ lxp_result lxp_bridge_withdraw_finalize(
     status = withdrawal_record(store, nullifier, &record);
     if (status != LXP_OK || record->settled)
         return LXP_ERR_WITHDRAWAL_ALREADY_SETTLED;
+    if (lxp_ct_memcmp(withdrawal->payout_recipient,
+                      record->request.payout_recipient, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
     if ((asset != NULL &&
          lxp_ct_memcmp(asset->asset_id, record->request.asset_id, 32U) != 0) ||
         (withdrawals != NULL &&

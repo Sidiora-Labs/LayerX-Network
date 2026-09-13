@@ -987,6 +987,18 @@ static lxp_result execute_artifact_fixture_activity(
         return status;
     }
     status = lxp_kernel_execute_activity(kernel, activity, execution, receipt);
+    if (status == LXP_OK && receipt->program_outcome.present) {
+        const lxp_program_outcome *outcome = &receipt->program_outcome;
+        uint8_t terminal_root[32], graph_root[32];
+        if (outcome->terminal_payload.length == 0U || outcome->call_graph_payload.length == 0U ||
+            lxp_hash_sha256(outcome->terminal_payload.bytes, outcome->terminal_payload.length,
+                            terminal_root) != LXP_OK ||
+            lxp_hash_sha256(outcome->call_graph_payload.bytes, outcome->call_graph_payload.length,
+                            graph_root) != LXP_OK ||
+            memcmp(terminal_root, outcome->terminal_payload_root, 32U) != 0 ||
+            memcmp(graph_root, outcome->call_graph_root, 32U) != 0)
+            return LXP_FATAL_INVARIANT;
+    }
     if (dump_executed_v3 && status == LXP_OK && receipt->result_code == LXP_OK &&
         activity->activity_type == LX_PROGRAMS_CALL &&
         emit_executed_fixture(activity, execution, receipt) != 0)

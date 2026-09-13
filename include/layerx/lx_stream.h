@@ -15,7 +15,7 @@ enum {
     LX_STREAM_PAYLOAD_VERSION = 1,
     LX_STREAM_KEY_BYTES = 39,
     LX_STREAM_RECORD_BYTES = 541,
-    LX_STREAM_RESULT_BYTES = 67,
+    LX_STREAM_RESULT_BYTES = 99,
     LX_STREAM_OPEN_PAYLOAD_FIXED = 204,
     LX_STREAM_OPEN_PAYLOAD_MAX =
         LX_STREAM_OPEN_PAYLOAD_FIXED + LX_STREAM_MAX_METER_AUTHORITIES * 32,
@@ -65,6 +65,7 @@ typedef struct lx_stream_record {
  * only the transfer set root into a receipt, so replaying an idempotency key
  * reproduces the original receipt byte for byte from this record. */
 typedef struct lx_stream_economic_result {
+    uint8_t stream_id[32];
     uint8_t transfer_set_root[32];
     lxp_u128 paid;
     lxp_u128 refunded;

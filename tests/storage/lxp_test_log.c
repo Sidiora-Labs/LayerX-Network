@@ -36,6 +36,14 @@ int main(void)
             LXP_OK || header.record_kind != kind ||
             memcmp(body, decoded, sizeof(body)) != 0) return 1;
     }
+    {
+        uint64_t before = log.write_offset;
+        uint64_t sequence_before = log.next_sequence;
+        if (lxp_log_append(&log, LXP_LOG_ACTIVITY, UINT64_MAX, body,
+                           (uint32_t)sizeof(body), NULL) !=
+                LXP_ERR_SEQUENCE_EXHAUSTED || log.write_offset != before ||
+            log.next_sequence != sequence_before) return 1;
+    }
     if (lxp_log_append(&log, (lxp_log_record_kind)10, 10U, body,
                        (uint32_t)sizeof(body), NULL) != LXP_ERR_NON_CANONICAL)
         return 1;

@@ -649,6 +649,15 @@ lxp_result lxp_gateway_invoice_record_put(
     if (registry == NULL || registry->scratch == NULL || invoice_id == NULL ||
         idempotency_key == NULL || receipt == NULL)
         return LXP_ERR_NON_CANONICAL;
+    for (size_t index = 0U; index < registry->kv.count; ++index) {
+        const lxp_gateway_kv_entry *entry = &registry->kv.entries[index];
+        if (entry->key_length == LXP_GATEWAY_KV_INVOICE_KEY_BYTES &&
+            memcmp(entry->key, lxp_gateway_invoice_prefix,
+                   sizeof(lxp_gateway_invoice_prefix)) == 0 &&
+            memcmp(entry->key + sizeof(lxp_gateway_invoice_prefix),
+                   invoice_id, 32U) == 0)
+            return LXP_ERR_INVOICE_ALREADY_SETTLED;
+    }
     status = gateway_receipt_record_length(receipt, &record_length);
     if (status != LXP_OK) return status;
     value_length =
@@ -690,7 +699,15 @@ lxp_result lxp_gateway_invoice_record_get(
     *settled = false;
     lxp_gateway_invoice_key(key, invoice_id, idempotency_key);
     status = lxp_gateway_kv_get(kv, key, sizeof(key), &value, &value_length);
-    if (status == LXP_ERR_UNKNOWN_FIELD) return LXP_OK;
+    if (status == LXP_ERR_UNKNOWN_FIELD) {
+        for (size_t index = 0U; index < kv->count; ++index) {
+            const lxp_gateway_kv_entry *entry = &kv->entries[index];
+            if (entry->key_length == sizeof(key) &&
+                memcmp(entry->key, key, sizeof(lxp_gateway_invoice_prefix) + 32U) == 0)
+                return LXP_ERR_INVOICE_ALREADY_SETTLED;
+        }
+        return LXP_OK;
+    }
     if (status != LXP_OK) return status;
     if (value_length <= (size_t)LXP_GATEWAY_KV_INVOICE_VALUE_PREFIX_BYTES ||
         lxp_ct_memcmp(value, invoice_id, 32U) != 0 ||

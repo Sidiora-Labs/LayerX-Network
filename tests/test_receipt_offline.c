@@ -62,6 +62,9 @@ int main(void)
     uint8_t state_hashes[2][32];
     uint8_t activity_root[32];
     uint8_t state_root[32];
+    lxp_merkle_proof receipt_proof;
+    uint8_t receipt_hashes[1][32];
+    uint8_t receipt_root[32];
     lxp_merkle_proof activity_proof;
     lxp_merkle_proof state_proof;
     lxp_ledger_receipt_input input;
@@ -141,6 +144,11 @@ int main(void)
     (void)memcpy(receipt_bytes, encoded.bytes, receipt_length);
     if (lxp_arena_reset(&arena, mark) != LXP_OK) return 1;
 
+    if (lxp_merkle_leaf_hash(receipt_bytes, receipt_length, receipt_hashes[0]) != LXP_OK ||
+        lxp_merkle_proof_generate((const uint8_t (*)[32])receipt_hashes, 1U, 0U,
+                                  &arena, &receipt_proof, receipt_root) != LXP_OK)
+        return 1;
+
     (void)memset(&requirement, 0, sizeof(requirement));
     requirement.network_id = 42U;
     (void)memcpy(requirement.recipient, receipt.to, 32U);
@@ -167,7 +175,7 @@ int main(void)
     checkpoint.header.previous_state_root[0] = 10U;
     (void)memcpy(checkpoint.header.resulting_state_root, state_root, 32U);
     (void)memcpy(checkpoint.header.activity_merkle_root, activity_root, 32U);
-    checkpoint.header.receipt_merkle_root[0] = 13U;
+    (void)memcpy(checkpoint.header.receipt_merkle_root, receipt_root, 32U);
     checkpoint.header.event_merkle_root[0] = 14U;
     checkpoint.header.data_availability_root[0] = 15U;
     checkpoint.header.oracle_root[0] = 16U;
@@ -205,7 +213,7 @@ int main(void)
             (lxp_byte_span){receipt_bytes, receipt_length},
             (lxp_byte_span){canonical_activity, sizeof(canonical_activity)},
             (lxp_byte_span){state_leaf, sizeof(state_leaf)},
-            &activity_proof, &state_proof, &certificate,
+            &receipt_proof, &activity_proof, &state_proof, &certificate,
             (lxp_byte_span){paxeer_reference, sizeof(paxeer_reference)},
             &augmented) != LXP_OK ||
         lxp_receipt_verify_checkpointed(
@@ -214,6 +222,21 @@ int main(void)
             &arena) != LXP_OK ||
         memcmp(&receipt, &original, sizeof(receipt)) != 0)
         return 1;
+    {
+        uint8_t altered_receipt[LXP_MAX_ACTIVITY_BYTES];
+        lxp_byte_span altered_encoded;
+        lxp_augmented_receipt altered = augmented;
+        lxp_receipt tampered = receipt;
+        tampered.amount.lo += 1U;
+        mark = lxp_arena_mark(&arena);
+        if (lxp_receipt_encode(&tampered, true, &arena, &altered_encoded) != LXP_OK) return 1;
+        (void)memcpy(altered_receipt, altered_encoded.bytes, altered_encoded.length);
+        altered.pre_checkpoint_receipt = (lxp_byte_span){altered_receipt, altered_encoded.length};
+        if (lxp_arena_reset(&arena, mark) != LXP_OK) return 1;
+        if (lxp_receipt_verify_checkpointed(&tampered, &altered, keys, 3U, checkpoint_id,
+              (lxp_byte_span){paxeer_reference, sizeof(paxeer_reference)}, &arena) !=
+            LXP_ERR_ROOT_MISMATCH || lxp_arena_reset(&arena, mark) != LXP_OK) return 1;
+    }
     (void)memcpy(altered_reference, paxeer_reference,
                  sizeof(paxeer_reference));
     altered_reference[0] ^= 1U;

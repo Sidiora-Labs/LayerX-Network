@@ -9,7 +9,7 @@
 
 static const uint8_t half_order[32] = {
     0x7fU,0xffU,0xffU,0xffU,0xffU,0xffU,0xffU,0xffU,
-    0xffU,0xffU,0xffU,0xffU,0xffU,0xffU,0xffU,
+    0xffU,0xffU,0xffU,0xffU,0xffU,0xffU,0xffU,0xffU,
     0x5dU,0x57U,0x6eU,0x73U,0x57U,0xa4U,0x50U,0x1dU,
     0xdfU,0xe9U,0x2fU,0x46U,0x68U,0x1bU,0x20U,0xa0U
 };
@@ -178,6 +178,8 @@ lxp_result lxp_secp256k1_recover_address(const uint8_t signature[64],
     sum=EC_POINT_new(group); public_point=EC_POINT_new(group);
     if (!x||!point_r||!check||!sum||!public_point ||
         EC_GROUP_get_order(group,order,context)!=1 || EC_GROUP_get_curve(group,prime,NULL,NULL,context)!=1) goto cleanup;
+    if (BN_is_zero(r) || BN_is_negative(r) || BN_cmp(r,order)>=0 ||
+        BN_is_zero(s) || BN_is_negative(s) || BN_cmp(s,order)>=0) goto cleanup;
     if ((recovery_id>>1U)!=0U && BN_add(x,x,order)!=1) goto cleanup;
     if (BN_cmp(x,prime)>=0 || EC_POINT_set_compressed_coordinates(group,point_r,x,(int)(recovery_id&1U),context)!=1 ||
         EC_POINT_mul(group,check,NULL,point_r,order,context)!=1 || !EC_POINT_is_at_infinity(group,check)) goto cleanup;

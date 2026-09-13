@@ -117,7 +117,9 @@ lxp_result lxp_replica_ingest_batch(
     if (replica->halted || !replica->execution_enabled ||
         !replica->acknowledgements_enabled)
         return LXP_FATAL_REPLAY_DIVERGENCE;
-    if (!replica->has_execution || replica->engine == NULL)
+    if (!replica->has_execution || replica->engine == NULL ||
+        replica->engine->transaction_begin == NULL ||
+        replica->engine->transaction_finish == NULL)
         return LXP_ERR_MODULE_DISABLED;
     mark = lxp_arena_mark(arena);
     status = lxp_batch_body_decode(canonical_body, body_length, &decoded);
@@ -143,14 +145,26 @@ lxp_result lxp_replica_ingest_batch(
         status = LXP_ERR_ROOT_MISMATCH;
     if (status == LXP_OK && body_length > UINT32_MAX)
         status = LXP_ERR_LENGTH_LIMIT;
+    if (status == LXP_OK &&
+        (decoded.header.last_sequence == UINT64_MAX ||
+         decoded.header.batch_number == UINT64_MAX ||
+         replica->durable_batch_count == UINT64_MAX ||
+         replica->executed_batch_count == UINT64_MAX ||
+         replica->acknowledged_batch_count == UINT64_MAX))
+        status = LXP_ERR_SEQUENCE_EXHAUSTED;
+    if (status == LXP_OK)
+        status = replica->engine->transaction_begin(replica->engine->context);
     if (status != LXP_OK) {
         (void)lxp_arena_reset(arena, mark);
         return status;
     }
+    replica->serving_current_state = false;
     status = lxp_replay_batch_publication(replica->engine, &decoded,
                                           replica->state_root, arena,
                                           &executed);
     if (status != LXP_OK) {
+        if (replica->engine->transaction_finish(replica->engine->context, false) != LXP_OK)
+            status = LXP_FATAL_INVARIANT;
         (void)lxp_replica_halt(replica);
         (void)lxp_arena_reset(arena, mark);
         return status;
@@ -160,6 +174,15 @@ lxp_result lxp_replica_ingest_batch(
                             decoded.header.last_sequence, canonical_body,
                             (uint32_t)body_length, NULL);
     if (status == LXP_OK) status = lxp_log_write_boundary(replica->log);
+    if (status == LXP_OK)
+        status = replica->engine->transaction_finish(replica->engine->context, true);
+    if (status != LXP_OK) {
+        if (replica->engine->transaction_finish(replica->engine->context, false) != LXP_OK)
+            status = LXP_FATAL_INVARIANT;
+        (void)lxp_replica_halt(replica);
+        (void)lxp_arena_reset(arena, mark);
+        return status;
+    }
     if (status == LXP_OK) {
         replica->head = decoded.header;
         replica->has_head = true;
@@ -177,9 +200,11 @@ lxp_result lxp_replica_ingest_batch(
                                      replica->replica_id, replica->log);
     }
     if (status == LXP_OK) {
+        replica->serving_current_state = true;
         replica->acknowledged_batch_count += 1U;
         *acknowledge = true;
     }
+    if (status != LXP_OK) (void)lxp_replica_halt(replica);
     (void)lxp_arena_reset(arena, mark);
     return status;
 }

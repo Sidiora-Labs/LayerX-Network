@@ -87,6 +87,10 @@ typedef struct lxp_replay_transition_registration {
     lxp_replay_transition_fn transition;
 } lxp_replay_transition_registration;
 
+typedef lxp_result (*lxp_replay_transaction_begin_fn)(void *context);
+typedef lxp_result (*lxp_replay_transaction_finish_fn)(void *context, bool commit);
+typedef struct lxp_replay_checkpoint lxp_replay_checkpoint;
+
 typedef struct lxp_replay_engine {
     lxp_replay_transition_registration
         transitions[LXP_MAX_REPLAY_TRANSITIONS];
@@ -96,6 +100,8 @@ typedef struct lxp_replay_engine {
     void *batch_finalize_context;
     void *context;
     const struct lxp_kernel *kernel;
+    lxp_replay_transaction_begin_fn transaction_begin;
+    lxp_replay_transaction_finish_fn transaction_finish;
 } lxp_replay_engine;
 #define lxp_replay_engine lxp_replay_engine
 
@@ -140,6 +146,13 @@ lxp_result lxp_replica_ingest_batch(
 lxp_result lxp_replay_engine_init(
     lxp_replay_engine *engine,
     lxp_replay_parameter_version_fn parameter_version, void *context);
+lxp_result lxp_replay_engine_bind_transaction(lxp_replay_engine *engine,
+    lxp_replay_transaction_begin_fn begin,
+    lxp_replay_transaction_finish_fn finish);
+lxp_result lxp_replay_checkpoint_create(struct lxp_kernel *kernel,
+    lxp_replay_checkpoint **checkpoint);
+lxp_result lxp_replay_checkpoint_restore(lxp_replay_checkpoint *checkpoint);
+void lxp_replay_checkpoint_destroy(lxp_replay_checkpoint *checkpoint);
 lxp_result lxp_replay_engine_bind_kernel(
     lxp_replay_engine *engine, const struct lxp_kernel *kernel);
 lxp_result lxp_replay_engine_register(lxp_replay_engine *engine,

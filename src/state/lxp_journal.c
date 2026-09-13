@@ -824,6 +824,49 @@ lxp_result lxp_state_publication_guard_end(
     return status;
 }
 
+lxp_result lxp_state_snapshot_restore(const lxp_state_snapshot *snapshot,
+                                      lxp_state_store *live)
+{
+    lxp_state_publication_guard guard = {0};
+    lxp_result status;
+    if (!snapshot_canonical(snapshot) || live == NULL ||
+        (snapshot->store.accounts != NULL) != (live->accounts != NULL))
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_state_writer_assert_owner(live);
+    if (status != LXP_OK) return status;
+    if (live->accounts != NULL) {
+        bool expected = false;
+        if (!atomic_compare_exchange_strong_explicit(
+                &live->accounts->gateway_transition, &expected, true,
+                memory_order_acq_rel, memory_order_acquire))
+            return LXP_ERR_CONTEXT_MISMATCH;
+        if (atomic_load_explicit(&live->accounts->gateway_acquirers,
+                                 memory_order_acquire) != 0U ||
+            snapshot->accounts.count > live->accounts->capacity ||
+            snapshot->accounts.count > live->accounts->index_capacity) {
+            atomic_store_explicit(&live->accounts->gateway_transition, false,
+                                  memory_order_release);
+            return LXP_ERR_CONTEXT_MISMATCH;
+        }
+        guard.gateway_excluded = true;
+    }
+    if (pthread_mutex_lock(&live->lock) != 0) {
+        if (guard.gateway_excluded)
+            atomic_store_explicit(&live->accounts->gateway_transition, false,
+                                  memory_order_release);
+        return LXP_ERR_IO;
+    }
+    guard.live = live;
+    guard.settled = snapshot;
+    guard.state_locked = true;
+    lxp_state_snapshot_publish_guarded(&guard);
+    if (pthread_mutex_unlock(&live->lock) != 0) abort();
+    if (guard.gateway_excluded)
+        atomic_store_explicit(&live->accounts->gateway_transition, false,
+                              memory_order_release);
+    return LXP_OK;
+}
+
 lxp_result lxp_state_store_bind_accounts(
     lxp_state_store *store, struct lx_account_registry *accounts)
 {
@@ -919,6 +962,8 @@ lxp_result lxp_state_journal_commit(lxp_state_journal *journal)
     if (status != LXP_OK) return status;
     if (journal->global_sequence != journal->store->next_sequence)
         return LXP_ERR_SEQUENCE_GAP;
+    if (journal->global_sequence == UINT64_MAX)
+        return LXP_ERR_SEQUENCE_EXHAUSTED;
     for (i = 0U; i < journal->count; ++i) {
         size_t location = find_cell(journal->store, journal->staged[i].key);
         if (location == journal->store->count) ++new_cells;

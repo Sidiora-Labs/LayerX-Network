@@ -18,10 +18,10 @@ import (
 	"github.com/sidiora-labs/paxeer-network/consensus/rpc/coretypes"
 	tmtypes "github.com/sidiora-labs/paxeer-network/consensus/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/rpc"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
-	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
 )
 
 const parityTestHeight int64 = 771
@@ -70,8 +70,9 @@ func (c *parityTxCountTMClient) Status(context.Context) (*coretypes.ResultStatus
 // GetBlockTransactionCountByNumber and GetBlockTransactionCountByHash both use getEvmTxCount; this
 // checks both match EncodeTmBlock's transaction list for the same fixture block.
 func TestBlockTransactionCountMatchesGetBlockByNumber(t *testing.T) {
-	k := &testkeeper.EVMTestApp.EvmKeeper
-	ctx := testkeeper.EVMTestApp.GetContextForDeliverTx(nil).
+	application := app.Setup(t, false, true, false)
+	k := &application.EvmKeeper
+	ctx := application.GetContextForDeliverTx(nil).
 		WithBlockHeight(parityTestHeight).
 		WithBlockTime(time.Unix(1700000000, 0)).
 		WithClosestUpgradeName("v6.0.0")
