@@ -47,7 +47,9 @@ contract LayerXMirrorArchiveTest {
         archive.begin(commitment, 1, 7, bytes32(0), uint64(payload.length), count, digest, chain);
         for (uint32 i = 0; i < count; ++i) {
             bytes memory chunk = chunkOf(payload, uint256(i) * chunkBytes, chunkBytes);
+            uint256 remainingGas = gasleft();
             archive.append(commitment, i, chunk);
+            require(remainingGas - gasleft() < 29_000_000, "append exceeds normal transaction budget");
             archive.append(commitment, i, chunk);
             require(keccak256(archive.chunk(commitment, i)) == keccak256(chunk), "stored chunk differs");
             archive.begin(commitment, 1, 7, bytes32(0), uint64(payload.length), count, digest, chain);
@@ -110,6 +112,8 @@ contract LayerXMirrorArchiveTest {
         bytes32 chain = keccak256(abi.encodePacked(bytes32(0), uint32(0), sha256(first), uint32(first.length)));
         chain = keccak256(abi.encodePacked(chain, uint32(1), sha256(second), uint32(second.length)));
         archive.begin(commitment, 1, 7, bytes32(0), uint64(payload.length), 2, sha256(payload), chain);
+        (bool emptySuccess, bytes memory emptyReason) = address(archive).call(abi.encodeCall(archive.append, (commitment, 0, bytes(""))));
+        requireRefusal(emptySuccess, emptyReason, LayerXMirrorArchive.InvalidManifest.selector);
         (bool success, bytes memory reason) = address(archive).call(abi.encodeCall(archive.append, (commitment, 1, second)));
         requireRefusal(success, reason, LayerXMirrorArchive.ChunkOrder.selector);
         archive.append(commitment, 0, first);
@@ -125,6 +129,23 @@ contract LayerXMirrorArchiveTest {
         archive.finalize(commitment);
         (, , bytes32 digest, bool finalized) = archive.manifest(commitment);
         require(digest == sha256(payload) && finalized, "refusal advanced digest");
+    }
+
+    function testChunkCreationFailureIsAtomic() public {
+        LayerXMirrorArchive archive = new LayerXMirrorArchive(address(this));
+        bytes memory payload = payloadOfLength(archive.MAX_CHUNK_BYTES());
+        bytes32 commitment = keccak256("creation-failure");
+        bytes32 digest = sha256(payload);
+        bytes32 chain = keccak256(abi.encodePacked(bytes32(0), uint32(0), digest, uint32(payload.length)));
+        archive.begin(commitment, 1, 7, bytes32(0), uint64(payload.length), 1, digest, chain);
+        (bool success,) = address(archive).call{gas: 100_000}(abi.encodeCall(archive.append, (commitment, 0, payload)));
+        require(!success, "underfunded chunk creation succeeded");
+        require(archive.chunk(commitment, 0).length == 0, "failed creation published a chunk");
+        archive.append(commitment, 0, payload);
+        archive.finalize(commitment);
+        (, , bytes32 storedDigest, bool finalized) = archive.manifest(commitment);
+        require(storedDigest == digest && finalized, "failed creation advanced archive hash");
+        require(keccak256(archive.chunk(commitment, 0)) == keccak256(payload), "split chunk retrieval mismatch");
     }
 
     function testArchiveRoundTripAndIdempotence() public {
