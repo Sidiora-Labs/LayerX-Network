@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.30;
 
+import {ArchiveSha256} from "./ArchiveSha256.sol";
+
 /// @notice Immutable, permissionless publication of public LayerX archive
 /// chunks. The contract has no custody, withdrawal, payable or token surface.
 contract LayerXMirrorArchive {
+    using ArchiveSha256 for ArchiveSha256.State;
     uint256 public constant MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
     uint256 public constant MAX_CHUNK_BYTES = 24 * 1024;
     uint256 public constant MAX_CHUNKS = 65_536;
@@ -30,6 +33,7 @@ contract LayerXMirrorArchive {
 
     mapping(bytes32 => ArchiveManifest) private _manifests;
     mapping(bytes32 => mapping(uint32 => bytes)) private _chunks;
+    mapping(bytes32 => ArchiveSha256.State) private _archiveHashes;
 
     event ManifestOpened(
         bytes32 indexed commitment,
@@ -53,6 +57,7 @@ contract LayerXMirrorArchive {
     error ChunkConflict();
     error IncompleteArchive();
     error InvalidPublisher();
+    error ArchiveDigestMismatch();
 
     modifier onlyPublisher() {
         if (msg.sender != publisher) revert InvalidPublisher();
@@ -98,6 +103,7 @@ contract LayerXMirrorArchive {
             nextChunk: 0,
             finalized: false
         });
+        _archiveHashes[commitment].initialize();
         emit ManifestOpened(
             commitment, networkId, batchNumber, totalBytes, totalChunks, archiveDigest
         );
@@ -116,6 +122,7 @@ contract LayerXMirrorArchive {
         uint256 nextBytes = uint256(archive.receivedBytes) + value.length;
         if (nextBytes > archive.totalBytes) revert InvalidManifest();
         _chunks[commitment][index] = value;
+        _archiveHashes[commitment].update(value);
         archive.observedChunkChain = keccak256(
             abi.encodePacked(archive.observedChunkChain, index, digest, uint32(value.length))
         );
@@ -132,6 +139,9 @@ contract LayerXMirrorArchive {
             archive.receivedBytes != archive.totalBytes ||
             archive.observedChunkChain != archive.expectedChunkChain
         ) revert IncompleteArchive();
+        if (_archiveHashes[commitment].digest(archive.receivedBytes) != archive.archiveDigest) {
+            revert ArchiveDigestMismatch();
+        }
         archive.finalized = true;
         emit ArchiveFinalized(commitment, archive.archiveDigest);
     }
