@@ -46,6 +46,8 @@ int main(void)
     uint8_t root[32];
     uint64_t sequence;
     size_t saved_count;
+    uint8_t asset_record[384];
+    size_t asset_record_length;
     bool found = false;
 
     if (epoch_fixture_open(&fixture, enabled, 1U) != LXP_OK)
@@ -57,6 +59,13 @@ int main(void)
         escrow_account->kind != LX_ACCOUNT_AGENT_ESCROW)
         return fail("accounts");
     if (epoch_fixture_bind(&fixture) != LXP_OK) return fail("bind");
+    if (epoch_fixture_ctx(&fixture, &ctx, &effects, LXP_MODULE_ASSET, 500U) != LXP_OK ||
+        lx_asset_record_encode(&fixture.asset, asset_record, sizeof(asset_record),
+                               &asset_record_length) != LXP_OK ||
+        lxp_ctx_kv_put(&ctx, fixture.asset.asset_id, 32U, asset_record,
+                       asset_record_length) != LXP_OK ||
+        lxp_module_ctx_commit(&ctx) != LXP_OK)
+        return fail("committed asset");
 
     /* The manifest enabled escrow alone: it holds the process runtime over
      * the process registries, and the modules the manifest left disabled
@@ -131,7 +140,8 @@ int main(void)
         return fail("maintained epoch context");
     ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
     ctx.batch_number = 1U;
-    if (lx_escrow_module_iface()->epoch_begin(&ctx, 2U, 1200U) != LXP_OK ||
+    lxp_result maintained = lx_escrow_module_iface()->epoch_begin(&ctx, 2U, 1200U);
+    if (maintained != LXP_OK ||
         escrow_account->balance.lo != 0U || owner->balance.lo != 50U ||
         effects.count != 2U || effects.effects[0].kind != LXP_EFFECT_TRANSFER ||
         !effects.effects[0].monetary || effects.effects[0].ordinal != 0U ||
@@ -141,8 +151,13 @@ int main(void)
         effects.effects[1].event_type != 5U || effects.effects[1].ordinal != 1U ||
         lx_escrow_receipt_replay(&ctx, timeout_key, &receipt, &found) != LXP_OK ||
         !found || receipt.amount.lo != 50U ||
-        memcmp(effects.effects[0].transfer_set_root, receipt.transfer_set_root, 32U) != 0)
+        memcmp(effects.effects[0].transfer_set_root, receipt.transfer_set_root, 32U) != 0) {
+        (void)fprintf(stderr, "maintained epoch: status=%d effects=%zu kinds=%d,%d ordinals=%u,%u found=%d\n",
+            (int)maintained, effects.count, (int)effects.effects[0].kind,
+            (int)effects.effects[1].kind, (unsigned)effects.effects[0].ordinal,
+            (unsigned)effects.effects[1].ordinal, found ? 1 : 0);
         return fail("maintained epoch transfer evidence");
+    }
     lxp_module_ctx_rollback(&ctx);
     if (escrow_account->balance.lo != 50U || owner->balance.lo != 0U ||
         hold_state(&fixture, &effects, 999U, record.escrow_id, &stored) != 0 ||
