@@ -1831,6 +1831,85 @@ fn verify_simulation_evidence(
     );
 }
 
+fn assert_verified_program_refusal(
+    cluster: &Cluster,
+    execution: &serde_json::Value,
+    signed: &[u8],
+    program_id: [u8; 32],
+) {
+    let call_type = must(
+        ActivityType::new(ModuleId::Programs, 3),
+        "ProgramCall activity type",
+    );
+    let registration = must(
+        ModuleRegistration::new(ModuleId::Programs, &[call_type]),
+        "ProgramCall registration",
+    );
+    let registry = must(ModuleRegistry::new(&[registration]), "ProgramCall registry");
+    let activity = must(
+        decode_signed(signed, &registry),
+        "original signed ProgramCall",
+    );
+    assert_eq!(activity.protocol_version(), PROTOCOL_VERSION);
+    assert_eq!(activity.network_id(), NETWORK_ID);
+    let call = must(
+        layerx_types::program_call::NativeProgramCall::decode(activity.payload()),
+        "original native ProgramCall",
+    );
+    assert_eq!(call.callee().bytes(), program_id);
+    let expected_activity = must(activity_id(&activity), "original ProgramCall activity ID");
+    let expected_payload = must(
+        layerx_wire::hash::payload_hash(&activity),
+        "original ProgramCall payload hash",
+    );
+    let receipt_bytes = unhex(field(execution, "receipt"));
+    let receipt = must(
+        verify_sequencer_signature(&receipt_bytes, cluster.sequencer_key),
+        "signed ProgramCall refusal",
+    );
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("protocol ProgramCall refusal"));
+    assert_eq!(protocol.protocol_version(), PROTOCOL_VERSION);
+    assert_eq!(protocol.protocol_version(), activity.protocol_version());
+    let terminal = unhex(field(execution, "terminal_payload"));
+    let graph = unhex(field(execution, "call_graph"));
+    let verified = must(
+        layerx_proof::program::verify_program_execution(
+            &receipt_bytes,
+            &terminal,
+            &graph,
+            layerx_proof::program::ProgramExecutionExpectation {
+                sequencer_public_key: cluster.sequencer_key,
+                previous_state_root: protocol.previous_state_root(),
+                activity_id: expected_activity,
+                payload_hash: expected_payload,
+                program_id,
+                guest_abi_version: call.guest_abi,
+            },
+        ),
+        "complete ProgramCall refusal proof",
+    );
+    assert!(matches!(
+        verified.outcome(),
+        layerx_types::intent::ProgramCallOutcome::Refused(_)
+    ));
+    assert!(verified.result_code() < 0);
+    assert_eq!(execution["activity_id"], hex(&expected_activity));
+    let outcome = protocol
+        .program_outcome()
+        .unwrap_or_else(|| panic!("refusal outcome"));
+    assert_eq!(outcome.abi_version(), call.guest_abi);
+    assert_eq!(outcome.result_code(), verified.result_code());
+    assert_eq!(protocol.transfer_set_root(), [0; 32]);
+    assert_eq!(outcome.transfer_root(), [0; 32]);
+    assert_eq!(outcome.occupancy_transfer_root(), [0; 32]);
+    assert_eq!(
+        outcome.applied_legs_digest(),
+        <[u8; 32]>::from(Sha256::digest([]))
+    );
+}
+
 #[test]
 fn real_program_simulation_executes_without_committing() {
     let cluster = start_cluster();
@@ -1853,8 +1932,7 @@ fn real_program_simulation_executes_without_committing() {
     let execution = &result["execution"];
     assert_eq!(execution["state"], "refused");
     assert_eq!(execution["program_id"], hex(&program_id));
-    assert_eq!(execution["terminal_payload"], "");
-    assert_eq!(execution["call_graph"], "");
+    assert_verified_program_refusal(&cluster, execution, &signed, program_id);
     let receipt_bytes = unhex(field(execution, "receipt"));
     let receipt = must(
         verify_sequencer_signature(&receipt_bytes, cluster.sequencer_key),
@@ -2343,8 +2421,7 @@ fn real_program_call_refusal_artifacts_are_bound_and_replay_after_restart() {
     let document = submitted.json();
     let result = &document["result"];
     assert_eq!(result["state"], "refused");
-    assert_eq!(result["terminal_payload"], "");
-    assert_eq!(result["call_graph"], "");
+    assert_verified_program_refusal(&cluster, result, &signed, program_id);
     check_program_refusal_artifact_endpoint(&cluster, result);
     let lookup_path = format!("/v1/programs/activities/{}", field(result, "activity_id"));
     let lookup = cluster
@@ -2426,8 +2503,8 @@ fn check_program_refusal_artifact_endpoint(cluster: &Cluster, result: &serde_jso
         let artifacts = artifacts.json();
         assert_eq!(artifacts["activity_id"], result["activity_id"]);
         assert_eq!(artifacts["receipt_digest"], hex(&digest));
-        assert_eq!(artifacts["terminal_payload"], "");
-        assert_eq!(artifacts["call_graph"], "");
+        assert_eq!(artifacts["terminal_payload"], result["terminal_payload"]);
+        assert_eq!(artifacts["call_graph"], result["call_graph"]);
     } else {
         assert_ne!(artifacts.status, 200);
     }
