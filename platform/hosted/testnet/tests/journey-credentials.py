@@ -8,6 +8,11 @@ import ssl
 import urllib.request
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--gateway', required=True)
@@ -42,8 +47,10 @@ def main():
         args.gateway.rstrip('/') + '/v1/keys', data=json.dumps(document).encode(),
         headers={'Authorization': 'Bearer ' + sessions['source'],
                  'Content-Type': 'application/json', 'Idempotency-Key': os.urandom(32).hex()})
-    with urllib.request.urlopen(request, context=ssl.create_default_context(cafile=args.ca),
-                                timeout=30) as response:
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=args.ca)),
+        NoRedirect())
+    with opener.open(request, timeout=30) as response:
         assert response.status in (200, 201), 'gateway key issuance refused'
         body = response.read(65537)
         assert len(body) <= 65536

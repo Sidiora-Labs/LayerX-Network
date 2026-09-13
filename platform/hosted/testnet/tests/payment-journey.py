@@ -87,6 +87,7 @@ def main():
         return matches[0]
 
     source_record, destination_record = account(args.did), account(args.destination)
+    assert source_record['name'] == f'agent:{args.did}:main', 'funded native MAIN source required'
     source, destination = source_record['account_id'], destination_record['account_id']
     before = rpc('lx_getBalance', [destination])
     source_before = rpc('lx_getAccount', [source])
@@ -125,11 +126,22 @@ def main():
     assert (verified.module_id, verified.operation, verified.result_code) == (1, 5, 0)
     assert verified.asset == asset and verified.amount == amount
     assert verified.from_account.hex() == source and verified.to_account.hex() == destination
+    assert verified.from_sequence == int(source_before['next_sequence'])
     after = rpc('lx_getBalance', [destination])
     assert int(after['balance']) == int(before['balance']) + amount
+    source_after = rpc('lx_getAccount', [source])
+    identity_after = rpc('lx_getSequence', [args.did, 'identity'])
+    assert verified.fee_charged > 0
+    assert int(source_after['balance']) == int(source_before['balance']) - amount - verified.fee_charged
+    assert verified.from_balance_before == int(source_before['balance']) - verified.fee_charged
+    assert verified.from_balance_after == int(source_after['balance'])
+    assert int(source_after['next_sequence']) == int(source_before['next_sequence']) + 1
+    assert int(identity_after['next_sequence']) == int(identity_before['next_sequence']) + 1
     replayed = rpc('lx_sendActivity', [signed['canonical'], 'executed'])
     assert replayed == executed, 'payment idempotency replay changed the result'
     assert rpc('lx_getBalance', [destination]) == after, 'payment replay changed the balance'
+    assert rpc('lx_getAccount', [source]) == source_after, 'payment replay changed the debit account'
+    assert rpc('lx_getSequence', [args.did, 'identity']) == identity_after, 'payment replay changed identity state'
     assert rpc('lx_getReceipt', [signed['activity_id']]) == receipt
     authority = {'batch_id': verified.batch_id.hex(), 'asset': verified.asset.hex(),
                  'previous_state_root': verified.previous_state_root.hex(),
@@ -137,7 +149,9 @@ def main():
                  'sequencer_public_key': args.sequencer_key}
     write('receipt.json', json.dumps({'result': dict(receipt, authority=authority)}, indent=2).encode())
     write('result.json', json.dumps({'activity_id': signed['activity_id'], 'before': before,
-          'after': after, 'result': executed, 'replayed': True}, indent=2).encode())
+          'after': after, 'source_before': source_before, 'source_after': source_after,
+          'identity_before': identity_before, 'identity_after': identity_after,
+          'fee_charged': str(verified.fee_charged), 'result': executed, 'replayed': True}, indent=2).encode())
     print(json.dumps({'activity_id': signed['activity_id'], 'amount': args.amount,
                       'destination_balance': after['balance'], 'replayed': True}))
 

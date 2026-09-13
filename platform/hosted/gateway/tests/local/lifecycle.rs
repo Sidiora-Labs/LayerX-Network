@@ -2780,6 +2780,7 @@ fn local_gateway_program_custody_journey() {
     .arg(hex_encode(&cluster.asset))
     .arg("--network-id")
     .arg(NETWORK_ID.to_string())
+    .args(["--sequencer-key", &hex_encode(&cluster.sequencer_key)])
     .arg("--wasm")
     .arg(artifact)
     .arg("--output")

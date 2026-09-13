@@ -6,10 +6,25 @@ from pathlib import Path
 import stat
 import struct
 import subprocess
+import sys
 import time
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / 'agent/sdk/python'))
+from layerx_sdk.programs import ProgramTrustContext, verify_program_receipt
+from layerx_sdk.verifier import AuthorizedReceiptBatch
+
+
+class Signatures:
+    def verify_ed25519(self, public_key, signature, message):
+        try:
+            Ed25519PublicKey.from_public_bytes(public_key).verify(signature, message)
+            return True
+        except InvalidSignature:
+            return False
 
 
 def protected(path):
@@ -42,6 +57,7 @@ def main():
     parser.add_argument('--did', required=True)
     parser.add_argument('--asset', required=True)
     parser.add_argument('--network-id', type=int, required=True)
+    parser.add_argument('--sequencer-key', required=True)
     parser.add_argument('--wasm', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -54,6 +70,7 @@ def main():
     public = key.public_key().public_bytes_raw()
     assert args.did == 'did:layerx:' + public.hex()
     asset = fixed(args.asset)
+    sequencer = fixed(args.sequencer_key)
     assert args.wasm.is_file() and not args.wasm.is_symlink()
     wasm = args.wasm.read_bytes()
     assert wasm.startswith(b'\0asm\1\0\0\0') and 0 < len(wasm) <= 524184
@@ -172,6 +189,20 @@ def main():
     executed = submit('/v1/programs/call', canonical, 3, key_id)
     assert executed['state'] == 'executed' and executed['result_code'] == 0, executed
     assert executed['receipt'] and executed['terminal_payload'] and executed['call_graph'], executed
+    expected_activity = hashlib.sha256(b'LXP/v1/activity-id\0' + canonical).hexdigest()
+    assert executed['activity_id'] == expected_activity and executed['program_id'] == program.hex()
+    authority = executed['authority']
+    verified = verify_program_receipt(
+        executed,
+        AuthorizedReceiptBatch(fixed(authority['batch_id']), bytes.fromhex(authority['asset']),
+                               fixed(authority['previous_state_root']), fixed(authority['resulting_state_root']),
+                               sequencer),
+        Signatures(), ProgramTrustContext(sequencer, protocol_version=3)).verification.receipt
+    assert (verified.module_id, verified.operation, verified.result_code) == (9, 3, 0)
+    assert verified.activity_id.hex() == expected_activity
+    assert verified.program_outcome is not None and verified.program_outcome.result_code == 0
+    assert executed['outcome']['kind'] == 'completed' and executed['outcome']['code'] == 0
+    write('call-activity-id', expected_activity.encode())
     replayed = submit('/v1/programs/call', canonical, 3, key_id)
     assert replayed == executed, (executed, replayed)
     after = rpc('lx_getBalance', [account.hex()])
