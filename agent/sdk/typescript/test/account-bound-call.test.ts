@@ -55,6 +55,11 @@ const wrongOwner = Buffer.from(name); wrongOwner[6] = wrongOwner[6] === 97 ? 98 
 const invalidNames = [Buffer.alloc(0), Buffer.alloc(513, 97), Buffer.from(name.toString().toUpperCase()), wrongOwner,
   Buffer.from(name.toString().replace(":main", ":asset:" + "00".repeat(32))), Buffer.from("agent::main")];
 const malformed = invalidNames.map((value) => wrapped(original, named(value)));
+const legacy = Buffer.from(original);
+const transferDomain = Buffer.from("LayerX/programs/402LXP/transfer-set/v2\0");
+assert(legacy.subarray(0, transferDomain.length).equals(transferDomain));
+legacy[transferDomain.length - 2] = 49;
+malformed.push(wrapped(legacy, names));
 malformed.push(wrapped(authorization, names), wrapped(original, Buffer.concat([names, Buffer.of(0)])), wrapped(original, names.subarray(0, -1)));
 for (const value of malformed) {
   const terminal = mutate(value);
