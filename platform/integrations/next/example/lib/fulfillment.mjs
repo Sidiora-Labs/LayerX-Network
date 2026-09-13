@@ -12,8 +12,16 @@ export class FileFulfillmentRepository {
   }
 
   async fulfill(proposed, release) {
+    return this.enqueue(proposed, release, false);
+  }
+
+  async reconcile(proposed, resolve) {
+    return this.enqueue(proposed, resolve, true);
+  }
+
+  async enqueue(proposed, release, reconciliation) {
     const before = queues.get(this.directory) ?? Promise.resolve();
-    const operation = before.then(() => this.commit(proposed, release));
+    const operation = before.then(() => this.commit(proposed, release, reconciliation));
     const barrier = operation.then(() => undefined, () => undefined);
     queues.set(this.directory, barrier);
     try {
@@ -23,7 +31,7 @@ export class FileFulfillmentRepository {
     }
   }
 
-  async commit(proposed, release) {
+  async commit(proposed, release, reconciliation) {
     if (!/^[0-9a-f]{64}$/u.test(proposed.idempotencyKey)
       || !/^[0-9a-f]{64}$/u.test(proposed.requestDigest)) {
       throw new MiddlewareError("fulfillment-conflict");
@@ -46,6 +54,7 @@ export class FileFulfillmentRepository {
     try {
       database.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=30000;");
       database.exec("CREATE TABLE IF NOT EXISTS fulfillment (id TEXT PRIMARY KEY, request_digest TEXT NOT NULL, receipt TEXT NOT NULL, resource TEXT NOT NULL)");
+      database.exec("CREATE TABLE IF NOT EXISTS fulfillment_claim (id TEXT PRIMARY KEY, request_digest TEXT NOT NULL, receipt TEXT NOT NULL)");
       database.exec("BEGIN IMMEDIATE");
       transaction = true;
       let stored = database.prepare("SELECT request_digest, receipt, resource FROM fulfillment WHERE id = ?").get(proposed.idempotencyKey);
@@ -83,17 +92,40 @@ export class FileFulfillmentRepository {
         transaction = false;
         return { ...proposed, resource: JSON.parse(stored.resource) };
       }
-      const resource = await release();
-      const encoded = JSON.stringify(resource);
-      if (encoded === undefined) throw new MiddlewareError("fulfillment-conflict");
-      database.prepare("INSERT INTO fulfillment VALUES (?, ?, ?, ?)").run(
-        proposed.idempotencyKey, proposed.requestDigest,
-        Buffer.from(proposed.canonicalReceipt).toString("base64"), encoded,
-      );
+      const receipt = Buffer.from(proposed.canonicalReceipt).toString("base64");
+      const claim = database.prepare("SELECT request_digest, receipt FROM fulfillment_claim WHERE id = ?").get(proposed.idempotencyKey);
+      if (claim !== undefined) {
+        if (claim.request_digest !== proposed.requestDigest || claim.receipt !== receipt) {
+          throw new MiddlewareError("fulfillment-conflict");
+        }
+        if (!reconciliation) throw new MiddlewareError("fulfillment-outcome-unknown");
+      } else {
+        if (reconciliation) throw new MiddlewareError("fulfillment-conflict");
+        database.prepare("INSERT INTO fulfillment_claim VALUES (?, ?, ?)").run(
+          proposed.idempotencyKey, proposed.requestDigest, receipt,
+        );
+      }
       database.exec("COMMIT");
       transaction = false;
       const parent = await open(this.directory, constants.O_RDONLY | constants.O_DIRECTORY);
       try { await parent.sync(); } finally { await parent.close(); }
+      const resource = await release();
+      const encoded = JSON.stringify(resource);
+      if (encoded === undefined) throw new MiddlewareError("fulfillment-outcome-unknown");
+      database.exec("BEGIN IMMEDIATE");
+      transaction = true;
+      const completed = database.prepare("SELECT request_digest, receipt, resource FROM fulfillment WHERE id = ?").get(proposed.idempotencyKey);
+      if (completed !== undefined) {
+        if (completed.request_digest !== proposed.requestDigest || completed.receipt !== receipt
+          || completed.resource !== encoded) throw new MiddlewareError("fulfillment-conflict");
+      } else {
+        database.prepare("INSERT INTO fulfillment VALUES (?, ?, ?, ?)").run(
+          proposed.idempotencyKey, proposed.requestDigest, receipt, encoded,
+        );
+      }
+      database.prepare("DELETE FROM fulfillment_claim WHERE id = ?").run(proposed.idempotencyKey);
+      database.exec("COMMIT");
+      transaction = false;
       return { ...proposed, resource };
     } catch (error) {
       if (transaction) database.exec("ROLLBACK");

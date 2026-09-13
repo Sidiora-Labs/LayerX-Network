@@ -91,6 +91,7 @@ export type MiddlewareErrorCode =
   | "payment-refused"
   | "verification-failure"
   | "fulfillment-conflict"
+  | "fulfillment-outcome-unknown"
   | "invalid-webhook"
   | "webhook-replay";
 

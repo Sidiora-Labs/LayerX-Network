@@ -527,6 +527,9 @@ function paymentErrorStatus(code: MiddlewareErrorCode): number {
   if (code === "payment-pending") {
     return 202;
   }
+  if (code === "fulfillment-outcome-unknown") {
+    return 503;
+  }
   if (code === "fulfillment-conflict") {
     return 409;
   }
