@@ -28,6 +28,12 @@ def main():
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     os.setsid()
+
+    def stop(_signal, _frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
     config = json.loads(Path(args.config).read_text())
     root = Path(config["root"]).resolve(strict=True)
     phase("configuration")
@@ -156,11 +162,6 @@ def main():
     phase("protected_inputs_ready")
     process = None
 
-    def stop(_signal, _frame):
-        raise SystemExit(0)
-
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
     try:
         process = subprocess.Popen(command)
         phase("runtime_launched")
