@@ -22,6 +22,8 @@ pub enum IntentKindTag {
     SessionGrant = 13,
     SessionRevoke = 14,
     AuthorityGrant = 15,
+    NativeCustodyCredit = 16,
+    NativeReceive = 17,
 }
 
 impl IntentKindTag {
@@ -42,6 +44,8 @@ impl IntentKindTag {
             13 => Some(Self::SessionGrant),
             14 => Some(Self::SessionRevoke),
             15 => Some(Self::AuthorityGrant),
+            16 => Some(Self::NativeCustodyCredit),
+            17 => Some(Self::NativeReceive),
             _ => None,
         }
     }

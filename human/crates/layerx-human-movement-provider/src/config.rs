@@ -23,6 +23,7 @@ pub(crate) struct Config {
     pub listener: ListenerConfig,
     pub state_root: PathBuf,
     pub evidence_root: PathBuf,
+    pub custody_profile: Option<[u8; 207]>,
     pub tracker: TrackerConfig,
     pub proof: DepositProofConfig,
     pub vault: EvmAddress,
@@ -85,6 +86,15 @@ impl Config {
             },
             state_root: path("STATE_ROOT")?,
             evidence_root: path("EVIDENCE_ROOT")?,
+            custody_profile: if protocol == 3 {
+                Some(
+                    read_private(&path("CUSTODY_PROFILE")?, 207)?
+                        .try_into()
+                        .map_err(|_| Error::Configuration)?,
+                )
+            } else {
+                None
+            },
             vault: EvmAddress::new(hex(&required("PAXEER_VAULT")?)?),
             checkpoint_registry: EvmAddress::new(hex(&required("PAXEER_CHECKPOINT_REGISTRY")?)?),
             claims_contract: EvmAddress::new(hex(&required("PAXEER_CLAIMS_CONTRACT")?)?),

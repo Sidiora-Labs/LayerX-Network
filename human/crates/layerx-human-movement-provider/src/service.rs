@@ -31,6 +31,7 @@ pub(crate) struct EvidenceService {
     trackers: BTreeMap<[u8; 32], FinalityTracker>,
     verifier: DepositProofVerifier,
     evidence_root: PathBuf,
+    custody_profile: Option<[u8; 207]>,
     vault: EvmAddress,
     chain_id: u64,
     checkpoint_registry: EvmAddress,
@@ -66,6 +67,7 @@ impl EvidenceService {
             trackers: BTreeMap::new(),
             verifier,
             evidence_root: config.evidence_root.clone(),
+            custody_profile: config.custody_profile,
             vault: config.vault,
             chain_id: config.proof.paxeer_chain_id,
             checkpoint_registry: config.checkpoint_registry,
@@ -153,6 +155,29 @@ impl EvidenceService {
             || candidate.nullifier() != verified.nullifier()
         {
             return Err(proof_error(ProofFault::EvidenceSourceMismatch));
+        }
+        if let Some(profile) = &self.custody_profile {
+            let path = self
+                .evidence_root
+                .join(format!("credit-{}.bin", hex_string(&transaction.bytes())));
+            let payload = read_private(&path, 427)
+                .map_err(|_| proof_error(ProofFault::ProducerUnavailable))?;
+            let owner_key = payload
+                .get(139..171)
+                .ok_or_else(|| proof_error(ProofFault::EvidenceSourceMismatch))?
+                .try_into()
+                .map_err(|_| proof_error(ProofFault::EvidenceSourceMismatch))?;
+            let credit = layerx_paxeer_client::AttestedNativeCustodyCredit::verify(
+                profile,
+                &payload,
+                layerx_paxeer_client::NativeCustodyExpectation {
+                    network_id: verified.network_id(),
+                    beneficiary: verified.custody().beneficiary,
+                    owner_key,
+                },
+            )
+            .map_err(|_| proof_error(ProofFault::EvidenceSourceMismatch))?;
+            return verified.with_native_credit(credit);
         }
         Ok(verified)
     }

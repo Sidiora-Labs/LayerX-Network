@@ -276,6 +276,19 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
             )?;
             finish(registry, ModuleId::Asset, 5, encoder)
         }
+        IntentKind::NativeReceive(value) => {
+            if intent.version() != IntentVersion::V1 {
+                return Err(CompileError::wire(
+                    CompileField::Version,
+                    WireError {
+                        result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                        offset: 0,
+                    },
+                ));
+            }
+            fixed(&mut encoder, value.payload(), CompileField::Authorization)?;
+            finish(registry, ModuleId::Asset, 6, encoder)
+        }
         IntentKind::LxpReceive(value) => {
             header(&mut encoder, 0x5201, 8)?;
             account(&mut encoder, &value.from, CompileField::From)?;
@@ -410,6 +423,19 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
                 &value.idempotency_key.bytes(),
                 CompileField::IdempotencyKey,
             )?;
+            finish(registry, ModuleId::Bridge, 1, encoder)
+        }
+        IntentKind::NativeCustodyCredit(value) => {
+            if intent.version() != IntentVersion::V1 {
+                return Err(CompileError::wire(
+                    CompileField::Version,
+                    WireError {
+                        result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                        offset: 0,
+                    },
+                ));
+            }
+            fixed(&mut encoder, value.payload(), CompileField::DepositProof)?;
             finish(registry, ModuleId::Bridge, 1, encoder)
         }
         IntentKind::BridgeWithdrawRequest(value) => {

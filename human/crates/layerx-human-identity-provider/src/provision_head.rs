@@ -70,8 +70,14 @@ pub(super) fn run() -> io::Result<()> {
         .map_err(|_| refused())?;
     let proof =
         decode_proof(&hex(&head.batch_evidence.receipt_proof_hex)?).map_err(|_| refused())?;
+    let receipt_bytes = hex(&head.receipt_hex)?;
+    let receipt = layerx_proof::receipt::verify_sequencer_signature(
+        &receipt_bytes,
+        authorization.public_key(),
+    )
+    .map_err(|_| refused())?;
     let verified = verify_receipt(
-        &hex(&head.receipt_hex)?,
+        &receipt_bytes,
         &proof,
         &hex(&head.batch_evidence.header_hex)?,
         &signature,
@@ -86,7 +92,12 @@ pub(super) fn run() -> io::Result<()> {
         || header.last_sequence() != head.observed_sequence
         || header.resulting_state_root().as_slice() != hex(&head.state_root)?
         || head.observed_at == 0
-        || hex(&head.receipt_digest)?.len() != 32
+        || layerx_wire::hash::receipt_digest(
+            &layerx_wire::receipt::encode_unsigned(&receipt).map_err(|_| refused())?,
+        )
+        .map_err(|_| refused())?
+        .as_slice()
+            != hex(&head.receipt_digest)?
     {
         return Err(refused());
     }

@@ -8,6 +8,8 @@ use layerx_wire::receipt::{decode, encode, encode_unsigned, Receipt};
 use crate::evidence::Evidence;
 use crate::level::achieved;
 
+mod native_credit;
+
 const PROGRAMS_MODULE_ID: u32 = 9;
 const PROGRAMS_STATE_OPERATION: u16 = 0;
 const PROGRAMS_CALL_OPERATION: u16 = 3;
@@ -260,6 +262,17 @@ pub fn verify_outcome(
     if !supported_protocol_version(protocol.protocol_version()) {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
+    if protocol.module_id() == 8 && protocol.operation() == 0 {
+        return native_credit::verify(receipt_bytes, authorised);
+    }
+    if u32::from(protocol.module_id()) == PROGRAMS_MODULE_ID && protocol.operation() == 0 {
+        return verify_program_state_outcome(receipt_bytes, authorised);
+    }
+    if u32::from(protocol.module_id()) == PROGRAMS_MODULE_ID
+        && u16::from(protocol.operation()) == PROGRAMS_CALL_OPERATION
+    {
+        return verify_program_outcome(receipt_bytes, authorised);
+    }
     if protocol.operation() == 0 {
         return Err(VerificationFailure::at(ReceiptCheck::Operation));
     }
@@ -500,6 +513,21 @@ pub fn verify_program_state(
     receipt_bytes: &[u8],
     authorised: &AuthorizedBatch,
 ) -> Result<VerifiedReceipt, VerificationFailure> {
+    let verified = verify_program_state_outcome(receipt_bytes, authorised)?;
+    if verified
+        .receipt()
+        .protocol()
+        .is_none_or(|receipt| receipt.result_code() != 0)
+    {
+        return Err(VerificationFailure::at(ReceiptCheck::ResultCode));
+    }
+    Ok(verified)
+}
+
+fn verify_program_state_outcome(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+) -> Result<VerifiedReceipt, VerificationFailure> {
     let receipt =
         decode(receipt_bytes).map_err(|_| VerificationFailure::at(ReceiptCheck::Decode))?;
     let reproduced =
@@ -523,8 +551,8 @@ pub fn verify_program_state(
     {
         return Err(VerificationFailure::at(ReceiptCheck::Module));
     }
-    if protocol.result_code() != 0 {
-        return Err(VerificationFailure::at(ReceiptCheck::ResultCode));
+    if protocol.result_code() != 0 && !protocol.effects().is_empty() {
+        return Err(VerificationFailure::at(ReceiptCheck::ReceiptShape));
     }
     if protocol.activity_id() == [0; 32] {
         return Err(VerificationFailure::at(ReceiptCheck::ActivityId));

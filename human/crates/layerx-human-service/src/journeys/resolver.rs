@@ -4,14 +4,14 @@ use std::fmt::{Display, Formatter};
 
 use layerx_intents::{
     BridgeDepositCredit, BridgeWithdrawRequest, BudgetCreate, BudgetDefund, BudgetFund, Intent,
-    IntentError, IntentKind, LxpReceive, LxpSend,
+    IntentError, IntentKind, LxpSend, NativeReceive,
 };
 use layerx_types::account::{AccountId, AccountNamespace};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, CheckpointId, IdempotencyKey};
 use layerx_types::intent::{
-    BudgetId, ContextHash, DepositProofId, EvmAddress, NetworkId, PayerGrantId, PeriodLength,
-    ProtocolVersion, PurposeHash, RolloverPolicy, SendAuthorization, Sequence, TimestampSeconds,
+    BudgetId, ContextHash, DepositProofId, EvmAddress, NetworkId, PeriodLength, ProtocolVersion,
+    PurposeHash, RolloverPolicy, SendAuthorization, Sequence, TimestampSeconds,
 };
 
 /// The only source and destination kinds accepted by the movement API.
@@ -133,12 +133,9 @@ pub struct BudgetRoute {
 }
 
 /// Exact material for an agent-to-human payer-grant draw.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PayerGrantRoute {
-    pub payer_grant: PayerGrantId,
-    pub receiver_sequence: Sequence,
-    pub idempotency_key: IdempotencyKey,
-    pub context_hash: ContextHash,
+    pub receive: NativeReceive,
 }
 
 /// Custody-boundary evidence. These are the only variants allowed to use the
@@ -239,11 +236,8 @@ impl RouteRequest {
                 put_send(&mut out, v);
             }
             Relationship::PayerGrant(v) => {
-                out.push(4);
-                out.extend(v.payer_grant.bytes());
-                out.extend(v.receiver_sequence.value().to_be_bytes());
-                out.extend(v.idempotency_key.bytes());
-                out.extend(v.context_hash.bytes());
+                out.push(9);
+                out.extend(v.receive.payload());
             }
             Relationship::Custody(CustodyRoute::Deposit {
                 deposit_proof,
@@ -317,11 +311,8 @@ impl RouteRequest {
                 })
             }
             3 => Relationship::AgentAuthorized(r.send()?),
-            4 => Relationship::PayerGrant(PayerGrantRoute {
-                payer_grant: PayerGrantId::new(r.array()?),
-                receiver_sequence: Sequence::from_u64(r.u64()?),
-                idempotency_key: IdempotencyKey::new(r.array()?),
-                context_hash: ContextHash::new(r.array()?),
+            9 => Relationship::PayerGrant(PayerGrantRoute {
+                receive: NativeReceive::new(&r.array::<733>()?).map_err(|_| wire_error())?,
             }),
             5 => Relationship::Custody(CustodyRoute::Deposit {
                 deposit_proof: DepositProofId::new(r.array()?),
@@ -846,22 +837,25 @@ impl RouteResolver {
                 IntentKind::BudgetDefund,
             )),
             (Endpoint::Agent(from), Endpoint::Human(to), Relationship::PayerGrant(route)) => {
+                let receive = &route.receive;
+                let protocol = receive.protocol_version();
+                if layerx_wire::hash::account_id_for_protocol(from, protocol).ok()
+                    != Some(receive.from())
+                    || layerx_wire::hash::account_id_for_protocol(to, protocol).ok()
+                        != Some(receive.to())
+                    || request.asset.bytes() != receive.asset()
+                    || request.amount.value() != receive.amount()
+                {
+                    return Err(unavailable(request));
+                }
                 Ok(one_leg(
                     MovementTerm::Return,
                     Mechanism::ReceiveUnderPayerGrant,
-                    LxpReceive::new(
-                        from.clone(),
-                        to.clone(),
-                        request.asset,
-                        request.amount,
-                        route.payer_grant,
-                        route.receiver_sequence,
-                        route.idempotency_key,
-                        route.context_hash,
-                    )?,
-                    IntentKind::LxpReceive,
+                    receive.clone(),
+                    IntentKind::NativeReceive,
                 ))
             }
+
             (source, destination, Relationship::Direct(route))
                 if direct_term(source.kind(), destination.kind()).is_some() =>
             {

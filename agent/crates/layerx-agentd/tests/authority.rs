@@ -118,3 +118,15 @@ fn rotation_between_prepare_and_submit_is_named_and_refused() {
         .unwrap_or_else(|error| panic!("valid authority refused: {error:?}"));
     assert_eq!(resolved.authority, authority);
 }
+
+#[test]
+fn aged_cache_entries_cannot_authorize_current_writes() {
+    let authority = ProtocolAuthority::SessionKey([8; 32]);
+    assert_eq!(
+        require_valid(&authority, 1, 7, 12, &state(1, 10)),
+        Err(AuthorityError::Stale {
+            current: 12,
+            observed: 10
+        })
+    );
+}

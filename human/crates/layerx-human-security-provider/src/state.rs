@@ -168,14 +168,14 @@ impl Store {
             store.atomic("initialized", &Sha256::digest(&bytes))?;
             store.atomic("head", &head_bytes(0, Sha256::digest(&bytes).into()))?;
         }
-        let (state, sequence, digest) = store.replay()?;
+        let (state, sequence, digest) = store.replay(true)?;
         store.state = state;
         store.sequence = sequence;
         store.digest = digest;
         Ok(store)
     }
 
-    fn replay(&self) -> Result<(State, u64, [u8; 32])> {
+    fn replay(&self, recover: bool) -> Result<(State, u64, [u8; 32])> {
         let metadata = fs::symlink_metadata(&self.root)?;
         if !metadata.is_dir()
             || metadata.file_type().is_symlink()
@@ -203,6 +203,7 @@ impl Store {
         }
         let mut state = record.state;
         let mut journals = Vec::new();
+        let mut pending = false;
         for entry in fs::read_dir(&self.root)? {
             let name = entry?
                 .file_name()
@@ -210,6 +211,12 @@ impl Store {
                 .map_err(|_| Error::Corrupt)?;
             match name.as_str() {
                 "writer.lock" | "initialized" | "snapshot.json" | "head" => {}
+                "transaction.tmp" if recover => {
+                    let path = self.root.join("transaction.tmp");
+                    check_file(&fs::symlink_metadata(&path)?)?;
+                    let _ = protected_read(&path, LIMIT)?;
+                    pending = true;
+                }
                 _ if name.len() == 25 && name.ends_with(".json") => {
                     let sequence = name[..20].parse::<u64>().map_err(|_| Error::Corrupt)?;
                     if name != format!("{sequence:020}.json") {
@@ -224,6 +231,11 @@ impl Store {
         if journals.len() as u64 > MAX_RECORDS {
             return Err(Error::Corrupt);
         }
+        let head = protected_read(&self.root.join("head"), 40)?;
+        if head.len() != 40 {
+            return Err(Error::Corrupt);
+        }
+        let mut previous_head = head_bytes(0, digest);
         let mut sequence = 0;
         for next in journals {
             if next != sequence + 1 {
@@ -245,12 +257,22 @@ impl Store {
                     return Err(Error::Corrupt);
                 }
             }
+            previous_head = head_bytes(sequence, digest);
             state = record.state;
             sequence = next;
             digest = Sha256::digest(&bytes).into();
         }
-        if protected_read(&self.root.join("head"), 40)?.as_slice() != head_bytes(sequence, digest) {
+        let committed_head = head_bytes(sequence, digest);
+        let repair_head = head.as_slice() != committed_head;
+        if repair_head && (!recover || sequence == 0 || head.as_slice() != previous_head) {
             return Err(Error::Corrupt);
+        }
+        if pending {
+            fs::remove_file(self.root.join("transaction.tmp"))?;
+            File::open(&self.root)?.sync_all()?;
+        }
+        if repair_head {
+            self.atomic("head", &committed_head)?;
         }
         Ok((state, sequence, digest))
     }
@@ -258,7 +280,7 @@ impl Store {
         if !self.healthy {
             return Err(Error::Corrupt);
         }
-        match self.replay() {
+        match self.replay(false) {
             Ok((state, sequence, digest))
                 if sequence == self.sequence && digest == self.digest && state == self.state =>
             {
