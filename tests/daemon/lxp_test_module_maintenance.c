@@ -526,6 +526,9 @@ static int batch_fetch(int descriptor, uint64_t batch, const uint8_t activity_id
     lxp_da_chunk *chunks;
     uint8_t signature[64];
     uint8_t root[32];
+    signer sequencer;
+    uint8_t sequencer_name[81], sequencer_id[32];
+    static const uint8_t digits[] = "0123456789abcdef";
     void *memory;
     memset(evidence, 0, sizeof(*evidence));
     evidence->storage = malloc(4U * LXP_MAX_BATCH_BODY_BYTES);
@@ -545,6 +548,17 @@ static int batch_fetch(int descriptor, uint64_t batch, const uint8_t activity_id
     REQUIRE(response.proof_length == 146U && load_u16(response.proof) == 1U);
     REQUIRE(lxp_batch_header_decode(response.payload, response.payload_length, &header) == LXP_OK);
     REQUIRE(header.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT && header.batch_number == batch && header.epoch == 1U);
+    REQUIRE(signer_init(&sequencer, 0x22U) == 0);
+    memcpy(sequencer_name, "layerx-sequencer:", 17U);
+    for (size_t i = 0U; i < 32U; ++i) {
+        sequencer_name[17U + i * 2U] = digits[sequencer.public_key[i] >> 4U];
+        sequencer_name[18U + i * 2U] = digits[sequencer.public_key[i] & 15U];
+    }
+    REQUIRE(lxp_hash_sha256(sequencer_name, sizeof(sequencer_name), sequencer_id) == LXP_OK);
+    REQUIRE(header.network_id == NETWORK_ID);
+    REQUIRE(memcmp(response.proof + 2U, sequencer_id, 32U) == 0);
+    REQUIRE(memcmp(response.proof + 34U, sequencer.public_key, 32U) == 0);
+    REQUIRE(load_u64(response.proof + 66U) == 1U && load_u64(response.proof + 74U) == UINT64_MAX);
     memcpy(evidence->authorization.sequencer_id, response.proof + 2U, 32U);
     memcpy(evidence->authorization.public_key, response.proof + 34U, 32U);
     evidence->authorization.first_batch_number = load_u64(response.proof + 66U);

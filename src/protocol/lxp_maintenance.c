@@ -110,8 +110,10 @@ static lxp_result validate(const lxp_batch_maintenance *record)
 {
     lxp_programs_occupancy_receipt occupancy;
     lxp_result status;
-    if (record == NULL || record->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
-        record->epoch == 0U || record->batch_number == 0U || record->timestamp_ms == 0U ||
+    if (record == NULL) return LXP_ERR_NON_CANONICAL;
+    if (record->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    if (record->epoch == 0U || record->batch_number == 0U || record->timestamp_ms == 0U ||
         record->global_sequence == UINT64_MAX || record->parameter_version == 0U)
         return LXP_ERR_NON_CANONICAL;
     status = lxp_programs_occupancy_receipt_decode(record->occupancy.bytes,
