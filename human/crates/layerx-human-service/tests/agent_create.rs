@@ -529,7 +529,7 @@ fn receipt(action: &ProtocolAction) -> ProtocolEvidence {
     let owner = canonical_owner::sign(
         action.compiled.payload(),
         action_key,
-        layerx_intents::canonical::PROTOCOL_VERSION,
+        layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION,
         NETWORK_ID,
     );
     let marker = stage as u8 + 11;
@@ -581,9 +581,15 @@ fn receipt(action: &ProtocolAction) -> ProtocolEvidence {
 
 fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
+    push_u16(
+        &mut bytes,
+        layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION,
+    );
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
+    push_u16(
+        &mut bytes,
+        layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION,
+    );
     push_bytes(&mut bytes, &fields.activity_id);
     push_u64(&mut bytes, CORE_SEQUENCE);
     push_bytes(&mut bytes, &fields.previous_state_root);

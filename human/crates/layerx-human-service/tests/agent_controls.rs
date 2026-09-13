@@ -40,6 +40,7 @@ use layerx_human_service::custody::{
 };
 use layerx_human_service::server::agent_creation::ProductionAgentCreation;
 use layerx_human_service::store::PrincipalId;
+use layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION;
 use layerx_intents::{DisclosureCheck, IntentKind};
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::account::AccountId;
@@ -47,7 +48,6 @@ use layerx_types::ids::{AssetId, Did};
 use layerx_types::intent::PurposeHash;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
 
 use support::directory;
@@ -730,7 +730,7 @@ fn protocol_receipt_for_payload(
     action_key: [u8; 32],
     payload: &layerx_types::payload::Payload,
 ) -> ProtocolEvidence {
-    let owner = canonical_owner::sign(payload, action_key, PROTOCOL_VERSION, 77);
+    let owner = canonical_owner::sign(payload, action_key, STATE_COMMITMENT_PROTOCOL_VERSION, 77);
 
     let previous_state_root = [0x81; 32];
     let fields = ReceiptFields {
@@ -769,9 +769,9 @@ fn protocol_receipt_for_payload(
 
 fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, PROTOCOL_VERSION);
+    push_u16(&mut bytes, STATE_COMMITMENT_PROTOCOL_VERSION);
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, PROTOCOL_VERSION);
+    push_u16(&mut bytes, STATE_COMMITMENT_PROTOCOL_VERSION);
     push_bytes(&mut bytes, &fields.activity_id);
     push_u64(&mut bytes, 11);
     push_bytes(&mut bytes, &fields.previous_state_root);
