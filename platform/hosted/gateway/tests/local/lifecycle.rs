@@ -938,13 +938,14 @@ fn local_gateway_rpc() {
     let identity = start_local_identity(&cluster, &certificates);
     let authority = start_local_authority(&cluster, &certificates);
     let redis = start_local_redis(&cluster, &certificates);
-    let gateway = start_local_gateway(
+    let gateway = start_gateway_runtime(
         &cluster,
         &certificates,
         &boundary,
         &identity,
         &authority,
         &redis,
+        true,
     );
     let key = issue_local_scoped_key(
         &certificates,
