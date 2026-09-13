@@ -17,6 +17,7 @@ const SETTLEMENT = bytes("LXP/programs/settlement-failure/v1\0");
 const CALLBACK = bytes("LXP/programs/callback-failure/v1\0");
 const TRANSFER_SET_V1 = bytes("LayerX/programs/402LXP/transfer-set/v1\0");
 const TRANSFER_SET_V2 = bytes("LayerX/programs/402LXP/transfer-set/v2\0");
+const ACCOUNT_BOUND_SET = bytes("LayerX/programs/402LXP/account-bound-set/v1\0");
 const PROGRAM_AUTHORITY = bytes("LayerX/programs/402LXP/program-authority/v1\0");
 const PROGRAM_FUNDING = bytes("LayerX/programs/402LXP/program-funding/v1\0");
 const PROGRAM_ACCOUNT = bytes("LayerX/programs/program-account/v1\0");
@@ -190,6 +191,7 @@ export async function decodeAndVerifyProgramTerminal(
     bindExecutionMetadata(decoded.runtime, 2, decoded.fee, decoded.metering, decoded.usage, receipt);
     if (!equal(decoded.graph, callGraph)) fail("candidate call graph");
     if (decoded.outcome === "success") {
+      if (decoded.code !== receipt.resultCode) fail("candidate response code");
       outcome = Object.freeze({ kind: "completed", code: decoded.code, response: hex(decoded.response) });
       successfulExecution = true;
     } else if (decoded.outcome === "failure") {
@@ -243,8 +245,7 @@ export async function decodeAndVerifyProgramTerminal(
   if (!recorded && (authorityRequired ? (authorization !== undefined) !== transferPresent : authorization !== undefined)) fail("transfer authority presence");
   if (authorization !== undefined) {
     if (authorization.length === 0 || authorityRoot === undefined || !equal(authorityRoot, receipt.transferRoot)) fail("transfer authority root");
-    if (receipt.encodingVersion === 4 && !starts(authorization, TRANSFER_SET_V2)) fail("V2 transfer authority required");
-    await verifyAuthorizationRoot(authorization, authorityRoot);
+    await verifyAuthorizationRoot(authorization, authorityRoot, receipt.encodingVersion === 4);
   }
   if (protocolVersion !== 1 && protocolVersion !== 2 && protocolVersion !== 3) fail("program receipt protocol");
   const boundUsage = usage ?? receiptUsage(receipt);
@@ -491,7 +492,14 @@ interface OccupancyChargeBinding { readonly payer: Uint8Array; readonly amountDu
 interface OccupancySettlementBinding { readonly byteBatches: bigint; readonly feeUnits: bigint; readonly charges: readonly OccupancyChargeBinding[] }
 interface StorageNamespaceBinding { readonly canonical: Uint8Array; readonly wire: Uint8Array; readonly program: Uint8Array; readonly principal?: Uint8Array }
 
-async function verifyAuthorizationRoot(encoded: Uint8Array, expected: Uint8Array): Promise<void> {
+async function verifyAuthorizationRoot(encoded: Uint8Array, expected: Uint8Array, requireV2: boolean): Promise<void> {
+  let names: Reader | undefined;
+  if (starts(encoded, ACCOUNT_BOUND_SET)) {
+    names = new Reader(encoded.subarray(ACCOUNT_BOUND_SET.length));
+    encoded = names.sizedU32(1_048_576);
+    if (starts(encoded, ACCOUNT_BOUND_SET)) fail("nested account-bound transfer set");
+  }
+  if (requireV2 && !starts(encoded, TRANSFER_SET_V2)) fail("V2 transfer authority required");
   const reader = new Reader(encoded);
   const candidate = starts(encoded, TRANSFER_SET_V2);
   const domain = candidate ? TRANSFER_SET_V2 : TRANSFER_SET_V1;
@@ -540,11 +548,39 @@ async function verifyAuthorizationRoot(encoded: Uint8Array, expected: Uint8Array
     if (authority !== undefined && (!equal(authority.owner, program) || !equal(authority.frame, frame)
       || !equal(authority.asset, asset) || !equal(authority.to, to) || authority.amount !== amount)) fail("program transfer authority");
     if (funding !== undefined && (!equal(funding.owner, program) || !equal(funding.destination, to) || !equal(funding.asset, asset))) fail("program funding authority");
+    if (names !== undefined) {
+      const name = names.fixed(names.u16());
+      if (authority !== undefined) {
+        if (name.length !== 0) fail("program source account name");
+      } else {
+        source = await principalPaymentAccount(principal, asset, name);
+      }
+    }
     total = checkedU128Add(total, amount, "transfer total");
     kernelLegs.push(concatenate(Uint8Array.of(0), source, to, asset, bigEndian(amount, 16), bigEndian(1n, 2)));
   }
   reader.end();
+  names?.end();
   if (!equal(await merkleRoot(kernelLegs), expected)) fail("transfer authorization root");
+}
+
+async function principalPaymentAccount(principal: Uint8Array, asset: Uint8Array, name: Uint8Array): Promise<Uint8Array> {
+  if (name.length > 512 || name.some((byte) => !(byte >= 97 && byte <= 122)
+    && !(byte >= 48 && byte <= 57) && ![46, 95, 45, 58].includes(byte))) fail("principal account name");
+  const text = new TextDecoder().decode(name);
+  if (!text.startsWith("agent:") || text.includes("::")) fail("principal account name");
+  const tail = text.slice(6);
+  let did: string;
+  if (tail.endsWith(":main")) did = tail.slice(0, -5);
+  else {
+    const suffix = `:asset:${hex(asset)}`;
+    if (!tail.endsWith(suffix)) fail("principal account asset");
+    did = tail.slice(0, -suffix.length);
+  }
+  if (did.length === 0 || did.startsWith(":") || did.endsWith(":")) fail("principal account DID");
+  const didBytes = bytes(did);
+  if (!equal(await sha256(bytes("LXP/v1/did-id\0"), bigEndian(BigInt(didBytes.length), 2), didBytes), principal)) fail("principal account owner");
+  return sha256(ACCOUNT_DERIVATION, bigEndian(BigInt(name.length), 4), name);
 }
 
 async function decodeProgramAuthority(encoded: Uint8Array): Promise<ProgramAuthorityBinding> {
