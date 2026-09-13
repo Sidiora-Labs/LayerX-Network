@@ -13,6 +13,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: ${{ github.workspace }}/.lane-target
+  CARGO_BUILD_JOBS: "4"
 
 jobs:
   build-lint-test:

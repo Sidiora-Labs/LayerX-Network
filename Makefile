@@ -2081,6 +2081,14 @@ human-test: $(BUILD_DIR)/tests/explorer_fixture human-test-hosted-provisioning
 
 HUMAN_TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),$(CURDIR)/human/target)
 HUMAN_IDENTITY_PROVIDER := $(HUMAN_TARGET_DIR)/debug/layerx-human-identity-provider
+HUMAN_TEST_WEBHOOKS := $(HUMAN_TARGET_DIR)/debug/layerx-webhooks
+
+.PHONY: human-test-webhooks
+human-test human-test-unit human-test-integration human-test-service: human-test-webhooks
+human-test human-test-unit human-test-integration human-test-service: export LAYERX_TEST_WEBHOOKS_BIN = $(HUMAN_TEST_WEBHOOKS)
+human-test-webhooks:
+	CARGO_BUILD_JOBS=4 cargo build --locked --manifest-path platform/Cargo.toml \
+		--target-dir $(HUMAN_TARGET_DIR) -p layerx-platform-webhooks --bin layerx-webhooks
 
 .PHONY: human-test-hosted-provisioning
 human-test-hosted-provisioning:
