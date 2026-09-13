@@ -432,7 +432,7 @@ fn start_gateway_runtime(
     gateway_env.extend(gateway_upstream_environment(
         cluster, boundary, identity, authority, redis,
     ));
-    let events = events::Runtime::prepare(cluster, boundary);
+    let events = events::Runtime::prepare(cluster);
     events.configure(&mut gateway_env, certificates);
     let (component_port, registry_token, component_process) =
         registry_runtime::configure_component(cluster, certificates, &mut gateway_env);
