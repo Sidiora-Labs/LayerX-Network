@@ -17,7 +17,7 @@ import {
   type TimedSecret,
 } from "../../api";
 import { DeviceSessionList } from "../../kit/device-list";
-import { DesktopDetail, MobileDetail } from "../../kit/patterns";
+import { DesktopDetail, MobileDetail } from "../../kit/pattern-detail";
 import { InlineNotice, ScreenCard } from "../../kit/surface";
 import { KitButton } from "../../kit/control";
 import { SettingsRow, SettingsSection, SettingsTextInput } from "../../kit/settings";

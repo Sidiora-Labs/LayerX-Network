@@ -5,7 +5,7 @@ import { useState } from "react";
 
 import { copyEntry } from "../../../copy/runtime";
 import { formatCopy } from "../../../copy/format";
-import { DesktopNotifications, MobileNotifications } from "../../kit/patterns";
+import { DesktopNotifications, MobileNotifications } from "../../kit/pattern-notifications";
 import { InlineNotice, ScreenCard } from "../../kit/surface";
 import { KitButton } from "../../kit/control";
 import { useAuthenticatedShell } from "../../shell/app-shell";

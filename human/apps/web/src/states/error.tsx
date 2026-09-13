@@ -12,7 +12,7 @@ import {
 import { copyEntry } from "../../copy/runtime.ts";
 import { formatCopy } from "../../copy/format.ts";
 import { DesktopConfirmation, MobileConfirmation } from "../kit/confirm";
-import { DesktopDetail, MobileDetail } from "../kit/patterns";
+import { DesktopDetail, MobileDetail } from "../kit/pattern-detail";
 import { InlineNotice, StateFrame } from "../kit/surface";
 import { KitButton } from "../kit/control";
 import {

@@ -12,7 +12,8 @@ import {
 } from "react";
 
 import { copyEntry } from "../../copy/runtime";
-import { DesktopNavigation, DesktopNotifications, MobileNavigation, type NavigationProps } from "../kit/patterns";
+import { DesktopNavigation, MobileNavigation, type NavigationProps } from "../kit/pattern-navigation";
+import { DesktopNotifications } from "../kit/pattern-notifications";
 import {
   notificationItems,
   useNotificationCenter,

@@ -6,7 +6,7 @@ import { copyEntry } from "../../../copy/runtime.ts";
 import { formatCopy } from "../../../copy/format.ts";
 import type { EvidenceRef, Journey } from "../../api/index.ts";
 import { CopyableIdentifier, StatusPill } from "../../kit/money";
-import { DesktopDetail, MobileDetail } from "../../kit/patterns";
+import { DesktopDetail, MobileDetail } from "../../kit/pattern-detail";
 import { InlineNotice, StateFrame } from "../../kit/surface";
 import { KitButton } from "../../kit/control";
 import type { CustodyShell, RefusalPresentation, TimelineRow, WalletPanelPlan } from "./model.ts";

@@ -14,7 +14,7 @@ import type {
 import { Badge, List, ListItem } from "../../kit/collection";
 import { CopyableIdentifier, LabelValue, StatusPill } from "../../kit/money";
 import { DesktopConfirmation, MobileConfirmation, type ConfirmationProps } from "../../kit/confirm";
-import { DesktopDetail, MobileDetail } from "../../kit/patterns";
+import { DesktopDetail, MobileDetail } from "../../kit/pattern-detail";
 import { KitButton } from "../../kit/control";
 import { ScreenCard, StateEmpty } from "../../kit/surface";
 import { PrivateFigure } from "../../settings/privacy";

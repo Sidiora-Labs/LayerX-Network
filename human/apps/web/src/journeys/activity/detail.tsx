@@ -8,7 +8,7 @@ import { formatCopy } from "../../../copy/format";
 import { humanApi, type ActivityEntryDetail, type ExportArtefact } from "../../api";
 import { ActivityEvidenceBadge } from "../../kit/activity";
 import { CopyableIdentifier, LabelValue, SignedWordedAmount, StatusPill } from "../../kit/money";
-import { DesktopDetail, MobileDetail } from "../../kit/patterns";
+import { DesktopDetail, MobileDetail } from "../../kit/pattern-detail";
 import { ExplorerLink } from "../../kit/explorer";
 import { KitButton } from "../../kit/control";
 import { KitList, KitListItem } from "../../kit/display";

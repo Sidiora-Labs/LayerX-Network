@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { copyEntry } from "../../../copy/runtime.ts";
 import { humanApi } from "../../api/index.ts";
 import { DesktopConfirmation, MobileConfirmation } from "../../kit/confirm";
-import { DesktopPrimaryAction, MobilePrimaryAction } from "../../kit/patterns";
+import { DesktopPrimaryAction, MobilePrimaryAction } from "../../kit/pattern-primary-action";
 import { InlineNotice, ScreenCard, StateFrame } from "../../kit/surface";
 import { KitButton } from "../../kit/control";
 import { StatusPill } from "../../kit/money";

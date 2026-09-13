@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { copyEntry } from "../../../copy/runtime.ts";
 import { formatCopy } from "../../../copy/format.ts";
 import { humanApi } from "../../api/index.ts";
-import { DesktopWizard, MobileWizard } from "../../kit/patterns";
+import { DesktopWizard, MobileWizard } from "../../kit/pattern-wizard";
 import { InlineNotice, ScreenCard, StateFrame } from "../../kit/surface";
 import { LabelValue, StatusPill } from "../../kit/money";
 import { TextField } from "../../kit/field";

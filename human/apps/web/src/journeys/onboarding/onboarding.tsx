@@ -12,7 +12,7 @@ import {
   type Session,
 } from "../../api";
 import { ACTIVE_ACCOUNT_STORAGE_KEY } from "../../auth/session";
-import { DesktopPrimaryAction, MobilePrimaryAction } from "../../kit/patterns";
+import { DesktopPrimaryAction, MobilePrimaryAction } from "../../kit/pattern-primary-action";
 import { InlineNotice, ScreenCard, StateSkeleton } from "../../kit/surface";
 import { KitButton } from "../../kit/control";
 import { StatusPill } from "../../kit/money";

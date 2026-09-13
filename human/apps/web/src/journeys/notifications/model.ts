@@ -5,7 +5,7 @@ import type {
   NotificationPage,
   NotificationSummary,
 } from "../../api";
-import type { KitNotificationItem } from "../../kit/patterns";
+import type { KitNotificationItem } from "../../kit/pattern-notifications";
 import { PrivateFigure } from "../../settings/privacy";
 import { moneyLabel } from "../approvals/model";
 

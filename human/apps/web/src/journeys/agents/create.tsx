@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { copyEntry } from "../../../copy/runtime.ts";
-import { DesktopWizard, MobileWizard } from "../../kit/patterns";
+import { DesktopWizard, MobileWizard } from "../../kit/pattern-wizard";
 import { InlineNotice, ScreenCard } from "../../kit/surface";
 import { KitButton } from "../../kit/control";
 import { KitTextField } from "../../kit/display";

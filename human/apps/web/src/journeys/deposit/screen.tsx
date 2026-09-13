@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { copyEntry } from "../../../copy/runtime.ts";
 import { humanApi } from "../../api/index.ts";
 import type { WalletBinding } from "../../api/index.ts";
-import { DesktopPrimaryAction, MobilePrimaryAction } from "../../kit/patterns";
+import { DesktopPrimaryAction, MobilePrimaryAction } from "../../kit/pattern-primary-action";
 import { InlineNotice, ScreenCard } from "../../kit/surface";
 import { LabelValue, StatusPill } from "../../kit/money";
 import { TextField } from "../../kit/field";
