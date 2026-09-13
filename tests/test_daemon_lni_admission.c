@@ -6,6 +6,8 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_history.h"
 #include "layerx/lxp_identity.h"
+#include "layerx/lx_asset.h"
+#include "layerx/lxp_kernel.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_storage.h"
 
@@ -102,6 +104,10 @@ typedef struct admission_fixture {
     lxp_daemon daemon;
     lxp_daemon_lni_server server;
     blocking_executor executor;
+    lxp_kernel *kernel;
+    lxp_state_store *state;
+    lxp_state_journal journal;
+    uint64_t parameter_version;
     char socket_path[LXP_DAEMON_LNI_SOCKET_PATH_BYTES];
     bool daemon_started;
     bool lni_started;
@@ -470,6 +476,14 @@ static int build_activity(const signer *key, uint64_t account_sequence,
     uint8_t preimage[32];
     uint8_t signature[64];
     size_t index;
+    struct timespec now;
+    uint64_t timestamp;
+    if (clock_gettime(CLOCK_REALTIME, &now) != 0 || now.tv_sec < 0 ||
+        (uint64_t)now.tv_sec > (UINT64_MAX - UINT64_C(300000)) / 1000U)
+        return 1;
+    timestamp = (uint64_t)now.tv_sec * 1000U +
+        (uint64_t)now.tv_nsec / UINT64_C(1000000);
+    if (timestamp < 1000U) return 1;
     (void)memset(&activity, 0, sizeof(activity));
     activity.protocol_version = LXP_PROTOCOL_VERSION;
     activity.network_id = NETWORK_ID;
@@ -478,8 +492,8 @@ static int build_activity(const signer *key, uint64_t account_sequence,
         REGISTERED_DID, sizeof(REGISTERED_DID) - 1U};
     activity.authority = (lxp_byte_span){key->public_key, 32U};
     activity.account_sequence = account_sequence;
-    activity.timestamp_bound.not_before = 1U;
-    activity.timestamp_bound.not_after = UINT64_C(4102444800000);
+    activity.timestamp_bound.not_before = timestamp - 1000U;
+    activity.timestamp_bound.not_after = timestamp + UINT64_C(299000);
     for (index = 0U; index < 8U; ++index)
         activity.idempotency_key[index] =
             (uint8_t)(account_sequence >> ((7U - index) * 8U));
@@ -559,6 +573,17 @@ static int fixture_start(admission_fixture *fixture,
     lxp_identity *identity = NULL;
     int written;
     (void)memset(fixture, 0, sizeof(*fixture));
+    fixture->kernel = calloc(1U, sizeof(*fixture->kernel));
+    fixture->state = calloc(1U, sizeof(*fixture->state));
+    fixture->parameter_version = 1U;
+    if (fixture->kernel == NULL || fixture->state == NULL ||
+        lxp_state_store_init(fixture->state, 1U) != LXP_OK ||
+        lxp_kernel_create(fixture->kernel, fixture->state, &fixture->journal,
+                          &fixture->parameter_version, 0U) != LXP_OK ||
+        lxp_kernel_register_module(fixture->kernel,
+                                   lx_asset_module_iface()) != LXP_OK)
+        return 1;
+    fixture->owner.kernel = fixture->kernel;
     fixture->canonical_log.descriptor = -1;
     fixture->executor.notify_descriptor = notify_descriptor;
     fixture->executor.mode = mode;
@@ -764,6 +789,11 @@ static int fixture_stop(admission_fixture *fixture, size_t expected_applied)
         result = 1;
     free(fixture->scratch_bytes);
     fixture->scratch_bytes = NULL;
+    if (lxp_state_store_destroy(fixture->state) != LXP_OK) result = 1;
+    free(fixture->state);
+    free(fixture->kernel);
+    fixture->state = NULL;
+    fixture->kernel = NULL;
     return result;
 }
 
