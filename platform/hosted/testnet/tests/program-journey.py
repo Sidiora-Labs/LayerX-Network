@@ -180,7 +180,7 @@ def main():
     capabilities = b'\x00\x04\x03\x05' + asset + account + (1).to_bytes(16, 'big') + b'\x07\x08'
     entrypoint = b'layerx_call'
     access = b'LayerX/programs/access-declaration/v1\0\0'
-    resources = [100_000_000, 16_777_216, 1_048_576, 1_048_576, 64, 1_048_576, 4096]
+    resources = [1_000_000, 16_777_216, 1_048_576, 1_048_576, 64, 1_048_576, 4096]
     call = (struct.pack('>32sHHIHII7Q', program, 2, len(entrypoint), len(calldata), len(capabilities),
                         len(access), 1024, *resources) + entrypoint + calldata + capabilities + access)
     canonical, key_id = signed(3, call)
