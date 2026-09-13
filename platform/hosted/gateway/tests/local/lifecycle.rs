@@ -2650,7 +2650,7 @@ fn local_funding_recovers_a_submitted_operation_after_restart() {
 
 #[test]
 fn local_gateway_program_custody_journey() {
-    let (cluster, _funding) = funding::start();
+    let (cluster, funding) = funding::start();
     let certificates = certificates(&cluster.root);
     let boundary = start_boundary(&cluster, &certificates);
     let identity = start_local_identity(&cluster, &certificates);
@@ -2669,21 +2669,97 @@ fn local_gateway_program_custody_journey() {
         &certificates,
         &gateway,
         &identity,
-        &["activity:write", "program:call", "program:read"],
+        &[
+            "activity:write",
+            "program:call",
+            "program:read",
+            "receipt:read",
+        ],
     );
-    let config = cluster.root.join("program-journey.curl");
+    let source_session = cluster.root.join("smoke-source-session");
+    write(&source_session, identity.session.as_bytes(), 0o600);
+    let identity_http = Http {
+        port: identity.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("identity CA"),
+        identity: None,
+    };
+    let provisioning = fs::read_to_string(identity.tokens.join("provisioning"))
+        .required("identity provisioning credential");
+    local_json_with_idempotency(
+        &identity_http,
+        "/v1/principals",
+        &provisioning,
+        "smoke-destination-principal",
+        &serde_json::json!({"tenant":"beta", "sub":funding.recipient_did,
+            "allowed_signer_public_keys":[hex_encode(&SigningKey::from_bytes(&funding.recipient_seed).verifying_key().to_bytes())],
+            "account":format!("agent:{}:main",funding.recipient_did), "audiences":[]}),
+        200,
+    );
+    let session = local_json_with_idempotency(
+        &identity_http,
+        "/v1/sessions",
+        &provisioning,
+        "smoke-destination-session",
+        &serde_json::json!({"sub":funding.recipient_did}),
+        200,
+    );
+    let destination_session = cluster.root.join("smoke-destination-session");
     write(
-        &config,
-        format!(
-            "header = \"Authorization: LayerX-Key {}:{}\"\n",
-            key["key"]["id"].as_str().required("key id"),
-            key["key"]["secret"].as_str().required("key secret"),
-        )
-        .as_bytes(),
+        &destination_session,
+        session["token"]
+            .as_str()
+            .required("destination session")
+            .as_bytes(),
         0o600,
     );
+    let credential_dir = cluster.root.join("smoke-credentials");
+    let python =
+        std::env::var_os("LAYERX_TEST_PYTHON").required("qualified Python with cryptography");
+    let status = Command::new(&python)
+        .arg(repository_root().join("platform/hosted/testnet/tests/journey-credentials.py"))
+        .args(["--gateway", &format!("https://localhost:{}", gateway.port)])
+        .arg("--ca")
+        .arg(certificates.path("ca.pem"))
+        .arg("--session")
+        .arg(source_session)
+        .arg("--destination-session")
+        .arg(destination_session)
+        .arg("--public-key")
+        .arg(&identity.signer)
+        .arg("--output")
+        .arg(&credential_dir)
+        .status()
+        .required("production smoke credential issuance");
+    assert!(status.success(), "smoke credentials failed: {status}");
+    let config = credential_dir.join("gateway.curl");
     let signer = cluster.root.join("program-journey.signer");
     write(&signer, &cluster.treasury_seed, 0o600);
+    let payment_output = cluster.root.join("payment-journey");
+    let status = Command::new(&python)
+        .arg(repository_root().join("platform/hosted/testnet/tests/payment-journey.py"))
+        .args(["--gateway", &format!("https://localhost:{}", gateway.port)])
+        .arg("--ca")
+        .arg(certificates.path("ca.pem"))
+        .arg("--auth-config")
+        .arg(&config)
+        .arg("--signer")
+        .arg(&signer)
+        .args([
+            "--did",
+            &cluster.treasury_did,
+            "--destination",
+            &funding.recipient_did,
+        ])
+        .args(["--asset", &hex_encode(&cluster.asset), "--amount", "1"])
+        .args(["--network-id", &NETWORK_ID.to_string()])
+        .arg("--encoder")
+        .arg(std::env::var_os("LAYERX_TEST_SEND_ENCODER").required("shared SEND encoder"))
+        .args(["--sequencer-key", &hex_encode(&cluster.sequencer_key)])
+        .arg("--output")
+        .arg(payment_output)
+        .status()
+        .required("real signed payment smoke journey");
+    assert!(status.success(), "payment smoke journey failed: {status}");
     let artifact = std::env::var_os("LAYERX_TEST_ESCROW_WASM").required("built escrow WASM");
     let output = cluster.root.join("program-custody-journey");
     let status = Command::new(

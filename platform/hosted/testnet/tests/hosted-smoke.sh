@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 : "${LAYERX_TESTNET_URL:?LAYERX_TESTNET_URL is required}"
 : "${LAYERX_GATEWAY_URL:?LAYERX_GATEWAY_URL is required}"
 : "${LAYERX_FAUCET_URL:?LAYERX_FAUCET_URL is required}"
@@ -8,6 +9,10 @@ set -eu
 : "${LAYERX_TEST_SOURCE_DID:?LAYERX_TEST_SOURCE_DID is required}"
 : "${LAYERX_TEST_SOURCE_PUBLIC_KEY:?LAYERX_TEST_SOURCE_PUBLIC_KEY is required}"
 : "${LAYERX_TEST_DESTINATION_DID:?LAYERX_TEST_DESTINATION_DID is required}"
+: "${LAYERX_TEST_DESTINATION_PUBLIC_KEY:?LAYERX_TEST_DESTINATION_PUBLIC_KEY is required}"
+: "${LAYERX_TEST_DESTINATION_AUTH_TOKEN_FILE:?LAYERX_TEST_DESTINATION_AUTH_TOKEN_FILE is required}"
+: "${LAYERX_TEST_SEQUENCER_PUBLIC_KEY:?An independent sequencer public key is required}"
+: "${LAYERX_TEST_SEND_ENCODER:?The built hosted-send example is required}"
 : "${LAYERX_TEST_ASSET:?LAYERX_TEST_ASSET is required}"
 : "${LAYERX_TEST_AMOUNT:?LAYERX_TEST_AMOUNT is required}"
 : "${LAYERX_TEST_SOURCE_KEY_FILE:?LAYERX_TEST_SOURCE_KEY_FILE is required}"
@@ -23,20 +28,16 @@ command -v openssl >/dev/null
 command -v "$LAYERX_BIN" >/dev/null
 work=$(mktemp -d "${TMPDIR:-/tmp}/layerx-hosted-smoke.XXXXXX")
 cleanup() {
-  if test -n "${LAYERX_TEST_RETAIN_STATE:-}"; then
-    printf '%s\n' "retained hosted smoke evidence at $work"
-  else
-    rm -rf -- "$work"
-  fi
+  printf '%s\n' "retained hosted smoke evidence at $work"
 }
 trap cleanup EXIT HUP INT TERM
 chmod 0700 "$work"
-auth_config="$work/auth.curl"
-: > "$auth_config"
-chmod 0600 "$auth_config"
-printf 'header = "Authorization: Bearer %s"\n' \
-  "$(tr -d '\r\n' < "$LAYERX_TEST_AUTH_TOKEN_FILE")" > "$auth_config"
-test "$(wc -c < "$auth_config")" -gt 35
+python3 "$(dirname "$0")/journey-credentials.py" --gateway "$LAYERX_GATEWAY_URL" \
+  --ca "$LAYERX_TEST_CA_FILE" --session "$LAYERX_TEST_AUTH_TOKEN_FILE" \
+  --destination-session "$LAYERX_TEST_DESTINATION_AUTH_TOKEN_FILE" \
+  --public-key "$LAYERX_TEST_SOURCE_PUBLIC_KEY" --output "$work/credentials"
+auth_config="$work/credentials/gateway.curl"
+session_config="$work/credentials/source.curl"
 journey="scheduled-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
 fetch_document() {
@@ -104,9 +105,10 @@ test "$(cat "$work/parameters.status")" = 200
 jq -e '.network == "layerx-testnet" and (.network_id | type) == "number"
   and (.package_semver | type) == "string" and (.lxp_wire_protocol_version | type) == "number"' \
   "$work/parameters.json" >/dev/null
-jq -e '.network_id == (input | .network_id) and .package_semver == (input | .package_semver)
-  and .lxp_wire_protocol_version == (input | .lxp_wire_protocol_version)' \
-  "$work/parameters.json" "$work/testnet-readyz.json" >/dev/null
+jq -e --slurpfile ready "$work/testnet-readyz.json" \
+  '.network_id == $ready[0].network_id and .package_semver == $ready[0].package_semver
+  and .lxp_wire_protocol_version == $ready[0].lxp_wire_protocol_version' \
+  "$work/parameters.json" >/dev/null
 ca_fingerprint=$(openssl x509 -in "$LAYERX_TEST_CA_FILE" -noout -fingerprint -sha256 | tr -d '\r\n')
 cluster_identity="cluster identity: $(jq -r '"network=\(.network) network_id=\(.network_id) package_semver=\(.package_semver) lxp_wire_protocol_version=\(.lxp_wire_protocol_version)"' "$work/parameters.json") gateway_network_id=$(jq -r '.network_id' "$work/gateway-readyz.json") gateway_package_semver=$(jq -r '.package_semver' "$work/gateway-readyz.json") testnet=$LAYERX_TESTNET_URL gateway=$LAYERX_GATEWAY_URL faucet=$LAYERX_FAUCET_URL ca=$ca_fingerprint"
 printf '%s\n' "$cluster_identity"
@@ -115,7 +117,7 @@ admit_journey funding
 jq -n --arg did "$LAYERX_TEST_SOURCE_DID" --arg public_key "$LAYERX_TEST_SOURCE_PUBLIC_KEY" \
   '{did:$did, public_key:$public_key}' > "$work/faucet-request.json"
 curl --fail --silent --show-error --max-time 30 --cacert "$LAYERX_TEST_CA_FILE" \
-  --config "$auth_config" \
+  --config "$session_config" \
   --request POST "$LAYERX_FAUCET_URL/v1/faucet/claims" \
   --header "Idempotency-Key: faucet-$journey" \
   --header 'Content-Type: application/json' --data-binary "@$work/faucet-request.json" \
@@ -123,37 +125,41 @@ curl --fail --silent --show-error --max-time 30 --cacert "$LAYERX_TEST_CA_FILE" 
 jq -e '.funded == true and .funding_id != null' "$work/faucet-response.json" >/dev/null
 printf '%s\n' "funding journey: claim faucet-$journey funded"
 
-admit_journey payment
-jq -n --arg source "$LAYERX_TEST_SOURCE_DID" --arg destination "$LAYERX_TEST_DESTINATION_DID" \
-  --arg currency "$LAYERX_TEST_ASSET" --arg amount "$LAYERX_TEST_AMOUNT" \
-  '{source:$source,destination:$destination,money:{currency:$currency,amount:$amount}}' \
-  > "$work/quote-request.json"
+jq -n --arg did "$LAYERX_TEST_DESTINATION_DID" --arg public_key "$LAYERX_TEST_DESTINATION_PUBLIC_KEY" \
+  '{did:$did, public_key:$public_key}' > "$work/destination-faucet-request.json"
 curl --fail --silent --show-error --max-time 30 --cacert "$LAYERX_TEST_CA_FILE" \
-  --config "$auth_config" \
-  --request POST "$LAYERX_GATEWAY_URL/v1/moves/quote" \
-  --header 'Content-Type: application/json' \
-  --data-binary "@$work/quote-request.json" > "$work/quote-response.json"
-quote_id=$(jq -er '.result.quote_id' "$work/quote-response.json")
-jq -n --arg quote_id "$quote_id" '{quote_id:$quote_id}' > "$work/payment-request.json"
-curl --fail --silent --show-error --max-time 60 --cacert "$LAYERX_TEST_CA_FILE" \
-  --config "$auth_config" \
-  --request POST "$LAYERX_GATEWAY_URL/v1/moves" \
-  --header "Idempotency-Key: payment-$journey" \
-  --header 'Content-Type: application/json' --data-binary "@$work/payment-request.json" \
-  > "$work/payment-response.json"
-receipt_id=$(jq -er '.result.receipt_id' "$work/payment-response.json")
-printf '%s\n' "payment journey: quote $quote_id committed as receipt $receipt_id"
+  --config "$work/credentials/destination.curl" \
+  --request POST "$LAYERX_FAUCET_URL/v1/faucet/claims" \
+  --header "Idempotency-Key: destination-faucet-$journey" \
+  --header 'Content-Type: application/json' --data-binary "@$work/destination-faucet-request.json" \
+  > "$work/destination-faucet-response.json"
+jq -e '.funded == true and .funding_id != null' "$work/destination-faucet-response.json" >/dev/null
+
+admit_journey payment
+python3 "$(dirname "$0")/payment-journey.py" --gateway "$LAYERX_GATEWAY_URL" \
+  --ca "$LAYERX_TEST_CA_FILE" --auth-config "$auth_config" --signer "$LAYERX_TEST_SOURCE_KEY_FILE" \
+  --did "$LAYERX_TEST_SOURCE_DID" --destination "$LAYERX_TEST_DESTINATION_DID" \
+  --asset "$LAYERX_TEST_ASSET" --amount "$LAYERX_TEST_AMOUNT" \
+  --network-id "$(jq -er '.network_id' "$work/parameters.json")" \
+  --encoder "$LAYERX_TEST_SEND_ENCODER" --sequencer-key "$LAYERX_TEST_SEQUENCER_PUBLIC_KEY" \
+  --output "$work/payment"
+receipt_id=$(jq -er '.activity_id' "$work/payment/result.json")
+printf '%s\n' "payment journey: signed transfer $receipt_id executed and replayed without additional credit"
 
 admit_journey receipt-inspection
 curl --fail --silent --show-error --max-time 30 --cacert "$LAYERX_TEST_CA_FILE" \
   --config "$auth_config" \
   "$LAYERX_GATEWAY_URL/v1/receipts/$receipt_id" > "$work/receipt-response.json"
 jq -er '.result.receipt' "$work/receipt-response.json" > "$work/receipt.hex"
-batch_id=$(jq -er '.result.authority.batch_id' "$work/receipt-response.json")
-asset=$(jq -er '.result.authority.asset' "$work/receipt-response.json")
-previous_root=$(jq -er '.result.authority.previous_state_root' "$work/receipt-response.json")
-resulting_root=$(jq -er '.result.authority.resulting_state_root' "$work/receipt-response.json")
-sequencer_key=$(jq -er '.result.authority.sequencer_public_key' "$work/receipt-response.json")
+batch_id=$(jq -er '.result.authority.batch_id' "$work/payment/receipt.json")
+asset=$(jq -er '.result.authority.asset' "$work/payment/receipt.json")
+previous_root=$(jq -er '.result.authority.previous_state_root' "$work/payment/receipt.json")
+resulting_root=$(jq -er '.result.authority.resulting_state_root' "$work/payment/receipt.json")
+sequencer_key=$(jq -er '.result.authority.sequencer_public_key' "$work/payment/receipt.json")
+test "$sequencer_key" = "$LAYERX_TEST_SEQUENCER_PUBLIC_KEY"
+jq -e --arg activity "$receipt_id" --slurpfile payment "$work/payment/receipt.json" \
+  '.result.activity_id == $activity and .result.receipt == $payment[0].result.receipt' \
+  "$work/receipt-response.json" >/dev/null
 "$LAYERX_BIN" --json receipt verify --receipt "$work/receipt.hex" --batch-id "$batch_id" \
   --asset "$asset" --previous-state-root "$previous_root" --resulting-state-root "$resulting_root" \
   --sequencer-public-key "$sequencer_key" > "$work/verification.json"
@@ -186,12 +192,13 @@ jq -e --slurpfile submitted "$work/program-response.json" \
   '.result.activity_id == $submitted[0].result.activity_id and .result.receipt == $submitted[0].result.receipt' \
   "$work/program-receipt.json" >/dev/null
 jq -er '.result.receipt' "$work/program-receipt.json" > "$work/program-receipt.hex"
+test "$(jq -er '.result.authority.sequencer_public_key' "$work/program-response.json")" = "$LAYERX_TEST_SEQUENCER_PUBLIC_KEY"
 "$LAYERX_BIN" --json receipt verify --receipt "$work/program-receipt.hex" \
-  --batch-id "$(jq -er '.result.authority.batch_id' "$work/program-receipt.json")" \
-  --asset "$(jq -er '.result.authority.asset' "$work/program-receipt.json")" \
-  --previous-state-root "$(jq -er '.result.authority.previous_state_root' "$work/program-receipt.json")" \
-  --resulting-state-root "$(jq -er '.result.authority.resulting_state_root' "$work/program-receipt.json")" \
-  --sequencer-public-key "$(jq -er '.result.authority.sequencer_public_key' "$work/program-receipt.json")" \
+  --batch-id "$(jq -er '.result.authority.batch_id' "$work/program-response.json")" \
+  --asset "$(jq -er '.result.authority.asset' "$work/program-response.json")" \
+  --previous-state-root "$(jq -er '.result.authority.previous_state_root' "$work/program-response.json")" \
+  --resulting-state-root "$(jq -er '.result.authority.resulting_state_root' "$work/program-response.json")" \
+  --sequencer-public-key "$LAYERX_TEST_SEQUENCER_PUBLIC_KEY" \
   > "$work/program-verification.json"
 jq -e '.ok == true and .kind == "receipt.verified" and .data.verified == true' "$work/program-verification.json" >/dev/null
 printf '%s\n' "Programs journey: activity $program_activity executed and independently receipt-verified"

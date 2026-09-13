@@ -635,8 +635,10 @@ secrets_generate() {
     [ "$(wc -c < "$d/test-source-signer.pub.hex")" -eq 64 ] || fail "test source signer key is not an ed25519 key"
     (umask 077; openssl genpkey -algorithm ed25519 -out "$d/test-destination-signer.key" 2>/dev/null)
     ed25519_public_hex "$d/test-destination-signer.key" > "$d/test-destination-signer.pub.hex"
-    TEST_SOURCE_DID=${LAYERX_BETA_TEST_SOURCE_DID:-did:layerx:beta:$(random_hex 16)}
-    TEST_DESTINATION_DID=${LAYERX_BETA_TEST_DESTINATION_DID:-did:layerx:beta:$(random_hex 16)}
+    TEST_SOURCE_DID=${LAYERX_BETA_TEST_SOURCE_DID:-did:layerx:$(cat "$d/test-source-signer.pub.hex")}
+    TEST_DESTINATION_DID=${LAYERX_BETA_TEST_DESTINATION_DID:-did:layerx:$(cat "$d/test-destination-signer.pub.hex")}
+    [ "$TEST_SOURCE_DID" = "did:layerx:$(cat "$d/test-source-signer.pub.hex")" ] || fail "smoke source DID must be derived from its generated signer"
+    [ "$TEST_DESTINATION_DID" = "did:layerx:$(cat "$d/test-destination-signer.pub.hex")" ] || fail "smoke destination DID must be derived from its generated signer"
     source "$REPO_ROOT/platform/hosted/human/material.sh"
     human_secrets_generate
     [ "$TEST_SOURCE_DID" != "$TEST_DESTINATION_DID" ] || fail "the smoke source and destination DIDs must differ"
@@ -1195,6 +1197,8 @@ registry_deployment_produce() (
     local input="$WORK_DIR/human-evidence-input" temporary producer
     local artifact="$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
     CARGO_TARGET_DIR="$WORK_DIR/program-target" make -C "$REPO_ROOT" programs-reference-escrow >&2
+    CARGO_TARGET_DIR="$WORK_DIR/smoke-target" cargo build --manifest-path "$REPO_ROOT/platform/Cargo.toml" \
+        -p layerx-platform-cli --bin layerx --example hosted-send >&2
     mkdir -p "$input"
     [ ! -e "$input/program-deployment.lxa" ] && [ ! -L "$input/program-deployment.lxa" ] || fail 'deployment input exists; reconcile before retry'
     temporary=$(mktemp "$input/.program-deployment.XXXXXXXX")
@@ -1539,6 +1543,12 @@ identity_provision() {
         grep -Eq '^ses_[0-9a-f]{32}\.[0-9a-f]{64}$' "$SECRETS_DIR/test-auth.token" || fail "identity returned no session token for the smoke source"
         rm -f "$dir/source-session.response.json"
     fi
+    jq -n --arg sub "$TEST_DESTINATION_DID" '{sub: $sub}' > "$dir/destination-session.json"
+    status=$(identity_request POST /v1/sessions "$dir/destination-session.json" "$dir/destination-session.response.json")
+    [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke destination session with status $status"
+    (umask 077; jq -er '.token' "$dir/destination-session.response.json" > "$SECRETS_DIR/test-destination-auth.token")
+    grep -Eq '^ses_[0-9a-f]{32}\.[0-9a-f]{64}$' "$SECRETS_DIR/test-destination-auth.token" || fail "identity returned no destination session token"
+    rm -f "$dir/destination-session.response.json"
     log "identity provisioned $TEST_SOURCE_DID and $TEST_DESTINATION_DID (session token source: $TEST_AUTH_SOURCE)"
 }
 
@@ -1752,6 +1762,11 @@ env_write() {
         printf 'export LAYERX_TEST_SOURCE_PUBLIC_KEY=%s\n' "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")"
         printf 'export LAYERX_TEST_SOURCE_KEY_FILE=%s\n' "$SECRETS_DIR/test-source-signer.key"
         printf 'export LAYERX_TEST_DESTINATION_DID=%s\n' "$TEST_DESTINATION_DID"
+        printf 'export LAYERX_TEST_DESTINATION_PUBLIC_KEY=%s\n' "$(cat "$SECRETS_DIR/test-destination-signer.pub.hex")"
+        printf 'export LAYERX_TEST_DESTINATION_AUTH_TOKEN_FILE=%s\n' "$SECRETS_DIR/test-destination-auth.token"
+        printf 'export LAYERX_TEST_SEQUENCER_PUBLIC_KEY=%s\n' "$(cat "$SECRETS_DIR/sequencer-public-key")"
+        printf 'export LAYERX_TEST_SEND_ENCODER=%s\n' "$WORK_DIR/smoke-target/debug/examples/hosted-send"
+        printf 'export LAYERX_BIN=%s\n' "$WORK_DIR/smoke-target/debug/layerx"
         printf 'export LAYERX_TEST_ASSET=%s\n' "$NODE_ASSET_ID"
         printf 'export LAYERX_TEST_AMOUNT=%s\n' "$TEST_AMOUNT"
         printf 'export LAYERX_TEST_ESCROW_WASM=%s\n' "$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
