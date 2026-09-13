@@ -490,6 +490,14 @@ int main(void)
         lxp_transfer_context settlement;
         settlement_context(&fixture, withdrawals, &settlement_authority,
                            &settlement);
+        {
+            lx_withdrawal_request altered = withdrawal;
+            altered.payout_recipient[0] ^= 1U;
+            if (fresh_ctx(&fixture) != 0 ||
+                lxp_bridge_withdraw_finalize(&module_ctx, withdrawals, reserve,
+                    &asset, &altered, &store, &claim, settlement, &receipt) !=
+                    LXP_ERR_CONTEXT_MISMATCH) return 1;
+        }
         if (fresh_ctx(&fixture) != 0 ||
             lxp_bridge_withdraw_finalize(
                 &module_ctx, withdrawals, reserve, &asset, &withdrawal,

@@ -397,6 +397,7 @@ lxp_result lxp_log_append(lxp_log *log, lxp_log_record_kind kind,
     lxp_result status;
     if (log == NULL || log->descriptor < 0 || !valid_kind((uint8_t)kind) ||
         (body == NULL && body_length != 0U)) return LXP_ERR_NON_CANONICAL;
+    if (global_sequence == UINT64_MAX) return LXP_ERR_SEQUENCE_EXHAUSTED;
     end = log->write_offset + LXP_LOG_HEADER_BYTES + body_length;
     if (end < log->write_offset || end > log->capacity)
         return LXP_ERR_LENGTH_LIMIT;
@@ -568,22 +569,31 @@ static void durability_group_clear(lxp_durability_group *group)
 static lxp_result durability_group_sync(lxp_durability_group *group)
 {
     struct stat filesystem;
+    bool directories[LXP_DURABILITY_GROUP_MAX_DESCRIPTORS];
     size_t index;
-    int result;
     if (group == NULL || group->descriptor_count == 0U)
         return LXP_ERR_NON_CANONICAL;
     if (fstat(group->descriptors[0], &filesystem) != 0)
         return LXP_ERR_IO;
-    for (index = 1U; index < group->descriptor_count; ++index) {
+    for (index = 0U; index < group->descriptor_count; ++index) {
         struct stat candidate;
         if (fstat(group->descriptors[index], &candidate) != 0 ||
-            candidate.st_dev != filesystem.st_dev)
+            candidate.st_dev != filesystem.st_dev ||
+            (!S_ISREG(candidate.st_mode) && !S_ISDIR(candidate.st_mode)))
             return LXP_ERR_IO;
+        directories[index] = S_ISDIR(candidate.st_mode);
     }
-    do {
-        result = syncfs(group->descriptors[0]);
-    } while (result != 0 && errno == EINTR);
-    return result == 0 ? LXP_OK : LXP_ERR_IO;
+    for (unsigned pass = 0U; pass < 2U; ++pass) {
+        for (index = 0U; index < group->descriptor_count; ++index) {
+            int result;
+            if (directories[index] != (pass == 1U)) continue;
+            do {
+                result = fsync(group->descriptors[index]);
+            } while (result != 0 && errno == EINTR);
+            if (result != 0) return LXP_ERR_IO;
+        }
+    }
+    return LXP_OK;
 }
 
 lxp_result lxp_durability_group_commit(lxp_durability_group *group)

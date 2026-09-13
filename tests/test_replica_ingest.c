@@ -5,6 +5,7 @@
 #include "layerx/lxp_replica.h"
 
 #include <unistd.h>
+#include <fcntl.h>
 
 #define CHECK(value) do { if (!(value)) { \
     (void)fprintf(stderr, "replica ingest check failed at %d\n", __LINE__); \
@@ -110,6 +111,35 @@ int main(void)
     CHECK(!ack && !replica.has_head && !replica.halted);
     CHECK(memcmp(follower->kernel.current_state_root, genesis, 32U) == 0);
     follower->execution.batch_number = batches[0].header.batch_number;
+    {
+        int writable = log.descriptor;
+        int read_only = open(path, O_RDONLY);
+        uint64_t sequence_before = follower->state.next_sequence;
+        uint64_t account_sequence_before = follower->accounts.accounts[0].next_sequence;
+        lxp_u128 balance_before = follower->accounts.accounts[0].balance;
+        lxp_identity_store *identities_before = malloc(sizeof(*identities_before));
+        CHECK(read_only >= 0 && identities_before != NULL);
+        *identities_before = follower->identities;
+        log.descriptor = read_only;
+        CHECK(lxp_replica_ingest_batch(&replica, bodies[0], lengths[0], 7U,
+                    &authorization, &ingest_arena, &ack) == LXP_ERR_IO);
+        CHECK(!ack && replica.halted && !replica.serving_current_state &&
+              !replica.has_head && replica.durable_batch_count == 0U &&
+              replica.executed_batch_count == 0U);
+        CHECK(memcmp(follower->kernel.current_state_root, genesis, 32U) == 0);
+        CHECK(follower->state.next_sequence == sequence_before &&
+              follower->accounts.accounts[0].next_sequence == account_sequence_before &&
+              lxp_u128_cmp(follower->accounts.accounts[0].balance, balance_before) == 0);
+        CHECK(memcmp(&follower->identities, identities_before, sizeof(*identities_before)) == 0);
+        free(identities_before);
+        CHECK(close(read_only) == 0);
+        log.descriptor = writable;
+        CHECK(lxp_replica_init(&replica, &log) == LXP_OK);
+        CHECK(lxp_replica_bind_execution(&replica, &follower->engine, genesis,
+            batches[0].header.batch_number, batches[0].header.first_sequence) == LXP_OK);
+        CHECK(lxp_replica_bind_eligibility(&replica, replica_ids[0],
+            (const uint8_t (*)[32])replica_ids, 3U, 2U) == LXP_OK);
+    }
     CHECK(lxp_replica_ingest_batch(&replica, bodies[0], lengths[0], 7U,
                                    &authorization, &ingest_arena, &ack) ==
           LXP_OK);
@@ -154,6 +184,9 @@ int main(void)
           LXP_FATAL_REPLAY_DIVERGENCE);
     CHECK(!ack && replica.halted && replica.durable_batch_count == 2U &&
           replica.acknowledged_batch_count == 2U);
+    CHECK(memcmp(follower->kernel.current_state_root,
+        batches[1].header.resulting_state_root, 32U) == 0);
+    CHECK(follower->state.next_sequence == batches[1].header.last_sequence + 1U);
     CHECK(lxp_replica_ingest_batch(&replica, bodies[2], lengths[2], 7U,
                                    &authorization, &ingest_arena, &ack) ==
           LXP_FATAL_REPLAY_DIVERGENCE);

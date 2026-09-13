@@ -389,6 +389,9 @@ lxp_result lxp_apply_transfer(lxp_transfer_leg *leg,
                               lxp_transfer_result *result)
 {
     lxp_authority_scope allowance_before;
+    const uint8_t *authorized_from = NULL;
+    lxp_authorization_kind authority_kind = LXP_AUTH_OWNER;
+    bool protocol_system_capability = false;
     bool allowance_bound;
     size_t index;
     lxp_result status;
@@ -411,6 +414,9 @@ lxp_result lxp_apply_transfer(lxp_transfer_leg *leg,
     if (status != LXP_OK) return status;
     status = lxp_sequence_terminal_check(context, leg);
     if (status != LXP_OK) return status;
+    status = source_authority(leg, context, &authorized_from, &authority_kind,
+                               &protocol_system_capability);
+    if (status != LXP_OK) return status;
     allowance_bound = context->allowance != NULL &&
                       context->allowance->scope != NULL;
     if (allowance_bound) allowance_before = *context->allowance->scope;
@@ -421,7 +427,7 @@ lxp_result lxp_apply_transfer(lxp_transfer_leg *leg,
         if (allowance_bound) *context->allowance->scope = allowance_before;
         return status;
     }
-    if (context->debit_authority_kind != LXP_AUTH_OCCUPANCY_RESPONSIBILITY)
+    if (authority_kind != LXP_AUTH_OCCUPANCY_RESPONSIBILITY)
         ++sequence_account_of(context, leg)->next_sequence;
     return status;
 }

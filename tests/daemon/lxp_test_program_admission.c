@@ -625,6 +625,101 @@ static int maintenance_receipt(int descriptor, uint64_t sequence, const uint8_t 
     return checked_receipt(descriptor, sequence, activity_id, false);
 }
 
+static int history_page(int descriptor, uint64_t first, uint64_t last,
+                         uint16_t limit, uint64_t expected_next)
+{
+    uint8_t query[19];
+    uint8_t arena_bytes[16384];
+    lxp_arena arena;
+    signer sequencer;
+    lxp_sequencer_authorization authorization = {0};
+    uint64_t next = first;
+    REQUIRE(signer_init(&sequencer, 0x22U) == 0);
+    memcpy(authorization.public_key, sequencer.public_key, 32U);
+    {
+        static const char digits[] = "0123456789abcdef";
+        static const char prefix[] = "layerx-sequencer:";
+        uint8_t label[sizeof(prefix) - 1U + 64U];
+        memcpy(label, prefix, sizeof(prefix) - 1U);
+        for (size_t i = 0U; i < 32U; ++i) {
+            label[sizeof(prefix) - 1U + i * 2U] = (uint8_t)digits[sequencer.public_key[i] >> 4U];
+            label[sizeof(prefix) + i * 2U] = (uint8_t)digits[sequencer.public_key[i] & 15U];
+        }
+        REQUIRE(lxp_hash_sha256(label, sizeof(label), authorization.sequencer_id) == LXP_OK);
+    }
+    authorization.first_batch_number = 1U;
+    authorization.last_batch_number = UINT64_MAX;
+    authorization.authorized = 1U;
+    store_u64(query, first);
+    store_u64(query + 8U, last);
+    store_u16(query + 16U, limit);
+    query[18U] = 2U;
+    REQUIRE(send_request(descriptor, LNI_MINOR, 9U, 900U, query, sizeof(query)) == 0);
+    for (;;) {
+        wire_envelope response;
+        REQUIRE(receive_envelope(descriptor, &response) == 0);
+        REQUIRE(response.correlation_id == 900U);
+        if (limit == 0U) {
+            REQUIRE(response.tag == ERROR_RESPONSE);
+            release_envelope(&response);
+            return 0;
+        }
+        if (response.tag == 11U) {
+            REQUIRE(response.payload_length == 8U && response.proof_length == 0U);
+            REQUIRE(load_u64(response.payload) == next && next == expected_next);
+            release_envelope(&response);
+            return 0;
+        }
+        REQUIRE(response.tag == 10U && next < expected_next);
+        REQUIRE(response.proof_length >= 55U + 64U);
+        REQUIRE(load_u64(response.proof + 1U) == next && response.proof[9U] == 2U);
+        {
+            lxp_merkle_proof proof = {0};
+            lxp_batch_header header;
+            uint8_t leaf[32];
+            size_t cursor, header_length;
+            const uint8_t *root;
+            proof.leaf_index = load_u32(response.proof + 42U);
+            proof.leaf_count = load_u32(response.proof + 46U);
+            proof.depth = response.proof[50U];
+            REQUIRE(proof.depth <= LXP_MERKLE_MAX_DEPTH);
+            cursor = 51U + (size_t)proof.depth * 32U;
+            REQUIRE(response.proof_length >= cursor + 4U + 64U);
+            memcpy(proof.siblings, response.proof + 51U, (size_t)proof.depth * 32U);
+            header_length = load_u32(response.proof + cursor);
+            cursor += 4U;
+            REQUIRE(header_length == response.proof_length - cursor - 64U);
+            REQUIRE(lxp_batch_header_decode(response.proof + cursor, header_length, &header) == LXP_OK);
+            REQUIRE(header.network_id == NETWORK_ID &&
+                    header.first_sequence + proof.leaf_index == next);
+            REQUIRE(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
+            REQUIRE(lxp_batch_verify_signature(&header, response.proof + cursor + header_length,
+                64U, &authorization, &arena) == LXP_OK);
+            if (response.proof[0] == 1U) {
+                lxp_activity activity;
+                REQUIRE(lxp_activity_decode(response.payload, response.payload_length, &activity) == LXP_OK);
+                REQUIRE(lxp_activity_verify_signature(&activity) == LXP_OK);
+                root = header.activity_merkle_root;
+            } else {
+                lxp_programs_occupancy_receipt maintenance;
+                REQUIRE(response.proof[0] == 2U);
+                REQUIRE(lxp_programs_occupancy_receipt_decode(response.payload,
+                    response.payload_length, &maintenance) == LXP_OK);
+                REQUIRE(maintenance.global_sequence == next && maintenance.batch_number == header.batch_number);
+                REQUIRE(next == header.last_sequence);
+                root = header.receipt_merkle_root;
+            }
+            REQUIRE(memcmp(response.proof + 10U, root, 32U) == 0);
+            REQUIRE(lxp_merkle_leaf_hash(response.payload, response.payload_length, leaf) == LXP_OK);
+            REQUIRE(lxp_merkle_proof_verify(leaf, &proof, root) == LXP_OK);
+            leaf[0] ^= 1U;
+            REQUIRE(lxp_merkle_proof_verify(leaf, &proof, root) != LXP_OK);
+        }
+        ++next;
+        release_envelope(&response);
+    }
+}
+
 static int maintenance_admission(int *descriptor, const signer *key, bool recovered, bool queued)
 {
     uint8_t deploy[112] = {1U}, encoded[ACTIVITY_CAPACITY], id[32];
@@ -649,6 +744,12 @@ static int maintenance_admission(int *descriptor, const signer *key, bool recove
             REQUIRE(maintenance_receipt(*descriptor, i * 2U + 1U, id) == 0);
             REQUIRE(maintenance_head(descriptor, i * 2U + 2U, i + 1U) == 0);
         }
+    }
+    if (!queued) {
+        uint64_t head = recovered ? 12U : 6U;
+        REQUIRE(history_page(*descriptor, 1U, head, 0U, 1U) == 0);
+        REQUIRE(history_page(*descriptor, 1U, head, 3U, 4U) == 0);
+        REQUIRE(history_page(*descriptor, 4U, head, 16U, head + 1U) == 0);
     }
     if (queued) puts("three signed activities durably queued before execution");
     else puts("durable activity and maintenance sequences remain contiguous across real daemon publication");

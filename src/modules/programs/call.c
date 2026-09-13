@@ -127,6 +127,7 @@ struct lxp_programs_call_activity {
         uint32_t terminal_length;
         uint8_t *events;
         uint32_t events_length;
+        uint32_t written[3];
         uint32_t graph_capacity;
         uint32_t terminal_capacity;
         uint32_t events_capacity;
@@ -138,6 +139,7 @@ struct lxp_programs_call_activity {
         uint8_t principal[32];
         uint8_t frame_path[8];
         uint8_t frame_depth;
+        uint32_t written[2];
         uint32_t event_index;
         uint8_t *topic;
         uint16_t topic_length;
@@ -1062,7 +1064,10 @@ lxp_result layerx_programs_call_terminal_byte(uint64_t token, uint16_t section,
     lxp_result status = terminal_buffer(value, section, &bytes, &length);
     if (status != LXP_OK) return status;
     if (offset >= length) return LXP_ERR_TRUNCATED;
+    if (section >= 3U || offset != value->terminal.written[section])
+        return LXP_ERR_NON_CANONICAL;
     bytes[offset] = byte;
+    ++value->terminal.written[section];
     return LXP_OK;
 }
 
@@ -1151,7 +1156,10 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
     const uint8_t *activity_id;
     uint8_t graph_root[32], terminal_root[32], events_root[32], frame[8] = {0};
     lxp_result status;
-    if (value == NULL || value->ctx == NULL || !value->terminal.active)
+    if (value == NULL || value->ctx == NULL || !value->terminal.active ||
+        value->terminal.written[0] != value->terminal.graph_length ||
+        value->terminal.written[1] != value->terminal.terminal_length ||
+        value->terminal.written[2] != value->terminal.events_length)
         return LXP_ERR_NON_CANONICAL;
     admission = lxp_ctx_call_admission(value->ctx);
     activity_id = lxp_ctx_activity_id(value->ctx);
@@ -1302,6 +1310,8 @@ lxp_result layerx_programs_call_event_begin(
     status = lxp_ctx_arena_alloc(value->ctx, data_length == 0U ? 1U : data_length,
                                  1U, &data);
     if (status != LXP_OK) return status;
+    value->event.written[0] = 0U;
+    value->event.written[1] = 0U;
     value->event.active = true;
     value->event.event_index = event_index;
     value->event.frame_depth = frame_depth;
@@ -1328,7 +1338,9 @@ lxp_result layerx_programs_call_event_byte(uint64_t token, uint16_t section,
         length = value->event.data_length;
     } else return LXP_ERR_UNKNOWN_FIELD;
     if (bytes == NULL || offset >= length) return LXP_ERR_TRUNCATED;
+    if (offset != value->event.written[section]) return LXP_ERR_NON_CANONICAL;
     bytes[offset] = byte;
+    ++value->event.written[section];
     return LXP_OK;
 }
 
@@ -1339,7 +1351,9 @@ lxp_result layerx_programs_call_event_emit(uint64_t token)
     const uint8_t *activity_id;
     lxp_programs_guest_event event;
     lxp_result status;
-    if (value == NULL || value->ctx == NULL || !value->event.active)
+    if (value == NULL || value->ctx == NULL || !value->event.active ||
+        value->event.written[0] != value->event.topic_length ||
+        value->event.written[1] != value->event.data_length)
         return LXP_ERR_NON_CANONICAL;
     activity_id = lxp_ctx_activity_id(value->ctx);
     if (activity_id == NULL) return LXP_FATAL_INVARIANT;

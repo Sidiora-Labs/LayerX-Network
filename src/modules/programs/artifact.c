@@ -85,11 +85,16 @@ lxp_result lxp_programs_artifact_store(lxp_module_ctx *ctx,
 {
     uint8_t key[ARTIFACT_KEY_BYTES];
     uint8_t manifest[LX_PROGRAMS_ARTIFACT_MANIFEST_BYTES];
+    uint8_t digest[32];
     lxp_result status;
     if (ctx == NULL || program_id == NULL || code_hash == NULL || wasm == NULL ||
         wasm_length == 0U || wasm_length > LXP_KERNEL_MAX_BLOB_BYTES ||
         wasm_length > UINT32_MAX || lxp_ct_is_zero(program_id, 32U) ||
         lxp_ct_is_zero(code_hash, 32U)) return LXP_ERR_NON_CANONICAL;
+    status = lxp_hash_sha256(wasm, wasm_length, digest);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(digest, code_hash, 32U) != 0)
+        return LXP_ERR_ROOT_MISMATCH;
     status = lxp_ctx_blob_put(ctx, code_hash, wasm, wasm_length);
     if (status != LXP_OK) return status;
     artifact_key(program_id, key);

@@ -209,6 +209,7 @@ lxp_result lxp_receipt_augment(
     lxp_byte_span pre_checkpoint_receipt,
     lxp_byte_span canonical_activity,
     lxp_byte_span state_leaf,
+    const lxp_merkle_proof *receipt_inclusion_proof,
     const lxp_merkle_proof *activity_inclusion_proof,
     const lxp_merkle_proof *state_inclusion_proof,
     const lxp_guarantor_cert *guarantor_certificate,
@@ -220,6 +221,7 @@ lxp_result lxp_receipt_augment(
         pre_checkpoint_receipt.length == 0U ||
         canonical_activity.bytes == NULL || canonical_activity.length == 0U ||
         state_leaf.bytes == NULL || state_leaf.length == 0U ||
+        receipt_inclusion_proof == NULL ||
         activity_inclusion_proof == NULL || state_inclusion_proof == NULL ||
         guarantor_certificate == NULL || augmented == NULL ||
         paxeer_settlement_reference.bytes == NULL ||
@@ -233,6 +235,7 @@ lxp_result lxp_receipt_augment(
     augmented->pre_checkpoint_receipt = pre_checkpoint_receipt;
     augmented->canonical_activity = canonical_activity;
     augmented->state_leaf = state_leaf;
+    augmented->receipt_inclusion_proof = *receipt_inclusion_proof;
     augmented->activity_inclusion_proof = *activity_inclusion_proof;
     augmented->state_inclusion_proof = *state_inclusion_proof;
     (void)memcpy(augmented->checkpoint_id,

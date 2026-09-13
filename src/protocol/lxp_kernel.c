@@ -2470,8 +2470,30 @@ static lxp_result synthesize_program_call_failure(
         (void)memcpy(failure_input + offset, outcome->applied_legs_digest, 32U);
         offset += 32U;
     }
-    return lxp_hash_domain(LXP_DOMAIN_CONTEXT_HASH, failure_input, offset,
-                           outcome->terminal_payload_root);
+    status = lxp_hash_domain(LXP_DOMAIN_CONTEXT_HASH, failure_input, offset,
+                             outcome->terminal_payload_root);
+    if (status == LXP_OK) {
+        static const uint8_t graph_domain[] = "LXP/programs/empty-call-graph/v1";
+        size_t domain_length = 0U;
+        const uint8_t *domain = lxp_domain_tag(LXP_DOMAIN_CONTEXT_HASH, &domain_length);
+        uint8_t *artifacts;
+        void *allocation = NULL;
+        if (domain == NULL || domain_length > LXP_MAX_ACTIVITY_BYTES - offset ||
+            domain_length > LXP_MAX_ACTIVITY_BYTES - sizeof(graph_domain))
+            return LXP_ERR_LENGTH_LIMIT;
+        status = lxp_arena_alloc(execution->arena,
+            domain_length + offset + domain_length + sizeof(graph_domain), 1U, &allocation);
+        if (status != LXP_OK) return status;
+        artifacts = allocation;
+        (void)memcpy(artifacts, domain, domain_length);
+        (void)memcpy(artifacts + domain_length, failure_input, offset);
+        outcome->terminal_payload = (lxp_byte_span){artifacts, domain_length + offset};
+        artifacts += domain_length + offset;
+        (void)memcpy(artifacts, domain, domain_length);
+        (void)memcpy(artifacts + domain_length, graph_domain, sizeof(graph_domain));
+        outcome->call_graph_payload = (lxp_byte_span){artifacts, domain_length + sizeof(graph_domain)};
+    }
+    return status;
 }
 
 void lxp_prepared_transition_destroy(lxp_prepared_transition *prepared)
@@ -4064,9 +4086,11 @@ lxp_result lxp_kernel_finalize_prepared_batch_publication(
     if (batch->maintenance.length != 0U)
         return lxp_kernel_finalize_batch_publication_maintenance(
             kernel, activities, batch->receipts, batch->count,
-            batch->maintenance, fsynced_publication_digest);
+            batch->maintenance, &batch->base_boundary, &batch->final_boundary,
+            batch->events, fsynced_publication_digest);
     return lxp_kernel_finalize_batch_publication_records(
         kernel, activities, batch->receipts, batch->count,
+        &batch->base_boundary, &batch->final_boundary, batch->events,
         fsynced_publication_digest);
 }
 
@@ -4133,10 +4157,17 @@ static lxp_result finalize_publication_records(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_receipt *receipts, size_t activity_count,
     const lxp_programs_occupancy_receipt *maintenance, lxp_byte_span encoded_maintenance,
-    const uint8_t fsynced_publication_digest[32])
+    const lxp_kernel_batch_boundary *base, const lxp_kernel_batch_boundary *final,
+    const lxp_byte_span *events, const uint8_t fsynced_publication_digest[32])
 {
+    static const uint8_t domain[] = "LXP/kernel/prepared-batch/v1";
+    static const uint8_t maintenance_domain[] = "LXP/kernel/prepared-maintenance/v1";
     size_t index;
+    uint8_t digest[32];
     uint8_t *verification_bytes;
+    lxp_result binding_status;
+    if (base == NULL || final == NULL || events == NULL)
+        return LXP_ERR_NON_CANONICAL;
     if (kernel == NULL || activities == NULL || receipts == NULL ||
         activity_count == 0U ||
         activity_count > LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES ||
@@ -4162,6 +4193,15 @@ static lxp_result finalize_publication_records(
     if (lxp_ct_memcmp(receipts[0].previous_state_root,
                       kernel->pending_batch_base_receipt_root, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
+    binding_status = lxp_hash_domain(LXP_DOMAIN_CONTEXT_HASH, domain, sizeof(domain), digest);
+    if (binding_status == LXP_OK) binding_status = level_token_mix(digest, base->receipt_state_root, 32U);
+    if (binding_status == LXP_OK) binding_status = level_token_mix(digest, base->canonical_state_root, 32U);
+    if (binding_status == LXP_OK) binding_status = level_token_u64(digest, base->next_sequence);
+    if (binding_status == LXP_OK) binding_status = level_token_mix(digest, final->receipt_state_root, 32U);
+    if (binding_status == LXP_OK) binding_status = level_token_mix(digest, final->canonical_state_root, 32U);
+    if (binding_status == LXP_OK) binding_status = level_token_u64(digest, final->next_sequence);
+    if (binding_status == LXP_OK) binding_status = level_token_u64(digest, activity_count);
+    if (binding_status != LXP_OK) return binding_status;
     verification_bytes = (uint8_t *)malloc(LXP_MAX_ACTIVITY_BYTES);
     if (verification_bytes == NULL) return LXP_ERR_ARENA_EXHAUSTED;
     for (index = 0U; index < activity_count; ++index) {
@@ -4176,6 +4216,11 @@ static lxp_result finalize_publication_records(
         if (status == LXP_OK)
             status = lxp_activity_id(encoded.bytes, encoded.length,
                                      activity_id);
+        if (status == LXP_OK) status = level_token_mix(digest, encoded.bytes, encoded.length);
+        if (status == LXP_OK) status = lxp_arena_reset(&arena, 0U);
+        if (status == LXP_OK) status = lxp_receipt_encode(&receipts[index], true, &arena, &encoded);
+        if (status == LXP_OK) status = level_token_mix(digest, encoded.bytes, encoded.length);
+        if (status == LXP_OK) status = level_token_mix(digest, events[index].bytes, events[index].length);
         if (status != LXP_OK ||
             !lxp_protocol_version_supported(
                 receipts[index].protocol_version) ||
@@ -4193,6 +4238,14 @@ static lxp_result finalize_publication_records(
         }
     }
     free(verification_bytes);
+    if (maintenance != NULL) {
+        binding_status = level_token_mix(digest, maintenance_domain, sizeof(maintenance_domain));
+        if (binding_status == LXP_OK)
+            binding_status = level_token_mix(digest, encoded_maintenance.bytes, encoded_maintenance.length);
+    }
+    if (binding_status != LXP_OK) return binding_status;
+    if (lxp_ct_memcmp(digest, fsynced_publication_digest, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
     if (kernel->pending_batch_publication_index > activity_count + (maintenance != NULL ? 1U : 0U))
         return LXP_FATAL_INVARIANT;
     if (maintenance == NULL) {
@@ -4250,16 +4303,20 @@ static lxp_result finalize_publication_records(
 lxp_result lxp_kernel_finalize_batch_publication_records(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_receipt *receipts, size_t activity_count,
+    const lxp_kernel_batch_boundary *base,
+    const lxp_kernel_batch_boundary *final, const lxp_byte_span *events,
     const uint8_t fsynced_publication_digest[32])
 {
     return finalize_publication_records(kernel, activities, receipts, activity_count,
-        NULL, (lxp_byte_span){NULL, 0U}, fsynced_publication_digest);
+        NULL, (lxp_byte_span){NULL, 0U}, base, final, events, fsynced_publication_digest);
 }
 
 lxp_result lxp_kernel_finalize_batch_publication_maintenance(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_receipt *receipts, size_t activity_count,
-    lxp_byte_span maintenance, const uint8_t fsynced_publication_digest[32])
+    lxp_byte_span maintenance, const lxp_kernel_batch_boundary *base,
+    const lxp_kernel_batch_boundary *final, const lxp_byte_span *events,
+    const uint8_t fsynced_publication_digest[32])
 {
     lxp_programs_occupancy_receipt record;
     lxp_result status = lxp_programs_occupancy_receipt_decode(
@@ -4269,7 +4326,7 @@ lxp_result lxp_kernel_finalize_batch_publication_maintenance(
         !lxp_protocol_version_uses_occupancy(receipts[0].protocol_version))
         return LXP_ERR_NON_CANONICAL;
     return finalize_publication_records(kernel, activities, receipts, activity_count,
-        &record, maintenance, fsynced_publication_digest);
+        &record, maintenance, base, final, events, fsynced_publication_digest);
 }
 
 uint32_t lxp_kernel_batch_publication_next_index(const lxp_kernel *kernel)
