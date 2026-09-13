@@ -2,6 +2,7 @@
 #include "../../cmd/layerx-guarantor/runtime.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_maintenance.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
