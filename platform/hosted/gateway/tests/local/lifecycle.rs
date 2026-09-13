@@ -2341,7 +2341,7 @@ fn assert_committed_fee_reads(
             );
             assert_canonical_fee(read, &signed_receive_fee_activity(cluster, funding), 4);
         } else {
-            assert_canonical_fee(read, &canonical, 0);
+            assert_canonical_fee(read, &canonical, if ordinal == 7 { 4 } else { 0 });
         }
     }
     let program = signed_program_call(&cluster.treasury_seed, &cluster.treasury_did, 1, random32());
