@@ -78,6 +78,7 @@ func TestEstimateGas(t *testing.T) {
 	EVMKeeper.BankKeeper().MintCoins(Ctx, types.ModuleName, amts)
 	EVMKeeper.BankKeeper().SendCoinsFromModuleToAccount(Ctx, types.ModuleName, sdk.AccAddress(from[:]), amts)
 	resObj := sendRequestGood(t, "estimateGas", txArgs, nil, map[string]any{})
+	require.Nil(t, resObj["error"], "estimate gas refused: %v", resObj["error"])
 	result := resObj["result"].(string)
 	require.Equal(t, "0x5208", result) // 21000
 	resObj = sendRequestGood(t, "estimateGas", txArgs, "latest", map[string]any{})
