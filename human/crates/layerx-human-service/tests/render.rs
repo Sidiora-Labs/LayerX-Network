@@ -92,14 +92,14 @@ fn send_intent(recipient_marker: u64, amount: u128, asset: [u8; 32], key: [u8; 3
     let signer = layerx_crypto::local::LocalSigner::new([0x31; 32]);
     let key = nonzero_key(key);
     let debit = layerx_crypto::send::SendDebit {
-        from: layerx_wire::hash::account_id_for_protocol(
+        from: layerx_intents::canonical::account_id_for_protocol(
             &account("agent:did:layerx:approval-render:main"),
-            layerx_wire::limits::PROTOCOL_VERSION,
+            layerx_intents::canonical::PROTOCOL_VERSION,
         )
         .unwrap_or_else(|error| panic!("source account: {error:?}")),
-        to: layerx_wire::hash::account_id_for_protocol(
+        to: layerx_intents::canonical::account_id_for_protocol(
             &recipient(recipient_marker),
-            layerx_wire::limits::PROTOCOL_VERSION,
+            layerx_intents::canonical::PROTOCOL_VERSION,
         )
         .unwrap_or_else(|error| panic!("destination account: {error:?}")),
         asset,
@@ -111,7 +111,7 @@ fn send_intent(recipient_marker: u64, amount: u128, asset: [u8; 32], key: [u8; 3
         conditions: Vec::new(),
         authorization_kind: SendAuthorizationKind::Owner as u8,
         network_id: NETWORK_ID,
-        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
     };
 
     let send = LxpSend::new(
@@ -133,7 +133,7 @@ fn send_intent(recipient_marker: u64, amount: u128, asset: [u8; 32], key: [u8; 3
             ),
         ),
         NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
-        ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
+        ProtocolVersion::new(layerx_intents::canonical::PROTOCOL_VERSION)
             .unwrap_or_else(|error| panic!("protocol: {error:?}")),
     )
     .unwrap_or_else(|error| panic!("send intent: {error:?}"));

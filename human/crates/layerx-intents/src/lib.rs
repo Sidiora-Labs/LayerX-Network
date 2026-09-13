@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod canonical;
 #[path = "compile.rs"]
 mod compiler;
 mod disclosure;

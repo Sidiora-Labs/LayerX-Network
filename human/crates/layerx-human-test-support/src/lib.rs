@@ -19,13 +19,13 @@ use layerx_human_service::store::{
     AgentTenantId, PrincipalId, PrincipalStore, RetentionPeriod, RetentionPolicy, RowKey,
     TenancyDigest, TenancyMap,
 };
+use layerx_intents::canonical::execution_batch_id as wire_execution_batch_id;
+use layerx_intents::canonical::PROTOCOL_VERSION;
 use layerx_proof::merkle::build_proof;
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::intent::{AuthorizationSignature, PublicKey, SendAuthorization};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::hash::execution_batch_id as wire_execution_batch_id;
-use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
 
 pub mod evidence_node;
@@ -130,7 +130,7 @@ pub fn evidence_gate(receipt_signer: &SigningKey) -> Gate {
     let config = StartupConfig {
         network_id: EVIDENCE_NETWORK_ID,
         node_endpoint: PathBuf::from("/run/layerx/layerxd.sock"),
-        expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        expected_protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
         tenants: BTreeSet::from([tenant.clone()]),
         policy_sources: BTreeMap::from([(
             tenant.clone(),
@@ -242,7 +242,7 @@ pub fn committed_execution_batch_id(
     activity_root: [u8; 32],
     global_sequence: u64,
 ) -> [u8; 32] {
-    layerx_wire::hash::program_execution_batch_id(
+    layerx_intents::canonical::program_execution_batch_id(
         previous_state_root,
         activity_root,
         global_sequence,
@@ -265,11 +265,14 @@ pub fn sign_send(
 
     assert_eq!(debit.authorization_kind, rejected.kind() as u8);
     assert!(matches!(
-        debit.encode_signed(rejected.public_key().bytes(), rejected.signature().bytes()),
+        layerx_intents::canonical::signed_send_payload(
+            debit,
+            rejected.public_key().bytes(),
+            rejected.signature().bytes()
+        ),
         Err(layerx_crypto::disclosure::DisclosureError::MalformedPayload)
     ));
-    let canonical = debit
-        .authorization_message()
+    let canonical = layerx_intents::canonical::send_authorization_bytes(debit)
         .unwrap_or_else(|error| panic!("send authorization: {error:?}"));
     let request = debit
         .signing_request(&canonical)
@@ -282,9 +285,12 @@ pub fn sign_send(
         panic!("local debit signer unexpectedly blocked");
     };
     let signature = signature.unwrap_or_else(|error| panic!("send signature: {error:?}"));
-    debit
-        .encode_signed(signer.public_key(), *signature.as_bytes())
-        .unwrap_or_else(|error| panic!("signed send: {error:?}"));
+    layerx_intents::canonical::signed_send_payload(
+        debit,
+        signer.public_key(),
+        *signature.as_bytes(),
+    )
+    .unwrap_or_else(|error| panic!("signed send: {error:?}"));
     SendAuthorization::new(
         rejected.kind(),
         PublicKey::new(signer.public_key()),
@@ -309,7 +315,7 @@ pub fn raw_receipt_evidence(
     let (proof, receipt_root) =
         build_proof(&leaves, 0).unwrap_or_else(|error| panic!("receipt proof: {error:?}"));
     let sequencer_id = signer.verifying_key().to_bytes();
-    let decoded = layerx_wire::receipt::decode(&canonical_receipt)
+    let decoded = layerx_intents::canonical::decode_receipt(&canonical_receipt)
         .unwrap_or_else(|error| panic!("canonical receipt: {error:?}"));
     let protocol = decoded
         .protocol()

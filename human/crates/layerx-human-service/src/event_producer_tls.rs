@@ -544,7 +544,7 @@ fn enqueue_journey(scope: &mut crate::store::PrincipalScope<'_>) {
             ),
             required(NetworkId::new(77), "network"),
             required(
-                ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION),
+                ProtocolVersion::new(layerx_intents::canonical::PROTOCOL_VERSION),
                 "protocol",
             ),
         ),

@@ -92,7 +92,7 @@ impl Config {
             serde_json::from_slice(&read("REGISTRY_FILE", 65536, false)?)
                 .map_err(|_| "registry snapshot invalid")?;
         if snapshot.network_id == 0
-            || !layerx_wire::limits::protocol_version_supported(snapshot.protocol_version)
+            || !layerx_intents::canonical::protocol_version_supported(snapshot.protocol_version)
             || snapshot.modules.is_empty()
             || snapshot.modules.len() > 32
         {

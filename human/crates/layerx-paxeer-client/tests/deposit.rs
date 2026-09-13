@@ -5,6 +5,9 @@ use std::thread;
 use std::time::Duration;
 
 use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_intents::canonical::decode_receipt as decode;
+use layerx_intents::canonical::receipt_digest;
+use layerx_intents::canonical::PROTOCOL_VERSION;
 use layerx_paxeer_client::{
     account_address, deposit_leaf_bytes, deposit_root_registration_message, raw_call, CreditFault,
     CreditPath, CustodyFault, DepositFailure, DepositProofConfig, DepositProofVerifier,
@@ -19,10 +22,6 @@ use layerx_types::amount::Amount;
 use layerx_types::ids::AssetId;
 use layerx_types::intent::EvmAddress;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
-use layerx_wire::encode::Encoder;
-use layerx_wire::hash::receipt_digest;
-use layerx_wire::limits::PROTOCOL_VERSION;
-use layerx_wire::receipt::decode;
 use sha2::{Digest as _, Sha256};
 
 const FUNDED: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
@@ -438,7 +437,7 @@ fn dummy_published_proof(authority: &SigningKey) -> PublishedDepositProof {
         deposit_root: [9; 32],
         custody_reference: CUSTODY_REFERENCE,
         network_id: CORE_NETWORK,
-        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
         signature: [0; 64],
     };
     let message = deposit_root_registration_message(&registration)
@@ -460,17 +459,7 @@ fn bridge_registry() -> ModuleRegistry {
         .unwrap_or_else(|error| panic!("module registry: {error:?}"))
 }
 
-#[derive(Clone)]
-struct ReceiptFields {
-    activity_id: [u8; 32],
-    previous_state_root: [u8; 32],
-    resulting_state_root: [u8; 32],
-    batch_id: [u8; 32],
-    asset: [u8; 32],
-    amount: u128,
-    from: [u8; 32],
-    to: [u8; 32],
-}
+use layerx_intents::vectors::CreditReceiptFields as ReceiptFields;
 
 fn signed_receipt(fields: &ReceiptFields, signing: &SigningKey) -> (Vec<u8>, AuthorizedBatch) {
     assert_eq!(fields.activity_id, hex_array(CREDIT_ACTIVITY_ID_HEX));
@@ -489,45 +478,7 @@ fn signed_receipt(fields: &ReceiptFields, signing: &SigningKey) -> (Vec<u8>, Aut
         fields.resulting_state_root,
         signing.verifying_key().to_bytes(),
     );
-    let encode = |signature: Option<[u8; 64]>| {
-        let mut encoder = Encoder::new(4_096);
-        assert_eq!(
-            encoder.structure_header_version(0x5201, PROTOCOL_VERSION),
-            Ok(())
-        );
-        assert_eq!(encoder.u16(PROTOCOL_VERSION), Ok(()));
-        assert_eq!(encoder.bytes(&fields.activity_id, 32), Ok(()));
-        assert_eq!(encoder.u64(9), Ok(()));
-        assert_eq!(encoder.bytes(&fields.previous_state_root, 32), Ok(()));
-        assert_eq!(encoder.bytes(&fields.resulting_state_root, 32), Ok(()));
-        assert_eq!(encoder.bytes(&fields.resulting_state_root, 32), Ok(()));
-        assert_eq!(encoder.i32(0), Ok(()));
-        assert_eq!(encoder.sequence_length(0, 512), Ok(()));
-        assert_eq!(encoder.u128(1), Ok(()));
-        assert_eq!(encoder.bytes(&fields.batch_id, 32), Ok(()));
-        assert_eq!(encoder.u16(ModuleId::Bridge as u16), Ok(()));
-        assert_eq!(encoder.u32(2), Ok(()));
-        assert_eq!(encoder.u32(1), Ok(()));
-        assert_eq!(encoder.u8(1), Ok(()));
-        assert_eq!(encoder.bytes(&fields.asset, 32), Ok(()));
-        assert_eq!(encoder.u128(fields.amount), Ok(()));
-        assert_eq!(encoder.bytes(&fields.from, 32), Ok(()));
-        assert_eq!(encoder.u128(100), Ok(()));
-        assert_eq!(encoder.u128(75), Ok(()));
-        assert_eq!(encoder.u64(1), Ok(()));
-        assert_eq!(encoder.bytes(&fields.to, 32), Ok(()));
-        assert_eq!(encoder.u128(10), Ok(()));
-        assert_eq!(encoder.u128(35), Ok(()));
-        assert_eq!(encoder.bytes(&[9; 32], 32), Ok(()));
-        assert_eq!(encoder.bytes(&[10; 32], 32), Ok(()));
-        assert_eq!(encoder.bytes(&[11; 32], 32), Ok(()));
-        assert_eq!(encoder.u64(1_000), Ok(()));
-        assert_eq!(encoder.u8(u8::from(signature.is_some())), Ok(()));
-        if let Some(signature) = signature {
-            assert_eq!(encoder.bytes(&signature, 64), Ok(()));
-        }
-        encoder.finish()
-    };
+    let encode = |signature| layerx_intents::vectors::credit_receipt(fields, signature);
     let unsigned = encode(None);
     let digest = receipt_digest(&unsigned)
         .unwrap_or_else(|error| panic!("credit receipt digest: {error:?}"));
@@ -543,7 +494,7 @@ fn signed_receipt(fields: &ReceiptFields, signing: &SigningKey) -> (Vec<u8>, Aut
     assert_eq!(
         protocol
             .program_outcome()
-            .map(layerx_wire::receipt::ProgramOutcome::abi_version),
+            .map(layerx_intents::canonical::ProgramOutcome::abi_version),
         None
     );
     (receipt_bytes, batch)
@@ -562,7 +513,7 @@ fn legacy_credit_receipt_remains_explicitly_protocol_v1() {
     assert_eq!(
         protocol
             .program_outcome()
-            .map(layerx_wire::receipt::ProgramOutcome::abi_version),
+            .map(layerx_intents::canonical::ProgramOutcome::abi_version),
         None
     );
 }

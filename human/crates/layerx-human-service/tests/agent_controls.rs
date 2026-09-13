@@ -37,6 +37,7 @@ use layerx_human_service::custody::{
 };
 use layerx_human_service::server::agent_creation::ProductionAgentCreation;
 use layerx_human_service::store::PrincipalId;
+use layerx_intents::canonical::PROTOCOL_VERSION;
 use layerx_intents::{DisclosureCheck, IntentKind};
 use layerx_proof::receipt::{verify, AuthorizedBatch};
 use layerx_types::account::AccountId;
@@ -44,7 +45,6 @@ use layerx_types::ids::{AssetId, Did};
 use layerx_types::intent::PurposeHash;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
 
 use support::directory;

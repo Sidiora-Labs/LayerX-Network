@@ -499,11 +499,15 @@ fn unsigned_payload(
     checked(builder.timestamp_bound(checked(TimestampBound::new(1000, 1010))?))?;
     checked(builder.idempotency_key(IdempotencyKey::new([4; 32])))?;
     checked(builder.fee_limit(Amount::from_u128(1)))?;
-    checked(builder.payload_hash(checked(layerx_wire::hash::payload_hash_for(&payload))?))?;
+    checked(
+        builder.payload_hash(checked(layerx_intents::canonical::payload_hash_for(
+            &payload,
+        ))?),
+    )?;
     checked(builder.payload(payload))?;
-    checked(layerx_wire::activity::encode_unsigned_envelope(&checked(
-        builder.build(),
-    )?))
+    checked(layerx_intents::canonical::unsigned_envelope_bytes(
+        &checked(builder.build())?,
+    ))
 }
 
 fn encoded_disclosure(disclosure: &layerx_crypto::disclosure::Disclosure) -> Result<Vec<u8>> {
@@ -572,11 +576,11 @@ fn authorize_canonical_send(host: &Host, binding: [u8; 32], handle: &[u8]) -> Re
         principal: "alice".into(),
         tenant: "tenant".into(),
         binding_digest: binding,
-        from: checked(layerx_wire::hash::account_id_for_protocol(
+        from: checked(layerx_intents::canonical::account_id_for_protocol(
             &checked(AccountId::parse("agent:did:layerx:alice:main"))?,
             3,
         ))?,
-        to: checked(layerx_wire::hash::account_id_for_protocol(
+        to: checked(layerx_intents::canonical::account_id_for_protocol(
             &checked(AccountId::parse("agent:did:layerx:recipient:main"))?,
             3,
         ))?,
@@ -665,7 +669,7 @@ fn monetary_payloads() -> Result<Vec<layerx_types::payload::Payload>> {
     use layerx_types::ids::Did;
     use layerx_types::payload::{ActivityType, ModuleId, Payload};
     let actor = checked(Did::new(b"did:layerx:alice"))?;
-    let issuer = checked(layerx_wire::hash::did_id_for_protocol(&actor, 3))?;
+    let issuer = checked(layerx_intents::canonical::did_id_for_protocol(&actor, 3))?;
     let registration = Payment::Register(Registration {
         asset: asset_id(&issuer, &[21; 32]),
         salt: [21; 32],
@@ -928,7 +932,6 @@ fn executor_certificate_cannot_authorize_or_manage_keys() -> Result<()> {
 #[test]
 fn native_send_authorization_is_scoped_and_durable() -> Result<()> {
     use layerx_human_service::custody::SendPlanAuthorization;
-    use layerx_wire::encode::Encoder;
     use sha2::{Digest, Sha256};
     let mut host = Host::new()?;
     let principal = PrincipalId::new("alice")?;
@@ -962,25 +965,24 @@ fn native_send_authorization_is_scoped_and_durable() -> Result<()> {
         not_after: now + 600,
     };
     let signature = store.authorize_send(&principal, &key, &authorization)?;
-    let mut message = Encoder::new(512);
-    checked(message.u16(0x5301))?;
-    for value in [authorization.from, authorization.to, authorization.asset] {
-        checked(message.fixed(&value))?;
-    }
-    checked(message.u128(authorization.amount))?;
-    checked(message.u64(authorization.sequence))?;
-    checked(message.fixed(&authorization.idempotency_key))?;
-    checked(message.u64(authorization.expires_at))?;
-    checked(message.fixed(&authorization.context))?;
-    checked(message.u8(0))?;
-    checked(message.u8(1))?;
-    checked(message.fixed(&authorization.from))?;
-    checked(message.fixed(&authorization.context))?;
-    checked(message.u32(authorization.network))?;
-    checked(message.u16(authorization.protocol))?;
+    let debit = layerx_crypto::send::SendDebit {
+        from: authorization.from,
+        to: authorization.to,
+        asset: authorization.asset,
+        amount: authorization.amount,
+        source_sequence: authorization.sequence,
+        idempotency_key: authorization.idempotency_key,
+        expires_at: authorization.expires_at,
+        context_hash: authorization.context,
+        conditions: Vec::new(),
+        authorization_kind: 1,
+        network_id: authorization.network,
+        protocol_version: authorization.protocol,
+    };
+    let message = checked(layerx_intents::vectors::owner_send_authorization(&debit))?;
     let mut hash = Sha256::new();
-    hash.update(layerx_wire::hash::Domain::SignaturePreimage.tag());
-    hash.update(message.finish());
+    hash.update(layerx_intents::canonical::Domain::SignaturePreimage.tag());
+    hash.update(message);
     checked(
         ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
             .verify(&hash.finalize(), &signature),

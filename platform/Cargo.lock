@@ -1317,7 +1317,6 @@ dependencies = [
  "layerx-proof",
  "layerx-sdk",
  "layerx-types",
- "layerx-wire",
  "rustls",
  "sha2",
 ]

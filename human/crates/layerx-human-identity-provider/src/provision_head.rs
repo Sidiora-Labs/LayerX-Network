@@ -56,7 +56,7 @@ fn hex(value: &str) -> io::Result<Vec<u8>> {
 }
 
 fn native_proof(bytes: &[u8]) -> io::Result<Proof> {
-    let proof = layerx_wire::receipt::decode_merkle_proof(bytes).map_err(|_| refused())?;
+    let proof = layerx_intents::canonical::decode_merkle_proof(bytes).map_err(|_| refused())?;
     Proof::new(
         proof.leaf_index(),
         proof.leaf_count(),
@@ -68,13 +68,13 @@ fn native_proof(bytes: &[u8]) -> io::Result<Proof> {
 fn authenticated_digest(
     bytes: &[u8],
     proof: &Proof,
-    header: &layerx_wire::receipt::BatchHeader,
+    header: &layerx_intents::canonical::BatchHeader,
     authorization: &SequencerAuthorization,
     observed_at: u64,
 ) -> io::Result<[u8; 32]> {
     if bytes.starts_with(b"LXP/programs/occupancy-receipt/v2\0") {
-        let receipt =
-            layerx_wire::maintenance::decode_occupancy_maintenance(bytes).map_err(|_| refused())?;
+        let receipt = layerx_intents::canonical::decode_occupancy_maintenance(bytes)
+            .map_err(|_| refused())?;
         if header.first_sequence() == 0
             || header.last_sequence() <= header.first_sequence()
             || header.last_sequence().checked_sub(header.first_sequence())
@@ -92,8 +92,8 @@ fn authenticated_digest(
     let receipt =
         layerx_proof::receipt::verify_sequencer_signature(bytes, authorization.public_key())
             .map_err(|_| refused())?;
-    layerx_wire::hash::receipt_digest(
-        &layerx_wire::receipt::encode_unsigned(&receipt).map_err(|_| refused())?,
+    layerx_intents::canonical::receipt_digest(
+        &layerx_intents::canonical::unsigned_receipt_bytes(&receipt).map_err(|_| refused())?,
     )
     .map_err(|_| refused())
 }

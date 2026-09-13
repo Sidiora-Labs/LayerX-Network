@@ -1894,7 +1894,7 @@ fn hex20(name: &str) -> Result<[u8; 20], String> {
 }
 
 fn selected_protocol(value: Option<&str>) -> Result<u16, String> {
-    let protocol = value.map_or(Ok(layerx_wire::limits::PROTOCOL_VERSION), |value| {
+    let protocol = value.map_or(Ok(layerx_intents::canonical::PROTOCOL_VERSION), |value| {
         value
             .parse::<u16>()
             .map_err(|_| "LAYERX_HUMAN_PROTOCOL_VERSION is invalid".to_owned())

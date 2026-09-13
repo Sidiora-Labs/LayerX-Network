@@ -257,7 +257,7 @@ impl CheckpointProof {
     pub fn validated(self) -> Result<Self, ClaimRefusal> {
         let native = self.native;
         let mut value = Self::validated_for_protocol(
-            layerx_wire::limits::PROTOCOL_VERSION,
+            layerx_intents::canonical::PROTOCOL_VERSION,
             self.checkpoint_hash,
             self.state_root,
             self.epoch,
@@ -698,12 +698,11 @@ impl WithdrawalBoundary {
         &self,
         debit: &CommittedWithdrawalDebit,
     ) -> Result<(), WithdrawalError> {
-        if self.protocol_version == layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION {
-            let found = debit
-                .verified
-                .receipt()
-                .protocol()
-                .map_or(0, layerx_wire::receipt::ProtocolReceipt::protocol_version);
+        if self.protocol_version == layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION {
+            let found = debit.verified.receipt().protocol().map_or(
+                0,
+                layerx_intents::canonical::ProtocolReceipt::protocol_version,
+            );
             if found != self.protocol_version {
                 return Err(WithdrawalError::Refused(
                     ClaimRefusal::DebitProtocolMismatch {
@@ -722,7 +721,7 @@ impl WithdrawalBoundary {
     ///
     /// Refuses missing endpoints, zero contract/depth/cadence/stall bounds, or invalid URLs.
     pub fn new(config: WithdrawalConfig) -> Result<Self, WithdrawalConfigError> {
-        Self::new_for_protocol(config, layerx_wire::limits::PROTOCOL_VERSION)
+        Self::new_for_protocol(config, layerx_intents::canonical::PROTOCOL_VERSION)
     }
 
     /// Validates and adopts a declared Paxeer withdrawal boundary bound to one
@@ -1599,8 +1598,8 @@ struct ClaimQueuedEvent {
 pub(crate) const fn supported_protocol_version(protocol_version: u16) -> bool {
     matches!(
         protocol_version,
-        layerx_wire::limits::PROTOCOL_VERSION
-            | layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION
+        layerx_intents::canonical::PROTOCOL_VERSION
+            | layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION
     )
 }
 

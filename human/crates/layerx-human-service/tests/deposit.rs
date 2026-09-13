@@ -421,9 +421,9 @@ fn binding_receipt(submission: AgentSubmission, address: EvmAddress) -> AgentBin
     let signer = ReceiptSigningKey::from_bytes(&[0x35; 32]);
     let encode = |signature: Option<[u8; 64]>| {
         let mut output = Vec::new();
-        output.extend_from_slice(&layerx_wire::limits::PROTOCOL_VERSION.to_be_bytes());
+        output.extend_from_slice(&layerx_intents::canonical::PROTOCOL_VERSION.to_be_bytes());
         output.extend_from_slice(&0x5201_u16.to_be_bytes());
-        output.extend_from_slice(&layerx_wire::limits::PROTOCOL_VERSION.to_be_bytes());
+        output.extend_from_slice(&layerx_intents::canonical::PROTOCOL_VERSION.to_be_bytes());
         push_bytes(&mut output, &submission.activity_id);
         output.extend_from_slice(&9_u64.to_be_bytes());
         push_bytes(&mut output, &[2; 32]);
@@ -1034,7 +1034,7 @@ impl Fixture {
             network,
             paxeer_chain_id: PAXEER_CHAIN_ID,
             layerx_network: network,
-            layerx_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+            layerx_protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
             vault: runtime.vault,
             asset: AssetId::new(ASSET),
             amount: Amount::from_u128(AMOUNT),

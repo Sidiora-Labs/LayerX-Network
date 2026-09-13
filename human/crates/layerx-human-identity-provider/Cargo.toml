@@ -6,10 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+layerx-intents.workspace = true
 layerx-client.workspace = true
 layerx-human-service = { path = "../layerx-human-service" }
 layerx-types.workspace = true
-layerx-wire.workspace = true
 layerx-proof.workspace = true
 getrandom.workspace = true
 serde.workspace = true
@@ -19,6 +19,7 @@ rustix = { workspace = true, features = ["fs"] }
 signal-hook = "=0.3.18"
 
 [dev-dependencies]
+layerx-intents = { workspace = true, features = ["test-vectors"] }
 base64.workspace = true
 tempfile = "=3.27.0"
 

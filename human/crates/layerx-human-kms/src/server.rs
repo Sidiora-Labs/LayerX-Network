@@ -119,8 +119,9 @@ fn validate_sign(request: &Request<'_>, config: &Config, now: u64) -> Result<Opt
     if request.operation != 5 {
         return Ok(None);
     }
-    let activity = layerx_wire::activity::decode_unsigned(request.canonical, &config.registry)
-        .map_err(|_| Error::Refused)?;
+    let activity =
+        layerx_intents::canonical::decode_unsigned_activity(request.canonical, &config.registry)
+            .map_err(|_| Error::Refused)?;
     if activity.network_id() != config.network
         || activity.protocol_version() != config.protocol
         || request.network != config.network

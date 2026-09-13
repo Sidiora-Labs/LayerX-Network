@@ -6,12 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+layerx-intents.workspace = true
 layerx-client.workspace = true
 layerx-types.workspace = true
 layerx-human-service = { path = "../layerx-human-service" }
 layerx-programs.workspace = true
 layerx-proof.workspace = true
-layerx-wire.workspace = true
 base64.workspace = true
 getrandom.workspace = true
 serde.workspace = true
@@ -26,4 +26,5 @@ data-encoding = "=2.9.0"
 signal-hook = "=0.3.18"
 
 [dev-dependencies]
+layerx-intents = { workspace = true, features = ["test-vectors"] }
 ed25519-dalek = "=2.2.0"

@@ -17,7 +17,6 @@ layerx-proof.workspace = true
 layerx-client.workspace = true
 layerx-sdk.workspace = true
 layerx-paxeer-client.workspace = true
-layerx-wire.workspace = true
 passkey-auth.workspace = true
 serde.workspace = true
 serde_json.workspace = true

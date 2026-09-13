@@ -59,7 +59,7 @@ fn provision_account() -> io::Result<()> {
     }
     let account = layerx_types::account::AccountId::parse(&format!("agent:{}:main", request.did))
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid account"))?;
-    let id = layerx_wire::hash::account_id_for_protocol(&account, 3)
+    let id = layerx_intents::canonical::account_id_for_protocol(&account, 3)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid protocol account"))?;
     let account_hex: String = id
         .iter()
