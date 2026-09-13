@@ -203,7 +203,7 @@ fn producer(script: &str, args: &[&str]) {
     );
 }
 
-pub(super) fn start() -> (Cluster, Funding) {
+fn funding_root() -> PathBuf {
     let root = std::env::temp_dir().join(format!(
         "pay4-funding-{}-{}-{}",
         std::process::id(),
@@ -211,6 +211,11 @@ pub(super) fn start() -> (Cluster, Funding) {
         NEXT_CLUSTER.fetch_add(1, Ordering::Relaxed),
     ));
     make_dir(&root, 0o700);
+    root
+}
+
+pub(super) fn start() -> (Cluster, Funding) {
+    let root = funding_root();
     let recipient_seed = random32();
     let recipient_did = treasury_did(&recipient_seed);
     let mut funding = Funding {

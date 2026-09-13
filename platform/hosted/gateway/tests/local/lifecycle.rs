@@ -97,9 +97,9 @@ struct LocalRedis {
 }
 struct Gateway {
     environment: BTreeMap<&'static str, String>,
-    _process: Daemon,
-    _event_processes: Vec<Daemon>,
-    _registry_process: Option<Daemon>,
+    process: Daemon,
+    event_processes: Vec<Daemon>,
+    registry_process: Option<Daemon>,
     _component_process: Daemon,
     port: u16,
     signer_file: String,
@@ -338,15 +338,10 @@ fn start_local_gateway(
     )
 }
 
-fn start_gateway_runtime(
+fn gateway_configuration(
     cluster: &Cluster,
     certificates: &Certificates,
-    boundary: &Boundary,
-    identity: &LocalIdentity,
-    authority: &LocalAuthority,
-    redis: &LocalRedis,
-    registry: bool,
-) -> Gateway {
+) -> (BTreeMap<&'static str, String>, u16, String) {
     let password_file = local_secret(&cluster.root, "client-password", &token());
     let pkcs12 = certificates.path("gateway-client.p12");
     command(
@@ -370,7 +365,7 @@ fn start_gateway_runtime(
         "trusted-sequencer.hex",
         &hex_encode(&cluster.sequencer_key),
     );
-    let mut gateway_env = BTreeMap::from([
+    let gateway_env = BTreeMap::from([
         ("LAYERX_GATEWAY_LISTEN", format!("127.0.0.1:{gateway_port}")),
         (
             "LAYERX_GATEWAY_TLS_CERT_DER",
@@ -429,6 +424,19 @@ fn start_gateway_runtime(
             ),
         ),
     ]);
+    (gateway_env, gateway_port, signer_file)
+}
+
+fn start_gateway_runtime(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    boundary: &Boundary,
+    identity: &LocalIdentity,
+    authority: &LocalAuthority,
+    redis: &LocalRedis,
+    registry: bool,
+) -> Gateway {
+    let (mut gateway_env, gateway_port, signer_file) = gateway_configuration(cluster, certificates);
     gateway_env.extend(gateway_upstream_environment(
         cluster, boundary, identity, authority, redis,
     ));
@@ -449,17 +457,17 @@ fn start_gateway_runtime(
     let gateway_process = local_service(cluster, "layerx-gateway", gateway_port, &gateway_env);
     let mut gateway = Gateway {
         environment: gateway_env,
-        _process: gateway_process,
-        _event_processes: Vec::new(),
-        _registry_process: None,
+        process: gateway_process,
+        event_processes: Vec::new(),
+        registry_process: None,
         _component_process: component_process,
         port: gateway_port,
         signer_file,
     };
-    gateway._event_processes =
+    gateway.event_processes =
         events.start(cluster, certificates, identity, authority, redis, &gateway);
     if let Some((path, port)) = registry_config {
-        gateway._registry_process = Some(registry_runtime::start(cluster, &path, port));
+        gateway.registry_process = Some(registry_runtime::start(cluster, &path, port));
     }
     gateway
 }
@@ -1858,12 +1866,7 @@ fn local_gateway_successful_send_latency() {
     let balance = boundary.core.get(&format!("/v1/accounts/{source}/balance"));
     assert_eq!(balance.status, 200, "{}", balance.body);
     assert_eq!(json(&balance)["result"]["balance"], "100000000000000");
-    println!(
-        "funded_send_sequences identity_next={} account_next={} balance={}",
-        account_sequence(&cluster.lni_socket, &cluster.treasury_did),
-        json(&balance)["result"]["next_sequence"],
-        json(&balance)["result"]["balance"]
-    );
+    print_funded_sequence(&cluster, &balance);
     let mut send_http = PersistentGatewayHttp::connect(&http);
     let mut samples = Vec::new();
     let mut last_signed = None;
@@ -1928,6 +1931,15 @@ fn local_gateway_successful_send_latency() {
         &funding,
         &cluster,
         &boundary,
+    );
+}
+
+fn print_funded_sequence(cluster: &Cluster, balance: &HttpAnswer) {
+    println!(
+        "funded_send_sequences identity_next={} account_next={} balance={}",
+        account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+        json(balance)["result"]["next_sequence"],
+        json(balance)["result"]["balance"]
     );
 }
 
@@ -2676,6 +2688,37 @@ fn local_gateway_program_custody_journey() {
             "receipt:read",
         ],
     );
+    let config = issue_smoke_credentials(&cluster, &certificates, &identity, &gateway, &funding);
+    let signer = cluster.root.join("program-journey.signer");
+    write(&signer, &cluster.treasury_seed, 0o600);
+    let payment_output = run_payment_smoke(
+        &cluster,
+        &certificates,
+        &gateway,
+        &funding,
+        &config,
+        &signer,
+    );
+    assert_wallet_balance_smoke(&cluster, &certificates, &gateway, &payment_output);
+    let (result, output) =
+        run_program_custody_smoke(&cluster, &certificates, &gateway, &config, &signer);
+    assert_lifecycle_refusal_recovery(
+        &cluster,
+        &certificates,
+        &mut gateway,
+        &key,
+        &result,
+        &output,
+    );
+}
+
+fn issue_smoke_credentials(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    identity: &LocalIdentity,
+    gateway: &Gateway,
+    funding: &funding::Funding,
+) -> PathBuf {
     let source_session = cluster.root.join("smoke-source-session");
     write(&source_session, identity.session.as_bytes(), 0o600);
     let identity_http = Http {
@@ -2731,9 +2774,19 @@ fn local_gateway_program_custody_journey() {
         .status()
         .required("production smoke credential issuance");
     assert!(status.success(), "smoke credentials failed: {status}");
-    let config = credential_dir.join("gateway.curl");
-    let signer = cluster.root.join("program-journey.signer");
-    write(&signer, &cluster.treasury_seed, 0o600);
+    credential_dir.join("gateway.curl")
+}
+
+fn run_payment_smoke(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    gateway: &Gateway,
+    funding: &funding::Funding,
+    config: &Path,
+    signer: &Path,
+) -> PathBuf {
+    let python =
+        std::env::var_os("LAYERX_TEST_PYTHON").required("qualified Python with cryptography");
     let payment_output = cluster.root.join("payment-journey");
     let status = Command::new(&python)
         .arg(repository_root().join("platform/hosted/testnet/tests/payment-journey.py"))
@@ -2741,9 +2794,9 @@ fn local_gateway_program_custody_journey() {
         .arg("--ca")
         .arg(certificates.path("ca.pem"))
         .arg("--auth-config")
-        .arg(&config)
+        .arg(config)
         .arg("--signer")
-        .arg(&signer)
+        .arg(signer)
         .args([
             "--did",
             &cluster.treasury_did,
@@ -2760,6 +2813,15 @@ fn local_gateway_program_custody_journey() {
         .status()
         .required("real signed payment smoke journey");
     assert!(status.success(), "payment smoke journey failed: {status}");
+    payment_output
+}
+
+fn assert_wallet_balance_smoke(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    gateway: &Gateway,
+    payment_output: &Path,
+) {
     let wallet_config = cluster.root.join("wallet-smoke-config.json");
     write(
         &wallet_config,
@@ -2813,6 +2875,15 @@ fn local_gateway_program_custody_journey() {
         payment["source_after"]["next_sequence"]
     );
     println!("wallet CLI verified the native balance and account sequence against the configured sequencer pin");
+}
+
+fn run_program_custody_smoke(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    gateway: &Gateway,
+    config: &Path,
+    signer: &Path,
+) -> (serde_json::Value, PathBuf) {
     let artifact = std::env::var_os("LAYERX_TEST_ESCROW_WASM").required("built escrow WASM");
     let output = cluster.root.join("program-custody-journey");
     let status = Command::new(
@@ -2873,6 +2944,17 @@ fn local_gateway_program_custody_journey() {
         assert_eq!(digest, expected);
     }
     assert_eq!(result["after"]["balance"], "1");
+    (result, output)
+}
+
+fn assert_lifecycle_refusal_recovery(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    gateway: &mut Gateway,
+    key: &serde_json::Value,
+    result: &serde_json::Value,
+    output: &Path,
+) {
     let sdk_request = cluster.root.join("lifecycle-sdk-request.json");
     write(&sdk_request, &serde_json::to_vec(&serde_json::json!({
         "endpoint": format!("https://localhost:{}", gateway.port),
@@ -2884,9 +2966,9 @@ fn local_gateway_program_custody_journey() {
     })).required("private lifecycle SDK request"), 0o600);
     for restarted in [false, true] {
         if restarted {
-            gateway._process.stop();
-            gateway._process = local_service(
-                &cluster,
+            gateway.process.stop();
+            gateway.process = local_service(
+                cluster,
                 "layerx-gateway",
                 gateway.port,
                 &gateway.environment,

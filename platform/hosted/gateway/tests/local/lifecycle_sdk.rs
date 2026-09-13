@@ -67,7 +67,9 @@ fn main() {
             assert_eq!(error.class, AgentErrorClass::PolicyRefusal);
             assert_eq!(error.retriability, Retriability::Terminal);
             assert_eq!(
-                error.protocol_result_code.map(|result| result.raw()),
+                error
+                    .protocol_result_code
+                    .map(layerx_types::result::ResultCode::raw),
                 Some(code)
             );
         }
