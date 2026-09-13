@@ -238,6 +238,7 @@ fn actual_daemon_maintenance_head_is_authenticated_before_initialization() {
         ("current", serde_json::json!(false)),
         ("observed_sequence", serde_json::json!(u64::MAX)),
         ("observed_at", serde_json::json!(0)),
+        ("observed_at", serde_json::json!(u64::MAX)),
     ] {
         let mut changed = input.clone();
         changed["head"][field] = value;

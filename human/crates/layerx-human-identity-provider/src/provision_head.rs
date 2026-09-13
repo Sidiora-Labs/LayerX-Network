@@ -69,14 +69,20 @@ fn authenticated_digest(
     proof: &Proof,
     header: &layerx_wire::receipt::BatchHeader,
     authorization: &SequencerAuthorization,
+    observed_at: u64,
 ) -> io::Result<[u8; 32]> {
     if bytes.starts_with(b"LXP/programs/occupancy-receipt/v2\0") {
         let receipt =
             layerx_wire::maintenance::decode_occupancy_maintenance(bytes).map_err(|_| refused())?;
-        if receipt.batch_number != header.batch_number()
+        if header.first_sequence() == 0
+            || header.last_sequence() <= header.first_sequence()
+            || header.last_sequence().checked_sub(header.first_sequence())
+                != Some(u64::from(proof.leaf_index()))
+            || receipt.batch_number != header.batch_number()
             || receipt.global_sequence != header.last_sequence()
             || receipt.resulting_state_root != header.resulting_state_root()
             || proof.leaf_index().checked_add(1) != Some(proof.leaf_count())
+            || observed_at != header.timestamp_ms()
         {
             return Err(refused());
         }
@@ -116,7 +122,13 @@ pub(super) fn run() -> io::Result<()> {
     )
     .map_err(|_| refused())?;
     let header = verified.header().header();
-    let digest = authenticated_digest(&receipt_bytes, &proof, header, &authorization)?;
+    let digest = authenticated_digest(
+        &receipt_bytes,
+        &proof,
+        header,
+        &authorization,
+        head.observed_at,
+    )?;
     if !head.current
         || header.network_id() != input.network_id
         || header.protocol_version() != 3
