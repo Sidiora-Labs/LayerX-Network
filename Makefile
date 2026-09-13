@@ -2080,6 +2080,20 @@ human-test: $(BUILD_DIR)/tests/explorer_fixture human-test-hosted-provisioning
 	$(HUMAN_NPM) test
 
 HUMAN_TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),$(CURDIR)/human/target)
+HUMAN_TEST_PAXD := $(abspath paxeer-network/build/paxd)
+HUMAN_TEST_CUSTODY_PROOF := $(abspath $(BUILD_DIR)/bin/layerx-custody-proof)
+
+.PHONY: human-test-custody-prerequisites
+human-test human-test-integration: human-test-custody-prerequisites
+human-test human-test-integration: export PAXD = $(HUMAN_TEST_PAXD)
+human-test human-test-integration: export LAYERX_CUSTODY_PROOF_BIN = $(HUMAN_TEST_CUSTODY_PROOF)
+human-test human-test-integration: export LAYERX_TEST_NATIVE_BIN_DIR = $(abspath $(BUILD_DIR)/bin)
+human-test-custody-prerequisites:
+	$(MAKE) public-tls-test-prerequisites
+	$(MAKE) PAXEER_GO_JOBS=4 custody-proof-build
+	$(MAKE) layerx-genesis-build
+	GOMAXPROCS=4 GOFLAGS="$(GOFLAGS) -p=4" $(MAKE) paxeer-build
+
 HUMAN_IDENTITY_PROVIDER := $(HUMAN_TARGET_DIR)/debug/layerx-human-identity-provider
 HUMAN_TEST_WEBHOOKS := $(HUMAN_TARGET_DIR)/debug/layerx-webhooks
 

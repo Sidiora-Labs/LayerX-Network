@@ -37,6 +37,14 @@ jobs:
           cargo install cargo-deny --locked --version 0.19.0
       - name: Install pinned Foundry toolchain
         uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+      - name: Install pinned settlement compiler
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: paxeer-network/go.mod
+          cache: false
+      - name: Download declared settlement modules
+        working-directory: paxeer-network
+        run: go mod download
       - name: Install Human and custody fixture dependencies
         run: |
           sudo apt-get update
