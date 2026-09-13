@@ -2139,6 +2139,7 @@ lxp_result lxp_daemon_account_evidence_publish(
     const lxp_daemon_account_evidence *evidence, lxp_arena *arena,
     uint8_t record_digest[32])
 {
+    lxp_daemon_account_evidence candidate;
     uint8_t key_material[64];
     uint8_t key[32];
     uint8_t *payload;
@@ -2152,6 +2153,20 @@ lxp_result lxp_daemon_account_evidence_publish(
         LXP_OK : LXP_ERR_AUTH_SCOPE;
     if (status == LXP_OK)
         status = verify_account_evidence(evidence, store->network_id, arena);
+    if (status == LXP_OK && store->handover_chain != NULL) {
+        lxp_daemon_account_evidence persisted;
+        size_t mark = lxp_arena_mark(arena);
+        status = lxp_daemon_account_evidence_lookup(store, evidence->account_id,
+            evidence->resulting_state_root, arena, &persisted);
+        if (status == LXP_OK) {
+            candidate = *evidence;
+            candidate.signed_header.authorization = persisted.signed_header.authorization;
+            evidence = &candidate;
+            if (!evidence_authorization_matches(store, &evidence->signed_header.authorization,
+                evidence->signed_header.canonical_header)) status = LXP_ERR_AUTH_SCOPE;
+        } else if (status == LXP_ERR_UNKNOWN_FIELD) status = LXP_OK;
+        if (lxp_arena_reset(arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    }
     payload_length = account_payload_length(evidence);
     payload = status == LXP_OK ? (uint8_t *)malloc(payload_length) : NULL;
     if (status == LXP_OK && payload == NULL) status = LXP_ERR_IO;
@@ -2656,6 +2671,17 @@ lxp_result lxp_daemon_activity_evidence_publish(
         evidence.global_sequence = receipt.global_sequence;
         evidence.batch_number = header.batch_number;
         status = verify_activity_evidence(&evidence, store->network_id, arena);
+    }
+    if (status == LXP_OK && store->handover_chain != NULL) {
+        lxp_daemon_activity_evidence persisted;
+        size_t mark = lxp_arena_mark(arena);
+        status = lxp_daemon_activity_evidence_lookup(store, evidence.activity_id, arena, &persisted);
+        if (status == LXP_OK) {
+            evidence.signed_header.authorization = persisted.signed_header.authorization;
+            if (!evidence_authorization_matches(store, &evidence.signed_header.authorization,
+                evidence.signed_header.canonical_header)) status = LXP_ERR_AUTH_SCOPE;
+        } else if (status == LXP_ERR_UNKNOWN_ACTIVITY) status = LXP_OK;
+        if (lxp_arena_reset(arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
     }
     payload_length = activity_payload_length(&evidence);
     payload = status == LXP_OK ? (uint8_t *)malloc(payload_length) : NULL;

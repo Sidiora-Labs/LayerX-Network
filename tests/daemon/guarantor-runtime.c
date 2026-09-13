@@ -62,6 +62,28 @@ int main(int argc, char **argv)
         mismatch.header.previous_state_root[0] ^= 1U;
         assert(gp_runtime_prepare(runtime, &mismatch) != LXP_OK);
         assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+        if (engine->kernel->handover.enabled && engine->kernel->epoch > 1U) {
+            lxp_sequencer_authorization retired = engine->kernel->handover.genesis_authorization;
+            uint8_t retired_key[32];
+            uint64_t sequence_before = engine->kernel->state->next_sequence;
+            assert(retired.first_batch_number == 1U && retired.last_batch_number == UINT64_MAX);
+            memset(retired_key, 0x22U, sizeof(retired_key));
+            for (uint64_t claimed_epoch = 1U; claimed_epoch <= body.header.epoch; ++claimed_epoch) {
+                lxp_batch_body forged = body;
+                forged.header.epoch = claimed_epoch;
+                memcpy(forged.header.sequencer_id, retired.sequencer_id, 32U);
+                assert(lxp_batch_availability_root(&forged, &arena,
+                    forged.header.data_availability_root) == LXP_OK);
+                assert(lxp_batch_sign(&forged.header, retired_key, &retired,
+                    forged.sequencer_signature, &arena) == LXP_OK);
+                assert(lxp_batch_verify_signature(&forged.header, forged.sequencer_signature,
+                    sizeof(forged.sequencer_signature), &retired, &arena) == LXP_OK);
+                assert(gp_runtime_prepare(runtime, &forged) != LXP_OK);
+                assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+                assert(engine->kernel->state->next_sequence == sequence_before);
+            }
+            lxp_secure_zero(retired_key, sizeof(retired_key));
+        }
         if (batch == count && getenv("LAYERX_TEST_HANDOVER_DIVERGENCE") != NULL) {
             lxp_batch_body divergent = body;
             lxp_sequencer_authorization authorization;
