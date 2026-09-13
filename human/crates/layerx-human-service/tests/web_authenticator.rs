@@ -130,7 +130,7 @@ fn browser_authenticator_interoperates_with_real_passkeys_and_refuses_forgery_an
         .is_err());
     let verified =
         required(passkeys.finish_assertion(&mut scope, &assertion.assertion_id, &credential, 103));
-    assert_eq!(verified.passkey_id, registered.passkey_id);
+    assert_eq!(verified.passkey_id, registered.passkey_id());
     assert!(passkeys
         .finish_assertion(&mut scope, &assertion.assertion_id, &credential, 104)
         .is_err());
@@ -138,5 +138,5 @@ fn browser_authenticator_interoperates_with_real_passkeys_and_refuses_forgery_an
     let credential = authenticator.credential("assert", &assertion.ceremony);
     let verified =
         required(passkeys.finish_assertion(&mut scope, &assertion.assertion_id, &credential, 106));
-    assert_eq!(verified.passkey_id, registered.passkey_id);
+    assert_eq!(verified.passkey_id, registered.passkey_id());
 }
