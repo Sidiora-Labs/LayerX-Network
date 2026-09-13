@@ -7,7 +7,7 @@ int program_admission_client_main(int argc, char **argv);
 #include "layerx/lxp_merkle.h"
 #include <sys/wait.h>
 
-enum { METERED_RECEIPTS = 20 };
+enum { METERED_RECEIPTS = 33 };
 
 typedef struct metered_run {
     uint64_t account_sequence;
@@ -16,6 +16,9 @@ typedef struct metered_run {
     uint8_t receipt_ids[METERED_RECEIPTS][32];
     lxp_result results[METERED_RECEIPTS];
     uint8_t root[32];
+    uint8_t session_ids[4][32];
+    uint8_t replacement_id[32];
+    lxp_u128 replacement_spent;
 } metered_run;
 
 static const uint8_t metered_asset[32] = {
@@ -588,6 +591,245 @@ static int metered_fee_refusals(int descriptor, metered_run *run,
     return 0;
 }
 
+static int metered_next_sequence(int descriptor, uint64_t *sequence)
+{
+    uint8_t preparation[79];
+    wire_envelope response;
+    store_u16(preparation, 1U); store_u16(preparation + 2U, 75U);
+    (void)memcpy(preparation + 4U, REGISTERED_DID, 75U);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 26U, 630U, preparation, sizeof(preparation)) == 0);
+    REQUIRE(receive_envelope(descriptor, &response) == 0);
+    REQUIRE(response.tag == 27U && response.payload_length >= 139U);
+    uint64_t previous = load_u64(response.payload + 99U);
+    REQUIRE(previous < UINT64_MAX);
+    *sequence = previous + 1U;
+    release_envelope(&response);
+    return 0;
+}
+
+static int metered_session_issue(int descriptor, const signer *owner, metered_run *run,
+    lxp_authority_grant *grant, const uint8_t *predecessor, const uint8_t *commitment,
+    lxp_result expected)
+{
+    uint8_t storage[4096], payload[1024], action[32] = {0};
+    lxp_arena arena;
+    lxp_byte_span body;
+    lxp_codec_writer writer;
+    lxp_receipt receipt;
+    uint64_t sequence;
+    REQUIRE(metered_next_sequence(descriptor, &sequence) == 0);
+    REQUIRE(sequence < UINT64_MAX - 1024U);
+    store_u64(action + 24U, sequence);
+    REQUIRE(lxp_grant_id_compute(grant, grant->grant_id) == LXP_OK);
+    REQUIRE(lxp_arena_init(&arena, storage, sizeof(storage)) == LXP_OK);
+    REQUIRE(lxp_grant_encode(grant, &arena, &body) == LXP_OK);
+    REQUIRE(lxp_codec_writer_init(&writer, &arena, sizeof(payload)) == LXP_OK);
+    REQUIRE(lxp_codec_write_u16(&writer, 0x7105U) == LXP_OK);
+    REQUIRE(lxp_codec_write_u16(&writer, predecessor == NULL ? 0x0103U : 0x0205U) == LXP_OK);
+    REQUIRE(lxp_codec_write_bytes(&writer, body.bytes, body.length, 1024U) == LXP_OK);
+    REQUIRE(lxp_codec_write_u64(&writer, sequence + 1024U) == LXP_OK);
+    REQUIRE(lxp_codec_write_bytes(&writer, action, 32U, 32U) == LXP_OK);
+    if (predecessor != NULL) {
+        REQUIRE(commitment != NULL);
+        REQUIRE(lxp_codec_write_bytes(&writer, predecessor, 32U, 32U) == LXP_OK);
+        REQUIRE(lxp_codec_write_bytes(&writer, commitment, 32U, 32U) == LXP_OK);
+    }
+    REQUIRE(writer.length <= sizeof(payload));
+    (void)memcpy(payload, writer.bytes, writer.length);
+    REQUIRE(metered_execute(descriptor, owner, run, 0x00070005U, payload,
+        writer.length, expected, &receipt) == 0);
+    REQUIRE(receipt.result_code == expected);
+    return 0;
+}
+
+static int metered_session_read(int descriptor, const uint8_t id[32],
+    lxp_authority_grant *grant, uint8_t successor[32], uint8_t commitment[32])
+{
+    uint8_t request[34], computed[32];
+    wire_envelope response;
+    store_u16(request, 1U); (void)memcpy(request + 2U, id, 32U);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 36U, 632U, request, sizeof(request)) == 0);
+    REQUIRE(receive_envelope(descriptor, &response) == 0);
+    REQUIRE(response.tag == 37U && response.correlation_id == 632U && response.payload_length >= 188U);
+    REQUIRE(response.proof_length == 0U && load_u16(response.payload) == 1U && !lxp_ct_is_zero(response.payload + 10U, 32U));
+    size_t length = load_u16(response.payload + 42U);
+    REQUIRE(length <= 1024U && response.payload_length == 44U + length + 144U);
+    REQUIRE(lxp_grant_decode(response.payload + 44U, length, grant) == LXP_OK);
+    REQUIRE(lxp_grant_id_compute(grant, computed) == LXP_OK && memcmp(computed, id, 32U) == 0);
+    (void)memcpy(grant->grant_id, id, 32U);
+    const uint8_t *facts = response.payload + 44U + length;
+    grant->revoked_at_sequence = load_u64(facts);
+    grant->revoked = grant->revoked_at_sequence != 0U;
+    REQUIRE(grant->revoked_at_sequence <= load_u64(response.payload + 2U));
+    if (grant->fee_budget.present) {
+        lxp_authority_scope counters = {0};
+        REQUIRE(lxp_authority_charge_record_decode(facts + 8U, 72U, id, &counters) == LXP_OK);
+        grant->fee_budget.spent_total = counters.spent_total;
+        grant->fee_budget.spent_this_period = counters.spent_this_period;
+        grant->fee_budget.period_start = counters.period_start;
+    } else REQUIRE(lxp_ct_is_zero(facts + 8U, 72U));
+    (void)memcpy(successor, facts + 80U, 32U);
+    (void)memcpy(commitment, facts + 112U, 32U);
+    if (grant->fee_budget.present && grant->revoked) {
+        REQUIRE(lxp_authority_session_charge_commitment(grant, computed) == LXP_OK);
+        REQUIRE(memcmp(commitment, computed, 32U) == 0);
+    } else REQUIRE(lxp_ct_is_zero(commitment, 32U));
+    release_envelope(&response);
+    return 0;
+}
+
+static int metered_session_refuse(int descriptor, metered_run *run, uint8_t seed,
+    const uint8_t *payload, size_t payload_length, lxp_result expected)
+{
+    uint8_t encoded[ACTIVITY_CAPACITY], root[32];
+    size_t length;
+    signer session;
+    REQUIRE(signer_init(&session, seed) == 0);
+    REQUIRE(metered_encode(&session, run->account_sequence, LX_PROGRAMS_CALL, 0U,
+        payload, payload_length, encoded, &length) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 633U, encoded, length) == 0);
+    REQUIRE(expect_error(descriptor, 633U, 4U, expected) == 0);
+    REQUIRE(metered_head(descriptor, 0U, root) == 0 && memcmp(root, run->root, 32U) == 0);
+    return 0;
+}
+
+static int metered_sessions_initial(int descriptor, const signer *owner, metered_run *run,
+    const uint8_t *payload, size_t payload_length)
+{
+    uint8_t did[32];
+    struct timespec now;
+    lxp_authority_grant grant;
+    lxp_receipt receipt;
+    REQUIRE(clock_gettime(CLOCK_REALTIME, &now) == 0);
+    uint64_t starts = (uint64_t)now.tv_sec * 1000U - 60000U;
+    REQUIRE(lxp_did_id_derive(REGISTERED_DID, sizeof(REGISTERED_DID) - 1U, did) == LXP_OK);
+    for (uint8_t seed = 0x51U; seed <= 0x54U; ++seed) {
+        signer session;
+        REQUIRE(signer_init(&session, seed) == 0);
+        if (seed == 0x53U) {
+            REQUIRE(lxp_authentication_key_bind(&grant, did, session.public_key,
+                starts, starts + 3600000U, run->generation) == LXP_OK);
+        } else {
+            REQUIRE(lxp_session_key_bind(&grant, did, session.public_key,
+                UINT64_C(1) << LXP_MODULE_PROGRAMS, 3U, 3U,
+                starts, starts + 3600000U, run->generation) == LXP_OK);
+            if (seed != 0x51U) {
+                grant.fee_budget.present = true;
+                (void)memcpy(grant.fee_budget.asset_id, metered_asset, 32U);
+                grant.fee_budget.maximum_per_activity = (lxp_u128){0U, 67108864U};
+                grant.fee_budget.maximum_total = (lxp_u128){0U, seed == 0x54U ? 67108864U : 134217728U};
+                grant.fee_budget.period_length = 3600000U;
+                grant.fee_budget.maximum_per_period = grant.fee_budget.maximum_total;
+                grant.fee_budget.period_start = starts;
+            }
+        }
+        REQUIRE(metered_session_issue(descriptor, owner, run, &grant, NULL, NULL, LXP_OK) == 0);
+        (void)memcpy(run->session_ids[seed - 0x51U], grant.grant_id, 32U);
+        if (seed == 0x52U || seed == 0x54U) {
+            REQUIRE(metered_execute(descriptor, &session, run, LX_PROGRAMS_CALL,
+                payload, payload_length, LXP_OK, &receipt) == 0);
+            REQUIRE(!lxp_u128_is_zero(receipt.fee_charged));
+            uint8_t successor[32], commitment[32];
+            REQUIRE(metered_session_read(descriptor, grant.grant_id, &grant, successor, commitment) == 0);
+            REQUIRE(lxp_u128_cmp(grant.fee_budget.spent_total, receipt.fee_charged) == 0 &&
+                lxp_u128_cmp(grant.fee_budget.spent_this_period, receipt.fee_charged) == 0 &&
+                lxp_ct_is_zero(successor, 32U) && !grant.revoked);
+        }
+    }
+    REQUIRE(metered_session_refuse(descriptor, run, 0x51U, payload, payload_length, LXP_ERR_AUTH_ALLOWANCE) == 0);
+    REQUIRE(metered_session_refuse(descriptor, run, 0x53U, payload, payload_length, LXP_ERR_AUTH_SCOPE) == 0);
+    REQUIRE(metered_session_refuse(descriptor, run, 0x54U, payload, payload_length, LXP_ERR_GRANT_EXHAUSTED) == 0);
+    puts("owner-issued fee sessions execute and persist charges; legacy paid and authentication-only spending refuse");
+    return 0;
+}
+
+static int metered_session_revoke(int descriptor, const signer *owner, metered_run *run, const uint8_t id[32])
+{
+    uint8_t payload[45] = {0x71U, 6U, 0U, 3U};
+    uint64_t sequence;
+    lxp_receipt receipt;
+    REQUIRE(metered_next_sequence(descriptor, &sequence) == 0);
+    (void)memcpy(payload + 4U, id, 32U); payload[36] = 1U;
+    store_u64(payload + 37U, sequence);
+    REQUIRE(metered_execute(descriptor, owner, run, 0x00070006U, payload, sizeof(payload), LXP_OK, &receipt) == 0);
+    REQUIRE(receipt.global_sequence == sequence);
+    run->generation = sequence;
+    return 0;
+}
+
+static int metered_session_replace(int descriptor, const signer *owner, metered_run *run,
+    const uint8_t *payload, size_t payload_length)
+{
+    uint8_t successor[32], commitment[32], changed[32];
+    lxp_authority_grant prior, next, invalid;
+    lxp_receipt receipt;
+    signer replacement;
+    REQUIRE(metered_session_refuse(descriptor, run, 0x51U, payload, payload_length, LXP_ERR_AUTH_ALLOWANCE) == 0);
+    REQUIRE(metered_session_refuse(descriptor, run, 0x53U, payload, payload_length, LXP_ERR_AUTH_SCOPE) == 0);
+    REQUIRE(metered_session_refuse(descriptor, run, 0x54U, payload, payload_length, LXP_ERR_GRANT_EXHAUSTED) == 0);
+    REQUIRE(metered_session_revoke(descriptor, owner, run, run->session_ids[2]) == 0);
+    REQUIRE(metered_session_refuse(descriptor, run, 0x53U, payload, payload_length, LXP_ERR_AUTH_REVOKED) == 0);
+    REQUIRE(metered_session_revoke(descriptor, owner, run, run->session_ids[1]) == 0);
+    REQUIRE(metered_session_read(descriptor, run->session_ids[1], &prior, successor, commitment) == 0);
+    REQUIRE(prior.revoked && lxp_ct_is_zero(successor, 32U) && !lxp_ct_is_zero(commitment, 32U));
+    REQUIRE(signer_init(&replacement, 0x55U) == 0);
+    next = prior;
+    (void)memcpy(next.key, replacement.public_key, 32U);
+    next.revoked = false; next.revoked_at_sequence = 0U;
+    next.grantor_revocation_sequence = run->generation;
+    next.fee_budget.spent_total = (lxp_u128){0U, 0U};
+    next.fee_budget.spent_this_period = (lxp_u128){0U, 0U};
+    next.fee_budget.period_start = next.not_before;
+    (void)memcpy(changed, commitment, 32U); changed[0] ^= 1U;
+    REQUIRE(metered_session_issue(descriptor, owner, run, &next, prior.grant_id, changed, LXP_ERR_AUTH_SCOPE) == 0);
+    invalid = next; invalid.fee_budget.maximum_total.lo++;
+    REQUIRE(metered_session_issue(descriptor, owner, run, &invalid, prior.grant_id, commitment, LXP_ERR_AUTH_SCOPE) == 0);
+    REQUIRE(metered_session_read(descriptor, prior.grant_id, &prior, successor, changed) == 0);
+    REQUIRE(lxp_ct_is_zero(successor, 32U) && memcmp(commitment, changed, 32U) == 0);
+    REQUIRE(metered_session_issue(descriptor, owner, run, &next, prior.grant_id, commitment, LXP_OK) == 0);
+    (void)memcpy(run->replacement_id, next.grant_id, 32U);
+    REQUIRE(metered_session_read(descriptor, next.grant_id, &next, successor, changed) == 0);
+    REQUIRE(lxp_u128_cmp(next.fee_budget.spent_total, prior.fee_budget.spent_total) == 0 &&
+        lxp_u128_cmp(next.fee_budget.spent_this_period, prior.fee_budget.spent_this_period) == 0 &&
+        next.fee_budget.period_start == prior.fee_budget.period_start);
+    REQUIRE(metered_execute(descriptor, &replacement, run, LX_PROGRAMS_CALL, payload, payload_length, LXP_OK, &receipt) == 0);
+    lxp_u128 charged;
+    REQUIRE(lxp_u128_add(prior.fee_budget.spent_total, receipt.fee_charged, &charged) == LXP_OK);
+    REQUIRE(metered_session_read(descriptor, next.grant_id, &next, successor, changed) == 0);
+    REQUIRE(lxp_u128_cmp(next.fee_budget.spent_total, charged) == 0);
+    run->replacement_spent = charged;
+    REQUIRE(signer_init(&replacement, 0x56U) == 0);
+    invalid = next;
+    (void)memcpy(invalid.key, replacement.public_key, 32U);
+    invalid.fee_budget.spent_total = (lxp_u128){0U, 0U};
+    invalid.fee_budget.spent_this_period = (lxp_u128){0U, 0U};
+    invalid.fee_budget.period_start = invalid.not_before;
+    REQUIRE(metered_session_issue(descriptor, owner, run, &invalid, prior.grant_id, commitment, LXP_ERR_SEQUENCE_REUSED) == 0);
+    REQUIRE(metered_session_read(descriptor, prior.grant_id, &prior, successor, changed) == 0);
+    REQUIRE(memcmp(successor, run->replacement_id, 32U) == 0 && memcmp(commitment, changed, 32U) == 0);
+    puts("session replacement inherits exact committed fee counters; changed commitment, widened budget and second successor refuse");
+    return 0;
+}
+
+static int metered_fee_policy(int descriptor, const metered_run *run)
+{
+    const uint8_t query[] = {0U, 1U, 3U};
+    wire_envelope response;
+    lx_asset_record record;
+    REQUIRE(send_request(descriptor, LNI_MINOR, 32U, 634U, query, sizeof(query)) == 0);
+    REQUIRE(receive_envelope(descriptor, &response) == 0);
+    REQUIRE(response.tag == 33U && response.correlation_id == 634U && response.proof_length == 0U &&
+        response.payload_length > 47U && load_u16(response.payload) == 1U &&
+        load_u16(response.payload + 42U) == 1U && response.payload[44U] == 2U &&
+        memcmp(response.payload + 10U, run->root, 32U) == 0);
+    size_t length = load_u16(response.payload + 45U);
+    REQUIRE(response.payload_length == 47U + length);
+    REQUIRE(lx_asset_record_decode(response.payload + 47U, length, &record) == LXP_OK);
+    REQUIRE(memcmp(record.asset_id, metered_asset, 32U) == 0 && record.decimals <= 38U && record.symbol_length != 0U);
+    release_envelope(&response);
+    return 0;
+}
+
 static int metered_initial(int descriptor, const signer *owner, metered_run *run)
 {
     uint8_t encoded[ACTIVITY_CAPACITY], payload[1024], wasm[512], destination[32];
@@ -608,6 +850,7 @@ static int metered_initial(int descriptor, const signer *owner, metered_run *run
     (void)memcpy(payload + 36U, owner->public_key, 32U);
     REQUIRE(metered_execute(descriptor, owner, run, 0x00070001U, payload, 68U, LXP_OK, &receipt) == 0);
     run->generation = receipt.global_sequence;
+    REQUIRE(metered_fee_policy(descriptor, run) == 0);
     REQUIRE(metered_issue(descriptor, owner, run, 0x44U, LXP_AUTHORITY_DELEGATED_CAPABILITY, false) == 0);
     REQUIRE(metered_issue(descriptor, owner, run, 0x45U, LXP_AUTHORITY_BUDGET_ALLOWANCE, false) == 0);
     REQUIRE(metered_issue(descriptor, owner, run, 0x46U, LXP_AUTHORITY_DELEGATED_CAPABILITY, true) == 0);
@@ -666,16 +909,18 @@ static int metered_initial(int descriptor, const signer *owner, metered_run *run
         REQUIRE(!lxp_u128_is_zero(receipt.fee_charged));
     }
     REQUIRE(metered_fee_refusals(descriptor, run, payload, length) == 0);
+    REQUIRE(run->receipt_count == 17U && run->account_sequence == 17U);
+    REQUIRE(metered_sessions_initial(descriptor, owner, run, payload, length) == 0);
     puts("live signed capability and budget grants charge Programs transfers; simulation, repeated spending, exhaustion and asset mismatch verified");
     return 0;
 }
 
-static int metered_recovered(int descriptor, metered_run *run)
+static int metered_recovered(int descriptor, const signer *owner, metered_run *run)
 {
     uint8_t root[32], destination[32], payload[512];
     lxp_receipt receipt;
     signer capability, budget;
-    REQUIRE(run->receipt_count == 17U && run->account_sequence == 17U);
+    REQUIRE(run->receipt_count == 23U && run->account_sequence == 23U);
     REQUIRE(metered_head(descriptor, 0U, root) == 0);
     REQUIRE(memcmp(root, run->root, 32U) == 0);
     for (size_t i = 0U; i < run->receipt_count; ++i)
@@ -688,7 +933,31 @@ static int metered_recovered(int descriptor, metered_run *run)
     REQUIRE(metered_execute(descriptor, &budget, run, LX_PROGRAMS_CALL, payload,
                              length, LXP_ERR_PROGRAM_REFUSED, &receipt) == 0);
     REQUIRE(metered_fee_refusals(descriptor, run, payload, length) == 0);
+    REQUIRE(metered_session_replace(descriptor, owner, run, payload, length) == 0);
+    REQUIRE(run->receipt_count == 32U && run->account_sequence == 32U);
     puts("daemon and authority replica replay preserve authenticated roots, receipts and exhausted capability and budget scopes");
+    return 0;
+}
+
+static int metered_session_replayed(int descriptor, const metered_run *run)
+{
+    uint8_t root[32], successor[32], commitment[32];
+    lxp_receipt receipt;
+    lxp_authority_grant original, replacement;
+    REQUIRE(run->receipt_count == 32U && run->account_sequence == 32U);
+    REQUIRE(metered_head(descriptor, 0U, root) == 0 && memcmp(root, run->root, 32U) == 0);
+    for (size_t i = 0U; i < run->receipt_count; ++i)
+        REQUIRE(metered_receipt(descriptor, run->receipt_ids[i], run->results[i], &receipt) == 0);
+    REQUIRE(metered_session_read(descriptor, run->session_ids[1], &original, successor, commitment) == 0);
+    REQUIRE(original.revoked && memcmp(successor, run->replacement_id, 32U) == 0 && !lxp_ct_is_zero(commitment, 32U));
+    REQUIRE(metered_session_read(descriptor, run->replacement_id, &replacement, successor, commitment) == 0);
+    REQUIRE(!replacement.revoked && lxp_ct_is_zero(successor, 32U) && lxp_ct_is_zero(commitment, 32U) &&
+        lxp_u128_cmp(replacement.fee_budget.spent_total, run->replacement_spent) == 0 &&
+        lxp_u128_cmp(replacement.fee_budget.spent_this_period, run->replacement_spent) == 0 &&
+        replacement.fee_budget.period_start == original.fee_budget.period_start &&
+        lxp_u128_cmp(replacement.fee_budget.maximum_total, original.fee_budget.maximum_total) == 0 &&
+        lxp_u128_cmp(replacement.fee_budget.maximum_per_period, original.fee_budget.maximum_per_period) == 0);
+    puts("second daemon and authority replica restart preserves exact signed replacement history and inherited fee counters");
     return 0;
 }
 
@@ -700,19 +969,31 @@ int main(int argc, char **argv)
     FILE *state;
     REQUIRE(argc == 4 && strlen(argv[1]) < sizeof(address.sun_path));
     metered_state_path = argv[3];
+    bool replacement_replay = strcmp(argv[2], "--metered-session-recovered") == 0;
     bool recovered = strcmp(argv[2], "--metered-allowance-recovered") == 0;
-    REQUIRE(recovered || strcmp(argv[2], "--metered-allowance") == 0);
+    REQUIRE(recovered || replacement_replay || strcmp(argv[2], "--metered-allowance") == 0);
     REQUIRE(metered_identity(&owner) == 0);
     address.sun_family = AF_UNIX;
     (void)memcpy(address.sun_path, argv[1], strlen(argv[1]) + 1U);
     int descriptor = socket(AF_UNIX, SOCK_STREAM, 0);
     REQUIRE(descriptor >= 0 && connect(descriptor, (struct sockaddr *)&address, sizeof(address)) == 0);
     REQUIRE(handshake(descriptor) == 0);
-    if (recovered) {
+    if (recovered || replacement_replay) {
         state = fopen(argv[3], "rb");
         REQUIRE(state != NULL && fread(&run, sizeof(run), 1U, state) == 1U &&
                 fgetc(state) == EOF && !ferror(state) && fclose(state) == 0);
-        REQUIRE(metered_recovered(descriptor, &run) == 0);
+        if (replacement_replay) {
+            REQUIRE(metered_session_replayed(descriptor, &run) == 0);
+            REQUIRE(close(descriptor) == 0);
+            return 0;
+        }
+        REQUIRE(metered_recovered(descriptor, &owner, &run) == 0);
+        char final_state[4096];
+        int final_length = snprintf(final_state, sizeof(final_state), "%s.session-replacement", argv[3]);
+        REQUIRE(final_length > 0 && (size_t)final_length < sizeof(final_state));
+        state = fopen(final_state, "wbx");
+        REQUIRE(state != NULL && fwrite(&run, sizeof(run), 1U, state) == 1U &&
+            fflush(state) == 0 && fsync(fileno(state)) == 0 && fclose(state) == 0);
     } else {
         uint8_t preparation[79];
         store_u16(preparation, 1U); store_u16(preparation + 2U, 75U);

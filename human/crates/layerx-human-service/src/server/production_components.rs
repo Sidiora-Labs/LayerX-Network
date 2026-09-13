@@ -147,6 +147,7 @@ const PRODUCTION_OPERATIONS: &[&str] = &[
     "security.session.revoke",
     "security.session.revoke-all",
     "session.list",
+    "session.fee-policy",
     "session.open",
     "session.refresh",
     "session.revoke",
@@ -2259,6 +2260,72 @@ fn resolve_direct_movement(
     Ok(())
 }
 
+fn canonical_fee_amount(value: &serde_json::Value, name: &str) -> Result<u128, ApiFailure> {
+    let text = text_field(value, name)?;
+    let parsed = text
+        .parse::<u128>()
+        .map_err(|_| ApiFailure::invalid_request(Some("native_fee_budget")))?;
+    if parsed.to_string() != text {
+        return Err(ApiFailure::invalid_request(Some("native_fee_budget")));
+    }
+    Ok(parsed)
+}
+
+fn native_fee_consent(
+    body: &serde_json::Value,
+    policy: &super::agent_runtime::NativeFeePolicy,
+) -> Result<Option<crate::agents::NativeFeeConsent>, ApiFailure> {
+    let Some(value) = body.get("native_fee_budget") else {
+        return if policy.version == 2 {
+            Err(ApiFailure::invalid_request(Some("native_fee_budget")))
+        } else {
+            Ok(None)
+        };
+    };
+    let object = value
+        .as_object()
+        .filter(|object| object.len() == 5)
+        .ok_or_else(|| ApiFailure::invalid_request(Some("native_fee_budget")))?;
+    let encoded = text_field(value, "asset_id")?;
+    if encoded.len() != 64
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || object.keys().any(|key| {
+            ![
+                "asset_id",
+                "maximum_per_activity",
+                "maximum_total",
+                "period_length_ms",
+                "maximum_per_period",
+            ]
+            .contains(&key.as_str())
+        })
+    {
+        return Err(ApiFailure::invalid_request(Some("native_fee_budget")));
+    }
+    let mut asset_id = [0; 32];
+    for (index, byte) in asset_id.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16)
+            .map_err(|_| ApiFailure::invalid_request(Some("native_fee_budget")))?;
+    }
+    if asset_id != policy.asset_id {
+        return Err(ApiFailure::invalid_request(Some("native_fee_budget")));
+    }
+    let consent = crate::agents::NativeFeeConsent {
+        asset_id,
+        maximum_per_activity: canonical_fee_amount(value, "maximum_per_activity")?,
+        maximum_total: canonical_fee_amount(value, "maximum_total")?,
+        period_length_ms: u64::try_from(canonical_fee_amount(value, "period_length_ms")?)
+            .map_err(|_| ApiFailure::invalid_request(Some("native_fee_budget")))?,
+        maximum_per_period: canonical_fee_amount(value, "maximum_per_period")?,
+    };
+    consent
+        .budget(0)
+        .map_err(|_| ApiFailure::invalid_request(Some("native_fee_budget")))?;
+    Ok(Some(consent))
+}
+
 impl ProductionComponents {
     fn execute_agent_create(
         &self,
@@ -2273,12 +2340,20 @@ impl ProductionComponents {
         let amount = text_field(limit, "amount")?
             .parse::<u128>()
             .map_err(|_| ApiFailure::invalid_request(Some("monthly_limit")))?;
+        let fee_policy = self
+            .agent
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?
+            .native_fee_policy()
+            .map_err(agent_failure)?;
+        let native_fee_budget = native_fee_consent(&request.body, &fee_policy)?;
         let creation = CreateAgentRequest::new(
             text_field(&request.body, "name")?,
             text_field(&request.body, "purpose")?,
             amount,
             text_field(limit, "currency")?,
         )
+        .and_then(|value| value.with_native_fee_budget(native_fee_budget))
         .map_err(|_| ApiFailure::invalid_request(None))?;
         let idempotency_key: [u8; 32] =
             Sha256::digest(required_idempotency(request)?.as_bytes()).into();
@@ -4570,6 +4645,19 @@ impl ProductionComponents {
             "passkey.assert.begin" => self.bootstrap_passkey_assert_begin(request, observed_at),
             "passkey.assert.finish" => self.bootstrap_passkey_assert_finish(request, observed_at),
             "session.open" => self.bootstrap_session_open(request, observed_at),
+            "session.fee-policy" => {
+                let policy = self
+                    .agent
+                    .lock()
+                    .map_err(|_| ApiFailure::unavailable())?
+                    .native_fee_policy()
+                    .map_err(agent_failure)?;
+                Ok(BackendResponse {
+                    result: json!({"asset_id": hex_bytes(&policy.asset_id),
+                    "currency": policy.currency, "decimals": policy.decimals}),
+                    session: None,
+                })
+            }
             _ => Err(ApiFailure::not_found()),
         }
     }
@@ -4780,8 +4868,13 @@ impl ProductionComponents {
                 .map_err(|error| auth_api_failure(&error))?;
             let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
             let registry = agent.registry().clone();
-            let (intent, grant_id) =
-                browser_grant_intent(&mut agent, &prepared, recovery_seed, &self.agent_actor)?;
+            let (intent, grant_id) = browser_grant_intent(
+                &mut agent,
+                &prepared,
+                recovery_seed,
+                &self.agent_actor,
+                action,
+            )?;
             let trace =
                 TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
             let mut adapter = ProductionAgentCreation::new(
@@ -4948,6 +5041,20 @@ impl ProductionComponents {
         if identity.frozen {
             return Err(ApiFailure::upstream_degraded());
         }
+        let prior_session = agent
+            .session_fee_state(context.protocol_grant_id)
+            .map_err(agent_failure)?;
+        if prior_session.revoked_at_sequence == 0
+            || prior_session.grant.grantor
+                != layerx_wire::hash::did_id_for_protocol(
+                    &Did::new(context.agent_did.as_bytes())
+                        .map_err(|_| ApiFailure::upstream_degraded())?,
+                    3,
+                )
+                .map_err(|_| ApiFailure::upstream_degraded())?
+        {
+            return Err(ApiFailure::upstream_degraded());
+        }
         let operation_key = action_key(required_idempotency(request)?);
         let current = now()?;
         let trace =
@@ -4981,6 +5088,12 @@ impl ProductionComponents {
                 scope,
                 &registry,
                 SessionProvision {
+                    native_fee_budget: prior_session.grant.fee_budget,
+                    replacement: prior_session
+                        .grant
+                        .fee_budget
+                        .map(|_| prior_session.clone()),
+                    not_before: current,
                     action_key: operation_key,
                     did: Did::new(context.agent_did.as_bytes())
                         .map_err(|_| ApiFailure::upstream_degraded())?,
@@ -5304,6 +5417,7 @@ fn browser_grant_intent(
     prepared: &crate::auth::PreparedBrowserSession,
     recovery_seed: [u8; 32],
     actor: &AgentDid,
+    action: [u8; 32],
 ) -> Result<(Intent, [u8; 32]), ApiFailure> {
     let mut session_seed: [u8; 32] = Sha256::digest(
         [
@@ -5315,31 +5429,40 @@ fn browser_grant_intent(
     .into();
     let session_public_key = LocalSigner::new(session_seed).public_key();
     session_seed.fill(0);
-    let authenticated = agent.balance().map_err(agent_failure)?;
     let identity = agent
         .identity_resolve(actor.as_str())
         .map_err(agent_failure)?;
-    let registry = agent.registry().clone();
-    let activity_types = registry
-        .registrations()
-        .iter()
-        .filter(|registration| registration.module() == ModuleId::Governance)
-        .flat_map(|registration| registration.activity_types().iter().copied())
-        .collect::<Vec<_>>();
-    if activity_types.is_empty() {
-        return Err(ApiFailure::upstream_degraded());
-    }
+    let did = layerx_types::ids::Did::new(actor.as_str().as_bytes())
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+    let grantor = layerx_wire::hash::did_id_for_protocol(&did, 3)
+        .map_err(|_| ApiFailure::upstream_degraded())?;
     let issued = issue_session_key(&SessionKeyRequest {
-        grantor: authenticated.account,
+        fee_budget: None,
+        purpose: layerx_crypto::session::SessionPurpose::Authentication,
+        grantor,
         session_public_key,
-        not_before: prepared.opened_at(),
-        expires_at: Some(prepared.refresh_expires_at()),
-        permitted_activity_types: activity_types,
+        not_before: prepared
+            .opened_at()
+            .checked_mul(1000)
+            .ok_or_else(ApiFailure::upstream_degraded)?,
+        expires_at: Some(
+            prepared
+                .refresh_expires_at()
+                .checked_mul(1000)
+                .ok_or_else(ApiFailure::upstream_degraded)?,
+        ),
+        permitted_activity_types: Vec::new(),
         revocation_sequence: Some(identity.revocation_sequence),
     })
     .map_err(|_| ApiFailure::upstream_degraded())?;
+    let expiry_sequence = agent
+        .head()
+        .map_err(agent_failure)?
+        .chain_sequence
+        .checked_add(1024)
+        .ok_or_else(ApiFailure::upstream_degraded)?;
     let intent = Intent::v1(IntentKind::SessionGrant(
-        ProtocolSessionGrant::new(issued.registration_payload)
+        ProtocolSessionGrant::new(issued.registration_payload, expiry_sequence, action)
             .map_err(|_| ApiFailure::upstream_degraded())?,
     ));
     Ok((intent, issued.grant_id))

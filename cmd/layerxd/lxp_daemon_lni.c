@@ -77,6 +77,8 @@ enum {
     LNI_ASSET_READ_RESPONSE = 33,
     LNI_FEE_ESTIMATE_REQUEST = 34,
     LNI_FEE_ESTIMATE_RESPONSE = 35,
+    LNI_SESSION_FEE_STATE_REQUEST = 36,
+    LNI_SESSION_FEE_STATE_RESPONSE = 37,
     LNI_ENVELOPE_FIXED_BYTES = 22,
     LNI_NODE_INFO_FIXED_BYTES = 93,
     LNI_PREPARATION_STATE_MAX_BYTES = 4096,
@@ -2322,10 +2324,12 @@ static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
     uint8_t *payload;
     size_t count = 0U, cursor = 44U;
     uint16_t returned = 0U;
+    uint8_t native_asset[32] = {0};
+    bool enforced = false;
     lxp_result status;
     if (request->minor < 5U || request->proof_length != 0U || request->correlation_id == 0U ||
         request->payload_length < 3U || load_u16(request->payload) != 1U ||
-        !((request->payload[2] == 1U && request->payload_length == 3U) ||
+        !(((request->payload[2] == 1U || request->payload[2] == 3U) && request->payload_length == 3U) ||
           (request->payload[2] == 2U && request->payload_length == 35U &&
            !lxp_ct_is_zero(request->payload + 3U, 32U))))
         return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
@@ -2336,15 +2340,28 @@ static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
     if (pthread_mutex_lock(&server->owner->mutex) != 0) { free(payload); return LXP_ERR_IO; }
     const lxp_kernel *kernel = server->owner->kernel;
     status = lx_asset_committed_records(kernel, records, LX_ASSET_REGISTRY_CAPACITY, &count);
+    if (status == LXP_OK && request->payload[2] == 3U) {
+        const lx_programs_transfer_runtime *runtime = kernel->module_runtime[LXP_MODULE_PROGRAMS];
+        lx_programs_fee_schedule schedule;
+        if (runtime == NULL || runtime->resolve_occupancy_parameters == NULL)
+            status = LXP_ERR_MODULE_DISABLED;
+        else status = runtime->resolve_occupancy_parameters(runtime->occupancy_parameter_context,
+            0U, &schedule, native_asset);
+        if (status == LXP_OK) status = lxp_authority_allowance_policy(kernel, &enforced);
+        if (status == LXP_OK && lxp_ct_is_zero(native_asset, 32U)) status = LXP_ERR_ASSET_MISMATCH;
+        cursor = 45U;
+    }
     if (status == LXP_OK && server->frame_bytes < cursor + LNI_ENVELOPE_FIXED_BYTES) status = LXP_ERR_LENGTH_LIMIT;
     if (status == LXP_OK) {
         store_u16(payload, 1U);
         store_u64(payload + 2U, kernel->state->next_sequence - 1U);
         (void)memcpy(payload + 10U, kernel->current_state_root, 32U);
+        if (request->payload[2] == 3U) payload[44] = enforced ? 2U : 1U;
         for (size_t i = 0U; i < count && status == LXP_OK; ++i) {
             uint8_t encoded[384];
             size_t length;
             if (request->payload[2] == 2U && memcmp(request->payload + 3U, records[i].asset_id, 32U) != 0) continue;
+            if (request->payload[2] == 3U && memcmp(native_asset, records[i].asset_id, 32U) != 0) continue;
             status = lx_asset_record_encode(&records[i], encoded, sizeof(encoded), &length);
             if (status == LXP_OK && (cursor + 2U + length + LNI_ENVELOPE_FIXED_BYTES > server->frame_bytes))
                 status = LXP_ERR_LENGTH_LIMIT;
@@ -2355,7 +2372,7 @@ static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
             }
         }
         store_u16(payload + 42U, returned);
-        if (status == LXP_OK && request->payload[2] == 2U && returned != 1U) status = LXP_ERR_ASSET_MISMATCH;
+        if (status == LXP_OK && request->payload[2] != 1U && returned != 1U) status = LXP_ERR_ASSET_MISMATCH;
     }
     if (pthread_mutex_unlock(&server->owner->mutex) != 0) status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK) status = send_envelope(descriptor, server->frame_bytes,
@@ -2363,6 +2380,62 @@ static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
     else status = evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
     free(payload);
     return status;
+}
+
+static lxp_result send_session_fee_state(lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    uint8_t payload[1400], key[33], commitment[32] = {0}, counters[72] = {0};
+    const lxp_module_kv_entry *original = NULL;
+    lxp_authority_grant grant;
+    size_t cursor = 42U;
+    lxp_result status;
+    if (request->minor < 5U || request->proof_length != 0U || request->correlation_id == 0U ||
+        request->payload_length != 34U || load_u16(request->payload) != 1U ||
+        lxp_ct_is_zero(request->payload + 2U, 32U))
+        return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+            1U, LXP_ERR_NON_CANONICAL, deadline);
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    const lxp_kernel *kernel = server->owner->kernel;
+    status = lxp_authority_grant_load(kernel, request->payload + 2U, &grant);
+    if (status == LXP_OK && (grant.kind != LXP_AUTHORITY_SESSION_KEY || grant.authentication_only))
+        status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK) {
+        for (size_t i = 0U; i < kernel->module_kv_count; ++i) {
+            const lxp_module_kv_entry *entry = &kernel->module_kv[i];
+            if (entry->module_id == LXP_MODULE_GOVERNANCE && entry->key_length == 33U &&
+                entry->key[0] == 5U && memcmp(entry->key + 1U, grant.grant_id, 32U) == 0) original = entry;
+        }
+        if (original == NULL || original->value_length > 1024U) status = LXP_FATAL_INVARIANT;
+    }
+    if (status == LXP_OK && grant.fee_budget.present) status = lxp_authority_fee_record_encode(&grant, counters);
+    if (status == LXP_OK && grant.fee_budget.present && grant.revoked)
+        status = lxp_authority_session_charge_commitment(&grant, commitment);
+    if (status == LXP_OK) {
+        store_u16(payload, 1U);
+        store_u64(payload + 2U, kernel->state->next_sequence - 1U);
+        (void)memcpy(payload + 10U, kernel->current_state_root, 32U);
+        store_u16(payload + cursor, (uint16_t)original->value_length); cursor += 2U;
+        (void)memcpy(payload + cursor, original->value, original->value_length); cursor += original->value_length;
+        store_u64(payload + cursor, grant.revoked ? grant.revoked_at_sequence : 0U); cursor += 8U;
+        (void)memcpy(payload + cursor, counters, sizeof(counters)); cursor += sizeof(counters);
+        lxp_authority_session_successor_key(grant.grant_id, key);
+        (void)memset(payload + cursor, 0, 32U);
+        for (size_t i = 0U; i < kernel->module_kv_count; ++i) {
+            const lxp_module_kv_entry *entry = &kernel->module_kv[i];
+            if (entry->module_id == LXP_MODULE_GOVERNANCE && entry->key_length == sizeof(key) &&
+                memcmp(entry->key, key, sizeof(key)) == 0) {
+                if (entry->value_length != 32U || lxp_ct_is_zero(entry->value, 32U)) status = LXP_FATAL_INVARIANT;
+                else (void)memcpy(payload + cursor, entry->value, 32U);
+            }
+        }
+        cursor += 32U;
+        (void)memcpy(payload + cursor, commitment, 32U); cursor += 32U;
+    }
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) return send_envelope(descriptor, server->frame_bytes,
+        LNI_SESSION_FEE_STATE_RESPONSE, request->correlation_id, payload, cursor, NULL, 0U, deadline);
+    return evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
 }
 
 static bool registration_active(
@@ -3763,6 +3836,8 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
             status = send_receipt(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_ASSET_READ_REQUEST) {
             status = send_asset_read(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_SESSION_FEE_STATE_REQUEST) {
+            status = send_session_fee_state(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_FEE_ESTIMATE_REQUEST) {
             status = send_fee_estimate(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_ACCOUNT_READ_REQUEST) {

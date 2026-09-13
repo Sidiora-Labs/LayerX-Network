@@ -42,6 +42,9 @@ const AGENT_LIFECYCLE_PUBLISH: u8 = 37;
 const AGENT_SESSION_RESTRICT: u8 = 38;
 const ACCOUNT_SEQUENCE: u8 = 13;
 const BALANCE: u8 = 6;
+const NATIVE_FEE_POLICY: u8 = 39;
+const SESSION_FEE_STATE: u8 = 40;
+const SESSION_SEED_PREPARE: u8 = 41;
 const HEAD: u8 = 7;
 const EVIDENCE: u8 = 8;
 const MAX_TEXT: usize = 255;
@@ -257,6 +260,15 @@ pub enum HumanRequest {
         current_sequence: u64,
     },
     Balance,
+    NativeFeePolicy,
+    SessionFeeState {
+        grant_id: [u8; 32],
+    },
+    SessionSeedPrepare {
+        agent: String,
+        action_key: [u8; 32],
+        request_digest: [u8; 32],
+    },
     Head,
     Evidence {
         idempotency_key: [u8; 32],
@@ -465,6 +477,26 @@ pub trait HumanOperations {
     /// # Errors
     /// Returns an error if authorization or operation validation fails, or required state is unavailable.
     fn balance(&mut self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError>;
+    /// # Errors
+    /// Refuses unavailable native fee policy or malformed committed metadata.
+    fn native_fee_policy(&mut self, peer: &HumanPeer)
+        -> Result<HumanResponse, HumanOperationError>;
+    /// # Errors
+    /// Refuses unbound or unavailable session fee state.
+    fn session_fee_state(
+        &mut self,
+        peer: &HumanPeer,
+        grant_id: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError>;
+    /// # Errors
+    /// Refuses invalid authenticated session preparation or changed replay bindings.
+    fn session_seed_prepare(
+        &mut self,
+        peer: &HumanPeer,
+        agent: &str,
+        action_key: [u8; 32],
+        request_digest: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError>;
     /// # Errors
     /// Returns an error if authorization or operation validation fails, or required state is unavailable.
     fn head(&self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError>;
@@ -1174,6 +1206,13 @@ fn dispatch_request<O: HumanOperations>(
             current_sequence,
         ),
         HumanRequest::Balance => operations.balance(peer),
+        HumanRequest::NativeFeePolicy => operations.native_fee_policy(peer),
+        HumanRequest::SessionFeeState { grant_id } => operations.session_fee_state(peer, grant_id),
+        HumanRequest::SessionSeedPrepare {
+            agent,
+            action_key,
+            request_digest,
+        } => operations.session_seed_prepare(peer, &agent, action_key, request_digest),
         HumanRequest::Head => operations.head(peer),
         HumanRequest::Evidence {
             idempotency_key,
@@ -1387,6 +1426,15 @@ fn decode_operation_1(
 ) -> Result<HumanRequest, HumanProtocolError> {
     Ok(match operation {
         BALANCE => HumanRequest::Balance,
+        NATIVE_FEE_POLICY => HumanRequest::NativeFeePolicy,
+        SESSION_FEE_STATE => HumanRequest::SessionFeeState {
+            grant_id: reader.fixed()?,
+        },
+        SESSION_SEED_PREPARE => HumanRequest::SessionSeedPrepare {
+            agent: reader.text()?,
+            action_key: reader.fixed()?,
+            request_digest: reader.fixed()?,
+        },
         HEAD => HumanRequest::Head,
         EVIDENCE => HumanRequest::Evidence {
             idempotency_key: reader.fixed()?,

@@ -19,6 +19,16 @@ fn native_capability_and_budget_grants_compile_and_disclose_exactly() {
             "../../../../agent/crates/layerx-crypto/tests/fixtures/authority-grant-budget.bin"
         )
         .as_slice(),
+        include_bytes!(
+            "../../../../tests/fixtures/authority/native-fee-grants/capability/grant.bin"
+        )
+        .as_slice(),
+        include_bytes!("../../../../tests/fixtures/authority/native-fee-grants/budget/grant.bin")
+            .as_slice(),
+        include_bytes!(
+            "../../../../tests/fixtures/authority/native-fee-grants/period-bound/grant.bin"
+        )
+        .as_slice(),
     ] {
         let grant = AuthorityGrant::decode(body).unwrap_or_else(|error| panic!("grant: {error:?}"));
         let intent = Intent::v1(IntentKind::AuthorityGrant(grant));

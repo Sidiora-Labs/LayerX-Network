@@ -59,6 +59,7 @@ typedef struct lxp_authority_grant {
     uint64_t revoked_at_sequence;
     uint8_t grantor_signature[64];
     lxp_authority_fee_budget fee_budget;
+    bool authentication_only;
 } lxp_authority_grant;
 #define lxp_authority_grant lxp_authority_grant
 
@@ -66,6 +67,9 @@ lxp_result lxp_grant_encode(const lxp_authority_grant *grant,
                             lxp_arena *arena, lxp_byte_span *encoded);
 lxp_result lxp_grant_id_compute(const lxp_authority_grant *grant,
                                 uint8_t grant_id[32]);
+lxp_result lxp_authentication_key_bind(lxp_authority_grant *grant,
+    const uint8_t grantor[32], const uint8_t session_key[32],
+    uint64_t not_before, uint64_t not_after, uint64_t revocation_sequence);
 lxp_result lxp_session_key_bind(lxp_authority_grant *grant,
                                 const uint8_t grantor[32],
                                 const uint8_t session_key[32],
@@ -108,6 +112,9 @@ lxp_result lxp_authority_fee_resolve(const struct lxp_kernel *kernel,
 lxp_result lxp_authority_fee_charge(lxp_authority_fee_budget *budget,
     lxp_u128 amount, uint64_t timestamp);
 void lxp_authority_fee_record_key(const uint8_t grant_id[32], uint8_t key[33]);
+void lxp_authority_session_successor_key(const uint8_t grant_id[32], uint8_t key[33]);
+lxp_result lxp_authority_session_charge_commitment(const lxp_authority_grant *grant,
+    uint8_t commitment[32]);
 lxp_result lxp_authority_fee_record_encode(const lxp_authority_grant *grant,
     uint8_t value[72]);
 

@@ -75,9 +75,43 @@ static int fee_grants(void)
     return 0;
 }
 
+static int authentication_sessions(void)
+{
+    uint8_t storage[2048], bytes[1024], owner[32] = {1U}, key[32] = {2U};
+    lxp_authority_grant grant, decoded;
+    lxp_arena arena;
+    lxp_byte_span encoded;
+    FEE_CHECK(lxp_authentication_key_bind(&grant, owner, key, 10U, 100U, 1U) == LXP_OK);
+    FEE_CHECK(grant.authentication_only && grant.scope.module_mask == 0U && !grant.fee_budget.present);
+    FEE_CHECK(lxp_arena_init(&arena, storage, sizeof(storage)) == LXP_OK);
+    FEE_CHECK(lxp_grant_encode(&grant, &arena, &encoded) == LXP_OK && encoded.bytes[4] == 3U);
+    FEE_CHECK(encoded.length < sizeof(bytes));
+    (void)memcpy(bytes, encoded.bytes, encoded.length);
+    FEE_CHECK(lxp_grant_decode(bytes, encoded.length, &decoded) == LXP_OK && decoded.authentication_only);
+    for (size_t i = 0U; i < encoded.length; ++i)
+        FEE_CHECK(lxp_grant_decode(bytes, i, &decoded) != LXP_OK);
+    for (unsigned purpose = 0U; purpose <= 255U; ++purpose) {
+        if (purpose == 1U) continue;
+        bytes[encoded.length - 1U] = (uint8_t)purpose;
+        FEE_CHECK(lxp_grant_decode(bytes, encoded.length, &decoded) != LXP_OK);
+    }
+    bytes[encoded.length - 1U] = 1U;
+    bytes[encoded.length] = 0U;
+    FEE_CHECK(lxp_grant_decode(bytes, encoded.length + 1U, &decoded) != LXP_OK);
+    grant.scope.module_mask = 2U;
+    FEE_CHECK(lxp_grant_id_compute(&grant, grant.grant_id) != LXP_OK);
+    grant.scope.module_mask = 0U;
+    grant.fee_budget.present = true;
+    FEE_CHECK(lxp_grant_id_compute(&grant, grant.grant_id) != LXP_OK);
+    grant.fee_budget.present = false;
+    (void)memset(grant.key, 0, 32U);
+    FEE_CHECK(lxp_grant_id_compute(&grant, grant.grant_id) != LXP_OK);
+    return 0;
+}
+
 int main(void)
 {
-    if (fee_grants() != 0) return 1;
+    if (fee_grants() != 0 || authentication_sessions() != 0) return 1;
     uint8_t storage[1024];
     uint8_t second_storage[1024];
     uint8_t grantor[32] = { 1U };

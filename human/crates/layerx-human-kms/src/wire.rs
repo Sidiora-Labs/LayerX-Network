@@ -138,7 +138,16 @@ pub(crate) fn blob(out: &mut Vec<u8>, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 pub(crate) fn disclosure(value: &Disclosure) -> Result<Vec<u8>> {
-    let mut out = vec![1];
+    let fee_grant = value
+        .authority_grant
+        .filter(|grant| grant.fee_budget.is_some());
+    let mut out = vec![if value.session_grant.is_some() {
+        3
+    } else if fee_grant.is_some() {
+        2
+    } else {
+        1
+    }];
     out.extend(value.activity_type.value().to_be_bytes());
     blob(&mut out, &value.actor)?;
     blob(&mut out, &value.authority)?;
@@ -183,6 +192,21 @@ pub(crate) fn disclosure(value: &Disclosure) -> Result<Vec<u8>> {
         out.extend(binding.ownership_signature_digest);
     } else {
         out.push(0);
+    }
+    if let Some(grant) = fee_grant {
+        blob(&mut out, &grant.encode().map_err(|_| Error::Refused)?)?;
+    }
+    if let Some(session) = &value.session_grant {
+        blob(&mut out, &session.grant.registration_payload)?;
+        out.extend(session.expiry_sequence.to_be_bytes());
+        out.extend(session.action_key);
+        if let Some(replacement) = session.replacement {
+            out.push(1);
+            out.extend(replacement.predecessor_grant_id);
+            out.extend(replacement.expected_charge_state);
+        } else {
+            out.push(0);
+        }
     }
     Ok(out)
 }

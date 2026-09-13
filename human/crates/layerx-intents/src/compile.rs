@@ -195,11 +195,31 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
             finish(registry, ModuleId::Governance, 8, encoder)
         }
         IntentKind::SessionGrant(value) => {
-            header(&mut encoder, 0x7105, 1)?;
+            header(
+                &mut encoder,
+                0x7105,
+                if value.replacement.is_some() {
+                    0x0205
+                } else {
+                    0x0103
+                },
+            )?;
             wire(
                 CompileField::SessionGrant,
                 encoder.bytes(&value.registration_payload, 1024),
             )?;
+            wire(
+                CompileField::SessionGrant,
+                encoder.u64(value.expiry_sequence),
+            )?;
+            wire(
+                CompileField::SessionGrant,
+                encoder.bytes(&value.action_key, 32),
+            )?;
+            if let Some((predecessor, commitment)) = value.replacement {
+                wire(CompileField::SessionGrant, encoder.bytes(&predecessor, 32))?;
+                wire(CompileField::SessionGrant, encoder.bytes(&commitment, 32))?;
+            }
             finish(registry, ModuleId::Governance, 5, encoder)
         }
         IntentKind::SessionRevoke(value) => {

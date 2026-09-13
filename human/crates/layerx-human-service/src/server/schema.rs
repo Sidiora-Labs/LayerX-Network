@@ -135,6 +135,7 @@ impl Operation {
                 | "passkey.assert.begin"
                 | "passkey.assert.finish"
                 | "session.open"
+                | "session.fee-policy"
                 | "version"
         )
     }

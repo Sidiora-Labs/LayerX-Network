@@ -31,6 +31,45 @@ const ID_DOMAIN: &[u8] = b"layerx-human/agent-create/id/v1";
 const NAME_LIMIT: usize = 80;
 const PURPOSE_LIMIT: usize = 64;
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NativeFeeConsent {
+    pub asset_id: [u8; 32],
+    pub maximum_per_activity: u128,
+    pub maximum_total: u128,
+    pub period_length_ms: u64,
+    pub maximum_per_period: u128,
+}
+
+impl NativeFeeConsent {
+    /// # Errors
+    /// Refuses zero, inverted or inconsistent explicit fee limits.
+    pub fn budget(
+        &self,
+        not_before_ms: u64,
+    ) -> Result<layerx_crypto::authority_grant::NativeFeeBudget, AgentCreationError> {
+        if self.asset_id == [0; 32]
+            || self.maximum_per_activity == 0
+            || self.maximum_total < self.maximum_per_activity
+            || (self.period_length_ms == 0 && self.maximum_per_period != 0)
+            || (self.period_length_ms != 0 && self.maximum_per_period < self.maximum_per_activity)
+        {
+            return Err(AgentCreationError::InvalidRequest);
+        }
+        Ok(layerx_crypto::authority_grant::NativeFeeBudget {
+            asset: self.asset_id,
+            maximum_per_activity: self.maximum_per_activity,
+            maximum_total: self.maximum_total,
+            period_length: self.period_length_ms,
+            maximum_per_period: self.maximum_per_period,
+            period_start: if self.period_length_ms == 0 {
+                0
+            } else {
+                not_before_ms
+            },
+        })
+    }
+}
+
 /// The exact user-facing create form. Infrastructure identifiers and recovery
 /// policy are supplied by authenticated service configuration, not requested
 /// from the human.
@@ -40,6 +79,7 @@ pub struct CreateAgentRequest {
     purpose: String,
     monthly_spend: u128,
     currency: String,
+    native_fee_budget: Option<NativeFeeConsent>,
 }
 
 impl CreateAgentRequest {
@@ -72,7 +112,21 @@ impl CreateAgentRequest {
             purpose,
             monthly_spend,
             currency,
+            native_fee_budget: None,
         })
+    }
+
+    /// # Errors
+    /// Refuses an invalid explicit native fee budget.
+    pub fn with_native_fee_budget(
+        mut self,
+        budget: Option<NativeFeeConsent>,
+    ) -> Result<Self, AgentCreationError> {
+        if let Some(value) = &budget {
+            value.budget(0)?;
+        }
+        self.native_fee_budget = budget;
+        Ok(self)
     }
 
     #[must_use]
@@ -362,6 +416,9 @@ pub struct ProtocolEvidence {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionProvision {
+    pub replacement: Option<layerx_crypto::session::SessionFeeState>,
+    pub native_fee_budget: Option<layerx_crypto::authority_grant::NativeFeeBudget>,
+    pub not_before: u64,
     pub action_key: [u8; 32],
     pub did: Did,
     pub activity_types: Vec<ActivityType>,
@@ -507,6 +564,8 @@ struct StoredPreset {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct JourneyRecord {
+    #[serde(default)]
+    native_fee_budget: Option<NativeFeeConsent>,
     version: u8,
     agent_id: [u8; 32],
     idempotency_key: [u8; 32],
@@ -568,6 +627,8 @@ impl CreationJourney {
             if existing.record.idempotency_key == context.idempotency_key
                 && existing.record.name == request.name
                 && existing.record.monthly_spend == request.monthly_spend
+                && existing.record.currency == request.currency
+                && existing.record.native_fee_budget == request.native_fee_budget
                 && existing.record.preset.id == request.purpose
             {
                 return Ok(existing);
@@ -610,6 +671,7 @@ impl CreationJourney {
             .collect();
         let journey = Self {
             record: JourneyRecord {
+                native_fee_budget: request.native_fee_budget.clone(),
                 version: RECORD_VERSION,
                 agent_id,
                 idempotency_key: context.idempotency_key,
@@ -925,6 +987,21 @@ impl CreationJourney {
             scope,
             registry,
             SessionProvision {
+                replacement: None,
+                native_fee_budget: self
+                    .record
+                    .native_fee_budget
+                    .as_ref()
+                    .map(|budget| {
+                        budget.budget(
+                            self.record
+                                .started_at
+                                .checked_mul(1_000)
+                                .ok_or(AgentCreationError::InvalidContext)?,
+                        )
+                    })
+                    .transpose()?,
+                not_before: self.record.started_at,
                 action_key,
                 did: self.did()?,
                 activity_types,
@@ -1167,6 +1244,14 @@ fn validate_record(record: &JourneyRecord, expected: [u8; 32]) -> Result<(), Age
             })
     {
         return Err(AgentCreationError::CorruptJourney);
+    }
+    if let Some(budget) = &record.native_fee_budget {
+        budget.budget(
+            record
+                .started_at
+                .checked_mul(1_000)
+                .ok_or(AgentCreationError::CorruptJourney)?,
+        )?;
     }
     Ok(())
 }

@@ -24,8 +24,8 @@ pub use controls::{
 pub use create::{
     AgentCreationContract, AgentCreationError, AgentEvidence, AgentFailure, CapabilityProvision,
     CreateAgentRequest, CreationContext, CreationJourney, CreationProjection, CreationStage,
-    CreationState, CreationStatus, ProtocolAction, ProtocolEvidence, PurposePresetCatalog,
-    ScopedAgentCreationContract, SessionProvision, StageState,
+    CreationState, CreationStatus, NativeFeeConsent, ProtocolAction, ProtocolEvidence,
+    PurposePresetCatalog, ScopedAgentCreationContract, SessionProvision, StageState,
 };
 pub use reclaim::{
     Reclaim, ReclaimAgentBoundary, ReclaimAgentContext, ReclaimError, ReclaimMechanism,

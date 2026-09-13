@@ -944,8 +944,17 @@ fn encode_sign_request(
 }
 
 fn encode_disclosure(disclosure: &Disclosure) -> Result<Vec<u8>, CustodyError> {
+    let fee_grant = disclosure
+        .authority_grant
+        .filter(|grant| grant.fee_budget.is_some());
     let mut writer = WireWriter::new();
-    writer.u8(1)?;
+    writer.u8(if disclosure.session_grant.is_some() {
+        3
+    } else if fee_grant.is_some() {
+        2
+    } else {
+        1
+    })?;
     writer.u32(disclosure.activity_type.value())?;
     writer.bytes(&disclosure.actor, 255)?;
     writer.bytes(&disclosure.authority, 524_288)?;
@@ -989,6 +998,26 @@ fn encode_disclosure(disclosure: &Disclosure) -> Result<Vec<u8>, CustodyError> {
             writer.fixed(&binding.ownership_signature_digest)?;
         }
         None => writer.u8(0)?,
+    }
+    if let Some(grant) = fee_grant {
+        writer.bytes(
+            &grant
+                .encode()
+                .map_err(|_| CustodyError::Kms(KmsError::InvalidConfiguration))?,
+            1024,
+        )?;
+    }
+    if let Some(session) = &disclosure.session_grant {
+        writer.bytes(&session.grant.registration_payload, 1024)?;
+        writer.fixed(&session.expiry_sequence.to_be_bytes())?;
+        writer.fixed(&session.action_key)?;
+        if let Some(replacement) = session.replacement {
+            writer.u8(1)?;
+            writer.fixed(&replacement.predecessor_grant_id)?;
+            writer.fixed(&replacement.expected_charge_state)?;
+        } else {
+            writer.u8(0)?;
+        }
     }
     Ok(writer.finish())
 }

@@ -117,6 +117,8 @@ fn send_payload() -> Vec<u8> {
 fn issued(seed: [u8; 32], permitted: ActivityType, expires_at: u64) -> IssuedSessionKey {
     let public_key = LocalSigner::new(seed).public_key();
     issue_session_key(&SessionKeyRequest {
+        fee_budget: None,
+        purpose: layerx_crypto::session::SessionPurpose::Activity,
         grantor: [1; 32],
         session_public_key: public_key,
         not_before: 900,

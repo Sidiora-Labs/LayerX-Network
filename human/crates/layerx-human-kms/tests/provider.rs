@@ -500,7 +500,16 @@ fn unsigned_payload(
 }
 
 fn encoded_disclosure(disclosure: &layerx_crypto::disclosure::Disclosure) -> Result<Vec<u8>> {
-    let mut out = vec![1];
+    let fee_grant = disclosure
+        .authority_grant
+        .filter(|grant| grant.fee_budget.is_some());
+    let mut out = vec![if disclosure.session_grant.is_some() {
+        3
+    } else if fee_grant.is_some() {
+        2
+    } else {
+        1
+    }];
     out.extend(disclosure.activity_type.value().to_be_bytes());
     blob(&mut out, &disclosure.actor)?;
     blob(&mut out, &disclosure.authority)?;
@@ -531,6 +540,21 @@ fn encoded_disclosure(disclosure: &layerx_crypto::disclosure::Disclosure) -> Res
     out.extend(disclosure.idempotency_key);
     assert!(disclosure.evm_payout_binding.is_none());
     out.push(0);
+    if let Some(grant) = fee_grant {
+        blob(&mut out, &checked(grant.encode())?)?;
+    }
+    if let Some(session) = &disclosure.session_grant {
+        blob(&mut out, &session.grant.registration_payload)?;
+        out.extend(session.expiry_sequence.to_be_bytes());
+        out.extend(session.action_key);
+        if let Some(replacement) = session.replacement {
+            out.push(1);
+            out.extend(replacement.predecessor_grant_id);
+            out.extend(replacement.expected_charge_state);
+        } else {
+            out.push(0);
+        }
+    }
     Ok(out)
 }
 fn checked<T, E: std::fmt::Debug>(value: std::result::Result<T, E>) -> Result<T> {
@@ -1133,5 +1157,201 @@ fn refuse_cross_scope(
     assert!(store
         .sign_evm_action(&other, key, &authorization.action_key)
         .is_err());
+    Ok(())
+}
+
+#[test]
+fn owner_fee_grants_bind_every_disclosed_budget_field_across_provider_restart() -> Result<()> {
+    use layerx_crypto::authority_grant::{AuthorityGrant, NativeFeeBudget};
+    use layerx_crypto::disclosure::bind;
+    use layerx_types::ids::Did;
+    use layerx_types::payload::{ActivityType, ModuleId, Payload};
+    let mut host = Host::new()?;
+    let binding = [73; 32];
+    let (handle, public) = facts(&host.call(&request(1, binding, &[], None)?)?)?;
+    let actor = checked(Did::new(b"did:layerx:alice"))?;
+    let issuer = checked(layerx_wire::hash::did_id_for_protocol(&actor, 3))?;
+    let mut grant = checked(AuthorityGrant::decode(include_bytes!(
+        "../../../../tests/fixtures/authority/native-fee-grants/period-bound/grant.bin"
+    )))?;
+    grant.grantor = issuer;
+    grant.grantee = issuer;
+    let payload = checked(Payload::new(
+        &registry()?,
+        checked(ActivityType::new(ModuleId::Governance, 8))?,
+        &checked(grant.payload())?,
+    ))?;
+    let canonical = unsigned_payload(public, 77, payload)?;
+    let disclosure = checked(bind(&canonical, &registry()?))?;
+    let mutations: &[fn(&mut NativeFeeBudget)] = &[
+        |fee| fee.asset[0] ^= 1,
+        |fee| fee.maximum_per_activity -= 1,
+        |fee| fee.maximum_total += 1,
+        |fee| fee.period_length += 1,
+        |fee| fee.maximum_per_period += 1,
+    ];
+    for pass in 0..2 {
+        if pass == 1 {
+            host.stop();
+            host.start()?;
+        }
+        let encoded = encoded_disclosure(&disclosure)?;
+        assert_eq!(encoded[0], 2);
+        let (signed_request, digest) = signing_request(binding, &handle, &canonical, &encoded)?;
+        let response = host.call(&signed_request)?;
+        assert_eq!(response[7], 0);
+        assert_eq!(response.len(), 72);
+        checked(
+            ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
+                .verify(&digest, &response[8..]),
+        )?;
+        for mutate in mutations {
+            let mut changed = disclosure.clone();
+            let Some(grant) = changed.authority_grant.as_mut() else {
+                return Err("missing grant".into());
+            };
+            let Some(fee) = grant.fee_budget.as_mut() else {
+                return Err("missing fee".into());
+            };
+            mutate(fee);
+            assert_eq!(
+                host.call(
+                    &signing_request(binding, &handle, &canonical, &encoded_disclosure(&changed)?)?
+                        .0
+                )?[7],
+                1
+            );
+        }
+        let mut original_version = encoded.clone();
+        original_version[0] = 1;
+        assert_eq!(
+            host.call(&signing_request(binding, &handle, &canonical, &original_version)?.0)?[7],
+            1
+        );
+        let mut truncated = encoded.clone();
+        truncated.truncate(truncated.len() - 1);
+        assert_eq!(
+            host.call(&signing_request(binding, &handle, &canonical, &truncated)?.0)?[7],
+            1
+        );
+        let mut changed_start = encoded;
+        let last = changed_start.len() - 1;
+        changed_start[last] ^= 1;
+        assert_eq!(
+            host.call(&signing_request(binding, &handle, &canonical, &changed_start)?.0)?[7],
+            1
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn session_registration_and_replacement_disclosures_survive_provider_restart() -> Result<()> {
+    use layerx_crypto::authority_grant::NativeFeeBudget;
+    use layerx_crypto::disclosure::bind;
+    use layerx_crypto::local::LocalSigner;
+    use layerx_crypto::session::{issue_session_key, SessionKeyRequest, SessionPurpose};
+    use layerx_crypto::signer::Signer as _;
+    use layerx_types::payload::{ActivityType, ModuleId};
+    let mut host = Host::new()?;
+    let binding = [74; 32];
+    let (handle, public) = facts(&host.call(&request(1, binding, &[], None)?)?)?;
+    let issuer = checked(layerx_wire::hash::did_id_for_protocol(
+        &checked(layerx_types::ids::Did::new(b"did:layerx:alice"))?,
+        3,
+    ))?;
+    for pass in 0..2 {
+        if pass == 1 {
+            host.stop();
+            host.start()?;
+        }
+        for version in 1..=4 {
+            let issued = checked(issue_session_key(&SessionKeyRequest {
+                grantor: issuer,
+                session_public_key: LocalSigner::new([0x67; 32]).public_key(),
+                not_before: 1000,
+                expires_at: Some(3_601_000),
+                revocation_sequence: Some(3),
+                permitted_activity_types: if version == 3 {
+                    vec![]
+                } else {
+                    vec![checked(ActivityType::new(ModuleId::Asset, 5))?]
+                },
+                fee_budget: matches!(version, 2 | 4).then_some(NativeFeeBudget {
+                    asset: [3; 32],
+                    maximum_per_activity: 4,
+                    maximum_total: 12,
+                    period_length: 60_000,
+                    maximum_per_period: 8,
+                    period_start: 1000,
+                }),
+                purpose: if version == 3 {
+                    SessionPurpose::Authentication
+                } else {
+                    SessionPurpose::Activity
+                },
+            }))?;
+            let mut grant = checked(layerx_intents::SessionGrant::new(
+                issued.registration_payload,
+                9000,
+                [4; 32],
+            ))?;
+            if version == 4 {
+                grant = checked(grant.replacing([5; 32], [6; 32]))?;
+            }
+            let compiled = checked(layerx_intents::compile(
+                &layerx_intents::Intent::v1(layerx_intents::IntentKind::SessionGrant(grant)),
+                &registry()?,
+            ))?;
+            let canonical = unsigned_payload(public, 77, compiled.payload().clone())?;
+            let disclosure = checked(bind(&canonical, &registry()?))?;
+            let encoded = encoded_disclosure(&disclosure)?;
+            assert_eq!(encoded[0], 3);
+            let (request, digest) = signing_request(binding, &handle, &canonical, &encoded)?;
+            let response = host.call(&request)?;
+            assert_eq!(response[7], 0);
+            checked(
+                ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
+                    .verify(&digest, &response[8..]),
+            )?;
+            for field in 0..4 {
+                let mut changed = disclosure.clone();
+                let session = changed
+                    .session_grant
+                    .as_mut()
+                    .ok_or("missing session disclosure")?;
+                match field {
+                    0 => session.expiry_sequence += 1,
+                    1 => session.action_key[0] ^= 1,
+                    2 => session.grant.registration_payload[9] ^= 1,
+                    _ => {
+                        if let Some(replacement) = session.replacement.as_mut() {
+                            replacement.expected_charge_state[0] ^= 1;
+                        } else {
+                            session.grant.registration_payload.push(0);
+                        }
+                    }
+                }
+                assert_eq!(
+                    host.call(
+                        &signing_request(
+                            binding,
+                            &handle,
+                            &canonical,
+                            &encoded_disclosure(&changed)?
+                        )?
+                        .0
+                    )?[7],
+                    1
+                );
+            }
+            let mut legacy = encoded;
+            legacy[0] = 1;
+            assert_eq!(
+                host.call(&signing_request(binding, &handle, &canonical, &legacy)?.0)?[7],
+                1
+            );
+        }
+    }
     Ok(())
 }

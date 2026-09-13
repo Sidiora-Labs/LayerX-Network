@@ -89,6 +89,8 @@ fn any_persisted_ciphertext_tamper_is_refused() {
 
 fn bounded_request() -> SessionKeyRequest {
     SessionKeyRequest {
+        fee_budget: None,
+        purpose: layerx_crypto::session::SessionPurpose::Activity,
         grantor: [0x11; 32],
         session_public_key: [0x22; 32],
         not_before: 10,
@@ -176,4 +178,69 @@ fn session_issuance_refuses_every_unbounded_or_widened_scope() {
         issue_session_key(&request).err(),
         Some(SessionIssueError::NonRepresentableActivitySet)
     );
+}
+
+#[test]
+fn versioned_sessions_preserve_legacy_bytes_and_reject_authentication_spend_scope() {
+    use layerx_crypto::authority_grant::NativeFeeBudget;
+    use layerx_crypto::session::{decode_session_key, SessionPurpose};
+    let legacy = issue_session_key(&bounded_request())
+        .unwrap_or_else(|error| panic!("legacy session: {error:?}"));
+    assert_eq!(
+        decode_session_key(&legacy.registration_payload),
+        Ok(legacy.clone())
+    );
+    let mut request = bounded_request();
+    request.fee_budget = Some(NativeFeeBudget {
+        asset: [3; 32],
+        maximum_per_activity: 4,
+        maximum_total: 12,
+        period_length: 10,
+        maximum_per_period: 8,
+        period_start: 10,
+    });
+    let paid = issue_session_key(&request)
+        .unwrap_or_else(|error| panic!("explicit fee session: {error:?}"));
+    assert_eq!(
+        decode_session_key(&paid.registration_payload),
+        Ok(paid.clone())
+    );
+    assert_eq!(
+        paid.registration_payload.len(),
+        legacy.registration_payload.len() + 132
+    );
+    assert_ne!(paid.grant_id, legacy.grant_id);
+    request.purpose = SessionPurpose::Authentication;
+    assert!(issue_session_key(&request).is_err());
+    request.fee_budget = None;
+    assert!(issue_session_key(&request).is_err());
+    request.permitted_activity_types.clear();
+    let authentication = issue_session_key(&request)
+        .unwrap_or_else(|error| panic!("authentication-only registration: {error:?}"));
+    assert_eq!(
+        decode_session_key(&authentication.registration_payload),
+        Ok(authentication.clone())
+    );
+    assert_eq!(
+        authentication.registration_payload.len(),
+        legacy.registration_payload.len() + 1
+    );
+    assert!(authentication.permitted_activity_types.is_empty());
+    assert!(authentication.fee_budget.is_none());
+    for length in 0..authentication.registration_payload.len() {
+        assert!(decode_session_key(&authentication.registration_payload[..length]).is_err());
+    }
+    for purpose in 0..=u8::MAX {
+        if purpose == 1 {
+            continue;
+        }
+        let mut bytes = authentication.registration_payload.clone();
+        *bytes.last_mut().unwrap_or_else(|| panic!("purpose byte")) = purpose;
+        assert!(decode_session_key(&bytes).is_err());
+    }
+    let mut extra = authentication.registration_payload;
+    extra.push(0);
+    assert!(decode_session_key(&extra).is_err());
+    request.session_public_key = [0; 32];
+    assert!(issue_session_key(&request).is_err());
 }

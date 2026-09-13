@@ -56,7 +56,7 @@ static lxp_result validate_grant(const lxp_authority_grant *grant)
         return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
     if (grant->not_after == 0U || grant->not_after <= grant->not_before ||
         lxp_ct_is_zero(grant->grantee, 32U) || lxp_ct_is_zero(grant->key, 32U) ||
-        grant->scope.module_mask == 0U ||
+        (!grant->authentication_only && grant->scope.module_mask == 0U) ||
         grant->scope.activity_ordinal_min > grant->scope.activity_ordinal_max)
         return LXP_ERR_MALFORMED_GRANT;
     if (grant->kind == LXP_AUTHORITY_DELEGATED_CAPABILITY ||
@@ -70,9 +70,17 @@ static lxp_result validate_grant(const lxp_authority_grant *grant)
               lxp_u128_is_zero(grant->scope.maximum_per_period))))
             return LXP_ERR_MALFORMED_GRANT;
     }
+    if (grant->authentication_only) {
+        const lxp_authority_scope empty = {0};
+        if (grant->kind != LXP_AUTHORITY_SESSION_KEY || grant->fee_budget.present ||
+            lxp_ct_is_zero(grant->grantor, 32U) || grant->grantor_revocation_sequence == 0U ||
+            memcmp(grant->grantor, grant->grantee, 32U) != 0 ||
+            !lxp_authority_scope_equal(&grant->scope, &empty)) return LXP_ERR_MALFORMED_GRANT;
+    }
     if (grant->fee_budget.present) {
         const lxp_authority_fee_budget *fee = &grant->fee_budget;
-        if ((grant->kind != LXP_AUTHORITY_DELEGATED_CAPABILITY &&
+        if ((grant->kind != LXP_AUTHORITY_SESSION_KEY &&
+             grant->kind != LXP_AUTHORITY_DELEGATED_CAPABILITY &&
              grant->kind != LXP_AUTHORITY_BUDGET_ALLOWANCE) ||
             lxp_ct_is_zero(fee->asset_id, 32U) ||
             lxp_u128_is_zero(fee->maximum_per_activity) ||
@@ -106,7 +114,7 @@ lxp_result lxp_grant_encode(const lxp_authority_grant *grant,
     if (status != LXP_OK) return status;
 #define WRITE(expression) do { status = (expression); if (status != LXP_OK) return status; } while (0)
     WRITE(lxp_codec_write_struct_header(&writer, 0x2001U));
-    WRITE(lxp_codec_write_u8(&writer, grant->fee_budget.present ? 2U : 1U));
+    WRITE(lxp_codec_write_u8(&writer, grant->authentication_only ? 3U : (grant->fee_budget.present ? 2U : 1U)));
     WRITE(lxp_codec_write_bytes(&writer, grant->grantor, 32U, 32U));
     WRITE(lxp_codec_write_bytes(&writer, grant->grantee, 32U, 32U));
     WRITE(lxp_codec_write_u8(&writer, (uint8_t)grant->kind));
@@ -140,6 +148,7 @@ lxp_result lxp_grant_encode(const lxp_authority_grant *grant,
         WRITE(write_amount(&writer, fee->spent_this_period));
         WRITE(lxp_codec_write_u64(&writer, fee->period_start));
     }
+    if (grant->authentication_only) WRITE(lxp_codec_write_u8(&writer, 1U));
 #undef WRITE
     encoded->bytes = writer.bytes;
     encoded->length = writer.length;
@@ -163,6 +172,24 @@ lxp_result lxp_grant_id_compute(const lxp_authority_grant *grant,
     lxp_secure_zero(storage, 1024U);
     free(storage);
     return status;
+}
+
+lxp_result lxp_authentication_key_bind(lxp_authority_grant *grant,
+    const uint8_t grantor[32], const uint8_t session_key[32],
+    uint64_t not_before, uint64_t not_after, uint64_t revocation_sequence)
+{
+    if (grant == NULL || grantor == NULL || session_key == NULL ||
+        revocation_sequence == 0U || not_after <= not_before) return LXP_ERR_MALFORMED_GRANT;
+    (void)memset(grant, 0, sizeof(*grant));
+    (void)memcpy(grant->grantor, grantor, 32U);
+    (void)memcpy(grant->grantee, grantor, 32U);
+    (void)memcpy(grant->key, session_key, 32U);
+    grant->kind = LXP_AUTHORITY_SESSION_KEY;
+    grant->not_before = not_before;
+    grant->not_after = not_after;
+    grant->grantor_revocation_sequence = revocation_sequence;
+    grant->authentication_only = true;
+    return lxp_grant_id_compute(grant, grant->grant_id);
 }
 
 lxp_result lxp_session_key_bind(lxp_authority_grant *grant,
@@ -242,6 +269,7 @@ lxp_result lxp_authority_resolve(const lxp_authority_grant *grant,
     if (grant->kind < LXP_AUTHORITY_OWNER ||
         grant->kind > LXP_AUTHORITY_PROTOCOL_MODULE)
         return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
+    if (grant->authentication_only) return LXP_ERR_AUTH_SCOPE;
     if (!signature_valid) return LXP_ERR_BAD_SIGNATURE;
     if (grant->revoked) return LXP_ERR_AUTH_REVOKED;
     if (lxp_ct_memcmp(actor, grant->grantee, 32U) != 0)
@@ -289,7 +317,7 @@ lxp_result lxp_grant_decode(const uint8_t *bytes, size_t length,
     READ(lxp_codec_reader_init(&reader, bytes, length));
     READ(lxp_codec_read_struct_header(&reader, 0x2001U));
     READ(lxp_codec_read_u8(&reader, &version));
-    if (version != 1U && version != 2U) return LXP_ERR_VERSION_UNSUPPORTED;
+    if (version != 1U && version != 2U && version != 3U) return LXP_ERR_VERSION_UNSUPPORTED;
     FIXED(grant->grantor, 32U);
     FIXED(grant->grantee, 32U);
     READ(lxp_codec_read_u8(&reader, &kind));
@@ -297,6 +325,7 @@ lxp_result lxp_grant_decode(const uint8_t *bytes, size_t length,
         kind > (uint8_t)LXP_AUTHORITY_PROTOCOL_MODULE)
         return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
     grant->kind = (lxp_authority_kind)kind;
+    if (version == 3U && grant->kind != LXP_AUTHORITY_SESSION_KEY) return LXP_ERR_VERSION_UNSUPPORTED;
     FIXED(grant->key, 32U);
     READ(lxp_codec_read_u64(&reader, &grant->scope.module_mask));
     READ(lxp_codec_read_u16(&reader, &grant->scope.activity_ordinal_min));
@@ -329,6 +358,12 @@ lxp_result lxp_grant_decode(const uint8_t *bytes, size_t length,
         READ(lxp_codec_read_u128(&reader, &fee->maximum_per_period));
         READ(lxp_codec_read_u128(&reader, &fee->spent_this_period));
         READ(lxp_codec_read_u64(&reader, &fee->period_start));
+    }
+    if (version == 3U) {
+        uint8_t purpose;
+        READ(lxp_codec_read_u8(&reader, &purpose));
+        if (purpose != 1U) return LXP_ERR_MALFORMED_GRANT;
+        grant->authentication_only = true;
     }
     READ(lxp_codec_finish(&reader));
 #undef FIXED
@@ -785,6 +820,34 @@ lxp_result lxp_authority_fee_record_encode(const lxp_authority_grant *grant,
     return lxp_authority_charge_record_encode(grant->grant_id, &counters, value);
 }
 
+void lxp_authority_session_successor_key(const uint8_t grant_id[32], uint8_t key[33])
+{
+    key[0] = 9U;
+    (void)memcpy(key + 1U, grant_id, 32U);
+}
+
+lxp_result lxp_authority_session_charge_commitment(const lxp_authority_grant *grant,
+    uint8_t commitment[32])
+{
+    static const uint8_t domain[] = "LXP/session-fee-replacement/v1";
+    uint8_t value[72], revoked[8];
+    lxp_hash_context hash;
+    lxp_result status;
+    if (grant == NULL || commitment == NULL || grant->kind != LXP_AUTHORITY_SESSION_KEY ||
+        grant->authentication_only || !grant->fee_budget.present || !grant->revoked ||
+        grant->revoked_at_sequence == 0U) return LXP_ERR_AUTH_SCOPE;
+    status = lxp_authority_fee_record_encode(grant, value);
+    for (size_t i = 0U; i < 8U; ++i)
+        revoked[i] = (uint8_t)(grant->revoked_at_sequence >> (56U - i * 8U));
+    lxp_hash_init(&hash);
+    if (status == LXP_OK) status = lxp_hash_update(&hash, domain, sizeof(domain));
+    if (status == LXP_OK) status = lxp_hash_update(&hash, grant->grant_id, 32U);
+    if (status == LXP_OK) status = lxp_hash_update(&hash, revoked, sizeof(revoked));
+    if (status == LXP_OK) status = lxp_hash_update(&hash, value, sizeof(value));
+    if (status == LXP_OK) status = lxp_hash_final(&hash, commitment);
+    return status;
+}
+
 lxp_result lxp_authority_allowance_policy(const lxp_kernel *kernel, bool *enforced)
 {
     static const uint8_t key[32] = LXP_NATIVE_FEE_AUTHORITY_PARAMETER;
@@ -820,10 +883,11 @@ lxp_result lxp_authority_fee_resolve(const lxp_kernel *kernel,
     bool enforced = false;
     status = lxp_authority_allowance_policy(kernel, &enforced);
     if (status != LXP_OK || !enforced) return status;
-    if (!authority_kind_metered(authority->kind)) return LXP_OK;
+    if (authority->kind != LXP_AUTHORITY_SESSION_KEY &&
+        !authority_kind_metered(authority->kind)) return LXP_OK;
     status = lxp_authority_grant_load(kernel, authority->grant_id, grant);
     if (status != LXP_OK) return status == LXP_ERR_UNKNOWN_FIELD ? LXP_ERR_AUTH_ALLOWANCE : status;
-    if (grant->kind != authority->kind ||
+    if (grant->authentication_only || grant->kind != authority->kind ||
         memcmp(grant->grantee, authority->actor, 32U) != 0 ||
         memcmp(grant->key, authority->verified_key, 32U) != 0 ||
         grant->revoked || timestamp < grant->not_before || timestamp >= grant->not_after)
