@@ -239,16 +239,14 @@ impl<'a> ProductionAgentCreation<'a> {
         Ok(prepared)
     }
 
-    fn submit_scoped(
+    fn signing_descriptor(
         &mut self,
-        scope: &mut PrincipalScope<'_>,
+        principal: &crate::store::PrincipalId,
         action: &ProtocolAction,
-    ) -> Result<ProtocolEvidence, AgentFailure> {
-        let prepared = self.prepare_action(scope, action)?;
-        let principal = scope.principal().clone();
+    ) -> Result<crate::custody::KeyDescriptor, AgentFailure> {
         let descriptor = self
             .custody
-            .describe_key(&principal, &action.custody_key)
+            .describe_key(principal, &action.custody_key)
             .map_err(|_| AgentFailure::Refused("agent custody key is unavailable"))?;
         let expected_class = if action.custody_key.as_str() == "human-primary" {
             crate::custody::KeyClass::HumanPrimary
@@ -261,6 +259,17 @@ impl<'a> ProductionAgentCreation<'a> {
             ));
         }
         self.owner_primary_key = Some(descriptor.public_key);
+        Ok(descriptor)
+    }
+
+    fn submit_scoped(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        action: &ProtocolAction,
+    ) -> Result<ProtocolEvidence, AgentFailure> {
+        let prepared = self.prepare_action(scope, action)?;
+        let principal = scope.principal().clone();
+        let descriptor = self.signing_descriptor(&principal, action)?;
         let grant = poll_once_ready(self.custody.sign_in_scope(
             scope,
             SignRequest::new(
