@@ -19,7 +19,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -863,7 +863,11 @@ fn route(config: &Config, request: &Request) -> Response {
     }
 }
 
-fn handle_connection(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
+fn handle_connection(
+    config: &Arc<Config>,
+    tcp: TcpStream,
+    shutdown: &AtomicBool,
+) -> Result<(), String> {
     tcp.set_nodelay(true).map_err(|error| error.to_string())?;
     tcp.set_read_timeout(Some(IO_TIMEOUT))
         .map_err(|error| error.to_string())?;
@@ -873,6 +877,9 @@ fn handle_connection(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String>
         ServerConnection::new(Arc::clone(&config.tls)).map_err(|error| error.to_string())?;
     let mut stream = StreamOwned::new(connection, tcp);
     for request_number in 0..MAX_REQUESTS_PER_CONNECTION {
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
         let request = match read_http_message(&mut stream) {
             Ok(request) => request,
             Err(_) if request_number == 0 => {
@@ -881,7 +888,8 @@ fn handle_connection(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String>
             }
             Err(_) => break,
         };
-        let keep_alive = request_number + 1 < MAX_REQUESTS_PER_CONNECTION
+        let keep_alive = !shutdown.load(Ordering::Acquire)
+            && request_number + 1 < MAX_REQUESTS_PER_CONNECTION
             && request
                 .headers
                 .get("connection")
@@ -916,28 +924,52 @@ impl Drop for ConnectionPermit {
 }
 
 fn serve(config: Config) -> Result<(), String> {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))
+        .map_err(|error| error.to_string())?;
+    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))
+        .map_err(|error| error.to_string())?;
     let listener = TcpListener::bind(config.listen).map_err(|error| error.to_string())?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
     let config = Arc::new(config);
+    let mut workers = Vec::<thread::JoinHandle<()>>::new();
     eprintln!(
         "layerx-receipt-authority listening with TLS on {}",
         config.listen
     );
-    for connection in listener.incoming() {
-        match connection {
-            Ok(stream) => {
+    while !shutdown.load(Ordering::Acquire) {
+        workers.retain(|worker| !worker.is_finished());
+        match listener.accept() {
+            Ok((stream, _)) => {
                 let Some(permit) = ConnectionPermit::acquire() else {
                     continue;
                 };
                 let shared = Arc::clone(&config);
-                thread::spawn(move || {
+                let stopping = Arc::clone(&shutdown);
+                workers.push(thread::spawn(move || {
                     let _permit = permit;
-                    if let Err(error) = handle_connection(&shared, stream) {
+                    if let Err(error) = handle_connection(&shared, stream, &stopping) {
                         eprintln!("layerx-receipt-authority connection failed: {error}");
                     }
-                });
+                }));
             }
-            Err(error) => eprintln!("layerx-receipt-authority accept failed: {error}"),
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::WouldBlock
+                    && error.kind() != std::io::ErrorKind::Interrupted
+                {
+                    eprintln!("layerx-receipt-authority accept failed: {error}");
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
         }
+    }
+    drop(listener);
+    for worker in workers {
+        worker
+            .join()
+            .map_err(|_| "receipt authority connection worker panicked".to_owned())?;
     }
     Ok(())
 }
