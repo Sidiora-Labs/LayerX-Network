@@ -4829,19 +4829,7 @@ impl ProductionComponents {
                 .auth_index
                 .resolve_assertion(assertion_id, now)
                 .map_err(|error| auth_failure(&error))?;
-            let device = request
-                .body
-                .get("device")
-                .and_then(serde_json::Value::as_object)
-                .ok_or_else(|| ApiFailure::invalid_request(Some("device")))?;
-            let device_label = device
-                .get("label")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| ApiFailure::invalid_request(Some("device.label")))?;
-            let device_platform = device
-                .get("platform")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| ApiFailure::invalid_request(Some("device.platform")))?;
+            let (device_label, device_platform) = browser_device(request)?;
             let idempotency = required_idempotency(request)?;
             let action = action_key(idempotency);
             let recovery_seed = self
@@ -5045,17 +5033,7 @@ impl ProductionComponents {
         let prior_session = agent
             .session_fee_state(context.protocol_grant_id)
             .map_err(agent_failure)?;
-        if prior_session.revoked_at_sequence == 0
-            || prior_session.grant.grantor
-                != layerx_intents::canonical::did_id_for_protocol(
-                    &Did::new(context.agent_did.as_bytes())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    3,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?
-        {
-            return Err(ApiFailure::upstream_degraded());
-        }
+        validate_resumed_session(&prior_session, &context.agent_did)?;
         let operation_key = action_key(required_idempotency(request)?);
         let current = now()?;
         let trace =
@@ -5581,4 +5559,38 @@ fn production_auth_index(root: PathBuf, key: [u8; 32]) -> Result<AuthDiscoveryIn
             .map_err(|_| "authentication index key is invalid".to_owned())?,
     )
     .map_err(|_| "authentication index refused startup".to_owned())
+}
+
+fn browser_device<'a>(request: &'a ScopedRequest<'_>) -> Result<(&'a str, &'a str), ApiFailure> {
+    let device = request
+        .body
+        .get("device")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| ApiFailure::invalid_request(Some("device")))?;
+    let device_label = device
+        .get("label")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| ApiFailure::invalid_request(Some("device.label")))?;
+    let device_platform = device
+        .get("platform")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| ApiFailure::invalid_request(Some("device.platform")))?;
+    Ok((device_label, device_platform))
+}
+
+fn validate_resumed_session(
+    prior_session: &layerx_crypto::session::SessionFeeState,
+    did: &str,
+) -> Result<(), ApiFailure> {
+    if prior_session.revoked_at_sequence == 0
+        || prior_session.grant.grantor
+            != layerx_intents::canonical::did_id_for_protocol(
+                &Did::new(did.as_bytes()).map_err(|_| ApiFailure::upstream_degraded())?,
+                3,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?
+    {
+        return Err(ApiFailure::upstream_degraded());
+    }
+    Ok(())
 }

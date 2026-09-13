@@ -120,11 +120,11 @@ impl<'a> ProductionAgentCreation<'a> {
             .ok_or(AgentFailure::Refused("session token was not provisioned"))
     }
 
-    fn prepare_action(
+    fn protocol_preparation(
         &mut self,
         scope: &mut PrincipalScope<'_>,
         action: &ProtocolAction,
-    ) -> Result<crate::journeys::AgentPreparation, AgentFailure> {
+    ) -> Result<ProtocolPreparation, AgentFailure> {
         let binding: [u8; 32] = Sha256::digest(
             serde_json::to_vec(&(
                 self.actor.as_str(),
@@ -178,6 +178,15 @@ impl<'a> ProductionAgentCreation<'a> {
                     .map_err(|_| AgentFailure::Unavailable)?;
                 retained
             };
+        Ok(retained)
+    }
+
+    fn prepare_action(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        action: &ProtocolAction,
+    ) -> Result<crate::journeys::AgentPreparation, AgentFailure> {
+        let retained = self.protocol_preparation(scope, action)?;
         let account_sequence = retained.account_sequence;
         let not_before = retained.not_before;
         let not_after = retained.not_after;
@@ -282,25 +291,7 @@ impl<'a> ProductionAgentCreation<'a> {
         if signed.idempotency_key() != action.action_key {
             return Err(AgentFailure::Refused("signed creation action differs"));
         }
-        let signed_key =
-            crate::store::RowKey::new(format!("protocol-signed-{}", hex(&action.action_key)))
-                .map_err(|_| AgentFailure::Refused("invalid protocol action key"))?;
-        if let Some(existing) = scope.get(crate::store::Table::Journeys, &signed_key) {
-            if existing.bytes() != signed_activity {
-                return Err(AgentFailure::Refused(
-                    "signed protocol activity changed on retry",
-                ));
-            }
-        } else {
-            scope
-                .put(
-                    crate::store::Table::Journeys,
-                    signed_key,
-                    action.started_at,
-                    signed_activity.clone(),
-                )
-                .map_err(|_| AgentFailure::Unavailable)?;
-        }
+        retain_signed_activity(scope, action, &signed_activity)?;
         let submit = SubmitRequest {
             preparation_ref: prepared.preparation_ref,
             signature: SignatureBytes::new(grant.signature().to_vec())
@@ -695,25 +686,7 @@ impl ProductionAgentCreation<'_> {
         let actor = std::str::from_utf8(request.did.as_bytes())
             .map_err(|_| AgentFailure::Refused("invalid agent DID"))?;
         let identity = self.runtime.identity_resolve(actor).map_err(map_boundary)?;
-        let native_not_before = match &request.replacement {
-            Some(prior) => {
-                if prior.revoked_at_sequence == 0
-                    || prior.successor != [0; 32]
-                    || prior.grant.fee_budget != request.native_fee_budget
-                    || prior.grant.permitted_activity_types != request.activity_types
-                    || prior.grant.grantor
-                        != layerx_intents::canonical::did_id_for_protocol(&request.did, 3)
-                            .map_err(|_| AgentFailure::Refused("invalid session DID"))?
-                {
-                    return Err(AgentFailure::Refused("session replacement is not bound"));
-                }
-                prior.grant.not_before
-            }
-            None => request
-                .not_before
-                .checked_mul(1_000)
-                .ok_or(AgentFailure::Refused("session time overflow"))?,
-        };
+        let native_not_before = session_period_anchor(request)?;
         let plan = SessionPreparation {
             version: 1,
             request_binding,
@@ -967,4 +940,53 @@ fn digest(parts: &[&[u8]]) -> [u8; 32] {
         digest.update(part);
     }
     digest.finalize().into()
+}
+
+fn retain_signed_activity(
+    scope: &mut PrincipalScope<'_>,
+    action: &ProtocolAction,
+    signed_activity: &[u8],
+) -> Result<(), AgentFailure> {
+    let signed_key =
+        crate::store::RowKey::new(format!("protocol-signed-{}", hex(&action.action_key)))
+            .map_err(|_| AgentFailure::Refused("invalid protocol action key"))?;
+    if let Some(existing) = scope.get(crate::store::Table::Journeys, &signed_key) {
+        if existing.bytes() != signed_activity {
+            return Err(AgentFailure::Refused(
+                "signed protocol activity changed on retry",
+            ));
+        }
+    } else {
+        scope
+            .put(
+                crate::store::Table::Journeys,
+                signed_key,
+                action.started_at,
+                signed_activity.to_vec(),
+            )
+            .map_err(|_| AgentFailure::Unavailable)?;
+    }
+    Ok(())
+}
+
+fn session_period_anchor(request: &SessionProvision) -> Result<u64, AgentFailure> {
+    match &request.replacement {
+        Some(prior) => {
+            if prior.revoked_at_sequence == 0
+                || prior.successor != [0; 32]
+                || prior.grant.fee_budget != request.native_fee_budget
+                || prior.grant.permitted_activity_types != request.activity_types
+                || prior.grant.grantor
+                    != layerx_intents::canonical::did_id_for_protocol(&request.did, 3)
+                        .map_err(|_| AgentFailure::Refused("invalid session DID"))?
+            {
+                return Err(AgentFailure::Refused("session replacement is not bound"));
+            }
+            Ok(prior.grant.not_before)
+        }
+        None => request
+            .not_before
+            .checked_mul(1_000)
+            .ok_or(AgentFailure::Refused("session time overflow")),
+    }
 }

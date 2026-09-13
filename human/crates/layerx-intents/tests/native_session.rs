@@ -65,38 +65,7 @@ fn executable_session_intents_reproduce_original_owner_signed_native_registratio
             (77, 3)
         );
         let unsigned = checked(activity::encode_unsigned(&submitted));
-        let original_signature: [u8; 64] = checked(
-            submitted
-                .signature()
-                .unwrap_or_else(|| panic!("missing original signature"))
-                .try_into(),
-        );
-        let original_owner: [u8; 32] = checked(submitted.authority().try_into());
-        assert_eq!(
-            checked(layerx_intents::owner_activity::attach_signature(
-                &unsigned,
-                original_signature,
-                original_owner,
-                &registry
-            )),
-            fixture.activity
-        );
-        assert!(layerx_intents::owner_activity::attach_signature(
-            &unsigned,
-            original_signature,
-            [0; 32],
-            &registry
-        )
-        .is_err());
-        let mut changed_signature = original_signature;
-        changed_signature[0] ^= 1;
-        assert!(layerx_intents::owner_activity::attach_signature(
-            &unsigned,
-            changed_signature,
-            original_owner,
-            &registry
-        )
-        .is_err());
+        assert_owner_signature_round_trip(&submitted, &unsigned, fixture.activity, &registry);
 
         let message = checked(SignatureMessage::new(
             hash::Domain::SignaturePreimage,
@@ -163,4 +132,44 @@ fn executable_session_intents_reproduce_original_owner_signed_native_registratio
             assert!(compile(&Intent::v2(IntentKind::SessionGrant(grant)), &registry).is_err());
         }
     }
+}
+
+fn assert_owner_signature_round_trip(
+    submitted: &activity::Activity,
+    unsigned: &[u8],
+    signed_bytes: &[u8],
+    registry: &ModuleRegistry,
+) {
+    let original_signature: [u8; 64] = checked(
+        submitted
+            .signature()
+            .unwrap_or_else(|| panic!("missing original signature"))
+            .try_into(),
+    );
+    let original_owner: [u8; 32] = checked(submitted.authority().try_into());
+    assert_eq!(
+        checked(layerx_intents::owner_activity::attach_signature(
+            unsigned,
+            original_signature,
+            original_owner,
+            registry
+        )),
+        signed_bytes
+    );
+    assert!(layerx_intents::owner_activity::attach_signature(
+        unsigned,
+        original_signature,
+        [0; 32],
+        registry
+    )
+    .is_err());
+    let mut changed_signature = original_signature;
+    changed_signature[0] ^= 1;
+    assert!(layerx_intents::owner_activity::attach_signature(
+        unsigned,
+        changed_signature,
+        original_owner,
+        registry
+    )
+    .is_err());
 }
