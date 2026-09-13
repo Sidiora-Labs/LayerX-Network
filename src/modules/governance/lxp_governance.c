@@ -230,6 +230,9 @@ static lxp_result grant_scope_validate(lxp_module_ctx *ctx,
           lxp_u128_cmp(scope->maximum_per_activity, scope->maximum_per_period) > 0)))
         return LXP_ERR_AUTH_SCOPE;
     if (grant->fee_budget.present) {
+        bool enforced = false;
+        status = lxp_authority_allowance_policy(ctx->kernel, &enforced);
+        if (status != LXP_OK || !enforced) return status == LXP_OK ? LXP_ERR_AUTH_SCOPE : status;
         const lxp_authority_fee_budget *fee = &grant->fee_budget;
         const lx_programs_transfer_runtime *runtime = ctx->kernel->module_runtime[LXP_MODULE_PROGRAMS];
         if (runtime == NULL || memcmp(fee->asset_id, runtime->occupancy_asset_id, 32U) != 0 ||

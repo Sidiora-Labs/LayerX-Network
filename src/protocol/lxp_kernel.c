@@ -645,6 +645,13 @@ static lxp_result kernel_private_execution_bind(
     size_t index;
     lxp_result status;
     *private_execution = *execution;
+    bool enforced = false;
+    status = lxp_authority_allowance_policy(kernel, &enforced);
+    if (status != LXP_OK) return status;
+    if (!enforced) {
+        private_execution->allowance = NULL;
+        return LXP_OK;
+    }
     if (allowance == NULL)
         return execution->authority != NULL &&
                    (execution->authority->kind ==
@@ -4785,7 +4792,16 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         execution->authority == NULL || execution->fee_parameters == NULL ||
         execution->arena == NULL || execution->batch_number == 0U)
         return LXP_ERR_NON_CANONICAL;
-    if ((execution->authority->kind == LXP_AUTHORITY_DELEGATED_CAPABILITY ||
+    bool enforced = false;
+    lxp_kernel_execution policy_execution;
+    status = lxp_authority_allowance_policy(kernel, &enforced);
+    if (status != LXP_OK) return status;
+    if (!enforced) {
+        policy_execution = *execution;
+        policy_execution.allowance = NULL;
+        execution = &policy_execution;
+    }
+    if (enforced && (execution->authority->kind == LXP_AUTHORITY_DELEGATED_CAPABILITY ||
          execution->authority->kind == LXP_AUTHORITY_BUDGET_ALLOWANCE) &&
         (execution->allowance == NULL || execution->allowance->scope == NULL))
         return LXP_ERR_AUTH_ALLOWANCE;

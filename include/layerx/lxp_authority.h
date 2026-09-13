@@ -99,6 +99,8 @@ struct lxp_kernel;
 struct lxp_identity;
 struct lxp_transfer_allowance;
 
+#define LXP_NATIVE_FEE_AUTHORITY_PARAMETER "native-fee-authority-version"
+lxp_result lxp_authority_allowance_policy(const struct lxp_kernel *kernel, bool *enforced);
 lxp_result lxp_authority_fee_resolve(const struct lxp_kernel *kernel,
     const lxp_authority_resolved *authority, const lxp_activity *activity,
     uint64_t timestamp, lxp_u128 amount, lxp_authority_grant *grant);

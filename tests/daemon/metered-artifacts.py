@@ -20,7 +20,7 @@ assert 32 <= len(token) <= 128 and all(0x21 <= ord(c) <= 0x7e for c in token)
 request = urllib.request.Request(
     f'http://127.0.0.1:{port}/v1/programs/activities/{activity}/artifacts?receipt_digest={digest}',
     headers={'Authorization': 'Bearer ' + token})
-with urllib.request.build_opener(NoRedirect).open(request, timeout=10) as response:
+with urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect).open(request, timeout=10) as response:
     assert response.status == 200
     body = response.read(4 * 1024 * 1024 + 1)
 assert len(body) <= 4 * 1024 * 1024

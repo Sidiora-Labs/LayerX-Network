@@ -228,7 +228,8 @@ static int metered_activity(metered_fixture *f, uint32_t type,
     return 0;
 }
 
-static int metered_fixture_init(metered_fixture *f, uint64_t activity_limit)
+static int metered_fixture_init(metered_fixture *f, uint64_t activity_limit,
+                                bool enforce_allowances)
 {
     lx_account *treasury;
     lxp_module_ctx registration;
@@ -259,6 +260,16 @@ static int metered_fixture_init(metered_fixture *f, uint64_t activity_limit)
     f->parameters = 1U;
     METERED_CHECK(lxp_kernel_create(&f->kernel, &f->state, &f->journal,
                                      &f->parameters, 0U) == LXP_OK);
+    if (enforce_allowances) {
+        lxp_module_kv_entry *policy = &f->kernel.module_kv[f->kernel.module_kv_count++];
+        (void)memset(policy, 0, sizeof(*policy));
+        policy->module_id = LXP_MODULE_GOVERNANCE;
+        policy->key_length = 32U;
+        (void)memcpy(policy->key, LXP_NATIVE_FEE_AUTHORITY_PARAMETER,
+                     sizeof(LXP_NATIVE_FEE_AUTHORITY_PARAMETER) - 1U);
+        policy->value_length = 32U;
+        policy->value[31] = 2U;
+    }
     METERED_CHECK(install_metering_v1(&f->kernel) == LXP_OK);
     METERED_CHECK(lxp_kernel_register_module(&f->kernel,
                     programs_module_registration_v4()) == LXP_OK);
@@ -365,7 +376,7 @@ static int metered_fixture_init(metered_fixture *f, uint64_t activity_limit)
     f->grant.not_before = 1U;
     f->grant.not_after = 1000U;
     f->grant.grantor_revocation_sequence = 1U;
-    f->grant.fee_budget.present = true;
+    f->grant.fee_budget.present = enforce_allowances;
     (void)memcpy(f->grant.fee_budget.asset_id, f->asset.asset_id, 32U);
     f->grant.fee_budget.maximum_per_activity = (lxp_u128){0U, 67108864U};
     f->grant.fee_budget.maximum_total = (lxp_u128){0U, 268435456U};
@@ -421,6 +432,58 @@ static int metered_fees(const metered_fixture *f, lxp_u128 *total)
     return 0;
 }
 
+static int metered_legacy_replay(void)
+{
+    metered_fixture *live = calloc(1U, sizeof(*live));
+    metered_fixture *replay = calloc(1U, sizeof(*replay));
+    uint8_t live_bytes[LXP_MAX_ACTIVITY_BYTES];
+    uint8_t replay_bytes[LXP_MAX_ACTIVITY_BYTES];
+    lxp_arena live_arena, replay_arena;
+    lxp_byte_span live_receipt, replay_receipt;
+    METERED_CHECK(live != NULL && replay != NULL);
+    METERED_CHECK(metered_fixture_init(live, 3U, false) == 0);
+    METERED_CHECK(metered_fixture_init(replay, 3U, false) == 0);
+    METERED_CHECK(!live->grant.fee_budget.present && !replay->grant.fee_budget.present);
+    METERED_CHECK(memcmp(live->grant_id, replay->grant_id, 32U) == 0);
+    for (uint8_t marker = 7U; marker <= 9U; ++marker) {
+        live->source->frozen = marker == 7U;
+        replay->source->frozen = marker == 7U;
+        METERED_CHECK(lxp_state_root(&live->kernel, live->kernel.current_state_root) == LXP_OK);
+        METERED_CHECK(lxp_state_root(&replay->kernel, replay->kernel.current_state_root) == LXP_OK);
+        METERED_CHECK(metered_activity(live, LX_PROGRAMS_CALL, live->call,
+                                       live->call_length, marker, true) == 0);
+        METERED_CHECK(metered_activity(replay, LX_PROGRAMS_CALL, replay->call,
+                                       replay->call_length, marker, true) == 0);
+        replay->execution.allowance = NULL;
+        METERED_CHECK(lxp_kernel_execute_activity(&live->kernel, &live->activity,
+                        &live->execution, &live->receipt) == LXP_OK);
+        METERED_CHECK(lxp_kernel_execute_activity(&replay->kernel, &replay->activity,
+                        &replay->execution, &replay->receipt) == LXP_OK);
+        METERED_CHECK(live->receipt.result_code ==
+            (marker == 7U ? LXP_ERR_PROGRAM_REFUSED : LXP_OK));
+        METERED_CHECK(!lxp_u128_is_zero(live->receipt.fee_charged));
+        METERED_CHECK(metered_spent(live, 0U) == 0 && metered_spent(replay, 0U) == 0);
+        METERED_CHECK(memcmp(live->kernel.current_state_root,
+                             replay->kernel.current_state_root, 32U) == 0);
+        METERED_CHECK(lxp_arena_init(&live_arena, live_bytes, sizeof(live_bytes)) == LXP_OK);
+        METERED_CHECK(lxp_arena_init(&replay_arena, replay_bytes, sizeof(replay_bytes)) == LXP_OK);
+        METERED_CHECK(lxp_receipt_encode(&live->receipt, &live_arena, &live_receipt) == LXP_OK);
+        METERED_CHECK(lxp_receipt_encode(&replay->receipt, &replay_arena, &replay_receipt) == LXP_OK);
+        METERED_CHECK(live_receipt.length == replay_receipt.length);
+        METERED_CHECK(memcmp(live_receipt.bytes, replay_receipt.bytes, live_receipt.length) == 0);
+    }
+    METERED_CHECK(live->payee->balance.lo == 18U && replay->payee->balance.lo == 18U);
+    while (live->kernel.blob_count != 0U)
+        free(live->kernel.blobs[--live->kernel.blob_count].bytes);
+    while (replay->kernel.blob_count != 0U)
+        free(replay->kernel.blobs[--replay->kernel.blob_count].bytes);
+    METERED_CHECK(lxp_state_store_destroy(&live->state) == LXP_OK);
+    METERED_CHECK(lxp_state_store_destroy(&replay->state) == LXP_OK);
+    free(live);
+    free(replay);
+    return 0;
+}
+
 int main(void)
 {
     metered_fixture *f = calloc(1U, sizeof(*f));
@@ -428,7 +491,8 @@ int main(void)
     lxp_u128 paid_fees = {0U, 0U};
     uint8_t root[32];
     uint64_t sequence;
-    METERED_CHECK(f != NULL && metered_fixture_init(f, 4U) == 0);
+    METERED_CHECK(metered_legacy_replay() == 0);
+    METERED_CHECK(f != NULL && metered_fixture_init(f, 4U, true) == 0);
     f->source->frozen = true;
     METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
     METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length,
@@ -487,7 +551,7 @@ int main(void)
     free(f);
     paid_fees = (lxp_u128){0U, 0U};
     f = calloc(1U, sizeof(*f));
-    METERED_CHECK(f != NULL && metered_fixture_init(f, 3U) == 0);
+    METERED_CHECK(f != NULL && metered_fixture_init(f, 3U, true) == 0);
     METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length,
                                    6U, true) == 0);
     METERED_CHECK(lxp_kernel_execute_activity(&f->kernel, &f->activity,

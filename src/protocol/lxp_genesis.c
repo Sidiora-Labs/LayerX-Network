@@ -11,6 +11,7 @@
 #include "layerx/lxp_bridge_credit.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_authority.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_ledger.h"
@@ -356,6 +357,8 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
         manifest->module_value_count > LXP_GENESIS_MAX_MODULE_VALUES)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < manifest->parameter_count; ++i) {
+        static const uint8_t fee_authority_key[32] =
+            LXP_NATIVE_FEE_AUTHORITY_PARAMETER;
         if (manifest->parameters[i].module_id == 0U ||
             manifest->parameters[i].module_id > LXP_MODULE_RESERVED_COUNT ||
             lxp_ct_is_zero(manifest->parameters[i].key, 32U) ||
@@ -365,6 +368,12 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
                 manifest->parameters[i].module_id,
                 manifest->parameters[i].key) >= 0))
             return LXP_ERR_UNSORTED_SEQUENCE;
+        if (memcmp(manifest->parameters[i].key, fee_authority_key, 32U) == 0 &&
+            (manifest->parameters[i].module_id != LXP_MODULE_GOVERNANCE ||
+             manifest->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+             !lxp_ct_is_zero(manifest->parameters[i].value, 31U) ||
+             manifest->parameters[i].value[31] != 2U))
+            return LXP_ERR_VERSION_UNSUPPORTED;
     }
     for (i = 0U; i < manifest->guarantor_count; ++i) {
         if (lxp_ct_is_zero(manifest->guarantors[i].guarantor_id, 32U) ||

@@ -164,6 +164,16 @@ static int fixture_init(fixture *f, uint8_t marker_offset)
     f->parameters = 1U;
     CHECK(lxp_kernel_create(&f->kernel, &f->state, &f->journal,
                             &f->parameters, 0U) == LXP_OK);
+    {
+        lxp_module_kv_entry *policy = &f->kernel.module_kv[f->kernel.module_kv_count++];
+        (void)memset(policy, 0, sizeof(*policy));
+        policy->module_id = LXP_MODULE_GOVERNANCE;
+        policy->key_length = 32U;
+        (void)memcpy(policy->key, LXP_NATIVE_FEE_AUTHORITY_PARAMETER,
+                     sizeof(LXP_NATIVE_FEE_AUTHORITY_PARAMETER) - 1U);
+        policy->value_length = 32U;
+        policy->value[31] = 2U;
+    }
     CHECK(lxp_kernel_set_capabilities(&f->kernel, NULL,
                                       lxp_kernel_canonical_ledger_apply) ==
           LXP_OK);

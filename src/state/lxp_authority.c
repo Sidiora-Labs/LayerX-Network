@@ -785,6 +785,24 @@ lxp_result lxp_authority_fee_record_encode(const lxp_authority_grant *grant,
     return lxp_authority_charge_record_encode(grant->grant_id, &counters, value);
 }
 
+lxp_result lxp_authority_allowance_policy(const lxp_kernel *kernel, bool *enforced)
+{
+    static const uint8_t key[32] = LXP_NATIVE_FEE_AUTHORITY_PARAMETER;
+    bool found = false;
+    if (kernel == NULL || enforced == NULL) return LXP_ERR_NON_CANONICAL;
+    *enforced = false;
+    for (size_t i = 0U; i < kernel->module_kv_count; ++i) {
+        const lxp_module_kv_entry *entry = &kernel->module_kv[i];
+        if (entry->module_id != LXP_MODULE_GOVERNANCE || entry->key_length != sizeof(key) ||
+            memcmp(entry->key, key, sizeof(key)) != 0) continue;
+        if (found || entry->value_length != 32U || !lxp_ct_is_zero(entry->value, 31U) ||
+            entry->value[31] != 2U) return LXP_ERR_VERSION_UNSUPPORTED;
+        found = true;
+    }
+    *enforced = found;
+    return LXP_OK;
+}
+
 lxp_result lxp_authority_fee_resolve(const lxp_kernel *kernel,
     const lxp_authority_resolved *authority, const lxp_activity *activity,
     uint64_t timestamp, lxp_u128 amount, lxp_authority_grant *grant)
@@ -796,6 +814,9 @@ lxp_result lxp_authority_fee_resolve(const lxp_kernel *kernel,
     if (kernel == NULL || authority == NULL || activity == NULL || grant == NULL)
         return LXP_ERR_NON_CANONICAL;
     (void)memset(grant, 0, sizeof(*grant));
+    bool enforced = false;
+    status = lxp_authority_allowance_policy(kernel, &enforced);
+    if (status != LXP_OK || !enforced) return status;
     if (!authority_kind_metered(authority->kind)) return LXP_OK;
     status = lxp_authority_grant_load(kernel, authority->grant_id, grant);
     if (status != LXP_OK) return status == LXP_ERR_UNKNOWN_FIELD ? LXP_ERR_AUTH_ALLOWANCE : status;

@@ -1,6 +1,7 @@
 #include "layerx/lxp_genesis_builder.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_authority.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
@@ -227,6 +228,16 @@ static int check_kernel(const built_genesis *built,
     REQUIRE(lxp_genesis_module_plan_matches(plan, &kernel) == LXP_OK);
     REQUIRE(lxp_snapshot_load(built->snapshot.bytes, built->snapshot.length,
                               &built->snapshot_manifest, &kernel) == LXP_OK);
+    {
+        static const uint8_t key[32] = LXP_NATIVE_FEE_AUTHORITY_PARAMETER;
+        bool expected = false;
+        bool enforced = false;
+        for (size_t i = 0U; i < built->manifest.parameter_count; ++i)
+            if (memcmp(built->manifest.parameters[i].key, key, 32U) == 0)
+                expected = true;
+        REQUIRE(lxp_authority_allowance_policy(&kernel, &enforced) == LXP_OK);
+        REQUIRE(enforced == expected);
+    }
     REQUIRE(accounts.count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT);
     REQUIRE(memcmp(kernel.current_state_root,
                    built->snapshot_manifest.receipt_state_root, 32U) == 0);
@@ -313,10 +324,77 @@ static int check_enable_flag(void)
     return 0;
 }
 
+static int check_allowance_policy(void)
+{
+    static const uint8_t key[32] = LXP_NATIVE_FEE_AUTHORITY_PARAMETER;
+    static uint8_t arena_bytes[8388608U];
+    static built_genesis legacy, active, repeated;
+    static lxp_kernel kernel;
+    lxp_genesis_manifest changed;
+    lxp_genesis_module_plan plan;
+    lxp_byte_span encoded;
+    lxp_arena arena;
+    bool enforced = true;
+    REQUIRE(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
+    REQUIRE(build(NULL, 0U, &arena, &legacy) == LXP_OK);
+    REQUIRE(build(key, 2U, &arena, &active) == LXP_OK);
+    REQUIRE(build(NULL, 0U, &arena, &repeated) == LXP_OK);
+    REQUIRE(legacy.encoded_manifest.length == repeated.encoded_manifest.length);
+    REQUIRE(memcmp(legacy.encoded_manifest.bytes, repeated.encoded_manifest.bytes,
+                   legacy.encoded_manifest.length) == 0);
+    REQUIRE(legacy.snapshot.length == repeated.snapshot.length);
+    REQUIRE(memcmp(legacy.snapshot.bytes, repeated.snapshot.bytes,
+                   legacy.snapshot.length) == 0);
+    REQUIRE(memcmp(legacy.manifest.genesis_state_root,
+                   active.manifest.genesis_state_root, 32U) != 0);
+    REQUIRE(lxp_genesis_module_plan_resolve(&active.manifest, &plan) == LXP_OK);
+    REQUIRE(check_kernel(&active, &plan) == 0);
+    REQUIRE(lxp_genesis_verify_signature(&active.manifest, &arena) == LXP_OK);
+    REQUIRE(lxp_authority_allowance_policy(&kernel, &enforced) == LXP_OK && !enforced);
+    kernel.module_kv_count = 1U;
+    kernel.module_kv[0].module_id = LXP_MODULE_GOVERNANCE;
+    kernel.module_kv[0].key_length = 32U;
+    (void)memcpy(kernel.module_kv[0].key, key, 32U);
+    kernel.module_kv[0].value_length = 32U;
+    kernel.module_kv[0].value[31] = 2U;
+    REQUIRE(lxp_authority_allowance_policy(&kernel, &enforced) == LXP_OK && enforced);
+    for (unsigned int version = 0U; version <= UINT8_MAX; ++version) {
+        if (version == 2U) continue;
+        changed = active.manifest;
+        changed.parameters[0].value[31] = (uint8_t)version;
+        REQUIRE(lxp_genesis_encode(&changed, true, &arena, &encoded) == LXP_ERR_VERSION_UNSUPPORTED);
+        kernel.module_kv[0].value[31] = (uint8_t)version;
+        REQUIRE(lxp_authority_allowance_policy(&kernel, &enforced) == LXP_ERR_VERSION_UNSUPPORTED && !enforced);
+    }
+    kernel.module_kv[0].value[31] = 2U;
+    for (size_t index = 0U; index < 31U; ++index) {
+        changed = active.manifest;
+        changed.parameters[0].value[index] = 1U;
+        REQUIRE(lxp_genesis_encode(&changed, true, &arena, &encoded) == LXP_ERR_VERSION_UNSUPPORTED);
+        kernel.module_kv[0].value[index] = 1U;
+        REQUIRE(lxp_authority_allowance_policy(&kernel, &enforced) == LXP_ERR_VERSION_UNSUPPORTED && !enforced);
+        kernel.module_kv[0].value[index] = 0U;
+    }
+    kernel.module_kv[0].value_length = 31U;
+    REQUIRE(lxp_authority_allowance_policy(&kernel, &enforced) == LXP_ERR_VERSION_UNSUPPORTED);
+    kernel.module_kv[0].value_length = 32U;
+    kernel.module_kv[1] = kernel.module_kv[0];
+    kernel.module_kv_count = 2U;
+    REQUIRE(lxp_authority_allowance_policy(&kernel, &enforced) == LXP_ERR_VERSION_UNSUPPORTED);
+    changed = active.manifest;
+    changed.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
+    REQUIRE(lxp_genesis_encode(&changed, true, &arena, &encoded) == LXP_ERR_VERSION_UNSUPPORTED);
+    changed = active.manifest;
+    changed.parameters[0].module_id = LXP_MODULE_ASSET;
+    REQUIRE(lxp_genesis_encode(&changed, true, &arena, &encoded) == LXP_ERR_VERSION_UNSUPPORTED);
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(check_table() == 0);
     REQUIRE(check_defaults() == 0);
     REQUIRE(check_enable_flag() == 0);
+    REQUIRE(check_allowance_policy() == 0);
     return 0;
 }
