@@ -32,6 +32,8 @@ pub enum NativeReadError {
     ResultTooLarge,
     Unavailable,
     Verification,
+    AccountEvidence(layerx_client::read::ReadError),
+    HistoryEvidence(layerx_client::read::ReadError),
 }
 
 pub struct NativeReadRoute {
@@ -252,21 +254,6 @@ impl NativeReadRoute {
             head.sealed_batch,
         );
         let correlation = self.next_id()?;
-        let account_evidence = self
-            .client
-            .account(
-                account,
-                VerificationLevel::BATCH_INCLUDED,
-                correlation,
-                authorization,
-            )
-            .map_err(|_| NativeReadError::Verification)?;
-        let payer = maintenance_payer(
-            account,
-            account_evidence.canonical_bytes(),
-            signed.header.protocol_version(),
-        )?;
-        let correlation = self.next_id()?;
         let page = self
             .client
             .history(
@@ -278,17 +265,17 @@ impl NativeReadRoute {
                 correlation,
                 authorization,
             )
-            .map_err(|_| NativeReadError::Verification)?;
-        self.history_json(account, payer, end, page, registry)
+            .map_err(NativeReadError::HistoryEvidence)?;
+        self.history_json(account, end, page, registry, authorization)
     }
 
     fn history_json(
         &mut self,
         account: [u8; 32],
-        payer: Option<([u8; 32], [u8; 32])>,
         end: u64,
         page: HistoryPage,
         registry: &ModuleRegistry,
+        authorization: SequencerAuthorization,
     ) -> Result<Value, NativeReadError> {
         let mut items = Vec::new();
         let mut size = 0_usize;
@@ -321,9 +308,12 @@ impl NativeReadRoute {
                         "receipt": receipt_value,
                         "verification_level": item.achieved().wire_rank()}))
                 }
-                HistoryKind::Receipt => {
-                    maintenance_json(item.canonical_bytes(), payer, item.global_sequence)?
-                }
+                HistoryKind::Receipt => self.maintenance(
+                    item.canonical_bytes(),
+                    account,
+                    item.global_sequence,
+                    authorization,
+                )?,
                 HistoryKind::Event => return Err(NativeReadError::Verification),
             };
             if let Some(value) = selected {
@@ -352,6 +342,36 @@ impl NativeReadRoute {
             "cursor": cursor, "scanned_items": scanned, "verification_level": VerificationLevel::BATCH_INCLUDED.wire_rank(),
             "freshness": {"observed_sequence": self.client.head().chain_sequence, "snapshot_end_sequence": end}}),
         )
+    }
+
+    fn maintenance(
+        &mut self,
+        bytes: &[u8],
+        account: [u8; 32],
+        sequence: u64,
+        authorization: SequencerAuthorization,
+    ) -> Result<Option<Value>, NativeReadError> {
+        let record = layerx_wire::maintenance::decode_occupancy_maintenance(bytes)
+            .map_err(|_| NativeReadError::Verification)?;
+        if record.payers.is_empty() {
+            return maintenance_json(bytes, None, sequence);
+        }
+        let correlation = self.next_id()?;
+        let evidence = self
+            .client
+            .account(
+                account,
+                VerificationLevel::BATCH_INCLUDED,
+                correlation,
+                authorization,
+            )
+            .map_err(NativeReadError::AccountEvidence)?;
+        let payer = maintenance_payer(
+            account,
+            evidence.canonical_bytes(),
+            self.client.handshake().node().protocol_version,
+        )?;
+        maintenance_json(bytes, payer, sequence)
     }
 
     fn encode_cursor(&self, account: [u8; 32], next: u64, end: u64) -> [u8; 32] {
