@@ -334,10 +334,12 @@ fn maintained_chain_authenticates_each_selected_transition_and_every_record() {
         &evidence,
         &receipts,
     ));
-    let selected = verified
-        .receipt()
-        .protocol()
-        .expect("selected protocol receipt");
+    let selected = must(
+        verified
+            .receipt()
+            .protocol()
+            .ok_or("selected protocol receipt"),
+    );
     assert_eq!(selected.previous_state_root(), [3; 32]);
     assert_eq!(selected.resulting_state_root(), [3; 32]);
     for changed in [
@@ -369,7 +371,7 @@ fn maintained_chain_authenticates_each_selected_transition_and_every_record() {
     following.sequence += 1;
     following.activity_id = [2; 32];
     following.previous_state_root = [99; 32];
-    following.batch_id = decoded.protocol().expect("protocol receipt").batch_id();
+    following.batch_id = must(decoded.protocol().ok_or("protocol receipt")).batch_id();
     let unsigned = encode_fields_version(&following, None, PROTOCOL_VERSION);
     let signature = SigningKey::from_bytes(&[3; 32])
         .sign(&must(receipt_digest(&unsigned)))
