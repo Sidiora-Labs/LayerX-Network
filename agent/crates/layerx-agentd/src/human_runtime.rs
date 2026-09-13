@@ -2326,63 +2326,53 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         authority: &AuthorizedBatch,
         header: &layerx_wire::receipt::BatchHeader,
     ) -> Result<crate::protocol_evidence::VerifiedReceiptEvidence, HumanOperationError> {
-        use layerx_client::availability::{
-            AvailabilitySelector, FetchContext, FetchOutcome, RetrievalLimits,
-        };
-        use layerx_proof::availability::RootCommitments;
         let node = self.node.handshake().node().clone();
-        let context = FetchContext {
-            interface_version: node.interface_version,
-            correlation_id: header
-                .batch_number()
-                .checked_add(10_000)
-                .ok_or(HumanOperationError::Refused)?,
-            expected_batch_number: header.batch_number(),
-            data_availability_root: header.data_availability_root(),
-            record_roots: RootCommitments {
-                activity: header.activity_merkle_root(),
-                receipt: header.receipt_merkle_root(),
-                event: header.event_merkle_root(),
-                oracle: header.oracle_root(),
-            },
-            limits: RetrievalLimits {
-                maximum_bytes: 96 * 1024,
-                maximum_chunks: 256,
-                deadline: std::time::Duration::from_secs(10),
-            },
-        };
-        let FetchOutcome::Complete(available) = self
-            .node
-            .fetch_availability(
-                AvailabilitySelector::Batch(header.batch_number()),
-                context,
-                |_| {},
-            )
-            .map_err(|_| HumanOperationError::Unavailable)?
-        else {
-            return Err(HumanOperationError::Unavailable);
-        };
-        let receipts = &available.records().receipts;
-        let maintenance = receipts.last().ok_or(HumanOperationError::Refused)?;
-        let leaves: Vec<_> = receipts.iter().map(Vec::as_slice).collect();
-        let (proof, root) = layerx_proof::merkle::build_proof(&leaves, receipts.len() - 1)
-            .map_err(|_| HumanOperationError::Refused)?;
-        if root != header.receipt_merkle_root() {
-            return Err(HumanOperationError::Refused);
-        }
         let authorization = layerx_proof::inclusion::SequencerAuthorization::new(
             header.sequencer_id(),
             authority.sequencer_public_key(),
             header.batch_number(),
             header.batch_number(),
         );
+        let sequence = header.last_sequence();
+        let correlation = sequence
+            .checked_add(10_000)
+            .ok_or(HumanOperationError::Refused)?;
+        let page = self
+            .node
+            .history(
+                sequence,
+                sequence,
+                1,
+                None,
+                layerx_types::verify::VerificationLevel::BATCH_INCLUDED,
+                correlation,
+                authorization,
+            )
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        if page.items.len() != 1 || page.cursor.is_some() {
+            return Err(HumanOperationError::Refused);
+        }
+        let item = &page.items[0];
+        if item.kind != layerx_client::read::HistoryKind::Receipt
+            || item.global_sequence != sequence
+            || !item
+                .canonical_bytes()
+                .starts_with(b"LXP/programs/occupancy-receipt/v2\0")
+        {
+            return Err(HumanOperationError::Refused);
+        }
+        let proof = layerx_client::read::HistoryProof::decode(item.proof_material())
+            .map_err(|_| HumanOperationError::Refused)?;
         let header_signature = raw.header_signature();
+        if proof.header != raw.canonical_header() || proof.header_signature != header_signature {
+            return Err(HumanOperationError::Refused);
+        }
         let evidence = layerx_proof::receipt::MaintainedOutcomeEvidence {
             header: raw.canonical_header(),
             header_signature: &header_signature,
             activity_proof: raw.proof(),
-            maintenance,
-            maintenance_proof: &proof,
+            maintenance: item.canonical_bytes(),
+            maintenance_proof: &proof.proof,
             authorization: &authorization,
         };
         crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized_maintained(
