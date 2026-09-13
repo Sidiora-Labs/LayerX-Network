@@ -1,19 +1,15 @@
 "use client";
 
-import {
-  AppShell,
-  CodeEntry,
-  DetailDisclosure,
-  FilterBar,
-  GlobalSearch,
-  MoneyList,
-  NotificationsArchive,
-  NotificationsScreen,
-  BellPopover,
-  PrimaryAction,
-  Wizard,
-  cn,
-} from "@layerx/ui";
+import { AppShell } from "@layerx/ui/components/app-shell";
+import { CodeEntry } from "@layerx/ui/components/code-entry";
+import { DetailDisclosure } from "@layerx/ui/components/detail";
+import { FilterBar } from "@layerx/ui/components/filters";
+import { GlobalSearch } from "@layerx/ui/components/search";
+import { MoneyList } from "@layerx/ui/components/money-list";
+import { NotificationsArchive, NotificationsScreen, BellPopover } from "@layerx/ui/components/notifications";
+import { PrimaryAction } from "@layerx/ui/components/primary-action";
+import { Wizard } from "@layerx/ui/components/wizard";
+import { cn } from "@layerx/ui/cn";
 import { useId, type ComponentProps } from "react";
 
 import { DisabledReason, REDUCED_MOTION_CLASS, type ControlAvailability } from "./control";

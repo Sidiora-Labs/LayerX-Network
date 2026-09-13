@@ -1,6 +1,7 @@
 "use client";
 
-import { Button, cn, type ButtonProps } from "@layerx/ui";
+import { Button, type ButtonProps } from "@layerx/ui/components/button";
+import { cn } from "@layerx/ui/cn";
 import { useId, type ReactNode } from "react";
 
 export const REDUCED_MOTION_CLASS =
