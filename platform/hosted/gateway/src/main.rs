@@ -1850,14 +1850,9 @@ fn reserve_activity(
                 let Ok(result) = serde_json::from_slice::<serde_json::Value>(&result) else {
                     return Err(response(503, "persistence_unavailable", Some(5)));
                 };
-                return Err(if operation.program_mutation {
-                    program_terminal_response(config, result, trace_id, true)
-                } else {
-                    json_response(
-                        200,
-                        &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
-                    )
-                });
+                return Err(activity_terminal_response(
+                    config, operation, result, trace_id,
+                ));
             }
             if let Some(status) = state
                 .strip_prefix("refused_")
@@ -2153,6 +2148,22 @@ fn complete_lifecycle(
     program_terminal_response(config, result, trace_id, true)
 }
 
+fn activity_terminal_response(
+    config: &Config,
+    operation: &ActivityOperation,
+    result: serde_json::Value,
+    trace_id: &str,
+) -> OutgoingResponse {
+    if operation.program_mutation {
+        program_terminal_response(config, result, trace_id, true)
+    } else {
+        json_response(
+            200,
+            &serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
+        )
+    }
+}
+
 fn program_terminal_response(
     config: &Config,
     mut result: serde_json::Value,
@@ -2314,14 +2325,7 @@ fn complete_activity(
         return response(503, "persistence_unavailable", Some(5));
     }
     pay_timing("gateway.complete.persist", persist_started);
-    let response = if operation.program_mutation {
-        program_terminal_response(config, result, trace_id, true)
-    } else {
-        json_response(
-            200,
-            &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
-        )
-    };
+    let response = activity_terminal_response(config, operation, result, trace_id);
     pay_timing("gateway.complete.total", total_started);
     response
 }
