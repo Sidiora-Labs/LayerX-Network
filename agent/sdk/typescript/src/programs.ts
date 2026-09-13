@@ -4,7 +4,7 @@ import type { AuthorizedReceiptBatch, ReceiptVerification, SelectableProtocolVer
 import { DEFAULT_PROTOCOL_VERSION, isSelectableProtocolVersion, programsModuleVersionForProtocol, verifyProgramLifecycleReceipt,
   supportedProgramGuestAbi, verifyReceiptOutcome } from "./verifier.js";
 import { PlatformSdkError, type IdempotencyKey, type ProductionClient } from "./production.js";
-import { assertFreshSimulationObservation, decodeAndVerifyProgramTerminal, decodeSignedProgramCall,
+import { assertFreshSimulationObservation, bindRetainedProgramCall, decodeAndVerifyProgramTerminal, decodeSignedProgramCall,
   type DecodedSignedProgramCall } from "./program-wire.js";
 
 const HEX32 = /^[0-9a-f]{64}$/u;
@@ -143,7 +143,11 @@ export async function verifyProgramReceipt(
   const retained = execution.retained_signed_activity === undefined ? undefined : decodeHex(execution.retained_signed_activity, MAX_CALLDATA);
   if (retained !== undefined && expectedSignedActivity !== undefined && !equal(retained, expectedSignedActivity)) throw new TypeError("retained program activity mismatch");
   const canonical = expectedSignedActivity ?? retained;
-  if (canonical !== undefined && !equal(await digest(concat(new TextEncoder().encode("LXP/v1/activity-id\0"), canonical)), protocol.activityId)) throw new TypeError("program signed activity mismatch");
+  if (canonical !== undefined) {
+    const bound = await bindRetainedProgramCall(canonical, execution.activity_id, execution.program_id, protocol.protocolVersion);
+    if (bound.guestAbi !== execution.guest_abi_version
+      || execution.idempotency_key !== undefined && bound.idempotencyKey !== execution.idempotency_key) throw new TypeError("retained program call metadata mismatch");
+  }
   const terminal = await decodeAndVerifyProgramTerminal(terminalPayload, callGraph, execution.program_id, outcome, protocol.protocolVersion,
     canonical === undefined ? undefined : { protocol, signedActivity: canonical });
   if (!sameUsage(terminal.usage, execution.usage) || !sameOutcome(terminal.outcome, execution.outcome)) throw new TypeError("program terminal document binding failed");

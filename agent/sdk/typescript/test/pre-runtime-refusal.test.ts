@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseProgramExecutionDocument, ProgramTrustContext, verifyProgramReceipt } from "../src/programs.js";
-import { decodeAndVerifyProgramTerminal } from "../src/program-wire.js";
+import { bindRetainedProgramCall, decodeAndVerifyProgramTerminal } from "../src/program-wire.js";
 import type { ProgramReceiptOutcome, ProtocolReceipt } from "../src/verifier.js";
 
 const root = new URL("../../../../../tests/fixtures/programs/pre-runtime-refusal/", import.meta.url);
@@ -33,11 +33,24 @@ await assert.rejects(verifyProgramReceipt({ ...document, retained_signed_activit
 const changedReceipt = fixture("receipt.hex"); changedReceipt[changedReceipt.length - 1]! ^= 1;
 await assert.rejects(verifyProgramReceipt({ ...document, receipt: changedReceipt.toString("hex") }, authority, trust));
 await assert.rejects(verifyProgramReceipt({ ...document, program_id: "01".repeat(32) }, authority, trust), /native refusal payload binding/);
+await assert.rejects(verifyProgramReceipt({ ...document, idempotency_key: "01".repeat(32) }, authority, trust), /retained program call metadata mismatch/);
+
+const historical = Buffer.from(canonical);
+historical.writeUInt16BE(2, 0); historical.writeUInt16BE(2, 6);
+const historicalId = createHash("sha256").update("LXP/v1/activity-id\0").update(historical).digest("hex");
+const historicalBinding = await bindRetainedProgramCall(historical, historicalId, document.program_id, 2);
+assert.equal(historicalBinding.guestAbi, 2);
+assert.equal(historicalBinding.idempotencyKey, document.idempotency_key);
+await assert.rejects(verifyProgramReceipt(document, authority, trust, historical));
 
 const decode = (terminal: Uint8Array, metadata: ProgramReceiptOutcome = outcome,
-  enclosing: ProtocolReceipt = protocol, callGraph: Uint8Array = graph) => decodeAndVerifyProgramTerminal(
-    terminal, callGraph, document.program_id, { ...metadata, terminalPayloadRoot: hash(terminal), callGraphRoot: hash(callGraph) },
-    3, { protocol: enclosing, signedActivity: canonical });
+  enclosing: ProtocolReceipt = protocol, callGraph: Uint8Array = graph) => {
+  const bound = { ...metadata, terminalPayloadRoot: hash(terminal), callGraphRoot: hash(callGraph) };
+  return decodeAndVerifyProgramTerminal(terminal, callGraph, document.program_id, bound,
+    3, { protocol: { ...enclosing, programOutcome: bound }, signedActivity: canonical });
+};
+await assert.rejects(decodeAndVerifyProgramTerminal(payload, graph, document.program_id, { ...outcome, feeUnits: 1n },
+  3, { protocol, signedActivity: canonical }), /native refusal receipt binding/);
 for (let length = 0; length < payload.length; length++) {
   await assert.rejects(decode(payload.subarray(0, length)));
 }

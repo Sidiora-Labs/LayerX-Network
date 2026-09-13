@@ -202,7 +202,7 @@ export async function decodeAndVerifyProgramTerminal(
     bindExecutionMetadata(decoded.runtime, 2, decoded.fee, decoded.metering, decoded.usage, receipt);
     if (!equal(decoded.graph, callGraph)) fail("candidate call graph");
     if (decoded.outcome === "success") {
-      if (decoded.code !== receipt.resultCode) fail("candidate response code");
+      if (receipt.resultCode !== 0) fail("candidate response code requires successful execution");
       outcome = Object.freeze({ kind: "completed", code: decoded.code, response: hex(decoded.response) });
       successfulExecution = true;
     } else if (decoded.outcome === "failure") {
@@ -283,6 +283,7 @@ async function verifyPreRuntimeFailure(
     || !equal(activity, protocol.activityId) || moduleVersion !== protocol.moduleVersion
     || parameterVersion !== protocol.parameterVersion || encoding !== outcome.encodingVersion
     || protocol.protocolVersion !== version || protocol.moduleId !== 9 || protocol.operation !== 3
+    || protocol.programOutcome === undefined || !sameReceiptOutcome(outcome, protocol.programOutcome)
     || outcome.terminalKind !== 2 || outcome.runtimeVersion !== 1
     || !((version === 2 && encoding === 3) || (version === 3 && encoding === 4))
     || outcome.memoryBytes !== 0n || outcome.storageReadBytes !== 0n
@@ -293,9 +294,27 @@ async function verifyPreRuntimeFailure(
     || !equal(outcome.occupancyTransferRoot, zero) || outcome.occupancyByteBatches !== 0n
     || outcome.occupancyFeeUnits !== 0n) fail("native refusal occupancy commitments");
   if (!equal(graph, EMPTY_CALL_GRAPH)) fail("native refusal call graph");
-  const canonical = new Uint8Array(binding.signedActivity);
+  const retained = await bindRetainedProgramCall(binding.signedActivity, hex(activity), expectedProgram, version);
+  if (!equal(retained.payloadHash, payloadHash) || retained.guestAbi !== outcome.abiVersion) fail("native refusal payload binding");
+}
+
+function sameReceiptOutcome(left: ProgramReceiptOutcome, right: ProgramReceiptOutcome): boolean {
+  const keys = Object.keys(left) as Array<keyof ProgramReceiptOutcome>;
+  return keys.length === Object.keys(right).length && keys.every((key) => {
+    const value = left[key], other = right[key];
+    if (value instanceof Uint8Array) return other instanceof Uint8Array && equal(value, other);
+    if (Array.isArray(value)) return Array.isArray(other) && value.length === other.length && value.every((item, index) => item === other[index]);
+    return value === other;
+  });
+}
+
+export async function bindRetainedProgramCall(
+  signedActivity: Uint8Array, expectedActivity: string, expectedProgram: string, version: number,
+): Promise<Readonly<{ payloadHash: Uint8Array; guestAbi: number; idempotencyKey: string }>> {
+  const canonical = new Uint8Array(signedActivity);
   if (canonical.length === 0 || canonical.length > 1_048_576
-    || !equal(await sha256(ACTIVITY_DOMAIN, canonical), activity)) fail("native refusal activity binding");
+    || ![1, 2, 3].includes(version)
+    || hex(await sha256(ACTIVITY_DOMAIN, canonical)) !== expectedActivity) fail("program signed activity mismatch");
   const call = new Reader(canonical);
   if (call.u16() !== version || call.u16() !== 0x1001 || call.byte() !== 12) fail("native refusal activity header");
   field(call, 1); if (call.u16() !== version) fail("native refusal activity protocol");
@@ -305,16 +324,35 @@ async function verifyPreRuntimeFailure(
   field(call, 5); call.sizedU32(524_288);
   field(call, 6); call.u64();
   field(call, 7); const notBefore = call.u64(), notAfter = call.u64();
-  field(call, 8); call.sizedU32(32, 32);
+  field(call, 8); const idempotencyKey = hex(call.sizedU32(32, 32));
   field(call, 9); call.u128();
   field(call, 10); const declaredHash = call.sizedU32(32, 32);
   field(call, 11); const payload = call.sizedU32(524_288);
   field(call, 12); call.sizedU32(128); call.end();
-  const native = decodeNativeProgramCall(payload);
-  if (notAfter < notBefore || !equal(declaredHash, payloadHash)
-    || !equal(await sha256(PAYLOAD_DOMAIN, payload), payloadHash)
-    || !equal(encodeNativeProgramCall(native), payload) || hex(native.programId) !== expectedProgram
-    || native.guestAbi !== outcome.abiVersion) fail("native refusal payload binding");
+  if (notAfter < notBefore || !equal(await sha256(PAYLOAD_DOMAIN, payload), declaredHash)) fail("retained call payload hash");
+  let program: string, guestAbi: number;
+  if (version === 3 || version === 2 && !starts(payload, CALL_DOMAIN)) {
+    const native = decodeNativeProgramCall(payload);
+    if (!equal(encodeNativeProgramCall(native), payload)) fail("retained native call encoding");
+    program = hex(native.programId); guestAbi = native.guestAbi;
+  } else {
+    const legacy = new Reader(payload);
+    if (!equal(legacy.fixed(CALL_DOMAIN.length), CALL_DOMAIN)) fail("retained call domain");
+    program = hex(legacy.fixed(32)); guestAbi = 1;
+    if (legacy.u64() === 0n) fail("retained call budget");
+    legacy.u128();
+    const count = legacy.u16();
+    if (count > 5) fail("retained call capabilities");
+    let prior = 0;
+    for (let index = 0; index < count; index++) {
+      const tag = legacy.byte();
+      if (tag <= prior || tag > 5) fail("retained call capability tag");
+      prior = tag;
+    }
+    legacy.sizedU32(1_048_576); legacy.end();
+  }
+  if (program !== expectedProgram || program === "0".repeat(64)) fail("native refusal payload binding");
+  return Object.freeze({ payloadHash: declaredHash, guestAbi, idempotencyKey });
 }
 
 async function verifyAppliedLegs(encoded: Uint8Array, expected: Uint8Array): Promise<void> {
