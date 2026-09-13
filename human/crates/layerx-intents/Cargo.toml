@@ -9,6 +9,7 @@ license.workspace = true
 test-vectors = []
 
 [dependencies]
+sha2.workspace = true
 layerx-types.workspace = true
 layerx-wire.workspace = true
 layerx-crypto.workspace = true

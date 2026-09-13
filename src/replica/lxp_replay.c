@@ -20,6 +20,18 @@ lxp_result lxp_replay_engine_init(
     return LXP_OK;
 }
 
+lxp_result lxp_replay_engine_bind_transaction(lxp_replay_engine *engine,
+    lxp_replay_transaction_begin_fn begin,
+    lxp_replay_transaction_finish_fn finish)
+{
+    if (engine == NULL || begin == NULL || finish == NULL ||
+        engine->transaction_begin != NULL || engine->transaction_finish != NULL)
+        return LXP_ERR_NON_CANONICAL;
+    engine->transaction_begin = begin;
+    engine->transaction_finish = finish;
+    return LXP_OK;
+}
+
 lxp_result lxp_replay_engine_bind_kernel(
     lxp_replay_engine *engine, const lxp_kernel *kernel)
 {

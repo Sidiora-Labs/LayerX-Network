@@ -98,7 +98,12 @@ static lxp_result validate_typed(lxp_module_ctx *ctx,
                                        value->typed->keyed.idempotency_key,
                                        &result, &found);
         if (status != LXP_OK) return status;
-        if (found) return LXP_OK;
+        if (found) {
+            if (result.ordinal != value->ordinal ||
+                memcmp(result.stream_id, value->typed->keyed.stream_id, 32U) != 0)
+                return LXP_ERR_CONTEXT_MISMATCH;
+            return LXP_OK;
+        }
         status = lx_stream_load(ctx, value->typed->keyed.stream_id, &record);
     } else if (value->ordinal == 2U) {
         status = lx_stream_load(ctx, value->typed->amount.stream_id, &record);

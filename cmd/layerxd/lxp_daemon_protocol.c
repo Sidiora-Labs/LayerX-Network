@@ -566,16 +566,17 @@ static lxp_result route_inner(lxp_daemon_protocol_owner *owner,
     }
     if (strncmp(path, batch_prefix, sizeof(batch_prefix) - 1U) == 0) {
         const char *suffix = path + sizeof(batch_prefix) - 1U;
-        const char *tail = strstr(suffix, "/receipt-authority?receipt_digest=");
+        static const char authority_suffix[] = "/receipt-authority?receipt_digest=";
+        const char *tail = strstr(suffix, authority_suffix);
         char batch_text[65];
         uint8_t batch_id[32];
         uint8_t receipt_digest[32];
         if (tail == NULL || (size_t)(tail - suffix) != 64U ||
-            strlen(tail + 34U) != 64U)
+            strlen(tail + sizeof(authority_suffix) - 1U) != 64U)
             return LXP_ERR_NON_CANONICAL;
         (void)memcpy(batch_text, suffix, 64U); batch_text[64] = '\0';
         if (parse_hex32(batch_text, batch_id) != LXP_OK ||
-            parse_hex32(tail + 34U, receipt_digest) != LXP_OK)
+            parse_hex32(tail + sizeof(authority_suffix) - 1U, receipt_digest) != LXP_OK)
             return LXP_ERR_NON_CANONICAL;
         return batch_route(owner, batch_id, receipt_digest, arena, writer);
     }

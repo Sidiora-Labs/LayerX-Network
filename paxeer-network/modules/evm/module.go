@@ -68,27 +68,25 @@ func (AppModuleBasic) ValidateGenesis(cdc codec.JSONCodec, _ client.TxEncodingCo
 // ValidateGenesisStream performs genesis state validation for the evm module in a streaming fashion.
 func (am AppModuleBasic) ValidateGenesisStream(cdc codec.JSONCodec, config client.TxEncodingConfig, genesisCh <-chan json.RawMessage) error {
 	genesisStateCh := make(chan types.GenesisState)
-	var err error
-	doneCh := make(chan struct{})
+	resultCh := make(chan error, 1)
 	go func() {
-		err = types.ValidateStream(genesisStateCh)
-		doneCh <- struct{}{}
+		resultCh <- types.ValidateStream(genesisStateCh)
 	}()
-	go func() {
-		defer close(genesisStateCh)
-		for genesis := range genesisCh {
-			var data types.GenesisState
-			err_ := cdc.UnmarshalAsJSON(genesis, &data)
-			if err_ != nil {
-				err = err_
-				doneCh <- struct{}{}
-				return
-			}
-			genesisStateCh <- data
+	var decodeErr error
+	for genesis := range genesisCh {
+		var data types.GenesisState
+		if err := cdc.UnmarshalAsJSON(genesis, &data); err != nil {
+			decodeErr = err
+			break
 		}
-	}()
-	<-doneCh
-	return err
+		genesisStateCh <- data
+	}
+	close(genesisStateCh)
+	validationErr := <-resultCh
+	if decodeErr != nil {
+		return decodeErr
+	}
+	return validationErr
 }
 
 // RegisterRESTRoutes registers the capability module's REST service handlers.

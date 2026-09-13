@@ -126,3 +126,46 @@ fn missing_and_malformed_heads_refuse_without_a_consumed_value() {
         assert!(output.stdout.is_empty());
     }
 }
+
+#[test]
+fn actual_daemon_head_binds_the_declared_receipt_digest() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/fixtures/custody/daemon-credit-receipt");
+    let read = |name: &str| {
+        std::fs::read(root.join(name))
+            .unwrap_or_else(|error| panic!("daemon fixture {name}: {error}"))
+    };
+    let receipt = read("credit.receipt");
+    let header_bytes = read("header");
+    let header = layerx_wire::receipt::decode_batch_header(&header_bytes)
+        .unwrap_or_else(|error| panic!("daemon header: {error:?}"));
+    let decoded = layerx_wire::receipt::decode(&receipt)
+        .unwrap_or_else(|error| panic!("daemon receipt: {error:?}"));
+    let digest = layerx_wire::hash::receipt_digest(
+        &layerx_wire::receipt::encode_unsigned(&decoded)
+            .unwrap_or_else(|error| panic!("unsigned receipt: {error:?}")),
+    )
+    .unwrap_or_else(|error| panic!("receipt digest: {error:?}"));
+    assert_eq!(header.batch_number(), 1);
+    let mut input = serde_json::json!({"network_id": header.network_id(),
+        "sequencer_id": encoded(&header.sequencer_id()), "public_key": encoded(&read("sequencer.public")),
+        "head": {"current": true, "receipt_hex": encoded(&receipt), "receipt_digest": encoded(&digest),
+            "state_root": encoded(&header.resulting_state_root()), "observed_sequence": header.last_sequence(),
+            "observed_at": header.timestamp_ms(), "batch_evidence": {"header_hex": encoded(&header_bytes),
+                "header_signature": encoded(&read("header.signature")), "receipt_proof_hex": encoded(&read("receipt.proof"))}}});
+    let output = run(&input.to_string());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"{\"consumed\":0}\n");
+    for index in 0..digest.len() {
+        let mut changed = digest;
+        changed[index] ^= 1;
+        input["head"]["receipt_digest"] = serde_json::json!(encoded(&changed));
+        let output = run(&input.to_string());
+        assert!(!output.status.success(), "digest byte {index}");
+        assert!(output.stdout.is_empty());
+    }
+}

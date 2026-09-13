@@ -582,8 +582,20 @@ static int terminal_maintenance_case(void)
     /* The refusal consumes the offered sequence and the sweep the next one. */
     CHECK(f->state.next_sequence == first_sequence + 2U);
     CHECK(memcmp(f->kernel.current_state_root, settled_root, 32U) == 0);
+    {
+        lxp_receipt altered = decoded[0];
+        altered.timestamp += 1U;
+        CHECK(lxp_kernel_finalize_batch_publication_maintenance(&f->kernel, &activity,
+            &altered, 1U, maintenance, lxp_kernel_prepared_batch_base_boundary(prepared),
+            lxp_kernel_prepared_batch_final_boundary(prepared),
+            lxp_kernel_prepared_batch_events(prepared), digest) == LXP_ERR_CONTEXT_MISMATCH);
+        CHECK(f->kernel.batch_publication_pending);
+        CHECK(f->kernel.pending_batch_publication_index == 0U);
+    }
     CHECK(lxp_kernel_finalize_batch_publication_maintenance(&f->kernel, &activity,
-        decoded, 1U, maintenance, digest) == LXP_OK);
+        decoded, 1U, maintenance, lxp_kernel_prepared_batch_base_boundary(prepared),
+        lxp_kernel_prepared_batch_final_boundary(prepared),
+        lxp_kernel_prepared_batch_events(prepared), digest) == LXP_OK);
     CHECK(f->feed.scanned_through_sequence == first_sequence + 1U);
     CHECK(memcmp(f->feed.head_state_root, settled_root, 32U) == 0);
     lxp_kernel_prepared_batch_destroy(prepared);

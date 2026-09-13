@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "archives": [
+    {
+      "name": "libwasmvm_muslc.a",
+      "size": 74504088,
+      "sha256": "2c2d90423e5bebba911b0be7963b09062adb555ecd6149f7cc759a494bb2eda6",
+      "compressed_size": 17109549,
+      "compressed_sha256": "0d68b4d19cc557e958efb57d13a55c6f90d91ddd6d4f7e1bfe598f1ef2e42d02",
+      "kind": "group",
+      "parts": [
+        {
+          "name": "libwasmvm_muslc.part00.a",
+          "size": 26521776,
+          "sha256": "917e82b4842f58fdb0c80c2b35c932eb1e6f41004fa8a159bcb02c18b12d10eb",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm_muslc.part01.a",
+          "size": 25557072,
+          "sha256": "02f22699337f32640a75889c5f16d9fc377dc8fe683afd72ae81ca946b562606",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm_muslc.part02.a",
+          "size": 22425506,
+          "sha256": "4b96461b5b9d0240c2e3e4d5d391f94004c6c2ac41a43d8a27af920be38184a2",
+          "architecture": 0
+        }
+      ]
+    },
+    {
+      "name": "libwasmvm_muslc.aarch64.a",
+      "size": 77832140,
+      "sha256": "409cd9da695d4f1989271230094563c38aa2d867b26908b2ca2082a0d71e3b8e",
+      "compressed_size": 17936641,
+      "compressed_sha256": "9a717922c14a3c98fc899dce7033fb96acba5f9b1afceefa9f8381ee17654075",
+      "kind": "group",
+      "parts": [
+        {
+          "name": "libwasmvm_muslc.aarch64.part00.a",
+          "size": 25869018,
+          "sha256": "d547bbc252e0ae94284cc9310067306809b5896a9c811f9dfa0f0591e30d657c",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm_muslc.aarch64.part01.a",
+          "size": 26504884,
+          "sha256": "a976b00baa3705bd64c6f8eea07746497579d0bf21b9dc3e6b49429b1888bd1a",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm_muslc.aarch64.part02.a",
+          "size": 24459420,
+          "sha256": "53181beb7e5323c6441f83620846f2b84cfa00fb3215533e4b07af2dda667c32",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm_muslc.aarch64.part03.a",
+          "size": 999216,
+          "sha256": "468890c5bb2b9ac87a0be46d59082a407f2296330bc33d3dd5aca6a0ad9455bb",
+          "architecture": 0
+        }
+      ]
+    },
+    {
+      "name": "libwasmvmstatic_darwin.a",
+      "size": 98435272,
+      "sha256": "713d221d712bee043794fc600e093b62e9e878b312f044f548a8852b670451c8",
+      "compressed_size": 28445987,
+      "compressed_sha256": "baf402acc70a8980b750963a39443e5f7dbdeadb8370bc49c55028c3e3030941",
+      "kind": "fat",
+      "parts": [
+        {
+          "name": "libwasmvmstatic_darwin.amd64.a",
+          "size": 50072272,
+          "sha256": "6f65c279c2a30918c397051262b43ecd687941bc5913dcffa0318465644ae2a1",
+          "architecture": 16777223
+        },
+        {
+          "name": "libwasmvmstatic_darwin.arm64.a",
+          "size": 48362952,
+          "sha256": "95256f64fce373fc503dead513b3ebc9a5a62b4a7534820d563b48dc722a0ed8",
+          "architecture": 16777228
+        }
+      ]
+    }
+  ]
+}

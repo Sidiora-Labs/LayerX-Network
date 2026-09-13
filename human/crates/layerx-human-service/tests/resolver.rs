@@ -9,8 +9,8 @@ use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, CheckpointId, IdempotencyKey};
 use layerx_types::intent::{
     AuthorizationSignature, BudgetId, ContextHash, DepositProofId, EvmAddress, NetworkId,
-    PayerGrantId, PeriodLength, ProtocolVersion, PublicKey, PurposeHash, RolloverPolicy,
-    SendAuthorization, SendAuthorizationKind, Sequence, TimestampSeconds,
+    PeriodLength, ProtocolVersion, PublicKey, PurposeHash, RolloverPolicy, SendAuthorization,
+    SendAuthorizationKind, Sequence, TimestampSeconds,
 };
 use proptest::prelude::*;
 
@@ -117,12 +117,7 @@ fn resolver_selects_every_normative_mechanism_and_vocabulary_term() {
     let received = request(
         Endpoint::Agent(agent()),
         Endpoint::Human(human()),
-        Relationship::PayerGrant(PayerGrantRoute {
-            payer_grant: PayerGrantId::new([10; 32]),
-            receiver_sequence: Sequence::from_u64(10),
-            idempotency_key: key(10),
-            context_hash: ContextHash::new([10; 32]),
-        }),
+        Relationship::PayerGrant(receive_route(10, 10, 10)),
         10,
     );
 
@@ -276,12 +271,7 @@ fn relationship(selector: u8, sequence: u64, byte: u8) -> Relationship {
             revocation_sequence: Sequence::from_u64(sequence),
             create: None,
         }),
-        3 => Relationship::PayerGrant(PayerGrantRoute {
-            payer_grant: PayerGrantId::new([nonzero; 32]),
-            receiver_sequence: Sequence::from_u64(sequence),
-            idempotency_key: key(nonzero),
-            context_hash: ContextHash::new([nonzero; 32]),
-        }),
+        3 => Relationship::PayerGrant(receive_route(sequence, nonzero, 1)),
         4 => Relationship::Custody(CustodyRoute::Deposit {
             deposit_proof: DepositProofId::new([nonzero; 32]),
             checkpoint: CheckpointId::new([nonzero; 32]),
@@ -354,4 +344,62 @@ proptest! {
             Err(RouteError::Unavailable { .. } | RouteError::InvalidIntent(_)) => {}
         }
     }
+}
+
+fn receive_route(sequence: u64, byte: u8, amount: u128) -> PayerGrantRoute {
+    let canonical = layerx_human_test_support::receive::signed_receive(
+        &layerx_human_test_support::receive::SignedReceiveRequest {
+            from: &agent(),
+            to: &human(),
+            asset: asset().bytes(),
+            amount,
+            sequence,
+            idempotency_key: key(byte).bytes(),
+            network_id: 77,
+            protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        },
+    );
+    PayerGrantRoute {
+        receive: layerx_intents::NativeReceive::new(&canonical)
+            .unwrap_or_else(|error| panic!("signed receive: {error:?}")),
+    }
+}
+
+#[test]
+fn receive_route_requires_complete_signed_authority_and_exact_request() {
+    let input = request(
+        Endpoint::Agent(agent()),
+        Endpoint::Human(human()),
+        Relationship::PayerGrant(receive_route(7, 19, 13)),
+        13,
+    );
+    let canonical = input.canonical_encode();
+    assert_eq!(
+        RouteRequest::canonical_decode(&canonical),
+        Ok(input.clone())
+    );
+    let Relationship::PayerGrant(route) = &input.relationship else {
+        panic!("payer grant route")
+    };
+    let signed = route.receive.payload();
+    for index in 0..signed.len() {
+        let mut corrupted = *signed;
+        corrupted[index] ^= 1;
+        assert!(
+            layerx_intents::NativeReceive::new(&corrupted).is_err(),
+            "authorization byte {index}"
+        );
+    }
+    for length in [0, 116, 220, 387, 732] {
+        assert!(layerx_intents::NativeReceive::new(&signed[..length]).is_err());
+    }
+    let mut wrong = input.clone();
+    wrong.amount = Amount::from_u128(14);
+    assert!(RouteResolver::resolve(&wrong).is_err());
+    wrong = input.clone();
+    wrong.asset = AssetId::new([0x42; 32]);
+    assert!(RouteResolver::resolve(&wrong).is_err());
+    wrong = input;
+    wrong.destination = Endpoint::Human(account("agent:did:layerx:other:main"));
+    assert!(RouteResolver::resolve(&wrong).is_err());
 }

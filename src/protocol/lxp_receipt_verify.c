@@ -80,6 +80,7 @@ lxp_result lxp_receipt_verify_checkpointed(
     lxp_arena *arena)
 {
     const lxp_guarantor_cert *certificate;
+    uint8_t receipt_leaf[32];
     uint8_t activity_id[32];
     uint8_t activity_leaf[32];
     uint8_t state_leaf[32];
@@ -100,6 +101,18 @@ lxp_result lxp_receipt_verify_checkpointed(
     certificate = augmented->guarantor_certificate;
     status = receipt_bytes_match(
         receipt, augmented->pre_checkpoint_receipt, arena);
+    if (status == LXP_OK &&
+        (receipt->protocol_version != certificate->checkpoint.header.protocol_version ||
+         receipt->global_sequence < certificate->checkpoint.header.first_sequence ||
+         receipt->global_sequence > certificate->checkpoint.header.last_sequence))
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status == LXP_OK)
+        status = lxp_merkle_leaf_hash(augmented->pre_checkpoint_receipt.bytes,
+                                      augmented->pre_checkpoint_receipt.length, receipt_leaf);
+    if (status == LXP_OK)
+        status = lxp_merkle_proof_verify(receipt_leaf,
+            &augmented->receipt_inclusion_proof,
+            certificate->checkpoint.header.receipt_merkle_root);
     if (status == LXP_OK)
         status = lxp_hash_activity_id(
             augmented->canonical_activity.bytes,

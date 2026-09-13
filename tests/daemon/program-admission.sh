@@ -122,11 +122,19 @@ IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
 [[ "$replica_ready" == R ]]
 (source platform/hosted/node/sequencer-env.sh; layerx_sequencer_environment "$work/data/sequencer.env"; if [[ ${2:-} == --availability-batches ]]; then export LAYERX_NODE_SETTLEMENT_CONTRACT="$availability_bond" LAYERX_NODE_CHECKPOINT_REGISTRY="$availability_registry" LAYERX_NODE_PAXEER_RPC_PORT="$availability_port"; fi; exec "$sequencer_binary" --serve "$work/data/sequencer.conf") > "$work/sequencer.log" 2>&1 &
 sequencer_pid=$!
-for ((attempt=0; attempt<200; attempt++)); do
-    [[ ! -S "$runtime/layerxd.lni.sock" ]] || break
-    kill -0 "$sequencer_pid"
-    sleep 0.1
-done
+python3 - "$runtime/layerxd.lni.sock" "$sequencer_pid" <<'PYWAIT'
+import os, socket, sys, time
+for attempt in range(200):
+    os.kill(int(sys.argv[2]), 0)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(sys.argv[1])
+        break
+    except OSError:
+        time.sleep(0.1)
+else:
+    raise SystemExit("daemon did not accept LNI connections")
+PYWAIT
 if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
     client_name=${2#--}
     client_name=${client_name//-/_}

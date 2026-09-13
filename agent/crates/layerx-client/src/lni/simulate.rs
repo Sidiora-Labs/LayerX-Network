@@ -245,14 +245,10 @@ pub fn verify_simulation(
     }
     match protocol.program_outcome() {
         Some(outcome) => {
-            if !execution.terminal_payload.is_empty()
-                && digest(&execution.terminal_payload) != outcome.terminal_payload_root()
-            {
+            if digest(&execution.terminal_payload) != outcome.terminal_payload_root() {
                 return Err(SimulateError::ArtifactMismatch);
             }
-            if !execution.call_graph.is_empty()
-                && digest(&execution.call_graph) != outcome.call_graph_root()
-            {
+            if digest(&execution.call_graph) != outcome.call_graph_root() {
                 return Err(SimulateError::ArtifactMismatch);
             }
         }

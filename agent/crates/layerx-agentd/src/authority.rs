@@ -48,6 +48,7 @@ pub enum AuthorityError {
     BoundaryUnavailable,
     Missing,
     SequenceRegression { current: u64, observed: u64 },
+    Stale { current: u64, observed: u64 },
     Expired,
     Revoked,
     Rotated,
@@ -108,6 +109,12 @@ pub fn require_valid(
     core_sequence: u64,
     state: &AuthorityState,
 ) -> Result<ResolvedAuthority, AuthorityError> {
+    if state.observed_sequence != core_sequence {
+        return Err(AuthorityError::Stale {
+            current: core_sequence,
+            observed: state.observed_sequence,
+        });
+    }
     if &state.authority != expected || state.generation != opened_generation {
         return Err(AuthorityError::Rotated);
     }

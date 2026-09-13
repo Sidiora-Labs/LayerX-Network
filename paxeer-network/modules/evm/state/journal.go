@@ -72,6 +72,11 @@ func (e *accessListAddSlotChange) revert(s *DBImpl) {
 	if len(slots) == 0 {
 		s.tempState.transientAccessLists.Slots = append(slotsList[:idx], slotsList[idx+1:]...)
 		s.tempState.transientAccessLists.Addresses[e.address] = -1
+		for address, slotIndex := range s.tempState.transientAccessLists.Addresses {
+			if slotIndex > idx {
+				s.tempState.transientAccessLists.Addresses[address] = slotIndex - 1
+			}
+		}
 	}
 }
 

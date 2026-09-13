@@ -142,8 +142,14 @@ fn post_restart_retry_reuses_original_result_and_pending_bytes() {
         })
         .unwrap_or_else(|error| panic!("restored settled: {error:?}"));
     assert_eq!(settled, Outcome::RepeatedOriginal(result()));
+    assert_eq!(
+        store
+            .sweep(1_000)
+            .unwrap_or_else(|error| panic!("sweep: {error:?}")),
+        1
+    );
     let retried = store
-        .execute([4; 32], b"pending-body", 101, |attempt| {
+        .execute([4; 32], b"pending-body", 1_001, |attempt| {
             assert!(attempt.retry);
             assert_eq!(attempt.idempotency_key, [4; 32]);
             assert_eq!(attempt.exact_request_bytes, b"pending-body");

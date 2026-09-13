@@ -100,5 +100,18 @@ int main(void)
         !run(0U, zero_workers) || !run(8U, maximum_workers) ||
         memcmp(zero_workers, maximum_workers, sizeof(zero_workers)) != 0)
         return 1;
+    if (lxp_state_store_init(&store, UINT64_MAX - 1U) != LXP_OK ||
+        lxp_state_journal_open(&store, UINT64_MAX - 1U, &journal) != LXP_OK ||
+        lxp_state_journal_set(&journal, key, (lxp_u128){0U, 7U}) != LXP_OK ||
+        lxp_state_journal_commit(&journal) != LXP_OK ||
+        store.next_sequence != UINT64_MAX ||
+        lxp_state_journal_open(&store, UINT64_MAX, &journal) != LXP_OK ||
+        lxp_state_journal_set(&journal, key, (lxp_u128){0U, 8U}) != LXP_OK ||
+        lxp_state_journal_commit(&journal) != LXP_ERR_SEQUENCE_EXHAUSTED ||
+        store.next_sequence != UINT64_MAX || !journal.open ||
+        lxp_state_store_get(&store, key, &value, &found) != LXP_OK ||
+        !found || value.hi != 0U || value.lo != 7U ||
+        lxp_state_journal_rollback(&journal) != LXP_OK ||
+        lxp_state_store_destroy(&store) != LXP_OK) return 1;
     return 0;
 }

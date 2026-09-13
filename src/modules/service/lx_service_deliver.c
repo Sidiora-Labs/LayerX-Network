@@ -96,7 +96,8 @@ lxp_result lx_service_deliver_execute(
     delivery.global_sequence = lxp_ctx_global_sequence(ctx);
     status = lx_service_delivery_put(ctx, &delivery);
     if (status != LXP_OK) return status;
-    agreement.state = LX_SERVICE_AGREEMENT_DELIVERED;
+    if (agreement.state == LX_SERVICE_AGREEMENT_COMMITTED)
+        agreement.state = LX_SERVICE_AGREEMENT_DELIVERED;
     status = lx_service_agreement_put(ctx, &agreement);
     if (status != LXP_OK) return status;
     *result = delivery;
