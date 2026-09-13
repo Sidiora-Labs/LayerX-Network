@@ -337,7 +337,7 @@ def _produce(work_dir):
         require(result['activity_id'] == activity_id.hex() and result['module'] == module and result['version'] == 1,
                 receipt_path, 'receipt activity/module binding')
         token = protected_bytes(config['authority_token_file'], 4096).decode('ascii')
-        request = urllib.request.Request(config['authority_url'].rstrip('/') + '/internal/v1/activities/' + activity_id.hex() + '/authority',
+        request = urllib.request.Request(config['authority_url'].rstrip('/') + '/v1/authorized-batches/wait-by-activity/' + activity_id.hex(),
                                          headers={'Authorization': 'Bearer ' + token})
         context = ssl.create_default_context(cafile=config['authority_ca_file'])
         with urllib.request.urlopen(request, context=context, timeout=30) as response:
