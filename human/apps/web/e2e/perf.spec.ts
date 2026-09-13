@@ -1,7 +1,9 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { test } from "./production-fixture.ts";
 
 import {
   PERFORMANCE_SAMPLE_COUNT,
@@ -130,6 +132,7 @@ async function installMetricObservers(page: Page): Promise<void> {
 
 async function labMetrics(page: Page, route: string): Promise<LabMetrics> {
   await page.goto(route, { waitUntil: "networkidle" });
+  expect(new URL(page.url()).pathname).toBe(route);
   await page.waitForTimeout(250);
   return page.evaluate(() => ({ ...window.__layerxLabMetrics }));
 }
