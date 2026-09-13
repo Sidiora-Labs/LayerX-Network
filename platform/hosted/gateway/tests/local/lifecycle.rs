@@ -2430,6 +2430,10 @@ fn signed_fee_activity(module: ModuleId, ordinal: u16, payload_bytes: &[u8]) -> 
         .and_then(|value| value.payload(payload))
         .required("fee envelope fields");
     let unsigned = builder.build().required("fee envelope");
+    let canonical = layerx_wire::activity::encode_unsigned_envelope(&unsigned)
+        .required("fee unsigned encoding");
+    layerx_crypto::disclosure::bind(&canonical, &registry)
+        .unwrap_or_else(|error| panic!("fee disclosure {module:?}/{ordinal}: {error:?}"));
     let preimage = layerx_wire::sign::preimage_unsigned(&unsigned).required("fee signing preimage");
     let signature = key.sign(preimage.as_bytes()).to_bytes();
     layerx_wire::activity::encode_signed_envelope(
