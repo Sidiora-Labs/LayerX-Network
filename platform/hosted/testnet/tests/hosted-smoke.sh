@@ -174,7 +174,7 @@ curl --fail --silent --show-error --max-time 120 --cacert "$LAYERX_TEST_CA_FILE"
   --header 'Content-Type: application/octet-stream' \
   --header "Idempotency-Key: $LAYERX_TEST_PROGRAM_IDEMPOTENCY_KEY" \
   --data-binary "@$LAYERX_TEST_PROGRAM_ACTIVITY_FILE" > "$work/program-response.json"
-jq -e '.ok == true and .result.state == "completed"
+jq -e '.ok == true and .result.state == "executed" and .result.result_code == 0
   and (.result.receipt | type == "string" and length > 0)
   and (.result.terminal_payload | type == "string" and length > 0)
   and (.result.call_graph | type == "string" and length > 0)' "$work/program-response.json" >/dev/null

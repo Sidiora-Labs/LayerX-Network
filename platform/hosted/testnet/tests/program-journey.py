@@ -115,6 +115,10 @@ def main():
     canonical, key_id = signed(1, deploy)
     deployed = request('/v1/programs/deploy', canonical, 1, key_id)
     assert deployed['state'] == 'completed' and deployed['receipt'], deployed
+    duplicate, duplicate_key = signed(1, deploy)
+    refused = request('/v1/programs/deploy', duplicate, 1, duplicate_key)
+    assert refused['state'] == 'refused' and refused['receipt'], refused
+    assert request('/v1/programs/deploy', duplicate, 1, duplicate_key) == refused
     seed = os.urandom(16)
     account = hashlib.sha256(b'LayerX/programs/program-account/v1\0' + program + blob(seed)).digest()
     register = program + b'LXPA1' + asset + blob(seed)
@@ -135,14 +139,14 @@ def main():
     write('call.lxa', canonical)
     write('call-idempotency-key', key_id.encode())
     executed = request('/v1/programs/call', canonical, 3, key_id)
-    assert executed['state'] == 'completed', executed
+    assert executed['state'] == 'executed' and executed['result_code'] == 0, executed
     assert executed['receipt'] and executed['terminal_payload'] and executed['call_graph'], executed
     replayed = request('/v1/programs/call', canonical, 3, key_id)
     assert replayed == executed, (executed, replayed)
     after = rpc('lx_getBalance', [account.hex()])
     assert int(after['balance']) == 1, after
     write('result.json', json.dumps({'program_id': program.hex(), 'program_account': account.hex(),
-          'before': before, 'after': after, 'deployment': deployed, 'registration': registered,
+          'before': before, 'after': after, 'deployment': deployed, 'refused_deployment': refused, 'registration': registered,
           'result': executed}, indent=2).encode())
     print(json.dumps({'program_id': program.hex(), 'program_account': account.hex(),
                       'activity_id': executed['activity_id'], 'escrow_balance': '1', 'replayed': True}))

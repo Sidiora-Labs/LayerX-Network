@@ -1488,9 +1488,8 @@ fn visa(
         Err(refusal) => return refusal,
     };
     if !execute {
-        let binding = match layerx_visa_tap::verified_agent_binding(layerx_agent, &verified) {
-            Ok(value) => value,
-            Err(_) => return Dispatch::error(400, "refused", "visa_tap_refused"),
+        let Ok(binding) = layerx_visa_tap::verified_agent_binding(layerx_agent, &verified) else {
+            return Dispatch::error(400, "refused", "visa_tap_refused");
         };
         return Dispatch::result(
             200,
@@ -1537,7 +1536,7 @@ fn visa(
             return Dispatch::error(503, "pending", "persistence_unavailable")
         }
         Err(_) => return Dispatch::error(400, "refused", "visa_tap_refused"),
-    };
+    }
     visa_execute(config, request, record, trace, activity_binding)
 }
 
