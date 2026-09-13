@@ -1437,9 +1437,8 @@ fn visa(
     operation: &str,
     execute: bool,
 ) -> Dispatch {
-    let body: VisaRequest = match direct_body(request) {
-        Ok(value) => value,
-        Err(()) => return Dispatch::error(400, "refused", "invalid_visa_tap_request"),
+    let Ok(body) = direct_body::<VisaRequest>(request) else {
+        return Dispatch::error(400, "refused", "invalid_visa_tap_request");
     };
     let Ok(tap) = TapRequest::parse(
         body.authority,
