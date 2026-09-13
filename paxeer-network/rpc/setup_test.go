@@ -617,6 +617,11 @@ func init() {
 		panic(err)
 	}
 	testApp.Commit(context.Background())
+	for height := int64(2); height <= MockHeight103; height++ {
+		if committed := testApp.CommitMultiStore().Commit(true); committed.Version != height {
+			panic(fmt.Sprintf("historical store committed version %d, expected %d", committed.Version, height))
+		}
+	}
 	if store := EVMKeeper.ReceiptStore(); store != nil {
 		latest := int64(math.MaxInt64)
 		if err := store.SetLatestVersion(latest); err != nil {
@@ -626,7 +631,7 @@ func init() {
 	}
 	ctxProvider := func(height int64) sdk.Context {
 		if height == MockHeight2 {
-			return MultiTxCtx.WithIsTracing(true)
+			return MultiTxCtx.WithBlockHeight(height).WithIsTracing(true)
 		}
 		if height == evmrpc.LatestCtxHeight {
 			// See LatestCtxUpgradeName above — make the latest ctx look
@@ -634,7 +639,7 @@ func init() {
 			// sees the production path, not the pre-v5.8.0 fallback.
 			return baseCtx.WithIsTracing(true).WithClosestUpgradeName(LatestCtxUpgradeName)
 		}
-		return Ctx.WithIsTracing(true)
+		return Ctx.WithBlockHeight(height).WithIsTracing(true)
 	}
 	// Start good http server
 	goodConfig := evmrpcconfig.DefaultConfig
