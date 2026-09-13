@@ -67,6 +67,33 @@ pub struct PaxeerObservation<'a> {
     pub confirmations: u64,
 }
 
+impl<'a> PaxeerObservation<'a> {
+    #[must_use]
+    pub fn from_finality(
+        operation_id: &'a str,
+        report: &layerx_paxeer_client::FinalityReport,
+    ) -> Self {
+        use layerx_paxeer_client::FinalityStage;
+        let (stage, block_hash) = match report.stage() {
+            FinalityStage::Announced => ("announced", None),
+            FinalityStage::Missing { .. } => ("missing", None),
+            FinalityStage::Pooled { .. } => ("pooled", None),
+            FinalityStage::Confirming { inclusion, .. } => {
+                ("confirming", Some(inclusion.block.hash))
+            }
+            FinalityStage::Final { inclusion, .. } => ("final", Some(inclusion.block.hash)),
+            FinalityStage::Displaced { lost, .. } => ("displaced", Some(lost.block.hash)),
+        };
+        Self {
+            operation_id,
+            transaction_hash: report.transaction().bytes(),
+            stage,
+            block_hash,
+            confirmations: report.progress().confirmed,
+        }
+    }
+}
+
 impl TransitionEvidence {
     #[must_use]
     pub const fn empty() -> Self {
