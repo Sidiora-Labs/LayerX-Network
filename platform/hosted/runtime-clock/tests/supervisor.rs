@@ -236,7 +236,8 @@ fn stalled_public_read(clock: Arc<RuntimeClock>, root: &Path) -> Result {
     use layerx_sdk::rpc::{Commitment, RpcClient, RpcError};
     use layerx_sdk::rpc_verification::ReceiptPolicy;
     let fixture = root.join("fixture");
-    let header = layerx_wire::receipt::decode_batch_header(&fs::read(fixture.join("header"))?)?;
+    let header = layerx_wire::receipt::decode_batch_header(&fs::read(fixture.join("header"))?)
+        .map_err(|error| format!("native batch fixture: {error:?}"))?;
     let key: [u8; 32] = fs::read(fixture.join("sequencer.public"))?
         .try_into()
         .map_err(|_| "fixture key length")?;
