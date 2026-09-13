@@ -79,11 +79,13 @@ def main():
 
     def account(did):
         snapshot = rpc('lx_getBalances', [did])
-        assert snapshot['did'] == did and snapshot['verification'] == 'authenticated_node_snapshot'
+        assert snapshot['did'] == did and snapshot['verification'] == 'state_proven'
         matches = [record for record in snapshot['accounts']
                    if record['asset_id'] == args.asset and record['name'] in
                    [f'agent:{did}:main', f'agent:{did}:asset:{args.asset}']]
         assert len(matches) == 1, 'one funded account is required for each payment participant'
+        assert matches[0]['verification'] == 'state_proven'
+        assert matches[0]['canonical_value'] and matches[0]['proof_material']
         return matches[0]
 
     source_record, destination_record = account(args.did), account(args.destination)
@@ -91,6 +93,8 @@ def main():
     source, destination = source_record['account_id'], destination_record['account_id']
     before = rpc('lx_getBalance', [destination])
     source_before = rpc('lx_getAccount', [source])
+    assert source_before['verification'] == 'state_proven'
+    assert source_before['account_id'] == source and source_before['asset_id'] == args.asset
     identity_before = rpc('lx_getSequence', [args.did, 'identity'])
     assert identity_before['did'] == args.did
     assert identity_before['verification'] == 'authenticated_node_snapshot'
