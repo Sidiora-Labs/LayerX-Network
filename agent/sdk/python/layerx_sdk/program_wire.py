@@ -152,7 +152,8 @@ def bind_retained_program_call(canonical: bytes, expected_activity: str,
     if (envelope.protocol_version != expected_protocol
             or sha256(_ACTIVITY_DOMAIN + canonical).hexdigest() != expected_activity):
         _fail("retained call activity binding")
-    if envelope.protocol_version == 3:
+    if envelope.protocol_version == 3 or (
+            envelope.protocol_version == 2 and not envelope.payload.startswith(_CALL_DOMAIN)):
         native = decode_native_program_call(envelope.payload)
         program, abi = native.program_id.hex(), native.guest_abi
     else:

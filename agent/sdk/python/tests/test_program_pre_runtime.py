@@ -135,6 +135,25 @@ class ProgramPreRuntimeTest(unittest.TestCase):
             with self.subTest(wrapper=domain), self.assertRaises(ValueError):
                 self.check_terminal(terminal=wrapped)
 
+    def test_native_protocol_two_codec_preserves_historical_failure_layout(self):
+        canonical = bytearray(self.signed)
+        canonical[:2] = (2).to_bytes(2, "big")
+        canonical[6:8] = (2).to_bytes(2, "big")
+        activity = sha256(b"LXP/v1/activity-id\0" + canonical).digest()
+        payload_hash, abi, key = bind_retained_program_call(
+            bytes(canonical), activity.hex(), self.execution["program_id"], 2)
+        self.assertEqual((payload_hash, abi, key), (self.payload_hash, 2, self.key))
+        terminal = bytearray(self.terminal[:-33])
+        terminal[len(_PRE_RUNTIME):len(_PRE_RUNTIME) + 32] = activity
+        terminal[len(_PRE_RUNTIME) + 68:len(_PRE_RUNTIME) + 72] = (3).to_bytes(4, "big")
+        outcome = replace(self.protocol.program_outcome, encoding_version=3, applied_legs_digest=bytes(32))
+        protocol = replace(self.protocol, protocol_version=2, activity_id=activity,
+                           module_version=3, program_outcome=outcome)
+        decoded = self.check_terminal(terminal=bytes(terminal), protocol=protocol)
+        self.assertEqual(decoded.outcome, self.execution["outcome"])
+        with self.assertRaises(ValueError):
+            bind_retained_program_call(bytes(canonical), activity.hex(), self.execution["program_id"], 3)
+
     def test_resigned_terminal_fields_cannot_rebind_refusal(self):
         base = len(_PRE_RUNTIME)
         with tempfile.TemporaryDirectory(prefix="layerx-program-refusal-signature-") as directory:
