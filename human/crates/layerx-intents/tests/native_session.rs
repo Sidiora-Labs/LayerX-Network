@@ -97,7 +97,7 @@ fn executable_session_intents_reproduce_original_owner_signed_native_registratio
                 protocol.operation(),
                 protocol.result_code()
             ),
-            (7, 5, 0)
+            (7, 0, 0)
         );
         let disclosed = checked(bind(&unsigned, &registry));
         let session = disclosed
