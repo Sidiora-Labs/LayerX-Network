@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { copyEntry } from "../../../copy/runtime.ts";
+import { humanApi } from "../../api/index.ts";
+import { NativeFeeBudgetFields, useNativeFeeBudget } from "../../auth/native-fee-budget-fields.tsx";
 import { DesktopWizard, MobileWizard } from "../../kit/pattern-wizard";
 import { InlineNotice, ScreenCard } from "../../kit/surface";
 import { KitButton } from "../../kit/control";
@@ -115,6 +117,8 @@ export function AgentCreateJourney() {
   const router = useRouter();
   const shell = useAgentsShell();
   const agents = useMemo(() => new Agents(), []);
+  const api = useMemo(() => humanApi(), []);
+  const feeLimits = useNativeFeeBudget(api);
   const [draft, setDraft] = useState<CreationDraft>({
     name: "",
     purpose: "",
@@ -127,10 +131,12 @@ export function AgentCreateJourney() {
   const [outcomeUnknown, setOutcomeUnknown] = useState(false);
 
   const submit = async () => {
+    const budget = feeLimits.budget;
+    if (budget === undefined) return;
     setSubmitting(true);
     setErrorSentence(undefined);
     try {
-      setProgress(journeyProgress(await agents.create(draft)));
+      setProgress(journeyProgress(await agents.create({ ...draft, nativeFeeBudget: budget })));
     } catch (error) {
       if (mutationOutcomeUnknown(error)) {
         setOutcomeUnknown(true);
@@ -293,17 +299,20 @@ export function AgentCreateJourney() {
       label: copyEntry(steps[2].labelKey).message,
       title: copyEntry(steps[2].labelKey).message,
       description: copyEntry(steps[2].helpKey).message,
-      canContinue: () => steps[2].complete && !submitting,
+      canContinue: () => steps[2].complete && feeLimits.budget !== undefined && !submitting,
       render: () => (
-        <DraftField
-          labelKey={steps[2].labelKey}
-          helpKey={steps[2].helpKey}
-          value={draft.limitInput}
-          numeric
-          onChange={(value) => {
-            setDraft((current) => ({ ...current, limitInput: value }));
-          }}
-        />
+        <div className="flex flex-col gap-4">
+          <DraftField
+            labelKey={steps[2].labelKey}
+            helpKey={steps[2].helpKey}
+            value={draft.limitInput}
+            numeric
+            onChange={(value) => {
+              setDraft((current) => ({ ...current, limitInput: value }));
+            }}
+          />
+          <NativeFeeBudgetFields control={feeLimits} disabled={submitting} />
+        </div>
       ),
     },
   ];
@@ -335,7 +344,7 @@ export function AgentCreateJourney() {
         ]}
         completeLabel={copyEntry("agent.create.submit").message}
         onComplete={() => {
-          if (creationReady(draft) && !submitting) {
+          if (creationReady(draft) && feeLimits.budget !== undefined && !submitting) {
             void submit();
           }
         }}

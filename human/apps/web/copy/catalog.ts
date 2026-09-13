@@ -29,6 +29,15 @@ export interface CopyEntry {
 }
 
 export const copyEntries = [
+  { key: "fees.limits.title", message: "Fee limits", context: "Owner-approved fees before opening a session or creating an agent.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "fees.limits.body", message: "Choose the most this access may spend on fees. These limits do not reserve or move money. The 24-hour limit starts when access opens; the total limit does not reset.", context: "Explicit fee allowance scope and renewal boundaries.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "fees.limits.perAction", message: "Maximum fee per action ({currency})", context: "Exact per-action fee ceiling in the registered currency.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "fees.limits.total", message: "Total fee limit ({currency})", context: "Lifetime fee allowance in the registered currency.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "fees.limits.perPeriod", message: "Fee limit per 24 hours ({currency})", context: "Fee allowance in successive 24-hour periods from opening.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "fees.limits.loading", message: "Checking the fee currency.", context: "Native fee asset discovery is pending.", surface: "default", kind: "status", moneyAdjacent: true },
+  { key: "fees.limits.unavailable", message: "The fee currency could not be checked. Try again before continuing.", context: "Unavailable fee discovery blocks new access.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "fees.limits.invalid", message: "Enter positive amounts. The per-action limit must fit within both the total and 24-hour limits.", context: "Invalid fee allowance blocks consent.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "fees.limits.required", message: "Choose valid fee limits before continuing.", context: "Disabled action reason before fee consent.", surface: "default", kind: "body", moneyAdjacent: true },
   { key: "application.name", message: "LayerX Human Interface", context: "Accessible product name and application metadata.", surface: "default", kind: "body", moneyAdjacent: false },
   { key: "navigation.home", message: "Home", context: "Authenticated application home navigation and heading.", surface: "default", kind: "action", moneyAdjacent: false },
   { key: "navigation.agents", message: "Agents", context: "Managed agents navigation.", surface: "default", kind: "action", moneyAdjacent: false },

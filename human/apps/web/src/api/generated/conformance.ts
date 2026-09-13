@@ -67,6 +67,7 @@ import {
   encodeJourneyPage,
   encodeKeyChallenge,
   encodeMoveQuote,
+  encodeNativeFeeAsset,
   encodeNotificationPage,
   encodeNotificationPreferences,
   encodeNotificationSummary,
@@ -245,6 +246,8 @@ export const conformance: { readonly [name in OperationName]: (run: ConformanceR
     encodeSessionRevocation(await run.client.securitySessionRevoke(runParam(run, "session_id"), decodeSecuritySessionRevocation(runBody(run), "golden request body"), runKey(run))),
   "security.session.revoke-all": async (run) =>
     encodeSessionRevocation(await run.client.securitySessionRevokeAll(decodeSecuritySessionRevocation(runBody(run), "golden request body"), runKey(run))),
+  "session.fee-policy": async (run) =>
+    encodeNativeFeeAsset(await run.client.sessionFeePolicy()),
   "session.list": async (run) =>
     encodeSessionList(await run.client.sessionList()),
   "session.open": async (run) =>

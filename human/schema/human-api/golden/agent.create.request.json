@@ -10,6 +10,13 @@
     "monthly_limit": {
       "amount": "250000000",
       "currency": "LXP"
+    },
+    "native_fee_budget": {
+      "asset_id": "b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898",
+      "maximum_per_activity": "1000000000000000",
+      "maximum_total": "100000000000000000",
+      "period_length_ms": "86400000",
+      "maximum_per_period": "10000000000000000"
     }
   }
 }

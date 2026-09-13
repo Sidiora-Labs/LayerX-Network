@@ -14,10 +14,12 @@ import {
   type KeyChallenge,
   type LimitEnforcement,
   type Money,
+  type NativeFeeBudget,
   type MoveQuote,
   type VerificationLevel,
 } from "../../api/index.ts";
 import { type ConfirmationKind, type StatusKey } from "../../kit/model.ts";
+import { nativeFeeBudgetIdentity } from "../../auth/native-fee-budget.ts";
 
 export type {
   Agent,
@@ -44,6 +46,7 @@ export interface CreationDraft {
   readonly purpose: string;
   readonly limitInput: string;
   readonly currency: string;
+  readonly nativeFeeBudget?: NativeFeeBudget;
 }
 
 export interface CreationStep {
@@ -587,6 +590,7 @@ export class Agents {
       name: draft.name.trim(),
       purpose: draft.purpose.trim(),
       monthly_limit: monthlyLimit,
+      ...(draft.nativeFeeBudget === undefined ? {} : { native_fee_budget: draft.nativeFeeBudget }),
     };
     return this.#mutate(
       mutationScope(
@@ -595,6 +599,7 @@ export class Agents {
         request.purpose,
         monthlyLimit.currency,
         monthlyLimit.amount.toString(10),
+        nativeFeeBudgetIdentity(draft.nativeFeeBudget),
       ),
       (key) => this.#client.agentCreate(request, key),
     );

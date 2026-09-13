@@ -1,4 +1,13 @@
 export const runtimeMessages: readonly (readonly [string, string])[] = [
+  ["fees.limits.title","Fee limits"],
+  ["fees.limits.body","Choose the most this access may spend on fees. These limits do not reserve or move money. The 24-hour limit starts when access opens; the total limit does not reset."],
+  ["fees.limits.perAction","Maximum fee per action ({currency})"],
+  ["fees.limits.total","Total fee limit ({currency})"],
+  ["fees.limits.perPeriod","Fee limit per 24 hours ({currency})"],
+  ["fees.limits.loading","Checking the fee currency."],
+  ["fees.limits.unavailable","The fee currency could not be checked. Try again before continuing."],
+  ["fees.limits.invalid","Enter positive amounts. The per-action limit must fit within both the total and 24-hour limits."],
+  ["fees.limits.required","Choose valid fee limits before continuing."],
   ["application.name","LayerX Human Interface"],
   ["navigation.home","Home"],
   ["navigation.agents","Agents"],
