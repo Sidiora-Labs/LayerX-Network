@@ -56,7 +56,7 @@ def main():
             os.fsync(output.fileno())
         return path
 
-    def rpc(method, params):
+    def rpc(method, params, pending=False):
         nonlocal counter
         counter += 1
         body = json.dumps({'jsonrpc': '2.0', 'id': counter, 'method': method, 'params': params}).encode()
@@ -70,6 +70,10 @@ def main():
         write(f'{counter:02d}-response.json', result.stdout)
         assert result.returncode == 0, f'payment transport failed: {result.returncode}'
         value = json.loads(result.stdout)
+        if pending and value.get('id') == counter and value.get('error', {}).get('code') == -32001:
+            state = value['error'].get('data', {})
+            if state.get('state') == 'pending' and state.get('requested_commitment') == 'executed':
+                return state
         assert value.get('id') == counter and 'error' not in value, value
         return value['result']
 
@@ -104,7 +108,7 @@ def main():
     write('payment.lxa', bytes.fromhex(signed['canonical']))
     deadline = time.monotonic() + 120
     while True:
-        executed = rpc('lx_sendActivity', [signed['canonical'], 'executed'])
+        executed = rpc('lx_sendActivity', [signed['canonical'], 'executed'], pending=True)
         if executed.get('commitment') == 'executed':
             break
         assert time.monotonic() < deadline, executed
