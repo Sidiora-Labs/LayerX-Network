@@ -199,7 +199,7 @@ impl DisclosureCheck {
                         round_trip.bytes(&predecessor, 32, DisclosureField::AuthorityGrant)?;
                         round_trip.bytes(&commitment, 32, DisclosureField::ContextHash)?;
                     }
-                } else if value.registration_payload.get(2) != Some(&1)
+                } else if value.registration_payload.get(4) != Some(&1)
                     || value.replacement.is_some()
                 {
                     return Err(DisclosureCheckError::FieldMismatch(

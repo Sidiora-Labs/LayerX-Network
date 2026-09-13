@@ -207,7 +207,7 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
         }
         IntentKind::SessionGrant(value) => {
             if intent.version() != IntentVersion::V3 {
-                if value.registration_payload.get(2) != Some(&1) || value.replacement.is_some() {
+                if value.registration_payload.get(4) != Some(&1) || value.replacement.is_some() {
                     return Err(CompileError::wire(
                         CompileField::Version,
                         WireError {

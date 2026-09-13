@@ -65,11 +65,10 @@ impl SessionKeyRegistry {
             owner_uid,
         })
     }
-    ///
-    /// # Errors
-    ///
     /// Prepares one durable encrypted session seed for a bound issuance request.
+    ///
     /// # Errors
+    ///
     /// Refuses changed request bindings, invalid inputs or unprotected storage.
     pub fn prepare_seed(
         &self,
@@ -145,6 +144,8 @@ impl SessionKeyRegistry {
             .map_err(|_| SessionKeyRegistryError::Crypto)
     }
 
+    /// # Errors
+    ///
     /// Returns an error if key material, protected files, or registry state cannot be validated or accessed.
     pub fn provision(
         &self,
