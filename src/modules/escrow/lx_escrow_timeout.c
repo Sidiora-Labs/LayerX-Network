@@ -182,7 +182,9 @@ static lxp_result sweep_settle(lxp_module_ctx *ctx,
     set.context.actor_sequence = set.legs[0].from->next_sequence;
     set.context.batch_timestamp = timestamp;
     (void)memcpy(set.context.authorized_from, set.legs[0].from->id, 32U);
-    status = lxp_ctx_emit_transfer_set(ctx, &set, receipt);
+    status = ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT ?
+        lxp_ctx_emit_monetary_transfer_set(ctx, &set, receipt) :
+        lxp_ctx_emit_transfer_set(ctx, &set, receipt);
     if (status != LXP_OK) return status;
     *applied = true;
     return LXP_OK;

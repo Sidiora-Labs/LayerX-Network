@@ -126,6 +126,29 @@ int main(void)
         stored.locked_amount.lo != 50U)
         return fail("transition before expiry");
 
+    if (epoch_fixture_ctx(&fixture, &ctx, &effects, LXP_MODULE_ESCROW,
+                          1200U) != LXP_OK)
+        return fail("maintained epoch context");
+    ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    ctx.batch_number = 1U;
+    if (lx_escrow_module_iface()->epoch_begin(&ctx, 2U, 1200U) != LXP_OK ||
+        escrow_account->balance.lo != 0U || owner->balance.lo != 50U ||
+        effects.count != 2U || effects.effects[0].kind != LXP_EFFECT_TRANSFER ||
+        !effects.effects[0].monetary || effects.effects[0].ordinal != 0U ||
+        effects.effects[0].module_id != LXP_MODULE_ESCROW ||
+        effects.effects[0].body_length != 0U ||
+        effects.effects[1].kind != LXP_EFFECT_EVENT ||
+        effects.effects[1].event_type != 5U || effects.effects[1].ordinal != 1U ||
+        lx_escrow_receipt_replay(&ctx, timeout_key, &receipt, &found) != LXP_OK ||
+        !found || receipt.amount.lo != 50U ||
+        memcmp(effects.effects[0].transfer_set_root, receipt.transfer_set_root, 32U) != 0)
+        return fail("maintained epoch transfer evidence");
+    lxp_module_ctx_rollback(&ctx);
+    if (escrow_account->balance.lo != 50U || owner->balance.lo != 0U ||
+        hold_state(&fixture, &effects, 999U, record.escrow_id, &stored) != 0 ||
+        stored.state != LX_ESCROW_STATE_OPEN || stored.locked_amount.lo != 50U)
+        return fail("maintained epoch rollback");
+
     /* Epoch 3 opens past the expiry: the escrow sweep times the hold out
      * and the production ledger applier returns the 50 units to the owner. */
     if (lxp_kernel_epoch_transition(&fixture.kernel, 3U, 1200U,
