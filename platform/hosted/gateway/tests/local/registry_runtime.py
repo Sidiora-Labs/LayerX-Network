@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
@@ -12,7 +11,6 @@ import stat
 import struct
 import subprocess
 import sys
-import tarfile
 import time
 
 
@@ -47,22 +45,17 @@ def main():
         ["docker", "image", "inspect", "--format", "{{.Id}}",
          config["runtime_image"]], text=True).strip()
     phase("image_inspected")
-    image_container = subprocess.check_output(
-        ["docker", "create", image], text=True).strip()
-    try:
-        archive = subprocess.check_output(
-            ["docker", "cp", f"{image_container}:/usr/bin/bwrap", "-"])
-        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as files:
-            members = files.getmembers()
-            if len(members) != 1 or not members[0].isfile():
-                raise RuntimeError("image isolation executable must be one regular file")
-            executable = files.extractfile(members[0])
-            if executable is None:
-                raise RuntimeError("image isolation executable is missing")
-            isolation_digest = hashlib.file_digest(executable, "sha256").hexdigest()
-    finally:
-        subprocess.run(["docker", "rm", image_container], check=True,
-                       stdout=subprocess.DEVNULL)
+    evidence_path = Path(config["runtime_image_evidence"])
+    if evidence_path.resolve(strict=True) != evidence_path or not evidence_path.is_file():
+        raise RuntimeError("runtime image evidence must be a canonical regular file")
+    evidence = json.loads(evidence_path.read_text())
+    if set(evidence) != {"image_id", "isolation_sha256"} or evidence["image_id"] != image:
+        raise RuntimeError("runtime image differs from qualified image evidence")
+    isolation_digest = evidence["isolation_sha256"]
+    if (not isinstance(isolation_digest, str) or len(isolation_digest) != 64
+            or any(byte not in "0123456789abcdef" for byte in isolation_digest)
+            or isolation_digest == "0" * 64):
+        raise RuntimeError("runtime isolation digest is invalid")
     phase("isolation_digest_verified")
     bins = Path(config["service_bin_dir"]).resolve(strict=True)
     supervisor = bins / "layerx-cgroup-exec"
