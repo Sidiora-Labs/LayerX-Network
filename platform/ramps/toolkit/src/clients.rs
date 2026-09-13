@@ -1747,8 +1747,8 @@ mod authority_shape_tests {
             .wire_version
             .parse::<u16>()
             .unwrap_or_else(|error| panic!("protocol: {error}"));
-        let key =
-            parse_hex32(&facts.sequencer_public_key).unwrap_or_else(|error| panic!("key: {error}"));
+        let key = parse_hex32(&facts.sequencer_public_key)
+            .unwrap_or_else(|error| panic!("key: {error:?}"));
         assert!(facts
             .validate_context(&activity, network, protocol, key)
             .is_ok());
