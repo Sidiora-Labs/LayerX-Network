@@ -174,6 +174,7 @@ pub enum HistoryKind {
 /// One ordered core-produced history byte string.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HistoryItem {
+    proof_material: Vec<u8>,
     pub global_sequence: u64,
     pub kind: HistoryKind,
     canonical_bytes: Vec<u8>,
@@ -181,6 +182,11 @@ pub struct HistoryItem {
 }
 
 impl HistoryItem {
+    #[must_use]
+    pub fn proof_material(&self) -> &[u8] {
+        &self.proof_material
+    }
+
     #[must_use]
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
@@ -606,6 +612,7 @@ pub fn history(
                     context,
                 )?;
                 items.push(HistoryItem {
+                    proof_material: evidence_bytes.to_vec(),
                     global_sequence: sequence,
                     kind,
                     canonical_bytes: response.canonical_payload.to_vec(),
@@ -705,7 +712,7 @@ fn verify_history_item(
         require_level(context.requested, VerificationLevel::UNVERIFIED)?;
         return Ok(VerificationLevel::UNVERIFIED);
     }
-    let bundle = ProofBundle::decode(proof_material)?;
+    let bundle = HistoryProof::decode(proof_material)?;
     let header = decode_batch_header(&bundle.header).map_err(|_| ReadError::MalformedValue)?;
     if header.protocol_version() != context.expected_protocol_version
         || header.network_id() != context.expected_network_id
@@ -771,14 +778,16 @@ fn decode_history_end(bytes: &[u8]) -> Result<u64, ReadError> {
     Ok(u64::from_be_bytes(encoded))
 }
 
-struct ProofBundle {
-    proof: Proof,
-    header: Vec<u8>,
-    header_signature: [u8; 64],
+pub struct HistoryProof {
+    pub proof: Proof,
+    pub header: Vec<u8>,
+    pub header_signature: [u8; 64],
 }
 
-impl ProofBundle {
-    fn decode(bytes: &[u8]) -> Result<Self, ReadError> {
+impl HistoryProof {
+    /// # Errors
+    /// Refuses malformed, truncated or noncanonical inclusion proof fields.
+    pub fn decode(bytes: &[u8]) -> Result<Self, ReadError> {
         let mut reader = Reader::new(bytes);
         let _asserted_level = reader.u8()?;
         let _root: [u8; 32] = reader.array()?;

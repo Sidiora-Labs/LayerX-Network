@@ -2285,7 +2285,7 @@ fn agent_evidence_digest(
 
 impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
     fn terminal_receipt_evidence(
-        &self,
+        &mut self,
         receipt_evidence: &layerx_client::evidence::VerifiedProofBundle,
         authority: &AuthorizedBatch,
     ) -> Result<crate::protocol_evidence::VerifiedReceiptEvidence, HumanOperationError> {
@@ -2304,6 +2304,11 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             signed_header.canonical_bytes.clone(),
             signed_header.signature,
         );
+        let header = layerx_wire::receipt::decode_batch_header(&signed_header.canonical_bytes)
+            .map_err(|_| HumanOperationError::Refused)?;
+        if header.protocol_version() == 3 && header.first_sequence() < header.last_sequence() {
+            return self.maintained_terminal_receipt(&raw, authority, &header);
+        }
         let node = self.node.handshake().node();
         let terminal = crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized(
             &raw,
@@ -2313,6 +2318,71 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         )
         .map_err(|_| HumanOperationError::Refused)?;
         Ok(terminal)
+    }
+
+    fn maintained_terminal_receipt(
+        &mut self,
+        raw: &crate::protocol_evidence::RawReceiptEvidence,
+        authority: &AuthorizedBatch,
+        header: &layerx_wire::receipt::BatchHeader,
+    ) -> Result<crate::protocol_evidence::VerifiedReceiptEvidence, HumanOperationError> {
+        let node = self.node.handshake().node().clone();
+        let authorization = layerx_proof::inclusion::SequencerAuthorization::new(
+            header.sequencer_id(),
+            authority.sequencer_public_key(),
+            header.batch_number(),
+            header.batch_number(),
+        );
+        let sequence = header.last_sequence();
+        let correlation = sequence
+            .checked_add(10_000)
+            .ok_or(HumanOperationError::Refused)?;
+        let page = self
+            .node
+            .history(
+                sequence,
+                sequence,
+                1,
+                None,
+                layerx_types::verify::VerificationLevel::BATCH_INCLUDED,
+                correlation,
+                authorization,
+            )
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        if page.items.len() != 1 || page.cursor.is_some() {
+            return Err(HumanOperationError::Refused);
+        }
+        let item = &page.items[0];
+        if item.kind != layerx_client::read::HistoryKind::Receipt
+            || item.global_sequence != sequence
+            || !item
+                .canonical_bytes()
+                .starts_with(b"LXP/programs/occupancy-receipt/v2\0")
+        {
+            return Err(HumanOperationError::Refused);
+        }
+        let proof = layerx_client::read::HistoryProof::decode(item.proof_material())
+            .map_err(|_| HumanOperationError::Refused)?;
+        let header_signature = raw.header_signature();
+        if proof.header != raw.canonical_header() || proof.header_signature != header_signature {
+            return Err(HumanOperationError::Refused);
+        }
+        let evidence = layerx_proof::receipt::MaintainedOutcomeEvidence {
+            header: raw.canonical_header(),
+            header_signature: &header_signature,
+            activity_proof: raw.proof(),
+            maintenance: item.canonical_bytes(),
+            maintenance_proof: &proof.proof,
+            authorization: &authorization,
+        };
+        crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized_maintained(
+            raw,
+            authority,
+            &evidence,
+            node.protocol_version,
+            node.network_id,
+        )
+        .map_err(|_| HumanOperationError::Refused)
     }
 
     fn augment_receipt_evidence(
@@ -3925,7 +3995,7 @@ mod terminal_recovery_tests {
     }
 
     #[test]
-    fn restarted_terminal_uses_the_authenticated_signed_receipt_reference() {
+    fn terminal_recovery_checks_the_authenticated_signed_receipt_reference() {
         let value: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../platform/hosted/authority/tests/fixtures/real-program-deploy-receipt.json"
         ))

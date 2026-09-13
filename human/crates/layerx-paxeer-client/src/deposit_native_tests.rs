@@ -110,3 +110,95 @@ fn real_native_credit_receipt_binds_attestation_supply_and_authority() {
             .is_err()
     );
 }
+
+fn checked<T, E: std::fmt::Debug>(value: Result<T, E>) -> T {
+    value.unwrap_or_else(|error| panic!("daemon credit evidence: {error:?}"))
+}
+
+#[test]
+fn actual_daemon_credit_passes_signed_batch_and_custody_verification() {
+    use layerx_proof::inclusion::SequencerAuthorization;
+    use layerx_proof::merkle::decode_proof;
+    use layerx_proof::receipt::{authorized_maintained_activity_batch, MaintainedOutcomeEvidence};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/fixtures/custody/daemon-credit-receipt");
+    let read = |name: &str| checked(std::fs::read(root.join(name)));
+    let receipt_bytes = read("credit.receipt");
+    let header_bytes = read("header");
+    let header = checked(layerx_wire::receipt::decode_batch_header(&header_bytes));
+    let receipt = checked(decode(&receipt_bytes));
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("protocol credit"));
+    let key = checked(read("sequencer.public").try_into());
+    let batch = AuthorizedBatch::new(
+        protocol.batch_id(),
+        [0; 32],
+        header.previous_state_root(),
+        header.resulting_state_root(),
+        key,
+    );
+    let authorization = SequencerAuthorization::new(header.sequencer_id(), key, 1, 1);
+    let signature = checked(read("header.signature").try_into());
+    let proof = checked(decode_proof(&read("receipt.proof")));
+    let maintenance = read("maintenance.receipt");
+    let maintenance_proof = checked(decode_proof(&read("maintenance.proof")));
+    let evidence = MaintainedOutcomeEvidence {
+        header: &header_bytes,
+        header_signature: &signature,
+        activity_proof: &proof,
+        maintenance: &maintenance,
+        maintenance_proof: &maintenance_proof,
+        authorization: &authorization,
+    };
+    let activity_batch = checked(authorized_maintained_activity_batch(
+        &receipt_bytes,
+        &batch,
+        &evidence,
+    ));
+    let payload = read("credit");
+    let profile = read("profile");
+    let credit = checked(AttestedNativeCustodyCredit::verify(
+        &profile,
+        &payload,
+        NativeCustodyExpectation {
+            network_id: header.network_id(),
+            beneficiary: field(&payload, 107),
+            owner_key: field(&payload, 139),
+        },
+    ));
+    let activity_type = checked(layerx_types::payload::ActivityType::new(
+        layerx_types::payload::ModuleId::Bridge,
+        1,
+    ));
+    let registration = checked(layerx_types::payload::ModuleRegistration::new(
+        layerx_types::payload::ModuleId::Bridge,
+        &[activity_type],
+    ));
+    let registry = checked(layerx_types::payload::ModuleRegistry::new(&[registration]));
+    let activity = checked(layerx_wire::activity::decode_signed(
+        &read("activity"),
+        &registry,
+    ));
+    assert_eq!(activity.payload(), payload);
+    let activity_id = checked(layerx_wire::hash::activity_id(&activity));
+    let reserve = field(&profile, 129);
+    assert_eq!(
+        verify_native_credit_receipt(
+            &credit,
+            &receipt_bytes,
+            &activity_batch,
+            activity_id,
+            reserve
+        ),
+        Ok(())
+    );
+    let mut altered = receipt_bytes.clone();
+    let last = altered.len() - 1;
+    altered[last] ^= 1;
+    assert!(
+        verify_native_credit_receipt(&credit, &altered, &activity_batch, activity_id, reserve)
+            .is_err()
+    );
+    assert!(authorized_maintained_activity_batch(&altered, &batch, &evidence).is_err());
+}

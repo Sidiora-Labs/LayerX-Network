@@ -1696,10 +1696,8 @@ impl DepositProof {
     ///
     /// # Errors
     ///
-    /// Refuses a reserve outside `system:paxeer-reserve`, a recipient that is
-    /// not the custody beneficiary, and the currently unavailable complete
-    /// C proof ingress. The existing seven-field intent is not an equivalent
-    /// substitute for `lx_deposit_proof`.
+    /// Refuses a reserve outside `system:paxeer-reserve`, a different custody
+    /// beneficiary, or a missing or mismatched authenticated native attestation.
     pub fn credit_intent(
         &self,
         reserve: &AccountId,
@@ -1744,7 +1742,7 @@ impl DepositProof {
     ///
     /// # Errors
     ///
-    /// Returns the typed complete-proof ingress refusal before compilation.
+    /// Refuses invalid custody bindings or an undeclared native Bridge activity.
     pub fn compile_credit(
         &self,
         reserve: &AccountId,
@@ -1755,13 +1753,13 @@ impl DepositProof {
             .map_err(|_| DepositFailure::CreditRefused(CreditFault::NativeCompilation))
     }
 
-    /// Refuses receipt acceptance until Core exposes a complete-proof activity
-    /// whose receipt can bind this deposit nullifier and exact submitted proof.
+    /// Authenticates the native credit receipt and binds its custody event,
+    /// reserve, beneficiary, supply change and payload to this deposit proof.
     ///
     /// # Errors
     ///
-    /// Returns the same typed proof-ingress refusal as credit preparation after
-    /// checking the reserve and beneficiary boundary.
+    /// Refuses missing native proof ingress, invalid receipt authority, or any
+    /// mismatch between the submitted credit and its authenticated effects.
     pub fn accept_credit(
         &self,
         receipt_bytes: &[u8],

@@ -8,7 +8,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use layerx_agentd::audit::Redacted;
 use layerx_agentd::budget::{LimitConfig, LimitId, LimitScope};
@@ -753,8 +753,13 @@ fn serve(config: Config) -> Result<(), String> {
                 PathBuf::from(required("LAYERX_AGENT_HUMAN_NODE_LNI")?),
                 limits,
             )?;
-            NativeReadRoute::new(client, boot.enrolment.did.clone(), config.bearer.clone())
-                .map_err(|error| format!("native read route is invalid: {error:?}"))
+            NativeReadRoute::new(
+                client,
+                boot.enrolment.did.clone(),
+                config.bearer.clone(),
+                Instant::now,
+            )
+            .map_err(|error| format!("native read route is invalid: {error:?}"))
         })
         .transpose()?;
     let human = start_human_owner(mcp)?;

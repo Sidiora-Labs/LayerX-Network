@@ -16,6 +16,7 @@ const MINIMUM_BEARER_BYTES: usize = 32;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BoundaryRefusal {
     NotServed(&'static str),
+    UnsupportedRead,
     Unauthorized,
     Unavailable(String),
     Malformed(String),
@@ -29,6 +30,7 @@ impl BoundaryRefusal {
             Self::NotServed(tool) => {
                 format!("tool {tool} has no operation on the bound daemon surface")
             }
+            Self::UnsupportedRead => "the daemon does not serve the requested read".to_owned(),
             Self::Unauthorized => "the daemon refused the bound agent credential".to_owned(),
             Self::Unavailable(reason) => format!("the daemon is unavailable: {reason}"),
             Self::Malformed(reason) => format!("the daemon response is unusable: {reason}"),
@@ -156,6 +158,7 @@ impl AgentSurface {
             200 => serde_json::from_str(&body)
                 .map_err(|_| BoundaryRefusal::Malformed("invalid native read result".to_owned())),
             401 => Err(BoundaryRefusal::Unauthorized),
+            404 | 405 | 501 => Err(BoundaryRefusal::UnsupportedRead),
             400 | 413 => Err(BoundaryRefusal::Malformed(
                 "the daemon refused the read selector or result bound".to_owned(),
             )),

@@ -102,8 +102,10 @@ impl DisclosureCheck {
                 DisclosureField::Version,
             ));
         }
-        if matches!(intent.kind(), IntentKind::NativeCustodyCredit(_))
-            && intent.version() != crate::IntentVersion::V1
+        if matches!(
+            intent.kind(),
+            IntentKind::NativeCustodyCredit(_) | IntentKind::NativeReceive(_)
+        ) && intent.version() != crate::IntentVersion::V1
         {
             return Err(DisclosureCheckError::FieldMismatch(
                 DisclosureField::Version,
@@ -222,6 +224,9 @@ impl DisclosureCheck {
                 round_trip.fixed(&value.context_hash.bytes(), DisclosureField::ContextHash)?;
                 round_trip.u32(value.network_id.value(), DisclosureField::Network)?;
                 round_trip.u16(value.protocol_version.value(), DisclosureField::Header)?;
+            }
+            IntentKind::NativeReceive(value) => {
+                round_trip.fixed(value.payload(), DisclosureField::Authorization)?;
             }
             IntentKind::LxpReceive(value) => {
                 round_trip.header(0x5201, 8)?;
@@ -366,6 +371,19 @@ impl DisclosureCheck {
         intent: &Intent,
         disclosure: &Disclosure,
     ) -> Result<(), DisclosureCheckError> {
+        if let IntentKind::NativeReceive(receive) = intent.kind() {
+            disclosure
+                .reencode()
+                .map_err(|_| DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes))?;
+            require(
+                disclosure.activity_type == expected_activity_type(intent)?,
+                DisclosureField::ActivityType,
+            )?;
+            return require(
+                disclosure.canonical_payload() == receive.payload(),
+                DisclosureField::PayloadBytes,
+            );
+        }
         if let IntentKind::NativeCustodyCredit(credit) = intent.kind() {
             return verify_native_agent(credit, disclosure);
         }
@@ -597,7 +615,7 @@ fn expected_activity_type(intent: &Intent) -> Result<ActivityType, DisclosureChe
         IntentKind::SessionGrant(_) => (ModuleId::Governance, 5),
         IntentKind::SessionRevoke(_) => (ModuleId::Governance, 6),
         IntentKind::LxpSend(_) => (ModuleId::Asset, 5),
-        IntentKind::LxpReceive(_) => (ModuleId::Asset, 6),
+        IntentKind::LxpReceive(_) | IntentKind::NativeReceive(_) => (ModuleId::Asset, 6),
         IntentKind::PayerGrantRegistration(_) => (ModuleId::Budget, 4),
         IntentKind::BudgetCreate(_) => (ModuleId::Budget, 1),
         IntentKind::BudgetFund(_) => (ModuleId::Budget, 2),
