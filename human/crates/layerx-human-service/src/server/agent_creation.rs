@@ -266,10 +266,7 @@ impl<'a> ProductionAgentCreation<'a> {
         ))
         .map_err(|_| AgentFailure::Unavailable)?
         .map_err(|_| AgentFailure::Refused("custody refused creation signature"))?;
-        let signature: [u8; 64] = grant
-            .signature()
-            .try_into()
-            .map_err(|_| AgentFailure::Refused("invalid custody signature"))?;
+        let signature = *grant.signature();
         let signed_activity = layerx_intents::owner_activity::attach_signature(
             &prepared.unsigned_canonical_bytes,
             signature,
