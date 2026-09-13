@@ -881,6 +881,23 @@ static int maintenance_refusals(const batch_evidence *evidence)
     return 0;
 }
 
+static int reconnect(int descriptor)
+{
+    struct sockaddr_un address = {0};
+    socklen_t length = sizeof(address);
+    REQUIRE(getpeername(descriptor, (struct sockaddr *)&address, &length) == 0);
+    REQUIRE(address.sun_family == AF_UNIX && length <= sizeof(address));
+    REQUIRE(close(descriptor) == 0);
+    int connected = socket(AF_UNIX, SOCK_STREAM, 0);
+    REQUIRE(connected >= 0 && connect(connected, (struct sockaddr *)&address, length) == 0);
+    if (connected != descriptor) {
+        REQUIRE(dup2(connected, descriptor) == descriptor);
+        REQUIRE(close(connected) == 0);
+    }
+    REQUIRE(handshake(descriptor) == 0);
+    return 0;
+}
+
 static int scenario_start(int descriptor, const char *directory, scenario_state *state,
                            const signer *owner, const signer *provider)
 {
@@ -1015,6 +1032,7 @@ static int scenario_start(int descriptor, const char *directory, scenario_state 
         const struct timespec delay = {0, 10000000};
         REQUIRE(nanosleep(&delay, NULL) == 0);
     }
+    REQUIRE(reconnect(descriptor) == 0);
     memcpy(payload, market_id, 32U); payload[32U] = 1U;
     REQUIRE(submit(descriptor, state, owner, &state->owner_sequence, LX_PERPS_MARKET_HALT,
         payload, LX_PERPS_HALT_PAYLOAD_BYTES, LXP_OK, &evidence) == 0);
