@@ -9,6 +9,11 @@ use crate::evidence::Evidence;
 use crate::level::achieved;
 
 mod native_credit;
+mod owner_module;
+
+pub use owner_module::{
+    verify_native_owner_outcome, NativeOwnerOutcomeContext, NativeOwnerOutcomeFailure,
+};
 
 const PROGRAMS_MODULE_ID: u32 = 9;
 const PROGRAMS_STATE_OPERATION: u16 = 0;
