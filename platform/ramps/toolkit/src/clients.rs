@@ -1446,6 +1446,8 @@ enum MaintainedIdentityDocument {
     OccupancyMaintenanceV2 {
         receipt_hex: String,
         receipt_proof_hex: String,
+        #[serde(default)]
+        activity_receipts_hex: Vec<String>,
     },
 }
 
@@ -1495,10 +1497,19 @@ impl MaintainedBatchDocument {
         let MaintainedIdentityDocument::OccupancyMaintenanceV2 {
             receipt_hex,
             receipt_proof_hex,
+            activity_receipts_hex,
         } = &self.batch_identity;
         let maintenance = bytes(receipt_hex)?;
         let maintenance_proof = proof(receipt_proof_hex)?;
-        layerx_proof::receipt::authorized_maintained_activity_batch(
+        let receipts = if activity_receipts_hex.is_empty() {
+            vec![receipt.to_vec()]
+        } else {
+            activity_receipts_hex
+                .iter()
+                .map(|value| bytes(value))
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        layerx_proof::receipt::authorized_maintained_activity_batch_chain(
             receipt,
             facts,
             &layerx_proof::receipt::MaintainedOutcomeEvidence {
@@ -1509,6 +1520,7 @@ impl MaintainedBatchDocument {
                 maintenance_proof: &maintenance_proof,
                 authorization,
             },
+            &receipts,
         )
         .map_err(|_| "maintained evidence verification")
     }

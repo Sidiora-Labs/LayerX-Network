@@ -1522,6 +1522,7 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
     let BatchIdentityEvidence::OccupancyMaintenanceV2 {
         receipt: maintenance_bytes,
         proof: maintenance_path,
+        ..
     } = &served_evidence.batch_identity
     else {
         panic!("maintained response")
@@ -1604,6 +1605,7 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
     let BatchIdentityEvidence::OccupancyMaintenanceV2 {
         receipt,
         proof: maintenance_proof,
+        ..
     } = &evidence.batch_identity
     else {
         panic!("native maintained batch must carry maintenance evidence")

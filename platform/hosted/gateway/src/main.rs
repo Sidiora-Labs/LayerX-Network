@@ -2002,6 +2002,52 @@ fn submit_activity(
     response
 }
 
+fn publish_lifecycle(
+    config: &Config,
+    canonical_hex: &str,
+    activity_id: &str,
+    receipt: &[u8],
+) -> Result<(), OutgoingResponse> {
+    let canonical = decode_hex(canonical_hex, 1_048_576)
+        .map_err(|_| response(503, "persistence_unavailable", Some(5)))?;
+    let activity = decode_signed(&canonical, &config.modules)
+        .map_err(|_| response(503, "persistence_unavailable", Some(5)))?;
+    if activity.activity_type().module() != ModuleId::Programs {
+        return Err(response(502, "lifecycle_binding_invalid", None));
+    }
+    if !matches!(activity.activity_type().ordinal(), 1 | 2) {
+        return Ok(());
+    }
+    let digest = layerx_wire::hash::receipt_digest(receipt)
+        .map_err(|_| response(502, "receipt_verification_failed", None))?;
+    let upstream = config
+        .client
+        .request(
+            &config.registry,
+            config.registry_token.as_str(),
+            &http::OutboundRequest {
+                method: "POST",
+                path: "/__registry/deployments",
+                idempotency: Some(activity_id),
+                content_type: "application/octet-stream",
+                body: &canonical,
+            },
+        )
+        .map_err(|_| response(503, "program_registry_unavailable", Some(5)))?;
+    if upstream.status != 200 || upstream.content_type != "application/json" {
+        return Err(response(503, "program_registry_unavailable", Some(5)));
+    }
+    let published: serde_json::Value = serde_json::from_slice(&upstream.body)
+        .map_err(|_| response(503, "program_registry_invalid", Some(5)))?;
+    if published["activity_id"] != activity_id
+        || published["receipt_digest"] != hex(&digest)
+        || published["state"] != "deployed"
+    {
+        return Err(response(503, "program_registry_invalid", Some(5)));
+    }
+    Ok(())
+}
+
 fn complete_lifecycle(
     config: &Config,
     record: &KeyRecord,
@@ -2035,6 +2081,16 @@ fn complete_lifecycle(
     let Some(protocol) = decoded.protocol() else {
         return response(502, "receipt_verification_failed", None);
     };
+    if protocol.result_code() == 0 {
+        if let Err(error) = publish_lifecycle(
+            config,
+            &operation.retained_signed_activity,
+            &operation.submitted_activity_id,
+            &receipt,
+        ) {
+            return error;
+        }
+    }
     let result = serde_json::json!({
         "activity_id": operation.submitted_activity_id, "receipt": hex(&receipt),
         "state": if protocol.result_code() == 0 { "completed" } else { "refused" },
@@ -3573,6 +3629,16 @@ fn complete_pending_lifecycle(
     result_code: i32,
     trace_id: &str,
 ) -> OutgoingResponse {
+    if result_code == 0 {
+        if let Err(error) = publish_lifecycle(
+            config,
+            &operation.continuation,
+            &operation.activity_id,
+            receipt,
+        ) {
+            return error;
+        }
+    }
     let result = serde_json::json!({
         "activity_id": operation.activity_id, "receipt": hex(receipt),
         "state": if result_code == 0 { "completed" } else { "refused" },

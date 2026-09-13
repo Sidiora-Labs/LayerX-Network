@@ -70,6 +70,7 @@ fn fixture() -> (Vec<u8>, BatchEvidence, SequencerAuthorization) {
         batch_identity: BatchIdentityEvidence::OccupancyMaintenanceV2 {
             receipt: maintenance,
             proof: encode_proof(&maintenance_proof),
+            activity_receipts: Vec::new(),
         },
     };
     let authorization = SequencerAuthorization::new(
@@ -153,7 +154,8 @@ fn native_proof(proof_bytes: &[u8]) -> Vec<u8> {
 #[test]
 fn replica_maintenance_document_is_explicit_and_closed() {
     let (bytes, evidence, authorization) = fixture();
-    let BatchIdentityEvidence::OccupancyMaintenanceV2 { receipt, proof } = &evidence.batch_identity
+    let BatchIdentityEvidence::OccupancyMaintenanceV2 { receipt, proof, .. } =
+        &evidence.batch_identity
     else {
         panic!("maintenance")
     };
@@ -182,7 +184,7 @@ fn replica_maintenance_document_is_explicit_and_closed() {
 }
 
 fn reseal(bytes: &[u8], evidence: &mut BatchEvidence) {
-    let BatchIdentityEvidence::OccupancyMaintenanceV2 { receipt, proof } =
+    let BatchIdentityEvidence::OccupancyMaintenanceV2 { receipt, proof, .. } =
         &mut evidence.batch_identity
     else {
         panic!("maintenance")

@@ -62,9 +62,13 @@ fn fixture_bytes(name: &str) -> Vec<u8> {
 }
 
 fn take<const N: usize>(input: &mut &[u8]) -> [u8; N] {
-    let (value, remaining) = input.split_at_checked(N).expect("native fixture field");
+    let (value, remaining) = input
+        .split_at_checked(N)
+        .unwrap_or_else(|| panic!("truncated native fixture field"));
     *input = remaining;
-    value.try_into().expect("exact native fixture field length")
+    value
+        .try_into()
+        .unwrap_or_else(|error| panic!("exact native fixture field length: {error:?}"))
 }
 
 fn stored_chunks(batch_number: u64, committed_root: [u8; 32]) -> Vec<Chunk> {
@@ -90,10 +94,14 @@ fn stored_chunks(batch_number: u64, committed_root: [u8; 32]) -> Vec<Chunk> {
         let class_offset = u64::from_be_bytes(take(&mut input));
         let length = u32::from_be_bytes(take(&mut input));
         let claimed_hash = take(&mut input);
-        let length = usize::try_from(length).expect("native chunk length");
-        let (bytes, remaining) = input.split_at_checked(length).expect("native chunk bytes");
+        let length = usize::try_from(length)
+            .unwrap_or_else(|error| panic!("native chunk length: {error:?}"));
+        let (bytes, remaining) = input
+            .split_at_checked(length)
+            .unwrap_or_else(|| panic!("truncated native chunk bytes"));
         input = remaining;
-        actual_total += u64::try_from(bytes.len()).expect("native chunk total");
+        actual_total += u64::try_from(bytes.len())
+            .unwrap_or_else(|error| panic!("native chunk total: {error:?}"));
         chunks.push(Chunk {
             batch_number,
             index,
@@ -110,16 +118,17 @@ fn stored_chunks(batch_number: u64, committed_root: [u8; 32]) -> Vec<Chunk> {
 
 fn build_archive(batch_number: u64, node_head: NodeHead) -> Archive {
     let header_bytes = fixture_bytes(&format!("{batch_number}.header"));
-    let header = decode_batch_header(&header_bytes).expect("native signed batch header");
+    let header = decode_batch_header(&header_bytes)
+        .unwrap_or_else(|error| panic!("native signed batch header: {error:?}"));
     assert_eq!(header.network_id(), NETWORK_ID);
     assert_eq!(header.batch_number(), batch_number);
     let trust = SignedHeaderTrust {
         sequencer_id: fixture_bytes("sequencer.id")
             .try_into()
-            .expect("native sequencer ID"),
+            .unwrap_or_else(|error| panic!("native sequencer ID: {error:?}")),
         sequencer_public_key: fixture_bytes("sequencer.public")
             .try_into()
-            .expect("native sequencer public key"),
+            .unwrap_or_else(|error| panic!("native sequencer public key: {error:?}")),
         first_batch_number: 1,
         last_batch_number: 6,
     };
@@ -132,11 +141,11 @@ fn build_archive(batch_number: u64, node_head: NodeHead) -> Archive {
             last_batch_number: trust.last_batch_number,
             header_signature: fixture_bytes(&format!("{batch_number}.signature"))
                 .try_into()
-                .expect("native batch signature"),
+                .unwrap_or_else(|error| panic!("native batch signature: {error:?}")),
         },
         &trust,
     )
-    .expect("authenticated native batch");
+    .unwrap_or_else(|error| panic!("authenticated native batch: {error:?}"));
     let chunks = stored_chunks(batch_number, header.data_availability_root());
     let hashes = chunks
         .iter()
@@ -146,11 +155,12 @@ fn build_archive(batch_number: u64, node_head: NodeHead) -> Archive {
         .into_iter()
         .enumerate()
         .map(|(index, chunk)| {
-            let (proof, computed_root) =
-                build_leaf_hash_proof(&hashes, index).expect("native availability inclusion proof");
+            let (proof, computed_root) = build_leaf_hash_proof(&hashes, index)
+                .unwrap_or_else(|error| panic!("native availability inclusion proof: {error:?}"));
             assert_eq!(computed_root, header.data_availability_root());
-            verify_chunk(chunk, &proof, batch_number, &computed_root)
-                .expect("authenticated native availability chunk")
+            verify_chunk(chunk, &proof, batch_number, &computed_root).unwrap_or_else(|error| {
+                panic!("authenticated native availability chunk: {error:?}")
+            })
         })
         .collect::<Vec<_>>();
     let roots = RootCommitments {
@@ -159,10 +169,13 @@ fn build_archive(batch_number: u64, node_head: NodeHead) -> Archive {
         event: header.event_merkle_root(),
         oracle: header.oracle_root(),
     };
-    let (records, _) = reassemble(&verified, roots).expect("canonical native record streams");
+    let (records, _) = reassemble(&verified, roots)
+        .unwrap_or_else(|error| panic!("canonical native record streams: {error:?}"));
     let availability =
         AvailabilityResult::from_verified("native-da-store".to_owned(), verified, records, roots)
-            .expect("complete authenticated native availability");
+            .unwrap_or_else(|error| {
+                panic!("complete authenticated native availability: {error:?}")
+            });
     Archive::from_node(&batch, &availability, None, node_head)
         .unwrap_or_else(|error| panic!("archive assembly failed: {error:?}"))
 }
