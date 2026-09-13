@@ -134,6 +134,7 @@ struct lxp_module_ctx {
     size_t staged_reserve;
     lx_account_registration staged_accounts[
         LXP_MODULE_MAX_STAGED_ACCOUNTS];
+    uint8_t staged_account_bindings[LXP_MODULE_MAX_STAGED_ACCOUNTS][32];
     size_t staged_account_count;
     lxp_module_account_snapshot transfer_snapshots[
         LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];

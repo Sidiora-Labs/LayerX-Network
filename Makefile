@@ -291,8 +291,20 @@ $(BUILD_DIR)/tests/lxp_test_kernel: tests/protocol/lxp_test_kernel.c \
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
-test-kernel: $(BUILD_DIR)/tests/lxp_test_kernel
+$(BUILD_DIR)/tests/lxp_test_module_custody: \
+		tests/daemon/lxp_test_module_custody.c \
+		tests/daemon/lxp_test_epoch_modules.h \
+		cmd/layerxd/lxp_daemon_modules.h $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-kernel: $(BUILD_DIR)/tests/lxp_test_kernel \
+		$(BUILD_DIR)/tests/lxp_test_module_custody
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_kernel
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_module_custody
 
 $(BUILD_DIR)/tests/lxp_test_module_ctx: \
 		tests/protocol/lxp_test_module_ctx.c $(LIBRARY) \

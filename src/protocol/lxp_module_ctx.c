@@ -51,6 +51,7 @@ struct lxp_prepared_module_transition {
     size_t staged_count;
     lx_account_registration staged_accounts[
         LXP_MODULE_MAX_STAGED_ACCOUNTS];
+    uint8_t staged_account_bindings[LXP_MODULE_MAX_STAGED_ACCOUNTS][32];
     size_t staged_account_count;
     lxp_prepared_account_change accounts[
         LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
@@ -121,11 +122,61 @@ lxp_result lxp_ctx_bind_asset_supply(lxp_module_ctx *ctx,
     return LXP_OK;
 }
 
+static lxp_result module_custody_binding(const lxp_module_ctx *ctx,
+                                         const lx_account *account, uint8_t digest[32])
+{
+    static const uint8_t domain[] = "LXP/module-custody-creation/v1";
+    lxp_hash_context hash;
+    uint8_t integers[20];
+    lxp_result status;
+    if (ctx == NULL || account == NULL || digest == NULL ||
+        ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        lxp_ct_is_zero(ctx->activity_id, 32U) || ctx->global_sequence == 0U ||
+        account->created_at_sequence != ctx->global_sequence ||
+        lx_account_validate_canonical(account) != LXP_OK ||
+        !account->has_asset || lxp_ct_is_zero(account->asset_id, 32U) ||
+        account->has_authority_key || !lxp_ct_is_zero(account->authority_key, 32U) ||
+        account->next_sequence != 0U || account->frozen || account->has_open_reference)
+        return LXP_FATAL_INVARIANT;
+    integers[0] = (uint8_t)(ctx->module_id >> 8U);
+    integers[1] = (uint8_t)ctx->module_id;
+    integers[2] = (uint8_t)((uint16_t)account->kind >> 8U);
+    integers[3] = (uint8_t)account->kind;
+    for (size_t i = 0U; i < 8U; ++i) {
+        integers[4U + i] = (uint8_t)(ctx->global_sequence >> (56U - i * 8U));
+        integers[12U + i] = (uint8_t)((uint64_t)account->name_length >> (56U - i * 8U));
+    }
+    lxp_hash_init(&hash);
+    status = lxp_hash_update(&hash, domain, sizeof(domain));
+    if (status == LXP_OK) status = lxp_hash_update(&hash, ctx->activity_id, 32U);
+    if (status == LXP_OK) status = lxp_hash_update(&hash, integers, sizeof(integers));
+    if (status == LXP_OK) status = lxp_hash_update(&hash, account->id, 32U);
+    if (status == LXP_OK) status = lxp_hash_update(&hash, account->asset_id, 32U);
+    if (status == LXP_OK) status = lxp_hash_update(&hash, account->name, account->name_length);
+    return status == LXP_OK ? lxp_hash_final(&hash, digest) : status;
+}
+
 static lxp_result commit_account(const lxp_module_ctx *ctx,
                                  lx_account_registry *registry,
                                  const lx_account_registration *registration,
                                  lx_account **account)
 {
+    if (registration->account.kind != LX_ACCOUNT_MODULE_VALUE &&
+        (ctx->module_id == LXP_MODULE_ESCROW || ctx->module_id == LXP_MODULE_BUDGET ||
+         ctx->module_id == LXP_MODULE_STREAM || ctx->module_id == LXP_MODULE_PERPS)) {
+        uint8_t binding[32];
+        size_t index;
+        if (ctx->staged_account_count > LXP_MODULE_MAX_STAGED_ACCOUNTS)
+            return LXP_FATAL_INVARIANT;
+        for (index = 0U; index < ctx->staged_account_count; ++index)
+            if (registration == &ctx->staged_accounts[index]) break;
+        if (index == ctx->staged_account_count ||
+            module_custody_binding(ctx, &registration->account, binding) != LXP_OK ||
+            memcmp(binding, ctx->staged_account_bindings[index], 32U) != 0)
+            return LXP_FATAL_INVARIANT;
+        return lx_account_module_custody_registration_commit(registry, registration,
+                                                              ctx->module_id, account);
+    }
     if (ctx->module_id == LXP_MODULE_BRIDGE &&
         registration->account.kind == LX_ACCOUNT_AGENT_MAIN)
         return lx_account_credit_registration_commit(registry, registration, account);
@@ -644,6 +695,9 @@ lxp_result lxp_ctx_account_stage_perps_market(lxp_module_ctx *ctx,
     status = lxp_state_journal_require_account_root(ctx->kernel->journal);
     if (status != LXP_OK) return status;
     registration.expected_count = ctx->kernel->state->accounts->count + ctx->staged_account_count;
+    status = module_custody_binding(ctx, candidate,
+                                     ctx->staged_account_bindings[ctx->staged_account_count]);
+    if (status != LXP_OK) return status;
     ctx->staged_accounts[ctx->staged_account_count++] = registration;
     return LXP_OK;
 }
@@ -729,6 +783,9 @@ lxp_result lxp_ctx_account_stage_module_custody(lxp_module_ctx *ctx,
     if (status == LXP_OK) status = lxp_state_journal_require_account_root(ctx->kernel->journal);
     if (status != LXP_OK) return status;
     registration.expected_count = ctx->kernel->state->accounts->count + ctx->staged_account_count;
+    status = module_custody_binding(ctx, candidate,
+                                     ctx->staged_account_bindings[ctx->staged_account_count]);
+    if (status != LXP_OK) return status;
     ctx->staged_accounts[ctx->staged_account_count] = registration;
     *account = &ctx->staged_accounts[ctx->staged_account_count++].account;
     return LXP_OK;
@@ -2070,6 +2127,8 @@ lxp_result lxp_module_ctx_export_prepared(
     result->staged_account_count = ctx->staged_account_count;
     (void)memcpy(result->staged_accounts, ctx->staged_accounts,
                  ctx->staged_account_count * sizeof(ctx->staged_accounts[0]));
+    (void)memcpy(result->staged_account_bindings, ctx->staged_account_bindings,
+                 ctx->staged_account_count * sizeof(ctx->staged_account_bindings[0]));
     for (i = 0U; i < ctx->transfer_snapshot_count; ++i) {
         const lxp_module_account_snapshot *snapshot =
             &ctx->transfer_snapshots[i];
@@ -2208,6 +2267,8 @@ lxp_result lxp_module_ctx_import_prepared(
     (void)memcpy(ctx->staged_accounts, prepared->staged_accounts,
                  prepared->staged_account_count *
                      sizeof(prepared->staged_accounts[0]));
+    (void)memcpy(ctx->staged_account_bindings, prepared->staged_account_bindings,
+                 prepared->staged_account_count * sizeof(prepared->staged_account_bindings[0]));
     for (i = 0U; i < ctx->staged_account_count; ++i)
         ctx->staged_accounts[i].expected_count =
             ctx->kernel->state->accounts->count + i;
