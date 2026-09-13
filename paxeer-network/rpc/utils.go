@@ -231,10 +231,14 @@ type indexedMsg struct {
 
 func transactionNonceUnconsumed(k *keeper.Keeper, ctxProvider func(int64) sdk.Context,
 	block *coretypes.ResultBlock, transaction *ethtypes.Transaction, decoder sdk.TxDecoder) (bool, error) {
-	if block == nil || block.Block == nil || block.Block.Height < 1 || transaction == nil {
+	if block == nil || block.Block == nil || transaction == nil {
 		return false, errors.New("cannot resolve transaction nonce without a committed block")
 	}
 	height := block.Block.Height
+	if height < 1 {
+		return false, errors.New("cannot resolve transaction nonce without a committed block")
+	}
+	canonicalHeight := uint64(height)
 	before, after := ctxProvider(height-1), ctxProvider(height)
 	if before.BlockHeight() != height-1 || after.BlockHeight() != height {
 		return false, fmt.Errorf("historical nonce contexts do not match block %d", height)
@@ -251,6 +255,10 @@ func transactionNonceUnconsumed(k *keeper.Keeper, ctxProvider func(int64) sdk.Co
 		return true, nil
 	}
 	for index, encoded := range block.Block.Txs {
+		if index < 0 {
+			return false, errors.New("canonical transaction index is negative")
+		}
+		canonicalIndex := uint64(index)
 		peer := getEthTxForTxBz(encoded, decoder)
 		if peer == nil {
 			continue
@@ -269,8 +277,8 @@ func transactionNonceUnconsumed(k *keeper.Keeper, ctxProvider func(int64) sdk.Co
 			continue
 		}
 		receipt, err := k.GetReceipt(ctxProvider(LatestCtxHeight), peer.Hash())
-		if err != nil || receipt == nil || receipt.BlockNumber != uint64(height) ||
-			uint64(receipt.TransactionIndex) != uint64(index) || receipt.TxHashHex != peer.Hash().Hex() {
+		if err != nil || receipt == nil || receipt.BlockNumber != canonicalHeight ||
+			uint64(receipt.TransactionIndex) != canonicalIndex || receipt.TxHashHex != peer.Hash().Hex() {
 			continue
 		}
 		return true, nil
