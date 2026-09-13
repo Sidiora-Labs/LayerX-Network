@@ -645,9 +645,10 @@ static int metered_session_issue(int descriptor, const signer *owner, metered_ru
 static int metered_session_read(int descriptor, const uint8_t id[32],
     lxp_authority_grant *grant, uint8_t successor[32], uint8_t commitment[32])
 {
-    uint8_t request[34], computed[32];
+    uint8_t request[34], computed[32], expected_id[32];
     wire_envelope response;
-    store_u16(request, 1U); (void)memcpy(request + 2U, id, 32U);
+    (void)memcpy(expected_id, id, sizeof(expected_id));
+    store_u16(request, 1U); (void)memcpy(request + 2U, expected_id, 32U);
     REQUIRE(send_request(descriptor, LNI_MINOR, 36U, 632U, request, sizeof(request)) == 0);
     REQUIRE(receive_envelope(descriptor, &response) == 0);
     REQUIRE(response.tag == 37U && response.correlation_id == 632U && response.payload_length >= 188U);
@@ -655,15 +656,15 @@ static int metered_session_read(int descriptor, const uint8_t id[32],
     size_t length = load_u16(response.payload + 42U);
     REQUIRE(length <= 1024U && response.payload_length == 44U + length + 144U);
     REQUIRE(lxp_grant_decode(response.payload + 44U, length, grant) == LXP_OK);
-    REQUIRE(lxp_grant_id_compute(grant, computed) == LXP_OK && memcmp(computed, id, 32U) == 0);
-    (void)memcpy(grant->grant_id, id, 32U);
+    REQUIRE(lxp_grant_id_compute(grant, computed) == LXP_OK && memcmp(computed, expected_id, 32U) == 0);
+    (void)memcpy(grant->grant_id, expected_id, 32U);
     const uint8_t *facts = response.payload + 44U + length;
     grant->revoked_at_sequence = load_u64(facts);
     grant->revoked = grant->revoked_at_sequence != 0U;
     REQUIRE(grant->revoked_at_sequence <= load_u64(response.payload + 2U));
     if (grant->fee_budget.present) {
         lxp_authority_scope counters = {0};
-        REQUIRE(lxp_authority_charge_record_decode(facts + 8U, 72U, id, &counters) == LXP_OK);
+        REQUIRE(lxp_authority_charge_record_decode(facts + 8U, 72U, expected_id, &counters) == LXP_OK);
         grant->fee_budget.spent_total = counters.spent_total;
         grant->fee_budget.spent_this_period = counters.spent_this_period;
         grant->fee_budget.period_start = counters.period_start;
