@@ -1250,16 +1250,11 @@ fn owner_fee_grants_bind_every_disclosed_budget_field_across_provider_restart() 
 
 #[test]
 fn session_registration_and_replacement_disclosures_survive_provider_restart() -> Result<()> {
-    use layerx_crypto::authority_grant::NativeFeeBudget;
     use layerx_crypto::disclosure::bind;
-    use layerx_crypto::local::LocalSigner;
-    use layerx_crypto::session::{issue_session_key, SessionKeyRequest, SessionPurpose};
-    use layerx_crypto::signer::Signer as _;
-    use layerx_types::payload::{ActivityType, ModuleId};
     let mut host = Host::new()?;
     let binding = [74; 32];
     let (handle, public) = facts(&host.call(&request(1, binding, &[], None)?)?)?;
-    let issuer = checked(layerx_intents::canonical::did_id_for_protocol(
+    let grantor = checked(layerx_intents::canonical::did_id_for_protocol(
         &checked(layerx_types::ids::Did::new(b"did:layerx:alice"))?,
         3,
     ))?;
@@ -1269,31 +1264,7 @@ fn session_registration_and_replacement_disclosures_survive_provider_restart() -
             host.start()?;
         }
         for version in 1..=4 {
-            let issued = checked(issue_session_key(&SessionKeyRequest {
-                grantor: issuer,
-                session_public_key: LocalSigner::new([0x67; 32]).public_key(),
-                not_before: 1000,
-                expires_at: Some(3_601_000),
-                revocation_sequence: Some(3),
-                permitted_activity_types: if version == 3 {
-                    vec![]
-                } else {
-                    vec![checked(ActivityType::new(ModuleId::Asset, 5))?]
-                },
-                fee_budget: matches!(version, 2 | 4).then_some(NativeFeeBudget {
-                    asset: [3; 32],
-                    maximum_per_activity: 4,
-                    maximum_total: 12,
-                    period_length: 60_000,
-                    maximum_per_period: 8,
-                    period_start: 1000,
-                }),
-                purpose: if version == 3 {
-                    SessionPurpose::Authentication
-                } else {
-                    SessionPurpose::Activity
-                },
-            }))?;
+            let issued = session_disclosure_grant(version, grantor)?;
             let mut grant = checked(layerx_intents::SessionGrant::new(
                 issued.registration_payload,
                 9000,
@@ -1357,4 +1328,40 @@ fn session_registration_and_replacement_disclosures_survive_provider_restart() -
         }
     }
     Ok(())
+}
+
+fn session_disclosure_grant(
+    version: u8,
+    grantor: [u8; 32],
+) -> Result<layerx_crypto::session::IssuedSessionKey> {
+    use layerx_crypto::authority_grant::NativeFeeBudget;
+    use layerx_crypto::local::LocalSigner;
+    use layerx_crypto::session::{issue_session_key, SessionKeyRequest, SessionPurpose};
+    use layerx_crypto::signer::Signer as _;
+    use layerx_types::payload::{ActivityType, ModuleId};
+    checked(issue_session_key(&SessionKeyRequest {
+        grantor,
+        session_public_key: LocalSigner::new([0x67; 32]).public_key(),
+        not_before: 1000,
+        expires_at: Some(3_601_000),
+        revocation_sequence: Some(3),
+        permitted_activity_types: if version == 3 {
+            vec![]
+        } else {
+            vec![checked(ActivityType::new(ModuleId::Asset, 5))?]
+        },
+        fee_budget: matches!(version, 2 | 4).then_some(NativeFeeBudget {
+            asset: [3; 32],
+            maximum_per_activity: 4,
+            maximum_total: 12,
+            period_length: 60_000,
+            maximum_per_period: 8,
+            period_start: 1000,
+        }),
+        purpose: if version == 3 {
+            SessionPurpose::Authentication
+        } else {
+            SessionPurpose::Activity
+        },
+    }))
 }
