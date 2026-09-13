@@ -1,7 +1,6 @@
 use super::*;
 
 pub struct Runtime {
-    core_port: u16,
     payment_port: u16,
     program_port: u16,
     webhook_port: u16,
@@ -16,13 +15,11 @@ struct Context<'a> {
     authority: &'a LocalAuthority,
     redis: &'a LocalRedis,
     gateway: &'a Gateway,
-    core_port: u16,
 }
 
 impl Runtime {
-    pub fn prepare(cluster: &Cluster, boundary: &Boundary) -> Self {
+    pub fn prepare(cluster: &Cluster) -> Self {
         Self {
-            core_port: boundary.core.port,
             payment_port: free_port(),
             program_port: free_port(),
             webhook_port: free_port(),
@@ -91,7 +88,6 @@ impl Runtime {
             authority,
             redis,
             gateway,
-            core_port: self.core_port,
         };
         let key = local_secret(&cluster.root, "event-api-key", &event_key(&context));
         let credentials = local_secret(
@@ -339,10 +335,13 @@ fn start_webhooks(
             "IDENTITY_TOKEN_FILE",
             text(&context.identity.tokens.join("webhooks")),
         ),
-        ("COMPONENT_URL", origin(context.core_port)),
+        (
+            "COMPONENT_URL",
+            context.gateway.environment["LAYERX_GATEWAY_COMPONENT_URL"].clone(),
+        ),
         (
             "COMPONENT_TOKEN_FILE",
-            text(&context.cluster.root.join("component-token")),
+            text(&context.cluster.root.join("registry-boundary-webhook-token")),
         ),
         ("AUTHORITY_URL", origin(context.authority.port)),
         ("AUTHORITY_TOKEN_FILE", context.authority.token_file.clone()),
