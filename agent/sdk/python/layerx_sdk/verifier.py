@@ -337,6 +337,7 @@ class ProtocolReceipt:
     timestamp: int
     program_outcome: ProgramReceiptOutcome | None
     sequencer_signature: bytes
+    total_units: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -741,7 +742,8 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
         _receipt_failure(ReceiptFailureCode.RECEIPT_SHAPE)
     decoder = _Decoder(canonical_receipt)
     envelope_version = decoder.u16()
-    if envelope_version not in (1, 2, 3) or decoder.u16() != 0x5201:
+    structure_tag = decoder.u16()
+    if envelope_version not in (1, 2, 3) or structure_tag not in (0x5201, 0x5202):
         _receipt_failure(ReceiptFailureCode.DECODE)
     protocol_version = decoder.u16()
     if protocol_version != envelope_version:
@@ -794,6 +796,21 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
     authorization_hash = decoder.bounded(32)
     context_hash = decoder.bounded(32)
     timestamp = decoder.u64()
+    total_units = None
+    if structure_tag == 0x5202:
+        before, after = decoder.u128(), decoder.u128()
+        expected = None
+        if operation == 1 and before == 0:
+            expected = 0
+        elif 2 <= operation <= 8:
+            expected = before
+        elif operation == 10 and amount > 0 and before <= _MAX_U128 - amount:
+            expected = before + amount
+        elif operation == 11 and amount > 0 and before >= amount:
+            expected = before - amount
+        if module_id != 1 or result_code != 0 or _all_zero(asset) or expected != after:
+            _receipt_failure(ReceiptFailureCode.DECODE)
+        total_units = (before, after)
     if global_sequence == 0:
         _receipt_failure(ReceiptFailureCode.GLOBAL_SEQUENCE)
     if module_id == 0:
@@ -860,6 +877,7 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
             timestamp=timestamp,
             program_outcome=program_outcome,
             sequencer_signature=sequencer_signature,
+            total_units=total_units,
         ),
         canonical_receipt[:signature_flag_offset] + b"\0",
     )
