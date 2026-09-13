@@ -66,7 +66,11 @@ pub fn configure_component(
     gateway_environment: &mut BTreeMap<&'static str, String>,
 ) -> (u16, String, Daemon) {
     let port = free_port();
-    let gateway_token = local_secret(&cluster.root, "boundary-gateway-token", &token());
+    let gateway_token = local_secret(
+        &cluster.root,
+        "boundary-gateway-token",
+        &cluster.program_token,
+    );
     let registry_token = local_secret(&cluster.root, "registry-boundary-token", &token());
     gateway_environment.insert(
         "LAYERX_GATEWAY_COMPONENT_URL",
