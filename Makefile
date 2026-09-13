@@ -2092,8 +2092,8 @@ human-test-webhooks:
 
 .PHONY: human-test-hosted-provisioning
 human-test-hosted-provisioning:
-	@python3 -c 'import cryptography, pytest, yaml' || \
-		{ echo "pytest, PyYAML and cryptography are required for the hosted Human provisioning tests" >&2; exit 1; }
+	@python3 -c 'import cryptography, pytest, yaml; from Crypto.Hash import keccak' || \
+		{ echo "pytest, PyYAML, cryptography and pycryptodome are required for the hosted Human provisioning tests" >&2; exit 1; }
 	$(HUMAN_CARGO) build --manifest-path $(HUMAN_MANIFEST) --locked \
 		--target-dir $(HUMAN_TARGET_DIR) -p layerx-human-identity-provider
 	test -x $(HUMAN_IDENTITY_PROVIDER)
