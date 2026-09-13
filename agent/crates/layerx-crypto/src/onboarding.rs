@@ -75,7 +75,7 @@ impl OnboardingConsent {
         let mut reader = Decoder::new(&payload[4..], 1024);
         let sponsor = reader.fixed(32).map_err(encoding)?.try_into().map_err(|_| OnboardingError::Encoding)?;
         let native_asset = reader.fixed(32).map_err(encoding)?.try_into().map_err(|_| OnboardingError::Encoding)?;
-        let account = reader.fixed(32).map_err(encoding)?.try_into().map_err(|_| OnboardingError::Encoding)?;
+        let account: [u8; 32] = reader.fixed(32).map_err(encoding)?.try_into().map_err(|_| OnboardingError::Encoding)?;
         let action_key = reader.fixed(32).map_err(encoding)?.try_into().map_err(|_| OnboardingError::Encoding)?;
         let expires_at = reader.u64().map_err(encoding)?;
         reader.finish().map_err(encoding)?;
