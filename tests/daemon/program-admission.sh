@@ -142,7 +142,15 @@ if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
     mkdir "$work/scenario"
     chown 4021:4021 "$work/scenario"
     scenario_state="$work/scenario"
-    if [[ ${2:-} == --metered-allowance ]]; then scenario_state="$work/scenario/state"; fi
+    if [[ ${2:-} == --metered-allowance ]]; then
+        scenario_state="$work/scenario/state"
+        install -m 0600 -o 4021 -g 4021 "$work/data/secrets/program-token" "$work/scenario/program-token"
+        export LAYERX_TEST_METERED_PROGRAM_PORT="$program_port"
+        export LAYERX_TEST_METERED_PROGRAM_TOKEN_FILE="$work/scenario/program-token"
+        export LAYERX_TEST_METERED_ARTIFACT_SCRIPT="$work/metered-artifacts.py"
+        cp "$root/tests/daemon/metered-artifacts.py" "$LAYERX_TEST_METERED_ARTIFACT_SCRIPT"
+        chmod 0644 "$LAYERX_TEST_METERED_ARTIFACT_SCRIPT"
+    fi
 elif [[ ${2:-} == --grant-issuance ]]; then
     cp "$build_dir/tests/lxp_test_grant_issuance" "$work/client"
     mkdir "$work/grants"

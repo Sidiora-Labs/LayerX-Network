@@ -5,6 +5,7 @@ int program_admission_client_main(int argc, char **argv);
 #include "layerx/lxp_authority.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_merkle.h"
+#include <sys/wait.h>
 
 enum { METERED_RECEIPTS = 16 };
 
@@ -23,6 +24,64 @@ static const uint8_t metered_asset[32] = {
 };
 static const uint8_t metered_program[32] = {0x49U};
 static const char *metered_state_path;
+static int metered_transfer(const lxp_receipt *receipt, lxp_result expected);
+
+static int metered_artifacts(lxp_receipt *receipt)
+{
+    const char *port = getenv("LAYERX_TEST_METERED_PROGRAM_PORT");
+    const char *token = getenv("LAYERX_TEST_METERED_PROGRAM_TOKEN_FILE");
+    const char *script = getenv("LAYERX_TEST_METERED_ARTIFACT_SCRIPT");
+    const char *python = getenv("LAYERX_TEST_PYTHON");
+    uint8_t digest[32], arena_bytes[2U * LXP_MAX_ACTIVITY_BYTES];
+    uint8_t artifacts[2U * LXP_MAX_ACTIVITY_BYTES + 8U];
+    char activity_hex[65], digest_hex[65];
+    static const char digits[] = "0123456789abcdef";
+    lxp_arena arena;
+    int pipes[2], child_status;
+    size_t length = 0U;
+    REQUIRE(port != NULL && token != NULL && script != NULL && python != NULL);
+    REQUIRE(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
+    REQUIRE(lxp_receipt_digest(receipt, &arena, digest) == LXP_OK);
+    for (size_t i = 0U; i < 32U; ++i) {
+        activity_hex[2U * i] = digits[receipt->activity_id[i] >> 4U];
+        activity_hex[2U * i + 1U] = digits[receipt->activity_id[i] & 15U];
+        digest_hex[2U * i] = digits[digest[i] >> 4U];
+        digest_hex[2U * i + 1U] = digits[digest[i] & 15U];
+    }
+    activity_hex[64] = '\0'; digest_hex[64] = '\0';
+    REQUIRE(pipe(pipes) == 0);
+    pid_t child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        if (close(pipes[0]) != 0 || dup2(pipes[1], STDOUT_FILENO) != STDOUT_FILENO ||
+            close(pipes[1]) != 0) _exit(125);
+        execl(python, python, script, port, token, activity_hex, digest_hex, (char *)NULL);
+        _exit(126);
+    }
+    REQUIRE(close(pipes[1]) == 0);
+    for (;;) {
+        REQUIRE(length < sizeof(artifacts));
+        ssize_t count = read(pipes[0], artifacts + length, sizeof(artifacts) - length);
+        if (count < 0 && errno == EINTR) continue;
+        REQUIRE(count >= 0);
+        if (count == 0) break;
+        length += (size_t)count;
+    }
+    REQUIRE(close(pipes[0]) == 0 && waitpid(child, &child_status, 0) == child);
+    REQUIRE(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0);
+    REQUIRE(length >= 8U);
+    size_t terminal_length = load_u32(artifacts);
+    REQUIRE(terminal_length <= length - 8U);
+    size_t graph_length = load_u32(artifacts + 4U + terminal_length);
+    REQUIRE(graph_length == length - terminal_length - 8U);
+    REQUIRE(lxp_receipt_bind_program_artifacts(receipt,
+        (lxp_byte_span){artifacts + 4U, terminal_length},
+        (lxp_byte_span){artifacts + 8U + terminal_length, graph_length}) == LXP_OK);
+    REQUIRE(metered_transfer(receipt, receipt->result_code) == 0);
+    receipt->program_outcome.terminal_payload = (lxp_byte_span){NULL, 0U};
+    receipt->program_outcome.call_graph_payload = (lxp_byte_span){NULL, 0U};
+    return 0;
+}
 
 static int metered_simulation_evidence(const wire_envelope *response, bool refused)
 {
@@ -187,7 +246,7 @@ static int metered_receipt(int descriptor, const uint8_t id[32],
                 REQUIRE(receipt->program_outcome.result_code == expected);
                 REQUIRE(receipt->program_outcome.terminal_kind ==
                     (expected == LXP_OK ? LXP_PROGRAM_TERMINAL_SUCCESS : LXP_PROGRAM_TERMINAL_FAILURE));
-                REQUIRE(metered_transfer(receipt, expected) == 0);
+                REQUIRE(metered_artifacts(receipt) == 0);
             }
             release_envelope(&response);
             return 0;
@@ -416,35 +475,61 @@ static int metered_simulate(int descriptor, const signer *delegate, metered_run 
         (void)fprintf(stderr, "metered simulation receipt result=%d terminal=%u outcome=%d\n",
                       receipt.result_code, (unsigned)receipt.program_outcome.terminal_kind,
                       receipt.program_outcome.result_code);
-    if (expected == LXP_OK) {
-        REQUIRE(receipt.result_code == LXP_OK && receipt.program_outcome.present &&
-                receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS);
-        REQUIRE(metered_transfer(&receipt, LXP_OK) == 0);
-    } else {
-        REQUIRE(expected == LXP_ERR_NON_CANONICAL && receipt.result_code == expected &&
-                receipt.program_outcome.present &&
-                receipt.program_outcome.result_code == expected &&
-                receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_FAILURE &&
-                receipt.program_outcome.terminal_payload.length == 0U &&
-                receipt.program_outcome.call_graph_payload.length == 0U);
-    }
     REQUIRE(memcmp(receipt.activity_id, id, 32U) == 0);
     size_t cursor = 38U + receipt_length;
     uint32_t terminal_length = load_u32(response.payload + cursor);
     cursor += 4U;
     REQUIRE(terminal_length <= response.payload_length - cursor - 4U);
-    REQUIRE(terminal_length == receipt.program_outcome.terminal_payload.length);
-    if (terminal_length != 0U)
-        REQUIRE(memcmp(response.payload + cursor,
-                       receipt.program_outcome.terminal_payload.bytes, terminal_length) == 0);
+    lxp_byte_span terminal = {response.payload + cursor, terminal_length};
     cursor += terminal_length;
     uint32_t graph_length = load_u32(response.payload + cursor);
     cursor += 4U;
-    REQUIRE(graph_length == response.payload_length - cursor &&
-            graph_length == receipt.program_outcome.call_graph_payload.length);
-    if (graph_length != 0U)
-        REQUIRE(memcmp(response.payload + cursor,
-                       receipt.program_outcome.call_graph_payload.bytes, graph_length) == 0);
+    REQUIRE(graph_length == response.payload_length - cursor);
+    lxp_byte_span graph = {response.payload + cursor, graph_length};
+    REQUIRE(lxp_receipt_bind_program_artifacts(&receipt, terminal, graph) == LXP_OK);
+    if (expected == LXP_OK) {
+        REQUIRE(receipt.result_code == LXP_OK && receipt.program_outcome.present &&
+                receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS);
+        REQUIRE(metered_transfer(&receipt, LXP_OK) == 0);
+    } else {
+        static const uint8_t failure_domain[] = "LXP/programs/pre-runtime-failure/v1";
+        static const uint8_t empty_graph[] = "LXP/programs/empty-call-graph/v1";
+        size_t hash_domain_length = 0U;
+        const uint8_t *hash_domain = lxp_domain_tag(LXP_DOMAIN_CONTEXT_HASH, &hash_domain_length);
+        uint8_t expected_terminal[256], expected_graph[128], payload_hash[32], empty_digest[32];
+        size_t offset = 0U;
+        lxp_activity original;
+        REQUIRE(expected == LXP_ERR_NON_CANONICAL && receipt.result_code == expected &&
+                receipt.program_outcome.present &&
+                receipt.program_outcome.result_code == expected &&
+                receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_FAILURE);
+        REQUIRE(lxp_activity_decode(encoded, length, &original) == LXP_OK);
+        REQUIRE(receipt.protocol_version == original.protocol_version && receipt.protocol_version == 3U &&
+                receipt.module_id == LXP_MODULE_PROGRAMS && original.network_id == 77U);
+        REQUIRE(lxp_hash_payload(payload, payload_length, payload_hash) == LXP_OK);
+        REQUIRE(memcmp(original.payload_hash, payload_hash, 32U) == 0);
+        REQUIRE(hash_domain != NULL && hash_domain_length + sizeof(failure_domain) + 109U <= sizeof(expected_terminal));
+        (void)memcpy(expected_terminal, hash_domain, hash_domain_length); offset += hash_domain_length;
+        (void)memcpy(expected_terminal + offset, failure_domain, sizeof(failure_domain)); offset += sizeof(failure_domain);
+        (void)memcpy(expected_terminal + offset, id, 32U); offset += 32U;
+        (void)memcpy(expected_terminal + offset, payload_hash, 32U); offset += 32U;
+        store_u32(expected_terminal + offset, (uint32_t)expected); offset += 4U;
+        store_u32(expected_terminal + offset, receipt.module_version); offset += 4U;
+        store_u32(expected_terminal + offset, receipt.parameter_version); offset += 4U;
+        expected_terminal[offset++] = 4U;
+        REQUIRE(lxp_hash_sha256("", 0U, empty_digest) == LXP_OK);
+        (void)memcpy(expected_terminal + offset, empty_digest, 32U); offset += 32U;
+        REQUIRE(terminal.length == offset && memcmp(terminal.bytes, expected_terminal, offset) == 0);
+        REQUIRE(hash_domain_length + sizeof(empty_graph) <= sizeof(expected_graph));
+        (void)memcpy(expected_graph, hash_domain, hash_domain_length);
+        (void)memcpy(expected_graph + hash_domain_length, empty_graph, sizeof(empty_graph));
+        REQUIRE(graph.length == hash_domain_length + sizeof(empty_graph) &&
+                memcmp(graph.bytes, expected_graph, graph.length) == 0);
+        REQUIRE(receipt.program_outcome.encoding_version == 4U &&
+                receipt.program_outcome.abi_version == load_u16(payload + 32U) &&
+                lxp_ct_is_zero(receipt.program_outcome.transfer_root, 32U) &&
+                memcmp(receipt.program_outcome.applied_legs_digest, empty_digest, 32U) == 0);
+    }
     REQUIRE(memcmp(response.proof + 146U, sequencer.public_key, 32U) == 0);
     REQUIRE(memcmp(response.proof + 66U, receipt.previous_state_root, 32U) == 0 &&
             memcmp(response.proof + 66U, run->root, 32U) == 0 &&
