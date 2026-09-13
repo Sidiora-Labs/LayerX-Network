@@ -195,63 +195,69 @@ fn independent_implementation_can_enumerate_vectors() {
 }
 
 #[test]
-fn independent_verifier_accepts_real_native_send_and_refuses_substitutions() {
+fn independent_verifier_accepts_real_native_send_and_refuses_substitutions() -> Result<(), String> {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine as _;
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../platform/sdk/conformance/fixtures/receipt-positive-v2.json"
     ))
-    .expect("native fixture");
-    let decode = |value: &str| -> Vec<u8> {
+    .map_err(|error| format!("native fixture: {error}"))?;
+    let decode = |value: &str| -> Result<Vec<u8>, String> {
         assert_eq!(value.len() % 2, 0);
         (0..value.len())
             .step_by(2)
-            .map(|index| u8::from_str_radix(&value[index..index + 2], 16).expect("hex"))
+            .map(|index| {
+                u8::from_str_radix(&value[index..index + 2], 16)
+                    .map_err(|error| format!("hex: {error}"))
+            })
             .collect()
     };
-    let field = |name: &str| -> [u8; 32] {
+    let field = |name: &str| -> Result<[u8; 32], String> {
         decode(
             fixture["authorized_batch"][name]
                 .as_str()
-                .expect("authority field"),
-        )
+                .ok_or("authority field")?,
+        )?
         .try_into()
-        .expect("32 bytes")
+        .map_err(|_| "authority must be 32 bytes".into())
     };
     let trusted = AuthorizedBatch::new(
-        field("batch_id_hex"),
-        field("asset_hex"),
-        field("previous_state_root_hex"),
-        field("resulting_state_root_hex"),
-        field("sequencer_public_key_hex"),
+        field("batch_id_hex")?,
+        field("asset_hex")?,
+        field("previous_state_root_hex")?,
+        field("resulting_state_root_hex")?,
+        field("sequencer_public_key_hex")?,
     );
     let canonical = decode(
         fixture["canonical_receipt_hex"]
             .as_str()
-            .expect("native receipt"),
-    );
-    let portable = PortableReceipt::export(&canonical, &trusted).expect("export native receipt");
-    let bytes = portable.to_json().expect("portable encoding");
+            .ok_or("native receipt")?,
+    )?;
+    let portable = PortableReceipt::export(&canonical, &trusted)
+        .map_err(|error| format!("native receipt: {error}"))?;
+    let bytes = portable
+        .to_json()
+        .map_err(|error| format!("portable encoding: {error}"))?;
     let verifier = IndependentVerifier::new("independent-native-receipt");
     let outcome = verifier
         .verify_vector_against_trusted_batch(
-            std::str::from_utf8(&bytes).expect("JSON UTF-8"),
+            std::str::from_utf8(&bytes).map_err(|error| format!("JSON UTF-8: {error}"))?,
             &trusted,
         )
-        .expect("independent verification");
+        .map_err(|error| format!("independent verification: {error:?}"))?;
     assert_eq!(
         outcome.receipt_digest.to_vec(),
         decode(
             fixture["expected"]["receipt_digest_hex"]
                 .as_str()
-                .expect("receipt digest")
-        )
+                .ok_or("receipt digest")?
+        )?
     );
     for index in [0, canonical.len() / 2, canonical.len() - 1] {
         let mut altered = canonical.clone();
         altered[index] ^= 1;
         let mut document: serde_json::Value =
-            serde_json::from_slice(&bytes).expect("portable JSON");
+            serde_json::from_slice(&bytes).map_err(|error| format!("portable JSON: {error}"))?;
         document["canonicalReceipt"] = serde_json::json!(URL_SAFE_NO_PAD.encode(altered));
         assert!(verifier
             .verify_vector_against_trusted_batch(&document.to_string(), &trusted)
@@ -266,10 +272,11 @@ fn independent_verifier_accepts_real_native_send_and_refuses_substitutions() {
         "sequencerPublicKey",
     ] {
         let mut document: serde_json::Value =
-            serde_json::from_slice(&bytes).expect("portable JSON");
+            serde_json::from_slice(&bytes).map_err(|error| format!("portable JSON: {error}"))?;
         document[name] = serde_json::json!(URL_SAFE_NO_PAD.encode([0x91; 32]));
         assert!(verifier
             .verify_vector_against_trusted_batch(&document.to_string(), &trusted)
             .is_err());
     }
+    Ok(())
 }

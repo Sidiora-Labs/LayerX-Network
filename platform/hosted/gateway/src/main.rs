@@ -1828,7 +1828,7 @@ fn reserve_activity(
             {
                 return Err(response(409, "idempotency_conflict", None));
             }
-            if state == "completed" {
+            if matches!(state.as_str(), "completed" | "refused") {
                 let limit = if operation.program_mutation {
                     MAX_REQUEST
                 } else {
@@ -2071,6 +2071,14 @@ fn complete_lifecycle(
     )
 }
 
+fn terminal_state(result_code: i32) -> &'static str {
+    if result_code == 0 {
+        "completed"
+    } else {
+        "refused"
+    }
+}
+
 fn complete_activity(
     config: &Config,
     record: &KeyRecord,
@@ -2155,7 +2163,7 @@ fn complete_activity(
         .complete_verified(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.request_digest,
-            state: "completed",
+            state: terminal_state(verified_result_code),
             response_hex: &hex(&stored_result),
             receipt_hex: &hex(&receipt),
             activity_id: Some(&component.activity_id.to_ascii_lowercase()),
@@ -2388,7 +2396,7 @@ fn resolve_pending_program(
         Ok(value) => value,
         Err(error) => return error,
     };
-    let (verified, receipt, _) = match verified_program_result(
+    let (verified, receipt, result_code) = match verified_program_result(
         config,
         &component.activity_id,
         &component.receipt,
@@ -2399,7 +2407,15 @@ fn resolve_pending_program(
         Ok(value) => value,
         Err(error) => return error,
     };
-    complete_pending_program(config, record, operation, &verified, &receipt, trace_id)
+    complete_pending_program(
+        config,
+        record,
+        operation,
+        &verified,
+        &receipt,
+        result_code,
+        trace_id,
+    )
 }
 
 fn read_route(
@@ -3231,7 +3247,7 @@ fn read_program_receipt(
     if operation.state == "pending" {
         return resolve_pending_program(config, record, &operation, trace_id);
     }
-    if operation.state != "completed" {
+    if !matches!(operation.state.as_str(), "completed" | "refused") {
         return response(409, "program_call_refused", None);
     }
     let Ok(body) = decode_hex(&operation.response, MAX_REQUEST) else {
@@ -3291,7 +3307,7 @@ fn read_program_activity(
     if operation.state == "pending" {
         return resolve_pending_program(config, record, &operation, trace_id);
     }
-    if operation.state != "completed" {
+    if !matches!(operation.state.as_str(), "completed" | "refused") {
         return response(409, "program_call_refused", None);
     }
     let Ok(body) = decode_hex(&operation.response, MAX_REQUEST) else {
@@ -3567,7 +3583,11 @@ fn complete_pending_lifecycle(
         .complete(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.digest,
-            state: "completed",
+            state: if result_code == 0 {
+                "completed"
+            } else {
+                "refused"
+            },
             response_hex: &hex(result.to_string().as_bytes()),
             receipt_hex: &hex(receipt),
             activity_id: Some(&operation.activity_id),
@@ -3595,6 +3615,7 @@ fn complete_pending_program(
     operation: &OperationRecord,
     verified: &[u8],
     receipt: &[u8],
+    result_code: i32,
     trace_id: &str,
 ) -> OutgoingResponse {
     let mut result: serde_json::Value = match serde_json::from_slice(verified) {
@@ -3615,7 +3636,11 @@ fn complete_pending_program(
         .complete(Completion {
             idempotency_scope: &operation.scope,
             request_digest: &operation.digest,
-            state: "completed",
+            state: if result_code == 0 {
+                "completed"
+            } else {
+                "refused"
+            },
             response_hex: &hex(&stored_result),
             receipt_hex: &hex(receipt),
             activity_id: Some(&operation.activity_id),

@@ -9,15 +9,17 @@ def open_directory(path, create=False):
     absolute = os.path.abspath(path)
     if absolute == os.path.sep:
         raise ValueError("data directory must not be the filesystem root")
-    descriptor = os.open(os.path.sep, os.O_RDONLY | os.O_DIRECTORY)
+    descriptor = os.open(os.path.sep, os.O_PATH | os.O_DIRECTORY)
     try:
-        for component in absolute.split(os.path.sep)[1:]:
+        components = absolute.split(os.path.sep)[1:]
+        for index, component in enumerate(components):
             if create:
                 try:
                     os.mkdir(component, mode=0o700, dir_fd=descriptor)
                 except FileExistsError:
                     pass
-            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            access = os.O_RDONLY if index == len(components) - 1 else os.O_PATH
+            child = os.open(component, access | os.O_DIRECTORY | os.O_NOFOLLOW,
                             dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child

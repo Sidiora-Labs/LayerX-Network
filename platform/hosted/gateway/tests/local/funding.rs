@@ -204,8 +204,12 @@ fn producer(script: &str, args: &[&str]) {
 }
 
 pub(super) fn start() -> (Cluster, Funding) {
-    let root =
-        std::env::temp_dir().join(format!("pay4-funding-{}-{}", std::process::id(), now_ms()));
+    let root = std::env::temp_dir().join(format!(
+        "pay4-funding-{}-{}-{}",
+        std::process::id(),
+        now_ms(),
+        NEXT_CLUSTER.fetch_add(1, Ordering::Relaxed),
+    ));
     make_dir(&root, 0o700);
     let recipient_seed = random32();
     let recipient_did = treasury_did(&recipient_seed);

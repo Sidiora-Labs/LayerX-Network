@@ -512,8 +512,12 @@ fn verify_authorized_receipt(
         if protocol.program_outcome().is_some() {
             return Err(EvidenceRefusal::Receipt(ReceiptCheck::ReceiptShape));
         }
-        verify_program_state(receipt_bytes, authorised)
-            .map_err(|failure| EvidenceRefusal::Receipt(failure.check))?;
+        if protocol.result_code() == 0 {
+            verify_program_state(receipt_bytes, authorised)
+        } else {
+            verify_outcome(receipt_bytes, authorised)
+        }
+        .map_err(|failure| EvidenceRefusal::Receipt(failure.check))?;
     } else {
         verify_outcome(receipt_bytes, authorised)
             .map_err(|failure| EvidenceRefusal::Receipt(failure.check))?;
@@ -553,7 +557,11 @@ fn verify_maintained_receipt(
         if protocol.program_outcome().is_some() {
             return Err(EvidenceRefusal::Receipt(ReceiptCheck::ReceiptShape));
         }
-        verify_program_state_maintained(receipt_bytes, authorised, evidence)
+        if protocol.result_code() == 0 {
+            verify_program_state_maintained(receipt_bytes, authorised, evidence)
+        } else {
+            verify_outcome_maintained(receipt_bytes, authorised, evidence)
+        }
     } else {
         verify_outcome_maintained(receipt_bytes, authorised, evidence)
     };
