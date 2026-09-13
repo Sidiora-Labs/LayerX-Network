@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -50,22 +51,27 @@ type History struct {
 	failure       error
 }
 
-func protectedFile(path string, maximum int) ([]byte, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+func protectedFile(path string, maximum int) (data []byte, resultErr error) {
+	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
+	file, err := root.OpenFile(filepath.Base(path), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
 	}
 	stat, valid := info.Sys().(*syscall.Stat_t)
-	if !valid || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || stat.Uid != uint32(os.Geteuid()) ||
+	if !valid || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || int64(stat.Uid) != int64(os.Geteuid()) ||
 		stat.Nlink != 1 || info.Size() <= 0 || info.Size() > int64(maximum) {
 		return nil, errors.New("protected history file identity")
 	}
-	data := make([]byte, info.Size())
+	data = make([]byte, info.Size())
 	if _, err := file.ReadAt(data, 0); err != nil {
 		return nil, err
 	}
@@ -91,17 +97,20 @@ func privateDirectory(path string) error {
 		return err
 	}
 	stat, valid := info.Sys().(*syscall.Stat_t)
-	if !valid || stat.Uid != uint32(os.Geteuid()) || info.Mode().Perm()&0077 != 0 {
+	if !valid || int64(stat.Uid) != int64(os.Geteuid()) || info.Mode().Perm()&0077 != 0 {
 		return errors.New("history directory permissions")
 	}
 	return nil
 }
 
-func recordKey(height int64) []byte {
+func recordKey(height int64) ([]byte, error) {
+	if height < 0 {
+		return nil, errors.New("negative history height")
+	}
 	key := make([]byte, 9)
 	key[0] = 'h'
 	binary.BigEndian.PutUint64(key[1:], uint64(height))
-	return key
+	return key, nil
 }
 
 func recordMessage(record *historyRecord) ([]byte, error) {
@@ -161,7 +170,11 @@ func (history *History) decode(encoded []byte) (*historyRecord, error) {
 }
 
 func (history *History) get(height int64) (*historyRecord, error) {
-	encoded, err := history.database.Get(recordKey(height), nil)
+	key, err := recordKey(height)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := history.database.Get(key, nil)
 	if err != nil {
 		return nil, fmt.Errorf("authenticated history unavailable at %d: %w", height, err)
 	}
@@ -172,20 +185,22 @@ func (history *History) get(height int64) (*historyRecord, error) {
 	return record, nil
 }
 
-func (history *History) writeHighWater(encoded []byte) error {
+func (history *History) writeHighWater(encoded []byte) (resultErr error) {
 	temporary, err := os.CreateTemp(history.directory, ".high-water-")
 	if err != nil {
 		return err
 	}
 	name := temporary.Name()
-	defer os.Remove(name)
+	defer func() {
+		if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	if _, err := temporary.Write(encoded); err != nil {
-		temporary.Close()
-		return err
+		return errors.Join(err, temporary.Close())
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
+		return errors.Join(err, temporary.Close())
 	}
 	if err := temporary.Close(); err != nil {
 		return err
@@ -197,8 +212,7 @@ func (history *History) writeHighWater(encoded []byte) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
-	return directory.Sync()
+	return errors.Join(directory.Sync(), directory.Close())
 }
 
 func OpenHistory(directory, keyPath string, expected Expected, genesisBytes []byte, now time.Time) (*History, error) {
@@ -238,12 +252,10 @@ func OpenHistory(directory, keyPath string, expected Expected, genesisBytes []by
 	history := &History{directory: directory, database: database, key: ed25519.NewKeyFromSeed(seed),
 		expected: expected, genesis: genesis, genesisDigest: sha256.Sum256(genesisBytes), validators: validators}
 	if err := history.openHead(anchor, anchorErr == nil); err != nil {
-		database.Close()
-		return nil, err
+		return nil, errors.Join(err, database.Close())
 	}
 	if err := history.checkIndex(); err != nil {
-		database.Close()
-		return nil, err
+		return nil, errors.Join(err, database.Close())
 	}
 	return history, nil
 }
@@ -264,9 +276,13 @@ func (history *History) checkIndex() error {
 		if len(key) != 9 || key[0] != 'h' {
 			return errors.New("history record key")
 		}
-		height := binary.BigEndian.Uint64(key[1:])
+		encodedHeight := binary.BigEndian.Uint64(key[1:])
+		if encodedHeight > math.MaxInt64 {
+			return errors.New("history height overflow")
+		}
+		height := int64(encodedHeight)
 		first := max(int64(2), history.head.Height-MaxHistory+1)
-		if height > uint64(history.head.Height) || (height > 1 && height < uint64(first)) {
+		if height > history.head.Height || (height > 1 && height < first) {
 			return errors.New("history retained height window")
 		}
 	}
@@ -291,7 +307,11 @@ func (history *History) openHead(anchor []byte, anchored bool) error {
 		}
 		batch := new(leveldb.Batch)
 		batch.Put([]byte("head"), encoded)
-		batch.Put(recordKey(0), encoded)
+		key, err := recordKey(0)
+		if err != nil {
+			return err
+		}
+		batch.Put(key, encoded)
 		if err := history.database.Write(batch, &opt.WriteOptions{Sync: true}); err != nil {
 			return err
 		}
@@ -411,9 +431,17 @@ func (history *History) Advance(entries []LightBlock, now time.Time) error {
 		if err != nil {
 			return err
 		}
-		batch.Put(recordKey(height), lastEncoded)
+		key, err := recordKey(height)
+		if err != nil {
+			return err
+		}
+		batch.Put(key, lastEncoded)
 		if height > MaxHistory+1 {
-			batch.Delete(recordKey(height - MaxHistory))
+			staleKey, err := recordKey(height - MaxHistory)
+			if err != nil {
+				return err
+			}
+			batch.Delete(staleKey)
 		}
 		head = record
 	}

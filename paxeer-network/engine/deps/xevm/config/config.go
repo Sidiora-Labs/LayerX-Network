@@ -1,8 +1,9 @@
 package config
 
 import (
-	canonical "github.com/sidiora-labs/paxeer-network/modules/evm/config"
 	"math/big"
+
+	canonical "github.com/sidiora-labs/paxeer-network/modules/evm/config"
 
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
