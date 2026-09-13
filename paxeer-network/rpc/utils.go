@@ -16,6 +16,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/sidiora-labs/paxeer-network/consensus/libs/bytes"
@@ -228,6 +229,27 @@ type indexedMsg struct {
 	index int
 }
 
+func transactionNonceUnconsumed(k *keeper.Keeper, ctxProvider func(int64) sdk.Context,
+	block *coretypes.ResultBlock, transaction *ethtypes.Transaction) (bool, error) {
+	if block == nil || block.Block == nil || block.Block.Height < 1 || transaction == nil {
+		return false, errors.New("cannot resolve transaction nonce without a committed block")
+	}
+	height := block.Block.Height
+	before, after := ctxProvider(height-1), ctxProvider(height)
+	if before.BlockHeight() != height-1 || after.BlockHeight() != height {
+		return false, fmt.Errorf("historical nonce contexts do not match block %d", height)
+	}
+	sender, err := rpcutils.RecoverEVMSender(transaction, height, block.Block.Time.Unix())
+	if err != nil {
+		return false, err
+	}
+	first, next := k.GetNonce(before, sender), k.GetNonce(after, sender)
+	if next < first {
+		return false, fmt.Errorf("sender nonce regressed in block %d", height)
+	}
+	return transaction.Nonce() < first || transaction.Nonce() >= next, nil
+}
+
 func validateBlockExecutionReceipts(
 	k *keeper.Keeper,
 	ctxProvider func(int64) sdk.Context,
@@ -253,6 +275,7 @@ func validateBlockExecutionReceipts(
 		}
 		for messageIndex, message := range tx.GetMsgs() {
 			var hash common.Hash
+			var evmTransaction *ethtypes.Transaction
 			switch typed := message.(type) {
 			case *types.MsgEVMTransaction:
 				if typed.IsAssociateTx() {
@@ -266,6 +289,7 @@ func validateBlockExecutionReceipts(
 					return fmt.Errorf("recover consensus transaction %d message %d sender in block %d: %w", txIndex, messageIndex, block.Block.Height, err)
 				}
 				hash = transaction.Hash()
+				evmTransaction = transaction
 			case *wasmtypes.MsgExecuteContract:
 				if !includeSynthetic {
 					continue
@@ -277,6 +301,15 @@ func validateBlockExecutionReceipts(
 			receipt, err := getOrSetCachedReceiptErr(cacheCreationMutex, globalBlockCache, latestCtx, k, block, hash)
 			if err != nil {
 				if errors.Is(err, receiptstore.ErrNotFound) {
+					if evmTransaction != nil {
+						unconsumed, nonceErr := transactionNonceUnconsumed(k, ctxProvider, block, evmTransaction)
+						if nonceErr != nil {
+							return nonceErr
+						}
+						if unconsumed {
+							continue
+						}
+					}
 					return fmt.Errorf("block %d transaction %d message %d has no canonical receipt: %w", block.Block.Height, txIndex, messageIndex, err)
 				}
 				return fmt.Errorf("load block %d transaction %d message %d receipt: %w", block.Block.Height, txIndex, messageIndex, err)
