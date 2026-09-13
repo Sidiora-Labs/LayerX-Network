@@ -2756,10 +2756,63 @@ fn local_gateway_program_custody_journey() {
         .arg(std::env::var_os("LAYERX_TEST_SEND_ENCODER").required("shared SEND encoder"))
         .args(["--sequencer-key", &hex_encode(&cluster.sequencer_key)])
         .arg("--output")
-        .arg(payment_output)
+        .arg(&payment_output)
         .status()
         .required("real signed payment smoke journey");
     assert!(status.success(), "payment smoke journey failed: {status}");
+    let wallet_config = cluster.root.join("wallet-smoke-config.json");
+    write(
+        &wallet_config,
+        &serde_json::to_vec(&serde_json::json!({
+            "version":1, "current_environment":"testnet", "default_key":null, "keys":{},
+            "environments":{"testnet":{
+                "endpoint":format!("https://localhost:{}",gateway.port), "network_id":NETWORK_ID,
+                "sequencer_trust_anchor":hex_encode(&cluster.sequencer_key)
+            }}
+        }))
+        .required("private wallet configuration"),
+        0o600,
+    );
+    let wallet =
+        Command::new(std::env::var_os("LAYERX_TEST_WALLET_CLI").required("qualified wallet CLI"))
+            .args([
+                "--json",
+                "--rpc",
+                &format!("https://localhost:{}/rpc", gateway.port),
+            ])
+            .args(["wallet", "balance", "--did", &cluster.treasury_did])
+            .args(["--asset", &hex_encode(&cluster.asset)])
+            .env("LAYERX_CONFIG", wallet_config)
+            .env("LAYERX_CREDENTIAL_STORE", "file")
+            .env("LAYERX_CREDENTIAL_PASSPHRASE", hex_encode(&random32()))
+            .env("SSL_CERT_FILE", certificates.path("ca.pem"))
+            .output()
+            .required("real wallet CLI balance");
+    assert!(
+        wallet.status.success(),
+        "wallet balance failed: {}",
+        String::from_utf8_lossy(&wallet.stderr)
+    );
+    let wallet: serde_json::Value =
+        serde_json::from_slice(&wallet.stdout).required("wallet balance JSON");
+    let payment: serde_json::Value = serde_json::from_slice(
+        &fs::read(payment_output.join("result.json")).required("payment result"),
+    )
+    .required("payment result JSON");
+    assert_eq!(wallet["ok"], true);
+    assert_eq!(wallet["kind"], "wallet.balance");
+    assert_eq!(wallet["data"]["did"], cluster.treasury_did);
+    let accounts = wallet["data"]["accounts"]
+        .as_array()
+        .required("verified wallet accounts");
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0]["asset_id"], hex_encode(&cluster.asset));
+    assert_eq!(accounts[0]["balance"], payment["source_after"]["balance"]);
+    assert_eq!(
+        accounts[0]["next_sequence"],
+        payment["source_after"]["next_sequence"]
+    );
+    println!("wallet CLI verified the native balance and account sequence against the configured sequencer pin");
     let artifact = std::env::var_os("LAYERX_TEST_ESCROW_WASM").required("built escrow WASM");
     let output = cluster.root.join("program-custody-journey");
     let status = Command::new(
