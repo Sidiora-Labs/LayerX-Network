@@ -160,7 +160,6 @@ export function AgentsSurface({
           <StateEmpty title={copyEntry("agent.list.select").message} />
         ) : (
           <AgentDetailScreen
-            shell="desktop"
             agentId={selected}
             embedded
             onChanged={() => { void load(); }}
