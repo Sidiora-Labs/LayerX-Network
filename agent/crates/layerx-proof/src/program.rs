@@ -240,7 +240,7 @@ fn verify_program_execution_receipt(
         ));
     }
     let pre_runtime = terminal_payload.starts_with(PRE_RUNTIME_FAILURE);
-    let terminal_payload = if outcome.encoding_version() == 4 && !pre_runtime {
+    let terminal_detail = if outcome.encoding_version() == 4 && !pre_runtime {
         let (detail, legs) = layerx_wire::receipt::decode_applied_terminal(terminal_payload)
             .map_err(|_| {
                 ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal)
@@ -264,7 +264,7 @@ fn verify_program_execution_receipt(
     let terminal = decode_terminal_payload(
         outcome.terminal_kind(),
         outcome.abi_version(),
-        terminal_payload,
+        terminal_detail,
     )
     .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal))?;
     if let TerminalDetail::Failure(FailureTerminal::PreRuntime(failure)) = &terminal.detail {
@@ -275,7 +275,7 @@ fn verify_program_execution_receipt(
     }
     verify_terminal_commitments(&terminal, call_graph, protocol.protocol_version(), outcome)?;
     let (typed_outcome, authenticated_failure, authenticated_resource) =
-        verified_terminal_outcome(&terminal, expected_program_id, outcome)?;
+        verified_terminal_outcome(&terminal, terminal_payload, expected_program_id, outcome)?;
     Ok(VerifiedProgramExecution {
         result_code: outcome.result_code(),
         fee_units: outcome.fee_units(),
@@ -369,11 +369,36 @@ fn guest_refused(outcome: &ProgramOutcome) -> ProgramCallOutcome {
     })
 }
 
+fn verify_terminal_representation(
+    terminal: &DecodedTerminal,
+    raw: &[u8],
+    outcome: &ProgramOutcome,
+) -> Result<(), ProgramExecutionVerificationFailure> {
+    if <[u8; 32]>::from(Sha256::digest(raw)) != outcome.terminal_payload_root() {
+        return terminal_failure();
+    }
+    let detail = if outcome.encoding_version() == 4 && !raw.starts_with(PRE_RUNTIME_FAILURE) {
+        layerx_wire::receipt::decode_applied_terminal(raw)
+            .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal))?
+            .0
+    } else {
+        raw
+    };
+    let canonical = decode_terminal_payload(outcome.terminal_kind(), outcome.abi_version(), detail)
+        .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal))?;
+    if &canonical != terminal {
+        return terminal_failure();
+    }
+    Ok(())
+}
+
 fn verified_terminal_outcome(
     terminal: &DecodedTerminal,
+    raw: &[u8],
     expected_program: [u8; 32],
     outcome: &ProgramOutcome,
 ) -> Result<TerminalOutcome, ProgramExecutionVerificationFailure> {
+    verify_terminal_representation(terminal, raw, outcome)?;
     match &terminal.detail {
         TerminalDetail::Execution(ExecutionTerminal::CandidateV4 {
             program,
@@ -398,7 +423,7 @@ fn verified_terminal_outcome(
             }
             match candidate_outcome {
                 CandidateTerminalOutcome::Success { code, response } => {
-                    if *code != outcome.result_code() {
+                    if outcome.result_code() != 0 {
                         return terminal_failure();
                     }
                     let response = ProgramCallResponse::new(*code, response).map_err(|_| {
@@ -681,7 +706,7 @@ mod terminal_binding_tests {
         let program: [u8; 32] = bytes("program_id_hex")
             .try_into()
             .unwrap_or_else(|_| panic!("program"));
-        assert!(verified_terminal_outcome(&terminal, program, outcome).is_ok());
+        assert!(verified_terminal_outcome(&terminal, &raw, program, outcome).is_ok());
         let TerminalDetail::Execution(ExecutionTerminal::CandidateV4 {
             outcome: CandidateTerminalOutcome::Success { code, .. },
             ..
@@ -693,7 +718,7 @@ mod terminal_binding_tests {
             .checked_add(1)
             .unwrap_or_else(|| panic!("terminal code"));
         assert_eq!(
-            verified_terminal_outcome(&terminal, program, outcome)
+            verified_terminal_outcome(&terminal, &raw, program, outcome)
                 .err()
                 .map(|error| error.check),
             Some(ProgramExecutionCheck::Terminal)
