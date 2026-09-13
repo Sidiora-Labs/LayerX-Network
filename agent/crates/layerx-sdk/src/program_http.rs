@@ -1182,6 +1182,45 @@ fn decode_execution_authority(
     ))
 }
 
+fn execution_call_binding(
+    signed_activity: &[u8],
+    activity_id: [u8; 32],
+    program_id: [u8; 32],
+    guest_abi_version: u16,
+) -> Result<([u8; 32], u16), ProgramOperationError> {
+    let registry = crate::program_lifecycle::programs_module_registry()?;
+    let activity = layerx_wire::activity::decode_signed(signed_activity, &registry)
+        .map_err(|_| ProgramOperationError::Decode)?;
+    if layerx_wire::hash::activity_id(&activity).map_err(|_| ProgramOperationError::Decode)?
+        != activity_id
+    {
+        return Err(ProgramOperationError::IdentityMismatch);
+    }
+    if activity.activity_type().module() != layerx_types::payload::ModuleId::Programs
+        || activity.activity_type().ordinal() != 3
+    {
+        return Err(ProgramOperationError::IdentityMismatch);
+    }
+    let bound_program = if activity.protocol_version() == 3 {
+        let call = layerx_types::program_call::NativeProgramCall::decode(activity.payload())
+            .map_err(|_| ProgramOperationError::Decode)?;
+        if call.guest_abi != guest_abi_version {
+            return Err(ProgramOperationError::IdentityMismatch);
+        }
+        call.callee().bytes()
+    } else {
+        layerx_types::intent::ProgramCall::from_canonical_payload(activity.payload())
+            .map_err(|_| ProgramOperationError::Decode)?
+            .callee()
+            .bytes()
+    };
+    if bound_program != program_id {
+        return Err(ProgramOperationError::IdentityMismatch);
+    }
+    let payload_hash =
+        layerx_wire::hash::payload_hash(&activity).map_err(|_| ProgramOperationError::Decode)?;
+}
+
 fn decode_execution(
     value: &Value,
     expected_state: Option<ExecutionState>,
@@ -1231,37 +1270,8 @@ fn decode_execution(
     let output_bytes = decimal_u64(usage, "output_bytes")?;
     let fee_units = decimal_u128(usage, "fee_units")?;
     let outcome = value.get("outcome").ok_or(ProgramOperationError::Decode)?;
-    let registry = crate::program_lifecycle::programs_module_registry()?;
-    let activity = layerx_wire::activity::decode_signed(signed_activity, &registry)
-        .map_err(|_| ProgramOperationError::Decode)?;
-    if layerx_wire::hash::activity_id(&activity).map_err(|_| ProgramOperationError::Decode)?
-        != activity_id
-    {
-        return Err(ProgramOperationError::IdentityMismatch);
-    }
-    if activity.activity_type().module() != layerx_types::payload::ModuleId::Programs
-        || activity.activity_type().ordinal() != 3
-    {
-        return Err(ProgramOperationError::IdentityMismatch);
-    }
-    let bound_program = if activity.protocol_version() == 3 {
-        let call = layerx_types::program_call::NativeProgramCall::decode(activity.payload())
-            .map_err(|_| ProgramOperationError::Decode)?;
-        if call.guest_abi != guest_abi_version {
-            return Err(ProgramOperationError::IdentityMismatch);
-        }
-        call.callee().bytes()
-    } else {
-        layerx_types::intent::ProgramCall::from_canonical_payload(activity.payload())
-            .map_err(|_| ProgramOperationError::Decode)?
-            .callee()
-            .bytes()
-    };
-    if bound_program != program_id {
-        return Err(ProgramOperationError::IdentityMismatch);
-    }
-    let payload_hash =
-        layerx_wire::hash::payload_hash(&activity).map_err(|_| ProgramOperationError::Decode)?;
+    let (payload_hash, protocol_version) =
+        execution_call_binding(signed_activity, activity_id, program_id, guest_abi_version)?;
     let evidence = ProgramExecutionEvidence {
         payload_hash,
         receipt,
@@ -1283,7 +1293,7 @@ fn decode_execution(
         .evidence()
         .receipt_digest()
         .ok_or(ProgramOperationError::Verification)?;
-    if protocol.protocol_version() != activity.protocol_version()
+    if protocol.protocol_version() != protocol_version
         || protocol.module_version() != module_version
         || protocol.batch_id() != batch_id
         || protocol.global_sequence() != global_sequence
