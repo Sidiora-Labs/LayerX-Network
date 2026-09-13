@@ -3,10 +3,11 @@ import json
 import os
 from pathlib import Path
 import struct
+import time
 
 
-def records():
-    data = Path(os.environ['LAYERX_AUTHORITY_REPLICA_LOG']).read_bytes()
+def records(path=None):
+    data = (Path(os.environ['LAYERX_AUTHORITY_REPLICA_LOG']) if path is None else path).read_bytes()
     offset = 0
     result = []
     while offset + 32 <= len(data) and data[offset:offset + 4] != bytes(4):
@@ -43,6 +44,21 @@ def request(batch, digest):
     return status, body
 
 
+published = records(Path(os.environ['LAYERX_AUTHORITY_REPLICA_LOG']).parents[1] /
+                    'logs/receipt-authority.log')
+assert len(published) == 12 and published[-1]['version'] == ord('3')
+last = published[-2]
+assert last['version'] != ord('3') and last['header'] == published[-1]['header']
+deadline = time.monotonic() + 5
+while True:
+    status, body = request(last['batch'], last['digest'])
+    if status == 200:
+        identity = json.loads(body)['batch_evidence']['batch_identity']
+        assert identity['kind'] == 'occupancy_maintenance_v2'
+        assert bytes.fromhex(identity['receipt_hex']) == published[-1]['receipt']
+        break
+    assert status in (404, 503) and time.monotonic() < deadline
+    time.sleep(.01)
 stored = records()
 checked = 0
 for activity in stored:

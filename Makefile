@@ -3371,7 +3371,7 @@ test-daemon-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_program_admissi
 
 $(BUILD_DIR)/tests/lxp_test_maintenance_crash: tests/daemon/lxp_test_maintenance_crash.c $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) -Wl,--wrap=lxp_daemon_start_protocol_batch -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) -Wl,--wrap=lxp_daemon_start_protocol_batch -Wl,--wrap=lxp_fault_inject_point -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
 .PHONY: test-daemon-maintenance-crash
 test-daemon-maintenance-crash: $(BUILD_DIR)/tests/lxp_test_maintenance_crash $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build

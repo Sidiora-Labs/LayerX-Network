@@ -74,6 +74,7 @@ int main(void)
         lxp_log second_log;
         uint64_t durable;
         int descriptor;
+        int directory_descriptor;
         uint8_t corrupt = 0xffU;
         off_t first_pair = (off_t)(2U *
             (LXP_LOG_HEADER_BYTES + sizeof(first)));
@@ -91,7 +92,12 @@ int main(void)
                            (uint32_t)sizeof(second), NULL) != LXP_OK ||
             lxp_log_append(&second_log, LXP_LOG_RECEIPT, 12U, second,
                            (uint32_t)sizeof(second), NULL) != LXP_OK ||
-            lxp_log_write_boundary(&second_log) != LXP_OK ||
+            lxp_log_write_boundary(&second_log) != LXP_OK)
+            return 1;
+        directory_descriptor = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (directory_descriptor < 0 ||
+            !lxp_durability_group_defer_descriptor(directory_descriptor) ||
+            close(directory_descriptor) != 0 ||
             lxp_durability_group_commit(&group) != LXP_OK)
             return 1;
         if (lxp_log_durable_head(&first_log, &durable) != LXP_OK ||
@@ -136,6 +142,28 @@ int main(void)
             rmdir(directory) != 0)
             return 1;
         lxp_log_set_prepared_recovery(false);
+    }
+    {
+        char directory[] = "/tmp/lxp-durable-failure-XXXXXX";
+        char path[128];
+        const uint8_t bytes[] = {1U, 2U};
+        lxp_log log;
+        lxp_durability_group group;
+        uint64_t durable;
+        if (mkdtemp(directory) == NULL ||
+            lxp_log_segment_create(&log, directory, 0U, 4096U) != LXP_OK ||
+            lxp_durability_group_begin(&group) != LXP_OK ||
+            lxp_log_append(&log, LXP_LOG_ACTIVITY, 1U, bytes, sizeof(bytes), NULL) != LXP_OK ||
+            lxp_log_append(&log, LXP_LOG_RECEIPT, 1U, bytes, sizeof(bytes), NULL) != LXP_OK ||
+            lxp_log_write_boundary(&log) != LXP_OK ||
+            group.descriptor_count != 1U || close(group.descriptors[0]) != 0 ||
+            lxp_durability_group_commit(&group) != LXP_ERR_IO || group.active ||
+            log.durable_offset != 0U || log.durable_generation != 0U ||
+            lxp_log_durable_head(&log, &durable) != LXP_OK || durable != UINT64_MAX ||
+            lxp_log_close(&log) != LXP_OK ||
+            snprintf(path, sizeof(path), "%s/%020u.lxp", directory, 0U) < 0 ||
+            unlink(path) != 0 || rmdir(directory) != 0)
+            return 1;
     }
     return 0;
 }
