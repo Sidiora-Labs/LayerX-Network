@@ -15,6 +15,7 @@ use crate::{
     authority_grant::AuthorityGrant,
     ct,
     payments::{Grant, Payment},
+    session::{decode_session_key, IssuedSessionKey, SessionPurpose},
     SignatureMessage,
 };
 
@@ -104,6 +105,20 @@ pub struct DisclosedWithdrawal {
     pub request_anchor: [u8; 32],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisclosedSessionGrant {
+    pub grant: IssuedSessionKey,
+    pub expiry_sequence: u64,
+    pub action_key: [u8; 32],
+    pub replacement: Option<DisclosedSessionReplacement>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DisclosedSessionReplacement {
+    pub predecessor_grant_id: [u8; 32],
+    pub expected_charge_state: [u8; 32],
+}
+
 /// Every time bound that can make the disclosed activity expire.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Expiry {
@@ -145,6 +160,7 @@ pub struct Disclosure {
     /// Decoded payment or Programs payload, present for those activity types.
     pub payment: Option<Payment>,
     pub authority_grant: Option<AuthorityGrant>,
+    pub session_grant: Option<DisclosedSessionGrant>,
     activity: Activity,
     signing_digest: [u8; 32],
 }
@@ -550,6 +566,7 @@ fn decode_withdraw(activity: &Activity) -> Result<DisclosureFields, DisclosureEr
         },
         idempotency_key: activity.idempotency_key(),
         authority_grant: None,
+        session_grant: None,
         evm_payout_binding: None,
         withdrawal: Some(DisclosedWithdrawal {
             account_sequence: activity.account_sequence(),
@@ -743,6 +760,7 @@ fn payment_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         },
         idempotency_key: activity.idempotency_key(),
         authority_grant: None,
+        session_grant: None,
         evm_payout_binding: None,
         withdrawal: None,
         payment: Some(payment),
@@ -770,6 +788,7 @@ fn governance_fields(
         },
         idempotency_key: activity.idempotency_key(),
         authority_grant: None,
+        session_grant: None,
         evm_payout_binding: Some(binding),
         withdrawal: None,
         payment: None,
@@ -821,6 +840,89 @@ fn authority_grant_fields(activity: &Activity) -> Result<DisclosureFields, Discl
         withdrawal: None,
         payment: None,
         authority_grant: Some(grant),
+        session_grant: None,
+    })
+}
+
+fn session_grant_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
+    if activity.protocol_version() != 3 || activity.authority().len() != 32 {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    let mut decoder = Decoder::new(activity.payload(), 1024);
+    if decoder.u16()? != 0x7105 {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    let version = decoder.u8()?;
+    let fields = decoder.u8()?;
+    if !matches!((version, fields), (1, 3) | (2, 5)) {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    let grant =
+        decode_session_key(decoder.bytes(1024)?).map_err(|_| DisclosureError::MalformedPayload)?;
+    let expiry_sequence = decoder.u64()?;
+    let action_key: [u8; 32] = decoder
+        .bytes(32)?
+        .try_into()
+        .map_err(|_| DisclosureError::MalformedPayload)?;
+    let replacement = if version == 2 {
+        Some(DisclosedSessionReplacement {
+            predecessor_grant_id: decoder
+                .bytes(32)?
+                .try_into()
+                .map_err(|_| DisclosureError::MalformedPayload)?,
+            expected_charge_state: decoder
+                .bytes(32)?
+                .try_into()
+                .map_err(|_| DisclosureError::MalformedPayload)?,
+        })
+    } else {
+        None
+    };
+    decoder.finish()?;
+    let did = layerx_types::ids::Did::new(activity.actor_did())
+        .map_err(|_| DisclosureError::MalformedPayload)?;
+    if grant.grantor != hash::did_id_for_protocol(&did, activity.protocol_version())?
+        || activity.authority() == grant.session_public_key
+        || !crate::ed25519::public_key_is_canonical(&grant.session_public_key)
+        || expiry_sequence == 0
+        || action_key == [0; 32]
+    {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    if let Some(replacement) = replacement {
+        if grant.purpose != SessionPurpose::Activity
+            || grant.fee_budget.is_none()
+            || replacement.predecessor_grant_id == [0; 32]
+            || replacement.predecessor_grant_id == grant.grant_id
+            || replacement.expected_charge_state == [0; 32]
+        {
+            return Err(DisclosureError::MalformedPayload);
+        }
+    }
+    Ok(DisclosureFields {
+        activity_type: activity.activity_type(),
+        actor: activity.actor_did().to_vec(),
+        authority: activity.authority().to_vec(),
+        counterparties: Vec::new(),
+        amounts: Vec::new(),
+        asset: grant.fee_budget.map_or([0; 32], |fee| fee.asset),
+        fee_limit: activity.fee_limit(),
+        expiry: Expiry {
+            not_before: activity.timestamp_bound().not_before,
+            not_after: activity.timestamp_bound().not_after,
+            payload_expires_at: grant.expires_at,
+        },
+        idempotency_key: activity.idempotency_key(),
+        evm_payout_binding: None,
+        withdrawal: None,
+        payment: None,
+        authority_grant: None,
+        session_grant: Some(DisclosedSessionGrant {
+            grant,
+            expiry_sequence,
+            action_key,
+            replacement,
+        }),
     })
 }
 
@@ -846,6 +948,9 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
     }
     if kind == (ModuleId::Governance, 8) {
         return authority_grant_fields(activity);
+    }
+    if kind == (ModuleId::Governance, 5) {
+        return session_grant_fields(activity);
     }
     if kind == (ModuleId::Governance, GOVERNANCE_EVM_BINDING_ORDINAL) {
         return governance_fields(activity, not_before, not_after);
@@ -879,6 +984,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
             },
             idempotency_key: activity.idempotency_key(),
             authority_grant: None,
+            session_grant: None,
             evm_payout_binding: None,
             withdrawal: None,
             payment: None,
@@ -912,6 +1018,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         },
         idempotency_key: send.idempotency_key,
         authority_grant: None,
+        session_grant: None,
         evm_payout_binding: None,
         withdrawal: None,
         payment: None,
@@ -932,6 +1039,7 @@ struct DisclosureFields {
     withdrawal: Option<DisclosedWithdrawal>,
     payment: Option<Payment>,
     authority_grant: Option<AuthorityGrant>,
+    session_grant: Option<DisclosedSessionGrant>,
 }
 
 impl Disclosure {
@@ -982,6 +1090,7 @@ impl Disclosure {
         require_field!(idempotency_key);
         require_field!(withdrawal);
         require_field!(authority_grant);
+        require_field!(session_grant);
         require_field!(evm_payout_binding);
         require_field!(payment);
         Ok(())
@@ -1077,6 +1186,15 @@ impl Disclosure {
         if let Some(payment) = &self.payment {
             encoder.bytes(&payment.encode(&self.actor)?, 32768)?;
         }
+        if let Some(session) = &self.session_grant {
+            encoder.bytes(&session.grant.registration_payload, 1024)?;
+            encoder.u64(session.expiry_sequence)?;
+            encoder.fixed(&session.action_key)?;
+            if let Some(replacement) = session.replacement {
+                encoder.fixed(&replacement.predecessor_grant_id)?;
+                encoder.fixed(&replacement.expected_charge_state)?;
+            }
+        }
         Ok(encoder.finish())
     }
 
@@ -1124,6 +1242,7 @@ impl Disclosure {
         require_field!(idempotency_key);
         require_field!(withdrawal);
         require_field!(authority_grant);
+        require_field!(session_grant);
         let reencoded = self.reencode()?;
         if !ct::eq(&reencoded, canonical) {
             return Err(DisclosureError::FieldMismatch("canonical_bytes"));
@@ -1168,6 +1287,7 @@ pub fn bind(canonical: &[u8], registry: &ModuleRegistry) -> Result<Disclosure, D
         expiry: fields.expiry,
         idempotency_key: fields.idempotency_key,
         authority_grant: fields.authority_grant,
+        session_grant: fields.session_grant,
         evm_payout_binding: fields.evm_payout_binding,
         withdrawal: fields.withdrawal,
         payment: fields.payment,
