@@ -50,6 +50,7 @@ fn actual_daemon_terminal_requires_the_complete_maintained_transition() {
         &raw,
         &authority,
         &evidence,
+        &[raw.canonical_receipt().to_vec()],
         header.protocol_version(),
         header.network_id(),
     ));
@@ -79,6 +80,7 @@ fn actual_daemon_terminal_requires_the_complete_maintained_transition() {
         &raw,
         &wrong,
         &evidence,
+        &[raw.canonical_receipt().to_vec()],
         header.protocol_version(),
         header.network_id()
     )
@@ -87,6 +89,7 @@ fn actual_daemon_terminal_requires_the_complete_maintained_transition() {
         &raw,
         &authority,
         &evidence,
+        &[raw.canonical_receipt().to_vec()],
         header.protocol_version(),
         header.network_id() + 1
     )
@@ -101,6 +104,7 @@ fn actual_daemon_terminal_requires_the_complete_maintained_transition() {
         &raw,
         &authority,
         &bad_evidence,
+        &[raw.canonical_receipt().to_vec()],
         header.protocol_version(),
         header.network_id()
     )

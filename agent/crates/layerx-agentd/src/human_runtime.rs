@@ -2333,34 +2333,18 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             header.batch_number(),
             header.batch_number(),
         );
-        let sequence = header.last_sequence();
-        let correlation = sequence
-            .checked_add(10_000)
-            .ok_or(HumanOperationError::Refused)?;
-        let page = self
-            .node
-            .history(
-                sequence,
-                sequence,
-                1,
-                None,
-                layerx_types::verify::VerificationLevel::BATCH_INCLUDED,
-                correlation,
-                authorization,
-            )
-            .map_err(|_| HumanOperationError::Unavailable)?;
-        if page.items.len() != 1 || page.cursor.is_some() {
-            return Err(HumanOperationError::Refused);
-        }
-        let item = &page.items[0];
-        if item.kind != layerx_client::read::HistoryKind::Receipt
-            || item.global_sequence != sequence
-            || !item
-                .canonical_bytes()
-                .starts_with(b"LXP/programs/occupancy-receipt/v2\0")
+        let items = self.maintained_receipt_history(raw, header, &authorization)?;
+        let item = items.last().ok_or(HumanOperationError::Refused)?;
+        if !item
+            .canonical_bytes()
+            .starts_with(b"LXP/programs/occupancy-receipt/v2\0")
         {
             return Err(HumanOperationError::Refused);
         }
+        let receipts = items[..items.len() - 1]
+            .iter()
+            .map(|item| item.canonical_bytes().to_vec())
+            .collect::<Vec<_>>();
         let proof = layerx_client::read::HistoryProof::decode(item.proof_material())
             .map_err(|_| HumanOperationError::Refused)?;
         let header_signature = raw.header_signature();
@@ -2379,10 +2363,72 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             raw,
             authority,
             &evidence,
+            &receipts,
             node.protocol_version,
             node.network_id,
         )
         .map_err(|_| HumanOperationError::Refused)
+    }
+
+    fn maintained_receipt_history(
+        &mut self,
+        raw: &crate::protocol_evidence::RawReceiptEvidence,
+        header: &layerx_wire::receipt::BatchHeader,
+        authorization: &layerx_proof::inclusion::SequencerAuthorization,
+    ) -> Result<Vec<layerx_client::read::HistoryItem>, HumanOperationError> {
+        let count = header
+            .last_sequence()
+            .checked_sub(header.first_sequence())
+            .filter(|count| *count > 0 && *count <= 65_535)
+            .ok_or(HumanOperationError::Refused)?;
+        let mut items = Vec::new();
+        let mut next = header.first_sequence();
+        let mut total = 0_usize;
+        while next <= header.last_sequence() {
+            let expected = (header.last_sequence() - next + 1).min(256);
+            let page = self
+                .node
+                .history(
+                    next,
+                    header.last_sequence(),
+                    256,
+                    None,
+                    layerx_types::verify::VerificationLevel::BATCH_INCLUDED,
+                    next.checked_add(10_000)
+                        .ok_or(HumanOperationError::Refused)?,
+                    authorization.clone(),
+                )
+                .map_err(|_| HumanOperationError::Unavailable)?;
+            if u64::try_from(page.items.len()).ok() != Some(expected)
+                || page.cursor.is_some() != (next + expected <= header.last_sequence())
+            {
+                return Err(HumanOperationError::Refused);
+            }
+            for item in page.items {
+                if item.kind != layerx_client::read::HistoryKind::Receipt
+                    || item.global_sequence != next
+                {
+                    return Err(HumanOperationError::Refused);
+                }
+                let proof = layerx_client::read::HistoryProof::decode(item.proof_material())
+                    .map_err(|_| HumanOperationError::Refused)?;
+                if proof.header != raw.canonical_header()
+                    || proof.header_signature != raw.header_signature()
+                {
+                    return Err(HumanOperationError::Refused);
+                }
+                total = total
+                    .checked_add(item.canonical_bytes().len())
+                    .filter(|total| *total <= 16_777_216)
+                    .ok_or(HumanOperationError::Refused)?;
+                items.push(item);
+                next = next.checked_add(1).ok_or(HumanOperationError::Refused)?;
+            }
+        }
+        if u64::try_from(items.len()).ok() != count.checked_add(1) {
+            return Err(HumanOperationError::Refused);
+        }
+        Ok(items)
     }
 
     fn augment_receipt_evidence(
