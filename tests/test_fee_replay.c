@@ -5,6 +5,7 @@
 #include "layerx/lxp_storage.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/programs.h"
+#include "layerx/lx_asset.h"
 
 #include <stdint.h>
 #include <stdio.h>
