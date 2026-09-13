@@ -231,3 +231,91 @@ fn replace_terminal_root(authority: AuthorizedBatch, root: [u8; 32]) -> Authoriz
         authority.sequencer_public_key(),
     )
 }
+
+#[test]
+fn real_native_multi_call_receipts_preserve_each_authenticated_transition() {
+    use layerx_proof::merkle::build_proof;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/fixtures/programs/maintained-multicall");
+    let read = |name: &str| checked(std::fs::read(root.join(name)));
+    let header_bytes = read("header");
+    let header = checked(layerx_wire::receipt::decode_batch_header(&header_bytes));
+    let public = checked(read("sequencer.public").try_into());
+    let signature = checked(read("header.signature").try_into());
+    let receipts = vec![read("receipt-0"), read("receipt-1")];
+    let maintenance = read("maintenance.receipt");
+    let leaves = [receipts[0].as_slice(), receipts[1].as_slice(), &maintenance];
+    let (maintenance_proof, committed_root) = checked(build_proof(&leaves, 2));
+    assert_eq!(committed_root, header.receipt_merkle_root());
+    assert_eq!(header.last_sequence() - header.first_sequence(), 2);
+    let authorization = SequencerAuthorization::new(
+        header.sequencer_id(),
+        public,
+        header.batch_number(),
+        header.batch_number(),
+    );
+    for (index, bytes) in receipts.iter().enumerate() {
+        let decoded = checked(layerx_wire::receipt::decode(bytes));
+        let protocol = checked(decoded.protocol().ok_or("native Programs receipt"));
+        assert_eq!(protocol.module_id(), 9);
+        assert_eq!(protocol.operation(), 3);
+        assert_eq!(protocol.result_code(), 0);
+        let activity_authority = AuthorizedBatch::new(
+            protocol.batch_id(),
+            protocol.asset(),
+            protocol.previous_state_root(),
+            protocol.resulting_state_root(),
+            public,
+        );
+        let raw = RawReceiptEvidence::new(
+            bytes.clone(),
+            checked(build_proof(&leaves, index)).0,
+            header_bytes.clone(),
+            signature,
+        );
+        let evidence = MaintainedOutcomeEvidence {
+            header: raw.canonical_header(),
+            header_signature: &signature,
+            activity_proof: raw.proof(),
+            maintenance: &maintenance,
+            maintenance_proof: &maintenance_proof,
+            authorization: &authorization,
+        };
+        let verified = checked(VerifiedReceiptEvidence::verify_authorized_maintained(
+            &raw,
+            &activity_authority,
+            &evidence,
+            &receipts,
+            header.protocol_version(),
+            header.network_id(),
+        ));
+        assert_eq!(verified.activity_id(), protocol.activity_id());
+        assert_eq!(verified.global_sequence(), protocol.global_sequence());
+        assert_eq!(verified.result_code(), 0);
+        if index == 1 {
+            assert_ne!(
+                activity_authority.previous_state_root(),
+                header.previous_state_root()
+            );
+        }
+        assert!(VerifiedReceiptEvidence::verify_authorized_maintained(
+            &raw,
+            &activity_authority,
+            &evidence,
+            &receipts[..1],
+            header.protocol_version(),
+            header.network_id(),
+        )
+        .is_err());
+        let reversed = vec![receipts[1].clone(), receipts[0].clone()];
+        assert!(VerifiedReceiptEvidence::verify_authorized_maintained(
+            &raw,
+            &activity_authority,
+            &evidence,
+            &reversed,
+            header.protocol_version(),
+            header.network_id(),
+        )
+        .is_err());
+    }
+}
