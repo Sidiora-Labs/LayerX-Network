@@ -34,6 +34,8 @@ pub fn configure(
         "network_id": NETWORK_ID, "epoch": verified_epoch(cluster),
         "certificates_dir": certificates.path("ca.der").parent(),
         "service_bin_dir": std::env::var("LAYERX_TEST_REGISTRY_BIN_DIR").required("qualified registry binaries"),
+        "runtime_image": std::env::var("LAYERX_TEST_REGISTRY_IMAGE").required("qualified registry runtime image"),
+        "quota_root": std::env::var("LAYERX_TEST_REGISTRY_QUOTA_ROOT").required("qualified registry quota filesystem"),
         "builder_root": std::env::var("LAYERX_TEST_BUILDER_ROOT").required("qualified builder root"),
         "builder_digest_file": std::env::var("LAYERX_TEST_BUILDER_DIGEST_FILE").required("qualified builder digest"),
         "request_token_file": request_token,

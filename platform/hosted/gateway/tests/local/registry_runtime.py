@@ -28,7 +28,7 @@ def main():
     os.chown(state, 4030, 4030)
     image = subprocess.check_output(
         ["docker", "image", "inspect", "--format", "{{.Id}}",
-         "layerx-repair/registry-runtime:20260913"], text=True).strip()
+         config["runtime_image"]], text=True).strip()
     isolation_digest = subprocess.check_output(
         ["docker", "run", "--rm", image, "sha256sum", "/usr/bin/bwrap"],
         text=True).split()[0]
@@ -119,7 +119,7 @@ def main():
     for source, target, readonly in [
         ("/sys/fs/cgroup", "/run/layerx/host-cgroup", False),
         (state, "/run/layerx/state", False),
-        ("/root/lx-builds/repair-registry-runtime/quota", "/run/layerx/quota", False),
+        (config["quota_root"], "/run/layerx/quota", False),
         (config["builder_root"], "/run/layerx/builder", True),
         (bins / "layerx-program-registry", "/run/layerx/bin/layerx-program-registry", True),
         (supervisor, "/run/layerx/bin/layerx-cgroup-exec", True),
