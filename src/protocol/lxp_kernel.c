@@ -1173,7 +1173,7 @@ static lxp_result kernel_fee_prepare(lxp_kernel *kernel, const lxp_activity *act
         return LXP_FATAL_INVARIANT;
     *transaction = NULL;
     status = lxp_authority_fee_resolve(kernel, execution->authority, activity,
-        execution->batch_timestamp_ms, fee, &grant);
+        execution->batch_timestamp_ms, execution->recorded_fee_schedule_version, fee, &grant);
     if (status != LXP_OK) return status;
     token = calloc(1U, sizeof(*token));
     if (token == NULL) return LXP_ERR_ARENA_EXHAUSTED;
@@ -1234,7 +1234,8 @@ static lxp_result kernel_fee_admission(const lxp_kernel *kernel,
 {
     lxp_authority_grant grant;
     return lxp_authority_fee_resolve(kernel, execution->authority, activity,
-        execution->batch_timestamp_ms, activity->fee_limit, &grant);
+        execution->batch_timestamp_ms, execution->recorded_fee_schedule_version,
+        activity->fee_limit, &grant);
 }
 
 static void close_failed_fee_transaction(lxp_kernel *kernel,

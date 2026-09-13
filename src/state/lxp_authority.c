@@ -805,9 +805,12 @@ lxp_result lxp_authority_allowance_policy(const lxp_kernel *kernel, bool *enforc
 
 lxp_result lxp_authority_fee_resolve(const lxp_kernel *kernel,
     const lxp_authority_resolved *authority, const lxp_activity *activity,
-    uint64_t timestamp, lxp_u128 amount, lxp_authority_grant *grant)
+    uint64_t timestamp, uint32_t fee_schedule_version, lxp_u128 amount,
+    lxp_authority_grant *grant)
 {
     const lx_programs_transfer_runtime *runtime;
+    lx_programs_fee_schedule schedule;
+    uint8_t asset_id[32];
     lxp_authority_fee_budget budget;
     uint8_t hash[32];
     lxp_result status;
@@ -831,8 +834,12 @@ lxp_result lxp_authority_fee_resolve(const lxp_kernel *kernel,
     if (lxp_u128_is_zero(amount)) return LXP_OK;
     runtime = kernel->module_runtime[LXP_MODULE_PROGRAMS];
     if (!grant->fee_budget.present) return LXP_ERR_AUTH_ALLOWANCE;
-    if (runtime == NULL) return LXP_ERR_MODULE_DISABLED;
-    if (memcmp(grant->fee_budget.asset_id, runtime->occupancy_asset_id, 32U) != 0)
+    if (runtime == NULL || runtime->resolve_occupancy_parameters == NULL)
+        return LXP_ERR_MODULE_DISABLED;
+    status = runtime->resolve_occupancy_parameters(runtime->occupancy_parameter_context,
+        fee_schedule_version, &schedule, asset_id);
+    if (status != LXP_OK) return status;
+    if (memcmp(grant->fee_budget.asset_id, asset_id, 32U) != 0)
         return LXP_ERR_ASSET_MISMATCH;
     budget = grant->fee_budget;
     return lxp_authority_fee_charge(&budget, amount, timestamp);

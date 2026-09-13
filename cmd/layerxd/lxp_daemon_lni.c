@@ -1894,7 +1894,7 @@ static lxp_result admission_fee_reserve(lxp_daemon_lni_server *server,
 {
     lxp_authority_grant grant;
     lxp_result status = lxp_authority_fee_resolve(server->owner->kernel,
-        authority, activity, timestamp, activity->fee_limit, &grant);
+        authority, activity, timestamp, 0U, activity->fee_limit, &grant);
     if (status != LXP_OK || !grant.fee_budget.present) return status;
     if (pthread_mutex_lock(&server->daemon->mutex) != 0) return LXP_ERR_IO;
     for (size_t index = 0U; status == LXP_OK && index < server->daemon->queue_count; ++index) {

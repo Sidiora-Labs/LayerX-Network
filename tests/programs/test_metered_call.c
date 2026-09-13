@@ -559,6 +559,18 @@ int main(void)
     METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call, f->call_length,
                                    2U, true) == 0);
     {
+        lxp_authority_grant loaded;
+        (void)memset(f->runtime.occupancy_asset_id, 0, 32U);
+        METERED_CHECK(lxp_authority_fee_resolve(&f->kernel, &f->authority, &f->activity,
+            f->execution.batch_timestamp_ms, 0U, f->activity.fee_limit, &loaded) == LXP_OK);
+        METERED_CHECK(lxp_authority_fee_resolve(&f->kernel, &f->authority, &f->activity,
+            f->execution.batch_timestamp_ms, 1U, f->activity.fee_limit, &loaded) == LXP_OK);
+        METERED_CHECK(lxp_authority_fee_resolve(&f->kernel, &f->authority, &f->activity,
+            f->execution.batch_timestamp_ms, UINT32_MAX, f->activity.fee_limit,
+            &loaded) != LXP_OK);
+        (void)memcpy(f->runtime.occupancy_asset_id, f->asset.asset_id, 32U);
+    }
+    {
         lxp_kernel_prepared_batch *prepared = NULL;
         lxp_authority_grant loaded;
         size_t retries = 0U;
