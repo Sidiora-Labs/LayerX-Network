@@ -94,8 +94,10 @@ int main(int argc, char **argv)
             return 0;
         }
         status = gp_runtime_prepare(runtime, &body);
-        if (status != LXP_OK)
+        if (status != LXP_OK) {
+            fprintf(stderr, "prepare batch=%lu refused: %d\n", batch, (int)status);
             break;
+        }
         lxp_byte_span *activities;
         size_t activity_count;
         assert(lxp_replay_section_decode(&body.activities, &arena, &activities, &activity_count) ==
@@ -172,8 +174,17 @@ int main(int argc, char **argv)
         if (status != LXP_OK)
             break;
         status = lxp_guarantor_recompute_roots(&body, &replay, &arena, &roots);
-        if (status != LXP_OK)
+        if (status != LXP_OK) {
+            fprintf(stderr, "independent roots batch=%lu refused: %d\n", batch, (int)status);
             break;
+        }
+        if (lxp_batch_maintenance_is_envelope(replay.encoded_batch_maintenance_receipt)) {
+            lxp_replay_batch_result incomplete = replay;
+            lxp_batch_roots rejected;
+            assert(incomplete.event_count == incomplete.activity_count + 1U);
+            incomplete.event_count--;
+            assert(lxp_guarantor_recompute_roots(&body, &incomplete, &arena, &rejected) != LXP_OK);
+        }
         assert(!memcmp(engine->kernel->current_state_root, body.header.resulting_state_root, 32U));
         {
             lxp_state_witness *proof = malloc(sizeof(*proof));

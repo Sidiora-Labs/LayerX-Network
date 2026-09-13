@@ -244,6 +244,7 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
         result->encoded_events = (lxp_byte_span *)memory;
     }
     result->activity_count = activity_count;
+    result->event_count = event_count;
     result->receipt_count = receipt_count;
     (void)memcpy(current_root, starting_state_root, 32U);
     for (i = 0U; i < activity_count; ++i) {

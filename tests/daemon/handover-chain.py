@@ -101,6 +101,15 @@ def main():
         native / 'data/checkpoints/da-bodies.log', certificate_directory / 'checkpoint.bin',
         certificate_directory / 'finality.bin', native / 'treasury', replacement.hex(), checkpoint_id,
         ready['identity_sequence'], now, now + 300000, 0, os.urandom(32).hex(), activity]
+    fifo = output / 'invalid-input.fifo'
+    os.mkfifo(fifo, 0o600)
+    for index, name in ((2, 'manifest'), (3, 'history'), (4, 'checkpoint'), (5, 'finality'), (6, 'key')):
+        invalid_input = arguments.copy()
+        invalid_input[index] = fifo
+        with (output / f'refuse-fifo-{name}.log').open('wb') as log:
+            refused_input = subprocess.run([str(value) for value in invalid_input], cwd=ROOT,
+                env=environment, stdout=log, stderr=log, timeout=10)
+        assert refused_input.returncode != 0 and not activity.exists()
     invoke(arguments, environment, output / 'issue.log')
     activity.chmod(0o644)
     verify = [build / 'bin/layerx-handover', '--verify-key', native / 'data/genesis/genesis.manifest',

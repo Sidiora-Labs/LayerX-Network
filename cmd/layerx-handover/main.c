@@ -120,7 +120,7 @@ static lxp_result load_history(handover_issuer *issuer,
     } else if (status == LXP_OK) {
         if (!S_ISREG(information.st_mode) || information.st_nlink != 1)
             status = LXP_ERR_AUTH_SCOPE;
-        if (status == LXP_OK) status = lxp_log_open(&log, log_path);
+        if (status == LXP_OK) status = lxp_log_open_readonly(&log, log_path);
         if (status == LXP_OK) opened = true;
         if (status == LXP_OK) status = lxp_daemon_handover_history_load(&issuer->chain,
             &log, checkpoint_directory, finality_verify, issuer, &issuer->arena);
@@ -201,7 +201,7 @@ static lxp_result read_private_key(const char *path, uint8_t key[32])
 {
     struct stat before, after;
     size_t offset = 0U;
-    int descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    int descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     lxp_result status = LXP_OK;
     if (descriptor < 0) return LXP_ERR_IO;
     if (fstat(descriptor, &before) != 0 || !S_ISREG(before.st_mode) || before.st_nlink != 1 ||
