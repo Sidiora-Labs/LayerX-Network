@@ -728,8 +728,14 @@ fn parse_maintenance(value: &Value) -> Result<Option<ProtocolHeadMaintenanceProo
         return Err("maintenance proof exceeds its bound".to_owned());
     }
     let proof = hex::decode(encoded_proof).map_err(|error| error.to_string())?;
-    let receipt_proof = layerx_proof::merkle::decode_proof(&proof)
+    let canonical = decode_merkle_proof(&proof)
         .map_err(|error| format!("maintenance proof encoding: {error:?}"))?;
+    let receipt_proof = Proof::new(
+        canonical.leaf_index(),
+        canonical.leaf_count(),
+        canonical.siblings().to_vec(),
+    )
+    .map_err(|error| format!("maintenance proof structure: {error:?}"))?;
     Ok(Some(ProtocolHeadMaintenanceProof {
         receipt,
         receipt_proof,
