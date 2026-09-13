@@ -113,6 +113,57 @@ impl Registration {
     }
 }
 
+fn update_sessions(
+    protocol: &ProtocolReceipt,
+    state: &[u8],
+    sequence: u64,
+    registered: &mut BTreeMap<[u8; 32], Registration>,
+    revoked: &mut BTreeSet<[u8; 32]>,
+) -> Result<(), Response> {
+    let refused = || unavailable("identity_session_proof_invalid");
+    if protocol.protocol_version() != 3
+        || protocol.module_id() != 7
+        || protocol.module_version() != 1
+        || protocol.global_sequence() != sequence
+    {
+        return Err(refused());
+    }
+    if protocol.result_code() != 0 {
+        return Ok(());
+    }
+    if state.len() != 223 || &state[..5] != b"LXGI1" || native_u64(state, 215)? != sequence {
+        return Err(refused());
+    }
+    if let Some(registration) = Registration::from_receipt(protocol, state, sequence)? {
+        let id = registration.grant.grant_id;
+        if revoked.contains(&id) || registered.insert(id, registration).is_some() {
+            return Err(refused());
+        }
+    }
+    for effect in protocol
+        .effects()
+        .iter()
+        .filter(|e| e.module_id() == 7 && e.event_type() == 0x7106)
+    {
+        let body = effect.body();
+        if body.len() != 41
+            || effect.kind() != 3
+            || effect.monetary()
+            || !(1..=5).contains(&body[32])
+            || native_u64(body, 33)? != sequence
+            || native_u64(state, 69)? != sequence
+        {
+            return Err(refused());
+        }
+        let id: [u8; 32] = body[..32].try_into().map_err(|_| refused())?;
+        if id == [0; 32] || !revoked.insert(id) {
+            return Err(refused());
+        }
+        registered.remove(&id);
+    }
+    Ok(())
+}
+
 pub(super) fn current(
     identity: &Identity,
     anchor: &Verified,
@@ -175,35 +226,13 @@ pub(super) fn current(
             return Err(refused());
         }
         native_checkpoint(item)?;
-        if let Some(registration) =
-            Registration::from_receipt(protocol, &next, item.facts.global_sequence)?
-        {
-            let id = registration.grant.grant_id;
-            if revoked.contains(&id) || registered.insert(id, registration).is_some() {
-                return Err(refused());
-            }
-        }
-        for effect in protocol
-            .effects()
-            .iter()
-            .filter(|e| e.module_id() == 7 && e.event_type() == 0x7106)
-        {
-            let body = effect.body();
-            if body.len() != 41
-                || effect.kind() != 3
-                || effect.monetary()
-                || !(1..=5).contains(&body[32])
-                || native_u64(body, 33)? != item.facts.global_sequence
-                || native_u64(&next, 69)? != item.facts.global_sequence
-            {
-                return Err(refused());
-            }
-            let id: [u8; 32] = body[..32].try_into().map_err(|_| refused())?;
-            if id == [0; 32] || !revoked.insert(id) {
-                return Err(refused());
-            }
-            registered.remove(&id);
-        }
+        update_sessions(
+            protocol,
+            &next,
+            item.facts.global_sequence,
+            &mut registered,
+            &mut revoked,
+        )?;
         state = next;
     }
     let revision = native_u64(&state, 69)?;
@@ -407,5 +436,99 @@ mod tests {
             changed_key[0] ^= 1;
             assert!(layerx_proof::receipt::verify_sequencer_signature(bytes, changed_key).is_err());
         }
+    }
+
+    #[test]
+    fn native_revocation_and_replacement_preserve_only_current_membership() {
+        let key =
+            *include_bytes!("../../tests/fixtures/native-sessions/lifecycle/sequencer-public");
+        let receipts: [&[u8]; 10] = [
+            include_bytes!("../../tests/fixtures/native-sessions/lifecycle/grant-1.receipt"),
+            include_bytes!("../../tests/fixtures/native-sessions/lifecycle/grant-2.receipt"),
+            include_bytes!("../../tests/fixtures/native-sessions/lifecycle/grant-3.receipt"),
+            include_bytes!("../../tests/fixtures/native-sessions/lifecycle/grant-4.receipt"),
+            include_bytes!("../../tests/fixtures/native-sessions/lifecycle/grant-5.receipt"),
+            include_bytes!("../../tests/fixtures/native-sessions/lifecycle/grant-6.receipt"),
+            include_bytes!("../../tests/fixtures/native-sessions/lifecycle/grant-7.receipt"),
+            include_bytes!("../../tests/fixtures/native-sessions/lifecycle/grant-8.receipt"),
+            include_bytes!("../../tests/fixtures/native-sessions/lifecycle/grant-9.receipt"),
+            include_bytes!("../../tests/fixtures/native-sessions/lifecycle/grant-10.receipt"),
+        ];
+        let mut registered = BTreeMap::new();
+        let mut revoked = BTreeSet::new();
+        let mut revision = 0;
+        let mut previous_sequence = 0;
+        let mut authentication_id = None;
+        let mut replacement_id = None;
+        for (index, bytes) in receipts.iter().enumerate() {
+            let receipt = layerx_proof::receipt::verify_sequencer_signature(bytes, key)
+                .unwrap_or_else(|error| panic!("native lifecycle signature: {error:?}"));
+            let protocol = receipt
+                .protocol()
+                .unwrap_or_else(|| panic!("native protocol"));
+            let sequence = protocol.global_sequence();
+            assert!(sequence > previous_sequence);
+            previous_sequence = sequence;
+            let before: Vec<_> = registered.keys().copied().collect();
+            let state = if protocol.result_code() == 0 {
+                protocol
+                    .effects()
+                    .iter()
+                    .find(|e| e.module_id() == 7 && e.event_type() == 0x7110)
+                    .unwrap_or_else(|| panic!("native identity state"))
+                    .body()
+            } else {
+                &[]
+            };
+            update_sessions(protocol, state, sequence, &mut registered, &mut revoked)
+                .unwrap_or_else(|_| panic!("native lifecycle {index}"));
+            if matches!(index, 6 | 7 | 9) {
+                assert_ne!(protocol.result_code(), 0);
+                assert_eq!(registered.keys().copied().collect::<Vec<_>>(), before);
+            } else {
+                assert_eq!(protocol.result_code(), 0);
+                revision = native_u64(state, 69).unwrap_or_else(|_| panic!("native revision"));
+            }
+            if index < 4 {
+                assert_eq!(registered.len(), index + 1);
+                if index == 2 {
+                    let (id, grant) = registered
+                        .iter()
+                        .find(|(_, entry)| entry.grant.purpose == SessionPurpose::Authentication)
+                        .unwrap_or_else(|| panic!("native authentication grant"));
+                    assert!(grant.grant.permitted_activity_types.is_empty());
+                    assert!(grant.grant.fee_budget.is_none());
+                    authentication_id = Some(*id);
+                }
+            }
+            if index == 4 {
+                let id = authentication_id.unwrap_or_else(|| panic!("authentication identity"));
+                assert!(revoked.contains(&id));
+                assert!(!registered.contains_key(&id));
+            }
+            if (4..8).contains(&index) {
+                assert!(registered
+                    .values()
+                    .all(|entry| entry.grant.revocation_sequence != revision));
+            }
+            if index == 8 {
+                let live: Vec<_> = registered
+                    .iter()
+                    .filter(|(_, entry)| entry.grant.revocation_sequence == revision)
+                    .collect();
+                assert_eq!(live.len(), 1);
+                assert!(live[0].1.grant.fee_budget.is_some());
+                replacement_id = Some(*live[0].0);
+            }
+        }
+        let id = replacement_id.unwrap_or_else(|| panic!("native replacement identity"));
+        assert!(!revoked.contains(&id));
+        assert_eq!(
+            registered
+                .values()
+                .filter(|entry| entry.grant.revocation_sequence == revision)
+                .count(),
+            1
+        );
     }
 }
