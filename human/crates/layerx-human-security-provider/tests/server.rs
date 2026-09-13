@@ -2,6 +2,7 @@ mod support;
 
 use data_encoding::BASE32_NOPAD;
 use hmac::{Hmac, Mac as _};
+use layerx_client::runtime_clock::RuntimeClock;
 use layerx_human_security_provider::{serve, Config, Store};
 use layerx_human_service::security::{
     AuthenticatorProvider, RecoveryEvidenceProvider, SecurityBoundaryError,
@@ -10,6 +11,7 @@ use layerx_human_service::server::production_auth::{
     RemoteSecurityProvider, SecurityProviderConfig,
 };
 use layerx_human_service::store::PrincipalId;
+use layerx_types::clock::{Clock, Deadline};
 use sha1::Sha1;
 use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -21,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture {
@@ -70,11 +72,14 @@ impl Fixture {
             deadline: Duration::from_secs(1),
         };
         let shutdown = stop.clone();
-        let thread = std::thread::spawn(move || serve(config, shutdown));
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let clock = RuntimeClock::from_environment().unwrap();
+        let service_clock = clock.clone();
+        let thread = std::thread::spawn(move || serve(config, shutdown, service_clock));
+        let clock = RuntimeClock::from_environment().unwrap();
+        let mut deadline = Deadline::start(clock.as_ref(), Duration::from_secs(5)).unwrap();
         while !self.socket().exists() {
             assert!(!thread.is_finished(), "server exited before binding");
-            assert!(Instant::now() < deadline);
+            assert!(!deadline.remaining(clock.as_ref()).unwrap().is_zero());
             std::thread::sleep(Duration::from_millis(10));
         }
         Running {
@@ -356,7 +361,8 @@ fn slow_partial_frame_has_total_deadline() {
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
     stream.write_all(&10u32.to_be_bytes()).unwrap();
-    let start = Instant::now();
+    let clock = RuntimeClock::from_environment().unwrap();
+    let start = clock.sample(Duration::from_secs(1)).unwrap();
     for byte in b"LXSP" {
         if stream.write_all(&[*byte]).is_err() {
             break;
@@ -365,7 +371,14 @@ fn slow_partial_frame_has_total_deadline() {
     }
     let mut response = [0; 1];
     assert!(matches!(stream.read(&mut response), Ok(0) | Err(_)));
-    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(
+        clock
+            .sample(Duration::from_secs(1))
+            .unwrap()
+            .elapsed_since(start)
+            .unwrap()
+            < Duration::from_secs(2)
+    );
     fixture.client().probe().unwrap();
 }
 
@@ -460,10 +473,11 @@ fn binary_configuration_and_signal_shutdown() {
     }
     for signal in [rustix::process::Signal::TERM, rustix::process::Signal::INT] {
         let mut child = configured().spawn().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let clock = RuntimeClock::from_environment().unwrap();
+        let mut deadline = Deadline::start(clock.as_ref(), Duration::from_secs(5)).unwrap();
         while fixture.client().probe().is_err() {
             assert!(child.try_wait().unwrap().is_none());
-            assert!(Instant::now() < deadline);
+            assert!(!deadline.remaining(clock.as_ref()).unwrap().is_zero());
             std::thread::sleep(Duration::from_millis(10));
         }
         rustix::process::kill_process(
@@ -472,7 +486,7 @@ fn binary_configuration_and_signal_shutdown() {
         )
         .unwrap();
         while child.try_wait().unwrap().is_none() {
-            assert!(Instant::now() < deadline);
+            assert!(!deadline.remaining(clock.as_ref()).unwrap().is_zero());
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(child.wait().unwrap().success());

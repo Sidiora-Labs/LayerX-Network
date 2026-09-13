@@ -1,6 +1,7 @@
+use layerx_types::clock::Clock;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -83,6 +84,7 @@ pub trait PrivilegedHumanServices: Send + 'static {
 pub struct PrivilegedHumanComponents<S: PrivilegedHumanServices> {
     state: Mutex<PrivilegedState<S>>,
     policy: AuthorizationGrantPolicy,
+    clock: std::sync::Arc<dyn Clock>,
 }
 
 struct PrivilegedState<S> {
@@ -123,6 +125,7 @@ impl<S: PrivilegedHumanServices> PrivilegedHumanComponents<S> {
         passkeys: Passkeys,
         services: S,
         policy: AuthorizationGrantPolicy,
+        clock: std::sync::Arc<dyn Clock>,
     ) -> Result<Self, ApiFailure> {
         Ok(Self {
             state: Mutex::new(PrivilegedState {
@@ -132,6 +135,7 @@ impl<S: PrivilegedHumanServices> PrivilegedHumanComponents<S> {
                 grants: BTreeMap::new(),
             }),
             policy: policy.validate()?,
+            clock,
         })
     }
 }
@@ -146,7 +150,11 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
         if operation.is_public_bootstrap() {
             return Err(ApiFailure::forbidden());
         }
-        let now = unix_seconds()?;
+        let now = self
+            .clock
+            .sample(Duration::from_secs(1))
+            .map_err(|_| ApiFailure::unavailable())?
+            .unix_seconds();
         let mut state = self.state.lock().map_err(|_| ApiFailure::unavailable())?;
         let passkeys = state.passkeys.clone();
         let principal =
@@ -225,7 +233,11 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
     }
 
     fn execute(&self, request: ScopedRequest<'_>) -> Result<BackendResponse, ApiFailure> {
-        let now = unix_seconds()?;
+        let now = self
+            .clock
+            .sample(Duration::from_secs(1))
+            .map_err(|_| ApiFailure::unavailable())?
+            .unix_seconds();
         let mut state = self.state.lock().map_err(|_| ApiFailure::unavailable())?;
         let operation_request = ComponentOperationRequest {
             operation: request.operation,
@@ -317,7 +329,11 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
     }
 
     fn readiness(&self, _trace: &str) -> Result<Readiness, ApiFailure> {
-        let now = unix_seconds()?;
+        let now = self
+            .clock
+            .sample(Duration::from_secs(1))
+            .map_err(|_| ApiFailure::unavailable())?
+            .unix_seconds();
         let mut state = self.state.lock().map_err(|_| ApiFailure::unavailable())?;
         let PrivilegedState {
             store, services, ..
@@ -332,13 +348,6 @@ fn mint_authorization() -> Result<String, ApiFailure> {
     let encoded = URL_SAFE_NO_PAD.encode(entropy);
     entropy.zeroize();
     Ok(encoded)
-}
-
-fn unix_seconds() -> Result<u64, ApiFailure> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| ApiFailure::unavailable())
-        .map(|duration| duration.as_secs())
 }
 
 pub(super) fn map_auth_error(error: &AuthError) -> ApiFailure {

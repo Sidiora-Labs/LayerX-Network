@@ -1,7 +1,8 @@
+use layerx_types::clock::Clock;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -64,9 +65,17 @@ pub struct Router<B: HumanApiComponents> {
     backend: Arc<B>,
     limits: PrincipalLimits,
     config: HttpConfig,
+    clock: Arc<dyn Clock>,
 }
 
 impl<B: HumanApiComponents> Router<B> {
+    fn unix_seconds(&self) -> Result<u64, ApiFailure> {
+        self.clock
+            .sample(Duration::from_secs(1))
+            .map(|reading| reading.unix_seconds())
+            .map_err(|_| ApiFailure::unavailable())
+    }
+
     /// Creates a router from the embedded schema and explicit finite policies.
     ///
     /// # Errors
@@ -76,6 +85,7 @@ impl<B: HumanApiComponents> Router<B> {
         backend: Arc<B>,
         limits: PrincipalLimits,
         config: HttpConfig,
+        clock: Arc<dyn Clock>,
     ) -> Result<Self, ApiFailure> {
         let schema = ApiSchema::v1().map_err(|_| ApiFailure::unavailable())?;
         Ok(Self {
@@ -83,6 +93,7 @@ impl<B: HumanApiComponents> Router<B> {
             backend,
             limits,
             config: config.validate()?,
+            clock,
         })
     }
 
@@ -218,7 +229,10 @@ impl<B: HumanApiComponents> Router<B> {
     }
 
     fn version_response(&self, trace: &TraceId, public_rate_key: &str) -> HttpResponse {
-        if let Err(failure) = self.limits.admit(public_rate_key, unix_seconds()) {
+        if let Err(failure) = self
+            .unix_seconds()
+            .and_then(|now| self.limits.admit(public_rate_key, now))
+        {
             return error_response(trace, &failure);
         }
         let (major, minor) = self.schema.version();
@@ -273,7 +287,7 @@ impl<B: HumanApiComponents> Router<B> {
         } = authorization;
         let cookies = parse_cookies(request.header("cookie"))?;
         if operation.is_public_bootstrap() {
-            self.limits.admit(public_rate_key, unix_seconds())?;
+            self.limits.admit(public_rate_key, self.unix_seconds()?)?;
             Ok(None)
         } else {
             let credential_name = if operation.uses_refresh_cookie() {
@@ -304,7 +318,7 @@ impl<B: HumanApiComponents> Router<B> {
                 trace.as_str(),
             )?;
             self.limits
-                .admit(context.principal.as_str(), unix_seconds())?;
+                .admit(context.principal.as_str(), self.unix_seconds()?)?;
             Ok(Some(context))
         }
     }
@@ -426,12 +440,6 @@ fn mint_trace(inbound: Option<&str>) -> Result<TraceId, TraceId> {
         return Err(TraceId::mint([0_u8; 16]));
     }
     Ok(TraceId::mint(entropy))
-}
-
-fn unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
 }
 
 fn json_digest(value: &Value) -> Result<[u8; 32], ApiFailure> {

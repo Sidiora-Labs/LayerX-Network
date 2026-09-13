@@ -22,6 +22,7 @@ pub struct Server {
     state: State,
     allowed_uid: u32,
     deadline: Duration,
+    clock: std::sync::Arc<dyn layerx_types::clock::Clock>,
 }
 
 impl Server {
@@ -34,6 +35,7 @@ impl Server {
         state: State,
         allowed_uid: u32,
         deadline: Duration,
+        clock: std::sync::Arc<dyn layerx_types::clock::Clock>,
     ) -> io::Result<Self> {
         if !socket.is_absolute() || deadline.is_zero() || deadline > Duration::from_secs(60) {
             return Err(invalid("invalid socket path or deadline"));
@@ -56,6 +58,7 @@ impl Server {
             state,
             allowed_uid,
             deadline,
+            clock,
         })
     }
 
@@ -69,7 +72,12 @@ impl Server {
                 Ok((mut peer, _)) => {
                     let credentials = rustix::net::sockopt::socket_peercred(&peer)?;
                     if credentials.uid.as_raw() == self.allowed_uid {
-                        wire::serve(&mut peer, &mut self.state, self.deadline)?;
+                        wire::serve(
+                            &mut peer,
+                            &mut self.state,
+                            self.deadline,
+                            self.clock.as_ref(),
+                        )?;
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {

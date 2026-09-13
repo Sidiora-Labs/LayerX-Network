@@ -1,6 +1,7 @@
+use layerx_types::clock::{Clock, Deadline};
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::{invalid, State};
 
@@ -10,9 +11,10 @@ pub(crate) fn serve(
     stream: &mut UnixStream,
     state: &mut State,
     deadline: Duration,
+    clock: &dyn Clock,
 ) -> io::Result<()> {
-    let expires = Instant::now() + deadline;
-    let request = read_request(stream, expires);
+    let mut expires = Deadline::start(clock, deadline).map_err(io::Error::other)?;
+    let request = read_request(stream, &mut expires, clock);
     state.ready()?;
     let result = match request {
         Ok((0, fields)) if fields.is_empty() => Ok(Vec::new()),
@@ -46,19 +48,23 @@ pub(crate) fn serve(
         .to_be_bytes()
         .to_vec();
     framed.extend_from_slice(&response);
-    let _ = write_before(stream, &framed, expires);
+    let _ = write_before(stream, &framed, &mut expires, clock);
     Ok(())
 }
 
-fn read_request(stream: &mut UnixStream, expires: Instant) -> io::Result<(u8, Vec<Vec<u8>>)> {
+fn read_request(
+    stream: &mut UnixStream,
+    expires: &mut Deadline,
+    clock: &dyn Clock,
+) -> io::Result<(u8, Vec<Vec<u8>>)> {
     let mut length = [0; 4];
-    read_before(stream, &mut length, expires)?;
+    read_before(stream, &mut length, expires, clock)?;
     let length = u32::from_be_bytes(length) as usize;
     if !(10..=MAX_FRAME).contains(&length) {
         return Err(invalid("frame length"));
     }
     let mut bytes = vec![0; length];
-    read_before(stream, &mut bytes, expires)?;
+    read_before(stream, &mut bytes, expires, clock)?;
     decode(&bytes)
 }
 
@@ -101,16 +107,22 @@ fn decode(bytes: &[u8]) -> io::Result<(u8, Vec<Vec<u8>>)> {
     Ok((operation, fields))
 }
 
-fn remaining(expires: Instant) -> io::Result<Duration> {
-    expires
-        .checked_duration_since(Instant::now())
-        .filter(|value| !value.is_zero())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "frame deadline"))
+fn remaining(expires: &mut Deadline, clock: &dyn Clock) -> io::Result<Duration> {
+    let remaining = expires.remaining(clock).map_err(io::Error::other)?;
+    if remaining.is_zero() {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "frame deadline"));
+    }
+    Ok(remaining)
 }
 
-fn read_before(stream: &mut UnixStream, mut bytes: &mut [u8], expires: Instant) -> io::Result<()> {
+fn read_before(
+    stream: &mut UnixStream,
+    mut bytes: &mut [u8],
+    expires: &mut Deadline,
+    clock: &dyn Clock,
+) -> io::Result<()> {
     while !bytes.is_empty() {
-        stream.set_read_timeout(Some(remaining(expires)?))?;
+        stream.set_read_timeout(Some(remaining(expires, clock)?))?;
         match stream.read(bytes) {
             Ok(0) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
             Ok(count) => bytes = &mut bytes[count..],
@@ -121,9 +133,14 @@ fn read_before(stream: &mut UnixStream, mut bytes: &mut [u8], expires: Instant) 
     Ok(())
 }
 
-fn write_before(stream: &mut UnixStream, mut bytes: &[u8], expires: Instant) -> io::Result<()> {
+fn write_before(
+    stream: &mut UnixStream,
+    mut bytes: &[u8],
+    expires: &mut Deadline,
+    clock: &dyn Clock,
+) -> io::Result<()> {
     while !bytes.is_empty() {
-        stream.set_write_timeout(Some(remaining(expires)?))?;
+        stream.set_write_timeout(Some(remaining(expires, clock)?))?;
         match stream.write(bytes) {
             Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
             Ok(count) => bytes = &bytes[count..],

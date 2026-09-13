@@ -221,6 +221,7 @@ impl Store {
         &mut self,
         request: &Request<'_>,
         signing_digest: Option<[u8; 32]>,
+        now: u64,
     ) -> Result<Vec<u8>> {
         if !self.healthy {
             return Err(Error::Unavailable);
@@ -244,7 +245,7 @@ impl Store {
             return self.authorize_send(request, signing_digest.ok_or(Error::Refused)?);
         }
         if request.operation >= 6 {
-            return self.evm(request);
+            return self.evm(request, now);
         }
         let key = hex(&request.binding);
         let record = self.state.records.get_mut(&key).ok_or(Error::NotFound)?;
@@ -303,7 +304,7 @@ impl Store {
         self.persist()?;
         Ok(signature)
     }
-    fn evm(&mut self, request: &Request<'_>) -> Result<Vec<u8>> {
+    fn evm(&mut self, request: &Request<'_>, now: u64) -> Result<Vec<u8>> {
         use crate::evm_types::{EvmAcknowledgement, EvmPlanAuthorization};
         let record = self
             .state
@@ -325,10 +326,6 @@ impl Store {
             return Ok(address.to_vec());
         }
         let wallet = record.wallet.as_mut().ok_or(Error::NotFound)?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| Error::Unavailable)?
-            .as_secs();
         let action = match request.operation {
             7 => {
                 let authorization: EvmPlanAuthorization =

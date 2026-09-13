@@ -477,7 +477,8 @@ spec:
               mountPath: /run/layerx/human
               subPath: human
           command:
-            - /usr/local/bin/layerx-human-service
+            - /usr/local/bin/human-entrypoint
+            - service
         - name: components
           image: ghcr.io/sidiora-labs/layerx-human:0.1.0
           imagePullPolicy: Always

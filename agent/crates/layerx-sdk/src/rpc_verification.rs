@@ -1,5 +1,6 @@
+use layerx_types::clock::Deadline;
 use std::cmp::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use layerx_client::evidence::{
     verification_label, verify_account_evidence, AccountEvidencePolicy, RootSelector,
@@ -344,16 +345,24 @@ impl RpcClient {
             return Err(RpcError::MissingFinalityTrust);
         }
         let id = super::rpc::encode_hex(&activity);
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or(RpcError::InvalidRequest)?;
+        if timeout.is_zero() {
+            return Err(RpcError::Pending {
+                activity_id: activity,
+            });
+        }
+        let clock = self.clock()?;
+        let mut deadline = Deadline::start(clock.as_ref(), timeout).map_err(RpcError::Clock)?;
         loop {
-            if Instant::now() >= deadline {
+            if deadline
+                .remaining(clock.as_ref())
+                .map_err(RpcError::Clock)?
+                .is_zero()
+            {
                 return Err(RpcError::Pending {
                     activity_id: activity,
                 });
             }
-            match self.receipt_at_commitment(&id, activity, commitment, policy, deadline) {
+            match self.receipt_at_commitment(&id, activity, commitment, policy, &mut deadline) {
                 Ok(Some(receipt)) => return Ok(receipt),
                 Ok(None)
                 | Err(RpcError::Remote {
@@ -362,15 +371,47 @@ impl RpcClient {
                 }) => {}
                 Err(error) => return Err(error),
             }
-            if Instant::now() >= deadline {
+            if deadline
+                .remaining(clock.as_ref())
+                .map_err(RpcError::Clock)?
+                .is_zero()
+            {
                 return Err(RpcError::Pending {
                     activity_id: activity,
                 });
             }
             std::thread::sleep(
-                Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+                Duration::from_millis(50).min(
+                    deadline
+                        .remaining(clock.as_ref())
+                        .map_err(RpcError::Clock)?,
+                ),
             );
         }
+    }
+
+    fn read_before_deadline(
+        &self,
+        method: &str,
+        params: &Value,
+        deadline: &mut Deadline,
+    ) -> Result<Option<Value>, RpcError> {
+        let clock = self.clock()?;
+        let remaining = deadline
+            .remaining(clock.as_ref())
+            .map_err(RpcError::Clock)?;
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        let result = self.call_bounded(method, params, remaining);
+        if deadline
+            .remaining(clock.as_ref())
+            .map_err(RpcError::Clock)?
+            .is_zero()
+        {
+            return Ok(None);
+        }
+        result.map(Some)
     }
 
     fn receipt_at_commitment(
@@ -379,9 +420,14 @@ impl RpcClient {
         activity: [u8; 32],
         commitment: Commitment,
         policy: &ReceiptPolicy,
-        deadline: Instant,
+        deadline: &mut Deadline,
     ) -> Result<Option<VerifiedRpcReceipt>, RpcError> {
-        let result = self.get_receipt(id)?;
+        let clock = self.clock()?;
+        let Some(result) =
+            self.read_before_deadline("lx_getReceipt", &serde_json::json!([id]), deadline)?
+        else {
+            return Ok(None);
+        };
         if matches!(
             result.get("state").and_then(Value::as_str),
             Some("pending" | "unknown")
@@ -406,28 +452,65 @@ impl RpcClient {
         let batch_evidence = if commitment == Commitment::Executed {
             None
         } else {
-            if Instant::now() >= deadline {
+            if deadline
+                .remaining(clock.as_ref())
+                .map_err(RpcError::Clock)?
+                .is_zero()
+            {
                 return Ok(None);
             }
-            let proof = self.get_proof("receipt", id, None)?;
+            let Some(proof) = self.read_before_deadline(
+                "lx_getProof",
+                &serde_json::json!(["receipt", id]),
+                deadline,
+            )?
+            else {
+                return Ok(None);
+            };
             let evidence = verify_rpc_inclusion(&proof, id, &canonical, policy)?;
             if commitment == Commitment::Finalised {
-                if Instant::now() >= deadline {
+                if deadline
+                    .remaining(clock.as_ref())
+                    .map_err(RpcError::Clock)?
+                    .is_zero()
+                {
                     return Ok(None);
                 }
-                let node = self.get_node_info()?;
+                let Some(node) =
+                    self.read_before_deadline("lx_getNodeInfo", &serde_json::json!([]), deadline)?
+                else {
+                    return Ok(None);
+                };
                 let checkpoint_id = node
                     .get("latest_finalised_checkpoint")
                     .and_then(Value::as_str)
                     .ok_or(RpcError::InvalidResponse)?;
-                if Instant::now() >= deadline {
+                if deadline
+                    .remaining(clock.as_ref())
+                    .map_err(RpcError::Clock)?
+                    .is_zero()
+                {
                     return Ok(None);
                 }
-                let checkpoint = self.get_checkpoint(checkpoint_id)?;
+                let Some(checkpoint) = self.read_before_deadline(
+                    "lx_getCheckpoint",
+                    &serde_json::json!([checkpoint_id]),
+                    deadline,
+                )?
+                else {
+                    return Ok(None);
+                };
                 verify_rpc_checkpoint(&checkpoint, evidence.canonical_header(), policy)?;
             }
             Some(evidence)
         };
+        if deadline
+            .remaining(clock.as_ref())
+            .map_err(RpcError::Clock)?
+            .is_zero()
+        {
+            return Ok(None);
+        }
         Ok(Some(VerifiedRpcReceipt {
             receipt,
             commitment,

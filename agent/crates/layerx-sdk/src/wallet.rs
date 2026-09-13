@@ -271,6 +271,10 @@ impl Wallet<'_> {
         prepared: PreparedPayment,
         options: &PaymentOptions,
     ) -> Result<VerifiedRpcReceipt, RpcError> {
+        self.rpc
+            .clock()?
+            .sample(Duration::from_secs(1))
+            .map_err(RpcError::Clock)?;
         let signature = sign_disclosed(
             self.signer,
             &prepared.canonical,

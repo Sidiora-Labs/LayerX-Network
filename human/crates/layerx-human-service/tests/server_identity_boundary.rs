@@ -279,6 +279,10 @@ fn real_component_boundary_registers_asserts_opens_and_authorizes_session() {
                 lifetime_seconds: 30,
                 maximum_outstanding: 32,
             },
+            required(
+                layerx_client::runtime_clock::RuntimeClock::from_environment(),
+                "clock authority",
+            ),
         ),
         "privileged components",
     );
@@ -459,6 +463,10 @@ fn verify_principal_route(socket: &std::path::Path, access_token: &str) {
                 allowed_origin: ORIGIN.to_owned(),
                 service_version: "test".to_owned(),
             },
+            required(
+                layerx_client::runtime_clock::RuntimeClock::from_environment(),
+                "clock authority",
+            ),
         ),
         "principal router",
     ));

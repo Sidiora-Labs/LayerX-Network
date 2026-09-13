@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+layerx-client.workspace = true
 layerx-human-service = { path = "../layerx-human-service" }
 layerx-types.workspace = true
 layerx-wire.workspace = true

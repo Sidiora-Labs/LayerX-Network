@@ -284,6 +284,10 @@ fn human_journey_and_approval_cross_tls_and_recover_after_sink_loss() {
                 lifetime_seconds: 30,
                 maximum_outstanding: 32,
             },
+            required(
+                layerx_client::runtime_clock::RuntimeClock::from_environment(),
+                "clock authority",
+            ),
         ),
         "privileged components",
     );
@@ -448,8 +452,17 @@ fn verify_delivery(socket: &std::path::Path, access_token: &str) {
         producer.spawn(Arc::downgrade(&outbox), Arc::clone(&health)),
         "worker",
     );
-    let deadline = std::time::Instant::now() + Duration::from_secs(36);
-    while health.ready() && std::time::Instant::now() < deadline {
+    let clock = required(
+        layerx_client::runtime_clock::RuntimeClock::from_environment(),
+        "clock authority",
+    );
+    let mut deadline = required(
+        layerx_types::clock::Deadline::start(clock.as_ref(), Duration::from_secs(36)),
+        "deadline",
+    );
+    while health.ready()
+        && !required(deadline.remaining(clock.as_ref()), "remaining deadline").is_zero()
+    {
         thread::sleep(Duration::from_millis(100));
     }
     assert!(!outbox.ready());
@@ -458,9 +471,16 @@ fn verify_delivery(socket: &std::path::Path, access_token: &str) {
         Some(second.clone())
     );
     let approval = source(Kind::Approval, approval_port);
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let clock = required(
+        layerx_client::runtime_clock::RuntimeClock::from_environment(),
+        "clock authority",
+    );
+    let mut deadline = required(
+        layerx_types::clock::Deadline::start(clock.as_ref(), Duration::from_secs(10)),
+        "deadline",
+    );
     while required(outbox.pending(), "recovery queue").is_some()
-        && std::time::Instant::now() < deadline
+        && !required(deadline.remaining(clock.as_ref()), "remaining deadline").is_zero()
     {
         thread::sleep(Duration::from_millis(100));
     }
@@ -725,6 +745,10 @@ fn human_listener(tls: &transport::Tls, socket: &std::path::Path) -> transport::
                 allowed_origin: ORIGIN.to_owned(),
                 service_version: "integration".to_owned(),
             },
+            required(
+                layerx_client::runtime_clock::RuntimeClock::from_environment(),
+                "clock authority",
+            ),
         ),
         "router",
     ));

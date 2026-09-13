@@ -3,7 +3,10 @@ set -eu
 umask 077
 role=${1:?Human role is required}
 shift
-private=/run/human-private/$role
+case "$role" in
+    service) private=/run/layerx/human/service-private ;;
+    *) private=/run/human-private/$role ;;
+esac
 mkdir -p "$private"
 chmod 0700 "$private"
 copy_material() {
@@ -17,13 +20,13 @@ case "$role" in
         copy_material kms-client-key.der
         copy_material ca.der
         copy_material purpose-catalog.json
-        exec /usr/local/bin/layerx-human-components "$@"
+        exec /usr/local/bin/layerx-runtime-clock --runtime-dir "$private" -- /usr/local/bin/layerx-human-components "$@"
         ;;
     kms)
         for name in kms-server.der kms-server-key.der kms-client.der kms-executor.der ca.der kms-seal registry.json; do
             copy_material "$name"
         done
-        exec /usr/local/bin/layerx-human-kms "$@"
+        exec /usr/local/bin/layerx-runtime-clock --runtime-dir "$private" -- /usr/local/bin/layerx-human-kms "$@"
         ;;
     agent)
         copy_material ca.der
@@ -35,18 +38,18 @@ case "$role" in
         ;;
     identity)
         copy_material recovery-policy.json
-        exec /usr/local/bin/layerx-human-identity-provider "$@"
+        exec /usr/local/bin/layerx-runtime-clock --runtime-dir "$private" -- /usr/local/bin/layerx-human-identity-provider "$@"
         ;;
     security)
         copy_material trust-history
-        exec /usr/local/bin/layerx-human-security-provider "$@"
+        exec /usr/local/bin/layerx-runtime-clock --runtime-dir "$private" -- /usr/local/bin/layerx-human-security-provider "$@"
         ;;
     movement)
         for name in ca.der kms-executor.der kms-executor-key.der; do
             copy_material "$name"
         done
-        exec /usr/local/bin/layerx-human-movement-provider "$@"
+        exec /usr/local/bin/layerx-runtime-clock --runtime-dir "$private" -- /usr/local/bin/layerx-human-movement-provider "$@"
         ;;
-    service) exec /usr/local/bin/layerx-human-service "$@" ;;
+    service) exec /usr/local/bin/layerx-runtime-clock --runtime-dir "$private" -- /usr/local/bin/layerx-human-service "$@" ;;
     *) printf 'unknown Human role\n' >&2; exit 64 ;;
 esac

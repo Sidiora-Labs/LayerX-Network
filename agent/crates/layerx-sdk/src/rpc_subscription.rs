@@ -1,5 +1,9 @@
+use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
+
+use layerx_types::clock::{Clock, Deadline};
 
 use serde_json::{json, Value};
 use tungstenite::{
@@ -22,7 +26,7 @@ pub enum SubscriptionTopic {
 }
 
 pub struct RpcSubscription {
-    socket: WebSocket<MaybeTlsStream<TcpStream>>,
+    socket: WebSocket<MaybeTlsStream<DeadlineStream>>,
     id: String,
     cursor: Option<u64>,
 }
@@ -58,6 +62,7 @@ impl RpcSubscription {
     /// # Errors
     /// Reports refused cancellations, malformed acknowledgements and lost connections.
     pub fn unsubscribe(&mut self) -> Result<(), RpcError> {
+        transport(&mut self.socket)?.reset()?;
         self.socket
             .send(Message::Text(
                 json!({"jsonrpc":"2.0", "id":UNSUBSCRIBE_ID, "method":"lx_unsubscribe", "params":[self.id.as_str()]})
@@ -66,7 +71,7 @@ impl RpcSubscription {
             ))
             .map_err(|_| RpcError::Transport)?;
         for _ in 0..=MAX_PENDING_EVENTS {
-            let value = receive_json(&mut self.socket)?.ok_or(RpcError::Transport)?;
+            let value = receive_until(&mut self.socket)?.ok_or(RpcError::Transport)?;
             if value.get("method").and_then(Value::as_str) == Some("lx_subscription") {
                 let (_, cursor) = notification(&value, &self.id)?;
                 self.cursor = Some(cursor);
@@ -80,6 +85,7 @@ impl RpcSubscription {
     /// # Errors
     /// Reports a failed connection close.
     pub fn close(&mut self) -> Result<(), RpcError> {
+        transport(&mut self.socket)?.reset()?;
         self.socket.close(None).map_err(|_| RpcError::Transport)
     }
 }
@@ -108,6 +114,7 @@ pub(crate) fn connect(
     endpoint: &url::Url,
     credential: Option<&LayerXKeyCredential>,
     tls: Option<std::sync::Arc<rustls::ClientConfig>>,
+    clock: Arc<dyn Clock>,
     topic: SubscriptionTopic,
     account: Option<[u8; 32]>,
     cursor: Option<u64>,
@@ -127,14 +134,19 @@ pub(crate) fn connect(
     let port = endpoint
         .port_or_known_default()
         .ok_or(RpcError::InvalidRequest)?;
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut deadline =
+        Deadline::start(clock.as_ref(), Duration::from_secs(30)).map_err(RpcError::Clock)?;
     let mut stream = None;
-    for address in (host, port)
-        .to_socket_addrs()
-        .map_err(|_| RpcError::Transport)?
-        .take(16)
-    {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+    for address in resolve(
+        host,
+        port,
+        deadline
+            .remaining(clock.as_ref())
+            .map_err(RpcError::Clock)?,
+    )? {
+        let remaining = deadline
+            .remaining(clock.as_ref())
+            .map_err(RpcError::Clock)?;
         if remaining.is_zero() {
             return Err(RpcError::Transport);
         }
@@ -143,13 +155,11 @@ pub(crate) fn connect(
             break;
         }
     }
-    let stream = stream.ok_or(RpcError::Transport)?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .map_err(|_| RpcError::Transport)?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(30)))
-        .map_err(|_| RpcError::Transport)?;
+    let stream = DeadlineStream {
+        socket: stream.ok_or(RpcError::Transport)?,
+        clock,
+        deadline,
+    };
     let mut request = endpoint
         .as_str()
         .into_client_request()
@@ -181,28 +191,22 @@ pub(crate) fn connect(
                 .into(),
         ))
         .map_err(|_| RpcError::Transport)?;
-    let response = receive_json(&mut socket)?.ok_or(RpcError::Transport)?;
+    let response = receive_until(&mut socket)?.ok_or(RpcError::Transport)?;
     let id = acknowledgement(&response)?;
     Ok(RpcSubscription { socket, id, cursor })
 }
 
 fn receive_json(
-    socket: &mut WebSocket<MaybeTlsStream<TcpStream>>,
+    socket: &mut WebSocket<MaybeTlsStream<DeadlineStream>>,
 ) -> Result<Option<Value>, RpcError> {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(None);
-        }
-        let stream = match socket.get_mut() {
-            MaybeTlsStream::Plain(stream) => stream,
-            MaybeTlsStream::Rustls(stream) => &stream.sock,
-            _ => return Err(RpcError::Transport),
-        };
-        stream
-            .set_read_timeout(Some(remaining))
-            .map_err(|_| RpcError::Transport)?;
+    transport(socket)?.reset()?;
+    receive_until(socket)
+}
+
+fn receive_until(
+    socket: &mut WebSocket<MaybeTlsStream<DeadlineStream>>,
+) -> Result<Option<Value>, RpcError> {
+    while !transport(socket)?.remaining()?.is_zero() {
         match socket.read() {
             Ok(Message::Text(text)) => {
                 return serde_json::from_str(&text)
@@ -225,6 +229,107 @@ fn receive_json(
         }
     }
     Ok(None)
+}
+
+struct DeadlineStream {
+    socket: TcpStream,
+    clock: Arc<dyn Clock>,
+    deadline: Deadline,
+}
+
+impl DeadlineStream {
+    fn reset(&mut self) -> Result<(), RpcError> {
+        self.deadline = Deadline::start(self.clock.as_ref(), Duration::from_secs(30))
+            .map_err(RpcError::Clock)?;
+        Ok(())
+    }
+
+    fn remaining(&mut self) -> Result<Duration, RpcError> {
+        self.deadline
+            .remaining(self.clock.as_ref())
+            .map_err(RpcError::Clock)
+    }
+
+    fn budget(&mut self) -> io::Result<Duration> {
+        let remaining = self
+            .remaining()
+            .map_err(|_| io::Error::other("clock unavailable"))?;
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "subscription deadline reached",
+            ));
+        }
+        Ok(remaining)
+    }
+}
+
+impl Read for DeadlineStream {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let budget = self.budget()?;
+        self.socket.set_read_timeout(Some(budget))?;
+        let read = self.socket.read(bytes)?;
+        self.budget()?;
+        Ok(read)
+    }
+}
+
+impl Write for DeadlineStream {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let budget = self.budget()?;
+        self.socket.set_write_timeout(Some(budget))?;
+        let written = self.socket.write(bytes)?;
+        self.budget()?;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.budget()?;
+        self.socket.flush()
+    }
+}
+
+fn transport(
+    socket: &mut WebSocket<MaybeTlsStream<DeadlineStream>>,
+) -> Result<&mut DeadlineStream, RpcError> {
+    match socket.get_mut() {
+        MaybeTlsStream::Plain(stream) => Ok(stream),
+        MaybeTlsStream::Rustls(stream) => Ok(&mut stream.sock),
+        _ => Err(RpcError::Transport),
+    }
+}
+
+fn resolve(host: &str, port: u16, budget: Duration) -> Result<Vec<std::net::SocketAddr>, RpcError> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+    struct Permit;
+    impl Drop for Permit {
+        fn drop(&mut self) {
+            ACTIVE.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+    ACTIVE
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            (active < 16).then_some(active + 1)
+        })
+        .map_err(|_| RpcError::Transport)?;
+    let permit = Permit;
+    let host = host.to_owned();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("rpc-subscription-resolver".into())
+        .spawn(move || {
+            let _permit = permit;
+            let result = (host.as_str(), port)
+                .to_socket_addrs()
+                .map(|addresses| addresses.take(16).collect());
+            let _ = sender.send(result);
+        })
+        .map_err(|_| RpcError::Transport)?;
+    receiver
+        .recv_timeout(budget)
+        .map_err(|_| RpcError::Transport)?
+        .map_err(|_| RpcError::Transport)
 }
 
 fn remote(error: &Value) -> RpcError {

@@ -830,6 +830,7 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustix",
  "rustls",
  "sha2",
 ]
@@ -877,6 +878,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
+ "layerx-client",
  "layerx-human-service",
  "layerx-proof",
  "layerx-types",
@@ -940,9 +942,11 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hmac",
+ "layerx-client",
  "layerx-human-service",
  "layerx-programs-registry",
  "layerx-proof",
+ "layerx-types",
  "layerx-wire",
  "rustix",
  "serde",

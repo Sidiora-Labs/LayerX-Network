@@ -1,7 +1,9 @@
 use layerx_client::lni::framing::{read_frame, write_frame};
 use layerx_client::lni::transport::{Limits, MutualTlsConfig};
+use layerx_client::runtime_clock::RuntimeClock;
 use layerx_human_service::custody::{KeyClass, KeyId, Keystore, KmsProvider, RemoteKmsProvider};
 use layerx_human_service::store::PrincipalId;
+use layerx_types::clock::{Clock, Deadline};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::error::Error;
@@ -11,7 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const MAX: usize = 2_097_152;
@@ -32,7 +34,9 @@ impl Host {
         let root = std::env::temp_dir().join(format!(
             "lxkp-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+            RuntimeClock::from_environment()?
+                .sample(Duration::from_secs(1))?
+                .monotonic_nanoseconds
         ));
         fs::create_dir(&root)?;
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
@@ -194,7 +198,8 @@ impl Host {
     }
     fn start(&mut self) -> Result<()> {
         self.child = Some(self.launch()?);
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let clock = RuntimeClock::from_environment()?;
+        let mut deadline = Deadline::start(clock.as_ref(), Duration::from_secs(10))?;
         loop {
             if self.remote("client", "beta-kms")?.probe().is_ok() {
                 return Ok(());
@@ -208,7 +213,7 @@ impl Host {
             {
                 return Err("KMS exited at startup".into());
             }
-            if Instant::now() >= deadline {
+            if deadline.remaining(clock.as_ref())?.is_zero() {
                 return Err("KMS startup deadline".into());
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -363,13 +368,14 @@ fn atomic_rotation_lost_response_restart_and_tombstones() -> Result<()> {
         let mut tls = host.connection(Some("client"))?;
         checked(write_frame(&mut tls, &rotate, MAX))?;
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let clock = RuntimeClock::from_environment()?;
+    let mut deadline = Deadline::start(clock.as_ref(), Duration::from_secs(5))?;
     loop {
         let (_, observed) = facts(&host.call(&request(2, binding, &handle, None)?)?)?;
         if observed != original {
             break;
         }
-        if Instant::now() >= deadline {
+        if deadline.remaining(clock.as_ref())?.is_zero() {
             return Err("lost-response rotation was not committed".into());
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -408,13 +414,14 @@ fn atomic_rotation_lost_response_restart_and_tombstones() -> Result<()> {
     encrypted[20] ^= 1;
     fs::write(path, encrypted)?;
     let mut child = host.launch()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let clock = RuntimeClock::from_environment()?;
+    let mut deadline = Deadline::start(clock.as_ref(), Duration::from_secs(5))?;
     loop {
         if let Some(status) = child.try_wait()? {
             assert!(!status.success());
             break;
         }
-        if Instant::now() >= deadline {
+        if deadline.remaining(clock.as_ref())?.is_zero() {
             child.kill()?;
             child.wait()?;
             return Err("tampered state did not fail closed".into());
@@ -556,7 +563,9 @@ fn signing_request(
 fn authorize_canonical_send(host: &Host, binding: [u8; 32], handle: &[u8]) -> Result<[u8; 64]> {
     use layerx_human_service::custody::SendPlanAuthorization;
     use layerx_types::account::AccountId;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let now = RuntimeClock::from_environment()?
+        .sample(Duration::from_secs(1))?
+        .unix_seconds();
     let authorization = SendPlanAuthorization {
         plan_id: [61; 32],
         action_key: [62; 32],
@@ -784,7 +793,9 @@ fn evm_authorization_nonce_dedup_and_acknowledgement_recovery() -> Result<()> {
     let wallet = store.evm_wallet(&principal, &key)?;
     assert_ne!(wallet, [0; 20]);
     assert_eq!(wallet, store.evm_wallet(&principal, &key)?);
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let now = RuntimeClock::from_environment()?
+        .sample(Duration::from_secs(1))?
+        .unix_seconds();
     let authorization = EvmPlanAuthorization {
         plan_id: [1; 32],
         action_key: [2; 32],
@@ -918,7 +929,9 @@ fn native_send_authorization_is_scoped_and_durable() -> Result<()> {
         host.remote("client", "beta-kms")?,
     )?;
     let public = store.create(&principal, &key, KeyClass::HumanPrimary)?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let now = RuntimeClock::from_environment()?
+        .sample(Duration::from_secs(1))?
+        .unix_seconds();
     let authorization = SendPlanAuthorization {
         plan_id: [1; 32],
         action_key: [2; 32],
@@ -1034,7 +1047,9 @@ fn external_signature_verification_and_executor_journal_recovery() -> Result<()>
     store.create(&principal, &key, KeyClass::HumanPrimary)?;
     let binding = store.evm_binding(&principal, &key)?;
     let handle = store.evm_provider_reference(&principal, &key)?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let now = RuntimeClock::from_environment()?
+        .sample(Duration::from_secs(1))?
+        .unix_seconds();
     let authorization = EvmPlanAuthorization {
         plan_id: [1; 32],
         action_key: [2; 32],

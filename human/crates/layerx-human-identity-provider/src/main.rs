@@ -96,6 +96,14 @@ fn run() -> io::Result<()> {
             "expected serve, bind-device, provision-owner or provision-account",
         ));
     }
+    let clock = if matches!(command.as_deref(), None | Some("serve")) {
+        Some(
+            layerx_client::runtime_clock::RuntimeClock::from_environment()
+                .map_err(io::Error::other)?,
+        )
+    } else {
+        None
+    };
     if command.as_deref() == Some("validate-account-head") {
         return provision_head::run();
     }
@@ -140,7 +148,14 @@ fn run() -> io::Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
-    Server::bind(&socket, state, uid, Duration::from_secs(deadline))?.run(&shutdown)
+    Server::bind(
+        &socket,
+        state,
+        uid,
+        Duration::from_secs(deadline),
+        clock.ok_or_else(|| io::Error::other("clock authority required"))?,
+    )?
+    .run(&shutdown)
 }
 
 fn main() -> std::process::ExitCode {

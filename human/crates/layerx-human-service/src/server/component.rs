@@ -111,6 +111,7 @@ pub struct HumanComponentServer {
 
 #[derive(Clone)]
 struct MaintenanceRuntime {
+    clock: Arc<dyn layerx_types::clock::Clock>,
     backend: Arc<dyn ComponentMaintenance>,
     interval: Duration,
     maximum_items: usize,
@@ -135,6 +136,7 @@ impl HumanComponentServer {
         backend: Arc<B>,
         interval: Duration,
         maximum_items: usize,
+        clock: Arc<dyn layerx_types::clock::Clock>,
     ) -> Result<Self, ComponentServerError>
     where
         B: HumanApiComponents + ComponentMaintenance,
@@ -145,6 +147,7 @@ impl HumanComponentServer {
         Ok(Self {
             backend: Arc::clone(&backend) as Arc<dyn HumanApiComponents>,
             maintenance: Some(MaintenanceRuntime {
+                clock,
                 backend,
                 interval,
                 maximum_items,
@@ -229,7 +232,7 @@ impl BoundHumanComponentServer {
     /// Refuses invalid component configuration, protocol evidence, or authenticated transport.
     pub fn run(self) -> Result<(), ComponentServerError> {
         let maintenance_worker = if let Some(maintenance) = self.maintenance.clone() {
-            let now = epoch_seconds()?;
+            let now = epoch_seconds(maintenance.clock.as_ref())?;
             maintenance
                 .backend
                 .maintain(maintenance.maximum_items, now)
@@ -241,7 +244,7 @@ impl BoundHumanComponentServer {
                     if shutdown.requested() {
                         break;
                     }
-                    let Ok(now) = epoch_seconds() else {
+                    let Ok(now) = epoch_seconds(maintenance.clock.as_ref()) else {
                         maintenance.backend.set_maintenance_health(false);
                         break;
                     };
@@ -293,10 +296,10 @@ impl BoundHumanComponentServer {
     }
 }
 
-fn epoch_seconds() -> Result<u64, ComponentServerError> {
-    std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map(|value| value.as_secs())
+fn epoch_seconds(clock: &dyn layerx_types::clock::Clock) -> Result<u64, ComponentServerError> {
+    clock
+        .sample(Duration::from_secs(1))
+        .map(|reading| reading.unix_seconds())
         .map_err(|_| ComponentServerError::Protocol)
 }
 

@@ -73,6 +73,7 @@ impl Running {
             State::open(root, policy())?,
             allowed_uid,
             Duration::from_millis(200),
+            layerx_client::runtime_clock::RuntimeClock::from_environment()?,
         )?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&shutdown);
