@@ -166,6 +166,10 @@ fn signed(cluster: &Cluster, sequence: u64) -> (Vec<u8>, [u8; 32]) {
         layerx_wire::activity::encode_signed_envelope(&signed).required("signed withdrawal");
     let decoded =
         layerx_wire::activity::decode_signed(&bytes, &registry).required("withdrawal roundtrip");
+    assert_eq!(
+        (decoded.protocol_version(), decoded.network_id()),
+        (PROTOCOL_VERSION, NETWORK_ID)
+    );
     let id = layerx_wire::hash::activity_id(&decoded).required("withdrawal activity identifier");
     (bytes, id)
 }
@@ -241,12 +245,11 @@ pub(super) fn run(
     assert_eq!(
         (
             verified.protocol_version(),
-            verified.network_id(),
             verified.module_id(),
             verified.operation(),
             verified.result_code()
         ),
-        (PROTOCOL_VERSION, NETWORK_ID, 1, 9, 0)
+        (PROTOCOL_VERSION, 1, 9, 0)
     );
     assert_eq!(verified.activity_id(), activity_id);
     assert_eq!(verified.fee_charged(), 17);

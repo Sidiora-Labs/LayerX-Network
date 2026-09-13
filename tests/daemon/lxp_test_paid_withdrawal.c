@@ -89,7 +89,8 @@ static int paid_receipt(int descriptor, paid_record *record, lxp_result result,
             REQUIRE(lxp_receipt_verify(&receipt, sequencer.public_key, &arena) == LXP_OK);
             if (receipt.result_code != result)
                 fprintf(stderr, "paid withdrawal receipt result=%d expected=%d\n", receipt.result_code, result);
-            REQUIRE(receipt.protocol_version == 3U && receipt.network_id == NETWORK_ID);
+            REQUIRE(receipt.protocol_version == 3U && activity.protocol_version == 3U && activity.network_id == NETWORK_ID);
+            REQUIRE(lxp_activity_verify_signature(&activity) == LXP_OK);
             REQUIRE(memcmp(receipt.activity_id, record->activity_id, 32U) == 0);
             REQUIRE(receipt.module_id == lxp_activity_module_id(activity.activity_type));
             REQUIRE(receipt.result_code == result && receipt.fee_charged.hi == 0U && receipt.fee_charged.lo == fee);
