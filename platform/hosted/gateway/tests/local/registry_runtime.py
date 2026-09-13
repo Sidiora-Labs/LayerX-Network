@@ -107,8 +107,8 @@ def main():
     authority_token = mount_file(config["authority_token_file"])
     script = "#!/bin/sh\nset -eu\n"
     script += "\n".join(f"export {name}={shlex.quote(value)}" for name, value in environment.items()) + "\n"
-    script += f'export LAYERX_REGISTRY_NODE_AUTHORIZATION="Bearer $(cat {shlex.quote(node_token)})"\n'
-    script += f'export LAYERX_REGISTRY_RECEIPT_AUTHORITY_AUTHORIZATION="Bearer $(cat {shlex.quote(authority_token)})"\n'
+    script += f'export LAYERX_REGISTRY_NODE_AUTHORIZATION="$(cat {shlex.quote(node_token)})"\n'
+    script += f'export LAYERX_REGISTRY_RECEIPT_AUTHORITY_AUTHORIZATION="$(cat {shlex.quote(authority_token)})"\n'
     script += "exec /run/layerx/bin/layerx-program-registry\n"
     entrypoint = generated("entrypoint.sh", script.encode())
     name = f"layerx-registry-test-{os.getpid()}-{secrets.token_hex(4)}"
