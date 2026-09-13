@@ -599,7 +599,7 @@ export class Agents {
         request.purpose,
         monthlyLimit.currency,
         monthlyLimit.amount.toString(10),
-        nativeFeeBudgetIdentity(draft.nativeFeeBudget),
+        ...(draft.nativeFeeBudget === undefined ? [] : [nativeFeeBudgetIdentity(draft.nativeFeeBudget)]),
       ),
       (key) => this.#client.agentCreate(request, key),
     );

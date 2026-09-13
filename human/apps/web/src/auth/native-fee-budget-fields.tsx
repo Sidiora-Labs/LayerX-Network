@@ -60,7 +60,8 @@ export function NativeFeeBudgetFields({
               onChange={(event) => { control.setLimit(name, event.target.value); }}
             />
           ))}
-          {Object.values(control.limits).every((value) => value.length > 0) && control.budget === undefined
+          {(["perAction", "total", "perPeriod"] as const).every((name) => control.limits[name].length > 0)
+            && control.budget === undefined
             ? <p role="alert">{copyEntry("fees.limits.invalid").message}</p> : null}
         </>
       )}
