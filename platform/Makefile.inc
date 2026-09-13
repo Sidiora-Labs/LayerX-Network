@@ -75,7 +75,7 @@ platform-jvm-dependencies-install:
 		platform/integrations/spring/example/pom.xml \
 		platform/docs/samples/first-payment-jvm/pom.xml platform/docs/samples/paid-endpoint-spring/pom.xml \
 		platform/docs/samples/mobile-payment-android/pom.xml; do \
-		mvn -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f "$$pom" -Pconformance dependency:go-offline; \
+		mvn -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f "$$pom" -Pconformance verify dependency:go-offline; \
 	done
 
 
