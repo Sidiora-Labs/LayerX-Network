@@ -7,6 +7,7 @@
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_batch.h"
+#include "layerx/lxp_handover.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -180,6 +181,7 @@ typedef struct lxp_kernel {
     size_t blob_count;
     size_t blob_total_bytes;
     uint64_t epoch;
+    lxp_handover_state handover;
     lxp_kernel_parameter_reader read_parameter;
     lxp_kernel_transfer_applier apply_transfer_set;
     lxp_kernel_fee_transaction fee_transaction;
@@ -329,6 +331,8 @@ typedef struct lxp_kernel_execution {
     uint8_t batch_id[32];
     uint8_t activity_root[32];
     const uint8_t *sequencer_private_key;
+    const lxp_receipt *replay_receipt;
+    const uint8_t *replay_public_key;
     const lxp_verified_receipt_index *verified_receipts;
     /* Output only. On a committed Programs CALL, the kernel writes the exact
      * envelope projection that the replay transition must publish as that

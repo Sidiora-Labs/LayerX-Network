@@ -7,6 +7,7 @@
 #include "layerx/lxp_daemon.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_history.h"
+#include "layerx/lxp_handover.h"
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_storage.h"
@@ -466,14 +467,13 @@ static int custody_id(const signer *key, const char *module, const uint8_t objec
     return actor_name(key, suffix, id);
 }
 
-static int receipt_wait(int descriptor, const uint8_t id[32], lxp_result expected,
-                        lxp_receipt *receipt)
+static int receipt_wait_signed(int descriptor, const uint8_t id[32], lxp_result expected,
+                        lxp_receipt *receipt, const uint8_t public_key[32])
 {
     uint8_t query[34] = {1U};
-    signer sequencer;
     uint8_t *storage = malloc(2U * LXP_MAX_ACTIVITY_BYTES);
     lxp_arena arena;
-    REQUIRE(storage != NULL && signer_init(&sequencer, 0x22U) == 0);
+    REQUIRE(storage != NULL);
     memcpy(query + 1U, id, 32U);
     query[33U] = 1U;
     for (unsigned attempt = 0U; attempt < 200U; ++attempt) {
@@ -484,7 +484,7 @@ static int receipt_wait(int descriptor, const uint8_t id[32], lxp_result expecte
         if (response.payload_length != 0U) {
             REQUIRE(lxp_arena_init(&arena, storage, 2U * LXP_MAX_ACTIVITY_BYTES) == LXP_OK);
             REQUIRE(lxp_receipt_decode(response.payload, response.payload_length, true, receipt) == LXP_OK);
-            REQUIRE(lxp_receipt_verify(receipt, sequencer.public_key, &arena) == LXP_OK);
+            REQUIRE(lxp_receipt_verify(receipt, public_key, &arena) == LXP_OK);
             REQUIRE(memcmp(receipt->activity_id, id, 32U) == 0);
             if (receipt->result_code != expected)
                 fprintf(stderr, "module %u result %d expected %d\n", receipt->module_id,
@@ -502,6 +502,14 @@ static int receipt_wait(int descriptor, const uint8_t id[32], lxp_result expecte
     return 1;
 }
 
+static int receipt_wait(int descriptor, const uint8_t id[32], lxp_result expected,
+                        lxp_receipt *receipt)
+{
+    signer sequencer;
+    REQUIRE(signer_init(&sequencer, 0x22U) == 0);
+    return receipt_wait_signed(descriptor, id, expected, receipt, sequencer.public_key);
+}
+
 typedef struct batch_evidence {
     lxp_arena arena;
     uint8_t *storage;
@@ -517,7 +525,8 @@ typedef struct batch_evidence {
     lxp_merkle_proof maintenance_proof;
 } batch_evidence;
 
-static int batch_fetch(int descriptor, uint64_t batch, const uint8_t activity_id[32], batch_evidence *evidence)
+static int batch_fetch_authorized(int descriptor, uint64_t batch, const uint8_t activity_id[32],
+    batch_evidence *evidence, const lxp_sequencer_authorization *authorization, uint64_t epoch)
 {
     uint8_t query[10] = {0U, 1U};
     wire_envelope response;
@@ -526,9 +535,6 @@ static int batch_fetch(int descriptor, uint64_t batch, const uint8_t activity_id
     lxp_da_chunk *chunks;
     uint8_t signature[64];
     uint8_t root[32];
-    signer sequencer;
-    uint8_t sequencer_name[81], sequencer_id[32];
-    static const uint8_t digits[] = "0123456789abcdef";
     void *memory;
     memset(evidence, 0, sizeof(*evidence));
     evidence->storage = malloc(4U * LXP_MAX_BATCH_BODY_BYTES);
@@ -547,18 +553,12 @@ static int batch_fetch(int descriptor, uint64_t batch, const uint8_t activity_id
     }
     REQUIRE(response.proof_length == 146U && load_u16(response.proof) == 1U);
     REQUIRE(lxp_batch_header_decode(response.payload, response.payload_length, &header) == LXP_OK);
-    REQUIRE(header.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT && header.batch_number == batch && header.epoch == 1U);
-    REQUIRE(signer_init(&sequencer, 0x22U) == 0);
-    memcpy(sequencer_name, "layerx-sequencer:", 17U);
-    for (size_t i = 0U; i < 32U; ++i) {
-        sequencer_name[17U + i * 2U] = digits[sequencer.public_key[i] >> 4U];
-        sequencer_name[18U + i * 2U] = digits[sequencer.public_key[i] & 15U];
-    }
-    REQUIRE(lxp_hash_sha256(sequencer_name, sizeof(sequencer_name), sequencer_id) == LXP_OK);
+    REQUIRE(header.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT && header.batch_number == batch && header.epoch == epoch);
     REQUIRE(header.network_id == NETWORK_ID);
-    REQUIRE(memcmp(response.proof + 2U, sequencer_id, 32U) == 0);
-    REQUIRE(memcmp(response.proof + 34U, sequencer.public_key, 32U) == 0);
-    REQUIRE(load_u64(response.proof + 66U) == 1U && load_u64(response.proof + 74U) == UINT64_MAX);
+    REQUIRE(memcmp(response.proof + 2U, authorization->sequencer_id, 32U) == 0);
+    REQUIRE(memcmp(response.proof + 34U, authorization->public_key, 32U) == 0);
+    REQUIRE(load_u64(response.proof + 66U) == authorization->first_batch_number &&
+        load_u64(response.proof + 74U) == authorization->last_batch_number);
     memcpy(evidence->authorization.sequencer_id, response.proof + 2U, 32U);
     memcpy(evidence->authorization.public_key, response.proof + 34U, 32U);
     evidence->authorization.first_batch_number = load_u64(response.proof + 66U);
@@ -632,6 +632,23 @@ static int batch_fetch(int descriptor, uint64_t batch, const uint8_t activity_id
     REQUIRE(lxp_receipt_decode(evidence->receipts[0].bytes, evidence->receipts[0].length, true, &receipt) == LXP_OK);
     REQUIRE(memcmp(receipt.activity_id, activity_id, 32U) == 0 && receipt.global_sequence == header.first_sequence);
     REQUIRE(evidence->maintenance.global_sequence == header.last_sequence && header.last_sequence == header.first_sequence + 1U);
+    return 0;
+}
+
+static int batch_fetch(int descriptor, uint64_t batch, const uint8_t activity_id[32], batch_evidence *evidence)
+{
+    signer sequencer;
+    lxp_sequencer_authorization authorization = {0};
+    REQUIRE(signer_init(&sequencer, 0x22U) == 0);
+    REQUIRE(lxp_handover_sequencer_id(sequencer.public_key, authorization.sequencer_id) == LXP_OK);
+    memcpy(authorization.public_key, sequencer.public_key, 32U);
+    authorization.first_batch_number = 1U;
+    authorization.last_batch_number = UINT64_MAX;
+    authorization.authorized = 1U;
+    REQUIRE(batch_fetch_authorized(descriptor, batch, activity_id, evidence, &authorization, 1U) == 0);
+    const lxp_batch_header header = evidence->body.header;
+    REQUIRE(header.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT && header.batch_number == batch && header.epoch == 1U);
+    REQUIRE(evidence->authorization.first_batch_number == 1U && evidence->authorization.last_batch_number == UINT64_MAX);
     return 0;
 }
 
@@ -899,7 +916,7 @@ static int reconnect(int descriptor)
 }
 
 static int scenario_start(int descriptor, const char *directory, scenario_state *state,
-                           const signer *owner, const signer *provider)
+                           const signer *owner, const signer *provider, bool handover)
 {
     uint8_t encoded[ACTIVITY_CAPACITY];
     uint8_t payload[LX_PERPS_MARKET_BYTES] = {0};
@@ -1028,6 +1045,18 @@ static int scenario_start(int descriptor, const char *directory, scenario_state 
     REQUIRE(submit_release(descriptor, state, provider, &state->provider_sequence, LX_SERVICE_DELIVER,
         payload, LX_SERVICE_DELIVER_PAYLOAD_FIXED_BYTES + LX_SERVICE_DELIVER_PAYLOAD_ITEM_BYTES) == 0);
     REQUIRE(now_ms() < state->deadline);
+    if (handover) {
+        char path[4096];
+        int path_length = snprintf(path, sizeof(path), "%s/handover-ready.json", directory);
+        REQUIRE(path_length > 0 && (size_t)path_length < sizeof(path));
+        FILE *ready = fopen(path, "wx");
+        REQUIRE(ready != NULL);
+        fprintf(ready, "{\"identity_sequence\":%llu,\"batch\":%llu,\"deadline\":%llu}\n",
+            (unsigned long long)state->owner_sequence, (unsigned long long)state->step_count,
+            (unsigned long long)state->deadline);
+        REQUIRE(!ferror(ready) && fclose(ready) == 0);
+        return 0;
+    }
     while (now_ms() <= state->deadline) {
         const struct timespec delay = {0, 10000000};
         REQUIRE(nanosleep(&delay, NULL) == 0);
@@ -1074,19 +1103,168 @@ static int scenario_recovered(int descriptor, const char *directory, scenario_st
     return 0;
 }
 
+static int scenario_handover(int descriptor, const char *directory,
+    const char *activity_path, scenario_state *state, const signer *owner, bool recovered, bool queue_only)
+{
+    uint8_t *encoded = malloc(LXP_MAX_ACTIVITY_BYTES);
+    uint8_t *memory = malloc(4U * LXP_MAX_ACTIVITY_BYTES);
+    uint8_t identifier[32], digest[32];
+    lxp_arena arena;
+    lxp_activity activity;
+    lxp_handover_evidence handover;
+    lxp_sequencer_authorization previous = {0}, current = {0};
+    batch_evidence evidence;
+    lxp_receipt receipt;
+    signer original, replacement;
+    REQUIRE(encoded != NULL && memory != NULL);
+    FILE *file = fopen(activity_path, "rb");
+    REQUIRE(file != NULL);
+    size_t length = fread(encoded, 1U, LXP_MAX_ACTIVITY_BYTES, file);
+    REQUIRE(length > 0U && length < LXP_MAX_ACTIVITY_BYTES && fgetc(file) == EOF &&
+        !ferror(file) && fclose(file) == 0);
+    REQUIRE(lxp_arena_init(&arena, memory, 4U * LXP_MAX_ACTIVITY_BYTES) == LXP_OK);
+    REQUIRE(lxp_activity_decode(encoded, length, &activity) == LXP_OK);
+    REQUIRE(lxp_activity_check_envelope(&activity, NETWORK_ID) == LXP_OK &&
+        lxp_activity_verify_signature(&activity) == LXP_OK);
+    REQUIRE(activity.activity_type == LXP_GOVERNANCE_HANDOVER &&
+        activity.account_sequence == state->owner_sequence && activity.authority.length == 32U &&
+        memcmp(activity.authority.bytes, owner->public_key, 32U) == 0);
+    REQUIRE(lxp_handover_evidence_decode(activity.payload, &handover) == LXP_OK);
+    REQUIRE(lxp_handover_certificate_verify(&handover.certificate, owner->public_key) == LXP_OK);
+    {
+        uint8_t canonical[LXP_HANDOVER_CERTIFICATE_BYTES + 1U];
+        lxp_handover_certificate decoded;
+        lxp_byte_span wrapped, canonical_recovery, canonical_evidence;
+        REQUIRE(lxp_handover_certificate_encode(&handover.certificate, canonical) == LXP_OK);
+        REQUIRE(lxp_handover_certificate_decode((lxp_byte_span){canonical, LXP_HANDOVER_CERTIFICATE_BYTES}, &decoded) == LXP_OK);
+        REQUIRE(lxp_handover_certificate_verify(&decoded, owner->public_key) == LXP_OK);
+        REQUIRE(lxp_handover_certificate_decode((lxp_byte_span){canonical, LXP_HANDOVER_CERTIFICATE_BYTES - 1U}, &decoded) != LXP_OK);
+        canonical[LXP_HANDOVER_CERTIFICATE_BYTES] = 0U;
+        REQUIRE(lxp_handover_certificate_decode((lxp_byte_span){canonical, sizeof(canonical)}, &decoded) != LXP_OK);
+        lxp_handover_evidence invalid = handover;
+        invalid.certificate.predecessor_batch++;
+        REQUIRE(lxp_handover_certificate_sign(&invalid.certificate, owner->private_key) != LXP_OK);
+        invalid = handover;
+        invalid.certificate.new_epoch = invalid.certificate.old_epoch;
+        REQUIRE(lxp_handover_certificate_sign(&invalid.certificate, owner->private_key) != LXP_OK);
+        invalid = handover;
+        invalid.certificate.activation_batch = UINT64_MAX;
+        REQUIRE(lxp_handover_certificate_sign(&invalid.certificate, owner->private_key) != LXP_OK);
+        REQUIRE(lxp_handover_recovery_decode(activity.payload, &canonical_recovery, &canonical_evidence) != LXP_OK);
+        REQUIRE(lxp_handover_evidence_encode(&handover, &arena, &wrapped) == LXP_OK);
+        REQUIRE(wrapped.length == activity.payload.length && memcmp(wrapped.bytes, activity.payload.bytes, wrapped.length) == 0);
+    }
+    REQUIRE(signer_init(&original, 0x22U) == 0 && signer_init(&replacement, 0x44U) == 0);
+    REQUIRE(memcmp(handover.certificate.old_public_key, original.public_key, 32U) == 0 &&
+        memcmp(handover.certificate.new_public_key, replacement.public_key, 32U) == 0);
+    REQUIRE(handover.certificate.network_id == NETWORK_ID && handover.certificate.old_epoch == 1U &&
+        handover.certificate.new_epoch == 2U && handover.certificate.predecessor_batch == state->step_count &&
+        handover.certificate.predecessor_last_sequence == state->step_count * 2U &&
+        handover.certificate.activation_batch == state->step_count + 1U);
+    memcpy(previous.public_key, original.public_key, 32U);
+    REQUIRE(lxp_handover_sequencer_id(previous.public_key, previous.sequencer_id) == LXP_OK);
+    previous.first_batch_number = 1U;
+    previous.last_batch_number = recovered ? state->step_count : UINT64_MAX;
+    previous.authorized = 1U;
+    memcpy(current.public_key, replacement.public_key, 32U);
+    REQUIRE(lxp_handover_sequencer_id(current.public_key, current.sequencer_id) == LXP_OK);
+    current.first_batch_number = state->step_count + 1U;
+    current.last_batch_number = UINT64_MAX;
+    current.authorized = 1U;
+    if (!recovered) {
+        const saved_step *last = &state->steps[state->step_count - 1U];
+        REQUIRE(batch_fetch_authorized(descriptor, state->step_count, last->activity_id,
+            &evidence, &previous, 1U) == 0);
+        REQUIRE(lxp_handover_evidence_verify_binding(&handover, owner->public_key,
+            &previous, 1U, state->step_count, state->step_count * 2U + 1U,
+            evidence.body.header.resulting_state_root, &arena) == LXP_OK);
+        free(evidence.storage);
+        lxp_handover_evidence invalid = handover;
+        lxp_byte_span invalid_payload;
+        uint8_t *invalid_activity = malloc(LXP_MAX_ACTIVITY_BYTES);
+        size_t invalid_length;
+        REQUIRE(invalid_activity != NULL);
+        invalid.certificate.governance_signature[0] ^= 1U;
+        REQUIRE(lxp_handover_evidence_encode(&invalid, &arena, &invalid_payload) == LXP_OK);
+        REQUIRE(build_activity(owner, state->owner_sequence, LXP_GOVERNANCE_HANDOVER,
+            0U, invalid_payload.bytes, invalid_payload.length, invalid_activity,
+            LXP_MAX_ACTIVITY_BYTES, &invalid_length) == 0);
+        REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 2999U,
+            invalid_activity, invalid_length) == 0);
+        REQUIRE(expect_error(descriptor, 2999U, 4U, LXP_ERR_BAD_SIGNATURE) == 0);
+        free(invalid_activity);
+        REQUIRE(now_ms() >= state->deadline);
+        REQUIRE(lxp_activity_id(encoded, length, identifier) == LXP_OK);
+        REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 3000U, encoded, length) == 0);
+        REQUIRE(expect_ack(descriptor, 3000U, encoded, length, identifier) == 0);
+    } else REQUIRE(lxp_activity_id(encoded, length, identifier) == LXP_OK);
+    if (queue_only) {
+        free(encoded);
+        free(memory);
+        return 0;
+    }
+    REQUIRE(receipt_wait_signed(descriptor, identifier, LXP_OK, &receipt, current.public_key) == 0);
+    REQUIRE(receipt.module_id == LXP_MODULE_GOVERNANCE && receipt.global_sequence == state->step_count * 2U + 1U);
+    REQUIRE(batch_fetch_authorized(descriptor, current.first_batch_number, identifier,
+        &evidence, &current, 2U) == 0);
+    REQUIRE(maintenance_effects_check(&evidence, true) == 0);
+    REQUIRE(maintenance_refusals(&evidence) == 0);
+    REQUIRE(lxp_hash_sha256(evidence.header.bytes, evidence.header.length, digest) == LXP_OK);
+    if (!recovered) REQUIRE(fixture_write(directory, "handover-effects", &evidence) == 0);
+    free(evidence.storage);
+    previous.last_batch_number = state->step_count;
+    for (size_t i = 0U; i < state->step_count; ++i) {
+        const saved_step *step = &state->steps[i];
+        REQUIRE(receipt_wait(descriptor, step->activity_id, (lxp_result)step->result, &receipt) == 0);
+        REQUIRE(batch_fetch_authorized(descriptor, step->batch, step->activity_id,
+            &evidence, &previous, 1U) == 0);
+        REQUIRE(lxp_hash_sha256(evidence.header.bytes, evidence.header.length, digest) == LXP_OK &&
+            memcmp(digest, step->header_hash, 32U) == 0);
+        REQUIRE(lxp_hash_sha256(evidence.receipts[1].bytes, evidence.receipts[1].length, digest) == LXP_OK &&
+            memcmp(digest, step->maintenance_hash, 32U) == 0);
+        free(evidence.storage);
+    }
+    if (recovered) {
+        uint8_t payload[LX_BUDGET_SPEND_PAYLOAD_BYTES] = {0};
+        store_u16(payload, 1U);
+        memcpy(payload + 2U, budget_id, 32U);
+        REQUIRE(actor_name(owner, ":main", payload + 34U) == 0);
+        store_u64(payload + 74U, 8U);
+        REQUIRE(build_activity(owner, state->owner_sequence + 1U, LX_BUDGET_SPEND, 0U,
+            payload, sizeof(payload), encoded, LXP_MAX_ACTIVITY_BYTES, &length) == 0);
+        REQUIRE(lxp_activity_id(encoded, length, identifier) == LXP_OK);
+        REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 3001U, encoded, length) == 0);
+        REQUIRE(expect_ack(descriptor, 3001U, encoded, length, identifier) == 0);
+        REQUIRE(receipt_wait_signed(descriptor, identifier, LXP_OK, &receipt, current.public_key) == 0);
+        REQUIRE(batch_fetch_authorized(descriptor, current.first_batch_number + 1U, identifier,
+            &evidence, &current, 2U) == 0);
+        REQUIRE(maintenance_effects_check(&evidence, false) == 0);
+        REQUIRE(fixture_write(directory, "handover-recovered-spend", &evidence) == 0);
+        free(evidence.storage);
+    }
+    free(encoded);
+    free(memory);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     signer owner, provider;
     struct sockaddr_un address = {0};
     scenario_state state = {0};
     char path[4096];
-    REQUIRE(argc == 4 && strlen(argv[1]) < sizeof(address.sun_path));
+    REQUIRE((argc == 4 || argc == 5) && strlen(argv[1]) < sizeof(address.sun_path));
     bool recovered = strcmp(argv[2], "--module-maintenance-recovered") == 0;
-    REQUIRE(recovered || strcmp(argv[2], "--module-maintenance") == 0);
+    bool handover_prepare = strcmp(argv[2], "--handover-prepare") == 0;
+    bool handover_queue = strcmp(argv[2], "--handover-queue") == 0;
+    bool handover_apply = strcmp(argv[2], "--handover-apply") == 0 || handover_queue;
+    bool handover_recovered = strcmp(argv[2], "--handover-recovered") == 0;
+    REQUIRE((argc == 4 && (recovered || handover_prepare || strcmp(argv[2], "--module-maintenance") == 0)) ||
+        (argc == 5 && (handover_apply || handover_recovered)));
     REQUIRE(signer_init(&owner, 0x11U) == 0 && signer_init(&provider, 0x33U) == 0);
     int length = snprintf(path, sizeof(path), "%s/scenario.bin", argv[3]);
     REQUIRE(length > 0 && (size_t)length < sizeof(path));
-    if (recovered) {
+    if (recovered || handover_apply || handover_recovered) {
         FILE *file = fopen(path, "rb");
         REQUIRE(file != NULL && fread(&state, sizeof(state), 1U, file) == 1U);
         REQUIRE(fgetc(file) == EOF && !ferror(file) && fclose(file) == 0 && state.step_count <= MAX_STEPS);
@@ -1096,13 +1274,21 @@ int main(int argc, char **argv)
     int descriptor = socket(AF_UNIX, SOCK_STREAM, 0);
     REQUIRE(descriptor >= 0 && connect(descriptor, (struct sockaddr *)&address, sizeof(address)) == 0);
     REQUIRE(handshake(descriptor) == 0);
-    if (recovered) REQUIRE(scenario_recovered(descriptor, argv[3], &state, &owner) == 0);
+    if (handover_apply || handover_recovered)
+        REQUIRE(scenario_handover(descriptor, argv[3], argv[4], &state, &owner, handover_recovered, handover_queue) == 0);
+    else if (recovered) REQUIRE(scenario_recovered(descriptor, argv[3], &state, &owner) == 0);
     else {
-        REQUIRE(scenario_start(descriptor, argv[3], &state, &owner, &provider) == 0);
+        REQUIRE(scenario_start(descriptor, argv[3], &state, &owner, &provider, handover_prepare) == 0);
         FILE *file = fopen(path, "wx");
         REQUIRE(file != NULL && fwrite(&state, sizeof(state), 1U, file) == 1U && fclose(file) == 0);
     }
     REQUIRE(close(descriptor) == 0);
+    if (handover_prepare || handover_apply || handover_recovered) {
+        puts(handover_prepare ? "funded module states prepared for authenticated handover" :
+            handover_queue ? "authenticated handover durably admitted before activation" :
+            "governance-authorized replacement sequencer binds epoch effects and historical proofs");
+        return 0;
+    }
     puts(recovered ? "module maintenance proofs and states survive daemon and guarantor restart" :
         "five enabled modules execute signed calls; deadline effects bind the signed receipt and event roots");
     return 0;

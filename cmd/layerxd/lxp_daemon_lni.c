@@ -10,6 +10,7 @@
 #include "layerx/lxp_authority.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_handover.h"
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_receipt.h"
@@ -1272,13 +1273,38 @@ static lxp_result sequencer_public_key_derive(
     return derived ? LXP_OK : LXP_ERR_BAD_SIGNATURE;
 }
 
+static lxp_result current_sequencer_authorization(
+    const lxp_daemon_protocol_owner *owner,
+    lxp_sequencer_authorization *authorization)
+{
+    if (owner == NULL || owner->receipt_authority == NULL || authorization == NULL)
+        return LXP_ERR_AUTH_SCOPE;
+    if (owner->receipt_authority->handover_chain != NULL)
+        *authorization = owner->receipt_authority->handover_chain->current_authorization;
+    else
+        *authorization = owner->receipt_authority->authorization;
+    return authorization->authorized == 1U ? LXP_OK : LXP_ERR_AUTH_SCOPE;
+}
+
 static bool simulation_available(const lxp_daemon_lni_server *server)
 {
-    return server != NULL && server->daemon != NULL &&
-        server->daemon->config.role == LXP_DAEMON_SEQUENCER &&
-        server->owner != NULL && server->owner->scratch != NULL &&
-        server->owner->programs_runtime != NULL &&
-        server->sequencer_private_key_loaded;
+    lxp_sequencer_authorization authorization;
+    uint8_t public_key[32];
+    lxp_result status;
+    if (server == NULL || server->daemon == NULL ||
+        server->daemon->config.role != LXP_DAEMON_SEQUENCER ||
+        server->owner == NULL || server->owner->scratch == NULL ||
+        server->owner->programs_runtime == NULL ||
+        !server->sequencer_private_key_loaded)
+        return false;
+    status = sequencer_public_key_derive(server->sequencer_private_key, public_key);
+    if (status != LXP_OK || pthread_mutex_lock(&server->owner->mutex) != 0)
+        return false;
+    status = current_sequencer_authorization(server->owner, &authorization);
+    if (status == LXP_OK && lxp_ct_memcmp(public_key, authorization.public_key, 32U) != 0)
+        status = LXP_ERR_AUTH_SCOPE;
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0) return false;
+    return status == LXP_OK;
 }
 
 static lxp_result load_sequencer_private_key(
@@ -1316,10 +1342,7 @@ static lxp_result load_sequencer_private_key(
         key[index] = (uint8_t)value;
     }
     status = sequencer_public_key_derive(key, public_key);
-    if (status == LXP_OK &&
-        lxp_ct_memcmp(public_key,
-                      owner->receipt_authority->authorization.public_key,
-                      32U) == 0) {
+    if (status == LXP_OK) {
         (void)memcpy(server->sequencer_private_key, key, 32U);
         server->sequencer_private_key_loaded = true;
     }
@@ -1368,6 +1391,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                   reader_capabilities);
     const char *capabilities[17];
     uint8_t payload[512];
+    lxp_sequencer_authorization authorization;
     uint64_t head;
     uint64_t batch;
     size_t cursor = 0U;
@@ -1422,12 +1446,23 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     if (LNI_NODE_INFO_FIXED_BYTES > sizeof(payload) - cursor)
         return LXP_ERR_LENGTH_LIMIT;
     cursor = 0U;
-    if (pthread_mutex_lock(&server->daemon->mutex) != 0) return LXP_ERR_IO;
-    head = server->daemon->next_sequence == 0U ? 0U :
-        server->daemon->next_sequence - 1U;
-    if (pthread_mutex_unlock(&server->daemon->mutex) != 0)
-        return LXP_FATAL_INVARIANT;
-    if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) return LXP_ERR_IO;
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = current_sequencer_authorization(server->owner, &authorization);
+    if (status == LXP_OK && pthread_mutex_lock(&server->daemon->mutex) != 0)
+        status = LXP_ERR_IO;
+    if (status == LXP_OK) {
+        head = server->daemon->next_sequence == 0U ? 0U :
+            server->daemon->next_sequence - 1U;
+        if (pthread_mutex_unlock(&server->daemon->mutex) != 0)
+            status = LXP_FATAL_INVARIANT;
+    }
+    if (status == LXP_OK && pthread_mutex_lock(&server->owner->receipt_mutex) != 0)
+        status = LXP_ERR_IO;
+    if (status != LXP_OK) {
+        if (pthread_mutex_unlock(&server->owner->mutex) != 0)
+            return LXP_FATAL_INVARIANT;
+        return status;
+    }
     batch = server->owner->published_batch_number;
     store_u16(payload + cursor, LNI_VERSION_MAJOR); cursor += 2U;
     store_u16(payload + cursor, LNI_VERSION_MINOR); cursor += 2U;
@@ -1444,7 +1479,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         (void)memset(payload + cursor, 0, 32U);
     cursor += 32U;
     (void)memcpy(payload + cursor,
-                 server->owner->receipt_authority->authorization.public_key,
+                 authorization.public_key,
                  32U); cursor += 32U;
     store_u16(payload + cursor, (uint16_t)capability_count); cursor += 2U;
     for (index = 0U; index < capability_count; ++index) {
@@ -1454,6 +1489,8 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         cursor += length;
     }
     if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0)
+        status = LXP_FATAL_INVARIANT;
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0)
         status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK)
         status = send_envelope(descriptor, server->frame_bytes,
@@ -1582,6 +1619,7 @@ static lxp_result send_batch_header(lxp_daemon_lni_server *server,
 {
     lxp_daemon_receipt_evidence evidence;
     lxp_batch_header header;
+    lxp_sequencer_authorization authorization;
     uint8_t proof[146];
     uint64_t record_offset = 0U;
     uint64_t selected;
@@ -1612,6 +1650,9 @@ static lxp_result send_batch_header(lxp_daemon_lni_server *server,
             mark = lxp_arena_mark(server->owner->scratch);
         }
     }
+    if (status == LXP_OK && found)
+        status = lxp_daemon_receipt_authority_header_authorization(
+            server->owner->receipt_authority, &header, &authorization);
     if (status == LXP_OK && !found) {
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_BATCH_HEADER_RESPONSE,
@@ -1620,15 +1661,15 @@ static lxp_result send_batch_header(lxp_daemon_lni_server *server,
     } else if (status == LXP_OK) {
         store_u16(proof, 1U);
         (void)memcpy(proof + 2U,
-                     server->owner->receipt_authority->authorization.sequencer_id,
+                     authorization.sequencer_id,
                      32U);
         (void)memcpy(proof + 34U,
-                     server->owner->receipt_authority->authorization.public_key,
+                     authorization.public_key,
                      32U);
         store_u64(proof + 66U,
-                  server->owner->receipt_authority->authorization.first_batch_number);
+                  authorization.first_batch_number);
         store_u64(proof + 74U,
-                  server->owner->receipt_authority->authorization.last_batch_number);
+                  authorization.last_batch_number);
         (void)memcpy(proof + 82U, evidence.header_signature, 64U);
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_BATCH_HEADER_RESPONSE,
@@ -2005,6 +2046,42 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                              LNI_SUBMIT_RESPONSE, request->correlation_id,
                              request->payload, request->payload_length,
                              activity_id, sizeof(activity_id), deadline);
+    }
+    if (server->owner->kernel->handover.enabled) {
+        uint8_t public_key[32];
+        lxp_sequencer_authorization current;
+        status = server->sequencer_private_key_loaded ?
+            sequencer_public_key_derive(server->sequencer_private_key, public_key) : LXP_ERR_AUTH_SCOPE;
+        if (status == LXP_OK) status = current_sequencer_authorization(server->owner, &current);
+        if (status == LXP_OK && activity.activity_type == LXP_GOVERNANCE_HANDOVER) {
+            lxp_kernel *candidate = malloc(sizeof(*candidate));
+            lxp_handover_evidence evidence;
+            size_t mark = lxp_arena_mark(server->owner->scratch);
+            if (candidate == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
+            if (status == LXP_OK) status = lxp_handover_evidence_decode(activity.payload, &evidence);
+            if (status == LXP_OK && memcmp(public_key, evidence.certificate.new_public_key, 32U) != 0)
+                status = LXP_ERR_AUTH_SCOPE;
+            if (status == LXP_OK && pthread_mutex_lock(&server->daemon->mutex) != 0)
+                status = LXP_ERR_IO;
+            if (status == LXP_OK) {
+                if (server->daemon->queue_count != 0U || server->daemon->next_sequence !=
+                    server->owner->kernel->state->next_sequence) status = LXP_ERR_CONTEXT_MISMATCH;
+                if (pthread_mutex_unlock(&server->daemon->mutex) != 0) status = LXP_FATAL_INVARIANT;
+            }
+            if (status == LXP_OK) {
+                *candidate = *server->owner->kernel;
+                status = lxp_handover_prepare(candidate, &activity,
+                    evidence.certificate.activation_batch, server->owner->scratch);
+            }
+            free(candidate);
+            if (lxp_arena_reset(server->owner->scratch, mark) != LXP_OK) status = LXP_FATAL_INVARIANT;
+        } else if (status == LXP_OK && memcmp(public_key, current.public_key, 32U) != 0)
+            status = LXP_ERR_AUTH_SCOPE;
+        if (status != LXP_OK) {
+            if (pthread_mutex_unlock(&server->owner->mutex) != 0) return LXP_FATAL_INVARIANT;
+            return send_refusal(descriptor, server->frame_bytes,
+                request->correlation_id, 4U, status, deadline);
+        }
     }
     if (activity.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
         (activity.activity_type == LX_ASSET_SEND ||
@@ -2832,10 +2909,13 @@ lxp_result lxp_daemon_lni_simulate(
     locked = true;
     mark = lxp_arena_mark(owner->scratch);
     status = program_admission_decode(owner, &activity);
-    if (status == LXP_OK && lxp_ct_memcmp(sequencer_public_key,
-                      owner->receipt_authority->authorization.public_key,
-                      32U) != 0)
-        status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK) {
+        lxp_sequencer_authorization authorization;
+        status = current_sequencer_authorization(owner, &authorization);
+        if (status == LXP_OK && lxp_ct_memcmp(sequencer_public_key,
+                authorization.public_key, 32U) != 0)
+            status = LXP_ERR_AUTH_SCOPE;
+    }
     if (status == LXP_OK) status = preparation_snapshot_valid(owner);
     if (status == LXP_OK) {
         prior_writer = owner->kernel->state->writer;

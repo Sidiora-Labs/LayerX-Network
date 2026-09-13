@@ -34,6 +34,12 @@ lxp_result lxp_da_recovery_from_kernel(
             kernel->state->next_sequence, receipt_watermark, projection_watermark};
         status = lxp_da_recovery_metadata_encode(&input, arena, encoded);
     }
+    if (status == LXP_OK && kernel->handover.enabled) {
+        lxp_byte_span evidence;
+        status = lxp_handover_history_latest(kernel, &evidence);
+        if (status == LXP_OK && evidence.length != 0U)
+            status = lxp_handover_recovery_encode(*encoded, evidence, arena, encoded);
+    }
     return status;
 }
 

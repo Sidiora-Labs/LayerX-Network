@@ -1,5 +1,6 @@
 #include "layerx/lxp_daemon.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_handover.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -114,7 +115,13 @@ static void *executor_run(void *argument)
         for (i = 0U; i < activity_count; ++i) {
             size_t at = (daemon->queue_head + i) %
                 LXP_DAEMON_QUEUE_CAPACITY;
+            lxp_activity decoded;
             activities[i] = daemon->queue[at];
+            if (lxp_activity_decode(activities[i].bytes, activities[i].length, &decoded) == LXP_OK &&
+                decoded.activity_type == LXP_GOVERNANCE_HANDOVER) {
+                activity_count = i == 0U ? 1U : i;
+                break;
+            }
         }
         sequence = daemon->next_sequence;
         (void)pthread_mutex_unlock(&daemon->mutex);

@@ -61,6 +61,38 @@ int main(int argc, char **argv)
         mismatch.header.previous_state_root[0] ^= 1U;
         assert(gp_runtime_prepare(runtime, &mismatch) != LXP_OK);
         assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+        if (batch == count && getenv("LAYERX_TEST_HANDOVER_DIVERGENCE") != NULL) {
+            lxp_batch_body divergent = body;
+            lxp_sequencer_authorization authorization;
+            uint64_t epoch;
+            uint8_t replacement_key[32];
+            assert(engine->kernel->handover.enabled && body.header.epoch == 2U);
+            memset(replacement_key, 0x44U, sizeof(replacement_key));
+            assert(lxp_handover_history_resolve(engine->kernel, body.header.batch_number,
+                &authorization, &epoch, &arena) == LXP_OK && epoch == 2U);
+            divergent.header.resulting_state_root[0] ^= 1U;
+            assert(lxp_batch_availability_root(&divergent, &arena,
+                divergent.header.data_availability_root) == LXP_OK);
+            assert(lxp_batch_sign(&divergent.header, replacement_key, &authorization,
+                divergent.sequencer_signature, &arena) == LXP_OK);
+            lxp_secure_zero(replacement_key, sizeof(replacement_key));
+            assert(gp_runtime_prepare(runtime, &divergent) == LXP_OK);
+            assert(engine->transaction_begin(engine->context) == LXP_OK);
+            status = lxp_replay_batch_publication(engine, &divergent, initial_root, &arena, &replay);
+            assert(status == LXP_ERR_ROOT_MISMATCH || status == LXP_FATAL_REPLAY_DIVERGENCE);
+            assert(engine->transaction_finish(engine->context, false) == LXP_OK);
+            assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+            assert(gp_runtime_note_divergence(runtime, &divergent.header, status) == LXP_OK);
+            assert(gp_runtime_prepare(runtime, &body) == LXP_ERR_DA_MISSING);
+            assert(lxp_log_close(&log) == LXP_OK);
+            gp_runtime_close(runtime);
+            runtime = NULL;
+            assert(gp_runtime_open(&runtime, argv[1], argv[2]) != LXP_OK);
+            if (runtime != NULL) gp_runtime_close(runtime);
+            free(memory);
+            puts("authenticated conflicting root refused and local divergence halt survives restart");
+            return 0;
+        }
         status = gp_runtime_prepare(runtime, &body);
         if (status != LXP_OK)
             break;

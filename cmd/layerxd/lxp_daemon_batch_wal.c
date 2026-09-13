@@ -1214,7 +1214,7 @@ static lxp_result decode_record(uint8_t *bytes,size_t length,
 {
     lxp_daemon_batch_wal_record *r=NULL; uint8_t digest[32];
     size_t offset=0U,i,j; lxp_result status=LXP_OK;
-    if(bytes==NULL||authorization==NULL||out==NULL)
+    if(bytes==NULL||out==NULL)
         return LXP_ERR_NON_CANONICAL;
     *out=NULL;
     if(memcmp(bytes,wal_magic,8U)!=0 || (get_u16(bytes+8U)!=1U && get_u16(bytes+8U)!=WAL_VERSION && get_u16(bytes+8U)!=WAL_MAINTENANCE_VERSION && get_u16(bytes+8U)!=WAL_AVAILABILITY_VERSION) ||
@@ -1253,13 +1253,13 @@ static lxp_result decode_record(uint8_t *bytes,size_t length,
        !lxp_ct_is_zero(r->owned+offset-7U-LXP_BATCH_HEADER_ENCODED_SIZE-64U,
                        7U) ||
        r->view.count==0U||r->view.count>LXP_DAEMON_BATCH_WAL_MAX_ITEMS ||
-       r->view.authorization.authorized!=authorization->authorized ||
+       (authorization != NULL && (r->view.authorization.authorized!=authorization->authorized ||
        r->view.authorization.first_batch_number!=authorization->first_batch_number ||
        r->view.authorization.last_batch_number!=authorization->last_batch_number ||
        lxp_ct_memcmp(r->view.authorization.sequencer_id,
                      authorization->sequencer_id,32U)!=0 ||
        lxp_ct_memcmp(r->view.authorization.public_key,
-                     authorization->public_key,32U)!=0){status=LXP_ERR_BAD_SIGNATURE;goto fail;}
+                     authorization->public_key,32U)!=0))){status=LXP_ERR_BAD_SIGNATURE;goto fail;}
     for(i=0U;i<r->view.count;++i){uint32_t al,rl,el;
         if(offset>length-32U || length-32U-offset<12U){status=LXP_ERR_LOG_TRUNCATED;goto fail;}
         al=get_u32(r->owned+offset);offset+=4U;rl=get_u32(r->owned+offset);offset+=4U;el=get_u32(r->owned+offset);offset+=4U;
@@ -1340,14 +1340,15 @@ fail:
     if(bytes!=NULL){lxp_secure_zero(bytes,length);free(bytes);} return status;
 }
 
-lxp_result lxp_daemon_batch_wal_load(const char *directory,
+static lxp_result batch_wal_load(const char *directory,
  const lxp_sequencer_authorization *authorization,
- lxp_daemon_batch_wal_record **out,bool *present)
+ lxp_daemon_batch_wal_authorize_fn authorize, void *context,
+ lxp_daemon_batch_wal_record **out,bool *present, bool sweep)
 {
     lxp_daemon_batch_wal_record *selected=NULL;
     uint8_t candidate;
     lxp_result first_group_error=LXP_OK;
-    if(authorization==NULL||out==NULL||present==NULL)
+    if((authorization==NULL && (authorize==NULL || context==NULL))||out==NULL||present==NULL)
         return LXP_ERR_NON_CANONICAL;
     *out=NULL;*present=false;
     for(candidate=0U;candidate<3U;++candidate) {
@@ -1358,7 +1359,7 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
         bool found=false;
         lxp_daemon_batch_wal_record *decoded=NULL;
         lxp_result status=read_record(directory,name,&bytes,&length,&found,
-                                      candidate==0U);
+                                      sweep && candidate==0U);
         if(status!=LXP_OK) {
             if(candidate==0U) {
                 lxp_daemon_batch_wal_destroy(selected);
@@ -1370,6 +1371,10 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
         if(!found)continue;
         status=decode_record(bytes,length,authorization,candidate!=0U,
             candidate==0U ? 0U : (uint8_t)(candidate-1U),false,&decoded);
+        if(status==LXP_OK && authorize!=NULL) {
+            status=authorize(context, &decoded->view);
+            if(status!=LXP_OK) { lxp_daemon_batch_wal_destroy(decoded); decoded=NULL; }
+        }
         if(status!=LXP_OK) {
             if(candidate==0U) {
                 lxp_daemon_batch_wal_destroy(selected);
@@ -1394,6 +1399,30 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
     }
     if(selected==NULL)return first_group_error;
     *out=selected;*present=true;return LXP_OK;
+}
+
+lxp_result lxp_daemon_batch_wal_load(const char *directory,
+ const lxp_sequencer_authorization *authorization,
+ lxp_daemon_batch_wal_record **out, bool *present)
+{
+    if (authorization == NULL) return LXP_ERR_NON_CANONICAL;
+    return batch_wal_load(directory, authorization, NULL, NULL, out, present, true);
+}
+
+lxp_result lxp_daemon_batch_wal_load_authorized(const char *directory,
+ lxp_daemon_batch_wal_authorize_fn authorize, void *context,
+ lxp_daemon_batch_wal_record **out, bool *present)
+{
+    if (authorize == NULL || context == NULL) return LXP_ERR_NON_CANONICAL;
+    return batch_wal_load(directory, NULL, authorize, context, out, present, true);
+}
+
+lxp_result lxp_daemon_batch_wal_read_authorized(const char *directory,
+ lxp_daemon_batch_wal_authorize_fn authorize, void *context,
+ lxp_daemon_batch_wal_record **out, bool *present)
+{
+    if (authorize == NULL || context == NULL) return LXP_ERR_NON_CANONICAL;
+    return batch_wal_load(directory, NULL, authorize, context, out, present, false);
 }
 
 lxp_result lxp_daemon_batch_wal_classify(const lxp_daemon_batch_wal_record *r,

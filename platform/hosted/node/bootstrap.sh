@@ -41,6 +41,9 @@
 #                           host. Exactly one of the two is required.
 #
 # Options:
+#   --handover-authority HEX64
+#                           Independent governance public key for authenticated
+#                           sequencer replacement. Omission disables handover.
 #   --asset HEX64           Genesis asset id (32 bytes hex). Default: the beta
 #                           asset sha256("layerx-beta-asset:LXT").
 #   --treasury-balance N    Treasury balance the genesis carries. The protocol
@@ -182,6 +185,8 @@ GENESIS_BUILD=""
 CUSTODY_PROFILE=""
 GENESIS_METADATA=""
 GENESIS_MODULES=()
+HANDOVER_AUTHORITY=""
+HANDOVER_PARAMETER_COUNT=0
 SETTLEMENT_ENV=""
 SETTLEMENT_DOCUMENT=${LAYERX_PAXEER_SETTLEMENT_JSON:-}
 FORCE=0
@@ -196,6 +201,10 @@ while [ $# -gt 0 ]; do
         --treasury-signer-socket) TREASURY_SIGNER_SOCKET=$2; shift 2 ;;
         --asset) ASSET_ID=$2; shift 2 ;;
         --genesis-metadata) GENESIS_METADATA=$2; shift 2 ;;
+        --handover-authority)
+            [ "$HANDOVER_PARAMETER_COUNT" -eq 0 ] || fail "--handover-authority repeats"
+            HANDOVER_PARAMETER_COUNT=1
+            HANDOVER_AUTHORITY=${2,,}; shift 2 ;;
         --treasury-balance) TREASURY_BALANCE=$2; shift 2 ;;
         --program-port) PROGRAM_PORT=$2; shift 2 ;;
         --replica-port) REPLICA_PORT=$2; shift 2 ;;
@@ -256,6 +265,10 @@ fi
 
 is_decimal() { [[ $1 =~ ^[0-9]+$ ]]; }
 is_hex64() { [[ $1 =~ ^[0-9a-f]{64}$ ]]; }
+
+if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ]; then
+    is_hex64 "$HANDOVER_AUTHORITY" || fail "--handover-authority must be 64 hex characters"
+fi
 
 is_decimal "$NETWORK_ID" || fail "--network-id must be decimal"
 [ "$NETWORK_ID" -ge 1 ] && [ "$NETWORK_ID" -le 4294967295 ] || fail "--network-id out of range"
@@ -327,7 +340,7 @@ if [ -z "$SETTLEMENT_DOCUMENT" ]; then
 fi
 GUARANTOR_COUNT=$(jq -er '.finality_policy.certificate_threshold | select(type == "number" and . == floor and . >= 1 and . <= 32)' "$SETTLEMENT_DOCUMENT") \
     || fail "certificate threshold must be an integer in 1..32 (LXP_GENESIS_MAX_GUARANTORS)"
-GENESIS_METADATA_MAX_BYTES=$((16384 - 314 - 81 * GUARANTOR_COUNT - 66 * ${#GENESIS_MODULES[@]}))
+GENESIS_METADATA_MAX_BYTES=$((16384 - 314 - 81 * GUARANTOR_COUNT - 66 * (${#GENESIS_MODULES[@]} + HANDOVER_PARAMETER_COUNT)))
 GENESIS_METADATA_BYTES=$(stat -c %s "$GENESIS_METADATA")
 [ "$GENESIS_METADATA_BYTES" -gt 219 ] && [ "$GENESIS_METADATA_BYTES" -le "$GENESIS_METADATA_MAX_BYTES" ] \
     || fail "genesis metadata length is outside request bounds: $GENESIS_METADATA_BYTES bytes, expected 220..$GENESIS_METADATA_MAX_BYTES with $GUARANTOR_COUNT guarantors"
@@ -492,7 +505,14 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     hex_to_bin "$(be_hex 3 2)"
     hex_to_bin "$(be_hex "$NETWORK_ID" 4)"
     hex_to_bin "$(be_hex "$GENESIS_TIMESTAMP_MS" 8)"
-    hex_to_bin "$(be_hex "$((1 + ${#GENESIS_MODULES[@]}))" 2)"
+    hex_to_bin "$(be_hex "$((1 + ${#GENESIS_MODULES[@]} + HANDOVER_PARAMETER_COUNT))" 2)"
+    if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ]; then
+        handover_key=$(printf 'handover-authority' | bin_to_hex)
+        handover_key="$handover_key$(printf '0%.0s' $(seq 1 $((64 - ${#handover_key}))))"
+        hex_to_bin "$(be_hex 7 2)"
+        hex_to_bin "$handover_key"
+        hex_to_bin "$HANDOVER_AUTHORITY"
+    fi
     for module in "${GENESIS_MODULES[@]}"; do
         module_key=$(printf 'module-enable:%s' "$module" | bin_to_hex)
         module_key="$module_key$(printf '0%.0s' $(seq 1 $((64 - ${#module_key}))))"
@@ -519,7 +539,7 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     for demand in 100 1 1 10 1 1000; do hex_to_bin "$(be_hex "$demand" 8)"; done
     cat "$GENESIS_METADATA"
 } > "$REQUEST"
-[ "$(stat -c %s "$REQUEST")" -eq "$((314 + 81 * GUARANTOR_COUNT + 66 * ${#GENESIS_MODULES[@]} + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
+[ "$(stat -c %s "$REQUEST")" -eq "$((314 + 81 * GUARANTOR_COUNT + 66 * (${#GENESIS_MODULES[@]} + HANDOVER_PARAMETER_COUNT) + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
 
 SIGNER_KEY="$DATA_DIR/work/genesis-signer.key"
 hex_to_bin "$SEQUENCER_PRIVATE" > "$SIGNER_KEY"
@@ -562,6 +582,10 @@ fi
 # --- identities, tokens, configurations ------------------------------------
 IDENTITIES="$DATA_DIR/identities.txt"
 printf '%s:%s:0\n' "$TREASURY_DID_HEX" "$TREASURY_PUBLIC" > "$IDENTITIES"
+if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ] && [ "$HANDOVER_AUTHORITY" != "$TREASURY_PUBLIC" ]; then
+    governance_did=$(printf 'did:layerx:%s' "$HANDOVER_AUTHORITY" | bin_to_hex)
+    printf '%s:%s:0\n' "$governance_did" "$HANDOVER_AUTHORITY" >> "$IDENTITIES"
+fi
 
 for logfile in logs/program-feed.log logs/canonical.log logs/receipt-authority.log logs/batch.log logs/evidence.log replica/receipt-authority.log; do
     : > "$DATA_DIR/$logfile"
@@ -629,6 +653,15 @@ LAYERX_AUTHORITY_BEARER_TOKEN=$REPLICA_TOKEN
 LAYERX_AUTHORITY_ADDRESS=127.0.0.1
 LAYERX_AUTHORITY_PORT=$REPLICA_PORT
 EOF
+if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ]; then
+    printf 'LAYERX_AUTHORITY_GENESIS_MANIFEST=%s\nLAYERX_AUTHORITY_AVAILABILITY_LOG=%s/checkpoints/da-bodies.log\n' "$MANIFEST" "$DATA_DIR" >> "$DATA_DIR/replica.env"
+    if [ -n "$SETTLEMENT_ENV" ]; then
+        printf 'LAYERX_NODE_SETTLEMENT_ENV=%s\n' "$SETTLEMENT_ENV" >> "$DATA_DIR/replica.env"
+    else
+        printf 'LAYERX_NODE_PAXEER_CHAIN_ID=%s\nLAYERX_NODE_SETTLEMENT_CONTRACT=%s\nLAYERX_NODE_CHECKPOINT_REGISTRY=%s\nLAYERX_NODE_PAXEER_RPC_ADDRESS=%s\nLAYERX_NODE_PAXEER_RPC_PORT=%s\n' \
+            "$PAXEER_CHAIN_ID" "$SETTLEMENT_CONTRACT" "$CHECKPOINT_REGISTRY" "$PAXEER_RPC_ADDRESS" "$PAXEER_RPC_PORT" >> "$DATA_DIR/replica.env"
+    fi
+fi
 
 umask 022
 cat > "$DATA_DIR/node.env.tmp" <<EOF

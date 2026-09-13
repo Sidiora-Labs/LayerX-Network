@@ -657,11 +657,24 @@ int main(int argc, char **argv)
             status = LXP_ERR_IO;
             goto batch_failed;
         }
-        if (cached == 1)
-            status = gp_verify_replay(&ctx, &bundle, &header, signature, &store, &arena, &field);
-        else
-            status = gp_verify_attest(&ctx, &bundle, &header, signature, &store, milliseconds(),
-                                      &arena, &own, &field);
+        ctx.sequencer_authorization = gp_runtime_prepared_authorization(runtime);
+        status = gp_runtime_transaction_begin(runtime);
+        if (status == LXP_OK) {
+            uint8_t previous_independent_root[32];
+            memcpy(previous_independent_root, ctx.independent_state_root, 32U);
+            if (cached == 1)
+                status = gp_verify_replay(&ctx, &bundle, &header, signature, &store, &arena, &field);
+            else
+                status = gp_verify_attest(&ctx, &bundle, &header, signature, &store, milliseconds(),
+                                          &arena, &own, &field);
+            if (status == LXP_OK) status = gp_runtime_transaction_finish(runtime, true);
+            else {
+                if (gp_runtime_transaction_finish(runtime, false) != LXP_OK)
+                    status = LXP_FATAL_INVARIANT;
+                memcpy(ctx.independent_state_root, previous_independent_root, 32U);
+                ctx.ready_to_sign = false;
+            }
+        }
         if (status != LXP_OK)
             goto batch_failed;
         (void)pthread_mutex_lock(&p->mutex);
@@ -752,6 +765,13 @@ int main(int argc, char **argv)
         ++batch;
         continue;
     batch_failed:
+        if (runtime_prepared && ctx.last_completed_duty >= LXP_GUARANTOR_DUTY_SIGNATURES &&
+            (status == LXP_FATAL_REPLAY_DIVERGENCE || status == LXP_ERR_ROOT_MISMATCH)) {
+            lxp_result recorded = gp_runtime_note_divergence(runtime, &header, status);
+            ctx.ready_to_sign = false;
+            ctx.attestation_halted_epoch = header.epoch;
+            if (recorded != LXP_OK) status = recorded;
+        }
         lxp_guarantor_lni_close(&client);
         fprintf(stderr, "refused batch=%llu field=%s result=%d\n", (unsigned long long)batch, field,
                 (int)status);

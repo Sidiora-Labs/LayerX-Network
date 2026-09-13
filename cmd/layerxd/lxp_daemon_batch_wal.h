@@ -106,6 +106,16 @@ lxp_result lxp_daemon_batch_wal_load(
     const char *checkpoint_directory,
     const lxp_sequencer_authorization *authorization,
     lxp_daemon_batch_wal_record **record, bool *present);
+typedef lxp_result (*lxp_daemon_batch_wal_authorize_fn)(void *context,
+    const lxp_daemon_batch_wal_input *input);
+lxp_result lxp_daemon_batch_wal_load_authorized(
+    const char *checkpoint_directory,
+    lxp_daemon_batch_wal_authorize_fn authorize, void *context,
+    lxp_daemon_batch_wal_record **record, bool *present);
+lxp_result lxp_daemon_batch_wal_read_authorized(
+    const char *checkpoint_directory,
+    lxp_daemon_batch_wal_authorize_fn authorize, void *context,
+    lxp_daemon_batch_wal_record **record, bool *present);
 lxp_result lxp_daemon_batch_wal_classify(
     const lxp_daemon_batch_wal_record *record,
     const lxp_kernel_batch_boundary *live,
