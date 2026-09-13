@@ -26,7 +26,7 @@ make -j4 CC=gcc \
     PROGRAMS_TARGET_DIR="$CARGO_TARGET_DIR" \
     PROGRAMS_RUNTIME_LIB="$CARGO_TARGET_DIR/debug/liblayerx_programs_sandbox.a" \
     build/bin/layerxd build/bin/layerx-genesis-build \
-    build/tests/lxp_test_daemon_finality_authority
+    build/tests/lxp_test_daemon_finality_authority build/tests/lxp_test_program_admission
 
 export LAYERX_TEST_NATIVE_BIN_DIR=$repo_root/build/bin
 sha256sum "$LAYERX_TEST_NATIVE_BIN_DIR/layerxd" \
