@@ -212,6 +212,8 @@ static int metered_activity(metered_fixture *f, uint32_t type,
     f->execution.maximum_timestamp_window = 100U;
     f->execution.global_sequence = f->state.next_sequence;
     f->execution.recorded_module_version = LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION;
+    f->execution.recorded_metering_schedule_version = 1U;
+    f->execution.recorded_fee_schedule_version = 1U;
     f->execution.parameter_version = 1U;
     f->execution.signature_valid = true;
     f->execution.identities = &f->identities;
