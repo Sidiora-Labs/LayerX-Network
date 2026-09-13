@@ -353,7 +353,7 @@ fn maintained_chain_authenticates_each_selected_transition_and_every_record() {
         )
         .is_err());
     }
-    let mut broken_signature = fixture.clone();
+    let mut broken_signature = Fixture::new(2);
     let end = broken_signature.following[0].len();
     broken_signature.following[0][end - 1] ^= 1;
     broken_signature.seal(2);
