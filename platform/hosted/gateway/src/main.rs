@@ -4181,6 +4181,17 @@ mod authority_shape_tests {
             serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
         let mut document = capture["authority"].clone();
         document["receipt"] = capture["receipt_hex"].clone();
+        let header = decode_hex(
+            capture["authority"]["batch_evidence"]["header_hex"]
+                .as_str()
+                .unwrap_or_else(|| panic!("header")),
+            1_048_576,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        document["protocol_network_id"] =
+            serde_json::json!(layerx_wire::receipt::decode_batch_header(&header)
+                .unwrap_or_else(|error| panic!("{error:?}"))
+                .network_id());
         assert!(serde_json::from_value::<AuthorityResponse>(document.clone()).is_ok());
         let mut historical = document.clone();
         historical
