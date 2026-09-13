@@ -72,6 +72,21 @@ class Chain(COMMON['Chain']):
                     evidence.write(json.dumps(receipt, sort_keys=True) + '\n')
                 return receipt
             time.sleep(.1)
+        diagnostic = {'transaction_hash': digest, 'submitted_nonce': transaction['nonce'],
+                      'gas_price': transaction['gasPrice'], 'gas_limit': transaction['gas']}
+        for name, method, parameters in (
+            ('latest_nonce', 'eth_getTransactionCount', [self.account.address, 'latest']),
+            ('pending_nonce', 'eth_getTransactionCount', [self.account.address, 'pending']),
+            ('block_number', 'eth_blockNumber', []),
+            ('transaction', 'eth_getTransactionByHash', [digest]),
+            ('pool_status', 'txpool_status', []),
+        ):
+            try:
+                diagnostic[name] = self.rpc(method, parameters)
+            except (OSError, ValueError, AssertionError, http.client.HTTPException) as error:
+                diagnostic[name] = {'error': str(error)}
+        (self.directory / ('transaction-timeout-' + digest.removeprefix('0x') + '.json')).write_text(
+            json.dumps(diagnostic, sort_keys=True) + '\n')
         raise AssertionError('transaction receipt deadline: ' + digest)
 
     def view(self, address, signature, *args):
