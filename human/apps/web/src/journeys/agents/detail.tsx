@@ -32,7 +32,6 @@ import {
   formatPlainTimestamp,
   journeyProgress,
   spendPresentation,
-  type AgentsShell,
   type JourneyProgress,
 } from "./model.ts";
 import { JourneyStages } from "./progress.tsx";
@@ -73,20 +72,18 @@ function SpendSection({ agent }: Readonly<{ agent: Agent }>) {
 }
 
 export function AgentDetailScreen({
-  shell: initialShell,
   agentId,
   ownerAccount,
   embedded = false,
   onChanged,
 }: Readonly<{
-  shell: AgentsShell;
   agentId: string;
   ownerAccount?: string;
   embedded?: boolean;
   onChanged?: () => void;
 }>) {
   const router = useRouter();
-  const shell = useAgentsShell(initialShell);
+  const shell = useAgentsShell();
   const agents = useMemo(() => new Agents(), []);
   const accountId = useActiveAccountId(ownerAccount);
   const [agent, setAgent] = useState<Agent | undefined>(undefined);

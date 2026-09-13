@@ -20,7 +20,7 @@ function browserCsrfToken(): string | undefined {
 }
 
 function browserTrace(): string | undefined {
-  if (typeof globalThis.crypto?.getRandomValues !== "function") {
+  if (typeof crypto === "undefined" || typeof crypto.getRandomValues !== "function") {
     return undefined;
   }
   const entropy = globalThis.crypto.getRandomValues(new Uint8Array(16));

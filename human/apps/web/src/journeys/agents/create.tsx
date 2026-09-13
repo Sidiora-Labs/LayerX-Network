@@ -27,7 +27,6 @@ import {
   journeyProgress,
   mutationOutcomeUnknown,
   parseMonthlyLimit,
-  type AgentsShell,
   type CreationDraft,
   type JourneyProgress,
 } from "./model.ts";
@@ -116,9 +115,9 @@ function CreationProgressCard({
   );
 }
 
-export function AgentCreateJourney({ shell: initialShell }: Readonly<{ shell: AgentsShell }>) {
+export function AgentCreateJourney() {
   const router = useRouter();
-  const shell = useAgentsShell(initialShell);
+  const shell = useAgentsShell();
   const agents = useMemo(() => new Agents(), []);
   const [draft, setDraft] = useState<CreationDraft>({
     name: "",

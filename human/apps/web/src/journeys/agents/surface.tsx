@@ -28,7 +28,6 @@ import {
   agentListItems,
   agentsLayout,
   type AgentListItemView,
-  type AgentsShell,
 } from "./model.ts";
 import { useAgentsShell } from "./shell.ts";
 
@@ -62,11 +61,10 @@ function AgentList({
 }
 
 export function AgentsSurface({
-  shell: initialShell,
   ownerAccount,
-}: Readonly<{ shell: AgentsShell; ownerAccount?: string }>) {
+}: Readonly<{ ownerAccount?: string }> = {}) {
   const router = useRouter();
-  const shell = useAgentsShell(initialShell);
+  const shell = useAgentsShell();
   const layout = agentsLayout(shell);
   const agents = useMemo(() => new Agents(), []);
   const accountId = useActiveAccountId(ownerAccount);
