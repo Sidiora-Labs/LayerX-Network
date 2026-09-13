@@ -1,12 +1,10 @@
 package api
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"io"
-	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/sidiora-labs/paxeer-network/wasm/staticarchive"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,12 +52,7 @@ func TestStaticArchiveChecksums(t *testing.T) {
 func sha256Sum(t *testing.T, path string) string {
 	t.Helper()
 
-	f, err := os.Open(path)
+	got, err := staticarchive.Verify(filepath.Dir(path), filepath.Base(path))
 	require.NoError(t, err)
-	defer func() { require.NoError(t, f.Close()) }()
-
-	h := sha256.New()
-	_, err = io.Copy(h, f)
-	require.NoError(t, err)
-	return hex.EncodeToString(h.Sum(nil))
+	return got
 }
