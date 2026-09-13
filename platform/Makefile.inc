@@ -15,7 +15,7 @@ PLATFORM_BETA_CLUSTER_ENV ?= build/beta-cluster/env
 	platform-test-docs platform-hosted-smoke platform-hosted-topology-check platform-hosted-agentd-check platform-beta-cluster-up platform-beta-cluster-down \
 	platform-test-agent-install \
 	platform-policy-install platform-sample-preflight platform-sample-install platform-sample-dependencies-ready \
-	platform-install-local-artifacts platform-dependencies-install platform-gradle-qualification
+	platform-install-local-artifacts platform-jvm-dependencies-install platform-dependencies-install platform-gradle-qualification
 
 PLATFORM_PYTHON_ENV := $(CURDIR)/build/platform-python
 PLATFORM_MAVEN_REPOSITORY ?= $(HOME)/.m2/repository
@@ -41,13 +41,7 @@ platform-sample-install: platform-sample-preflight
 	cd platform/docs/samples/first-payment-go && go mod download
 	cargo fetch --manifest-path platform/docs/samples/verify-receipt-rust/Cargo.toml --locked
 	cargo fetch --manifest-path platform/examples/marketplace/program/Cargo.toml --locked
-	$(MAKE) platform-install-local-artifacts PLATFORM_MAVEN_OFFLINE=
-	@set -eu; for pom in platform/sdk/jvm/pom.xml platform/integrations/spring/pom.xml platform/integrations/android/pom.xml \
-		platform/integrations/spring/example/pom.xml \
-		platform/docs/samples/first-payment-jvm/pom.xml platform/docs/samples/paid-endpoint-spring/pom.xml \
-		platform/docs/samples/mobile-payment-android/pom.xml; do \
-		mvn -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f "$$pom" -Pconformance dependency:go-offline; \
-	done
+	$(MAKE) platform-jvm-dependencies-install
 	@set -eu; \
 		sdk_lock=$$(sha256sum platform/sdk/swift/Package.resolved | awk '{print $$1}'); \
 		ios_lock=$$(sha256sum platform/integrations/ios/Package.resolved | awk '{print $$1}'); \
@@ -74,6 +68,15 @@ platform-install-local-artifacts:
 	mvn $(PLATFORM_MAVEN_OFFLINE) -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f platform/sdk/jvm/pom.xml install
 	mvn $(PLATFORM_MAVEN_OFFLINE) -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f platform/integrations/spring/pom.xml install
 	mvn $(PLATFORM_MAVEN_OFFLINE) -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f platform/integrations/android/pom.xml install
+
+platform-jvm-dependencies-install:
+	$(MAKE) platform-install-local-artifacts PLATFORM_MAVEN_OFFLINE=
+	@set -eu; for pom in platform/sdk/jvm/pom.xml platform/integrations/spring/pom.xml platform/integrations/android/pom.xml \
+		platform/integrations/spring/example/pom.xml \
+		platform/docs/samples/first-payment-jvm/pom.xml platform/docs/samples/paid-endpoint-spring/pom.xml \
+		platform/docs/samples/mobile-payment-android/pom.xml; do \
+		mvn -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f "$$pom" -Pconformance dependency:go-offline; \
+	done
 
 
 platform-dependencies-install: platform-sample-preflight
