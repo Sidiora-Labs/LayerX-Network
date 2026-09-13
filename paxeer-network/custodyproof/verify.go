@@ -258,16 +258,19 @@ func Verify(request *Request, now time.Time) (*Result, error) {
 
 func verifyState(request *Request, now time.Time, lookup func(int64) (*types.SignedHeader, error)) (*Result, error) {
 	if request == nil || request.Expected.ChainID != 125 || request.Expected.CometChainID == "" || now.IsZero() {
-		return nil, errors.New("Paxeer proof identity")
+		return nil, errors.New("paxeer proof identity")
 	}
 	expected, bundle := request.Expected, &request.Bundle
 	if config.GetEVMChainID(expected.CometChainID).Uint64() != expected.ChainID {
-		return nil, errors.New("Comet to EVM chain identity")
+		return nil, errors.New("comet to EVM chain identity")
 	}
 	if bundle.Version != Version || bundle.StateHeight < 2 || bundle.FinalizedHeight < bundle.StateHeight ||
 		bundle.FinalizedHeight == int64(^uint64(0)>>1) || expected.Confirmations == 0 || expected.Confirmations >= MaxHistory ||
-		bundle.FinalizedHeight-bundle.StateHeight >= MaxHistory ||
-		uint64(bundle.FinalizedHeight-bundle.StateHeight+1) < expected.Confirmations {
+		bundle.FinalizedHeight-bundle.StateHeight >= MaxHistory {
+		return nil, errors.New("state finality window")
+	}
+	confirmations := bundle.FinalizedHeight - bundle.StateHeight + 1
+	if confirmations < 1 || uint64(confirmations) < expected.Confirmations {
 		return nil, errors.New("state finality window")
 	}
 	stateHeader, err := lookup(bundle.StateHeight + 1)

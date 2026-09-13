@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -44,7 +45,6 @@ func run(output io.Writer) error {
 		if openErr != nil {
 			return openErr
 		}
-		defer history.Close()
 		switch request.Operation {
 		case "status":
 			result, err = history.Status(now)
@@ -58,8 +58,9 @@ func run(output io.Writer) error {
 		case "export":
 			result, err = history.Export()
 		default:
-			return fmt.Errorf("unsupported history operation")
+			err = fmt.Errorf("unsupported history operation")
 		}
+		err = errors.Join(err, history.Close())
 	}
 	if err != nil {
 		return err

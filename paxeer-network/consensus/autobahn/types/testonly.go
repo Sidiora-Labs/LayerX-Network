@@ -186,7 +186,7 @@ func GenProposalAt(rng utils.Rng, view View) *Proposal {
 
 // GenProposalForAt generates a Proposal at a specific view that verifies against the committee.
 func GenProposalForAt(rng utils.Rng, c *Committee, view View) *Proposal {
-	var laneRanges []*LaneRange
+	laneRanges := make([]*LaneRange, 0, c.Lanes().Len())
 	for lane := range c.Lanes().All() {
 		laneRanges = append(laneRanges, NewLaneRange(lane, 0, utils.None[*BlockHeader]()))
 	}
