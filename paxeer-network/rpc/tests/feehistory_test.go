@@ -16,6 +16,7 @@ func TestFeeHistoryExcludeAnteFailedTxs(t *testing.T) {
 	SetupTestServer(t, [][][]byte{{tx1Bz, tx2Bz}}, erc20Initializer()).Run(
 		func(port int) {
 			res := sendRequestWithNamespace("eth", port, "feeHistory", 1, "0x2", []float64{50, 60, 70})
+			require.Nil(t, res["error"], "fee history refused: %v", res["error"])
 			reward := res["result"].(map[string]interface{})["reward"].([]interface{})[0].([]interface{})
 			for _, r := range reward {
 				sr := r.(string)

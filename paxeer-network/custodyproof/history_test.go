@@ -132,9 +132,13 @@ func TestRealHistoryRefusesDatabaseRollbackAndCorruption(t *testing.T) {
 		t.Run(fault, func(t *testing.T) {
 			request, history, key, now := realHistory(t)
 			advanceReal(t, history, request.Bundle.History, now)
+			keyOne, err := recordKey(1)
+			if err != nil {
+				t.Fatal(err)
+			}
 			switch fault {
 			case "rollback":
-				older, err := history.database.Get(recordKey(1), nil)
+				older, err := history.database.Get(keyOne, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -142,7 +146,7 @@ func TestRealHistoryRefusesDatabaseRollbackAndCorruption(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "missing-retained-record":
-				if err := history.database.Delete(recordKey(1), &opt.WriteOptions{Sync: true}); err != nil {
+				if err := history.database.Delete(keyOne, &opt.WriteOptions{Sync: true}); err != nil {
 					t.Fatal(err)
 				}
 			case "corruption":
@@ -340,5 +344,11 @@ func TestRealHistoryPoisonsFailedAnchorWriteUntilReopen(t *testing.T) {
 	}
 	if _, err := recovered.Verify(cachedRequest(request), now); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHistoryRecordKeyRejectsNegativeHeight(t *testing.T) {
+	if _, err := recordKey(-1); err == nil {
+		t.Fatal("negative history height accepted")
 	}
 }

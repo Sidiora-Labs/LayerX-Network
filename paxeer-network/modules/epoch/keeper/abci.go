@@ -30,7 +30,7 @@ func (k Keeper) BeginBlock(ctx sdk.Context) {
 			GenesisTime:           lastEpoch.GenesisTime,
 			EpochDuration:         lastEpoch.EpochDuration,
 			CurrentEpoch:          lastEpoch.CurrentEpoch + 1,
-			CurrentEpochStartTime: ctx.BlockTime(),
+			CurrentEpochStartTime: lastEpoch.CurrentEpochStartTime.Add(lastEpoch.EpochDuration),
 			CurrentEpochHeight:    ctx.BlockHeight(),
 		}
 		k.SetEpoch(ctx, newEpoch)
