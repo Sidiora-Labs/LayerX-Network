@@ -5147,6 +5147,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         if (status == LXP_OK &&
             (activity->activity_type == LX_PROGRAMS_CALL ||
              activity->activity_type == LX_PROGRAMS_WIND_DOWN ||
+             lxp_activity_module_id(activity->activity_type) == LXP_MODULE_BUDGET ||
              lxp_activity_module_id(activity->activity_type) == LXP_MODULE_ASSET))
             status = lxp_kernel_bind_ledger_admission(
                 &module_ctx, execution->authority, activity->activity_type);
