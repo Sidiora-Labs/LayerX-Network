@@ -52,6 +52,7 @@ const TestBadPort = 7779
 const TestStrictPort = 7780
 const TestArchivePort = 7782
 const TestNotifierWSPort = 7784
+const TestFeePort = 7785
 
 const GenesisBlockHeight = 0
 const MockHeight8 = 8
@@ -98,6 +99,8 @@ var MultiTxBlockTx2 sdk.Tx
 var MultiTxBlockTx3 sdk.Tx
 var MultiTxBlockTx4 sdk.Tx
 var MultiTxBlockSynthTx sdk.Tx
+var Block2SyntheticTx sdk.Tx
+var block2SyntheticTx *ethtypes.Transaction
 var tx1 *ethtypes.Transaction
 var multiTxBlockTx1 *ethtypes.Transaction
 var multiTxBlockTx2 *ethtypes.Transaction
@@ -223,7 +226,7 @@ func (c *MockClient) mockBlock(height int64) *coretypes.ResultBlock {
 							return bz
 						}(),
 						func() []byte {
-							bz, _ := Encoder(MultiTxBlockSynthTx)
+							bz, _ := Encoder(Block2SyntheticTx)
 							return bz
 						}(),
 					},
@@ -633,9 +636,9 @@ func init() {
 		}
 		historicalContexts[height] = Ctx.WithMultiStore(store).WithBlockHeight(height)
 	}
-	Ctx = historicalContexts[MockHeight8]
+	Ctx = historicalContexts[1].WithBlockHeight(MockHeight8)
 	baseCtx = Ctx
-	MultiTxCtx = historicalContexts[MockHeight2]
+	MultiTxCtx, _ = Ctx.CacheContext()
 	if store := EVMKeeper.ReceiptStore(); store != nil {
 		latest := int64(math.MaxInt64)
 		if err := store.SetLatestVersion(latest); err != nil {
@@ -645,7 +648,7 @@ func init() {
 	}
 	ctxProvider := func(height int64) sdk.Context {
 		if height == MockHeight2 {
-			return MultiTxCtx.WithBlockHeight(height).WithIsTracing(true)
+			return MultiTxCtx.WithIsTracing(true)
 		}
 		if height == evmrpc.LatestCtxHeight {
 			// See LatestCtxUpgradeName above — make the latest ctx look
@@ -653,10 +656,7 @@ func init() {
 			// sees the production path, not the pre-v5.8.0 fallback.
 			return baseCtx.WithIsTracing(true).WithClosestUpgradeName(LatestCtxUpgradeName)
 		}
-		if historical, ok := historicalContexts[height]; ok {
-			return historical.WithIsTracing(true)
-		}
-		return Ctx.WithBlockHeight(height).WithIsTracing(true)
+		return Ctx.WithIsTracing(true)
 	}
 	// Start good http server
 	goodConfig := evmrpcconfig.DefaultConfig
@@ -671,6 +671,22 @@ func init() {
 		panic(err)
 	}
 	if err := HttpServer.Start(); err != nil {
+		panic(err)
+	}
+
+	feeConfig := goodConfig
+	feeConfig.HTTPPort = TestFeePort
+	feeContext := func(height int64) sdk.Context {
+		if height == evmrpc.LatestCtxHeight {
+			height = MockHeight8
+		}
+		return historicalContexts[height].WithIsTracing(true).WithClosestUpgradeName(LatestCtxUpgradeName)
+	}
+	feeServer, err := evmrpc.NewEVMHTTPServer(feeConfig, &MockClient{}, EVMKeeper, testApp.BeginBlockKeepers, testApp.BaseApp, testApp.TracerAnteHandler, feeContext, txConfigProvider, "", nil)
+	if err != nil {
+		panic(err)
+	}
+	if err := feeServer.Start(); err != nil {
 		panic(err)
 	}
 
@@ -824,6 +840,12 @@ func generateTxData() {
 		Data:      []byte("synthetic"),
 		ChainID:   chainId,
 	})
+	block2SyntheticBuilder, syntheticBlock2 := buildTx(ethtypes.DynamicFeeTx{
+		Nonce: 8, GasFeeCap: big.NewInt(1000000000), Gas: 1000,
+		To: &to, Value: big.NewInt(1000), Data: []byte("synthetic-block-2"), ChainID: chainId,
+	})
+	Block2SyntheticTx = block2SyntheticBuilder.GetTx()
+	block2SyntheticTx = syntheticBlock2
 	// Build a dedicated normal EVM tx for block 100
 	block100TxBuilder, block100NormalTx = buildTx(ethtypes.DynamicFeeTx{
 		Nonce:     7,
@@ -1008,6 +1030,10 @@ func setupLogs() {
 		},
 	}}})
 	CtxMultiTx := Ctx.WithBlockHeight(MockHeight2)
+	EVMKeeper.MockReceipt(CtxMultiTx, block2SyntheticTx.Hash(), &types.Receipt{
+		TxType: types.ShellEVMTxType, BlockNumber: MockHeight2, TransactionIndex: 5,
+		TxHashHex: block2SyntheticTx.Hash().Hex(),
+	})
 	EVMKeeper.MockReceipt(CtxMultiTx, multiTxBlockTx1.Hash(), &types.Receipt{
 		BlockNumber:      MockHeight2,
 		TransactionIndex: 1, // start at 1 bc 0 is the non-evm tx

@@ -400,7 +400,7 @@ func (i *InfoAPI) getRewards(block *coretypes.ResultBlock, baseFee *big.Int, rew
 		// okay to get from latest since receipt is immutable
 		receipt, err := i.keeper.GetReceipt(i.ctxProvider(LatestCtxHeight), ethtx.Hash())
 		if errors.Is(err, receiptstore.ErrNotFound) {
-			unconsumed, nonceErr := transactionNonceUnconsumed(i.keeper, i.ctxProvider, block, ethtx)
+			unconsumed, nonceErr := transactionNonceUnconsumed(i.keeper, i.ctxProvider, block, ethtx, i.txDecoder)
 			if nonceErr != nil {
 				return nil, nonceErr
 			}
@@ -457,7 +457,7 @@ func (i *InfoAPI) getCongestionData(ctx context.Context, height *int64) (blockGa
 		// okay to get from latest since receipt is immutable
 		receipt, err := i.keeper.GetReceiptWithRetry(i.ctxProvider(LatestCtxHeight), ethtx.Hash(), 3)
 		if errors.Is(err, receiptstore.ErrNotFound) {
-			unconsumed, nonceErr := transactionNonceUnconsumed(i.keeper, i.ctxProvider, block, ethtx)
+			unconsumed, nonceErr := transactionNonceUnconsumed(i.keeper, i.ctxProvider, block, ethtx, i.txDecoder)
 			if nonceErr != nil {
 				return 0, nonceErr
 			}
@@ -521,7 +521,7 @@ func (i *InfoAPI) CalculateGasUsedRatio(ctx context.Context, blockHeight int64) 
 		// okay to get from latest since receipt is immutable
 		receipt, err := i.keeper.GetReceiptWithRetry(i.ctxProvider(LatestCtxHeight), ethtx.Hash(), 3)
 		if errors.Is(err, receiptstore.ErrNotFound) {
-			unconsumed, nonceErr := transactionNonceUnconsumed(i.keeper, i.ctxProvider, block, ethtx)
+			unconsumed, nonceErr := transactionNonceUnconsumed(i.keeper, i.ctxProvider, block, ethtx, i.txDecoder)
 			if nonceErr != nil {
 				return 0, nonceErr
 			}

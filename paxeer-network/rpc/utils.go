@@ -230,7 +230,7 @@ type indexedMsg struct {
 }
 
 func transactionNonceUnconsumed(k *keeper.Keeper, ctxProvider func(int64) sdk.Context,
-	block *coretypes.ResultBlock, transaction *ethtypes.Transaction) (bool, error) {
+	block *coretypes.ResultBlock, transaction *ethtypes.Transaction, decoder sdk.TxDecoder) (bool, error) {
 	if block == nil || block.Block == nil || block.Block.Height < 1 || transaction == nil {
 		return false, errors.New("cannot resolve transaction nonce without a committed block")
 	}
@@ -247,7 +247,35 @@ func transactionNonceUnconsumed(k *keeper.Keeper, ctxProvider func(int64) sdk.Co
 	if next < first {
 		return false, fmt.Errorf("sender nonce regressed in block %d", height)
 	}
-	return transaction.Nonce() < first || transaction.Nonce() >= next, nil
+	if transaction.Nonce() < first || transaction.Nonce() >= next {
+		return true, nil
+	}
+	for index, encoded := range block.Block.Txs {
+		peer := getEthTxForTxBz(encoded, decoder)
+		if peer == nil {
+			continue
+		}
+		if peer.Hash() == transaction.Hash() {
+			break
+		}
+		if peer.Nonce() != transaction.Nonce() {
+			continue
+		}
+		peerSender, err := rpcutils.RecoverEVMSender(peer, height, block.Block.Time.Unix())
+		if err != nil {
+			return false, err
+		}
+		if peerSender != sender {
+			continue
+		}
+		receipt, err := k.GetReceipt(ctxProvider(LatestCtxHeight), peer.Hash())
+		if err != nil || receipt == nil || receipt.BlockNumber != uint64(height) ||
+			receipt.TransactionIndex != uint32(index) || common.HexToHash(receipt.TxHashHex) != peer.Hash() {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func validateBlockExecutionReceipts(
@@ -302,7 +330,7 @@ func validateBlockExecutionReceipts(
 			if err != nil {
 				if errors.Is(err, receiptstore.ErrNotFound) {
 					if evmTransaction != nil {
-						unconsumed, nonceErr := transactionNonceUnconsumed(k, ctxProvider, block, evmTransaction)
+						unconsumed, nonceErr := transactionNonceUnconsumed(k, ctxProvider, block, evmTransaction, decoder)
 						if nonceErr != nil {
 							return nonceErr
 						}
