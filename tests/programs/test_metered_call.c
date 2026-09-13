@@ -467,8 +467,8 @@ static int metered_legacy_replay(void)
                              replay->kernel.current_state_root, 32U) == 0);
         METERED_CHECK(lxp_arena_init(&live_arena, live_bytes, sizeof(live_bytes)) == LXP_OK);
         METERED_CHECK(lxp_arena_init(&replay_arena, replay_bytes, sizeof(replay_bytes)) == LXP_OK);
-        METERED_CHECK(lxp_receipt_encode(&live->receipt, &live_arena, &live_receipt) == LXP_OK);
-        METERED_CHECK(lxp_receipt_encode(&replay->receipt, &replay_arena, &replay_receipt) == LXP_OK);
+        METERED_CHECK(lxp_receipt_encode(&live->receipt, false, &live_arena, &live_receipt) == LXP_OK);
+        METERED_CHECK(lxp_receipt_encode(&replay->receipt, false, &replay_arena, &replay_receipt) == LXP_OK);
         METERED_CHECK(live_receipt.length == replay_receipt.length);
         METERED_CHECK(memcmp(live_receipt.bytes, replay_receipt.bytes, live_receipt.length) == 0);
     }
