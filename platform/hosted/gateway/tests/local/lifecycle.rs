@@ -989,9 +989,11 @@ fn local_gateway_rpc() {
     );
     let first = call("lx_sendActivity", params.clone(), true);
     assert_eq!(first["result"]["commitment"], "executed", "{first}");
-    assert!(first["result"]["receipt"]
-        .as_str()
-        .is_some_and(|r| !r.is_empty()));
+    assert!(
+        first["result"]["receipt"]
+            .as_str()
+            .is_some_and(|r| !r.is_empty())
+    );
     assert_eq!(
         call("lx_sendActivity", params, true)["result"],
         first["result"]
@@ -2149,8 +2151,9 @@ fn ws_receive(stream: &mut (impl Read + Write)) -> serde_json::Value {
 
 impl Http {
     fn upgrade_request(&self, target: &str, headers: &[(&str, &str)]) -> HttpAnswer {
-        let mut request =
-            format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: Upgrade\r\n");
+        let mut request = format!(
+            "GET {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: Upgrade\r\n"
+        );
         for (name, value) in headers {
             must(write!(request, "{name}: {value}\r\n"), "format header");
         }
@@ -2289,10 +2292,12 @@ fn local_gateway_committed_payment_reads() {
         .required("funded main account");
     assert_eq!(account["balance"], "100000000000000");
     assert_eq!(account["asset_id"], hex_encode(&cluster.asset));
-    assert!(!account["proof_material"]
-        .as_str()
-        .required("native proof")
-        .is_empty());
+    assert!(
+        !account["proof_material"]
+            .as_str()
+            .required("native proof")
+            .is_empty()
+    );
     let assets = read("lx_listAssets", serde_json::json!([]));
     let assets = assets["result"]["assets"].as_array().required("assets");
     assert_eq!(assets.len(), 1);
@@ -2345,7 +2350,7 @@ fn assert_committed_fee_reads(
                 )["error"]["code"],
                 -32602
             );
-            assert_canonical_fee(read, &signed_receive_fee_activity(cluster, funding), 0);
+            assert_canonical_fee(read, &signed_receive_fee_activity(cluster, funding), 4);
         } else {
             assert_canonical_fee(read, &canonical, 0);
         }

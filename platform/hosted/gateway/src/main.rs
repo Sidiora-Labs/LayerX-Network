@@ -16,9 +16,10 @@ use layerx_platform_gateway::store::{
     ReservationRequest,
 };
 use layerx_platform_gateway::{
-    authenticate_gateway_key, pay_timing, production_route, verify_activity_operation,
-    verify_program_operation, verify_program_simulation_operation, verify_submission, AccessError,
-    AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota, VerifiedSubmission,
+    AccessError, AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota,
+    VerifiedSubmission, authenticate_gateway_key, pay_timing, production_route,
+    verify_activity_operation, verify_program_operation, verify_program_simulation_operation,
+    verify_submission,
 };
 use layerx_types::amount::Amount;
 use layerx_types::intent::{
@@ -35,8 +36,8 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
@@ -137,6 +138,7 @@ struct AuthorityResponse {
     resulting_state_root: String,
     sequencer_public_key: String,
     network_id: String,
+    protocol_network_id: u32,
     wire_version: String,
     #[serde(
         default,
@@ -1238,6 +1240,7 @@ fn authority_response(
         .map_err(|_| response(503, "authority_invalid", Some(5)))?;
     if !facts.activity_id.eq_ignore_ascii_case(activity_id)
         || facts.network_id != config.network_id
+        || facts.protocol_network_id != config.protocol_network_id
         || facts.wire_version != config.wire_version
     {
         return Err(response(503, "authority_mismatch", Some(5)));
