@@ -395,6 +395,25 @@ fn open_session(
     session
 }
 
+fn producer_client(tls: &transport::Tls, journey: u16, approval: u16, webhook: u16) -> Client {
+    required(
+        Client::new(
+            BTreeMap::from([
+                (
+                    "journey".to_owned(),
+                    tls.upstream(journey, "producer-token"),
+                ),
+                (
+                    "approval".to_owned(),
+                    tls.upstream(approval, "producer-token"),
+                ),
+            ]),
+            tls.upstream(webhook, "notification-token"),
+        ),
+        "producer client",
+    )
+}
+
 fn verify_delivery(socket: &std::path::Path, access_token: &str) {
     let root = directory("human-event-tls");
     let tls = transport::Tls::new(&root);
@@ -406,29 +425,11 @@ fn verify_delivery(socket: &std::path::Path, access_token: &str) {
         &root,
         &[("JOURNEY", journey.port), ("APPROVAL", approval.port)],
     );
-    let client = || {
-        required(
-            Client::new(
-                BTreeMap::from([
-                    (
-                        "journey".to_owned(),
-                        tls.upstream(journey.port, "producer-token"),
-                    ),
-                    (
-                        "approval".to_owned(),
-                        tls.upstream(approval.port, "producer-token"),
-                    ),
-                ]),
-                tls.upstream(webhook.port, "notification-token"),
-            ),
-            "producer client",
-        )
-    };
     let event_root = root.join("producer");
     let (outbox, retention, digest) = event_store(&event_root);
     let store = Arc::clone(&outbox.store);
     let health = Arc::clone(&outbox.health);
-    let producer = client();
+    let producer = producer_client(&tls, journey.port, approval.port, webhook.port);
     let journey = qualify_journey(&producer, outbox.as_ref(), &mut webhook, journey, &source);
     let second =
         required(outbox.pending(), "approval pending").unwrap_or_else(|| panic!("approval"));
