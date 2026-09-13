@@ -1,11 +1,11 @@
 use std::time::{Duration, Instant};
 
+use layerx_client::Client;
 use layerx_client::availability::{
     AvailabilitySelector, FetchContext, FetchOutcome, RetrievalLimits,
 };
 use layerx_client::evidence::{CheckpointSelector, ProofBundleSelector, VerifiedProofBundle};
 use layerx_client::read::{HistoryKind, HistoryPage};
-use layerx_client::Client;
 use layerx_programs::hex;
 use layerx_proof::availability::RootCommitments;
 use layerx_proof::inclusion::SequencerAuthorization;
@@ -14,11 +14,11 @@ use layerx_types::account::AccountId;
 use layerx_types::ids::Did;
 use layerx_types::payload::ModuleRegistry;
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::activity::{decode_signed, Activity};
+use layerx_wire::activity::{Activity, decode_signed};
 use layerx_wire::hash;
-use layerx_wire::receipt::decode_batch_header;
 use layerx_wire::receipt::ProtocolReceipt;
-use serde_json::{json, Value};
+use layerx_wire::receipt::decode_batch_header;
+use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
@@ -523,11 +523,16 @@ fn receipt_mentions_account(
     Ok(directly_named || deposit.body()[64..96] == account)
 }
 
+struct MaintenancePayer {
+    principal: [u8; 32],
+    asset: [u8; 32],
+}
+
 fn maintenance_payer(
     account: [u8; 32],
     value: &[u8],
     protocol: u16,
-) -> Result<Option<([u8; 32], [u8; 32])>, NativeReadError> {
+) -> Result<Option<MaintenancePayer>, NativeReadError> {
     let decoded = layerx_proof::state::decode_account_value(account, value)
         .map_err(|_| NativeReadError::Verification)?;
     let Some(asset) = decoded.asset else {
@@ -547,12 +552,15 @@ fn maintenance_payer(
     let did = Did::new(did.as_bytes()).map_err(|_| NativeReadError::Verification)?;
     let principal =
         hash::did_id_for_protocol(&did, protocol).map_err(|_| NativeReadError::Verification)?;
-    Ok(Some((principal, asset.asset_id)))
+    Ok(Some(MaintenancePayer {
+        principal,
+        asset: asset.asset_id,
+    }))
 }
 
 fn maintenance_json(
     bytes: &[u8],
-    payer: Option<([u8; 32], [u8; 32])>,
+    payer: Option<MaintenancePayer>,
     sequence: u64,
 ) -> Result<Option<Value>, NativeReadError> {
     let record = layerx_wire::maintenance::decode_occupancy_maintenance(bytes)
@@ -560,7 +568,7 @@ fn maintenance_json(
     if record.global_sequence != sequence {
         return Err(NativeReadError::Verification);
     }
-    Ok(payer.is_some_and(|(principal, asset)| record.occupancy_asset_id == asset && record.payers.iter().any(|payer| payer.principal == principal)).then(|| json!({
+    Ok(payer.is_some_and(|expected| record.occupancy_asset_id == expected.asset && record.payers.iter().any(|payer| payer.principal == expected.principal)).then(|| json!({
         "global_sequence": sequence.to_string(), "kind": "maintenance", "canonical_hex": hex::encode(bytes),
         "verification_level": VerificationLevel::BATCH_INCLUDED.wire_rank()})))
 }
