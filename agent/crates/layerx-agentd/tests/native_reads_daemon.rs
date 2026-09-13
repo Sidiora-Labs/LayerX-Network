@@ -18,6 +18,9 @@ use layerx_programs::hex;
 use layerx_proof::availability::RootCommitments;
 use layerx_types::ids::Did;
 
+#[path = "../../../tests/support/monotonic_clock.rs"]
+mod monotonic_clock;
+
 fn connect(socket: &Path) -> Client {
     Client::connect(ClientConfig {
         endpoint: socket.to_path_buf(),
@@ -113,6 +116,7 @@ fn probe(socket: &Path, stage: &str, work: &Path) {
         client,
         did,
         "test-native-read-cursor-key-32-bytes".to_owned(),
+        monotonic_clock::monotonic_time,
     )
     .unwrap_or_else(|error| panic!("native route: {error:?}"));
     if stage != "finalized" {

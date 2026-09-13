@@ -42,12 +42,18 @@ pub struct NativeReadRoute {
     cursor_key: Zeroizing<String>,
     correlation: u64,
     deadline: Instant,
+    clock: fn() -> Instant,
 }
 
 impl NativeReadRoute {
     /// # Errors
     /// Rejects an empty actor or a cursor authentication key below the bearer bound.
-    pub fn new(client: Client, actor: Did, cursor_key: String) -> Result<Self, NativeReadError> {
+    pub fn new(
+        client: Client,
+        actor: Did,
+        cursor_key: String,
+        clock: fn() -> Instant,
+    ) -> Result<Self, NativeReadError> {
         if actor.as_bytes().is_empty() || cursor_key.len() < 32 {
             return Err(NativeReadError::InvalidRequest);
         }
@@ -56,12 +62,13 @@ impl NativeReadRoute {
             actor,
             cursor_key: Zeroizing::new(cursor_key),
             correlation: 10_000,
-            deadline: Instant::now(),
+            deadline: clock(),
+            clock,
         })
     }
 
     fn next_id(&mut self) -> Result<u64, NativeReadError> {
-        if Instant::now() >= self.deadline {
+        if (self.clock)() >= self.deadline {
             return Err(NativeReadError::Unavailable);
         }
         self.correlation = self
@@ -80,7 +87,7 @@ impl NativeReadRoute {
         let (kind, selector) = path
             .split_once('/')
             .ok_or(NativeReadError::InvalidRequest)?;
-        self.deadline = Instant::now()
+        self.deadline = (self.clock)()
             .checked_add(Duration::from_secs(10))
             .ok_or(NativeReadError::Unavailable)?;
         self.client
