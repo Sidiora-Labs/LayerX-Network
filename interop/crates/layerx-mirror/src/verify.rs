@@ -248,19 +248,11 @@ impl MirrorVerifier {
         }
         verify_path(canonical_receipt, &proof, &root)
             .map_err(MirrorVerifyError::ReceiptInclusion)?;
-        let decoded = decode(canonical_receipt).map_err(|_| MirrorVerifyError::ReceiptDecode)?;
-        let receipt = decoded.protocol().ok_or(MirrorVerifyError::ReceiptDecode)?;
         let header = decode_batch_header(&self.archive.canonical_batch_header)
             .map_err(|_| MirrorVerifyError::Header)?;
         let authorised = self.authorize_receipt(canonical_receipt, &proof, &header)?;
-        let verified = if receipt.module_id() == 9 && receipt.operation() == 3 {
-            verify_program_outcome(canonical_receipt, &authorised)
-        } else if receipt.module_id() == 9 && receipt.operation() == 0 {
-            verify_program_state(canonical_receipt, &authorised)
-        } else {
-            verify_outcome(canonical_receipt, &authorised)
-        };
-        let value = verified.map_err(|failure| MirrorVerifyError::Receipt(failure.check))?;
+        let value = verify_outcome(canonical_receipt, &authorised)
+            .map_err(|failure| MirrorVerifyError::Receipt(failure.check))?;
         Ok(self.report(value, MirrorEvidenceLevel::BatchIncluded))
     }
 

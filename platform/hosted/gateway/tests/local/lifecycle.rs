@@ -2486,7 +2486,9 @@ fn local_funding_recovers_a_submitted_operation_after_restart() {
     let path = "/admin/v1/testnet/fund";
     let first = boundary.admin_post(path, key, &body);
     assert_eq!(first.status, 200, "{}", first.body);
-    let account = hex_encode(&main_account(&funding.recipient_did).required("recipient account"));
+    let account = hex_encode(
+        &layerx_platform_core::main_account(&funding.recipient_did).required("recipient account"),
+    );
     let balance_path = format!("/v1/accounts/{account}/balance");
     let balance = boundary.core.get(&balance_path);
     assert_eq!(balance.status, 200, "{}", balance.body);
