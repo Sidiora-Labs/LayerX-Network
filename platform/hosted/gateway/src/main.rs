@@ -446,6 +446,14 @@ fn program_head(
         return Err(response(404, "unknown_program", None));
     }
     if upstream.status != 200 || upstream.content_type != "application/json" {
+        if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+            let detail: serde_json::Value =
+                serde_json::from_slice(&upstream.body).unwrap_or(serde_json::Value::Null);
+            eprintln!(
+                "program_registry_head_refusal status={} error={}",
+                upstream.status, detail["error"]
+            );
+        }
         return Err(response(503, "program_registry_invalid", Some(5)));
     }
     let document: serde_json::Value = serde_json::from_slice(&upstream.body)
