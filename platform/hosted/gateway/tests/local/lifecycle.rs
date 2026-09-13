@@ -2669,7 +2669,7 @@ fn local_gateway_program_custody_journey() {
         &certificates,
         &gateway,
         &identity,
-        &["activity:write", "program:call"],
+        &["activity:write", "program:call", "program:read"],
     );
     let config = cluster.root.join("program-journey.curl");
     write(
