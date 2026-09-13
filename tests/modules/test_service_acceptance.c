@@ -352,6 +352,21 @@ int main(void)
         lxp_module_ctx_commit(&ctx) != LXP_OK)
         return 1;
 
+    {
+        uint8_t event[50];
+        const lxp_effect *effect = &event_buffer.effects[0];
+        (void)memcpy(event, swept_id, 32U);
+        event[32U] = LX_SERVICE_AGREEMENT_ACCEPTED;
+        event[33U] = 1U;
+        be64(event + 34U, 48U);
+        be64(event + 42U, 1300U);
+        if (event_buffer.count != 1U || effect->kind != LXP_EFFECT_EVENT ||
+            effect->module_id != LXP_MODULE_SERVICE || effect->monetary ||
+            effect->event_type != LX_SERVICE_EVENT_DEFAULT_APPLIED ||
+            effect->body_length != sizeof(event) || memcmp(effect->body, event, sizeof(event)) != 0)
+            return 1;
+    }
+
     if (open_ctx(&ctx, 1400U, 49U) != 0 ||
         lx_service_agreement_lookup(&ctx, swept_id, &agreement) != LXP_OK ||
         agreement.state != LX_SERVICE_AGREEMENT_ACCEPTED ||
