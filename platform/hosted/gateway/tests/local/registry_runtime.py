@@ -38,7 +38,7 @@ def main():
     mounts = []
     mounted = {}
 
-    def mount_file(source):
+    def mount_file(source, owner_private=False):
         source = Path(source)
         if source.resolve(strict=True) != source or not source.is_file():
             raise RuntimeError("registry input must be a canonical regular file")
@@ -46,21 +46,21 @@ def main():
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             raise RuntimeError("registry input must be singly linked")
         if source not in mounted:
-            os.chown(source, metadata.st_uid, 4030)
-            os.chmod(source, 0o640)
+            os.chown(source, 4030 if owner_private else metadata.st_uid, 4030)
+            os.chmod(source, 0o600 if owner_private else 0o640)
             target = "/run/layerx/inputs/" + str(len(mounted))
             mounts.extend(["--mount", f"type=bind,src={source},dst={target},readonly"])
             mounted[source] = target
         return mounted[source]
 
-    def generated(name, data):
+    def generated(name, data, owner_private=False):
         target = runtime / name
         descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "wb") as output:
             output.write(data)
             output.flush()
             os.fsync(output.fileno())
-        return mount_file(target)
+        return mount_file(target, owner_private)
 
     history = b"LayerX/sequencer-trust-history/v1\0"
     history += struct.pack(">HHHIQ", 1, 0, 3, config["network_id"], config["epoch"])
@@ -93,7 +93,7 @@ def main():
         "LAYERX_REGISTRY_NODE_ENDPOINT": config["node_url"],
         "LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT": config["authority_url"],
         "LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID": config["replica_id"],
-        "LAYERX_REGISTRY_SEQUENCER_TRUST_HISTORY": generated("trust-history", history),
+        "LAYERX_REGISTRY_SEQUENCER_TRUST_HISTORY": generated("trust-history", history, True),
         "LAYERX_REGISTRY_IDENTITY_URL": config["identity_url"],
         "LAYERX_REGISTRY_IDENTITY_TOKEN_FILE": mount_file(config["identity_token_file"]),
         "LAYERX_REGISTRY_IDENTITY_CA_DER": ca,
