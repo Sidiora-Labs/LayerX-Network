@@ -2035,8 +2035,21 @@ fn publish_lifecycle(
                 body: &canonical,
             },
         )
-        .map_err(|_| response(503, "program_registry_unavailable", Some(5)))?;
+        .map_err(|error| {
+            if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+                eprintln!("program_registry_transport_failure: {error}");
+            }
+            response(503, "program_registry_unavailable", Some(5))
+        })?;
     if upstream.status != 200 || upstream.content_type != "application/json" {
+        if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+            let detail: serde_json::Value =
+                serde_json::from_slice(&upstream.body).unwrap_or(serde_json::Value::Null);
+            eprintln!(
+                "program_registry_refusal status={} error={}",
+                upstream.status, detail["error"]
+            );
+        }
         return Err(response(503, "program_registry_unavailable", Some(5)));
     }
     let published: serde_json::Value = serde_json::from_slice(&upstream.body)
