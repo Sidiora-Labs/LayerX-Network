@@ -1,5 +1,5 @@
 {
-  "canonical_state_root": "91d3f0fa9600d144ac5114a21ed85786bc646ece65e42f6e08d801edcb664df9",
+  "canonical_state_root": "194dca071ac042f1ce65053f1b93fff604fa193b9922fd164a0e90582458c258",
   "modules": [
     "budget",
     "escrow",
@@ -7,16 +7,19 @@
     "service",
     "stream"
   ],
+  "native_fee_authority_version": 2,
+  "native_fee_schedule_version": 3,
   "network_id": 77,
-  "previous_canonical_state_root": "76e49271ca5a6321ac3b7c1f17515f5e3990997d0cb77ee9050fb4ed05ed6d7a",
-  "previous_receipt_state_root": "3bc0abcd19ae9b26f2ffb3a038061996997acdcee2f844e4386d726b7801969f",
+  "previous_canonical_state_root": "931e6e2711ca946cad467ea3ad65dcbb74611d3dbe8578ae7f06157e73fd8754",
+  "previous_receipt_state_root": "e59b387c6e31993ba6ca8d9c2397f7815e3373863127f6609f04408fdaaf15ca",
   "protocol_version": 3,
-  "receipt_state_root": "d976b45ce513971c40b1b2b7d2aa132ba94b9ffc0ee529c11e3f61c701b85dc7",
-  "sequencer_public_key": "74493f2d9d509f6859eaf35d6bad5a921b305c4e36ea037cda530f987b13a876",
+  "receipt_state_root": "5c4473eda28947a9b7ef450615c73706b9cca7edf49d27bc965d45362add11e0",
+  "sequencer_public_key": "58a179348aa669054996e1d4ee8b71de684b7e496c5fa90cba45d1f15064f229",
   "sha256": {
-    "00000000000000000000.lxs": "2178bbb21cb95d8b7b89040699e2d40be01a5e50bc0336a088226c04cdd305f7",
-    "genesis.manifest": "20759e65d31e4780f70c50574348c0bb833c839d25b480cb53f27eb923cda18c",
-    "paxeer-deployment-descriptor.lxgd": "34b3988ab30b3af8464dc1ed7711f62f044f0e766c2c04a046632902eed09009",
-    "paxeer-registration-request.lxrr": "2990486b814ecaaedd1345c12075fba654b92e132750fdddd321501284f46dc5"
-  }
+    "00000000000000000000.lxs": "b68d57e290ffa9ef558192641d4940c38d93186a5b870078545b91076fd69f95",
+    "genesis.manifest": "98ad80ab902e3e49f8a4e4b1fa3a7e6d3b7fc589d499803939f36193a61347f1",
+    "paxeer-deployment-descriptor.lxgd": "ea7487963c12df6ae8aeebf1105bfe82f02e9bb1287cd0403a97a2ef5c45b432",
+    "paxeer-registration-request.lxrr": "1fb46a1069cab37653d9b62cfdb1c76bc83eadb9746e5ddef3171bb5b6b752f5"
+  },
+  "withdrawal_price": 0
 }
