@@ -27,6 +27,7 @@ _SETTLEMENT = b"LXP/programs/settlement-failure/v1\0"
 _CALLBACK = b"LXP/programs/callback-failure/v1\0"
 _TRANSFER_SET_V1 = b"LayerX/programs/402LXP/transfer-set/v1\0"
 _TRANSFER_SET_V2 = b"LayerX/programs/402LXP/transfer-set/v2\0"
+_ACCOUNT_BOUND_SET = b"LayerX/programs/402LXP/account-bound-set/v1\0"
 _PROGRAM_AUTHORITY = b"LayerX/programs/402LXP/program-authority/v1\0"
 _PROGRAM_FUNDING = b"LayerX/programs/402LXP/program-funding/v1\0"
 _PROGRAM_ACCOUNT = b"LayerX/programs/program-account/v1\0"
@@ -232,6 +233,8 @@ def decode_and_verify_program_terminal(
         if decoded["graph"] != call_graph:
             _fail("candidate call graph")
         if decoded["outcome"] == "success":
+            if decoded["code"] != receipt.result_code:
+                _fail("candidate response result code")
             outcome = {"kind": "completed", "code": decoded["code"], "response": cast(bytes, decoded["response"]).hex()}
             successful = True
         elif decoded["outcome"] == "failure":
@@ -285,9 +288,8 @@ def decode_and_verify_program_terminal(
     if authorization is not None:
         if not authorization or authority_root != receipt.transfer_root:
             _fail("transfer authority root")
-        if receipt.encoding_version == 4 and not authorization.startswith(_TRANSFER_SET_V2):
-            _fail("V2 transfer authority required")
-        _verify_authorization_root(authorization, cast(bytes, authority_root))
+        _verify_authorization_root(authorization, cast(bytes, authority_root),
+                                   require_v2=receipt.encoding_version == 4)
     if protocol_version not in (1, 2, 3):
         _fail("program receipt protocol")
     return DecodedProgramTerminal(outcome, usage if usage is not None else _receipt_usage(receipt),
@@ -502,9 +504,17 @@ def _usage(cpu: int, memory: int, read: int, write: int, values: int, output: in
     return {"cpu_fuel": str(cpu), "memory_bytes": str(memory), "storage_read_bytes": str(read), "storage_write_bytes": str(write), "output_values": values, "output_bytes": str(output), "fee_units": str(fee)}
 
 
-def _verify_authorization_root(encoded: bytes, expected: bytes) -> None:
+def _verify_authorization_root(encoded: bytes, expected: bytes, *, require_v2: bool = False) -> None:
+    names: _Reader | None = None
+    if encoded.startswith(_ACCOUNT_BOUND_SET):
+        names = _Reader(encoded[len(_ACCOUNT_BOUND_SET):])
+        encoded = names.sized_u32(1_048_576)
+        if encoded.startswith(_ACCOUNT_BOUND_SET):
+            _fail("nested account-bound transfer authorization")
     reader = _Reader(encoded)
     candidate = encoded.startswith(_TRANSFER_SET_V2)
+    if require_v2 and not candidate:
+        _fail("V2 transfer authority required")
     domain = _TRANSFER_SET_V2 if candidate else _TRANSFER_SET_V1
     if reader.fixed(len(domain)) != domain:
         _fail("transfer authorization domain")
@@ -557,11 +567,39 @@ def _verify_authorization_root(encoded: bytes, expected: bytes) -> None:
             _fail("program transfer authority")
         if funding is not None and (funding["owner"] != program or funding["destination"] != to or funding["asset"] != asset):
             _fail("program funding authority")
+        if names is not None:
+            name = names.fixed(names.u16())
+            if authority is not None:
+                if name:
+                    _fail("program source account name")
+            else:
+                source = _principal_payment_account(principal, asset, name)
         total = _checked_u128_add(total, amount, "transfer total")
         kernel_legs.append(b"\0" + source + to + asset + amount.to_bytes(16, "big") + (1).to_bytes(2, "big"))
     reader.end()
+    if names is not None:
+        names.end()
     if _merkle_root(kernel_legs) != expected:
         _fail("transfer authorization root")
+
+
+def _principal_payment_account(principal: bytes, asset: bytes, name: bytes) -> bytes:
+    allowed = b"abcdefghijklmnopqrstuvwxyz0123456789._-:"
+    if len(name) > 512 or any(byte not in allowed for byte in name) or b"::" in name or not name.startswith(b"agent:"):
+        _fail("principal payment account name")
+    tail = name[len(b"agent:"):]
+    if tail.endswith(b":main"):
+        did = tail[:-len(b":main")]
+    elif len(tail) >= 71 and tail[-71:] == b":asset:" + asset.hex().encode("ascii"):
+        did = tail[:-71]
+    else:
+        _fail("principal payment account asset")
+    if not did or did.startswith(b":") or did.endswith(b":"):
+        _fail("principal payment account DID")
+    owner = sha256(b"LXP/v1/did-id\0" + len(did).to_bytes(2, "big") + did).digest()
+    if owner != principal:
+        _fail("principal payment account authority")
+    return sha256(_ACCOUNT_DERIVATION + len(name).to_bytes(4, "big") + name).digest()
 
 
 def _decode_program_authority(encoded: bytes) -> Mapping[str, object]:
