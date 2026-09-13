@@ -2916,6 +2916,7 @@ impl ProductionComponents {
     }
 
     fn execute_profile_update(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
@@ -4008,6 +4009,7 @@ impl ProductionComponents {
     }
 
     fn execute_support_create(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
@@ -4035,6 +4037,7 @@ impl ProductionComponents {
     }
 
     fn execute_support_reply(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
@@ -4050,6 +4053,7 @@ impl ProductionComponents {
     }
 
     fn execute_support_read(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
@@ -4084,6 +4088,7 @@ impl ProductionComponents {
     }
 
     fn execute_support_feedback(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
@@ -4104,6 +4109,7 @@ impl ProductionComponents {
     }
 
     fn execute_notification_list(
+        &self,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
         let inventory =
@@ -4127,6 +4133,7 @@ impl ProductionComponents {
     }
 
     fn execute_notification_read(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
@@ -4159,6 +4166,7 @@ impl ProductionComponents {
     }
 
     fn execute_notification_preferences_set(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
@@ -4880,7 +4888,7 @@ impl ProductionComponents {
             "stepup.begin" => self.execute_stepup_begin(request, scope, principal),
             "stepup.finish" => self.execute_stepup_finish(request, scope),
             "profile.get" => Self::execute_profile_get(scope),
-            "profile.update" => Self::execute_profile_update(request, scope),
+            "profile.update" => self.execute_profile_update(request, scope),
             "onboarding.status" => Self::execute_onboarding_status(scope),
             "onboarding.resume" => self.execute_onboarding_resume(request, scope),
             "binding.statement" => self.execute_binding_statement(request, scope),
@@ -4926,16 +4934,16 @@ impl ProductionComponents {
             "approval.get" => self.execute_approval_get(request, scope),
             "approval.approve" | "approval.reject" => self.execute_approval_approve(request, scope),
             "support.list" => Self::execute_support_list(scope),
-            "support.create" => Self::execute_support_create(request, scope),
-            "support.reply" => Self::execute_support_reply(request, scope),
-            "support.read" => Self::execute_support_read(request, scope),
+            "support.create" => self.execute_support_create(request, scope),
+            "support.reply" => self.execute_support_reply(request, scope),
+            "support.read" => self.execute_support_read(request, scope),
             "support.status" => Self::execute_support_status(request, scope),
-            "support.feedback" => Self::execute_support_feedback(request, scope),
-            "notification.list" => Self::execute_notification_list(scope),
-            "notification.read" => Self::execute_notification_read(request, scope),
+            "support.feedback" => self.execute_support_feedback(request, scope),
+            "notification.list" => self.execute_notification_list(scope),
+            "notification.read" => self.execute_notification_read(request, scope),
             "notification.preferences.get" => Self::execute_notification_preferences_get(scope),
             "notification.preferences.set" => {
-                Self::execute_notification_preferences_set(request, scope)
+                self.execute_notification_preferences_set(request, scope)
             }
             "home.summary" => self.execute_home_summary(scope),
             "account.balance" => self.execute_account_balance(scope),
