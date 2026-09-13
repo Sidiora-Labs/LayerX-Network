@@ -3,6 +3,7 @@ use std::io::{self, Read, Write};
 use layerx_proof::inclusion::{verify_receipt, SequencerAuthorization};
 use layerx_proof::merkle::Proof;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,7 +87,7 @@ fn authenticated_digest(
         {
             return Err(refused());
         }
-        return layerx_wire::hash::sha256(bytes).map_err(|_| refused());
+        return Ok(Sha256::digest(bytes).into());
     }
     let receipt =
         layerx_proof::receipt::verify_sequencer_signature(bytes, authorization.public_key())

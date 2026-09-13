@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use layerx_proof::inclusion::{verify_receipt, SequencerAuthorization};
 use layerx_proof::merkle::{decode_proof, Proof};
 use layerx_wire::encode::Encoder;
+use sha2::{Digest, Sha256};
 
 fn hex(value: &str) -> Vec<u8> {
     value
@@ -198,8 +199,7 @@ fn maintenance_head() -> serde_json::Value {
     let header_bytes = read("header");
     let header = layerx_wire::receipt::decode_batch_header(&header_bytes)
         .unwrap_or_else(|e| panic!("header: {e:?}"));
-    let digest =
-        layerx_wire::hash::sha256(&receipt).unwrap_or_else(|e| panic!("maintenance digest: {e:?}"));
+    let digest: [u8; 32] = Sha256::digest(&receipt).into();
     assert_eq!(header.batch_number(), 1);
     serde_json::json!({"network_id": header.network_id(),
         "sequencer_id": encoded(&header.sequencer_id()), "public_key": encoded(&read("sequencer.public")),
