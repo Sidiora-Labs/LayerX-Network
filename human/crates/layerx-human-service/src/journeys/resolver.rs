@@ -311,7 +311,6 @@ impl RouteRequest {
                 })
             }
             3 => Relationship::AgentAuthorized(r.send()?),
-            4 => return Err(wire_error()),
             9 => Relationship::PayerGrant(PayerGrantRoute {
                 receive: NativeReceive::new(&r.array::<733>()?).map_err(|_| wire_error())?,
             }),
