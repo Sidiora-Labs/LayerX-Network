@@ -4,9 +4,8 @@ use layerx_crypto::ed25519;
 use layerx_proof::inclusion::{verify_state, InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::{build_proof, verify_path, MerkleError, Proof};
 use layerx_proof::receipt::{
-    authorized_maintained_activity_batch, verify_outcome, verify_program_outcome,
-    verify_program_state, AuthorizedBatch, MaintainedOutcomeEvidence, ReceiptCheck,
-    VerifiedReceipt,
+    authorized_maintained_activity_batch, verify_outcome, AuthorizedBatch,
+    MaintainedOutcomeEvidence, ReceiptCheck, VerifiedReceipt,
 };
 use layerx_wire::hash::batch_header_digest;
 use layerx_wire::receipt::{decode, decode_batch_header};
