@@ -661,42 +661,6 @@ fn validate_history_progress(start: u64, next: u64, end: u64) -> Result<(), Read
     Ok(())
 }
 
-#[cfg(test)]
-mod history_bounds_tests {
-    use super::{validate_history_progress, validate_history_sequence, ReadError};
-    #[test]
-    fn authenticated_history_must_stay_within_selector_and_make_progress() {
-        assert_eq!(validate_history_sequence(10, 10, 12), Ok(()));
-        assert_eq!(validate_history_sequence(12, 12, 12), Ok(()));
-        assert_eq!(
-            validate_history_sequence(13, 13, 12),
-            Err(ReadError::SelectorMismatch)
-        );
-        assert!(matches!(
-            validate_history_sequence(11, 10, 12),
-            Err(ReadError::HistoryRepetition { .. })
-        ));
-        assert!(matches!(
-            validate_history_sequence(10, 11, 12),
-            Err(ReadError::HistoryGap { .. })
-        ));
-        assert_eq!(validate_history_progress(10, 11, 12), Ok(()));
-        assert_eq!(validate_history_progress(10, 13, 12), Ok(()));
-        assert!(matches!(
-            validate_history_progress(10, 10, 12),
-            Err(ReadError::HistoryRepetition { .. })
-        ));
-        assert_eq!(
-            validate_history_progress(10, 14, 12),
-            Err(ReadError::SelectorMismatch)
-        );
-        assert_eq!(
-            validate_history_progress(10, u64::MAX, u64::MAX),
-            Err(ReadError::PageBound)
-        );
-    }
-}
-
 fn history_metadata(bytes: &[u8]) -> Result<(HistoryKind, u64, &[u8]), ReadError> {
     let (&kind, rest) = bytes.split_first().ok_or(ReadError::MalformedValue)?;
     let sequence_bytes: [u8; 8] = rest
@@ -964,4 +928,40 @@ pub fn did_accounts(
     }
     reader.finish()?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod history_bounds_tests {
+    use super::{validate_history_progress, validate_history_sequence, ReadError};
+    #[test]
+    fn authenticated_history_must_stay_within_selector_and_make_progress() {
+        assert_eq!(validate_history_sequence(10, 10, 12), Ok(()));
+        assert_eq!(validate_history_sequence(12, 12, 12), Ok(()));
+        assert_eq!(
+            validate_history_sequence(13, 13, 12),
+            Err(ReadError::SelectorMismatch)
+        );
+        assert!(matches!(
+            validate_history_sequence(11, 10, 12),
+            Err(ReadError::HistoryRepetition { .. })
+        ));
+        assert!(matches!(
+            validate_history_sequence(10, 11, 12),
+            Err(ReadError::HistoryGap { .. })
+        ));
+        assert_eq!(validate_history_progress(10, 11, 12), Ok(()));
+        assert_eq!(validate_history_progress(10, 13, 12), Ok(()));
+        assert!(matches!(
+            validate_history_progress(10, 10, 12),
+            Err(ReadError::HistoryRepetition { .. })
+        ));
+        assert_eq!(
+            validate_history_progress(10, 14, 12),
+            Err(ReadError::SelectorMismatch)
+        );
+        assert_eq!(
+            validate_history_progress(10, u64::MAX, u64::MAX),
+            Err(ReadError::PageBound)
+        );
+    }
 }
