@@ -19,10 +19,10 @@ use crate::{archive_commitment, Archive, ArchiveCommitment, MirrorCursor};
 
 const SYSTEM_PROGRAM: [u8; 32] = [0; 32];
 const PDA_MARKER: &[u8] = b"ProgramDerivedAddress";
-const MANIFEST_MAGIC: &[u8; 8] = b"LXMMAN02";
-const CHUNK_MAGIC: &[u8; 8] = b"LXMCHK02";
+const MANIFEST_MAGIC: &[u8; 8] = b"LXMMAN03";
+const CHUNK_MAGIC: &[u8; 8] = b"LXMCHK03";
 const INSTRUCTION_MAGIC: &[u8; 4] = b"LXMA";
-const INSTRUCTION_VERSION: u16 = 2;
+const INSTRUCTION_VERSION: u16 = 3;
 const MAX_TRANSACTION_BYTES: usize = 1232;
 const MIN_CHUNK_BYTES: usize = 128;
 const MAX_CHUNK_BYTES: usize = 720;
@@ -1219,7 +1219,7 @@ fn decode_manifest(
     commitment: ArchiveCommitment,
     publisher: [u8; 32],
 ) -> Result<Manifest, SolanaError> {
-    if bytes.len() != 8 + 32 + 32 + 4 + 8 + 32 + 8 + 4 + 32 + 32 + 32 + 8 + 4 + 1
+    if bytes.len() != 334
         || &bytes[..8] != MANIFEST_MAGIC
         || bytes[8..40] != *commitment.as_bytes()
         || bytes[40..72] != publisher
@@ -1260,7 +1260,14 @@ fn decode_manifest(
         1 => true,
         _ => return Err(SolanaError::Retrieval),
     };
-    if received != length || next_chunk != chunk_count || expected_chain != observed_chain {
+    let tail_length = usize::from(bytes[333]);
+    if tail_length >= 64
+        || tail_length != received % 64
+        || bytes[269 + tail_length..333].iter().any(|byte| *byte != 0)
+        || received != length
+        || next_chunk != chunk_count
+        || expected_chain != observed_chain
+    {
         return Err(SolanaError::Retrieval);
     }
     Ok(Manifest {

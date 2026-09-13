@@ -12,13 +12,15 @@ use solana_program::system_instruction;
 use solana_program::system_program;
 use solana_program::sysvar::Sysvar;
 
+mod archive_hash;
+
 entrypoint!(process_instruction);
 
 const INSTRUCTION_MAGIC: &[u8; 4] = b"LXMA";
-const INSTRUCTION_VERSION: u16 = 2;
-const MANIFEST_MAGIC: &[u8; 8] = b"LXMMAN02";
-const CHUNK_MAGIC: &[u8; 8] = b"LXMCHK02";
-const MANIFEST_BYTES: usize = 237;
+const INSTRUCTION_VERSION: u16 = 3;
+const MANIFEST_MAGIC: &[u8; 8] = b"LXMMAN03";
+const CHUNK_MAGIC: &[u8; 8] = b"LXMCHK03";
+const MANIFEST_BYTES: usize = 334;
 const CHUNK_HEADER_BYTES: usize = 80;
 const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CHUNK_BYTES: usize = 720;
@@ -33,6 +35,7 @@ enum MirrorError {
     Order = 5,
     Bounds = 6,
     Incomplete = 7,
+    ArchiveDigest = 8,
 }
 
 impl From<MirrorError> for ProgramError {
@@ -108,6 +111,7 @@ fn initialize(
     canonical[124..128].copy_from_slice(&total_chunks.to_be_bytes());
     canonical[128..160].copy_from_slice(&archive_digest);
     canonical[160..192].copy_from_slice(&expected_chain);
+    archive_hash::ArchiveHash::new().store(&mut canonical[237..])?;
     if manifest.owner == program_id {
         let existing = manifest.try_borrow_data()?;
         return if existing.as_ref() == canonical {
@@ -203,6 +207,8 @@ fn append(
     if next_bytes > total_bytes {
         return Err(MirrorError::Bounds.into());
     }
+    let mut archive_hash = archive_hash::ArchiveHash::load(&manifest_data[237..], received_bytes)?;
+    archive_hash.update(value)?;
     if chunk.owner == program_id || chunk.lamports() != 0 || !chunk.data_is_empty() {
         return Err(MirrorError::Conflict.into());
     }
@@ -235,6 +241,7 @@ fn append(
     manifest_data[192..224].copy_from_slice(next_chain.as_ref());
     manifest_data[224..232].copy_from_slice(&next_bytes.to_be_bytes());
     manifest_data[232..236].copy_from_slice(&(index + 1).to_be_bytes());
+    archive_hash.store(&mut manifest_data[237..])?;
     Ok(())
 }
 
@@ -267,6 +274,11 @@ fn finalize(
         || data[160..192] != data[192..224]
     {
         return Err(MirrorError::Incomplete.into());
+    }
+    let received = read_u64(&data[224..232])?;
+    let digest = archive_hash::ArchiveHash::load(&data[237..], received)?.finish(received)?;
+    if data[128..160] != digest {
+        return Err(MirrorError::ArchiveDigest.into());
     }
     data[236] = 1;
     Ok(())

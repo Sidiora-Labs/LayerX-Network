@@ -12,6 +12,12 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 solana-program = "=2.3.0"
 zeroize = "=1.8.1"
+sha2 = { version = "=0.10.9", features = ["compress"] }
+
+[dev-dependencies]
+solana-program-test = "=2.3.13"
+solana-sdk = "=2.3.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [lints.rust]
 unsafe_code = "deny"
