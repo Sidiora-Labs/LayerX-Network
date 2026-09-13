@@ -1,7 +1,7 @@
-import { encodeNativeProgramCall } from "./native-program-call.js";
+import { decodeNativeProgramCall, encodeNativeProgramCall } from "./native-program-call.js";
 import { decodeNativeCapabilitySet } from "./native-capabilities.js";
 import type { ProgramCall, ProgramOutcome, ProgramUsage } from "./programs.js";
-import type { ProgramReceiptOutcome } from "./verifier.js";
+import type { ProgramReceiptOutcome, ProtocolReceipt } from "./verifier.js";
 
 const ACTIVITY_DOMAIN = bytes("LXP/v1/activity-id\0");
 const PAYLOAD_DOMAIN = bytes("LXP/v1/payload-hash\0");
@@ -15,6 +15,8 @@ const FAILURE = bytes("LXP/programs/failure-detail/v1\0");
 const RESOURCE = bytes("LXP/programs/resource-detail/v1\0");
 const SETTLEMENT = bytes("LXP/programs/settlement-failure/v1\0");
 const CALLBACK = bytes("LXP/programs/callback-failure/v1\0");
+const PRE_RUNTIME_FAILURE = bytes("LXP/v1/context-hash\0LXP/programs/pre-runtime-failure/v1\0");
+const EMPTY_CALL_GRAPH = bytes("LXP/v1/context-hash\0LXP/programs/empty-call-graph/v1\0");
 const TRANSFER_SET_V1 = bytes("LayerX/programs/402LXP/transfer-set/v1\0");
 const TRANSFER_SET_V2 = bytes("LayerX/programs/402LXP/transfer-set/v2\0");
 const ACCOUNT_BOUND_SET = bytes("LayerX/programs/402LXP/account-bound-set/v1\0");
@@ -139,9 +141,18 @@ export async function decodeAndVerifyProgramTerminal(
   expectedProgramId: string,
   receipt: ProgramReceiptOutcome,
   protocolVersion: number,
+  binding?: Readonly<{ protocol: ProtocolReceipt; signedActivity: Uint8Array }>,
 ): Promise<DecodedProgramTerminal> {
   if (callGraph.length === 0 || !equal(await sha256(callGraph), receipt.callGraphRoot)) fail("program call graph root");
   if (terminalPayload.length === 0 || terminalPayload.length > 1_048_576 || !equal(await sha256(terminalPayload), receipt.terminalPayloadRoot)) fail("program terminal root");
+  if (starts(terminalPayload, PRE_RUNTIME_FAILURE)) {
+    if (binding === undefined) fail("native refusal requires signed activity binding");
+    await verifyPreRuntimeFailure(terminalPayload, callGraph, expectedProgramId, receipt, protocolVersion, binding);
+    return Object.freeze({
+      outcome: Object.freeze({ kind: "refused", failure: Object.freeze({ kind: "guest_refused", code: receipt.resultCode }) }),
+      usage: receiptUsage(receipt), transferVerification: "reconstructed",
+    });
+  }
   let inner = terminalPayload;
   if (receipt.encodingVersion === 4) {
     const domain = bytes("LXP/programs/terminal-applied-legs/v1\0");
@@ -250,6 +261,60 @@ export async function decodeAndVerifyProgramTerminal(
   if (protocolVersion !== 1 && protocolVersion !== 2 && protocolVersion !== 3) fail("program receipt protocol");
   const boundUsage = usage ?? receiptUsage(receipt);
   return Object.freeze({ outcome, usage: boundUsage, transferVerification: recorded ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed" });
+}
+
+async function verifyPreRuntimeFailure(
+  terminal: Uint8Array, graph: Uint8Array, expectedProgram: string, outcome: ProgramReceiptOutcome,
+  version: number, binding: Readonly<{ protocol: ProtocolReceipt; signedActivity: Uint8Array }>,
+): Promise<void> {
+  const protocol = binding.protocol, zero = new Uint8Array(32);
+  const reader = new Reader(terminal.subarray(PRE_RUNTIME_FAILURE.length));
+  const activity = reader.fixed(32), payloadHash = reader.fixed(32), code = reader.i32();
+  const moduleVersion = reader.u32(), parameterVersion = reader.u32();
+  let encoding = 3, appliedDigest: Uint8Array = zero;
+  if (terminal.length !== PRE_RUNTIME_FAILURE.length + 76) {
+    encoding = reader.byte();
+    if (encoding !== 4) fail("native refusal encoding");
+    appliedDigest = reader.fixed(32);
+  }
+  reader.end();
+  const emptyDigest = encoding === 4 ? await sha256(new Uint8Array()) : zero;
+  if (code >= 0 || code !== protocol.resultCode || code !== outcome.resultCode
+    || !equal(activity, protocol.activityId) || moduleVersion !== protocol.moduleVersion
+    || parameterVersion !== protocol.parameterVersion || encoding !== outcome.encodingVersion
+    || protocol.protocolVersion !== version || protocol.moduleId !== 9 || protocol.operation !== 3
+    || outcome.terminalKind !== 2 || outcome.runtimeVersion !== 1
+    || !((version === 2 && encoding === 3) || (version === 3 && encoding === 4))
+    || outcome.memoryBytes !== 0n || outcome.storageReadBytes !== 0n
+    || outcome.outputValues !== 0 || outcome.outputBytes !== 0n) fail("native refusal receipt binding");
+  if (!equal(appliedDigest, emptyDigest) || !equal(outcome.appliedLegsDigest, emptyDigest)
+    || !equal(outcome.transferRoot, zero)) fail("native refusal transfer commitments");
+  if (!equal(outcome.occupancyAssetId, zero) || !equal(outcome.occupancyEvidenceDigest, zero)
+    || !equal(outcome.occupancyTransferRoot, zero) || outcome.occupancyByteBatches !== 0n
+    || outcome.occupancyFeeUnits !== 0n) fail("native refusal occupancy commitments");
+  if (!equal(graph, EMPTY_CALL_GRAPH)) fail("native refusal call graph");
+  const canonical = new Uint8Array(binding.signedActivity);
+  if (canonical.length === 0 || canonical.length > 1_048_576
+    || !equal(await sha256(ACTIVITY_DOMAIN, canonical), activity)) fail("native refusal activity binding");
+  const call = new Reader(canonical);
+  if (call.u16() !== version || call.u16() !== 0x1001 || call.byte() !== 12) fail("native refusal activity header");
+  field(call, 1); if (call.u16() !== version) fail("native refusal activity protocol");
+  field(call, 2); call.u32();
+  field(call, 3); if (call.u32() !== 0x0009_0003) fail("native refusal activity type");
+  field(call, 4); call.sizedU32(255);
+  field(call, 5); call.sizedU32(524_288);
+  field(call, 6); call.u64();
+  field(call, 7); const notBefore = call.u64(), notAfter = call.u64();
+  field(call, 8); call.sizedU32(32, 32);
+  field(call, 9); call.u128();
+  field(call, 10); const declaredHash = call.sizedU32(32, 32);
+  field(call, 11); const payload = call.sizedU32(524_288);
+  field(call, 12); call.sizedU32(128); call.end();
+  const native = decodeNativeProgramCall(payload);
+  if (notAfter < notBefore || !equal(declaredHash, payloadHash)
+    || !equal(await sha256(PAYLOAD_DOMAIN, payload), payloadHash)
+    || !equal(encodeNativeProgramCall(native), payload) || hex(native.programId) !== expectedProgram
+    || native.guestAbi !== outcome.abiVersion) fail("native refusal payload binding");
 }
 
 async function verifyAppliedLegs(encoded: Uint8Array, expected: Uint8Array): Promise<void> {
