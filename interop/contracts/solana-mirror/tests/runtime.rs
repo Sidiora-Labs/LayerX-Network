@@ -95,7 +95,7 @@ async fn qualify(wrong_digest: bool, chunk_size: usize) {
         ],
         data: instruction(1, commitment, &begin),
     };
-    send(&mut context, &[initialize.clone(), initialize])
+    send(&mut context, &[initialize.clone(), initialize.clone()])
         .await
         .expect("real system PDA creation and exact initialize retry");
     let finalize = Instruction {
@@ -146,6 +146,16 @@ async fn qualify(wrong_digest: bool, chunk_size: usize) {
             .await
             .expect("exact retry without digest advancement");
         assert_eq!(manifest_data(&mut context, manifest).await, committed);
+        if index == 0 {
+            send(&mut context, std::slice::from_ref(&initialize))
+                .await
+                .expect("initialize retry preserves appended digest state");
+            assert_eq!(manifest_data(&mut context, manifest).await, committed);
+            let mut changed = initialize.clone();
+            changed.data[95] ^= 1;
+            assert!(send(&mut context, &[changed]).await.is_err());
+            assert_eq!(manifest_data(&mut context, manifest).await, committed);
+        }
     }
     let before = manifest_data(&mut context, manifest).await;
     assert_eq!(before.len(), 334);
@@ -166,6 +176,10 @@ async fn qualify(wrong_digest: bool, chunk_size: usize) {
         let mut expected = before;
         expected[236] = 1;
         assert_eq!(after, expected);
+        send(&mut context, std::slice::from_ref(&initialize))
+            .await
+            .expect("initialize retry preserves finalized digest state");
+        assert_eq!(manifest_data(&mut context, manifest).await, after);
         if chunk_size == 720 {
             if let Some(directory) = std::env::var_os("LAYERX_SOLANA_RUNTIME_FIXTURE_DIR") {
                 std::fs::create_dir_all(&directory).expect("public fixture directory");

@@ -114,11 +114,17 @@ fn initialize(
     archive_hash::ArchiveHash::new().store(&mut canonical[237..])?;
     if manifest.owner == program_id {
         let existing = manifest.try_borrow_data()?;
-        return if existing.as_ref() == canonical {
-            Ok(())
-        } else {
-            Err(MirrorError::Conflict.into())
-        };
+        validate_manifest(&existing, commitment, payer.key)?;
+        let received = read_u64(&existing[224..232])?;
+        archive_hash::ArchiveHash::load(&existing[237..], received)?;
+        if existing[..192] != canonical[..192]
+            || received > total_bytes
+            || read_u32(&existing[232..236])? > total_chunks
+            || existing[236] > 1
+        {
+            return Err(MirrorError::Conflict.into());
+        }
+        return Ok(());
     }
     if manifest.lamports() != 0 || !manifest.data_is_empty() {
         return Err(MirrorError::Conflict.into());
