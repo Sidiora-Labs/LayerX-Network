@@ -2020,7 +2020,9 @@ fn publish_lifecycle(
     if !matches!(activity.activity_type().ordinal(), 1 | 2) {
         return Ok(());
     }
-    let digest = layerx_wire::hash::receipt_digest(receipt)
+    let digest = layerx_wire::receipt::decode(receipt)
+        .and_then(|receipt| layerx_wire::receipt::encode_unsigned(&receipt))
+        .and_then(|unsigned| layerx_wire::hash::receipt_digest(&unsigned))
         .map_err(|_| response(502, "receipt_verification_failed", None))?;
     let upstream = config
         .client
