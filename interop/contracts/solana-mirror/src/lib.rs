@@ -8,9 +8,9 @@ use solana_program::program::invoke_signed;
 use solana_program::program_error::ProgramError;
 use solana_program::pubkey::Pubkey;
 use solana_program::rent::Rent;
-use solana_program::system_instruction;
-use solana_program::system_program;
 use solana_program::sysvar::Sysvar;
+use solana_sdk_ids::system_program;
+use solana_system_interface::instruction as system_instruction;
 
 mod archive_hash;
 
