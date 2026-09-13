@@ -241,6 +241,18 @@ impl Reclaim {
         {
             return Err(ReclaimError::RouteWidened);
         }
+        let (actor, account_sequence) = match &request.mechanism {
+            ReclaimMechanism::ReceiveUnderPayerGrant(route) => {
+                let did = request
+                    .owner
+                    .canonical()
+                    .strip_prefix("agent:")
+                    .and_then(|value| value.strip_suffix(":main"))
+                    .ok_or(ReclaimError::InvalidRequest)?;
+                (AgentDid::new(did)?, route.receive.receiver_sequence())
+            }
+            _ => (request.agent.actor.clone(), request.agent.account_sequence),
+        };
         let compiled = compile(leg.intent(), registry)?;
         let digest = request_digest(request, compiled.payload_hash());
         let row = record_row(request.idempotency_key)?;
@@ -273,9 +285,9 @@ impl Reclaim {
         let journey_leg = JourneyLeg::new(
             leg.intent().clone(),
             request.idempotency_key,
-            request.agent.actor.clone(),
+            actor,
             request.agent.authority.clone(),
-            request.agent.account_sequence,
+            account_sequence,
             request.agent.not_before,
             request.agent.not_after,
             request.agent.fee_limit,
@@ -492,7 +504,7 @@ fn validate_request(request: &ReclaimRequest) -> Result<(), ReclaimError> {
     let protocol_key = match &request.mechanism {
         ReclaimMechanism::BudgetDefund { .. } => request.idempotency_key,
         ReclaimMechanism::AgentAuthorized(route) => route.idempotency_key.bytes(),
-        ReclaimMechanism::ReceiveUnderPayerGrant(route) => route.idempotency_key.bytes(),
+        ReclaimMechanism::ReceiveUnderPayerGrant(route) => route.receive.idempotency_key(),
     };
     if protocol_key != request.idempotency_key {
         return Err(ReclaimError::IdempotencyConflict);
@@ -513,7 +525,7 @@ fn reclaim_route(request: &ReclaimRequest) -> Result<crate::journeys::Route, Rec
             create: None,
         }),
         ReclaimMechanism::AgentAuthorized(route) => Relationship::AgentAuthorized(*route),
-        ReclaimMechanism::ReceiveUnderPayerGrant(route) => Relationship::PayerGrant(*route),
+        ReclaimMechanism::ReceiveUnderPayerGrant(route) => Relationship::PayerGrant(route.clone()),
     };
     let source = match &request.mechanism {
         ReclaimMechanism::BudgetDefund { budget_account, .. } => {

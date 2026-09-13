@@ -107,6 +107,7 @@ pub enum IntentKind {
     /// Paxeer deposit: credit a proven external deposit through the bridge module.
     BridgeDepositCredit(BridgeDepositCredit),
     NativeCustodyCredit(crate::NativeCustodyCredit),
+    NativeReceive(crate::NativeReceive),
     /// Paxeer withdrawal: request a bridge-module withdrawal.
     BridgeWithdrawRequest(BridgeWithdrawRequest),
 }
@@ -122,9 +123,10 @@ impl IntentKind {
             | Self::AuthorityGrant(_)
             | Self::SessionGrant(_)
             | Self::SessionRevoke(_) => ModuleId::Governance,
-            Self::LxpSend(_) | Self::LxpReceive(_) | Self::BridgeWithdrawRequest(_) => {
-                ModuleId::Asset
-            }
+            Self::LxpSend(_)
+            | Self::LxpReceive(_)
+            | Self::NativeReceive(_)
+            | Self::BridgeWithdrawRequest(_) => ModuleId::Asset,
             Self::PayerGrantRegistration(_)
             | Self::BudgetCreate(_)
             | Self::BudgetFund(_)
