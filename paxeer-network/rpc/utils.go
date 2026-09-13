@@ -270,7 +270,7 @@ func transactionNonceUnconsumed(k *keeper.Keeper, ctxProvider func(int64) sdk.Co
 		}
 		receipt, err := k.GetReceipt(ctxProvider(LatestCtxHeight), peer.Hash())
 		if err != nil || receipt == nil || receipt.BlockNumber != uint64(height) ||
-			receipt.TransactionIndex != uint32(index) || common.HexToHash(receipt.TxHashHex) != peer.Hash() {
+			uint64(receipt.TransactionIndex) != uint64(index) || receipt.TxHashHex != peer.Hash().Hex() {
 			continue
 		}
 		return true, nil
