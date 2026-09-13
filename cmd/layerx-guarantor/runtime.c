@@ -1003,7 +1003,7 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
     runtime->incident_directory = open(state_directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (runtime->incident_directory < 0) { free(genesis); gp_runtime_close(runtime); return LXP_ERR_IO; }
     {
-        int incident = openat(runtime->incident_directory, "replay-halt", O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        int incident = openat(runtime->incident_directory, "replay-halt", O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
         struct stat info;
         if (incident >= 0) {
             if (fstat(incident, &info) != 0 || !S_ISREG(info.st_mode) || (info.st_mode & 0022) != 0) {
@@ -1011,6 +1011,9 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
             }
             runtime->known_finalisation.finalisation_halted = true;
             (void)close(incident);
+            free(genesis);
+            gp_runtime_close(runtime);
+            return LXP_ERR_DA_MISSING;
         } else if (errno != ENOENT) { free(genesis); gp_runtime_close(runtime); return LXP_ERR_IO; }
     }
     runtime->execution_bytes = malloc(3U * LXP_MAX_ACTIVITY_BYTES);
@@ -1405,7 +1408,7 @@ lxp_result gp_runtime_note_divergence(gp_runtime *runtime, const lxp_batch_heade
     for (size_t i = 0U; i < 4U; ++i) record[encoded.length + 64U + i] = (uint8_t)(code >> (24U - i * 8U));
     runtime->known_finalisation.finalisation_halted = true;
     descriptor = openat(runtime->incident_directory, "replay-halt",
-        O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0600);
+        O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
     if (descriptor < 0) return LXP_ERR_IO;
     if (fstat(descriptor, &info) != 0 || !S_ISREG(info.st_mode) || (info.st_mode & 0022) != 0)
         status = LXP_ERR_AUTH_SCOPE;

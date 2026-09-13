@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <signal.h>
+#include <unistd.h>
 
 int main(int argc, char **argv)
 {
@@ -23,6 +24,19 @@ int main(int argc, char **argv)
     assert(argc == 5 && memory);
     count = strtoul(argv[4], &end, 10);
     assert(*end == '\0' && count > 0U);
+    {
+        char directory[4096], path[4096];
+        int length = snprintf(directory, sizeof(directory), "%s/halt-input-XXXXXX", argv[2]);
+        assert(length > 0 && (size_t)length < sizeof(directory));
+        assert(mkdtemp(directory) != NULL);
+        length = snprintf(path, sizeof(path), "%s/replay-halt", directory);
+        assert(length > 0 && (size_t)length < sizeof(path));
+        assert(mkfifo(path, 0600) == 0);
+        (void)alarm(5U);
+        assert(gp_runtime_open(&runtime, argv[1], directory) == LXP_ERR_AUTH_SCOPE);
+        (void)alarm(0U);
+        assert(runtime == NULL && unlink(path) == 0 && rmdir(directory) == 0);
+    }
     assert(lxp_arena_init(&arena, memory, 128U * 1024U * 1024U) == LXP_OK);
     status = gp_runtime_open(&runtime, argv[1], argv[2]);
     if (status != LXP_OK) {
