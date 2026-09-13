@@ -13,6 +13,7 @@ from .program_lifecycle import NativeProgramLifecycleRequest
 from .program_wire import (
     DecodedSignedProgramCall,
     assert_fresh_simulation_observation,
+    bind_retained_program_call,
     decode_and_verify_program_terminal,
     decode_signed_program_call,
 )
@@ -178,6 +179,7 @@ def verify_program_receipt(
     authority: AuthorizedReceiptBatch,
     signatures: LocalSignatureVerifier,
     trust: ProgramTrustContext,
+    *, expected_signed_activity: bytes | None = None,
 ) -> VerifiedProgramReceipt:
     activity_id = execution.get("activity_id")
     module_version = execution.get("module_version")
@@ -196,7 +198,22 @@ def verify_program_receipt(
     authority_document = _mapping(execution.get("authority"))
     if protocol.module_id != 9 or protocol.operation != 3 or protocol.module_version != module_version or protocol.activity_id.hex() != activity_id or outcome is None or outcome.abi_version != guest_abi or outcome.result_code != result_code or protocol.batch_id.hex() != execution.get("batch_id") or execution.get("batch_id") != authority_document.get("batch_id") or str(protocol.global_sequence) != execution.get("global_sequence") or protocol.previous_state_root.hex() != authority_document.get("previous_state_root") or protocol.resulting_state_root.hex() != execution.get("state_root") or execution.get("state_root") != authority_document.get("resulting_state_root") or verification.receipt_digest.hex() != execution.get("receipt_digest") or not call_graph or sha256(terminal_payload).digest() != outcome.terminal_payload_root or sha256(call_graph).digest() != outcome.call_graph_root:
         raise ValueError("program receipt binding failed")
-    terminal = decode_and_verify_program_terminal(terminal_payload, call_graph, cast(str, execution["program_id"]), outcome, protocol.protocol_version)
+    retained = None
+    if "retained_signed_activity" in execution:
+        retained = _evidence_bytes(execution, "retained_signed_activity")
+    if expected_signed_activity is not None:
+        if retained is not None and retained != expected_signed_activity:
+            raise ValueError("program retained call mismatch")
+        retained = expected_signed_activity
+    payload_hash = None
+    if retained is not None:
+        payload_hash, expected_abi, expected_key = bind_retained_program_call(
+            retained, activity_id, cast(str, execution["program_id"]), protocol.protocol_version)
+        if expected_abi != guest_abi or ("idempotency_key" in execution and execution["idempotency_key"] != expected_key):
+            raise ValueError("program retained call metadata mismatch")
+    terminal = decode_and_verify_program_terminal(
+        terminal_payload, call_graph, cast(str, execution["program_id"]), outcome,
+        protocol.protocol_version, protocol=protocol, expected_payload_hash=payload_hash)
     if terminal.usage != execution.get("usage") or terminal.outcome != execution.get("outcome"):
         raise ValueError("program terminal document binding failed")
     return VerifiedProgramReceipt(verification, terminal_payload, call_graph, terminal.transfer_verification)
@@ -311,7 +328,8 @@ class ProgramOperations:
         execution = _execution(result.get("execution"), "simulated")
         if execution["program_id"] != call.program_id or execution["activity_id"] != signed.activity_id:
             raise ValueError("program simulation binding failed")
-        verified = verify_program_receipt(execution, _authority(execution, self._trust), self._signatures, self._trust)
+        verified = verify_program_receipt(execution, _authority(execution, self._trust), self._signatures, self._trust,
+                                          expected_signed_activity=signed.canonical_bytes)
         _verify_simulation(
             result.get("simulation_evidence"),
             execution,
@@ -405,7 +423,8 @@ def _submission(
     execution = _execution(result, cast(Literal["executed", "refused"], state))
     if (program_id is not None and execution["program_id"] != program_id) or (activity_id is not None and execution["activity_id"] != activity_id) or (idempotency_key is not None and execution.get("idempotency_key") != idempotency_key):
         raise ValueError("program execution binding failed")
-    verify_program_receipt(execution, _authority(execution, trust), signatures, trust)
+    verify_program_receipt(execution, _authority(execution, trust), signatures, trust,
+                           expected_signed_activity=None if retained_signed_activity is None else bytes.fromhex(retained_signed_activity))
     return execution
 
 
@@ -413,7 +432,7 @@ def _execution(value: object, expected_state: Literal["executed", "refused", "si
     execution = _mapping(value)
     _exact(execution, ("state", "activity_id", "program_id", "guest_abi_version", "module_version", "batch_id",
         "global_sequence", "result_code", "state_root", "receipt", "receipt_digest", "terminal_payload",
-        "call_graph", "authority", "usage", "outcome", "verification"), ("idempotency_key",))
+        "call_graph", "authority", "usage", "outcome", "verification"), ("idempotency_key", "retained_signed_activity"))
     if execution.get("state") != expected_state:
         raise ValueError("invalid program execution state")
     _hex_field(execution, "activity_id", 32, exact=True)
