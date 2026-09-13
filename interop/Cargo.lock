@@ -717,6 +717,7 @@ dependencies = [
  "layerx-sdk",
  "layerx-types",
  "layerx-wire",
+ "sha2",
 ]
 
 [[package]]
@@ -881,6 +882,7 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustls",
  "rustls-native-certs",
  "serde_json",
  "sha2",
@@ -1591,8 +1593,10 @@ dependencies = [
  "http",
  "httparse",
  "log",
- "native-tls",
  "rand",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "sha1",
  "thiserror",
 ]

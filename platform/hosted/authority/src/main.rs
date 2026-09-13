@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -673,6 +673,39 @@ fn evidence_refusal(refusal_kind: &EvidenceRefusal) -> Response {
     refusal(502, "evidence_refused", None)
 }
 
+fn await_requested_receipt(
+    config: &Config,
+    activity_id: [u8; 32],
+    wait_publication: bool,
+    deadline: Instant,
+) -> ReceiptSource {
+    loop {
+        let source = lookup_receipt(config, activity_id, wait_publication);
+        if !matches!(source, ReceiptSource::Unknown)
+            || !wait_publication
+            || Instant::now() >= deadline
+        {
+            return source;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn await_replica_evidence(
+    config: &Config,
+    path: &str,
+    wait: bool,
+    deadline: Instant,
+) -> ReplicaAnswer {
+    loop {
+        let answer = replica_get(config, path);
+        if !matches!(answer, ReplicaAnswer::Status(404, _)) || !wait || Instant::now() >= deadline {
+            return answer;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Response {
     let Ok(activity_id) = hex::decode32(requested) else {
         return refusal(400, "invalid_activity_id", None);
@@ -680,7 +713,8 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
     if activity_id == [0; 32] {
         return refusal(400, "invalid_activity_id", None);
     }
-    let receipt = match lookup_receipt(config, activity_id, wait_publication) {
+    let deadline = Instant::now() + IO_TIMEOUT;
+    let receipt = match await_requested_receipt(config, activity_id, wait_publication, deadline) {
         ReceiptSource::Found(receipt) => receipt,
         ReceiptSource::Unknown => return refusal(404, "unknown_activity", None),
         ReceiptSource::KeyMismatch => {
@@ -704,7 +738,7 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
         hex::encode(&locator.batch_id),
         hex::encode(&locator.receipt_digest)
     );
-    let document = match replica_get(config, &path) {
+    let document = match await_replica_evidence(config, &path, wait_publication, deadline) {
         ReplicaAnswer::Status(200, body) => body,
         ReplicaAnswer::Status(404, _) => {
             return refusal(503, "replica_evidence_unavailable", Some(1));

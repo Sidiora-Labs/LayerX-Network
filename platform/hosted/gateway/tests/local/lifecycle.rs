@@ -1,3 +1,4 @@
+mod events;
 mod funding;
 mod required;
 use required::Required;
@@ -95,6 +96,7 @@ struct LocalRedis {
 }
 struct Gateway {
     _process: Daemon,
+    _event_processes: Vec<Daemon>,
     port: u16,
     signer_file: String,
 }
@@ -406,12 +408,18 @@ fn start_local_gateway(
     gateway_env.extend(gateway_upstream_environment(
         cluster, boundary, identity, authority, redis,
     ));
+    let events = events::Runtime::prepare(cluster, boundary);
+    events.configure(&mut gateway_env, certificates);
     let gateway_process = local_service(cluster, "layerx-gateway", gateway_port, &gateway_env);
-    Gateway {
+    let mut gateway = Gateway {
         _process: gateway_process,
+        _event_processes: Vec::new(),
         port: gateway_port,
         signer_file,
-    }
+    };
+    gateway._event_processes =
+        events.start(cluster, certificates, identity, authority, redis, &gateway);
+    gateway
 }
 
 fn gateway_upstream_environment(
@@ -2460,5 +2468,72 @@ fn assert_canonical_fee(
             .required("schedule")
             .len(),
         494
+    );
+}
+
+#[test]
+fn local_funding_recovers_a_submitted_operation_after_restart() {
+    let (cluster, funding) = funding::start();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let public_key = hex_encode(
+        &SigningKey::from_bytes(&funding.recipient_seed)
+            .verifying_key()
+            .to_bytes(),
+    );
+    let body = funding_body(&funding.recipient_did, &public_key, 25);
+    let key = "durable-funded-send";
+    let path = "/admin/v1/testnet/fund";
+    let first = boundary.admin_post(path, key, &body);
+    assert_eq!(first.status, 200, "{}", first.body);
+    let account = hex_encode(
+        &layerx_platform_core::main_account(&funding.recipient_did).required("recipient account"),
+    );
+    let balance_path = format!("/v1/accounts/{account}/balance");
+    let balance = boundary.core.get(&balance_path);
+    assert_eq!(balance.status, 200, "{}", balance.body);
+    let digest = hex_encode(&sha256(&[b"fund", &[0], key.as_bytes()]));
+    let journal = cluster
+        .root
+        .join("state/journal")
+        .join(format!("{digest}.json"));
+    let canonical_digest = hex_encode(&sha256(&[b"fund-canonical", &[0], key.as_bytes()]));
+    let canonical_path = cluster
+        .root
+        .join("state/journal")
+        .join(format!("{canonical_digest}.json"));
+    let canonical = fs::read(&canonical_path).required("durable canonical funding");
+    drop(boundary);
+    let complete = fs::read(&journal).required("complete funding journal");
+    fs::write(journal.with_extension("complete.json"), &complete)
+        .required("retain complete outcome");
+    let first_record = complete
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .required("pending journal record")
+        + 1;
+    let mut interrupted = complete[..first_record].to_vec();
+    interrupted.extend_from_slice(b"{\"request_digest\":");
+    fs::write(&journal, interrupted).required("interrupt result persistence");
+    fs::File::open(&journal)
+        .required("journal file")
+        .sync_all()
+        .required("persist interruption");
+    let boundary = start_boundary(&cluster, &certificates);
+    let recovered = boundary.admin_post(path, key, &body);
+    assert_eq!(recovered.status, 200, "{}", recovered.body);
+    assert_eq!(json(&recovered), json(&first));
+    assert_eq!(json(&boundary.core.get(&balance_path)), json(&balance));
+    assert_eq!(
+        fs::read(&canonical_path).required("recovered canonical funding"),
+        canonical
+    );
+    let mut conflicting: serde_json::Value =
+        serde_json::from_str(&body).required("funding request");
+    conflicting["amount"] = serde_json::json!(26);
+    assert_refusal(
+        &boundary.admin_post(path, key, &conflicting.to_string()),
+        409,
+        "idempotency_conflict",
     );
 }

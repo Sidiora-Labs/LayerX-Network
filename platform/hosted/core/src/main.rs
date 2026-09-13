@@ -1759,11 +1759,12 @@ fn fund(config: &Config, request: &Request, key: &str) -> Response {
     }
 }
 
-fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Response, Response> {
-    let mut client = connect_client(config).map_err(|error| {
-        eprintln!("layerx-core-boundary: {error}");
-        refusal(503, "node_unavailable", Some(5))
-    })?;
+fn prepare_funding(
+    config: &Config,
+    client: &mut Client,
+    command: &FundingCommand,
+    key: &str,
+) -> Result<PreparedFunding, Response> {
     let stage_path = journal_path(config, "fund-canonical", key);
     let command_bytes =
         serde_json::to_vec(command).map_err(|_| refusal(503, "journal_unavailable", Some(5)))?;
@@ -1787,7 +1788,7 @@ fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Res
                 refusal(503, "treasury_identity_unavailable", Some(5))
             })?
             .account_sequence;
-        let sequence = treasury_sequence(config, &mut client, amount)?;
+        let sequence = treasury_sequence(config, client, amount)?;
         let now = now_ms();
         let signed = build_send_with_signer(
             &config.treasury,
@@ -1824,6 +1825,15 @@ fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Res
         .map_err(|_| refusal(503, "journal_unavailable", Some(5)))?;
         staged
     };
+    Ok(signed)
+}
+
+fn fund_send(config: &Config, command: &FundingCommand, key: &str) -> Result<Response, Response> {
+    let mut client = connect_client(config).map_err(|error| {
+        eprintln!("layerx-core-boundary: {error}");
+        refusal(503, "node_unavailable", Some(5))
+    })?;
+    let signed = prepare_funding(config, &mut client, command, key)?;
     if let Ok(Some(facts)) = await_receipt(config, signed.activity_id, Duration::ZERO) {
         return funding_receipt_response(command, &facts);
     }

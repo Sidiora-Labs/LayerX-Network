@@ -678,7 +678,9 @@ fn torn_tail_is_recovered_but_terminated_corruption_is_rejected() {
 fn paxeer_observations_preserve_inclusion_and_confirmation_history() {
     let path = journal_path("paxeer-monotonic");
     let mut journal = open_journal(&path);
-    journal.plan_paxeer([5; 32], [1; 32], 10, 1).expect("plan");
+    journal
+        .plan_paxeer([5; 32], [1; 32], 10, 1)
+        .unwrap_or_else(|error| panic!("plan: {error:?}"));
     let observe = |stage, block_hash, confirmations| PaxeerObservation {
         operation_id: "operation-1",
         transaction_hash: [6; 32],
@@ -688,7 +690,7 @@ fn paxeer_observations_preserve_inclusion_and_confirmation_history() {
     };
     journal
         .observe_paxeer([5; 32], observe("confirming", Some([7; 32]), 2), 2)
-        .expect("included");
+        .unwrap_or_else(|error| panic!("included: {error:?}"));
     let before = journal_bytes(&path);
     for observation in [
         observe("confirming", Some([7; 32]), 1),
@@ -701,19 +703,21 @@ fn paxeer_observations_preserve_inclusion_and_confirmation_history() {
     }
     journal
         .observe_paxeer([5; 32], observe("final", Some([7; 32]), 3), 3)
-        .expect("final");
+        .unwrap_or_else(|error| panic!("final: {error:?}"));
     assert!(journal
         .observe_paxeer([5; 32], observe("confirming", Some([7; 32]), 4), 4)
         .is_err());
     journal
         .observe_paxeer([5; 32], observe("displaced", Some([7; 32]), 0), 4)
-        .expect("reorg");
+        .unwrap_or_else(|error| panic!("reorg: {error:?}"));
     journal
         .observe_paxeer([5; 32], observe("confirming", Some([8; 32]), 1), 5)
-        .expect("new inclusion");
+        .unwrap_or_else(|error| panic!("new inclusion: {error:?}"));
     drop(journal);
     let reopened = open_journal(&path);
-    let recovered = reopened.paxeer(&[5; 32]).expect("recovered operation");
+    let recovered = reopened
+        .paxeer(&[5; 32])
+        .unwrap_or_else(|| panic!("recovered operation"));
     assert_eq!(recovered.block_hash, Some([8; 32]));
     assert_eq!(recovered.confirmations, 1);
     drop(reopened);
