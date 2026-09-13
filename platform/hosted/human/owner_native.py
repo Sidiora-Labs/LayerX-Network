@@ -16,6 +16,7 @@ from provision import Refused, fields, h32, protected_bytes, protected_json, req
 
 GUARDIAN_ROLES = ('guarantor-1', 'guarantor-2', 'sequencer')
 GUARDIAN_EPOCH_MAXIMUM = 64
+LNI_VERSION = (1, 5)
 
 
 def digest(domain, data):
@@ -66,12 +67,12 @@ def receipt(socket_path, activity_id):
         return bytes(data)
 
     def exchange(connection, tag, correlation, payload):
-        envelope = struct.pack('>HHHQ', 1, 4, tag, correlation) + span(payload) + span(b'')
+        envelope = struct.pack('>HHHQ', *LNI_VERSION, tag, correlation) + span(payload) + span(b'')
         connection.sendall(span(envelope))
         length = int.from_bytes(read_exact(connection, 4), 'big')
         require(22 <= length <= 1212416, socket_path, 'receipt frame bound')
         reader = Reader(read_exact(connection, length), socket_path)
-        require(reader.take(4) == b'\0\1\0\4', socket_path, 'LNI version')
+        require(reader.take(4) == struct.pack('>HH', *LNI_VERSION), socket_path, 'LNI version')
         returned_tag = reader.number(2)
         require(reader.number(8) == correlation, socket_path, 'LNI correlation')
         data = reader.span(1212416)
