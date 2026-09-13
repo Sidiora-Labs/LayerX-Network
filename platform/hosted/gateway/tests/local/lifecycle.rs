@@ -630,7 +630,7 @@ fn run_lifecycle_script(
     let authority_port = authority.port;
     let authority_token_file = &authority.token_file;
     let signer_file = &gateway.signer_file;
-    let manifest = local_manifest(cluster);
+    let manifest = local_manifest(cluster, 1_000_000_000_000);
     let evidence_directory = cluster.root.join("gateway-offline-evidence");
     make_dir(&evidence_directory, 0o700);
     let authority_token =
@@ -722,7 +722,7 @@ fn run_lifecycle_script(
     }
 }
 
-fn local_manifest(cluster: &Cluster) -> PathBuf {
+fn local_manifest(cluster: &Cluster, fee_limit: u128) -> PathBuf {
     use layerx_types::program_lifecycle::{
         NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, ProgramUpgradePolicy,
         ProgramWindDownOperation,
@@ -795,7 +795,7 @@ fn local_manifest(cluster: &Cluster) -> PathBuf {
             first_sequence + u64::try_from(index).required("index"),
             ordinal,
             &payload,
-            1_000_000_000_000,
+            fee_limit,
         );
         let kind = ActivityType::new(ModuleId::Programs, ordinal).required("ordinal");
         let registry = ModuleRegistry::new(&[
@@ -939,8 +939,8 @@ fn local_gateway_rpc() {
         call("lx_getNodeInfo", serde_json::json!([]), false)["result"]["network_id"],
         NETWORK_ID
     );
-    assert_unavailable_reads(&call);
-    let manifest = local_manifest(&cluster);
+    assert_unavailable_reads(&call, &cluster.asset);
+    let manifest = local_manifest(&cluster, 0);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(manifest).required("manifest")).required("manifest JSON");
     let signed = fs::read(manifest[0]["signed_file"].as_str().required("signed path"))
@@ -1020,11 +1020,23 @@ fn local_rpc(
     result
 }
 
-fn assert_unavailable_reads(call: &impl Fn(&str, serde_json::Value, bool) -> serde_json::Value) {
+fn assert_unavailable_reads(
+    call: &impl Fn(&str, serde_json::Value, bool) -> serde_json::Value,
+    native_asset: &[u8; 32],
+) {
+    let listed = call("lx_listAssets", serde_json::json!([]), false);
+    let assets = listed["result"]["assets"]
+        .as_array()
+        .required("committed genesis assets");
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0]["asset_id"], hex_encode(native_asset));
+    assert_eq!(assets[0]["symbol"], "TST");
+    assert_eq!(
+        call("lx_estimateFee", serde_json::json!(["abcd"]), false)["error"]["code"],
+        -32602
+    );
     for (method, params) in [
-        ("lx_listAssets", serde_json::json!([])),
         ("lx_getAsset", serde_json::json!(["ab".repeat(32)])),
-        ("lx_estimateFee", serde_json::json!(["abcd"])),
         ("lx_getBalances", serde_json::json!(["did:layerx:alice"])),
     ] {
         assert_eq!(call(method, params, false)["error"]["code"], -32001);
@@ -2248,7 +2260,7 @@ fn local_gateway_committed_payment_reads() {
     let assets = assets["result"]["assets"].as_array().required("assets");
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0]["asset_id"], hex_encode(&cluster.asset));
-    assert_eq!(assets[0]["symbol"], "TEST");
+    assert_eq!(assets[0]["symbol"], "TST");
     let detail = read(
         "lx_getAsset",
         serde_json::json!([hex_encode(&cluster.asset)]),

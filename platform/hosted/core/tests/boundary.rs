@@ -2256,7 +2256,10 @@ fn cluster_artifacts() -> (TestState, PathBuf, PathBuf, PathBuf) {
     ));
     make_dir(&root, 0o755);
     let layerxd = root.join("layerxd");
-    must(fs::hard_link(&layerxd_source, &layerxd), "link layerxd");
+    must(
+        fs::copy(&layerxd_source, &layerxd),
+        "copy qualified layerxd",
+    );
     let migrations = root.join("0007_history_index.sql");
     must(
         fs::copy(
@@ -2493,8 +2496,8 @@ fn supervised_files(root: &Path, builder: &Path, keys: [&[u8; 32]; 2], tokens: [
     );
     write(&root.join("checkpoint-settlement.json"), &settlement, 0o644);
     must(
-        fs::hard_link(builder, root.join("layerx-genesis-build")),
-        "link genesis builder",
+        fs::copy(builder, root.join("layerx-genesis-build")),
+        "copy qualified genesis builder",
     );
     write(&root.join("bootstrap-sequencer.key"), keys[0], 0o600);
     write(&root.join("bootstrap-treasury.key"), keys[1], 0o600);
