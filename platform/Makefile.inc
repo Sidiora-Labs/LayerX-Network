@@ -19,6 +19,7 @@ PLATFORM_BETA_CLUSTER_ENV ?= build/beta-cluster/env
 
 PLATFORM_PYTHON_ENV := $(CURDIR)/build/platform-python
 PLATFORM_MAVEN_REPOSITORY ?= $(HOME)/.m2/repository
+PLATFORM_MAVEN_OFFLINE ?= -o
 
 platform-policy-install:
 	@cargo deny --version >/dev/null || { echo "cargo-deny is required for Platform policy checks" >&2; exit 1; }
@@ -40,11 +41,12 @@ platform-sample-install: platform-sample-preflight
 	cd platform/docs/samples/first-payment-go && go mod download
 	cargo fetch --manifest-path platform/docs/samples/verify-receipt-rust/Cargo.toml --locked
 	cargo fetch --manifest-path platform/examples/marketplace/program/Cargo.toml --locked
+	$(MAKE) platform-install-local-artifacts PLATFORM_MAVEN_OFFLINE=
 	@set -eu; for pom in platform/sdk/jvm/pom.xml platform/integrations/spring/pom.xml platform/integrations/android/pom.xml \
 		platform/integrations/spring/example/pom.xml \
 		platform/docs/samples/first-payment-jvm/pom.xml platform/docs/samples/paid-endpoint-spring/pom.xml \
 		platform/docs/samples/mobile-payment-android/pom.xml; do \
-		mvn -q -f "$$pom" -Pconformance dependency:go-offline -DexcludeGroupIds=com.sidiora.layerx; \
+		mvn -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f "$$pom" -Pconformance dependency:go-offline; \
 	done
 	@set -eu; \
 		sdk_lock=$$(sha256sum platform/sdk/swift/Package.resolved | awk '{print $$1}'); \
@@ -69,9 +71,9 @@ platform-sample-dependencies-ready:
 	@test -s $(PLATFORM_MAVEN_REPOSITORY)/com/sidiora/layerx/layerx-android/0.1.0/layerx-android-0.1.0.jar || { echo "run make platform-dependencies-install to install the local Android integration" >&2; exit 1; }
 
 platform-install-local-artifacts:
-	mvn -o -q -f platform/sdk/jvm/pom.xml -DskipTests install
-	mvn -o -q -f platform/integrations/spring/pom.xml -DskipTests install
-	mvn -o -q -f platform/integrations/android/pom.xml -DskipTests install
+	mvn $(PLATFORM_MAVEN_OFFLINE) -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f platform/sdk/jvm/pom.xml install
+	mvn $(PLATFORM_MAVEN_OFFLINE) -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f platform/integrations/spring/pom.xml install
+	mvn $(PLATFORM_MAVEN_OFFLINE) -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f platform/integrations/android/pom.xml install
 
 
 platform-dependencies-install: platform-sample-preflight
