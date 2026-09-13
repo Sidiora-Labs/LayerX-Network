@@ -3801,6 +3801,12 @@ done:
     return status;
 }
 
+typedef struct kernel_maintenance_frame {
+    uint16_t module_id;
+    size_t offset;
+    size_t length;
+} kernel_maintenance_frame;
+
 typedef struct kernel_maintenance_run {
     lxp_kernel_batch_snapshot *snapshot;
     const lxp_kernel_execution *execution;
@@ -3810,6 +3816,7 @@ typedef struct kernel_maintenance_run {
     size_t length;
     size_t capacity;
     uint16_t frame_count;
+    kernel_maintenance_frame *frames;
 } kernel_maintenance_run;
 
 static lxp_result maintenance_append(kernel_maintenance_run *run,
@@ -3864,11 +3871,16 @@ static lxp_result maintenance_frame(kernel_maintenance_run *run,
     const lxp_module_ctx *ctx, const lxp_effect_buffer *effects, uint32_t abi_version)
 {
     size_t count = ctx->staged_count + effects->count;
+    size_t offset = run->length;
+    kernel_maintenance_frame *frames;
     lxp_result status;
     if (count == 0U || count > LXP_MAX_EFFECTS ||
         run->frame_count == LXP_KERNEL_MAX_MODULE_KV || abi_version != 1U ||
         ctx->staged_account_count != 0U || ctx->staged_blob_count != 0U)
         return LXP_ERR_LENGTH_LIMIT;
+    frames = realloc(run->frames, ((size_t)run->frame_count + 1U) * sizeof(*frames));
+    if (frames == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    run->frames = frames;
     status = maintenance_integer(run, ctx->module_id, 2U);
     if (status == LXP_OK) status = maintenance_integer(run, abi_version, 4U);
     if (status == LXP_OK) status = maintenance_integer(run, count, 2U);
@@ -3889,8 +3901,41 @@ static lxp_result maintenance_frame(kernel_maintenance_run *run,
     }
     for (size_t i = 0U; status == LXP_OK && i < effects->count; ++i)
         status = maintenance_effect(run, &effects->effects[i], (uint16_t)(ctx->staged_count + i));
-    if (status == LXP_OK) ++run->frame_count;
+    if (status == LXP_OK) {
+        run->frames[run->frame_count] = (kernel_maintenance_frame){
+            ctx->module_id, offset, run->length - offset};
+        ++run->frame_count;
+    }
     return status;
+}
+
+static lxp_result maintenance_frames_order(kernel_maintenance_run *run)
+{
+    uint8_t *ordered;
+    size_t offset;
+    if (run->frame_count == 0U) return LXP_OK;
+    offset = run->frames[0].offset;
+    if (offset > run->length) return LXP_FATAL_INVARIANT;
+    ordered = malloc(run->length);
+    if (ordered == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    (void)memcpy(ordered, run->bytes, offset);
+    for (uint16_t module = 1U; module <= LXP_MODULE_RESERVED_COUNT; ++module) {
+        for (uint16_t i = 0U; i < run->frame_count; ++i) {
+            const kernel_maintenance_frame *frame = &run->frames[i];
+            if (frame->module_id != module) continue;
+            if (frame->offset > run->length || frame->length > run->length - frame->offset ||
+                frame->length > run->length - offset) {
+                free(ordered);
+                return LXP_FATAL_INVARIANT;
+            }
+            (void)memcpy(ordered + offset, run->bytes + frame->offset, frame->length);
+            offset += frame->length;
+        }
+    }
+    if (offset != run->length) { free(ordered); return LXP_FATAL_INVARIANT; }
+    (void)memcpy(run->bytes, ordered, run->length);
+    free(ordered);
+    return LXP_OK;
 }
 
 bool lxp_kernel_uses_batch_maintenance(const lxp_kernel *kernel, uint16_t protocol_version)
@@ -4020,7 +4065,8 @@ static lxp_result kernel_run_batch_maintenance(void *opaque)
     if (status == LXP_OK) {
         run->bytes[sizeof(domain)] = (uint8_t)(run->frame_count >> 8U);
         run->bytes[sizeof(domain) + 1U] = (uint8_t)run->frame_count;
-        status = lxp_batch_maintenance_effects_validate((lxp_byte_span){run->bytes, run->length});
+        status = maintenance_frames_order(run);
+        if (status == LXP_OK) status = lxp_batch_maintenance_effects_validate((lxp_byte_span){run->bytes, run->length});
     }
     free(effects);
     free(ctx);
@@ -4032,8 +4078,8 @@ static lxp_result kernel_snapshot_finalize_maintenance(
     const lxp_kernel_execution *execution, lxp_arena *arena,
     lxp_programs_occupancy_receipt *record, lxp_byte_span *encoded)
 {
-    kernel_maintenance_run run = {candidate, execution, protocol_version, arena,
-        NULL, 0U, 0U, 0U};
+    kernel_maintenance_run run = {.snapshot = candidate, .execution = execution,
+        .protocol_version = protocol_version, .arena = arena};
     lxp_byte_span occupancy = {NULL, 0U};
     lxp_result status;
     if (!lxp_kernel_uses_batch_maintenance(&candidate->kernel, protocol_version))
@@ -4055,6 +4101,7 @@ static lxp_result kernel_snapshot_finalize_maintenance(
         status = lxp_batch_maintenance_encode(&envelope, arena, encoded);
     }
     free(run.bytes);
+    free(run.frames);
     return status;
 }
 

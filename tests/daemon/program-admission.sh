@@ -157,7 +157,7 @@ else
 fi
 chmod 0755 "$work/client"
 if [[ ${2:-} == --handover ]]; then
-    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-prepare "$scenario_state"
+    timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-prepare "$scenario_state"
     "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/handover-chain.py finalize "$work" "$build_dir" "$scenario_state"
     kill -TERM "$sequencer_pid"
     wait "$sequencer_pid"
@@ -192,7 +192,7 @@ else:
     raise SystemExit("handover daemon did not accept LNI connections")
 PYWAIT
     if [[ -n ${LAYERX_TEST_HANDOVER_CRASH_BOUNDARY:-} ]]; then
-        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-queue "$scenario_state" "$scenario_state/handover.activity"
+        timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-queue "$scenario_state" "$scenario_state/handover.activity"
         printf G >&"$handover_gate_fd"
         result=0
         wait "$sequencer_pid" || result=$?
@@ -201,7 +201,7 @@ PYWAIT
         unset LXP_TEST_APPLY_GATE_FD LXP_TEST_CRASH_BOUNDARY LXP_TEST_CRASH_OCCURRENCE
         sequencer_binary="$native_bin/layerxd"
     else
-        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-apply "$scenario_state" "$scenario_state/handover.activity"
+        timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-apply "$scenario_state" "$scenario_state/handover.activity"
         kill -KILL "$sequencer_pid"
         wait "$sequencer_pid" || true
     fi
@@ -228,7 +228,7 @@ for attempt in range(200):
 else:
     raise SystemExit("handover daemon did not accept LNI connections")
 PYWAIT
-    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-recovered "$scenario_state" "$scenario_state/handover.activity"
+    timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-recovered "$scenario_state" "$scenario_state/handover.activity"
     "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/handover-chain.py replay "$work" "$build_dir" "$scenario_state"
     exit 0
 fi
