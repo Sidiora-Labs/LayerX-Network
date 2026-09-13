@@ -2450,7 +2450,7 @@ fn finality_environment(node_env: &mut BTreeMap<&'static str, String>) {
 }
 
 fn supervised_files(root: &Path, builder: &Path, keys: [&[u8; 32]; 2], tokens: [&str; 2]) {
-    for name in ["bootstrap.sh", "supervisor.sh"] {
+    for name in ["bootstrap.sh", "supervisor.sh", "data_directory.py"] {
         let bytes = must(
             fs::read(repository_root().join("platform/hosted/node").join(name)),
             "supervisor source",
