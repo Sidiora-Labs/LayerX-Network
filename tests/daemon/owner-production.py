@@ -8,6 +8,7 @@ import traceback
 import subprocess
 import sys
 import time
+import urllib.error
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -203,7 +204,21 @@ def run(work, asset, rpc_port):
                     os.setuid(4021)
                     try:
                         operation()
-                    except BaseException:
+                    except BaseException as error:
+                        cause = error
+                        while cause is not None:
+                            if isinstance(cause, urllib.error.HTTPError):
+                                body = cause.read(4096)
+                                try:
+                                    document = json.loads(body)
+                                    code = document.get('error', document.get('code'))
+                                    if isinstance(code, dict):
+                                        code = code.get('code')
+                                    if isinstance(code, str) and code.replace('_', '').isalnum():
+                                        print('authority refusal:', cause.code, code, file=sys.stderr)
+                                except (ValueError, AttributeError):
+                                    pass
+                            cause = cause.__cause__
                         traceback.print_exc()
                         sys.stderr.flush()
                         os._exit(1)
