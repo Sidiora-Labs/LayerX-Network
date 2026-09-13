@@ -97,17 +97,16 @@ fn actual_reorg_preserves_lost_inclusion_and_restarts_on_new_inclusion() {
     let chain = Chain::start();
     let snapshot = chain.call("evm_snapshot", &[]);
     let transaction = chain.transfer();
-    let mut tracker = FinalityTracker::new(
-        TrackerConfig {
-            endpoints: vec![chain.endpoint.clone()],
-            minimum_endpoint_agreement: 1,
-            required_confirmations: 5,
-            poll_cadence: Duration::from_millis(100),
-            delayed_after_polls: 100,
-        },
-        transaction,
-    )
-    .unwrap_or_else(|error| panic!("tracker: {error:?}"));
+    let config = TrackerConfig {
+        endpoints: vec![chain.endpoint.clone()],
+        minimum_endpoint_agreement: 1,
+        required_confirmations: 5,
+        poll_cadence: Duration::from_millis(100),
+        delayed_after_polls: 100,
+    };
+    let mut tracker = FinalityTracker::new(config.clone(), transaction)
+        .unwrap_or_else(|error| panic!("tracker: {error:?}"));
+
     let path = std::env::temp_dir().join(format!(
         "layerx-ramp-real-reorg-{}.jsonl",
         std::process::id()
@@ -141,6 +140,9 @@ fn actual_reorg_preserves_lost_inclusion_and_restarts_on_new_inclusion() {
         )
         .unwrap_or_else(|error| panic!("displace: {error:?}"));
     drop(journal);
+    drop(tracker);
+    let mut tracker = FinalityTracker::new(config, transaction)
+        .unwrap_or_else(|error| panic!("restarted tracker: {error:?}"));
     let mut journal = open(&path);
     let retained = journal
         .paxeer(&[5; 32])
