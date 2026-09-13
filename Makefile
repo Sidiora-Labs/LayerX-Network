@@ -557,8 +557,20 @@ $(BUILD_DIR)/tests/test_budget_period: tests/modules/test_budget_period.c \
 		$(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -ldl -lm -o $@
 
-test-budget-period: $(BUILD_DIR)/tests/test_budget_period
+$(BUILD_DIR)/tests/lxp_test_epoch_budget_rollback: \
+		tests/daemon/lxp_test_epoch_budget_rollback.c \
+		tests/daemon/lxp_test_epoch_modules.h \
+		cmd/layerxd/lxp_daemon_modules.h $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-budget-period: $(BUILD_DIR)/tests/test_budget_period \
+		$(BUILD_DIR)/tests/lxp_test_epoch_budget_rollback
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_budget_period
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_epoch_budget_rollback
 
 $(BUILD_DIR)/tests/test_budget_spend: tests/modules/test_budget_spend.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build

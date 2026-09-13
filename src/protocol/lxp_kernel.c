@@ -1179,6 +1179,8 @@ lxp_result lxp_kernel_set_epoch(lxp_kernel *kernel, uint64_t epoch)
 typedef struct epoch_hook_run {
     lxp_module_ctx ctx;
     lxp_effect_buffer effects;
+    lx_budget_store *budget_store;
+    lx_budget_store *budget_before;
 } epoch_hook_run;
 
 /* The capacity guarantee a module context takes in prepare_commit is measured
@@ -1248,7 +1250,20 @@ static lxp_result epoch_hook_run_invoke(lxp_kernel *kernel, uint16_t module_id,
     if (status == LXP_OK) status = lxp_effect_buffer_init(&run->effects);
     if (status == LXP_OK)
         status = lxp_module_ctx_bind_effects(&run->ctx, &run->effects);
+    if (status == LXP_OK && module_id == LXP_MODULE_BUDGET) {
+        lx_budget_runtime *runtime =
+            (lx_budget_runtime *)lxp_ctx_module_runtime(&run->ctx);
+        if (runtime != NULL && runtime->store != NULL) {
+            run->budget_before = malloc(sizeof(*run->budget_before));
+            if (run->budget_before == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
+            else {
+                run->budget_store = runtime->store;
+                *run->budget_before = *runtime->store;
+            }
+        }
+    }
     if (status != LXP_OK) {
+        free(run->budget_before);
         free(run);
         return status;
     }
@@ -1262,13 +1277,21 @@ static lxp_result epoch_hook_run_invoke(lxp_kernel *kernel, uint16_t module_id,
 
 static void epoch_hook_runs_rollback(epoch_hook_run **runs, size_t count)
 {
-    while (count != 0U) lxp_module_ctx_rollback(&runs[--count]->ctx);
+    while (count != 0U) {
+        epoch_hook_run *run = runs[--count];
+        lxp_module_ctx_rollback(&run->ctx);
+        if (run->budget_before != NULL)
+            *run->budget_store = *run->budget_before;
+    }
 }
 
 static void epoch_hook_runs_free(epoch_hook_run **runs, size_t count)
 {
     size_t i;
-    for (i = 0U; i < count; ++i) free(runs[i]);
+    for (i = 0U; i < count; ++i) {
+        free(runs[i]->budget_before);
+        free(runs[i]);
+    }
 }
 
 lxp_result lxp_kernel_epoch_transition(lxp_kernel *kernel, uint64_t epoch,
