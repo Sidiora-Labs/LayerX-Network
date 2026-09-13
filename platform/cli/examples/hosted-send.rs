@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake};
 
 use layerx_crypto::local::LocalSigner;
-use layerx_crypto::send::SendDebit;
+use layerx_crypto::send::{send_context_hash, SendDebit};
 use layerx_crypto::signer::Signer as _;
 use layerx_platform_cli::wallet_signing::{PreparedPayment, SigningFacts};
 use serde::Deserialize;
@@ -111,15 +111,18 @@ fn run() -> Result<(), String> {
         return Err("source account is not owned by the signer".into());
     }
     let idempotency_key = fixed(&request.idempotency_key)?;
+    let from = fixed(&request.from)?;
+    let to = fixed(&request.to)?;
+    let asset = fixed(&request.asset)?;
     let debit = SendDebit {
-        from: fixed(&request.from)?,
-        to: fixed(&request.to)?,
-        asset: fixed(&request.asset)?,
+        from,
+        to,
+        asset,
         amount,
         source_sequence: request.source_sequence,
         idempotency_key,
         expires_at: request.not_after,
-        context_hash: [0; 32],
+        context_hash: send_context_hash(&from, &to, &asset, amount, &idempotency_key),
         conditions: Vec::new(),
         authorization_kind: 1,
         network_id: request.network_id,
