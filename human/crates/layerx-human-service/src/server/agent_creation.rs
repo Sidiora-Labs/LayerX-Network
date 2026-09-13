@@ -71,7 +71,11 @@ pub struct ProductionAgentCreation<'a> {
     timestamp_span: u64,
     fee_limit: u128,
     owner_primary_key: Option<[u8; 32]>,
-    latest_session_credential: Option<(zeroize::Zeroizing<[u8; 32]>, u64)>,
+    latest_session_credential: Option<(
+        zeroize::Zeroizing<[u8; 32]>,
+        u64,
+        super::agent_runtime::AgentFinalizationEvidence,
+    )>,
 }
 
 impl<'a> ProductionAgentCreation<'a> {
@@ -113,10 +117,19 @@ impl<'a> ProductionAgentCreation<'a> {
     /// # Errors
     ///
     /// Refuses invalid protocol evidence, custody authorization, or unavailable agent state.
-    pub fn take_latest_session_credential(&mut self) -> Result<([u8; 32], u64), AgentFailure> {
+    pub fn take_latest_session_credential(
+        &mut self,
+    ) -> Result<
+        (
+            [u8; 32],
+            u64,
+            super::agent_runtime::AgentFinalizationEvidence,
+        ),
+        AgentFailure,
+    > {
         self.latest_session_credential
             .take()
-            .map(|(token, generation)| (*token, generation))
+            .map(|(token, generation, evidence)| (*token, generation, evidence))
             .ok_or(AgentFailure::Refused("session token was not provisioned"))
     }
 
@@ -543,6 +556,7 @@ impl ProductionAgentCreation<'_> {
         self.latest_session_credential = Some((
             zeroize::Zeroizing::new(installed.token_id.expose()),
             installed.generation,
+            *finalization,
         ));
         Ok(AgentEvidence {
             action_key,

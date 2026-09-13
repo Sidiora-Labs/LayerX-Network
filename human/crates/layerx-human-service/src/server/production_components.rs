@@ -5093,7 +5093,7 @@ impl ProductionComponents {
                 },
             )
             .map_err(agent_failure_from_creation_contract)?;
-        let (token_id, generation) = adapter
+        let (token_id, generation, finalization) = adapter
             .take_latest_session_credential()
             .map_err(agent_failure_from_creation_contract)?;
         let observation = agent
@@ -5102,14 +5102,13 @@ impl ProductionComponents {
         if observation.generation != generation {
             return Err(ApiFailure::upstream_degraded());
         }
-        let finalization = super::agent_runtime::AgentFinalizationEvidence {
-            action_key: operation_key,
-            activity_id: operation_key,
-            receipt_digest: evidence.receipt_digest,
-            observed_sequence: evidence.observed_sequence,
-            verification: evidence.verification_level.wire_rank(),
-            finalized_at: current,
-        };
+        if finalization.action_key != operation_key
+            || finalization.receipt_digest != evidence.receipt_digest
+            || finalization.observed_sequence != evidence.observed_sequence
+            || finalization.verification != evidence.verification_level.wire_rank()
+        {
+            return Err(ApiFailure::upstream_degraded());
+        }
         let value = agent
             .agent_control(agent_id, true, observation.evidence_digest, finalization)
             .map_err(agent_failure)?;
