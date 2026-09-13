@@ -622,6 +622,17 @@ func init() {
 			panic(fmt.Sprintf("historical store committed version %d, expected %d", committed.Version, height))
 		}
 	}
+	historicalContexts := make(map[int64]sdk.Context)
+	for height := int64(1); height <= MockHeight103; height++ {
+		store, err := testApp.CommitMultiStore().CacheMultiStoreWithVersion(height)
+		if err != nil {
+			panic(err)
+		}
+		historicalContexts[height] = Ctx.WithMultiStore(store).WithBlockHeight(height)
+	}
+	Ctx = historicalContexts[MockHeight8]
+	baseCtx = Ctx
+	MultiTxCtx = historicalContexts[MockHeight2]
 	if store := EVMKeeper.ReceiptStore(); store != nil {
 		latest := int64(math.MaxInt64)
 		if err := store.SetLatestVersion(latest); err != nil {
@@ -638,6 +649,9 @@ func init() {
 			// post-v5.8.0 so any consumer that branches on upgrade name
 			// sees the production path, not the pre-v5.8.0 fallback.
 			return baseCtx.WithIsTracing(true).WithClosestUpgradeName(LatestCtxUpgradeName)
+		}
+		if historical, ok := historicalContexts[height]; ok {
+			return historical.WithIsTracing(true)
 		}
 		return Ctx.WithBlockHeight(height).WithIsTracing(true)
 	}

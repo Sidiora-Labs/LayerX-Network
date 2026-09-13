@@ -113,7 +113,7 @@ func TestFeeHistory(t *testing.T) {
 				require.Equal(t, tc.expectedError.Error(), errMap["message"].(string))
 			} else {
 				_, errorExists := resObj["error"]
-				require.False(t, errorExists)
+				require.False(t, errorExists, "fee history RPC refused: %v", resObj["error"])
 
 				resObj = resObj["result"].(map[string]interface{})
 
