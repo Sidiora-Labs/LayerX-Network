@@ -1219,6 +1219,7 @@ fn execution_call_binding(
     }
     let payload_hash =
         layerx_wire::hash::payload_hash(&activity).map_err(|_| ProgramOperationError::Decode)?;
+    Ok((payload_hash, activity.protocol_version()))
 }
 
 fn decode_execution(

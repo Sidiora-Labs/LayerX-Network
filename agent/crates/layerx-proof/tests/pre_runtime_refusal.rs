@@ -188,3 +188,29 @@ fn resigned_codec_mutations_cannot_rebind_native_refusal() {
         Some(ProgramExecutionCheck::Terminal)
     );
 }
+
+#[test]
+fn resigned_redundant_applied_wrapper_is_not_a_native_refusal() -> Result<(), layerx_wire::WireError>
+{
+    let terminal = fixture("terminal.hex");
+    let mut encoder = layerx_wire::encode::Encoder::new(1024);
+    encoder.fixed(b"LXP/programs/terminal-applied-legs/v1\0")?;
+    encoder.bytes(&terminal, 1024)?;
+    encoder.bytes(&[], 1024)?;
+    let wrapped = encoder.finish();
+    assert_eq!(
+        layerx_wire::receipt::decode_applied_terminal(&wrapped)?,
+        (terminal.as_slice(), &[][..])
+    );
+    let key = SigningKey::from_bytes(&[3; 32]);
+    let receipt = resign_terminal(&wrapped, &key);
+    let mut expected = expected();
+    expected.sequencer_public_key = key.verifying_key().to_bytes();
+    assert_eq!(
+        verify_program_execution(&receipt, &wrapped, &fixture("call-graph.hex"), expected)
+            .err()
+            .map(|error| error.check),
+        Some(ProgramExecutionCheck::Terminal)
+    );
+    Ok(())
+}

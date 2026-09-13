@@ -268,6 +268,9 @@ fn verify_program_execution_receipt(
     )
     .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal))?;
     if let TerminalDetail::Failure(FailureTerminal::PreRuntime(failure)) = &terminal.detail {
+        if !pre_runtime {
+            return terminal_failure();
+        }
         verify_pre_runtime(failure, protocol, expected_payload_hash, call_graph)?;
     }
     verify_terminal_commitments(&terminal, call_graph, protocol.protocol_version(), outcome)?;
