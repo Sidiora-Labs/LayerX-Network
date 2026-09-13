@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "archives": [
+    {
+      "name": "libwasmvm155_muslc.a",
+      "size": 74518626,
+      "sha256": "ef3fe84ba47f63384beb48c929531d3f4550fce3aea0ac676cbac915a51b202f",
+      "compressed_size": 17115904,
+      "compressed_sha256": "7994feb7d0f0446b686ba479cdda00d84e74054b2ab03a3c7bca3ff599d72308",
+      "kind": "group",
+      "parts": [
+        {
+          "name": "libwasmvm155_muslc.part00.a",
+          "size": 26547602,
+          "sha256": "bca7081c49158f7d74dd7b408c95c62994d8881529583315523384b803f5e8bb",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm155_muslc.part01.a",
+          "size": 25545782,
+          "sha256": "4769236b9aa01ae8e4c5b9d5a64b333edb4509fcbc6ccdb430f777d727ab7c7b",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm155_muslc.part02.a",
+          "size": 22425506,
+          "sha256": "4b96461b5b9d0240c2e3e4d5d391f94004c6c2ac41a43d8a27af920be38184a2",
+          "architecture": 0
+        }
+      ]
+    },
+    {
+      "name": "libwasmvm155_muslc.aarch64.a",
+      "size": 77840578,
+      "sha256": "7fd5118234735e5fef148c860979fd7668c7d000177cc0144f6cb07e397ec387",
+      "compressed_size": 17935189,
+      "compressed_sha256": "421997a821e1fc0eb2932370990419f46a6252d8d62a8f19279f7e45f6fa0a97",
+      "kind": "group",
+      "parts": [
+        {
+          "name": "libwasmvm155_muslc.aarch64.part00.a",
+          "size": 25877120,
+          "sha256": "1db1c86532b96fffd6317496721163002bf8f43fda24b7c02b3fdbfd391b76af",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm155_muslc.aarch64.part01.a",
+          "size": 26505222,
+          "sha256": "403d7887d10bac85a9983b9dca155a210bcc8f37f0798a0eaea1cb0fb1465219",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm155_muslc.aarch64.part02.a",
+          "size": 24459420,
+          "sha256": "53181beb7e5323c6441f83620846f2b84cfa00fb3215533e4b07af2dda667c32",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm155_muslc.aarch64.part03.a",
+          "size": 999216,
+          "sha256": "468890c5bb2b9ac87a0be46d59082a407f2296330bc33d3dd5aca6a0ad9455bb",
+          "architecture": 0
+        }
+      ]
+    },
+    {
+      "name": "libwasmvm155static_darwin.a",
+      "size": 55119896,
+      "sha256": "afcb224c05cbfbf7c2de5d7cc03ab47d20c4282f0008f64ef6b8698faf5ee16f",
+      "compressed_size": 16129835,
+      "compressed_sha256": "b12c174ba0b23e740c896e0a179e3277f62ecfbaaf2a057d6518b4ebc323691d",
+      "kind": "darwin",
+      "parts": [
+        {
+          "name": "libwasmvm155static_darwin.part00.a",
+          "size": 28462504,
+          "sha256": "57ccaf32c795f1704c7cb2db27a2d47859dd1fe063d65e0ccf30fc456f609263",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm155static_darwin.part01.a",
+          "size": 25655072,
+          "sha256": "fa10b2b8bb68af09d0ae38b418c01f6c806ed9ed0933b6a4edbab1c3809edabd",
+          "architecture": 0
+        },
+        {
+          "name": "libwasmvm155static_darwin.part02.a",
+          "size": 1002504,
+          "sha256": "faecaa4f5295e08872b1fe60fb7c0153b80088089ea0ab8eee4baeb0c8935e6b",
+          "architecture": 0
+        }
+      ]
+    }
+  ]
+}

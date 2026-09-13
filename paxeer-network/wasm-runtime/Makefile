@@ -73,6 +73,7 @@ release-build-alpine:
 	docker run --rm -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-alpine
 	cp libwasmvm/artifacts/libwasmvm_muslc.a internal/api
 	cp libwasmvm/artifacts/libwasmvm_muslc.aarch64.a internal/api
+	python3 ../scripts/package-static-wasm.py
 	make update-bindings
 
 # Creates a release build in a containerized build environment of the shared library for glibc Linux (.so)
@@ -101,6 +102,7 @@ release-build-macos-static:
 	rm -rf libwasmvm/target/aarch64-apple-darwin/release
 	docker run --rm -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-cross build_macos_static.sh
 	cp libwasmvm/artifacts/libwasmvmstatic_darwin.a internal/api/libwasmvmstatic_darwin.a
+	python3 ../scripts/package-static-wasm.py
 	make update-bindings
 
 # Creates a release build in a containerized build environment of the shared library for Windows (.dll)
