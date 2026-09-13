@@ -512,7 +512,7 @@ int main(void)
             METERED_CHECK(lxp_kernel_prepare_activity_batch(&f->kernel, &f->activity,
                 &f->execution, 1U, 1U, &prepared, &retries) == LXP_OK);
             receipts = lxp_kernel_prepared_batch_receipts(prepared);
-            METERED_CHECK(receipts != NULL && receipts[0].result_code == LXP_ERR_NON_CANONICAL &&
+            METERED_CHECK(receipts != NULL && receipts[0].result_code == LXP_ERR_VERSION_UNSUPPORTED &&
                 receipts[0].program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_FAILURE);
             METERED_CHECK(lxp_ct_is_zero(receipts[0].transfer_set_root, 32U));
             METERED_CHECK(lxp_authority_grant_load(lxp_kernel_prepared_batch_settled_kernel(prepared),
