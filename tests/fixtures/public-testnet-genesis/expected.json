@@ -1,0 +1,22 @@
+{
+  "canonical_state_root": "91d3f0fa9600d144ac5114a21ed85786bc646ece65e42f6e08d801edcb664df9",
+  "modules": [
+    "budget",
+    "escrow",
+    "perps",
+    "service",
+    "stream"
+  ],
+  "network_id": 77,
+  "previous_canonical_state_root": "76e49271ca5a6321ac3b7c1f17515f5e3990997d0cb77ee9050fb4ed05ed6d7a",
+  "previous_receipt_state_root": "3bc0abcd19ae9b26f2ffb3a038061996997acdcee2f844e4386d726b7801969f",
+  "protocol_version": 3,
+  "receipt_state_root": "d976b45ce513971c40b1b2b7d2aa132ba94b9ffc0ee529c11e3f61c701b85dc7",
+  "sequencer_public_key": "74493f2d9d509f6859eaf35d6bad5a921b305c4e36ea037cda530f987b13a876",
+  "sha256": {
+    "00000000000000000000.lxs": "2178bbb21cb95d8b7b89040699e2d40be01a5e50bc0336a088226c04cdd305f7",
+    "genesis.manifest": "20759e65d31e4780f70c50574348c0bb833c839d25b480cb53f27eb923cda18c",
+    "paxeer-deployment-descriptor.lxgd": "34b3988ab30b3af8464dc1ed7711f62f044f0e766c2c04a046632902eed09009",
+    "paxeer-registration-request.lxrr": "2990486b814ecaaedd1345c12075fba654b92e132750fdddd321501284f46dc5"
+  }
+}
