@@ -1539,17 +1539,26 @@ static int test_crash_recovery(const signer *registered_key)
     (void)close(ready_pipe[1]);
     phase_status = 0;
     if (descriptor_read_all_deadline(ready_pipe[0], &ready, sizeof(ready),
-                                     IO_DEADLINE_MILLISECONDS) != 0)
+                                     IO_DEADLINE_MILLISECONDS) != 0) {
+        (void)fprintf(stderr, "admission crash recovery: startup readiness failed\n");
         phase_status = 1;
+    }
     if (close(ready_pipe[0]) != 0) phase_status = 1;
-    if (phase_status == 0 && handshake(sockets[0]) != 0) phase_status = 1;
+    if (phase_status == 0 && handshake(sockets[0]) != 0) {
+        (void)fprintf(stderr, "admission crash recovery: LNI handshake failed\n");
+        phase_status = 1;
+    }
     if (phase_status == 0 && send_request(
             sockets[0], LNI_MINOR, SUBMIT_REQUEST, 1U,
-            activity, activity_length) != 0)
+            activity, activity_length) != 0) {
+        (void)fprintf(stderr, "admission crash recovery: activity submission failed\n");
         phase_status = 1;
+    }
     if (phase_status == 0 && expect_ack(
-            sockets[0], 1U, activity, activity_length, activity_id) != 0)
+            sockets[0], 1U, activity, activity_length, activity_id) != 0) {
+        (void)fprintf(stderr, "admission crash recovery: durable acknowledgement failed\n");
         phase_status = 1;
+    }
     if (phase_status == 0) {
         struct stat metadata;
         written = snprintf(journal_path, sizeof(journal_path),
@@ -1557,6 +1566,7 @@ static int test_crash_recovery(const signer *registered_key)
                            admission_directory);
         if (written < 0 || (size_t)written >= sizeof(journal_path) ||
             stat(journal_path, &metadata) != 0 || metadata.st_size <= 32) {
+            (void)fprintf(stderr, "admission crash recovery: durable journal evidence failed\n");
             phase_status = 1;
         } else {
             durable_journal_size = metadata.st_size;
