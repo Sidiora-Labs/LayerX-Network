@@ -2091,7 +2091,7 @@ human-test human-test-integration: export LAYERX_TEST_NATIVE_BIN_DIR = $(abspath
 human-test-custody-prerequisites:
 	$(MAKE) public-tls-test-prerequisites
 	$(MAKE) PAXEER_GO_JOBS=4 custody-proof-build
-	$(MAKE) layerx-genesis-build
+	$(MAKE) LXP_REVISION="$(shell git rev-parse HEAD)" layerx-genesis-build
 	GOMAXPROCS=4 GOFLAGS="$(GOFLAGS) -p=4" $(MAKE) paxeer-build
 
 HUMAN_IDENTITY_PROVIDER := $(HUMAN_TARGET_DIR)/debug/layerx-human-identity-provider
