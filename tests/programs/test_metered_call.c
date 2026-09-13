@@ -418,14 +418,24 @@ static int metered_legacy_replay(void)
     metered_fixture *replay = calloc(1U, sizeof(*replay));
     uint8_t live_bytes[LXP_MAX_ACTIVITY_BYTES];
     uint8_t replay_bytes[LXP_MAX_ACTIVITY_BYTES];
+    uint8_t expected_bytes[LXP_MAX_ACTIVITY_BYTES];
+    uint8_t expected_root[32];
     lxp_arena live_arena, replay_arena;
     lxp_byte_span live_receipt, replay_receipt;
+    FILE *historical = fopen("tests/fixtures/authority/legacy-paid-grant-replay.bin", "rb");
+    METERED_CHECK(historical != NULL);
     METERED_CHECK(live != NULL && replay != NULL);
     METERED_CHECK(metered_fixture_init(live, 3U, false) == 0);
     METERED_CHECK(metered_fixture_init(replay, 3U, false) == 0);
     METERED_CHECK(!live->grant.fee_budget.present && !replay->grant.fee_budget.present);
     METERED_CHECK(memcmp(live->grant_id, replay->grant_id, 32U) == 0);
+    METERED_CHECK(fread(expected_root, 1U, 32U, historical) == 32U);
+    METERED_CHECK(memcmp(live->grant_id, expected_root, 32U) == 0);
+    METERED_CHECK(fread(expected_root, 1U, 32U, historical) == 32U);
+    METERED_CHECK(memcmp(live->kernel.current_state_root, expected_root, 32U) == 0);
     for (uint8_t marker = 7U; marker <= 9U; ++marker) {
+        uint8_t encoded_length[4];
+        size_t expected_length;
         live->source->frozen = marker == 7U;
         replay->source->frozen = marker == 7U;
         METERED_CHECK(lxp_state_root(&live->kernel, live->kernel.current_state_root) == LXP_OK);
@@ -447,11 +457,22 @@ static int metered_legacy_replay(void)
                              replay->kernel.current_state_root, 32U) == 0);
         METERED_CHECK(lxp_arena_init(&live_arena, live_bytes, sizeof(live_bytes)) == LXP_OK);
         METERED_CHECK(lxp_arena_init(&replay_arena, replay_bytes, sizeof(replay_bytes)) == LXP_OK);
-        METERED_CHECK(lxp_receipt_encode(&live->receipt, false, &live_arena, &live_receipt) == LXP_OK);
-        METERED_CHECK(lxp_receipt_encode(&replay->receipt, false, &replay_arena, &replay_receipt) == LXP_OK);
+        METERED_CHECK(lxp_receipt_encode(&live->receipt, true, &live_arena, &live_receipt) == LXP_OK);
+        METERED_CHECK(lxp_receipt_encode(&replay->receipt, true, &replay_arena, &replay_receipt) == LXP_OK);
         METERED_CHECK(live_receipt.length == replay_receipt.length);
         METERED_CHECK(memcmp(live_receipt.bytes, replay_receipt.bytes, live_receipt.length) == 0);
+        METERED_CHECK(fread(encoded_length, 1U, 4U, historical) == 4U);
+        expected_length = ((size_t)encoded_length[0] << 24U) |
+            ((size_t)encoded_length[1] << 16U) | ((size_t)encoded_length[2] << 8U) |
+            (size_t)encoded_length[3];
+        METERED_CHECK(expected_length == live_receipt.length && expected_length <= sizeof(expected_bytes));
+        METERED_CHECK(fread(expected_bytes, 1U, expected_length, historical) == expected_length);
+        METERED_CHECK(memcmp(live_receipt.bytes, expected_bytes, expected_length) == 0);
+        METERED_CHECK(fread(expected_root, 1U, 32U, historical) == 32U);
+        METERED_CHECK(memcmp(live->kernel.current_state_root, expected_root, 32U) == 0);
     }
+    METERED_CHECK(fgetc(historical) == EOF && !ferror(historical));
+    METERED_CHECK(fclose(historical) == 0);
     METERED_CHECK(live->payee->balance.lo == 18U && replay->payee->balance.lo == 18U);
     while (live->kernel.blob_count != 0U)
         free(live->kernel.blobs[--live->kernel.blob_count].bytes);
