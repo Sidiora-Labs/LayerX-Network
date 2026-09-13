@@ -148,6 +148,20 @@ lxp_result lxp_kernel_bind_ledger_admission(
     if (ctx == NULL || ctx->kernel == NULL || authority == NULL)
         return LXP_ERR_NON_CANONICAL;
     if (ctx->ledger_admission.bound) return LXP_ERR_CONTEXT_MISMATCH;
+    if (ctx->module_id == LXP_MODULE_BUDGET &&
+        ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        status = lxp_ctx_account_find(ctx, authority->principal, &account);
+        if (status != LXP_OK) return status;
+        ctx->ledger_admission.activity_type = activity_type;
+        (void)memcpy(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U);
+        (void)memcpy(ctx->ledger_admission.actor, authority->actor, 32U);
+        (void)memcpy(ctx->ledger_admission.verified_key, authority->verified_key, 32U);
+        (void)memcpy(ctx->ledger_admission.account_id, account->id, 32U);
+        ctx->ledger_admission.account_present = true;
+        ctx->ledger_admission.next_sequence = account->next_sequence;
+        ctx->ledger_admission.bound = true;
+        return LXP_OK;
+    }
     if (ctx->module_id == LXP_MODULE_ASSET) {
         if (activity_type == LX_ASSET_WITHDRAW &&
             !lxp_protocol_version_uses_occupancy(ctx->protocol_version))

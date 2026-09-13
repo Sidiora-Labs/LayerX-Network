@@ -50,6 +50,7 @@ static int run(uint16_t module, unsigned index)
         LX_ACCOUNT_SYSTEM_FUNDING_LONG, LX_ACCOUNT_SYSTEM_FUNDING_SHORT};
     lxp_prepared_module_transition *prepared = NULL;
     lxp_activity activity = {0};
+    lxp_authority_resolved authority = {0};
     const lxp_module_registration *registration;
     lx_account_registration valid;
     lx_account *owner, *account;
@@ -66,8 +67,14 @@ static int run(uint16_t module, unsigned index)
     REQUIRE(epoch_fixture_open(&fixture, &module, 1U) == LXP_OK);
     REQUIRE(lxp_arena_init(&fixture.arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
     REQUIRE(epoch_fixture_account(&fixture, "agent:did:key:alice:main", 1U, 0U, &owner) == LXP_OK);
+    owner->has_authority_key = true;
+    (void)memcpy(owner->authority_key, public_key, 32U);
     REQUIRE(epoch_fixture_bind(&fixture) == LXP_OK);
     REQUIRE(lxp_did_id_derive(did, sizeof(did) - 1U, actor) == LXP_OK);
+    authority.kind = LXP_AUTHORITY_OWNER;
+    (void)memcpy(authority.actor, actor, 32U);
+    (void)memcpy(authority.verified_key, public_key, 32U);
+    (void)memcpy(authority.principal, owner->id, 32U);
     REQUIRE(account_name(module, index, object, name, &name_length, identifier) == 0);
     if (module == LXP_MODULE_ESCROW) {
         (void)memcpy(payload, object, 32U);
@@ -124,6 +131,7 @@ static int run(uint16_t module, unsigned index)
     }
     activity.protocol_version = 3U; activity.network_id = EPOCH_FIXTURE_NETWORK_ID;
     activity.activity_type = (uint32_t)module << 16U | 1U;
+    activity.account_sequence = module == LXP_MODULE_BUDGET ? 2U : 0U;
     activity.actor_did = (lxp_byte_span){did, sizeof(did) - 1U};
     activity.authority = (lxp_byte_span){public_key, 32U};
     activity.payload = (lxp_byte_span){payload, payload_length};
@@ -143,6 +151,27 @@ static int run(uint16_t module, unsigned index)
     REQUIRE(lxp_activity_id(encoded.bytes, encoded.length, ctx.activity_id) == LXP_OK);
     REQUIRE(lxp_kernel_module_for_activity(&fixture.kernel, activity.activity_type, 1U, &registration) == LXP_OK);
     REQUIRE(registration->iface->decode(&ctx, 1U, payload, payload_length, &decoded) == LXP_OK);
+    if (module == LXP_MODULE_BUDGET) {
+        lxp_ledger_admission_facts admitted;
+        REQUIRE(registration->iface->execute(&ctx, &activity, &authority, decoded, &effects) == LXP_ERR_SEQUENCE_GAP);
+        REQUIRE(lxp_kernel_bind_ledger_admission(&ctx, &authority, activity.activity_type) == LXP_OK);
+        REQUIRE(ctx.ledger_admission.bound && ctx.ledger_admission.next_sequence == 0U);
+        REQUIRE(registration->iface->validate(&ctx, &activity, &authority, decoded) == LXP_OK);
+        admitted = ctx.ledger_admission;
+        for (unsigned mutation = 0U; mutation < 7U; ++mutation) {
+            ctx.ledger_admission = admitted;
+            if (mutation == 0U) ctx.ledger_admission.activity_binding[0] ^= 1U;
+            if (mutation == 1U) ctx.ledger_admission.account_id[0] ^= 1U;
+            if (mutation == 2U) ctx.ledger_admission.next_sequence++;
+            if (mutation == 3U) ctx.ledger_admission.verified_key[0] ^= 1U;
+            if (mutation == 4U) ctx.ledger_admission.actor[0] ^= 1U;
+            if (mutation == 5U) ctx.ledger_admission.activity_type++;
+            if (mutation == 6U) ctx.ledger_admission.account_present = false;
+            REQUIRE(registration->iface->execute(&ctx, &activity, &authority, decoded, &effects) == LXP_ERR_CONTEXT_MISMATCH);
+            REQUIRE(owner->next_sequence == 0U);
+        }
+        ctx.ledger_admission = admitted;
+    }
     if (module == LXP_MODULE_PERPS)
         REQUIRE(lxp_ctx_account_stage_perps_market(&ctx, &activity, object, actor,
             fixture.asset.asset_id, identifier, perps_kinds[index], true) == LXP_OK);
@@ -186,6 +215,8 @@ static int run(uint16_t module, unsigned index)
     ctx.protocol_version = 3U;
     REQUIRE(lxp_activity_encode(&activity, &fixture.arena, &encoded) == LXP_OK);
     REQUIRE(lxp_activity_id(encoded.bytes, encoded.length, ctx.activity_id) == LXP_OK);
+    if (module == LXP_MODULE_BUDGET)
+        REQUIRE(lxp_kernel_bind_ledger_admission(&ctx, &authority, activity.activity_type) == LXP_OK);
     REQUIRE(lxp_module_ctx_import_prepared(&ctx, prepared, token, &effects) == LXP_OK);
     REQUIRE(lxp_state_journal_commit(&fixture.journal) == LXP_OK);
     REQUIRE(lxp_module_ctx_commit(&ctx) == LXP_OK);
