@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
+#include <signal.h>
 
 int main(int argc, char **argv)
 {
@@ -107,6 +109,31 @@ int main(int argc, char **argv)
             status = lxp_replay_batch_publication(engine, &body, initial_root, &arena, &replay);
             assert(status == LXP_OK);
             assert(!memcmp(replayed_root, engine->kernel->current_state_root, 32U));
+            if (batch == 1U) {
+                struct rlimit original, limited;
+                struct sigaction previous, ignore = {0};
+                assert(getrlimit(RLIMIT_FSIZE, &original) == 0);
+                limited = original;
+                limited.rlim_cur = (rlim_t)before.st_size + 1U;
+                assert(limited.rlim_cur <= original.rlim_max);
+                ignore.sa_handler = SIG_IGN;
+                assert(sigemptyset(&ignore.sa_mask) == 0);
+                assert(sigaction(SIGXFSZ, &ignore, &previous) == 0);
+                assert(setrlimit(RLIMIT_FSIZE, &limited) == 0);
+                assert(engine->transaction_finish(engine->context, true) == LXP_ERR_IO);
+                assert(setrlimit(RLIMIT_FSIZE, &original) == 0);
+                assert(sigaction(SIGXFSZ, &previous, NULL) == 0);
+                assert(stat(feed_path, &staged) == 0 && staged.st_size == before.st_size + 1);
+                assert(engine->transaction_finish(engine->context, false) == LXP_OK);
+                assert(stat(feed_path, &restored) == 0 && restored.st_size == before.st_size);
+                assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+                assert(engine->kernel->state->next_sequence == sequence_before);
+                assert(gp_runtime_prepare(runtime, &body) == LXP_OK);
+                assert(engine->transaction_begin(engine->context) == LXP_OK);
+                status = lxp_replay_batch_publication(engine, &body, initial_root, &arena, &replay);
+                assert(status == LXP_OK);
+                assert(!memcmp(replayed_root, engine->kernel->current_state_root, 32U));
+            }
             assert(engine->transaction_finish(engine->context, true) == LXP_OK);
             assert(stat(feed_path, &restored) == 0 && restored.st_size >= before.st_size);
         }

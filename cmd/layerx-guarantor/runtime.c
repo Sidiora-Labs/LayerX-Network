@@ -749,7 +749,8 @@ static lxp_result replay_transaction_finish(void *context, bool commit)
     saved = runtime->transaction;
     if (commit) {
         if (fflush(runtime->feed_file) != 0 ||
-            fstat(fileno(runtime->feed_file), &info) != 0)
+            fstat(fileno(runtime->feed_file), &info) != 0 ||
+            fseeko(saved->feed_file, runtime->transaction_feed_offset, SEEK_SET) != 0)
             return LXP_ERR_IO;
         status = copy_feed(runtime->feed_file, saved->feed_file,
                            runtime->transaction_feed_offset, info.st_size);
@@ -759,6 +760,7 @@ static lxp_result replay_transaction_finish(void *context, bool commit)
     } else {
         if (fflush(saved->feed_file) != 0 ||
             ftruncate(fileno(saved->feed_file), runtime->transaction_feed_offset) != 0 ||
+            fseeko(saved->feed_file, runtime->transaction_feed_offset, SEEK_SET) != 0 ||
             fsync(fileno(saved->feed_file)) != 0)
             status = LXP_ERR_IO;
         if (lxp_replay_checkpoint_restore(saved->checkpoint) != LXP_OK)
