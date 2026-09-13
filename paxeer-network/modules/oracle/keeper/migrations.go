@@ -76,10 +76,11 @@ func (m Migrator) Migrate4to5(ctx sdk.Context) error {
 func (m Migrator) Migrate5To6(ctx sdk.Context) error {
 	// Do a one time backfill for success count in the vote penalty counter
 	slashWindow := m.keeper.GetParams(ctx).SlashWindow
-	if slashWindow == 0 || ctx.BlockHeight() < 0 {
+	height := ctx.BlockHeight()
+	if slashWindow == 0 || height < 0 {
 		return fmt.Errorf("invalid oracle migration height or slash window")
 	}
-	elapsed := uint64(ctx.BlockHeight()) % slashWindow
+	elapsed := uint64(height) % slashWindow
 	cacheCtx, commit := ctx.CacheContext()
 	store := cacheCtx.KVStore(m.keeper.storeKey)
 

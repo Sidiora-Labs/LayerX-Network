@@ -192,7 +192,7 @@ func (history *History) writeHighWater(encoded []byte) (resultErr error) {
 	}
 	name := temporary.Name()
 	defer func() {
-		if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 			resultErr = errors.Join(resultErr, err)
 		}
 	}()
@@ -229,7 +229,7 @@ func OpenHistory(directory, keyPath string, expected Expected, genesisBytes []by
 	}
 	anchorPath := filepath.Join(directory, "high-water.json")
 	anchor, anchorErr := protectedFile(anchorPath, MaxHistoryRecord)
-	if anchorErr != nil && !os.IsNotExist(anchorErr) {
+	if anchorErr != nil && !errors.Is(anchorErr, os.ErrNotExist) {
 		return nil, anchorErr
 	}
 	dbPath := filepath.Join(directory, "history.db")
@@ -237,7 +237,7 @@ func OpenHistory(directory, keyPath string, expected Expected, genesisBytes []by
 	if statErr == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
 		return nil, errors.New("history database identity")
 	}
-	if statErr != nil && !os.IsNotExist(statErr) {
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return nil, statErr
 	}
 	if statErr != nil && anchorErr == nil {
