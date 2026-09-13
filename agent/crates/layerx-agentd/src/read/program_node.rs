@@ -7,9 +7,9 @@ use layerx_programs::{
     ProtocolHeadProof, Registry,
 };
 use layerx_programs_protocol_adapter::{ProtocolAdapterError, ProtocolProgramStateRead};
-use layerx_proof::merkle::{decode_proof, Proof};
+use layerx_proof::merkle::Proof;
 use layerx_wire::hash::receipt_digest;
-use layerx_wire::receipt::{decode as decode_receipt, encode_unsigned};
+use layerx_wire::receipt::{decode as decode_receipt, decode_merkle_proof, encode_unsigned};
 use serde_json::Value;
 
 use super::program_balances_impl::{program_balances, ProgramBalanceRead};
@@ -320,7 +320,7 @@ fn batch_evidence(value: &Value) -> Result<BatchEvidence, ProtocolAdapterError> 
     Ok(BatchEvidence {
         header,
         signature,
-        receipt_proof: decode_proof(&proof).map_err(|_| ProtocolAdapterError::NonCanonicalView)?,
+        receipt_proof: native_proof(&proof)?,
         batch_identity: value["batch_identity"].clone(),
         maintenance: maintenance_proof(&value["batch_identity"])?,
     })
@@ -401,12 +401,22 @@ fn maintenance_proof(
         return Err(ProtocolAdapterError::NonCanonicalView);
     }
     let bytes = hex::decode(encoded).map_err(|_| ProtocolAdapterError::NonCanonicalView)?;
-    let receipt_proof = decode_proof(&bytes).map_err(|_| ProtocolAdapterError::NonCanonicalView)?;
+    let receipt_proof = native_proof(&bytes)?;
     Ok(Some(ProtocolHeadMaintenanceProof {
         receipt,
         receipt_proof,
         activity_receipts,
     }))
+}
+
+fn native_proof(bytes: &[u8]) -> Result<Proof, ProtocolAdapterError> {
+    let proof = decode_merkle_proof(bytes).map_err(|_| ProtocolAdapterError::NonCanonicalView)?;
+    Proof::new(
+        proof.leaf_index(),
+        proof.leaf_count(),
+        proof.siblings().to_vec(),
+    )
+    .map_err(|_| ProtocolAdapterError::NonCanonicalView)
 }
 
 fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, ProtocolAdapterError> {
@@ -434,3 +444,7 @@ fn secure_endpoint(endpoint: &str) -> bool {
                     || host.starts_with("[::1]:")
             })
 }
+
+#[cfg(test)]
+#[path = "program_node_tests.rs"]
+mod tests;
