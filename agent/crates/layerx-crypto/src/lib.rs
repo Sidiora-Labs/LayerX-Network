@@ -12,6 +12,8 @@ pub mod keystore;
 #[cfg(feature = "custody")]
 pub mod local;
 #[cfg(feature = "custody")]
+pub mod onboarding;
+#[cfg(feature = "custody")]
 pub mod payments;
 #[cfg(feature = "custody")]
 pub mod redact;
