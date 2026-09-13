@@ -2175,19 +2175,19 @@ mod maintained_protocol_heads {
         assert!(verifier
             .verify_historical_protocol_head_proof(&proof)
             .is_err());
-        changed = maintenance.clone();
+        let mut changed = maintenance.clone();
         changed.activity_receipts[0][20] ^= 1;
         proof.maintenance = Some(&changed);
         assert!(verifier
             .verify_historical_protocol_head_proof(&proof)
             .is_err());
-        changed = maintenance.clone();
+        let mut changed = maintenance.clone();
         changed.receipt[20] ^= 1;
         proof.maintenance = Some(&changed);
         assert!(verifier
             .verify_historical_protocol_head_proof(&proof)
             .is_err());
-        changed = maintenance;
+        let mut changed = maintenance.clone();
         changed.activity_receipts = vec![RECEIPT.to_vec(); 65];
         proof.maintenance = Some(&changed);
         assert_eq!(
