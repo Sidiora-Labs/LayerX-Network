@@ -831,13 +831,24 @@ static int expect_ack(int descriptor, uint64_t correlation_id,
                       const uint8_t activity_id[32])
 {
     wire_envelope response;
-    if (receive_envelope(descriptor, &response) != 0) return 1;
+    if (receive_envelope(descriptor, &response) != 0) {
+        (void)fprintf(stderr, "admission acknowledgement: no complete response\n");
+        return 1;
+    }
     if (response.tag != SUBMIT_RESPONSE ||
         response.correlation_id != correlation_id ||
         response.payload_length != activity_length ||
         memcmp(response.payload, activity, activity_length) != 0 ||
         response.proof_length != 32U ||
         memcmp(response.proof, activity_id, 32U) != 0) {
+        (void)fprintf(stderr,
+                      "admission acknowledgement: tag=%u payload=%zu proof=%zu\n",
+                      (unsigned)response.tag, response.payload_length,
+                      response.proof_length);
+        if (response.tag == ERROR_RESPONSE && response.payload_length == 5U)
+            (void)fprintf(stderr, "admission acknowledgement: class=%u result=%d\n",
+                          (unsigned)response.payload[0],
+                          (int)(lxp_result)load_u32(response.payload + 1U));
         release_envelope(&response);
         return 1;
     }
