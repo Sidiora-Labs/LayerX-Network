@@ -104,7 +104,8 @@ impl ProvisionedSessionKey {
         if signer.public_key() != issued.session_public_key {
             return Err(SigningError::KeyMismatch);
         }
-        if issued.permitted_activity_types.is_empty()
+        if issued.purpose != layerx_crypto::session::SessionPurpose::Activity
+            || issued.permitted_activity_types.is_empty()
             || issued.expires_at == 0
             || issued.revocation_sequence == 0
         {

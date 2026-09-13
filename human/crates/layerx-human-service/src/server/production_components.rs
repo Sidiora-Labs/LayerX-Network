@@ -4869,6 +4869,7 @@ impl ProductionComponents {
             let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
             let registry = agent.registry().clone();
             let (intent, grant_id) = browser_grant_intent(
+                &mut scope,
                 &mut agent,
                 &prepared,
                 recovery_seed,
@@ -5412,7 +5413,14 @@ fn movement_active_binding(
     Ok(active)
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BrowserGrantPreparation {
+    registration_payload: Vec<u8>,
+    expiry_sequence: u64,
+}
+
 fn browser_grant_intent(
+    scope: &mut crate::store::PrincipalScope<'_>,
     agent: &mut AgentRuntime,
     prepared: &crate::auth::PreparedBrowserSession,
     recovery_seed: [u8; 32],
@@ -5429,40 +5437,70 @@ fn browser_grant_intent(
     .into();
     let session_public_key = LocalSigner::new(session_seed).public_key();
     session_seed.fill(0);
-    let identity = agent
-        .identity_resolve(actor.as_str())
-        .map_err(agent_failure)?;
     let did = layerx_types::ids::Did::new(actor.as_str().as_bytes())
         .map_err(|_| ApiFailure::upstream_degraded())?;
     let grantor = layerx_wire::hash::did_id_for_protocol(&did, 3)
         .map_err(|_| ApiFailure::upstream_degraded())?;
-    let issued = issue_session_key(&SessionKeyRequest {
-        fee_budget: None,
-        purpose: layerx_crypto::session::SessionPurpose::Authentication,
-        grantor,
-        session_public_key,
-        not_before: prepared
-            .opened_at()
-            .checked_mul(1000)
-            .ok_or_else(ApiFailure::upstream_degraded)?,
-        expires_at: Some(
-            prepared
-                .refresh_expires_at()
-                .checked_mul(1000)
-                .ok_or_else(ApiFailure::upstream_degraded)?,
-        ),
-        permitted_activity_types: Vec::new(),
-        revocation_sequence: Some(identity.revocation_sequence),
-    })
-    .map_err(|_| ApiFailure::upstream_degraded())?;
-    let expiry_sequence = agent
-        .head()
-        .map_err(agent_failure)?
-        .chain_sequence
-        .checked_add(1024)
+    let not_before = prepared
+        .opened_at()
+        .checked_mul(1000)
         .ok_or_else(ApiFailure::upstream_degraded)?;
+    let expires_at = prepared
+        .refresh_expires_at()
+        .checked_mul(1000)
+        .ok_or_else(ApiFailure::upstream_degraded)?;
+    let row_key = crate::store::RowKey::new(format!("browser-grant-{}", hex_bytes(&action)))
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+    let plan: BrowserGrantPreparation =
+        if let Some(row) = scope.get(crate::store::Table::Journeys, &row_key) {
+            serde_json::from_slice(row.bytes()).map_err(|_| ApiFailure::upstream_degraded())?
+        } else {
+            let identity = agent
+                .identity_resolve(actor.as_str())
+                .map_err(agent_failure)?;
+            let issued = issue_session_key(&SessionKeyRequest {
+                fee_budget: None,
+                purpose: layerx_crypto::session::SessionPurpose::Authentication,
+                grantor,
+                session_public_key,
+                not_before,
+                expires_at: Some(expires_at),
+                permitted_activity_types: Vec::new(),
+                revocation_sequence: Some(identity.revocation_sequence),
+            })
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+            let plan = BrowserGrantPreparation {
+                registration_payload: issued.registration_payload,
+                expiry_sequence: agent
+                    .head()
+                    .map_err(agent_failure)?
+                    .chain_sequence
+                    .checked_add(1024)
+                    .ok_or_else(ApiFailure::upstream_degraded)?,
+            };
+            scope
+                .put(
+                    crate::store::Table::Journeys,
+                    row_key,
+                    prepared.opened_at(),
+                    serde_json::to_vec(&plan).map_err(|_| ApiFailure::upstream_degraded())?,
+                )
+                .map_err(|_| ApiFailure::unavailable())?;
+            plan
+        };
+    let issued = layerx_crypto::session::decode_session_key(&plan.registration_payload)
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+    if issued.purpose != layerx_crypto::session::SessionPurpose::Authentication
+        || issued.grantor != grantor
+        || issued.session_public_key != session_public_key
+        || issued.not_before != not_before
+        || issued.expires_at != expires_at
+        || plan.expiry_sequence == 0
+    {
+        return Err(ApiFailure::upstream_degraded());
+    }
     let intent = Intent::v1(IntentKind::SessionGrant(
-        ProtocolSessionGrant::new(issued.registration_payload, expiry_sequence, action)
+        ProtocolSessionGrant::new(plan.registration_payload, plan.expiry_sequence, action)
             .map_err(|_| ApiFailure::upstream_degraded())?,
     ));
     Ok((intent, issued.grant_id))
