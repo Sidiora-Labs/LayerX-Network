@@ -2,6 +2,7 @@
 #define LXP_DAEMON_MAINTENANCE_JSON_H
 
 #include "layerx/lxp_daemon.h"
+#include "layerx/lxp_crypto.h"
 #include <stdio.h>
 #include <stdlib.h>
 
