@@ -354,4 +354,58 @@ mod tests {
         changed.push(0);
         assert!(Registration::decode(&summary, &changed, &state, 5).is_err());
     }
+
+    #[test]
+    fn original_native_receipts_verify_and_supply_canonical_session_membership() {
+        let cases: [(&[u8], &[u8; 32], bool); 2] = [
+            (
+                include_bytes!("../../tests/fixtures/native-sessions/legacy.receipt"),
+                include_bytes!("../../tests/fixtures/native-sessions/legacy.sequencer-public"),
+                false,
+            ),
+            (
+                include_bytes!("../../tests/fixtures/native-sessions/fee.receipt"),
+                include_bytes!("../../tests/fixtures/native-sessions/fee.sequencer-public"),
+                true,
+            ),
+        ];
+        for (bytes, key, paid) in cases {
+            let receipt = layerx_proof::receipt::verify_sequencer_signature(bytes, *key)
+                .unwrap_or_else(|error| panic!("original native signature: {error:?}"));
+            let protocol = receipt
+                .protocol()
+                .unwrap_or_else(|| panic!("native protocol receipt"));
+            assert_eq!(protocol.module_id(), 7);
+            assert_eq!(protocol.result_code(), 0);
+            let state = protocol
+                .effects()
+                .iter()
+                .find(|effect| effect.module_id() == 7 && effect.event_type() == 0x7110)
+                .unwrap_or_else(|| panic!("native identity event"))
+                .body();
+            let registration =
+                Registration::from_receipt(protocol, state, protocol.global_sequence())
+                    .unwrap_or_else(|_| panic!("native registration"))
+                    .unwrap_or_else(|| panic!("missing native session"));
+            assert_eq!(registration.grant.fee_budget.is_some(), paid);
+            assert_eq!(registration.grant.grantor, state[5..37]);
+            assert!(registration.active(
+                registration.grant.revocation_sequence,
+                protocol.global_sequence(),
+                u128::from(registration.grant.not_before)
+            ));
+            assert!(!registration.active(
+                registration.grant.revocation_sequence + 1,
+                protocol.global_sequence(),
+                u128::from(registration.grant.not_before)
+            ));
+            let mut changed = bytes.to_vec();
+            let last = changed.len() - 1;
+            changed[last] ^= 1;
+            assert!(layerx_proof::receipt::verify_sequencer_signature(&changed, *key).is_err());
+            let mut changed_key = *key;
+            changed_key[0] ^= 1;
+            assert!(layerx_proof::receipt::verify_sequencer_signature(bytes, changed_key).is_err());
+        }
+    }
 }
