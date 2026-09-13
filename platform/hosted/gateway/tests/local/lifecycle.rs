@@ -99,6 +99,7 @@ struct Gateway {
     _process: Daemon,
     _event_processes: Vec<Daemon>,
     _registry_process: Option<Daemon>,
+    _registry_boundary: Option<Daemon>,
     port: u16,
     signer_file: String,
 }
@@ -440,12 +441,14 @@ fn start_gateway_runtime(
         _process: gateway_process,
         _event_processes: Vec::new(),
         _registry_process: None,
+        _registry_boundary: None,
         port: gateway_port,
         signer_file,
     };
     gateway._event_processes =
         events.start(cluster, certificates, identity, authority, redis, &gateway);
-    if let Some((path, port)) = registry_config {
+    if let Some((path, port, node)) = registry_config {
+        gateway._registry_boundary = Some(node);
         gateway._registry_process = Some(registry_runtime::start(cluster, &path, port));
     }
     gateway
