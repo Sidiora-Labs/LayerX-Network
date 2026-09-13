@@ -302,6 +302,9 @@ func (c *MockClient) mockBlock(height int64) *coretypes.ResultBlock {
 			}(),
 		}
 	}
+	if height != MockHeight8 && height != MockHeight101 && height != MockHeight103 {
+		res.Block.Data.Txs = nil
+	}
 	return res
 }
 
@@ -1018,7 +1021,7 @@ func setupLogs() {
 			Topics:  []string{"0x0000000000000000000000000000000000000000000000000000000000000123"},
 		}},
 		GasUsed:           21000,
-		EffectiveGasPrice: 100,
+		EffectiveGasPrice: types.DefaultMinFeePerGas.TruncateInt().Uint64(),
 	})
 	bloom2 := ethtypes.CreateBloom(&ethtypes.Receipt{Logs: []*ethtypes.Log{{
 		Address: common.HexToAddress("0x1111111111111111111111111111111111111113"),
@@ -1037,7 +1040,7 @@ func setupLogs() {
 			Topics:  []string{"0x0000000000000000000000000000000000000000000000000000000000000123", "0x0000000000000000000000000000000000000000000000000000000000000456"},
 		}},
 		GasUsed:           30000,
-		EffectiveGasPrice: 100,
+		EffectiveGasPrice: types.DefaultMinFeePerGas.TruncateInt().Uint64(),
 	})
 	bloom3 := ethtypes.CreateBloom(&ethtypes.Receipt{Logs: []*ethtypes.Log{{
 		Address: common.HexToAddress("0x1111111111111111111111111111111111111114"),
@@ -1056,7 +1059,7 @@ func setupLogs() {
 			Topics:  []string{"0x0000000000000000000000000000000000000000000000000000000000000123", "0x0000000000000000000000000000000000000000000000000000000000000456"},
 		}},
 		GasUsed:           25000,
-		EffectiveGasPrice: 100,
+		EffectiveGasPrice: types.DefaultMinFeePerGas.TruncateInt().Uint64(),
 	})
 	bloom4 := ethtypes.CreateBloom(&ethtypes.Receipt{Logs: []*ethtypes.Log{{
 		Address: common.HexToAddress("0x1111111111111111111111111111111111111115"),
@@ -1075,7 +1078,7 @@ func setupLogs() {
 			Address: "0x1111111111111111111111111111111111111115",
 			Topics:  []string{"0x0000000000000000000000000000000000000000000000000000000000000123", "0x0000000000000000000000000000000000000000000000000000000000000456"},
 		}},
-		EffectiveGasPrice: 100,
+		EffectiveGasPrice: types.DefaultMinFeePerGas.TruncateInt().Uint64(),
 	})
 	// create a receipt with a synthetic log
 	bloomSynth := ethtypes.CreateBloom(&ethtypes.Receipt{Logs: []*ethtypes.Log{{
@@ -1113,7 +1116,7 @@ func setupLogs() {
 			Topics:  []string{"0x0000000000000000000000000000000000000000000000000000000000000123"},
 		}},
 		GasUsed:           21000,
-		EffectiveGasPrice: 100,
+		EffectiveGasPrice: types.DefaultMinFeePerGas.TruncateInt().Uint64(),
 	})
 	CtxMock = Ctx.WithBlockHeight(MockHeight103)
 	EVMKeeper.MockReceipt(CtxMock, common.HexToHash(TestSyntheticTxHash), &types.Receipt{
@@ -1160,7 +1163,7 @@ func setupLogs() {
 			Topics:    []string{"0x0000000000000000000000000000000000000000000000000000000000000234", "0x0000000000000000000000000000000000000000000000000000000000000789"},
 			Synthetic: true,
 		}},
-		EffectiveGasPrice: 100,
+		EffectiveGasPrice: types.DefaultMinFeePerGas.TruncateInt().Uint64(),
 	})
 
 	// block 2
