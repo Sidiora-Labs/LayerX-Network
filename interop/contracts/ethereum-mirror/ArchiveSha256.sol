@@ -36,8 +36,25 @@ library ArchiveSha256 {
         uint32[16] memory words;
         assembly ("memory-safe") {
             function transform(statePointer, wordPointer, blockPointer) {
-                for { let i := 0 } lt(i, 16) { i := add(i, 1) } {
-                    mstore(add(wordPointer, mul(i, 32)), shr(224, mload(add(blockPointer, mul(i, 4)))))
+                {
+                    let firstWords := mload(blockPointer)
+                    let lastWords := mload(add(blockPointer, 32))
+                    mstore(add(wordPointer, 0), and(shr(224, firstWords), 0xffffffff))
+                    mstore(add(wordPointer, 32), and(shr(192, firstWords), 0xffffffff))
+                    mstore(add(wordPointer, 64), and(shr(160, firstWords), 0xffffffff))
+                    mstore(add(wordPointer, 96), and(shr(128, firstWords), 0xffffffff))
+                    mstore(add(wordPointer, 128), and(shr(96, firstWords), 0xffffffff))
+                    mstore(add(wordPointer, 160), and(shr(64, firstWords), 0xffffffff))
+                    mstore(add(wordPointer, 192), and(shr(32, firstWords), 0xffffffff))
+                    mstore(add(wordPointer, 224), and(shr(0, firstWords), 0xffffffff))
+                    mstore(add(wordPointer, 256), and(shr(224, lastWords), 0xffffffff))
+                    mstore(add(wordPointer, 288), and(shr(192, lastWords), 0xffffffff))
+                    mstore(add(wordPointer, 320), and(shr(160, lastWords), 0xffffffff))
+                    mstore(add(wordPointer, 352), and(shr(128, lastWords), 0xffffffff))
+                    mstore(add(wordPointer, 384), and(shr(96, lastWords), 0xffffffff))
+                    mstore(add(wordPointer, 416), and(shr(64, lastWords), 0xffffffff))
+                    mstore(add(wordPointer, 448), and(shr(32, lastWords), 0xffffffff))
+                    mstore(add(wordPointer, 480), and(shr(0, lastWords), 0xffffffff))
                 }
                 let a := mload(add(statePointer, 0))
                 let b := mload(add(statePointer, 32))
