@@ -7,10 +7,18 @@ import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
 
 import { human_test_harness } from "./harness.ts";
+import { establishPublicSession } from "./public-session.ts";
 
 const WEB_ROOT = fileURLToPath(new URL("../", import.meta.url));
 
-export const test = base.extend<{ productionServer: void }>({
+export const test = base.extend<{
+  productionServer: void;
+  authenticatedSession: Awaited<ReturnType<typeof establishPublicSession>>;
+}>({
+  authenticatedSession: async ({ context }, use) => {
+    const session = await establishPublicSession(context, human_test_harness(process.env).baseUrl);
+    await use(session);
+  },
   productionServer: [async ({}, use, testInfo) => {
     const harness = human_test_harness(process.env);
     if (!harness.localProduction) {
