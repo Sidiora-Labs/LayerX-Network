@@ -241,14 +241,7 @@ export class AgentMiddleware {
     if (reservation.state === "committed") {
       try {
         const evidence = await this.#receipts.resolve(reservation.receiptDigest);
-        const verification = await verifyAgentPayment(evidence, request, this.#commitments);
-        if (toHex(verification.receiptDigest) !== reservation.receiptDigest
-          || verification.receipt.amount !== BigInt(amount)
-          || !constantTimeHex(verification.receipt.asset, request.asset)
-          || !constantTimeHex(verification.receipt.to, request.recipient)) {
-          throw new AgentMiddlewareError("budget-conflict");
-        }
-        return { kind: "verified", verification, reservation };
+        return await verifyCommittedAgentPayment(evidence, reservation, request, this.#commitments);
       } catch {
         return { kind: "unknown", reservation };
       }
@@ -802,6 +795,26 @@ function text(value: unknown, maximum: number): string {
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function verifyCommittedAgentPayment(
+  evidence: AgentReceiptEvidence,
+  reservation: CommittedBudgetReservation,
+  request: Pick<AgentSpendRequest, "amount" | "asset" | "recipient" | "commitment">,
+  commitments?: PaymentCommitmentResolver,
+): Promise<Extract<AgentSpendResult, { readonly kind: "verified" }>> {
+  const verification = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch);
+  if (toHex(verification.receiptDigest) !== reservation.receiptDigest
+    || verification.receipt.amount !== protocolAmount(request.amount)
+    || reservation.amount !== request.amount
+    || reservation.asset !== request.asset
+    || !constantTimeHex(verification.receipt.asset, request.asset)
+    || !constantTimeHex(verification.receipt.to, request.recipient)) {
+    throw new AgentMiddlewareError("budget-conflict");
+  }
+  if (request.commitment !== undefined) await verifyPaymentCommitment(verification,
+    evidence.authorizedBatch.sequencerPublicKey, request.commitment.network, request.commitment.level, commitments);
+  return { kind: "verified", verification, reservation };
 }
 
 export async function verifyAgentPayment(evidence: AgentReceiptEvidence, request: AgentSpendRequest,
