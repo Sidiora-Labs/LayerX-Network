@@ -668,9 +668,9 @@ fn withdrawal_admission(
         return Ok(None);
     }
     let correlation_id = session.next_correlation;
-    session.next_correlation = correlation_id.checked_add(3).ok_or_else(|| {
-        LniFailure::Unavailable("withdrawal correlation exhausted".to_owned())
-    })?;
+    session.next_correlation = correlation_id
+        .checked_add(3)
+        .ok_or_else(|| LniFailure::Unavailable("withdrawal correlation exhausted".to_owned()))?;
     let context = SnapshotContext {
         interface_version: session.handshake.node().interface_version,
         correlation_id,

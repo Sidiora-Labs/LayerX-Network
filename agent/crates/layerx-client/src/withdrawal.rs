@@ -27,14 +27,15 @@ pub fn registry(
 ) -> Result<ModuleRegistry, WithdrawalConfigurationError> {
     let unavailable = || WithdrawalConfigurationError::Unavailable;
     let unsupported = || WithdrawalConfigurationError::Unsupported;
-    if activity.protocol_version() != 3 || activity.network_id() != network_id
+    if activity.protocol_version() != 3
+        || activity.network_id() != network_id
         || activity.activity_type().module() != ModuleId::Asset
         || activity.activity_type().ordinal() != 9
     {
         return Err(WithdrawalConfigurationError::InvalidActivity);
     }
-    let schedule = estimate_fee(transport, 0x0001_0005, 0, 0, 0, context)
-        .map_err(|_| unavailable())?;
+    let schedule =
+        estimate_fee(transport, 0x0001_0005, 0, 0, 0, context).map_err(|_| unavailable())?;
     if schedule.value.canonical_schedule.len() != 255
         || schedule.value.canonical_schedule[..2] != [0, 3]
         || schedule.value.canonical_schedule[86] != 11
@@ -50,7 +51,10 @@ pub fn registry(
             interface_version: context.interface_version,
             expected_network_id: network_id,
             minimum_observed_head: schedule.observed_sequence,
-            correlation_id: context.correlation_id.checked_add(1).ok_or_else(unavailable)?,
+            correlation_id: context
+                .correlation_id
+                .checked_add(1)
+                .ok_or_else(unavailable)?,
         },
     )
     .map_err(|_| unavailable())?;
@@ -64,7 +68,9 @@ pub fn registry(
         .map_err(|_| WithdrawalConfigurationError::InvalidActivity)?;
     layerx_crypto::disclosure::bind(&unsigned, &prepared.module_registry)
         .map_err(|_| WithdrawalConfigurationError::InvalidActivity)?;
-    let asset_id = activity.payload().get(..32)
+    let asset_id = activity
+        .payload()
+        .get(..32)
         .ok_or(WithdrawalConfigurationError::InvalidActivity)?
         .try_into()
         .map_err(|_| WithdrawalConfigurationError::InvalidActivity)?;
@@ -72,7 +78,10 @@ pub fn registry(
         transport,
         asset_id,
         SnapshotContext {
-            correlation_id: context.correlation_id.checked_add(2).ok_or_else(unavailable)?,
+            correlation_id: context
+                .correlation_id
+                .checked_add(2)
+                .ok_or_else(unavailable)?,
             minimum_sequence: prepared.observed_head_sequence,
             ..context
         },

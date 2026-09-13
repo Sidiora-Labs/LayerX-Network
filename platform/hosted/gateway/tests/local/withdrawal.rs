@@ -8,9 +8,13 @@ use layerx_types::intent::EvmAddress;
 pub(super) fn configure_genesis(request: Vec<u8>) -> Vec<u8> {
     assert_eq!(&request[..7], b"LXGB\x02\0\x03");
     assert_eq!(&request[19..21], &1_u16.to_be_bytes());
-    let modules = fs::read_to_string(repository_root().join("platform/hosted/node/genesis-modules.conf"))
-        .required("public testnet module configuration");
-    assert_eq!(modules.lines().collect::<Vec<_>>(), ["budget", "escrow", "perps", "service", "stream"]);
+    let modules =
+        fs::read_to_string(repository_root().join("platform/hosted/node/genesis-modules.conf"))
+            .required("public testnet module configuration");
+    assert_eq!(
+        modules.lines().collect::<Vec<_>>(),
+        ["budget", "escrow", "perps", "service", "stream"]
+    );
     let mut parameters = BTreeMap::new();
     parameters.insert("parameter-version".to_owned(), 1_u8);
     parameters.insert("native-fee-authority-version".to_owned(), 2_u8);
@@ -39,27 +43,60 @@ pub(super) fn configure_genesis(request: Vec<u8>) -> Vec<u8> {
     configured
 }
 
-fn account(http: &Http, authorization: &str, name: &str, cluster: &Cluster) -> layerx_proof::state::CanonicalAccount {
+fn account(
+    http: &Http,
+    authorization: &str,
+    name: &str,
+    cluster: &Cluster,
+) -> layerx_proof::state::CanonicalAccount {
     let account = AccountId::parse(name).required("canonical account name");
     let id = layerx_wire::hash::account_id_for_protocol(&account, PROTOCOL_VERSION)
         .required("native account identifier");
-    let response = local_rpc(http, authorization, "lx_getAccount", &serde_json::json!([hex_encode(&id)]), true);
+    let response = local_rpc(
+        http,
+        authorization,
+        "lx_getAccount",
+        &serde_json::json!([hex_encode(&id)]),
+        true,
+    );
     assert!(response.get("error").is_none(), "account proof: {response}");
-    VerifiedRpcAccount::from_rpc_result(&response["result"], id, &AccountPolicy {
-        protocol_version: PROTOCOL_VERSION,
-        network_id: NETWORK_ID,
-        sequencer_key: cluster.sequencer_key,
-    })
+    VerifiedRpcAccount::from_rpc_result(
+        &response["result"],
+        id,
+        &AccountPolicy {
+            protocol_version: PROTOCOL_VERSION,
+            network_id: NETWORK_ID,
+            sequencer_key: cluster.sequencer_key,
+        },
+    )
     .required("independently verified public account")
-    .evidence().account().clone()
+    .evidence()
+    .account()
+    .clone()
 }
 
 fn identity(http: &Http, authorization: &str, did: &str) -> u64 {
-    let response = local_rpc(http, authorization, "lx_getSequence", &serde_json::json!([did, "identity"]), true);
-    assert!(response.get("error").is_none(), "identity sequence: {response}");
+    let response = local_rpc(
+        http,
+        authorization,
+        "lx_getSequence",
+        &serde_json::json!([did, "identity"]),
+        true,
+    );
+    assert!(
+        response.get("error").is_none(),
+        "identity sequence: {response}"
+    );
     assert_eq!(response["result"]["did"], did);
-    assert_eq!(response["result"]["verification"], "authenticated_node_snapshot");
-    response["result"]["next_sequence"].as_str().required("identity sequence").parse().required("identity sequence integer")
+    assert_eq!(
+        response["result"]["verification"],
+        "authenticated_node_snapshot"
+    );
+    response["result"]["next_sequence"]
+        .as_str()
+        .required("identity sequence")
+        .parse()
+        .required("identity sequence integer")
 }
 
 fn signed(cluster: &Cluster, sequence: u64) -> (Vec<u8>, [u8; 32]) {
@@ -67,40 +104,68 @@ fn signed(cluster: &Cluster, sequence: u64) -> (Vec<u8>, [u8; 32]) {
     let key = SigningKey::from_bytes(&cluster.treasury_seed);
     let idempotency = random32();
     let activity_type = ActivityType::new(ModuleId::Asset, 9).required("withdrawal type");
-    let registry = ModuleRegistry::new(&[
-        ModuleRegistration::new(ModuleId::Asset, &[activity_type]).required("withdrawal registration")
-    ]).required("withdrawal registry");
+    let registry =
+        ModuleRegistry::new(&[ModuleRegistration::new(ModuleId::Asset, &[activity_type])
+            .required("withdrawal registration")])
+        .required("withdrawal registry");
     let request = BridgeWithdrawRequest::new(
-        CheckpointId::new([0x42; 32]), 17,
-        AccountId::parse(&format!("agent:{}:main", cluster.treasury_did)).required("withdrawal owner account"),
+        CheckpointId::new([0x42; 32]),
+        17,
+        AccountId::parse(&format!("agent:{}:main", cluster.treasury_did))
+            .required("withdrawal owner account"),
         AccountId::parse("system:paxeer-withdrawals").required("withdrawal custody account"),
-        EvmAddress::new([0x31; 20]), AssetId::new(cluster.asset), Amount::from_u128(1),
+        EvmAddress::new([0x31; 20]),
+        AssetId::new(cluster.asset),
+        Amount::from_u128(1),
         IdempotencyKey::new(idempotency),
-    ).required("withdrawal intent");
+    )
+    .required("withdrawal intent");
     let intent = Intent::v2(IntentKind::BridgeWithdrawRequest(request));
-    let compiled = layerx_intents::compile(&intent, &registry).required("canonical withdrawal payload");
+    let compiled =
+        layerx_intents::compile(&intent, &registry).required("canonical withdrawal payload");
     DisclosureCheck::verify(&intent, &compiled).required("withdrawal disclosure roundtrip");
     let now = now_ms();
-    let envelope = layerx_crypto::send::encode_payment_envelope(ModuleId::Asset, 9, compiled.payload().as_bytes(),
+    let envelope = layerx_crypto::send::encode_payment_envelope(
+        ModuleId::Asset,
+        9,
+        compiled.payload().as_bytes(),
         &layerx_crypto::send::EnvelopeOptions {
-            actor: &cluster.treasury_did, public_key: key.verifying_key().to_bytes(),
-            protocol_version: PROTOCOL_VERSION, network_id: NETWORK_ID,
-            identity_sequence: sequence, idempotency_key: idempotency, fee_limit: 17,
-            not_before: now - 1000, not_after: now + 120000,
-        }).required("withdrawal envelope");
+            actor: &cluster.treasury_did,
+            public_key: key.verifying_key().to_bytes(),
+            protocol_version: PROTOCOL_VERSION,
+            network_id: NETWORK_ID,
+            identity_sequence: sequence,
+            idempotency_key: idempotency,
+            fee_limit: 17,
+            not_before: now - 1000,
+            not_after: now + 120000,
+        },
+    )
+    .required("withdrawal envelope");
     let disclosure = layerx_crypto::disclosure::bind(&envelope.canonical, &envelope.registry)
         .required("canonical signed withdrawal disclosure");
     let local = layerx_crypto::signer::LocalSigner::new(cluster.treasury_seed);
-    let mut future = layerx_crypto::signer::sign_disclosed(&local, &envelope.canonical, &disclosure, &envelope.registry);
+    let mut future = layerx_crypto::signer::sign_disclosed(
+        &local,
+        &envelope.canonical,
+        &disclosure,
+        &envelope.registry,
+    );
     let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-    let std::task::Poll::Ready(signature) = std::future::Future::poll(future.as_mut(), &mut context) else {
+    let std::task::Poll::Ready(signature) =
+        std::future::Future::poll(future.as_mut(), &mut context)
+    else {
         panic!("local signer unexpectedly pending")
     };
     let signature = signature.required("withdrawal owner signature");
     drop(future);
-    let signed = envelope.envelope.attach_signature(Signature::new(signature.as_bytes()).required("canonical signature"));
-    let bytes = layerx_wire::activity::encode_signed_envelope(&signed).required("signed withdrawal");
-    let decoded = layerx_wire::activity::decode_signed(&bytes, &registry).required("withdrawal roundtrip");
+    let signed = envelope
+        .envelope
+        .attach_signature(Signature::new(signature.as_bytes()).required("canonical signature"));
+    let bytes =
+        layerx_wire::activity::encode_signed_envelope(&signed).required("signed withdrawal");
+    let decoded =
+        layerx_wire::activity::decode_signed(&bytes, &registry).required("withdrawal roundtrip");
     let id = layerx_wire::hash::activity_id(&decoded).required("withdrawal activity identifier");
     (bytes, id)
 }
@@ -114,32 +179,75 @@ fn executed(http: &Http, authorization: &str, params: &serde_json::Value) -> ser
         }
         assert_eq!(response["error"]["code"], -32001, "{response}");
         assert_eq!(response["error"]["data"]["state"], "pending", "{response}");
-        assert!(Instant::now() < deadline, "withdrawal execution deadline: {response}");
+        assert!(
+            Instant::now() < deadline,
+            "withdrawal execution deadline: {response}"
+        );
         thread::sleep(Duration::from_millis(25));
     }
 }
 
-pub(super) fn run(cluster: &Cluster, certificates: &Certificates, gateway: &mut Gateway, key: &serde_json::Value) {
-    let http = Http { port: gateway.port, ca: Certificate::from_der(&certificates.ca_der).required("gateway CA"), identity: None };
-    let authorization = format!("LayerX-Key {}:{}", key["key"]["id"].as_str().required("key id"), key["key"]["secret"].as_str().required("key secret"));
+pub(super) fn run(
+    cluster: &Cluster,
+    certificates: &Certificates,
+    gateway: &mut Gateway,
+    key: &serde_json::Value,
+) {
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("gateway CA"),
+        identity: None,
+    };
+    let authorization = format!(
+        "LayerX-Key {}:{}",
+        key["key"]["id"].as_str().required("key id"),
+        key["key"]["secret"].as_str().required("key secret")
+    );
     let source = format!("agent:{}:main", cluster.treasury_did);
     let names = [source.as_str(), "system:fees", "system:paxeer-withdrawals"];
     let before = names.map(|name| account(&http, &authorization, name, cluster));
     let sequence = identity(&http, &authorization, &cluster.treasury_did);
     let (canonical, activity_id) = signed(cluster, sequence);
-    write(&cluster.root.join("public-withdrawal.lxa"), &canonical, 0o600);
+    write(
+        &cluster.root.join("public-withdrawal.lxa"),
+        &canonical,
+        0o600,
+    );
     let params = serde_json::json!([hex_encode(&canonical), "executed"]);
     let executed = executed(&http, &authorization, &params);
-    assert!(executed.get("error").is_none(), "public withdrawal: {executed}");
+    assert!(
+        executed.get("error").is_none(),
+        "public withdrawal: {executed}"
+    );
     assert_eq!(executed["result"]["activity_id"], hex_encode(&activity_id));
     assert_eq!(executed["result"]["result_code"], 0);
-    let response = local_rpc(&http, &authorization, "lx_getReceipt", &serde_json::json!([hex_encode(&activity_id)]), true);
-    let receipt = hex_decode(response["result"]["receipt"].as_str().required("public withdrawal receipt"))
-        .required("withdrawal receipt bytes");
-    let verified = layerx_proof::receipt::verify_sequencer_signature(&receipt, cluster.sequencer_key)
-        .required("independent withdrawal signature");
+    let response = local_rpc(
+        &http,
+        &authorization,
+        "lx_getReceipt",
+        &serde_json::json!([hex_encode(&activity_id)]),
+        true,
+    );
+    let receipt = hex_decode(
+        response["result"]["receipt"]
+            .as_str()
+            .required("public withdrawal receipt"),
+    )
+    .required("withdrawal receipt bytes");
+    let verified =
+        layerx_proof::receipt::verify_sequencer_signature(&receipt, cluster.sequencer_key)
+            .required("independent withdrawal signature");
     let verified = verified.protocol().required("native withdrawal receipt");
-    assert_eq!((verified.protocol_version(), verified.network_id(), verified.module_id(), verified.operation(), verified.result_code()), (PROTOCOL_VERSION, NETWORK_ID, 1, 9, 0));
+    assert_eq!(
+        (
+            verified.protocol_version(),
+            verified.network_id(),
+            verified.module_id(),
+            verified.operation(),
+            verified.result_code()
+        ),
+        (PROTOCOL_VERSION, NETWORK_ID, 1, 9, 0)
+    );
     assert_eq!(verified.activity_id(), activity_id);
     assert_eq!(verified.fee_charged(), 17);
     let after = names.map(|name| account(&http, &authorization, name, cluster));
@@ -147,16 +255,42 @@ pub(super) fn run(cluster: &Cluster, certificates: &Certificates, gateway: &mut 
     assert_eq!(after[1].balance(), before[1].balance() + 17);
     assert_eq!(after[2].balance(), before[2].balance() + 1);
     assert_eq!(after[0].next_sequence, before[0].next_sequence + 1);
-    assert_eq!(identity(&http, &authorization, &cluster.treasury_did), sequence + 1);
+    assert_eq!(
+        identity(&http, &authorization, &cluster.treasury_did),
+        sequence + 1
+    );
     for restart in [false, true] {
         if restart {
             gateway.process.stop();
-            gateway.process = local_service(cluster, "layerx-gateway", gateway.port, &gateway.environment);
+            gateway.process = local_service(
+                cluster,
+                "layerx-gateway",
+                gateway.port,
+                &gateway.environment,
+            );
         }
-        assert_eq!(local_rpc(&http, &authorization, "lx_sendActivity", &params, true), executed);
-        assert_eq!(names.map(|name| account(&http, &authorization, name, cluster)), after);
-        assert_eq!(identity(&http, &authorization, &cluster.treasury_did), sequence + 1);
-        assert_eq!(local_rpc(&http, &authorization, "lx_getReceipt", &serde_json::json!([hex_encode(&activity_id)]), true), response);
+        assert_eq!(
+            local_rpc(&http, &authorization, "lx_sendActivity", &params, true),
+            executed
+        );
+        assert_eq!(
+            names.map(|name| account(&http, &authorization, name, cluster)),
+            after
+        );
+        assert_eq!(
+            identity(&http, &authorization, &cluster.treasury_did),
+            sequence + 1
+        );
+        assert_eq!(
+            local_rpc(
+                &http,
+                &authorization,
+                "lx_getReceipt",
+                &serde_json::json!([hex_encode(&activity_id)]),
+                true
+            ),
+            response
+        );
     }
     println!("public owner withdrawal binds the native receipt, exact fee, verified balances and restart replay");
 }
@@ -170,22 +304,49 @@ fn local_gateway_legacy_genesis_refuses_withdrawal_without_mutation() {
     let authority = start_local_authority(&cluster, &certificates);
     let redis = start_local_redis(&cluster, &certificates);
     let gateway = start_local_gateway(
-        &cluster, &certificates, &boundary, &identity_service, &authority, &redis,
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity_service,
+        &authority,
+        &redis,
     );
-    let key = issue_local_scoped_key(&certificates, &gateway, &identity_service, &["activity:write"]);
-    let authorization = format!("LayerX-Key {}:{}",
+    let key = issue_local_scoped_key(
+        &certificates,
+        &gateway,
+        &identity_service,
+        &["activity:write"],
+    );
+    let authorization = format!(
+        "LayerX-Key {}:{}",
         key["key"]["id"].as_str().required("key id"),
-        key["key"]["secret"].as_str().required("key secret"));
-    let http = Http { port: gateway.port, ca: Certificate::from_der(&certificates.ca_der).required("CA"), identity: None };
+        key["key"]["secret"].as_str().required("key secret")
+    );
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
     let name = format!("agent:{}:main", cluster.treasury_did);
     let before = account(&http, &authorization, &name, &cluster);
     let sequence = identity(&http, &authorization, &cluster.treasury_did);
     let (canonical, _) = signed(&cluster, sequence);
-    let response = local_rpc(&http, &authorization, "lx_sendActivity",
-        &serde_json::json!([hex_encode(&canonical), "executed"]), true);
+    let response = local_rpc(
+        &http,
+        &authorization,
+        "lx_sendActivity",
+        &serde_json::json!([hex_encode(&canonical), "executed"]),
+        true,
+    );
     assert_eq!(response["error"]["code"], -32001, "{response}");
-    assert_eq!(response["error"]["data"]["error"]["code"], "activity_refused", "{response}");
+    assert_eq!(
+        response["error"]["data"]["error"]["code"], "activity_refused",
+        "{response}"
+    );
     assert!(response.get("result").is_none());
     assert_eq!(account(&http, &authorization, &name, &cluster), before);
-    assert_eq!(identity(&http, &authorization, &cluster.treasury_did), sequence);
+    assert_eq!(
+        identity(&http, &authorization, &cluster.treasury_did),
+        sequence
+    );
 }

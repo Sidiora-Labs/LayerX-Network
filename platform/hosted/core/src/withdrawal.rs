@@ -19,9 +19,17 @@ pub(super) fn registry(config: &Config, activity: &Activity) -> Result<ModuleReg
         config.network_id,
     )
     .map_err(|error| match error {
-        WithdrawalConfigurationError::Unsupported => SubmissionValidationError::AssetOrdinalReserved.response(),
-        WithdrawalConfigurationError::Unavailable => refusal(503, "withdrawal_configuration_unavailable", Some(5)),
-        WithdrawalConfigurationError::InvalidActivity => refusal(400, "invalid_asset_activity", None),
-        WithdrawalConfigurationError::AssetUnavailable => refusal(422, "withdrawal_asset_unavailable", None),
+        WithdrawalConfigurationError::Unsupported => {
+            SubmissionValidationError::AssetOrdinalReserved.response()
+        }
+        WithdrawalConfigurationError::Unavailable => {
+            refusal(503, "withdrawal_configuration_unavailable", Some(5))
+        }
+        WithdrawalConfigurationError::InvalidActivity => {
+            refusal(400, "invalid_asset_activity", None)
+        }
+        WithdrawalConfigurationError::AssetUnavailable => {
+            refusal(422, "withdrawal_asset_unavailable", None)
+        }
     })
 }
