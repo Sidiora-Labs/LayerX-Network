@@ -2379,7 +2379,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         let count = header
             .last_sequence()
             .checked_sub(header.first_sequence())
-            .filter(|count| *count > 0 && *count <= 65_535)
+            .filter(|count| *count > 0 && *count <= 64)
             .ok_or(HumanOperationError::Refused)?;
         let mut items = Vec::new();
         let mut next = header.first_sequence();

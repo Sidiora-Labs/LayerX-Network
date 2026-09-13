@@ -541,7 +541,7 @@ fn verify_maintained_chain(
 ) -> Result<(), MaintainedOutcomeFailure> {
     use MaintainedOutcomeFailure::{Receipt as Failure, SequenceRange};
     if receipts.len() != usize::try_from(count).map_err(|_| SequenceRange)?
-        || count > 65_535
+        || count > 64
         || receipts
             .get(usize::try_from(evidence.activity_proof.leaf_index()).map_err(|_| SequenceRange)?)
             .map(Vec::as_slice)
