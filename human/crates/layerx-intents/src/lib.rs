@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 
+pub mod canonical;
 #[path = "compile.rs"]
 mod compiler;
 mod disclosure;
 pub mod golden;
 mod native_custody;
 mod native_receive;
+pub mod owner_activity;
 mod reject;
 #[cfg(feature = "test-vectors")]
 pub mod vectors;

@@ -7,7 +7,7 @@ use layerx_intents::{
     compile, BudgetCreate, BudgetFund, CompileError, DidRegistration, DisclosureCheck,
     DisclosureCheckError, Intent, IntentError, IntentKind, RecoveryRegistration,
 };
-use layerx_proof::receipt::{verify, AuthorizedBatch, VerificationFailure};
+use layerx_proof::receipt::{AuthorizedBatch, VerificationFailure};
 use layerx_types::account::AccountId;
 use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, Did, IdempotencyKey};
@@ -407,11 +407,67 @@ pub struct ProtocolAction {
 /// finality rank returned by the peer-authenticated agent boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolEvidence {
+    pub signed_activity: Vec<u8>,
+    pub actor: Vec<u8>,
+    pub owner_public_key: [u8; 32],
+    pub network_id: u32,
     pub action_key: [u8; 32],
     pub activity_id: [u8; 32],
     pub receipt_bytes: Vec<u8>,
     pub authorized_batch: AuthorizedBatch,
     pub verification_level: VerificationLevel,
+}
+
+impl ProtocolEvidence {
+    /// # Errors
+    /// Refuses canonical owner activity or native receipt authority mismatches.
+    pub fn verify_outcome(
+        &self,
+        expected: ActivityType,
+    ) -> Result<layerx_proof::receipt::VerifiedReceipt, AgentFailure> {
+        self.bound_activity(expected)?;
+        layerx_proof::receipt::verify_native_owner_outcome(
+            &self.receipt_bytes,
+            &self.authorized_batch,
+            &layerx_proof::receipt::NativeOwnerOutcomeContext {
+                canonical_activity: &self.signed_activity,
+                actor: &self.actor,
+                action_key: self.action_key,
+                activity_type: expected,
+                owner_public_key: self.owner_public_key,
+                network_id: self.network_id,
+            },
+        )
+        .map_err(|_| AgentFailure::Refused("lifecycle receipt verification failed"))
+    }
+
+    /// # Errors
+    /// Refuses activity identity, idempotency, signature, payload or operation mismatches.
+    pub fn bound_activity(
+        &self,
+        expected: ActivityType,
+    ) -> Result<layerx_intents::canonical::Activity, AgentFailure> {
+        let registry = ModuleRegistry::new(&[layerx_types::payload::ModuleRegistration::new(
+            expected.module(),
+            &[expected],
+        )
+        .map_err(|_| AgentFailure::Refused("invalid expected lifecycle operation"))?])
+        .map_err(|_| AgentFailure::Refused("invalid lifecycle registry"))?;
+        let activity = layerx_intents::owner_activity::verify(&self.signed_activity, &registry)
+            .map_err(|_| AgentFailure::Refused("invalid signed lifecycle activity"))?;
+        if activity.activity_type() != expected
+            || activity.actor_did() != self.actor
+            || activity.authority() != self.owner_public_key
+            || activity.network_id() != self.network_id
+            || activity.idempotency_key() != self.action_key
+            || layerx_intents::canonical::activity_id(&activity)
+                .map_err(|_| AgentFailure::Refused("invalid lifecycle activity identity"))?
+                != self.activity_id
+        {
+            return Err(AgentFailure::Refused("lifecycle activity binding differs"));
+        }
+        Ok(activity)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -928,17 +984,24 @@ impl CreationJourney {
     ) -> Result<(), AgentCreationError> {
         let action = self.protocol_action(stage, registry)?;
         let action_key = action.action_key;
+        let kind = action.compiled.activity_type();
+        let payload = action.compiled.payload().as_bytes().to_vec();
         let evidence = agent.submit_protocol_scoped(scope, action)?;
-        if evidence.action_key != action_key || evidence.activity_id != action_key {
+        if evidence.action_key != action_key
+            || evidence.network_id != self.record.network_id
+            || evidence.bound_activity(kind)?.payload() != payload
+        {
             return Err(AgentCreationError::EvidenceConflict);
         }
-        let verified = verify(&evidence.receipt_bytes, &evidence.authorized_batch)?;
+        let verified = evidence.verify_outcome(kind)?;
         let protocol = verified
             .receipt()
             .protocol()
             .ok_or(AgentCreationError::EvidenceConflict)?;
         if protocol.activity_id() != evidence.activity_id
-            || Some(protocol.operation()) != stage.operation()
+            || protocol.result_code() != 0
+            || Some(u8::try_from(kind.ordinal()).map_err(|_| AgentCreationError::EvidenceConflict)?)
+                != stage.operation()
         {
             return Err(AgentCreationError::EvidenceConflict);
         }

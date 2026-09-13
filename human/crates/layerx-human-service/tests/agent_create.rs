@@ -1,3 +1,6 @@
+#[path = "support/canonical_owner.rs"]
+mod canonical_owner;
+
 use layerx_human_test_support as support;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,7 +28,7 @@ use layerx_human_service::agents::{
 use layerx_human_service::custody::{EnvelopeKms, Keystore};
 use layerx_human_service::store::{PrincipalStore, TenancyDigest};
 use layerx_intents::{DisclosureCheck, IntentKind};
-use layerx_proof::receipt::{verify, AuthorizedBatch};
+use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::verify::VerificationLevel;
 use serde_json::json;
@@ -239,8 +242,9 @@ impl AgentCreationContract for InProcessAgentLayer {
         {
             return Err(AgentFailure::Refused("typed intent mismatch"));
         }
-        let receipt = receipt(action.stage, action.action_key);
-        verify(&receipt.receipt_bytes, &receipt.authorized_batch)
+        let receipt = receipt(&action);
+        receipt
+            .verify_outcome(action.compiled.activity_type())
             .map_err(|_| AgentFailure::Refused("core receipt verification failed"))?;
         match action.stage {
             CreationStage::BudgetFunding => {
@@ -519,21 +523,24 @@ struct ReceiptFields {
     module: u16,
 }
 
-fn receipt(stage: CreationStage, action_key: [u8; 32]) -> ProtocolEvidence {
+fn receipt(action: &ProtocolAction) -> ProtocolEvidence {
+    let stage = action.stage;
+    let action_key = action.action_key;
+    let owner = canonical_owner::sign(
+        action.compiled.payload(),
+        action_key,
+        layerx_intents::canonical::PROTOCOL_VERSION,
+        NETWORK_ID,
+    );
     let marker = stage as u8 + 11;
     let previous_state_root = [marker; 32];
     let fields = ReceiptFields {
-        activity_id: action_key,
+        activity_id: owner.id,
         previous_state_root,
         resulting_state_root: [marker.saturating_add(1); 32],
-        batch_id: support::execution_batch_id(previous_state_root, action_key, CORE_SEQUENCE),
-        asset: [0x22; 32],
-        operation: match stage {
-            CreationStage::DidRegistration | CreationStage::BudgetCreation => 1,
-            CreationStage::BudgetFunding => 2,
-            CreationStage::RecoveryRegistration => 3,
-            _ => unreachable!(),
-        },
+        batch_id: support::execution_batch_id(previous_state_root, owner.id, CORE_SEQUENCE),
+        asset: [0; 32],
+        operation: 0,
         module: match stage {
             CreationStage::DidRegistration | CreationStage::RecoveryRegistration => {
                 ModuleId::Governance as u16
@@ -552,8 +559,12 @@ fn receipt(stage: CreationStage, action_key: [u8; 32]) -> ProtocolEvidence {
     let signature = signer.sign(&<[u8; 32]>::from(hasher.finalize()));
     let receipt_bytes = encode_receipt(&fields, Some(signature.to_bytes()));
     ProtocolEvidence {
+        signed_activity: owner.bytes,
+        actor: owner.actor,
+        owner_public_key: owner.public_key,
+        network_id: NETWORK_ID,
         action_key,
-        activity_id: action_key,
+        activity_id: owner.id,
         receipt_bytes,
         authorized_batch: AuthorizedBatch::new(
             fields.batch_id,
@@ -585,17 +596,17 @@ fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8
     bytes.extend_from_slice(&1_u32.to_be_bytes());
     bytes.push(fields.operation);
     push_bytes(&mut bytes, &fields.asset);
-    bytes.extend_from_slice(&1_u128.to_be_bytes());
-    push_bytes(&mut bytes, &[0x91; 32]);
-    bytes.extend_from_slice(&10_u128.to_be_bytes());
-    bytes.extend_from_slice(&9_u128.to_be_bytes());
-    push_u64(&mut bytes, 1);
-    push_bytes(&mut bytes, &[0x92; 32]);
-    bytes.extend_from_slice(&20_u128.to_be_bytes());
-    bytes.extend_from_slice(&21_u128.to_be_bytes());
-    push_bytes(&mut bytes, &[0x93; 32]);
-    push_bytes(&mut bytes, &[0x94; 32]);
-    push_bytes(&mut bytes, &[0x95; 32]);
+    bytes.extend_from_slice(&0_u128.to_be_bytes());
+    push_bytes(&mut bytes, &[0; 32]);
+    bytes.extend_from_slice(&0_u128.to_be_bytes());
+    bytes.extend_from_slice(&0_u128.to_be_bytes());
+    push_u64(&mut bytes, 0);
+    push_bytes(&mut bytes, &[0; 32]);
+    bytes.extend_from_slice(&0_u128.to_be_bytes());
+    bytes.extend_from_slice(&0_u128.to_be_bytes());
+    push_bytes(&mut bytes, &[0; 32]);
+    push_bytes(&mut bytes, &[0; 32]);
+    push_bytes(&mut bytes, &[0; 32]);
     push_u64(&mut bytes, 1_000);
     bytes.push(u8::from(signature.is_some()));
     if let Some(signature) = signature {

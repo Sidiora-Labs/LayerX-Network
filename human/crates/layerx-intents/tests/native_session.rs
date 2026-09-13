@@ -65,6 +65,39 @@ fn executable_session_intents_reproduce_original_owner_signed_native_registratio
             (77, 3)
         );
         let unsigned = checked(activity::encode_unsigned(&submitted));
+        let original_signature: [u8; 64] = checked(
+            submitted
+                .signature()
+                .unwrap_or_else(|| panic!("missing original signature"))
+                .try_into(),
+        );
+        let original_owner: [u8; 32] = checked(submitted.authority().try_into());
+        assert_eq!(
+            checked(layerx_intents::owner_activity::attach_signature(
+                &unsigned,
+                original_signature,
+                original_owner,
+                &registry
+            )),
+            fixture.activity
+        );
+        assert!(layerx_intents::owner_activity::attach_signature(
+            &unsigned,
+            original_signature,
+            [0; 32],
+            &registry
+        )
+        .is_err());
+        let mut changed_signature = original_signature;
+        changed_signature[0] ^= 1;
+        assert!(layerx_intents::owner_activity::attach_signature(
+            &unsigned,
+            changed_signature,
+            original_owner,
+            &registry
+        )
+        .is_err());
+
         let message = checked(SignatureMessage::new(
             hash::Domain::SignaturePreimage,
             submitted.protocol_version(),

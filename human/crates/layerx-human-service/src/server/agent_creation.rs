@@ -40,6 +40,14 @@ pub struct CreationBounds {
 }
 
 #[derive(Serialize, Deserialize)]
+struct ProtocolPreparation {
+    request_binding: [u8; 32],
+    account_sequence: u64,
+    not_before: u64,
+    not_after: u64,
+}
+
+#[derive(Serialize, Deserialize)]
 struct SessionPreparation {
     version: u8,
     request_binding: [u8; 32],
@@ -114,21 +122,65 @@ impl<'a> ProductionAgentCreation<'a> {
 
     fn prepare_action(
         &mut self,
+        scope: &mut PrincipalScope<'_>,
         action: &ProtocolAction,
     ) -> Result<crate::journeys::AgentPreparation, AgentFailure> {
-        let account_sequence = self
-            .runtime
-            .account_sequence(&self.actor, &self.authority)
-            .map_err(map_boundary)?;
-        let not_before = action
-            .started_at
-            .checked_mul(1_000)
-            .ok_or(AgentFailure::Refused("creation preparation bound overflow"))?;
-        let not_after = action
-            .started_at
-            .checked_add(self.timestamp_span)
-            .and_then(|value| value.checked_mul(1_000))
-            .ok_or(AgentFailure::Refused("creation preparation bound overflow"))?;
+        let binding: [u8; 32] = Sha256::digest(
+            serde_json::to_vec(&(
+                self.actor.as_str(),
+                self.authority.as_str(),
+                action.compiled.activity_type().value(),
+                action.compiled.payload().as_bytes(),
+                self.fee_limit,
+                self.timestamp_span,
+            ))
+            .map_err(|_| AgentFailure::Refused("invalid protocol preparation"))?,
+        )
+        .into();
+        let key =
+            crate::store::RowKey::new(format!("protocol-prepare-{}", hex(&action.action_key)))
+                .map_err(|_| AgentFailure::Refused("invalid protocol action key"))?;
+        let retained: ProtocolPreparation =
+            if let Some(row) = scope.get(crate::store::Table::Journeys, &key) {
+                let retained: ProtocolPreparation = serde_json::from_slice(row.bytes())
+                    .map_err(|_| AgentFailure::Refused("invalid retained protocol preparation"))?;
+                if retained.request_binding != binding || retained.not_after < retained.not_before {
+                    return Err(AgentFailure::Refused(
+                        "protocol preparation changed on retry",
+                    ));
+                }
+                retained
+            } else {
+                let retained = ProtocolPreparation {
+                    request_binding: binding,
+                    account_sequence: self
+                        .runtime
+                        .account_sequence(&self.actor, &self.authority)
+                        .map_err(map_boundary)?,
+                    not_before: action
+                        .started_at
+                        .checked_mul(1_000)
+                        .ok_or(AgentFailure::Refused("creation preparation bound overflow"))?,
+                    not_after: action
+                        .started_at
+                        .checked_add(self.timestamp_span)
+                        .and_then(|value| value.checked_mul(1_000))
+                        .ok_or(AgentFailure::Refused("creation preparation bound overflow"))?,
+                };
+                scope
+                    .put(
+                        crate::store::Table::Journeys,
+                        key,
+                        action.started_at,
+                        serde_json::to_vec(&retained)
+                            .map_err(|_| AgentFailure::Refused("invalid protocol preparation"))?,
+                    )
+                    .map_err(|_| AgentFailure::Unavailable)?;
+                retained
+            };
+        let account_sequence = retained.account_sequence;
+        let not_before = retained.not_before;
+        let not_after = retained.not_after;
         let request = PrepareRequest {
             protocol_activity_type: action.compiled.activity_type().value(),
             actor: self.actor.clone(),
@@ -183,7 +235,7 @@ impl<'a> ProductionAgentCreation<'a> {
         scope: &mut PrincipalScope<'_>,
         action: &ProtocolAction,
     ) -> Result<ProtocolEvidence, AgentFailure> {
-        let prepared = self.prepare_action(action)?;
+        let prepared = self.prepare_action(scope, action)?;
         let principal = scope.principal().clone();
         let descriptor = self
             .custody
@@ -214,6 +266,44 @@ impl<'a> ProductionAgentCreation<'a> {
         ))
         .map_err(|_| AgentFailure::Unavailable)?
         .map_err(|_| AgentFailure::Refused("custody refused creation signature"))?;
+        let signature: [u8; 64] = grant
+            .signature()
+            .try_into()
+            .map_err(|_| AgentFailure::Refused("invalid custody signature"))?;
+        let signed_activity = layerx_intents::owner_activity::attach_signature(
+            &prepared.unsigned_canonical_bytes,
+            signature,
+            grant.signer_public_key(),
+            self.runtime.registry(),
+        )
+        .map_err(|_| AgentFailure::Refused("custody signature does not bind preparation"))?;
+        let signed =
+            layerx_intents::owner_activity::verify(&signed_activity, self.runtime.registry())
+                .map_err(|_| AgentFailure::Refused("invalid signed creation activity"))?;
+        let activity_id = layerx_intents::canonical::activity_id(&signed)
+            .map_err(|_| AgentFailure::Refused("invalid signed creation identity"))?;
+        if signed.idempotency_key() != action.action_key {
+            return Err(AgentFailure::Refused("signed creation action differs"));
+        }
+        let signed_key =
+            crate::store::RowKey::new(format!("protocol-signed-{}", hex(&action.action_key)))
+                .map_err(|_| AgentFailure::Refused("invalid protocol action key"))?;
+        if let Some(existing) = scope.get(crate::store::Table::Journeys, &signed_key) {
+            if existing.bytes() != signed_activity {
+                return Err(AgentFailure::Refused(
+                    "signed protocol activity changed on retry",
+                ));
+            }
+        } else {
+            scope
+                .put(
+                    crate::store::Table::Journeys,
+                    signed_key,
+                    action.started_at,
+                    signed_activity.clone(),
+                )
+                .map_err(|_| AgentFailure::Unavailable)?;
+        }
         let submit = SubmitRequest {
             preparation_ref: prepared.preparation_ref,
             signature: SignatureBytes::new(grant.signature().to_vec())
@@ -231,7 +321,7 @@ impl<'a> ProductionAgentCreation<'a> {
                 grant.signer_public_key(),
             )
             .map_err(map_boundary)?;
-        if observation.activity_id != action.action_key {
+        if observation.activity_id != activity_id {
             return Err(AgentFailure::Refused(
                 "agent returned a different activity identity",
             ));
@@ -243,7 +333,7 @@ impl<'a> ProductionAgentCreation<'a> {
                     submission_ref: observation.submission.submission_ref.clone(),
                 }))
                 .map_err(map_boundary)?;
-            if tracked.activity_id != action.action_key {
+            if tracked.activity_id != activity_id {
                 return Err(AgentFailure::Refused(
                     "tracked creation activity identity changed",
                 ));
@@ -254,7 +344,7 @@ impl<'a> ProductionAgentCreation<'a> {
             Some(receipt) => receipt,
             None => match self
                 .runtime
-                .receipt_by_idempotency_key(action.action_key, action.action_key)
+                .receipt_by_idempotency_key(action.action_key, activity_id)
                 .map_err(map_boundary)?
             {
                 ReceiptLookup::Found(receipt) => receipt,
@@ -262,6 +352,10 @@ impl<'a> ProductionAgentCreation<'a> {
             },
         };
         Ok(ProtocolEvidence {
+            actor: self.actor.as_str().as_bytes().to_vec(),
+            owner_public_key: descriptor.public_key,
+            network_id: signed.network_id(),
+            signed_activity,
             action_key: action.action_key,
             activity_id: observation.activity_id,
             receipt_bytes: receipt.canonical_bytes,
@@ -311,13 +405,21 @@ impl<'a> ProductionAgentCreation<'a> {
         expected_operation: u8,
         finalized_at: u64,
     ) -> Result<super::agent_runtime::AgentFinalizationEvidence, AgentFailure> {
-        let verified =
-            layerx_proof::receipt::verify(&evidence.receipt_bytes, &evidence.authorized_batch)
-                .map_err(|_| AgentFailure::Refused("lifecycle receipt verification failed"))?;
-        if evidence.verification_level
-            < layerx_types::verify::VerificationLevel::CHECKPOINT_FINALISED
-            || evidence.verification_level < verified.level()
-        {
+        if evidence.verification_level < VerificationLevel::CHECKPOINT_FINALISED {
+            return Err(AgentFailure::Refused(
+                "lifecycle receipt is not checkpoint-finalized",
+            ));
+        }
+        let kind = layerx_types::payload::ActivityType::new(
+            expected_module,
+            u16::from(expected_operation),
+        )
+        .map_err(|_| AgentFailure::Refused("lifecycle receipt does not prove successful action"))?;
+        evidence.bound_activity(kind).map_err(|_| {
+            AgentFailure::Refused("lifecycle receipt does not prove successful action")
+        })?;
+        let verified = evidence.verify_outcome(kind)?;
+        if evidence.verification_level < verified.level() {
             return Err(AgentFailure::Refused(
                 "lifecycle receipt is not checkpoint-finalized",
             ));
@@ -325,10 +427,9 @@ impl<'a> ProductionAgentCreation<'a> {
         let protocol = verified.receipt().protocol().ok_or(AgentFailure::Refused(
             "lifecycle receipt is not protocol material",
         ))?;
-        if evidence.activity_id != evidence.action_key
-            || protocol.activity_id() != evidence.activity_id
+        if protocol.activity_id() != evidence.activity_id
             || protocol.module_id() != expected_module as u16
-            || protocol.operation() != expected_operation
+            || protocol.operation() != 0
             || protocol.result_code() != 0
         {
             return Err(AgentFailure::Refused(
@@ -604,7 +705,7 @@ impl ProductionAgentCreation<'_> {
                     || prior.grant.fee_budget != request.native_fee_budget
                     || prior.grant.permitted_activity_types != request.activity_types
                     || prior.grant.grantor
-                        != layerx_wire::hash::did_id_for_protocol(&request.did, 3)
+                        != layerx_intents::canonical::did_id_for_protocol(&request.did, 3)
                             .map_err(|_| AgentFailure::Refused("invalid session DID"))?
                 {
                     return Err(AgentFailure::Refused("session replacement is not bound"));
@@ -711,7 +812,7 @@ impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
             )
             .map_err(map_boundary)?;
         let session_public_key = LocalSigner::new(*session_seed.expose()).public_key();
-        let grantor = layerx_wire::hash::did_id_for_protocol(&request.did, 3)
+        let grantor = layerx_intents::canonical::did_id_for_protocol(&request.did, 3)
             .map_err(|_| AgentFailure::Refused("invalid agent identity"))?;
         let issued = issue_session_key(&SessionKeyRequest {
             fee_budget: plan

@@ -1,3 +1,6 @@
+#[path = "support/canonical_owner.rs"]
+mod canonical_owner;
+
 use layerx_human_test_support as support;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,7 +41,7 @@ use layerx_human_service::custody::{
 use layerx_human_service::server::agent_creation::ProductionAgentCreation;
 use layerx_human_service::store::PrincipalId;
 use layerx_intents::{DisclosureCheck, IntentKind};
-use layerx_proof::receipt::{verify, AuthorizedBatch};
+use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::account::AccountId;
 use layerx_types::ids::{AssetId, Did};
 use layerx_types::intent::PurposeHash;
@@ -361,8 +364,9 @@ impl AgentCreationContract for RealAgentLayer {
         {
             return Err(AgentFailure::Refused("typed limit intent mismatch"));
         }
-        let receipt = protocol_receipt(action.action_key);
-        verify(&receipt.receipt_bytes, &receipt.authorized_batch)
+        let receipt = protocol_receipt_for_payload(action.action_key, action.compiled.payload());
+        receipt
+            .verify_outcome(action.compiled.activity_type())
             .map_err(|_| AgentFailure::Refused("receipt verification failed"))?;
         decoded_limit(action.intent.kind())?;
         let finalization = ProductionAgentCreation::finalization_evidence(
@@ -372,7 +376,7 @@ impl AgentCreationContract for RealAgentLayer {
             self.now,
         )?;
         if finalization.action_key != action.action_key
-            || finalization.activity_id != action.action_key
+            || finalization.activity_id != receipt.activity_id
             || finalization.observed_sequence != 11
             || finalization.verification != VerificationLevel::CHECKPOINT_FINALISED.wire_rank()
         {
@@ -700,12 +704,40 @@ struct ReceiptFields {
 }
 
 fn protocol_receipt(action_key: [u8; 32]) -> ProtocolEvidence {
+    let profile = profile();
+    let intent = layerx_intents::Intent::v1(IntentKind::BudgetCreate(
+        layerx_intents::BudgetCreate::new(
+            layerx_types::intent::BudgetId::new(action_key),
+            profile.owner,
+            profile.budget_account,
+            profile.asset,
+            layerx_types::amount::Amount::from_u128(500),
+            layerx_types::intent::PeriodLength::new(profile.period_seconds)
+                .unwrap_or_else(|error| panic!("period: {error:?}")),
+            layerx_types::intent::RolloverPolicy::None,
+            layerx_types::amount::Amount::ZERO,
+            profile.purpose,
+            layerx_types::intent::TimestampSeconds::from_u64(2000),
+        )
+        .unwrap_or_else(|error| panic!("budget intent: {error:?}")),
+    ));
+    let compiled = layerx_intents::compile(&intent, &registry())
+        .unwrap_or_else(|error| panic!("budget encoding: {error:?}"));
+    protocol_receipt_for_payload(action_key, compiled.payload())
+}
+
+fn protocol_receipt_for_payload(
+    action_key: [u8; 32],
+    payload: &layerx_types::payload::Payload,
+) -> ProtocolEvidence {
+    let owner = canonical_owner::sign(payload, action_key, PROTOCOL_VERSION, 77);
+
     let previous_state_root = [0x81; 32];
     let fields = ReceiptFields {
-        activity_id: action_key,
+        activity_id: owner.id,
         previous_state_root,
         resulting_state_root: [0x82; 32],
-        batch_id: support::execution_batch_id(previous_state_root, action_key, 11),
+        batch_id: support::execution_batch_id(previous_state_root, owner.id, 11),
     };
     let signer = SigningKey::from_bytes(&[0x84; 32]);
     let unsigned = encode_receipt(&fields, None);
@@ -715,12 +747,16 @@ fn protocol_receipt(action_key: [u8; 32]) -> ProtocolEvidence {
     let signature = signer.sign(&<[u8; 32]>::from(hasher.finalize()));
     let receipt_bytes = encode_receipt(&fields, Some(signature.to_bytes()));
     ProtocolEvidence {
+        signed_activity: owner.bytes,
+        actor: owner.actor,
+        owner_public_key: owner.public_key,
+        network_id: 77,
         action_key,
-        activity_id: action_key,
+        activity_id: owner.id,
         receipt_bytes,
         authorized_batch: AuthorizedBatch::new(
             fields.batch_id,
-            ASSET,
+            [0; 32],
             fields.previous_state_root,
             fields.resulting_state_root,
             signer.verifying_key().to_bytes(),
@@ -746,19 +782,19 @@ fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8
     push_u16(&mut bytes, ModuleId::Budget as u16);
     bytes.extend_from_slice(&1_u32.to_be_bytes());
     bytes.extend_from_slice(&1_u32.to_be_bytes());
-    bytes.push(1);
-    push_bytes(&mut bytes, &ASSET);
-    bytes.extend_from_slice(&1_u128.to_be_bytes());
-    push_bytes(&mut bytes, &[0x86; 32]);
-    bytes.extend_from_slice(&10_u128.to_be_bytes());
-    bytes.extend_from_slice(&9_u128.to_be_bytes());
-    push_u64(&mut bytes, 1);
-    push_bytes(&mut bytes, &[0x87; 32]);
-    bytes.extend_from_slice(&20_u128.to_be_bytes());
-    bytes.extend_from_slice(&21_u128.to_be_bytes());
-    push_bytes(&mut bytes, &[0x88; 32]);
-    push_bytes(&mut bytes, &[0x89; 32]);
-    push_bytes(&mut bytes, &[0x8a; 32]);
+    bytes.push(0);
+    push_bytes(&mut bytes, &[0; 32]);
+    bytes.extend_from_slice(&0_u128.to_be_bytes());
+    push_bytes(&mut bytes, &[0; 32]);
+    bytes.extend_from_slice(&0_u128.to_be_bytes());
+    bytes.extend_from_slice(&0_u128.to_be_bytes());
+    push_u64(&mut bytes, 0);
+    push_bytes(&mut bytes, &[0; 32]);
+    bytes.extend_from_slice(&0_u128.to_be_bytes());
+    bytes.extend_from_slice(&0_u128.to_be_bytes());
+    push_bytes(&mut bytes, &[0; 32]);
+    push_bytes(&mut bytes, &[0; 32]);
+    push_bytes(&mut bytes, &[0; 32]);
     push_u64(&mut bytes, 1_002);
     bytes.push(u8::from(signature.is_some()));
     if let Some(signature) = signature {

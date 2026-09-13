@@ -7,7 +7,7 @@ use layerx_intents::{
     compile, BudgetCreate, CompileError, DisclosureCheck, DisclosureCheckError, Intent,
     IntentError, IntentKind,
 };
-use layerx_proof::receipt::{verify, VerificationFailure};
+use layerx_proof::receipt::VerificationFailure;
 use layerx_types::account::AccountId;
 use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, Did};
@@ -600,6 +600,8 @@ impl<B: AgentControlContract> AgentControls<B> {
         )?));
         let compiled = compile(&intent, registry)?;
         let disclosure = DisclosureCheck::verify(&intent, &compiled)?;
+        let kind = compiled.activity_type();
+        let payload = compiled.payload().as_bytes().to_vec();
         let evidence = self.boundary.submit_protocol_limit(ProtocolAction {
             stage: CreationStage::BudgetCreation,
             action_key,
@@ -610,17 +612,19 @@ impl<B: AgentControlContract> AgentControls<B> {
                 .map_err(|_| AgentControlError::InvalidProfile)?,
             started_at: observed_at,
         })?;
-        if evidence.action_key != action_key || evidence.activity_id != action_key {
+        if evidence.action_key != action_key || evidence.bound_activity(kind)?.payload() != payload
+        {
             return Err(AgentControlError::EvidenceConflict);
         }
-        let verified = verify(&evidence.receipt_bytes, &evidence.authorized_batch)?;
+        let verified = evidence.verify_outcome(kind)?;
         let protocol = verified
             .receipt()
             .protocol()
             .ok_or(AgentControlError::EvidenceConflict)?;
-        if protocol.activity_id() != action_key
+        if protocol.activity_id() != evidence.activity_id
             || protocol.module_id() != ModuleId::Budget as u16
-            || protocol.operation() != 1
+            || protocol.operation() != 0
+            || protocol.result_code() != 0
         {
             return Err(AgentControlError::EvidenceConflict);
         }

@@ -5047,7 +5047,7 @@ impl ProductionComponents {
             .map_err(agent_failure)?;
         if prior_session.revoked_at_sequence == 0
             || prior_session.grant.grantor
-                != layerx_wire::hash::did_id_for_protocol(
+                != layerx_intents::canonical::did_id_for_protocol(
                     &Did::new(context.agent_did.as_bytes())
                         .map_err(|_| ApiFailure::upstream_degraded())?,
                     3,
@@ -5439,7 +5439,7 @@ fn browser_grant_intent(
     session_seed.fill(0);
     let did = layerx_types::ids::Did::new(actor.as_str().as_bytes())
         .map_err(|_| ApiFailure::upstream_degraded())?;
-    let grantor = layerx_wire::hash::did_id_for_protocol(&did, 3)
+    let grantor = layerx_intents::canonical::did_id_for_protocol(&did, 3)
         .map_err(|_| ApiFailure::upstream_degraded())?;
     let not_before = prepared
         .opened_at()

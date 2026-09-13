@@ -683,7 +683,7 @@ fn monetary_payloads() -> Result<Vec<layerx_types::payload::Payload>> {
     use layerx_types::ids::Did;
     use layerx_types::payload::{ActivityType, ModuleId, Payload};
     let actor = checked(Did::new(b"did:layerx:alice"))?;
-    let issuer = checked(layerx_wire::hash::did_id_for_protocol(&actor, 3))?;
+    let issuer = checked(layerx_intents::canonical::did_id_for_protocol(&actor, 3))?;
     let registration = Payment::Register(Registration {
         asset: asset_id(&issuer, &[21; 32]),
         salt: [21; 32],
@@ -1173,7 +1173,7 @@ fn owner_fee_grants_bind_every_disclosed_budget_field_across_provider_restart() 
     let binding = [73; 32];
     let (handle, public) = facts(&host.call(&request(1, binding, &[], None)?)?)?;
     let actor = checked(Did::new(b"did:layerx:alice"))?;
-    let issuer = checked(layerx_wire::hash::did_id_for_protocol(&actor, 3))?;
+    let issuer = checked(layerx_intents::canonical::did_id_for_protocol(&actor, 3))?;
     let mut grant = checked(AuthorityGrant::decode(include_bytes!(
         "../../../../tests/fixtures/authority/native-fee-grants/period-bound/grant.bin"
     )))?;
@@ -1259,7 +1259,7 @@ fn session_registration_and_replacement_disclosures_survive_provider_restart() -
     let mut host = Host::new()?;
     let binding = [74; 32];
     let (handle, public) = facts(&host.call(&request(1, binding, &[], None)?)?)?;
-    let issuer = checked(layerx_wire::hash::did_id_for_protocol(
+    let issuer = checked(layerx_intents::canonical::did_id_for_protocol(
         &checked(layerx_types::ids::Did::new(b"did:layerx:alice"))?,
         3,
     ))?;
