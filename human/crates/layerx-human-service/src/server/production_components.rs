@@ -5499,7 +5499,7 @@ fn browser_grant_intent(
     {
         return Err(ApiFailure::upstream_degraded());
     }
-    let intent = Intent::v1(IntentKind::SessionGrant(
+    let intent = Intent::v3(IntentKind::SessionGrant(
         ProtocolSessionGrant::new(plan.registration_payload, plan.expiry_sequence, action)
             .map_err(|_| ApiFailure::upstream_degraded())?,
     ));

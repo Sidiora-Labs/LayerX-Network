@@ -26,7 +26,7 @@ use crate::store::PrincipalScope;
 use crate::trace::TraceId;
 
 use super::agent_runtime::{
-    AgentCapabilityInstall, AgentLifecycleSeed, AgentOwnerInstall, AgentRuntime, AgentSessionSeed,
+    AgentCapabilityInstall, AgentLifecycleSeed, AgentOwnerInstall, AgentRuntime,
 };
 use super::poll_once_ready;
 
@@ -744,7 +744,7 @@ impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
             scope,
             registry,
             &request,
-            Intent::v1(IntentKind::SessionGrant(grant_intent)),
+            Intent::v3(IntentKind::SessionGrant(grant_intent)),
             plan.started_at,
         )?;
         let finalization = Self::finalization_evidence(

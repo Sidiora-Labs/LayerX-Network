@@ -13,7 +13,6 @@ use layerx_types::intent::{
 #[cfg(test)]
 use layerx_types::intent::{AuthorizationSignature, SendAuthorizationKind};
 use layerx_types::payload::ModuleId;
-use layerx_wire::decode::Decoder;
 
 const MAX_SESSION_GRANT_BYTES: usize = 1024;
 
@@ -25,6 +24,7 @@ const MAX_SESSION_GRANT_BYTES: usize = 1024;
 pub enum IntentVersion {
     V1 = 1,
     V2 = 2,
+    V3 = 3,
 }
 
 impl IntentVersion {
@@ -56,6 +56,14 @@ impl Intent {
     pub const fn v2(kind: IntentKind) -> Self {
         Self {
             version: IntentVersion::V2,
+            kind,
+        }
+    }
+
+    #[must_use]
+    pub const fn v3(kind: IntentKind) -> Self {
+        Self {
+            version: IntentVersion::V3,
             kind,
         }
     }

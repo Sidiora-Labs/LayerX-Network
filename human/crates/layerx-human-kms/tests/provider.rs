@@ -436,7 +436,10 @@ fn registry() -> Result<layerx_types::payload::ModuleRegistry> {
         ))?,
         checked(ModuleRegistration::new(
             ModuleId::Governance,
-            &[checked(ActivityType::new(ModuleId::Governance, 8))?],
+            &[
+                checked(ActivityType::new(ModuleId::Governance, 5))?,
+                checked(ActivityType::new(ModuleId::Governance, 8))?,
+            ],
         ))?,
     ]))
 }
@@ -1300,7 +1303,7 @@ fn session_registration_and_replacement_disclosures_survive_provider_restart() -
                 grant = checked(grant.replacing([5; 32], [6; 32]))?;
             }
             let compiled = checked(layerx_intents::compile(
-                &layerx_intents::Intent::v1(layerx_intents::IntentKind::SessionGrant(grant)),
+                &layerx_intents::Intent::v3(layerx_intents::IntentKind::SessionGrant(grant)),
                 &registry()?,
             ))?;
             let canonical = unsigned_payload(public, 77, compiled.payload().clone())?;

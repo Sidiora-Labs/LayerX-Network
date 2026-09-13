@@ -123,6 +123,17 @@ impl CompileError {
 /// core-negotiated module registry refuses the value.
 #[allow(clippy::too_many_lines)]
 pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledIntent, CompileError> {
+    if intent.version() == IntentVersion::V3
+        && !matches!(intent.kind(), IntentKind::SessionGrant(_))
+    {
+        return Err(CompileError::wire(
+            CompileField::Version,
+            WireError {
+                result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                offset: 0,
+            },
+        ));
+    }
     let mut encoder = Encoder::new(MAX_PAYLOAD_BYTES);
     match intent.kind() {
         IntentKind::DidRegistration(value) => {
@@ -195,6 +206,23 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
             finish(registry, ModuleId::Governance, 8, encoder)
         }
         IntentKind::SessionGrant(value) => {
+            if intent.version() != IntentVersion::V3 {
+                if value.registration_payload.get(2) != Some(&1) || value.replacement.is_some() {
+                    return Err(CompileError::wire(
+                        CompileField::Version,
+                        WireError {
+                            result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                            offset: 0,
+                        },
+                    ));
+                }
+                header(&mut encoder, 0x7105, 1)?;
+                wire(
+                    CompileField::SessionGrant,
+                    encoder.bytes(&value.registration_payload, 1024),
+                )?;
+                return finish(registry, ModuleId::Governance, 5, encoder);
+            }
             header(
                 &mut encoder,
                 0x7105,
