@@ -200,10 +200,13 @@ def decode_batch_header(canonical_header: bytes) -> BatchHeader:
     if len(canonical_header) != _BATCH_HEADER_BYTES:
         _failure()
     decoder = _Decoder(canonical_header)
-    if decoder.u16() != 1 or decoder.u16() != 0x1701 or decoder.u8() != 15:
+    envelope_version = decoder.u16()
+    if envelope_version not in (1, 2, 3) or decoder.u16() != 0x1701 or decoder.u8() != 15:
         _failure()
     _field(decoder, 1)
     protocol_version = decoder.u16()
+    if protocol_version != envelope_version:
+        _failure()
     _field(decoder, 2)
     network_id = decoder.u32()
     _field(decoder, 3)
