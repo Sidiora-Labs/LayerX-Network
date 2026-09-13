@@ -902,15 +902,25 @@ lxp_result lxp_genesis_state_root(
 lxp_result lxp_genesis_fresh_empty_accounts(
     lxp_genesis_manifest *manifest, const uint8_t asset_id[32])
 {
-    static const uint16_t kinds[LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT] = {
+    static const uint16_t kinds[] = {
         LX_ACCOUNT_SYSTEM_FEES, LX_ACCOUNT_SYSTEM_PAXEER_RESERVE,
-        LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS
+        LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS, LX_ACCOUNT_SYSTEM_INSURANCE
     };
+    lxp_genesis_module_plan plan;
+    size_t count = LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT;
     size_t index;
+    lxp_result status;
     if (manifest == NULL || asset_id == NULL ||
-        lxp_ct_is_zero(asset_id, 32U) || manifest->account_count != 0U)
+        lxp_ct_is_zero(asset_id, 32U) || manifest->account_count != 0U ||
+        manifest->parameter_count > LXP_GENESIS_MAX_PARAMETERS)
         return LXP_ERR_NON_CANONICAL;
-    for (index = 0U; index < LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT; ++index) {
+    status = lxp_genesis_module_plan_resolve(manifest, &plan);
+    if (status != LXP_OK) return status;
+    for (index = 0U; index < plan.count; ++index)
+        if (plan.modules[index]->module_id == LXP_MODULE_PERPS) ++count;
+    if (count > sizeof(kinds) / sizeof(kinds[0]) ||
+        count > LXP_GENESIS_MAX_ACCOUNTS) return LXP_FATAL_INVARIANT;
+    for (index = 0U; index < count; ++index) {
         lxp_genesis_account *account = &manifest->accounts[index];
         const char *name = fresh_system_name(kinds[index]);
         size_t position = index;
@@ -930,7 +940,7 @@ lxp_result lxp_genesis_fresh_empty_accounts(
             account = &manifest->accounts[position];
         }
     }
-    manifest->account_count = LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT;
+    manifest->account_count = count;
     return LXP_OK;
 }
 

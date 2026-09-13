@@ -313,10 +313,62 @@ static int check_enable_flag(void)
     return 0;
 }
 
+static int check_perps_insurance(void)
+{
+    static uint8_t arena_bytes[8388608U];
+    static built_genesis enabled, disabled;
+    static lxp_state_store state;
+    static lxp_state_journal journal;
+    static lxp_kernel kernel;
+    static lx_account_registry accounts;
+    lxp_genesis_module_plan plan;
+    lxp_arena arena;
+    uint8_t key[32], identifier[32], root[32];
+    size_t found = 0U;
+    REQUIRE(lxp_genesis_module_enable_key(LXP_MODULE_PERPS, key) == LXP_OK);
+    REQUIRE(lx_account_id_from_string((const uint8_t *)"system:insurance", 16U,
+                                      identifier) == LXP_OK);
+    REQUIRE(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
+    REQUIRE(build(key, 0U, &arena, &disabled) == LXP_OK);
+    REQUIRE(disabled.manifest.account_count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT);
+    for (size_t i = 0U; i < disabled.manifest.account_count; ++i)
+        REQUIRE(memcmp(disabled.manifest.accounts[i].account_id, identifier, 32U) != 0);
+    REQUIRE(build(key, 1U, &arena, &enabled) == LXP_OK);
+    REQUIRE(enabled.manifest.account_count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT + 1U);
+    REQUIRE(lxp_genesis_verify_signature(&enabled.manifest, &arena) == LXP_OK);
+    REQUIRE(lxp_genesis_state_root(&enabled.manifest, &arena, root) == LXP_OK);
+    REQUIRE(memcmp(root, enabled.manifest.genesis_state_root, 32U) == 0);
+    REQUIRE(memcmp(root, disabled.manifest.genesis_state_root, 32U) != 0);
+    REQUIRE(lxp_genesis_module_plan_resolve(&enabled.manifest, &plan) == LXP_OK);
+    REQUIRE(lx_account_registry_init(&accounts) == LXP_OK);
+    REQUIRE(lxp_state_store_init(&state, 1U) == LXP_OK);
+    REQUIRE(lxp_state_store_bind_accounts(&state, &accounts) == LXP_OK);
+    REQUIRE(lxp_kernel_create(&kernel, &state, &journal, &enabled.manifest, 1U) == LXP_OK);
+    REQUIRE(lxp_genesis_module_plan_register(&plan, &kernel) == LXP_OK);
+    REQUIRE(lxp_snapshot_load(enabled.snapshot.bytes, enabled.snapshot.length,
+                              &enabled.snapshot_manifest, &kernel) == LXP_OK);
+    REQUIRE(accounts.count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT + 1U);
+    for (size_t i = 0U; i < accounts.count; ++i) {
+        const lx_account *account = &accounts.accounts[i];
+        if (memcmp(account->id, identifier, 32U) != 0) continue;
+        ++found;
+        REQUIRE(account->kind == LX_ACCOUNT_SYSTEM_INSURANCE && account->has_asset);
+        REQUIRE(memcmp(account->asset_id, enabled.manifest.accounts[0].asset_id, 32U) == 0);
+        REQUIRE(account->name_length == 16U && memcmp(account->name, "system:insurance", 16U) == 0);
+        REQUIRE(lxp_u128_is_zero(account->balance) && account->next_sequence == 0U);
+        REQUIRE(!account->has_authority_key && !account->frozen && !account->has_open_reference);
+        REQUIRE(lx_account_validate_canonical(account) == LXP_OK);
+    }
+    REQUIRE(found == 1U);
+    REQUIRE(lxp_state_store_destroy(&state) == LXP_OK);
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(check_table() == 0);
     REQUIRE(check_defaults() == 0);
     REQUIRE(check_enable_flag() == 0);
+    REQUIRE(check_perps_insurance() == 0);
     return 0;
 }
