@@ -54,6 +54,16 @@ class SupplyReceiptTests(unittest.TestCase):
         self.assertEqual(verified.receipt.total_units, (1_000_000, 1_000_000))
         self.assertEqual(verified.receipt.amount, 25_000)
 
+    def test_canonical_native_pause_and_unpause_supply_fields(self):
+        fixture = json.loads((ROOT / "platform/sdk/conformance/fixtures/receipt-positive-v2.json").read_text())
+        public_key = bytes.fromhex(fixture["authorized_batch"]["sequencer_public_key_hex"])
+        for name, operation in (("pause", 2), ("unpause", 3)):
+            canonical = (ROOT / "tests/fixtures/asset" / f"supply-{name}.receipt").read_bytes()
+            verified = verify_receipt(canonical, authority(canonical, public_key), self.signatures)
+            self.assertEqual(verified.receipt.operation, operation)
+            self.assertEqual(verified.receipt.amount, 0)
+            self.assertEqual(verified.receipt.total_units, (1_000_000, 1_000_000))
+
     def test_supply_totals_cannot_be_changed_or_downgraded(self):
         canonical = (NATIVE / "receipt").read_bytes()
         bound = authority(canonical, (NATIVE / "sequencer.public").read_bytes())
