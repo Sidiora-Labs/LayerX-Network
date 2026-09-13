@@ -643,7 +643,7 @@ pub fn verify_program_evidence(
         &evidence.receipt,
         &evidence.terminal_payload,
         &evidence.call_graph,
-        AuthorizedProgramExecutionExpectation {
+        &AuthorizedProgramExecutionExpectation {
             authority: evidence.authority,
             activity_id: evidence.activity_id,
             payload_hash: evidence.payload_hash,

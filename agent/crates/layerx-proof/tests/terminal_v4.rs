@@ -105,7 +105,7 @@ fn real_executed_v4_and_signed_mutated_leg_refusal() {
             guest_abi_version: abi,
         };
         let graph = bytes(&document, "call_graph_hex");
-        let result = verify_authorized_program_execution(&canonical, &terminal, &graph, expected);
+        let result = verify_authorized_program_execution(&canonical, &terminal, &graph, &expected);
         if mutated {
             assert_eq!(
                 result.err().map(|error| error.check),

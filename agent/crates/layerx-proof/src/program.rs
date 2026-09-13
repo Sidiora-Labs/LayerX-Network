@@ -192,7 +192,7 @@ pub fn verify_authorized_program_execution(
     receipt: &[u8],
     terminal_payload: &[u8],
     call_graph: &[u8],
-    expected: AuthorizedProgramExecutionExpectation,
+    expected: &AuthorizedProgramExecutionExpectation,
 ) -> Result<VerifiedProgramExecution, ProgramExecutionVerificationFailure> {
     let verified = verify_program_outcome(receipt, &expected.authority)
         .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Receipt))?;

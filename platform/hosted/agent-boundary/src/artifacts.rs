@@ -156,7 +156,7 @@ pub(super) fn verify(
         receipt_bytes,
         &terminal,
         &graph,
-        AuthorizedProgramExecutionExpectation {
+        &AuthorizedProgramExecutionExpectation {
             authority,
             activity_id,
             program_id,

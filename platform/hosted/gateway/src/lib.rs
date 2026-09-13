@@ -624,7 +624,7 @@ pub fn verify_program_operation(
         receipt_bytes,
         terminal_payload,
         call_graph,
-        AuthorizedProgramExecutionExpectation {
+        &AuthorizedProgramExecutionExpectation {
             authority: authority.authorized(),
             activity_id: expected.activity_id,
             payload_hash: expected.payload_hash,
