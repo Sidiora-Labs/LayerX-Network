@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../copy/catalog";
+import { copyEntry } from "../../../copy/runtime";
 import { batchPage, checkpointPage } from "../../explorer/client";
 import {
   ExplorerFrame,

@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../../../copy/catalog";
+import { copyEntry } from "../../../../../copy/runtime";
 import { checkpointRecord } from "../../../../explorer/client";
 import {
   ExplorerFrame,

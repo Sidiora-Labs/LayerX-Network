@@ -2,18 +2,13 @@
 
 import { useEffect, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import { formatCopy } from "../../../copy/format.ts";
 import type { EvidenceRef, Journey } from "../../api/index.ts";
-import {
-  CopyableIdentifier,
-  DesktopDetail,
-  InlineNotice,
-  KitButton,
-  MobileDetail,
-  StateFrame,
-  StatusPill,
-} from "../../kit";
+import { CopyableIdentifier, StatusPill } from "../../kit/money";
+import { DesktopDetail, MobileDetail } from "../../kit/patterns";
+import { InlineNotice, StateFrame } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
 import type { CustodyShell, RefusalPresentation, TimelineRow, WalletPanelPlan } from "./model.ts";
 
 export function useCustodyShell(): CustodyShell {

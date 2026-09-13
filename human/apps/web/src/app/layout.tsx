@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
-import { copyEntry } from "../../copy/catalog";
+import { copyEntry } from "../../copy/runtime";
 import { WebVitalsRum } from "../perf/web-vitals-rum";
 import { ApplicationStateBoundary } from "../states/application";
 

@@ -1,7 +1,9 @@
 "use client";
 
-import { copyEntry } from "../../../copy/catalog.ts";
-import { InlineNotice, KitList, KitListItem, StatusPill } from "../../kit";
+import { copyEntry } from "../../../copy/runtime.ts";
+import { InlineNotice } from "../../kit/surface";
+import { KitList, KitListItem } from "../../kit/display";
+import { StatusPill } from "../../kit/money";
 import type { JourneyProgress } from "./model.ts";
 
 export function JourneyStages({ progress }: Readonly<{ progress: JourneyProgress }>) {

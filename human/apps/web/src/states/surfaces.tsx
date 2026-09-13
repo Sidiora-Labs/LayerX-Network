@@ -2,9 +2,10 @@
 
 import { useEffect, type ReactNode } from "react";
 
-import { copyEntry } from "../../copy/catalog.ts";
+import { copyEntry } from "../../copy/runtime.ts";
 import { formatCopy } from "../../copy/format.ts";
-import { KitButton, StateEmpty, StateFrame, StateSkeleton } from "../kit";
+import { KitButton } from "../kit/control";
+import { StateEmpty, StateFrame, StateSkeleton } from "../kit/surface";
 
 export function LoadingSurface({ rows = 3 }: Readonly<{ rows?: number }>) {
   return (

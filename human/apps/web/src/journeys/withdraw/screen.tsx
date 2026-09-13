@@ -3,19 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import { formatCopy } from "../../../copy/format.ts";
 import { humanApi } from "../../api/index.ts";
-import {
-  DesktopWizard,
-  InlineNotice,
-  LabelValue,
-  MobileWizard,
-  ScreenCard,
-  StateFrame,
-  StatusPill,
-  TextField,
-} from "../../kit";
+import { DesktopWizard, MobileWizard } from "../../kit/patterns";
+import { InlineNotice, ScreenCard, StateFrame } from "../../kit/surface";
+import { LabelValue, StatusPill } from "../../kit/money";
+import { TextField } from "../../kit/field";
 import { ErrorSurface, errorPresentation, StillCheckingSurface } from "../../states";
 import { PrivateFigure } from "../../settings/privacy";
 import { presentedJourneyState, statusKeyForState } from "../custody/evidence.ts";

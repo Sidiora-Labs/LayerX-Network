@@ -3,18 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { copyEntry, human_copy_catalog } from "../../../copy/catalog.ts";
+import { copyEntry, human_copy_catalog } from "../../../copy/runtime.ts";
 import { humanApi, type HumanApiClient } from "../../api/index.ts";
-import {
-  AddressQrCode,
-  CopyableIdentifier,
-  InlineNotice,
-  KitButton,
-  LabelValue,
-  ScreenCard,
-  SettingsSection,
-  StatusPill,
-} from "../../kit/index.ts";
+import { AddressQrCode } from "../../kit/qr-code";
+import { CopyableIdentifier, LabelValue, StatusPill } from "../../kit/money";
+import { InlineNotice, ScreenCard } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { SettingsSection } from "../../kit/settings";
 import {
   JourneyTechnicalDetails,
   JourneyTimelineView,

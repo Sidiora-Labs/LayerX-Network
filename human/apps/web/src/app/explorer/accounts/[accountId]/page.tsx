@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../../../copy/catalog";
+import { copyEntry } from "../../../../../copy/runtime";
 import { accountActivityPage } from "../../../../explorer/client";
 import {
   ExplorerFrame,

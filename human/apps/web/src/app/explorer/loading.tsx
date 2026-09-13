@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../copy/catalog";
+import { copyEntry } from "../../../copy/runtime";
 import { PerformanceLoadingCard } from "../../kit/performance";
 
 export default function ExplorerLoading() {

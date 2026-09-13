@@ -10,7 +10,7 @@ import { cn } from "@layerx/ui/cn";
 import { type PlatformSetting } from "@layerx/ui/lib/platform";
 import { useId, useState, type ReactNode } from "react";
 
-import { copyEntry } from "../../copy/catalog.ts";
+import { copyEntry } from "../../copy/runtime.ts";
 import { formatExplicitCurrencyAmount, LiveRegion } from "./a11y";
 import {
   directionWord,

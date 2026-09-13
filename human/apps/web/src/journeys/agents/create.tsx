@@ -3,16 +3,12 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
-import {
-  DesktopWizard,
-  InlineNotice,
-  KitButton,
-  KitTextField,
-  MobileWizard,
-  ScreenCard,
-  StatusPill,
-} from "../../kit";
+import { copyEntry } from "../../../copy/runtime.ts";
+import { DesktopWizard, MobileWizard } from "../../kit/patterns";
+import { InlineNotice, ScreenCard } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { KitTextField } from "../../kit/display";
+import { StatusPill } from "../../kit/money";
 import { PrivateFigure } from "../../settings";
 import { StillCheckingSurface } from "../../states";
 import {

@@ -3,17 +3,12 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import { useActiveAccountId } from "../../auth/use-active-account.ts";
-import {
-  Badge,
-  InlineNotice,
-  KitButton,
-  KitList,
-  KitListItem,
-  ScreenCard,
-  StateEmpty,
-} from "../../kit";
+import { Badge } from "../../kit/collection";
+import { InlineNotice, ScreenCard, StateEmpty } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { KitList, KitListItem } from "../../kit/display";
 import {
   ErrorSurface,
   LoadingSurface,

@@ -1,6 +1,6 @@
 import { cookies, headers } from "next/headers";
 
-import { copyEntry } from "../../copy/catalog";
+import { copyEntry } from "../../copy/runtime";
 import { verifiedWebSession } from "../auth/server-session";
 import { Onboarding } from "../journeys/onboarding/onboarding";
 import { PlaneRouteAction } from "../kit/plane-route-action";

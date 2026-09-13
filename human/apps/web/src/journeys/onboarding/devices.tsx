@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog";
+import { copyEntry } from "../../../copy/runtime";
 import { formatCopy } from "../../../copy/format";
 import { humanApi, type Session } from "../../api";
-import { DeviceSessionList, ScreenCard, StateEmpty } from "../../kit";
+import { DeviceSessionList } from "../../kit/device-list";
+import { ScreenCard, StateEmpty } from "../../kit/surface";
 import { ErrorSurface, errorPresentation, LoadingSurface, OfflineSurface } from "../../states";
 
 type DeviceListState =

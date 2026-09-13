@@ -3,19 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import { humanApi } from "../../api/index.ts";
-import {
-  DesktopConfirmation,
-  DesktopPrimaryAction,
-  InlineNotice,
-  KitButton,
-  MobileConfirmation,
-  MobilePrimaryAction,
-  ScreenCard,
-  StateFrame,
-  StatusPill,
-} from "../../kit";
+import { DesktopConfirmation, MobileConfirmation } from "../../kit/confirm";
+import { DesktopPrimaryAction, MobilePrimaryAction } from "../../kit/patterns";
+import { InlineNotice, ScreenCard, StateFrame } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { StatusPill } from "../../kit/money";
 import { ErrorSurface, errorPresentation, LoadingSurface, StillCheckingSurface } from "../../states";
 import { presentedJourneyState, statusKeyForState } from "../custody/evidence.ts";
 import { browserWalletBridge, windowWalletProvider } from "../custody/handoff.ts";

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { copyEntry } from "../../copy/catalog";
+import { copyEntry } from "../../copy/runtime";
 import { formatCopy } from "../../copy/format";
 import { ExplorerFreshness as ExplorerFreshnessView, ExplorerNavigation } from "../kit/explorer";
 import { ScreenCard } from "../kit/surface";

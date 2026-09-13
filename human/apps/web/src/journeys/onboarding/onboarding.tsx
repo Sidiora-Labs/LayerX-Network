@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { copyEntry, human_copy_catalog } from "../../../copy/catalog";
+import { copyEntry, human_copy_catalog } from "../../../copy/runtime";
 import {
   HumanApiError,
   humanApi,
@@ -12,16 +12,11 @@ import {
   type Session,
 } from "../../api";
 import { ACTIVE_ACCOUNT_STORAGE_KEY } from "../../auth/session";
-import {
-  DesktopPrimaryAction,
-  InlineNotice,
-  KitButton,
-  MobilePrimaryAction,
-  ScreenCard,
-  StateSkeleton,
-  StatusPill,
-  TextField,
-} from "../../kit";
+import { DesktopPrimaryAction, MobilePrimaryAction } from "../../kit/patterns";
+import { InlineNotice, ScreenCard, StateSkeleton } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { StatusPill } from "../../kit/money";
+import { TextField } from "../../kit/field";
 import { ShellSelector, type PointerCapability, type ShellSelection } from "../../shell/selector";
 import { CeremonyCancelled, performAssertionCeremony, performRegistrationCeremony } from "./ceremony";
 import {

@@ -3,28 +3,15 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import { formatCopy } from "../../../copy/format.ts";
 import { humanApi, type Agent, type HumanApiClient, type Journey, type MoveQuote } from "../../api/index.ts";
-import {
-  CopyableIdentifier,
-  DesktopDetail,
-  DesktopWizard,
-  InlineNotice,
-  KitButton,
-  KitList,
-  KitListItem,
-  KitOptionList,
-  KitTextField,
-  LabelValue,
-  MobileDetail,
-  MobileWizard,
-  ScreenCard,
-  StateFrame,
-  StatusPill,
-  statusPresentation,
-  type WizardProps,
-} from "../../kit";
+import { CopyableIdentifier, LabelValue, StatusPill } from "../../kit/money";
+import { DesktopDetail, DesktopWizard, MobileDetail, MobileWizard, type WizardProps } from "../../kit/patterns";
+import { InlineNotice, ScreenCard, StateFrame } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { KitList, KitListItem, KitOptionList, KitTextField } from "../../kit/display";
+import { statusPresentation } from "../../kit/model";
 import { useShellSelection } from "../../shell/app-shell";
 import { PrivateFigure } from "../../settings/privacy";
 import { LoadingSurface, OfflineSurface, StillCheckingSurface } from "../../states/surfaces";

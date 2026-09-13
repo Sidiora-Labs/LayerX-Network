@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../../../copy/catalog";
+import { copyEntry } from "../../../../../copy/runtime";
 import { programRecord } from "../../../../explorer/client";
 import {
   ExplorerFrame,

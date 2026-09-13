@@ -9,17 +9,12 @@ import {
   type ReactNode,
 } from "react";
 
-import { copyEntry } from "../../copy/catalog.ts";
+import { copyEntry } from "../../copy/runtime.ts";
 import { formatCopy } from "../../copy/format.ts";
-import {
-  DesktopConfirmation,
-  DesktopDetail,
-  InlineNotice,
-  KitButton,
-  MobileConfirmation,
-  MobileDetail,
-  StateFrame,
-} from "../kit";
+import { DesktopConfirmation, MobileConfirmation } from "../kit/confirm";
+import { DesktopDetail, MobileDetail } from "../kit/patterns";
+import { InlineNotice, StateFrame } from "../kit/surface";
+import { KitButton } from "../kit/control";
 import {
   browserSupportReportOutbox,
   type ErrorReporter,

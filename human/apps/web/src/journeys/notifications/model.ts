@@ -1,11 +1,11 @@
-import { copyEntry, human_copy_catalog } from "../../../copy/catalog";
+import { copyEntry, human_copy_catalog } from "../../../copy/runtime";
 import { formatCopy } from "../../../copy/format";
 import { Fragment, createElement, type ReactNode } from "react";
 import type {
   NotificationPage,
   NotificationSummary,
 } from "../../api";
-import type { KitNotificationItem } from "../../kit";
+import type { KitNotificationItem } from "../../kit/patterns";
 import { PrivateFigure } from "../../settings/privacy";
 import { moneyLabel } from "../approvals/model";
 

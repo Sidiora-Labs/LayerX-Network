@@ -3,19 +3,15 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import type { Agent } from "../../api/index.ts";
 import { useActiveAccountId } from "../../auth/use-active-account.ts";
-import {
-  Badge,
-  CopyableIdentifier,
-  InlineNotice,
-  KitButton,
-  KitSectionHeader,
-  LabelValue,
-  ScreenCard,
-  StatPair,
-} from "../../kit";
+import { Badge } from "../../kit/collection";
+import { CopyableIdentifier, LabelValue } from "../../kit/money";
+import { InlineNotice, ScreenCard } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { KitSectionHeader } from "../../kit/display";
+import { StatPair } from "@layerx/ui/components/stat";
 import {
   ErrorSurface,
   LoadingSurface,
