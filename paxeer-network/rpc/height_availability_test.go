@@ -59,9 +59,7 @@ func (c *heightTestClient) BlockByHash(ctx context.Context, hash bytes.HexBytes)
 	if hash.String() == c.highHash.String() {
 		return c.highBlock, nil
 	}
-	return &coretypes.ResultBlock{
-		Block: &tmtypes.Block{Header: tmtypes.Header{Height: c.latest}},
-	}, nil
+	return nil, nil
 }
 
 func (c *heightTestClient) Block(ctx context.Context, height *int64) (*coretypes.ResultBlock, error) {

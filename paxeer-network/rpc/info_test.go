@@ -72,7 +72,8 @@ func TestCoinbase(t *testing.T) {
 }
 
 func TestGasPrice(t *testing.T) {
-	resObj := sendRequestGood(t, "gasPrice")
+	resObj := sendRequest(t, TestFeePort, "gasPrice")
+	require.Nil(t, resObj["error"], "gas price RPC refused: %v", resObj["error"])
 	Ctx = Ctx.WithBlockHeight(8)
 	result := resObj["result"].(string)
 	onePointOneGwei := "0x4190ab00"
@@ -106,13 +107,13 @@ func TestFeeHistory(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Mimic request sending and handle the response
-			resObj := sendRequestGood(t, "feeHistory", tc.blockCount, tc.lastBlock, tc.rewardPercentiles)
+			resObj := sendRequest(t, TestFeePort, "feeHistory", tc.blockCount, tc.lastBlock, tc.rewardPercentiles)
 			if tc.expectedError != nil {
 				errMap := resObj["error"].(map[string]interface{})
 				require.Equal(t, tc.expectedError.Error(), errMap["message"].(string))
 			} else {
 				_, errorExists := resObj["error"]
-				require.False(t, errorExists)
+				require.False(t, errorExists, "fee history RPC refused: %v", resObj["error"])
 
 				resObj = resObj["result"].(map[string]interface{})
 
@@ -291,7 +292,7 @@ func TestCalculatePercentilesEmptyBlockWithSinglePercentile(t *testing.T) {
 }
 
 func TestCalculateGasUsedRatio(t *testing.T) {
-	resObj := sendRequestGood(t, "feeHistory", 1, "latest", []interface{}{50.0})
+	resObj := sendRequest(t, TestFeePort, "feeHistory", 1, "latest", []interface{}{50.0})
 	result := resObj["result"].(map[string]interface{})
 
 	// Verify gas used ratio is calculated
@@ -357,7 +358,7 @@ func TestCalculateGasUsedRatioReceiptRetrievalError(t *testing.T) {
 
 func TestFeeHistoryGasUsedRatioCalculation(t *testing.T) {
 	// Test multiple blocks to ensure we can get different ratios
-	resObj := sendRequestGood(t, "feeHistory", 3, "latest", []interface{}{50.0})
+	resObj := sendRequest(t, TestFeePort, "feeHistory", 3, "latest", []interface{}{50.0})
 	result := resObj["result"].(map[string]interface{})
 
 	// Verify we have gas used ratio data
@@ -373,7 +374,7 @@ func TestFeeHistoryGasUsedRatioCalculation(t *testing.T) {
 	}
 
 	// Test edge case: single block
-	resObj2 := sendRequestGood(t, "feeHistory", 1, "latest", []interface{}{25.0})
+	resObj2 := sendRequest(t, TestFeePort, "feeHistory", 1, "latest", []interface{}{25.0})
 	result2 := resObj2["result"].(map[string]interface{})
 	gasUsedRatios2, ok := result2["gasUsedRatio"].([]interface{})
 	require.True(t, ok)
@@ -383,7 +384,7 @@ func TestFeeHistoryGasUsedRatioCalculation(t *testing.T) {
 // execution-apis eth_feeHistory: len(baseFeePerGas) == len(gasUsedRatio) + 1 (extra child base fee).
 func TestFeeHistoryBaseFeePerGasIncludesChild(t *testing.T) {
 	Ctx = Ctx.WithBlockHeight(1)
-	resObj := sendRequestGood(t, "feeHistory", 1, "latest", []interface{}{0.5})
+	resObj := sendRequest(t, TestFeePort, "feeHistory", 1, "latest", []interface{}{0.5})
 	result := resObj["result"].(map[string]interface{})
 	gasUsedRatios, ok := result["gasUsedRatio"].([]interface{})
 	require.True(t, ok)
