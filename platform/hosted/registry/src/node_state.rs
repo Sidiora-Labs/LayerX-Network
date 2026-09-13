@@ -470,6 +470,11 @@ impl NodeProgramStateSource {
     fn get_from(&self, endpoint: &str, authorization: &str, path: &str) -> Result<Value, String> {
         let (status, body) = self.fetch_from(endpoint, authorization, path)?;
         if !(200..300).contains(&status) {
+            if let Some(code) = body["error"].as_i64() {
+                return Err(format!(
+                    "node authority GET {path} returned HTTP {status} with protocol result {code}"
+                ));
+            }
             return Err(format!("node authority GET {path} returned HTTP {status}"));
         }
         Ok(body)
