@@ -668,7 +668,7 @@ impl KmsProvider for RemoteKmsProvider {
         reference: &ProviderKeyReference,
         payload: &[u8],
     ) -> Result<Vec<u8>, KmsError> {
-        if !(6..=12).contains(&operation) {
+        if !(6..=12).contains(&operation) && operation != 13 {
             return Err(KmsError::Refused);
         }
         let mut frame = encode_key_request(
@@ -677,7 +677,8 @@ impl KmsProvider for RemoteKmsProvider {
             binding,
             Some(reference),
         )?;
-        frame[4..6].copy_from_slice(&3_u16.to_be_bytes());
+        let version = if operation == 13 { 4_u16 } else { 3_u16 };
+        frame[4..6].copy_from_slice(&version.to_be_bytes());
         if operation >= 7 {
             let mut writer = WireWriter::from_bytes(frame);
             writer.bytes(payload, PROVIDER_FRAME_LIMIT)?;
@@ -685,7 +686,7 @@ impl KmsProvider for RemoteKmsProvider {
         } else if !payload.is_empty() {
             return Err(KmsError::Refused);
         }
-        self.call_version(operation, 3, &frame)
+        self.call_version(operation, version, &frame)
     }
 
     fn create_key(

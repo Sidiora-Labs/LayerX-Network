@@ -18,6 +18,8 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 mod native_setup;
 #[path = "provider/owner_rotation.rs"]
 mod owner_rotation;
+#[path = "provider/settlement_recipient.rs"]
+mod settlement_recipient;
 const MAX: usize = 2_097_152;
 struct Host {
     root: PathBuf,
