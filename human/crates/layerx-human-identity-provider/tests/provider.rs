@@ -704,12 +704,12 @@ fn provision_cli(root: &Path, policy_file: &Path, input: &[u8]) -> Result<std::p
             .stderr(std::process::Stdio::piped())
             .spawn()?,
     );
-    child
+    let input_result = child
         .0
         .stdin
         .take()
         .ok_or("stdin missing")?
-        .write_all(input)?;
+        .write_all(input);
     let mut stdout = Vec::new();
     child
         .0
@@ -724,8 +724,14 @@ fn provision_cli(root: &Path, policy_file: &Path, input: &[u8]) -> Result<std::p
         .take()
         .ok_or("stderr missing")?
         .read_to_end(&mut stderr)?;
+    let status = child.0.wait()?;
+    if let Err(error) = input_result {
+        if error.kind() != std::io::ErrorKind::BrokenPipe || status.success() {
+            return Err(error.into());
+        }
+    }
     Ok(std::process::Output {
-        status: child.0.wait()?,
+        status,
         stdout,
         stderr,
     })
