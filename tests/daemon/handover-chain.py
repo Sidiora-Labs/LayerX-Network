@@ -100,7 +100,11 @@ def main():
                     reads_executable = client_directory / 'native-handover-reads'
                     shutil.copyfile(read_consumer, reads_executable)
                     reads_executable.chmod(0o755)
+                    clock_executable = client_directory / 'runtime-clock'
+                    shutil.copyfile(os.environ['LAYERX_TEST_HANDOVER_CLOCK_BIN'], clock_executable)
+                    clock_executable.chmod(0o755)
                     invoke(['setpriv', '--reuid=4021', '--regid=4021', '--clear-groups',
+                            clock_executable, '--runtime-dir', client_directory, '--',
                             reads_executable, os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'],
                             client_directory, count], os.environ,
                            output / 'public-history-reads.log')

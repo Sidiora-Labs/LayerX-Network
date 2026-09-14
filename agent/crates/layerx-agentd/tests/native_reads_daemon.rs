@@ -18,9 +18,6 @@ use layerx_programs::hex;
 use layerx_proof::availability::RootCommitments;
 use layerx_types::ids::Did;
 
-#[path = "../../../tests/support/monotonic_clock.rs"]
-mod monotonic_clock;
-
 fn connect(socket: &Path) -> Client {
     Client::connect(ClientConfig {
         endpoint: socket.to_path_buf(),
@@ -116,7 +113,8 @@ fn probe(socket: &Path, stage: &str, work: &Path) {
         client,
         did,
         "test-native-read-cursor-key-32-bytes".to_owned(),
-        monotonic_clock::monotonic_time,
+        layerx_client::runtime_clock::RuntimeClock::from_environment()
+            .unwrap_or_else(|error| panic!("native read clock: {error}")),
     )
     .unwrap_or_else(|error| panic!("native route: {error:?}"));
     if stage != "finalized" {
@@ -264,11 +262,17 @@ fn real_daemon_availability_refusals() {
         .map_or_else(|| repository.join("build/bin"), PathBuf::from);
     assert!(binaries.join("layerxd").is_file());
     assert!(binaries.join("layerx-genesis-build").is_file());
+    let clock = PathBuf::from(
+        std::env::var_os("LAYERX_TEST_RUNTIME_CLOCK_BIN")
+            .unwrap_or_else(|| panic!("actual runtime clock binary is required")),
+    );
+    assert!(clock.is_file());
     let status = Command::new("bash")
         .arg(repository.join("tests/daemon/program-admission.sh"))
         .args(["build", "--availability-batches"])
         .arg(std::env::current_exe().unwrap_or_else(|error| panic!("test executable: {error}")))
         .env("LAYERX_TEST_NATIVE_BIN_DIR", binaries)
+        .env("LAYERX_TEST_RUNTIME_CLOCK_BIN", clock)
         .env("CARGO_BUILD_JOBS", "6")
         .env("MAKEFLAGS", "-j6")
         .current_dir(&repository)

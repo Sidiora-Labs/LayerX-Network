@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
+
+use layerx_types::clock::{Clock, Deadline};
 
 use layerx_client::availability::{
     AvailabilitySelector, FetchContext, FetchOutcome, RetrievalLimits,
@@ -43,8 +46,8 @@ pub struct NativeReadRoute {
     actor: Did,
     cursor_key: Zeroizing<String>,
     correlation: u64,
-    deadline: Instant,
-    clock: fn() -> Instant,
+    deadline: Deadline,
+    clock: Arc<dyn Clock>,
 }
 
 impl NativeReadRoute {
@@ -54,7 +57,7 @@ impl NativeReadRoute {
         client: Client,
         actor: Did,
         cursor_key: String,
-        clock: fn() -> Instant,
+        clock: Arc<dyn Clock>,
     ) -> Result<Self, NativeReadError> {
         if actor.as_bytes().is_empty() || cursor_key.len() < 32 {
             return Err(NativeReadError::InvalidRequest);
@@ -66,7 +69,8 @@ impl NativeReadRoute {
             actor,
             cursor_key: Zeroizing::new(cursor_key),
             correlation: 10_000,
-            deadline: clock(),
+            deadline: Deadline::start(clock.as_ref(), Duration::from_secs(10))
+                .map_err(|_| NativeReadError::Unavailable)?,
             clock,
         })
     }
@@ -130,9 +134,8 @@ impl NativeReadRoute {
             )
             .map_err(|_| NativeReadError::Verification)?,
         );
-        self.deadline = (self.clock)()
-            .checked_add(Duration::from_secs(10))
-            .ok_or(NativeReadError::Unavailable)?;
+        self.deadline = Deadline::start(self.clock.as_ref(), Duration::from_secs(10))
+            .map_err(|_| NativeReadError::Unavailable)?;
         self.refresh_history()?;
         Ok(self)
     }
@@ -158,7 +161,7 @@ impl NativeReadRoute {
             self.client
                 .reconnect()
                 .map_err(|_| NativeReadError::Unavailable)?;
-            let remaining = self.deadline.saturating_duration_since((self.clock)());
+            let remaining = self.remaining()?;
             self.client
                 .advance_sequencer_history_with_finality(
                     self.sequencer_history
@@ -209,10 +212,19 @@ impl NativeReadRoute {
         result.map_err(|_| NativeReadError::Verification)
     }
 
-    fn next_id(&mut self) -> Result<u64, NativeReadError> {
-        if (self.clock)() >= self.deadline {
+    fn remaining(&mut self) -> Result<Duration, NativeReadError> {
+        let remaining = self
+            .deadline
+            .remaining(self.clock.as_ref())
+            .map_err(|_| NativeReadError::Unavailable)?;
+        if remaining.is_zero() {
             return Err(NativeReadError::Unavailable);
         }
+        Ok(remaining)
+    }
+
+    fn next_id(&mut self) -> Result<u64, NativeReadError> {
+        self.remaining()?;
         self.correlation = self
             .correlation
             .checked_add(1)
@@ -229,9 +241,8 @@ impl NativeReadRoute {
         let (kind, selector) = path
             .split_once('/')
             .ok_or(NativeReadError::InvalidRequest)?;
-        self.deadline = (self.clock)()
-            .checked_add(Duration::from_secs(10))
-            .ok_or(NativeReadError::Unavailable)?;
+        self.deadline = Deadline::start(self.clock.as_ref(), Duration::from_secs(10))
+            .map_err(|_| NativeReadError::Unavailable)?;
         self.client
             .reconnect()
             .map_err(|_| NativeReadError::Unavailable)?;
@@ -330,7 +341,7 @@ impl NativeReadRoute {
             limits: RetrievalLimits {
                 maximum_bytes: MAX_AVAILABILITY_BYTES,
                 maximum_chunks: 256,
-                deadline: Duration::from_secs(10),
+                deadline: self.remaining()?,
             },
         };
         let mut chunks = Vec::new();

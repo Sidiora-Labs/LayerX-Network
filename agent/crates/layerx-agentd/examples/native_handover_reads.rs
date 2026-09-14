@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 use layerx_agentd::read::NativeReadRoute;
@@ -227,7 +227,7 @@ fn verify_route(
         checked(Client::connect(config.clone()))?,
         actor.clone(),
         "native-handover-history-cursor-bound".to_owned(),
-        Instant::now,
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
     ))?;
     route = checked(route.with_protected_finality(&finality))?;
     route = checked(route.with_protected_genesis(artifact))?;
@@ -238,7 +238,7 @@ fn verify_route(
         checked(Client::connect(config.clone()))?,
         actor.clone(),
         "native-handover-history-cursor-bound".to_owned(),
-        Instant::now,
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
     ))?;
     let invalid = checked(invalid.with_protected_finality(&finality))?;
     assert!(invalid.with_protected_genesis(&invalid_path).is_err());
@@ -250,7 +250,7 @@ fn verify_route(
         checked(Client::connect(config.clone()))?,
         actor.clone(),
         "native-handover-history-cursor-bound".to_owned(),
-        Instant::now,
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
     ))?;
     let invalid = checked(invalid.with_protected_finality(&finality))?;
     assert!(invalid.with_protected_genesis(&invalid_path).is_err());
@@ -310,7 +310,7 @@ fn verify_route(
         checked(Client::connect(config))?,
         actor,
         "native-handover-history-cursor-bound".to_owned(),
-        Instant::now,
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
     ))?;
     let reopened = checked(reopened.with_protected_finality(&finality))?;
     checked(reopened.with_protected_genesis(artifact))?;

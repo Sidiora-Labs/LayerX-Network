@@ -8,7 +8,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use layerx_agentd::audit::Redacted;
 use layerx_agentd::budget::{LimitConfig, LimitId, LimitScope};
@@ -788,7 +788,8 @@ fn serve(config: Config) -> Result<(), String> {
                 client,
                 boot.enrolment.did.clone(),
                 config.bearer.clone(),
-                Instant::now,
+                layerx_client::runtime_clock::RuntimeClock::from_environment()
+                    .map_err(|error| format!("native read clock unavailable: {error}"))?,
             )
             .map_err(|error| format!("native read route is invalid: {error:?}"))?;
             match handover_sources.as_ref() {
