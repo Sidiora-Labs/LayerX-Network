@@ -5,7 +5,7 @@ use layerx_types::account::AccountId;
 use layerx_types::ids::AssetId;
 use layerx_types::intent::EvmAddress;
 
-pub(super) fn configure_genesis(request: Vec<u8>) -> Vec<u8> {
+pub(super) fn configure_genesis(request: &[u8]) -> Vec<u8> {
     assert_eq!(&request[..7], b"LXGB\x02\0\x03");
     assert_eq!(&request[19..21], &1_u16.to_be_bytes());
     let modules =
@@ -138,7 +138,7 @@ fn signed(cluster: &Cluster, sequence: u64) -> (Vec<u8>, [u8; 32]) {
             idempotency_key: idempotency,
             fee_limit: 17,
             not_before: now - 1000,
-            not_after: now + 120000,
+            not_after: now + 120_000,
         },
     )
     .required("withdrawal envelope");

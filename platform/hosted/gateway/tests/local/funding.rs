@@ -619,7 +619,7 @@ fn funded_genesis(
     request[schedule + 167..schedule + 183].copy_from_slice(&4_u128.to_be_bytes());
     request[schedule + 183..schedule + 199].copy_from_slice(&4_u128.to_be_bytes());
     if withdrawal {
-        request = super::withdrawal::configure_genesis(request);
+        request = super::withdrawal::configure_genesis(&request);
     }
     write(&directory.join("request.lxgb"), &request, 0o600);
     write(&directory.join("signer.key"), sequencer_seed, 0o600);
