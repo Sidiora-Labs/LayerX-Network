@@ -847,6 +847,24 @@ static int native_source_dispatch_path(void)
     CHECK(env_init() == 0);
     CHECK(sign_raw(owner_seed, NULL, 0U, signature, public_key) == 0);
     env.state.next_sequence = 1U;
+    env.asset.symbol_length = 3U;
+    (void)memcpy(env.asset.symbol, "TST", 4U);
+    env.asset.name_length = 5U;
+    (void)memcpy(env.asset.name, "Asset", 5U);
+    env.asset.issuer_kind = 2U; env.asset.issuer_did32[0] = 1U;
+    env.asset.custody_kind = LX_ASSET_CUSTODY_PAXEER;
+    env.asset.custody_reference[0] = 1U; env.asset.custody_reference_length = 1U;
+    env.asset.total_units.lo = 1000U;
+    uint8_t asset_bytes[512], asset_arena_bytes[4096];
+    lxp_arena asset_arena;
+    lxp_module_ctx asset_ctx;
+    CHECK(lx_asset_record_encode(&env.asset, asset_bytes, sizeof(asset_bytes), &length) == LXP_OK);
+    CHECK(lxp_state_journal_open(&env.state, 1U, &env.journal) == LXP_OK);
+    CHECK(lxp_arena_init(&asset_arena, asset_arena_bytes, sizeof(asset_arena_bytes)) == LXP_OK);
+    CHECK(lxp_module_ctx_init(&asset_ctx, &env.kernel, LXP_MODULE_ASSET, 0U, 0U, 1U, 100000U, &asset_arena, true) == LXP_OK);
+    CHECK(lxp_ctx_kv_put(&asset_ctx, env.asset.asset_id, 32U, asset_bytes, length) == LXP_OK);
+    CHECK(lxp_module_ctx_commit(&asset_ctx) == LXP_OK && lxp_state_journal_commit(&env.journal) == LXP_OK);
+    env.global_sequence = 1U;
     for (size_t i = 0U; i < 32U; ++i) {
         asset_hex[2U * i] = digits[env.asset.asset_id[i] >> 4U];
         asset_hex[2U * i + 1U] = digits[env.asset.asset_id[i] & 15U];
