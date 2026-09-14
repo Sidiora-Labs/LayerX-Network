@@ -220,7 +220,7 @@ def drive(work, env, url):
             authority_public = p.hx(Ed25519PrivateKey.from_private_bytes(bytes([0x77]) * 32).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
             first_fields = [url, chain_config['registry'], chain_config['vault'], first['checkpoint_id'], p.hx(b1['account']), p.hx(b1['asset']), p.hx(bytes([0x31]) * 20), p.hx(d1['identity']), p.hx(d1['payer']), str(d1['nonce']), str(int.from_bytes(d1['amount'], 'big')), str(int.from_bytes(b1['amount'], 'big')), authority_public]
             with (work / 'rust-deposit-balance-fetch.log').open('w') as output:
-                subprocess.run([str(rust_target / 'debug/examples/native_publication_fetch'), '--deposit-balance-only', *first_fields], cwd=ROOT, stdout=output, stderr=output, check=True, timeout=120)
+                subprocess.run([str(rust_target / 'debug/examples/native_publication_fetch'), '--chain-id', str(chain_config['chain_id']), '--deposit-balance-only', *first_fields], cwd=ROOT, stdout=output, stderr=output, check=True, timeout=120)
             before = int(rpc.call('eth_getTransactionCount', [submitter.address, 'latest']), 16)
             duplicate_first = publish(first, work, 'publication-1-retry')
             assert duplicate_first['already_registered'] and duplicate_first['publication']['version'] == 2
@@ -246,7 +246,7 @@ def drive(work, env, url):
             withdrawal_account = p.sha(b'LX:ACCOUNT:v1' + len(namespace).to_bytes(4, 'big') + namespace)
             fields = [url, chain_config['registry'], chain_config['vault'], second['checkpoint_id'], p.hx(b['account']), p.hx(b['asset']), p.hx(w['recipient']), p.hx(w['identity']), p.hx(withdrawal_account), p.hx(d['identity']), p.hx(d['payer']), str(d['nonce']), str(int.from_bytes(d['amount'], 'big')), str(int.from_bytes(w['amount'], 'big')), str(int.from_bytes(b['amount'], 'big')), first['checkpoint_id'], p.hx(Ed25519PrivateKey.from_private_bytes(bytes([0x77]) * 32).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))]
             with (work / 'rust-native-fetch.log').open('w') as output:
-                subprocess.run([str(rust_target / 'debug/examples/native_publication_fetch'), *fields], cwd=ROOT, stdout=output, stderr=output, check=True, timeout=120)
+                subprocess.run([str(rust_target / 'debug/examples/native_publication_fetch'), '--chain-id', str(chain_config['chain_id']), *fields], cwd=ROOT, stdout=output, stderr=output, check=True, timeout=120)
             print('real custody CREDIT and WITHDRAW independently replayed; owner and separate deposit authority signatures published; all three Rust native v2 fetch consumers passed; retry sent no transactions', flush=True)
         finally:
             if process.poll() is None:

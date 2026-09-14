@@ -135,21 +135,47 @@ pub(crate) fn publication(
             return Err(invalid());
         }
         let rpc = |method, params: &[Json]| raw_call(endpoint, method, params).map_err(|e| e.fault);
-        let logs = rpc(
-            "eth_getLogs",
-            &[Json::Object(vec![
-                ("address".into(), Json::Text(hex(&contract.bytes()))),
-                ("fromBlock".into(), Json::Text("0x0".into())),
-                ("toBlock".into(), Json::Text("latest".into())),
-                (
-                    "topics".into(),
-                    Json::Array(vec![Json::Text(hex(&topic)), Json::Text(hex(&checkpoint))]),
-                ),
-            ])],
+        let first = rpc(
+            "eth_getBlockByNumber",
+            &[Json::Text("earliest".into()), Json::Bool(false)],
         )?;
-        let Json::Array(logs) = logs else {
+        let mut begin = quantity(required(&first, "number")?)?;
+        let end = quantity(&rpc("eth_blockNumber", &[])?)?;
+        if begin > end || fixed::<32>(required(&first, "hash")?)? == [0; 32] {
             return Err(invalid());
-        };
+        }
+        let mut logs = Vec::new();
+        loop {
+            let last = begin.saturating_add(255).min(end);
+            let batch = rpc(
+                "eth_getLogs",
+                &[Json::Object(vec![
+                    ("address".into(), Json::Text(hex(&contract.bytes()))),
+                    ("fromBlock".into(), Json::Text(format!("0x{begin:x}"))),
+                    ("toBlock".into(), Json::Text(format!("0x{last:x}"))),
+                    (
+                        "topics".into(),
+                        Json::Array(vec![Json::Text(hex(&topic)), Json::Text(hex(&checkpoint))]),
+                    ),
+                ])],
+            )?;
+            let Json::Array(batch) = batch else {
+                return Err(invalid());
+            };
+            if batch.len() > 1 || logs.len() + batch.len() > 1 {
+                return Err(invalid());
+            }
+            for log in batch {
+                if !(begin..=last).contains(&quantity(required(&log, "blockNumber")?)?) {
+                    return Err(invalid());
+                }
+                logs.push(log);
+            }
+            if last == end {
+                break;
+            }
+            begin = last.checked_add(1).ok_or_else(invalid)?;
+        }
         if logs.len() != 1 {
             return Err(invalid());
         }

@@ -1543,6 +1543,11 @@ fn real_published_checkpoint_withdrawal_and_balance_witnesses() {
         CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 2)
             .unwrap_or_else(|e| panic!("published withdrawal: {e:?}"));
     assert_eq!(fetched, proof);
+    anvil.call("anvil_mine", &[Json::Text("0x201".into())]);
+    let historical =
+        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 2)
+            .unwrap_or_else(|e| panic!("historical published withdrawal: {e:?}"));
+    assert_eq!(historical, proof);
     let boundary = WithdrawalBoundary::new_for_protocol(
         WithdrawalConfig {
             endpoints: vec![anvil.endpoint.clone()],

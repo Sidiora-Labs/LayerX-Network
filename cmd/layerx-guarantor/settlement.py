@@ -80,8 +80,15 @@ class RPC:
         require(self.url.scheme in ('http', 'https') and self.url.hostname and not self.url.username and not self.url.password, 'invalid RPC URL')
         require(self.url.scheme == 'https' or self.url.hostname == '127.0.0.1', 'plain RPC must use local relay')
         self.counter = 0
+        self.timings = {}
+
+    def report_timing(self, stage, started):
+        if os.environ.get('LAYERX_GUARANTOR_TIMING') == '1':
+            metrics = ','.join(f'{name}:{count}:{elapsed:.3f}' for name, (count, elapsed) in sorted(self.timings.items()))
+            print(f'settlement timing stage={stage} seconds={time.monotonic() - started:.3f} rpc={metrics}', file=sys.stderr, flush=True)
 
     def call(self, method, params):
+        started = time.monotonic()
         self.counter += 1
         cls = http.client.HTTPSConnection if self.url.scheme == 'https' else http.client.HTTPConnection
         conn = cls(self.url.hostname, self.url.port, timeout=30)
@@ -106,6 +113,8 @@ class RPC:
             return result['result']
         finally:
             conn.close()
+            count, elapsed = self.timings.get(method, (0, 0.0))
+            self.timings[method] = count + 1, elapsed + time.monotonic() - started
 
     def view(self, address, signature, inputs=(), args=(), outputs=('uint256',), block='latest'):
         return decode(outputs, raw(self.call('eth_call', [{'to': address, 'data': calldata(signature, inputs, args)}, block])))
@@ -335,20 +344,30 @@ def configuration(request):
 def main():
     require(len(sys.argv) == 4 and sys.argv[1] in ('membership', 'register', 'config', 'deposit'), 'usage: settlement.py config|membership|register|deposit INPUT.json OUTPUT.json')
     request = json.loads(Path(sys.argv[2]).read_text())
+    started = time.monotonic()
     if sys.argv[1] == 'config':
         result = configuration(request)
     elif sys.argv[1] == 'membership':
-        result = membership(RPC(request['rpc_url']), request)
+        rpc = RPC(request['rpc_url'])
+        result = membership(rpc, request)
+        rpc.report_timing('membership', started)
     elif sys.argv[1] == 'deposit':
         result = deposit(RPC(request['rpc_url']), request)
     else:
         lock_path = request.get('submitter_lock_file', request['submitter_key_file'] + '.lock')
         lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o660)
         with os.fdopen(lock_fd, 'r+') as lock:
+            rpc = RPC(request['rpc_url'])
             fcntl.flock(lock, fcntl.LOCK_EX)
-            result = register_with_race_recovery(RPC(request['rpc_url']), request)
+            rpc.report_timing('submitter-lock', started)
+            started = time.monotonic()
+            result = register_with_race_recovery(rpc, request)
+            rpc.report_timing('register', started)
             if 'native_facts' in request:
-                result['publication'] = publish_native(RPC(request['rpc_url']), request)
+                rpc = RPC(request['rpc_url'])
+                started = time.monotonic()
+                result['publication'] = publish_native(rpc, request)
+                rpc.report_timing('publication', started)
     if 'wire_output' in request:
         descriptor = os.open(request['wire_output'], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, 'wb') as wire:
