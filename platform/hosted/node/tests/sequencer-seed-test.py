@@ -12,6 +12,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[4]
 NODE_DIR = ROOT / 'platform/hosted/node'
 BIN = Path(os.environ.get('LAYERX_TEST_NATIVE_BIN_DIR', ROOT / 'build/bin'))
+SETTLEMENT = Path(os.environ.get('LAYERX_TEST_SETTLEMENT_ENV',
+                               NODE_DIR / 'tests/fixtures/settlement-configuration.txt'))
 sys.path.insert(0, str(ROOT / 'tests/support'))
 from lxgb_metadata import metadata
 
@@ -66,6 +68,12 @@ class SequencerSeedTest(unittest.TestCase):
             metadata(ASSET, public_key_of(self.treasury_seed), os.urandom(32)))
         self.data = self.work / 'data'
         self.run_dir = self.work / 'run'
+        # Public configuration retained from a real disposable custody run.
+        # These genesis-key tests do not query RPC or assert chain finality.
+        settlement = subprocess.run(
+            ['bash', str(NODE_DIR / 'bootstrap.sh'), '--check-settlement', str(SETTLEMENT)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
+        (self.work / 'settlement.env').write_bytes(settlement)
 
     def settlement_document(self):
         path = ROOT / 'contracts/config/checkpoint-settlement.json'
@@ -74,7 +82,9 @@ class SequencerSeedTest(unittest.TestCase):
         return path
 
     def clean_environment(self):
-        return {key: value for key, value in os.environ.items() if not key.startswith('LAYERX_')}
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('LAYERX_')}
+        environment['PATH'] = str(BIN) + os.pathsep + environment.get('PATH', '')
+        return environment
 
     def bootstrap_arguments(self, sequencer_key):
         return [
@@ -270,6 +280,7 @@ class SequencerSeedTest(unittest.TestCase):
         finally:
             process.terminate()
             process.wait(timeout=60)
+            process.stderr.close()
 
 
 if __name__ == '__main__':
