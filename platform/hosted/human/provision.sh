@@ -178,7 +178,7 @@ for suffix in ('.admission', '.deployment'):
 PYPAIR
 )
 
-human_native_owner_provision() (
+human_native_owner_prepare() (
     set -euo pipefail
     umask 077
     local input="$WORK_DIR/human-evidence-input" status
@@ -214,15 +214,17 @@ PYHEAD
         *) fail 'LAYERX_BETA_OWNER_CUSTODY must be kms or operator' ;;
     esac
     human_custody_step deposit
-    human_native_provision
-    python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
 )
 
 human_evidence_provision() (
     set -euo pipefail
     umask 077
     local provision="$REPO_ROOT/platform/hosted/human/provision.py"
+    human_native_owner_prepare
+    human_native_provision
     python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
+    registry_deployment_produce
+    human_journal_deploy
     python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
         --registry "$SECRETS_DIR/module-registry.json" --journal "$LAYERX_REGISTRY_JOURNAL"
     python3 "$provision" --assemble --work-dir "$WORK_DIR" \

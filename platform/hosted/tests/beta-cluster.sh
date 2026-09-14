@@ -2040,9 +2040,6 @@ beta_cluster_up() {
         done
         apply_configmap "$TESTNET_NAMESPACE" layerx-human-guardian-bindings \
             --from-file=bindings.json="$WORK_DIR/human-evidence-input/recovery-guardian-bindings.json"
-        human_native_owner_provision
-        registry_deployment_produce
-        human_journal_deploy
         human_evidence_provision
         human_policy_publish
     fi

@@ -18,6 +18,8 @@ use std::time::Duration;
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 #[path = "provider/native_setup.rs"]
 mod native_setup;
+#[path = "provider/owner_bootstrap.rs"]
+mod owner_bootstrap;
 #[path = "provider/owner_rotation.rs"]
 mod owner_rotation;
 #[path = "provider/settlement_recipient.rs"]
