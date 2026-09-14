@@ -312,6 +312,74 @@ fn verify_route(
     Ok(())
 }
 
+struct HistoryFacts {
+    activities: Vec<[u8; 32]>,
+    budget_id: [u8; 32],
+}
+
+fn history_facts(
+    client: &mut Client,
+    history: &SequencerHistory,
+    registry: &layerx_types::payload::ModuleRegistry,
+    count: u64,
+) -> Result<HistoryFacts> {
+    let head = history.verified_head().ok_or("verified head")?.header();
+    assert_eq!(head.batch_number(), count);
+    assert_eq!(head.epoch(), 2);
+    checked(client.reconnect())?;
+    let page = checked(client.history_with_history(
+        HistoryRange {
+            start_sequence: 1,
+            end_sequence: head.last_sequence(),
+            page_bound: 256,
+            cursor: None,
+        },
+        VerificationLevel::BATCH_INCLUDED,
+        500,
+        history,
+    ))?;
+    assert!(page.cursor.is_none());
+    assert_eq!(u64::try_from(page.items.len())?, head.last_sequence());
+    let mut activities = Vec::new();
+    let mut maintenance = 0;
+    let mut budget_id = None;
+    for item in page.items {
+        match item.kind {
+            HistoryKind::Activity => {
+                let activity = checked(layerx_wire::activity::decode_signed(
+                    item.canonical_bytes(),
+                    registry,
+                ))?;
+                if activity.activity_type().value() == 0x0003_0001 {
+                    assert!(budget_id.is_none());
+                    budget_id = Some(
+                        activity
+                            .payload()
+                            .get(2..34)
+                            .ok_or("budget creation ID")?
+                            .try_into()
+                            .map_err(|_| "budget ID width")?,
+                    );
+                }
+                activities.push(checked(layerx_wire::hash::activity_id(&activity))?);
+            }
+            HistoryKind::Receipt => {
+                let receipt = checked(layerx_wire::batch_maintenance::decode_maintenance(
+                    item.canonical_bytes(),
+                ))?;
+                assert_eq!(receipt.occupancy().global_sequence, item.global_sequence);
+                maintenance += 1;
+            }
+            HistoryKind::Event => return Err("unexpected event history".into()),
+        }
+    }
+    assert_eq!(maintenance, count);
+    Ok(HistoryFacts {
+        activities,
+        budget_id: budget_id.ok_or("executed budget creation")?,
+    })
+}
+
 fn main() -> Result<()> {
     let arguments: Vec<String> = std::env::args().collect();
     if arguments.len() != 4 {
@@ -347,57 +415,7 @@ fn main() -> Result<()> {
             stale = Some(history.clone());
         }
     }
-    let head = history.verified_head().ok_or("verified head")?.header();
-    assert_eq!(head.batch_number(), count);
-    assert_eq!(head.epoch(), 2);
-    checked(client.reconnect())?;
-    let page = checked(client.history_with_history(
-        HistoryRange {
-            start_sequence: 1,
-            end_sequence: head.last_sequence(),
-            page_bound: 256,
-            cursor: None,
-        },
-        VerificationLevel::BATCH_INCLUDED,
-        500,
-        &history,
-    ))?;
-    assert!(page.cursor.is_none());
-    assert_eq!(u64::try_from(page.items.len())?, head.last_sequence());
-    let mut activities = Vec::new();
-    let mut maintenance = 0;
-    let mut budget_id = None;
-    for item in page.items {
-        match item.kind {
-            HistoryKind::Activity => {
-                let activity = checked(layerx_wire::activity::decode_signed(
-                    item.canonical_bytes(),
-                    &genesis.registry,
-                ))?;
-                if activity.activity_type().value() == 0x0003_0001 {
-                    assert!(budget_id.is_none());
-                    budget_id = Some(
-                        activity
-                            .payload()
-                            .get(2..34)
-                            .ok_or("budget creation ID")?
-                            .try_into()
-                            .map_err(|_| "budget ID width")?,
-                    );
-                }
-                activities.push(checked(layerx_wire::hash::activity_id(&activity))?);
-            }
-            HistoryKind::Receipt => {
-                let receipt = checked(layerx_wire::batch_maintenance::decode_maintenance(
-                    item.canonical_bytes(),
-                ))?;
-                assert_eq!(receipt.occupancy().global_sequence, item.global_sequence);
-                maintenance += 1;
-            }
-            HistoryKind::Event => return Err("unexpected event history".into()),
-        }
-    }
-    assert_eq!(maintenance, count);
+    let facts = history_facts(&mut client, &history, &genesis.registry, count)?;
     let public = SigningKey::from_bytes(&[0x11; 32])
         .verifying_key()
         .to_bytes();
@@ -419,9 +437,16 @@ fn main() -> Result<()> {
         &history,
         stale.as_ref().ok_or("initial history")?,
         account,
-        budget_id.ok_or("executed budget creation")?,
+        facts.budget_id,
     )?;
-    verify_route(config, actor, &artifact, account, &history, &activities)?;
+    verify_route(
+        config,
+        actor,
+        &artifact,
+        account,
+        &history,
+        &facts.activities,
+    )?;
     println!("real native history, Agent reads and SDK account evidence verified across replacement and restart; stale and substituted evidence refused");
     Ok(())
 }
