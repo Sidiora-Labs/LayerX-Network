@@ -87,7 +87,7 @@ func BlocktestCmd(defaultNodeHome string) *cobra.Command {
 				baseapp.SetInterBlockCache(cache),
 			)
 			bt := testIngester(blockTestFileName, testName)
-			app.BlockTest(a, bt)
+			app.BlockTest(a, bt, home)
 			return nil
 		},
 	}

@@ -791,7 +791,7 @@ func TestNewInnerCurrentViewPrepareQCInvalidSignatureError(t *testing.T) {
 	// Create prepareQC at current view (6, 0) but signed by keys NOT in committee
 	otherKeys := make([]types.SecretKey, 3)
 	for i := range otherKeys {
-		otherKeys[i] = types.GenSecretKey(rng)
+		otherKeys[i] = types.GenSecretKey(rng).ForCommittee(committee)
 	}
 	currentProposal := types.GenProposalForAt(rng, committee, types.View{Index: 6, Number: 0})
 	prepareQC := makePrepareQC(otherKeys, currentProposal)
