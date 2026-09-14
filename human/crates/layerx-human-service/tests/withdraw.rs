@@ -1,5 +1,8 @@
 use layerx_human_test_support as support;
 
+#[path = "support/withdraw_native.rs"]
+mod withdraw_native;
+
 mod paxeer_real {
     include!("../../layerx-paxeer-client/tests/withdraw.rs");
 
@@ -20,13 +23,19 @@ mod paxeer_real {
         pub(super) fn new(expectation: DebitExpectation) -> Self {
             let anvil = Anvil::launch();
             let (token, vault, bond, checkpoint_registry, challenge_manager, claims) =
-                deploy_suite_for_protocol(&anvil, PROTOCOL_VERSION);
+                deploy_suite_for_asset_network(
+                    &anvil,
+                    PROTOCOL_VERSION,
+                    expectation.asset_id,
+                    expectation.network_id,
+                );
             let leaf = withdrawal_leaf(expectation);
             let timestamp_ms = anvil
                 .latest_timestamp()
                 .checked_mul(1_000)
                 .unwrap_or_else(|| panic!("latest block timestamp exceeds canonical milliseconds"));
-            let header = checkpoint_header(leaf, timestamp_ms);
+            let mut header = checkpoint_header(leaf, timestamp_ms);
+            header.network_id = expectation.network_id;
             let checkpoint_hash = checkpoint_hash(&header);
             let attestation = signed_attestation(&header, checkpoint_hash, bond);
             anvil.send_checked(
@@ -131,7 +140,7 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
-use ed25519_dalek::{Signer as _, SigningKey};
+use ed25519_dalek::SigningKey;
 use layerx_agent_api::idempotency::IdempotentMutation;
 use layerx_agent_api::identity::{AgentDid, AuthorityRef};
 use layerx_agent_api::prepare::{PreparationRef, PrepareRequest as ApiPrepareRequest};
@@ -143,8 +152,8 @@ use layerx_agent_api::track::{
 use layerx_agent_api::verify::Level;
 use layerx_agentd::outbox::{Outbox, OutboxError, SubmissionState as OutboxState};
 use layerx_agentd::prepare::{
-    prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
-    PreparationDefaults, PrepareRequest, Prepared,
+    prepare_activity, PreparationDefaults, PrepareRequest, Prepared,
+    ProductionCorePreparationBoundary,
 };
 use layerx_agentd::receipt::{self as daemon_receipt, ReceiptLookupKey as DaemonReceiptKey};
 use layerx_agentd::sign::{attach_external_signature, verify_before_submit};
@@ -163,10 +172,9 @@ use layerx_human_service::notify::JourneyId;
 use layerx_human_service::store::{PrincipalId, PrincipalStore, TenancyDigest};
 use layerx_human_service::trace::TraceId;
 use layerx_paxeer_client::{
-    account_address, CancelledFundsDisposition, ChallengeKind, CheckpointProof, DebitExpectation,
+    CancelledFundsDisposition, ChallengeKind, CheckpointProof, DebitExpectation,
     PaxeerFundsDisposition, ProtocolDebitDisposition, TransactionHash,
 };
-use layerx_proof::receipt::AuthorizedBatch;
 use layerx_sdk::{Call, Client as AgentClient};
 use layerx_types::account::AccountId;
 use layerx_types::activity::{Authority, TimestampBound};
@@ -179,11 +187,10 @@ use sha2::{Digest as _, Sha256};
 use paxeer_real::JourneyChain;
 use support::{directory, principal, retention_uniform, tenancy};
 
-const NETWORK_ID: u32 = 17;
-const ACCOUNT_SEQUENCE: u64 = 7;
+const NETWORK_ID: u32 = 77;
 const ASSET: [u8; 32] = [
-    0x70, 0xf5, 0xb6, 0x3a, 0x98, 0x55, 0xdd, 0x2b, 0xe2, 0xba, 0x94, 0x1c, 0x04, 0xa3, 0x3a, 0x1f,
-    0x0e, 0xeb, 0x97, 0x50, 0xcc, 0xeb, 0x32, 0x4c, 0x22, 0x37, 0x64, 0xf0, 0xfd, 0xc5, 0x01, 0xd8,
+    0xb5, 0xa3, 0x2b, 0x12, 0x02, 0x9f, 0x8d, 0xdf, 0xb9, 0x05, 0xf9, 0x0f, 0x28, 0x0f, 0x66, 0x4b,
+    0x46, 0x39, 0x0d, 0xe0, 0xfc, 0x62, 0x77, 0x0f, 0xc1, 0x97, 0xdd, 0x87, 0xb1, 0x8c, 0xd8, 0x98,
 ];
 const AMOUNT: u128 = 25;
 const RECIPIENT: [u8; 20] = [
@@ -222,15 +229,22 @@ fn account(value: &str) -> AccountId {
     AccountId::parse(value).unwrap_or_else(|error| panic!("account: {error:?}"))
 }
 
-struct RecordedCore(CorePreparationState);
+fn owner_public() -> [u8; 32] {
+    SigningKey::from_bytes(&[0x11; 32])
+        .verifying_key()
+        .to_bytes()
+}
 
-impl CorePreparationBoundary for RecordedCore {
-    fn preparation_state(&mut self, _actor: &Did) -> Result<CorePreparationState, CoreStateError> {
-        Ok(self.0.clone())
-    }
+fn owner_did() -> String {
+    format!("did:layerx:{}", hex(&owner_public()))
+}
+
+fn owner_account() -> AccountId {
+    account(&format!("agent:{}:main", owner_did()))
 }
 
 struct RealWithdrawalAgent {
+    node: layerx_client::Client,
     store: AgentStore,
     outbox: Outbox,
     tenant: TenantId,
@@ -243,9 +257,11 @@ struct RealWithdrawalAgent {
 }
 
 impl RealWithdrawalAgent {
-    fn new(root: &std::path::Path) -> Self {
+    fn new(fixture: &Fixture) -> Self {
         Self {
-            store: AgentStore::open(root).unwrap_or_else(|error| panic!("agent store: {error}")),
+            node: withdraw_native::connect(&fixture.native.endpoint),
+            store: AgentStore::open(&fixture.agent_root)
+                .unwrap_or_else(|error| panic!("agent store: {error}")),
             outbox: Outbox::default(),
             tenant: TenantId::new("tenant-a").unwrap_or_else(|error| panic!("tenant: {error}")),
             registry: registry(),
@@ -309,13 +325,8 @@ impl AgentBoundary for RealWithdrawalAgent {
         let request = &call.request().operation;
         let key = call.request().key.bytes();
         if !self.preparations.contains_key(&key) {
-            let mut core = RecordedCore(CorePreparationState {
-                network_id: NETWORK_ID,
-                account_sequence: request.account_sequence.get(),
-                protocol_timestamp: request.timestamp_bound.not_before.get().saturating_add(1),
-                observed_head_sequence: 88,
-                module_registry: self.registry.clone(),
-            });
+            let mut core = ProductionCorePreparationBoundary::new(&mut self.node, 10)
+                .map_err(|_| AgentBoundaryError::Unavailable)?;
             let prepared = prepare_activity(
                 &mut core,
                 PreparationDefaults {
@@ -330,7 +341,7 @@ impl AgentBoundary for RealWithdrawalAgent {
                 PrepareRequest {
                     actor: Did::new(request.actor.as_str().as_bytes())
                         .map_err(|_| AgentBoundaryError::CorruptResponse)?,
-                    authority: Authority::owner(request.authority.as_str().as_bytes())
+                    authority: Authority::owner(&owner_public())
                         .map_err(|_| AgentBoundaryError::CorruptResponse)?,
                     activity_type: activity_type(),
                     expected_account_sequence: Some(request.account_sequence.get()),
@@ -417,14 +428,18 @@ impl AgentBoundary for RealWithdrawalAgent {
                 None,
             )
             .map_err(|_| AgentBoundaryError::Refused)?;
-        let owner = account("agent:did:layerx:alice:main");
-        let withdrawals = account("system:paxeer-withdrawals");
-        let material = withdrawal_receipt(
-            activity_id,
-            key,
-            account_address(&owner),
-            account_address(&withdrawals),
-        );
+        let submitted = self
+            .node
+            .submit_signed(&self.registry, signer_public_key, 20, 1, &signed)
+            .map_err(|_| AgentBoundaryError::Unavailable)?;
+        let layerx_client::submit::Submission::Acknowledged(ack) = submitted else {
+            return Err(AgentBoundaryError::Unavailable);
+        };
+        if ack.activity_id() != activity_id {
+            return Err(AgentBoundaryError::CorruptResponse);
+        }
+        let (material, verified) =
+            withdraw_native::receipt(&mut self.node, &self.registry, activity_id);
         daemon_receipt::store(
             &mut self.store,
             self.tenant.clone(),
@@ -433,16 +448,6 @@ impl AgentBoundary for RealWithdrawalAgent {
             &material.authorised_batch,
         )
         .map_err(|_| AgentBoundaryError::CorruptResponse)?;
-        let receipt_authority = SigningKey::from_bytes(&[0x51; 32]);
-        let raw = support::raw_receipt_evidence(
-            material.canonical_bytes.clone(),
-            material.authorised_batch,
-            1,
-            &receipt_authority,
-        );
-        let verified = support::evidence_verifier(&receipt_authority)
-            .verify_receipt(&raw)
-            .map_err(|_| AgentBoundaryError::CorruptResponse)?;
         self.outbox
             .transition(
                 &mut self.store,
@@ -507,100 +512,6 @@ impl AgentBoundary for RealWithdrawalAgent {
         }
         Ok(ReceiptLookup::Found(material))
     }
-}
-
-#[derive(Clone, Copy)]
-struct ReceiptFields {
-    activity_id: [u8; 32],
-    batch_id: [u8; 32],
-    key: [u8; 32],
-    from: [u8; 32],
-    to: [u8; 32],
-}
-
-fn withdrawal_receipt(
-    activity_id: [u8; 32],
-    key: [u8; 32],
-    from: [u8; 32],
-    to: [u8; 32],
-) -> ReceiptMaterial {
-    let fields = ReceiptFields {
-        activity_id,
-        batch_id: support::committed_execution_batch_id([0x41; 32], [0x81; 32], 1),
-        key,
-        from,
-        to,
-    };
-    let signer = SigningKey::from_bytes(&[0x51; 32]);
-    let unsigned = encode_receipt(fields, None);
-    let mut digest = Sha256::new();
-    digest.update(b"LXP/v1/receipt\0");
-    digest.update(&unsigned);
-    let signature = signer.sign(&<[u8; 32]>::from(digest.finalize()));
-    ReceiptMaterial {
-        canonical_bytes: encode_receipt(fields, Some(signature.to_bytes())),
-        authorised_batch: AuthorizedBatch::new(
-            fields.batch_id,
-            ASSET,
-            [0x41; 32],
-            [0x42; 32],
-            signer.verifying_key().to_bytes(),
-        ),
-        verification_level: layerx_types::verify::VerificationLevel::SEQUENCER_SIGNED,
-    }
-}
-
-fn encode_receipt(fields: ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    push_u16(&mut bytes, layerx_intents::canonical::PROTOCOL_VERSION);
-    push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, layerx_intents::canonical::PROTOCOL_VERSION);
-    push_bytes(&mut bytes, &fields.activity_id);
-    push_u64(&mut bytes, 1);
-    push_bytes(&mut bytes, &[0x41; 32]);
-    push_bytes(&mut bytes, &[0x42; 32]);
-    push_bytes(&mut bytes, &[0x81; 32]);
-    bytes.extend_from_slice(&0_i32.to_be_bytes());
-    bytes.extend_from_slice(&0_u32.to_be_bytes());
-    bytes.extend_from_slice(&1_u128.to_be_bytes());
-    push_bytes(&mut bytes, &fields.batch_id);
-    push_u16(&mut bytes, u16::from(ModuleId::Asset as u8));
-    bytes.extend_from_slice(&1_u32.to_be_bytes());
-    bytes.extend_from_slice(&1_u32.to_be_bytes());
-    bytes.push(9);
-    push_bytes(&mut bytes, &ASSET);
-    bytes.extend_from_slice(&AMOUNT.to_be_bytes());
-    push_bytes(&mut bytes, &fields.from);
-    bytes.extend_from_slice(&100_u128.to_be_bytes());
-    bytes.extend_from_slice(&(100_u128 - AMOUNT).to_be_bytes());
-    push_u64(&mut bytes, 1);
-    push_bytes(&mut bytes, &fields.to);
-    bytes.extend_from_slice(&0_u128.to_be_bytes());
-    bytes.extend_from_slice(&AMOUNT.to_be_bytes());
-    push_bytes(&mut bytes, &[0x93; 32]);
-    push_bytes(&mut bytes, &[0x94; 32]);
-    push_bytes(&mut bytes, &fields.key);
-    push_u64(&mut bytes, 1_000);
-    bytes.push(u8::from(signature.is_some()));
-    if let Some(signature) = signature {
-        push_bytes(&mut bytes, &signature);
-    }
-    bytes
-}
-
-fn push_u16(bytes: &mut Vec<u8>, value: u16) {
-    bytes.extend_from_slice(&value.to_be_bytes());
-}
-
-fn push_u64(bytes: &mut Vec<u8>, value: u64) {
-    bytes.extend_from_slice(&value.to_be_bytes());
-}
-
-fn push_bytes(output: &mut Vec<u8>, value: &[u8]) {
-    let length =
-        u32::try_from(value.len()).unwrap_or_else(|_| panic!("receipt field length overflow"));
-    output.extend_from_slice(&length.to_be_bytes());
-    output.extend_from_slice(value);
 }
 
 struct RealRuntime {
@@ -682,6 +593,7 @@ impl WithdrawalRuntime for RealRuntime {
 }
 
 struct Fixture {
+    native: withdraw_native::NativeFixture,
     root: std::path::PathBuf,
     store_root: std::path::PathBuf,
     agent_root: std::path::PathBuf,
@@ -695,6 +607,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(label: &str) -> Self {
+        let native = withdraw_native::NativeFixture::new();
         let root = directory(label);
         fs::create_dir_all(&root).unwrap_or_else(|error| panic!("fixture root: {error}"));
         let store_root = root.join("human-store");
@@ -715,7 +628,7 @@ impl Fixture {
                 &principal,
                 &key,
                 KeyClass::HumanPrimary,
-                KeyEntropy::new([0x51; 32], [0x52; 16], [0x53; 24])
+                KeyEntropy::new([0x11; 32], [0x52; 16], [0x53; 24])
                     .unwrap_or_else(|error| panic!("entropy: {error}")),
             )
             .unwrap_or_else(|error| panic!("generate key: {error}"));
@@ -732,13 +645,13 @@ impl Fixture {
             .unwrap_or_else(|error| panic!("agent SDK: {error:?}"));
         let plan = WithdrawalPlan {
             request_anchor: layerx_types::ids::CheckpointId::new([18; 32]),
-            layerx_protocol_version: 2,
+            layerx_protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
             journey_id: JourneyId::new(format!("jrn_{label}"))
                 .unwrap_or_else(|error| panic!("journey id: {error}")),
             idempotency_key: [0x31; 32],
             network: NetworkId::new(NETWORK_ID)
                 .unwrap_or_else(|error| panic!("network: {error:?}")),
-            owner: account("agent:did:layerx:alice:main"),
+            owner: owner_account(),
             withdrawals_account: account("system:paxeer-withdrawals"),
             payout_address: EvmAddress::new(RECIPIENT),
             asset: AssetId::new(ASSET),
@@ -751,18 +664,19 @@ impl Fixture {
             },
             reminder_interval_seconds: 30,
             agent: WithdrawalAgentPlan {
-                actor: AgentDid::new("did:layerx:alice")
+                actor: AgentDid::new(owner_did())
                     .unwrap_or_else(|error| panic!("actor: {error:?}")),
-                authority: AuthorityRef::new("custody-human-primary")
+                authority: AuthorityRef::new(hex(&owner_public()))
                     .unwrap_or_else(|error| panic!("authority: {error:?}")),
-                account_sequence: ACCOUNT_SEQUENCE,
-                not_before: 995,
-                not_after: 2_000,
+                account_sequence: native.account_sequence,
+                not_before: native.timestamp,
+                not_after: native.timestamp + 300_000,
                 fee_limit: 7,
                 custody_key: key,
             },
         };
         Self {
+            native,
             store_root,
             agent_root: root.join("agent-store"),
             tenancy_digest,
@@ -785,8 +699,13 @@ impl Fixture {
             activity_id,
             network_id: NETWORK_ID,
             withdrawal_id: activity_id,
-            account: account_address(&self.plan.owner),
-            withdrawals_account: account_address(&self.plan.withdrawals_account),
+            account: layerx_paxeer_client::account_address_for_protocol(&self.plan.owner, 3)
+                .unwrap_or_else(|error| panic!("owner account: {error:?}")),
+            withdrawals_account: layerx_paxeer_client::account_address_for_protocol(
+                &self.plan.withdrawals_account,
+                3,
+            )
+            .unwrap_or_else(|error| panic!("withdrawal account: {error:?}")),
             asset_id: ASSET,
             amount: AMOUNT,
             recipient: EvmAddress::new(RECIPIENT),
@@ -994,7 +913,7 @@ fn drive_claim_queued(
 #[test]
 fn real_agentd_debit_and_anvil_claim_survive_ack_gaps_and_pay_exactly_once() {
     let fixture = Fixture::new("withdrawpayout");
-    let mut agent = RealWithdrawalAgent::new(&fixture.agent_root);
+    let mut agent = RealWithdrawalAgent::new(&fixture);
     let mut runtime = RealRuntime::new(fixture.expectation([0x31; 32]));
     let (mut store, mut journey, mut now) = drive_claim_queued(&fixture, &mut runtime, &mut agent);
     let reminders = {
@@ -1064,7 +983,7 @@ fn real_agentd_debit_and_anvil_claim_survive_ack_gaps_and_pay_exactly_once() {
 #[test]
 fn real_challenge_hold_and_cancellation_report_actual_funds_disposition() {
     let fixture = Fixture::new("withdrawcancel");
-    let mut agent = RealWithdrawalAgent::new(&fixture.agent_root);
+    let mut agent = RealWithdrawalAgent::new(&fixture);
     let mut runtime = RealRuntime::new(fixture.expectation([0x31; 32]));
     let (mut store, mut journey, mut now) = drive_claim_queued(&fixture, &mut runtime, &mut agent);
     runtime.chain.raise_challenge([0x91; 32]);

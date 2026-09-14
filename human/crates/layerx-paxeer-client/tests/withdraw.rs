@@ -475,6 +475,22 @@ fn deploy_suite_for_protocol(
     EvmAddress,
     EvmAddress,
 ) {
+    deploy_suite_for_asset_network(anvil, protocol_version, ASSET, NETWORK_ID)
+}
+
+fn deploy_suite_for_asset_network(
+    anvil: &Anvil,
+    protocol_version: u16,
+    asset: [u8; 32],
+    network_id: u32,
+) -> (
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+) {
     let owner = parse_address(FUNDED);
     let challenger = parse_address(CHALLENGER);
     let token_template = anvil.deploy("IntegrationToken", &[address_word(owner)]);
@@ -506,9 +522,9 @@ fn deploy_suite_for_protocol(
             address_word(owner),
             address_word(token),
             address_word(vault),
-            ASSET,
+            asset,
             quantity_word(&protocol_version.to_be_bytes()),
-            quantity_word(&NETWORK_ID.to_be_bytes()),
+            quantity_word(&network_id.to_be_bytes()),
             quantity_word(&100_u32.to_be_bytes()),
             quantity_word(&86_400_u64.to_be_bytes()),
             [0x23; 32],
@@ -520,7 +536,7 @@ fn deploy_suite_for_protocol(
         &[
             address_word(bond),
             quantity_word(&protocol_version.to_be_bytes()),
-            quantity_word(&NETWORK_ID.to_be_bytes()),
+            quantity_word(&network_id.to_be_bytes()),
             quantity_word(&1_u16.to_be_bytes()),
             quantity_word(&1_u16.to_be_bytes()),
             quantity_word(&3_600_u64.to_be_bytes()),
@@ -570,9 +586,9 @@ fn deploy_suite_for_protocol(
         (
             asset_registry,
             call_data(
-                REGISTER_ASSET,
+                REGISTER_asset,
                 &[
-                    ASSET,
+                    asset,
                     address_word(token),
                     quantity_word(&6_u8.to_be_bytes()),
                     quantity_word(&1_u128.to_be_bytes()),
@@ -621,7 +637,7 @@ fn deploy_suite_for_protocol(
             call_data(
                 DEPOSIT,
                 &[
-                    ASSET,
+                    asset,
                     quantity_word(&VAULT_BALANCE.to_be_bytes()),
                     [0x28; 32],
                 ],

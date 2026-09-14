@@ -944,7 +944,11 @@ pub struct VerifiedReceiptEvidence {
 }
 
 impl VerifiedReceiptEvidence {
-    pub(crate) fn verify_authorized_maintained(
+    /// Verifies an outcome against the complete authenticated native batch transition.
+    ///
+    /// # Errors
+    /// Refuses incomplete history, altered maintenance, roots, signatures or network binding.
+    pub fn verify_authorized_maintained(
         raw: &RawReceiptEvidence,
         activity_batch: &AuthorizedBatch,
         evidence: &layerx_proof::receipt::MaintainedOutcomeEvidence<'_>,
