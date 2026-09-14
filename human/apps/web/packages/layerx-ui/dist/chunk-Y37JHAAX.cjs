@@ -49,10 +49,10 @@ function Wizard({
     return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: _chunkMD6ORKN4cjs.cn.call(void 0, "flex h-full min-h-0 flex-1 flex-col", className), children: [
       /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: "flex items-center gap-3 px-4 pt-2 pb-4", children: [
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkRA3A4XJ2cjs.IconButton, { variant: "outline", size: "sm", onClick: back, "aria-label": "Back", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _lucidereact.ArrowLeft, {}) }),
-        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "flex flex-1 items-center gap-1.5", "aria-hidden": true, children: steps.map((s, i) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "flex flex-1 items-center gap-1.5", "aria-hidden": true, children: steps.map((s, i) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
           "span",
           {
-            className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+            className: _chunkMD6ORKN4cjs.cn.call(void 0,
               "h-1 flex-1 rounded-full transition-colors",
               i <= index ? "bg-foreground" : "bg-border"
             )
@@ -74,20 +74,20 @@ function Wizard({
   return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: _chunkMD6ORKN4cjs.cn.call(void 0, "grid min-h-0 flex-1 grid-cols-[1fr_340px] gap-8", className), children: [
     /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: "flex min-h-0 flex-col", children: [
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "ol", { className: "flex items-center gap-2 pb-6", "aria-label": "Progress", children: steps.map((s, i) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "li", { className: "flex items-center gap-2", children: [
-        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+        /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
           "span",
           {
-            className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+            className: _chunkMD6ORKN4cjs.cn.call(void 0,
               "inline-flex size-6 items-center justify-center rounded-full text-xs font-bold",
               i < index ? "bg-success text-success-foreground" : i === index ? "bg-primary text-primary-foreground" : "bg-surface-sunken text-faint-foreground"
             ),
             children: i < index ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _lucidereact.Check, { className: "size-3.5" }) : i + 1
           }
         ),
-        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+        /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
           "span",
           {
-            className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+            className: _chunkMD6ORKN4cjs.cn.call(void 0,
               "text-sm font-semibold",
               i === index ? "text-foreground" : "text-muted-foreground"
             ),

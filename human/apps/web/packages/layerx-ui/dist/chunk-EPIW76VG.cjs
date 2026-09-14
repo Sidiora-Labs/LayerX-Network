@@ -66,7 +66,7 @@ function ConfirmDialog({
 }) {
   const resolved = _chunkI62LU2PGcjs.usePlatform.call(void 0, platform);
   const footer = /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, _jsxruntime.Fragment, { children: [
-    cancel && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    cancel && /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       _chunkRA3A4XJ2cjs.Button,
       {
         variant: _nullishCoalesce(cancel.variant, () => ( "secondary")),
@@ -77,7 +77,7 @@ function ConfirmDialog({
         children: cancel.label
       }
     ),
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       _chunkRA3A4XJ2cjs.Button,
       {
         variant: _nullishCoalesce(confirm.variant, () => ( "primary")),

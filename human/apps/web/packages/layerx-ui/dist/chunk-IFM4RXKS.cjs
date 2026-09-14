@@ -31,7 +31,7 @@ function BalanceHeader({
     label && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "span", { className: "text-sm text-muted-foreground", children: label }),
     /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: "flex items-center gap-2.5", children: [
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "span", { className: "text-[32px] leading-none font-extrabold tabular-nums tracking-tight text-foreground", children: hidden ? `${symbol} \u2022\u2022\u2022\u2022\u2022\u2022` : _chunkW6TE4RURcjs.formatBalance.call(void 0, value, symbol) }),
-      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
         "button",
         {
           type: "button",
@@ -44,10 +44,10 @@ function BalanceHeader({
     ] }),
     change && !hidden && /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "span", { className: "flex items-center gap-1.5 text-sm text-muted-foreground", children: [
       "1 day change:",
-      /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
         "span",
         {
-          className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+          className: _chunkMD6ORKN4cjs.cn.call(void 0,
             "flex items-center gap-1 font-semibold",
             change.up ? "text-success" : "text-destructive"
           ),

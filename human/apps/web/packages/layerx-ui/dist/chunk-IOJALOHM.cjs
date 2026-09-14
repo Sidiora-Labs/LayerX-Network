@@ -13,7 +13,7 @@ function OptionList({
   className,
   "aria-label": ariaLabel
 }) {
-  return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
     RadioGroup.Root,
     {
       value,
@@ -22,7 +22,7 @@ function OptionList({
       "aria-label": ariaLabel,
       children: items.map((item) => {
         const checked = item.value === value;
-        return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+        return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
           RadioGroup.Item,
           {
             value: item.value,
@@ -32,10 +32,10 @@ function OptionList({
                 /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "span", { className: "text-[15px] font-medium text-foreground", children: item.label }),
                 item.description && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "span", { className: "text-[13px] text-muted-foreground", children: item.description })
               ] }),
-              /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+              /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
                 "span",
                 {
-                  className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+                  className: _chunkMD6ORKN4cjs.cn.call(void 0,
                     "inline-flex size-[22px] shrink-0 items-center justify-center rounded-full border-2 transition-colors",
                     checked ? "border-accent" : "border-border-strong group-hover:border-faint-foreground"
                   ),

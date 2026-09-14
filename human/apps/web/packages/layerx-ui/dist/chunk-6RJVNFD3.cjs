@@ -18,10 +18,10 @@ function AmountText({
   className,
   ...props
 }) {
-  return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
     "span",
     {
-      className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+      className: _chunkMD6ORKN4cjs.cn.call(void 0,
         "font-semibold tabular-nums",
         colorMode === "signed" && (value > 0 ? "text-success" : value < 0 ? "text-destructive" : "text-foreground"),
         colorMode === "neutral" && "text-foreground",

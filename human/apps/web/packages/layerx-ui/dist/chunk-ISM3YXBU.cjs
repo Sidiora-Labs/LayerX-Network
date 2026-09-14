@@ -9,10 +9,10 @@ var _lucidereact = require('lucide-react');
 var _jsxruntime = require('react/jsx-runtime');
 var Input = React.forwardRef(
   ({ className, error, leading, trailing, ...props }, ref) => {
-    return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+    return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
       "div",
       {
-        className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+        className: _chunkMD6ORKN4cjs.cn.call(void 0,
           "flex h-12 items-center gap-2 rounded-md border bg-surface px-4 transition-colors",
           error ? "border-destructive focus-within:ring-2 focus-within:ring-destructive/25" : "border-border focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20",
           props.disabled && "opacity-50",
@@ -20,7 +20,7 @@ var Input = React.forwardRef(
         ),
         children: [
           leading,
-          /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+          /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
             "input",
             {
               ref,
@@ -38,16 +38,16 @@ Input.displayName = "Input";
 var SearchInput = React.forwardRef(
   ({ className, value, onClear, ...props }, ref) => {
     const hasValue = value !== void 0 ? String(value).length > 0 : false;
-    return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+    return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
       "div",
       {
-        className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+        className: _chunkMD6ORKN4cjs.cn.call(void 0,
           "flex h-11 items-center gap-2.5 rounded-full bg-surface border border-border px-4 transition-colors focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20",
           className
         ),
         children: [
           /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _lucidereact.Search, { className: "size-[18px] shrink-0 text-muted-foreground", "aria-hidden": true }),
-          /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+          /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
             "input",
             {
               ref,
@@ -57,7 +57,7 @@ var SearchInput = React.forwardRef(
               ...props
             }
           ),
-          hasValue && onClear && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+          hasValue && onClear && /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
             "button",
             {
               type: "button",

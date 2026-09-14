@@ -41,7 +41,7 @@ function NotificationRow({
   item,
   onClick
 }) {
-  return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
     _chunkZY7BNJKWcjs.ListItem,
     {
       leading: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkZY7BNJKWcjs.IconTile, { shape: "circle", className: "size-10 [&_svg]:size-4", children: _nullishCoalesce(item.icon, () => ( /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _lucidereact.Bell, {}))) }),
@@ -73,7 +73,7 @@ function NotificationsScreen({
   const shown = filterBySegment(items, segment);
   return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: _chunkMD6ORKN4cjs.cn.call(void 0, "flex h-full flex-col bg-background", className), children: [
     /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "header", { className: "relative flex items-center justify-center border-b border-border bg-surface px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3.5", children: [
-      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
         _chunkRA3A4XJ2cjs.IconButton,
         {
           variant: "outline",
@@ -86,7 +86,7 @@ function NotificationsScreen({
       ),
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "h2", { className: "text-[17px] font-bold text-foreground", children: "Notifications" })
     ] }),
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "p-4 pb-2", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "p-4 pb-2", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       _chunk5ISTU3ZIcjs.SegmentedControl,
       {
         "aria-label": "Recency",
@@ -95,7 +95,7 @@ function NotificationsScreen({
         onValueChange: (v) => setSegment(v)
       }
     ) }),
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "lx-scroll flex-1 overflow-y-auto px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]", children: shown.length > 0 ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkZY7BNJKWcjs.List, { children: shown.map((n) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0, NotificationRow, { item: n, onClick: onItemClick }, n.id)) }) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "lx-scroll flex-1 overflow-y-auto px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]", children: shown.length > 0 ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkZY7BNJKWcjs.List, { children: shown.map((n) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0, NotificationRow, { item: n, onClick: onItemClick }, n.id)) }) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       _chunkMEQICWTKcjs.EmptyState,
       {
         className: "mt-6",
@@ -128,7 +128,7 @@ function BellPopover({
         ] })
       ] }),
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "lx-scroll max-h-[360px] overflow-y-auto px-2 py-1", children: recent.length > 0 ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkZY7BNJKWcjs.List, { className: "divide-border/50", children: recent.map((n) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0, NotificationRow, { item: n, onClick: onItemClick }, n.id)) }) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "p", { className: "py-8 text-center text-sm text-muted-foreground", children: "You're all caught up." }) }),
-      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "border-t border-border p-2", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "border-t border-border p-2", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
         "button",
         {
           type: "button",
@@ -154,7 +154,7 @@ function NotificationsArchive({
   return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: _chunkMD6ORKN4cjs.cn.call(void 0, "mx-auto flex max-w-[720px] flex-col gap-4", className), children: [
     /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: "flex items-center justify-between gap-4", children: [
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "h2", { className: "text-xl font-bold text-foreground", children: "Notifications" }),
-      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
         _chunk5ISTU3ZIcjs.SegmentedControl,
         {
           "aria-label": "Recency",
@@ -166,7 +166,7 @@ function NotificationsArchive({
         }
       )
     ] }),
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "rounded-lg border border-border bg-surface px-5 py-2", children: shown.length > 0 ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkZY7BNJKWcjs.List, { children: shown.map((n) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0, NotificationRow, { item: n, onClick: onItemClick }, n.id)) }) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "rounded-lg border border-border bg-surface px-5 py-2", children: shown.length > 0 ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkZY7BNJKWcjs.List, { children: shown.map((n) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0, NotificationRow, { item: n, onClick: onItemClick }, n.id)) }) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       _chunkMEQICWTKcjs.EmptyState,
       {
         icon: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _lucidereact.Bell, {}),

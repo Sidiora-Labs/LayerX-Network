@@ -7,7 +7,7 @@ var _chunkMD6ORKN4cjs = require('./chunk-MD6ORKN4.cjs');
 var _react = require('react'); var React = _interopRequireWildcard(_react);
 var _classvarianceauthority = require('class-variance-authority');
 var _jsxruntime = require('react/jsx-runtime');
-var avatarVariants = _classvarianceauthority.cva.call(void 0, 
+var avatarVariants = _classvarianceauthority.cva.call(void 0,
   "relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-semibold select-none",
   {
     variants: {
@@ -38,7 +38,7 @@ var Avatar = React.forwardRef(
     const showImage = src && !imgFailed;
     return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "span", { ref, className: _chunkMD6ORKN4cjs.cn.call(void 0, avatarVariants({ size, tone, className })), ...props, children: showImage ? (
       // eslint-disable-next-line @next/next/no-img-element
-      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
         "img",
         {
           src,
