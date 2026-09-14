@@ -37,5 +37,5 @@ RUN apt-get update && \
 COPY --from=builder /go/bin/paxd /usr/bin/paxd
 COPY --from=builder /go/lib/libwasmvm.x86_64.so /go/lib/libwasmvm152.x86_64.so /go/lib/libwasmvm155.x86_64.so /usr/lib/
 COPY --from=builder /go/lib/libwasmvm.sha256 /usr/lib/libwasmvm.sha256
-RUN /usr/bin/paxd version
+RUN chmod 0555 /usr/bin/paxd /usr/lib/libwasmvm.x86_64.so /usr/lib/libwasmvm152.x86_64.so /usr/lib/libwasmvm155.x86_64.so && /usr/bin/paxd version
 ENTRYPOINT ["/usr/bin/paxd"]
