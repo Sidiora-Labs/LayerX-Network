@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{CreationStage, NativeAgentCreationContract, NativeFundingRequest, ProtocolEvidence};
+use crate::agents::{CreationStage, NativeAgentCreationContract, NativeFundingRequest};
 use crate::custody::{Operation as CustodyOperation, SignAuthorization, SignRequest};
 use crate::onboarding::{NativePlan, NativeSponsor, OnboardingStatus};
 use crate::store::{PrincipalId, PrincipalScope};
@@ -17,16 +17,16 @@ impl ProductionComponents {
                 .map_err(|_| ApiFailure::upstream_degraded())?.ok_or_else(ApiFailure::not_found)?;
             self.custody.resume_onboarding_local(&mut journey, &mut scope, observed_at)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
-            if journey.status().state() == crate::onboarding::OnboardingState::Complete {
+            if matches!(journey.status().state(), crate::onboarding::OnboardingState::Complete | crate::onboarding::OnboardingState::Refused) {
                 return Ok(journey.status());
             }
             journey
         };
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-        let sponsor = {
+        let (sponsor, mut agent) = {
             let scope = store.principal(&self.onboarding_sponsor_principal)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
-            self.native_onboarding_sponsor(&scope, &mut agent)?
+            let mut agent = self.principal_agent(&scope)?;
+            (self.native_onboarding_sponsor(&scope, &mut agent)?, agent)
         };
         let registry = agent.registry().clone();
         let (plan, consent) = {
@@ -49,6 +49,9 @@ impl ProductionComponents {
             let mut scope = store.principal(principal).map_err(|_| ApiFailure::unavailable())?;
             journey.accept_native_registration(&mut scope, &plan, &registration, &trace, observed_at)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
+            if journey.status().state() == crate::onboarding::OnboardingState::Refused {
+                return Ok(journey.status());
+            }
         }
         let funded = {
             let mut scope = store.principal(&self.onboarding_sponsor_principal)
@@ -64,8 +67,12 @@ impl ProductionComponents {
             }).map_err(|_| ApiFailure::upstream_degraded())?
         };
         let mut scope = store.principal(principal).map_err(|_| ApiFailure::unavailable())?;
-        plan.accept_funding(&mut scope, &registry, &funded, observed_at)
+        journey.accept_native_funding(&mut scope, &plan, &funded, &registry, observed_at)
             .map_err(|_| ApiFailure::upstream_degraded())?;
+        if journey.status().state() == crate::onboarding::OnboardingState::Refused {
+            return Ok(journey.status());
+        }
+        let mut agent = self.principal_agent(&scope)?;
         let owner = owner::resolve_principal_owner(self, &scope, &mut agent)?;
         let mut adapter = self.onboarding_adapter(&mut agent, &trace, owner.actor, owner.authority)?;
         let recovery = adapter.submit_lifecycle_intent(&mut scope, &registry,
@@ -87,6 +94,9 @@ impl ProductionComponents {
         if owner.actor != self.agent_actor || owner.authority != self.agent_authority
             || owner.account.canonical() != self.agent_owner_account
         {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        if owner.recovery_policy()? != (self.agent_recovery_root, self.agent_recovery_threshold) {
             return Err(ApiFailure::upstream_degraded());
         }
         let key = self.custody.describe_key(scope.principal(), &primary_key()?)

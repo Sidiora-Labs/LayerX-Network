@@ -4703,7 +4703,10 @@ impl ProductionComponents {
                 .auth_index
                 .resolve_assertion(assertion_id, now)
                 .map_err(|error| auth_failure(&error))?;
-            self.advance_native_onboarding(&principal, &request.trace, now)?;
+            let onboarding = self.advance_native_onboarding(&principal, &request.trace, now)?;
+            if onboarding.state() != crate::onboarding::OnboardingState::Complete {
+                return Err(ApiFailure::forbidden());
+            }
             let (device_label, device_platform) = browser_device(request)?;
             let idempotency = required_idempotency(request)?;
             let action = action_key(idempotency);
@@ -4729,7 +4732,7 @@ impl ProductionComponents {
                     },
                 )
                 .map_err(|error| auth_api_failure(&error))?;
-            let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut agent = self.principal_agent(&scope)?;
             let owner = owner::resolve_principal_owner(self, &scope, &mut agent)?;
             let registry = agent.registry().clone();
             let (intent, grant_id) = browser_grant_intent(

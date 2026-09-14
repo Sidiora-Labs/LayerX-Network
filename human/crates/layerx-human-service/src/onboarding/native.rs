@@ -82,11 +82,10 @@ impl NativePlan {
         Ok(value)
     }
 
-    pub fn accept_funding(
-        &self, scope: &mut PrincipalScope<'_>, registry: &ModuleRegistry,
-        funded: &NativeFundingEvidence, now: u64,
-    ) -> Result<(), OnboardingError> {
-        let (source, destination, asset, amount, _, key, _, _, _, network, protocol) =
+    fn verify_funding(
+        &self, registry: &ModuleRegistry, funded: &NativeFundingEvidence,
+    ) -> Result<i32, OnboardingError> {
+        let (source, destination, asset, amount, sequence, key, _, _, _, network, protocol) =
             funded.intent.to_wire_parts();
         if source != &self.source_account()? || destination != &self.target_account()?
             || asset.bytes() != self.asset || amount.value() != self.initial_funding
@@ -98,39 +97,52 @@ impl NativePlan {
         }
         let compiled = compile(&Intent::v1(IntentKind::LxpSend(funded.intent.clone())), registry)?;
         let kind = compiled.activity_type();
-        self.verify_evidence(&funded.evidence, kind, self.funding_action)?;
-        if funded.evidence.bound_activity(kind).map_err(|_| OnboardingError::EvidenceConflict)?.payload()
-            != compiled.payload().as_bytes()
-        {
+        let verified = self.verify_evidence(&funded.evidence, kind, self.funding_action)?;
+        let activity = funded.evidence.bound_activity(kind)
+            .map_err(|_| OnboardingError::EvidenceConflict)?;
+        if activity.payload() != compiled.payload().as_bytes() {
             return Err(OnboardingError::EvidenceConflict);
         }
-        put_exact(scope, RowKey::new(FUNDING_ROW)?, now, funded.evidence.receipt_bytes.clone())?;
-        put_exact(scope, RowKey::new("onboarding-native-funding-activity")?, now,
-            funded.evidence.signed_activity.clone())
+        let receipt = verified.receipt().protocol().ok_or(OnboardingError::ReceiptShape)?;
+        if receipt.result_code() == 0 {
+            let from = layerx_intents::canonical::account_id_for_protocol(source, 3)
+                .map_err(|_| OnboardingError::EvidenceConflict)?;
+            let to = layerx_intents::canonical::account_id_for_protocol(destination, 3)
+                .map_err(|_| OnboardingError::EvidenceConflict)?;
+            if receipt.from() != from || receipt.to() != to || receipt.asset() != self.asset
+                || receipt.amount() != self.initial_funding || receipt.debit_sequence() != sequence.value()
+                || receipt.debit_balance_before().checked_sub(self.initial_funding) != Some(receipt.debit_balance_after())
+                || receipt.credit_balance_before().checked_add(self.initial_funding) != Some(receipt.credit_balance_after())
+                || receipt.fee_charged() > activity.fee_limit()
+            {
+                return Err(OnboardingError::EvidenceConflict);
+            }
+        }
+        Ok(receipt.result_code())
     }
 
     fn verify_evidence(
         &self, evidence: &ProtocolEvidence, kind: ActivityType, action: [u8; 32],
-    ) -> Result<(), OnboardingError> {
+    ) -> Result<layerx_proof::receipt::VerifiedReceipt, OnboardingError> {
         if evidence.action_key != action || evidence.network_id != self.network_id
-            || evidence.verification_level != VerificationLevel::CHECKPOINT_FINALISED
+            || evidence.verification_level < VerificationLevel::CHECKPOINT_FINALISED
         {
             return Err(OnboardingError::EvidenceConflict);
         }
         let verified = evidence.verify_outcome(kind).map_err(|_| OnboardingError::EvidenceConflict)?;
         let protocol = verified.receipt().protocol().ok_or(OnboardingError::ReceiptShape)?;
-        if protocol.result_code() != 0 || protocol.activity_id() != evidence.activity_id
+        if evidence.verification_level < verified.level() || protocol.activity_id() != evidence.activity_id
             || protocol.global_sequence() == 0
         {
             return Err(OnboardingError::EvidenceConflict);
         }
-        Ok(())
+        Ok(verified)
     }
 }
 
 impl OnboardingJourney {
     pub(crate) fn native_plan(
-        &self, scope: &mut PrincipalScope<'_>, sponsor: &NativeSponsor, now: u64,
+        &mut self, scope: &mut PrincipalScope<'_>, sponsor: &NativeSponsor, now: u64,
     ) -> Result<NativePlan, OnboardingError> {
         let key = RowKey::new(PLAN_ROW)?;
         let retained = scope.get(Table::Journeys, &key)
@@ -169,7 +181,38 @@ impl OnboardingJourney {
         }
         put_exact(scope, key, now, serde_json::to_vec(&plan)
             .map_err(|_| OnboardingError::EvidenceConflict)?)?;
+        if self.record.native_funding.is_none() {
+            self.record.native_funding = Some(ProtocolRecord::queued());
+            self.persist(scope, now)?;
+        }
         Ok(plan)
+    }
+
+    fn require_native_plan(&self, plan: &NativePlan) -> Result<(), OnboardingError> {
+        if plan.target_did != self.record.did || Some(plan.target_key) != self.record.public_key
+            || plan.registration_action != self.action_key(ProtocolStage::DidRegistration)
+            || plan.recovery_action != self.action_key(ProtocolStage::RecoveryRegistration)
+            || plan.recovery_root != self.record.recovery_root
+            || plan.recovery_threshold != self.record.recovery_threshold
+            || self.record.native_funding.is_none()
+        {
+            return Err(OnboardingError::EvidenceConflict);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn accept_native_funding(
+        &mut self, scope: &mut PrincipalScope<'_>, plan: &NativePlan,
+        funded: &NativeFundingEvidence, registry: &ModuleRegistry, now: u64,
+    ) -> Result<(), OnboardingError> {
+        self.require_native_plan(plan)?;
+        if !self.did_verified() {
+            return Err(OnboardingError::StageNotEligible);
+        }
+        let result = plan.verify_funding(registry, funded)?;
+        let record = self.record.native_funding.as_mut().ok_or(OnboardingError::StageNotEligible)?;
+        retain_native_outcome(scope, record, funding_row(), &funded.evidence, result, now)?;
+        self.persist(scope, now)
     }
 
     pub(crate) fn accept_native_registration(
@@ -178,7 +221,9 @@ impl OnboardingJourney {
     ) -> Result<(), OnboardingError> {
         let kind = ActivityType::new(ModuleId::Governance, 1)
             .map_err(|_| OnboardingError::EvidenceConflict)?;
-        plan.verify_evidence(evidence, kind, plan.registration_action)?;
+        self.require_native_plan(plan)?;
+        let verified = plan.verify_evidence(evidence, kind, plan.registration_action)?;
+        let result = verified.receipt().protocol().ok_or(OnboardingError::ReceiptShape)?.result_code();
         let activity = evidence.bound_activity(kind).map_err(|_| OnboardingError::EvidenceConflict)?;
         let registration = SponsoredRegistration::decode(activity.payload())
             .map_err(|_| OnboardingError::EvidenceConflict)?;
@@ -187,7 +232,7 @@ impl OnboardingJourney {
         {
             return Err(OnboardingError::EvidenceConflict);
         }
-        self.accept_native_stage(scope, ProtocolStage::DidRegistration, evidence, trace, now)
+        self.accept_native_stage(scope, (ProtocolStage::DidRegistration, result), evidence, trace, now)
     }
 
     pub(crate) fn accept_native_recovery(
@@ -196,41 +241,64 @@ impl OnboardingJourney {
     ) -> Result<(), OnboardingError> {
         let compiled = compile(&plan.recovery_intent()?, registry)?;
         let kind = compiled.activity_type();
-        plan.verify_evidence(evidence, kind, plan.recovery_action)?;
+        self.require_native_plan(plan)?;
+        let verified = plan.verify_evidence(evidence, kind, plan.recovery_action)?;
+        let result = verified.receipt().protocol().ok_or(OnboardingError::ReceiptShape)?.result_code();
         let activity = evidence.bound_activity(kind).map_err(|_| OnboardingError::EvidenceConflict)?;
         if activity.payload() != compiled.payload().as_bytes() || evidence.actor != plan.target_did
             || evidence.owner_public_key != plan.target_key || !self.did_verified()
-            || scope.get(Table::Journeys, &RowKey::new(FUNDING_ROW)?).is_none()
+            || !self.record.native_funding.as_ref().is_some_and(|record| record.state == ProtocolState::Verified)
         {
             return Err(OnboardingError::EvidenceConflict);
         }
-        self.accept_native_stage(scope, ProtocolStage::RecoveryRegistration, evidence, trace, now)
+        self.accept_native_stage(scope, (ProtocolStage::RecoveryRegistration, result), evidence, trace, now)
     }
 
     fn accept_native_stage(
-        &mut self, scope: &mut PrincipalScope<'_>, stage: ProtocolStage,
+        &mut self, scope: &mut PrincipalScope<'_>, outcome: (ProtocolStage, i32),
         evidence: &ProtocolEvidence, trace: &TraceId, now: u64,
     ) -> Result<(), OnboardingError> {
-        let digest: [u8; 32] = Sha256::digest(&evidence.receipt_bytes).into();
-        let progress = self.stage(stage);
-        if evidence.action_key != self.action_key(stage)
-            || progress.receipt_digest.is_some_and(|old| old != digest)
-            || progress.activity_id.is_some_and(|old| old != evidence.activity_id)
-        {
+        let (stage, result) = outcome;
+        if evidence.action_key != self.action_key(stage) {
             return Err(OnboardingError::EvidenceConflict);
         }
-        put_exact(scope, receipt_row(stage)?, now, evidence.receipt_bytes.clone())?;
-        put_exact(scope, RowKey::new(format!("onboarding-native-activity-{}", stage.code()))?, now,
-            evidence.signed_activity.clone())?;
-        let progress = self.stage_mut(stage);
-        progress.state = ProtocolState::Verified;
-        progress.unavailable = None;
-        progress.receipt_digest = Some(digest);
-        progress.activity_id = Some(evidence.activity_id);
-        progress.submission_ref = Some(hex(&evidence.activity_id));
-        progress.refusal_code = None;
+        retain_native_outcome(scope, self.stage_mut(stage), receipt_row(stage)?, evidence, result, now)?;
         self.persist(scope, now)?;
-        let mut audit = AuditChain::open(scope)?;
-        self.ensure_activation_audit(scope, &mut audit, trace, stage, now)
+        if result == 0 {
+            let mut audit = AuditChain::open(scope)?;
+            self.ensure_activation_audit(scope, &mut audit, trace, stage, now)?;
+        }
+        Ok(())
     }
+}
+
+pub(super) fn funding_row() -> RowKey {
+    RowKey::new(FUNDING_ROW).unwrap_or_else(|_| unreachable!("static onboarding funding row"))
+}
+
+fn retain_native_outcome(
+    scope: &mut PrincipalScope<'_>, record: &mut ProtocolRecord, row: RowKey,
+    evidence: &ProtocolEvidence, result: i32, now: u64,
+) -> Result<(), OnboardingError> {
+    let digest: [u8; 32] = Sha256::digest(&evidence.receipt_bytes).into();
+    if record.receipt_digest.is_some_and(|old| old != digest)
+        || record.activity_id.is_some_and(|old| old != evidence.activity_id)
+        || record.state == ProtocolState::Refused && record.refusal_code != Some(result)
+    {
+        return Err(OnboardingError::EvidenceConflict);
+    }
+    put_exact(scope, RowKey::new(format!("{}-activity", row.as_str()))?, now, evidence.signed_activity.clone())?;
+    put_exact(scope, row, now, evidence.receipt_bytes.clone())?;
+    record.unavailable = None;
+    record.submission_ref = Some(hex(&evidence.activity_id));
+    if result == 0 {
+        record.state = ProtocolState::Verified;
+        record.receipt_digest = Some(digest);
+        record.activity_id = Some(evidence.activity_id);
+        record.refusal_code = None;
+    } else {
+        record.state = ProtocolState::Refused;
+        record.refusal_code = Some(result);
+    }
+    Ok(())
 }
