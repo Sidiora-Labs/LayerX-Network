@@ -420,7 +420,8 @@ static int peer_url(const char *url, char host[256], uint16_t *port)
     *port = (uint16_t)n;
     return 0;
 }
-static lxp_result feedback(lxp_guarantor_lni *client, struct producer *p,
+static lxp_result feedback(lxp_guarantor_lni *client, const char *socket_path,
+                           struct producer *p,
                            const lxp_guarantor_cert *certificate,
                            const lxp_daemon_settlement_registration_evidence *registration,
                            lxp_arena *arena)
@@ -452,6 +453,8 @@ static lxp_result feedback(lxp_guarantor_lni *client, struct producer *p,
         return LXP_ERR_LENGTH_LIMIT;
     if (status == LXP_OK)
         status = gp_file_write(path, proof.bytes, proof.length);
+    if (status == LXP_OK)
+        status = lxp_guarantor_lni_open(client, socket_path, 30000U);
     if (status == LXP_OK)
         status = lxp_guarantor_lni_feedback(client, payload, proof, arena);
     if (status == LXP_OK) {
@@ -741,9 +744,7 @@ int main(int argc, char **argv)
                     goto batch_failed;
                 }
                 field = "tag28 feedback";
-                status = lxp_guarantor_lni_open(&client, socket_path, 30000U);
-                if (status == LXP_OK)
-                    status = feedback(&client, p, &certificate, &registration, &arena);
+                status = feedback(&client, socket_path, p, &certificate, &registration, &arena);
                 (void)pthread_mutex_unlock(&p->mutex);
                 if (status != LXP_OK)
                     goto batch_failed;
