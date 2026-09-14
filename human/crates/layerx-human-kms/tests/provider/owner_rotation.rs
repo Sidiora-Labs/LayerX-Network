@@ -331,7 +331,7 @@ fn native_commit(host: &Host, old: &Key, next: &Key, native: &Native, owner: &Di
     let (value, _) = native.state(owner)?;
     let begin = now_ms()?.checked_add(15_000).ok_or("clock overflow")?;
     let end = begin.checked_add(60_000).ok_or("clock overflow")?;
-    let effective_sequence = value["global_sequence"]
+    let effective_sequence = value["head_sequence"]
         .as_u64()
         .ok_or("missing sequence")?
         .checked_add(2)
@@ -468,7 +468,7 @@ fn native_cancel(host: &Host, old: &Key, next: &Key, native: &Native, owner: &Di
     let (value, _) = native.state(owner)?;
     let begin = now_ms()?.checked_add(3000).ok_or("clock overflow")?;
     let end = begin.checked_add(3000).ok_or("clock overflow")?;
-    let effective_sequence = value["global_sequence"]
+    let effective_sequence = value["head_sequence"]
         .as_u64()
         .ok_or("missing sequence")?
         .checked_add(2)
