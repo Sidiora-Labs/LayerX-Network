@@ -116,7 +116,8 @@ def run(work, asset, rpc_port):
     authority = work / 'authority'
     authority.mkdir(mode=0o700)
     cli = work / 'layerxctl'
-    shutil.copyfile(repo / 'cmd/layerxctl/target/debug/layerxctl', cli)
+    cli_target = Path(os.environ.get('CARGO_TARGET_DIR', repo / 'cmd/layerxctl/target'))
+    shutil.copyfile(cli_target / 'debug/layerxctl', cli)
     cli.chmod(0o755)
     config = dict(node_socket=str(work / 'run/layerxd.lni.sock'), network_id=77,
         owner_seed_file=str(work / 'human-owner/owner.seed'), pending_seed_file=str(work / 'human-owner/pending.seed'),
@@ -183,7 +184,8 @@ def run(work, asset, rpc_port):
             LAYERX_AUTHORITY_SEQUENCER_PUBLIC_KEY=config['sequencer_public_key'],
             LAYERX_AUTHORITY_FIRST_BATCH='1', LAYERX_AUTHORITY_LAST_BATCH=str(2 ** 64 - 1))
         peer = ['setpriv', '--reuid=4021', '--regid=4021', '--clear-groups']
-        service = start([*peer, str(repo / 'platform/target/debug/layerx-receipt-authority')], 'authority-service', authority_env)
+        platform_target = Path(os.environ.get('CARGO_TARGET_DIR', repo / 'platform/target'))
+        service = start([*peer, str(platform_target / 'debug/layerx-receipt-authority')], 'authority-service', authority_env)
         for _ in range(100):
             assert service.poll() is None, 'authority startup failed'
             try:
@@ -250,6 +252,9 @@ def run(work, asset, rpc_port):
         assert len(list((inputs / 'owner-native-run').glob('*.receipt'))) == 4
         if '--checkpoint' in sys.argv:
             checkpoint(work, public, settlement, rpc, account, start, key, cert, 10)
+            if '--movement-proof' in sys.argv:
+                from movement_proof import run as movement_proof
+                movement_proof(work, settlement, rpc, account, start, key, cert, 10)
             if '--module-reads' in sys.argv:
                 module_reads(work, public, 10)
             if '--settlement-only' not in sys.argv:
