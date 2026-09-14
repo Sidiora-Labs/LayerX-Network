@@ -33,6 +33,12 @@ CPPFLAGS := -Iinclude -I$(BUILD_DIR)/generated \
 CFLAGS := -std=c17 -pedantic -Werror -Wall -Wextra -Wconversion -Wshadow -Wvla \
 	-fno-strict-aliasing -ffp-contract=off $(OPT_LEVEL) $(EXTRA_CFLAGS)
 
+C_TARGET_ARCH := $(firstword $(subst -, ,$(shell $(CC) -dumpmachine)))
+CONSENSUS_CFLAGS :=
+ifneq ($(filter x86_64 i386 i486 i586 i686 aarch64 arm64,$(C_TARGET_ARCH)),)
+CONSENSUS_CFLAGS := -mgeneral-regs-only
+endif
+
 LIB_SOURCES := $(filter-out src/storage/lxp_projection.c,$(shell find src -type f -name '*.c' -print | LC_ALL=C sort))
 LIB_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LIB_SOURCES))
 LIBRARY := $(BUILD_DIR)/liblayerx.a
@@ -188,6 +194,9 @@ mirror-verify-live:
 		./scripts/qualify-mirror-verification-live.sh
 
 build: $(LIBRARY)
+
+$(LIB_OBJECTS) $(TEST_LIB_OBJECTS): CFLAGS += $(CONSENSUS_CFLAGS)
+$(LIB_OBJECTS) $(TEST_LIB_OBJECTS): Makefile
 
 $(LIBRARY): $(LIB_OBJECTS)
 	@mkdir -p $(@D)
@@ -3478,6 +3487,12 @@ test-daemon-handover-crash: test-daemon-handover $(BUILD_DIR)/tests/lxp_test_mai
 .PHONY: test-daemon-handover-peers
 test-daemon-handover-peers: $(BUILD_DIR)/tests/lxp_test_module_maintenance $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority $(BUILD_DIR)/tests/lxp_test_guarantor_runtime $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build $(BUILD_DIR)/bin/layerx-handover $(BUILD_DIR)/bin/layerx-guarantor
 	$(RUN_PREFIX) env LAYERX_TEST_HANDOVER_PEERS=1 python3 tests/daemon/withdraw-custody.py $(BUILD_DIR) --handover
+
+.PHONY: test-daemon-handover-consumers
+test-daemon-handover-consumers:
+	cargo build --locked --manifest-path agent/Cargo.toml -p layerx-client --example native_handover_history
+	cargo build --locked --manifest-path agent/Cargo.toml -p layerx-agentd --example native_handover_reads
+	$(MAKE) test-daemon-handover-peers LAYERX_TEST_HANDOVER_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_history) LAYERX_TEST_HANDOVER_READ_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_reads)
 
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build

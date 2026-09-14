@@ -722,7 +722,9 @@ dependencies = [
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
  "layerx-programs-runtime",
+ "layerx-paxeer-verifier",
  "layerx-proof",
+ "layerx-sdk",
  "layerx-types",
  "layerx-wire",
  "native-tls",
@@ -743,6 +745,7 @@ dependencies = [
  "ed25519-dalek",
  "layerx-crypto",
  "layerx-programs-runtime",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
@@ -812,6 +815,17 @@ dependencies = [
  "sha2",
  "sha3",
  "zeroize",
+]
+
+[[package]]
+name = "layerx-paxeer-verifier"
+version = "0.1.0"
+dependencies = [
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
+ "rustls",
+ "sha3",
 ]
 
 [[package]]

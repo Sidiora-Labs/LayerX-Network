@@ -56,7 +56,7 @@ static lxp_result sign_manifest(
 static lxp_result materialize_snapshot(
     const lxp_genesis_manifest *manifest, lxp_arena *arena,
     lxp_snapshot_manifest_record *snapshot_manifest,
-    lxp_byte_span *snapshot)
+    lxp_byte_span *snapshot, lxp_byte_span *handover_trust)
 {
     lxp_state_store *state = NULL;
     lxp_state_journal *journal = NULL;
@@ -102,9 +102,13 @@ static lxp_result materialize_snapshot(
         status = LXP_FATAL_REPLAY_DIVERGENCE;
     if (status == LXP_OK)
         (void)memcpy(kernel->current_state_root, receipt_root, 32U);
-    if (status == LXP_OK)
+    if (status == LXP_OK && handover_trust != NULL)
+        status = lxp_handover_kernel_initialize(kernel, manifest, NULL, NULL);
+    if (status == LXP_OK && handover_trust != NULL)
+        status = lxp_handover_genesis_trust_encode(kernel, arena, handover_trust);
+    if (status == LXP_OK && snapshot != NULL)
         status = lxp_snapshot_write(kernel, 0U, arena, snapshot);
-    if (status == LXP_OK)
+    if (status == LXP_OK && snapshot != NULL)
         status = lxp_snapshot_manifest_build(
             snapshot->bytes, snapshot->length, 0U, canonical_root,
             receipt_root, snapshot_manifest);
@@ -121,6 +125,20 @@ done:
     free(kernel);
     free(journal);
     free(state);
+    return status;
+}
+
+lxp_result lxp_genesis_handover_trust_build(
+    const lxp_genesis_manifest *manifest, lxp_arena *arena,
+    lxp_byte_span *encoded)
+{
+    lxp_result status;
+    if (manifest == NULL || arena == NULL || encoded == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *encoded = (lxp_byte_span){NULL, 0U};
+    status = lxp_genesis_verify_signature(manifest, arena);
+    if (status == LXP_OK)
+        status = materialize_snapshot(manifest, arena, NULL, NULL, encoded);
     return status;
 }
 
@@ -219,7 +237,7 @@ static lxp_result build_fresh(
         status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK)
         status = materialize_snapshot(candidate, arena, snapshot_manifest,
-                                      snapshot);
+                                      snapshot, NULL);
     if (status == LXP_OK)
         status = lxp_genesis_encode(candidate, true, arena,
                                     encoded_manifest);

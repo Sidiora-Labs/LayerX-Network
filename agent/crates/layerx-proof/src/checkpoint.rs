@@ -138,6 +138,12 @@ impl Attestation {
         self.attested_at_ms
     }
 
+    /// Returns every field of the exact signed canonical attestation statement.
+    #[must_use]
+    pub fn canonical_statement(&self) -> [u8; ATTESTATION_BYTES] {
+        self.message()
+    }
+
     fn message(&self) -> [u8; ATTESTATION_BYTES] {
         let mut message = [0_u8; ATTESTATION_BYTES];
         message[..2].copy_from_slice(&self.protocol_version.to_be_bytes());

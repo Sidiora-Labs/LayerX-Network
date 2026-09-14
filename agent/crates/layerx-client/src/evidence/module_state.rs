@@ -51,6 +51,46 @@ pub fn verify_module_evidence(
     key: &[u8],
     policy: AccountEvidencePolicy,
 ) -> Result<VerifiedModuleEvidence, EvidenceError> {
+    verify_module_evidence_with_authority(
+        canonical_value,
+        proof_material,
+        module_id,
+        key,
+        policy,
+        None,
+    )
+}
+
+/// Verifies native module state using genesis-authenticated historical signing terms.
+///
+/// # Errors
+/// Refuses unknown terms and retains every witness, selector and checkpoint binding check.
+pub fn verify_module_evidence_with_history(
+    canonical_value: &[u8],
+    proof_material: &[u8],
+    module_id: u16,
+    key: &[u8],
+    policy: AccountEvidencePolicy,
+    history: &crate::handover::SequencerHistory,
+) -> Result<VerifiedModuleEvidence, EvidenceError> {
+    verify_module_evidence_with_authority(
+        canonical_value,
+        proof_material,
+        module_id,
+        key,
+        policy,
+        Some(history),
+    )
+}
+
+fn verify_module_evidence_with_authority(
+    canonical_value: &[u8],
+    proof_material: &[u8],
+    module_id: u16,
+    key: &[u8],
+    policy: AccountEvidencePolicy,
+    history: Option<&crate::handover::SequencerHistory>,
+) -> Result<VerifiedModuleEvidence, EvidenceError> {
     if policy.expected_protocol_version != 3 || module_id > 9 || key.is_empty() || key.len() > 129 {
         return Err(EvidenceError::SelectorMismatch);
     }
@@ -68,8 +108,19 @@ pub fn verify_module_evidence(
         return Err(EvidenceError::SelectorMismatch);
     }
     let signed_header = decode_signed_header(&mut reader)?;
+    let public_key = if let Some(history) = history {
+        let verified = history
+            .verify_header(&signed_header.canonical_bytes, &signed_header.signature)
+            .map_err(|_| EvidenceError::SequencerMismatch)?;
+        history
+            .authorization_for_batch(verified.header().batch_number())
+            .map_err(|_| EvidenceError::SequencerMismatch)?
+            .public_key()
+    } else {
+        policy.handshake_sequencer_key
+    };
     let authorization = signed_header.pinned_key_authorization(
-        policy.handshake_sequencer_key,
+        public_key,
         policy.expected_protocol_version,
         policy.expected_network_id,
     )?;

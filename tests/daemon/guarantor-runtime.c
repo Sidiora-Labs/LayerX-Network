@@ -13,6 +13,59 @@
 #include <unistd.h>
 #include <openssl/evp.h>
 
+static void write_u32(FILE *output, uint32_t value)
+{
+    uint8_t bytes[4] = {(uint8_t)(value >> 24U), (uint8_t)(value >> 16U),
+                        (uint8_t)(value >> 8U), (uint8_t)value};
+    assert(fwrite(bytes, sizeof(bytes), 1U, output) == 1U);
+}
+
+static FILE *public_export(const char *name)
+{
+    char path[4096];
+    const char *directory = getenv("LAYERX_TEST_PUBLICATION_EXPORT_DIR");
+    assert(directory != NULL);
+    int length = snprintf(path, sizeof(path), "%s/%s", directory, name);
+    assert(length > 0 && (size_t)length < sizeof(path));
+    FILE *output = fopen(path, "wx");
+    assert(output != NULL);
+    return output;
+}
+
+static void export_genesis(gp_runtime *runtime)
+{
+    const lxp_kernel *kernel = gp_runtime_engine(runtime)->kernel;
+    if (!kernel->handover.enabled || getenv("LAYERX_TEST_PUBLICATION_EXPORT_DIR") == NULL)
+        return;
+    uint8_t *memory = malloc(LXP_STATE_WITNESS_MAX_BYTES + 8192U);
+    lxp_arena arena;
+    lxp_byte_span encoded;
+    assert(memory != NULL);
+    assert(lxp_arena_init(&arena, memory, LXP_STATE_WITNESS_MAX_BYTES + 8192U) == LXP_OK);
+    assert(lxp_handover_genesis_trust_encode(kernel, &arena, &encoded) == LXP_OK);
+    FILE *output = public_export("handover-genesis.bin");
+    assert(fwrite(encoded.bytes, encoded.length, 1U, output) == 1U);
+    assert(fclose(output) == 0);
+    free(memory);
+}
+
+static void export_forgery(const lxp_batch_body *body, const char *kind, lxp_arena *arena)
+{
+    if (getenv("LAYERX_TEST_PUBLICATION_EXPORT_DIR") == NULL)
+        return;
+    char name[128];
+    int length = snprintf(name, sizeof(name), "%s-%llu-%llu.bin", kind,
+        (unsigned long long)body->header.batch_number, (unsigned long long)body->header.epoch);
+    assert(length > 0 && (size_t)length < sizeof(name));
+    lxp_byte_span header;
+    assert(lxp_batch_header_encode(&body->header, arena, &header) == LXP_OK && header.length <= UINT32_MAX);
+    FILE *output = public_export(name);
+    write_u32(output, (uint32_t)header.length);
+    assert(fwrite(header.bytes, header.length, 1U, output) == 1U);
+    assert(fwrite(body->sequencer_signature, 64U, 1U, output) == 1U);
+    assert(fclose(output) == 0);
+}
+
 int main(int argc, char **argv)
 {
     gp_runtime *runtime = NULL;
@@ -46,6 +99,7 @@ int main(int argc, char **argv)
         return 1;
     }
     assert(gp_runtime_engine(runtime)->kernel != NULL);
+    export_genesis(runtime);
     status = lxp_log_open(&log, argv[3]);
     if (status != LXP_OK) {
         gp_runtime_close(runtime);
@@ -101,6 +155,7 @@ int main(int argc, char **argv)
             assert(lxp_batch_verify_signature(&forged.header, forged.sequencer_signature,
                 sizeof(forged.sequencer_signature), &claimed, &arena) == LXP_OK);
             assert(gp_runtime_prepare(runtime, &forged) != LXP_OK);
+            export_forgery(&forged, "unauthorized", &arena);
             assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
             assert(engine->kernel->state->next_sequence == sequence_before);
             lxp_secure_zero(unauthorized_key, sizeof(unauthorized_key));
@@ -122,6 +177,7 @@ int main(int argc, char **argv)
                 assert(lxp_batch_verify_signature(&forged.header, forged.sequencer_signature,
                     sizeof(forged.sequencer_signature), &retired, &arena) == LXP_OK);
                 assert(gp_runtime_prepare(runtime, &forged) != LXP_OK);
+                export_forgery(&forged, "retired", &arena);
                 assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
                 assert(engine->kernel->state->next_sequence == sequence_before);
             }

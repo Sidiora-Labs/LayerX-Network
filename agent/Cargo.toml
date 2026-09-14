@@ -4,6 +4,7 @@ members = [
     "crates/layerx-wire",
     "crates/layerx-crypto",
     "crates/layerx-proof",
+    "crates/layerx-paxeer-verifier",
     "crates/layerx-client",
     "crates/layerx-identity-binding",
     "crates/layerx-agent-api",

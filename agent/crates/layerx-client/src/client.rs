@@ -134,6 +134,176 @@ pub struct Client {
 }
 
 impl Client {
+    /// Reads an account using authenticated historical term authority.
+    ///
+    /// # Errors
+    /// Refuses stale history and all ordinary capability, selector and evidence failures.
+    pub fn account_with_history(
+        &mut self,
+        account_id: [u8; 32],
+        requested: VerificationLevel,
+        correlation_id: u64,
+        history: &crate::handover::SequencerHistory,
+    ) -> Result<ReadValue, ReadError> {
+        self.require_account_read_capabilities(requested)?;
+        let authorization = history
+            .authorization_for_batch(self.head().sealed_batch)
+            .map_err(|_| ReadError::AuthorityRangeMismatch)?;
+        let context = self.read_context(requested, correlation_id, authorization);
+        let transport = self.transport.as_mut().ok_or(ReadError::Disconnected)?;
+        crate::read::account_with_history(transport, account_id, context, history)
+    }
+
+    /// Reads module state with genesis-authenticated historical term authority.
+    ///
+    /// # Errors
+    /// Refuses unavailable capabilities, stale history and every original module proof failure.
+    pub fn module_state_with_history(
+        &mut self,
+        module_id: u16,
+        key: &[u8],
+        requested: VerificationLevel,
+        correlation_id: u64,
+        history: &crate::handover::SequencerHistory,
+    ) -> Result<ReadValue, ReadError> {
+        self.require_read_capability(Capability::AccountRead)?;
+        let authorization = history
+            .authorization_for_batch(self.head().sealed_batch)
+            .map_err(|_| ReadError::AuthorityRangeMismatch)?;
+        let context = self.read_context(requested, correlation_id, authorization);
+        let transport = self.transport.as_mut().ok_or(ReadError::Disconnected)?;
+        crate::read::module_state_with_history(transport, module_id, key, context, history)
+    }
+
+    /// Reads a bounded history page using independently authenticated signing terms.
+    ///
+    /// # Errors
+    /// Refuses unavailable capabilities, unverified history and invalid inclusion evidence.
+    pub fn history_with_history(
+        &mut self,
+        range: crate::read::HistoryRange,
+        requested: VerificationLevel,
+        correlation_id: u64,
+        history: &crate::handover::SequencerHistory,
+    ) -> Result<HistoryPage, ReadError> {
+        self.require_read_capability(Capability::HistoryRange)?;
+        let authorization = history
+            .authorization_for_sequence(range.start_sequence)
+            .map_err(|_| ReadError::AuthorityRangeMismatch)?;
+        let context = self.read_context(requested, correlation_id, authorization);
+        let transport = self.transport.as_mut().ok_or(ReadError::Disconnected)?;
+        crate::read::history_with_history(transport, range, context, history)
+    }
+
+    /// Extends one caller-pinned history through the next complete native batch.
+    ///
+    /// # Errors
+    /// Refuses domain mismatches, unavailable transport and unauthenticated history.
+    pub fn advance_sequencer_history(
+        &mut self,
+        history: &mut crate::handover::SequencerHistory,
+        correlation_id: u64,
+        limits: crate::availability::RetrievalLimits,
+    ) -> Result<(), crate::handover::HistoryError> {
+        self.advance_sequencer_history_with_finality(history, correlation_id, limits, None)
+    }
+
+    /// Extends pinned history using independently verified Paxeer finality for each handover.
+    ///
+    /// # Errors
+    /// Refuses unconfigured finality, domain mismatches and unauthenticated transitions.
+    pub fn advance_sequencer_history_with_finality(
+        &mut self,
+        history: &mut crate::handover::SequencerHistory,
+        correlation_id: u64,
+        limits: crate::availability::RetrievalLimits,
+        verifier: Option<&layerx_paxeer_verifier::PaxeerCheckpointVerifier>,
+    ) -> Result<(), crate::handover::HistoryError> {
+        use crate::handover::HistoryError;
+        if history.network_id() != self.config.handshake.expected_network_id
+            || self.config.handshake.expected_protocol_version != 3
+        {
+            return Err(HistoryError::Genesis);
+        }
+        let transport = self.transport.as_mut().ok_or(HistoryError::Transport)?;
+        history.fetch_next_with_finality(
+            transport,
+            self.handshake.node().interface_version,
+            correlation_id,
+            limits,
+            verifier,
+        )
+    }
+
+    /// Reads a signed historical header under a caller's authenticated genesis history.
+    ///
+    /// # Errors
+    /// Refuses unavailable transport, mismatched domains and unverified signing terms.
+    pub fn batch_header_with_history(
+        &mut self,
+        batch_number: u64,
+        correlation_id: u64,
+        history: &crate::handover::SequencerHistory,
+    ) -> Result<SignedBatchHeader, BatchHeaderError> {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::BatchHeader)
+        {
+            return Err(BatchHeaderError::UnavailableCapability);
+        }
+        if history.network_id() != self.config.handshake.expected_network_id
+            || self.config.handshake.expected_protocol_version != 3
+        {
+            return Err(BatchHeaderError::AuthorityMismatch);
+        }
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or(BatchHeaderError::Disconnected)?;
+        batch::lookup_with_history(
+            transport,
+            self.handshake.node().interface_version,
+            batch_number,
+            correlation_id,
+            history,
+        )
+    }
+
+    /// Retrieves a proof with historical signer authority established from genesis.
+    ///
+    /// # Errors
+    /// Refuses unavailable capabilities, unknown terms and all existing proof failures.
+    pub fn proof_bundle_with_history(
+        &mut self,
+        selector: ProofBundleSelector,
+        correlation_id: u64,
+        registry: &ModuleRegistry,
+        history: &crate::handover::SequencerHistory,
+    ) -> Result<VerifiedProofBundle, EvidenceError> {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::ProofBundle)
+        {
+            return Err(EvidenceError::Unavailable);
+        }
+        let transport = self.transport.as_mut().ok_or(EvidenceError::Unavailable)?;
+        evidence::proof_bundle_with_history(
+            transport,
+            selector,
+            EvidenceContext {
+                interface_version: self.handshake.node().interface_version,
+                correlation_id,
+                expected_protocol_version: self.config.handshake.expected_protocol_version,
+                expected_network_id: self.config.handshake.expected_network_id,
+                handshake_sequencer_key: self.handshake.node().authorised_sequencer_key,
+            },
+            registry,
+            history,
+        )
+    }
+
     /// Opens the configured Unix boundary and performs the mandatory handshake.
     ///
     /// # Errors
