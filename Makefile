@@ -2299,25 +2299,13 @@ human-test-journey:
 	$(HUMAN_NPM) run test:journey
 
 human-e2e-journeys:
-	$(HUMAN_NPM) run build
-	HUMAN_E2E_REAL_STACK=1 \
-	HUMAN_E2E_LOCAL_PRODUCTION=1 \
-	HUMAN_E2E_BASE_URL=http://127.0.0.1:3105 \
-		$(HUMAN_NPM) run test:journey
+	bash $(HUMAN_WEB_DIR)/e2e/run-production-browser.sh test:journey
 
 human-e2e-settings:
-	$(HUMAN_NPM) run build
-	HUMAN_E2E_REAL_STACK=1 \
-	HUMAN_E2E_LOCAL_PRODUCTION=1 \
-	HUMAN_E2E_BASE_URL=http://127.0.0.1:3105 \
-		$(HUMAN_NPM) run test:settings
+	bash $(HUMAN_WEB_DIR)/e2e/run-production-browser.sh test:settings
 
 human-e2e-explorer:
-	$(HUMAN_NPM) run build
-	HUMAN_E2E_REAL_STACK=1 \
-	HUMAN_E2E_LOCAL_PRODUCTION=1 \
-	HUMAN_E2E_BASE_URL=http://127.0.0.1:3105 \
-		$(HUMAN_NPM) run test:explorer
+	bash $(HUMAN_WEB_DIR)/e2e/run-production-browser.sh test:explorer
 
 human-test-e2e:
 	$(HUMAN_NPM) run test:e2e
