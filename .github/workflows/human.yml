@@ -95,7 +95,10 @@ jobs:
 
   browser-performance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 180
+    env:
+      LAYERX_BETA_BUILDER_ENVIRONMENT_DIR: ${{ github.workspace }}/build/browser-builder/rootfs
+      LAYERX_BETA_FOUNDRY_BIN: /home/runner/.foundry/bin
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -111,8 +114,32 @@ jobs:
         run: >-
           npm --prefix human/apps/web ci &&
           npm --prefix human/apps/web exec playwright install --with-deps chromium
+      - name: Install the settlement tools and production TLS prerequisites
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+      - name: Prepare the disposable cluster host
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends authbind libnss3-tools openssl jq python3-yaml
+          sudo install -o "$(id -un)" -g "$(id -gn)" -m 0500 /dev/null /etc/authbind/byport/443
+          printf '127.0.0.1 human.testnet.layerx.network\n' | sudo tee -a /etc/hosts >/dev/null
+      - name: Build the pinned Programs builder environment
+        run: bash platform/hosted/registry/builder-environment/build-env.sh build/browser-builder
+      - name: Start the actual beta services from this revision
+        run: make platform-beta-cluster-up
       - name: Enforce route and browser performance budgets
+        timeout-minutes: 20
         run: make human-e2e-perf
+      - name: Retain browser results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: human-production-browser
+          path: human/apps/web/test-results
+          if-no-files-found: ignore
+      - name: Tear down the disposable beta cluster
+        if: always()
+        run: make platform-beta-cluster-down
 
   intent-fuzz:
     if: github.event_name == 'schedule'

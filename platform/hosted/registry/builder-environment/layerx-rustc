@@ -1,0 +1,18 @@
+#!/bin/sh
+# rustc wrapper pinned by /opt/cache/cargo/config.toml. The registry sandbox
+# sets RUSTFLAGS, which makes cargo ignore every target.<triple>.rustflags a
+# project declares, so the deterministic wasm32 flags the LayerX runtime
+# requires are applied here for every wasm32-unknown-unknown compilation.
+set -eu
+rustc=$1
+shift
+wasm=0
+for argument in "$@"; do
+    case "$argument" in
+        wasm32-unknown-unknown|--target=wasm32-unknown-unknown) wasm=1 ;;
+    esac
+done
+if [ "$wasm" -eq 1 ]; then
+    exec "$rustc" "$@" -C target-feature=-reference-types -C link-arg=--compress-relocations
+fi
+exec "$rustc" "$@"
