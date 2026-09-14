@@ -368,6 +368,20 @@ struct Journey {
     sequencer: [u8; 32],
 }
 
+fn verify_deploy_receipt(
+    receipt: &[u8],
+    history: &layerx_proof::signed_authority::SignedAuthorityHistory,
+) -> Result<()> {
+    let public_key = history
+        .intervals()
+        .last()
+        .ok_or("missing current authority")?
+        .public_key();
+    let receipt = checked(verify_sequencer_signature(receipt, public_key))?;
+    assert_eq!(receipt.protocol().ok_or("Deploy receipt")?.result_code(), 0);
+    Ok(())
+}
+
 fn setup(socket: &Path, directory: &Path, config: &Value) -> Result<Journey> {
     let endpoint = field(config, "endpoint")?;
     let token = std::fs::read_to_string(field(config, "token_file")?)?;
@@ -419,21 +433,7 @@ fn setup(socket: &Path, directory: &Path, config: &Value) -> Result<Journey> {
         &canonical,
     ))?;
     let receipt = submit(&mut client, &canonical, &did, public, endpoint, &token)?;
-    let deploy_receipt = checked(verify_sequencer_signature(
-        &receipt,
-        preceding_history
-            .intervals()
-            .last()
-            .ok_or("missing current authority")?
-            .public_key(),
-    ))?;
-    assert_eq!(
-        deploy_receipt
-            .protocol()
-            .ok_or("Deploy receipt")?
-            .result_code(),
-        0
-    );
+    verify_deploy_receipt(&receipt, &preceding_history)?;
     let proof = deployment(socket, request.bound_activity_id())?;
     assert_eq!(proof.activity, canonical);
     assert_eq!(proof.state.receipt, receipt);
