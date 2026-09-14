@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod config;
+mod evidence_export;
 mod execution;
 mod journal;
 mod listener;
@@ -23,7 +24,11 @@ fn main() {
 }
 
 fn run() -> Result<(), Error> {
+    let request = evidence_export::Request::arguments(std::env::args().skip(1))?;
     let config = Config::from_environment()?;
+    if let Some(request) = request {
+        return evidence_export::publish(&config, &request);
+    }
     let journal = Journal::open(&config.state_root, config.listener.protocol)?;
     let mut service = EvidenceService::new(&config, journal)?;
     let listener = Listener::bind(config.listener)?;
