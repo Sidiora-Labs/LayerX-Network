@@ -97,10 +97,10 @@ pub fn onboarding_sponsor_command(operation: &str, input: &[u8]) -> Result<Vec<u
     }
     let runtime = Runtime::open()?;
     let value = match operation {
-        "prepare" => runtime.prepare(serde_json::from_slice(input).map_err(refused)?)?,
-        "sign" => runtime.sign(serde_json::from_slice(input).map_err(refused)?)?,
+        "prepare" => runtime.prepare(&serde_json::from_slice(input).map_err(refused)?)?,
+        "sign" => runtime.sign(&serde_json::from_slice(input).map_err(refused)?)?,
         "settlement-recipient" => {
-            runtime.recipient(serde_json::from_slice(input).map_err(refused)?)?
+            runtime.recipient(&serde_json::from_slice(input).map_err(refused)?)?
         }
         _ => return Err("unknown sponsor operation".to_owned()),
     };
@@ -247,7 +247,7 @@ impl Runtime {
         })
     }
 
-    fn prepare(&self, request: Prepare) -> Result<serde_json::Value, String> {
+    fn prepare(&self, request: &Prepare) -> Result<serde_json::Value, String> {
         let identity = RemoteIdentityProvider::new(IdentityProviderConfig {
             socket: absolute("LAYERX_HUMAN_IDENTITY_SOCKET")?,
             deadline: Duration::from_secs(number("LAYERX_HUMAN_IDENTITY_DEADLINE_SECONDS")?),
@@ -334,7 +334,7 @@ impl Runtime {
         serde_json::to_value(owner).map_err(refused)
     }
 
-    fn recipient(&self, request: RecipientRequest) -> Result<serde_json::Value, String> {
+    fn recipient(&self, request: &RecipientRequest) -> Result<serde_json::Value, String> {
         if request.asset != self.native_asset || request.checkpoint == [0; 32] {
             return Err(refused(()));
         }
@@ -379,7 +379,7 @@ impl Runtime {
         )
     }
 
-    fn sign(&self, request: SigningRequest) -> Result<serde_json::Value, String> {
+    fn sign(&self, request: &SigningRequest) -> Result<serde_json::Value, String> {
         let principal = PrincipalId::new(&request.principal).map_err(refused)?;
         let mut store = self.store.lock().map_err(refused)?;
         let mut scope = store.principal(&principal).map_err(refused)?;
@@ -394,7 +394,7 @@ impl Runtime {
             return Err(refused(()));
         }
         let did = Did::new(owner.did.as_bytes()).map_err(refused)?;
-        let compiled = bootstrap_intent(&owner, &request, &self.registry)?;
+        let compiled = bootstrap_intent(&owner, request, &self.registry)?;
         let context = OwnerEnvelopeContext {
             actor: did,
             owner_public_key: owner.public_key,
