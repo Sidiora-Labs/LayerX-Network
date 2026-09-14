@@ -1,12 +1,13 @@
 mod human;
 mod protected;
+mod trust;
 
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::refusal::decode_core_refusal;
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_platform_authority::{
-    authorized_batch_by_activity, hex, parse_replica_evidence, receipt_locator, EvidenceRefusal,
+    authorized_batch_by_activity, hex, receipt_locator, EvidenceRefusal,
 };
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION as PROTOCOL_VERSION;
@@ -70,6 +71,8 @@ Environment:
   LAYERX_AUTHORITY_WIRE_VERSION              wire version echoed in every answer, must be the built protocol version (default 3)
   LAYERX_AUTHORITY_SEQUENCER_ID              64-hex sequencer identity pinned for header verification
   LAYERX_AUTHORITY_SEQUENCER_PUBLIC_KEY      64-hex sequencer public key pinned for header and receipt signatures
+  LAYERX_AUTHORITY_GENESIS_TRUST             protected native genesis trust artifact; requires HANDOVER_FINALITY
+  LAYERX_AUTHORITY_HANDOVER_FINALITY         protected independent Paxeer verification policy
   LAYERX_AUTHORITY_FIRST_BATCH               first authorised batch number
   LAYERX_AUTHORITY_LAST_BATCH                last authorised batch number
 ";
@@ -89,10 +92,8 @@ struct Config {
     network_id: String,
     wire_version: String,
     authorization: SequencerAuthorization,
-    sequencer_id: [u8; 32],
-    first_batch: u64,
-    last_batch: u64,
     sequencer_public_key: [u8; 32],
+    trust: Option<trust::Trust>,
 }
 
 struct Request {
@@ -276,6 +277,7 @@ fn config() -> Result<Config, String> {
         );
     }
     Ok(Config {
+        trust: trust::Trust::load(protocol_network_id, sequencer_id, sequencer_public_key)?,
         listen,
         tls,
         human: human::Human::load(&tokens)?,
@@ -289,9 +291,6 @@ fn config() -> Result<Config, String> {
         protocol_network_id,
         network_id,
         wire_version,
-        sequencer_id,
-        first_batch,
-        last_batch,
         authorization: SequencerAuthorization::new(
             sequencer_id,
             sequencer_public_key,
@@ -576,7 +575,9 @@ fn lookup_receipt(config: &Config, activity_id: [u8; 32], wait_publication: bool
             "LNI does not advertise publication notification waits".to_owned(),
         );
     }
-    if handshake.node().authorised_sequencer_key != config.sequencer_public_key {
+    if config.trust.is_none()
+        && handshake.node().authorised_sequencer_key != config.sequencer_public_key
+    {
         return ReceiptSource::KeyMismatch;
     }
     let mut selector = Vec::with_capacity(33);
@@ -585,7 +586,10 @@ fn lookup_receipt(config: &Config, activity_id: [u8; 32], wait_publication: bool
     if wait_publication {
         selector.push(1);
     }
-    let correlation_id = CORRELATION.fetch_add(1, Ordering::AcqRel);
+    let correlation_id = match trust::correlation(1) {
+        Ok(id) => id,
+        Err(()) => return ReceiptSource::Unavailable("LNI correlation exhausted".to_owned()),
+    };
     let request = match encode_envelope(Envelope {
         version: handshake.node().interface_version,
         message_tag: RECEIPT_LOOKUP_REQUEST,
@@ -641,37 +645,36 @@ fn checkpoint_for(
     config: &Config,
     batch: Option<u64>,
 ) -> Result<layerx_client::evidence::VerifiedCheckpoint, ()> {
-    use layerx_client::evidence::{checkpoint, CheckpointSelector, EvidenceContext};
-    let limits = Limits {
-        maximum_frame_bytes: LNI_FRAME_BYTES,
-        maximum_connections: MAX_LNI_CONNECTIONS,
-        maximum_streams: 1,
-        maximum_queued_bytes: LNI_FRAME_BYTES,
-        deadline: IO_TIMEOUT,
-    };
-    let mut transport =
-        Uds::connect(&config.lni_socket, &config.lni_gate, limits).map_err(|_| ())?;
-    let expected = HandshakeConfig {
-        built_interface_version: Version::V1_3,
-        expected_protocol_version: PROTOCOL_VERSION,
-        expected_network_id: config.protocol_network_id,
-    };
-    let handshake = perform(&mut transport, &expected, None).map_err(|_| ())?;
-    if handshake.node().authorised_sequencer_key != config.sequencer_public_key {
-        return Err(());
-    }
-    let verified = checkpoint(
-        &mut transport,
-        CheckpointSelector::Batch(batch.unwrap_or(handshake.node().latest_sealed_batch)),
-        EvidenceContext {
-            interface_version: Version::V1_3,
-            correlation_id: CORRELATION.fetch_add(1, Ordering::AcqRel),
-            expected_protocol_version: PROTOCOL_VERSION,
-            expected_network_id: config.protocol_network_id,
-            handshake_sequencer_key: config.sequencer_public_key,
-        },
+    let deadline = Instant::now().checked_add(IO_TIMEOUT).ok_or(())?;
+    let mut transport = Uds::connect(
+        &config.lni_socket,
+        &config.lni_gate,
+        trust::limits(deadline)?,
     )
     .map_err(|_| ())?;
+    let handshake = perform(
+        &mut transport,
+        &HandshakeConfig {
+            built_interface_version: Version::V1_5,
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: config.protocol_network_id,
+        },
+        None,
+    )
+    .map_err(|_| ())?;
+    let history = trust::snapshot(
+        config,
+        handshake.node().latest_sealed_batch,
+        handshake.node().authorised_sequencer_key,
+        deadline,
+    )?;
+    let verified = trust::checkpoint(
+        config,
+        &mut transport,
+        batch.unwrap_or(handshake.node().latest_sealed_batch),
+        handshake.node().interface_version,
+        history.as_ref(),
+    )?;
     if batch.is_none() {
         let header = layerx_wire::receipt::decode_batch_header(verified.canonical_header())
             .map_err(|_| ())?;
@@ -765,17 +768,16 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
         }
         ReplicaAnswer::Unavailable => return refusal(503, "replica_unavailable", Some(5)),
     };
-    let evidence =
-        match parse_replica_evidence(&document, config.replica_id, config.sequencer_public_key) {
-            Ok(evidence) => evidence,
-            Err(error) => return evidence_refusal(&error),
-        };
+    let (evidence, authorization) = match trust::replica(config, &receipt, &document) {
+        Ok(verified) => verified,
+        Err(error) => return evidence_refusal(&error),
+    };
     if layerx_wire::receipt::decode_batch_header(&evidence.header).map_or(true, |header| {
         header.network_id() != config.protocol_network_id
     }) {
         return refusal(503, "receipt_network_mismatch", Some(5));
     }
-    match authorized_batch_by_activity(activity_id, &receipt, &evidence, &config.authorization) {
+    match authorized_batch_by_activity(activity_id, &receipt, &evidence, &authorization) {
         Ok(facts) => {
             if verify_withdrawal_request(config, &receipt, &evidence.header, deadline).is_err() {
                 return refusal(503, "withdrawal_evidence_unavailable", Some(5));
@@ -853,21 +855,44 @@ fn verify_withdrawal_request(
         None,
     )
     .map_err(|error| format!("{error:?}"))?;
-    if handshake.node().authorised_sequencer_key != config.sequencer_public_key {
-        return Err("withdrawal sequencer key mismatch".to_owned());
-    }
-    let bundle = proof_bundle(
-        &mut transport,
-        ProofBundleSelector::Activity(protocol.activity_id()),
-        EvidenceContext {
-            interface_version: handshake.node().interface_version,
-            correlation_id: CORRELATION.fetch_add(1, Ordering::AcqRel),
-            expected_protocol_version: PROTOCOL_VERSION,
-            expected_network_id: config.protocol_network_id,
-            handshake_sequencer_key: config.sequencer_public_key,
-        },
-        &withdrawal::registry().map_err(|error| format!("{error:?}"))?,
+    let history = trust::snapshot(
+        config,
+        handshake.node().latest_sealed_batch,
+        handshake.node().authorised_sequencer_key,
+        deadline,
     )
+    .map_err(|()| "withdrawal sequencer history unavailable".to_owned())?;
+    let authorization = match &history {
+        Some(history) => history
+            .authorization_for_sequence(protocol.global_sequence())
+            .map_err(|error| format!("{error:?}"))?,
+        None => config.authorization,
+    };
+    let context = EvidenceContext {
+        interface_version: handshake.node().interface_version,
+        correlation_id: trust::correlation(1)
+            .map_err(|()| "LNI correlation exhausted".to_owned())?,
+        expected_protocol_version: PROTOCOL_VERSION,
+        expected_network_id: config.protocol_network_id,
+        handshake_sequencer_key: authorization.public_key(),
+    };
+    let registry = withdrawal::registry().map_err(|error| format!("{error:?}"))?;
+    let bundle = if let Some(history) = &history {
+        layerx_client::evidence::proof_bundle_with_history(
+            &mut transport,
+            ProofBundleSelector::Activity(protocol.activity_id()),
+            context,
+            &registry,
+            history,
+        )
+    } else {
+        proof_bundle(
+            &mut transport,
+            ProofBundleSelector::Activity(protocol.activity_id()),
+            context,
+            &registry,
+        )
+    }
     .map_err(|error| format!("{error:?}"))?;
     let VerifiedProofBundle::Activity {
         canonical_bytes,
@@ -885,7 +910,7 @@ fn verify_withdrawal_request(
         protocol.asset(),
         protocol.previous_state_root(),
         protocol.resulting_state_root(),
-        config.sequencer_public_key,
+        authorization.public_key(),
     );
     withdrawal::verify(
         receipt,

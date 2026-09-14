@@ -1,7 +1,5 @@
 use super::{by_activity, hex, json, protected, refusal, Config, Request, Response};
-use layerx_platform_authority::{
-    authorized_batch_by_activity, parse_replica_evidence, receipt_locator, AuthorityFacts,
-};
+use layerx_platform_authority::{authorized_batch_by_activity, receipt_locator, AuthorityFacts};
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_wire::receipt::{decode, decode_batch_header};
 use serde::{Deserialize, Serialize};
@@ -423,15 +421,17 @@ fn verify(
 ) -> Result<Verified, ()> {
     let receipt = hex::decode(&record.receipt_hex).map_err(|_| ())?;
     let locator = receipt_locator(&receipt).map_err(|_| ())?;
-    let evidence = parse_replica_evidence(
+    let (evidence, derived) = crate::trust::replica(
+        config,
+        &receipt,
         &serde_json::to_vec(&record.replica_document).map_err(|_| ())?,
-        config.replica_id,
-        config.sequencer_public_key,
     )
     .map_err(|_| ())?;
-    let facts =
-        authorized_batch_by_activity(locator.activity_id, &receipt, &evidence, authorization)
-            .map_err(|_| ())?;
+    if config.trust.is_none() && derived != *authorization {
+        return Err(());
+    }
+    let facts = authorized_batch_by_activity(locator.activity_id, &receipt, &evidence, &derived)
+        .map_err(|_| ())?;
     let header = decode_batch_header(&evidence.header).map_err(|_| ())?;
     if header.network_id() != config.protocol_network_id {
         return Err(());
@@ -705,6 +705,8 @@ fn balance_context(
     if age_ms > u128::from(p.maximum_age_seconds) * 1000 {
         return Err(unavailable("balance_evidence_stale"));
     }
+    let authorization = crate::trust::authorization(config, &head.header, &head.header_signature)
+        .map_err(|()| unavailable("sequencer_history_unavailable"))?;
     Ok(json(
         200,
         &value!({
@@ -714,9 +716,9 @@ fn balance_context(
             "observed_at": head.timestamp_ms.to_string(),
             "age_seconds": u64::try_from(age_ms / 1000).map_err(|_| unavailable("clock_unavailable"))?,
             "maximum_age_seconds": p.maximum_age_seconds,
-            "sequencer_id": hex::encode(&config.sequencer_id),
-            "sequencer_public_key": hex::encode(&config.sequencer_public_key),
-            "first_batch_number": config.first_batch, "last_batch_number": config.last_batch,
+            "sequencer_id": hex::encode(&authorization.sequencer_id()),
+            "sequencer_public_key": hex::encode(&authorization.public_key()),
+            "first_batch_number": authorization.first_batch_number(), "last_batch_number": authorization.last_batch_number(),
             "evidence": account_summary(p, evidence)?
         }),
     ))

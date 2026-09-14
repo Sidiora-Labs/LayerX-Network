@@ -76,6 +76,21 @@ impl SequencerAuthorization {
     pub const fn public_key(&self) -> [u8; 32] {
         self.public_key
     }
+
+    #[must_use]
+    pub const fn sequencer_id(&self) -> [u8; 32] {
+        self.sequencer_id
+    }
+
+    #[must_use]
+    pub const fn first_batch_number(&self) -> u64 {
+        self.first_batch_number
+    }
+
+    #[must_use]
+    pub const fn last_batch_number(&self) -> u64 {
+        self.last_batch_number
+    }
 }
 
 /// Exact failure class for header and inclusion verification.
