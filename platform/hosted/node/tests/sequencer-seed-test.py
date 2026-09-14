@@ -147,6 +147,32 @@ class SequencerSeedTest(unittest.TestCase):
         exports = environment_lines(self.data / 'sequencer.env')
         self.assertEqual(exports['LAYERX_NODE_SEQUENCER_KEY_FILE'], str(ROOT / relative))
 
+    def test_bootstrap_reads_a_raw_seed_through_an_external_symlink(self):
+        link = self.work / 'sequencer-link.key'
+        link.symlink_to(self.sequencer_path)
+        result = self.bootstrap(sequencer_key=link)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        exports = environment_lines(self.data / 'sequencer.env')
+        self.assertEqual(exports['LAYERX_NODE_SEQUENCER_KEY_FILE'], str(link))
+        self.assertEqual(exports['LAYERX_NODE_SEQUENCER_PUBLIC_KEY'],
+                         public_key_of(self.sequencer_seed).hex())
+        for entry in self.data.rglob('*'):
+            if entry.is_file():
+                self.assertNotIn(self.sequencer_seed, entry.read_bytes(), str(entry))
+                self.assertNotIn(self.sequencer_seed.hex().encode(), entry.read_bytes(), str(entry))
+
+    def test_bootstrap_reads_a_hex_seed_through_an_external_symlink(self):
+        self.sequencer_path.unlink()
+        write_seed(self.sequencer_path, self.sequencer_seed.hex().upper().encode() + b'\n')
+        link = self.work / 'sequencer-link.key'
+        link.symlink_to(self.sequencer_path)
+        result = self.bootstrap(sequencer_key=link)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        exports = environment_lines(self.data / 'sequencer.env')
+        self.assertEqual(exports['LAYERX_NODE_SEQUENCER_KEY_FILE'], str(link))
+        self.assertEqual(exports['LAYERX_NODE_SEQUENCER_PUBLIC_KEY'],
+                         public_key_of(self.sequencer_seed).hex())
+
     def test_bootstrap_refuses_a_key_file_inside_the_data_directory(self):
         self.data.mkdir(mode=0o700)
         inside = self.data / 'sequencer.key'
@@ -171,6 +197,12 @@ class SequencerSeedTest(unittest.TestCase):
         result = self.bootstrap(sequencer_key=self.work / 'absent.key')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b'--sequencer-key must name a readable regular file', result.stderr)
+        self.assertFalse(self.data.exists())
+
+    def test_bootstrap_refuses_a_treasury_key_that_is_not_a_regular_file(self):
+        result = self.bootstrap(extra=['--treasury-key', str(self.work)])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'treasury key file must name a readable regular file', result.stderr)
         self.assertFalse(self.data.exists())
 
     def test_supervisor_refuses_a_seed_line_in_sequencer_env(self):
