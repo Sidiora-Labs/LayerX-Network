@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / 'tests/bridge'))
 from custody_chain import Chain
 
 PUBLICATION = runpy.run_path(str(ROOT / 'tests/daemon/guarantor-publication-chain.py'))
+FINALITY = runpy.run_path(str(ROOT / 'tests/daemon/native-budget-finality.py'))
 CODEC = PUBLICATION['p']
 SETTLEMENT = PUBLICATION['s']
 MAX_REQUESTS = 16
@@ -71,13 +72,17 @@ def authority(native, control, export):
         output.write(f'{identity.hex()},{public.hex()},{header[2]},{first},{last},active\n')
     os.chown(path, 4021, 4021)
     path.chmod(0o600)
+    return first
 
 
-def finalize(native, private, control, build, chain_config, url, submitter, state, inputs, number, first_batch, batch):
+def finalize(native, private, control, build, chain_config, url, submitter, state, inputs, number, first_batch, batch, authority_first_batch):
     evidence = private / f'request-{number}'
     evidence.mkdir(mode=0o700)
     export = PUBLICATION['replay'](native, evidence, batch, build)
     assert 1 <= first_batch <= batch
+    public = control / 'proofs' / str(number)
+    client_directory(public)
+    registrations = []
     for current in range(first_batch, batch + 1):
         committed = json.loads((evidence / f'exports-{batch}/{current}.json').read_text())
         header = PUBLICATION['decode_header'](committed['canonical_header'])
@@ -87,13 +92,14 @@ def finalize(native, private, control, build, chain_config, url, submitter, stat
         result = PUBLICATION['publish'](request, evidence, f'checkpoint-{current}')
         assert result['checkpoint_id'] == request['checkpoint_id']
         assert result['publication']['checkpoint_id'] == request['checkpoint_id']
-    public = control / 'proofs' / str(number)
-    client_directory(public)
+        registrations.append(FINALITY['registrations'](SETTLEMENT, ROOT, build, request, result,
+            committed, authority_first_batch, evidence, public))
     client_json(public / 'request.json', request)
     client_json(public / 'result.json', result)
     client_json(public / 'export.json', export)
     client_json(control / 'responses' / f'{number}.json', {
-        'version': 1, 'batch': batch, 'checkpoint_id': request['checkpoint_id'],
+        'version': 1, 'batch': batch, 'checkpoint_id': SETTLEMENT.raw(request['checkpoint_id'], 32).hex(),
+        'registrations': registrations,
         'request': str(public / 'request.json'), 'result': str(public / 'result.json'),
         'export': str(public / 'export.json'),
     })
@@ -139,7 +145,7 @@ def drive(work, environment, url):
             bootstrap = private / 'bootstrap'
             bootstrap.mkdir(mode=0o700)
             export = PUBLICATION['replay'](native, bootstrap, 1, build)
-            authority(native, control, export)
+            authority_first_batch = authority(native, control, export)
             chain_config = json.loads((native / 'publication-chain.json').read_text())
             client_json(control / 'ready.json', {'version': 1, 'funded_batch': 1})
             next_request, last_requested_batch, last_finalized_batch = 1, 1, 0
@@ -152,7 +158,7 @@ def drive(work, environment, url):
                     request = read_request(request_path)
                     assert request['batch'] > last_requested_batch, 'Budget checkpoint must advance the actual native batch'
                     finalize(native, private, control, build, chain_config, url, submitter_path,
-                             state, inputs, next_request, last_finalized_batch + 1, request['batch'])
+                             state, inputs, next_request, last_finalized_batch + 1, request['batch'], authority_first_batch)
                     last_requested_batch = last_finalized_batch = request['batch']
                     next_request += 1
                 else:
