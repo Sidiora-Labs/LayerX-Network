@@ -513,6 +513,68 @@ fn malformed_proof_candidates_are_refused_over_the_real_socket() -> Result {
 }
 
 #[test]
+fn published_evidence_is_private_complete_and_never_overwrites_an_existing_path() -> Result {
+    let dir = Directory::new()?;
+    let codec = NativeMovementCodec::for_protocol(3)?;
+    let original = codec.encode_response(&Response::Unavailable)?;
+    let changed = codec.encode_response(&Response::ContractViolation)?;
+    let path = dir.0.join("evidence.bin");
+    assert!(crate::journal::publish_private(&path, &original)?);
+    assert_eq!(read_private(&path, MAX_FRAME)?, original);
+    let metadata = fs::symlink_metadata(&path)?;
+    assert_eq!(metadata.mode() & 0o777, 0o600);
+    assert_eq!(metadata.nlink(), 1);
+    assert!(!crate::journal::publish_private(&path, &changed)?);
+    assert_eq!(read_private(&path, MAX_FRAME)?, original);
+    assert!(crate::journal::publish_private(&dir.0.join("empty.bin"), &[]).is_err());
+    assert!(
+        crate::journal::publish_private(&dir.0.join("large.bin"), &vec![0; MAX_FRAME + 1]).is_err()
+    );
+    let linked = dir.0.join("linked.bin");
+    std::os::unix::fs::symlink(&path, &linked)?;
+    assert!(!crate::journal::publish_private(&linked, &changed)?);
+    assert!(read_private(&linked, MAX_FRAME).is_err());
+    assert_eq!(read_private(&path, MAX_FRAME)?, original);
+    assert!(fs::read_dir(&dir.0)?.all(|entry| entry.is_ok_and(|entry| {
+        !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("proof-pending-")
+    })));
+    Ok(())
+}
+
+#[test]
+fn deposit_export_arguments_require_exact_nonzero_public_identity() -> Result {
+    use crate::evidence_export::Request;
+    assert!(Request::arguments(std::iter::empty()).is_ok_and(|value| value.is_none()));
+    let valid = vec![
+        "--publish-deposit-proof".to_owned(),
+        format!("0x{}", "11".repeat(32)),
+        format!("0x{}", "22".repeat(32)),
+        "agent:did:layerx:deposit-recipient:main".to_owned(),
+    ];
+    assert!(Request::arguments(valid.clone().into_iter())?.is_some());
+    for index in 0..valid.len() {
+        let mut invalid = valid.clone();
+        invalid[index] = "invalid".to_owned();
+        assert!(Request::arguments(invalid.into_iter()).is_err());
+    }
+    for index in [1, 2] {
+        let mut invalid = valid.clone();
+        invalid[index] = format!("0x{}", "00".repeat(32));
+        assert!(Request::arguments(invalid.into_iter()).is_err());
+    }
+    for length in 1..valid.len() {
+        assert!(Request::arguments(valid[..length].iter().cloned()).is_err());
+    }
+    let mut extra = valid;
+    extra.push("extra".to_owned());
+    assert!(Request::arguments(extra.into_iter()).is_err());
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires LAYERX_HUMAN_MOVEMENT_TEST_PAXEER_RPC and a real signed deposit proof producer"]
 fn live_paxeer_deposit_proof_is_reverified_after_restart() -> Result {
     let endpoint = std::env::var("LAYERX_HUMAN_MOVEMENT_TEST_PAXEER_RPC")?;
