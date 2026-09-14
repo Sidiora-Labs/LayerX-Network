@@ -1,9 +1,7 @@
 import datetime
 import json
-import hashlib
 import os
 from pathlib import Path
-import runpy
 import shutil
 import socket
 import ssl
@@ -17,7 +15,6 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 ROOT = Path(__file__).resolve().parents[2]
-RECORDS = runpy.run_path(str(ROOT / 'tests/daemon/handover-authority.py'))['records']
 
 
 def protected(path, content):
@@ -138,13 +135,20 @@ class Authority:
             self.log = None
 
     def configure(self, request):
-        assert set(request) == {'version', 'policy', 'binding', 'clock'} and request['version'] == 1
-        records = RECORDS(self.native / 'data/logs/receipt-authority.log')
+        assert set(request) == {'version', 'policy', 'binding', 'clock', 'receipts'} and request['version'] == 1
+        records = request['receipts']
+        assert isinstance(records, list) and 5 <= len(records) <= 16
         identifiers = []
-        for activity, receipt in records:
-            assert receipt[-69:-64] == b'\1\0\0\0\x40'
-            digest = hashlib.sha256(b'LXP/v1/receipt\0' + receipt[:-69] + b'\0').hexdigest()
+        for record in records:
+            assert set(record) == {'activity_id', 'receipt_digest'}
+            activity, digest = record['activity_id'], record['receipt_digest']
+            assert all(isinstance(value, str) and len(value) == 64 and bytes.fromhex(value).hex() == value
+                       for value in (activity, digest))
+            assert activity not in identifiers
             authorized = self.query('/v1/authorized-batches/by-activity/' + activity)
+            assert authorized['activity_id'] == activity
+            receipt = bytes.fromhex(authorized['receipt'])
+            assert 0 < len(receipt) <= 1048576
             batch = authorized['batch_id']
             document = self.query(f'/v1/batches/{batch}/receipt-authority?receipt_digest={digest}')
             protected(self.state / (activity + '.json'), json.dumps(dict(receipt_hex=receipt.hex(),

@@ -129,6 +129,19 @@ fn policy(receipt: &Receipt, recovery: bool) -> Result<Value> {
     )
 }
 impl Created {
+    pub fn references(&self) -> Result<Vec<Value>> {
+        [
+            &self.identity,
+            &self.rotation,
+            &self.recovery,
+            &self.creation,
+            &self.grant,
+        ]
+        .into_iter()
+        .map(Receipt::reference)
+        .collect()
+    }
+
     pub fn policy(&self, fixture: &Fixture) -> Result<Value> {
         let identity = self.recovery.identity()?;
         let public = layerx_programs::hex::encode(&fixture.public);

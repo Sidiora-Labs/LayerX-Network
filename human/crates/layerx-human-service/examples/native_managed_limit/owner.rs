@@ -21,17 +21,20 @@ use std::time::Duration;
 
 pub struct Installed {
     pub owner: Option<UnifiedAgentOwner<RemoteHumanAuthority>>,
-    pub store: Arc<Mutex<Store>>,
+    store: Option<Arc<Mutex<Store>>>,
     pub tenant: TenantId,
     pub peer: HumanPeer,
     pub created: Created,
     pub seed: HumanAgentLifecycleSeed,
     configuration: Value,
     authority_request: u64,
+    receipt_references: Vec<Value>,
 }
 impl Installed {
     pub fn store(&self) -> Result<MutexGuard<'_, Store>> {
         self.store
+            .as_ref()
+            .ok_or("managed store is closed")?
             .lock()
             .map_err(|_| "managed store lock poisoned".into())
     }
@@ -54,13 +57,37 @@ impl Installed {
             )?,
         ))
     }
+    pub fn retain_receipt(&mut self, receipt: &super::creation::Receipt) -> Result<()> {
+        let reference = receipt.reference()?;
+        if let Some(existing) = self
+            .receipt_references
+            .iter()
+            .find(|value| value["activity_id"] == reference["activity_id"])
+        {
+            assert_eq!(existing, &reference);
+        } else {
+            self.receipt_references.push(reference);
+        }
+        Ok(())
+    }
     pub fn restart(&mut self, fixture: &Fixture) -> Result<()> {
         drop(self.owner.take());
+        let old = self.store.take().ok_or("managed store is closed")?;
+        assert_eq!(Arc::strong_count(&old), 1);
+        drop(old);
+        self.store = Some(Arc::new(Mutex::new(Store::open(
+            fixture.directory.join("managed-store"),
+        )?)));
         self.authority_request = self
             .authority_request
             .checked_add(1)
             .ok_or("authority request overflow")?;
-        self.configuration = configure(fixture, &self.created, self.authority_request)?;
+        self.configuration = configure(
+            fixture,
+            &self.created,
+            self.authority_request,
+            &self.receipt_references,
+        )?;
         let keys = checked(SessionKeyRegistry::open(
             fixture.directory.join("managed-session-keys"),
             self.created.operator_secret.to_vec(),
@@ -82,7 +109,12 @@ impl Installed {
         Ok(())
     }
 }
-fn configure(fixture: &Fixture, created: &Created, number: u64) -> Result<Value> {
+fn configure(
+    fixture: &Fixture,
+    created: &Created,
+    number: u64,
+    references: &[Value],
+) -> Result<Value> {
     if number > 16 {
         return Err("managed authority request count".into());
     }
@@ -102,7 +134,7 @@ fn configure(fixture: &Fixture, created: &Created, number: u64) -> Result<Value>
         &pending,
         serde_json::to_vec(
             &json!({"version":1,"policy":created.policy(fixture)?,"binding":created.provider.binding,
-            "clock": clock_fields}),
+            "clock": clock_fields, "receipts": references}),
         )?,
     )?;
     std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o600))?;
@@ -138,7 +170,7 @@ fn construct(
     let mut operations = checked(ProductionHumanOperations::new(
         authority,
         Fixture::open()?.client,
-        Arc::clone(&installed.store),
+        Arc::clone(installed.store.as_ref().ok_or("managed store is closed")?),
         &peers,
         4096,
         30_000,
@@ -150,7 +182,7 @@ fn construct(
     let tenant = Sha256::digest(installed.tenant.as_str().as_bytes()).into();
     checked(UnifiedAgentOwner::new(
         operations,
-        Arc::clone(&installed.store),
+        Arc::clone(installed.store.as_ref().ok_or("managed store is closed")?),
         &peers,
         vec![LimitConfig {
             id: LimitId(installed.created.budget.budget_id[..16].try_into()?),
@@ -255,7 +287,8 @@ fn request(
 }
 
 pub fn install(fixture: &mut Fixture, mut created: Created) -> Result<Installed> {
-    let configuration = configure(fixture, &created, 1)?;
+    let receipt_references = created.references()?;
+    let configuration = configure(fixture, &created, 1, &receipt_references)?;
     let keys = created
         .session_keys
         .take()
@@ -284,13 +317,14 @@ pub fn install(fixture: &mut Fixture, mut created: Created) -> Result<Installed>
     let seed = seed(fixture, &created)?;
     let mut installed = Installed {
         owner: None,
-        store,
+        store: Some(store),
         tenant,
         peer,
         created,
         seed,
         configuration,
         authority_request: 1,
+        receipt_references,
     };
     let mut authority = installed.authority()?;
     let lease = checked(authority.lease_attestation(&installed.peer))?;
@@ -319,12 +353,22 @@ pub fn install(fixture: &mut Fixture, mut created: Created) -> Result<Installed>
         layerx_agentd::identity::ProtocolAuthority::SessionKey(installed.created.granted.grant_id)
     );
     assert_ne!(session.request.token_id, [0; 32]);
+    publish(&installed, &mut owner, fixture.public)?;
+    installed.owner = Some(owner);
+    Ok(installed)
+}
+
+fn publish(
+    installed: &Installed,
+    owner: &mut UnifiedAgentOwner<RemoteHumanAuthority>,
+    public: [u8; 32],
+) -> Result<()> {
     checked(owner.capability_install(
         &installed.peer,
         layerx_agentd::human::HumanCapabilityInstall {
             action_key: SESSION_ACTION,
             agent: installed.seed.actor.clone(),
-            authority_id: fixture.public,
+            authority_id: public,
             capability_id: installed.seed.capability_id,
             activity_types: vec![6],
             counterparties: installed.seed.counterparties.clone(),
@@ -352,6 +396,5 @@ pub fn install(fixture: &mut Fixture, mut created: Created) -> Result<Installed>
         &*owner.sessions.read().map_err(|_| "session registry lock")?,
         &installed.tenant,
     ))?;
-    installed.owner = Some(owner);
-    Ok(installed)
+    Ok(())
 }

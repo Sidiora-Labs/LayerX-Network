@@ -151,6 +151,12 @@ fn evidence(
         None,
     ))?;
     fixture.finalize(&header)?;
+    installed.retain_receipt(&super::creation::Receipt {
+        signed: exact.clone(),
+        kind: 0x0003_0003,
+        bytes: receipt.clone(),
+        header,
+    })?;
     installed.restart(fixture)?;
     checked(
         installed
