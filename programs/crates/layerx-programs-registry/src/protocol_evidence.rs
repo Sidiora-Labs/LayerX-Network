@@ -929,7 +929,7 @@ impl ProtocolDeploymentVerifier {
         signature: &[u8; 64],
         moment: EvidenceMoment,
     ) -> Result<(crate::AccountStateHead, [u8; 32]), ProtocolEvidenceError> {
-        let anchor = self.anchors[self.select_anchor(header, header_signature, moment)?];
+        let anchor = self.anchors[self.select_anchor(header, signature, moment)?];
         let inclusion =
             verify_receipt_inclusion(receipt, proof, header, signature, &anchor.authorization())
                 .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
