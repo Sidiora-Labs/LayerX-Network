@@ -27,6 +27,7 @@ lxp_result lxp_handover_genesis_trust_encode(const lxp_kernel *kernel,
     uint8_t *proof_bytes;
     uint8_t state_root[32], receipt_root[32];
     size_t proof_length = 0U;
+    const lxp_module_registration *ordered[9] = {NULL};
     lxp_codec_writer writer;
     lxp_result status;
     if (kernel == NULL || arena == NULL || encoded == NULL ||
@@ -76,11 +77,16 @@ lxp_result lxp_handover_genesis_trust_encode(const lxp_kernel *kernel,
     if (status == LXP_OK) status = lxp_codec_write_u32(&writer, (uint32_t)kernel->module_count);
     for (size_t i = 0U; status == LXP_OK && i < kernel->module_count; ++i) {
         const lxp_module_registration *module = &kernel->modules[i];
-        if (module->activity_type_count > 64U ||
-            (i != 0U && module->module_id <= kernel->modules[i - 1U].module_id)) {
+        if (module->activity_type_count > 64U || module->module_id == 0U ||
+            module->module_id > 9U || ordered[module->module_id - 1U] != NULL) {
             status = LXP_ERR_NON_CANONICAL;
             break;
         }
+        ordered[module->module_id - 1U] = module;
+    }
+    for (size_t i = 0U; status == LXP_OK && i < 9U; ++i) {
+        const lxp_module_registration *module = ordered[i];
+        if (module == NULL) continue;
         status = lxp_codec_write_u16(&writer, module->module_id);
         if (status == LXP_OK)
             status = lxp_codec_write_u32(&writer, (uint32_t)module->activity_type_count);
