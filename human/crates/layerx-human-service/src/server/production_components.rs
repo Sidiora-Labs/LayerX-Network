@@ -395,6 +395,10 @@ mod owner_rotation;
 mod onboarding_sponsor;
 pub use onboarding_sponsor::onboarding_sponsor_command;
 
+#[path = "production_recipient.rs"]
+mod recipient;
+pub use recipient::{RecipientServer, RecipientServerConfig};
+
 #[path = "production_onboarding.rs"]
 mod onboarding_native;
 #[path = "production_owner.rs"]

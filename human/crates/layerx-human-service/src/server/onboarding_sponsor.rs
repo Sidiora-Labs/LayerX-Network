@@ -36,6 +36,16 @@ struct Owner {
     recovery_delay_seconds: u64,
     registration_action: [u8; 32],
     recovery_action: [u8; 32],
+    recipient: [u8; 20],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecipientRequest {
+    principal: String,
+    checkpoint: [u8; 32],
+    asset: [u8; 32],
+    recipient: [u8; 20],
 }
 
 #[derive(Deserialize, Serialize)]
@@ -79,6 +89,7 @@ pub fn onboarding_sponsor_command(operation: &str, input: &[u8]) -> Result<Vec<u
     let value = match operation {
         "prepare" => runtime.prepare(serde_json::from_slice(input).map_err(refused)?)?,
         "sign" => runtime.sign(serde_json::from_slice(input).map_err(refused)?)?,
+        "settlement-recipient" => runtime.recipient(serde_json::from_slice(input).map_err(refused)?)?,
         _ => return Err("unknown sponsor operation".to_owned()),
     };
     serde_json::to_vec(&value).map_err(refused)
@@ -152,13 +163,35 @@ impl Runtime {
             pending_key: pending.public_key, recovery_root: recovery.root().bytes(),
             recovery_threshold: recovery.threshold().value(), recovery_delay_seconds: recovery.challenge_delay_secs(),
             registration_action: journey.bootstrap_action(crate::onboarding::ProtocolStage::DidRegistration),
-            recovery_action: journey.bootstrap_action(crate::onboarding::ProtocolStage::RecoveryRegistration) };
+            recovery_action: journey.bootstrap_action(crate::onboarding::ProtocolStage::RecoveryRegistration),
+            recipient: self.custody.evm_wallet(scope.principal(), &KeyId::new("human-primary").map_err(refused)?).map_err(refused)? };
         let row = RowKey::new("onboarding-sponsor-owner").map_err(refused)?;
         let bytes = serde_json::to_vec(&owner).map_err(refused)?;
         if let Some(prior) = scope.get(Table::Journeys, &row) {
             if prior.bytes() != bytes { return Err(refused(())); }
         } else { scope.put(Table::Journeys, row, observed, bytes).map_err(refused)?; }
         serde_json::to_value(owner).map_err(refused)
+    }
+
+    fn recipient(&self, request: RecipientRequest) -> Result<serde_json::Value, String> {
+        let principal = PrincipalId::new(&request.principal).map_err(refused)?;
+        let mut store = self.store.lock().map_err(refused)?;
+        let mut scope = store.principal(&principal).map_err(refused)?;
+        let key = KeyId::new("human-primary").map_err(refused)?;
+        let trace = TraceId::mint(request.checkpoint[..16].try_into().map_err(refused)?);
+        let signature = self.custody.settlement_recipient_in_scope(&mut scope, &key,
+            crate::custody::SettlementRecipientRequest { checkpoint: request.checkpoint,
+                asset: request.asset, recipient: request.recipient }, &trace, now().map_err(refused)?).map_err(refused)?;
+        let journey = OnboardingJourney::load(&scope).map_err(refused)?.ok_or_else(|| refused(()))?;
+        let did = journey.did().map_err(refused)?;
+        let did_text = std::str::from_utf8(did.as_bytes()).map_err(refused)?;
+        let account = AccountId::parse(&format!("agent:{did_text}:main")).map_err(refused)?;
+        let public_key = self.custody.creation_keystore().describe(&principal, &key).map_err(refused)?.public_key;
+        Ok(json!({"network_id": self.network, "principal": principal.as_str(), "did": did_text,
+            "account": hex_bytes(&layerx_intents::canonical::account_id_for_protocol(&account, 3).map_err(refused)?),
+            "public_key": hex_bytes(&public_key), "asset": hex_bytes(&request.asset),
+            "checkpoint": hex_bytes(&request.checkpoint), "recipient": hex_bytes(&request.recipient),
+            "signature": hex_bytes(&signature)}))
     }
 
     fn sign(&self, request: SigningRequest) -> Result<serde_json::Value, String> {
@@ -202,6 +235,8 @@ fn bootstrap_intent(owner: &Owner, request: &SigningRequest, registry: &ModuleRe
     if request.operation == "identity" && request.action_key != owner.registration_action
         || request.operation == "recovery" && request.action_key != owner.recovery_action { return Err(refused(())); }
     if request.operation == "credit" {
+        if request.effective_sequence.is_some() || request.policy_start_ms.is_some()
+            || request.policy_end_ms.is_some() { return Err(refused(())); }
         let raw: &[u8; 427] = request.credit.as_deref().ok_or_else(|| refused(()))?.try_into().map_err(refused)?;
         if raw[139..171] != owner.public_key { return Err(refused(())); }
         let credit = layerx_intents::NativeCustodyCredit::new(raw,

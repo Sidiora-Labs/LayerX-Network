@@ -16,6 +16,10 @@ impl PrincipalStore {
         root: impl AsRef<Path>, retention: RetentionPolicy, tenancy_digest: TenancyDigest,
         authority: Arc<dyn PrincipalTenancyAuthority>,
     ) -> Result<Self, StoreError> {
+        let root = root.as_ref();
+        if !root.is_absolute() || fs::canonicalize(root)? != root {
+            return Err(StoreError::Tenancy(TenancyError::DigestMismatch));
+        }
         let mut store = Self::open(root, retention, tenancy_digest)?;
         store.provider = Some(authority);
         for principal in store.known_principals()? {
@@ -61,9 +65,12 @@ impl PrincipalStore {
             return Err(StoreError::Tenancy(TenancyError::DigestMismatch));
         }
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-        if path.exists() {
-            verify_binding_file(&path, bytes)?;
-        } else {
+        match fs::symlink_metadata(&path) {
+            Ok(_) => { verify_binding_file(&path, bytes)?; return Ok(tenant); }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+        }
+        {
             let pending = directory.join("provider-binding.pending");
             match fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&pending) {
                 Ok(mut file) => { file.write_all(bytes)?; file.sync_all()?; }

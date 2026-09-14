@@ -279,8 +279,8 @@ def _produce(work_dir):
     root = Path(work_dir) / 'human-evidence-input'
     path = root / 'owner-native.json'
     config = protected_json(path)
-    kms = 'kms_command' in config
-    key_fields = 'kms_command kms_owner_file' if kms else 'owner_seed_file pending_seed_file'
+    kms = 'kms_signer' in config
+    key_fields = 'kms_signer kms_owner_file' if kms else 'owner_seed_file pending_seed_file'
     fields(config, 'node_socket network_id sequencer_public_key layerxctl fee_limit authority_url authority_token_file authority_ca_file authority_state_root ' + key_fields, path, 'native producer configuration')
     uint(config['network_id'], 32, path, 'network_id', 1)
     uint(config['fee_limit'], 128, path, 'fee_limit')
@@ -296,7 +296,9 @@ def _produce(work_dir):
     kms_owner = None
     signer = None
     if kms:
-        require(Path(config['kms_command']).is_absolute(), path, 'KMS onboarding executable')
+        fields(config['kms_signer'], 'socket peer_uid peer_gid', path, 'KMS signer peer')
+        for key in ('peer_uid', 'peer_gid'):
+            uint(config['kms_signer'][key], 32, path, key)
         kms_owner = protected_json(config['kms_owner_file'])
         public = bytes(kms_owner['public_key'])
         pending_public = bytes(kms_owner['pending_key'])

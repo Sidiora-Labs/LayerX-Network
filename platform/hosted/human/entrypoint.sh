@@ -19,6 +19,15 @@ case "$role" in
         copy_material purpose-catalog.json
         exec /usr/local/bin/layerx-human-components "$@"
         ;;
+    onboarding-signer)
+        copy_material kms-client.der
+        copy_material kms-client-key.der
+        copy_material ca.der
+        export LAYERX_HUMAN_KMS_CLIENT_CERTIFICATE_DER="$private/kms-client.der"
+        export LAYERX_HUMAN_KMS_CLIENT_PRIVATE_KEY_DER="$private/kms-client-key.der"
+        export LAYERX_HUMAN_KMS_ROOT_CERTIFICATE_DER="$private/ca.der"
+        exec python3 /usr/local/lib/layerx-human/onboarding_socket.py "$@"
+        ;;
     kms)
         for name in kms-server.der kms-server-key.der kms-client.der kms-executor.der ca.der kms-seal registry.json; do
             copy_material "$name"

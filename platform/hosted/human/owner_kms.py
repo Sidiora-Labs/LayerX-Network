@@ -1,20 +1,30 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 
-from provision import fields, protected_json, require, write_json
+from provision import fields, protected_bytes, protected_json, require, write_json
 from owner_native import protected_write, digest, span
 
 
-def prepare(work_dir, executable):
+def prepare(work_dir, executable, config_directory):
     root = Path(work_dir) / 'human-evidence-input'
+    config_directory = Path(config_directory)
+    require(config_directory.is_absolute() and config_directory.resolve() == config_directory,
+            config_directory, 'canonical onboarding configuration directory')
+    for suffix in ('TENANCY_DIGEST', 'AUTH_INDEX_KEY', 'STREAM_CURSOR_KEY'):
+        name = 'LAYERX_HUMAN_' + suffix
+        value = protected_bytes(config_directory / name, 128).decode()
+        require(os.environ.get(name) == value, config_directory, 'same protected production configuration')
+    funding = int(os.environ['LAYERX_HUMAN_ONBOARDING_INITIAL_FUNDING'])
+    require(0 < funding < 2**128, config_directory, 'finite onboarding funding')
     request = protected_json(root / 'owner-request.json')
     fields(request, 'email display_name idempotency_key now', root, 'owner provisioning request')
     call = {key: request[key] for key in ('email', 'display_name', 'idempotency_key')}
     completed = subprocess.run([executable, 'prepare'], input=json.dumps(call).encode(), capture_output=True)
     require(completed.returncode == 0, root, 'real KMS sponsor preparation')
     owner = json.loads(completed.stdout)
-    fields(owner, 'principal did public_key pending_key recovery_root recovery_threshold recovery_delay_seconds registration_action recovery_action', root, 'KMS sponsor export')
+    fields(owner, 'principal did public_key pending_key recovery_root recovery_threshold recovery_delay_seconds registration_action recovery_action recipient', root, 'KMS sponsor export')
     for name in ('public_key', 'pending_key', 'recovery_root', 'registration_action', 'recovery_action'):
         require(type(owner[name]) is list and len(owner[name]) == 32
                 and all(type(value) is int and 0 <= value <= 255 for value in owner[name])
@@ -22,6 +32,8 @@ def prepare(work_dir, executable):
     require(owner['public_key'] != owner['pending_key']
             and owner['did'] == 'did:layerx:' + owner['principal'], root, 'actual provider and KMS identity binding')
     write_json(root / 'owner-kms.json', owner)
+    write_json(root / 'onboarding-configuration.json', dict(directory=str(config_directory),
+        sponsor_principal=owner['principal'], initial_funding=funding))
     write_json(Path(work_dir) / 'human-owner-result.json', {key: owner[key] for key in
         ('principal', 'did', 'recovery_root', 'recovery_threshold', 'recovery_delay_seconds')})
     public = bytes(owner['public_key'])
@@ -41,9 +53,8 @@ def sign(config, owner, label, payload, sequence, not_before, not_after, action)
         require(len(payload) == 92 and payload[:4] == b'\x71\2\0\4', config, 'canonical rotation policy')
         request.update(policy_start_ms=int.from_bytes(payload[68:76], 'big'),
             policy_end_ms=int.from_bytes(payload[76:84], 'big'), effective_sequence=int.from_bytes(payload[84:92], 'big'))
-    completed = subprocess.run([config['kms_command'], 'sign'], input=json.dumps(request).encode(), capture_output=True)
-    require(completed.returncode == 0, config, 'KMS bootstrap signature')
-    result = json.loads(completed.stdout)
+    from onboarding_socket import request as signed_request
+    result = signed_request(config['kms_signer'], 'sign', request)
     fields(result, 'activity activity_id', config, 'signed bootstrap response')
     signed = bytes.fromhex(result['activity'])
     verify_signed(signed, config, owner, payload, sequence, not_before, not_after, action,
@@ -74,3 +85,13 @@ def verify_signed(signed, config, owner, payload, sequence, not_before, not_afte
     tag(12); signature = r.span(64); r.finish()
     require(len(signature) == 64, config, 'signature length')
     Ed25519PublicKey.from_public_bytes(bytes(owner['public_key'])).verify(signature, digest(b'signature-preimage', unsigned))
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--work-dir', required=True)
+    parser.add_argument('--executable', required=True)
+    parser.add_argument('--config-directory', required=True)
+    args = parser.parse_args()
+    prepare(args.work_dir, args.executable, args.config_directory)

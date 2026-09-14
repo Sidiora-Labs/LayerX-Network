@@ -511,6 +511,10 @@ spec:
               value: /run/layerx/human/components.sock
             - name: LAYERX_HUMAN_COMPONENT_ALLOWED_UID
               value: '4020'
+            - {name: LAYERX_HUMAN_RECIPIENT_SOCKET, value: /run/layerx/human/recipient.sock}
+            - {name: LAYERX_HUMAN_RECIPIENT_CALLER_UID, value: '4021'}
+            - {name: LAYERX_HUMAN_RECIPIENT_CALLER_GID, value: '4020'}
+            - {name: LAYERX_HUMAN_RECIPIENT_DEADLINE_SECONDS, value: '10'}
             - name: LAYERX_HUMAN_COMPONENT_WORKERS
               value: '4'
             - name: LAYERX_HUMAN_COMPONENT_QUEUE_CAPACITY

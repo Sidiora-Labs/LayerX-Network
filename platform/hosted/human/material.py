@@ -41,6 +41,9 @@ def assemble_policy(evidence, deployment, registry_path, output, network, chain)
         'principal_policy': 'principal-policy.json', 'recovery_policy': 'recovery-policy.json',
         'movement': 'movement-policy.json',
     }.items()}
+    onboarding = evidence / 'onboarding-configuration.json'
+    if onboarding.exists():
+        policy['onboarding_configuration'] = protected_json(onboarding)
     addresses = deployment['addresses']
     policy['components'].update({
         'PAXEER_EXIT_CONTRACT': addresses['emergency_exit'],
@@ -90,8 +93,22 @@ def main():
         'EXIT_POLL_CADENCE_SECONDS': 5, 'EXIT_DELAYED_AFTER_POLLS': 12,
         'CONTINUATION_UNKNOWN_DEADLINE_SECONDS': 300,
     }
+    policy = protected_json(sys.argv[4]) if sys.argv[4] else None
+    onboarding = policy.get('onboarding_configuration') if policy else None
+    if onboarding is not None:
+        directory = Path(onboarding['directory'])
+        if not directory.is_absolute() or directory.resolve() != directory:
+            raise ValueError('canonical onboarding configuration directory required')
     for name in ('TENANCY_DIGEST', 'AUTH_INDEX_KEY', 'STREAM_CURSOR_KEY'):
-        config[name] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip('=')
+        if onboarding is None:
+            config[name] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip('=')
+        else:
+            from provision import protected_bytes
+            source = Path(onboarding['directory']) / ('LAYERX_HUMAN_' + name)
+            value = protected_bytes(source, 128).decode()
+            if not re.fullmatch('[A-Za-z0-9_-]{43}', value) or len(base64.urlsafe_b64decode(value + '=')) != 32:
+                raise ValueError('onboarding configuration binding refused')
+            config[name] = value
     for prefix in ('AGENT', 'KMS'):
         for key, value in {'MAX_FRAME_BYTES': 1048576, 'MAX_CONNECTIONS': 4,
                            'MAX_STREAMS': 4, 'MAX_QUEUED_BYTES': 4194304,
@@ -133,14 +150,17 @@ def main():
     journal = root / 'journal'
     journal.mkdir(mode=0o700)
     if sys.argv[4]:
-        policy = protected_json(sys.argv[4])
         required = {'components', 'agent', 'purpose_catalog', 'registry', 'journal_directory',
                     'authority', 'principal_policy', 'recovery_policy', 'movement'}
+        if onboarding is not None:
+            required.add('onboarding_configuration')
         if set(policy) != required:
             raise ValueError('Human policy fields do not match the documented contract')
         component_keys = {'AGENT_ACTOR', 'AGENT_AUTHORITY', 'AGENT_OWNER_ACCOUNT',
                           'AGENT_RECOVERY_ROOT', 'AGENT_RECOVERY_THRESHOLD',
                           'PAXEER_EXIT_CONTRACT', 'PAXEER_WITHDRAWAL_CLAIMS_CONTRACT'}
+        if onboarding is not None:
+            component_keys.update(('ONBOARDING_SPONSOR_PRINCIPAL', 'ONBOARDING_INITIAL_FUNDING'))
         agent_keys = {'HUMAN_PEERS', 'HUMAN_LIMIT_SCOPE', 'HUMAN_LIMIT_SCOPE_ID',
                       'HUMAN_LIMIT_ID', 'HUMAN_LIMIT_NAME', 'HUMAN_LIMIT_CEILING',
                       'HUMAN_LIMIT_CONSUMED'}
@@ -230,6 +250,15 @@ def main():
             write(root / 'authority-config', key, value)
         write(root / 'authority', 'principal-policy.json', json.dumps(policy['principal_policy']))
         write(root / 'identity', 'recovery-policy.json', json.dumps(recovery))
+        if onboarding is not None:
+            if (set(onboarding) != {'directory', 'sponsor_principal', 'initial_funding'}
+                    or policy['components']['ONBOARDING_SPONSOR_PRINCIPAL'] != onboarding['sponsor_principal']
+                    or policy['components']['ONBOARDING_INITIAL_FUNDING'] != onboarding['initial_funding']
+                    or type(onboarding['initial_funding']) is not int or not 0 < onboarding['initial_funding'] < 2**128):
+                raise ValueError('onboarding sponsor configuration refused')
+            config.update(IDENTITY_BINDING_SOCKET='/run/layerx/human/identity-binding.sock',
+                IDENTITY_BINDING_TENANT=tenant, IDENTITY_BINDING_PEER_UID=4020,
+                IDENTITY_BINDING_PEER_GID=4020, IDENTITY_BINDING_DEADLINE_SECONDS=10)
         config['EXIT_REQUIRED_CONFIRMATIONS'] = movement['PAXEER_CONFIRMATIONS']
         config.update(policy['components'])
         agent.update(policy['agent'])

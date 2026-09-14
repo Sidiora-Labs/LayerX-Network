@@ -22,7 +22,7 @@ COPY --from=build /src/human/target/release/layerx-human-identity-provider /usr/
 COPY --from=build /src/human/target/release/layerx-human-security-provider /usr/local/bin/layerx-human-security-provider
 COPY --from=build /src/human/target/release/layerx-human-movement-provider /usr/local/bin/layerx-human-movement-provider
 COPY --from=build /src/cmd/layerxctl/target/release/layerxctl /usr/local/bin/layerxctl
-COPY platform/hosted/human/provision.py platform/hosted/human/owner_native.py platform/hosted/human/owner_kms.py /usr/local/lib/layerx-human/
+COPY platform/hosted/human/provision.py platform/hosted/human/owner_native.py platform/hosted/human/owner_kms.py platform/hosted/human/onboarding_socket.py /usr/local/lib/layerx-human/
 COPY --chmod=0555 platform/hosted/human/entrypoint.sh /usr/local/bin/human-entrypoint
 USER 4020:4020
 ENTRYPOINT ["/usr/local/bin/layerx-human-service"]
