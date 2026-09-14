@@ -525,6 +525,18 @@ static int terminal_rejection_case(void)
     CHECK(restarted->feed.scanned_through_sequence == first_sequence);
     lxp_daemon_batch_wal_destroy(loaded);
     lxp_kernel_prepared_batch_destroy(prepared);
+    CHECK(lxp_history_close(&live->history) == LXP_OK);
+    CHECK(lxp_log_close(&live->feed_log) == LXP_OK);
+    CHECK(lxp_log_close(&live->canonical_log) == LXP_OK);
+    CHECK(pthread_mutex_destroy(&live->feed_mutex) == 0);
+    CHECK(lxp_state_store_destroy(&live->state) == LXP_OK);
+    lx_account_registry_release(&live->accounts);
+    CHECK(lxp_history_close(&restarted->history) == LXP_OK);
+    CHECK(lxp_log_close(&restarted->feed_log) == LXP_OK);
+    CHECK(lxp_log_close(&restarted->canonical_log) == LXP_OK);
+    CHECK(pthread_mutex_destroy(&restarted->feed_mutex) == 0);
+    CHECK(lxp_state_store_destroy(&restarted->state) == LXP_OK);
+    lx_account_registry_release(&restarted->accounts);
     free(live->storage);
     free(restarted->storage);
     free(live);
@@ -655,12 +667,21 @@ static int terminal_maintenance_case(void)
     lx_account_registry_release(&restarted->accounts);
     free(restarted->storage);
     free(restarted);
+    CHECK(lxp_history_close(&f->history) == LXP_OK);
+    CHECK(lxp_log_close(&f->feed_log) == LXP_OK);
+    CHECK(lxp_log_close(&f->canonical_log) == LXP_OK);
+    CHECK(pthread_mutex_destroy(&f->feed_mutex) == 0);
+    CHECK(lxp_state_store_destroy(&f->state) == LXP_OK);
+    lx_account_registry_release(&f->accounts);
     free(f->storage);
     free(f);
     return 0;
 }
 
-int main(void)
+#ifndef LXP_TEST_TERMINAL_REJECTION_MAIN
+#define LXP_TEST_TERMINAL_REJECTION_MAIN main
+#endif
+int LXP_TEST_TERMINAL_REJECTION_MAIN(void)
 {
     if (classification_case() != 0) return 1;
     if (terminal_rejection_case() != 0) return 1;

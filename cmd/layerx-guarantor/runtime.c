@@ -324,6 +324,20 @@ static lxp_result compare_signed(const lxp_receipt *receipt, lxp_byte_span publi
     return reset_status == LXP_OK ? status : reset_status;
 }
 
+static lxp_result replay_execute_terminal(lxp_kernel *kernel, const lxp_activity *activity,
+    const lxp_kernel_execution *execution, lxp_receipt *receipt)
+{
+    lxp_result status;
+    if (execution == NULL || execution->replay_receipt == NULL ||
+        execution->replay_public_key == NULL || execution->sequencer_private_key != NULL)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_kernel_execute_activity(kernel, activity, execution, receipt);
+    if (status != LXP_OK && status == execution->replay_receipt->result_code &&
+        lxp_terminal_rejection_applies(status))
+        status = lxp_kernel_terminal_rejection(kernel, activity, execution, status, receipt);
+    return status;
+}
+
 static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_sequence,
                                           const uint8_t *canonical_activity, size_t activity_length,
                                           const uint8_t *canonical_receipt, size_t receipt_length,
@@ -459,7 +473,7 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
         (void)memcpy(process->programs.occupancy_asset_id, asset_id, 32U);
     }
     (void)memset(receipt, 0, sizeof(*receipt));
-    status = lxp_kernel_execute_activity(&process->kernel, activity, &execution, receipt);
+    status = replay_execute_terminal(&process->kernel, activity, &execution, receipt);
     if (status == LXP_OK)
         status = compare_signed(receipt, (lxp_byte_span){canonical_receipt, receipt_length},
                                  &process->execution_arena);

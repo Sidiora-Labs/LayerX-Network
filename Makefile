@@ -3763,7 +3763,18 @@ $(BUILD_DIR)/tests/lxp_test_guarantor_receipt: tests/daemon/guarantor-receipt.c 
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out %.c,$^) $(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
-test-guarantor-receipt: $(BUILD_DIR)/tests/lxp_test_guarantor_receipt
+test-guarantor-receipt: $(BUILD_DIR)/tests/lxp_test_guarantor_receipt test-guarantor-terminal-rejection
+	$(RUN_PREFIX) $<
+
+.PHONY: test-guarantor-terminal-rejection
+$(BUILD_DIR)/tests/lxp_test_guarantor_terminal_rejection: tests/daemon/guarantor-terminal-rejection.c \
+	cmd/layerx-guarantor/runtime.c tests/protocol/lxp_test_terminal_rejection.c tests/programs/test_call_activity.c \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o $(BUILD_DIR)/obj/cmd/layerx-guarantor/runtime.o,$(LAYERXD_OBJECTS)) \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(filter-out %.c,$^) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+test-guarantor-terminal-rejection: $(BUILD_DIR)/tests/lxp_test_guarantor_terminal_rejection
 	$(RUN_PREFIX) $<
 
 .PHONY: test-state-proof
