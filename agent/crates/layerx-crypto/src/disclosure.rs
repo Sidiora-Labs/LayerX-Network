@@ -1046,6 +1046,48 @@ fn session_grant_fields(activity: &Activity) -> Result<DisclosureFields, Disclos
     })
 }
 
+fn legacy_budget_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
+    let TimestampBound {
+        not_before,
+        not_after,
+    } = activity.timestamp_bound();
+    let budget = decode_budget_create(activity.payload())?;
+    Ok(DisclosureFields {
+        activity_type: activity.activity_type(),
+        actor: activity.actor_did().to_vec(),
+        authority: activity.authority().to_vec(),
+        counterparties: vec![
+            Counterparty {
+                role: CounterpartyRole::Payer,
+                account: budget.owner,
+            },
+            Counterparty {
+                role: CounterpartyRole::Recipient,
+                account: budget.budget,
+            },
+        ],
+        amounts: vec![DisclosedAmount {
+            role: AmountRole::SpendingLimit,
+            value: budget.per_period_limit,
+        }],
+        asset: budget.asset,
+        fee_limit: activity.fee_limit(),
+        expiry: Expiry {
+            not_before,
+            not_after,
+            payload_expires_at: budget.expires_at,
+        },
+        idempotency_key: activity.idempotency_key(),
+        authority_grant: None,
+        session_grant: None,
+        onboarding: None,
+        native_operation: None,
+        evm_payout_binding: None,
+        withdrawal: None,
+        payment: None,
+    })
+}
+
 fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
     if activity.activity_type().module() == ModuleId::Asset
         && activity.activity_type().ordinal() == ASSET_WITHDRAW_ORDINAL
@@ -1068,7 +1110,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
     }
     if kind == (ModuleId::Governance, 3)
         || (kind == (ModuleId::Budget, 1)
-            && matches!(activity.payload().get(..2), Some([0, 1] | [0, 2])))
+            && matches!(activity.payload().get(..2), Some([0, 1 | 2])))
     {
         return native::fields(activity);
     }
@@ -1085,41 +1127,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         return governance_fields(activity, not_before, not_after);
     }
     if kind == (ModuleId::Budget, BUDGET_CREATE_ORDINAL) {
-        let budget = decode_budget_create(activity.payload())?;
-        return Ok(DisclosureFields {
-            activity_type: activity.activity_type(),
-            actor: activity.actor_did().to_vec(),
-            authority: activity.authority().to_vec(),
-            counterparties: vec![
-                Counterparty {
-                    role: CounterpartyRole::Payer,
-                    account: budget.owner,
-                },
-                Counterparty {
-                    role: CounterpartyRole::Recipient,
-                    account: budget.budget,
-                },
-            ],
-            amounts: vec![DisclosedAmount {
-                role: AmountRole::SpendingLimit,
-                value: budget.per_period_limit,
-            }],
-            asset: budget.asset,
-            fee_limit: activity.fee_limit(),
-            expiry: Expiry {
-                not_before,
-                not_after,
-                payload_expires_at: budget.expires_at,
-            },
-            idempotency_key: activity.idempotency_key(),
-            authority_grant: None,
-            session_grant: None,
-            onboarding: None,
-            native_operation: None,
-            evm_payout_binding: None,
-            withdrawal: None,
-            payment: None,
-        });
+        return legacy_budget_fields(activity);
     }
     let send = semantics(activity)?;
     Ok(DisclosureFields {
