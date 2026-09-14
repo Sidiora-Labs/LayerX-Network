@@ -144,6 +144,21 @@ static int fixture(lxp_daemon_finality_authority *authority)
                 header->timestamp_ms + 1000U, &arena, &attestations[i]) != LXP_OK)
             FAIL();
     }
+    if (getenv("LAYERX_TEST_DA_BONDED_SET_VERSION") != NULL) {
+        const char *text = getenv("LAYERX_TEST_DA_BONDED_SET_VERSION");
+        uint64_t version = 0U;
+        if (getenv("LAYERX_TEST_DA_HEADER_FILE") == NULL || text[0] < '1' || text[0] > '9')
+            FAIL();
+        for (i = 0U; text[i] != '\0'; ++i) {
+            unsigned digit;
+            if (text[i] < '0' || text[i] > '9') FAIL();
+            digit = (unsigned)(text[i] - '0');
+            if (version > (UINT64_MAX - digit) / 10U) FAIL();
+            version = version * 10U + digit;
+        }
+        if (version < bonded_set.version) FAIL();
+        bonded_set.version = version;
+    }
     if (lxp_guarantor_cert_assemble(&checkpoint, attestations, 2U, 2U,
                                     &certificate) != LXP_OK) FAIL();
     requirements.checkpoint_epoch = header->epoch;

@@ -67,6 +67,9 @@ def main():
     assert chain.rpc('eth_chainId', []) == '0x7d'
     bond = settlement['LAYERX_NODE_SETTLEMENT_CONTRACT']
     registry = settlement['LAYERX_NODE_CHECKPOINT_REGISTRY']
+    if os.environ.get('LAYERX_TEST_HANDOVER_PEERS') == '1':
+        peers = runpy.run_path(str(ROOT / 'tests/daemon/handover-peers.py'))
+        peers['setup'](native, chain)
     administrator = chain.account.address
     chain.send(COMMON['USDL'], 'mint(address,uint256)', administrator, '2000')
     chain.send(COMMON['USDL'], 'approve(address,uint256)', bond, '2000')
@@ -75,6 +78,9 @@ def main():
         chain.send(bond, 'activateGuarantor(bytes32,address,address,uint64,uint64)',
             identifier, signer, administrator, '1', str(index))
         chain.send(bond, 'depositBond(bytes32,uint256)', identifier, '1000')
+    membership_version = int(chain.view(bond, 'membershipVersion()'), 16)
+    assert 4 <= membership_version < 2 ** 64
+    environment['LAYERX_TEST_DA_BONDED_SET_VERSION'] = str(membership_version)
     checkpoint_id = None
     certificate_directory = None
     for batch in range(1, count + 1):
@@ -83,6 +89,13 @@ def main():
         path = output / f'header-{batch}.bin'
         path.write_bytes(header)
         native_environment = environment | {'LAYERX_TEST_DA_HEADER_FILE': str(path)}
+        if batch == 1:
+            for invalid_version in ('0', '3', '04', '+4', '4x', str(2 ** 64)):
+                with (output / ('refuse-membership-version-' + invalid_version + '.log')).open('wb') as log:
+                    rejected = subprocess.run([str(build / 'tests/lxp_test_daemon_finality_authority'), 'prepare'],
+                        cwd=ROOT, env=native_environment | {'LAYERX_TEST_DA_BONDED_SET_VERSION': invalid_version},
+                        stdout=log, stderr=log, timeout=30)
+                assert rejected.returncode != 0, 'invalid bonded set version accepted'
         prepared = subprocess.run([str(build / 'tests/lxp_test_daemon_finality_authority'), 'prepare'],
             cwd=ROOT, env=native_environment, check=True, capture_output=True, timeout=30)
         vector = json.loads(prepared.stdout)

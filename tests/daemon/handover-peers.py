@@ -102,9 +102,8 @@ def tls_files(directory):
             path.chmod(0o700 if path.is_dir() else 0o600)
 
 
-def run(native, build, exports, count, lni_socket):
-    chain = from_environment(os.environ['LAYERX_TEST_WITHDRAW_RPC'])
-    assert chain.rpc('eth_chainId', []) == '0x7d' and count >= 3
+def setup(native, chain):
+    assert chain.rpc('eth_chainId', []) == '0x7d'
     settlement = environment_file(native / 'settlement.env')
     custody = json.loads(Path(os.environ['LAYERX_TEST_CUSTODY_FILE']).read_text())
     artifacts = Path(os.environ['LAYERX_TEST_CUSTODY_ARTIFACTS'])
@@ -116,6 +115,32 @@ def run(native, build, exports, count, lni_socket):
     govern(chain, custody['timelock'], vault, 'setGuarantorBond(address)', bond)
     deposit_authority = ed25519.Ed25519PrivateKey.from_private_bytes(bytes([0x77]) * 32).public_key().public_bytes_raw()
     govern(chain, custody['timelock'], vault, 'setDepositRootAuthority(bytes32)', '0x' + deposit_authority.hex())
+    asset = COMMON.run('cast', 'keccak', 'USDL')
+    govern(chain, custody['timelock'], custody['registry'],
+        'registerAsset(bytes32,address,uint8,uint128,uint128)', asset, COMMON.USDL, '6', '1', str(2 ** 128 - 1))
+    chain.send(COMMON.USDL, 'mint(address,uint256)', chain.account.address, '1000')
+    chain.send(COMMON.USDL, 'approve(address,uint256)', vault, '1000')
+    chain.send(vault, 'deposit(bytes32,uint256,bytes32)', asset, '1000', custody['beneficiary'])
+    for target, signature, arguments, expected in (
+        (COMMON.USDL, 'balanceOf(address)', (vault,), 1000),
+        (vault, 'totalCustodied(bytes32)', (asset,), 1000),
+        (bond, 'custodiedValue()', (), 1000),
+        (bond, 'minimumBond()', (), 100),
+    ):
+        assert int(chain.view(target, signature, *arguments), 16) == expected
+
+
+def run(native, build, exports, count, lni_socket):
+    chain = from_environment(os.environ['LAYERX_TEST_WITHDRAW_RPC'])
+    assert chain.rpc('eth_chainId', []) == '0x7d' and count >= 3
+    settlement = environment_file(native / 'settlement.env')
+    custody = json.loads(Path(os.environ['LAYERX_TEST_CUSTODY_FILE']).read_text())
+    bond, registry, vault = settlement['LAYERX_NODE_SETTLEMENT_CONTRACT'], settlement['LAYERX_NODE_CHECKPOINT_REGISTRY'], custody['vault']
+    assert int(chain.view(bond, 'custodiedValue()'), 16) == 1000
+    assert int(chain.view(bond, 'minimumBond()'), 16) == 100
+    assert chain.view(vault, 'guarantorBond()')[-40:].lower() == bond[2:].lower()
+    deposit_authority = ed25519.Ed25519PrivateKey.from_private_bytes(bytes([0x77]) * 32).public_key().public_bytes_raw()
+    assert bytes.fromhex(chain.view(vault, 'depositRootAuthority()')[2:]) == deposit_authority
     output = native / 'handover-peers'
     output.mkdir(mode=0o755)
     output.chmod(0o755)
