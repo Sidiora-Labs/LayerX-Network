@@ -722,6 +722,7 @@ dependencies = [
  "layerx-programs-registry",
  "layerx-programs-runtime",
  "layerx-proof",
+ "layerx-sdk",
  "layerx-types",
  "layerx-wire",
  "native-tls",

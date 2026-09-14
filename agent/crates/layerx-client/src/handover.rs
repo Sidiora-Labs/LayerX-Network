@@ -60,6 +60,62 @@ pub struct SequencerHistory {
 }
 
 impl SequencerHistory {
+    #[must_use]
+    pub const fn network_id(&self) -> u32 {
+        self.network_id
+    }
+
+    /// Verifies historical header authority within an authenticated term interval.
+    ///
+    /// # Errors
+    /// Refuses retired keys, claimed epochs and sequences outside verified history.
+    pub fn verify_header(
+        &self,
+        canonical: &[u8],
+        signature: &[u8; 64],
+    ) -> Result<VerifiedBatchHeader, HistoryError> {
+        let header = decode_batch_header(canonical).map_err(|_| HistoryError::Header)?;
+        let authorization = self.authorization_for_batch(header.batch_number())?;
+        let interval = self
+            .intervals
+            .iter()
+            .find(|entry| (entry.first_batch..=entry.last_batch).contains(&header.batch_number()))
+            .ok_or(HistoryError::UnverifiedRange)?;
+        let head = self
+            .predecessor
+            .as_ref()
+            .ok_or(HistoryError::UnverifiedRange)?;
+        if header.protocol_version() != 3
+            || header.network_id() != self.network_id
+            || header.epoch() != interval.epoch
+            || header.first_sequence() < interval.first_sequence
+            || header.last_sequence() > interval.last_sequence.min(head.header().last_sequence())
+        {
+            return Err(HistoryError::Header);
+        }
+        verify_header(canonical, signature, &authorization).map_err(|_| HistoryError::Header)
+    }
+
+    /// Returns the authenticated term's sequence ceiling for bounded history pagination.
+    ///
+    /// # Errors
+    /// Refuses every sequence not yet covered by complete history verification.
+    pub fn sequence_interval_end(&self, sequence: u64) -> Result<u64, HistoryError> {
+        self.authorization_for_sequence(sequence)?;
+        let interval = self
+            .intervals
+            .iter()
+            .find(|entry| (entry.first_sequence..=entry.last_sequence).contains(&sequence))
+            .ok_or(HistoryError::UnverifiedRange)?;
+        Ok(interval.last_sequence.min(
+            self.predecessor
+                .as_ref()
+                .ok_or(HistoryError::UnverifiedRange)?
+                .header()
+                .last_sequence(),
+        ))
+    }
+
     /// Verifies real builder output against independently configured genesis pins.
     ///
     /// # Errors

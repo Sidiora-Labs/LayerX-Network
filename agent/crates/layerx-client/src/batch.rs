@@ -187,6 +187,36 @@ pub fn lookup_untrusted(
     fetch(transport, version, batch_number, correlation_id, None)
 }
 
+/// Verifies a retrieved header using genesis-bound historical term authority.
+///
+/// # Errors
+/// Refuses unverified ranges, retired signers and malformed or invalid headers.
+pub fn lookup_with_history(
+    transport: &mut dyn FrameTransport,
+    version: Version,
+    batch_number: u64,
+    correlation_id: u64,
+    history: &crate::handover::SequencerHistory,
+) -> Result<SignedBatchHeader, BatchHeaderError> {
+    let authorization = history
+        .authorization_for_batch(batch_number)
+        .map_err(|_| BatchHeaderError::AuthorityMismatch)?;
+    let mut candidate = fetch(
+        transport,
+        version,
+        batch_number,
+        correlation_id,
+        Some(authorization.public_key()),
+    )?
+    .0;
+    history
+        .verify_header(candidate.canonical_bytes(), &candidate.signature)
+        .map_err(|_| BatchHeaderError::AuthorityMismatch)?;
+    candidate.first_batch_number = batch_number;
+    candidate.last_batch_number = batch_number;
+    Ok(candidate)
+}
+
 /// Retrieves a canonical batch header and verifies its independently pinned sequencer.
 ///
 /// # Errors

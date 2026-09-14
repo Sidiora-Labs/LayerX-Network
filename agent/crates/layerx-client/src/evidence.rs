@@ -315,7 +315,7 @@ impl SignedHeader {
         )
     }
 
-    fn pinned_key_authorization(
+    pub(crate) fn pinned_key_authorization(
         &self,
         handshake_key: [u8; 32],
         expected_protocol_version: u16,
@@ -517,6 +517,30 @@ pub fn proof_bundle(
     context: EvidenceContext,
     registry: &ModuleRegistry,
 ) -> Result<VerifiedProofBundle, EvidenceError> {
+    proof_bundle_with_authority(transport, selector, context, registry, None)
+}
+
+/// Retrieves proof material under independently authenticated handover history.
+///
+/// # Errors
+/// Refuses unknown term ranges and all original proof, domain and selector failures.
+pub fn proof_bundle_with_history(
+    transport: &mut dyn FrameTransport,
+    selector: ProofBundleSelector,
+    context: EvidenceContext,
+    registry: &ModuleRegistry,
+    history: &crate::handover::SequencerHistory,
+) -> Result<VerifiedProofBundle, EvidenceError> {
+    proof_bundle_with_authority(transport, selector, context, registry, Some(history))
+}
+
+fn proof_bundle_with_authority(
+    transport: &mut dyn FrameTransport,
+    selector: ProofBundleSelector,
+    context: EvidenceContext,
+    registry: &ModuleRegistry,
+    history: Option<&crate::handover::SequencerHistory>,
+) -> Result<VerifiedProofBundle, EvidenceError> {
     let (kind, target_activity_id, account_id) = match selector {
         ProofBundleSelector::Activity(identifier) => (1, identifier, None),
         ProofBundleSelector::AccountState {
@@ -558,9 +582,44 @@ pub fn proof_bundle(
             target_activity_id,
             context,
             registry,
+            history,
         );
     }
-    inclusion_proof_bundle(response, kind, target_activity_id, context, registry)
+    inclusion_proof_bundle(
+        response,
+        kind,
+        target_activity_id,
+        context,
+        registry,
+        history,
+    )
+}
+
+fn proof_header_authorization(
+    signed: &SignedHeader,
+    context: EvidenceContext,
+    history: Option<&crate::handover::SequencerHistory>,
+) -> Result<SequencerAuthorization, EvidenceError> {
+    if let Some(history) = history {
+        let header = history
+            .verify_header(&signed.canonical_bytes, &signed.signature)
+            .map_err(|_| EvidenceError::SequencerMismatch)?;
+        let authorization = history
+            .authorization_for_batch(header.header().batch_number())
+            .map_err(|_| EvidenceError::SequencerMismatch)?;
+        signed.pinned_key_authorization(
+            authorization.public_key(),
+            context.expected_protocol_version,
+            context.expected_network_id,
+        )?;
+        Ok(authorization)
+    } else {
+        signed.pinned_key_authorization(
+            context.handshake_sequencer_key,
+            context.expected_protocol_version,
+            context.expected_network_id,
+        )
+    }
 }
 
 fn inclusion_proof_bundle(
@@ -569,6 +628,7 @@ fn inclusion_proof_bundle(
     target_activity_id: [u8; 32],
     context: EvidenceContext,
     registry: &ModuleRegistry,
+    history: Option<&crate::handover::SequencerHistory>,
 ) -> Result<VerifiedProofBundle, EvidenceError> {
     let mut reader = Reader::new(&response.proof);
     if reader.u16()? != WIRE_VERSION || reader.u8()? != kind {
@@ -581,11 +641,7 @@ fn inclusion_proof_bundle(
     let proof = decode_proof(&mut reader)?;
     let signed_header = decode_signed_header(&mut reader)?;
     reader.finish()?;
-    let authorization = signed_header.pinned_key_authorization(
-        context.handshake_sequencer_key,
-        context.expected_protocol_version,
-        context.expected_network_id,
-    )?;
+    let authorization = proof_header_authorization(&signed_header, context, history)?;
     match kind {
         1 => {
             let activity =
@@ -646,6 +702,7 @@ fn account_proof_bundle(
     target_activity_id: [u8; 32],
     context: EvidenceContext,
     registry: &ModuleRegistry,
+    history: Option<&crate::handover::SequencerHistory>,
 ) -> Result<VerifiedProofBundle, EvidenceError> {
     let decoded = decode_nested_evidence(
         &response.proof,
@@ -655,11 +712,7 @@ fn account_proof_bundle(
     if decoded.selector != RootSelector::Latest || decoded.proof.account_id != account {
         return Err(EvidenceError::SelectorMismatch);
     }
-    let authorization = decoded.signed_header.pinned_key_authorization(
-        context.handshake_sequencer_key,
-        context.expected_protocol_version,
-        context.expected_network_id,
-    )?;
+    let authorization = proof_header_authorization(&decoded.signed_header, context, history)?;
     if let AccountEvidenceKind::Maintenance { parameter_version } = decoded.kind {
         let activity_count = decoded
             .proof
@@ -693,8 +746,14 @@ fn account_proof_bundle(
             &request,
             &[],
         )?;
-        let receipt_bundle =
-            inclusion_proof_bundle(receipt_response, 3, target_activity_id, context, registry)?;
+        let receipt_bundle = inclusion_proof_bundle(
+            receipt_response,
+            3,
+            target_activity_id,
+            context,
+            registry,
+            history,
+        )?;
         let (activity_receipt, activity_id) = maintained_activity_link(
             receipt_bundle,
             &decoded,
@@ -763,6 +822,44 @@ fn maintained_activity_link(
         return Err(EvidenceError::SelectorMismatch);
     }
     Ok((activity_receipt, activity_id))
+}
+
+/// Verifies account evidence with a key and term derived from authenticated genesis history.
+///
+/// # Errors
+/// Refuses substituted headers, unverified terms and every original account proof failure.
+pub fn verify_account_evidence_with_history(
+    canonical_value: &[u8],
+    proof_material: &[u8],
+    account: [u8; 32],
+    asset: Option<[u8; 32]>,
+    policy: AccountEvidencePolicy,
+    history: &crate::handover::SequencerHistory,
+) -> Result<VerifiedAccountEvidence, EvidenceError> {
+    let decoded = decode_nested_evidence(
+        proof_material,
+        policy.expected_protocol_version,
+        policy.expected_network_id,
+    )?;
+    let header = history
+        .verify_header(
+            &decoded.signed_header.canonical_bytes,
+            &decoded.signed_header.signature,
+        )
+        .map_err(|_| EvidenceError::SequencerMismatch)?;
+    let authorization = history
+        .authorization_for_batch(header.header().batch_number())
+        .map_err(|_| EvidenceError::SequencerMismatch)?;
+    verify_account_evidence(
+        canonical_value,
+        proof_material,
+        account,
+        asset,
+        AccountEvidencePolicy {
+            handshake_sequencer_key: authorization.public_key(),
+            ..policy
+        },
+    )
 }
 
 /// Returns the public-read label naming the level a proof established, and

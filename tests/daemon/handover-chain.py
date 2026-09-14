@@ -67,7 +67,8 @@ def main():
                 native / 'data/genesis/genesis-handover-trust.lxt').read_bytes()
             with tempfile.TemporaryDirectory(prefix='lxp-handover-consumer-', dir='/tmp') as temporary:
                 client_directory = Path(temporary)
-                client_directory.chmod(0o755)
+                os.chown(client_directory, 4021, 4021)
+                client_directory.chmod(0o700)
                 executable = client_directory / 'native-handover-history'
                 shutil.copyfile(consumer, executable)
                 executable.chmod(0o755)
@@ -75,11 +76,21 @@ def main():
                     if public_file.name == 'handover-genesis.bin' or public_file.name.startswith(('retired-', 'unauthorized-')):
                         destination = client_directory / public_file.name
                         shutil.copyfile(public_file, destination)
-                        destination.chmod(0o644)
+                        os.chown(destination, 4021, 4021)
+                        destination.chmod(0o400)
                 invoke(['setpriv', '--reuid=4021', '--regid=4021', '--clear-groups',
                         executable, os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'],
                         client_directory, count], os.environ,
                        output / 'public-history-consumer.log')
+                read_consumer = os.environ.get('LAYERX_TEST_HANDOVER_READ_CONSUMER_BIN')
+                if read_consumer is not None:
+                    reads_executable = client_directory / 'native-handover-reads'
+                    shutil.copyfile(read_consumer, reads_executable)
+                    reads_executable.chmod(0o755)
+                    invoke(['setpriv', '--reuid=4021', '--regid=4021', '--clear-groups',
+                            reads_executable, os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'],
+                            client_directory, count], os.environ,
+                           output / 'public-history-reads.log')
         return
     environment = os.environ.copy()
     settlement = dict(line.split('=', 1) for line in (native / 'settlement.env').read_text().splitlines())

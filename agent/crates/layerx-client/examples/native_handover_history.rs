@@ -242,6 +242,7 @@ fn reject_signed_forgeries(directory: &Path, history: &SequencerHistory, count: 
             .authorization_for_batch(header.batch_number())
             .map_err(|error| format!("{error:?}"))?;
         assert!(verify_header(&canonical, &signature, &authorization).is_err());
+        assert!(history.verify_header(&canonical, &signature).is_err());
         if name.starts_with("retired-") {
             retired += 1;
         } else {

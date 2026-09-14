@@ -38,6 +38,7 @@ pub enum NativeReadError {
 
 pub struct NativeReadRoute {
     client: Client,
+    sequencer_history: Option<layerx_client::handover::SequencerHistory>,
     actor: Did,
     cursor_key: Zeroizing<String>,
     correlation: u64,
@@ -59,12 +60,120 @@ impl NativeReadRoute {
         }
         Ok(Self {
             client,
+            sequencer_history: None,
             actor,
             cursor_key: Zeroizing::new(cursor_key),
             correlation: 10_000,
             deadline: clock(),
             clock,
         })
+    }
+
+    /// Binds public historical reads to an explicitly configured protected genesis artifact.
+    ///
+    /// # Errors
+    /// Refuses unprotected files, substituted native witness data and incomplete history.
+    pub fn with_protected_genesis(
+        mut self,
+        path: &std::path::Path,
+    ) -> Result<Self, NativeReadError> {
+        let bytes = crate::config::read_protected_source(
+            path,
+            layerx_wire::handover::GENESIS_TRUST_MAX_BYTES,
+        )
+        .map_err(|_| NativeReadError::InvalidRequest)?;
+        let pins = layerx_wire::handover::decode_genesis_trust(&bytes)
+            .map_err(|_| NativeReadError::Verification)?;
+        if pins.network_id != self.client.handshake().node().network_id
+            || self.client.handshake().node().protocol_version != 3
+        {
+            return Err(NativeReadError::Verification);
+        }
+        self.sequencer_history = Some(
+            layerx_client::handover::SequencerHistory::from_genesis_artifact(
+                &bytes,
+                pins.network_id,
+                pins.canonical_state_root,
+                pins.initial_sequencer_key,
+            )
+            .map_err(|_| NativeReadError::Verification)?,
+        );
+        self.deadline = (self.clock)()
+            .checked_add(Duration::from_secs(10))
+            .ok_or(NativeReadError::Unavailable)?;
+        self.refresh_history()?;
+        Ok(self)
+    }
+
+    fn refresh_history(&mut self) -> Result<(), NativeReadError> {
+        if self.sequencer_history.is_none() {
+            return Ok(());
+        }
+        let target = self.client.head().sealed_batch;
+        loop {
+            let verified = self
+                .sequencer_history
+                .as_ref()
+                .and_then(layerx_client::handover::SequencerHistory::verified_head)
+                .map_or(0, |head| head.header().batch_number());
+            if verified > target {
+                return Err(NativeReadError::Verification);
+            }
+            if verified == target {
+                return Ok(());
+            }
+            let correlation = self.next_id()?;
+            self.client
+                .reconnect()
+                .map_err(|_| NativeReadError::Unavailable)?;
+            let remaining = self.deadline.saturating_duration_since((self.clock)());
+            self.client
+                .advance_sequencer_history(
+                    self.sequencer_history
+                        .as_mut()
+                        .ok_or(NativeReadError::Verification)?,
+                    correlation,
+                    RetrievalLimits {
+                        maximum_bytes: layerx_wire::handover::MAX_RECOVERY_BYTES,
+                        maximum_chunks: 4096,
+                        deadline: remaining,
+                    },
+                )
+                .map_err(|_| NativeReadError::Verification)?;
+            self.correlation = self
+                .correlation
+                .checked_add(2)
+                .ok_or(NativeReadError::Unavailable)?;
+        }
+    }
+
+    fn native_proof(
+        &mut self,
+        selector: ProofBundleSelector,
+        correlation: u64,
+        registry: &ModuleRegistry,
+    ) -> Result<VerifiedProofBundle, NativeReadError> {
+        let result = if let Some(history) = &self.sequencer_history {
+            self.client
+                .proof_bundle_with_history(selector, correlation, registry, history)
+        } else {
+            self.client.proof_bundle(selector, correlation, registry)
+        };
+        result.map_err(|_| NativeReadError::Verification)
+    }
+
+    fn native_header(
+        &mut self,
+        batch: u64,
+        correlation: u64,
+    ) -> Result<layerx_client::batch::SignedBatchHeader, NativeReadError> {
+        let result = if let Some(history) = &self.sequencer_history {
+            self.client
+                .batch_header_with_history(batch, correlation, history)
+        } else {
+            self.client.batch_header(batch, correlation)
+        };
+        result.map_err(|_| NativeReadError::Verification)
     }
 
     fn next_id(&mut self) -> Result<u64, NativeReadError> {
@@ -93,6 +202,12 @@ impl NativeReadRoute {
         self.client
             .reconnect()
             .map_err(|_| NativeReadError::Unavailable)?;
+        self.refresh_history()?;
+        if self.sequencer_history.is_some() {
+            self.client
+                .reconnect()
+                .map_err(|_| NativeReadError::Unavailable)?;
+        }
         let correlation = self.next_id()?;
         let registry = self
             .client
@@ -129,10 +244,7 @@ impl NativeReadRoute {
             ProofBundleSelector::Activity(activity)
         };
         let correlation = self.next_id()?;
-        let verified = self
-            .client
-            .proof_bundle(selector, correlation, registry)
-            .map_err(|_| NativeReadError::Verification)?;
+        let verified = self.native_proof(selector, correlation, registry)?;
         proof_json(&verified, self.client.head().chain_sequence)
     }
 
@@ -168,10 +280,7 @@ impl NativeReadRoute {
 
     fn availability(&mut self, batch: u64) -> Result<Value, NativeReadError> {
         let correlation = self.next_id()?;
-        let signed = self
-            .client
-            .batch_header(batch, correlation)
-            .map_err(|_| NativeReadError::Verification)?;
+        let signed = self.native_header(batch, correlation)?;
         let header = &signed.header;
         let correlation = self.next_id()?;
         let context = FetchContext {
@@ -249,46 +358,72 @@ impl NativeReadRoute {
                 "freshness": {"observed_sequence": head.chain_sequence}}),
             );
         }
-        let correlation = self.next_id()?;
-        let signed = self
-            .client
-            .batch_header(head.sealed_batch, correlation)
-            .map_err(|_| NativeReadError::Verification)?;
-        let authorization = SequencerAuthorization::new(
-            signed.sequencer_id,
-            signed.sequencer_public_key,
-            0,
-            head.sealed_batch,
-        );
-        let correlation = self.next_id()?;
-        let page = self
-            .client
-            .history(
-                start,
+        let (authorization, term_end) = if let Some(history) = &self.sequencer_history {
+            (
+                history
+                    .authorization_for_sequence(start)
+                    .map_err(|_| NativeReadError::Verification)?,
+                history
+                    .sequence_interval_end(start)
+                    .map_err(|_| NativeReadError::Verification)?
+                    .min(end),
+            )
+        } else {
+            let correlation = self.next_id()?;
+            let signed = self.native_header(head.sealed_batch, correlation)?;
+            (
+                SequencerAuthorization::new(
+                    signed.sequencer_id,
+                    signed.sequencer_public_key,
+                    0,
+                    head.sealed_batch,
+                ),
                 end,
+            )
+        };
+        let correlation = self.next_id()?;
+        let page = if let Some(history) = &self.sequencer_history {
+            self.client.history_with_history(
+                layerx_client::read::HistoryRange {
+                    start_sequence: start,
+                    end_sequence: term_end,
+                    page_bound: limit,
+                    cursor: None,
+                },
+                VerificationLevel::BATCH_INCLUDED,
+                correlation,
+                history,
+            )
+        } else {
+            self.client.history(
+                start,
+                term_end,
                 limit,
                 None,
                 VerificationLevel::BATCH_INCLUDED,
                 correlation,
                 authorization,
             )
-            .map_err(NativeReadError::HistoryEvidence)?;
-        self.history_json(account, end, page, registry, authorization)
+        }
+        .map_err(NativeReadError::HistoryEvidence)?;
+        self.history_json(account, (end, term_end), page, registry, authorization)
     }
 
     fn history_json(
         &mut self,
         account: [u8; 32],
-        end: u64,
+        window: (u64, u64),
         page: HistoryPage,
         registry: &ModuleRegistry,
         authorization: SequencerAuthorization,
     ) -> Result<Value, NativeReadError> {
+        let (end, term_end) = window;
         let mut items = Vec::new();
         let mut size = 0_usize;
         let mut next = page
             .cursor
-            .map(layerx_client::read::HistoryCursor::next_sequence);
+            .map(layerx_client::read::HistoryCursor::next_sequence)
+            .or_else(|| (term_end < end).then(|| term_end + 1));
         let mut scanned = 0_usize;
         for item in page.items {
             let selected = match item.kind {
@@ -298,10 +433,8 @@ impl NativeReadRoute {
                     let id =
                         hash::activity_id(&activity).map_err(|_| NativeReadError::Verification)?;
                     let correlation = self.next_id()?;
-                    let receipt = self
-                        .client
-                        .proof_bundle(ProofBundleSelector::Receipt(id), correlation, registry)
-                        .map_err(|_| NativeReadError::Verification)?;
+                    let receipt =
+                        self.native_proof(ProofBundleSelector::Receipt(id), correlation, registry)?;
                     let decoded = layerx_wire::receipt::decode(receipt.canonical_bytes())
                         .map_err(|_| NativeReadError::Verification)?;
                     let protocol = decoded.protocol().ok_or(NativeReadError::Verification)?;
@@ -358,21 +491,29 @@ impl NativeReadRoute {
         sequence: u64,
         authorization: SequencerAuthorization,
     ) -> Result<Option<Value>, NativeReadError> {
-        let record = layerx_wire::maintenance::decode_occupancy_maintenance(bytes)
+        let maintenance = layerx_wire::batch_maintenance::decode_maintenance(bytes)
             .map_err(|_| NativeReadError::Verification)?;
+        let record = maintenance.occupancy();
         if record.payers.is_empty() {
             return maintenance_json(bytes, None, sequence);
         }
         let correlation = self.next_id()?;
-        let evidence = self
-            .client
-            .account(
+        let evidence = if let Some(history) = &self.sequencer_history {
+            self.client.account_with_history(
+                account,
+                VerificationLevel::BATCH_INCLUDED,
+                correlation,
+                history,
+            )
+        } else {
+            self.client.account(
                 account,
                 VerificationLevel::BATCH_INCLUDED,
                 correlation,
                 authorization,
             )
-            .map_err(NativeReadError::AccountEvidence)?;
+        }
+        .map_err(NativeReadError::AccountEvidence)?;
         let payer = maintenance_payer(
             account,
             evidence.canonical_bytes(),
@@ -570,8 +711,9 @@ fn maintenance_json(
     payer: Option<MaintenancePayer>,
     sequence: u64,
 ) -> Result<Option<Value>, NativeReadError> {
-    let record = layerx_wire::maintenance::decode_occupancy_maintenance(bytes)
+    let maintenance = layerx_wire::batch_maintenance::decode_maintenance(bytes)
         .map_err(|_| NativeReadError::Verification)?;
+    let record = maintenance.occupancy();
     if record.global_sequence != sequence {
         return Err(NativeReadError::Verification);
     }
