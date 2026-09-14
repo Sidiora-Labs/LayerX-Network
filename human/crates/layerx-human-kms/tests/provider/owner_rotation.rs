@@ -5,12 +5,15 @@ use layerx_crypto::rotation::{
     OwnerRotation, OwnerRotationCommit, OwnerRotationConsent, OwnerRotationState,
 };
 use layerx_crypto::signer::Signer as _;
+use layerx_intents::canonical as hash;
+use layerx_intents::canonical::{
+    signed_envelope_bytes as encode_signed_envelope,
+    unsigned_envelope_bytes as encode_unsigned_envelope,
+};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::payload::{ActivityType, ModuleId, Payload};
-use layerx_wire::activity::{encode_signed_envelope, encode_unsigned_envelope};
-use layerx_wire::hash;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -182,9 +185,12 @@ fn provider_cases(host: &Host, old: &Key, next: &Key) -> Result<Vec<Vec<u8>>> {
         },
     ] {
         let signed = rotation(host, old, &value, envelope)?;
-        let decoded = checked(layerx_wire::activity::decode_signed(&signed, &registry()?))?;
+        let decoded = checked(layerx_intents::canonical::decode_signed_activity(
+            &signed,
+            &registry()?,
+        ))?;
         assert_eq!(checked(OwnerRotation::from_activity(&decoded))?, value);
-        let unsigned = checked(layerx_wire::activity::encode_unsigned(&decoded))?;
+        let unsigned = checked(layerx_intents::canonical::unsigned_activity_bytes(&decoded))?;
         let disclosed = checked(bind(&unsigned, &registry()?))?;
         assert_eq!(
             disclosed.native_operation,

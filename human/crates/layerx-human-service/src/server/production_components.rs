@@ -435,8 +435,10 @@ impl ProductionComponents {
         .map_err(|_| "agent SDK contract refused startup".to_owned())?;
         let mut agent = AgentRuntime::connect(config.agent_socket, config.agent_limits)
             .map_err(|_| "agent boundary refused startup".to_owned())?;
-        let native_asset = agent.native_fee_policy()
-            .map_err(|_| "authenticated native asset refused startup".to_owned())?.asset_id;
+        let native_asset = agent
+            .native_fee_policy()
+            .map_err(|_| "authenticated native asset refused startup".to_owned())?
+            .asset_id;
         let keystore = Keystore::open_production(config.custody_root, config.network_id, provider)
             .map_err(|_| "KMS or custody storage refused startup".to_owned())?;
         let custody = Arc::new(CustodySigner::new_shared(
