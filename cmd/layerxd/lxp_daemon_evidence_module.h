@@ -52,7 +52,7 @@ lxp_result lxp_daemon_module_evidence_wire_encode(
         signed_header == NULL || arena == NULL || canonical_value == NULL || proof_material == NULL ||
         key.bytes == NULL || key.length == 0U || key.length > LXP_STATE_WITNESS_MAX_KEY ||
         module_id > LXP_MODULE_RESERVED_COUNT || requested_rank > 4U ||
-        !authorizations_equal(&store->authorization, &signed_header->authorization) ||
+        !evidence_authorization_matches(store, &signed_header->authorization, signed_header->canonical_header) ||
         (selector_kind == 1U && (selector_batch != 0U || selector_checkpoint_id != NULL)) ||
         (selector_kind == 2U && (selector_batch == 0U || selector_checkpoint_id != NULL)) ||
         (selector_kind == 3U && (selector_batch != 0U || selector_checkpoint_id == NULL ||

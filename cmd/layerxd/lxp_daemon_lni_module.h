@@ -16,6 +16,8 @@ static lxp_result send_module_read(
     size_t mark;
     lxp_daemon_receipt_evidence head;
     lxp_daemon_signed_header_evidence signed_header;
+    lxp_batch_header header;
+    uint64_t epoch;
     lxp_result status;
     if (request->minor < 5U || request->correlation_id == 0U ||
         request->proof_length != 0U || request->payload_length < 10U ||
@@ -56,6 +58,18 @@ static lxp_result send_module_read(
         signed_header.authorization = server->owner->evidence_store->authorization;
         signed_header.canonical_header = head.canonical_header;
         memcpy(signed_header.signature, head.header_signature, sizeof(signed_header.signature));
+        if (server->owner->evidence_store->handover_chain != NULL) {
+            status = lxp_batch_header_decode(head.canonical_header.bytes,
+                head.canonical_header.length, &header);
+            if (status == LXP_OK)
+                status = lxp_handover_trust_authorization(
+                    server->owner->evidence_store->handover_chain, header.batch_number,
+                    &signed_header.authorization, &epoch);
+            if (status == LXP_OK && header.epoch != epoch)
+                status = LXP_ERR_AUTH_SCOPE;
+        }
+    }
+    if (status == LXP_OK) {
         status = lxp_daemon_module_evidence_wire_encode(
             server->owner->evidence_store, server->owner->kernel, &signed_header,
             module_id, key, selector_kind, batch, checkpoint, rank,

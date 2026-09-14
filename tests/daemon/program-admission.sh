@@ -299,8 +299,17 @@ elif [[ ${2:-} == --availability-batches ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --availability-batches > "$work/availability-activity-id"
     cp "$3" "$work/availability-test"
     chmod 0755 "$work/availability-test"
+    availability_clock=()
+    if [[ -n ${LAYERX_TEST_RUNTIME_CLOCK_BIN:-} ]]; then
+        cp "$LAYERX_TEST_RUNTIME_CLOCK_BIN" "$work/runtime-clock"
+        chmod 0755 "$work/runtime-clock"
+        mkdir "$runtime/clock"
+        chown 4021:4021 "$runtime/clock"
+        chmod 0700 "$runtime/clock"
+        availability_clock=("$work/runtime-clock" --runtime-dir "$runtime/clock" --)
+    fi
     LAYERX_TEST_AVAILABILITY_WORK="$work" LAYERX_TEST_AVAILABILITY_SOCKET="$runtime/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=retained \
-        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/availability-test" \
+        setpriv --reuid=4021 --regid=4021 --clear-groups "${availability_clock[@]}" "$work/availability-test" \
         --exact real_daemon_availability_refusals --nocapture --test-threads=1
     for ((attempt=0; attempt<3000; attempt++)); do
         [[ ! -f "$work/availability-finality-ready" ]] || break
@@ -309,7 +318,7 @@ elif [[ ${2:-} == --availability-batches ]]; then
     done
     [[ -f "$work/availability-finality-ready" ]]
     LAYERX_TEST_AVAILABILITY_WORK="$work" LAYERX_TEST_AVAILABILITY_SOCKET="$runtime/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=finalized \
-        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/availability-test" \
+        setpriv --reuid=4021 --regid=4021 --clear-groups "${availability_clock[@]}" "$work/availability-test" \
         --exact real_daemon_availability_refusals --nocapture --test-threads=1
     kill "$sequencer_pid"
     wait "$sequencer_pid"
@@ -329,7 +338,7 @@ PYCORRUPT
         sleep 0.1
     done
     LAYERX_TEST_AVAILABILITY_WORK="$work" LAYERX_TEST_AVAILABILITY_SOCKET="$runtime/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=corrupt \
-        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/availability-test" \
+        setpriv --reuid=4021 --regid=4021 --clear-groups "${availability_clock[@]}" "$work/availability-test" \
         --exact real_daemon_availability_refusals --nocapture --test-threads=1
     exit 0
 else
