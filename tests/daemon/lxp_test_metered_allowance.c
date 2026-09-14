@@ -34,7 +34,7 @@ static int metered_artifacts(lxp_receipt *receipt)
     const char *port = getenv("LAYERX_TEST_METERED_PROGRAM_PORT");
     const char *token = getenv("LAYERX_TEST_METERED_PROGRAM_TOKEN_FILE");
     const char *script = getenv("LAYERX_TEST_METERED_ARTIFACT_SCRIPT");
-    const char *python = getenv("LAYERX_TEST_PYTHON");
+    const char *python = getenv("LAYERX_TEST_METERED_PYTHON");
     uint8_t digest[32], arena_bytes[2U * LXP_MAX_ACTIVITY_BYTES];
     uint8_t artifacts[2U * LXP_MAX_ACTIVITY_BYTES + 8U];
     char activity_hex[65], digest_hex[65];

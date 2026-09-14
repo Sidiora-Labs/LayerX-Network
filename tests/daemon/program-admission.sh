@@ -180,6 +180,8 @@ if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} 
         export LAYERX_TEST_METERED_PROGRAM_PORT="$program_port"
         export LAYERX_TEST_METERED_PROGRAM_TOKEN_FILE="$work/scenario/program-token"
         export LAYERX_TEST_METERED_ARTIFACT_SCRIPT="$work/metered-artifacts.py"
+        LAYERX_TEST_METERED_PYTHON=$("${LAYERX_TEST_PYTHON:-python3}" -c 'import os, sys; print(os.path.realpath(sys.executable))')
+        export LAYERX_TEST_METERED_PYTHON
         cp "$root/tests/daemon/metered-artifacts.py" "$LAYERX_TEST_METERED_ARTIFACT_SCRIPT"
         chmod 0644 "$LAYERX_TEST_METERED_ARTIFACT_SCRIPT"
     fi
