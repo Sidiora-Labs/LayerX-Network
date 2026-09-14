@@ -319,7 +319,7 @@ fn setup(socket: &Path, directory: &Path, config: &Value) -> Result<Journey> {
     let mut route = checked(NativeReadRoute::new(
         checked(Client::connect(configuration(socket)))?,
         did.clone(),
-        "native-programs-handover".into(),
+        "native-programs-handover-history-cursor-bound".into(),
         layerx_client::runtime_clock::RuntimeClock::from_environment()?,
     ))?;
     route = checked(route.with_protected_finality(&directory.join("handover-finality.conf")))?;
