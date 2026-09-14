@@ -49,11 +49,12 @@ class Chain(COMMON['Chain']):
         assert anchor['hash'] == identity['anchor_hash']
         assert self.account.address == identity['deployer']
 
-    def transaction(self, data, to=None, success=True, value=0):
+    def transaction(self, data, to=None, success=True, value=0, signer=None):
         assert self.rpc('eth_chainId', []) == '0x7d'
+        account = self.account if signer is None else signer
         transaction = {
             'chainId': 125,
-            'nonce': int(self.rpc('eth_getTransactionCount', [self.account.address, 'pending']), 16),
+            'nonce': int(self.rpc('eth_getTransactionCount', [account.address, 'pending']), 16),
             'data': data,
             'gas': 15_000_000,
             'gasPrice': int(self.rpc('eth_gasPrice', []), 16),
@@ -61,7 +62,7 @@ class Chain(COMMON['Chain']):
         }
         if to is not None:
             transaction['to'] = to_checksum_address(to)
-        signed = self.account.sign_transaction(transaction)
+        signed = account.sign_transaction(transaction)
         digest = self.rpc('eth_sendRawTransaction', ['0x' + bytes(signed.raw_transaction).hex()])
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
@@ -75,8 +76,8 @@ class Chain(COMMON['Chain']):
         diagnostic = {'transaction_hash': digest, 'submitted_nonce': transaction['nonce'],
                       'gas_price': transaction['gasPrice'], 'gas_limit': transaction['gas']}
         for name, method, parameters in (
-            ('latest_nonce', 'eth_getTransactionCount', [self.account.address, 'latest']),
-            ('pending_nonce', 'eth_getTransactionCount', [self.account.address, 'pending']),
+            ('latest_nonce', 'eth_getTransactionCount', [account.address, 'latest']),
+            ('pending_nonce', 'eth_getTransactionCount', [account.address, 'pending']),
             ('block_number', 'eth_blockNumber', []),
             ('transaction', 'eth_getTransactionByHash', [digest]),
             ('pool_status', 'txpool_status', []),

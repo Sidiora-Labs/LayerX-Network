@@ -128,6 +128,14 @@ def setup(native, chain):
         (bond, 'minimumBond()', (), 100),
     ):
         assert int(chain.view(target, signature, *arguments), 16) == expected
+    submitter = Account.create()
+    submitter_file = native / 'handover-submitter.key'
+    descriptor = os.open(submitter_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'w') as output:
+        output.write('0x' + submitter.key.hex())
+    os.chown(submitter_file, 4021, 4021)
+    chain.transaction('0x', submitter.address, value=10 ** 20)
+    return submitter
 
 
 def run(native, build, exports, count, lni_socket):
@@ -180,12 +188,8 @@ def run(native, build, exports, count, lni_socket):
             shutil.copytree(sys.prefix, support / 'venv', symlinks=True)
             python = support / 'venv/bin' / Path(sys.executable).name
         tls_files(support / 'tls')
-        submitter = Account.create()
-        submitter_file = support / 'submitter.key'
-        submitter_file.write_text('0x' + submitter.key.hex())
-        os.chown(submitter_file, 4021, 4021)
-        submitter_file.chmod(0o600)
-        chain.transaction('0x', submitter.address, value=10 ** 20)
+        submitter_file = native / 'handover-submitter.key'
+        submitter = Account.from_key(submitter_file.read_text().strip())
         ports = [COMMON.free_port(), COMMON.free_port()]
         configurations = []
         for index in (1, 2):

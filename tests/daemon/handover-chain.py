@@ -67,9 +67,10 @@ def main():
     assert chain.rpc('eth_chainId', []) == '0x7d'
     bond = settlement['LAYERX_NODE_SETTLEMENT_CONTRACT']
     registry = settlement['LAYERX_NODE_CHECKPOINT_REGISTRY']
+    submitter = None
     if os.environ.get('LAYERX_TEST_HANDOVER_PEERS') == '1':
         peers = runpy.run_path(str(ROOT / 'tests/daemon/handover-peers.py'))
-        peers['setup'](native, chain)
+        submitter = peers['setup'](native, chain)
     administrator = chain.account.address
     chain.send(COMMON['USDL'], 'mint(address,uint256)', administrator, '2000')
     chain.send(COMMON['USDL'], 'approve(address,uint256)', bond, '2000')
@@ -104,7 +105,7 @@ def main():
         calldata = COMMON['run']('cast', 'calldata',
             f"registerCheckpoint({COMMON['HEADER']},bytes,{COMMON['ATTESTATION']}[])",
             vector['header'], '0x', vector['attestations'])
-        receipt = chain.transaction(calldata, registry)
+        receipt = chain.transaction(calldata, registry, signer=submitter)
         assert int(receipt['status'], 16) == 1 and receipt['logs']
         observed = int(chain.rpc('eth_getBlockByNumber', [receipt['blockNumber'], False])['timestamp'], 16) * 1000
         invoke([build / 'tests/lxp_test_daemon_finality_authority', 'emit', receipt['transactionHash'],
