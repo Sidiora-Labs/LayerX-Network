@@ -1,4 +1,5 @@
 import json
+import errno
 import os
 from pathlib import Path
 import socket
@@ -61,7 +62,7 @@ def serve(configuration_file):
             and parent.st_uid == os.geteuid() and parent.st_gid == os.getegid()
             and stat.S_IMODE(parent.st_mode) == 0o750,
             path, 'private signer runtime directory')
-    require(not path.exists() and not path.is_symlink(), path, 'fresh signer endpoint')
+    prepare_socket(path)
     require(configuration['client_uid'] != os.geteuid()
             and type(configuration['client_uid']) is int and 0 < configuration['client_uid'] < 2**32
             and type(configuration['client_gid']) is int and 0 <= configuration['client_gid'] < 2**32,
@@ -100,6 +101,22 @@ def serve(configuration_file):
             current = path.lstat()
             if stat.S_ISSOCK(current.st_mode) and current.st_ino == inode:
                 path.unlink()
+
+
+def prepare_socket(path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    require(stat.S_ISSOCK(info.st_mode) and info.st_uid == os.geteuid()
+            and info.st_gid == os.getegid() and stat.S_IMODE(info.st_mode) == 0o660,
+            path, 'owned stale signer endpoint')
+    with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as probe:
+        probe.setblocking(False)
+        require(probe.connect_ex(str(path)) == errno.ECONNREFUSED, path, 'inactive signer endpoint')
+    current = path.lstat()
+    require((current.st_dev, current.st_ino) == (info.st_dev, info.st_ino), path, 'unchanged signer endpoint')
+    path.unlink()
 
 
 if __name__ == '__main__':

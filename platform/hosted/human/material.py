@@ -297,6 +297,13 @@ def main():
             destination.chmod(0o600)
     for key, value in config.items():
         write(root / 'config', 'LAYERX_HUMAN_' + key, value)
+    history_files = [root / 'agent/genesis-handover-trust.lxt', root / 'agent/handover-finality.conf']
+    if any(path.exists() or path.is_symlink() for path in history_files):
+        from provision import protected_bytes
+        protected_bytes(root / 'agent/genesis-handover-trust.lxt')
+        protected_bytes(root / 'agent/handover-finality.conf')
+        agent.update(GENESIS_TRUST='/run/human-private/agent/genesis-handover-trust.lxt',
+                     HANDOVER_FINALITY='/run/human-private/agent/handover-finality.conf')
     for key, value in agent.items():
         write(root / 'agent-config', 'LAYERX_AGENT_' + key, value)
 

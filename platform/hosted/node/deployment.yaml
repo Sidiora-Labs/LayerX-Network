@@ -97,6 +97,10 @@ spec:
               install -m 0600 /run/authority-input/authority-token /run/authority-private/material/human-agent.token
               install -m 0600 /run/authority-input/principal-policy.json /run/authority-private/material/principal-policy.json
               install -m 0600 /run/module-registry/registry.json /run/authority-private/material/registry.json
+              if [ -e /run/authority-input/genesis-handover-trust.lxt ] || [ -e /run/authority-input/handover-finality.conf ]; then
+                  install -m 0600 /run/authority-input/genesis-handover-trust.lxt /run/authority-private/material/genesis-handover-trust.lxt
+                  install -m 0600 /run/authority-input/handover-finality.conf /run/authority-private/material/handover-finality.conf
+              fi
           securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
           volumeMounts:
@@ -147,6 +151,12 @@ spec:
             - --settlement-env
             - /run/layerx/settlement/settlement.env
           env:
+            - name: LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: layerx-node-config
+                  key: handover-authority
+                  optional: true
             - {name: LAYERX_NODE_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
             - {name: LAYERX_NODE_ASSET_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: asset-id}}}
             - {name: LAYERX_NODE_REPLICA_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: replica-id}}}
@@ -341,6 +351,8 @@ spec:
             - {name: LAYERX_AUTHORITY_TLS_KEY_DER, value: /run/layerx/authority-tls/server.key.der}
             - {name: LAYERX_AUTHORITY_CLIENT_CA_DER, value: /run/layerx/trust/ca.crt.der}
             - {name: LAYERX_AUTHORITY_HUMAN_AGENT_TOKEN_FILE, value: /run/authority-private/material/human-agent.token}
+            - {name: LAYERX_AUTHORITY_GENESIS_TRUST, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: genesis-trust-file, optional: true}}}
+            - {name: LAYERX_AUTHORITY_HANDOVER_FINALITY, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: handover-finality-file, optional: true}}}
             - {name: LAYERX_AUTHORITY_HUMAN_AGENT_TENANT, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: tenant}}}
             - {name: LAYERX_AUTHORITY_HUMAN_AGENT_PRINCIPAL, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: principal}}}
             - {name: LAYERX_AUTHORITY_PRINCIPAL_POLICY_FILE, value: /run/authority-private/material/principal-policy.json}
