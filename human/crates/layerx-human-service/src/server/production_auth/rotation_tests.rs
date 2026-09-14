@@ -51,55 +51,24 @@ fn rotation_step_up_binds_owner_tenant_target_timing_and_retry_key() {
             expected
         );
     }
-    assert_ne!(
-        digest(
-            &checked(PrincipalId::new("another")),
-            &tenant,
-            destination,
-            &fields,
-            &body,
-            "original"
-        ),
-        expected
-    );
-    assert_ne!(
-        digest(
-            &principal,
-            &checked(AgentTenantId::new("another")),
-            destination,
-            &fields,
-            &body,
-            "original"
-        ),
-        expected
-    );
-    assert_ne!(
-        digest(
+    let other_principal = checked(PrincipalId::new("another"));
+    let other_tenant = checked(AgentTenantId::new("another"));
+    let other_fields = BTreeMap::from([("agent_id".to_owned(), "agt_another".to_owned())]);
+    for (owner, scope, path, parameters, key) in [
+        (&other_principal, &tenant, destination, &fields, "original"),
+        (&principal, &other_tenant, destination, &fields, "original"),
+        (
             &principal,
             &tenant,
             "/v1/agents/agt_another/rotation",
             &fields,
-            &body,
-            "original"
+            "original",
         ),
-        expected
-    );
-    let other_fields = BTreeMap::from([("agent_id".to_owned(), "agt_another".to_owned())]);
-    assert_ne!(
-        digest(
-            &principal,
-            &tenant,
-            destination,
-            &other_fields,
-            &body,
-            "original"
-        ),
-        expected
-    );
-    assert_ne!(
-        digest(&principal, &tenant, destination, &fields, &body, "another"),
-        expected
-    );
+        (&principal, &tenant, destination, &other_fields, "original"),
+        (&principal, &tenant, destination, &fields, "another"),
+    ] {
+        assert_ne!(digest(owner, scope, path, parameters, &body, key), expected);
+    }
     let mut with_evidence = body.clone();
     with_evidence["step_up"] = json!({"challenge_id":"chg_bound"});
     assert_eq!(

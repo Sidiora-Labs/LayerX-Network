@@ -23,6 +23,8 @@ import {
   decodeMoveCommitRequest,
   decodeMoveQuoteRequest,
   decodeNotificationPreferences,
+  decodeOwnerRotationDisclosureRequest,
+  decodeOwnerRotationRequest,
   decodePasskeyAssertionBegin,
   decodePasskeyAssertionFinish,
   decodePasskeyRegistrationBegin,
@@ -158,6 +160,10 @@ export const conformance: { readonly [name in OperationName]: (run: ConformanceR
     encodeAgent(await run.client.agentResume(runParam(run, "agent_id"), runKey(run))),
   "agent.rotate": async (run) =>
     encodeKeyChallenge(await run.client.agentRotate(runParam(run, "agent_id"), runKey(run))),
+  "agent.rotation.disclosure": async (run) =>
+    encodeSecurityAction(await run.client.agentRotationDisclosure(runParam(run, "agent_id"), decodeOwnerRotationDisclosureRequest(runBody(run), "golden request body"))),
+  "agent.rotation.start": async (run) =>
+    encodeKeyChallenge(await run.client.agentRotationStart(runParam(run, "agent_id"), decodeOwnerRotationRequest(runBody(run), "golden request body"), runKey(run))),
   "approval.approve": async (run) =>
     encodeApprovalDecision(await run.client.approvalApprove(runParam(run, "approval_id"), decodeApprovalApproveRequest(runBody(run), "golden request body"), runKey(run))),
   "approval.get": async (run) =>
