@@ -735,10 +735,7 @@ fn serve_connection(
     }
 }
 
-fn serve(config: Config) -> Result<(), String> {
-    let mcp = mcp_enrolment()?
-        .map(|enrolment| mcp_boot(&config, enrolment))
-        .transpose()?;
+fn native_handover_sources() -> Result<Option<(PathBuf, PathBuf)>, String> {
     let genesis_trust = match std::env::var("LAYERX_AGENT_GENESIS_TRUST") {
         Ok(path) => Some(path),
         Err(std::env::VarError::NotPresent) => None,
@@ -753,13 +750,24 @@ fn serve(config: Config) -> Result<(), String> {
             return Err("handover finality policy path is not UTF-8".to_owned())
         }
     };
-    if genesis_trust.is_some() != handover_finality.is_some() {
-        return Err(
+    match (genesis_trust, handover_finality) {
+        (None, None) => Ok(None),
+        (Some(genesis), Some(finality)) => {
+            Ok(Some((PathBuf::from(genesis), PathBuf::from(finality))))
+        }
+        _ => Err(
             "native genesis trust and handover finality policy must be configured together"
                 .to_owned(),
-        );
+        ),
     }
-    if genesis_trust.is_some() && mcp.is_none() {
+}
+
+fn serve(config: Config) -> Result<(), String> {
+    let mcp = mcp_enrolment()?
+        .map(|enrolment| mcp_boot(&config, enrolment))
+        .transpose()?;
+    let handover_sources = native_handover_sources()?;
+    if handover_sources.is_some() && mcp.is_none() {
         return Err("native genesis trust requires the configured native read boundary".to_owned());
     }
     let mut native = mcp
@@ -783,14 +791,10 @@ fn serve(config: Config) -> Result<(), String> {
                 Instant::now,
             )
             .map_err(|error| format!("native read route is invalid: {error:?}"))?;
-            match genesis_trust.as_deref() {
-                Some(path) => route
-                    .with_protected_finality(Path::new(
-                        handover_finality
-                            .as_deref()
-                            .ok_or("handover finality policy is absent")?,
-                    ))
-                    .and_then(|route| route.with_protected_genesis(Path::new(path)))
+            match handover_sources.as_ref() {
+                Some((genesis, finality)) => route
+                    .with_protected_finality(finality)
+                    .and_then(|route| route.with_protected_genesis(genesis))
                     .map_err(|error| format!("native genesis trust is invalid: {error:?}")),
                 None => Ok(route),
             }
