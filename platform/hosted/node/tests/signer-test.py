@@ -580,6 +580,27 @@ class SignerCase(unittest.TestCase):
         self.assertEqual(refused.returncode, 0, refused.stderr)
         self.assertEqual(self.bound_client(target, public_key).bind(*fields), signature)
 
+    def test_binding_library_import_preserves_peer_key_and_payload_binding(self):
+        policy = self.binding_policy()
+        seed, _, target, _ = self.file_signer(extra=['--binding-policy', str(policy)])
+        public_key = public_key_of(seed)
+        fields = self.binding_fields(public_key)
+        payload = fields[0].to_bytes(4, 'big') + b''.join(fields[1:])
+        program = ('import os,sys; from signer.client import SignerClient; '
+                   'p=bytes.fromhex(sys.argv[3]); '
+                   'c=SignerClient(sys.argv[1],expected_peer_uid=os.geteuid(),'
+                   'expected_peer_gid=os.getegid(),expected_public_key=bytes.fromhex(sys.argv[2])); '
+                   'print(c.bind(int.from_bytes(p[:4],"big"),p[4:36],p[36:68],'
+                   'p[68:88],p[88:120]).hex())')
+        environment = dict(os.environ, PYTHONPATH=str(SIGNER_DIR.parent))
+        result = subprocess.run([sys.executable, '-c', program, str(target), public_key.hex(),
+                                 payload.hex()], cwd=str(self.work), env=environment,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        signature = bytes.fromhex(result.stdout.decode().strip())
+        self.assertTrue(verify(public_key, b'LX:SETTLE:RECIPIENT:v1\0' + payload, signature))
+        self.assertEqual(signature, self.bound_client(target, public_key).bind(*fields))
+
 
 class BootstrapTreasuryCase(unittest.TestCase):
     def setUp(self):

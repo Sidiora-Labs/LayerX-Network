@@ -122,7 +122,10 @@ class SignerClient:
                 or re.fullmatch('[0-9a-f]{128}', signature) is None:
             raise SignerError('the treasury signer answered a different recipient binding')
         signature = bytes.fromhex(signature)
-        from provider import verify_binding
+        if __package__:
+            from .provider import verify_binding
+        else:
+            from provider import verify_binding
         if not verify_binding(self._expected_public_key, binding, signature):
             raise SignerError('the treasury recipient binding signature does not verify')
         return signature
