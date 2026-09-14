@@ -597,25 +597,7 @@ impl ProductionAgentCreation<'_> {
         let actor = std::str::from_utf8(request.did.as_bytes())
             .map_err(|_| AgentFailure::Refused("invalid agent DID"))?;
         let identity = self.runtime.identity_resolve(actor).map_err(map_boundary)?;
-        let native_not_before = match &request.replacement {
-            Some(prior) => {
-                if prior.revoked_at_sequence == 0
-                    || prior.successor != [0; 32]
-                    || prior.grant.fee_budget != request.native_fee_budget
-                    || prior.grant.permitted_activity_types != request.activity_types
-                    || prior.grant.grantor
-                        != layerx_wire::hash::did_id_for_protocol(&request.did, 3)
-                            .map_err(|_| AgentFailure::Refused("invalid session DID"))?
-                {
-                    return Err(AgentFailure::Refused("session replacement is not bound"));
-                }
-                prior.grant.not_before
-            }
-            None => request
-                .not_before
-                .checked_mul(1_000)
-                .ok_or(AgentFailure::Refused("session time overflow"))?,
-        };
+        let native_not_before = session_period_anchor(request)?;
         let plan = SessionPreparation {
             version: 1,
             request_binding,
@@ -869,4 +851,26 @@ fn digest(parts: &[&[u8]]) -> [u8; 32] {
         digest.update(part);
     }
     digest.finalize().into()
+}
+
+fn session_period_anchor(request: &SessionProvision) -> Result<u64, AgentFailure> {
+    match &request.replacement {
+        Some(prior) => {
+            if prior.revoked_at_sequence == 0
+                || prior.successor != [0; 32]
+                || prior.grant.fee_budget != request.native_fee_budget
+                || prior.grant.permitted_activity_types != request.activity_types
+                || prior.grant.grantor
+                    != layerx_wire::hash::did_id_for_protocol(&request.did, 3)
+                        .map_err(|_| AgentFailure::Refused("invalid session DID"))?
+            {
+                return Err(AgentFailure::Refused("session replacement is not bound"));
+            }
+            Ok(prior.grant.not_before)
+        }
+        None => request
+            .not_before
+            .checked_mul(1_000)
+            .ok_or(AgentFailure::Refused("session time overflow")),
+    }
 }
