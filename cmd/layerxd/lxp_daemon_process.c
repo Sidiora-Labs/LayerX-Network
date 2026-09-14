@@ -3586,7 +3586,7 @@ static lxp_result apply_canonical_batch(
     lxp_byte_span canonical_receipts[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_batch_roots scheduling_roots;
     uint8_t batch_id[32] = {0};
-    uint64_t timestamp;
+    uint64_t timestamp = 0U;
     size_t count = 0U;
     size_t retry_prefix_count = 0U;
     size_t kernel_consumed = 0U;
@@ -3740,6 +3740,9 @@ static lxp_result apply_canonical_batch(
             first_global_sequence, process->next_batch,
             &process->execution_arena, executions,
             &scheduling_roots, batch_id);
+    if (status != LXP_OK && getenv("LAYERX_PAY_TIMING") != NULL)
+        (void)fprintf(stderr, "batch-prepare sequence=%llu through=admission-and-prefix result=%d\n",
+            (unsigned long long)first_global_sequence, (int)status);
     maximum_workers = process->daemon.config.serial_execution ? 1U :
         (uint32_t)process->daemon.config.verify_workers;
     if (maximum_workers == 0U) maximum_workers = 1U;
@@ -3792,8 +3795,14 @@ static lxp_result apply_canonical_batch(
             status = refusal;
         }
     }
+    if (status != LXP_OK && getenv("LAYERX_PAY_TIMING") != NULL)
+        (void)fprintf(stderr, "batch-prepare sequence=%llu through=serial-prepare result=%d\n",
+            (unsigned long long)first_global_sequence, (int)status);
     if (status == LXP_OK && lxp_protocol_version_uses_occupancy(process->protocol_version))
         status = lxp_kernel_prepare_batch_maintenance(prepared_batch, activities, executions);
+    if (status != LXP_OK && getenv("LAYERX_PAY_TIMING") != NULL)
+        (void)fprintf(stderr, "batch-prepare sequence=%llu through=batch-maintenance result=%d\n",
+            (unsigned long long)first_global_sequence, (int)status);
     if (status == LXP_OK && lxp_protocol_version_uses_occupancy(process->protocol_version))
         status = lxp_daemon_reserve_batch_maintenance(&process->daemon, count);
     if (status == LXP_OK) {
@@ -3810,6 +3819,9 @@ static lxp_result apply_canonical_batch(
         status = lxp_receipt_encode(
             &prepared_receipts[i], true, &process->execution_arena,
             &canonical_receipts[i]);
+    if (status != LXP_OK && getenv("LAYERX_PAY_TIMING") != NULL)
+        (void)fprintf(stderr, "batch-prepare sequence=%llu through=receipt-encoding result=%d\n",
+            (unsigned long long)first_global_sequence, (int)status);
     prepared_us = pay_timing_us();
     if (status == LXP_OK) {
         if (pthread_mutex_lock(&process->publication_mutex) != 0)

@@ -25,6 +25,8 @@ typedef struct kv_view {
 typedef struct lxp_prepared_account_change {
     lx_account before;
     lx_account after;
+    lxp_u128 minimum_balance;
+    lxp_u128 maximum_balance;
 } lxp_prepared_account_change;
 
 struct lxp_prepared_module_transition {
@@ -1862,6 +1864,35 @@ static lxp_result stage_allowance_record(lxp_module_ctx *ctx)
     return LXP_OK;
 }
 
+static lxp_result transfer_balance_extrema(lxp_module_ctx *ctx,
+    const lxp_transfer_set *set, lxp_u128 balances[LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U])
+{
+    for (size_t i = 0U; i < set->leg_count; ++i) {
+        const lxp_transfer_leg *leg = &set->legs[i];
+        if (lxp_u128_is_zero(leg->amount)) continue;
+        for (size_t side = 0U; side < 2U; ++side) {
+            lx_account *account = side == 0U ? leg->from : leg->to;
+            size_t index;
+            lxp_result status;
+            for (index = 0U; index < ctx->transfer_snapshot_count; ++index)
+                if (ctx->transfer_snapshots[index].account == account) break;
+            if (index == ctx->transfer_snapshot_count) return LXP_FATAL_INVARIANT;
+            status = side == 0U ?
+                lxp_u128_sub(balances[index], leg->amount, &balances[index]) :
+                lxp_u128_add(balances[index], leg->amount, &balances[index]);
+            if (status != LXP_OK) return LXP_FATAL_INVARIANT;
+            if (lxp_u128_cmp(balances[index], ctx->transfer_snapshots[index].minimum_balance) < 0)
+                ctx->transfer_snapshots[index].minimum_balance = balances[index];
+            if (lxp_u128_cmp(balances[index], ctx->transfer_snapshots[index].maximum_balance) > 0)
+                ctx->transfer_snapshots[index].maximum_balance = balances[index];
+        }
+    }
+    for (size_t i = 0U; i < ctx->transfer_snapshot_count; ++i)
+        if (lxp_u128_cmp(balances[i], ctx->transfer_snapshots[i].account->balance) != 0)
+            return LXP_FATAL_INVARIANT;
+    return LXP_OK;
+}
+
 static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
                                     const lxp_transfer_set *set,
                                     lxp_receipt *receipt,
@@ -1870,6 +1901,7 @@ static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
     lxp_transfer_set emitted;
     lxp_transfer_source_authority bound_authorities[LXP_MAX_TRANSFER_SET_LEGS];
     lxp_transfer_allowance bound_allowance;
+    lxp_u128 balances[LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
     size_t i;
     if (ctx == NULL || set == NULL || receipt == NULL)
         return LXP_ERR_NON_CANONICAL;
@@ -1895,6 +1927,8 @@ static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
                 return LXP_ERR_ARENA_EXHAUSTED;
             ctx->transfer_snapshots[prior].account = accounts[side];
             ctx->transfer_snapshots[prior].balance = accounts[side]->balance;
+            ctx->transfer_snapshots[prior].minimum_balance = accounts[side]->balance;
+            ctx->transfer_snapshots[prior].maximum_balance = accounts[side]->balance;
             (void)memcpy(ctx->transfer_snapshots[prior].asset_id,
                          accounts[side]->asset_id, 32U);
             ctx->transfer_snapshots[prior].has_asset = accounts[side]->has_asset;
@@ -1913,6 +1947,8 @@ static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
                 return LXP_ERR_ARENA_EXHAUSTED;
             ctx->transfer_snapshots[prior].account = account;
             ctx->transfer_snapshots[prior].balance = account->balance;
+            ctx->transfer_snapshots[prior].minimum_balance = account->balance;
+            ctx->transfer_snapshots[prior].maximum_balance = account->balance;
             (void)memcpy(ctx->transfer_snapshots[prior].asset_id,
                          account->asset_id, 32U);
             ctx->transfer_snapshots[prior].has_asset = account->has_asset;
@@ -1921,6 +1957,8 @@ static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
             ++ctx->transfer_snapshot_count;
         }
     }
+    for (i = 0U; i < ctx->transfer_snapshot_count; ++i)
+        balances[i] = ctx->transfer_snapshots[i].account->balance;
     emitted = *set;
     emitted.context.origin_module_id = ctx->module_id;
     for (i = 0U; i < emitted.context.source_authority_count; ++i)
@@ -1934,6 +1972,7 @@ static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
         if (status == LXP_OK)
             status = lxp_kernel_apply_transfer_set(ctx->kernel, &emitted,
                                                    receipt);
+        if (status == LXP_OK) status = transfer_balance_extrema(ctx, set, balances);
         if (status == LXP_OK) status = stage_allowance_record(ctx);
         if (status != LXP_OK) {
             restore_transfer_snapshots(ctx);
@@ -2492,6 +2531,8 @@ lxp_result lxp_module_ctx_export_prepared(
         result->accounts[result->account_count].before.next_sequence =
             snapshot->next_sequence;
         result->accounts[result->account_count].after = *snapshot->account;
+        result->accounts[result->account_count].minimum_balance = snapshot->minimum_balance;
+        result->accounts[result->account_count].maximum_balance = snapshot->maximum_balance;
         ++result->account_count;
     }
     for (i = 0U; i < ctx->staged_blob_count; ++i) {
@@ -2547,12 +2588,11 @@ lxp_result lxp_module_ctx_export_prepared(
     return LXP_OK;
 }
 
-lxp_result lxp_module_ctx_import_prepared(
+static lxp_result prepared_context_validate(
     lxp_module_ctx *ctx, const lxp_prepared_module_transition *prepared,
-    const uint8_t level_snapshot_token[32], lxp_effect_buffer *effects)
+    const uint8_t level_snapshot_token[32], lxp_effect_buffer *effects,
+    lx_account **accounts)
 {
-    uint8_t *blob_copies[LXP_KERNEL_MAX_STAGED_BLOBS] = { NULL };
-    lx_account *accounts[LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
     size_t i;
     if (ctx == NULL || prepared == NULL || level_snapshot_token == NULL ||
         lxp_ct_is_zero(level_snapshot_token, 32U) || effects == NULL ||
@@ -2661,6 +2701,19 @@ lxp_result lxp_module_ctx_import_prepared(
                      prepared->allowance_record_before_length) != 0)))
             return LXP_ERR_CONTEXT_MISMATCH;
     }
+    return LXP_OK;
+}
+
+lxp_result lxp_module_ctx_import_prepared(
+    lxp_module_ctx *ctx, const lxp_prepared_module_transition *prepared,
+    const uint8_t level_snapshot_token[32], lxp_effect_buffer *effects)
+{
+    uint8_t *blob_copies[LXP_KERNEL_MAX_STAGED_BLOBS] = { NULL };
+    lx_account *accounts[LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
+    size_t i;
+    lxp_result validated = prepared_context_validate(ctx, prepared,
+        level_snapshot_token, effects, accounts);
+    if (validated != LXP_OK) return validated;
     {
         lxp_result status = outcome_copy_artifacts(
             &ctx->program_outcome, &prepared->program_outcome, ctx->arena);
@@ -2704,6 +2757,8 @@ lxp_result lxp_module_ctx_import_prepared(
         (void)memcpy(snapshot->asset_id, accounts[i]->asset_id, 32U);
         snapshot->has_asset = accounts[i]->has_asset;
         snapshot->next_sequence = accounts[i]->next_sequence;
+        snapshot->minimum_balance = prepared->accounts[i].minimum_balance;
+        snapshot->maximum_balance = prepared->accounts[i].maximum_balance;
         *accounts[i] = prepared->accounts[i].after;
     }
     ctx->transfer_applied = prepared->account_count != 0U;
@@ -2734,6 +2789,100 @@ lxp_result lxp_module_ctx_import_prepared(
     *effects = prepared->effects;
     ctx->next_effect_ordinal = (uint16_t)effects->count;
     return LXP_OK;
+}
+
+const lxp_program_outcome *lxp_prepared_module_outcome(
+    const lxp_prepared_module_transition *prepared)
+{
+    return prepared == NULL ? NULL : &prepared->program_outcome;
+}
+
+static lxp_result fee_adjust_account(lx_account *account,
+    const lxp_module_fee_transfer *fee, bool payer)
+{
+    lxp_result status;
+    if (account->has_asset &&
+        memcmp(account->asset_id, fee->payer_before.asset_id, 32U) != 0)
+        return LXP_ERR_ASSET_MISMATCH;
+    if (payer) {
+        status = lxp_u128_sub(account->balance, fee->amount, &account->balance);
+        return status == LXP_OK ? LXP_OK : LXP_ERR_INSUFFICIENT_BALANCE;
+    }
+    status = lxp_u128_add(account->balance, fee->amount, &account->balance);
+    if (status != LXP_OK) return status;
+    if (account->next_sequence == UINT64_MAX) return LXP_ERR_SEQUENCE_EXHAUSTED;
+    ++account->next_sequence;
+    account->has_asset = true;
+    (void)memcpy(account->asset_id, fee->payer_before.asset_id, 32U);
+    return LXP_OK;
+}
+
+lxp_result lxp_module_ctx_import_prepared_after_fee(
+    lxp_module_ctx *ctx, const lxp_prepared_module_transition *prepared,
+    const uint8_t level_snapshot_token[32], lxp_effect_buffer *effects,
+    const lxp_module_fee_transfer *fee, lxp_result *settlement_refusal)
+{
+    lxp_prepared_module_transition *adjusted;
+    lx_account *accounts[LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
+    lxp_result status, balance_status = LXP_OK;
+    if (settlement_refusal == NULL) return LXP_ERR_NON_CANONICAL;
+    *settlement_refusal = LXP_OK;
+    if (ctx == NULL || prepared == NULL || fee == NULL ||
+        lxp_u128_is_zero(fee->amount) || !fee->payer_before.has_asset ||
+        (fee->payer_before.kind != LX_ACCOUNT_AGENT_MAIN &&
+         fee->payer_before.kind != LX_ACCOUNT_AGENT_ASSET) ||
+        fee->treasury_before.kind != LX_ACCOUNT_SYSTEM_FEES ||
+        memcmp(fee->payer_before.id, fee->treasury_before.id, 32U) == 0 ||
+        prepared->account_count > LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U)
+        return LXP_ERR_NON_CANONICAL;
+    for (size_t side = 0U; side < 2U; ++side) {
+        lx_account expected = side == 0U ? fee->payer_before : fee->treasury_before;
+        lx_account *actual;
+        status = fee_adjust_account(&expected, fee, side == 0U);
+        if (status != LXP_OK) return status;
+        status = lxp_ctx_account_find(ctx, expected.id, &actual);
+        if (status != LXP_OK || !account_equal(actual, &expected))
+            return LXP_ERR_CONTEXT_MISMATCH;
+    }
+    adjusted = malloc(sizeof(*adjusted));
+    if (adjusted == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    *adjusted = *prepared;
+    for (size_t i = 0U; i < adjusted->account_count; ++i) {
+        lxp_prepared_account_change *change = &adjusted->accounts[i];
+        for (size_t side = 0U; side < 2U; ++side) {
+            const lx_account *before = side == 0U ? &fee->payer_before : &fee->treasury_before;
+            lxp_u128 extreme;
+            if (memcmp(change->before.id, before->id, 32U) != 0) continue;
+            if (!account_equal(&change->before, before)) {
+                free(adjusted);
+                return LXP_ERR_CONTEXT_MISMATCH;
+            }
+            status = fee_adjust_account(&change->before, fee, side == 0U);
+            if (status != LXP_OK) { free(adjusted); return status; }
+            if (side == 0U) {
+                status = lxp_u128_sub(change->minimum_balance, fee->amount, &extreme);
+                if (status != LXP_OK) balance_status = LXP_ERR_INSUFFICIENT_BALANCE;
+                else change->minimum_balance = extreme;
+                status = lxp_u128_sub(change->maximum_balance, fee->amount, &extreme);
+                if (status == LXP_OK) change->maximum_balance = extreme;
+            } else {
+                status = lxp_u128_add(change->maximum_balance, fee->amount, &extreme);
+                if (status != LXP_OK) balance_status = status;
+                else change->maximum_balance = extreme;
+                status = lxp_u128_add(change->minimum_balance, fee->amount, &extreme);
+                if (status == LXP_OK) change->minimum_balance = extreme;
+            }
+            status = fee_adjust_account(&change->after, fee, side == 0U);
+            if (status != LXP_OK) balance_status = status;
+        }
+    }
+    status = prepared_context_validate(ctx, adjusted, level_snapshot_token, effects, accounts);
+    if (status == LXP_OK && balance_status != LXP_OK)
+        *settlement_refusal = balance_status;
+    else if (status == LXP_OK)
+        status = lxp_module_ctx_import_prepared(ctx, adjusted, level_snapshot_token, effects);
+    free(adjusted);
+    return status;
 }
 
 lxp_result lxp_ctx_emit_programs_maintenance_transfer_set(

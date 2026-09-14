@@ -288,6 +288,7 @@ fn submit(
     )?;
     assert_eq!(field(&value, "activity_id")?, hex::encode(&expected));
     let receipt = checked(hex::decode(field(&value, "receipt")?))?;
+    checked(client.reconnect())?;
     let included = checked(client.proof_bundle(
         layerx_client::evidence::ProofBundleSelector::Receipt(expected),
         405,
