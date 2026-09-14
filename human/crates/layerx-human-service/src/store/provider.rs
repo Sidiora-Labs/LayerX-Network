@@ -123,13 +123,15 @@ fn verify_binding_file(path: &Path, expected: &[u8]) -> Result<(), StoreError> {
 }
 
 fn provider_lock(root: &Path) -> Result<fs::File, StoreError> {
+    let nofollow = i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits())
+        .map_err(|_| io::Error::other("O_NOFOLLOW exceeds the native file option bound"))?;
     let lock = fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits())
+        .custom_flags(nofollow)
         .open(root.join("provider.lock"))?;
     let metadata = lock.metadata()?;
     if !metadata.is_file()
