@@ -187,7 +187,7 @@ impl ProductionComponents {
         let id = rotation_id(action)?;
         let agent_id = path(request, "agent_id")?;
         if scope.get(Table::Journeys, &rotation_key(&id)?).is_none() {
-            let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut agent = self.principal_agent(scope)?;
             let context = agent.agent_context(agent_id).map_err(agent_failure)?;
             let identity = checked_identity(&mut agent, &context.agent_did)?;
             if identity.primary_public_key != context.seed.custody_public_key
@@ -281,7 +281,7 @@ impl ProductionComponents {
         if record.terminal() {
             return Ok(true);
         }
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         match record.phase {
             Phase::Announce => {
                 self.announce_rotation(scope, &mut agent, trace, &mut record, observed_at)?;
@@ -741,9 +741,7 @@ impl ProductionComponents {
             })
             .ok_or_else(|| ApiFailure::invalid_request(Some("idempotency_key")))?;
         let agent_id = path(request, "agent_id")?;
-        self.agent
-            .lock()
-            .map_err(|_| ApiFailure::unavailable())?
+        self.principal_agent(scope)?
             .agent_context(agent_id)
             .map_err(agent_failure)?;
         let schema = ApiSchema::v1().map_err(|_| ApiFailure::upstream_degraded())?;

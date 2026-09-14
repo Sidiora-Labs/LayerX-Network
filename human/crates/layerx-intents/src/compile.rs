@@ -11,6 +11,10 @@ use layerx_wire::WireError;
 
 use crate::{Intent, IntentKind, IntentVersion};
 
+#[path = "owner_bootstrap.rs"]
+mod owner_bootstrap;
+pub use owner_bootstrap::NativeOwnerBootstrap;
+
 const ASSET_SEND_TAG: u16 = 0x5301;
 const ASSET_SEND_FIELD_COUNT: u16 = 10;
 

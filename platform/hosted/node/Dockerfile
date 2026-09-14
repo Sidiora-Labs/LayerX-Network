@@ -20,6 +20,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chown 4020:4020 /var/lib/layerx /run/layerx
 COPY --from=build /src/build/bin/layerx-guarantor /usr/local/bin/layerx-guarantor
 COPY --from=build /src/cmd/layerx-guarantor/settlement.py /opt/layerx/guarantor/settlement.py
+COPY --from=build /src/cmd/layerx-guarantor/publication.py /opt/layerx/guarantor/publication.py
+COPY --from=build /src/cmd/layerx-guarantor/authorization.py /opt/layerx/guarantor/authorization.py
+COPY --from=build /src/platform/hosted/human/recipient_binding.py /opt/layerx/human/recipient_binding.py
+COPY --from=build /src/platform/hosted/human/onboarding_socket.py /opt/layerx/human/onboarding_socket.py
+COPY --from=build /src/platform/hosted/human/provision.py /opt/layerx/human/provision.py
 COPY --from=build /src/cmd/layerx-guarantor/requirements.txt /opt/layerx/guarantor/requirements.txt
 RUN python3 -m venv /opt/layerx/guarantor/venv \
     && /opt/layerx/guarantor/venv/bin/pip install --no-cache-dir -r /opt/layerx/guarantor/requirements.txt

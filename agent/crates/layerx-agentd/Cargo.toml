@@ -9,6 +9,7 @@ license.workspace = true
 layerx-types = { path = "../layerx-types" }
 layerx-client = { path = "../layerx-client" }
 layerx-identity-binding = { path = "../layerx-identity-binding" }
+layerx-paxeer-verifier = { path = "../layerx-paxeer-verifier" }
 layerx-agent-api = { path = "../layerx-agent-api" }
 layerx-crypto = { path = "../layerx-crypto" }
 layerx-proof = { path = "../layerx-proof" }
@@ -26,6 +27,7 @@ zeroize = "=1.9.0"
 getrandom = "=0.3.4"
 
 [dev-dependencies]
+layerx-sdk = { path = "../layerx-sdk" }
 native-tls = "=0.2.18"
 openssl = "=0.10.81"
 ed25519-dalek = "=2.2.0"

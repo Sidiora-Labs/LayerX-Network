@@ -17,6 +17,9 @@ const RATE_MAGIC: &[u8; 4] = b"LXRL";
 const RATE_VERSION: u8 = 1;
 const STEP_UP_KEY_PREFIX: &str = "custody-stepup-";
 const STEP_UP_ID_LIMIT: usize = 96;
+#[path = "settlement_recipient.rs"]
+mod settlement_recipient;
+pub use settlement_recipient::SettlementRecipientRequest;
 
 /// The operation class named in a custody signing decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

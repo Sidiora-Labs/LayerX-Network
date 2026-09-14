@@ -2744,6 +2744,8 @@ static lxp_result publish_receipt_visibility(lxp_daemon_process *process)
     process->owner.pending_receipt_count = 0U;
     if (pthread_mutex_unlock(&process->owner.receipt_mutex) != 0)
         status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = lxp_daemon_lni_receipts_committed();
     return status;
 }
 

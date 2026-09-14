@@ -55,6 +55,8 @@ human_secrets_apply() {
 human_policy_publish() {
     local evidence="$WORK_DIR/human-evidence"
     LAYERX_BETA_HUMAN_POLICY_FILE="$WORK_DIR/human-policy.json"
+    python3 "$REPO_ROOT/platform/hosted/human/history_material.py" "$WORK_DIR/genesis" \
+        "$WORK_DIR/paxeer/deployment.json" "$evidence" "$SECRETS_DIR/human" "$CA_DIR/ca.der" "$NODE_SEQUENCER_PUBLIC_KEY"
     python3 "$REPO_ROOT/platform/hosted/human/material.py" --assemble \
         "$evidence" "$WORK_DIR/paxeer/deployment.json" "$SECRETS_DIR/module-registry.json" \
         "$LAYERX_BETA_HUMAN_POLICY_FILE" "$NODE_NETWORK_ID" "$PAXEER_CHAIN_ID"

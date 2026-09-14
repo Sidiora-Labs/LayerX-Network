@@ -25,6 +25,7 @@ pub mod secp256k1;
 pub mod send;
 #[cfg(feature = "custody")]
 pub mod session;
+pub mod settlement_recipient;
 #[cfg(feature = "custody")]
 pub mod signer;
 

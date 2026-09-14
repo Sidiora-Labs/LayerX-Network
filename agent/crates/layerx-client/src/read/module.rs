@@ -1,4 +1,6 @@
-use crate::evidence::{verify_module_evidence, AccountEvidencePolicy};
+use crate::evidence::{
+    verify_module_evidence, verify_module_evidence_with_history, AccountEvidencePolicy,
+};
 
 use super::{
     decode_core_refusal, decode_envelope, encode_envelope, require_level, Envelope, FrameTransport,
@@ -11,6 +13,16 @@ pub(super) fn read(
     module_id: u16,
     key: &[u8],
     context: ReadContext,
+) -> Result<ReadValue, ReadError> {
+    read_with_history(transport, module_id, key, context, None)
+}
+
+pub(super) fn read_with_history(
+    transport: &mut dyn FrameTransport,
+    module_id: u16,
+    key: &[u8],
+    context: ReadContext,
+    history: Option<&crate::handover::SequencerHistory>,
 ) -> Result<ReadValue, ReadError> {
     if key.is_empty() || key.len() > 129 || module_id > 9 {
         return Err(ReadError::PageBound);
@@ -54,20 +66,34 @@ pub(super) fn read(
     if response.message_tag != ACCOUNT_READ_RESPONSE_TAG {
         return Err(ReadError::UnexpectedResponse);
     }
-    let verified = verify_module_evidence(
-        response.canonical_payload,
-        response.proof_material,
-        module_id,
-        key,
-        AccountEvidencePolicy {
-            root_selector: context.root_selector,
-            expected_protocol_version: context.expected_protocol_version,
-            expected_network_id: context.expected_network_id,
-            handshake_sequencer_key: context.handshake_sequencer_key,
-        },
-    )
+    let policy = AccountEvidencePolicy {
+        root_selector: context.root_selector,
+        expected_protocol_version: context.expected_protocol_version,
+        expected_network_id: context.expected_network_id,
+        handshake_sequencer_key: context.handshake_sequencer_key,
+    };
+    let verified = if let Some(history) = history {
+        verify_module_evidence_with_history(
+            response.canonical_payload,
+            response.proof_material,
+            module_id,
+            key,
+            policy,
+            history,
+        )
+    } else {
+        verify_module_evidence(
+            response.canonical_payload,
+            response.proof_material,
+            module_id,
+            key,
+            policy,
+        )
+    }
     .map_err(ReadError::ProductionEvidence)?;
-    if verified.signed_header().response_authorization() != context.sequencer_authorization {
+    if history.is_none()
+        && verified.signed_header().response_authorization() != context.sequencer_authorization
+    {
         return Err(ReadError::AuthorityRangeMismatch);
     }
     let header =

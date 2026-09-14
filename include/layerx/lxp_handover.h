@@ -41,6 +41,8 @@ typedef struct lxp_handover_evidence {
 
 struct lxp_kernel;
 struct lxp_module_ctx;
+lxp_result lxp_handover_genesis_trust_encode(const struct lxp_kernel *kernel,
+    lxp_arena *arena, lxp_byte_span *encoded);
 typedef lxp_result (*lxp_handover_finality_verify_fn)(void *context,
     const lxp_handover_evidence *evidence, lxp_arena *arena);
 

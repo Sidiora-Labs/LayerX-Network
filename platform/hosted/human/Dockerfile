@@ -15,13 +15,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && groupadd -g 4020 layerx && useradd -M -u 4020 -g 4020 -s /usr/sbin/nologin layerx
 COPY --from=build /src/human/target/release/layerx-human-service /usr/local/bin/layerx-human-service
 COPY --from=build /src/human/target/release/layerx-human-components /usr/local/bin/layerx-human-components
+COPY --from=build /src/human/target/release/layerx-human-onboarding /usr/local/bin/layerx-human-onboarding
 COPY --from=build /src/human/target/release/layerx-human-kms /usr/local/bin/layerx-human-kms
 COPY --from=build /src/agent/target/release/layerx-agentd /usr/local/bin/layerx-agentd
 COPY --from=build /src/human/target/release/layerx-human-identity-provider /usr/local/bin/layerx-human-identity-provider
 COPY --from=build /src/human/target/release/layerx-human-security-provider /usr/local/bin/layerx-human-security-provider
 COPY --from=build /src/human/target/release/layerx-human-movement-provider /usr/local/bin/layerx-human-movement-provider
 COPY --from=build /src/cmd/layerxctl/target/release/layerxctl /usr/local/bin/layerxctl
-COPY platform/hosted/human/provision.py platform/hosted/human/owner_native.py /usr/local/lib/layerx-human/
+COPY platform/hosted/human/provision.py platform/hosted/human/owner_native.py platform/hosted/human/owner_kms.py platform/hosted/human/onboarding_socket.py platform/hosted/human/onboarding_bootstrap.py platform/hosted/human/onboarding_material.py platform/hosted/human/material.py platform/hosted/human/recipient_binding.py /usr/local/lib/layerx-human/
 COPY --chmod=0555 platform/hosted/human/entrypoint.sh /usr/local/bin/human-entrypoint
 USER 4020:4020
 ENTRYPOINT ["/usr/local/bin/layerx-human-service"]

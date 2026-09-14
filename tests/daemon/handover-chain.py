@@ -2,6 +2,8 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shutil
+import tempfile
 import subprocess
 import sys
 import time
@@ -57,6 +59,56 @@ def main():
             peers = runpy.run_path(str(ROOT / 'tests/daemon/handover-peers.py'))
             peers['run'](native, build, output / f'exports-{count}', count,
                 os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'])
+        consumer = os.environ.get('LAYERX_TEST_HANDOVER_CONSUMER_BIN')
+        if consumer is not None:
+            assert os.environ.get('LAYERX_TEST_HANDOVER_PEERS') == '1'
+            public_exports = output / f'exports-{count}'
+            assert (public_exports / 'handover-genesis.bin').read_bytes() == (
+                native / 'data/genesis/genesis-handover-trust.lxt').read_bytes()
+            with tempfile.TemporaryDirectory(prefix='lxp-handover-consumer-', dir='/tmp') as temporary:
+                client_directory = Path(temporary)
+                os.chown(client_directory, 4021, 4021)
+                client_directory.chmod(0o700)
+                executable = client_directory / 'native-handover-history'
+                shutil.copyfile(consumer, executable)
+                executable.chmod(0o755)
+                for public_file in public_exports.iterdir():
+                    if public_file.name == 'handover-genesis.bin' or public_file.name.startswith(('retired-', 'unauthorized-')):
+                        destination = client_directory / public_file.name
+                        shutil.copyfile(public_file, destination)
+                        os.chown(destination, 4021, 4021)
+                        destination.chmod(0o400)
+                settlement = json.loads((native / 'handover-peers/checkpoint-settlement.json').read_text())
+                domain = settlement['settlement_domains']['beta']
+                registration = (native / 'data/genesis/paxeer-registration-request.lxrr').read_bytes()
+                policy = dict(version='1', url=os.environ['LAYERX_TEST_WITHDRAW_RPC'],
+                    transport='local-emulator', trust_anchor_der='', chain_id='125',
+                    request_timeout_ms='8000', registry=domain['settlement_contract'].removeprefix('0x').lower(),
+                    guarantor_bond=domain['guarantor_bond'].removeprefix('0x').lower(),
+                    protocol_version='3', network_id='77', canonical_genesis_root=registration[9:41].hex(),
+                    confirmations='1')
+                policy_path = client_directory / 'handover-finality.conf'
+                policy_path.write_text(''.join(f'{key}={value}\n' for key, value in policy.items()))
+                os.chown(policy_path, 4021, 4021)
+                policy_path.chmod(0o400)
+                invoke(['setpriv', '--reuid=4021', '--regid=4021', '--clear-groups',
+                        executable, os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'],
+                        client_directory, count], os.environ,
+                       output / 'public-history-consumer.log')
+                read_consumer = os.environ.get('LAYERX_TEST_HANDOVER_READ_CONSUMER_BIN')
+                if read_consumer is not None:
+                    reads_executable = client_directory / 'native-handover-reads'
+                    shutil.copyfile(read_consumer, reads_executable)
+                    reads_executable.chmod(0o755)
+                    invoke(['setpriv', '--reuid=4021', '--regid=4021', '--clear-groups',
+                            reads_executable, os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'],
+                            client_directory, count], os.environ,
+                           output / 'public-history-reads.log')
+                authority = os.environ.get('LAYERX_TEST_HANDOVER_AUTHORITY_BIN')
+                if authority is not None:
+                    authority_gate = runpy.run_path(str(ROOT / 'tests/daemon/handover-authority.py'))
+                    authority_gate['run'](native, client_directory, authority,
+                                          os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'])
         return
     environment = os.environ.copy()
     settlement = dict(line.split('=', 1) for line in (native / 'settlement.env').read_text().splitlines())
