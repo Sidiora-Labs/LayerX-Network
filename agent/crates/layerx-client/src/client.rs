@@ -388,7 +388,11 @@ impl Client {
                 layerx_proof::receipt::NativeOwnerOutcomeFailure::ActivityBinding,
             ));
         }
-        if !self.handshake.capabilities().contains(Capability::ReceiptLookup) {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::ReceiptLookup)
+        {
             return Err(ReceiptError::UnavailableCapability);
         }
         let transport = self.transport.as_mut().ok_or(ReceiptError::Disconnected)?;
