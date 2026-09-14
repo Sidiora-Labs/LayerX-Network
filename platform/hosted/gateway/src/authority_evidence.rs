@@ -387,6 +387,8 @@ mod maintained_consumer_tests {
         let legacy = captured();
         let mut changed = legacy["authority"]["batch_evidence"].clone();
         changed["batch_identity"]["kind"] = serde_json::json!("batch_maintenance_v1");
+        changed["batch_identity"]["activity_receipts_hex"] =
+            serde_json::json!([legacy["receipt_hex"].clone()]);
         let document: MaintainedBatchDocument = required(serde_json::from_value(changed));
         assert!(document.authorize(receipt, &facts, &pins).is_err());
     }
