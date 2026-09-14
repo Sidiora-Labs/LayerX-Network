@@ -158,9 +158,12 @@ fi
 for script in tools/*.sh tools/ci/*.sh; do
     IFS= read -r interpreter < "$script"
     case "$interpreter" in
-        '#!/usr/bin/env bash'|'#!/bin/bash') bash -n "$script" ;;
-        '#!/usr/bin/env sh'|'#!/bin/sh') sh -n "$script" ;;
-        *) echo "unsupported shell interpreter in $script: $interpreter" >&2; exit 1 ;;
+        '#!/bin/sh' | '#!/usr/bin/env sh') sh -n "$script" ;;
+        '#!/bin/bash' | '#!/usr/bin/env bash') bash -n "$script" ;;
+        *)
+            echo "unsupported shell interpreter: $script" >&2
+            exit 1
+            ;;
     esac
 done
 

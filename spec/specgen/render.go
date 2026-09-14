@@ -142,7 +142,11 @@ func renderTasks(f *Doc, featureDir, banner string) (string, error) {
 		if depth == 0 {
 			idLabel = id + "." // top-level groups render as "1.", subtasks as "1.1"
 		}
-		fmt.Fprintf(&b, "%s- %s %s %s\n", indent, checkbox(f.Str(sec, "status")), idLabel, f.Str(sec, "title"))
+		title := f.Str(sec, "title")
+		if f.Str(sec, "status") == "implemented" {
+			title += " — **Implemented - qualification pending**"
+		}
+		fmt.Fprintf(&b, "%s- %s %s %s\n", indent, checkbox(f.Str(sec, "status")), idLabel, title)
 		// Implementation detail bullets, in file order.
 		for _, kv := range f.OrderedKV(sec, "do_") {
 			fmt.Fprintf(&b, "%s  - %s\n", indent, kv[1])
