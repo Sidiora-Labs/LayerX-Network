@@ -109,6 +109,7 @@ struct Current {
     head: u64,
     timestamp: u64,
     checkpoint: [u8; 32],
+    authorization: layerx_proof::inclusion::SequencerAuthorization,
 }
 
 fn current(
@@ -155,6 +156,7 @@ fn current(
         head: session.context.head.chain_sequence,
         timestamp: header.timestamp_ms(),
         checkpoint: session.context.head.finalised_checkpoint,
+        authorization: session.context.sequencer_authorization,
     })
 }
 
@@ -390,7 +392,6 @@ fn balance(
     policy: &PrincipalPolicy,
     subject: &Subject,
     current: &Current,
-    config: &Config,
 ) -> Result<Response, Response> {
     let (registry, bytes) = super::read_registry(&human.registry_path)?;
     let asset = registry
@@ -410,7 +411,7 @@ fn balance(
     }
     Ok(json(
         200,
-        &value!({"account_id":hex::encode(&subject.account_id),"asset_id":hex::encode(&subject.asset),"currency":asset.currency,"decimals":asset.decimals,"symbol":asset.symbol,"registry_revision":hex::encode(&digest(&bytes)),"observed_at":current.timestamp.to_string(),"age_seconds":u64::try_from(age/1000).map_err(|_| unavailable("clock_unavailable"))?,"maximum_age_seconds":policy.maximum_age_seconds,"sequencer_id":hex::encode(&config.sequencer_id),"sequencer_public_key":hex::encode(&config.sequencer_public_key),"first_batch_number":config.first_batch,"last_batch_number":config.last_batch,"checkpoint_digest":hex::encode(&current.checkpoint)}),
+        &value!({"account_id":hex::encode(&subject.account_id),"asset_id":hex::encode(&subject.asset),"currency":asset.currency,"decimals":asset.decimals,"symbol":asset.symbol,"registry_revision":hex::encode(&digest(&bytes)),"observed_at":current.timestamp.to_string(),"age_seconds":u64::try_from(age/1000).map_err(|_| unavailable("clock_unavailable"))?,"maximum_age_seconds":policy.maximum_age_seconds,"sequencer_id":hex::encode(&current.authorization.sequencer_id()),"sequencer_public_key":hex::encode(&current.authorization.public_key()),"first_batch_number":current.authorization.first_batch_number(),"last_batch_number":current.authorization.last_batch_number(),"checkpoint_digest":hex::encode(&current.checkpoint)}),
     ))
 }
 
@@ -550,7 +551,7 @@ pub(super) fn dispatch(
         return super::registry(&human.registry_path);
     }
     if name == "balance-context" {
-        return balance(human, policy, &subject, &current, config);
+        return balance(human, policy, &subject, &current);
     }
     let mut evidence = human.evidence(config)?;
     for item in &mut evidence {
