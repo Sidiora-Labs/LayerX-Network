@@ -3586,7 +3586,7 @@ static lxp_result apply_canonical_batch(
     lxp_byte_span canonical_receipts[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_batch_roots scheduling_roots;
     uint8_t batch_id[32] = {0};
-    uint64_t timestamp;
+    uint64_t timestamp = 0U;
     size_t count = 0U;
     size_t retry_prefix_count = 0U;
     size_t kernel_consumed = 0U;
