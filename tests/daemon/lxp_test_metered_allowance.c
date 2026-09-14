@@ -941,6 +941,8 @@ static int metered_initial(int descriptor, const signer *owner, metered_run *run
     size_t first = run->receipt_count;
     for (size_t i = 0U; i < 2U; ++i) {
         size_t encoded_length;
+        (void)fprintf(stderr, "metered queued ProgramCall index=%zu account_sequence=%llu\n",
+            i, (unsigned long long)run->account_sequence);
         REQUIRE(metered_encode(&capability, run->account_sequence, LX_PROGRAMS_CALL,
                                 0U, payload, length, encoded, &encoded_length) == 0);
         REQUIRE(metered_submit(descriptor, run, encoded, encoded_length, LXP_OK) == 0);

@@ -17,7 +17,12 @@ replica_pid= sequencer_pid= settlement_pid=
 cleanup() {
     result=$?
     for pid in "$sequencer_pid" "$replica_pid" "$settlement_pid"; do
-        if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" || true; fi
+        if [[ -n "$pid" ]]; then
+            kill "$pid" 2>/dev/null || true
+            child_result=0
+            wait "$pid" || child_result=$?
+            printf 'native fixture child pid=%s exit=%s\n' "$pid" "$child_result" >&2
+        fi
     done
     rm -rf "$runtime"
     if [[ "$result" == 0 && -z ${LAYERX_TEST_ADMISSION_LOG_DIR:-} ]]; then rm -rf "$work"; else printf 'native admission evidence: %s\n' "$work" >&2; fi
