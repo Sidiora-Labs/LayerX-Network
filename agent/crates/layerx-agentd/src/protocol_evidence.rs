@@ -20,6 +20,7 @@ use layerx_wire::receipt::{decode, decode_batch_header, BatchHeader};
 use sha2::{Digest, Sha256};
 
 use crate::config::{read_protected_source, ProtectedSourceError, StartupConfig};
+mod native_owner;
 
 const MAX_AUTHORITY_SOURCE_BYTES: usize = 65_536;
 const AUTHORITY_SOURCE_VERSION: &str = "layerx-sequencer-authority-v1";
@@ -744,6 +745,7 @@ pub enum ReceiptEvidenceError {
     Policy(VerifierPolicyError),
     Inclusion(InclusionError),
     Receipt(VerificationFailure),
+    NativeOwner(layerx_proof::receipt::NativeOwnerOutcomeFailure),
     ProtocolVersion,
     SequenceRange,
     BatchIdentity,

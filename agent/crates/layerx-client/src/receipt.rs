@@ -3,6 +3,7 @@
 use std::thread;
 
 use layerx_proof::receipt::{verify, AuthorizedBatch, VerificationFailure, VerifiedReceipt};
+use layerx_proof::receipt::{verify_native_owner_outcome, NativeOwnerOutcomeContext, NativeOwnerOutcomeFailure};
 
 use crate::client::ReconnectPolicy;
 use crate::lni::refusal::decode_core_refusal;
@@ -78,6 +79,7 @@ pub enum ReceiptError {
         result: layerx_types::result::ResultCode,
     },
     Verification(VerificationFailure),
+    NativeOwnerVerification(NativeOwnerOutcomeFailure),
     ActivityMismatch {
         expected: [u8; 32],
         actual: [u8; 32],
@@ -121,6 +123,34 @@ pub fn lookup(
     selector: ReceiptSelector,
     context: LookupContext,
 ) -> Result<Lookup, ReceiptError> {
+    lookup_verified(transport, selector, context, |bytes| {
+        verify(bytes, &context.authorised_batch).map_err(ReceiptError::Verification)
+    })
+}
+
+/// Retrieves an owner module outcome bound to an independently retained signing request.
+///
+/// # Errors
+/// Refuses malformed transport, selector mismatches and every activity, owner,
+/// signature, receipt, root and fee binding failure.
+pub fn lookup_native_owner(
+    transport: &mut dyn FrameTransport,
+    selector: ReceiptSelector,
+    context: LookupContext,
+    expected: &NativeOwnerOutcomeContext<'_>,
+) -> Result<Lookup, ReceiptError> {
+    lookup_verified(transport, selector, context, |bytes| {
+        verify_native_owner_outcome(bytes, &context.authorised_batch, expected)
+            .map_err(ReceiptError::NativeOwnerVerification)
+    })
+}
+
+fn lookup_verified(
+    transport: &mut dyn FrameTransport,
+    selector: ReceiptSelector,
+    context: LookupContext,
+    verifier: impl FnOnce(&[u8]) -> Result<VerifiedReceipt, ReceiptError>,
+) -> Result<Lookup, ReceiptError> {
     let mut selector_bytes = selector.encode();
     if context.interface_version.minor >= 5 {
         selector_bytes.push(1);
@@ -156,8 +186,7 @@ pub fn lookup(
     if response.canonical_payload.is_empty() {
         return Ok(Lookup::Absent);
     }
-    let verified = verify(response.canonical_payload, &context.authorised_batch)
-        .map_err(ReceiptError::Verification)?;
+    let verified = verifier(response.canonical_payload)?;
     let Some(receipt) = verified.receipt().protocol() else {
         return Err(ReceiptError::Verification(VerificationFailure {
             check: layerx_proof::receipt::ReceiptCheck::ReceiptShape,

@@ -1,6 +1,7 @@
 //! Verified, byte-preserving receipt storage and protocol-code classification.
 
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
+use layerx_proof::receipt::{verify_native_owner_outcome, NativeOwnerOutcomeContext, NativeOwnerOutcomeFailure, VerifiedReceipt};
 use layerx_types::result::{KnownResult, ResultCode, ResultDomain, Retriability};
 use layerx_types::verify::VerificationLevel;
 use sha2::{Digest, Sha256};
@@ -47,6 +48,7 @@ pub struct ServedReceipt {
 #[derive(Debug)]
 pub enum ReceiptStoreError {
     Verification(ReceiptCheck),
+    NativeOwnerVerification(NativeOwnerOutcomeFailure),
     Store(StoreError),
     Corrupt,
     Missing,
@@ -88,6 +90,15 @@ pub fn store(
 ) -> Result<ReceiptMetadata, ReceiptStoreError> {
     let verified = verify_outcome(receipt_bytes, authorised)
         .map_err(|failure| ReceiptStoreError::Verification(failure.check))?;
+    persist_verified(durable, tenant, idempotency_key, &verified)
+}
+
+fn persist_verified(
+    durable: &mut Store,
+    tenant: TenantId,
+    idempotency_key: [u8; 32],
+    verified: &VerifiedReceipt,
+) -> Result<ReceiptMetadata, ReceiptStoreError> {
     let protocol = verified
         .receipt()
         .protocol()
@@ -203,6 +214,52 @@ pub fn store_verified_if_absent(
                 tenant,
                 ReceiptLookupKey::Idempotency(idempotency_key),
             )?;
+            if served.canonical_bytes != receipt_bytes || served.metadata != metadata {
+                return Err(ReceiptStoreError::Corrupt);
+            }
+            Ok(served)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Stores an owner module receipt only after verifying the retained original activity.
+/// Existing finality is preserved and all durable indexes must agree byte for byte.
+///
+/// # Errors
+/// Refuses altered signing context, receipt proof failures, conflicting indexes
+/// and persistence failures. Generic transfer verification remains separate.
+pub fn store_native_owner_if_absent(
+    durable: &mut Store,
+    tenant: TenantId,
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+    expected: &NativeOwnerOutcomeContext<'_>,
+) -> Result<ServedReceipt, ReceiptStoreError> {
+    let verified = verify_native_owner_outcome(receipt_bytes, authorised, expected)
+        .map_err(ReceiptStoreError::NativeOwnerVerification)?;
+    let protocol = verified.receipt().protocol().ok_or(ReceiptStoreError::Corrupt)?;
+    match serve(durable, tenant.clone(), ReceiptLookupKey::Idempotency(expected.action_key)) {
+        Ok(existing) => {
+            if existing.canonical_bytes != verified.canonical_bytes()
+                || existing.metadata.activity_id != protocol.activity_id()
+                || existing.metadata.idempotency_key != expected.action_key
+                || existing.metadata.global_sequence != protocol.global_sequence()
+                || existing.metadata.result != classify(ResultCode::from_raw(protocol.result_code()))
+                || existing.metadata.verification_level < verified.level()
+            {
+                return Err(ReceiptStoreError::Corrupt);
+            }
+            for lookup in [ReceiptLookupKey::Activity(protocol.activity_id()), ReceiptLookupKey::GlobalSequence(protocol.global_sequence())] {
+                if serve(durable, tenant.clone(), lookup)? != existing {
+                    return Err(ReceiptStoreError::Corrupt);
+                }
+            }
+            Ok(existing)
+        }
+        Err(ReceiptStoreError::Missing) => {
+            let metadata = persist_verified(durable, tenant.clone(), expected.action_key, &verified)?;
+            let served = serve(durable, tenant, ReceiptLookupKey::Idempotency(expected.action_key))?;
             if served.canonical_bytes != receipt_bytes || served.metadata != metadata {
                 return Err(ReceiptStoreError::Corrupt);
             }

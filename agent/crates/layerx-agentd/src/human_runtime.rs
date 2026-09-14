@@ -48,6 +48,8 @@ use crate::sign::{
     attach_external_signature, validate_issued_session, verify_before_submit, ProvisionedSessionKey,
 };
 use crate::store::{key, ObjectKind, StorageClass, Store, TenantId, TenantKey};
+mod native_receipt;
+use native_receipt::RetainedNativeOwner;
 
 const MAX_RESPONSE: usize = 1_048_576;
 
@@ -2347,6 +2349,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         &mut self,
         receipt_evidence: &layerx_client::evidence::VerifiedProofBundle,
         authority: &AuthorizedBatch,
+        native: Option<&layerx_proof::receipt::NativeOwnerOutcomeContext<'_>>,
     ) -> Result<crate::protocol_evidence::VerifiedReceiptEvidence, HumanOperationError> {
         let layerx_client::evidence::VerifiedProofBundle::Receipt {
             canonical_bytes,
@@ -2366,7 +2369,12 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         let header = layerx_wire::receipt::decode_batch_header(&signed_header.canonical_bytes)
             .map_err(|_| HumanOperationError::Refused)?;
         if header.protocol_version() == 3 && header.first_sequence() < header.last_sequence() {
-            return self.maintained_terminal_receipt(&raw, authority, &header);
+            return self.maintained_terminal_receipt(&raw, authority, &header, native);
+        }
+        if let Some(expected) = native {
+            return crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized_native_owner(
+                &raw, authority, expected, None,
+            ).map_err(|_| HumanOperationError::Refused);
         }
         let node = self.node.handshake().node();
         let terminal = crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized(
@@ -2384,6 +2392,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         raw: &crate::protocol_evidence::RawReceiptEvidence,
         authority: &AuthorizedBatch,
         header: &layerx_wire::receipt::BatchHeader,
+        native: Option<&layerx_proof::receipt::NativeOwnerOutcomeContext<'_>>,
     ) -> Result<crate::protocol_evidence::VerifiedReceiptEvidence, HumanOperationError> {
         let node = self.node.handshake().node().clone();
         let authorization = layerx_proof::inclusion::SequencerAuthorization::new(
@@ -2394,12 +2403,8 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         );
         let items = self.maintained_receipt_history(raw, header, &authorization)?;
         let item = items.last().ok_or(HumanOperationError::Refused)?;
-        if !item
-            .canonical_bytes()
-            .starts_with(b"LXP/programs/occupancy-receipt/v2\0")
-        {
-            return Err(HumanOperationError::Refused);
-        }
+        layerx_wire::batch_maintenance::decode_maintenance(item.canonical_bytes())
+            .map_err(|_| HumanOperationError::Refused)?;
         let receipts = items[..items.len() - 1]
             .iter()
             .map(|item| item.canonical_bytes().to_vec())
@@ -2418,6 +2423,11 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             maintenance_proof: &proof.proof,
             authorization: &authorization,
         };
+        if let Some(expected) = native {
+            return crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized_native_owner(
+                raw, authority, expected, Some((&evidence, &receipts)),
+            ).map_err(|_| HumanOperationError::Refused);
+        }
         crate::protocol_evidence::VerifiedReceiptEvidence::verify_authorized_maintained(
             raw,
             authority,
@@ -2497,6 +2507,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         tenant: TenantId,
         mut served: crate::receipt::ServedReceipt,
         authority: &AuthorizedBatch,
+        native: Option<&layerx_proof::receipt::NativeOwnerOutcomeContext<'_>>,
     ) -> Result<crate::receipt::ServedReceipt, HumanOperationError> {
         let expected_activity_id = served.metadata.activity_id;
         let registry = self.authority.registry(peer).map_err(map_core)?;
@@ -2528,7 +2539,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
                 {
                     return Err(HumanOperationError::Refused);
                 }
-                let terminal = self.terminal_receipt_evidence(&receipt_evidence, authority)?;
+                let terminal = self.terminal_receipt_evidence(&receipt_evidence, authority, native)?;
                 let terminal_state = if terminal.result_code() == 0 {
                     SubmissionState::Executed
                 } else {
@@ -3134,21 +3145,20 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         let authority = self
             .authority
             .authorized_batch(peer, expected_activity_id)?;
-        let lookup = self
-            .node
-            .lookup_receipt(
-                ReceiptSelector::IdempotencyKey {
-                    idempotency_key,
-                    expected_activity_id,
-                },
-                u64::from_be_bytes(
-                    idempotency_key[..8]
-                        .try_into()
-                        .map_err(|_| HumanOperationError::Refused)?,
-                ),
-                authority,
-            )
-            .map_err(|_| HumanOperationError::Unavailable)?;
+        let original = self.outbox.exact_signed_bytes(idempotency_key)
+            .map_err(|_| HumanOperationError::Refused)?.to_vec();
+        let registry = self.authority.registry(peer).map_err(map_core)?;
+        let retained = RetainedNativeOwner::decode(original, &registry, self.node.handshake().node(),
+            idempotency_key, expected_activity_id)?;
+        let native = retained.as_ref().map(RetainedNativeOwner::context);
+        let selector = ReceiptSelector::IdempotencyKey { idempotency_key, expected_activity_id };
+        let correlation = u64::from_be_bytes(idempotency_key[..8].try_into()
+            .map_err(|_| HumanOperationError::Refused)?);
+        let lookup = if let Some(expected) = &native {
+            self.node.lookup_native_owner_receipt(selector, correlation, authority, expected)
+        } else {
+            self.node.lookup_receipt(selector, correlation, authority)
+        }.map_err(native_receipt::map_lookup_error)?;
         let mut out = Encoder::new();
         match lookup {
             Lookup::Absent => out.u8(0),
@@ -3164,14 +3174,18 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                         .store
                         .lock()
                         .map_err(|_| HumanOperationError::Unavailable)?;
-                    crate::receipt::store_verified_if_absent(
+                    let ingress = if let Some(expected) = &native {
+                        crate::receipt::store_native_owner_if_absent(
+                            &mut store, tenant.clone(), receipt.canonical_bytes(), &authority, expected,
+                        )
+                    } else { crate::receipt::store_verified_if_absent(
                         &mut store,
                         tenant.clone(),
                         idempotency_key,
                         receipt.canonical_bytes(),
                         &authority,
-                    )
-                    .map_err(|error| match error {
+                    ) };
+                    ingress.map_err(|error| match error {
                         crate::receipt::ReceiptStoreError::Missing
                         | crate::receipt::ReceiptStoreError::Store(_) => {
                             HumanOperationError::Unavailable
@@ -3195,6 +3209,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                     tenant,
                     served,
                     &authority,
+                    native.as_ref(),
                 )?;
                 self.last_verified_receipt = Some((
                     idempotency_key,
