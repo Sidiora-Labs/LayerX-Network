@@ -2382,13 +2382,14 @@ platform-qualify:
 
 PUBLIC_TLS_TEST_TARGET_DIR = $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(CURDIR)/platform/target)
 PUBLIC_TLS_TEST_BOUNDARY = $(PUBLIC_TLS_TEST_TARGET_DIR)/debug/layerx-paxeer-boundary
+PUBLIC_TLS_TEST_CLOCK = $(PUBLIC_TLS_TEST_TARGET_DIR)/debug/layerx-runtime-clock
 
 .PHONY: public-tls-test-prerequisites
 public-tls-test-prerequisites:
-	cargo build --manifest-path platform/Cargo.toml --locked -p layerx-platform-paxeer-boundary --target-dir "$(PUBLIC_TLS_TEST_TARGET_DIR)"
+	cargo build --manifest-path platform/Cargo.toml --locked -p layerx-platform-paxeer-boundary -p layerx-runtime-clock --target-dir "$(PUBLIC_TLS_TEST_TARGET_DIR)"
 
 agent-test: public-tls-test-prerequisites
-	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked --workspace
+	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" LAYERX_RUNTIME_CLOCK_BIN="$(PUBLIC_TLS_TEST_CLOCK)" LAYERX_TEST_RUNTIME_CLOCK_BIN="$(PUBLIC_TLS_TEST_CLOCK)" sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked --workspace
 
 agent-lint:
 	$(AGENT_CARGO) clippy --manifest-path $(AGENT_MANIFEST) --locked --workspace --all-targets -- -D warnings
@@ -2900,7 +2901,7 @@ agent-qualify-wire: $(BUILD_DIR)/agent-wire-reference
 		$(CURDIR)/agent/tools/wire-differential/target/debug/agent-wire-differential
 
 agent-test-sanitize: public-tls-test-prerequisites
-	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" sh $(CURDIR)/tools/runtime/run-with-clock.sh sh agent/tools/run-sanitizers.sh
+	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" LAYERX_RUNTIME_CLOCK_BIN="$(PUBLIC_TLS_TEST_CLOCK)" LAYERX_TEST_RUNTIME_CLOCK_BIN="$(PUBLIC_TLS_TEST_CLOCK)" sh $(CURDIR)/tools/runtime/run-with-clock.sh sh agent/tools/run-sanitizers.sh
 
 agent-check-boundary:
 	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tools/boundary-check/Cargo.toml --locked
