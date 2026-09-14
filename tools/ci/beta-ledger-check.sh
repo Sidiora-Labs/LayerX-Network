@@ -3,16 +3,26 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-usage: tools/ci/beta-ledger-check.sh [--ledger PATH] [--spec PATH] [--revisions]
+usage: tools/ci/beta-ledger-check.sh [--ledger PATH] [--spec PATH]
+                                    [--contract PATH]
+                                    [--release-candidate REVISION]
+                                    [--revisions]
 
 Validates every record of the LayerX beta executed-evidence ledger
-(spec/layerx-beta/qualification.kvx by default) and prints the set of distinct
-gate revisions. Every violation is listed on stderr; the exit status is 1 when
-at least one violation exists, 2 on usage or environment errors, 0 otherwise.
+(spec/layerx-beta/qualification.kvx by default), binds every gate revision to
+the current line of development and prints the set of distinct gate revisions.
+Every violation is listed on stderr; the exit status is 1 when at least one
+violation exists, 2 on usage or environment errors, 0 otherwise.
 
   --ledger PATH   ledger to check (default spec/layerx-beta/qualification.kvx)
   --spec PATH     feature spec used to resolve tasks and acceptance criteria
                   (default spec/layerx-beta/spec.kvx)
+  --contract PATH beta contract naming the release candidate
+                  (default platform/docs/content/beta.md)
+  --release-candidate REVISION
+                  release-candidate revision; overrides the contract value and
+                  the LAYERX_BETA_RELEASE_CANDIDATE environment variable, the
+                  way --revision does for tools/ci/beta-report.sh
   --revisions     print only the distinct gate revisions, one per line
 
 Parsing rules (mirroring spec/specgen/kvx.go):
@@ -29,7 +39,8 @@ Parsing rules (mirroring spec/specgen/kvx.go):
 
 Gate records ([gate.<task>.<n>]) must satisfy:
   * keys task, reqs, revision, command, environment, started_at, outcome,
-    evidence and note are all present and no other key exists
+    evidence and note are all present; optional supersedes is a non-empty list
+    of earlier gate identifiers, and no other key exists
   * task equals the <task> part of the section name and [task.<task>] exists
     in the feature spec
   * reqs is a non-empty list of <req>.<ac> pairs, each resolving to key ac_<ac>
@@ -65,6 +76,35 @@ Observation records ([observation.<task>.<n>]) must satisfy:
     severity is blocker, suspect, assumption or note
   * no gate key (reqs, revision, command, environment, started_at, outcome,
     evidence, note) and no other unknown key is present
+
+Gate revision binding. Only gate records carry a revision, so the binding
+concerns gate records alone and an observation-only ledger is always bound.
+
+The release candidate is --release-candidate, else
+LAYERX_BETA_RELEASE_CANDIDATE, else the release_candidate row (or, when that
+row is absent, the release_candidate_revision row) of the Identity table of
+the beta contract, resolved the way tools/ci/beta-report.sh resolves it: the
+row is optional, and a value that is absent, empty, unset, none, undeclared or
+- (in any case) leaves the release candidate undeclared, while a 40-hex value
+declares it. Declaring the candidate in the contract is what binds this check
+and the rendered report to the same revision. A declared value that is not a
+40-hex identifier, or that names no commit in this repository, is a violation.
+
+A gate revision is bound when it is an ancestor of the release candidate or an
+ancestor of HEAD, where a commit is an ancestor of itself. An unbound gate
+revision was recorded on a line of development that leads neither to the
+release candidate nor to the checked-out revision, so it is not history of
+either and proves nothing about either. An unbound gate record remains a violation unless a later passing, bound
+record explicitly supersedes it with the identical task, requirement list and
+command. Supersession never changes or removes historical records, validates
+every original field and evidence document, and cannot supply release evidence
+for a different candidate. The generated report still requires exact candidate
+revision evidence. Unreplaced records are listed with the binding target they
+fail. The binding is enforced whether or not a release candidate is
+declared: while none is declared HEAD is the only binding target, and
+declaring one widens the binding to the candidate's history, it never narrows
+it. A ledger whose gate revisions cannot be bound because HEAD names no commit
+and no release candidate is declared is itself a violation.
 EOF
 }
 
@@ -145,8 +185,28 @@ BEGIN { section = "" }
 }
 '
 
+CONTRACT_IDENTITY_ROW='
+function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+BEGIN { in_identity = 0 }
+/^#+[ \t]/ {
+    hashes = $0
+    sub(/[ \t].*$/, "", hashes)
+    title = $0
+    sub(/^#+[ \t]+/, "", title)
+    in_identity = (length(hashes) == 2 && trim(title) == "Identity")
+    next
+}
+in_identity && substr($0, 1, 1) == "|" {
+    n = split($0, cells, "|")
+    if (n < 3) next
+    if (trim(cells[2]) != key) next
+    print trim(cells[3])
+}
+'
+
 beta_ledger_check() {
-    local root ledger="" spec="" revisions_only=0
+    local root ledger="" spec="" contract="" revisions_only=0
+    local candidate_arg=""
     root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
     while [ "$#" -gt 0 ]; do
         case $1 in
@@ -158,6 +218,16 @@ beta_ledger_check() {
         --spec)
             [ "$#" -ge 2 ] || { usage >&2; return 2; }
             spec=$2
+            shift 2
+            ;;
+        --contract)
+            [ "$#" -ge 2 ] || { usage >&2; return 2; }
+            contract=$2
+            shift 2
+            ;;
+        --release-candidate)
+            [ "$#" -ge 2 ] || { usage >&2; return 2; }
+            candidate_arg=$2
             shift 2
             ;;
         --revisions)
@@ -176,8 +246,10 @@ beta_ledger_check() {
     done
     ledger=${ledger:-$root/spec/layerx-beta/qualification.kvx}
     spec=${spec:-$root/spec/layerx-beta/spec.kvx}
+    contract=${contract:-$root/platform/docs/content/beta.md}
     [ -f "$ledger" ] || { echo "beta-ledger-check: ledger not found: $ledger" >&2; return 2; }
     [ -f "$spec" ] || { echo "beta-ledger-check: feature spec not found: $spec" >&2; return 2; }
+    [ -f "$contract" ] || { echo "beta-ledger-check: beta contract not found: $contract" >&2; return 2; }
     command -v python3 >/dev/null 2>&1 || { echo "beta-ledger-check: python3 is required" >&2; return 2; }
     git -C "$root" rev-parse --git-dir >/dev/null 2>&1 || { echo "beta-ledger-check: $root is not a git repository" >&2; return 2; }
 
@@ -185,9 +257,51 @@ beta_ledger_check() {
     local -A value=() vtype=() lineno=() section_line=() section_keys=()
     local -A spec_sections=() spec_keys=()
     local -A make_targets=() makefiles_seen=()
-    local -A revisions=()
+    local -A revisions=() revision_sections=()
     local kind section key type val ln
     local gates=0 observations=0
+    local contract_shown=${contract#"$root"/}
+
+    local declared=$candidate_arg
+    local declared_source="--release-candidate"
+    if [ -z "$declared" ]; then
+        declared=${LAYERX_BETA_RELEASE_CANDIDATE-}
+        declared_source="LAYERX_BETA_RELEASE_CANDIDATE"
+    fi
+    if [ -z "$declared" ]; then
+        local contract_key rows row
+        for contract_key in release_candidate release_candidate_revision; do
+            rows=0
+            while IFS= read -r row; do
+                rows=$((rows + 1))
+                declared=$row
+            done < <(awk -v key="$contract_key" "$CONTRACT_IDENTITY_ROW" "$contract")
+            if [ "$rows" -gt 1 ]; then
+                violations+=("$contract_shown: the Identity table carries $rows $contract_key rows; at most one is allowed")
+            fi
+            if [ "$rows" -gt 0 ]; then
+                declared_source="$contract_shown Identity $contract_key"
+                break
+            fi
+            declared_source="$contract_shown Identity release_candidate"
+        done
+    fi
+    local release_candidate="" candidate_declared=0
+    case ${declared,,} in
+    "" | unset | none | undeclared | -) ;;
+    *)
+        if [[ $declared =~ ^[0-9a-f]{40}$ ]]; then
+            if git -C "$root" cat-file -e "$declared^{commit}" 2>/dev/null; then
+                release_candidate=$declared
+                candidate_declared=1
+            else
+                violations+=("$declared_source: release candidate '$declared' is not a commit in this repository")
+            fi
+        else
+            violations+=("$declared_source: release candidate '$declared' is not a 40-hex commit identifier")
+        fi
+        ;;
+    esac
 
     while IFS=$'\036' read -r kind section key type val ln; do
         case $kind in
@@ -337,7 +451,7 @@ PY
                 [ -n "${value[$section$'\037'$key]+x}" ] || violations+=("$line_ref: [$section] lacks key '$key'")
             done
             for key in ${section_keys[$section]}; do
-                case " $gate_keys " in
+                case " $gate_keys supersedes " in
                 *" $key "*) ;;
                 *) violations+=("$line_ref: [$section] carries unknown key '$key'") ;;
                 esac
@@ -364,6 +478,7 @@ PY
                 val=${value[$section$'\037'revision]}
                 if [[ $val =~ ^[0-9a-f]{40}$ ]] && git -C "$root" cat-file -e "$val^{commit}" 2>/dev/null; then
                     revisions[$val]=1
+                    revision_sections[$val]="${revision_sections[$val]-}${revision_sections[$val]+ }$section"
                 else
                     violations+=("$line_ref: [$section] revision '$val' is not a commit in this repository")
                 fi
@@ -436,9 +551,104 @@ PY
         fi
     done
 
+    local -A superseded_by=()
+    local previous replacement_revision replacement_bound matching_key
+    for section in "${order[@]}"; do
+        [[ $section =~ ^gate\. ]] || continue
+        [ -n "${value[$section$'\037'supersedes]+x}" ] || continue
+        line_ref="$ledger:${section_line[$section]}"
+        if [ "${vtype[$section$'\037'supersedes]}" != list ] || [ -z "${value[$section$'\037'supersedes]}" ]; then
+            violations+=("$line_ref: [$section] supersedes must be a non-empty list")
+            continue
+        fi
+        [ "${value[$section$'\037'outcome]-}" = pass ] || violations+=("$line_ref: [$section] only a passing gate can supersede historical evidence")
+        replacement_revision=${value[$section$'\037'revision]-}
+        replacement_bound=0
+        if [[ $replacement_revision =~ ^[0-9a-f]{40}$ ]]; then
+            if git -C "$root" merge-base --is-ancestor "$replacement_revision" HEAD 2>/dev/null; then
+                replacement_bound=1
+            elif [ "$candidate_declared" -eq 1 ] && git -C "$root" merge-base --is-ancestor "$replacement_revision" "$release_candidate" 2>/dev/null; then
+                replacement_bound=1
+            fi
+        fi
+        [ "$replacement_bound" -eq 1 ] || violations+=("$line_ref: [$section] superseding evidence is not bound to HEAD or the release candidate")
+        while IFS= read -r -d $'\037' previous || [ -n "$previous" ]; do
+            if ! [[ $previous =~ ^gate\.([0-9]+(\.[0-9]+)?)\.([0-9]+)$ ]] || [ -z "${section_line[$previous]+x}" ]; then
+                violations+=("$line_ref: [$section] supersedes unknown gate '$previous'")
+                continue
+            fi
+            if [ "${section_line[$previous]}" -ge "${section_line[$section]}" ]; then
+                violations+=("$line_ref: [$section] can only supersede an earlier gate, not '$previous'")
+                continue
+            fi
+            if [ -n "${superseded_by[$previous]+x}" ]; then
+                violations+=("$line_ref: [$section] duplicates supersession of '$previous'")
+                continue
+            fi
+            for matching_key in task reqs command; do
+                [ "${value[$section$'\037'$matching_key]-}" = "${value[$previous$'\037'$matching_key]-}" ] || violations+=("$line_ref: [$section] supersession of '$previous' changes $matching_key")
+            done
+            [[ ${value[$section$'\037'started_at]-} > ${value[$previous$'\037'started_at]-} ]] || violations+=("$line_ref: [$section] superseding execution must start after '$previous'")
+            superseded_by[$previous]=$section
+        done < <(printf '%s\037' "${value[$section$'\037'supersedes]}")
+    done
+
     local -a distinct=()
     if [ "${#revisions[@]}" -gt 0 ]; then
         while IFS= read -r val; do distinct+=("$val"); done < <(printf '%s\n' "${!revisions[@]}" | sort)
+    fi
+
+    local head_commit binding_target
+    head_commit=$(git -C "$root" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null || true)
+    local -a binding_targets=()
+    if [ "$candidate_declared" -eq 1 ]; then
+        binding_targets+=("$release_candidate")
+    fi
+    if [ -n "$head_commit" ]; then
+        binding_targets+=("$head_commit")
+    fi
+    if [ "$candidate_declared" -eq 1 ] && [ -n "$head_commit" ]; then
+        binding_target="the release candidate $release_candidate or HEAD $head_commit"
+    elif [ "$candidate_declared" -eq 1 ]; then
+        binding_target="the release candidate $release_candidate"
+    elif [ -n "$head_commit" ]; then
+        binding_target="HEAD $head_commit"
+    else
+        binding_target="no binding target: HEAD names no commit and no release candidate is declared"
+    fi
+
+    local -a unbound=() carriers=()
+    local rev target bound sections joined first record_line
+    if [ "${#binding_targets[@]}" -eq 0 ]; then
+        if [ "${#distinct[@]}" -gt 0 ]; then
+            violations+=("$ledger: ${#distinct[@]} gate revision(s) cannot be bound: HEAD names no commit and no release candidate is declared")
+        fi
+    else
+        for rev in ${distinct[@]+"${distinct[@]}"}; do
+            bound=0
+            for target in "${binding_targets[@]}"; do
+                if git -C "$root" merge-base --is-ancestor "$rev" "$target" 2>/dev/null; then
+                    bound=1
+                    break
+                fi
+            done
+            [ "$bound" -eq 0 ] || continue
+            sections=${revision_sections[$rev]-}
+            carriers=()
+            [ -z "$sections" ] || read -r -a carriers <<<"$sections"
+            local -a active_carriers=()
+            for section in "${carriers[@]}"; do
+                [ -n "${superseded_by[$section]+x}" ] || active_carriers+=("$section")
+            done
+            [ "${#active_carriers[@]}" -gt 0 ] || continue
+            carriers=("${active_carriers[@]}")
+            unbound+=("$rev")
+            first=${carriers[0]-}
+            record_line=0
+            [ -z "$first" ] || record_line=${section_line[$first]-0}
+            printf -v joined '%s, ' ${carriers[@]+"${carriers[@]}"}
+            violations+=("$ledger:$record_line: gate revision $rev is not an ancestor of $binding_target; ${#carriers[@]} gate record(s) name it (${joined%, })")
+        done
     fi
 
     if [ "${#violations[@]}" -gt 0 ]; then
@@ -451,6 +661,13 @@ PY
         return 0
     fi
     printf 'beta-ledger-check: %d gate record(s), %d observation record(s) in %s\n' "$gates" "$observations" "${ledger#"$root"/}"
+    if [ "$candidate_declared" -eq 1 ]; then
+        printf 'beta-ledger-check: release candidate %s (%s)\n' "$release_candidate" "$declared_source"
+    else
+        printf 'beta-ledger-check: release candidate undeclared (%s)\n' "$declared_source"
+    fi
+    printf 'beta-ledger-check: gate revision binding: %d active revision(s) unbound to %s; %d historical gate record(s) superseded\n' \
+        "${#unbound[@]}" "$binding_target" "${#superseded_by[@]}"
     printf 'beta-ledger-check: distinct gate revisions (%d):\n' "${#distinct[@]}"
     [ "${#distinct[@]}" -eq 0 ] || printf '  %s\n' "${distinct[@]}"
     return 0

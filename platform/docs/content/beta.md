@@ -19,10 +19,13 @@ This is the canonical LayerX Network beta contract. It is the only statement of 
 | required_rung_hosted | deployment_proven |
 | rung_order | source_present < statically_coherent < built < tested < runtime_proven < deployment_proven < owner_certified |
 | evidence_ledger | spec/layerx-beta/qualification.kvx |
+| release_candidate | unset |
 | contract_check | tools/ci/beta-contract-check.sh |
 | ledger_check | tools/ci/beta-ledger-check.sh |
 
 The reached rung of a surface is raised only by a `[gate.*]` record in the evidence ledger. No such record exists at the revision this contract describes, so every reached rung below is `source_present`.
+
+`release_candidate` names the immutable revision qualified for this beta. An unset value produces no-go and supplies no gate evidence to the report. Every active gate revision must be an ancestor of HEAD or of the declared candidate. Historical records remain unchanged and fully validated. A later passing gate may explicitly supersede earlier records only for the identical task, requirement list and command, with a later execution time and a revision bound to HEAD or the candidate. Unknown, duplicate, forward and self references, failed replacements, changed requirements and missing evidence are refused. Historical records never establish a rung for a different release candidate; the report still requires gates executed at that exact revision.
 
 ## Surfaces and journeys
 
