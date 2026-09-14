@@ -149,8 +149,10 @@ fn changed_event(offset: usize) -> Result<Vec<u8>, String> {
     let digest = checked(layerx_wire::hash::receipt_digest(&unsigned))?;
     let key = SigningKey::from_bytes(&[0x39; 32]);
     assert_eq!(unsigned.pop(), Some(0));
-    unsigned.push(1);
-    unsigned.extend_from_slice(&key.sign(&digest).to_bytes());
+    let mut signature = layerx_wire::encode::Encoder::new(69);
+    checked(signature.u8(1))?;
+    checked(signature.bytes(&key.sign(&digest).to_bytes(), 64))?;
+    unsigned.extend_from_slice(&signature.finish());
     Ok(unsigned)
 }
 
