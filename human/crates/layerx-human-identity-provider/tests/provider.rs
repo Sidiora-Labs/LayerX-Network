@@ -1,3 +1,5 @@
+use layerx_client::runtime_clock::RuntimeClock;
+use layerx_types::clock::{Clock, Deadline};
 use std::error::Error;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -7,7 +9,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use layerx_human_identity_provider::{Policy, Server, State};
 use layerx_human_service::auth::Device;
@@ -45,6 +47,7 @@ impl Running {
             State::open(root, policy())?,
             uid,
             Duration::from_millis(200),
+            RuntimeClock::from_environment()?,
         )?
         .with_binding_reader(reader, tenant, readers)?;
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -61,6 +64,7 @@ impl Running {
             State::open(root, policy())?,
             uid,
             Duration::from_millis(200),
+            RuntimeClock::from_environment()?,
         )?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&shutdown);
@@ -424,9 +428,10 @@ fn refuses_conflicts_unknowns_and_malformed_frames() -> Result {
     let mut slow = UnixStream::connect(&socket)?;
     slow.write_all(&100_u32.to_be_bytes())?;
     slow.write_all(b"L")?;
-    let start = Instant::now();
+    let clock = RuntimeClock::from_environment()?;
+    let start = clock.sample(Duration::from_secs(1))?;
     assert!(call(&socket, 0, &[])?.is_empty());
-    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(clock.sample(Duration::from_secs(1))?.elapsed_since(start)? < Duration::from_secs(2));
     running.stop()
 }
 
@@ -525,13 +530,17 @@ fn binary_sigterm_and_crash_restart() -> Result {
     );
     let pid = rustix::process::Pid::from_raw(i32::try_from(child.0.id())?).ok_or("invalid pid")?;
     rustix::process::kill_process(pid, rustix::process::Signal::TERM)?;
-    let expires = Instant::now() + Duration::from_secs(3);
+    let clock = RuntimeClock::from_environment()?;
+    let mut expires = Deadline::start(clock.as_ref(), Duration::from_secs(3))?;
     loop {
         if let Some(status) = child.0.try_wait()? {
             assert!(status.success());
             break;
         }
-        assert!(Instant::now() < expires, "SIGTERM shutdown deadline");
+        assert!(
+            !expires.remaining(clock.as_ref())?.is_zero(),
+            "SIGTERM shutdown deadline"
+        );
         thread::sleep(Duration::from_millis(10));
     }
     assert!(!socket.exists());
@@ -549,8 +558,9 @@ impl Drop for OwnedChild {
 }
 
 fn wait_ready(socket: &Path, child: &mut std::process::Child) -> Result {
-    let expires = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < expires {
+    let clock = RuntimeClock::from_environment()?;
+    let mut expires = Deadline::start(clock.as_ref(), Duration::from_secs(5))?;
+    while !expires.remaining(clock.as_ref())?.is_zero() {
         if exchange(socket, &request(0, &[])?).is_ok() {
             return Ok(());
         }
@@ -594,16 +604,37 @@ fn refuses_live_sockets_regular_files_and_socket_symlinks() -> Result {
     let uid = rustix::process::geteuid().as_raw();
     let running = Running::start(&socket, &directory.path().join("first"), uid)?;
     let state = State::open(&directory.path().join("second"), policy())?;
-    assert!(Server::bind(&socket, state, uid, Duration::from_secs(1)).is_err());
+    assert!(Server::bind(
+        &socket,
+        state,
+        uid,
+        Duration::from_secs(1),
+        RuntimeClock::from_environment()?
+    )
+    .is_err());
     running.stop()?;
     fs::write(&socket, b"keep this file")?;
     let state = State::open(&directory.path().join("second"), policy())?;
-    assert!(Server::bind(&socket, state, uid, Duration::from_secs(1)).is_err());
+    assert!(Server::bind(
+        &socket,
+        state,
+        uid,
+        Duration::from_secs(1),
+        RuntimeClock::from_environment()?
+    )
+    .is_err());
     assert_eq!(fs::read(&socket)?, b"keep this file");
     fs::remove_file(&socket)?;
     std::os::unix::fs::symlink(directory.path().join("missing"), &socket)?;
     let state = State::open(&directory.path().join("second"), policy())?;
-    assert!(Server::bind(&socket, state, uid, Duration::from_secs(1)).is_err());
+    assert!(Server::bind(
+        &socket,
+        state,
+        uid,
+        Duration::from_secs(1),
+        RuntimeClock::from_environment()?
+    )
+    .is_err());
     assert!(fs::symlink_metadata(&socket)?.file_type().is_symlink());
     Ok(())
 }

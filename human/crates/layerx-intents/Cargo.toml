@@ -6,9 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-test-vectors = []
+test-vectors = ["dep:ed25519-dalek"]
 
 [dependencies]
+ed25519-dalek = { version = "=2.2.0", optional = true }
 sha2.workspace = true
 layerx-types.workspace = true
 layerx-wire.workspace = true

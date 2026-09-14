@@ -123,7 +123,7 @@ impl ProductionComponents {
         let trace = TraceId::mint(request.checkpoint[..16].try_into().map_err(|_| ApiFailure::forbidden())?);
         let signature = self.custody.settlement_recipient_in_scope(&mut scope, &key,
             SettlementRecipientRequest { checkpoint: request.checkpoint, asset: request.asset, recipient },
-            &trace, now()?).map_err(|_| ApiFailure::forbidden())?;
+            &trace, self.now()?).map_err(|_| ApiFailure::forbidden())?;
         let (actor, account) = movement_principal_account(&scope)?;
         let public_key = self.custody.describe_key(&principal, &key).map_err(|_| ApiFailure::forbidden())?.public_key;
         Ok(json!({"network_id": self.network_id, "principal": principal.as_str(), "did": actor.as_str(),

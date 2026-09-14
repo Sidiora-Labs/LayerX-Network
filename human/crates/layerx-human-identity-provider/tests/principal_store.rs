@@ -34,7 +34,7 @@ impl Running {
         let state = State::open(&root.join("identity"), Policy {
             root: [0x43; 32], threshold: 1, delay_seconds: 86_400,
         })?;
-        let server = Server::bind(&root.join("identity.sock"), state, uid, Duration::from_secs(1))?
+        let server = Server::bind(&root.join("identity.sock"), state, uid, Duration::from_secs(1), layerx_client::runtime_clock::RuntimeClock::from_environment()?)?
             .with_binding_reader(&root.join("binding.sock"), "human-provider", &[uid])?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&shutdown);

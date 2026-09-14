@@ -51,7 +51,7 @@ fn send_route(sequence: u64, key_byte: u8) -> SendRoute {
         ),
         network_id: NetworkId::new(1)
             .unwrap_or_else(|error| panic!("network identifier: {error:?}")),
-        protocol_version: ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
+        protocol_version: ProtocolVersion::new(layerx_intents::canonical::PROTOCOL_VERSION)
             .unwrap_or_else(|error| panic!("protocol version: {error:?}")),
     }
 }
@@ -356,7 +356,7 @@ fn receive_route(sequence: u64, byte: u8, amount: u128) -> PayerGrantRoute {
             sequence,
             idempotency_key: key(byte).bytes(),
             network_id: 77,
-            protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+            protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
         },
     );
     PayerGrantRoute {

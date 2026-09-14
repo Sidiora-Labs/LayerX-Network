@@ -4,7 +4,6 @@ use std::process::{Command, Stdio};
 
 use layerx_proof::inclusion::{verify_receipt, SequencerAuthorization};
 use layerx_proof::merkle::{decode_proof, Proof};
-use layerx_wire::encode::Encoder;
 use sha2::{Digest, Sha256};
 
 fn hex(value: &str) -> Vec<u8> {
@@ -32,16 +31,7 @@ fn encoded(bytes: &[u8]) -> String {
 }
 
 fn native_proof(proof: &Proof) -> String {
-    let mut writer = Encoder::new(1_041);
-    let mut write = || {
-        writer.structure_header(0x4d50)?;
-        writer.u32(proof.leaf_index())?;
-        writer.u32(proof.leaf_count())?;
-        writer.u8(u8::try_from(proof.siblings().len()).unwrap_or_else(|e| panic!("depth: {e}")))?;
-        writer.bytes(&proof.siblings().concat(), 1_024)
-    };
-    write().unwrap_or_else(|e| panic!("native proof: {e:?}"));
-    encoded(&writer.finish())
+    encoded(&layerx_intents::vectors::native_merkle_proof(proof))
 }
 
 fn fixture_proof(bytes: &[u8]) -> String {
@@ -119,10 +109,10 @@ fn real_retained_second_batch_cannot_initialize_fresh_limits() {
     .unwrap_or_else(|e| panic!("real receipt inclusion: {e:?}"));
     let header = evidence.header().header();
     assert_eq!(header.batch_number(), 2);
-    let receipt = layerx_wire::receipt::decode(&hex(text("receipt_hex")))
+    let receipt = layerx_intents::canonical::decode_receipt(&hex(text("receipt_hex")))
         .unwrap_or_else(|e| panic!("receipt: {e:?}"));
-    let digest = layerx_wire::hash::receipt_digest(
-        &layerx_wire::receipt::encode_unsigned(&receipt)
+    let digest = layerx_intents::canonical::receipt_digest(
+        &layerx_intents::canonical::unsigned_receipt_bytes(&receipt)
             .unwrap_or_else(|e| panic!("unsigned: {e:?}")),
     )
     .unwrap_or_else(|e| panic!("digest: {e:?}"));
@@ -156,12 +146,12 @@ fn actual_daemon_head_binds_the_declared_receipt_digest() {
     };
     let receipt = read("credit.receipt");
     let header_bytes = read("header");
-    let header = layerx_wire::receipt::decode_batch_header(&header_bytes)
+    let header = layerx_intents::canonical::decode_batch_header(&header_bytes)
         .unwrap_or_else(|error| panic!("daemon header: {error:?}"));
-    let decoded = layerx_wire::receipt::decode(&receipt)
+    let decoded = layerx_intents::canonical::decode_receipt(&receipt)
         .unwrap_or_else(|error| panic!("daemon receipt: {error:?}"));
-    let digest = layerx_wire::hash::receipt_digest(
-        &layerx_wire::receipt::encode_unsigned(&decoded)
+    let digest = layerx_intents::canonical::receipt_digest(
+        &layerx_intents::canonical::unsigned_receipt_bytes(&decoded)
             .unwrap_or_else(|error| panic!("unsigned receipt: {error:?}")),
     )
     .unwrap_or_else(|error| panic!("receipt digest: {error:?}"));
@@ -197,7 +187,7 @@ fn maintenance_head() -> serde_json::Value {
     };
     let receipt = read("maintenance.receipt");
     let header_bytes = read("header");
-    let header = layerx_wire::receipt::decode_batch_header(&header_bytes)
+    let header = layerx_intents::canonical::decode_batch_header(&header_bytes)
         .unwrap_or_else(|e| panic!("header: {e:?}"));
     let digest: [u8; 32] = Sha256::digest(&receipt).into();
     assert_eq!(header.batch_number(), 1);

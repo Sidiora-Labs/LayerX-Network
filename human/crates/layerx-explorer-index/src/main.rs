@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
 
+use layerx_types::clock::Clock;
 use std::env;
 use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use layerx_agentd::read::{LayerxdProgramBalanceReader, ProgramAuthority};
 use layerx_client::head::Head;
@@ -310,11 +311,11 @@ fn replay_verified_sources(root: &Path, registry: &mut Registry) -> Result<(), S
     Ok(())
 }
 
-fn now_ms() -> Result<u64, String> {
-    let value = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| "system time precedes the Unix epoch".to_owned())?;
-    u64::try_from(value.as_millis()).map_err(|_| "system time is out of range".to_owned())
+fn now_ms(clock: &dyn Clock) -> Result<u64, String> {
+    clock
+        .sample(Duration::from_secs(1))
+        .map(|reading| reading.unix_milliseconds)
+        .map_err(|error| error.to_string())
 }
 
 fn lifecycle(value: ProgramLifecycle) -> &'static str {
@@ -488,6 +489,7 @@ fn serve_connection(
     stream: &mut TcpStream,
     config: &Config,
     index: &mut Indexer,
+    clock: &dyn Clock,
 ) -> Result<(), String> {
     let mut bytes = [0_u8; HEADER_LIMIT];
     let mut length = 0_usize;
@@ -524,7 +526,7 @@ fn serve_connection(
         return response(stream, 401, "{\"error\":\"unauthorized\"}");
     }
     if path == "/healthz" {
-        return match refresh_program(config, index, config.probe_program, now_ms()?) {
+        return match refresh_program(config, index, config.probe_program, now_ms(clock)?) {
             Ok(()) => response(stream, 200, "{\"ready\":true}"),
             Err(_) => response(stream, 503, "{\"ready\":false}"),
         };
@@ -538,7 +540,7 @@ fn serve_connection(
     let Some(program) = program else {
         return response(stream, 400, "{\"error\":\"invalid_program\"}");
     };
-    let now = now_ms()?;
+    let now = now_ms(clock)?;
     match refresh_program(config, index, program, now) {
         Ok(()) => {}
         Err(ProgramRefreshError::UnknownProgram) => {
@@ -554,7 +556,7 @@ fn serve_connection(
     }
 }
 
-fn serve(config: &Config) -> Result<(), String> {
+fn serve(config: &Config, clock: &dyn Clock) -> Result<(), String> {
     let head = config
         .journal
         .observed_head()
@@ -564,7 +566,7 @@ fn serve(config: &Config) -> Result<(), String> {
         sealed_batch: config.observed_sealed_batch,
         finalised_checkpoint: config.finalised_checkpoint,
     });
-    refresh_program(config, &mut index, config.probe_program, now_ms()?)
+    refresh_program(config, &mut index, config.probe_program, now_ms(clock)?)
         .map_err(|error| format!("explorer protocol probe failed: {error}"))?;
     let listener = TcpListener::bind(&config.listen)
         .map_err(|error| format!("explorer program listener failed: {error}"))?;
@@ -574,13 +576,17 @@ fn serve(config: &Config) -> Result<(), String> {
             .set_read_timeout(Some(Duration::from_secs(10)))
             .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(10))))
             .map_err(|error| format!("explorer connection timeout setup failed: {error}"))?;
-        let _ = serve_connection(&mut stream, config, &mut index);
+        let _ = serve_connection(&mut stream, config, &mut index, clock);
     }
     Ok(())
 }
 
 fn main() {
-    if let Err(error) = config().and_then(|config| serve(&config)) {
+    if let Err(error) = config().and_then(|config| {
+        let clock = layerx_client::runtime_clock::RuntimeClock::from_environment()
+            .map_err(|error| error.to_string())?;
+        serve(&config, clock.as_ref())
+    }) {
         eprintln!("layerx-explorer-index: {error}");
         std::process::exit(2);
     }

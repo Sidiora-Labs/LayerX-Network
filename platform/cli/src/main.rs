@@ -30,6 +30,56 @@ use config::{Configuration, Environment};
 use http::Client;
 use output::CommandOutput;
 
+struct ProcessClock {
+    generation: [u8; 16],
+    origin: std::time::Instant,
+    previous: std::sync::Mutex<Option<layerx_types::clock::ClockReading>>,
+}
+
+impl layerx_types::clock::Clock for ProcessClock {
+    fn sample(
+        &self,
+        budget: std::time::Duration,
+    ) -> Result<layerx_types::clock::ClockReading, layerx_types::clock::ClockError> {
+        use layerx_types::clock::{ClockError, ClockReading};
+        if budget.is_zero() {
+            return Err(ClockError::Unavailable);
+        }
+        let mut previous = self.previous.lock().map_err(|_| ClockError::Unavailable)?;
+        let wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| ClockError::Regression)?;
+        let elapsed = std::time::Instant::now()
+            .checked_duration_since(self.origin)
+            .ok_or(ClockError::Regression)?;
+        let reading = ClockReading {
+            generation: self.generation,
+            unix_milliseconds: u64::try_from(wall.as_millis()).map_err(|_| ClockError::Overflow)?,
+            monotonic_nanoseconds: u64::try_from(elapsed.as_nanos())
+                .map_err(|_| ClockError::Overflow)?,
+        };
+        if let Some(previous) = *previous {
+            reading.follows(previous)?;
+        }
+        *previous = Some(reading);
+        Ok(reading)
+    }
+}
+
+pub(crate) fn process_clock(
+) -> Result<std::sync::Arc<dyn layerx_types::clock::Clock>, layerx_types::clock::ClockError> {
+    let mut generation = [0; 16];
+    getrandom::fill(&mut generation).map_err(|_| layerx_types::clock::ClockError::Unavailable)?;
+    if generation == [0; 16] {
+        return Err(layerx_types::clock::ClockError::Invalid);
+    }
+    Ok(std::sync::Arc::new(ProcessClock {
+        generation,
+        origin: std::time::Instant::now(),
+        previous: std::sync::Mutex::new(None),
+    }))
+}
+
 #[derive(Parser)]
 #[command(name = "layerx", version, about = "LayerX developer CLI")]
 struct Cli {

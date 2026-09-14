@@ -41,8 +41,11 @@ impl RecoveryReceipt {
         text(self.evidence_id.as_bytes())?;
         text(self.canonical_receipt.as_bytes())?;
         let receipt = decode64(&self.canonical_receipt)?;
-        let decoded = layerx_wire::receipt::decode(&receipt).map_err(|_| Error::Refused)?;
-        if layerx_wire::receipt::encode(&decoded).map_err(|_| Error::Refused)? != receipt {
+        let decoded =
+            layerx_intents::canonical::decode_receipt(&receipt).map_err(|_| Error::Refused)?;
+        if layerx_intents::canonical::receipt_bytes(&decoded).map_err(|_| Error::Refused)?
+            != receipt
+        {
             return Err(Error::Refused);
         }
         let proof = decode_proof(&decode64(&self.receipt_proof)?).map_err(|_| Error::Refused)?;

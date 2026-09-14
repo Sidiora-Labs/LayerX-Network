@@ -20,8 +20,8 @@ serde_json.workspace = true
 native-tls = "=0.2.18"
 
 [dev-dependencies]
+layerx-intents = { workspace = true, features = ["test-vectors"] }
 k256.workspace = true
-layerx-wire.workspace = true
 
 [lints]
 workspace = true

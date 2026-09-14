@@ -4,6 +4,9 @@ use layerx_client::head::Head;
 use layerx_crypto::secp256k1;
 use layerx_explorer_index::verify::Verifier;
 use layerx_explorer_index::{IndexError, Indexer, IngestOutcome, QueryError};
+use layerx_intents::canonical::PROTOCOL_VERSION;
+use layerx_intents::canonical::{batch_header_bytes as encode_batch_header, decode_batch_header};
+use layerx_intents::vectors::small_availability_record;
 use layerx_proof::availability::{
     verify_chunk, AvailabilityClass, Chunk, RootCommitments, VerifiedChunk,
 };
@@ -12,9 +15,6 @@ use layerx_proof::checkpoint::{
 };
 use layerx_proof::merkle::{build_leaf_hash_proof, root};
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::encode::Encoder;
-use layerx_wire::limits::PROTOCOL_VERSION;
-use layerx_wire::receipt::{decode_batch_header, encode_batch_header};
 use sha2::{Digest as _, Sha256};
 
 const HEADER_HEX: &str = "000217010f010002020000002a0300000000000000070400000000000000080500000000000000010600000000000000040700000020070707070707070707070707070707070707070707070707070707070707070708000000200808080808080808080808080808080808080808080808080808080808080808090000002091ed12e8565698680de301805638f596971c38d675d0258fd6827008587d2ccf0a00000020616323e29dec4e7e5b8ce8e23fd9c440d41e9a4b7aed8fa1912e739e9319066c0b000000203977f389195d255de7f536f64e62e68c99ca9e4fd9cb72e66041fd6cb80de3e10c0000002012e44fb808b082f72b3f7fecf45d9fb45d5c693bd8e98599c9ca53e2a9a48f0e0d000000202a6b085ba8513ee8878a31da25d7f2a059f197ed0637afe18def06f2a7b4841f0e00000000000003e80f000000200f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
@@ -78,7 +78,7 @@ fn availability_material(
         oracle_inputs: vec![b"oracle-public-1".to_vec()],
     };
     let activities = if canonical {
-        counted(&records.activities[0])
+        small_availability_record(&records.activities[0])
     } else {
         framed(&records.activities[0])
     };
@@ -87,7 +87,7 @@ fn availability_material(
     receipts.extend_from_slice(&tagged(2, &records.events[0]));
     receipts.extend_from_slice(&tagged(2, &records.events[1]));
     let oracle = if canonical {
-        counted(&records.oracle_inputs[0])
+        small_availability_record(&records.oracle_inputs[0])
     } else {
         framed(&records.oracle_inputs[0])
     };
@@ -141,13 +141,6 @@ fn availability_material(
             .unwrap_or_else(|error| panic!("oracle root failed: {error:?}")),
     };
     (verified, records, roots)
-}
-
-fn counted(bytes: &[u8]) -> Vec<u8> {
-    let mut encoder = Encoder::new(1024);
-    assert_eq!(encoder.sequence_length(1, 65_535), Ok(()));
-    assert_eq!(encoder.bytes(bytes, 1024), Ok(()));
-    encoder.finish()
 }
 
 fn availability_result() -> AvailabilityResult {

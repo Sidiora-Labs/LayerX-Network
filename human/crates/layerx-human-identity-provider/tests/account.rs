@@ -29,7 +29,7 @@ fn exported_did_uses_protocol_account_derivation() {
         serde_json::from_slice(&output.stdout).unwrap_or_else(|error| panic!("json: {error:?}"));
     let account = layerx_types::account::AccountId::parse(&format!("agent:{did}:main"))
         .unwrap_or_else(|error| panic!("account: {error:?}"));
-    let expected = layerx_wire::hash::account_id_for_protocol(&account, 3)
+    let expected = layerx_intents::canonical::account_id_for_protocol(&account, 3)
         .unwrap_or_else(|error| panic!("protocol id: {error:?}"));
     let expected: String = expected
         .iter()

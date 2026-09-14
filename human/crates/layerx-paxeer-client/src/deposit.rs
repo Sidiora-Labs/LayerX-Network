@@ -10,6 +10,7 @@ use layerx_agent_api::prepare::{
     TimestampBound as AgentTimestampBound,
 };
 use layerx_agent_api::{Amount as AgentAmount, Sequence};
+use layerx_intents::canonical::CanonicalError as WireError;
 use layerx_intents::{CompiledIntent, Intent};
 use layerx_proof::merkle::{decode_proof, encode_proof};
 use layerx_proof::merkle::{leaf_hash, verify_leaf_hash, MerkleError, Proof};
@@ -20,7 +21,6 @@ use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, CheckpointId, IdempotencyKey};
 use layerx_types::intent::{DepositProofId, EvmAddress};
 use layerx_types::payload::ModuleRegistry;
-use layerx_wire::WireError;
 use sha2::{Digest as _, Sha256};
 
 use crate::client::{
@@ -76,9 +76,9 @@ pub fn account_address_for_protocol(
     protocol_version: u16,
 ) -> Result<[u8; 32], AccountAddressError> {
     match protocol_version {
-        layerx_wire::limits::PROTOCOL_VERSION => Ok(account_address(account)),
-        layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION => {
-            layerx_wire::hash::account_id_for_protocol(account, protocol_version)
+        layerx_intents::canonical::PROTOCOL_VERSION => Ok(account_address(account)),
+        layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION => {
+            layerx_intents::canonical::account_id_for_protocol(account, protocol_version)
                 .map_err(AccountAddressError::NonCanonicalAccount)
         }
         _ => Err(AccountAddressError::UnsupportedProtocolVersion { protocol_version }),

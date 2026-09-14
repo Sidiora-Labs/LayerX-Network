@@ -248,7 +248,7 @@ pub fn encode_checkpoint_proof(
     encode_checkpoint_proof_for_protocol(
         value,
         maximum_bytes,
-        layerx_wire::limits::PROTOCOL_VERSION,
+        layerx_intents::canonical::PROTOCOL_VERSION,
     )
 }
 
@@ -333,7 +333,7 @@ pub fn decode_checkpoint_proof(
     decode_checkpoint_proof_for_protocol(
         bytes,
         maximum_bytes,
-        layerx_wire::limits::PROTOCOL_VERSION,
+        layerx_intents::canonical::PROTOCOL_VERSION,
     )
 }
 
