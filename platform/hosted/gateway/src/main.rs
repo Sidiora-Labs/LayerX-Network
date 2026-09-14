@@ -2329,17 +2329,7 @@ fn complete_activity(
             trace_id,
         );
     }
-    let Ok(mut result) = serde_json::from_slice::<serde_json::Value>(&result) else {
-        return response(503, "receipt_encoding_failed", Some(5));
-    };
-    retain_submission_binding(
-        &mut result,
-        &operation.protocol_idempotency,
-        operation
-            .program_call
-            .then_some(operation.retained_signed_activity.as_str()),
-    );
-    let Ok(stored_result) = serde_json::to_vec(&result) else {
+    let Ok((result, stored_result)) = retained_activity_result(&result, operation) else {
         return response(503, "receipt_encoding_failed", Some(5));
     };
     let persist_started = Instant::now();
@@ -2368,6 +2358,22 @@ fn complete_activity(
     let response = activity_terminal_response(config, operation, result, trace_id);
     pay_timing("gateway.complete.total", total_started);
     response
+}
+
+fn retained_activity_result(
+    encoded: &[u8],
+    operation: &ActivityOperation,
+) -> Result<(serde_json::Value, Vec<u8>), ()> {
+    let mut result = serde_json::from_slice::<serde_json::Value>(encoded).map_err(|_| ())?;
+    retain_submission_binding(
+        &mut result,
+        &operation.protocol_idempotency,
+        operation
+            .program_call
+            .then_some(operation.retained_signed_activity.as_str()),
+    );
+    let stored = serde_json::to_vec(&result).map_err(|_| ())?;
+    Ok((result, stored))
 }
 
 fn verify_withdrawal_submission(
