@@ -43,13 +43,17 @@ pub(super) fn binding_client(tenant: &str) -> Result<Option<Client>, String> {
     });
     let [socket, uid, gid] = values;
     let (socket, uid, gid) = (socket?, uid?, gid?);
-    Client::new(BindingConfig {
-        socket: PathBuf::from(socket),
-        tenant: tenant.to_owned(),
-        peer_uid: uid.parse().map_err(|_| "invalid identity binding UID")?,
-        peer_gid: gid.parse().map_err(|_| "invalid identity binding GID")?,
-        deadline: Duration::from_secs(5),
-    })
+    Client::new(
+        BindingConfig {
+            socket: PathBuf::from(socket),
+            tenant: tenant.to_owned(),
+            peer_uid: uid.parse().map_err(|_| "invalid identity binding UID")?,
+            peer_gid: gid.parse().map_err(|_| "invalid identity binding GID")?,
+            deadline: Duration::from_secs(5),
+        },
+        layerx_client::runtime_clock::RuntimeClock::from_environment()
+            .map_err(|_| "identity binding clock unavailable")?,
+    )
     .map(Some)
     .map_err(|_| "identity binding configuration is invalid".to_owned())
 }

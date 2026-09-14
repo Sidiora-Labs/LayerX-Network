@@ -832,6 +832,7 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustix",
  "rustls",
  "sha2",
 ]
@@ -879,6 +880,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
+ "layerx-client",
  "layerx-human-service",
  "layerx-identity-binding",
  "layerx-proof",

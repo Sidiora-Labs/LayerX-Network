@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 
+use layerx_types::clock::{Clock, Deadline};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use layerx_types::ids::Did;
 use serde::Deserialize;
@@ -24,9 +26,19 @@ pub struct Config {
     pub deadline: Duration,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Client {
     config: Config,
+    clock: Arc<dyn Clock>,
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Client")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -99,7 +111,7 @@ impl Client {
     ///
     /// # Errors
     /// Refuses noncanonical socket paths, invalid text and unbounded deadlines.
-    pub fn new(config: Config) -> io::Result<Self> {
+    pub fn new(config: Config, clock: Arc<dyn Clock>) -> io::Result<Self> {
         valid_text(&config.tenant)?;
         if !config.socket.is_absolute()
             || config.deadline.is_zero()
@@ -108,7 +120,7 @@ impl Client {
             return Err(invalid("binding configuration"));
         }
         protected_parent(&config.socket, config.peer_uid)?;
-        Ok(Self { config })
+        Ok(Self { config, clock })
     }
 
     /// Reads only the provider's durable principal-to-DID binding.
@@ -122,24 +134,23 @@ impl Client {
         )?;
         let mut frame = MAGIC.to_vec();
         frame.extend(request);
-        let expires = Instant::now()
-            .checked_add(self.config.deadline)
-            .ok_or_else(|| invalid("binding deadline"))?;
-        let mut stream = self.connect(expires)?;
+        let mut expires =
+            Deadline::start(self.clock.as_ref(), self.config.deadline).map_err(io::Error::other)?;
+        let mut stream = self.connect(&mut expires)?;
         let mut encoded = u32::try_from(frame.len())
             .map_err(|_| invalid("frame length"))?
             .to_be_bytes()
             .to_vec();
         encoded.extend(frame);
-        write_before(&mut stream, &encoded, expires)?;
+        write_before(&mut stream, &encoded, &mut expires, self.clock.as_ref())?;
         let mut length = [0; 4];
-        read_before(&mut stream, &mut length, expires)?;
+        read_before(&mut stream, &mut length, &mut expires, self.clock.as_ref())?;
         let length = u32::from_be_bytes(length) as usize;
         if !(6..=MAX_FRAME).contains(&length) {
             return Err(invalid("binding response length"));
         }
         let mut bytes = vec![0; length];
-        read_before(&mut stream, &mut bytes, expires)?;
+        read_before(&mut stream, &mut bytes, &mut expires, self.clock.as_ref())?;
         if &bytes[..5] != MAGIC {
             return Err(invalid("binding response version"));
         }
@@ -165,7 +176,7 @@ impl Client {
         })
     }
 
-    fn connect(&self, expires: Instant) -> io::Result<UnixStream> {
+    fn connect(&self, expires: &mut Deadline) -> io::Result<UnixStream> {
         protected_parent(&self.config.socket, self.config.peer_uid)?;
         let before = socket_identity(&self.config)?;
         let socket = rustix::net::socket_with(
@@ -181,7 +192,9 @@ impl Client {
                 Err(error)
                     if error == rustix::io::Errno::AGAIN || error == rustix::io::Errno::INTR =>
                 {
-                    std::thread::sleep(remaining(expires)?.min(Duration::from_millis(5)));
+                    std::thread::sleep(
+                        remaining(expires, self.clock.as_ref())?.min(Duration::from_millis(5)),
+                    );
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -234,16 +247,22 @@ fn valid_text(value: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn remaining(expires: Instant) -> io::Result<Duration> {
-    expires
-        .checked_duration_since(Instant::now())
-        .filter(|value| !value.is_zero())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "binding deadline"))
+fn remaining(expires: &mut Deadline, clock: &dyn Clock) -> io::Result<Duration> {
+    let value = expires.remaining(clock).map_err(io::Error::other)?;
+    if value.is_zero() {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "binding deadline"));
+    }
+    Ok(value)
 }
 
-fn read_before(stream: &mut UnixStream, mut bytes: &mut [u8], expires: Instant) -> io::Result<()> {
+fn read_before(
+    stream: &mut UnixStream,
+    mut bytes: &mut [u8],
+    expires: &mut Deadline,
+    clock: &dyn Clock,
+) -> io::Result<()> {
     while !bytes.is_empty() {
-        stream.set_read_timeout(Some(remaining(expires)?))?;
+        stream.set_read_timeout(Some(remaining(expires, clock)?))?;
         match stream.read(bytes) {
             Ok(0) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
             Ok(count) => bytes = &mut bytes[count..],
@@ -254,9 +273,14 @@ fn read_before(stream: &mut UnixStream, mut bytes: &mut [u8], expires: Instant) 
     Ok(())
 }
 
-fn write_before(stream: &mut UnixStream, mut bytes: &[u8], expires: Instant) -> io::Result<()> {
+fn write_before(
+    stream: &mut UnixStream,
+    mut bytes: &[u8],
+    expires: &mut Deadline,
+    clock: &dyn Clock,
+) -> io::Result<()> {
     while !bytes.is_empty() {
-        stream.set_write_timeout(Some(remaining(expires)?))?;
+        stream.set_write_timeout(Some(remaining(expires, clock)?))?;
         match stream.write(bytes) {
             Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
             Ok(count) => bytes = &bytes[count..],
