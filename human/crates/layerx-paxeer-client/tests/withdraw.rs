@@ -586,7 +586,7 @@ fn deploy_suite_for_asset_network(
         (
             asset_registry,
             call_data(
-                REGISTER_asset,
+                REGISTER_ASSET,
                 &[
                     asset,
                     address_word(token),
