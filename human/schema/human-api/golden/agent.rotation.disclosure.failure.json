@@ -1,0 +1,13 @@
+{
+  "status": 503,
+  "body": {
+    "ok": false,
+    "error": {
+      "code": "unavailable",
+      "copy_key": "error.custody.unavailable",
+      "retry": "retriable-after",
+      "retry_after_ms": 30000
+    },
+    "trace": "trc_01j8agea1ka1b2c3d4e5f6g7h8"
+  }
+}

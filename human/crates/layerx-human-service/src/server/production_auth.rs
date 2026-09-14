@@ -755,7 +755,7 @@ fn body_hash(body: &Value) -> Result<[u8; 32], ProductionAuthError> {
     let body = serde_json::to_vec(body).map_err(|_| ProductionAuthError::InvalidDisclosure)?;
     Ok(Sha256::digest(body).into())
 }
-fn step_up_digest(
+pub(super) fn step_up_digest(
     principal: &PrincipalId,
     tenant: &AgentTenantId,
     operation: &Operation,

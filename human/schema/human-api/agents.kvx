@@ -63,6 +63,15 @@ required = ["money:Money"]
 required = ["confirm_name:string"]
 confirmation = "Archive is destructive: confirm_name must equal the agent's name exactly, and a mismatch is refused with confirmation-mismatch."
 
+[type.OwnerRotationRequest]
+required = ["delay_seconds:integer","window_seconds:integer","step_up:StepUpEvidence"]
+bounds = "Both durations are explicit positive whole seconds no greater than 4294967295. The signed announcement preserves both exactly."
+authority = "Step-up evidence binds the authenticated owner and tenant, agent, both durations and the exact idempotency key."
+
+[type.OwnerRotationDisclosureRequest]
+required = ["delay_seconds:integer","window_seconds:integer","idempotency_key:string"]
+effect = "Read-only preparation of the exact rotation operation digest; no key or protocol state changes."
+
 [type.KeyChallengeKind]
 variants = ["rotate","recover"]
 
@@ -175,6 +184,23 @@ request = "Empty"
 response = "KeyChallenge"
 idempotency = true
 effect = "Rotation runs through the protocol's own mechanism with its challenge delay presented in plain time before anything changes hands."
+
+[operation.agent.rotation.disclosure]
+authorization_class = "read"
+method = "POST"
+path = "/v1/agents/{agent_id}/rotation/disclosure"
+request = "OwnerRotationDisclosureRequest"
+response = "SecurityAction"
+effect = "The authenticated owner receives the operation digest for the exact agent.rotation.start request, including both durations and its idempotency key, before a passkey step-up."
+
+[operation.agent.rotation.start]
+authorization_class = "security-settings"
+method = "POST"
+path = "/v1/agents/{agent_id}/rotation"
+request = "OwnerRotationRequest"
+response = "KeyChallenge"
+idempotency = true
+effect = "The owner explicitly approves the challenge delay and completion window. Rotation uses the signed protocol announcement and two-key consent while preserving the agent's identity and history."
 
 [operation.agent.recover]
 authorization_class = "security-settings"
