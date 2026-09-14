@@ -11,7 +11,7 @@ static uint8_t memory[TEST_ARENA_BYTES];
 
 static void print_hex_field(const char *name, lxp_byte_span bytes, bool final)
 {
-    printf("\"%s\":\"", name);
+    printf("\"%s\":\"0x", name);
     for (size_t i = 0U; i < bytes.length; ++i) printf("%02x", bytes.bytes[i]);
     printf("\"%s", final ? "" : ",");
 }
