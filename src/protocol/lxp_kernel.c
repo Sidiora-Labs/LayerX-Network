@@ -15,6 +15,7 @@
 #include "../modules/programs/event.h"
 
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -4000,6 +4001,12 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
     uint8_t *storage = NULL;
     lxp_arena arena;
     lxp_result status;
+#define SERIAL_PREPARE(call) do { \
+    status = (call); \
+    if (status != LXP_OK && getenv("LAYERX_PAY_TIMING") != NULL) \
+        (void)fprintf(stderr, "serial-prepare sequence=%llu step=%s result=%d\n", \
+            (unsigned long long)execution->global_sequence, #call, (int)status); \
+} while (0)
     if (kernel == NULL || activity == NULL || execution == NULL || batch_out == NULL ||
         execution->identities == NULL || execution->arena == NULL ||
         activity->activity_type == LX_PROGRAMS_CALL)
@@ -4026,20 +4033,20 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
         status = LXP_ERR_ARENA_EXHAUSTED;
         goto done;
     }
-    status = lxp_arena_init(&arena, storage, LXP_KERNEL_PREPARE_ARENA_BYTES);
+    SERIAL_PREPARE(lxp_arena_init(&arena, storage, LXP_KERNEL_PREPARE_ARENA_BYTES));
     if (status == LXP_OK)
-        status = lxp_kernel_batch_snapshot_create(kernel, execution->identities,
-            execution->verified_receipts, execution, &batch->base);
+        SERIAL_PREPARE(lxp_kernel_batch_snapshot_create(kernel, execution->identities,
+            execution->verified_receipts, execution, &batch->base));
     if (status == LXP_OK)
-        status = lxp_kernel_batch_snapshot_clone(batch->base, &batch->settled);
+        SERIAL_PREPARE(lxp_kernel_batch_snapshot_clone(batch->base, &batch->settled));
     if (status == LXP_OK)
-        status = lxp_kernel_batch_snapshot_begin_level(batch->settled);
+        SERIAL_PREPARE(lxp_kernel_batch_snapshot_begin_level(batch->settled));
     if (status != LXP_OK) goto done;
-    status = kernel_private_execution_bind(&batch->settled->kernel,
+    SERIAL_PREPARE(kernel_private_execution_bind(&batch->settled->kernel,
                                             &batch->settled->identities,
                                             execution,
                                             &private_execution,
-                                            &private_allowance);
+                                            &private_allowance));
     if (status != LXP_OK) goto done;
     private_execution.arena = &arena;
     private_execution.identities = &batch->settled->identities;
@@ -4049,8 +4056,8 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
     private_execution.recorded_metering_schedule_version = batch->settled->metering_schedule.version;
     private_execution.canonical_events_out = NULL;
     if (activity->activity_type == LXP_GOVERNANCE_HANDOVER) {
-        status = lxp_handover_prepare(&batch->settled->kernel, activity,
-                                       execution->batch_number, &arena);
+        SERIAL_PREPARE(lxp_handover_prepare(&batch->settled->kernel, activity,
+                                       execution->batch_number, &arena));
         if (status != LXP_OK) goto done;
         private_execution.epoch = batch->settled->kernel.epoch;
     }
@@ -4058,8 +4065,8 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
     batch->settled->programs_runtime.state_feed = runtime->state_feed;
     batch->settled->kernel.observe_commit = kernel_stage_commit;
     batch->settled->kernel.commit_observer_context = &record;
-    status = lxp_kernel_execute_activity(&batch->settled->kernel, activity,
-                                         &private_execution, &batch->receipts[0]);
+    SERIAL_PREPARE(lxp_kernel_execute_activity(&batch->settled->kernel, activity,
+                                         &private_execution, &batch->receipts[0]));
     if (status == LXP_OK && activity->activity_type == LXP_GOVERNANCE_HANDOVER &&
         batch->receipts[0].result_code != LXP_OK)
         status = (lxp_result)batch->receipts[0].result_code;
@@ -4068,13 +4075,13 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
     batch->settled->programs_runtime.state_feed = NULL;
     mark = lxp_arena_mark(execution->arena);
     if (status == LXP_OK)
-        status = lxp_receipt_digest(&batch->receipts[0], execution->arena, receipt_digest);
+        SERIAL_PREPARE(lxp_receipt_digest(&batch->receipts[0], execution->arena, receipt_digest));
     if (lxp_arena_reset(execution->arena, mark) != LXP_OK) status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK && (!record.present ||
         lxp_ct_memcmp(record.receipt_digest, receipt_digest, 32U) != 0))
         status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK)
-        status = lxp_programs_project_receipt_events(&batch->receipts[0], &arena, &batch->events[0]);
+        SERIAL_PREPARE(lxp_programs_project_receipt_events(&batch->receipts[0], &arena, &batch->events[0]));
     if (status == LXP_OK && batch->events[0].length != 0U) {
         batch->event_bytes[0] = malloc(batch->events[0].length);
         if (batch->event_bytes[0] == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
@@ -4098,8 +4105,8 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
             span->bytes = batch->artifact_bytes[i];
         }
     }
-    if (status == LXP_OK) status = lxp_state_snapshot_seal_level(batch->settled->state);
-    if (status == LXP_OK) status = kernel_prepared_batch_digest(activity, execution, batch);
+    if (status == LXP_OK) SERIAL_PREPARE(lxp_state_snapshot_seal_level(batch->settled->state));
+    if (status == LXP_OK) SERIAL_PREPARE(kernel_prepared_batch_digest(activity, execution, batch));
     if (status == LXP_OK) {
         *batch_out = batch;
         batch = NULL;
@@ -4108,6 +4115,7 @@ done:
     lxp_kernel_prepared_batch_destroy(batch);
     free(storage);
     return status;
+#undef SERIAL_PREPARE
 }
 
 typedef struct kernel_maintenance_frame {
