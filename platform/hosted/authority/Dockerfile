@@ -6,7 +6,9 @@ COPY . .
 RUN cargo build --locked --release --manifest-path platform/Cargo.toml -p layerx-platform-authority -p layerx-runtime-clock
 
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates libgcc openssl util-linux && addgroup -g 4020 layerx && adduser -D -H -u 4020 -G layerx layerx
+RUN apk add --no-cache ca-certificates libgcc openssl util-linux setpriv \
+    && ln -s /bin/setpriv /usr/bin/setpriv \
+    && addgroup -g 4020 layerx && adduser -D -H -u 4020 -G layerx layerx
 RUN /usr/bin/setpriv --help | grep -- --pdeathsig
 COPY --from=build /src/platform/target/release/layerx-receipt-authority /usr/local/bin/layerx-receipt-authority
 COPY --from=build /src/platform/target/release/layerx-runtime-clock /usr/local/bin/layerx-runtime-clock
