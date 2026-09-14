@@ -160,7 +160,7 @@ impl Trust {
 
     pub(super) fn checkpoint(
         &self,
-        checkpoint: VerifiedCheckpoint,
+        checkpoint: &VerifiedCheckpoint,
     ) -> Result<VerifiedCheckpoint, ()> {
         let publication = self
             .verifier
@@ -294,7 +294,7 @@ pub(super) fn checkpoint(
         if header.canonical_bytes() != checkpoint.canonical_header() {
             return Err(());
         }
-        return config.trust.as_ref().ok_or(())?.checkpoint(checkpoint);
+        return config.trust.as_ref().ok_or(())?.checkpoint(&checkpoint);
     }
     Ok(checkpoint)
 }

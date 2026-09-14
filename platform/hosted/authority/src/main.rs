@@ -586,9 +586,8 @@ fn lookup_receipt(config: &Config, activity_id: [u8; 32], wait_publication: bool
     if wait_publication {
         selector.push(1);
     }
-    let correlation_id = match trust::correlation(1) {
-        Ok(id) => id,
-        Err(()) => return ReceiptSource::Unavailable("LNI correlation exhausted".to_owned()),
+    let Ok(correlation_id) = trust::correlation(1) else {
+        return ReceiptSource::Unavailable("LNI correlation exhausted".to_owned());
     };
     let request = match encode_envelope(Envelope {
         version: handshake.node().interface_version,
