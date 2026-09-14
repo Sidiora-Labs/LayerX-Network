@@ -2004,7 +2004,10 @@ fn resolve_movement_context(
     observed_at: u64,
 ) -> Result<super::movement_provider::PlanningContext, ApiFailure> {
     let key = KeyId::new("human-primary").map_err(|_| ApiFailure::upstream_degraded())?;
-    let mut agent = components.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+    let mut agent = components
+        .agent
+        .lock()
+        .map_err(|_| ApiFailure::unavailable())?;
     let owner = resolve_principal_owner(components, scope, &mut agent)?;
     let actor = owner.actor;
     let account = owner.account;

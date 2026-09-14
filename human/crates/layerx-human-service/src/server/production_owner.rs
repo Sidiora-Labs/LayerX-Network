@@ -30,12 +30,19 @@ pub(super) fn resolve_principal_owner(
     {
         return Err(ApiFailure::forbidden());
     }
-    let identity = agent.identity_resolve(actor.as_str()).map_err(agent_failure)?;
+    let identity = agent
+        .identity_resolve(actor.as_str())
+        .map_err(agent_failure)?;
     let did = Did::new(actor.as_str().as_bytes()).map_err(|_| ApiFailure::upstream_degraded())?;
     validate_owner_identity(&did, descriptor.public_key, &identity)?;
     let authority = AuthorityRef::new(hex_bytes(&descriptor.public_key))
         .map_err(|_| ApiFailure::upstream_degraded())?;
-    Ok(PrincipalOwner { actor, authority, account, identity })
+    Ok(PrincipalOwner {
+        actor,
+        authority,
+        account,
+        identity,
+    })
 }
 
 fn validate_owner_identity(
@@ -60,9 +67,13 @@ fn validate_owner_identity(
 impl PrincipalOwner {
     pub fn recovery_policy(&self) -> Result<([u8; 32], u16), ApiFailure> {
         let root = self.identity.canonical_bytes[77..109]
-            .try_into().map_err(|_| ApiFailure::upstream_degraded())?;
-        let threshold = u16::from_be_bytes(self.identity.canonical_bytes[109..111]
-            .try_into().map_err(|_| ApiFailure::upstream_degraded())?);
+            .try_into()
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let threshold = u16::from_be_bytes(
+            self.identity.canonical_bytes[109..111]
+                .try_into()
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+        );
         if root == [0; 32] || threshold == 0 {
             return Err(ApiFailure::forbidden());
         }
