@@ -11,6 +11,7 @@ use layerx_wire::hash::{
     account_id_for_protocol, activity_id, payload_hash, payload_hash_for, Domain,
 };
 use layerx_wire::receipt::ProtocolReceipt;
+use sha2::{Digest as _, Sha256};
 
 fn refused() -> VerificationFailure {
     VerificationFailure::at(ReceiptCheck::ReceiptShape)
@@ -107,11 +108,13 @@ fn effects(receipt: &ProtocolReceipt) -> Result<&[u8], VerificationFailure> {
         return Err(refused());
     };
     if transfer.module_id() != 1
+        || transfer.ordinal() != 0
         || transfer.kind() != 2
         || !transfer.monetary()
         || transfer.event_type() != 0
         || !transfer.body().is_empty()
         || event.module_id() != 1
+        || event.ordinal() != 1
         || event.kind() != 3
         || event.monetary()
         || event.event_type() != 9
@@ -137,7 +140,6 @@ fn effects(receipt: &ProtocolReceipt) -> Result<&[u8], VerificationFailure> {
     leg[65..97].copy_from_slice(&payload[..32]);
     leg[97..113].copy_from_slice(&payload[32..48]);
     leg[113..].copy_from_slice(&3_u16.to_be_bytes());
-    use sha2::{Digest as _, Sha256};
     let mut nullifier = Sha256::new();
     nullifier.update(b"LX:WITHDRAWAL:v1");
     nullifier.update(&body[2..118]);
