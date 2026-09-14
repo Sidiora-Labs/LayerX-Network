@@ -359,6 +359,7 @@ pub struct ProductionComponents {
     agent: Mutex<AgentRuntime>,
     agent_contract: layerx_sdk::Client,
     agent_limits: Limits,
+    native_asset: [u8; 32],
     custody: Arc<CustodySigner>,
     security: Mutex<RemoteSecurityProvider>,
     stream: super::stream_journal::StreamJournal,
@@ -432,8 +433,10 @@ impl ProductionComponents {
             layerx_agent_api::agent_api_schema_v1().version,
         )
         .map_err(|_| "agent SDK contract refused startup".to_owned())?;
-        let agent = AgentRuntime::connect(config.agent_socket, config.agent_limits)
+        let mut agent = AgentRuntime::connect(config.agent_socket, config.agent_limits)
             .map_err(|_| "agent boundary refused startup".to_owned())?;
+        let native_asset = agent.native_fee_policy()
+            .map_err(|_| "authenticated native asset refused startup".to_owned())?.asset_id;
         let keystore = Keystore::open_production(config.custody_root, config.network_id, provider)
             .map_err(|_| "KMS or custody storage refused startup".to_owned())?;
         let custody = Arc::new(CustodySigner::new_shared(
@@ -480,6 +483,7 @@ impl ProductionComponents {
             agent: Mutex::new(agent),
             agent_contract,
             agent_limits: config.agent_limits,
+            native_asset,
             custody,
             security: Mutex::new(security),
             stream: super::stream_journal::StreamJournal::new(
