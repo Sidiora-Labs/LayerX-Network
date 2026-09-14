@@ -5,7 +5,7 @@
 pub struct BudgetRecordError;
 
 /// Native Budget state with explicitly timestamp-based period fields.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BudgetRecord {
     pub id: [u8; 32],
     pub owner: [u8; 32],
@@ -13,6 +13,10 @@ pub struct BudgetRecord {
     pub asset: [u8; 32],
     pub source: Option<[u8; 32]>,
     pub limit: u128,
+    pub configured_limit: u128,
+    pub carry_cap: u128,
+    pub carried: u128,
+    pub rollover_policy: u8,
     pub spent: u128,
     pub period_start: u64,
     pub period_length: u64,
@@ -68,6 +72,10 @@ impl BudgetRecord {
                 None
             },
             limit: u128::from_be_bytes(field(bytes, 162)?),
+            configured_limit: u128::from_be_bytes(field(bytes, 178)?),
+            carry_cap: u128::from_be_bytes(field(bytes, 194)?),
+            carried: u128::from_be_bytes(field(bytes, 226)?),
+            rollover_policy: bytes[274],
             spent: u128::from_be_bytes(field(bytes, 210)?),
             period_start: u64::from_be_bytes(field(bytes, 250)?),
             period_length: u64::from_be_bytes(field(bytes, 242)?),

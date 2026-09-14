@@ -302,11 +302,15 @@ impl EvidenceAuthority {
         prior_binding.period_start_ms = record.period_start;
         if let Some(previous) = previous {
             prior_binding.owner_public_key = previous.binding.owner_public_key;
+            prior_binding.expiry_ms = previous.binding.expiry_ms;
         }
         let baseline = self.native_budget_state(&prior_binding, &evidence.baseline)?;
         let current = self.native_budget_state(binding, &evidence.current)?;
         let mut coordinates = prior_binding.clone();
         coordinates.owner_public_key = binding.owner_public_key;
+        if previous.is_some() {
+            coordinates.expiry_ms = binding.expiry_ms;
+        }
         if !coordinates.advances(binding)
             || baseline.header.timestamp_ms() > current.header.timestamp_ms()
             || baseline.record.revocation > current.record.revocation
@@ -328,11 +332,6 @@ impl EvidenceAuthority {
         } else if baseline.record.spent != 0 {
             return Err(Error::Baseline);
         }
-        let mut spent = if binding.period_start_ms == prior_binding.period_start_ms {
-            baseline.record.spent
-        } else {
-            0
-        };
         let verified = self.native_budget_history(
             &baseline.header,
             &current.header,
@@ -343,30 +342,15 @@ impl EvidenceAuthority {
                 .ok_or(Error::Arithmetic)?,
             evidence,
         )?;
-        self.native_budget_rotation_chain(
+        let owner_keys = self.native_budget_rotation_chain(
             &prior_binding,
             binding,
             evidence,
             &verified,
             current.root,
         )?;
-        let mut outcomes = Vec::new();
-        for (entry, receipt) in evidence.history.iter().zip(verified) {
-            if let Some(outcome) = Self::native_budget_outcome(binding, entry, &receipt)? {
-                if outcome.succeeded() && outcome.timestamp_ms >= binding.period_start_ms {
-                    if outcome.timestamp_ms >= current.period_end {
-                        return Err(Error::Window);
-                    }
-                    spent = spent
-                        .checked_add(outcome.amount())
-                        .ok_or(Error::Arithmetic)?;
-                }
-                outcomes.push(outcome);
-            }
-        }
-        if spent != current.record.spent {
-            return Err(Error::Consumption);
-        }
+        let (spent, outcomes) =
+            self.native_budget_changes(binding, evidence, &verified, &owner_keys)?;
         Ok(NativeBudgetReconciliation {
             binding: binding.clone(),
             authority: self.clone(),
@@ -400,7 +384,7 @@ impl EvidenceAuthority {
         Self::native_budget_outcome(binding, entry, &verified)?.ok_or(Error::Receipt)
     }
 
-    fn native_budget_outcome(
+    pub(super) fn native_budget_outcome(
         binding: &NativeBudgetBinding,
         entry: &super::RawActivityReceiptEvidence,
         receipt: &VerifiedCumulativeReceipt,

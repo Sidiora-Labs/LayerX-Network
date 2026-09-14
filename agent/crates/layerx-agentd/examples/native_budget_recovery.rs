@@ -1,5 +1,7 @@
 use std::error::Error;
 
+#[path = "native_budget_recovery/amend.rs"]
+mod amend;
 #[path = "native_budget_recovery/expiry.rs"]
 mod expiry;
 #[path = "native_budget_recovery/fixture.rs"]

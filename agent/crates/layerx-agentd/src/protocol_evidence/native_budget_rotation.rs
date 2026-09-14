@@ -20,10 +20,12 @@ impl EvidenceAuthority {
         evidence: &NativeBudgetRecoveryEvidence,
         receipts: &[VerifiedCumulativeReceipt],
         state_root: [u8; 32],
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<[u8; 32]>, Error> {
+        let mut keys = Vec::with_capacity(receipts.len());
         let mut public_key = previous.owner_public_key;
         let mut last_record = None;
         for (entry, receipt) in evidence.history.iter().zip(receipts) {
+            keys.push(public_key);
             if receipt.module_id() != 7 || receipt.result_code() != 0 {
                 continue;
             }
@@ -107,7 +109,7 @@ impl EvidenceAuthority {
         if let Some(record) = last_record {
             self.native_budget_rotation_state(current, evidence, &record, state_root)?;
         }
-        Ok(())
+        Ok(keys)
     }
 
     fn native_budget_rotation_state(
