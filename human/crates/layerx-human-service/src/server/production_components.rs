@@ -4783,8 +4783,8 @@ impl ProductionComponents {
                 },
             )
             .map_err(|_| ApiFailure::upstream_degraded())?;
-            let evidence = adapter
-                .submit_lifecycle_intent(
+            let signed = adapter
+                .prepare_lifecycle_intent(
                     &mut scope,
                     &registry,
                     intent,
@@ -4793,11 +4793,17 @@ impl ProductionComponents {
                     prepared.opened_at(),
                 )
                 .map_err(|_| ApiFailure::upstream_degraded())?;
+            drop(scope);
+            drop(store);
+            let evidence = adapter.submit_prepared(signed)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
             ProductionAgentCreation::finalization_evidence(&evidence, ModuleId::Governance, 5, now)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
             prepared
                 .bind_protocol_grant(grant_id)
                 .map_err(|error| auth_api_failure(&error))?;
+            let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut scope = store.principal(&principal).map_err(|_| ApiFailure::unavailable())?;
             let grant = Passkeys::commit_open_session(&mut scope, prepared, now)
                 .map_err(|error| auth_api_failure(&error))?;
             self.auth_index
@@ -5454,7 +5460,9 @@ fn production_principal_store(
     tenancy_digest: [u8; 32],
     binding: layerx_identity_binding::Config,
 ) -> Result<Arc<Mutex<PrincipalStore>>, String> {
-    let provider = layerx_identity_binding::Client::new(binding)
+    let clock = layerx_client::runtime_clock::RuntimeClock::from_environment()
+        .map_err(|_| "principal clock capability unavailable".to_owned())?;
+    let provider = layerx_identity_binding::Client::new(binding, clock)
         .map_err(|_| "identity binding provider configuration refused".to_owned())?;
     PrincipalStore::open_with_authority(root, retention, TenancyDigest::new(tenancy_digest),
         Arc::new(IdentityTenancy(provider)))

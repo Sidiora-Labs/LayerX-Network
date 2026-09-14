@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from provision import fields, protected_json, require, strict_pairs, write_json
+from provision import fields, protected_bytes, protected_json, require, strict_pairs, write_json
 
 MAX_FRAME = 1048576
 
@@ -40,7 +40,8 @@ class Api:
             headers['Idempotency-Key'] = action
         if authenticated and self.cookies:
             headers['Cookie'] = '; '.join(name + '=' + value for name, value in self.cookies.items())
-            headers['X-CSRF-Token'] = self.cookies['__Host-layerx_csrf']
+            if method != 'GET':
+                headers['X-CSRF-Token'] = self.cookies['__Host-layerx_csrf']
         request = urllib.request.Request(self.url + path, method=method, headers=headers,
             data=None if body is None else json.dumps(body, allow_nan=False, separators=(',', ':')).encode())
         try:
@@ -127,6 +128,20 @@ def journey(args):
     require(type(config['initial_funding']) is int and 0 < config['initial_funding'] < 2**128,
             args.request, 'bounded native funding')
     api = Api(args.url, args.ca, args.origin)
+    if args.resume:
+        retained = protected_json(args.result)
+        token = protected_bytes(args.credential, 4096).decode()
+        require(token and not any(ord(c) < 33 or ord(c) > 126 for c in token),
+                'Human journey', 'retained real session credential')
+        api.cookies = {'__Host-layerx_access': token}
+        profile = api.result('GET', '/v1/profile', 200)
+        state = api.result('GET', '/v1/onboarding', 200)
+        balance = api.result('GET', '/v1/account/balance', 200)
+        require(profile['display_name'] == config['display_name'] and state == retained['journey']
+                and balance['account_id'] == retained['account_id']
+                and balance['verification'] == 'checkpoint-finalised',
+                'Human journey', 'retained authenticated principal and executed onboarding')
+        return
     status, _ = api.call('GET', '/v1/account/balance', authenticated=False)
     require(status == 401, 'Human journey', 'unauthenticated balance refusal')
     body = {name: config[name] for name in ('email', 'display_name')}
@@ -167,7 +182,7 @@ def journey(args):
                 'Human journey', 'executed native owner and recovery')
         stages = {stage['stage']: stage for stage in state['stages']}
         for name in ('protocol-identity', 'initial-funding', 'recovery'):
-            require(stages[name]['state'] == 'done' and any(item['class'] == 'layerx-receipt'
+            require(stages[name]['state'] == 'receipt-verified' and any(item['class'] == 'layerx-receipt'
                 and item['verification'] == 'receipt-verified' for item in stages[name]['evidence']),
                 'Human journey', 'original native ' + name + ' evidence')
         balance = api.result('GET', '/v1/account/balance', 200)
@@ -200,6 +215,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     for name in ('url', 'ca', 'origin', 'request', 'authenticator', 'credential', 'result'):
         parser.add_argument('--' + name, required=True)
+    parser.add_argument('--resume', action='store_true')
     try:
         journey(parser.parse_args())
     except Exception:

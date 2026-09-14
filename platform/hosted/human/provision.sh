@@ -178,7 +178,7 @@ for suffix in ('.admission', '.deployment'):
 PYPAIR
 )
 
-human_evidence_provision() (
+human_native_owner_provision() (
     set -euo pipefail
     umask 077
     local input="$WORK_DIR/human-evidence-input" status
@@ -215,6 +215,13 @@ PYHEAD
     esac
     human_custody_step deposit
     human_native_provision
+    python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
+)
+
+human_evidence_provision() (
+    set -euo pipefail
+    umask 077
+    local provision="$REPO_ROOT/platform/hosted/human/provision.py"
     python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
     python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
         --registry "$SECRETS_DIR/module-registry.json" --journal "$LAYERX_REGISTRY_JOURNAL"

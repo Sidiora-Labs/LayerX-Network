@@ -29,7 +29,7 @@ case "$role" in
         copy_material kms-client.der
         copy_material kms-client-key.der
         copy_material ca.der
-        exec python3 /usr/local/lib/layerx-human/onboarding_bootstrap.py "$@"
+        exec /usr/local/bin/layerx-runtime-clock --runtime-dir "$private" -- python3 /usr/local/lib/layerx-human/onboarding_bootstrap.py "$@"
         ;;
     onboarding-signer)
         copy_material kms-client.der
@@ -38,7 +38,7 @@ case "$role" in
         export LAYERX_HUMAN_KMS_CLIENT_CERTIFICATE_DER="$private/kms-client.der"
         export LAYERX_HUMAN_KMS_CLIENT_PRIVATE_KEY_DER="$private/kms-client-key.der"
         export LAYERX_HUMAN_KMS_ROOT_CERTIFICATE_DER="$private/ca.der"
-        exec python3 /usr/local/lib/layerx-human/onboarding_socket.py "$@"
+        exec /usr/local/bin/layerx-runtime-clock --runtime-dir "$private" -- python3 /usr/local/lib/layerx-human/onboarding_socket.py "$@"
         ;;
     kms)
         for name in kms-server.der kms-server-key.der kms-client.der kms-executor.der ca.der kms-seal registry.json; do
@@ -58,7 +58,7 @@ case "$role" in
         export LAYERX_AGENT_HUMAN_AUTHORITY_BEARER="$(cat /run/human-material/authority-token)"
         export LAYERX_AGENT_PROGRAM_BEARER_TOKEN="$(cat /run/human-material/program-token)"
         printf 'header = "Authorization: Bearer %s"\n' "$LAYERX_AGENT_PROGRAM_BEARER_TOKEN" > "$private/probe.conf"
-        exec /usr/local/bin/layerx-agentd "$@"
+        exec /usr/local/bin/layerx-runtime-clock --runtime-dir "$private" -- /usr/local/bin/layerx-agentd "$@"
         ;;
     identity)
         copy_material recovery-policy.json

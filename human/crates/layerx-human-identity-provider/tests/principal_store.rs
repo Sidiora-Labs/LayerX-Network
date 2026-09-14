@@ -81,7 +81,7 @@ fn provision(root: &Path, email: &str, idempotency: &str) -> Result<PrincipalId>
 fn client(root: &Path) -> Result<Client> {
     Ok(Client::new(Config { socket: root.join("binding.sock"), tenant: "human-provider".into(),
         peer_uid: rustix::process::geteuid().as_raw(), peer_gid: rustix::process::getegid().as_raw(),
-        deadline: Duration::from_secs(1) })?)
+        deadline: Duration::from_secs(1) }, layerx_client::runtime_clock::RuntimeClock::from_environment()?)?)
 }
 
 fn open(root: &Path, digest: TenancyDigest, client: Client) -> Result<PrincipalStore> {
