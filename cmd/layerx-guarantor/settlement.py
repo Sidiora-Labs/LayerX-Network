@@ -92,7 +92,17 @@ class RPC:
             body = response.read(4_000_001)
             require(len(body) <= 4_000_000, 'RPC response too large')
             result = json.loads(body)
-            require(result.get('jsonrpc') == '2.0' and result.get('id') == self.counter and 'error' not in result and 'result' in result, 'RPC rejected ' + method)
+            refusal = 'RPC rejected ' + method
+            error = result.get('error')
+            if isinstance(error, dict):
+                if isinstance(error.get('code'), int) and not isinstance(error['code'], bool):
+                    refusal += ' code=' + str(error['code'])
+                data = error.get('data')
+                if isinstance(data, str) and data.startswith('0x') and len(data) >= 10 and all(
+                    character in '0123456789abcdefABCDEF' for character in data[2:10]
+                ):
+                    refusal += ' selector=' + data[:10]
+            require(result.get('jsonrpc') == '2.0' and result.get('id') == self.counter and 'error' not in result and 'result' in result, refusal)
             return result['result']
         finally:
             conn.close()
@@ -152,25 +162,30 @@ def validate_receipt(receipt, registry, transaction, digest, header, version):
     return block
 
 
-def registered_transaction(rpc, registry, digest):
+def bounded_event_logs(rpc, target, topics):
     first = rpc.call('eth_getBlockByNumber', ['earliest', False])
     require(isinstance(first, dict), 'initial block unavailable')
     begin = int(first['number'], 16)
     end = int(rpc.call('eth_blockNumber', []), 16)
     require(0 <= begin <= end < 2 ** 64 and any(raw(first['hash'], 32)), 'initial block invalid')
-    transaction = None
+    found = []
     while begin <= end:
         last = min(begin + 255, end)
-        logs = rpc.call('eth_getLogs', [{'address': registry, 'fromBlock': hex(begin),
-            'toBlock': hex(last), 'topics': [EVENT, '0x' + digest.hex()]}])
-        require(isinstance(logs, list) and len(logs) <= 1, 'existing registration event count mismatch')
+        logs = rpc.call('eth_getLogs', [{'address': target, 'fromBlock': hex(begin),
+            'toBlock': hex(last), 'topics': topics}])
+        require(isinstance(logs, list) and len(found) + len(logs) <= 1, 'matching event count mismatch')
         if logs:
-            require(transaction is None and begin <= int(logs[0]['blockNumber'], 16) <= last,
-                'existing registration event count mismatch')
-            transaction = logs[0]['transactionHash']
-            raw(transaction, 32)
+            require(begin <= int(logs[0]['blockNumber'], 16) <= last, 'matching event block mismatch')
+            found.extend(logs)
         begin = last + 1
-    require(transaction is not None, 'existing registration event count mismatch')
+    return found
+
+
+def registered_transaction(rpc, registry, digest):
+    logs = bounded_event_logs(rpc, registry, [EVENT, '0x' + digest.hex()])
+    require(len(logs) == 1, 'existing registration event count mismatch')
+    transaction = logs[0]['transactionHash']
+    raw(transaction, 32)
     return transaction
 
 
