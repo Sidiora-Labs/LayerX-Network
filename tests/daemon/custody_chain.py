@@ -173,7 +173,8 @@ def owned_chain(work, artifacts):
         process = None
         try:
             with (work / 'paxd.log').open('w') as log:
-                process = subprocess.Popen([env.get('PAXD', 'paxd'), 'start', '--home', str(chain_home)],
+                process = subprocess.Popen([env.get('PAXD', 'paxd'), 'start', '--home', str(chain_home),
+                                            '--consensus.create-empty-blocks-interval=1s'],
                                            cwd=ROOT, env=env, stdout=log, stderr=log)
             reader = COMMON['Chain'](ports[0])
             deadline = time.monotonic() + 60
@@ -205,6 +206,7 @@ def owned_chain(work, artifacts):
             assert int(chain.view(USDL, 'decimals()'), 16) == 6
             provenance = {
                 'chain_id': 125, 'deployer': account.address, 'usdl': USDL,
+                'create_empty_blocks_interval': '1s',
                 'genesis_sha256': hashlib.sha256(genesis_bytes).hexdigest(),
                 'anchor_number': identity['anchor_number'], 'anchor_hash': identity['anchor_hash'],
                 'token_runtime_sha256': hashlib.sha256(bytes.fromhex(runtime.removeprefix('0x'))).hexdigest(),
