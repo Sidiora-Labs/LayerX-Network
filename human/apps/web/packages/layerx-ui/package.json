@@ -60,6 +60,8 @@
     "tailwind-merge": "3.6.0"
   },
   "devDependencies": {
+    "@jridgewell/sourcemap-codec": "1.5.5",
+    "source-map": "0.7.6",
     "tsup": "8.5.1",
     "typescript": "5.9.3"
   },
