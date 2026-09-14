@@ -474,7 +474,11 @@ wait_for_treasury_signer() {
 
 run_bootstrap() {
     wait_for_treasury_signer
-    "$SCRIPT_DIR/bootstrap.sh" --data-dir "$DATA_DIR" --run-dir "$RUN_DIR" --layerxd "$LAYERXD" "$@"
+    local -a authority=()
+    if [ -n "${LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY:-}" ]; then
+        authority=(--handover-authority "$LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY")
+    fi
+    "$SCRIPT_DIR/bootstrap.sh" --data-dir "$DATA_DIR" --run-dir "$RUN_DIR" --layerxd "$LAYERXD" "${authority[@]}" "$@"
 }
 
 publish_generation() {
@@ -490,6 +494,11 @@ if [ -r "$GENERATION_FILE" ]; then GENERATION=$(cat "$GENERATION_FILE"); fi
 if [ ! -r "$DATA_DIR/node.env" ]; then
     log "bootstrapping $DATA_DIR"
     run_bootstrap --force "${BOOTSTRAP_ARGS[@]}"
+fi
+if [ -n "${LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY:-}" ]; then
+    configured_handover=$(sed -n 's/^LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY=//p' "$DATA_DIR/node.env")
+    [ "$configured_handover" = "$LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY" ] \
+        || fail "configured handover authority differs from committed genesis"
 fi
 check_sequencer_environment "$DATA_DIR/sequencer.env"
 GENERATION=$((GENERATION + 1))

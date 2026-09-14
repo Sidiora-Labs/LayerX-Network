@@ -4,6 +4,8 @@ mod codec;
 mod migrate;
 mod retention;
 mod tenancy;
+mod provider;
+pub use provider::PrincipalTenancyAuthority;
 
 pub use migrate::MigrationError;
 pub use retention::{ExpiryReport, RetentionPeriod, RetentionPolicy};
@@ -380,6 +382,8 @@ pub struct PrincipalStore {
     version: u32,
     retention: RetentionPolicy,
     tenancy: TenancyMap,
+    provider: Option<std::sync::Arc<dyn PrincipalTenancyAuthority>>,
+    provider_lock: Option<fs::File>,
 }
 
 impl PrincipalStore {
@@ -424,6 +428,8 @@ impl PrincipalStore {
             version,
             retention,
             tenancy,
+            provider: None,
+            provider_lock: None,
         })
     }
 
@@ -436,11 +442,7 @@ impl PrincipalStore {
     /// Refuses principals without a tenancy mapping and corrupt or
     /// newer-versioned principal files.
     pub fn principal(&mut self, id: &PrincipalId) -> Result<PrincipalScope<'_>, StoreError> {
-        let tenant = self
-            .tenancy
-            .tenant_for(id)
-            .map_err(|_| StoreError::Tenancy(TenancyError::Unmapped))?
-            .clone();
+        let tenant = self.resolve_tenant(id)?;
         let directory = self.root.join(PRINCIPALS_DIR).join(id.as_str());
         let path = directory.join(STORE_FILE);
         let state = if path.exists() {

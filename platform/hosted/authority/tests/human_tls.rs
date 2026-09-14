@@ -454,6 +454,7 @@ fn drive_client() {
         &must(fs::read(root.join("ca.der"))),
     ));
     let peer = HumanPeer {
+        subject: None,
         uid: 1,
         tenant: "tenant space".to_owned(),
         principal: "principal".to_owned(),
@@ -507,6 +508,7 @@ fn drive_client() {
         Err(HumanOperationError::Refused)
     ));
     let other = HumanPeer {
+        subject: None,
         tenant: "other".to_owned(),
         ..peer.clone()
     };
@@ -553,6 +555,7 @@ fn real_client_balance_context_uses_registry_and_verified_header() {
         &must(fs::read(server.root.join("ca.der"))),
     ));
     let peer = HumanPeer {
+        subject: None,
         uid: 1,
         tenant: "tenant space".to_owned(),
         principal: "principal".to_owned(),

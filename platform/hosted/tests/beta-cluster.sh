@@ -1338,6 +1338,9 @@ wait_for_node_genesis() {
     node_file_fetch "$data/genesis/paxeer-deployment-descriptor.lxgd" "$WORK_DIR/genesis/paxeer-deployment-descriptor.lxgd"
     node_file_fetch "$data/genesis/paxeer-registration-request.lxrr" "$WORK_DIR/genesis/paxeer-registration-request.lxrr"
     node_file_fetch "$data/node.env" "$WORK_DIR/genesis/node.env"
+    if rg -q '^LAYERX_NODE_GENESIS_HANDOVER_TRUST=' "$WORK_DIR/genesis/node.env"; then
+        node_file_fetch "$data/genesis/genesis-handover-trust.lxt" "$WORK_DIR/genesis/genesis-handover-trust.lxt"
+    fi
     NODE_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")
     NODE_GUARANTOR_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
     NODE_SECOND_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_SECOND_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")

@@ -1,5 +1,9 @@
 //! Durable, receipt-gated human identity onboarding.
 
+mod native;
+
+pub(crate) use native::{NativePlan, NativeSponsor};
+
 use std::fmt::{Display, Formatter};
 
 use layerx_agent_api::error::RequestId;
@@ -70,6 +74,7 @@ pub enum OnboardingStage {
     ApplicationIdentity,
     CustodyKey,
     DidRegistration,
+    InitialFunding,
     RecoveryRegistration,
 }
 
@@ -490,6 +495,8 @@ struct JourneyRecord {
     public_key: Option<[u8; 32]>,
     did_registration: ProtocolRecord,
     recovery_registration: ProtocolRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_funding: Option<ProtocolRecord>,
 }
 
 /// Durable onboarding state machine. It stores no private key material and has
@@ -595,6 +602,7 @@ impl OnboardingJourney {
             public_key: None,
             did_registration: ProtocolRecord::queued(),
             recovery_registration: ProtocolRecord::queued(),
+            native_funding: None,
         };
         let mut journey = Self { record };
         let application = journey.application_evidence(scope);
@@ -809,7 +817,7 @@ impl OnboardingJourney {
     #[must_use]
     pub fn status(&self) -> OnboardingStatus {
         let account_active = self.did_verified();
-        OnboardingStatus {
+        let mut status = OnboardingStatus {
             state: self.overall_state(),
             account_active,
             recovery_challenge_delay_secs: self.record.recovery_challenge_delay_secs,
@@ -845,7 +853,13 @@ impl OnboardingJourney {
                     recovery_receipt_row_infallible(),
                 ),
             ],
+        };
+        if let Some(record) = &self.record.native_funding {
+            status.stages.insert(3, self.protocol_status(
+                OnboardingStage::InitialFunding, record, native::funding_row(),
+            ));
         }
+        status
     }
 
     fn same_start(&self, request: &OnboardingStart) -> bool {
@@ -1178,6 +1192,11 @@ impl OnboardingJourney {
         if self.record.public_key.is_none() {
             return OnboardingState::GettingReady;
         }
+        if let Some(funding) = &self.record.native_funding {
+            if funding.state == ProtocolState::Refused {
+                return OnboardingState::Refused;
+            }
+        }
         if self.recovery_verified() {
             return OnboardingState::Complete;
         }
@@ -1216,6 +1235,14 @@ fn validate_record(record: &JourneyRecord) -> Result<(), OnboardingError> {
     }
     validate_protocol_record(&record.did_registration)?;
     validate_protocol_record(&record.recovery_registration)?;
+    if let Some(funding) = &record.native_funding {
+        validate_protocol_record(funding)?;
+        if funding.state == ProtocolState::Verified && record.did_registration.state != ProtocolState::Verified
+            || record.recovery_registration.state == ProtocolState::Verified && funding.state != ProtocolState::Verified
+        {
+            return Err(OnboardingError::CorruptJourney("native funding order is invalid"));
+        }
+    }
     if record.did_registration.state != ProtocolState::Verified
         && record.recovery_registration.state == ProtocolState::Verified
     {

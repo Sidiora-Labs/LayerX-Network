@@ -26,7 +26,14 @@ fn run() -> Result<(), String> {
     let backend = Arc::new(ProductionComponents::open(
         ProductionComponentsConfig::from_environment()?,
     )?);
-    HumanComponentServer::new_maintained(
+    let recipient = layerx_human_service::server::production_components::RecipientServer::bind(
+        Arc::clone(&backend), layerx_human_service::server::production_components::RecipientServerConfig {
+            socket: PathBuf::from(required("LAYERX_HUMAN_RECIPIENT_SOCKET")?),
+            caller_uid: required_number("LAYERX_HUMAN_RECIPIENT_CALLER_UID")?,
+            caller_gid: required_number("LAYERX_HUMAN_RECIPIENT_CALLER_GID")?,
+            deadline: Duration::from_secs(required_number("LAYERX_HUMAN_RECIPIENT_DEADLINE_SECONDS")?),
+        }).map_err(|_| "the recipient listener cannot bind".to_owned())?;
+    let server = HumanComponentServer::new_maintained(
         backend,
         Duration::from_secs(required_number(
             "LAYERX_HUMAN_MAINTENANCE_INTERVAL_SECONDS",
@@ -41,9 +48,19 @@ fn run() -> Result<(), String> {
         queue_capacity: required_number("LAYERX_HUMAN_COMPONENT_QUEUE_CAPACITY")?,
         limits: layerx_human_service::server::default_component_limits(),
     })
-    .map_err(|_| "the privileged component listener cannot bind".to_owned())?
-    .run()
-    .map_err(|_| "the privileged component listener failed".to_owned())
+    .map_err(|_| "the privileged component listener cannot bind".to_owned())?;
+    let shutdown = server.shutdown();
+    let recipient_shutdown = shutdown.clone();
+    let worker = std::thread::spawn(move || {
+        let result = recipient.run(&recipient_shutdown);
+        recipient_shutdown.request();
+        result
+    });
+    let result = server.run();
+    shutdown.request();
+    worker.join().map_err(|_| "the recipient listener panicked".to_owned())?
+        .map_err(|_| "the recipient listener failed".to_owned())?;
+    result.map_err(|_| "the privileged component listener failed".to_owned())
 }
 
 fn required(name: &str) -> Result<String, String> {

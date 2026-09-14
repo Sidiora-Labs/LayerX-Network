@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+layerx-identity-binding.workspace = true
 layerx-platform-internal.workspace = true
 base64.workspace = true
 getrandom.workspace = true
@@ -15,6 +16,7 @@ layerx-types.workspace = true
 layerx-crypto.workspace = true
 layerx-proof.workspace = true
 layerx-client.workspace = true
+layerx-identity-binding.workspace = true
 layerx-sdk.workspace = true
 layerx-paxeer-client.workspace = true
 layerx-wire.workspace = true
@@ -27,7 +29,7 @@ k256.workspace = true
 subtle.workspace = true
 zeroize.workspace = true
 rustls = { version = "0.23.32", default-features = false, features = ["ring", "std", "tls12"] }
-rustix.workspace = true
+rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 layerx-human-test-support = { path = "../layerx-human-test-support" }

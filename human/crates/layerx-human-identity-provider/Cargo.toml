@@ -18,6 +18,7 @@ rustix = { workspace = true, features = ["fs"] }
 signal-hook = "=0.3.18"
 
 [dev-dependencies]
+layerx-identity-binding.workspace = true
 base64.workspace = true
 tempfile = "=3.27.0"
 

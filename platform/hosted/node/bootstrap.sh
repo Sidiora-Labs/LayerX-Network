@@ -603,6 +603,9 @@ REGISTRATION_REQUEST="$GENESIS_DIR/paxeer-registration-request.lxrr"
 for artifact in "$MANIFEST" "$SNAPSHOT" "$REGISTRATION_REQUEST" "$GENESIS_DIR/paxeer-deployment-descriptor.lxgd"; do
     [ -s "$artifact" ] || fail "genesis artifact missing: $artifact"
 done
+if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ]; then
+    [ -s "$GENESIS_DIR/genesis-handover-trust.lxt" ] || fail "genesis handover trust artifact missing"
+fi
 RETAINED_REQUEST="$GENESIS_DIR/genesis-request.lxgb"
 mv "$REQUEST" "$RETAINED_REQUEST"
 [ "$(stat -c %s "$REGISTRATION_REQUEST")" -eq 73 ] || fail "registration request has an unexpected length"
@@ -700,6 +703,7 @@ LAYERX_AUTHORITY_ADDRESS=127.0.0.1
 LAYERX_AUTHORITY_PORT=$REPLICA_PORT
 EOF
 if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ]; then
+    printf 'LAYERX_NODE_GENESIS_HANDOVER_TRUST=%s/genesis-handover-trust.lxt\nLAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY=%s\n' "$GENESIS_DIR" "$HANDOVER_AUTHORITY" >> "$DATA_DIR/node.env"
     printf 'LAYERX_AUTHORITY_GENESIS_MANIFEST=%s\nLAYERX_AUTHORITY_AVAILABILITY_LOG=%s/checkpoints/da-bodies.log\n' "$MANIFEST" "$DATA_DIR" >> "$DATA_DIR/replica.env"
     if [ -n "$SETTLEMENT_ENV" ]; then
         printf 'LAYERX_NODE_SETTLEMENT_ENV=%s\n' "$SETTLEMENT_ENV" >> "$DATA_DIR/replica.env"

@@ -284,6 +284,7 @@ fn publish_mcp_binding(
         .get(&configured.peer_uid)
         .ok_or("LAYERX_AGENT_MCP_PEER_UID names no configured human peer")?;
     let peer = HumanPeer {
+        subject: None,
         uid: configured.peer_uid,
         principal: principal.clone(),
         tenant: tenant.clone(),
@@ -407,6 +408,7 @@ fn connect_human_authority(
     for (uid, (principal, tenant)) in peers {
         authority
             .registry(&HumanPeer {
+                subject: None,
                 uid: *uid,
                 principal: principal.clone(),
                 tenant: tenant.clone(),

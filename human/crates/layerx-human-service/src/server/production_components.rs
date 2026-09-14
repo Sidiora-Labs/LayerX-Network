@@ -199,6 +199,7 @@ pub struct ProductionComponentsConfig {
     agent_limits: Limits,
     security: SecurityProviderConfig,
     identity: IdentityProviderConfig,
+    identity_binding: layerx_identity_binding::Config,
     movement: MovementProviderConfig,
     kms_provider_reference: String,
     kms_endpoint: SocketAddr,
@@ -214,6 +215,8 @@ pub struct ProductionComponentsConfig {
     agent_authority: AuthorityRef,
     agent_timestamp_span_seconds: u64,
     agent_fee_limit: u128,
+    onboarding_sponsor_principal: crate::store::PrincipalId,
+    onboarding_initial_funding: u128,
     evm_gas_limit: u64,
     evm_max_fee_per_gas: u64,
     evm_max_priority_fee_per_gas: u64,
@@ -266,6 +269,7 @@ impl ProductionComponentsConfig {
                 deadline: Duration::from_secs(number("LAYERX_HUMAN_SECURITY_DEADLINE_SECONDS")?),
                 maximum_frame_bytes: number("LAYERX_HUMAN_SECURITY_MAX_FRAME_BYTES")?,
             },
+            identity_binding: principal_binding_configuration()?,
             identity: IdentityProviderConfig {
                 socket: absolute("LAYERX_HUMAN_IDENTITY_SOCKET")?,
                 deadline: Duration::from_secs(number("LAYERX_HUMAN_IDENTITY_DEADLINE_SECONDS")?),
@@ -297,6 +301,10 @@ impl ProductionComponentsConfig {
                 .map_err(|_| "LAYERX_HUMAN_AGENT_AUTHORITY is invalid".to_owned())?,
             agent_timestamp_span_seconds: number("LAYERX_HUMAN_AGENT_TIMESTAMP_SPAN_SECONDS")?,
             agent_fee_limit: number("LAYERX_HUMAN_AGENT_FEE_LIMIT")?,
+            onboarding_sponsor_principal: crate::store::PrincipalId::new(
+                required("LAYERX_HUMAN_ONBOARDING_SPONSOR_PRINCIPAL")?,
+            ).map_err(|_| "invalid onboarding sponsor principal".to_owned())?,
+            onboarding_initial_funding: number("LAYERX_HUMAN_ONBOARDING_INITIAL_FUNDING")?,
             evm_gas_limit: number("LAYERX_HUMAN_EVM_GAS_LIMIT")?,
             evm_max_fee_per_gas: number("LAYERX_HUMAN_EVM_MAX_FEE_PER_GAS")?,
             evm_max_priority_fee_per_gas: number("LAYERX_HUMAN_EVM_MAX_PRIORITY_FEE_PER_GAS")?,
@@ -362,6 +370,8 @@ pub struct ProductionComponents {
     agent_authority: AuthorityRef,
     agent_timestamp_span_seconds: u64,
     agent_fee_limit: u128,
+    onboarding_sponsor_principal: crate::store::PrincipalId,
+    onboarding_initial_funding: u128,
     evm_gas_limit: u64,
     evm_max_fee_per_gas: u64,
     evm_max_priority_fee_per_gas: u64,
@@ -381,6 +391,16 @@ pub struct ProductionComponents {
 #[path = "production_rotation.rs"]
 mod owner_rotation;
 
+#[path = "onboarding_sponsor.rs"]
+mod onboarding_sponsor;
+pub use onboarding_sponsor::onboarding_sponsor_command;
+
+#[path = "production_recipient.rs"]
+mod recipient;
+pub use recipient::{RecipientServer, RecipientServerConfig};
+
+#[path = "production_onboarding.rs"]
+mod onboarding_native;
 #[path = "production_owner.rs"]
 mod owner;
 use owner::resolve_principal_owner;
@@ -398,7 +418,7 @@ impl ProductionComponents {
             PurposePresetCatalog::from_json(&read_nonempty(&config.agent_purpose_catalog)?)
                 .map_err(|_| "agent purpose catalog was refused".to_owned())?;
         let store =
-            production_principal_store(config.store_root, config.retention, config.tenancy_digest)?;
+            production_principal_store(config.store_root, config.retention, config.tenancy_digest, config.identity_binding)?;
         let auth_index = production_auth_index(config.auth_index_root, config.auth_index_key)?;
         let agent_contract = layerx_sdk::Client::daemon(
             config.agent_socket.clone(),
@@ -470,6 +490,8 @@ impl ProductionComponents {
             agent_authority: config.agent_authority,
             agent_timestamp_span_seconds: config.agent_timestamp_span_seconds,
             agent_fee_limit: config.agent_fee_limit,
+            onboarding_sponsor_principal: config.onboarding_sponsor_principal,
+            onboarding_initial_funding: config.onboarding_initial_funding,
             evm_gas_limit: config.evm_gas_limit,
             evm_max_fee_per_gas: config.evm_max_fee_per_gas,
             evm_max_priority_fee_per_gas: config.evm_max_priority_fee_per_gas,
@@ -665,6 +687,9 @@ impl HumanApiComponents for ProductionComponents {
         .map_err(|error| auth_failure(&error))?;
         let principal = context.principal.clone();
         let session_id = context.session_id.clone();
+        if request.operation.name == "onboarding.resume" {
+            return self.execute_onboarding_resume(&request, &principal);
+        }
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
         let mut scope = store
             .principal(&principal)
@@ -757,7 +782,7 @@ impl ComponentMaintenance for ProductionComponents {
             .active_principals(observed_at)
             .map_err(|error| auth_failure(&error))?;
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-        for principal in store.tenancy().principals() {
+        for principal in store.known_principals().map_err(|_| ApiFailure::upstream_degraded())? {
             if !principals.contains(&principal) {
                 principals.push(principal);
             }
@@ -2899,48 +2924,9 @@ impl ProductionComponents {
     fn execute_onboarding_resume(
         &self,
         request: &ScopedRequest<'_>,
-        scope: &mut crate::store::PrincipalScope<'_>,
+        principal: &crate::store::PrincipalId,
     ) -> Result<BackendResponse, ApiFailure> {
-        let mut journey = OnboardingJourney::load(scope)
-            .map_err(|_| ApiFailure::upstream_degraded())?
-            .ok_or_else(ApiFailure::not_found)?;
-        let status = self
-            .custody
-            .resume_onboarding_local(&mut journey, scope, now()?)
-            .map_err(|_| ApiFailure::upstream_degraded())?;
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-        let sequence = agent
-            .account_sequence(&self.agent_actor, &self.agent_authority)
-            .map_err(|_| ApiFailure::upstream_degraded())?;
-        let registry = agent.registry().clone();
-        let mut engine = journey
-            .start_durable_engine(
-                scope,
-                &registry,
-                self.agent_actor.clone(),
-                self.agent_authority.clone(),
-                sequence,
-                now()?,
-                now()?
-                    .checked_add(self.agent_timestamp_span_seconds)
-                    .ok_or_else(ApiFailure::unavailable)?,
-                self.agent_fee_limit,
-                now()?,
-            )
-            .map_err(|_| ApiFailure::upstream_degraded())?;
-        let trace =
-            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
-        let _ = super::executor::poll_once_ready(engine.advance(
-            scope,
-            &self.agent_contract,
-            &mut *agent,
-            &self.custody,
-            &registry,
-            &trace,
-            now()?,
-        ))
-        .map_err(|_| ApiFailure::upstream_degraded())?
-        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let status = self.advance_native_onboarding(principal, &request.trace, now()?)?;
         Ok(BackendResponse {
             result: identity_dispatch::onboarding_status(&status),
             session: None,
@@ -4560,7 +4546,9 @@ impl ProductionComponents {
             let mut scope = store
                 .principal(&provisioned.principal)
                 .map_err(|_| ApiFailure::unavailable())?;
-            let journey = OnboardingJourney::start(&mut scope, &provisioned.onboarding, now)
+            let mut journey = OnboardingJourney::start(&mut scope, &provisioned.onboarding, now)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+            self.custody.resume_onboarding_local(&mut journey, &mut scope, now)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
             identity_dispatch::update_profile(
                 &mut scope,
@@ -4709,6 +4697,10 @@ impl ProductionComponents {
                 .auth_index
                 .resolve_assertion(assertion_id, now)
                 .map_err(|error| auth_failure(&error))?;
+            let onboarding = self.advance_native_onboarding(&principal, &request.trace, now)?;
+            if onboarding.state() != crate::onboarding::OnboardingState::Complete {
+                return Err(ApiFailure::forbidden());
+            }
             let (device_label, device_platform) = browser_device(request)?;
             let idempotency = required_idempotency(request)?;
             let action = action_key(idempotency);
@@ -4734,14 +4726,15 @@ impl ProductionComponents {
                     },
                 )
                 .map_err(|error| auth_api_failure(&error))?;
-            let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut agent = self.principal_agent(&scope)?;
+            let owner = owner::resolve_principal_owner(self, &scope, &mut agent)?;
             let registry = agent.registry().clone();
             let (intent, grant_id) = browser_grant_intent(
                 &mut scope,
                 &mut agent,
                 &prepared,
                 recovery_seed,
-                &self.agent_actor,
+                &owner.actor,
                 action,
             )?;
             let trace =
@@ -4751,8 +4744,8 @@ impl ProductionComponents {
                 &self.agent_contract,
                 &self.custody,
                 &trace,
-                self.agent_actor.clone(),
-                self.agent_authority.clone(),
+                owner.actor,
+                owner.authority,
                 super::agent_creation::CreationBounds {
                     timestamp_span: self.agent_timestamp_span_seconds,
                     fee_limit: self.agent_fee_limit,
@@ -4822,7 +4815,6 @@ impl ProductionComponents {
             "profile.get" => Self::execute_profile_get(scope),
             "profile.update" => Self::execute_profile_update(request, scope),
             "onboarding.status" => Self::execute_onboarding_status(scope),
-            "onboarding.resume" => self.execute_onboarding_resume(request, scope),
             "binding.statement" => self.execute_binding_statement(request, scope),
             "binding.submit" => self.execute_binding_submit(request, scope),
             "binding.status" => Self::execute_binding_status(scope),
@@ -5112,6 +5104,9 @@ fn validate_production_configuration(config: &ProductionComponentsConfig) -> Res
         || config.evm_max_priority_fee_per_gas > config.evm_max_fee_per_gas
     {
         return Err("EVM execution gas and fee bounds are invalid".to_owned());
+    }
+    if config.onboarding_initial_funding == 0 {
+        return Err("onboarding initial funding must be positive".to_owned());
     }
     if config.agent_timestamp_span_seconds == 0 || config.agent_fee_limit == 0 {
         return Err("agent preparation bounds must be non-zero".to_owned());
@@ -5426,8 +5421,12 @@ fn production_principal_store(
     root: PathBuf,
     retention: RetentionPolicy,
     tenancy_digest: [u8; 32],
+    binding: layerx_identity_binding::Config,
 ) -> Result<Arc<Mutex<PrincipalStore>>, String> {
-    PrincipalStore::open(root, retention, TenancyDigest::new(tenancy_digest))
+    let provider = layerx_identity_binding::Client::new(binding)
+        .map_err(|_| "identity binding provider configuration refused".to_owned())?;
+    PrincipalStore::open_with_authority(root, retention, TenancyDigest::new(tenancy_digest),
+        Arc::new(IdentityTenancy(provider)))
         .map(|store| Arc::new(Mutex::new(store)))
         .map_err(|_| "principal store refused startup".to_owned())
 }
@@ -5473,4 +5472,27 @@ fn validate_resumed_session(
         return Err(ApiFailure::upstream_degraded());
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct IdentityTenancy(layerx_identity_binding::Client);
+
+impl crate::store::PrincipalTenancyAuthority for IdentityTenancy {
+    fn tenant_for(&self, principal: &crate::store::PrincipalId) -> Result<crate::store::AgentTenantId, crate::store::StoreError> {
+        let binding = self.0.lookup(principal.as_str())?;
+        if binding.principal() != principal.as_str() {
+            return Err(crate::store::StoreError::InvalidPrincipal);
+        }
+        crate::store::AgentTenantId::new(binding.agent_tenant())
+    }
+}
+
+fn principal_binding_configuration() -> Result<layerx_identity_binding::Config, String> {
+    Ok(layerx_identity_binding::Config {
+        socket: absolute("LAYERX_HUMAN_IDENTITY_BINDING_SOCKET")?,
+        tenant: required("LAYERX_HUMAN_IDENTITY_BINDING_TENANT")?,
+        peer_uid: number("LAYERX_HUMAN_IDENTITY_BINDING_PEER_UID")?,
+        peer_gid: number("LAYERX_HUMAN_IDENTITY_BINDING_PEER_GID")?,
+        deadline: Duration::from_secs(number("LAYERX_HUMAN_IDENTITY_BINDING_DEADLINE_SECONDS")?),
+    })
 }
