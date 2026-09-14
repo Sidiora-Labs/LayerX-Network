@@ -1,12 +1,11 @@
 use std::io::{Read as _, Write as _};
 
 fn main() -> std::process::ExitCode {
-    match run() {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(_) => {
-            eprintln!("Human onboarding sponsor request refused");
-            std::process::ExitCode::FAILURE
-        }
+    if run().is_ok() {
+        std::process::ExitCode::SUCCESS
+    } else {
+        eprintln!("Human onboarding sponsor request refused");
+        std::process::ExitCode::FAILURE
     }
 }
 
