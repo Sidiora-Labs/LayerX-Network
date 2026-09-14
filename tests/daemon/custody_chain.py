@@ -137,7 +137,7 @@ def retain_custody_proofs(work, origins, ca, identity, vault):
 
 @contextlib.contextmanager
 def owned_chain(work, artifacts):
-    with tempfile.TemporaryDirectory(prefix='lxp-custody-paxd-', dir='/tmp') as temporary:
+    with tempfile.TemporaryDirectory(prefix='lxp-custody-paxd-') as temporary:
         private = Path(temporary)
         ports, reservations = [], []
         for _ in range(7):
