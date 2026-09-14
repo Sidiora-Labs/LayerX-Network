@@ -279,6 +279,7 @@ static lxp_result recover_ranged_batch_authorities(
     lxp_daemon_process *process);
 static lxp_result recover_prepared_batch_wal(
     lxp_daemon_process *process, lxp_daemon_protocol_owner *owner);
+static lxp_result replicate_authority_history(lxp_daemon_process *process);
 
 static volatile sig_atomic_t stop_requested;
 
@@ -1879,7 +1880,8 @@ static lxp_result replay_canonical_after_snapshot(
     if (process == NULL || owner == NULL || owner->kernel != &process->kernel ||
         owner->feed_store.canonical_log != &process->canonical_log)
         return LXP_ERR_NON_CANONICAL;
-    status = recover_prepared_batch_wal(process, owner);
+    status = replicate_authority_history(process);
+    if (status == LXP_OK) status = recover_prepared_batch_wal(process, owner);
     if (status == LXP_OK) status = reconcile_snapshot_evidence(process);
     if (status != LXP_OK) return status;
     expected_sequence = process->state.next_sequence;
