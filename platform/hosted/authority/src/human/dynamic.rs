@@ -6,7 +6,6 @@ use super::{
 use layerx_identity_binding::{Binding, Client, Config as BindingConfig};
 use layerx_types::{
     account::AccountId,
-    ids::Did,
     payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry},
 };
 use layerx_wire::activity::{decode_signed, encode_signed, encode_unsigned, Activity};
@@ -21,13 +20,15 @@ pub(super) fn binding_client(tenant: &str) -> Result<Option<Client>, String> {
         "LAYERX_AUTHORITY_IDENTITY_BINDING_UID",
         "LAYERX_AUTHORITY_IDENTITY_BINDING_GID",
     ];
-    let values = names.map(|name| std::env::var(name).ok());
-    if values.iter().all(Option::is_none) {
+    if names.iter().all(|name| std::env::var_os(name).is_none()) {
         return Ok(None);
     }
-    let [Some(socket), Some(uid), Some(gid)] = values else {
-        return Err("identity binding configuration is incomplete".to_owned());
-    };
+    let values = names.map(|name| {
+        std::env::var(name)
+            .map_err(|_| "identity binding configuration is incomplete or invalid".to_owned())
+    });
+    let [socket, uid, gid] = values;
+    let (socket, uid, gid) = (socket?, uid?, gid?);
     Client::new(BindingConfig {
         socket: PathBuf::from(socket),
         tenant: tenant.to_owned(),
