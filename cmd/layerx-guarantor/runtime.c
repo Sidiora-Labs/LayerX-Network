@@ -310,6 +310,20 @@ static lxp_result load_schedule(gp_runtime *process)
                                       &process->fees);
 }
 
+static lxp_result compare_signed(const lxp_receipt *receipt, lxp_byte_span published,
+                                  lxp_arena *arena)
+{
+    lxp_byte_span encoded;
+    size_t mark = lxp_arena_mark(arena);
+    lxp_result status = lxp_receipt_encode(receipt, true, arena, &encoded);
+    if (status == LXP_OK &&
+        (encoded.length != published.length ||
+         lxp_ct_memcmp(encoded.bytes, published.bytes, published.length) != 0))
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+    lxp_result reset_status = lxp_arena_reset(arena, mark);
+    return reset_status == LXP_OK ? status : reset_status;
+}
+
 static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_sequence,
                                           const uint8_t *canonical_activity, size_t activity_length,
                                           const uint8_t *canonical_receipt, size_t receipt_length,
@@ -324,7 +338,6 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     lxp_authority_resolved authority;
     lxp_transfer_allowance allowance;
     lxp_kernel_execution execution;
-    lxp_byte_span encoded_receipt;
     uint8_t activity_id[32];
     lxp_result status;
     if (process == NULL || canonical_activity == NULL || canonical_receipt == NULL ||
@@ -448,11 +461,8 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     (void)memset(receipt, 0, sizeof(*receipt));
     status = lxp_kernel_execute_activity(&process->kernel, activity, &execution, receipt);
     if (status == LXP_OK)
-        status = lxp_receipt_encode(receipt, true, &process->execution_arena, &encoded_receipt);
-    if (status == LXP_OK &&
-        (encoded_receipt.length != receipt_length ||
-         lxp_ct_memcmp(encoded_receipt.bytes, canonical_receipt, receipt_length) != 0))
-        status = LXP_FATAL_REPLAY_DIVERGENCE;
+        status = compare_signed(receipt, (lxp_byte_span){canonical_receipt, receipt_length},
+                                 &process->execution_arena);
     return status;
 }
 static lxp_result read_artifact(const char *path, size_t maximum, uint8_t **bytes, size_t *length)
