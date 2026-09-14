@@ -200,7 +200,7 @@ fn submit(
     let expected = checked(activity_id(&activity))?;
     match checked(client.submit_signed(&state.module_registry, public, 402, 1, canonical))? {
         layerx_client::submit::Submission::Acknowledged(ack) => {
-            assert_eq!(ack.activity_id(), expected)
+            assert_eq!(ack.activity_id(), expected);
         }
         layerx_client::submit::Submission::Unknown(_) => {
             return Err("unknown Programs admission".into())
@@ -217,18 +217,98 @@ fn submit(
     assert_eq!(field(&value, "activity_id")?, hex::encode(&expected));
     checked(hex::decode(field(&value, "receipt")?))
 }
-fn main() -> Result<()> {
-    let args: Vec<_> = std::env::args().collect();
-    if args.len() != 4 {
-        return Err("usage: native_handover_programs SOCKET DIRECTORY CONFIG".into());
+fn call_payload(
+    program: [u8; 32],
+    account: [u8; 32],
+    asset: [u8; 32],
+    seed: &[u8],
+) -> Result<Vec<u8>> {
+    let mut calldata = vec![1, 1];
+    calldata.extend_from_slice(&u16::try_from(seed.len())?.to_be_bytes());
+    calldata.extend_from_slice(seed);
+    for field in [&account, &asset, &account, &account] {
+        calldata.extend_from_slice(field);
     }
-    let socket = Path::new(&args[1]);
-    let directory = Path::new(&args[2]);
-    let config: Value = serde_json::from_slice(&std::fs::read(&args[3])?)?;
-    let endpoint = field(&config, "endpoint")?;
-    let token = std::fs::read_to_string(field(&config, "token_file")?)?;
-    let replica_token = std::fs::read_to_string(field(&config, "replica_token_file")?)?;
-    let ca = std::fs::read(field(&config, "ca_file")?)?;
+    calldata.extend_from_slice(&1_u128.to_be_bytes());
+    calldata.extend_from_slice(&[0x72; 32]);
+    calldata.extend_from_slice(&[0x73; 32]);
+    let mut capabilities = vec![0, 4, 3, 5];
+    capabilities.extend_from_slice(&asset);
+    capabilities.extend_from_slice(&account);
+    capabilities.extend_from_slice(&1_u128.to_be_bytes());
+    capabilities.extend_from_slice(&[7, 8]);
+    checked(
+        NativeProgramCall {
+            program_id: layerx_types::intent::ProgramId::new(program),
+            guest_abi: 2,
+            entrypoint: b"layerx_call",
+            calldata: &calldata,
+            capabilities: &capabilities,
+            access_declaration: b"LayerX/programs/access-declaration/v1\0\0",
+            response_capacity: 1024,
+            resources: Resources([
+                1_000_000, 16_777_216, 1_048_576, 1_048_576, 64, 1_048_576, 4096,
+            ]),
+        }
+        .encode(),
+    )
+}
+
+fn verify_call_artifacts(
+    receipt: &[u8],
+    activity: &layerx_wire::activity::Activity,
+    key: [u8; 32],
+    service: (&str, &str),
+    program: [u8; 32],
+) -> Result<()> {
+    let (endpoint, token) = service;
+    let signed_receipt = checked(verify_sequencer_signature(receipt, key))?;
+    let protocol = signed_receipt.protocol().ok_or("CALL receipt")?;
+    assert_eq!(protocol.result_code(), 0);
+    assert_eq!(protocol.activity_id(), checked(activity_id(activity))?);
+    let digest = checked(receipt_digest(&checked(encode_unsigned(&signed_receipt))?))?;
+    let artifacts = wait_get(
+        endpoint,
+        token,
+        &format!(
+            "/v1/programs/activities/{}/artifacts?receipt_digest={}",
+            hex::encode(&protocol.activity_id()),
+            hex::encode(&digest)
+        ),
+    )?;
+    checked(verify_program_execution(
+        receipt,
+        &checked(hex::decode(field(&artifacts, "terminal_payload")?))?,
+        &checked(hex::decode(field(&artifacts, "call_graph")?))?,
+        ProgramExecutionExpectation {
+            sequencer_public_key: key,
+            previous_state_root: protocol.previous_state_root(),
+            activity_id: checked(activity_id(activity))?,
+            payload_hash: activity.payload_hash(),
+            program_id: program,
+            guest_abi_version: 2,
+        },
+    ))?;
+    Ok(())
+}
+
+struct Journey {
+    client: Client,
+    route: NativeReadRoute,
+    reader: LayerxdProgramBalanceReader,
+    program: [u8; 32],
+    key: SigningKey,
+    did: Did,
+    endpoint: String,
+    token: String,
+    sequencer: [u8; 32],
+}
+
+fn setup(socket: &Path, directory: &Path, config: &Value) -> Result<Journey> {
+    let endpoint = field(config, "endpoint")?;
+    let token = std::fs::read_to_string(field(config, "token_file")?)?;
+    let replica_token = std::fs::read_to_string(field(config, "replica_token_file")?)?;
+    let ca = std::fs::read(field(config, "ca_file")?)?;
     let key = SigningKey::from_bytes(&[0x11; 32]);
     let public = key.verifying_key().to_bytes();
     let did = checked(Did::new(
@@ -244,13 +324,13 @@ fn main() -> Result<()> {
     ))?;
     route = checked(route.with_protected_finality(&directory.join("handover-finality.conf")))?;
     route = checked(route.with_protected_genesis(&directory.join("handover-genesis.bin")))?;
-    let stale = checked(route.signed_authority())?.ok_or("missing history")?;
+    let preceding_history = checked(route.signed_authority())?.ok_or("missing history")?;
     let protected = checked(ProtocolDeploymentVerifier::from_protected_history(
-        Path::new(field(&config, "trust_file")?),
+        Path::new(field(config, "trust_file")?),
         300_000,
     ))?;
-    let stale_verifier = checked(protected.with_signed_history(&stale))?;
-    let wasm = std::fs::read(field(&config, "wasm_file")?)?;
+    let stale_verifier = checked(protected.with_signed_history(&preceding_history))?;
+    let wasm = std::fs::read(field(config, "wasm_file")?)?;
     let program = [0x71; 32];
     let deploy = NativeProgramDeploy {
         program_id: layerx_types::intent::ProgramId::new(program),
@@ -274,16 +354,16 @@ fn main() -> Result<()> {
     let history = checked(route.signed_authority())?.ok_or("missing deployed history")?;
     assert!(stale_verifier.verify_historical_deployment(&proof).is_err());
     let verifier = checked(protected.with_signed_history(&history))?;
-    let verified = checked(verifier.verify_historical_deployment(&proof))?;
-    assert_eq!(verified.program().bytes(), program);
+    let evidence = checked(verifier.verify_historical_deployment(&proof))?;
+    assert_eq!(evidence.program().bytes(), program);
     let mut registry = Registry::new();
-    checked(registry.record_verified_deployment(&verified))?;
-    let replica_id = checked(hex::decode_digest(field(&config, "replica_id")?))?;
+    checked(registry.record_verified_deployment(&evidence))?;
+    let replica_id = checked(hex::decode_digest(field(config, "replica_id")?))?;
     let mut reader = checked(LayerxdProgramBalanceReader::connect(
         endpoint,
         token.clone(),
         ProgramAuthority {
-            endpoint: field(&config, "replica_endpoint")?,
+            endpoint: field(config, "replica_endpoint")?,
             authorization: replica_token,
             replica_id,
             ca_der: &ca,
@@ -296,6 +376,44 @@ fn main() -> Result<()> {
         .is_err());
     checked(reader.refresh_authority(&history))?;
     checked(reader.read(checked(ProgramId::new(program))?, now()?))?;
+    let sequencer = history
+        .intervals()
+        .last()
+        .ok_or("missing current authority")?
+        .public_key();
+    Ok(Journey {
+        client,
+        route,
+        reader,
+        program,
+        key,
+        did,
+        endpoint: endpoint.to_owned(),
+        token,
+        sequencer,
+    })
+}
+
+fn main() -> Result<()> {
+    let args: Vec<_> = std::env::args().collect();
+    if args.len() != 4 {
+        return Err("usage: native_handover_programs SOCKET DIRECTORY CONFIG".into());
+    }
+    let socket = Path::new(&args[1]);
+    let directory = Path::new(&args[2]);
+    let config: Value = serde_json::from_slice(&std::fs::read(&args[3])?)?;
+    let Journey {
+        mut client,
+        mut route,
+        mut reader,
+        program,
+        key,
+        did,
+        endpoint,
+        token,
+        sequencer,
+    } = setup(socket, directory, &config)?;
+    let public = key.verifying_key().to_bytes();
     let asset = checked(hex::decode_digest(
         "b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898",
     ))?;
@@ -311,12 +429,8 @@ fn main() -> Result<()> {
     registration.extend_from_slice(&u32::try_from(seed.len())?.to_be_bytes());
     registration.extend_from_slice(seed);
     let registration = signed(&mut client, &key, &did, 6, &registration)?;
-    let registered = submit(&mut client, &registration, &did, public, endpoint, &token)?;
-    let key = history
-        .intervals()
-        .last()
-        .ok_or("missing current authority")?
-        .public_key();
+    let registered = submit(&mut client, &registration, &did, public, &endpoint, &token)?;
+    let key = sequencer;
     assert_eq!(
         checked(verify_sequencer_signature(&registered, key))?
             .protocol()
@@ -324,35 +438,7 @@ fn main() -> Result<()> {
             .result_code(),
         0
     );
-    let mut calldata = vec![1, 1];
-    calldata.extend_from_slice(&u16::try_from(seed.len())?.to_be_bytes());
-    calldata.extend_from_slice(seed);
-    for field in [&account, &asset, &account, &account] {
-        calldata.extend_from_slice(field);
-    }
-    calldata.extend_from_slice(&1_u128.to_be_bytes());
-    calldata.extend_from_slice(&[0x72; 32]);
-    calldata.extend_from_slice(&[0x73; 32]);
-    let mut capabilities = vec![0, 4, 3, 5];
-    capabilities.extend_from_slice(&asset);
-    capabilities.extend_from_slice(&account);
-    capabilities.extend_from_slice(&1_u128.to_be_bytes());
-    capabilities.extend_from_slice(&[7, 8]);
-    let call = checked(
-        NativeProgramCall {
-            program_id: layerx_types::intent::ProgramId::new(program),
-            guest_abi: 2,
-            entrypoint: b"layerx_call",
-            calldata: &calldata,
-            capabilities: &capabilities,
-            access_declaration: b"LayerX/programs/access-declaration/v1\0\0",
-            response_capacity: 1024,
-            resources: Resources([
-                1_000_000, 16_777_216, 1_048_576, 1_048_576, 64, 1_048_576, 4096,
-            ]),
-        }
-        .encode(),
-    )?;
+    let call = call_payload(program, account, asset, seed)?;
     let canonical = signed(
         &mut client,
         &SigningKey::from_bytes(&[0x11; 32]),
@@ -360,37 +446,11 @@ fn main() -> Result<()> {
         3,
         &call,
     )?;
-    let receipt = submit(&mut client, &canonical, &did, public, endpoint, &token)?;
+    let receipt = submit(&mut client, &canonical, &did, public, &endpoint, &token)?;
     checked(client.reconnect())?;
     let state = checked(client.preparation_state(&did, 403))?;
     let activity = checked(decode_signed(&canonical, &state.module_registry))?;
-    let signed_receipt = checked(verify_sequencer_signature(&receipt, key))?;
-    let protocol = signed_receipt.protocol().ok_or("CALL receipt")?;
-    assert_eq!(protocol.result_code(), 0);
-    assert_eq!(protocol.activity_id(), checked(activity_id(&activity))?);
-    let digest = checked(receipt_digest(&checked(encode_unsigned(&signed_receipt))?))?;
-    let artifacts = wait_get(
-        endpoint,
-        &token,
-        &format!(
-            "/v1/programs/activities/{}/artifacts?receipt_digest={}",
-            hex::encode(&protocol.activity_id()),
-            hex::encode(&digest)
-        ),
-    )?;
-    checked(verify_program_execution(
-        &receipt,
-        &checked(hex::decode(field(&artifacts, "terminal_payload")?))?,
-        &checked(hex::decode(field(&artifacts, "call_graph")?))?,
-        ProgramExecutionExpectation {
-            sequencer_public_key: key,
-            previous_state_root: protocol.previous_state_root(),
-            activity_id: checked(activity_id(&activity))?,
-            payload_hash: activity.payload_hash(),
-            program_id: program,
-            guest_abi_version: 2,
-        },
-    ))?;
+    verify_call_artifacts(&receipt, &activity, key, (&endpoint, &token), program)?;
     let final_history = checked(route.signed_authority())?.ok_or("missing CALL history")?;
     assert!(reader
         .read(checked(ProgramId::new(program))?, now()?)
@@ -406,7 +466,7 @@ fn main() -> Result<()> {
             .amount,
         1
     );
-    let replay = submit(&mut client, &canonical, &did, public, endpoint, &token)?;
+    let replay = submit(&mut client, &canonical, &did, public, &endpoint, &token)?;
     assert_eq!(replay, receipt);
     let after = checked(reader.read(checked(ProgramId::new(program))?, now()?))?;
     assert_eq!(before, after);

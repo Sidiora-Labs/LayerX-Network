@@ -785,6 +785,43 @@ fn native_handover_sources() -> Result<Option<(PathBuf, PathBuf)>, String> {
     }
 }
 
+struct ProgramAuthorityBoot {
+    verifier: ProtocolDeploymentVerifier,
+    registry: Registry,
+    signed_history: Option<layerx_proof::signed_authority::SignedAuthorityHistory>,
+}
+
+fn program_authority_boot(
+    config: &Config,
+    native: &mut Option<NativeReadRoute>,
+) -> Result<ProgramAuthorityBoot, String> {
+    let verifier = ProtocolDeploymentVerifier::from_protected_history(
+        Path::new(&config.sequencer_trust_history),
+        config.staleness_ms,
+    )
+    .map_err(|error| format!("agent deployment verifier is invalid: {error}"))?;
+    let signed_history = native
+        .as_mut()
+        .map(NativeReadRoute::signed_authority)
+        .transpose()
+        .map_err(|error| format!("program history unavailable: {error:?}"))?
+        .flatten();
+    let admission_verifier = signed_history
+        .as_ref()
+        .map(|history| verifier.with_signed_history(history))
+        .transpose()
+        .map_err(|error| format!("program admission authority refused: {error:?}"))?;
+    let registry = load_registry(
+        Path::new(&config.deployment_journal),
+        admission_verifier.as_ref().unwrap_or(&verifier),
+    )?;
+    Ok(ProgramAuthorityBoot {
+        verifier,
+        registry,
+        signed_history,
+    })
+}
+
 fn serve(config: Config) -> Result<(), String> {
     let mcp = mcp_enrolment()?
         .map(|enrolment| mcp_boot(&config, enrolment))
@@ -825,26 +862,11 @@ fn serve(config: Config) -> Result<(), String> {
         })
         .transpose()?;
     let human = start_human_owner(mcp)?;
-    let verifier = ProtocolDeploymentVerifier::from_protected_history(
-        Path::new(&config.sequencer_trust_history),
-        config.staleness_ms,
-    )
-    .map_err(|error| format!("agent deployment verifier is invalid: {error}"))?;
-    let signed_history = native
-        .as_mut()
-        .map(NativeReadRoute::signed_authority)
-        .transpose()
-        .map_err(|error| format!("program history unavailable: {error:?}"))?
-        .flatten();
-    let admission_verifier = signed_history
-        .as_ref()
-        .map(|history| verifier.with_signed_history(history))
-        .transpose()
-        .map_err(|error| format!("program admission authority refused: {error:?}"))?;
-    let registry = load_registry(
-        Path::new(&config.deployment_journal),
-        admission_verifier.as_ref().unwrap_or(&verifier),
-    )?;
+    let ProgramAuthorityBoot {
+        verifier,
+        registry,
+        signed_history,
+    } = program_authority_boot(&config, &mut native)?;
     let reader = LayerxdProgramBalanceReader::connect(
         &config.node_endpoint,
         config.node_bearer,
