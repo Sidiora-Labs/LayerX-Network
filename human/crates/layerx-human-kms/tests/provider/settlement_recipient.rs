@@ -43,13 +43,13 @@ fn recipient_binding_uses_real_custody_and_survives_restart() -> Result<()> {
     };
     let signature = sign(&authorization)?;
     checked(authorization.verify_signature(&signature))?;
-    let changes: [fn(&mut RecipientAuthorization); 4] = [
+    let mutations: [fn(&mut RecipientAuthorization); 4] = [
         |value| value.network_id += 1,
         |value| value.binding_digest[0] ^= 1,
         |value| value.public_key[0] ^= 1,
         |value| value.recipient[0] ^= 1,
     ];
-    for change in changes {
+    for change in mutations {
         let mut changed = authorization.clone();
         change(&mut changed);
         assert!(sign(&changed).is_err());
