@@ -4,7 +4,7 @@ if [ "$#" -ne 1 ] || [ "$(id -u)" -ne 0 ]; then
     echo "native Budget tests require one scenario and root for the distinct node uid" >&2
     exit 2
 fi
-case "$1" in recovery|unknown|refusals) ;; *) echo "expected recovery, unknown or refusals" >&2; exit 2 ;; esac
+case "$1" in recovery|unknown|refusals|managed) ;; *) echo "expected recovery, unknown, refusals or managed" >&2; exit 2 ;; esac
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo_root"
 export CARGO_BUILD_JOBS=4

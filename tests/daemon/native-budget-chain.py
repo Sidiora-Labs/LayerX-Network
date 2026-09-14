@@ -119,7 +119,7 @@ def finalize(native, private, control, build, chain_config, url, submitter, stat
 
 def drive(work, environment, url):
     scenario = environment['LAYERX_TEST_NATIVE_BUDGET_SCENARIO']
-    assert scenario in ('recovery', 'unknown', 'refusals')
+    assert scenario in ('recovery', 'unknown', 'refusals', 'managed')
     build = Path(environment['LAYERX_TEST_CUSTODY_BUILD_DIR'])
     control = work / 'budget-control'
     client_directory(control)
@@ -146,6 +146,8 @@ def drive(work, environment, url):
     with (work / 'native-budget.log').open('wb') as log:
         process = subprocess.Popen(['bash', 'tests/daemon/program-admission.sh', str(build), '--native-budget'],
                                    cwd=ROOT, env=environment, stdout=log, stderr=log, start_new_session=True)
+        managed = None
+        managed_request = 1
         try:
             deadline = time.monotonic() + 90
             while not (control / 'funded.json').exists():
@@ -164,6 +166,25 @@ def drive(work, environment, url):
             deadline = time.monotonic() + 900
             while process.poll() is None:
                 assert time.monotonic() < deadline, 'native Budget scenario deadline'
+                if scenario == 'managed':
+                    preparation = control / f'managed-authority-{managed_request}.request.json'
+                    if preparation.exists():
+                        assert managed_request <= MAX_REQUESTS, 'managed authority preparation bound'
+                        descriptor = os.open(preparation, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                        with os.fdopen(descriptor, 'rb') as source:
+                            info = os.fstat(source.fileno())
+                            assert stat.S_ISREG(info.st_mode) and info.st_uid == 4021 and info.st_nlink == 1
+                            assert info.st_mode & 0o777 == 0o600 and 0 < info.st_size <= 1048576
+                            document = source.read(1048577)
+                            assert len(document) == info.st_size
+                        if managed is None:
+                            module = runpy.run_path(str(ROOT / 'tests/daemon/native-managed-authority.py'))
+                            managed = module['Authority'](native, control, build, environment)
+                        response = managed.configure(json.loads(document, object_pairs_hook=unique_fields))
+                        client_json(control / f'managed-authority-{managed_request}.response.json', response)
+                        managed_request += 1
+                    if managed is not None:
+                        assert managed.process.poll() is None, 'managed Authority exited'
                 request_path = control / 'requests' / f'{next_request}.json'
                 if request_path.exists():
                     assert next_request <= MAX_REQUESTS, 'native Budget request count bound'
@@ -178,6 +199,8 @@ def drive(work, environment, url):
             assert process.wait() == 0, 'real native Budget client refused'
             assert next_request > 1, 'native Budget client did not finalize a checkpoint'
         finally:
+            if managed is not None:
+                managed.close()
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGTERM)
                 try:

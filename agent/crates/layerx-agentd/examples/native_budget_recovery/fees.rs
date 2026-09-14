@@ -16,6 +16,10 @@ pub struct Funding {
     pub root: [u8; 32],
 }
 
+/// # Errors
+/// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
+/// # Panics
+/// Panics when real native results contradict the fixture contract.
 pub fn authority(path: &Path, key: [u8; 32], epoch: u64) -> Result<Authority> {
     let source = std::fs::read_to_string(path)?;
     assert!(source.len() <= 4096);
@@ -39,6 +43,10 @@ pub fn authority(path: &Path, key: [u8; 32], epoch: u64) -> Result<Authority> {
     })
 }
 
+/// # Errors
+/// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
+/// # Panics
+/// Panics when real native results contradict the fixture contract.
 pub fn funding(
     client: &mut Client,
     authority: &Authority,

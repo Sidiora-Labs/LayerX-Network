@@ -197,10 +197,15 @@ if [[ ${2:-} == --native-budget ]]; then
     : "${LAYERX_TEST_NATIVE_BUDGET_WORK:?actual Budget control directory is required}"
     : "${LAYERX_TEST_NATIVE_BUDGET_CLIENT:?compiled real Budget client is required}"
     : "${LAYERX_TEST_RUNTIME_CLOCK_BIN:?actual runtime clock is required}"
-    case ${LAYERX_TEST_NATIVE_BUDGET_SCENARIO:-} in recovery|unknown|refusals) ;; *) exit 2 ;; esac
+    case ${LAYERX_TEST_NATIVE_BUDGET_SCENARIO:-} in recovery|unknown|refusals|managed) ;; *) exit 2 ;; esac
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --native-budget-fund "$scenario_state"
     cp "$LAYERX_TEST_NATIVE_BUDGET_CLIENT" "$work/native-budget-client"
     cp "$LAYERX_TEST_RUNTIME_CLOCK_BIN" "$work/native-budget-clock"
+    if [[ $LAYERX_TEST_NATIVE_BUDGET_SCENARIO == managed ]]; then
+        cp "$LAYERX_TEST_MANAGED_IDENTITY_BIN" "$work/managed-identity-provider"
+        chmod 0755 "$work/managed-identity-provider"
+        export LAYERX_TEST_MANAGED_IDENTITY_BIN="$work/managed-identity-provider"
+    fi
     chmod 0755 "$work/native-budget-client" "$work/native-budget-clock"
     mkdir "$runtime/budget-clock"
     chown 4021:4021 "$runtime/budget-clock"

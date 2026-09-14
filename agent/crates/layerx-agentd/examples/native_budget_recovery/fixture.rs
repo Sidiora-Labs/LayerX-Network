@@ -68,6 +68,8 @@ fn configuration(socket: &Path) -> ClientConfig {
     }
 }
 
+/// # Errors
+/// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
 pub fn result_code(bytes: &[u8]) -> Result<i32> {
     Ok(checked(layerx_wire::receipt::decode(bytes))?
         .protocol()
@@ -75,6 +77,8 @@ pub fn result_code(bytes: &[u8]) -> Result<i32> {
         .result_code())
 }
 
+/// # Errors
+/// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
 pub fn account(name: &str) -> Result<[u8; 32]> {
     checked(account_id_for_protocol(
         &checked(AccountId::parse(name))?,
@@ -83,6 +87,10 @@ pub fn account(name: &str) -> Result<[u8; 32]> {
 }
 
 impl Fixture {
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
+    /// # Panics
+    /// Panics when real native results contradict the fixture contract.
     pub fn open() -> Result<Self> {
         let socket = PathBuf::from(std::env::var("LAYERX_TEST_NATIVE_BUDGET_SOCKET")?);
         let directory = PathBuf::from(std::env::var("LAYERX_TEST_NATIVE_BUDGET_WORK")?);
@@ -136,6 +144,10 @@ impl Fixture {
         self.key = key;
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
+    /// # Panics
+    /// Panics when real native results contradict the fixture contract.
     pub fn signed(&mut self, kind: u32, id: u8, payload: Vec<u8>) -> Result<VerifiedSubmission> {
         checked(self.client.reconnect())?;
         let funding = super::fees::funding(
@@ -199,14 +211,22 @@ impl Fixture {
         ))
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
     pub fn create(&mut self, id: u8) -> Result<NativeBudgetScope> {
         self.create_with_period(id, 3_600_000)
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
     pub fn create_with_period(&mut self, id: u8, period_length: u64) -> Result<NativeBudgetScope> {
         self.create_with_lifetime(id, period_length, 3_600_000)
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
+    /// # Panics
+    /// Panics when real native results contradict the fixture contract.
     pub fn create_with_lifetime(
         &mut self,
         id: u8,
@@ -254,6 +274,10 @@ impl Fixture {
         })
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
+    /// # Panics
+    /// Panics when real native results contradict the fixture contract.
     pub fn owner_bytes(&mut self, kind: u32, id: u8, bytes: &[u8]) -> Result<Vec<u8>> {
         use layerx_types::activity::{EnvelopeBuilder, Signature, TimestampBound};
         use layerx_types::payload::Payload;
@@ -301,6 +325,10 @@ impl Fixture {
         Ok(exact)
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
+    /// # Panics
+    /// Panics when real native results contradict the fixture contract.
     pub fn close(&mut self, scope: &NativeBudgetScope, id: u8) -> Result<()> {
         let mut encoded = Encoder::new(42);
         checked(encoded.u16(1))?;
@@ -312,6 +340,8 @@ impl Fixture {
         self.finalize(&result.1)
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
     pub fn spend(
         &mut self,
         scope: &NativeBudgetScope,
@@ -327,6 +357,10 @@ impl Fixture {
         self.signed(0x0003_0006, id, payload.finish())
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
+    /// # Panics
+    /// Panics when real native results contradict the fixture contract.
     pub fn submit(&mut self, bytes: &[u8]) -> Result<(Vec<u8>, SignedHeader)> {
         let activity = checked(layerx_wire::activity::decode_signed(bytes, &self.registry))?;
         let id = checked(layerx_wire::hash::activity_id(&activity))?;
@@ -342,6 +376,8 @@ impl Fixture {
         self.receipt(id)
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
     pub fn receipt(&mut self, id: [u8; 32]) -> Result<(Vec<u8>, SignedHeader)> {
         let mut deadline = Deadline::start(self.clock.as_ref(), Duration::from_secs(30))?;
         loop {
@@ -366,6 +402,8 @@ impl Fixture {
         }
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
     pub fn drop_response(&self, bytes: &[u8]) -> Result<()> {
         let config = configuration(&self.socket);
         let mut transport = checked(Uds::connect(
@@ -386,6 +424,10 @@ impl Fixture {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
+    /// # Panics
+    /// Panics when real native results contradict the fixture contract.
     pub fn finalize(&mut self, header: &SignedHeader) -> Result<()> {
         self.request = self.request.checked_add(1).ok_or("request overflow")?;
         if self.request > 16 {

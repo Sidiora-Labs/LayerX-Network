@@ -32,6 +32,10 @@ fn material(directory: &Path, value: &serde_json::Value) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// # Errors
+/// Returns a refusal if actual native fixture inputs, transport, or evidence are invalid.
+/// # Panics
+/// Panics when real native results contradict the fixture contract.
 pub fn register(
     client: &mut Client,
     directory: &Path,

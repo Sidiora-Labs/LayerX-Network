@@ -2192,16 +2192,28 @@ HUMAN_TEST_CUSTODY_PROOF := $(abspath $(BUILD_DIR)/bin/layerx-custody-proof)
 
 .PHONY: human-test-custody-prerequisites
 human-test human-test-integration: human-test-custody-prerequisites
-human-test human-test-integration: export PAXD = $(HUMAN_TEST_PAXD)
-human-test human-test-integration: export LAYERX_CUSTODY_PROOF_BIN = $(HUMAN_TEST_CUSTODY_PROOF)
-human-test human-test-integration: export LAYERX_TEST_NATIVE_BIN_DIR = $(abspath $(BUILD_DIR)/bin)
-human-test human-test-integration: export LAYERX_TEST_SIGN_CREDIT_BIN = $(abspath $(BUILD_DIR)/tests/bridge/sign-credit)
+human-test human-test-integration human-test-service: export PAXD = $(HUMAN_TEST_PAXD)
+human-test human-test-integration human-test-service: export LAYERX_CUSTODY_PROOF_BIN = $(HUMAN_TEST_CUSTODY_PROOF)
+human-test human-test-integration human-test-service: export LAYERX_TEST_NATIVE_BIN_DIR = $(abspath $(BUILD_DIR)/bin)
+human-test human-test-integration human-test-service: export LAYERX_TEST_SIGN_CREDIT_BIN = $(abspath $(BUILD_DIR)/tests/bridge/sign-credit)
 human-test-custody-prerequisites:
 	$(MAKE) public-tls-test-prerequisites
 	$(MAKE) PAXEER_GO_JOBS=4 custody-proof-build
 	$(MAKE) -j4 LXP_REVISION="$(shell git rev-parse HEAD)" \
 		layerxd layerx-genesis-build $(BUILD_DIR)/tests/bridge/sign-credit
 	GOMAXPROCS=4 GOFLAGS="$(GOFLAGS) -p=4" $(MAKE) paxeer-build
+
+.PHONY: human-test-native-managed-prerequisites
+human-test human-test-integration human-test-service: human-test-native-managed-prerequisites
+human-test-native-managed-prerequisites: human-test-custody-prerequisites
+	$(HUMAN_CARGO) build --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-identity-provider --target-dir "$(HUMAN_TARGET_DIR)"
+	$(MAKE) -j4 CC=gcc LXP_REVISION="$(shell git rev-parse HEAD)" \
+		PROGRAMS_TARGET_DIR="$(HUMAN_TARGET_DIR)" \
+		PROGRAMS_RUNTIME_LIB="$(HUMAN_TARGET_DIR)/debug/liblayerx_programs_sandbox.a" \
+		layerx-module-registry $(BUILD_DIR)/tests/lxp_test_module_maintenance \
+		$(BUILD_DIR)/tests/lxp_test_guarantor_runtime $(BUILD_DIR)/tests/lxp_test_native_budget_finality
+	cargo build --manifest-path platform/Cargo.toml --locked -p layerx-platform-authority --target-dir "$(HUMAN_TARGET_DIR)"
+	$(HUMAN_CARGO) build --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --example native_managed_limit --target-dir "$(HUMAN_TARGET_DIR)"
 
 HUMAN_IDENTITY_PROVIDER := $(HUMAN_TARGET_DIR)/debug/layerx-human-identity-provider
 HUMAN_TEST_WEBHOOKS := $(HUMAN_TARGET_DIR)/debug/layerx-webhooks
