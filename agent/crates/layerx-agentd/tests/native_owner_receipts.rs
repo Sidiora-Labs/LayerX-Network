@@ -122,41 +122,45 @@ fn real_native_owner_success_and_refusal_survive_durable_indexes_and_restart() {
             )),
             saved
         );
-        for mutate in [
-            |v: &mut NativeOwnerOutcomeContext<'_>| v.action_key[0] ^= 1,
-            |v: &mut NativeOwnerOutcomeContext<'_>| v.network_id += 1,
-        ] {
-            let mut changed = expected;
-            mutate(&mut changed);
-            assert!(store_native_owner_if_absent(
-                &mut durable,
-                tenant.clone(),
-                &receipt,
-                &batch,
-                &changed
-            )
-            .is_err());
-        }
-        assert_eq!(
-            checked(serve(
-                &durable,
-                tenant.clone(),
-                ReceiptLookupKey::Idempotency(expected.action_key)
-            )),
-            saved
-        );
-        assert!(serve(
-            &durable,
-            checked(TenantId::new("different-tenant")),
-            ReceiptLookupKey::Activity(protocol.activity_id())
-        )
-        .is_err());
-        let mut changed = receipt.clone();
-        let last = changed.len() - 1;
-        changed[last] ^= 1;
+        assert_refusal_binding(&mut durable, tenant, &receipt, &batch, &expected, &saved);
+    }
+}
+
+fn assert_refusal_binding(
+    durable: &mut Store,
+    tenant: TenantId,
+    receipt: &[u8],
+    batch: &AuthorizedBatch,
+    expected: &NativeOwnerOutcomeContext<'_>,
+    saved: &layerx_agentd::receipt::ServedReceipt,
+) {
+    for mutate in [
+        |v: &mut NativeOwnerOutcomeContext<'_>| v.action_key[0] ^= 1,
+        |v: &mut NativeOwnerOutcomeContext<'_>| v.network_id += 1,
+    ] {
+        let mut changed = *expected;
+        mutate(&mut changed);
         assert!(
-            store_native_owner_if_absent(&mut durable, tenant, &changed, &batch, &expected)
+            store_native_owner_if_absent(durable, tenant.clone(), receipt, batch, &changed)
                 .is_err()
         );
     }
+    assert_eq!(
+        checked(serve(
+            durable,
+            tenant.clone(),
+            ReceiptLookupKey::Idempotency(expected.action_key)
+        )),
+        *saved
+    );
+    assert!(serve(
+        durable,
+        checked(TenantId::new("different-tenant")),
+        ReceiptLookupKey::Activity(saved.metadata.activity_id)
+    )
+    .is_err());
+    let mut changed = receipt.to_vec();
+    let last = changed.len() - 1;
+    changed[last] ^= 1;
+    assert!(store_native_owner_if_absent(durable, tenant, &changed, batch, expected).is_err());
 }
