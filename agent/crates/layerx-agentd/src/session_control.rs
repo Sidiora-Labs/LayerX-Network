@@ -372,6 +372,42 @@ impl SessionControl {
         Ok((report, preparations))
     }
 
+    pub(crate) fn commit_owner_rotation(
+        &self,
+        tenant: &TenantId,
+        agent_id: &str,
+        request: &managed_agent::rotation::Projection<'_>,
+    ) -> Result<HumanResponse, HumanOperationError> {
+        let mut registry = self
+            .registry
+            .write()
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        match managed_agent::rotation::prepare(&store, &registry, tenant, agent_id, request)? {
+            managed_agent::rotation::Prepared::Replay(response) => Ok(response),
+            managed_agent::rotation::Prepared::Commit {
+                event,
+                updates,
+                response,
+            } => {
+                let report =
+                    session::invalidate_with_projection(&mut store, &mut registry, &event, updates)
+                        .map_err(|_| HumanOperationError::Refused)?;
+                drop(store);
+                drop(registry);
+                self.invalidate_preparations(
+                    &report.invalidated_generations,
+                    event.observed_sequence,
+                )
+                .map_err(|_| HumanOperationError::Unavailable)?;
+                Ok(response)
+            }
+        }
+    }
+
     fn invalidate_preparations(
         &self,
         invalidated: &[(session::SessionRef, u64)],

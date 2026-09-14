@@ -15,8 +15,8 @@ use layerx_crypto::local::LocalSigner;
 use layerx_crypto::session::{issue_session_key, SessionKeyRequest};
 use layerx_crypto::signer::Signer as _;
 use layerx_intents::{
-    BudgetCreate, BudgetDefund, Intent, IntentKind, KeyRotation,
-    SessionGrant as ProtocolSessionGrant, SessionRevoke,
+    BudgetCreate, BudgetDefund, Intent, IntentKind, SessionGrant as ProtocolSessionGrant,
+    SessionRevoke,
 };
 use layerx_paxeer_client::{
     raw_call, EmergencyExit, EndpointConfig, EndpointTransport, ExitConfig, ExitEligibility,
@@ -24,7 +24,6 @@ use layerx_paxeer_client::{
 use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::export::OfflineExport;
 use layerx_types::account::AccountId;
-use layerx_types::activity::TimestampBound;
 use layerx_types::amount::Amount as ProtocolAmount;
 use layerx_types::ids::Did;
 use layerx_types::ids::{AssetId, IdempotencyKey};
@@ -102,6 +101,8 @@ const PRODUCTION_OPERATIONS: &[&str] = &[
     "agent.recover",
     "agent.resume",
     "agent.rotate",
+    "agent.rotation.start",
+    "agent.rotation.disclosure",
     "approval.approve",
     "approval.get",
     "approval.list",
@@ -376,6 +377,9 @@ pub struct ProductionComponents {
     continuation_unknown_deadline_seconds: u64,
     maintenance_healthy: AtomicBool,
 }
+
+#[path = "production_rotation.rs"]
+mod owner_rotation;
 
 impl ProductionComponents {
     /// # Errors
@@ -914,6 +918,10 @@ impl ProductionComponents {
                     crate::journeys::WithdrawalStage::PaidOut(_)
                         | crate::journeys::WithdrawalStage::Cancelled(_)
                 ))
+            }
+            "agent-rotation" => {
+                drop(agent);
+                self.advance_owner_rotation(scope, id, trace, observed_at)
             }
             "exit" => {
                 drop(agent);
@@ -2688,111 +2696,6 @@ impl ProductionComponents {
             .map_err(agent_failure)?;
         Ok(BackendResponse {
             result: managed_journey_json(&value),
-            session: None,
-        })
-    }
-
-    fn execute_agent_rotate(
-        &self,
-        request: &ScopedRequest<'_>,
-        scope: &mut crate::store::PrincipalScope<'_>,
-        principal: &crate::store::PrincipalId,
-    ) -> Result<BackendResponse, ApiFailure> {
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-        let agent_id = path(request, "agent_id")?;
-        let recover = request.operation.name == "agent.recover";
-        if recover {
-            return Err(ApiFailure::upstream_degraded());
-        }
-        let context = agent.agent_context(agent_id).map_err(agent_failure)?;
-        let policy = agent
-            .agent_key_policy(&context.agent_did, false)
-            .map_err(agent_failure)?;
-        let operation_key = action_key(required_idempotency(request)?);
-        let pending_key_id = KeyId::new(format!("agent-rotation-{}", hex_bytes(&operation_key)))
-            .map_err(|_| ApiFailure::upstream_degraded())?;
-        let pending_public_key = match self
-            .custody
-            .creation_keystore()
-            .describe(principal, &pending_key_id)
-        {
-            Ok(descriptor) if descriptor.class == KeyClass::AgentPrimary => descriptor.public_key,
-            Err(CustodyError::KeyNotFound) => self
-                .custody
-                .creation_keystore()
-                .create(principal, &pending_key_id, KeyClass::AgentPrimary)
-                .map_err(|_| ApiFailure::upstream_degraded())?,
-            Ok(_) | Err(_) => return Err(ApiFailure::upstream_degraded()),
-        };
-        let current = now()?;
-        let effective_at = current
-            .checked_add(policy.required_delay_seconds)
-            .ok_or_else(ApiFailure::upstream_degraded)?;
-        let lapse_at = effective_at
-            .checked_add(policy.required_delay_seconds)
-            .ok_or_else(ApiFailure::upstream_degraded)?;
-        let intent = Intent::v1(IntentKind::KeyRotation(
-            KeyRotation::new(
-                Did::new(context.agent_did.as_bytes())
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                PublicKey::new(pending_public_key),
-                TimestampBound::new(effective_at, lapse_at)
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                ProtocolSequence::from_u64(policy.effective_sequence),
-            )
-            .map_err(|_| ApiFailure::upstream_degraded())?,
-        ));
-        let trace =
-            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
-        let registry = agent.registry().clone();
-        let mut adapter = ProductionAgentCreation::new(
-            &mut agent,
-            &self.agent_contract,
-            &self.custody,
-            &trace,
-            AgentDid::new(context.seed.actor.clone())
-                .map_err(|_| ApiFailure::upstream_degraded())?,
-            AuthorityRef::new(context.seed.primary_authority.clone())
-                .map_err(|_| ApiFailure::upstream_degraded())?,
-            super::agent_creation::CreationBounds {
-                timestamp_span: self.agent_timestamp_span_seconds,
-                fee_limit: self.agent_fee_limit,
-            },
-        )
-        .map_err(|_| ApiFailure::upstream_degraded())?;
-        let receipt = adapter
-            .submit_lifecycle_intent(
-                scope,
-                &registry,
-                intent,
-                operation_key,
-                KeyId::new(context.seed.custody_key)
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                current,
-            )
-            .map_err(|_| ApiFailure::upstream_degraded())?;
-        let finalized_at = now()?;
-        let evidence = ProductionAgentCreation::finalization_evidence(
-            &receipt,
-            ModuleId::Governance,
-            2,
-            finalized_at,
-        )
-        .map_err(|_| ApiFailure::upstream_degraded())?;
-        let ready_at = finalized_at
-            .checked_add(policy.required_delay_seconds)
-            .ok_or_else(ApiFailure::upstream_degraded)?;
-        let value = agent
-            .agent_key_change(
-                agent_id,
-                false,
-                policy.required_delay_seconds,
-                ready_at,
-                evidence,
-            )
-            .map_err(agent_failure)?;
-        Ok(BackendResponse {
-            result: managed_challenge_json(&value),
             session: None,
         })
     }
@@ -4933,7 +4836,8 @@ impl ProductionComponents {
             "agent.pause" | "agent.resume" => self.execute_agent_pause(request, scope),
             "agent.limit" => self.execute_agent_limit(request, scope),
             "agent.reclaim" => self.execute_agent_reclaim(request, scope),
-            "agent.rotate" | "agent.recover" => {
+            "agent.rotation.disclosure" => self.execute_rotation_disclosure(request, scope),
+            "agent.rotate" | "agent.rotation.start" | "agent.recover" => {
                 self.execute_agent_rotate(request, scope, principal)
             }
             "agent.archive" => self.execute_agent_archive(request, scope),

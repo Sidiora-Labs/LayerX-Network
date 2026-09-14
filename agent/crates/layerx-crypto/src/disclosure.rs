@@ -1108,7 +1108,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
     ) {
         return payment_fields(activity);
     }
-    if kind == (ModuleId::Governance, 3)
+    if matches!(kind, (ModuleId::Governance, 2 | 3))
         || (kind == (ModuleId::Budget, 1)
             && matches!(activity.payload().get(..2), Some([0, 1 | 2])))
     {

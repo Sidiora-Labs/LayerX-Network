@@ -213,16 +213,28 @@ static lxp_result parse_request(
         if (status == LXP_OK) {
             uint16_t schedule_length;
             lxp_fee_params schedule;
-            lxp_genesis_module_value *value = &draft->module_values[draft->module_value_count];
+            uint8_t encoded[LXP_FEE_PARAMS_V4_BYTES];
             status = reader_u16(&reader, &schedule_length);
-            if (status == LXP_OK && schedule_length > sizeof(value->value)) status = LXP_ERR_LENGTH_LIMIT;
-            if (status == LXP_OK) status = reader_copy(&reader, value->value, schedule_length);
-            if (status == LXP_OK) status = lxp_fee_params_decode(value->value, schedule_length, &schedule);
-            if (status == LXP_OK && schedule.version != 2U) status = LXP_ERR_VERSION_UNSUPPORTED;
-            if (status == LXP_OK) {
+            if (status == LXP_OK && schedule_length > sizeof(encoded)) status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK) status = reader_copy(&reader, encoded, schedule_length);
+            if (status == LXP_OK) status = lxp_fee_params_decode(encoded, schedule_length, &schedule);
+            if (status == LXP_OK && schedule.version != 2U && schedule.version != 3U && schedule.version != 4U)
+                status = LXP_ERR_VERSION_UNSUPPORTED;
+            if (status == LXP_OK && draft->module_value_count + (schedule.version == 4U ? 2U : 1U) > LXP_GENESIS_MAX_MODULE_VALUES)
+                status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK && schedule.version == 4U) {
+                lxp_genesis_module_value *value = &draft->module_values[draft->module_value_count++];
                 value->module_id = LXP_MODULE_GOVERNANCE;
-                value->value_length = schedule_length;
+                value->value_length = LXP_FEE_PARAMS_V4_PRICES_BYTES;
+                (void)memcpy(value->key, "fee.module-prices", 17U);
+                (void)memcpy(value->value, encoded + LXP_FEE_PARAMS_V4_HEAD_BYTES, value->value_length);
+            }
+            if (status == LXP_OK) {
+                lxp_genesis_module_value *value = &draft->module_values[draft->module_value_count];
+                value->module_id = LXP_MODULE_GOVERNANCE;
+                value->value_length = schedule.version == 4U ? LXP_FEE_PARAMS_V4_HEAD_BYTES : schedule_length;
                 (void)memcpy(value->key, "fee.schedule", 12U);
+                (void)memcpy(value->value, encoded, value->value_length);
                 ++draft->module_value_count;
             }
         }

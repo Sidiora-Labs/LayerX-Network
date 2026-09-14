@@ -1758,6 +1758,58 @@ static lxp_result committed_activity_present(
     return status;
 }
 
+static lxp_result committed_rotation_replay(lxp_daemon_protocol_owner *owner,
+    const lxp_activity *activity, const uint8_t activity_id[32], bool *present)
+{
+    lxp_receipt_query query = {0};
+    lxp_byte_span canonical = {NULL, 0U};
+    lxp_receipt receipt;
+    lxp_daemon_receipt_evidence evidence;
+    uint8_t digest[32], did[32];
+    bool committed = false, cutover = false;
+    *present = false;
+    if (activity->protocol_version != 3U || activity->activity_type != 0x00070002U ||
+        activity->payload.length < 8U || memcmp(activity->payload.bytes, "\x71\x02\x01\x01", 4U) != 0)
+        return LXP_OK;
+    lxp_result status = committed_activity_present(owner, activity_id, &committed);
+    if (status != LXP_OK || !committed) return status;
+    size_t mark = lxp_arena_mark(owner->scratch);
+    query.kind = LXP_RECEIPT_BY_TRANSACTION_ID;
+    query.maximum_response_bytes = LXP_MAX_ACTIVITY_BYTES;
+    (void)memcpy(query.identifier, activity_id, 32U);
+    status = lxp_receipt_lookup(owner->history, &query, owner->scratch, &canonical);
+    if (status == LXP_OK) status = lxp_receipt_decode(canonical.bytes, canonical.length, true, &receipt);
+    if (status == LXP_OK) status = lxp_receipt_digest(&receipt, owner->scratch, digest);
+    if (status == LXP_OK) status = lxp_daemon_receipt_authority_lookup(owner->receipt_authority,
+        digest, owner->scratch, &evidence);
+    if (status == LXP_OK && (evidence.canonical_receipt.length != canonical.length ||
+        memcmp(evidence.canonical_receipt.bytes, canonical.bytes, canonical.length) != 0 ||
+        memcmp(receipt.activity_id, activity_id, 32U) != 0)) status = LXP_ERR_LOG_CORRUPT;
+    if (status == LXP_OK) status = lxp_did_id_derive(activity->actor_did.bytes, activity->actor_did.length, did);
+    if (status == LXP_OK && receipt.result_code == LXP_OK && receipt.module_id == LXP_MODULE_GOVERNANCE &&
+        receipt.module_version == 1U && receipt.operation == 0U && activity->authority.length == 32U) {
+        for (size_t i = 0U; i < receipt.effects.count; ++i) {
+            const lxp_effect *effect = &receipt.effects.effects[i];
+            if (effect->module_id != LXP_MODULE_GOVERNANCE || effect->kind != LXP_EFFECT_EVENT ||
+                effect->event_type != 0x7142U) continue;
+            if (cutover || effect->body_length != 141U || memcmp(effect->body, "LXOR1", 5U) != 0 ||
+                memcmp(effect->body + 5U, did, 32U) != 0 ||
+                memcmp(effect->body + 37U, activity->authority.bytes, 32U) != 0 ||
+                !lxp_ed25519_pubkey_is_canonical(effect->body + 69U) ||
+                memcmp(effect->body + 37U, effect->body + 69U, 32U) == 0 ||
+                load_u64(effect->body + 101U) != receipt.global_sequence ||
+                lxp_ct_is_zero(effect->body + 109U, 32U)) {
+                status = LXP_ERR_LOG_CORRUPT;
+                break;
+            }
+            cutover = true;
+        }
+        if (status == LXP_OK) *present = cutover;
+    }
+    if (lxp_arena_reset(owner->scratch, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    return status;
+}
+
 static void authentication_refusal_record(
     lxp_daemon_lni_server *server, const struct ucred *credential)
 {
@@ -2024,6 +2076,15 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
         status = committed_activity_present(server->owner, activity_id,
                                             &known);
     if (status != LXP_OK) goto unlock_owner;
+    bool rotation_replay = false;
+    status = committed_rotation_replay(server->owner, &activity, activity_id, &rotation_replay);
+    if (status != LXP_OK) goto unlock_owner;
+    if (rotation_replay) {
+        if (pthread_mutex_unlock(&server->owner->mutex) != 0) return LXP_FATAL_INVARIANT;
+        return send_envelope(descriptor, server->frame_bytes, LNI_SUBMIT_RESPONSE,
+            request->correlation_id, request->payload, request->payload_length,
+            activity_id, sizeof(activity_id), deadline);
+    }
     status = wall_clock_milliseconds(&timestamp);
     if (status != LXP_OK) goto unlock_owner;
     if (status == LXP_OK &&
@@ -2770,7 +2831,7 @@ static lxp_result send_fee_estimate(lxp_daemon_lni_server *server, int descripto
     lxp_fee_meter meter = {0};
     lxp_u128 fee;
     uint32_t version;
-    uint8_t payload[64U + LXP_FEE_PARAMS_V2_BYTES];
+    uint8_t payload[64U + LXP_FEE_PARAMS_V4_BYTES];
     size_t length;
     lxp_result status;
     if (request->minor < 5U || request->proof_length != 0U || request->correlation_id == 0U ||

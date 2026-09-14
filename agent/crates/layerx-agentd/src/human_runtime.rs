@@ -1268,6 +1268,44 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         let tenant =
             TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
         let (kind, amount, currency, delay, ready) = match kind {
+            crate::human::HumanAgentJourneyKind::OwnerRotated {
+                custody_key,
+                signed_activity,
+            } => {
+                if pre_observation != [0; 32] || post_observation != [0; 32] {
+                    return Err(HumanOperationError::Refused);
+                }
+                let (identity, authority, registry) = {
+                    let mut operations = self.lock_operations()?;
+                    let registry = operations.authority.registry(peer).map_err(map_core)?;
+                    let activity =
+                        layerx_wire::activity::decode_signed(&signed_activity, &registry)
+                            .map_err(|_| HumanOperationError::Refused)?;
+                    let did =
+                        Did::new(activity.actor_did()).map_err(|_| HumanOperationError::Refused)?;
+                    let identity = operations
+                        .authority
+                        .core_identity(peer, &did)
+                        .map_err(|_| HumanOperationError::Refused)?;
+                    let authority = operations
+                        .authority
+                        .authorized_batch(peer, evidence.activity_id)?;
+                    (identity, authority, registry)
+                };
+                return self.session_control.commit_owner_rotation(
+                    &tenant,
+                    agent_id,
+                    &managed_agent::rotation::Projection {
+                        custody_key: &custody_key,
+                        signed_activity: &signed_activity,
+                        evidence: evidence.into(),
+                        identity: &identity,
+                        authority: &authority,
+                        registry: &registry,
+                    },
+                );
+            }
+
             crate::human::HumanAgentJourneyKind::Reclaim { amount, currency } => {
                 (0, amount, currency, 0, 0)
             }

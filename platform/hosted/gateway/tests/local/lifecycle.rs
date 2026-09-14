@@ -2,6 +2,7 @@ mod events;
 mod funding;
 mod registry_runtime;
 mod required;
+mod withdrawal;
 use required::Required;
 
 include!(concat!(env!("OUT_DIR"), "/core_fixture.rs"));
@@ -2662,7 +2663,7 @@ fn local_funding_recovers_a_submitted_operation_after_restart() {
 
 #[test]
 fn local_gateway_program_custody_journey() {
-    let (cluster, funding) = funding::start();
+    let (cluster, funding) = funding::start_withdrawal();
     let certificates = certificates(&cluster.root);
     let boundary = start_boundary(&cluster, &certificates);
     let identity = start_local_identity(&cluster, &certificates);
@@ -2700,6 +2701,7 @@ fn local_gateway_program_custody_journey() {
         &signer,
     );
     assert_wallet_balance_smoke(&cluster, &certificates, &gateway, &payment_output);
+    withdrawal::run(&cluster, &certificates, &mut gateway, &key);
     let (result, output) =
         run_program_custody_smoke(&cluster, &certificates, &gateway, &config, &signer);
     assert_lifecycle_refusal_recovery(

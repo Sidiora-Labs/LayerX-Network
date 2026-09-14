@@ -14,6 +14,7 @@
 #include "layerx/lxp_authority.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_handover.h"
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_protocol.h"
@@ -349,6 +350,7 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
     uint8_t handover_authority[32];
     bool handover_enabled;
     lxp_result handover_status;
+    lxp_byte_span fee_head = {NULL, 0U}, fee_prices = {NULL, 0U};
     if (manifest == NULL ||
         !lxp_protocol_version_supported(manifest->protocol_version) ||
         manifest->network_id == 0U || manifest->genesis_timestamp_ms == 0U ||
@@ -441,6 +443,18 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
                 manifest->module_values[i].module_id,
                 manifest->module_values[i].key) >= 0))
             return LXP_ERR_UNSORTED_SEQUENCE;
+        const lxp_genesis_module_value *value = &manifest->module_values[i];
+        static const uint8_t head_key[32] = "fee.schedule";
+        static const uint8_t prices_key[32] = "fee.module-prices";
+        if (value->module_id == LXP_MODULE_GOVERNANCE && memcmp(value->key, head_key, 32U) == 0)
+            fee_head = (lxp_byte_span){value->value, value->value_length};
+        if (value->module_id == LXP_MODULE_GOVERNANCE && memcmp(value->key, prices_key, 32U) == 0)
+            fee_prices = (lxp_byte_span){value->value, value->value_length};
+    }
+    if (fee_prices.bytes != NULL || (fee_head.length >= 2U && fee_head.bytes[0] == 0U && fee_head.bytes[1] == 4U)) {
+        lxp_fee_params schedule;
+        lxp_result status = lxp_fee_stored_schedule_decode(fee_head, fee_prices, &schedule);
+        if (status != LXP_OK) return status;
     }
     return LXP_OK;
 }

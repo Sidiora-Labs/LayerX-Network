@@ -59,6 +59,39 @@ pub fn append(request: &mut Vec<u8>, asset: &[u8; 32], issuer_public: &[u8; 32],
     request.extend_from_slice(&schedule);
 }
 
+pub fn append_withdrawal(
+    request: &mut Vec<u8>,
+    asset: &[u8; 32],
+    issuer_public: &[u8; 32],
+    salt: &[u8; 32],
+    withdrawal_price: u64,
+) {
+    append(request, asset, issuer_public, salt);
+    let schedule = request.len() - 247;
+    request[schedule - 2..schedule].copy_from_slice(&255_u16.to_be_bytes());
+    request[schedule..schedule + 2].copy_from_slice(&3_u16.to_be_bytes());
+    request[schedule + 86] = 11;
+    request.extend_from_slice(&withdrawal_price.to_be_bytes());
+}
+
+pub fn append_modules(
+    request: &mut Vec<u8>,
+    asset: &[u8; 32],
+    issuer_public: &[u8; 32],
+    salt: &[u8; 32],
+    withdrawal_price: u64,
+    prices: &[u128; 7],
+) {
+    append_withdrawal(request, asset, issuer_public, salt, withdrawal_price);
+    let schedule = request.len() - 255;
+    request[schedule - 2..schedule].copy_from_slice(&368_u16.to_be_bytes());
+    request[schedule..schedule + 2].copy_from_slice(&4_u16.to_be_bytes());
+    request.push(7);
+    for price in prices {
+        request.extend_from_slice(&price.to_be_bytes());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::append;
@@ -78,6 +111,21 @@ mod tests {
     }
 
     #[test]
+    fn withdrawal_metadata_matches_the_native_fee_encoder() {
+        let mut legacy = Vec::new();
+        append(&mut legacy, &sequence(0), &sequence(32), &sequence(64));
+        let mut encoded = Vec::new();
+        super::append_withdrawal(&mut encoded, &sequence(0), &sequence(32), &sequence(64), 17);
+        assert_eq!(encoded.len(), VECTOR_LENGTH + 8);
+        assert_eq!(&encoded[..190], &legacy[..190]);
+        assert_eq!(&encoded[190..192], &255_u16.to_be_bytes());
+        assert_eq!(
+            &encoded[192..],
+            include_bytes!("../fixtures/fee-params-v3.bin")
+        );
+    }
+
+    #[test]
     fn emits_the_shared_vector() {
         let mut encoded = Vec::new();
         append(&mut encoded, &sequence(0), &sequence(32), &sequence(64));
@@ -91,6 +139,25 @@ mod tests {
         assert_eq!(
             digest, expected,
             "lxgb metadata emitters disagree; tests/support/lxgb_metadata.py pins the same vector"
+        );
+    }
+
+    #[test]
+    fn module_metadata_matches_the_native_fee_encoder() {
+        let mut encoded = Vec::new();
+        super::append_modules(
+            &mut encoded,
+            &sequence(0),
+            &sequence(32),
+            &sequence(64),
+            17,
+            &[4, 4, 4, 4, 4, 4, 0],
+        );
+        assert_eq!(encoded.len(), VECTOR_LENGTH + 121);
+        assert_eq!(&encoded[190..192], &368_u16.to_be_bytes());
+        assert_eq!(
+            &encoded[192..],
+            include_bytes!("../fixtures/fee-params-v4.bin")
         );
     }
 }

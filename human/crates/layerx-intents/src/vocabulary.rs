@@ -92,6 +92,7 @@ pub enum IntentKind {
     NativeOnboardingConsent(layerx_crypto::onboarding::OnboardingConsent),
     NativeOnboarding(layerx_crypto::onboarding::SponsoredRegistration),
     NativeBudgetCreate(crate::NativeBudgetCreate),
+    NativeOwnerRotation(layerx_crypto::rotation::OwnerRotation),
     NativeAssetAccountOpen(AssetId),
     /// Identity security: announce a governance identity-key rotation.
     KeyRotation(KeyRotation),
@@ -131,6 +132,7 @@ impl IntentKind {
             Self::DidRegistration(_)
             | Self::NativeOnboardingConsent(_)
             | Self::NativeOnboarding(_)
+            | Self::NativeOwnerRotation(_)
             | Self::KeyRotation(_)
             | Self::RecoveryRegistration(_)
             | Self::EvmPayoutBinding(_)

@@ -1131,8 +1131,24 @@ $(BUILD_DIR)/tests/test_fees: tests/test_fees.c $(LIBRARY) \
 		$(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -ldl -lm -o $@
 
-test-fees: $(BUILD_DIR)/tests/test_fees
+$(BUILD_DIR)/tests/test_fees_v3: tests/test_fees_v3.c $(LIBRARY) \
+        $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+$(BUILD_DIR)/tests/test_fees_v4: tests/test_fees_v4.c $(LIBRARY) \
+        $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-fees: $(BUILD_DIR)/tests/test_fees $(BUILD_DIR)/tests/test_fees_v3 $(BUILD_DIR)/tests/test_fees_v4
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_fees
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_fees_v3
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_fees_v4
 
 $(BUILD_DIR)/tests/test_metering: tests/test_metering.c fuzz/fuzz_meter.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -3461,6 +3477,20 @@ test-daemon-handover-crash: test-daemon-handover $(BUILD_DIR)/tests/lxp_test_mai
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR)
 
+.PHONY: test-daemon-withdrawal
+test-daemon-withdrawal: $(BUILD_DIR)/tests/lxp_test_program_admission \
+		$(BUILD_DIR)/tests/lxp_test_guarantor_runtime $(BUILD_DIR)/tests/bridge/sign-credit \
+		$(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR)
+
+$(BUILD_DIR)/tests/lxp_test_paid_withdrawal: tests/daemon/lxp_test_paid_withdrawal.c tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-daemon-paid-withdrawal
+test-daemon-paid-withdrawal: $(BUILD_DIR)/tests/lxp_test_paid_withdrawal $(BUILD_DIR)/tests/lxp_test_guarantor_runtime $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR) --paid-withdrawal
+
 .PHONY: test-program-simulate
 test-program-simulate: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR) simulate
@@ -3737,3 +3767,21 @@ test-program-call-builders: $(BUILD_DIR)/tests/test_call_builders
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_call_builders
 
 test: test-program-call-builders
+
+$(BUILD_DIR)/tests/lxp_test_owner_rotation_unit: tests/protocol/lxp_test_owner_rotation.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-owner-rotation
+test-owner-rotation: $(BUILD_DIR)/tests/lxp_test_owner_rotation_unit
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_owner_rotation_unit
+
+test: test-owner-rotation
+
+$(BUILD_DIR)/tests/lxp_test_owner_rotation: tests/daemon/lxp_test_owner_rotation.c tests/daemon/lxp_test_native_onboarding.c tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-daemon-owner-rotation
+test-daemon-owner-rotation: $(BUILD_DIR)/tests/lxp_test_owner_rotation $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR) --owner-rotation

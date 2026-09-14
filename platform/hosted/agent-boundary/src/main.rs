@@ -513,7 +513,7 @@ fn open_session(config: &Config) -> Result<Session, LniFailure> {
     let mut transport = Uds::connect(&config.lni_socket, &config.gate, lni_limits(config))
         .map_err(|error| LniFailure::Unavailable(format!("{error:?}")))?;
     let expected = HandshakeConfig {
-        built_interface_version: Version::V1_4,
+        built_interface_version: Version::V1_5,
         expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: config.protocol_network_id,
     };
@@ -567,7 +567,7 @@ fn lookup_receipt(session: &mut Session, activity: [u8; 32]) -> Result<Lookup, L
     selector.push(1);
     selector.extend_from_slice(&activity);
     let request = encode_envelope(Envelope {
-        version: Version::V1_4,
+        version: session.handshake.node().interface_version,
         message_tag: RECEIPT_LOOKUP_REQUEST_TAG,
         correlation_id,
         canonical_payload: &selector,
@@ -651,6 +651,53 @@ fn terminal(status: u16, code: &str) -> Refusal {
     }
 }
 
+fn withdrawal_admission(
+    config: &Config,
+    session: &mut Session,
+    signed: &[u8],
+) -> Result<Option<Refusal>, LniFailure> {
+    use layerx_client::payments::SnapshotContext;
+    use layerx_client::withdrawal::WithdrawalConfigurationError;
+
+    let Ok(activity) = decode_signed(signed, &config.registry) else {
+        return Ok(Some(terminal(400, "malformed_activity")));
+    };
+    if activity.activity_type().module() != ModuleId::Asset
+        || activity.activity_type().ordinal() != 9
+    {
+        return Ok(None);
+    }
+    let correlation_id = session.next_correlation;
+    session.next_correlation = correlation_id
+        .checked_add(3)
+        .ok_or_else(|| LniFailure::Unavailable("withdrawal correlation exhausted".to_owned()))?;
+    let context = SnapshotContext {
+        interface_version: session.handshake.node().interface_version,
+        correlation_id,
+        minimum_sequence: session.handshake.node().chain_head_sequence,
+    };
+    match layerx_client::withdrawal::registry(
+        &mut session.transport,
+        &activity,
+        context,
+        config.protocol_network_id,
+    ) {
+        Ok(_) => Ok(None),
+        Err(WithdrawalConfigurationError::Unsupported) => {
+            Ok(Some(terminal(422, "asset_ordinal_reserved")))
+        }
+        Err(WithdrawalConfigurationError::InvalidActivity) => {
+            Ok(Some(terminal(400, "invalid_asset_activity")))
+        }
+        Err(WithdrawalConfigurationError::AssetUnavailable) => {
+            Ok(Some(terminal(422, "withdrawal_asset_unavailable")))
+        }
+        Err(WithdrawalConfigurationError::Unavailable) => Err(LniFailure::Unavailable(
+            "committed withdrawal configuration is unavailable".to_owned(),
+        )),
+    }
+}
+
 fn submit_activity(
     config: &Config,
     session: &mut Session,
@@ -658,9 +705,12 @@ fn submit_activity(
     attempt: u32,
     signed: &[u8],
 ) -> Result<SubmitOutcome, LniFailure> {
+    if let Some(refusal) = withdrawal_admission(config, session, signed)? {
+        return Ok(SubmitOutcome::Refused(refusal));
+    }
     let node = session.handshake.node();
     let context = SubmissionContext {
-        interface_version: Version::V1_4,
+        interface_version: node.interface_version,
         protocol_version: node.protocol_version,
         network_id: node.network_id,
         correlation_id: session.correlation(),

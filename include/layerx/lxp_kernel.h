@@ -140,6 +140,11 @@ struct lxp_module_ctx {
     lxp_identity_store *identities;
     lxp_identity staged_identity;
     bool identity_staged;
+    bool owner_rotation_staged;
+    uint8_t owner_rotation_did[32];
+    uint8_t owner_rotation_from[32];
+    uint8_t owner_rotation_to[32];
+    size_t owner_rotation_account_count;
     lxp_module_account_snapshot transfer_snapshots[
         LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
     size_t transfer_snapshot_count;
