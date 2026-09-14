@@ -310,6 +310,13 @@ struct RealWithdrawalAgent {
 }
 
 impl RealWithdrawalAgent {
+    fn reconnect_before_submission(&mut self) -> Result<(), AgentBoundaryError> {
+        self.node.reconnect().map_err(|error| {
+            eprintln!("native withdrawal reconnect before first submit: {error:?}");
+            AgentBoundaryError::Unavailable
+        })
+    }
+
     fn new(fixture: &Fixture) -> Self {
         Self {
             node: withdraw_native::connect(&fixture.native.endpoint),
@@ -486,6 +493,7 @@ impl AgentBoundary for RealWithdrawalAgent {
                 None,
             )
             .map_err(|_| AgentBoundaryError::Refused)?;
+        self.reconnect_before_submission()?;
         let submitted = self
             .node
             .submit_signed(&self.registry, signer_public_key, 20, 1, &signed)

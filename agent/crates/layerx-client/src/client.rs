@@ -683,6 +683,13 @@ impl Client {
         correlation_id: u64,
         grant_id: [u8; 32],
     ) -> Result<crate::payments::CommittedSnapshot<Vec<u8>>, ReadError> {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::SessionFeeState)
+        {
+            return Err(ReadError::UnavailableCapability);
+        }
         let context = crate::payments::SnapshotContext {
             interface_version: self.handshake.node().interface_version,
             correlation_id,

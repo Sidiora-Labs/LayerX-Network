@@ -173,7 +173,7 @@ def send(rpc, account, target, data, value=0):
     if getattr(rpc, "signing_key", None):
         transaction = command("cast", "send", "--rpc-url", rpc.url, "--private-key", rpc.signing_key,
                               "--async", "--gas-limit", "6000000", "--value", str(value),
-                              target, "--data", data, env=getattr(rpc, "command_env", None))
+                              target, data, env=getattr(rpc, "command_env", None))
         return receipt(rpc, transaction)
     transaction = rpc.call("eth_sendTransaction", [{"from": account, "to": target,
                             "data": data, "value": hex(value), "gas": hex(6000000)}])

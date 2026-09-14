@@ -34,7 +34,7 @@ static int metered_artifacts(lxp_receipt *receipt)
     const char *port = getenv("LAYERX_TEST_METERED_PROGRAM_PORT");
     const char *token = getenv("LAYERX_TEST_METERED_PROGRAM_TOKEN_FILE");
     const char *script = getenv("LAYERX_TEST_METERED_ARTIFACT_SCRIPT");
-    const char *python = getenv("LAYERX_TEST_PYTHON");
+    const char *python = getenv("LAYERX_TEST_METERED_PYTHON");
     uint8_t digest[32], arena_bytes[2U * LXP_MAX_ACTIVITY_BYTES];
     uint8_t artifacts[2U * LXP_MAX_ACTIVITY_BYTES + 8U];
     char activity_hex[65], digest_hex[65];
@@ -642,6 +642,63 @@ static int metered_session_issue(int descriptor, const signer *owner, metered_ru
     return 0;
 }
 
+static int metered_session_client(int descriptor, const uint8_t id[32],
+                                  const wire_envelope *response)
+{
+    const char *client = getenv("LAYERX_TEST_SESSION_FEE_CLIENT");
+    const char *clock = getenv("LAYERX_TEST_SESSION_FEE_CLOCK");
+    const char *clock_directory = getenv("LAYERX_TEST_SESSION_FEE_CLOCK_DIRECTORY");
+    struct sockaddr_un address;
+    socklen_t address_length = sizeof(address);
+    char id_hex[65], payload_hex[2801];
+    static const char digits[] = "0123456789abcdef";
+    int child_status;
+    if (client == NULL) return 0;
+    REQUIRE(clock != NULL && clock_directory != NULL);
+    REQUIRE(response->payload_length <= 1400U);
+    REQUIRE(getpeername(descriptor, (struct sockaddr *)&address, &address_length) == 0);
+    for (size_t i = 0U; i < 32U; ++i) {
+        id_hex[i * 2U] = digits[id[i] >> 4U];
+        id_hex[i * 2U + 1U] = digits[id[i] & 15U];
+    }
+    id_hex[64] = '\0';
+    for (size_t i = 0U; i < response->payload_length; ++i) {
+        payload_hex[i * 2U] = digits[response->payload[i] >> 4U];
+        payload_hex[i * 2U + 1U] = digits[response->payload[i] & 15U];
+    }
+    payload_hex[response->payload_length * 2U] = '\0';
+    pid_t child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        if (setenv("LAYERX_TEST_SESSION_FEE_SOCKET", address.sun_path, 1) != 0 ||
+            setenv("LAYERX_TEST_SESSION_FEE_GRANT", id_hex, 1) != 0 ||
+            setenv("LAYERX_TEST_SESSION_FEE_EXPECTED", payload_hex, 1) != 0) _exit(125);
+        execl(clock, clock, "--runtime-dir", clock_directory, "--", client,
+              "--exact", "real_daemon_session_fee_state", "--nocapture",
+              "--test-threads=1", (char *)NULL);
+        _exit(126);
+    }
+    REQUIRE(waitpid(child, &child_status, 0) == child);
+    REQUIRE(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0);
+    return 0;
+}
+
+static int metered_session_read_refusals(int descriptor, const uint8_t authentication_id[32])
+{
+    uint8_t request[34] = {0};
+    store_u16(request, 1U);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 36U, 636U, request, sizeof(request)) == 0);
+    REQUIRE(expect_error(descriptor, 636U, 1U, LXP_ERR_NON_CANONICAL) == 0);
+    (void)memcpy(request + 2U, authentication_id, 32U);
+    REQUIRE(send_request(descriptor, LNI_MINOR - 1U, 36U, 637U, request, sizeof(request)) == 0);
+    REQUIRE(expect_error(descriptor, 637U, 1U, LXP_ERR_NON_CANONICAL) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 36U, 638U, request, sizeof(request) - 1U) == 0);
+    REQUIRE(expect_error(descriptor, 638U, 1U, LXP_ERR_NON_CANONICAL) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 36U, 639U, request, sizeof(request)) == 0);
+    REQUIRE(expect_error(descriptor, 639U, 4U, LXP_ERR_AUTH_SCOPE) == 0);
+    return 0;
+}
+
 static int metered_session_read(int descriptor, const uint8_t id[32],
     lxp_authority_grant *grant, uint8_t successor[32], uint8_t commitment[32])
 {
@@ -675,6 +732,7 @@ static int metered_session_read(int descriptor, const uint8_t id[32],
         REQUIRE(lxp_authority_session_charge_commitment(grant, computed) == LXP_OK);
         REQUIRE(memcmp(commitment, computed, 32U) == 0);
     } else REQUIRE(lxp_ct_is_zero(commitment, 32U));
+    REQUIRE(metered_session_client(descriptor, expected_id, &response) == 0);
     release_envelope(&response);
     return 0;
 }
@@ -737,6 +795,7 @@ static int metered_sessions_initial(int descriptor, const signer *owner, metered
                 lxp_ct_is_zero(successor, 32U) && !grant.revoked);
         }
     }
+    REQUIRE(metered_session_read_refusals(descriptor, run->session_ids[2]) == 0);
     REQUIRE(metered_session_refuse(descriptor, run, 0x51U, payload, payload_length, LXP_ERR_AUTH_ALLOWANCE) == 0);
     REQUIRE(metered_session_refuse(descriptor, run, 0x53U, payload, payload_length, LXP_ERR_AUTH_SCOPE) == 0);
     REQUIRE(metered_session_refuse(descriptor, run, 0x54U, payload, payload_length, LXP_ERR_GRANT_EXHAUSTED) == 0);
@@ -882,6 +941,8 @@ static int metered_initial(int descriptor, const signer *owner, metered_run *run
     size_t first = run->receipt_count;
     for (size_t i = 0U; i < 2U; ++i) {
         size_t encoded_length;
+        (void)fprintf(stderr, "metered queued ProgramCall index=%zu account_sequence=%llu\n",
+            i, (unsigned long long)run->account_sequence);
         REQUIRE(metered_encode(&capability, run->account_sequence, LX_PROGRAMS_CALL,
                                 0U, payload, length, encoded, &encoded_length) == 0);
         REQUIRE(metered_submit(descriptor, run, encoded, encoded_length, LXP_OK) == 0);

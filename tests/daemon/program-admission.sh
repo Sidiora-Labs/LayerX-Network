@@ -17,7 +17,12 @@ replica_pid= sequencer_pid= settlement_pid=
 cleanup() {
     result=$?
     for pid in "$sequencer_pid" "$replica_pid" "$settlement_pid"; do
-        if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" || true; fi
+        if [[ -n "$pid" ]]; then
+            kill "$pid" 2>/dev/null || true
+            child_result=0
+            wait "$pid" || child_result=$?
+            printf 'native fixture child pid=%s exit=%s\n' "$pid" "$child_result" >&2
+        fi
     done
     rm -rf "$runtime"
     if [[ "$result" == 0 && -z ${LAYERX_TEST_ADMISSION_LOG_DIR:-} ]]; then rm -rf "$work"; else printf 'native admission evidence: %s\n' "$work" >&2; fi
@@ -159,10 +164,24 @@ if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} 
     if [[ ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then scenario_state="$work/scenario/state"; fi
     if [[ ${2:-} == --metered-allowance ]]; then
         scenario_state="$work/scenario/state"
+        if [[ -n ${LAYERX_TEST_SESSION_FEE_CLIENT:-} ]]; then
+            : "${LAYERX_TEST_RUNTIME_CLOCK_BIN:?actual runtime clock is required for the session fee client}"
+            cp "$LAYERX_TEST_SESSION_FEE_CLIENT" "$work/session-fee-client"
+            cp "$LAYERX_TEST_RUNTIME_CLOCK_BIN" "$work/session-fee-clock"
+            chmod 0755 "$work/session-fee-client" "$work/session-fee-clock"
+            mkdir "$runtime/session-fee-clock"
+            chown 4021:4021 "$runtime/session-fee-clock"
+            chmod 0700 "$runtime/session-fee-clock"
+            export LAYERX_TEST_SESSION_FEE_CLIENT="$work/session-fee-client"
+            export LAYERX_TEST_SESSION_FEE_CLOCK="$work/session-fee-clock"
+            export LAYERX_TEST_SESSION_FEE_CLOCK_DIRECTORY="$runtime/session-fee-clock"
+        fi
         install -m 0600 -o 4021 -g 4021 "$work/data/secrets/program-token" "$work/scenario/program-token"
         export LAYERX_TEST_METERED_PROGRAM_PORT="$program_port"
         export LAYERX_TEST_METERED_PROGRAM_TOKEN_FILE="$work/scenario/program-token"
         export LAYERX_TEST_METERED_ARTIFACT_SCRIPT="$work/metered-artifacts.py"
+        LAYERX_TEST_METERED_PYTHON=$("${LAYERX_TEST_PYTHON:-python3}" -c 'import os, sys; print(os.path.realpath(sys.executable))')
+        export LAYERX_TEST_METERED_PYTHON
         cp "$root/tests/daemon/metered-artifacts.py" "$LAYERX_TEST_METERED_ARTIFACT_SCRIPT"
         chmod 0644 "$LAYERX_TEST_METERED_ARTIFACT_SCRIPT"
     fi
