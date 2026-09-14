@@ -87,3 +87,46 @@ fn version_and_capability_rules_are_checked_against_the_schema_source() {
         ))
     );
 }
+
+#[test]
+fn session_fee_state_tags_are_complete_and_unknown_tags_still_refuse() {
+    use layerx_client::lni::schema::{decode_envelope, SchemaError};
+    for tag in [36, 37] {
+        let entry = lni_schema_v1()
+            .messages
+            .iter()
+            .find(|message| message.tag == tag)
+            .unwrap_or_else(|| panic!("session fee state schema missing"));
+        assert_eq!(entry.capability, Capability::SessionFeeState);
+        let encoded = encode_envelope(Envelope {
+            version: Version::V1_5,
+            message_tag: tag,
+            correlation_id: 7,
+            canonical_payload: &[0, 1],
+            proof_material: &[],
+        })
+        .unwrap_or_else(|error| panic!("session state encoding: {error:?}"));
+        assert_eq!(
+            decode_envelope(&encoded).map(|message| message.message_tag),
+            Ok(tag)
+        );
+    }
+    for tag in [0, 38, u16::MAX] {
+        assert_eq!(
+            encode_envelope(Envelope {
+                version: Version::V1_5,
+                message_tag: tag,
+                correlation_id: 7,
+                canonical_payload: &[],
+                proof_material: &[]
+            }),
+            Err(SchemaError::UnknownMessage(tag))
+        );
+        let mut encoded = hex("00010005002400000000000000070000000000000000");
+        encoded[4..6].copy_from_slice(&tag.to_be_bytes());
+        assert_eq!(
+            decode_envelope(&encoded),
+            Err(SchemaError::UnknownMessage(tag))
+        );
+    }
+}
