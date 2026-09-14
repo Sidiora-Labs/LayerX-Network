@@ -90,14 +90,14 @@ fn native_owner_bootstrap_is_disclosed_signed_and_bound_to_every_envelope_field(
             }
             Poll::Pending => panic!("local signer did not finish"),
         };
-        let signed = attach_signature(
+        let envelope = attach_signature(
             &unsigned,
             *signature.as_bytes(),
             signer.public_key(),
             &registry,
         )
         .unwrap_or_else(|error| panic!("authenticated owner envelope: {error:?}"));
-        let decoded = verify(&signed, &registry)
+        let decoded = verify(&envelope, &registry)
             .unwrap_or_else(|error| panic!("independent signature verification: {error:?}"));
         assert_eq!(
             decoded.activity_type(),
@@ -110,8 +110,8 @@ fn native_owner_bootstrap_is_disclosed_signed_and_bound_to_every_envelope_field(
         assert_eq!(decoded.network_id(), 77);
         assert_eq!(decoded.account_sequence(), 10);
         assert_eq!(decoded.idempotency_key(), context.action_key);
-        for offset in 0..signed.len() {
-            let mut changed = signed.clone();
+        for offset in 0..envelope.len() {
+            let mut changed = envelope.clone();
             changed[offset] ^= 1;
             assert!(
                 verify(&changed, &registry).is_err(),
