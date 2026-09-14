@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use ed25519_dalek::SigningKey;
 use layerx_agentd::read::NativeReadRoute;
 use layerx_client::availability::RetrievalLimits;
+use layerx_client::client::{ClientConfig, ReconnectPolicy};
 use layerx_client::evidence::{
     verification_label, verify_account_evidence_with_history, AccountEvidencePolicy, RootSelector,
 };
@@ -14,7 +15,7 @@ use layerx_client::lni::handshake::HandshakeConfig;
 use layerx_client::lni::schema::Version;
 use layerx_client::lni::transport::Limits;
 use layerx_client::read::{HistoryKind, HistoryRange};
-use layerx_client::{Client, ClientConfig, ReconnectPolicy};
+use layerx_client::Client;
 use layerx_programs::hex;
 use layerx_sdk::rpc_verification::{VerifiedRpcAccount, VerifiedRpcBalances};
 use layerx_types::account::AccountId;
