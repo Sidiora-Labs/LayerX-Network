@@ -505,7 +505,7 @@ impl ProductionComponents {
         request: &ScopedRequest<'_>,
         grants: &[(String, [u8; 32])],
     ) -> Result<(), ApiFailure> {
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let owner = resolve_principal_owner(self, scope, &mut agent)?;
         let registry = agent.registry().clone();
         let trace =
@@ -864,7 +864,7 @@ impl ProductionComponents {
         trace: &TraceId,
         observed_at: u64,
     ) -> Result<bool, ApiFailure> {
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let registry = agent.registry().clone();
         match kind {
             "move" => {
@@ -874,7 +874,7 @@ impl ProductionComponents {
                 let status = crate::server::poll_once_ready(journey.advance(
                     scope,
                     &self.agent_contract,
-                    &mut *agent,
+                    &mut agent,
                     &self.custody,
                     &registry,
                     trace,
@@ -900,7 +900,7 @@ impl ProductionComponents {
                         scope,
                         &mut journey,
                         &self.agent_contract,
-                        &mut *agent,
+                        &mut agent,
                         &self.custody,
                         &registry,
                         trace,
@@ -925,7 +925,7 @@ impl ProductionComponents {
                         scope,
                         &mut journey,
                         &self.agent_contract,
-                        &mut *agent,
+                        &mut agent,
                         &self.custody,
                         &registry,
                         trace,
@@ -2004,10 +2004,7 @@ fn resolve_movement_context(
     observed_at: u64,
 ) -> Result<super::movement_provider::PlanningContext, ApiFailure> {
     let key = KeyId::new("human-primary").map_err(|_| ApiFailure::upstream_degraded())?;
-    let mut agent = components
-        .agent
-        .lock()
-        .map_err(|_| ApiFailure::unavailable())?;
+    let mut agent = components.principal_agent(scope)?;
     let owner = resolve_principal_owner(components, scope, &mut agent)?;
     let actor = owner.actor;
     let account = owner.account;
@@ -2354,9 +2351,7 @@ impl ProductionComponents {
             .parse::<u128>()
             .map_err(|_| ApiFailure::invalid_request(Some("monthly_limit")))?;
         let fee_policy = self
-            .agent
-            .lock()
-            .map_err(|_| ApiFailure::unavailable())?
+            .principal_agent(scope)?
             .native_fee_policy()
             .map_err(agent_failure)?;
         let native_fee_budget = native_fee_consent(&request.body, &fee_policy)?;
@@ -2370,7 +2365,7 @@ impl ProductionComponents {
         .map_err(|_| ApiFailure::invalid_request(None))?;
         let idempotency_key: [u8; 32] =
             Sha256::digest(required_idempotency(request)?.as_bytes()).into();
-        let mut runtime = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut runtime = self.principal_agent(scope)?;
         let owner = resolve_principal_owner(self, scope, &mut runtime)?;
         let (human_recovery_root, recovery_threshold) = owner.recovery_policy()?;
         let creation_context = CreationContext {
@@ -2427,8 +2422,11 @@ impl ProductionComponents {
         })
     }
 
-    fn execute_agent_list(&self) -> Result<BackendResponse, ApiFailure> {
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+    fn execute_agent_list(
+        &self,
+        scope: &crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut agent = self.principal_agent(scope)?;
         let page = agent.agent_list(None, 100).map_err(agent_failure)?;
         Ok(BackendResponse {
             result: json!({"agents": page.agents.iter().map(managed_agent_json).collect::<Vec<_>>(), "next_cursor": page.next_cursor.map(|value| URL_SAFE_NO_PAD.encode(value)).unwrap_or_default()}),
@@ -2439,8 +2437,9 @@ impl ProductionComponents {
     fn execute_agent_get(
         &self,
         request: &ScopedRequest<'_>,
+        scope: &crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let value = agent
             .agent_get(path(request, "agent_id")?)
             .map_err(agent_failure)?;
@@ -2458,7 +2457,7 @@ impl ProductionComponents {
         if request.operation.name == "agent.resume" {
             return self.execute_agent_resume(request, scope);
         }
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let agent_id = path(request, "agent_id")?;
         let context = agent.agent_context(agent_id).map_err(agent_failure)?;
         let session = agent
@@ -2537,7 +2536,7 @@ impl ProductionComponents {
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
         let (amount, currency) = money_field(&request.body, "monthly_limit")?;
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let agent_id = path(request, "agent_id")?;
         let context = agent.agent_context(agent_id).map_err(agent_failure)?;
         if context.seed.currency != currency {
@@ -2623,7 +2622,7 @@ impl ProductionComponents {
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
         let (amount, currency) = money_field(&request.body, "money")?;
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let agent_id = path(request, "agent_id")?;
         let context = agent.agent_context(agent_id).map_err(agent_failure)?;
         if context.seed.currency != currency {
@@ -2712,7 +2711,7 @@ impl ProductionComponents {
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let agent_id = path(request, "agent_id")?;
         let confirm_name = text_field(&request.body, "confirm_name")?;
         let context = agent.agent_context(agent_id).map_err(agent_failure)?;
@@ -2981,7 +2980,7 @@ impl ProductionComponents {
         let signature = decode_hex(text_field(&request.body, "signature")?)
             .map_err(|()| ApiFailure::invalid_request(Some("signature")))?;
         let key: [u8; 32] = sha2::Sha256::digest(required_idempotency(request)?.as_bytes()).into();
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let owner = resolve_principal_owner(self, scope, &mut agent)?;
         let sequence = agent
             .account_sequence(&owner.actor, &owner.authority)
@@ -3011,7 +3010,7 @@ impl ProductionComponents {
         let status = super::executor::poll_once_ready(engine.advance(
             scope,
             &self.agent_contract,
-            &mut *agent,
+            &mut agent,
             &self.custody,
             &registry,
             &trace,
@@ -3135,7 +3134,7 @@ impl ProductionComponents {
         let signature = decode_hex(text_field(&request.body, "signature")?)
             .map_err(|()| ApiFailure::invalid_request(Some("signature")))?;
         let key: [u8; 32] = sha2::Sha256::digest(required_idempotency(request)?.as_bytes()).into();
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let owner = resolve_principal_owner(self, scope, &mut agent)?;
         let sequence = agent
             .account_sequence(&owner.actor, &owner.authority)
@@ -3175,7 +3174,7 @@ impl ProductionComponents {
             .copied();
         let custody_evidence = if phase == Some(crate::journeys::JourneyPhase::Prepared) {
             let prepared = engine
-                .prepared_disclosure_digest(&self.agent_contract, &mut *agent, &registry)
+                .prepared_disclosure_digest(&self.agent_contract, &mut agent, &registry)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
             let challenge = request
                 .body
@@ -3206,7 +3205,7 @@ impl ProductionComponents {
         let status = super::executor::poll_once_ready(engine.advance_authorized(
             scope,
             &self.agent_contract,
-            &mut *agent,
+            &mut agent,
             &self.custody,
             &registry,
             &trace,
@@ -3258,12 +3257,7 @@ impl ProductionComponents {
                 now()?,
             )
             .map_err(movement_failure)?;
-        let registry = self
-            .agent
-            .lock()
-            .map_err(|_| ApiFailure::unavailable())?
-            .registry()
-            .clone();
+        let registry = self.principal_agent(scope)?.registry().clone();
         let mut journey = crate::journeys::MoveJourney::commit(
             scope,
             &plan,
@@ -3274,11 +3268,11 @@ impl ProductionComponents {
         .map_err(move_journey_failure)?;
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let status = super::executor::poll_once_ready(journey.advance(
             scope,
             &self.agent_contract,
-            &mut *agent,
+            &mut agent,
             &self.custody,
             &registry,
             &trace,
@@ -3304,13 +3298,8 @@ impl ProductionComponents {
             .lock()
             .map_err(|_| ApiFailure::unavailable())?;
         let plan = movement.deposit_plan(planning).map_err(movement_failure)?;
-        let binding = crate::binding::BindingJourney::new(
-            self.agent
-                .lock()
-                .map_err(|_| ApiFailure::unavailable())?
-                .registry()
-                .clone(),
-        );
+        let binding =
+            crate::binding::BindingJourney::new(self.principal_agent(scope)?.registry().clone());
         let journey = crate::journeys::DepositJourney::start(scope, &binding, &plan, now()?)
             .map_err(deposit_journey_failure)?;
         let status = journey.status().map_err(deposit_journey_failure)?;
@@ -3343,14 +3332,14 @@ impl ProductionComponents {
             .map_err(deposit_journey_failure)?;
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let registry = agent.registry().clone();
         let status = movement
             .advance_deposit(
                 scope,
                 &mut journey,
                 &self.agent_contract,
-                &mut *agent,
+                &mut agent,
                 &self.custody,
                 &registry,
                 &trace,
@@ -3393,7 +3382,7 @@ impl ProductionComponents {
             .map_err(movement_failure)?;
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let registry = agent.registry().clone();
         let observed_at = now()?;
         let mut journey = movement
@@ -3405,7 +3394,7 @@ impl ProductionComponents {
                 .prepared_debit_disclosure_digest(
                     scope,
                     &self.agent_contract,
-                    &mut *agent,
+                    &mut agent,
                     &registry,
                 )
                 .map_err(withdrawal_journey_failure)?
@@ -3428,7 +3417,7 @@ impl ProductionComponents {
                     scope,
                     &mut journey,
                     &self.agent_contract,
-                    &mut *agent,
+                    &mut agent,
                     &self.custody,
                     &registry,
                     &trace,
@@ -3820,7 +3809,7 @@ impl ProductionComponents {
         &self,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let sequence = agent
             .head()
             .map_err(|_| ApiFailure::upstream_degraded())?
@@ -3850,7 +3839,7 @@ impl ProductionComponents {
     ) -> Result<BackendResponse, ApiFailure> {
         let approval_id = decode_id(path(request, "approval_id")?)
             .map_err(|()| ApiFailure::invalid_request(Some("approval_id")))?;
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let sequence = agent
             .head()
             .map_err(|_| ApiFailure::upstream_degraded())?
@@ -3876,7 +3865,7 @@ impl ProductionComponents {
     ) -> Result<BackendResponse, ApiFailure> {
         let approval_id = decode_id(path(request, "approval_id")?)
             .map_err(|()| ApiFailure::invalid_request(Some("approval_id")))?;
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let sequence = agent
             .head()
             .map_err(|_| ApiFailure::upstream_degraded())?
@@ -4102,7 +4091,7 @@ impl ProductionComponents {
         &self,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let balance = agent
             .balance()
             .map_err(|_| ApiFailure::upstream_degraded())?;
@@ -4189,9 +4178,7 @@ impl ProductionComponents {
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
         let balance = self
-            .agent
-            .lock()
-            .map_err(|_| ApiFailure::unavailable())?
+            .principal_agent(scope)?
             .balance()
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let mut material =
@@ -4268,9 +4255,7 @@ impl ProductionComponents {
     ) -> Result<BackendResponse, ApiFailure> {
         let filters = activity_filters(&request.body)?;
         let head = self
-            .agent
-            .lock()
-            .map_err(|_| ApiFailure::unavailable())?
+            .principal_agent(scope)?
             .head()
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let statement = EvidenceExport::new(self.feed, self.activity_export_maximum_bytes)
@@ -4348,9 +4333,7 @@ impl ProductionComponents {
         }
         let receipt_authority = ReceiptAuthority::from_entries(&entries);
         let head = self
-            .agent
-            .lock()
-            .map_err(|_| ApiFailure::unavailable())?
+            .principal_agent(scope)?
             .head()
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let (bundle, _) = EvidenceExport::new(self.feed, self.activity_export_maximum_bytes)
@@ -4422,9 +4405,7 @@ impl ProductionComponents {
                 .after(FeedCursor::parse(cursor).map_err(|error| activity_feed_failure(&error))?);
         }
         let head = self
-            .agent
-            .lock()
-            .map_err(|_| ApiFailure::unavailable())?
+            .principal_agent(scope)?
             .head()
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let page = self
@@ -4808,8 +4789,8 @@ impl ProductionComponents {
     ) -> Result<BackendResponse, ApiFailure> {
         match request.operation.name.as_str() {
             "agent.create" => self.execute_agent_create(request, scope),
-            "agent.list" => self.execute_agent_list(),
-            "agent.get" => self.execute_agent_get(request),
+            "agent.list" => self.execute_agent_list(scope),
+            "agent.get" => self.execute_agent_get(request, scope),
             "agent.pause" | "agent.resume" => self.execute_agent_pause(request, scope),
             "agent.limit" => self.execute_agent_limit(request, scope),
             "agent.reclaim" => self.execute_agent_reclaim(request, scope),
@@ -4902,7 +4883,7 @@ impl ProductionComponents {
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
-        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let mut agent = self.principal_agent(scope)?;
         let agent_id = path(request, "agent_id")?;
 
         let context = agent.agent_context(agent_id).map_err(agent_failure)?;

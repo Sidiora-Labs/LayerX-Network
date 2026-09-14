@@ -8,6 +8,22 @@ pub(super) struct PrincipalOwner {
     pub identity: super::super::agent_runtime::AgentCoreIdentity,
 }
 
+impl ProductionComponents {
+    pub(super) fn principal_agent(
+        &self,
+        scope: &crate::store::PrincipalScope<'_>,
+    ) -> Result<AgentRuntime, ApiFailure> {
+        let (actor, account) = movement_principal_account(scope)?;
+        let did =
+            Did::new(actor.as_str().as_bytes()).map_err(|_| ApiFailure::upstream_degraded())?;
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let asset = agent.native_fee_policy().map_err(agent_failure)?.asset_id;
+        agent
+            .for_subject(scope.principal(), &did, &account, asset)
+            .map_err(agent_failure)
+    }
+}
+
 pub(super) fn resolve_principal_owner(
     components: &ProductionComponents,
     scope: &crate::store::PrincipalScope<'_>,
