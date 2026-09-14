@@ -38,7 +38,7 @@ jobs:
       - name: Install pinned Foundry toolchain
         uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
       - name: Install pinned settlement compiler
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: paxeer-network/go.mod
           cache: false
