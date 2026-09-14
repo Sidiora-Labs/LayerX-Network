@@ -88,6 +88,8 @@ def main():
         header = bytes.fromhex(exported['canonical_header'].removeprefix('0x'))
         path = output / f'header-{batch}.bin'
         path.write_bytes(header)
+        certificate_directory = output / f'certificate-{batch}'
+        certificate_directory.mkdir(mode=0o700)
         native_environment = environment | {'LAYERX_TEST_DA_HEADER_FILE': str(path)}
         if batch == 1:
             for invalid_version in ('0', '3', '04', '+4', '4x', str(2 ** 64)):
@@ -96,7 +98,7 @@ def main():
                         cwd=ROOT, env=native_environment | {'LAYERX_TEST_DA_BONDED_SET_VERSION': invalid_version},
                         stdout=log, stderr=log, timeout=30)
                 assert rejected.returncode != 0, 'invalid bonded set version accepted'
-        prepared = subprocess.run([str(build / 'tests/lxp_test_daemon_finality_authority'), 'prepare'],
+        prepared = subprocess.run([str(build / 'tests/lxp_test_daemon_finality_authority'), 'prepare', str(certificate_directory)],
             cwd=ROOT, env=native_environment, check=True, capture_output=True, timeout=30)
         vector = json.loads(prepared.stdout)
         calldata = COMMON['run']('cast', 'calldata',
@@ -105,8 +107,6 @@ def main():
         receipt = chain.transaction(calldata, registry)
         assert int(receipt['status'], 16) == 1 and receipt['logs']
         observed = int(chain.rpc('eth_getBlockByNumber', [receipt['blockNumber'], False])['timestamp'], 16) * 1000
-        certificate_directory = output / f'certificate-{batch}'
-        certificate_directory.mkdir(mode=0o700)
         invoke([build / 'tests/lxp_test_daemon_finality_authority', 'emit', receipt['transactionHash'],
             int(receipt['blockNumber'], 16), observed, certificate_directory], native_environment,
             output / f'emit-{batch}.log')

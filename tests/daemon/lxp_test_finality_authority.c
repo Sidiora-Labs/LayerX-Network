@@ -208,6 +208,36 @@ static void prepare(void)
     (void)printf("]\"}\n");
 }
 
+static int attestations_file(const char *directory, bool writing)
+{
+    for (size_t i = 0U; i < certificate.attestation_count; ++i) {
+        uint8_t canonical[GP_ATTESTATION_BYTES], original[GP_ATTESTATION_BYTES];
+        lxp_guarantor_attestation retained;
+        struct stat metadata;
+        char path[1024];
+        FILE *file;
+        int length = snprintf(path, sizeof(path), "%s/guarantor-%zu.attestation", directory, i + 1U);
+        if (length < 0 || (size_t)length >= sizeof(path) ||
+            gp_attestation_encode(&certificate.attestations[i], canonical) != LXP_OK) FAIL();
+        file = fopen(path, writing ? "wbx" : "rb");
+        if (file == NULL) FAIL();
+        if (writing) {
+            if (fwrite(canonical, 1U, sizeof(canonical), file) != sizeof(canonical) ||
+                fclose(file) != 0) FAIL();
+        } else {
+            if (fstat(fileno(file), &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
+                fread(original, 1U, sizeof(original), file) != sizeof(original) ||
+                fgetc(file) != EOF || fclose(file) != 0 ||
+                memcmp(original, canonical, 209U) != 0 ||
+                gp_attestation_decode(original, sizeof(original), &retained) != LXP_OK ||
+                lxp_guarantor_attestation_verify(&retained, bonded_set.records[i].public_key) != LXP_OK)
+                FAIL();
+            certificate.attestations[i] = retained;
+        }
+    }
+    return 0;
+}
+
 static int check(lxp_daemon_finality_authority *authority, const char *name,
                   bool success, bool unavailable)
 {
@@ -231,12 +261,18 @@ int main(int argc, char **argv)
     int failed = 0;
     if (log_bootstrap() != 0 || fixture(&authority) != 0) FAIL();
     if (argc == 2 && strcmp(argv[1], "prepare") == 0) { prepare(); return 0; }
+    if (argc == 3 && strcmp(argv[1], "prepare") == 0) {
+        if (attestations_file(argv[2], true) != 0) FAIL();
+        prepare();
+        return 0;
+    }
     if (argc == 6 && strcmp(argv[1], "emit") == 0) {
         lxp_arena arena;
         lxp_byte_span payload, proof;
         FILE *output;
         char path[1024];
-        if (decode(argv[2], registration.transaction_id, 32U) != 0) FAIL();
+        if (attestations_file(argv[5], false) != 0 ||
+            decode(argv[2], registration.transaction_id, 32U) != 0) FAIL();
         registration.observed_block_number = strtoull(argv[3], NULL, 10);
         registration.observed_at_ms = strtoull(argv[4], NULL, 10);
         if (lxp_arena_init(&arena, memory, sizeof(memory)) != LXP_OK ||
@@ -249,15 +285,6 @@ int main(int argc, char **argv)
             if (length < 0 || (size_t)length >= sizeof(path)) FAIL();
             output = fopen(path, "wb");
             if (output == NULL || fwrite(bytes.bytes, 1U, bytes.length, output) != bytes.length ||
-                fclose(output) != 0) FAIL();
-        }
-        for (size_t i = 0U; i < certificate.attestation_count; ++i) {
-            uint8_t canonical[GP_ATTESTATION_BYTES];
-            int length = snprintf(path, sizeof(path), "%s/guarantor-%zu.attestation", argv[5], i + 1U);
-            if (length < 0 || (size_t)length >= sizeof(path) ||
-                gp_attestation_encode(&certificate.attestations[i], canonical) != LXP_OK) FAIL();
-            output = fopen(path, "wb");
-            if (output == NULL || fwrite(canonical, 1U, sizeof(canonical), output) != sizeof(canonical) ||
                 fclose(output) != 0) FAIL();
         }
         return 0;
