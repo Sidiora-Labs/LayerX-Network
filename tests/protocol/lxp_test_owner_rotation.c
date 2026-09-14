@@ -1,6 +1,7 @@
 #include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_protocol.h"
 #include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +20,7 @@ typedef struct rotation_fixture {
     lxp_module_ctx ctx;
     lxp_effect_buffer effects;
     lxp_arena arena;
-    uint8_t arena_bytes[32768];
+    uint8_t arena_bytes[2U * LXP_MAX_ACTIVITY_BYTES];
     uint8_t previous[223];
     uint8_t old_public[32];
     uint8_t new_public[32];
@@ -104,7 +105,7 @@ static int encode(EVP_PKEY *key_value, const uint8_t public_key[32], const uint8
     size_t payload_length, uint8_t *output, size_t *length)
 {
     lxp_activity activity = {0}; lxp_arena arena; lxp_byte_span encoded;
-    uint8_t storage[2048], digest[32], signature[64]; size_t signature_length = sizeof(signature);
+    uint8_t storage[LXP_MAX_ACTIVITY_BYTES], digest[32], signature[64]; size_t signature_length = sizeof(signature);
     activity.protocol_version = 3U; activity.network_id = 77U; activity.activity_type = 0x00070002U;
     activity.actor_did = (lxp_byte_span){owner_did, sizeof(owner_did) - 1U};
     activity.authority = (lxp_byte_span){public_key, 32U}; activity.idempotency_key[0] = 4U;
