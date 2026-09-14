@@ -169,6 +169,8 @@ impl SequencerHistory {
             .as_slice()
             .try_into()
             .map_err(|_| HistoryError::Genesis)?;
+        sequencer_id(&initial_sequencer_key).map_err(|_| HistoryError::Genesis)?;
+        sequencer_id(&governance_key).map_err(|_| HistoryError::Genesis)?;
         if network_id == 0
             || genesis_root == [0; 32]
             || initial_sequencer_key == [0; 32]
@@ -396,6 +398,10 @@ fn verify_availability(
     let roots = availability.record_roots();
     if availability.batch_number() != header.batch_number()
         || availability.data_availability_root() != header.data_availability_root()
+        || availability.chunks.iter().any(|chunk| {
+            chunk.chunk().batch_number != header.batch_number()
+                || chunk.data_availability_root() != header.data_availability_root()
+        })
         || roots.activity != header.activity_merkle_root()
         || roots.receipt != header.receipt_merkle_root()
         || roots.event != header.event_merkle_root()

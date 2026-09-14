@@ -34,7 +34,7 @@ static FILE *public_export(const char *name)
 
 static void export_genesis(gp_runtime *runtime)
 {
-    lxp_kernel *kernel = gp_runtime_engine(runtime)->kernel;
+    const lxp_kernel *kernel = gp_runtime_engine(runtime)->kernel;
     if (!kernel->handover.enabled || getenv("LAYERX_TEST_PUBLICATION_EXPORT_DIR") == NULL)
         return;
     uint8_t key[32] = "handover-authority";
@@ -48,7 +48,7 @@ static void export_genesis(gp_runtime *runtime)
     assert(lxp_state_proof_encode(proof, encoded, LXP_STATE_WITNESS_MAX_BYTES, &length) == LXP_OK);
     assert(length <= UINT32_MAX && kernel->module_count <= UINT32_MAX);
     FILE *output = public_export("handover-genesis.bin");
-    write_u32(output, kernel->network_id);
+    write_u32(output, kernel->handover.network_id);
     assert(fwrite(kernel->current_state_root, 32U, 1U, output) == 1U);
     assert(fwrite(kernel->handover.genesis_authorization.public_key, 32U, 1U, output) == 1U);
     write_u32(output, (uint32_t)length);

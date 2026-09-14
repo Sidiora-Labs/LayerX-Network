@@ -52,6 +52,17 @@ pub struct Evidence<'a> {
 /// # Errors
 /// Refuses hashing inputs outside the native bound.
 pub fn sequencer_id(public_key: &[u8; 32]) -> Result<[u8; 32], HandoverError> {
+    let mut coordinate = *public_key;
+    coordinate[31] &= 0x7f;
+    let mut prime = [0xff_u8; 32];
+    prime[0] = 0xed;
+    prime[31] = 0x7f;
+    if coordinate.iter().all(|byte| *byte == 0)
+        || (coordinate[0] == 1 && coordinate[1..].iter().all(|byte| *byte == 0))
+        || coordinate.iter().rev().cmp(prime.iter().rev()) != std::cmp::Ordering::Less
+    {
+        return Err(HandoverError::Certificate);
+    }
     let mut preimage = [0_u8; 81];
     preimage[..17].copy_from_slice(b"layerx-sequencer:\0");
     let digits = b"0123456789abcdef";
