@@ -646,12 +646,15 @@ static int metered_session_client(int descriptor, const uint8_t id[32],
                                   const wire_envelope *response)
 {
     const char *client = getenv("LAYERX_TEST_SESSION_FEE_CLIENT");
+    const char *clock = getenv("LAYERX_TEST_SESSION_FEE_CLOCK");
+    const char *clock_directory = getenv("LAYERX_TEST_SESSION_FEE_CLOCK_DIRECTORY");
     struct sockaddr_un address;
     socklen_t address_length = sizeof(address);
     char id_hex[65], payload_hex[2801];
     static const char digits[] = "0123456789abcdef";
     int child_status;
     if (client == NULL) return 0;
+    REQUIRE(clock != NULL && clock_directory != NULL);
     REQUIRE(response->payload_length <= 1400U);
     REQUIRE(getpeername(descriptor, (struct sockaddr *)&address, &address_length) == 0);
     for (size_t i = 0U; i < 32U; ++i) {
@@ -670,7 +673,8 @@ static int metered_session_client(int descriptor, const uint8_t id[32],
         if (setenv("LAYERX_TEST_SESSION_FEE_SOCKET", address.sun_path, 1) != 0 ||
             setenv("LAYERX_TEST_SESSION_FEE_GRANT", id_hex, 1) != 0 ||
             setenv("LAYERX_TEST_SESSION_FEE_EXPECTED", payload_hex, 1) != 0) _exit(125);
-        execl(client, client, "--exact", "real_daemon_session_fee_state", "--nocapture",
+        execl(clock, clock, "--runtime-dir", clock_directory, "--", client,
+              "--exact", "real_daemon_session_fee_state", "--nocapture",
               "--test-threads=1", (char *)NULL);
         _exit(126);
     }

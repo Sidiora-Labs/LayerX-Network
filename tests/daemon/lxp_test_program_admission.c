@@ -168,12 +168,20 @@ static int descriptor_read_all_deadline(int descriptor, uint8_t *bytes,
         ready = poll(&pending, 1U, remaining);
         if (ready < 0 && errno == EINTR) continue;
         if (ready <= 0 ||
-            (pending.revents & (POLLERR | POLLNVAL)) != 0)
+            (pending.revents & (POLLERR | POLLNVAL)) != 0) {
+            (void)fprintf(stderr, "native read poll ready=%d revents=%d offset=%zu length=%zu elapsed=%lld errno=%d\n",
+                ready, (int)pending.revents, offset, length,
+                (long long)(monotonic_milliseconds() - start), errno);
             return 1;
+        }
         ssize_t received = read(descriptor, bytes + offset, length - offset);
         if (received > 0) offset += (size_t)received;
         else if (received < 0 && errno == EINTR) continue;
-        else return 1;
+        else {
+            (void)fprintf(stderr, "native read returned=%lld offset=%zu length=%zu errno=%d\n",
+                (long long)received, offset, length, errno);
+            return 1;
+        }
     }
     return 0;
 }
@@ -412,6 +420,9 @@ static int expect_ack(int descriptor, uint64_t correlation_id,
         memcmp(response.payload, activity, activity_length) != 0 ||
         response.proof_length != 32U ||
         memcmp(response.proof, activity_id, 32U) != 0) {
+        (void)fprintf(stderr, "submission acknowledgement tag=%u correlation=%llu payload=%zu expected=%zu proof=%zu\n",
+            response.tag, (unsigned long long)response.correlation_id,
+            response.payload_length, activity_length, response.proof_length);
         release_envelope(&response);
         return 1;
     }

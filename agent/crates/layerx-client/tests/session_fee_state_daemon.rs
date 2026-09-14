@@ -95,6 +95,11 @@ fn real_daemon_session_fee_state() {
     }
     let evidence =
         std::env::temp_dir().join(format!("lxp-session-fee-evidence-{}", std::process::id()));
+    let clock = checked(
+        std::env::var_os("LAYERX_TEST_RUNTIME_CLOCK_BIN")
+            .ok_or("actual LAYERX_TEST_RUNTIME_CLOCK_BIN is required for the confined Client"),
+    );
+    assert!(Path::new(&clock).is_file());
     checked(fs::create_dir(&evidence));
     let output = checked(
         Command::new(std::env::var_os("LAYERX_TEST_PYTHON").unwrap_or_else(|| "python3".into()))

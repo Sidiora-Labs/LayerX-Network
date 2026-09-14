@@ -160,9 +160,16 @@ if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} 
     if [[ ${2:-} == --metered-allowance ]]; then
         scenario_state="$work/scenario/state"
         if [[ -n ${LAYERX_TEST_SESSION_FEE_CLIENT:-} ]]; then
+            : "${LAYERX_TEST_RUNTIME_CLOCK_BIN:?actual runtime clock is required for the session fee client}"
             cp "$LAYERX_TEST_SESSION_FEE_CLIENT" "$work/session-fee-client"
-            chmod 0755 "$work/session-fee-client"
+            cp "$LAYERX_TEST_RUNTIME_CLOCK_BIN" "$work/session-fee-clock"
+            chmod 0755 "$work/session-fee-client" "$work/session-fee-clock"
+            mkdir "$runtime/session-fee-clock"
+            chown 4021:4021 "$runtime/session-fee-clock"
+            chmod 0700 "$runtime/session-fee-clock"
             export LAYERX_TEST_SESSION_FEE_CLIENT="$work/session-fee-client"
+            export LAYERX_TEST_SESSION_FEE_CLOCK="$work/session-fee-clock"
+            export LAYERX_TEST_SESSION_FEE_CLOCK_DIRECTORY="$runtime/session-fee-clock"
         fi
         install -m 0600 -o 4021 -g 4021 "$work/data/secrets/program-token" "$work/scenario/program-token"
         export LAYERX_TEST_METERED_PROGRAM_PORT="$program_port"

@@ -2396,6 +2396,15 @@ PUBLIC_TLS_TEST_CLOCK = $(PUBLIC_TLS_TEST_TARGET_DIR)/debug/layerx-runtime-clock
 public-tls-test-prerequisites:
 	cargo build --manifest-path platform/Cargo.toml --locked -p layerx-platform-paxeer-boundary -p layerx-runtime-clock --target-dir "$(PUBLIC_TLS_TEST_TARGET_DIR)"
 
+.PHONY: agent-test-native-prerequisites
+agent-test agent-test-sanitize: agent-test-native-prerequisites
+agent-test agent-test-sanitize: export PAXD = $(abspath paxeer-network/build/paxd)
+agent-test agent-test-sanitize: export LAYERX_CUSTODY_PROOF_BIN = $(abspath $(BUILD_DIR)/bin/layerx-custody-proof)
+agent-test agent-test-sanitize: export LAYERX_TEST_NATIVE_BIN_DIR = $(abspath $(BUILD_DIR)/bin)
+agent-test agent-test-sanitize: export LAYERX_TEST_NATIVE_BUILD_DIR = $(abspath $(BUILD_DIR))
+agent-test-native-prerequisites:
+	LAYERX_TEST_NATIVE_BUILD_DIR="$(abspath $(BUILD_DIR))" sh agent/tools/run-real-node-tests.sh prepare
+
 agent-test: public-tls-test-prerequisites
 	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" LAYERX_RUNTIME_CLOCK_BIN="$(PUBLIC_TLS_TEST_CLOCK)" LAYERX_TEST_RUNTIME_CLOCK_BIN="$(PUBLIC_TLS_TEST_CLOCK)" sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked --workspace
 
