@@ -2443,6 +2443,90 @@ fn agent_evidence_digest(
 }
 
 impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
+    fn dispatch_queued(
+        &mut self,
+        peer: &HumanPeer,
+        submission_id: [u8; 32],
+        registry: &ModuleRegistry,
+        signer: [u8; 32],
+        correlation: u64,
+    ) -> Result<HumanResponse, HumanOperationError> {
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        let bytes = subject::begin_transmission(
+            self.outboxes.entry(peer.tenant.clone()).or_default(),
+            &mut store,
+            submission_id,
+        )?;
+        let (state, reason) =
+            match self
+                .node
+                .submit_signed(registry, signer, correlation, 0, &bytes)
+            {
+                Ok(Submission::Acknowledged(_)) => {
+                    (SubmissionState::Acknowledged, "core admission acknowledged")
+                }
+                Ok(Submission::Unknown(_)) => {
+                    (SubmissionState::Unknown, "submission outcome indeterminate")
+                }
+                Err(_) => (
+                    SubmissionState::Unknown,
+                    "node submission boundary unavailable after durable dispatch",
+                ),
+            };
+        self.outboxes
+            .entry(peer.tenant.clone())
+            .or_default()
+            .transition(&mut store, submission_id, state, reason, None)
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        Self::observation(
+            self.outboxes
+                .entry(peer.tenant.clone())
+                .or_default()
+                .status(submission_id)
+                .ok_or(HumanOperationError::Unavailable)?,
+        )
+    }
+
+    fn resume_queued(
+        &mut self,
+        peer: &HumanPeer,
+        identifier: [u8; 32],
+        expected_activity: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError> {
+        let registry = self.authority.registry(peer).map_err(map_core)?;
+        let bytes = self
+            .outboxes
+            .entry(peer.tenant.clone())
+            .or_default()
+            .bytes_for_transmission(identifier)
+            .map_err(|_| HumanOperationError::Refused)?
+            .to_vec();
+        let activity = layerx_wire::activity::decode_signed(&bytes, &registry)
+            .map_err(|_| HumanOperationError::Refused)?;
+        if activity.idempotency_key() != identifier
+            || layerx_wire::hash::activity_id(&activity)
+                .map_err(|_| HumanOperationError::Refused)?
+                != expected_activity
+            || activity.network_id() != self.node.handshake().node().network_id
+            || activity.protocol_version() != self.node.handshake().node().protocol_version
+        {
+            return Err(HumanOperationError::Refused);
+        }
+        let signer = activity
+            .authority()
+            .try_into()
+            .map_err(|_| HumanOperationError::Refused)?;
+        let correlation = u64::from_be_bytes(
+            identifier[..8]
+                .try_into()
+                .map_err(|_| HumanOperationError::Refused)?,
+        ) | 1;
+        self.dispatch_queued(peer, identifier, &registry, signer, correlation)
+    }
+
     fn subject_owner(
         &mut self,
         peer: &HumanPeer,
@@ -3187,40 +3271,13 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
             ),
             submission_id,
         );
-        let bytes = subject::begin_transmission(
-            self.outboxes.entry(peer.tenant.clone()).or_default(),
-            &mut store,
+        drop(store);
+        self.dispatch_queued(
+            peer,
             submission_id,
-        )?;
-        let (state, reason) = match self.node.submit_signed(
             &cached.registry,
             request.operation.signer_public_key,
             request.request_id,
-            0,
-            &bytes,
-        ) {
-            Ok(Submission::Acknowledged(_)) => {
-                (SubmissionState::Acknowledged, "core admission acknowledged")
-            }
-            Ok(Submission::Unknown(_)) => {
-                (SubmissionState::Unknown, "submission outcome indeterminate")
-            }
-            Err(_) => (
-                SubmissionState::Unknown,
-                "node submission boundary unavailable after durable dispatch",
-            ),
-        };
-        self.outboxes
-            .entry(peer.tenant.clone())
-            .or_default()
-            .transition(&mut store, submission_id, state, reason, None)
-            .map_err(|_| HumanOperationError::Unavailable)?;
-        Self::observation(
-            self.outboxes
-                .entry(peer.tenant.clone())
-                .or_default()
-                .status(submission_id)
-                .ok_or(HumanOperationError::Unavailable)?,
         )
     }
 
@@ -3245,6 +3302,9 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
             .status(id)
             .ok_or(HumanOperationError::Refused)?
             .clone();
+        if status.state == SubmissionState::Queued {
+            return self.resume_queued(peer, id, status.activity_id);
+        }
         if status.state == SubmissionState::Submitted {
             let mut store = self
                 .store
