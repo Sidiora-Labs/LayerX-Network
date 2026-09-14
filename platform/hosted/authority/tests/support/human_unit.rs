@@ -200,7 +200,7 @@ fn registry_rejects_legacy_and_invalid_asset_metadata() {
 #[test]
 fn authorized_activity_uses_the_real_receipt_transition_before_maintenance() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../agent/tests/fixtures/custody/daemon-credit-receipt");
+        .join("../../../tests/fixtures/custody/daemon-credit-receipt");
     let bytes = fs::read(root.join("credit.receipt"))
         .unwrap_or_else(|error| panic!("native receipt: {error}"));
     let header_bytes =

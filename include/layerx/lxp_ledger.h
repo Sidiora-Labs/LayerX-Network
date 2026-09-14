@@ -285,6 +285,7 @@ typedef struct lxp_state_proof {
 
 lxp_result lx_account_name_parse(const uint8_t *name, size_t name_length,
                                  lx_account_name *parsed);
+lxp_result lx_account_owner_did(const lx_account *account, uint8_t owner[32]);
 lxp_result lx_account_kind_of(const uint8_t *name, size_t name_length,
                               lx_account_kind *kind);
 lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,

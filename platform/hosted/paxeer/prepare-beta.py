@@ -5,10 +5,13 @@ import os
 from pathlib import Path
 import secrets
 import subprocess
+import sys
 import time
 
 ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / 'node'))
+from genesis_fees import MODULE_NAMES, module_metadata, module_prices
 BETA_PROTOCOL_VERSION = 3
 BETA_ASSET_ID = 'b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'
 
@@ -34,16 +37,29 @@ def keypair(directory, name):
     return address, '0x' + compressed.hex()
 
 
-def genesis_request(guarantors, network_id, asset_id, timestamp_ms, metadata):
+def genesis_modules():
+    modules = (ROOT.parent / 'node/genesis-modules.conf').read_text().splitlines()
+    if len(modules) != 5 or set(modules) != {'budget', 'escrow', 'perps', 'service', 'stream'}:
+        raise ValueError('invalid public testnet genesis module configuration')
+    return tuple(sorted(modules))
+
+
+def genesis_request(guarantors, network_id, asset_id, timestamp_ms, metadata, modules=None):
     if not 0 < network_id < 2**32 or not 0 < timestamp_ms < 2**64:
         raise ValueError('invalid genesis network or timestamp')
     asset = bytes.fromhex(asset_id.removeprefix('0x'))
     if len(asset) != 32 or not any(asset) or len(guarantors) != 3:
         raise ValueError('beta genesis requires one asset and three guarantors')
+    modules = genesis_modules() if modules is None else tuple(modules)
+    if len(modules) != len(set(modules)) or not set(modules) <= set(genesis_modules()):
+        raise ValueError('invalid genesis module selection')
     be = lambda value, width: value.to_bytes(width, 'big')
     request = bytearray(b'LXGB\x02' + be(BETA_PROTOCOL_VERSION, 2))
-    request += be(network_id, 4) + be(timestamp_ms, 8) + be(1, 2) + be(7, 2)
-    request += b'parameter-version'.ljust(32, b'\x00') + be(1, 32)
+    request += be(network_id, 4) + be(timestamp_ms, 8) + be(2 + len(modules), 2)
+    for key in sorted(['parameter-version', 'native-fee-authority-version',
+                       *('module-enable:' + module for module in modules)]):
+        request += be(7, 2) + key.encode().ljust(32, b'\x00')
+        request += be(2 if key == 'native-fee-authority-version' else 1, 32)
     request += be(len(guarantors), 2)
     previous = bytes(32)
     for member in guarantors:
@@ -73,9 +89,11 @@ def main():
     parser.add_argument('--network-id', type=int, default=402)
     parser.add_argument('--asset-id', default=BETA_ASSET_ID)
     parser.add_argument('--genesis-metadata', type=Path, required=True)
+    parser.add_argument('--withdrawal-fee', type=int, default=0)
+    parser.add_argument('--module-fees', type=Path, default=ROOT.parent / 'node/genesis-module-fees.json')
     parser.add_argument('--timestamp-ms', type=int, default=int(time.time() * 1000))
     args = parser.parse_args()
-    metadata = args.genesis_metadata.read_bytes()
+    metadata = module_metadata(args.genesis_metadata.read_bytes(), args.withdrawal_fee, module_prices(args.module_fees))
     os.umask(0o077)
     target = args.directory.resolve()
     target.mkdir(mode=0o700, parents=False, exist_ok=False)
@@ -99,6 +117,7 @@ def main():
     (target/'deployment-input.json').write_text(json.dumps(deployment, indent=2) + '\n')
     (target/'genesis-request.lxgb').write_bytes(genesis_request(
         guarantors, args.network_id, args.asset_id, args.timestamp_ms, metadata))
+    (target/'metadata.lxgb').write_bytes(metadata)
     (keys/'genesis-signer.key').write_bytes(secrets.token_bytes(32))
     print(target)
 

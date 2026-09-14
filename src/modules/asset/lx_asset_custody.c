@@ -372,7 +372,7 @@ lxp_result lx_asset_withdraw_request(lxp_module_ctx *ctx,
     set.legs[0].amount = withdrawal->amount;
     set.legs[0].reason = LXP_REASON_WITHDRAWAL;
     set.context = transfer->context;
-    status = lxp_ctx_emit_transfer_set(ctx, &set, receipt);
+    status = lxp_ctx_emit_monetary_transfer_set(ctx, &set, receipt);
     if (status != LXP_OK) {
         lxp_module_ctx_rollback(ctx);
         return status;

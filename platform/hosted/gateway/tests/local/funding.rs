@@ -20,6 +20,7 @@ pub(super) struct Funding {
     nodes: Vec<Daemon>,
     root: PathBuf,
     checkpoint_output: Option<PathBuf>,
+    withdrawal: bool,
     pub(super) recipient_did: String,
     pub(super) recipient_seed: [u8; 32],
 }
@@ -215,6 +216,14 @@ fn funding_root() -> PathBuf {
 }
 
 pub(super) fn start() -> (Cluster, Funding) {
+    start_configured(false)
+}
+
+pub(super) fn start_withdrawal() -> (Cluster, Funding) {
+    start_configured(true)
+}
+
+fn start_configured(withdrawal: bool) -> (Cluster, Funding) {
     let root = funding_root();
     let recipient_seed = random32();
     let recipient_did = treasury_did(&recipient_seed);
@@ -222,6 +231,7 @@ pub(super) fn start() -> (Cluster, Funding) {
         nodes: Vec::new(),
         root,
         checkpoint_output: None,
+        withdrawal,
         recipient_did: recipient_did.clone(),
         recipient_seed,
     };
@@ -592,6 +602,7 @@ fn funded_genesis(
     builder: &Path,
     sequencer_seed: &[u8; 32],
     profile: &Path,
+    withdrawal: bool,
 ) -> Genesis {
     let directory = root.join("genesis");
     make_dir(&directory, 0o755);
@@ -607,6 +618,9 @@ fn funded_genesis(
     request[schedule + 151..schedule + 167].copy_from_slice(&4_u128.to_be_bytes());
     request[schedule + 167..schedule + 183].copy_from_slice(&4_u128.to_be_bytes());
     request[schedule + 183..schedule + 199].copy_from_slice(&4_u128.to_be_bytes());
+    if withdrawal {
+        request = super::withdrawal::configure_genesis(&request);
+    }
     write(&directory.join("request.lxgb"), &request, 0o600);
     write(&directory.join("signer.key"), sequencer_seed, 0o600);
     let artifacts = directory.join("artifacts");
@@ -665,7 +679,13 @@ fn start_node(
     let treasury_key = SigningKey::from_bytes(&treasury_seed)
         .verifying_key()
         .to_bytes();
-    let genesis = funded_genesis(&root, &builder, &sequencer_seed, profile);
+    let genesis = funded_genesis(
+        &root,
+        &builder,
+        &sequencer_seed,
+        profile,
+        funding.withdrawal,
+    );
     let settlement = start_checkpoint_settlement(funding, &root, &genesis);
     let replica_token = token();
     let program_token = token();

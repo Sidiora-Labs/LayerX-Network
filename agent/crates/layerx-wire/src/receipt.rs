@@ -400,6 +400,11 @@ impl ProtocolReceipt {
 
 impl Effect {
     #[must_use]
+    pub const fn ordinal(&self) -> u16 {
+        self.ordinal
+    }
+
+    #[must_use]
     pub const fn module_id(&self) -> u16 {
         self.module_id
     }

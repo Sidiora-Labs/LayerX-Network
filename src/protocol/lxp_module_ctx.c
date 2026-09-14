@@ -524,6 +524,11 @@ static lxp_result account_registry_preview(
             return status;
         }
     }
+    if (ctx->owner_rotation_staged) {
+        status = lxp_governance_rotation_accounts(ctx, preview, true);
+        if (status != LXP_OK) lx_account_registry_release(preview);
+        return status;
+    }
     return LXP_OK;
 }
 
@@ -920,6 +925,11 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
     }
     if (ctx->identity_staged && lxp_governance_onboarding_prepared(ctx) != LXP_OK)
         return LXP_FATAL_INVARIANT;
+    if (ctx->owner_rotation_staged) {
+        if (lxp_governance_rotation_prepared(ctx) != LXP_OK ||
+            lxp_governance_rotation_accounts(ctx, ctx->kernel->state->accounts, true) != LXP_OK)
+            return LXP_FATAL_INVARIANT;
+    }
     for (i = 0U; i < ctx->staged_account_count; ++i) {
         lx_account *committed;
         status = commit_account(ctx,
@@ -987,6 +997,18 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
             staged->bytes = NULL;
         }
     }
+    if (ctx->owner_rotation_staged) {
+        bool found = false;
+        for (size_t index = 0U; index < ctx->identities->count; ++index) {
+            lxp_identity *identity = &ctx->identities->identities[index];
+            if (memcmp(identity->did_id, ctx->owner_rotation_did, 32U) != 0) continue;
+            if (found || lxp_governance_identity_refresh(ctx->kernel, identity) != LXP_OK)
+                return LXP_FATAL_INVARIANT;
+            found = true;
+        }
+        if (!found) return LXP_FATAL_INVARIANT;
+        ctx->owner_rotation_staged = false;
+    }
     if (ctx->identity_staged) {
         ctx->identities->identities[ctx->identities->count++] = ctx->staged_identity;
         ctx->identity_staged = false;
@@ -1034,7 +1056,11 @@ lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx)
             ctx->kernel->module_kv_count) ++additions;
     if (additions > LXP_KERNEL_MAX_MODULE_KV - ctx->kernel->module_kv_count)
         return LXP_ERR_ARENA_EXHAUSTED;
-    if (ctx->staged_account_count != 0U) {
+    if (ctx->owner_rotation_staged) {
+        status = lxp_governance_rotation_prepared(ctx);
+        if (status != LXP_OK) return status;
+    }
+    if (ctx->staged_account_count != 0U || ctx->owner_rotation_staged) {
         account_preview = (lx_account_registry *)malloc(
             sizeof(*account_preview));
         if (account_preview == NULL) return LXP_ERR_ARENA_EXHAUSTED;
@@ -1331,6 +1357,7 @@ void lxp_module_ctx_rollback(lxp_module_ctx *ctx)
     ctx->staged_count = 0U;
     ctx->staged_account_count = 0U;
     ctx->identity_staged = false;
+    ctx->owner_rotation_staged = false;
     for (i = 0U; i < ctx->staged_blob_count; ++i)
         free(ctx->staged_blobs[i].bytes);
     ctx->staged_blob_count = 0U;
@@ -2256,7 +2283,7 @@ lxp_result lxp_ctx_bind_ledger_receipt(
         memcmp(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U) != 0 ||
         ctx->ledger_admission.activity_type !=
             ((uint32_t)LXP_MODULE_ASSET << 16U | input->operation) ||
-        (input->operation != 5U && input->operation != 6U &&
+        (input->operation != 5U && input->operation != 6U && input->operation != 9U &&
          input->operation != 10U && input->operation != 11U) ||
         lxp_u128_is_zero(input->amount) ||
         input->leg_count != 1U || input->global_sequence != ctx->global_sequence ||
@@ -2278,6 +2305,34 @@ lxp_result lxp_ctx_bind_ledger_receipt(
         lxp_u128_cmp(expected_from, input->from_balance_after) != 0 ||
         lxp_u128_cmp(expected_to, input->to_balance_after) != 0)
         return LXP_ERR_NON_CANONICAL;
+    if (input->operation == 9U) {
+        const lx_asset_runtime *runtime = lxp_ctx_module_runtime(ctx);
+        lx_account *from = NULL;
+        lx_account *to = NULL;
+        const uint8_t *stored = NULL;
+        size_t length = 0U;
+        uint8_t key[LX_WITHDRAWAL_STATE_KEY_BYTES];
+        lx_withdrawal_record withdrawal;
+        (void)memcpy(key, "withdrawal:", 11U);
+        (void)memcpy(key + 11U, input->context_hash, 32U);
+        if (runtime == NULL ||
+            lxp_ctx_account_find(ctx, input->from, &from) != LXP_OK ||
+            lxp_ctx_account_find(ctx, input->to, &to) != LXP_OK ||
+            from->kind != LX_ACCOUNT_AGENT_MAIN ||
+            to->kind != LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS ||
+            input->from_sequence == UINT64_MAX ||
+            from->next_sequence != input->from_sequence + 1U ||
+            input->from_sequence != ctx->ledger_admission.next_sequence ||
+            memcmp(input->from, ctx->ledger_admission.account_id, 32U) != 0 ||
+            lxp_ctx_kv_get(ctx, key, sizeof(key), &stored, &length) != LXP_OK ||
+            lx_withdrawal_state_decode(key, sizeof(key), stored, length, &withdrawal) != LXP_OK ||
+            withdrawal.request.network_id != runtime->network_id ||
+            memcmp(withdrawal.request.withdrawal_id, ctx->activity_id, 32U) != 0 ||
+            memcmp(withdrawal.request.account_id, input->from, 32U) != 0 ||
+            memcmp(withdrawal.request.asset_id, input->asset, 32U) != 0 ||
+            lxp_u128_cmp(withdrawal.request.amount, input->amount) != 0)
+            return LXP_ERR_NON_CANONICAL;
+    }
     {
         size_t from_matches = 0U;
         size_t to_matches = 0U;
@@ -2338,7 +2393,7 @@ lxp_result lxp_module_ctx_export_prepared(
     bool prepared_here = false;
     if (ctx == NULL || effects == NULL || level_snapshot_token == NULL ||
         lxp_ct_is_zero(level_snapshot_token, 32U) || prepared == NULL ||
-        *prepared != NULL || !ctx->mutable || ctx->kernel == NULL || ctx->identity_staged ||
+        *prepared != NULL || !ctx->mutable || ctx->kernel == NULL || ctx->identity_staged || ctx->owner_rotation_staged ||
         ctx->effects != effects || ctx->next_effect_ordinal != effects->count ||
         !effects_are_canonical(ctx->module_id, effects) ||
         ctx->staged_count > LXP_MODULE_MAX_STAGED_WRITES ||
@@ -2503,7 +2558,7 @@ lxp_result lxp_module_ctx_import_prepared(
         lxp_ct_is_zero(level_snapshot_token, 32U) || effects == NULL ||
         !ctx->mutable || ctx->kernel == NULL || ctx->kernel->state == NULL ||
         ctx->effects != effects || effects->count != 0U ||
-        ctx->next_effect_ordinal != 0U || ctx->identity_staged ||
+        ctx->next_effect_ordinal != 0U || ctx->identity_staged || ctx->owner_rotation_staged ||
         ctx->kernel->state->accounts == NULL || ctx->staged_count != 0U ||
         ctx->staged_account_count != 0U || ctx->staged_blob_count != 0U ||
         ctx->transfer_snapshot_count != 0U || ctx->commit_prepared ||
@@ -2757,7 +2812,7 @@ lxp_result lxp_module_savepoint_begin(lxp_module_ctx *ctx,
                                       lxp_module_savepoint *savepoint)
 {
     if (ctx == NULL || savepoint == NULL || savepoint->active ||
-        ctx->effects == NULL || ctx->commit_prepared || ctx->identity_staged)
+        ctx->effects == NULL || ctx->commit_prepared || ctx->identity_staged || ctx->owner_rotation_staged)
         return LXP_ERR_NON_CANONICAL;
     *savepoint = (lxp_module_savepoint){
         lxp_arena_mark(ctx->arena), ctx->staged_count,

@@ -206,11 +206,11 @@ static int onboard_account(int descriptor, const uint8_t id[32], const uint8_t a
         REQUIRE(response.tag == ERROR_RESPONSE && response.payload_length == 5U &&
             (lxp_result)load_u32(response.payload + 1U) == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE);
     } else {
-        REQUIRE(response.tag == 8U && response.payload_length >= 102U && response.proof_length != 0U);
+        REQUIRE(response.tag == 8U && response.payload_length >= 103U && response.proof_length != 0U);
         const uint8_t *value = response.payload;
         size_t names = load_u16(value), offset = 3U + names;
         uint8_t actual[32];
-        REQUIRE(names != 0U && names <= LX_ACCOUNT_NAME_MAX && response.payload_length == names + 102U);
+        REQUIRE(names != 0U && names <= LX_ACCOUNT_NAME_MAX && response.payload_length == names + 103U);
         REQUIRE(lx_account_id_from_string(value + 2U, names, actual) == LXP_OK && memcmp(actual, id, 32U) == 0);
         REQUIRE(lxp_u128_from_be(value + offset, balance) == LXP_OK);
         REQUIRE(memcmp(value + offset + 16U, asset, 32U) == 0 && value[offset + 48U] == 1U);
@@ -269,7 +269,9 @@ static int onboard_budget(int descriptor, onboarding_run *run, const signer *own
     (void)memcpy(create + 66U, onboarding_asset, 32U); create[98U] = 0x91U;
     store_u64(create + 138U, 2000U); store_u64(create + 170U, 1000U);
     store_u64(create + 178U, 60000U); store_u64(create + 186U, (uint64_t)now.tv_sec * 1000U);
-    store_u64(create + 194U, (uint64_t)now.tv_sec * 1000U + 300000U); create[210U] = 1U;
+    store_u64(create + 194U, (uint64_t)now.tv_sec * 1000U + 300000U);
+    REQUIRE(run->generation != 0U && run->generation < UINT64_MAX);
+    store_u64(create + 202U, run->generation); create[210U] = 1U;
     REQUIRE(onboard_account(descriptor, target_id, onboarding_asset, &before, &sequence, true) == 0);
     (void)memcpy(create + 211U, owner_id, 32U); store_u64(create + 243U, sequence);
     REQUIRE(onboard_execute(descriptor, run, target, &run->target_sequence, LX_BUDGET_CREATE, create, sizeof(create), LXP_ERR_UNAUTHORIZED_DEBIT, &receipt) == 0);
@@ -294,12 +296,49 @@ static int onboard_budget(int descriptor, onboarding_run *run, const signer *own
     REQUIRE(onboard_account(descriptor, target_id, onboarding_asset, &after, &sequence, true) == 0 && lxp_u128_cmp(after, expected) == 0);
     REQUIRE(onboard_account(descriptor, budget_account, onboarding_asset, &budget_balance, &budget_sequence, true) == 0 && budget_balance.hi == 0U && budget_balance.lo == 1200U);
     before = after;
-    (void)memcpy(close_budget + 2U, budget_id, 32U); store_u64(close_budget + 34U, 1U);
+    (void)memcpy(close_budget + 2U, budget_id, 32U); store_u64(close_budget + 34U, run->generation + 1U);
     REQUIRE(onboard_execute(descriptor, run, target, &run->target_sequence, LX_BUDGET_CLOSE, close_budget, sizeof(close_budget), LXP_OK, &receipt) == 0);
     REQUIRE(lxp_u128_sub(before, receipt.fee_charged, &expected) == LXP_OK && lxp_u128_add(expected, (lxp_u128){0U, 1200U}, &expected) == LXP_OK);
     REQUIRE(onboard_account(descriptor, target_id, onboarding_asset, &after, &sequence, true) == 0 && lxp_u128_cmp(after, expected) == 0);
     REQUIRE(onboard_account(descriptor, budget_account, onboarding_asset, &budget_balance, &budget_sequence, true) == 0 && lxp_u128_is_zero(budget_balance));
     puts("native managed Budget binds exact source sequence, charges refused fees, funds once and returns the complete remainder");
+    return 0;
+}
+
+static int onboard_unpayable(int descriptor, const signer *target, const uint8_t target_id[32],
+    const uint8_t owner_id[32], const onboarding_run *run)
+{
+    lxp_send send = {0};
+    uint8_t material[144], message[512], digest[32], payload[1024], encoded[ACTIVITY_CAPACITY], root[32];
+    size_t length, encoded_length;
+    struct timespec now;
+    REQUIRE(clock_gettime(CLOCK_REALTIME, &now) == 0);
+    uint64_t timestamp = (uint64_t)now.tv_sec * 1000U;
+    (void)memcpy(send.from, target_id, 32U); (void)memcpy(send.to, owner_id, 32U);
+    (void)memcpy(send.asset, onboarding_asset, 32U); send.amount.lo = 1U;
+    send.idempotency_key[0] = 0xcfU; send.expires_at = timestamp + 300000U;
+    (void)memcpy(material, send.from, 32U); (void)memcpy(material + 32U, send.to, 32U);
+    (void)memcpy(material + 64U, send.asset, 32U);
+    REQUIRE(lxp_u128_to_be(send.amount, material + 96U) == LXP_OK);
+    (void)memcpy(material + 112U, send.idempotency_key, 32U);
+    REQUIRE(lxp_hash_context_value(material, sizeof(material), send.context_hash) == LXP_OK);
+    send.authorization.kind = LXP_AUTH_OWNER; send.authorization.network_id = NETWORK_ID; send.authorization.protocol_version = 3U;
+    (void)memcpy(send.authorization.controller, target_id, 32U);
+    (void)memcpy(send.authorization.public_key, target->public_key, 32U);
+    (void)memcpy(send.authorization.signed_context_hash, send.context_hash, 32U);
+    REQUIRE(lxp_send_authorization_message(&send, message, sizeof(message), &length) == LXP_OK);
+    REQUIRE(lxp_hash_signature_preimage(message, length, digest) == LXP_OK);
+    REQUIRE(sign_raw(target, digest, 32U, send.authorization.signature) == 0);
+    REQUIRE(lxp_send_encode(&send, payload, sizeof(payload), &length) == LXP_OK);
+    REQUIRE(onboard_encode(target, run->target_sequence, 0x00010005U, timestamp, send.idempotency_key,
+        (lxp_u128){0U, 4U}, payload, length, encoded, &encoded_length) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 709U, encoded, encoded_length) == 0);
+    REQUIRE(expect_error(descriptor, 709U, 4U, LXP_ERR_FEE_UNPAYABLE) == 0);
+    REQUIRE(onboard_head(descriptor, 0U, root) == 0 && memcmp(root, run->root, 32U) == 0);
+    lxp_u128 balance;
+    uint64_t sequence;
+    REQUIRE(onboard_account(descriptor, target_id, onboarding_asset, &balance, &sequence, true) == 0);
+    REQUIRE(lxp_u128_is_zero(balance) && sequence == 0U);
     return 0;
 }
 
@@ -318,6 +357,7 @@ static int onboard_initial(int descriptor, const signer *owner, const signer *ta
     length = fread(encoded, 1U, sizeof(encoded), credit);
     REQUIRE(length != 0U && length < sizeof(encoded) && !ferror(credit) && fclose(credit) == 0);
     REQUIRE(onboard_submit(descriptor, run, encoded, length, LXP_OK, &receipt) == 0);
+    REQUIRE(lxp_u128_is_zero(receipt.fee_charged));
     ++run->owner_sequence;
     onboard_did(owner, did);
     REQUIRE(lxp_did_id_derive(did, sizeof(did), owner_did) == LXP_OK);
@@ -345,7 +385,7 @@ static int onboard_initial(int descriptor, const signer *owner, const signer *ta
         if (variant == 6U) REQUIRE(onboard_wrong_network(target, inner, &inner_length) == 0);
         if (variant == 7U) {
             REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 706U, inner, inner_length) == 0);
-            REQUIRE(expect_error(descriptor, 706U, 4U, LXP_ERR_UNKNOWN_DID) == 0);
+            REQUIRE(expect_error(descriptor, 706U, 6U, LXP_ERR_UNKNOWN_DID) == 0);
         }
         payload[0] = 0x71U; payload[1] = 1U; payload[2] = 2U; payload[3] = 1U;
         REQUIRE(inner_length <= sizeof(payload) - 8U);
@@ -356,17 +396,20 @@ static int onboard_initial(int descriptor, const signer *owner, const signer *ta
         REQUIRE(onboard_submit(descriptor, run, encoded, length, expected, &receipt) == 0);
         ++run->owner_sequence;
         REQUIRE(!lxp_u128_is_zero(receipt.fee_charged));
+        REQUIRE(receipt.fee_charged.hi == 0U && receipt.fee_charged.lo == 4U);
         REQUIRE(onboard_account(descriptor, target_id, onboarding_asset, &balance, &account_sequence, variant == 7U) == 0);
         if (variant == 7U) {
             REQUIRE(lxp_u128_is_zero(balance) && account_sequence == 0U);
             run->generation = receipt.global_sequence;
             uint8_t replay_id[32];
+            REQUIRE(lxp_activity_id(encoded, length, replay_id) == LXP_OK);
             REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 705U, encoded, length) == 0);
             REQUIRE(expect_ack(descriptor, 705U, encoded, length, replay_id) == 0);
             REQUIRE(memcmp(replay_id, run->ids[run->count - 1U], 32U) == 0);
             REQUIRE(onboard_head(descriptor, 0U, replay_id) == 0 && memcmp(replay_id, run->root, 32U) == 0);
         }
     }
+    REQUIRE(onboard_unpayable(descriptor, target, target_id, owner_id, run) == 0);
     REQUIRE(onboard_account(descriptor, owner_id, onboarding_asset, &balance, &account_sequence, true) == 0);
     lxp_send send = {0};
     uint8_t material[144], message[512], digest[32];
@@ -404,7 +447,10 @@ static int onboard_initial(int descriptor, const signer *owner, const signer *ta
     return 0;
 }
 
-int main(int argc, char **argv)
+#ifndef ONBOARDING_CLIENT_MAIN
+#define ONBOARDING_CLIENT_MAIN main
+#endif
+int ONBOARDING_CLIENT_MAIN(int argc, char **argv)
 {
     struct sockaddr_un address = {0};
     onboarding_run run = {0};

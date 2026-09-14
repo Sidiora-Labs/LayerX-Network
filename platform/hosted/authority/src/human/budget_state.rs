@@ -6,14 +6,15 @@ use super::super::{
 };
 use super::{digest, hex, json, refusal, unavailable, Config, PrincipalPolicy, Response};
 use layerx_client::evidence::{
-    checkpoint, verify_account_evidence, AccountEvidencePolicy, CheckpointSelector,
-    EvidenceContext, RootSelector, VerifiedAccountEvidence, VerifiedCheckpoint,
+    verify_account_evidence, verify_account_evidence_with_history, AccountEvidencePolicy,
+    RootSelector, VerifiedAccountEvidence, VerifiedCheckpoint,
 };
 use layerx_client::head::Head;
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::schema::Version;
 use layerx_client::lni::transport::{Limits, Uds};
 use layerx_client::read::{self, ReadContext, ReadValue, Requested};
+use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::state::CanonicalAccount;
 use layerx_types::verify::VerificationLevel;
 use serde_json::json as value;
@@ -27,6 +28,8 @@ struct Session<'a> {
     context: ReadContext,
     checkpoint: VerifiedCheckpoint,
     evidence: Sha256,
+    history: Option<layerx_client::handover::SequencerHistory>,
+    observed_key: [u8; 32],
 }
 
 fn limits() -> Limits {
@@ -57,14 +60,14 @@ fn correlation() -> Result<u64, ()> {
 
 impl<'a> Session<'a> {
     fn open(config: &'a Config) -> Result<Self, ()> {
+        let deadline = std::time::Instant::now()
+            .checked_add(IO_TIMEOUT)
+            .ok_or(())?;
         let mut transport =
             Uds::connect(&config.lni_socket, &config.lni_gate, limits()).map_err(|_| ())?;
         let result = perform(&mut transport, &handshake(config), None).map_err(|_| ())?;
         let node = result.node();
-        if node.authorised_sequencer_key != config.sequencer_public_key
-            || node.interface_version != Version::V1_5
-            || node.latest_finalised_checkpoint == [0; 32]
-        {
+        if node.interface_version != Version::V1_5 || node.latest_finalised_checkpoint == [0; 32] {
             return Err(());
         }
         let head = Head {
@@ -72,18 +75,25 @@ impl<'a> Session<'a> {
             sealed_batch: node.latest_sealed_batch,
             finalised_checkpoint: node.latest_finalised_checkpoint,
         };
-        let checkpoint = checkpoint(
+        let history = crate::trust::snapshot(
+            config,
+            head.sealed_batch,
+            node.authorised_sequencer_key,
+            deadline,
+        )?;
+        let authorization = match &history {
+            Some(history) => history
+                .authorization_for_batch(head.sealed_batch)
+                .map_err(|_| ())?,
+            None => config.authorization,
+        };
+        let checkpoint = crate::trust::checkpoint(
+            config,
             &mut transport,
-            CheckpointSelector::Batch(head.sealed_batch),
-            EvidenceContext {
-                interface_version: node.interface_version,
-                correlation_id: correlation()?,
-                expected_protocol_version: PROTOCOL_VERSION,
-                expected_network_id: config.protocol_network_id,
-                handshake_sequencer_key: config.sequencer_public_key,
-            },
-        )
-        .map_err(|_| ())?;
+            head.sealed_batch,
+            node.interface_version,
+            history.as_ref(),
+        )?;
         let header = layerx_wire::receipt::decode_batch_header(checkpoint.canonical_header())
             .map_err(|_| ())?;
         if checkpoint.report().evidence().checkpoint_id() != Some(head.finalised_checkpoint)
@@ -100,6 +110,8 @@ impl<'a> Session<'a> {
             transport,
             checkpoint,
             evidence,
+            history,
+            observed_key: node.authorised_sequencer_key,
             context: ReadContext {
                 interface_version: node.interface_version,
                 correlation_id: 0,
@@ -107,8 +119,8 @@ impl<'a> Session<'a> {
                 expected_network_id: config.protocol_network_id,
                 requested: Requested::new(VerificationLevel::CHECKPOINT_FINALISED),
                 head,
-                sequencer_authorization: config.authorization,
-                handshake_sequencer_key: config.sequencer_public_key,
+                sequencer_authorization: authorization,
+                handshake_sequencer_key: authorization.public_key(),
                 root_selector: RootSelector::Checkpoint(head.finalised_checkpoint),
             },
         })
@@ -136,31 +148,58 @@ impl<'a> Session<'a> {
 
     fn module(&mut self, module: u16, key: &[u8]) -> Result<Vec<u8>, ()> {
         let context = self.context()?;
-        let value =
-            read::module_state(&mut self.transport, module, key, context).map_err(|_| ())?;
+        let value = match &self.history {
+            Some(history) => {
+                read::module_state_with_history(&mut self.transport, module, key, context, history)
+            }
+            None => read::module_state(&mut self.transport, module, key, context),
+        }
+        .map_err(|_| ())?;
         self.retain(&value)?;
         Ok(value.canonical_bytes().to_vec())
     }
 
     fn account(&mut self, id: [u8; 32]) -> Result<VerifiedAccountEvidence, ()> {
         let context = self.context()?;
-        let value = read::account(&mut self.transport, id, context).map_err(|_| ())?;
-        self.retain(&value)?;
-        let account = verify_account_evidence(
-            value.canonical_bytes(),
-            value.proof_material(),
-            id,
-            None,
-            AccountEvidencePolicy {
-                expected_protocol_version: PROTOCOL_VERSION,
-                expected_network_id: self.config.protocol_network_id,
-                handshake_sequencer_key: self.config.sequencer_public_key,
-                root_selector: self.context.root_selector,
-            },
-        )
+        let value = match &self.history {
+            Some(history) => read::account_with_history(&mut self.transport, id, context, history),
+            None => read::account(&mut self.transport, id, context),
+        }
         .map_err(|_| ())?;
-        if account.signed_header().canonical_bytes != self.checkpoint.canonical_header()
-            || account.signed_header().response_authorization() != self.config.authorization
+        self.retain(&value)?;
+        let policy = AccountEvidencePolicy {
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: self.config.protocol_network_id,
+            handshake_sequencer_key: self.context.handshake_sequencer_key,
+            root_selector: self.context.root_selector,
+        };
+        let account = match &self.history {
+            Some(history) => verify_account_evidence_with_history(
+                value.canonical_bytes(),
+                value.proof_material(),
+                id,
+                None,
+                policy,
+                history,
+            ),
+            None => verify_account_evidence(
+                value.canonical_bytes(),
+                value.proof_material(),
+                id,
+                None,
+                policy,
+            ),
+        }
+        .map_err(|_| ())?;
+        let header = account.signed_header();
+        let authorization = SequencerAuthorization::new(
+            header.sequencer_id,
+            header.public_key,
+            header.first_batch_number,
+            header.last_batch_number,
+        );
+        if header.canonical_bytes != self.checkpoint.canonical_header()
+            || (self.history.is_none() && authorization != self.config.authorization)
         {
             return Err(());
         }
@@ -172,7 +211,7 @@ impl<'a> Session<'a> {
             .map_err(|_| ())?;
         let result = perform(&mut transport, &handshake(self.config), None).map_err(|_| ())?;
         let node = result.node();
-        if node.authorised_sequencer_key != self.config.sequencer_public_key
+        if node.authorised_sequencer_key != self.observed_key
             || node.chain_head_sequence != self.context.head.chain_sequence
             || node.latest_sealed_batch != self.context.head.sealed_batch
             || node.latest_finalised_checkpoint != self.context.head.finalised_checkpoint
@@ -216,7 +255,7 @@ fn identity(session: &mut Session<'_>, did: &str, owner: &CanonicalAccount) -> R
     if bytes.len() != 223
         || &bytes[..5] != b"LXGI1"
         || bytes[5..37] != key
-        || owner.authority_key.as_ref().map(|key| key.as_slice()) != Some(&bytes[37..69])
+        || owner.authority_key.as_ref().map(<[u8; 32]>::as_slice) != Some(&bytes[37..69])
     {
         return Err(());
     }

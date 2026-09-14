@@ -64,6 +64,16 @@ pub(crate) fn apply_revocation(
     activities: &mut [PendingActivity],
     event: &RevocationEvent,
 ) -> Result<InvalidationReport, SessionError> {
+    apply_revocation_with_updates(store, registry, activities, event, Vec::new())
+}
+
+pub(crate) fn apply_revocation_with_updates(
+    store: &mut Store,
+    registry: &mut SessionRegistry,
+    activities: &mut [PendingActivity],
+    event: &RevocationEvent,
+    mut companion: Vec<(crate::store::TenantKey, Vec<u8>)>,
+) -> Result<InvalidationReport, SessionError> {
     let mut invalidated_sessions = Vec::new();
     let mut invalidated_generations = Vec::new();
     let candidates = registry
@@ -84,10 +94,11 @@ pub(crate) fn apply_revocation(
             Ok((session.clone(), invalidated))
         })
         .collect::<Result<Vec<_>, SessionError>>()?;
-    let updates = candidates
+    let mut updates = candidates
         .iter()
         .map(|(_, record)| Ok((session_key(&record.request)?, encode(record)?)))
         .collect::<Result<Vec<_>, SessionError>>()?;
+    updates.append(&mut companion);
     store.update_local_batch(updates)?;
     for (session, invalidated) in candidates {
         let invalidated_generation = invalidated

@@ -161,7 +161,7 @@ static lxp_result durable_receipt_facts(
         owner->receipt_authority, receipt_digest, owner->scratch,
         &evidence);
     if (status == LXP_OK && evidence.format_version == 3U) {
-        status = lxp_programs_occupancy_receipt_decode(
+        status = lxp_batch_maintenance_occupancy_decode(
             evidence.canonical_receipt.bytes,
             evidence.canonical_receipt.length, &maintenance);
         if (status == LXP_OK)

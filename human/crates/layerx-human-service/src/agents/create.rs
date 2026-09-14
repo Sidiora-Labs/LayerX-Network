@@ -35,7 +35,7 @@ const PURPOSE_LIMIT: usize = 64;
 mod native;
 pub use native::{
     NativeAgentCreationContract, NativeFundingEvidence, NativeFundingRequest,
-    NativeOnboardingRequest,
+    NativeIdentityRevisionRequest, NativeOnboardingRequest,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

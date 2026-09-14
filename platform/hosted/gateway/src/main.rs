@@ -2315,6 +2315,9 @@ fn complete_activity(
         Err(error) => return error,
     };
     pay_timing("gateway.complete.receipt", verify_started);
+    if verify_withdrawal_submission(config, operation, &receipt).is_err() {
+        return response(502, "withdrawal_verification_failed", None);
+    }
     if !operation.program_mutation && verified_result_code != 0 {
         return complete_activity_refusal(
             config,
@@ -2326,17 +2329,7 @@ fn complete_activity(
             trace_id,
         );
     }
-    let Ok(mut result) = serde_json::from_slice::<serde_json::Value>(&result) else {
-        return response(503, "receipt_encoding_failed", Some(5));
-    };
-    retain_submission_binding(
-        &mut result,
-        &operation.protocol_idempotency,
-        operation
-            .program_call
-            .then_some(operation.retained_signed_activity.as_str()),
-    );
-    let Ok(stored_result) = serde_json::to_vec(&result) else {
+    let Ok((result, stored_result)) = retained_activity_result(&result, operation) else {
         return response(503, "receipt_encoding_failed", Some(5));
     };
     let persist_started = Instant::now();
@@ -2365,6 +2358,49 @@ fn complete_activity(
     let response = activity_terminal_response(config, operation, result, trace_id);
     pay_timing("gateway.complete.total", total_started);
     response
+}
+
+fn retained_activity_result(
+    encoded: &[u8],
+    operation: &ActivityOperation,
+) -> Result<(serde_json::Value, Vec<u8>), ()> {
+    let mut result = serde_json::from_slice::<serde_json::Value>(encoded).map_err(|_| ())?;
+    retain_submission_binding(
+        &mut result,
+        &operation.protocol_idempotency,
+        operation
+            .program_call
+            .then_some(operation.retained_signed_activity.as_str()),
+    );
+    let stored = serde_json::to_vec(&result).map_err(|_| ())?;
+    Ok((result, stored))
+}
+
+fn verify_withdrawal_submission(
+    config: &Config,
+    operation: &ActivityOperation,
+    receipt: &[u8],
+) -> Result<(), ()> {
+    let decoded = layerx_wire::receipt::decode(receipt).map_err(|_| ())?;
+    let protocol = decoded.protocol().ok_or(())?;
+    if protocol.module_id() != 1 || protocol.operation() != 9 {
+        return Ok(());
+    }
+    let authorized = layerx_proof::receipt::AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        protocol.previous_state_root(),
+        protocol.resulting_state_root(),
+        config.sequencer_authorization.public_key(),
+    );
+    layerx_proof::receipt::withdrawal::verify(
+        receipt,
+        &authorized,
+        &operation.canonical,
+        config.protocol_network_id,
+    )
+    .map_err(|_| ())?;
+    Ok(())
 }
 
 fn submitted_unknown_response(
@@ -3236,7 +3272,7 @@ fn modules_from_file(module_file: ModuleFile) -> Result<ModuleRegistry, String> 
     {
         return Err("gateway asset registry is invalid".to_owned());
     }
-    if module_file.modules.is_empty() || module_file.modules.len() > 8 {
+    if module_file.modules.is_empty() || module_file.modules.len() > ModuleId::ALL.len() {
         return Err("gateway module registry is outside its bound".to_owned());
     }
     let mut registrations = Vec::with_capacity(module_file.modules.len());
@@ -4211,6 +4247,48 @@ mod authority_shape_tests {
 #[cfg(test)]
 mod module_schema_tests {
     use super::*;
+
+    #[test]
+    fn native_generated_registry_admits_exactly_the_closed_protocol_module_set() {
+        let document: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../tests/fixtures/public-testnet-modules/registry.json"
+        ))
+        .unwrap_or_else(|error| panic!("native generated module registry: {error}"));
+        let parse = |value: serde_json::Value| -> Result<ModuleRegistry, String> {
+            modules_from_file(serde_json::from_value(value).map_err(|error| error.to_string())?)
+        };
+        let registry = parse(document.clone())
+            .unwrap_or_else(|error| panic!("complete protocol registry: {error}"));
+        assert_eq!(
+            registry
+                .registrations()
+                .iter()
+                .map(ModuleRegistration::module)
+                .collect::<Vec<_>>(),
+            ModuleId::ALL
+        );
+        for module in ModuleId::ALL {
+            assert_eq!(ModuleId::from_u16(module as u16), Ok(module));
+        }
+        let mut tenth = document.clone();
+        tenth["modules"]
+            .as_array_mut()
+            .unwrap_or_else(|| panic!("module declarations"))
+            .push(document["modules"][0].clone());
+        assert!(parse(tenth).is_err());
+        let mut duplicate = document.clone();
+        duplicate["modules"][8] = document["modules"][0].clone();
+        assert!(parse(duplicate).is_err());
+        let mut unknown = document.clone();
+        unknown["modules"][8]["module"] = serde_json::json!(10);
+        assert!(parse(unknown).is_err());
+        let mut zero = document.clone();
+        zero["modules"][0]["ordinals"][0] = serde_json::json!(0);
+        assert!(parse(zero).is_err());
+        let mut duplicate_ordinal = document;
+        duplicate_ordinal["modules"][0]["ordinals"][1] = serde_json::json!(1);
+        assert!(parse(duplicate_ordinal).is_err());
+    }
 
     #[test]
     fn registry_requires_versioned_asset_metadata() {

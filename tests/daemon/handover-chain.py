@@ -104,6 +104,11 @@ def main():
                             reads_executable, os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'],
                             client_directory, count], os.environ,
                            output / 'public-history-reads.log')
+                authority = os.environ.get('LAYERX_TEST_HANDOVER_AUTHORITY_BIN')
+                if authority is not None:
+                    authority_gate = runpy.run_path(str(ROOT / 'tests/daemon/handover-authority.py'))
+                    authority_gate['run'](native, client_directory, authority,
+                                          os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'])
         return
     environment = os.environ.copy()
     settlement = dict(line.split('=', 1) for line in (native / 'settlement.env').read_text().splitlines())

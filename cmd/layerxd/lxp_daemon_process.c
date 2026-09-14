@@ -1302,8 +1302,6 @@ static lxp_result replay_execute_activity(
     lxp_result status;
     lxp_sequencer_authorization authorization;
     uint64_t trusted_epoch;
-    uint8_t fee_wire[LXP_FEE_PARAMS_V2_BYTES];
-    size_t fee_wire_length;
     if (process == NULL || canonical_activity == NULL ||
         canonical_receipt == NULL || activity == NULL || receipt == NULL ||
         expected == NULL ||
@@ -1326,7 +1324,8 @@ static lxp_result replay_execute_activity(
         return LXP_ERR_VERSION_UNSUPPORTED;
     status = process_batch_authorization(process, batch_number, &authorization, &trusted_epoch);
     if (status != LXP_OK) return status;
-    status = lxp_fee_params_encode(&process->fees, fee_wire, sizeof(fee_wire), &fee_wire_length);
+    status = lxp_fee_replay_schedule_verify(&process->kernel,
+        expected->parameter_version, &process->fees);
     if (status != LXP_OK) return status;
     status = lxp_activity_decode(canonical_activity, activity_length, activity);
     if (status == LXP_OK &&
@@ -5680,6 +5679,8 @@ static lxp_result open_process(lxp_daemon_process *process,
             &process->kernel, 0U, &fee_schedule, occupancy_asset_id);
     }
     bearer = required_environment("LAYERX_NODE_PROGRAM_BEARER_TOKEN");
+    if (status == LXP_OK) stage = "replica prefix recovery";
+    if (status == LXP_OK) status = replicate_authority_history(process);
     if (status == LXP_OK) stage = "protocol owner";
     if (status == LXP_OK)
         status = lxp_daemon_protocol_owner_attach(

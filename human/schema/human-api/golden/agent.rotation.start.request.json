@@ -1,0 +1,18 @@
+{
+  "method": "POST",
+  "path": "/v1/agents/agt_01j8agd2s3a1b2c3d4e5f6g7h8/rotation",
+  "headers": {
+    "Idempotency-Key": "1d5f8a2c6e9b43d7a4f0c8b2e6d1a5f9"
+  },
+  "body": {
+    "delay_seconds": 86400,
+    "window_seconds": 3600,
+    "step_up": {
+      "challenge_id": "chg_01j2h5w4eh8j0k2m4n6p8q0r2s",
+      "confirms": "opd_01j2h5x8fj9k1m3n5p7q9r1s3t",
+      "passkey_id": "pky_01j2h5m2we5f7g9h1j3k5m7n9p",
+      "completed_at": "2026-08-20T09:35:00Z",
+      "expires_at": "2026-08-20T09:40:00Z"
+    }
+  }
+}

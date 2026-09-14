@@ -93,7 +93,7 @@ fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
     let count = match &disclosure.native_operation {
         Some(DisclosedNativeOperation::BudgetCreate(_)) => mutations.len(),
         Some(DisclosedNativeOperation::RecoveryPolicy(_)) => 4,
-        None => 0,
+        Some(DisclosedNativeOperation::OwnerRotation(_)) | None => 0,
     };
     (0..count)
         .map(|field| {
@@ -106,6 +106,9 @@ fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
                     2 => value.threshold += 1,
                     _ => value.delay_bounds = Some((1, 2)),
                 },
+                Some(DisclosedNativeOperation::OwnerRotation(_)) => {
+                    panic!("unexpected rotation disclosure")
+                }
                 None => panic!("missing native disclosure"),
             }
             changed
