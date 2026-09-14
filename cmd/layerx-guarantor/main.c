@@ -345,7 +345,8 @@ static lxp_result binding_store(const struct producer *p, const char *state)
         status = gp_file_write(path, bytes, length);
     return status;
 }
-static lxp_result binding_restore(struct producer *p, const char *state)
+static lxp_result binding_restore(struct producer *p, const char *state,
+                                   gp_settlement_membership_view *view)
 {
     uint8_t bytes[LXP_PAXEER_BOND_BINDING_MAX_SIZE];
     lxp_paxeer_bond_binding previous;
@@ -361,7 +362,8 @@ static lxp_result binding_restore(struct producer *p, const char *state)
     status = lxp_paxeer_bond_binding_decode(bytes, length, &previous);
     if (status != LXP_OK)
         return status;
-    return lxp_paxeer_bond_binding_adopt(&p->bonds, &previous);
+    return gp_settlement_bond_restore(&p->settlement, &previous, &p->bonds,
+                                      view, &p->availability);
 }
 static lxp_result deposits_ingest(struct producer *p, const char *state)
 {
@@ -672,14 +674,13 @@ int main(int argc, char **argv)
         field = "bonded membership";
         (void)pthread_mutex_lock(&p->mutex);
         p->prepared = false;
-        status = gp_settlement_bond_bind(&p->settlement, header.epoch, header.protocol_version,
-                                         &p->bonds, view, &p->availability);
+        if (!p->bound)
+            status = binding_restore(p, state, view);
+        if (status == LXP_OK)
+            status = gp_settlement_bond_bind(&p->settlement, header.epoch, header.protocol_version,
+                                             &p->bonds, view, &p->availability);
         if (status == LXP_OK && p->availability == LXP_PAXEER_MEMBERSHIP_SYNC_BOUND) {
-            if (!p->bound) {
-                status = binding_restore(p, state);
-                if (status == LXP_OK)
-                    p->bound = true;
-            }
+            p->bound = true;
             if (status == LXP_OK)
                 status = deposits_ingest(p, state);
             if (status == LXP_OK)

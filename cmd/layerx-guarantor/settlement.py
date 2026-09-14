@@ -349,7 +349,13 @@ def main():
         result = configuration(request)
     elif sys.argv[1] == 'membership':
         rpc = RPC(request['rpc_url'])
-        result = membership(rpc, request)
+        block = 'latest'
+        if 'observed_block_number' in request:
+            observed = request['observed_block_number']
+            require(isinstance(observed, int) and not isinstance(observed, bool)
+                    and 0 < observed < 2 ** 64, 'membership observation block invalid')
+            block = hex(observed)
+        result = membership(rpc, request, block)
         rpc.report_timing('membership', started)
     elif sys.argv[1] == 'deposit':
         result = deposit(RPC(request['rpc_url']), request)
