@@ -7,11 +7,11 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "npm run build:ui && next build",
+    "build": "npm run build:copy && npm run build:ui && next build",
     "build:ui": "cd packages/layerx-ui && rm -rf dist && ../../node_modules/.bin/tsup",
     "start": "next start",
-    "test": "node --test e2e/scaffold.test.mjs e2e/copy.test.ts e2e/ui-library.test.ts e2e/kit.spec.ts e2e/harness.test.ts e2e/state-matrix.test.ts e2e/states.spec.ts e2e/api-client.test.ts e2e/custody-evidence.test.ts e2e/session-boundary.test.ts e2e/explorer-admission.test.ts e2e/explorer-verifier.test.ts e2e/activity.spec.ts e2e/agents.spec.ts e2e/custody.spec.ts e2e/security.spec.ts",
-    "test:component": "node --test e2e/scaffold.test.mjs e2e/copy.test.ts e2e/ui-library.test.ts e2e/kit.spec.ts e2e/harness.test.ts e2e/state-matrix.test.ts e2e/states.spec.ts e2e/api-client.test.ts e2e/custody-evidence.test.ts e2e/session-boundary.test.ts e2e/explorer-admission.test.ts e2e/explorer-verifier.test.ts e2e/activity.spec.ts e2e/agents.spec.ts e2e/custody.spec.ts e2e/security.spec.ts",
+    "test": "node --test e2e/scaffold.test.mjs e2e/copy.test.ts e2e/ui-library.test.ts e2e/kit.spec.ts e2e/harness.test.ts e2e/state-matrix.test.ts e2e/states.spec.ts e2e/api-client.test.ts e2e/custody-evidence.test.ts e2e/session-boundary.test.ts e2e/explorer-admission.test.ts e2e/explorer-verifier.test.ts e2e/activity.spec.ts e2e/agents.spec.ts e2e/custody.spec.ts e2e/security.spec.ts e2e/native-fee-budget.test.ts",
+    "test:component": "node --test e2e/scaffold.test.mjs e2e/copy.test.ts e2e/ui-library.test.ts e2e/kit.spec.ts e2e/harness.test.ts e2e/state-matrix.test.ts e2e/states.spec.ts e2e/api-client.test.ts e2e/custody-evidence.test.ts e2e/session-boundary.test.ts e2e/explorer-admission.test.ts e2e/explorer-verifier.test.ts e2e/activity.spec.ts e2e/agents.spec.ts e2e/custody.spec.ts e2e/security.spec.ts e2e/native-fee-budget.test.ts",
     "test:foundation": "node --test e2e/shell.spec.ts e2e/a11y.spec.ts e2e/states.spec.ts",
     "test:perf": "playwright test --config playwright.perf.config.ts --project=desktop-shell",
     "test:journey": "playwright test --grep @journey",
@@ -19,13 +19,14 @@
     "test:explorer": "playwright test --grep @explorer",
     "test:e2e": "playwright test",
     "test:visual": "playwright test --grep @visual",
-    "lint": "tsc --noEmit && eslint --max-warnings=0 \"src/**/*.{ts,tsx}\" \"copy/**/*.ts\" && node policy/check.mjs && npm audit --audit-level=high",
+    "lint": "node copy/generate-runtime.ts --check && tsc --noEmit && eslint --max-warnings=0 \"src/**/*.{ts,tsx}\" \"copy/**/*.ts\" && node policy/check.mjs && npm audit --audit-level=high",
     "typecheck": "tsc --noEmit",
-    "e2e": "npm run test:e2e"
+    "e2e": "npm run test:e2e",
+    "build:copy": "node copy/generate-runtime.ts"
   },
   "dependencies": {
     "@layerx/ui": "file:packages/layerx-ui",
-    "next": "16.3.1",
+    "next": "16.3.5",
     "qrcode": "^1.5.4",
     "react": "19.2.8",
     "react-dom": "19.2.8"
@@ -39,6 +40,7 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "eslint": "10.8.1",
+    "source-map": "0.7.6",
     "tailwindcss": "4.3.3",
     "tsup": "8.5.1",
     "typescript": "5.9.3",

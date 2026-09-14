@@ -4,7 +4,7 @@ import type { AuthorizedReceiptBatch, ReceiptVerification, SelectableProtocolVer
 import { DEFAULT_PROTOCOL_VERSION, isSelectableProtocolVersion, programsModuleVersionForProtocol, verifyProgramLifecycleReceipt,
   supportedProgramGuestAbi, verifyReceiptOutcome } from "./verifier.js";
 import { PlatformSdkError, type IdempotencyKey, type ProductionClient } from "./production.js";
-import { assertFreshSimulationObservation, decodeAndVerifyProgramTerminal, decodeSignedProgramCall,
+import { assertFreshSimulationObservation, bindRetainedProgramCall, decodeAndVerifyProgramTerminal, decodeSignedProgramCall,
   type DecodedSignedProgramCall } from "./program-wire.js";
 
 const HEX32 = /^[0-9a-f]{64}$/u;
@@ -51,7 +51,7 @@ export type ProgramFailure = Readonly<{ kind: "unknown_program" | "reentrancy" |
 export type ProgramOutcome = Readonly<{ kind: "completed"; code: number; response: string }> | Readonly<{ kind: "legacy_completed"; code: number; values: readonly unknown[] }> | Readonly<{ kind: "refused"; failure: ProgramFailure }>;
 export interface ProgramUsage { readonly cpu_fuel: string; readonly memory_bytes: string; readonly storage_read_bytes: string; readonly storage_write_bytes: string; readonly output_values: number; readonly output_bytes: string; readonly fee_units: string }
 export interface ProgramAuthorityDocument { readonly batch_id: string; readonly asset: string; readonly previous_state_root: string; readonly resulting_state_root: string; readonly sequencer_public_key: string }
-export interface ProgramExecutionDocument { readonly state: "executed" | "refused" | "simulated"; readonly activity_id: string; readonly program_id: string; readonly guest_abi_version: number; readonly module_version: number; readonly batch_id: string; readonly global_sequence: string; readonly result_code: number; readonly state_root: string; readonly receipt: string; readonly receipt_digest: string; readonly terminal_payload: string; readonly call_graph: string; readonly authority: ProgramAuthorityDocument; readonly usage: ProgramUsage; readonly outcome: ProgramOutcome; readonly verification: "receipt-terminal-and-call-graph-verified"; readonly idempotency_key?: string }
+export interface ProgramExecutionDocument { readonly state: "executed" | "refused" | "simulated"; readonly activity_id: string; readonly program_id: string; readonly guest_abi_version: number; readonly module_version: number; readonly batch_id: string; readonly global_sequence: string; readonly result_code: number; readonly state_root: string; readonly receipt: string; readonly receipt_digest: string; readonly terminal_payload: string; readonly call_graph: string; readonly authority: ProgramAuthorityDocument; readonly usage: ProgramUsage; readonly outcome: ProgramOutcome; readonly verification: "receipt-terminal-and-call-graph-verified"; readonly idempotency_key?: string; readonly retained_signed_activity?: string }
 export interface ProgramUnknownSubmission { readonly state: "unknown"; readonly activity_id: string; readonly idempotency_key: string; readonly retained_signed_activity?: string }
 export type ProgramSubmission = ProgramUnknownSubmission | (ProgramExecutionDocument & Readonly<{ state: "executed" | "refused" }>);
 export interface ProgramSimulationEvidence { readonly boundary_id: string; readonly activity_id: string; readonly previous_state_root: string; readonly hypothetical_state_root: string; readonly observed_sequence: string; readonly observed_at: string; readonly committed: false; readonly public_key: string; readonly signature: string }
@@ -108,6 +108,7 @@ export async function verifyProgramReceipt(
   execution: ProgramExecutionDocument,
   authority: AuthorizedReceiptBatch,
   trust: ProgramTrustContext,
+  expectedSignedActivity?: Uint8Array,
 ): Promise<VerifiedProgramReceipt> {
   const protocolVersion = trust.protocolVersion();
   if (!HEX32.test(execution.activity_id)
@@ -139,7 +140,16 @@ export async function verifyProgramReceipt(
     || !equal(await digest(callGraph), outcome.callGraphRoot)) {
     throw new TypeError("program receipt binding failed");
   }
-  const terminal = await decodeAndVerifyProgramTerminal(terminalPayload, callGraph, execution.program_id, outcome, protocol.protocolVersion);
+  const retained = execution.retained_signed_activity === undefined ? undefined : decodeHex(execution.retained_signed_activity, MAX_CALLDATA);
+  if (retained !== undefined && expectedSignedActivity !== undefined && !equal(retained, expectedSignedActivity)) throw new TypeError("retained program activity mismatch");
+  const canonical = expectedSignedActivity ?? retained;
+  if (canonical !== undefined) {
+    const bound = await bindRetainedProgramCall(canonical, execution.activity_id, execution.program_id, protocol.protocolVersion);
+    if (bound.guestAbi !== execution.guest_abi_version
+      || execution.idempotency_key !== undefined && bound.idempotencyKey !== execution.idempotency_key) throw new TypeError("retained program call metadata mismatch");
+  }
+  const terminal = await decodeAndVerifyProgramTerminal(terminalPayload, callGraph, execution.program_id, outcome, protocol.protocolVersion,
+    canonical === undefined ? undefined : { protocol, signedActivity: canonical });
   if (!sameUsage(terminal.usage, execution.usage) || !sameOutcome(terminal.outcome, execution.outcome)) throw new TypeError("program terminal document binding failed");
   return Object.freeze({ verification, terminalPayload, callGraph, transferVerification: terminal.transferVerification });
 }
@@ -199,7 +209,7 @@ export class ProgramOperations {
     this.#requireCurrentHead(call.programId, prior);
     requireFreshHead(prior, this.trust.nowMilliseconds());
     const simulation = simulationDocument(value, call.programId, signed.activityId);
-    const verified = await verifyProgramReceipt(simulation.execution, wireAuthority(simulation.execution.authority, this.trust), this.trust);
+    const verified = await verifyProgramReceipt(simulation.execution, wireAuthority(simulation.execution.authority, this.trust), this.trust, signed.canonicalBytes);
     await verifySimulationEvidence(simulation, verified, prior, signed, this.trust);
     this.#requireCurrentHead(call.programId, prior);
     requireFreshHead(prior, this.trust.nowMilliseconds());
@@ -313,7 +323,8 @@ async function submissionDocument(value: unknown, trust: ProgramTrustContext, ex
   if ((expected.programId !== undefined && execution.program_id !== expected.programId)
     || (expected.activityId !== undefined && execution.activity_id !== expected.activityId)
     || (expected.idempotencyKey !== undefined && execution.idempotency_key !== expected.idempotencyKey)) throw new TypeError("program execution binding failed");
-  await verifyProgramReceipt(execution, wireAuthority(execution.authority, trust), trust);
+  await verifyProgramReceipt(execution, wireAuthority(execution.authority, trust), trust,
+    expected.retainedSignedActivity === undefined ? undefined : decodeHex(expected.retainedSignedActivity, MAX_CALLDATA));
   return execution as ProgramSubmission;
 }
 
@@ -351,7 +362,7 @@ function executionDocument(candidate: Readonly<Record<string, unknown>>, state: 
   if (candidate.state !== state) throw new TypeError("invalid program execution state");
   exactKeys(candidate, ["state", "activity_id", "program_id", "guest_abi_version", "module_version", "batch_id",
     "global_sequence", "result_code", "state_root", "receipt", "receipt_digest", "terminal_payload", "call_graph",
-    "authority", "usage", "outcome", "verification"], ["idempotency_key"]);
+    "authority", "usage", "outcome", "verification"], ["idempotency_key", "retained_signed_activity"]);
   const usage = object(candidate.usage);
   const authority = object(candidate.authority);
   exactKeys(authority, ["batch_id", "asset", "previous_state_root", "resulting_state_root", "sequencer_public_key"]);
@@ -386,6 +397,7 @@ function executionDocument(candidate: Readonly<Record<string, unknown>>, state: 
     verification: candidate.verification === "receipt-terminal-and-call-graph-verified"
       ? candidate.verification : (() => { throw new TypeError("invalid program verification status"); })(),
     ...(candidate.idempotency_key === undefined ? {} : { idempotency_key: requiredHex32(candidate, "idempotency_key") }),
+    ...(candidate.retained_signed_activity === undefined ? {} : { retained_signed_activity: requiredHex(candidate, "retained_signed_activity", MAX_CALLDATA) }),
   });
   if ((state === "refused" && result.outcome.kind !== "refused")
     || (state === "executed" && result.outcome.kind === "refused")) throw new TypeError("program state/outcome mismatch");

@@ -38,6 +38,9 @@ lxp_result gp_settlement_membership_sync(const gp_settlement_config *, uint64_t,
 lxp_result gp_settlement_bond_bind(const gp_settlement_config *, uint64_t, uint16_t,
                                    lxp_paxeer_bond_state *, gp_settlement_membership_view *,
                                    lxp_paxeer_membership_sync_availability *);
+lxp_result gp_settlement_bond_restore(const gp_settlement_config *, const lxp_paxeer_bond_binding *,
+                                      lxp_paxeer_bond_state *, gp_settlement_membership_view *,
+                                      lxp_paxeer_membership_sync_availability *);
 lxp_result gp_settlement_bond_deposit(const gp_settlement_config *, const uint8_t *,
                                       const uint8_t *, lxp_paxeer_bond_state *,
                                       lxp_paxeer_bond_deposit_record *);

@@ -1,0 +1,21 @@
+[package]
+name = "layerx-runtime-clock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+layerx-types.workspace = true
+rustix = { workspace = true, features = ["net"] }
+signal-hook = "=0.3.18"
+
+[dev-dependencies]
+layerx-client.workspace = true
+layerx-sdk.workspace = true
+layerx-proof.workspace = true
+layerx-wire.workspace = true
+
+[lints]
+workspace = true

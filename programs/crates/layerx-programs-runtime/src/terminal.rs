@@ -13,6 +13,9 @@ const AUTHORITY: &[u8] = b"LXP/program-execution-with-transfer-authority/v2\0";
 const FAILURE: &[u8] = b"LXP/programs/failure-detail/v1\0";
 const RESOURCE: &[u8] = b"LXP/programs/resource-detail/v1\0";
 const SETTLEMENT: &[u8] = b"LXP/programs/settlement-failure/v1\0";
+pub const PRE_RUNTIME_FAILURE: &[u8] =
+    b"LXP/v1/context-hash\0LXP/programs/pre-runtime-failure/v1\0";
+pub const EMPTY_CALL_GRAPH: &[u8] = b"LXP/v1/context-hash\0LXP/programs/empty-call-graph/v1\0";
 const CALLBACK: &[u8] = b"LXP/programs/callback-failure/v1\0";
 const MAX_TRACE_EVIDENCE_BYTES: usize = 34 + MAX_TRACE_COMMITMENTS * 52;
 const MAX_GRAPH_EVIDENCE_BYTES: usize = b"LayerX/programs/call-graph/v1\0".len()
@@ -71,12 +74,24 @@ pub enum CandidateTerminalOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FailureTerminal {
+    PreRuntime(PreRuntimeFailure),
     Program(ProgramFailure),
     Composition { tag: u8, fields: FailureFields },
     Entrypoint { tag: u8, fields: FailureFields },
     Abi { tag: u8, fields: FailureFields },
     Settlement(TransferLawError),
     Callback { stage: u8, status: i32 },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreRuntimeFailure {
+    pub activity_id: [u8; 32],
+    pub payload_hash: [u8; 32],
+    pub result_code: i32,
+    pub module_version: u32,
+    pub parameter_version: u32,
+    pub encoding_version: u8,
+    pub applied_legs_digest: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,7 +196,12 @@ pub fn decode_terminal_payload(
     encoded: &[u8],
 ) -> Result<DecodedTerminal, TerminalDecodeError> {
     let (inner, attachments) = unwrap(encoded)?;
-    let detail = if inner.starts_with(EXECUTION_V2) || inner.starts_with(EXECUTION_V3) && abi == 1 {
+    let detail = if inner.starts_with(PRE_RUNTIME_FAILURE) {
+        if kind != 2 || !attachments.is_empty() {
+            return Err(TerminalDecodeError::MismatchedKind);
+        }
+        TerminalDetail::Failure(FailureTerminal::PreRuntime(decode_pre_runtime(inner)?))
+    } else if inner.starts_with(EXECUTION_V2) || inner.starts_with(EXECUTION_V3) && abi == 1 {
         if kind != 1 {
             return Err(TerminalDecodeError::MismatchedKind);
         }
@@ -245,6 +265,36 @@ pub fn decode_terminal_payload(
     Ok(DecodedTerminal {
         detail,
         attachments,
+    })
+}
+
+fn decode_pre_runtime(encoded: &[u8]) -> Result<PreRuntimeFailure, TerminalDecodeError> {
+    let mut cursor = Cursor::new(&encoded[PRE_RUNTIME_FAILURE.len()..]);
+    let activity_id = cursor.array()?;
+    let payload_hash = cursor.array()?;
+    let result_code = cursor.i32()?;
+    let module_version = cursor.u32()?;
+    let parameter_version = cursor.u32()?;
+    let (encoding_version, applied_legs_digest) = if cursor.remaining() == 0 {
+        (3, [0; 32])
+    } else {
+        if cursor.byte()? != 4 {
+            return Err(TerminalDecodeError::Malformed);
+        }
+        (4, cursor.array()?)
+    };
+    cursor.end()?;
+    if result_code >= 0 {
+        return Err(TerminalDecodeError::Malformed);
+    }
+    Ok(PreRuntimeFailure {
+        activity_id,
+        payload_hash,
+        result_code,
+        module_version,
+        parameter_version,
+        encoding_version,
+        applied_legs_digest,
     })
 }
 

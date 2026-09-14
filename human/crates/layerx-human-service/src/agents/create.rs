@@ -7,7 +7,7 @@ use layerx_intents::{
     compile, BudgetCreate, BudgetFund, CompileError, DidRegistration, DisclosureCheck,
     DisclosureCheckError, Intent, IntentError, IntentKind, RecoveryRegistration,
 };
-use layerx_proof::receipt::{verify, AuthorizedBatch, VerificationFailure};
+use layerx_proof::receipt::{AuthorizedBatch, VerificationFailure};
 use layerx_types::account::AccountId;
 use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, Did, IdempotencyKey};
@@ -31,6 +31,52 @@ const ID_DOMAIN: &[u8] = b"layerx-human/agent-create/id/v1";
 const NAME_LIMIT: usize = 80;
 const PURPOSE_LIMIT: usize = 64;
 
+#[path = "create_native.rs"]
+mod native;
+pub use native::{
+    NativeAgentCreationContract, NativeFundingEvidence, NativeFundingRequest,
+    NativeIdentityRevisionRequest, NativeOnboardingRequest,
+};
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NativeFeeConsent {
+    pub asset_id: [u8; 32],
+    pub maximum_per_activity: u128,
+    pub maximum_total: u128,
+    pub period_length_ms: u64,
+    pub maximum_per_period: u128,
+}
+
+impl NativeFeeConsent {
+    /// # Errors
+    /// Refuses zero, inverted or inconsistent explicit fee limits.
+    pub fn budget(
+        &self,
+        not_before_ms: u64,
+    ) -> Result<layerx_crypto::authority_grant::NativeFeeBudget, AgentCreationError> {
+        if self.asset_id == [0; 32]
+            || self.maximum_per_activity == 0
+            || self.maximum_total < self.maximum_per_activity
+            || (self.period_length_ms == 0 && self.maximum_per_period != 0)
+            || (self.period_length_ms != 0 && self.maximum_per_period < self.maximum_per_activity)
+        {
+            return Err(AgentCreationError::InvalidRequest);
+        }
+        Ok(layerx_crypto::authority_grant::NativeFeeBudget {
+            asset: self.asset_id,
+            maximum_per_activity: self.maximum_per_activity,
+            maximum_total: self.maximum_total,
+            period_length: self.period_length_ms,
+            maximum_per_period: self.maximum_per_period,
+            period_start: if self.period_length_ms == 0 {
+                0
+            } else {
+                not_before_ms
+            },
+        })
+    }
+}
+
 /// The exact user-facing create form. Infrastructure identifiers and recovery
 /// policy are supplied by authenticated service configuration, not requested
 /// from the human.
@@ -40,6 +86,7 @@ pub struct CreateAgentRequest {
     purpose: String,
     monthly_spend: u128,
     currency: String,
+    native_fee_budget: Option<NativeFeeConsent>,
 }
 
 impl CreateAgentRequest {
@@ -72,7 +119,21 @@ impl CreateAgentRequest {
             purpose,
             monthly_spend,
             currency,
+            native_fee_budget: None,
         })
+    }
+
+    /// # Errors
+    /// Refuses an invalid explicit native fee budget.
+    pub fn with_native_fee_budget(
+        mut self,
+        budget: Option<NativeFeeConsent>,
+    ) -> Result<Self, AgentCreationError> {
+        if let Some(value) = &budget {
+            value.budget(0)?;
+        }
+        self.native_fee_budget = budget;
+        Ok(self)
     }
 
     #[must_use]
@@ -236,6 +297,9 @@ pub enum CreationStage {
     CapabilityNarrowing,
     BudgetCreation,
     BudgetFunding,
+    MainFunding,
+    AssetAccountOpening,
+    InitialFunding,
 }
 
 impl CreationStage {
@@ -258,6 +322,9 @@ impl CreationStage {
             Self::CapabilityNarrowing => 5,
             Self::BudgetCreation => 6,
             Self::BudgetFunding => 7,
+            Self::MainFunding => 8,
+            Self::AssetAccountOpening => 9,
+            Self::InitialFunding => 10,
         }
     }
 
@@ -266,6 +333,8 @@ impl CreationStage {
             Self::DidRegistration | Self::BudgetCreation => Some(1),
             Self::RecoveryRegistration => Some(3),
             Self::BudgetFunding => Some(2),
+            Self::MainFunding | Self::InitialFunding => Some(5),
+            Self::AssetAccountOpening => Some(4),
             Self::Custody | Self::SessionProvision | Self::CapabilityNarrowing => None,
         }
     }
@@ -340,6 +409,7 @@ pub struct CreationProjection {
 /// node payload bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolAction {
+    pub actor: Option<Did>,
     pub stage: CreationStage,
     pub action_key: [u8; 32],
     pub intent: Intent,
@@ -353,6 +423,10 @@ pub struct ProtocolAction {
 /// finality rank returned by the peer-authenticated agent boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolEvidence {
+    pub signed_activity: Vec<u8>,
+    pub actor: Vec<u8>,
+    pub owner_public_key: [u8; 32],
+    pub network_id: u32,
     pub action_key: [u8; 32],
     pub activity_id: [u8; 32],
     pub receipt_bytes: Vec<u8>,
@@ -360,8 +434,84 @@ pub struct ProtocolEvidence {
     pub verification_level: VerificationLevel,
 }
 
+impl ProtocolEvidence {
+    /// # Errors
+    /// Refuses canonical owner activity or native receipt authority mismatches.
+    pub fn verify_outcome(
+        &self,
+        expected: ActivityType,
+    ) -> Result<layerx_proof::receipt::VerifiedReceipt, AgentFailure> {
+        self.bound_activity(expected)?;
+        if expected.module() == layerx_types::payload::ModuleId::Asset {
+            let verified =
+                layerx_proof::receipt::verify_outcome(&self.receipt_bytes, &self.authorized_batch)
+                    .map_err(|_| {
+                        AgentFailure::Refused("native asset receipt verification failed")
+                    })?;
+            let protocol = verified
+                .receipt()
+                .protocol()
+                .ok_or(AgentFailure::Refused("native asset receipt is missing"))?;
+            if protocol.activity_id() != self.activity_id
+                || protocol.protocol_version() != 3
+                || protocol.module_id() != 1
+                || u16::from(protocol.operation()) != expected.ordinal()
+            {
+                return Err(AgentFailure::Refused(
+                    "native asset receipt binding differs",
+                ));
+            }
+            return Ok(verified);
+        }
+        layerx_proof::receipt::verify_native_owner_outcome(
+            &self.receipt_bytes,
+            &self.authorized_batch,
+            &layerx_proof::receipt::NativeOwnerOutcomeContext {
+                canonical_activity: &self.signed_activity,
+                actor: &self.actor,
+                action_key: self.action_key,
+                activity_type: expected,
+                owner_public_key: self.owner_public_key,
+                network_id: self.network_id,
+            },
+        )
+        .map_err(|_| AgentFailure::Refused("lifecycle receipt verification failed"))
+    }
+
+    /// # Errors
+    /// Refuses activity identity, idempotency, signature, payload or operation mismatches.
+    pub fn bound_activity(
+        &self,
+        expected: ActivityType,
+    ) -> Result<layerx_intents::canonical::Activity, AgentFailure> {
+        let registry = ModuleRegistry::new(&[layerx_types::payload::ModuleRegistration::new(
+            expected.module(),
+            &[expected],
+        )
+        .map_err(|_| AgentFailure::Refused("invalid expected lifecycle operation"))?])
+        .map_err(|_| AgentFailure::Refused("invalid lifecycle registry"))?;
+        let activity = layerx_intents::owner_activity::verify(&self.signed_activity, &registry)
+            .map_err(|_| AgentFailure::Refused("invalid signed lifecycle activity"))?;
+        if activity.activity_type() != expected
+            || activity.actor_did() != self.actor
+            || activity.authority() != self.owner_public_key
+            || activity.network_id() != self.network_id
+            || activity.idempotency_key() != self.action_key
+            || layerx_intents::canonical::activity_id(&activity)
+                .map_err(|_| AgentFailure::Refused("invalid lifecycle activity identity"))?
+                != self.activity_id
+        {
+            return Err(AgentFailure::Refused("lifecycle activity binding differs"));
+        }
+        Ok(activity)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionProvision {
+    pub replacement: Option<layerx_crypto::session::SessionFeeState>,
+    pub native_fee_budget: Option<layerx_crypto::authority_grant::NativeFeeBudget>,
+    pub not_before: u64,
     pub action_key: [u8; 32],
     pub did: Did,
     pub activity_types: Vec<ActivityType>,
@@ -507,6 +657,10 @@ struct StoredPreset {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct JourneyRecord {
+    #[serde(default)]
+    native: Option<native::NativeCreation>,
+    #[serde(default)]
+    native_fee_budget: Option<NativeFeeConsent>,
     version: u8,
     agent_id: [u8; 32],
     idempotency_key: [u8; 32],
@@ -554,6 +708,17 @@ impl CreationJourney {
         catalog: &PurposePresetCatalog,
         now: u64,
     ) -> Result<Self, AgentCreationError> {
+        Self::start_with(scope, request, context, catalog, now, None)
+    }
+
+    fn start_with(
+        scope: &mut PrincipalScope<'_>,
+        request: &CreateAgentRequest,
+        context: &CreationContext,
+        catalog: &PurposePresetCatalog,
+        now: u64,
+        native: Option<native::NativeCreation>,
+    ) -> Result<Self, AgentCreationError> {
         context.validate()?;
         let preset = catalog
             .preset(request.purpose())
@@ -568,6 +733,11 @@ impl CreationJourney {
             if existing.record.idempotency_key == context.idempotency_key
                 && existing.record.name == request.name
                 && existing.record.monthly_spend == request.monthly_spend
+                && existing.record.currency == request.currency
+                && existing.record.native_fee_budget == request.native_fee_budget
+                && (existing.record.native == native
+                    || (existing.record.version == RECORD_VERSION
+                        && existing.record.native.is_none()))
                 && existing.record.preset.id == request.purpose
             {
                 return Ok(existing);
@@ -598,7 +768,17 @@ impl CreationJourney {
             budget_expiry_seconds: preset.budget_expiry_seconds,
             initial_funding: preset.initial_funding,
         };
-        let stages = CreationStage::ALL
+        let selected_stages = native.as_ref().map_or_else(
+            || CreationStage::ALL.to_vec(),
+            |mode| {
+                native::stages(
+                    mode,
+                    request.native_fee_budget.as_ref(),
+                    preset.budget_asset,
+                )
+            },
+        );
+        let stages = selected_stages
             .into_iter()
             .map(|stage| StageRecord {
                 stage,
@@ -610,7 +790,9 @@ impl CreationJourney {
             .collect();
         let journey = Self {
             record: JourneyRecord {
-                version: RECORD_VERSION,
+                version: if native.is_some() { 2 } else { RECORD_VERSION },
+                native,
+                native_fee_budget: request.native_fee_budget.clone(),
                 agent_id,
                 idempotency_key: context.idempotency_key,
                 name: request.name.clone(),
@@ -790,6 +972,9 @@ impl CreationJourney {
         agent: &mut C,
         now: u64,
     ) -> Result<CreationStatus, AgentCreationError> {
+        if self.record.version != RECORD_VERSION {
+            return Err(AgentCreationError::InvalidStage);
+        }
         self.ensure_custody(scope, keystore, now)?;
         for stage in CreationStage::ALL.into_iter().skip(1) {
             if self.stage(stage).state == StageState::ReceiptVerified {
@@ -805,6 +990,9 @@ impl CreationJourney {
                 CreationStage::SessionProvision => self.run_session(scope, registry, agent, now),
                 CreationStage::CapabilityNarrowing => self.run_capability(scope, agent, now),
                 CreationStage::Custody => unreachable!(),
+                CreationStage::MainFunding
+                | CreationStage::AssetAccountOpening
+                | CreationStage::InitialFunding => return Err(AgentCreationError::InvalidStage),
             };
             match result {
                 Ok(()) => {}
@@ -866,17 +1054,24 @@ impl CreationJourney {
     ) -> Result<(), AgentCreationError> {
         let action = self.protocol_action(stage, registry)?;
         let action_key = action.action_key;
+        let kind = action.compiled.activity_type();
+        let payload = action.compiled.payload().as_bytes().to_vec();
         let evidence = agent.submit_protocol_scoped(scope, action)?;
-        if evidence.action_key != action_key || evidence.activity_id != action_key {
+        if evidence.action_key != action_key
+            || evidence.network_id != self.record.network_id
+            || evidence.bound_activity(kind)?.payload() != payload
+        {
             return Err(AgentCreationError::EvidenceConflict);
         }
-        let verified = verify(&evidence.receipt_bytes, &evidence.authorized_batch)?;
+        let verified = evidence.verify_outcome(kind)?;
         let protocol = verified
             .receipt()
             .protocol()
             .ok_or(AgentCreationError::EvidenceConflict)?;
         if protocol.activity_id() != evidence.activity_id
-            || Some(protocol.operation()) != stage.operation()
+            || protocol.result_code() != 0
+            || Some(u8::try_from(kind.ordinal()).map_err(|_| AgentCreationError::EvidenceConflict)?)
+                != stage.operation()
         {
             return Err(AgentCreationError::EvidenceConflict);
         }
@@ -925,6 +1120,21 @@ impl CreationJourney {
             scope,
             registry,
             SessionProvision {
+                replacement: None,
+                native_fee_budget: self
+                    .record
+                    .native_fee_budget
+                    .as_ref()
+                    .map(|budget| {
+                        budget.budget(
+                            self.record
+                                .started_at
+                                .checked_mul(1_000)
+                                .ok_or(AgentCreationError::InvalidContext)?,
+                        )
+                    })
+                    .transpose()?,
+                not_before: self.record.started_at,
                 action_key,
                 did: self.did()?,
                 activity_types,
@@ -1079,11 +1289,15 @@ impl CreationJourney {
             )?)),
             CreationStage::Custody
             | CreationStage::SessionProvision
-            | CreationStage::CapabilityNarrowing => return Err(AgentCreationError::InvalidStage),
+            | CreationStage::CapabilityNarrowing
+            | CreationStage::MainFunding
+            | CreationStage::AssetAccountOpening
+            | CreationStage::InitialFunding => return Err(AgentCreationError::InvalidStage),
         };
         let compiled = compile(&intent, registry)?;
         let disclosure = DisclosureCheck::verify(&intent, &compiled)?;
         Ok(ProtocolAction {
+            actor: None,
             stage,
             action_key: self.stage(stage).action_key,
             intent,
@@ -1107,7 +1321,11 @@ impl CreationJourney {
             .map_err(|_| AgentCreationError::CorruptJourney)?;
         AccountId::parse(&format!(
             "agent:{did}:budget:{}",
-            short_hex(&self.record.agent_id)
+            if self.record.version == 2 {
+                native::full_hex(&self.record.agent_id)
+            } else {
+                short_hex(&self.record.agent_id)
+            }
         ))
         .map_err(|_| AgentCreationError::CorruptJourney)
     }
@@ -1142,7 +1360,16 @@ impl CreationJourney {
 }
 
 fn validate_record(record: &JourneyRecord, expected: [u8; 32]) -> Result<(), AgentCreationError> {
-    if record.version != RECORD_VERSION
+    let expected_stages = match (&record.native, record.version) {
+        (None, RECORD_VERSION) => CreationStage::ALL.to_vec(),
+        (Some(mode), 2) => native::stages(
+            mode,
+            record.native_fee_budget.as_ref(),
+            record.preset.budget_asset,
+        ),
+        _ => return Err(AgentCreationError::CorruptJourney),
+    };
+    if !matches!(record.version, 1 | 2)
         || record.agent_id != expected
         || record.idempotency_key == [0; 32]
         || record.name.is_empty()
@@ -1154,11 +1381,11 @@ fn validate_record(record: &JourneyRecord, expected: [u8; 32]) -> Result<(), Age
             .checked_add(record.preset.session_lifetime_seconds)
             .is_none()
         || record.did.is_empty()
-        || record.stages.len() != CreationStage::ALL.len()
+        || record.stages.len() != expected_stages.len()
         || record
             .stages
             .iter()
-            .zip(CreationStage::ALL)
+            .zip(expected_stages)
             .any(|(record, expected_stage)| {
                 record.stage != expected_stage
                     || record.action_key != action_key(expected, expected_stage)
@@ -1167,6 +1394,30 @@ fn validate_record(record: &JourneyRecord, expected: [u8; 32]) -> Result<(), Age
             })
     {
         return Err(AgentCreationError::CorruptJourney);
+    }
+    if let Some(budget) = &record.native_fee_budget {
+        budget.budget(
+            record
+                .started_at
+                .checked_mul(1_000)
+                .ok_or(AgentCreationError::CorruptJourney)?,
+        )?;
+    }
+    if let Some(mode) = &record.native {
+        if mode.native_asset == [0; 32]
+            || mode.timestamp_span == 0
+            || record
+                .started_at
+                .checked_add(mode.timestamp_span)
+                .and_then(|value| value.checked_mul(1_000))
+                .is_none()
+            || record
+                .native_fee_budget
+                .as_ref()
+                .is_some_and(|fee| fee.asset_id != mode.native_asset)
+        {
+            return Err(AgentCreationError::CorruptJourney);
+        }
     }
     Ok(())
 }

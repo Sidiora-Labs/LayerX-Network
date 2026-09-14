@@ -1,6 +1,6 @@
 "use client";
 
-import { List, ListItem } from "@layerx/ui";
+import { List, ListItem } from "@layerx/ui/components/list";
 import type { ReactNode } from "react";
 
 export interface DeviceListItem {

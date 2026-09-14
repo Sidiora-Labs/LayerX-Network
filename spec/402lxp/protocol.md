@@ -77,7 +77,7 @@ Receiver authorization is:
 
 The receive authorization message is ASCII `LXP:RECEIVE:v1`, followed by the receive fields from `from` through `context_hash`, followed by receiver authorization without its public key or signature. The receiver signs using the native signature-preimage domain. These payload encodings do not replace the signed activity envelope.
 
-Asset grant issue uses ordinal 7 with the canonical grant. Grant revoke uses ordinal 8 and `version:u16=1 || grant_id32 || revocation_sequence:u64`. Ordinal 9 is reserved. Python and TypeScript codecs for these payloads live in `agent/sdk/python/layerx_sdk/x402_receive.py` and `agent/sdk/typescript/src/x402/receive.ts`.
+Asset grant issue uses ordinal 7 with the canonical grant. Grant revoke uses ordinal 8 and `version:u16=1 || grant_id32 || revocation_sequence:u64`. Ordinal 9 is the settlement-owned WITHDRAW request; its named price requires fee parameter encoding 3. Python and TypeScript codecs for these payloads live in `agent/sdk/python/layerx_sdk/x402_receive.py` and `agent/sdk/typescript/src/x402/receive.ts`.
 
 ## Asset accounts
 

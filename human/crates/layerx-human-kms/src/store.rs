@@ -11,6 +11,8 @@ use std::path::PathBuf;
 use zeroize::{Zeroize, Zeroizing};
 
 const MAX_STATE: usize = 8 * 1024 * 1024;
+#[path = "settlement_recipient.rs"]
+mod settlement_recipient;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -25,6 +27,8 @@ struct Record {
     wallet: Option<crate::evm::Wallet>,
     #[serde(default)]
     send_actions: BTreeMap<String, (crate::evm_types::SendPlanAuthorization, Vec<u8>)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recipient_identity: Option<[u8; 32]>,
 }
 impl Drop for Record {
     fn drop(&mut self) {
@@ -221,6 +225,7 @@ impl Store {
         &mut self,
         request: &Request<'_>,
         signing_digest: Option<[u8; 32]>,
+        now: u64,
     ) -> Result<Vec<u8>> {
         if !self.healthy {
             return Err(Error::Unavailable);
@@ -243,8 +248,11 @@ impl Store {
         if request.operation == 11 {
             return self.authorize_send(request, signing_digest.ok_or(Error::Refused)?);
         }
+        if request.operation == 13 {
+            return self.authorize_recipient(request);
+        }
         if request.operation >= 6 {
-            return self.evm(request);
+            return self.evm(request, now);
         }
         let key = hex(&request.binding);
         let record = self.state.records.get_mut(&key).ok_or(Error::NotFound)?;
@@ -303,7 +311,7 @@ impl Store {
         self.persist()?;
         Ok(signature)
     }
-    fn evm(&mut self, request: &Request<'_>) -> Result<Vec<u8>> {
+    fn evm(&mut self, request: &Request<'_>, now: u64) -> Result<Vec<u8>> {
         use crate::evm_types::{EvmAcknowledgement, EvmPlanAuthorization};
         let record = self
             .state
@@ -325,10 +333,6 @@ impl Store {
             return Ok(address.to_vec());
         }
         let wallet = record.wallet.as_mut().ok_or(Error::NotFound)?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| Error::Unavailable)?
-            .as_secs();
         let action = match request.operation {
             7 => {
                 let authorization: EvmPlanAuthorization =
@@ -407,6 +411,7 @@ impl Store {
             generation: 0,
             wallet: None,
             send_actions: BTreeMap::new(),
+            recipient_identity: None,
         };
         let response = description(&record)?;
         self.state.records.insert(key, record);
@@ -455,6 +460,7 @@ fn validate(state: &State, config: &Config) -> std::result::Result<(), String> {
             || !handles.insert(record.handle)
             || (record.generation == 0) != record.previous.is_none()
             || record.previous == Some(record.public)
+            || record.recipient_identity == Some([0; 32])
         {
             return Err("state invariant failed".into());
         }

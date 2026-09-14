@@ -5,6 +5,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_fee.h"
+#include "layerx/lxp_handover.h"
 #include "layerx/lxp_protocol.h"
 
 #include <fcntl.h>
@@ -213,16 +214,28 @@ static lxp_result parse_request(
         if (status == LXP_OK) {
             uint16_t schedule_length;
             lxp_fee_params schedule;
-            lxp_genesis_module_value *value = &draft->module_values[draft->module_value_count];
+            uint8_t encoded[LXP_FEE_PARAMS_V4_BYTES];
             status = reader_u16(&reader, &schedule_length);
-            if (status == LXP_OK && schedule_length > sizeof(value->value)) status = LXP_ERR_LENGTH_LIMIT;
-            if (status == LXP_OK) status = reader_copy(&reader, value->value, schedule_length);
-            if (status == LXP_OK) status = lxp_fee_params_decode(value->value, schedule_length, &schedule);
-            if (status == LXP_OK && schedule.version != 2U) status = LXP_ERR_VERSION_UNSUPPORTED;
-            if (status == LXP_OK) {
+            if (status == LXP_OK && schedule_length > sizeof(encoded)) status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK) status = reader_copy(&reader, encoded, schedule_length);
+            if (status == LXP_OK) status = lxp_fee_params_decode(encoded, schedule_length, &schedule);
+            if (status == LXP_OK && schedule.version != 2U && schedule.version != 3U && schedule.version != 4U)
+                status = LXP_ERR_VERSION_UNSUPPORTED;
+            if (status == LXP_OK && draft->module_value_count + (schedule.version == 4U ? 2U : 1U) > LXP_GENESIS_MAX_MODULE_VALUES)
+                status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK && schedule.version == 4U) {
+                lxp_genesis_module_value *value = &draft->module_values[draft->module_value_count++];
                 value->module_id = LXP_MODULE_GOVERNANCE;
-                value->value_length = schedule_length;
+                value->value_length = LXP_FEE_PARAMS_V4_PRICES_BYTES;
+                (void)memcpy(value->key, "fee.module-prices", 17U);
+                (void)memcpy(value->value, encoded + LXP_FEE_PARAMS_V4_HEAD_BYTES, value->value_length);
+            }
+            if (status == LXP_OK) {
+                lxp_genesis_module_value *value = &draft->module_values[draft->module_value_count];
+                value->module_id = LXP_MODULE_GOVERNANCE;
+                value->value_length = schedule.version == 4U ? LXP_FEE_PARAMS_V4_HEAD_BYTES : schedule_length;
                 (void)memcpy(value->key, "fee.schedule", 12U);
+                (void)memcpy(value->value, encoded, value->value_length);
                 ++draft->module_value_count;
             }
         }
@@ -369,6 +382,7 @@ static lxp_result build_artifacts(
     static const char request_name[] = "paxeer-registration-request.lxrr";
     static const char descriptor_name[] =
         "paxeer-deployment-descriptor.lxgd";
+    static const char handover_trust_name[] = "genesis-handover-trust.lxt";
     uint8_t registration_request[LXP_GENESIS_REGISTRATION_REQUEST_BYTES];
     uint8_t deployment_descriptor[LXP_GENESIS_DEPLOYMENT_DESCRIPTOR_BYTES];
     uint8_t asset_id[32];
@@ -387,12 +401,16 @@ static lxp_result build_artifacts(
     lxp_snapshot_manifest_record snapshot_manifest;
     lxp_byte_span encoded_manifest;
     lxp_byte_span snapshot;
+    lxp_byte_span handover_trust = {NULL, 0U};
+    bool handover_enabled = false;
+    uint8_t governance_public_key[32];
     lxp_arena arena;
     char manifest_path[4096];
     char snapshot_path[4096];
     char snapshot_temporary_path[4096];
     char registration_request_path[4096];
     char deployment_descriptor_path[4096];
+    char handover_trust_path[4096];
     int directory_descriptor = -1;
     bool directory_created = false;
     lxp_result status;
@@ -443,6 +461,11 @@ static lxp_result build_artifacts(
         status = lxp_genesis_deployment_descriptor_encode(
             manifest, &arena, deployment_descriptor);
     if (status == LXP_OK)
+        status = lxp_handover_genesis_authority(manifest, governance_public_key,
+            &handover_enabled);
+    if (status == LXP_OK && handover_enabled)
+        status = lxp_genesis_handover_trust_build(manifest, &arena, &handover_trust);
+    if (status == LXP_OK)
         status = join_path(manifest_path, sizeof(manifest_path),
                            output_directory, manifest_name);
     if (status == LXP_OK)
@@ -460,6 +483,9 @@ static lxp_result build_artifacts(
         status = join_path(deployment_descriptor_path,
                            sizeof(deployment_descriptor_path),
                            output_directory, descriptor_name);
+    if (status == LXP_OK)
+        status = join_path(handover_trust_path, sizeof(handover_trust_path),
+            output_directory, handover_trust_name);
     if (status == LXP_OK && mkdir(output_directory, 0700) != 0)
         status = LXP_ERR_IO;
     else if (status == LXP_OK)
@@ -479,6 +505,9 @@ static lxp_result build_artifacts(
         status = write_exclusive(deployment_descriptor_path,
                                  deployment_descriptor,
                                  sizeof(deployment_descriptor));
+    if (status == LXP_OK && handover_enabled)
+        status = write_exclusive(handover_trust_path, handover_trust.bytes,
+            handover_trust.length);
     if (status == LXP_OK) {
         directory_descriptor = open(output_directory,
                                     O_RDONLY | O_DIRECTORY | O_CLOEXEC |
@@ -490,6 +519,7 @@ static lxp_result build_artifacts(
         status == LXP_OK)
         status = LXP_ERR_IO;
     if (status != LXP_OK && directory_created) {
+        (void)unlink(handover_trust_path);
         (void)unlink(deployment_descriptor_path);
         (void)unlink(registration_request_path);
         (void)unlink(snapshot_temporary_path);

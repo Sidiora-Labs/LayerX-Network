@@ -2,7 +2,7 @@
 
 # Human API reference
 
-Schema `LayerX Human API`, contract major `1`, minor `2`, generated from `human/schema/human-api`.
+Schema `LayerX Human API`, contract major `1`, minor `4`, generated from `human/schema/human-api`.
 
 Transport is HTTPS with JSON bodies under the `/v1` base path. Every amount is a decimal string of base units and always travels with its currency code. Every mutation that can move money requires the `Idempotency-Key` header, and repeating the request returns the original journey rather than a second effect.
 
@@ -30,6 +30,8 @@ Additive only within a major version: a release may only add sections, keys, lis
 | `agent.recover` | `POST` | `/v1/agents/{agent_id}/recover` | `Empty` | `KeyChallenge` | required |
 | `agent.resume` | `POST` | `/v1/agents/{agent_id}/resume` | `Empty` | `Agent` | required |
 | `agent.rotate` | `POST` | `/v1/agents/{agent_id}/rotate` | `Empty` | `KeyChallenge` | required |
+| `agent.rotation.disclosure` | `POST` | `/v1/agents/{agent_id}/rotation/disclosure` | `OwnerRotationDisclosureRequest` | `SecurityAction` | not used |
+| `agent.rotation.start` | `POST` | `/v1/agents/{agent_id}/rotation` | `OwnerRotationRequest` | `KeyChallenge` | required |
 | `approval.approve` | `POST` | `/v1/approvals/{approval_id}/approve` | `ApprovalApproveRequest` | `ApprovalDecision` | required |
 | `approval.get` | `GET` | `/v1/approvals/{approval_id}` | `Empty` | `ApprovalDetail` | not used |
 | `approval.list` | `GET` | `/v1/approvals` | `Empty` | `ApprovalPage` | not used |
@@ -63,6 +65,7 @@ Additive only within a major version: a release may only add sections, keys, lis
 | `security.recovery.reveal` | `POST` | `/v1/security/recovery/evidence` | `SecurityRecoveryReveal` | `TimedSecret` | not used |
 | `security.session.revoke` | `POST` | `/v1/security/sessions/{session_id}/revoke` | `SecuritySessionRevocation` | `SessionRevocation` | required |
 | `security.session.revoke-all` | `POST` | `/v1/security/sessions/revoke-all` | `SecuritySessionRevocation` | `SessionRevocation` | required |
+| `session.fee-policy` | `GET` | `/v1/sessions/fee-policy` | `Empty` | `NativeFeeAsset` | not used |
 | `session.list` | `GET` | `/v1/sessions` | `Empty` | `SessionList` | not used |
 | `session.open` | `POST` | `/v1/sessions` | `SessionOpenRequest` | `Session` | required |
 | `session.refresh` | `POST` | `/v1/sessions/refresh` | `Empty` | `Session` | not used |
@@ -134,7 +137,7 @@ additive_only
 | `ApprovalId` | scalar | json: `string`<br>prefix: `apr_`<br>rust: `String`<br>typescript: `string` |
 | `Agent` | type | required: `agent_id:AgentId`, `name:string`, `purpose:string`, `state:AgentState`, `state_copy_key:CopyKey`, `limit:SpendLimit`, `spend:AgentSpend`, `evidence:EvidenceRef[]`, `created_at:Timestamp`, `updated_at:Timestamp`<br>optional: `creation_journey_id:JourneyId` |
 | `AgentArchiveRequest` | type | required: `confirm_name:string` |
-| `AgentCreateRequest` | type | required: `name:string`, `purpose:string`, `monthly_limit:Money` |
+| `AgentCreateRequest` | type | required: `name:string`, `purpose:string`, `monthly_limit:Money`<br>optional: `native_fee_budget:NativeFeeBudget` |
 | `AgentLimitRequest` | type | required: `monthly_limit:Money` |
 | `AgentPage` | type | required: `agents:Agent[]`, `next_cursor:Cursor` |
 | `AgentReclaimRequest` | type | required: `money:Money` |
@@ -150,6 +153,8 @@ additive_only
 | `KeyChallenge` | type | required: `agent_id:AgentId`, `kind:KeyChallengeKind`, `delay_copy_key:CopyKey`, `delay_seconds:integer`, `ready_at:Timestamp`, `evidence:EvidenceRef[]` |
 | `KeyChallengeKind` | type | variants: `rotate`, `recover` |
 | `LimitEnforcement` | type | variants: `protocol`, `app` |
+| `OwnerRotationDisclosureRequest` | type | required: `delay_seconds:integer`, `window_seconds:integer`, `idempotency_key:string` |
+| `OwnerRotationRequest` | type | required: `delay_seconds:integer`, `window_seconds:integer`, `step_up:StepUpEvidence` |
 | `SpendLimit` | type | required: `monthly:Money`, `enforcement:LimitEnforcement`, `enforcement_copy_key:CopyKey` |
 | `VerifiedMoney` | type | required: `money:Money`, `verification:VerificationLevel` |
 
@@ -189,6 +194,7 @@ additive_only
 | `EmailAddress` | scalar | json: `string`<br>rust: `String`<br>typescript: `string` |
 | `EvmAddress` | scalar | json: `string`<br>prefix: `0x`<br>rust: `String`<br>typescript: `string` |
 | `EvmSignature` | scalar | json: `string`<br>prefix: `0x`<br>rust: `String`<br>typescript: `string` |
+| `Milliseconds` | scalar | json: `string`<br>format: `decimal`<br>rust: `u64`<br>typescript: `bigint` |
 | `OpaqueCredential` | scalar | json: `string`<br>rust: `String`<br>typescript: `string` |
 | `OperationDigest` | scalar | json: `string`<br>prefix: `opd_`<br>rust: `String`<br>typescript: `string` |
 | `PasskeyId` | scalar | json: `string`<br>prefix: `pky_`<br>rust: `String`<br>typescript: `string` |
@@ -212,6 +218,8 @@ additive_only
 | `BindingStatementRequest` | type | required: `address:EvmAddress` |
 | `BindingSubmission` | type | required: `address:EvmAddress`, `statement:string`, `signature:EvmSignature` |
 | `Device` | type | required: `device_id:DeviceId`, `label:string`, `platform:string` |
+| `NativeFeeAsset` | type | required: `asset_id:string`, `currency:CurrencyCode`, `decimals:integer` |
+| `NativeFeeBudget` | type | required: `asset_id:string`, `maximum_per_activity:Amount`, `maximum_total:Amount`, `period_length_ms:Milliseconds`, `maximum_per_period:Amount` |
 | `Passkey` | type | required: `passkey_id:PasskeyId`, `label:string`, `created_at:Timestamp`<br>optional: `last_used_at:Timestamp` |
 | `PasskeyAssertion` | type | required: `assertion_id:AssertionId`, `passkey_id:PasskeyId`, `completed_at:Timestamp`, `expires_at:Timestamp` |
 | `PasskeyAssertionBegin` | type | optional: `email:EmailAddress` |

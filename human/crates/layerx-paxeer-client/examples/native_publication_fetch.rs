@@ -25,20 +25,20 @@ fn checked<T, E: std::fmt::Debug>(result: std::result::Result<T, E>) -> Result<T
     result.map_err(|error| format!("{error:?}").into())
 }
 
-fn endpoint(url: &str) -> EndpointConfig {
+fn endpoint(url: &str, chain_id: u64) -> EndpointConfig {
     EndpointConfig {
         url: url.to_owned(),
         request_timeout: Duration::from_secs(30),
         transport: EndpointTransport::LocalEmulator,
-        expected_chain_id: 31_337,
+        expected_chain_id: chain_id,
     }
 }
 
-fn fetch_deposit_balance(args: &[String]) -> Result<[u8; 32]> {
+fn fetch_deposit_balance(args: &[String], chain_id: u64) -> Result<[u8; 32]> {
     if args.len() != 13 {
         return Err("expected 13 deposit and balance inputs".into());
     }
-    let endpoint = endpoint(&args[0]);
+    let endpoint = endpoint(&args[0], chain_id);
     let registry = EvmAddress::new(bytes(&args[1])?);
     let vault = EvmAddress::new(bytes(&args[2])?);
     let checkpoint = bytes(&args[3])?;
@@ -90,17 +90,27 @@ fn fetch_deposit_balance(args: &[String]) -> Result<[u8; 32]> {
 }
 
 fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let inputs: Vec<String> = std::env::args().skip(1).collect();
+    let (args, chain_id) = if inputs.first().is_some_and(|v| v == "--chain-id") {
+        let value = inputs.get(1).ok_or("missing chain id")?;
+        let chain_id: u64 = value.parse()?;
+        if chain_id == 0 || chain_id.to_string() != *value {
+            return Err("invalid chain id".into());
+        }
+        (&inputs[2..], chain_id)
+    } else {
+        (inputs.as_slice(), 31_337)
+    };
     if args.first().is_some_and(|v| v == "--deposit-balance-only") {
-        fetch_deposit_balance(&args[1..])?;
+        fetch_deposit_balance(&args[1..], chain_id)?;
         return Ok(());
     }
     if args.len() != 17 {
         return Err("expected 17 public fixture inputs".into());
     }
     let common = [0, 1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 14, 16].map(|i| args[i].clone());
-    let root = fetch_deposit_balance(&common)?;
-    let endpoint = endpoint(&args[0]);
+    let root = fetch_deposit_balance(&common, chain_id)?;
+    let endpoint = endpoint(&args[0], chain_id);
     let registry = EvmAddress::new(bytes(&args[1])?);
     let checkpoint = bytes(&args[3])?;
     let withdrawal = bytes(&args[7])?;

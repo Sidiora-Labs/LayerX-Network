@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
+#include "layerx/lxp_maintenance.h"
 #include "lxp_daemon_batch_wal.h"
 
 #include "layerx/lxp_batch_identity.h"
@@ -209,9 +210,10 @@ static lxp_result wal_digest(const uint8_t *bytes, size_t body_length,
 static lxp_result spans_root(const lxp_byte_span *spans, size_t count,
                              uint8_t root[32])
 {
-    uint8_t hashes[LXP_DAEMON_BATCH_WAL_MAX_ITEMS][32];
+    uint8_t hashes[LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U][32];
     size_t level_count=count,i;
     lxp_result status=LXP_OK;
+    if (count == 0U || count > LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U) return LXP_ERR_LENGTH_LIMIT;
     for(i=0U;i<count && status==LXP_OK;++i)
         status=lxp_merkle_leaf_hash(spans[i].bytes,spans[i].length,hashes[i]);
     while(status==LXP_OK && level_count>1U) {
@@ -324,7 +326,7 @@ static lxp_result validate_canonical_items(
     }
     if (status == LXP_OK && in->maintenance.length != 0U) {
         lxp_programs_occupancy_receipt maintenance;
-        status = lxp_programs_occupancy_receipt_decode(
+        status = lxp_batch_maintenance_occupancy_decode(
             in->maintenance.bytes, in->maintenance.length, &maintenance);
         if (status == LXP_OK &&
             (!lxp_protocol_version_uses_occupancy(in->protocol_version) ||
@@ -352,6 +354,9 @@ lxp_result lxp_daemon_batch_wal_body(
 {
     lxp_batch_body built = {0};
     lxp_byte_span receipts[LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U];
+    lxp_byte_span events[LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U];
+    lxp_byte_span maintenance_events;
+    size_t event_count;
     lxp_state_diff_entry *entries;
     size_t count, entry_count, i, mark;
     uint8_t root[32];
@@ -367,13 +372,17 @@ lxp_result lxp_daemon_batch_wal_body(
     count = in->count;
     for (i = 0U; i < count; ++i) receipts[i] = in->receipts[i];
     if (in->maintenance.length != 0U) receipts[count++] = in->maintenance;
+    event_count = in->count;
+    for (i = 0U; i < event_count; ++i) events[i] = in->events[i];
+    if (status == LXP_OK) status = lxp_batch_maintenance_events(in->maintenance, &built.header, &maintenance_events);
+    if (status == LXP_OK && maintenance_events.length != 0U) events[event_count++] = maintenance_events;
     if (status == LXP_OK)
         status = lxp_replay_section_encode(in->activities, in->count, arena, &built.activities);
     if (status == LXP_OK)
-        status = lxp_da_receipt_section_encode(receipts, count, in->events,
-                                               in->count, arena, &built.receipts);
+        status = lxp_da_receipt_section_encode(receipts, count, events,
+                                               event_count, arena, &built.receipts);
     if (status == LXP_OK)
-        status = lxp_replay_section_encode(in->events, in->count, arena, &built.events);
+        status = lxp_replay_section_encode(events, event_count, arena, &built.events);
     if (status == LXP_OK)
         status = lxp_replay_section_encode(NULL, 0U, arena, &built.oracle_inputs);
     built.state_diff = in->state_diff;
@@ -415,6 +424,9 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in, bool lega
     size_t payload_bytes = 0U;
     uint8_t activity_root[32],event_root[32],empty_root[32],publication[32];
     lxp_result status;
+    lxp_byte_span events[LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U];
+    lxp_byte_span maintenance_events;
+    size_t event_count;
     if (in==NULL || in->count==0U || in->count>LXP_DAEMON_BATCH_WAL_MAX_ITEMS ||
         in->activities==NULL || in->receipts==NULL || in->events==NULL ||
         ((in->terminal_payloads == NULL) != (in->call_graphs == NULL)) ||
@@ -502,8 +514,13 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in, bool lega
         for (j = proof->depth; j < LXP_MERKLE_MAX_DEPTH; ++j)
             if (!lxp_ct_is_zero(proof->siblings[j], 32U)) return LXP_ERR_NON_CANONICAL;
     }
+    event_count = in->count;
+    for (i = 0U; i < event_count; ++i) events[i] = in->events[i];
+    status = lxp_batch_maintenance_events(in->maintenance, &header, &maintenance_events);
+    if (status != LXP_OK) return status;
+    if (maintenance_events.length != 0U) events[event_count++] = maintenance_events;
     if(spans_root(in->activities,in->count,activity_root)!=LXP_OK ||
-       spans_root(in->events,in->count,event_root)!=LXP_OK ||
+       spans_root(events,event_count,event_root)!=LXP_OK ||
        lxp_merkle_leaf_hash(NULL,0U,empty_root)!=LXP_OK ||
        lxp_ct_memcmp(activity_root,header.activity_merkle_root,32U)!=0 ||
        lxp_ct_memcmp(event_root,header.event_merkle_root,32U)!=0 ||
@@ -1197,7 +1214,7 @@ static lxp_result decode_record(uint8_t *bytes,size_t length,
 {
     lxp_daemon_batch_wal_record *r=NULL; uint8_t digest[32];
     size_t offset=0U,i,j; lxp_result status=LXP_OK;
-    if(bytes==NULL||authorization==NULL||out==NULL)
+    if(bytes==NULL||out==NULL)
         return LXP_ERR_NON_CANONICAL;
     *out=NULL;
     if(memcmp(bytes,wal_magic,8U)!=0 || (get_u16(bytes+8U)!=1U && get_u16(bytes+8U)!=WAL_VERSION && get_u16(bytes+8U)!=WAL_MAINTENANCE_VERSION && get_u16(bytes+8U)!=WAL_AVAILABILITY_VERSION) ||
@@ -1236,13 +1253,13 @@ static lxp_result decode_record(uint8_t *bytes,size_t length,
        !lxp_ct_is_zero(r->owned+offset-7U-LXP_BATCH_HEADER_ENCODED_SIZE-64U,
                        7U) ||
        r->view.count==0U||r->view.count>LXP_DAEMON_BATCH_WAL_MAX_ITEMS ||
-       r->view.authorization.authorized!=authorization->authorized ||
+       (authorization != NULL && (r->view.authorization.authorized!=authorization->authorized ||
        r->view.authorization.first_batch_number!=authorization->first_batch_number ||
        r->view.authorization.last_batch_number!=authorization->last_batch_number ||
        lxp_ct_memcmp(r->view.authorization.sequencer_id,
                      authorization->sequencer_id,32U)!=0 ||
        lxp_ct_memcmp(r->view.authorization.public_key,
-                     authorization->public_key,32U)!=0){status=LXP_ERR_BAD_SIGNATURE;goto fail;}
+                     authorization->public_key,32U)!=0))){status=LXP_ERR_BAD_SIGNATURE;goto fail;}
     for(i=0U;i<r->view.count;++i){uint32_t al,rl,el;
         if(offset>length-32U || length-32U-offset<12U){status=LXP_ERR_LOG_TRUNCATED;goto fail;}
         al=get_u32(r->owned+offset);offset+=4U;rl=get_u32(r->owned+offset);offset+=4U;el=get_u32(r->owned+offset);offset+=4U;
@@ -1323,14 +1340,15 @@ fail:
     if(bytes!=NULL){lxp_secure_zero(bytes,length);free(bytes);} return status;
 }
 
-lxp_result lxp_daemon_batch_wal_load(const char *directory,
+static lxp_result batch_wal_load(const char *directory,
  const lxp_sequencer_authorization *authorization,
- lxp_daemon_batch_wal_record **out,bool *present)
+ lxp_daemon_batch_wal_authorize_fn authorize, void *context,
+ lxp_daemon_batch_wal_record **out,bool *present, bool sweep)
 {
     lxp_daemon_batch_wal_record *selected=NULL;
     uint8_t candidate;
     lxp_result first_group_error=LXP_OK;
-    if(authorization==NULL||out==NULL||present==NULL)
+    if((authorization==NULL && (authorize==NULL || context==NULL))||out==NULL||present==NULL)
         return LXP_ERR_NON_CANONICAL;
     *out=NULL;*present=false;
     for(candidate=0U;candidate<3U;++candidate) {
@@ -1341,7 +1359,7 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
         bool found=false;
         lxp_daemon_batch_wal_record *decoded=NULL;
         lxp_result status=read_record(directory,name,&bytes,&length,&found,
-                                      candidate==0U);
+                                      sweep && candidate==0U);
         if(status!=LXP_OK) {
             if(candidate==0U) {
                 lxp_daemon_batch_wal_destroy(selected);
@@ -1353,6 +1371,10 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
         if(!found)continue;
         status=decode_record(bytes,length,authorization,candidate!=0U,
             candidate==0U ? 0U : (uint8_t)(candidate-1U),false,&decoded);
+        if(status==LXP_OK && authorize!=NULL) {
+            status=authorize(context, &decoded->view);
+            if(status!=LXP_OK) { lxp_daemon_batch_wal_destroy(decoded); decoded=NULL; }
+        }
         if(status!=LXP_OK) {
             if(candidate==0U) {
                 lxp_daemon_batch_wal_destroy(selected);
@@ -1377,6 +1399,30 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
     }
     if(selected==NULL)return first_group_error;
     *out=selected;*present=true;return LXP_OK;
+}
+
+lxp_result lxp_daemon_batch_wal_load(const char *directory,
+ const lxp_sequencer_authorization *authorization,
+ lxp_daemon_batch_wal_record **out, bool *present)
+{
+    if (authorization == NULL) return LXP_ERR_NON_CANONICAL;
+    return batch_wal_load(directory, authorization, NULL, NULL, out, present, true);
+}
+
+lxp_result lxp_daemon_batch_wal_load_authorized(const char *directory,
+ lxp_daemon_batch_wal_authorize_fn authorize, void *context,
+ lxp_daemon_batch_wal_record **out, bool *present)
+{
+    if (authorize == NULL || context == NULL) return LXP_ERR_NON_CANONICAL;
+    return batch_wal_load(directory, NULL, authorize, context, out, present, true);
+}
+
+lxp_result lxp_daemon_batch_wal_read_authorized(const char *directory,
+ lxp_daemon_batch_wal_authorize_fn authorize, void *context,
+ lxp_daemon_batch_wal_record **out, bool *present)
+{
+    if (authorize == NULL || context == NULL) return LXP_ERR_NON_CANONICAL;
+    return batch_wal_load(directory, NULL, authorize, context, out, present, false);
 }
 
 lxp_result lxp_daemon_batch_wal_classify(const lxp_daemon_batch_wal_record *r,

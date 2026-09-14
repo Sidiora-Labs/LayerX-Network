@@ -12,6 +12,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[4]
 NODE_DIR = ROOT / 'platform/hosted/node'
 BIN = Path(os.environ.get('LAYERX_TEST_NATIVE_BIN_DIR', ROOT / 'build/bin'))
+SETTLEMENT = Path(os.environ.get('LAYERX_TEST_SETTLEMENT_ENV',
+                               NODE_DIR / 'tests/fixtures/settlement-configuration.txt'))
 sys.path.insert(0, str(ROOT / 'tests/support'))
 from lxgb_metadata import metadata
 
@@ -66,6 +68,12 @@ class SequencerSeedTest(unittest.TestCase):
             metadata(ASSET, public_key_of(self.treasury_seed), os.urandom(32)))
         self.data = self.work / 'data'
         self.run_dir = self.work / 'run'
+        # Public configuration retained from a real disposable custody run.
+        # These genesis-key tests do not query RPC or assert chain finality.
+        settlement = subprocess.run(
+            ['bash', str(NODE_DIR / 'bootstrap.sh'), '--check-settlement', str(SETTLEMENT)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
+        (self.work / 'settlement.env').write_bytes(settlement)
 
     def settlement_document(self):
         path = ROOT / 'contracts/config/checkpoint-settlement.json'
@@ -74,7 +82,9 @@ class SequencerSeedTest(unittest.TestCase):
         return path
 
     def clean_environment(self):
-        return {key: value for key, value in os.environ.items() if not key.startswith('LAYERX_')}
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('LAYERX_')}
+        environment['PATH'] = str(BIN) + os.pathsep + environment.get('PATH', '')
+        return environment
 
     def bootstrap_arguments(self, sequencer_key):
         return [
@@ -147,6 +157,32 @@ class SequencerSeedTest(unittest.TestCase):
         exports = environment_lines(self.data / 'sequencer.env')
         self.assertEqual(exports['LAYERX_NODE_SEQUENCER_KEY_FILE'], str(ROOT / relative))
 
+    def test_bootstrap_reads_a_raw_seed_through_an_external_symlink(self):
+        link = self.work / 'sequencer-link.key'
+        link.symlink_to(self.sequencer_path)
+        result = self.bootstrap(sequencer_key=link)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        exports = environment_lines(self.data / 'sequencer.env')
+        self.assertEqual(exports['LAYERX_NODE_SEQUENCER_KEY_FILE'], str(link))
+        self.assertEqual(exports['LAYERX_NODE_SEQUENCER_PUBLIC_KEY'],
+                         public_key_of(self.sequencer_seed).hex())
+        for entry in self.data.rglob('*'):
+            if entry.is_file():
+                self.assertNotIn(self.sequencer_seed, entry.read_bytes(), str(entry))
+                self.assertNotIn(self.sequencer_seed.hex().encode(), entry.read_bytes(), str(entry))
+
+    def test_bootstrap_reads_a_hex_seed_through_an_external_symlink(self):
+        self.sequencer_path.unlink()
+        write_seed(self.sequencer_path, self.sequencer_seed.hex().upper().encode() + b'\n')
+        link = self.work / 'sequencer-link.key'
+        link.symlink_to(self.sequencer_path)
+        result = self.bootstrap(sequencer_key=link)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        exports = environment_lines(self.data / 'sequencer.env')
+        self.assertEqual(exports['LAYERX_NODE_SEQUENCER_KEY_FILE'], str(link))
+        self.assertEqual(exports['LAYERX_NODE_SEQUENCER_PUBLIC_KEY'],
+                         public_key_of(self.sequencer_seed).hex())
+
     def test_bootstrap_refuses_a_key_file_inside_the_data_directory(self):
         self.data.mkdir(mode=0o700)
         inside = self.data / 'sequencer.key'
@@ -171,6 +207,12 @@ class SequencerSeedTest(unittest.TestCase):
         result = self.bootstrap(sequencer_key=self.work / 'absent.key')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b'--sequencer-key must name a readable regular file', result.stderr)
+        self.assertFalse(self.data.exists())
+
+    def test_bootstrap_refuses_a_treasury_key_that_is_not_a_regular_file(self):
+        result = self.bootstrap(extra=['--treasury-key', str(self.work)])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'treasury key file must name a readable regular file', result.stderr)
         self.assertFalse(self.data.exists())
 
     def test_supervisor_refuses_a_seed_line_in_sequencer_env(self):
@@ -238,6 +280,7 @@ class SequencerSeedTest(unittest.TestCase):
         finally:
             process.terminate()
             process.wait(timeout=60)
+            process.stderr.close()
 
 
 if __name__ == '__main__':

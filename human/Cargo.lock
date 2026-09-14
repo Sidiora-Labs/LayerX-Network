@@ -808,6 +808,8 @@ dependencies = [
  "layerx-agent-api",
  "layerx-client",
  "layerx-crypto",
+ "layerx-identity-binding",
+ "layerx-paxeer-verifier",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
  "layerx-programs-runtime",
@@ -816,6 +818,7 @@ dependencies = [
  "layerx-wire",
  "rustix",
  "rustls-native-certs",
+ "serde",
  "serde_json",
  "sha2",
  "ureq",
@@ -827,9 +830,11 @@ name = "layerx-client"
 version = "0.1.0"
 dependencies = [
  "layerx-crypto",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustix",
  "rustls",
  "sha2",
 ]
@@ -859,13 +864,13 @@ dependencies = [
  "layerx-agentd",
  "layerx-client",
  "layerx-crypto",
+ "layerx-intents",
  "layerx-mirror",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
  "layerx-proof",
  "layerx-sdk",
  "layerx-types",
- "layerx-wire",
  "native-tls",
  "serde_json",
  "sha2",
@@ -877,10 +882,12 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
+ "layerx-client",
  "layerx-human-service",
+ "layerx-identity-binding",
+ "layerx-intents",
  "layerx-proof",
  "layerx-types",
- "layerx-wire",
  "rustix",
  "serde",
  "serde_json",
@@ -900,7 +907,6 @@ dependencies = [
  "layerx-human-service",
  "layerx-intents",
  "layerx-types",
- "layerx-wire",
  "ring",
  "rustix",
  "rustls",
@@ -940,10 +946,12 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hmac",
+ "layerx-client",
  "layerx-human-service",
+ "layerx-intents",
  "layerx-programs-registry",
  "layerx-proof",
- "layerx-wire",
+ "layerx-types",
  "rustix",
  "serde",
  "serde_json",
@@ -968,13 +976,13 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-human-test-support",
+ "layerx-identity-binding",
  "layerx-intents",
  "layerx-paxeer-client",
  "layerx-platform-internal",
  "layerx-proof",
  "layerx-sdk",
  "layerx-types",
- "layerx-wire",
  "native-tls",
  "passkey-auth",
  "proptest",
@@ -997,9 +1005,20 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-human-service",
+ "layerx-intents",
  "layerx-proof",
  "layerx-types",
- "layerx-wire",
+ "sha2",
+]
+
+[[package]]
+name = "layerx-identity-binding"
+version = "0.1.0"
+dependencies = [
+ "layerx-types",
+ "rustix",
+ "serde",
+ "serde_json",
  "sha2",
 ]
 
@@ -1007,6 +1026,7 @@ dependencies = [
 name = "layerx-intents"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "layerx-agentd",
  "layerx-client",
  "layerx-crypto",
@@ -1049,13 +1069,23 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-intents",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-sdk",
  "layerx-types",
- "layerx-wire",
  "rustix",
- "rustls",
  "sha2",
+]
+
+[[package]]
+name = "layerx-paxeer-verifier"
+version = "0.1.0"
+dependencies = [
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
+ "rustls",
+ "sha3",
 ]
 
 [[package]]

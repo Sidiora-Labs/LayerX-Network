@@ -94,6 +94,27 @@ def main():
             policy = s.membership(rpc, dict(request, epoch=header[2], guarantors=[{'guarantor_id': '0x' + a[7].hex(), 'signer': a[14]} for a in attestations]))
             assert policy['minimum_bond'] == 100
             assert policy['version'] == 5
+            saved_membership = dict(request, epoch=header[2], guarantors=[
+                {'guarantor_id': '0x' + a[7].hex(), 'signer': a[14]} for a in attestations],
+                observed_block_number=policy['block_number'])
+            rpc.call('anvil_mine', ['0x2'])
+            assert int(rpc.call('eth_blockNumber', []), 16) > policy['block_number']
+            historical_input = work / 'historical-membership.json'
+            historical_output = work / 'historical-membership-result.json'
+            historical_input.write_text(json.dumps(saved_membership))
+            subprocess.run([sys.executable, str(ROOT / 'cmd/layerx-guarantor/settlement.py'),
+                'membership', str(historical_input), str(historical_output)], check=True)
+            assert json.loads(historical_output.read_text()) == policy
+            for invalid_block in (0, -1, True, '1', 1.5, 2 ** 64):
+                invalid_input = work / 'invalid-membership.json'
+                invalid_input.write_text(json.dumps(dict(saved_membership,
+                    observed_block_number=invalid_block)))
+                refused = subprocess.run([sys.executable,
+                    str(ROOT / 'cmd/layerx-guarantor/settlement.py'), 'membership',
+                    str(invalid_input), str(work / 'invalid-membership-result.json')],
+                    capture_output=True, text=True)
+                assert refused.returncode != 0
+                assert 'membership observation block invalid' in refused.stderr
             unbonded = signed_attestations(header, digest, bond, [s.Account.create(), accounts[1]], header[13] + 1000)
             try:
                 s.register(rpc, dict(request, attestations=[json_values(a) for a in unbonded]))

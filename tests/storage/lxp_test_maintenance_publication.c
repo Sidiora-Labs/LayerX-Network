@@ -2,6 +2,7 @@
 #include "lxp_daemon_batch_wal.h"
 #include "layerx/lxp_daemon.h"
 #include "layerx/lxp_genesis.h"
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_bridge_credit.h"
 #include "../bridge/files.h"
@@ -166,7 +167,8 @@ static int maintenance_fixture_open(maintenance_fixture *f)
     f->authority.scope = &f->scope;
     f->authority.kind = LXP_AUTHORITY_OWNER;
     memcpy(f->authority.actor, f->identity->did_id, 32U);
-    memcpy(f->authority.principal, actor_id, 32U);
+    CHECK(lxp_did_id_derive(maintenance_did, sizeof(maintenance_did) - 1U,
+        f->authority.principal) == LXP_OK);
     memcpy(f->authority.verified_key, f->actor_public_key, 32U);
     CHECK(lxp_authority_hash(f->authority.kind, grant, f->actor_public_key,
         f->authority.authority_hash) == LXP_OK);
@@ -180,7 +182,7 @@ static int maintenance_publish(maintenance_fixture *f, uint32_t type,
 {
     lxp_activity *activities = calloc(count, sizeof(*activities));
     lxp_kernel_execution *executions = calloc(count, sizeof(*executions));
-    lxp_byte_span canonical[64], receipts[65], artifacts[64], graphs[64];
+    lxp_byte_span canonical[64], receipts[65], events[65], artifacts[64], graphs[64];
     uint8_t *canonical_storage[64] = {NULL}, *receipt_storage[64] = {NULL};
     lxp_merkle_proof proofs[64];
     uint8_t signatures[64][64], leaves[65][32], root[32], batch_id[32], durable[32];
@@ -189,16 +191,24 @@ static int maintenance_publish(maintenance_fixture *f, uint32_t type,
     lxp_daemon_batch_wal_input input = {0};
     lxp_batch_roots roots;
     lxp_batch_header header = {0};
+    lxp_batch_body *body = calloc(1U, sizeof(*body));
     lxp_kernel_batch_boundary live;
     lxp_daemon_batch_wal_recovery recovery;
     const lxp_receipt *decoded;
     lxp_programs_occupancy_receipt maintenance;
+    lxp_batch_maintenance envelope;
     size_t retry = 0U;
     bool present = false;
     uint64_t first_sequence = f->state.next_sequence;
-    CHECK(count > 0U && count <= 64U && activities != NULL && executions != NULL);
+    CHECK(count > 0U && count <= 64U && activities != NULL && executions != NULL && body != NULL);
     CHECK(lxp_arena_reset(&f->arena, 0U) == LXP_OK);
     f->scope.module_mask = UINT64_C(1) << lxp_activity_module_id(type);
+    if (lxp_activity_module_id(type) == LXP_MODULE_PROGRAMS) {
+        CHECK(lxp_did_id_derive(maintenance_did, sizeof(maintenance_did) - 1U,
+            f->authority.principal) == LXP_OK);
+    } else if (f->actor != NULL) {
+        memcpy(f->authority.principal, f->actor->id, 32U);
+    }
     for (size_t i = 0U; i < count; ++i) {
         EVP_PKEY *key;
         EVP_MD_CTX *ctx;
@@ -292,10 +302,15 @@ static int maintenance_publish(maintenance_fixture *f, uint32_t type,
         graphs[i] = decoded[i].program_outcome.call_graph_payload;
     }
     receipts[count] = lxp_kernel_prepared_batch_maintenance(prepared);
-    CHECK(lxp_programs_occupancy_receipt_decode(receipts[count].bytes, receipts[count].length, &maintenance) == LXP_OK);
+    CHECK(lxp_batch_maintenance_decode(receipts[count].bytes, receipts[count].length, &envelope) == LXP_OK);
+    CHECK(envelope.epoch == executions[0].epoch && envelope.timestamp_ms == executions[0].batch_timestamp_ms);
+    CHECK(lxp_programs_occupancy_receipt_decode(envelope.occupancy.bytes, envelope.occupancy.length, &maintenance) == LXP_OK);
     CHECK(maintenance.global_sequence == first_sequence + count && maintenance.batch_number == batch_number);
+    for (size_t i = 0U; i < count; ++i)
+        events[i] = lxp_kernel_prepared_batch_events(prepared)[i];
+    events[count] = envelope.effects;
     CHECK(lxp_batch_roots_compute(&(lxp_batch_root_inputs){canonical, count, receipts, count + 1U,
-        lxp_kernel_prepared_batch_events(prepared), count, NULL, 0U, NULL, 0U}, &f->arena, &roots) == LXP_OK);
+        events, count + 1U, NULL, 0U, NULL, 0U}, &f->arena, &roots) == LXP_OK);
     header.protocol_version = 3U;
     header.network_id = activities[0].network_id;
     header.epoch = 1U;
@@ -333,6 +348,13 @@ static int maintenance_publish(maintenance_fixture *f, uint32_t type,
     input.call_graphs = graphs;
     input.receipt_proofs = proofs;
     input.maintenance = receipts[count];
+    CHECK(lxp_da_body_from_kernels(&header,
+        lxp_kernel_prepared_batch_base_kernel(prepared),
+        lxp_kernel_prepared_batch_settled_kernel(prepared), canonical, count,
+        receipts, count + 1U, events, count + 1U, NULL, 0U, &f->arena, body) == LXP_OK);
+    header = body->header;
+    input.state_diff = body->state_diff;
+    input.recovery_metadata = body->recovery_metadata;
     CHECK(lxp_batch_sign(&header, executed_sequencer_seed, &f->authorization, input.header_signature, &f->arena) == LXP_OK);
     CHECK(lxp_batch_header_encode(&header, &f->arena, &input.canonical_header) == LXP_OK);
     for (size_t i = 0U; i <= count; ++i)
@@ -402,9 +424,10 @@ static int maintenance_publish(maintenance_fixture *f, uint32_t type,
         input.header_signature, &f->arena) == LXP_OK);
     {
         lxp_daemon_account_evidence account;
-        CHECK(lxp_daemon_account_evidence_lookup(&f->evidence, f->authority.principal,
+        const uint8_t *account_id = f->actor != NULL ? f->actor->id : f->authority.principal;
+        CHECK(lxp_daemon_account_evidence_lookup(&f->evidence, account_id,
             maintenance.resulting_state_root, &f->arena, &account) == LXP_OK);
-        CHECK(account.format_version == 2U && account.observed_sequence == maintenance.global_sequence);
+        CHECK(account.format_version == 3U && account.observed_sequence == maintenance.global_sequence);
         CHECK(account.canonical_receipt.length == input.maintenance.length &&
             memcmp(account.canonical_receipt.bytes, input.maintenance.bytes, input.maintenance.length) == 0);
     }
@@ -420,6 +443,7 @@ static int maintenance_publish(maintenance_fixture *f, uint32_t type,
     }
     free(executions);
     free(activities);
+    free(body);
     return 0;
 }
 

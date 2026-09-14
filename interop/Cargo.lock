@@ -671,9 +671,11 @@ name = "layerx-client"
 version = "0.1.0"
 dependencies = [
  "layerx-crypto",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustix",
  "rustls",
  "sha2",
 ]
@@ -717,6 +719,7 @@ dependencies = [
  "layerx-sdk",
  "layerx-types",
  "layerx-wire",
+ "sha2",
 ]
 
 [[package]]
@@ -793,6 +796,17 @@ dependencies = [
  "sha2",
  "sha3",
  "zeroize",
+]
+
+[[package]]
+name = "layerx-paxeer-verifier"
+version = "0.1.0"
+dependencies = [
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
+ "rustls",
+ "sha3",
 ]
 
 [[package]]
@@ -881,6 +895,7 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustls",
  "rustls-native-certs",
  "serde_json",
  "sha2",
@@ -1591,8 +1606,10 @@ dependencies = [
  "http",
  "httparse",
  "log",
- "native-tls",
  "rand",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "sha1",
  "thiserror",
 ]

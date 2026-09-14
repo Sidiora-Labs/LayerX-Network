@@ -2,6 +2,7 @@
 #include "lxp_daemon_batch_wal.h"
 #include "layerx/lxp_daemon.h"
 #include "layerx/lxp_genesis.h"
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lx_asset.h"
 #include <unistd.h>
 #define main terminal_rejection_activity_fixture_main
@@ -534,10 +535,12 @@ static int terminal_rejection_case(void)
 static int terminal_maintenance_case(void)
 {
     terminal_fixture *f = malloc(sizeof(*f));
+    terminal_fixture *restarted = malloc(sizeof(*restarted));
     lxp_activity activity;
     lxp_kernel_execution execution;
     lxp_kernel_prepared_batch *prepared = NULL;
     lxp_programs_occupancy_receipt sweep;
+    lxp_batch_maintenance envelope;
     lxp_batch_roots roots;
     lxp_byte_span canonical, maintenance;
     const lxp_receipt *decoded;
@@ -546,8 +549,9 @@ static int terminal_maintenance_case(void)
     uint8_t batch_id[32], digest[32], settled_root[32];
     uint64_t first_sequence;
     size_t payload_length = 0U;
-    CHECK(f != NULL);
+    CHECK(f != NULL && restarted != NULL);
     CHECK(terminal_fixture_open(f) == 0);
+    CHECK(terminal_fixture_open(restarted) == 0);
     CHECK(terminal_build_send(f, &activity, payload, &payload_length) == 0);
     CHECK(lxp_activity_encode(&activity, &f->arena, &canonical) == LXP_OK);
     CHECK(canonical.length <= sizeof(canonical_bytes));
@@ -565,8 +569,18 @@ static int terminal_maintenance_case(void)
     CHECK(lxp_kernel_prepare_batch_maintenance(prepared, &activity, &execution) == LXP_OK);
     maintenance = lxp_kernel_prepared_batch_maintenance(prepared);
     CHECK(maintenance.bytes != NULL && maintenance.length != 0U);
+    CHECK(lxp_batch_maintenance_decode(maintenance.bytes, maintenance.length,
+                                       &envelope) == LXP_OK);
+    CHECK(envelope.protocol_version == activity.protocol_version);
+    CHECK(envelope.epoch == execution.epoch);
+    CHECK(envelope.batch_number == execution.batch_number);
+    CHECK(envelope.timestamp_ms == execution.batch_timestamp_ms);
+    CHECK(envelope.global_sequence == first_sequence + 1U);
+    CHECK(envelope.parameter_version == execution.parameter_version);
     CHECK(lxp_programs_occupancy_receipt_decode(maintenance.bytes,
-                                                maintenance.length, &sweep) == LXP_OK);
+                                                maintenance.length, &sweep) != LXP_OK);
+    CHECK(lxp_programs_occupancy_receipt_decode(envelope.occupancy.bytes,
+                                                envelope.occupancy.length, &sweep) == LXP_OK);
     decoded = lxp_kernel_prepared_batch_receipts(prepared);
     CHECK(decoded != NULL);
     CHECK(decoded[0].result_code == LXP_ERR_SEQUENCE_MISMATCH);
@@ -576,6 +590,40 @@ static int terminal_maintenance_case(void)
     CHECK(memcmp(sweep.previous_state_root, decoded[0].resulting_state_root, 32U) == 0);
     memcpy(settled_root, lxp_kernel_prepared_batch_final_root(prepared), 32U);
     CHECK(memcmp(settled_root, sweep.resulting_state_root, 32U) == 0);
+    {
+        lxp_kernel_execution replay_execution = execution;
+        lxp_replay_activity_output output;
+        lxp_receipt refusal;
+        uint8_t previous_root[32], recomputed_root[32];
+        uint8_t *tampered = malloc(maintenance.length);
+        CHECK(tampered != NULL);
+        replay_execution.identities = &restarted->identities;
+        replay_execution.authority = &restarted->authority;
+        replay_execution.fee_parameters = &restarted->fees;
+        replay_execution.arena = &restarted->arena;
+        CHECK(lxp_kernel_terminal_rejection(&restarted->kernel, &activity,
+            &replay_execution, LXP_ERR_SEQUENCE_MISMATCH, &refusal) == LXP_OK);
+        CHECK(memcmp(refusal.resulting_state_root, decoded[0].resulting_state_root, 32U) == 0);
+        replay_execution.global_sequence = first_sequence + 1U;
+        memcpy(previous_root, restarted->kernel.current_state_root, 32U);
+        memcpy(tampered, maintenance.bytes, maintenance.length);
+        tampered[maintenance.length - 1U] ^= 1U;
+        CHECK(lxp_kernel_finalize_batch_maintenance(&restarted->kernel,
+            activity.protocol_version, &replay_execution,
+            (lxp_byte_span){tampered, maintenance.length}, &output) == LXP_FATAL_REPLAY_DIVERGENCE);
+        CHECK(restarted->state.next_sequence == first_sequence + 1U);
+        CHECK(!restarted->journal.open);
+        CHECK(lxp_state_root(&restarted->kernel, recomputed_root) == LXP_OK);
+        CHECK(memcmp(recomputed_root, previous_root, 32U) == 0);
+        CHECK(memcmp(restarted->kernel.current_state_root, previous_root, 32U) == 0);
+        CHECK(lxp_kernel_finalize_batch_maintenance(&restarted->kernel,
+            activity.protocol_version, &replay_execution, maintenance, &output) == LXP_OK);
+        CHECK(output.canonical_receipt.length == maintenance.length);
+        CHECK(memcmp(output.canonical_receipt.bytes, maintenance.bytes, maintenance.length) == 0);
+        CHECK(restarted->state.next_sequence == first_sequence + 2U);
+        CHECK(memcmp(restarted->kernel.current_state_root, settled_root, 32U) == 0);
+        free(tampered);
+    }
     memcpy(digest, lxp_kernel_prepared_batch_publication_digest(prepared), 32U);
     CHECK(lxp_kernel_commit_prepared_batch(&f->kernel, &f->identities, prepared,
                                            digest) == LXP_OK);
@@ -599,6 +647,14 @@ static int terminal_maintenance_case(void)
     CHECK(f->feed.scanned_through_sequence == first_sequence + 1U);
     CHECK(memcmp(f->feed.head_state_root, settled_root, 32U) == 0);
     lxp_kernel_prepared_batch_destroy(prepared);
+    CHECK(lxp_history_close(&restarted->history) == LXP_OK);
+    CHECK(lxp_log_close(&restarted->feed_log) == LXP_OK);
+    CHECK(lxp_log_close(&restarted->canonical_log) == LXP_OK);
+    CHECK(pthread_mutex_destroy(&restarted->feed_mutex) == 0);
+    CHECK(lxp_state_store_destroy(&restarted->state) == LXP_OK);
+    lx_account_registry_release(&restarted->accounts);
+    free(restarted->storage);
+    free(restarted);
     free(f->storage);
     free(f);
     return 0;

@@ -1,4 +1,4 @@
-import { LoadingSurface } from "../../../states";
+import { LoadingSurface } from "../../../states/surfaces";
 
 export default function AgentsRouteLoading() {
   return <LoadingSurface />;

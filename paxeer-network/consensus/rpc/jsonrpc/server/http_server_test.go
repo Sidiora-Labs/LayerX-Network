@@ -1,12 +1,20 @@
 package server
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -73,7 +81,36 @@ func TestMaxOpenConnections(t *testing.T) {
 	}
 }
 
+func localTLSFiles(t *testing.T) (string, string, *x509.CertPool) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key")
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	require.NoError(t, os.WriteFile(certFile, certPEM, 0o600))
+	require.NoError(t, os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600))
+	roots := x509.NewCertPool()
+	require.True(t, roots.AppendCertsFromPEM(certPEM))
+	return certFile, keyFile, roots
+}
+
 func TestServeTLS(t *testing.T) {
+	certFile, keyFile, roots := localTLSFiles(t)
 	t.Cleanup(leaktest.Check(t))
 
 	ln, err := net.Listen("tcp", "localhost:0")
@@ -90,7 +127,7 @@ func TestServeTLS(t *testing.T) {
 	chErr := make(chan error, 1)
 	go func() {
 		select {
-		case chErr <- ServeTLS(ctx, ln, mux, "test.crt", "test.key", DefaultConfig()):
+		case chErr <- ServeTLS(ctx, ln, mux, certFile, keyFile, DefaultConfig()):
 		case <-ctx.Done():
 		}
 	}()
@@ -102,7 +139,7 @@ func TestServeTLS(t *testing.T) {
 	}
 
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
 	}
 	c := &http.Client{Transport: tr}
 	// We need this, because http.Transport is trying to be smart and keeps the connection open

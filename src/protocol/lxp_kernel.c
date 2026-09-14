@@ -3,6 +3,11 @@
 #include "layerx/lxp_admission.h"
 #include "layerx/lxp_bridge_credit.h"
 #include "layerx/lx_asset.h"
+#include "layerx/lx_budget.h"
+#include "layerx/lx_escrow.h"
+#include "layerx/lx_stream.h"
+#include "layerx/lx_service.h"
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/programs.h"
@@ -21,8 +26,15 @@ struct lxp_kernel_batch_snapshot {
     lxp_state_journal journal;
     lx_programs_transfer_runtime programs_runtime;
     lx_asset_runtime asset_runtime;
-    lx_asset_record *asset_records;
+    lx_asset_registry *asset_registry;
+    lx_escrow_runtime escrow_runtime;
+    lx_budget_runtime budget_runtime;
+    lx_budget_store *budget_store;
+    lx_stream_runtime stream_runtime;
     bool asset_runtime_bound;
+    bool escrow_runtime_bound;
+    bool budget_runtime_bound;
+    bool stream_runtime_bound;
     lxp_transfer_asset_state *assets;
     lx_programs_fee_schedule fee_schedule;
     lx_programs_metering_schedule metering_schedule;
@@ -126,6 +138,35 @@ lxp_result lxp_kernel_program_payment_account(
     return *account == NULL ? LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE : LXP_OK;
 }
 
+static lxp_result receipt_execution_signature(lxp_receipt *receipt,
+    const lxp_kernel_execution *execution)
+{
+    lxp_byte_span actual, expected;
+    size_t mark;
+    lxp_result status;
+    if (execution->sequencer_private_key != NULL) {
+        if (execution->replay_receipt != NULL || execution->replay_public_key != NULL)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        return lxp_receipt_sign(receipt, execution->sequencer_private_key, execution->arena);
+    }
+    if (execution->replay_receipt == NULL && execution->replay_public_key == NULL)
+        return LXP_OK;
+    if (execution->replay_receipt == NULL || execution->replay_public_key == NULL)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    mark = lxp_arena_mark(execution->arena);
+    status = lxp_receipt_verify(execution->replay_receipt, execution->replay_public_key, execution->arena);
+    if (status == LXP_OK) status = lxp_receipt_encode(receipt, false, execution->arena, &actual);
+    if (status == LXP_OK)
+        status = lxp_receipt_encode(execution->replay_receipt, false, execution->arena, &expected);
+    if (status == LXP_OK && (actual.length != expected.length ||
+        lxp_ct_memcmp(actual.bytes, expected.bytes, actual.length) != 0))
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+    if (status == LXP_OK)
+        (void)memcpy(receipt->sequencer_signature, execution->replay_receipt->sequencer_signature, 64U);
+    if (lxp_arena_reset(execution->arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    return status;
+}
+
 lxp_result lxp_kernel_bind_ledger_admission(
     lxp_module_ctx *ctx, const lxp_authority_resolved *authority,
     uint32_t activity_type)
@@ -136,6 +177,20 @@ lxp_result lxp_kernel_bind_ledger_admission(
     if (ctx == NULL || ctx->kernel == NULL || authority == NULL)
         return LXP_ERR_NON_CANONICAL;
     if (ctx->ledger_admission.bound) return LXP_ERR_CONTEXT_MISMATCH;
+    if (ctx->module_id == LXP_MODULE_BUDGET &&
+        ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        status = lxp_ctx_account_find(ctx, authority->principal, &account);
+        if (status != LXP_OK) return status;
+        ctx->ledger_admission.activity_type = activity_type;
+        (void)memcpy(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U);
+        (void)memcpy(ctx->ledger_admission.actor, authority->actor, 32U);
+        (void)memcpy(ctx->ledger_admission.verified_key, authority->verified_key, 32U);
+        (void)memcpy(ctx->ledger_admission.account_id, account->id, 32U);
+        ctx->ledger_admission.account_present = true;
+        ctx->ledger_admission.next_sequence = account->next_sequence;
+        ctx->ledger_admission.bound = true;
+        return LXP_OK;
+    }
     if (ctx->module_id == LXP_MODULE_ASSET) {
         if (activity_type == LX_ASSET_WITHDRAW &&
             !lxp_protocol_version_uses_occupancy(ctx->protocol_version))
@@ -314,7 +369,8 @@ static void kernel_snapshot_release(lxp_kernel_batch_snapshot *snapshot)
         free(snapshot->kernel.blobs[index].bytes);
         snapshot->kernel.blobs[index].bytes = NULL;
     }
-    free(snapshot->asset_records);
+    free(snapshot->asset_registry);
+    free(snapshot->budget_store);
     free(snapshot->assets);
     snapshot->assets = NULL;
     lxp_state_snapshot_destroy(snapshot->state);
@@ -379,19 +435,61 @@ static lxp_result kernel_snapshot_finish(
             asset->transfer_asset_count != runtime->asset_count)
             return LXP_ERR_CONTEXT_MISMATCH;
         snapshot->asset_runtime = *asset;
-        snapshot->asset_records = malloc(asset->asset_count * sizeof(*snapshot->asset_records));
-        if (snapshot->asset_records == NULL) return LXP_ERR_ARENA_EXHAUSTED;
-        (void)memcpy(snapshot->asset_records, asset->assets,
-                     asset->asset_count * sizeof(*snapshot->asset_records));
+        snapshot->asset_registry = malloc(sizeof(*snapshot->asset_registry));
+        if (snapshot->asset_registry == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+        status = lx_asset_registry_init(snapshot->asset_registry, 0U);
+        if (status != LXP_OK) return status;
+        snapshot->asset_registry->count = asset->asset_count;
+        (void)memcpy(snapshot->asset_registry->assets, asset->assets,
+                     asset->asset_count * sizeof(asset->assets[0]));
         snapshot->asset_runtime.accounts = lxp_state_snapshot_accounts_for_prepare(snapshot->state);
-        snapshot->asset_runtime.assets = snapshot->asset_records;
+        snapshot->asset_runtime.assets = snapshot->asset_registry->assets;
         snapshot->asset_runtime.transfer_assets = snapshot->assets;
         snapshot->asset_runtime_bound = true;
+    }
+    if (snapshot->kernel.module_runtime[LXP_MODULE_ESCROW] != NULL) {
+        const lx_escrow_runtime *escrow =
+            snapshot->kernel.module_runtime[LXP_MODULE_ESCROW];
+        if (!snapshot->asset_runtime_bound || escrow->accounts != runtime->accounts ||
+            escrow->assets == NULL || escrow->assets->count != snapshot->asset_registry->count ||
+            memcmp(escrow->assets->assets, snapshot->asset_registry->assets,
+                   escrow->assets->count * sizeof(escrow->assets->assets[0])) != 0)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        snapshot->escrow_runtime.accounts =
+            lxp_state_snapshot_accounts_for_prepare(snapshot->state);
+        snapshot->escrow_runtime.assets = snapshot->asset_registry;
+        snapshot->escrow_runtime_bound = true;
+    }
+    if (snapshot->kernel.module_runtime[LXP_MODULE_BUDGET] != NULL) {
+        const lx_budget_runtime *budget =
+            snapshot->kernel.module_runtime[LXP_MODULE_BUDGET];
+        if (budget->store == NULL || budget->store->count > LX_BUDGET_STORE_CAPACITY)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        snapshot->budget_store = malloc(sizeof(*snapshot->budget_store));
+        if (snapshot->budget_store == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+        *snapshot->budget_store = *budget->store;
+        snapshot->budget_runtime.store = snapshot->budget_store;
+        snapshot->budget_runtime_bound = true;
+    }
+    if (snapshot->kernel.module_runtime[LXP_MODULE_STREAM] != NULL) {
+        const lx_stream_runtime *stream =
+            snapshot->kernel.module_runtime[LXP_MODULE_STREAM];
+        if (stream->assets != runtime->assets || stream->asset_count != runtime->asset_count)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        snapshot->stream_runtime.assets = snapshot->assets;
+        snapshot->stream_runtime.asset_count = runtime->asset_count;
+        snapshot->stream_runtime_bound = true;
     }
     (void)memset(snapshot->kernel.module_runtime, 0,
                  sizeof(snapshot->kernel.module_runtime));
     if (snapshot->asset_runtime_bound)
         snapshot->kernel.module_runtime[LXP_MODULE_ASSET] = &snapshot->asset_runtime;
+    if (snapshot->escrow_runtime_bound)
+        snapshot->kernel.module_runtime[LXP_MODULE_ESCROW] = &snapshot->escrow_runtime;
+    if (snapshot->budget_runtime_bound)
+        snapshot->kernel.module_runtime[LXP_MODULE_BUDGET] = &snapshot->budget_runtime;
+    if (snapshot->stream_runtime_bound)
+        snapshot->kernel.module_runtime[LXP_MODULE_STREAM] = &snapshot->stream_runtime;
     snapshot->programs_runtime = *runtime;
     snapshot->programs_runtime.accounts =
         lxp_state_snapshot_accounts_for_prepare(snapshot->state);
@@ -446,6 +544,8 @@ lxp_result lxp_kernel_batch_snapshot_create(
     snapshot = (lxp_kernel_batch_snapshot *)calloc(1U, sizeof(*snapshot));
     if (snapshot == NULL) return LXP_ERR_ARENA_EXHAUSTED;
     snapshot->kernel = *kernel;
+    for (size_t index = 0U; index < snapshot->kernel.blob_count; ++index)
+        snapshot->kernel.blobs[index].bytes = NULL;
     snapshot->fee_parameters = *batch_execution->fee_parameters;
     snapshot->identities = *identities;
     if (verified_receipts != NULL) {
@@ -510,6 +610,8 @@ lxp_result lxp_kernel_batch_snapshot_clone(
     snapshot = (lxp_kernel_batch_snapshot *)calloc(1U, sizeof(*snapshot));
     if (snapshot == NULL) return LXP_ERR_ARENA_EXHAUSTED;
     snapshot->kernel = source->kernel;
+    for (size_t index = 0U; index < snapshot->kernel.blob_count; ++index)
+        snapshot->kernel.blobs[index].bytes = NULL;
     snapshot->identities = source->identities;
     snapshot->verified_receipts = source->verified_receipts;
     snapshot->fee_schedule = source->fee_schedule;
@@ -610,6 +712,91 @@ static lxp_result level_token_identity(uint8_t chain[32],
     return LXP_OK;
 }
 
+typedef struct kernel_private_allowance {
+    lxp_transfer_allowance allowance;
+    lxp_authority_scope scope;
+    lxp_authority_resolved authority;
+} kernel_private_allowance;
+
+static lxp_result kernel_private_execution_bind(
+    const lxp_kernel *kernel, const lxp_identity_store *identities,
+    const lxp_kernel_execution *execution,
+    lxp_kernel_execution *private_execution,
+    kernel_private_allowance *private_allowance)
+{
+    const lxp_transfer_allowance *allowance = execution->allowance;
+    lxp_authority_grant committed;
+    lxp_authority_scope expected;
+    const lxp_identity *identity = NULL;
+    uint8_t authority_hash[32];
+    size_t index;
+    lxp_result status;
+    *private_execution = *execution;
+    bool enforced = false;
+    status = lxp_authority_allowance_policy(kernel, &enforced);
+    if (status != LXP_OK) return status;
+    if (!enforced) {
+        private_execution->allowance = NULL;
+        return LXP_OK;
+    }
+    if (allowance == NULL)
+        return execution->authority != NULL &&
+                   (execution->authority->kind ==
+                        LXP_AUTHORITY_DELEGATED_CAPABILITY ||
+                    execution->authority->kind ==
+                        LXP_AUTHORITY_BUDGET_ALLOWANCE) ?
+                   LXP_ERR_AUTH_ALLOWANCE : LXP_OK;
+    if (allowance->scope == NULL || execution->authority == NULL ||
+        allowance->kind != execution->authority->kind ||
+        memcmp(allowance->grantor, execution->authority->principal, 32U) != 0 ||
+        !lxp_authority_scope_equal(allowance->scope,
+                                   execution->authority->scope))
+        return LXP_ERR_CONTEXT_MISMATCH;
+    private_allowance->allowance = *allowance;
+    private_allowance->scope = *allowance->scope;
+    private_allowance->authority = *execution->authority;
+    if (allowance->kind == LXP_AUTHORITY_DELEGATED_CAPABILITY ||
+        allowance->kind == LXP_AUTHORITY_BUDGET_ALLOWANCE) {
+        status = lxp_authority_grant_load(kernel, allowance->grant_id,
+                                          &committed);
+        if (status == LXP_ERR_UNKNOWN_FIELD) return LXP_ERR_AUTH_ALLOWANCE;
+        if (status != LXP_OK) return status;
+        expected = *allowance->scope;
+        expected.spent_total = committed.scope.spent_total;
+        expected.spent_this_period = committed.scope.spent_this_period;
+        expected.period_start = committed.scope.period_start;
+        if (committed.kind != allowance->kind ||
+            memcmp(committed.grantee, execution->authority->actor, 32U) != 0 ||
+            memcmp(committed.key, execution->authority->verified_key, 32U) != 0 ||
+            !lxp_authority_scope_equal(&committed.scope, &expected))
+            return LXP_ERR_CONTEXT_MISMATCH;
+        for (index = 0U; index < identities->count; ++index)
+            if (memcmp(identities->identities[index].did_id,
+                        committed.grantor, 32U) == 0) {
+                identity = &identities->identities[index];
+                break;
+            }
+        if (identity == NULL) return LXP_ERR_UNKNOWN_DID;
+        status = lxp_authority_is_live(&committed,
+                                       identity->revocation_sequence,
+                                       execution->batch_timestamp_ms,
+                                       execution->global_sequence);
+        if (status != LXP_OK) return status;
+        status = lxp_authority_hash(committed.kind, committed.grant_id,
+                                     committed.key, authority_hash);
+        if (status != LXP_OK) return status;
+        if (memcmp(authority_hash, execution->authority->authority_hash,
+                    sizeof(authority_hash)) != 0)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        private_allowance->scope = committed.scope;
+    }
+    private_allowance->allowance.scope = &private_allowance->scope;
+    private_allowance->authority.scope = &private_allowance->scope;
+    private_execution->allowance = &private_allowance->allowance;
+    private_execution->authority = &private_allowance->authority;
+    return LXP_OK;
+}
+
 static lxp_result kernel_execution_binding(
     const lxp_kernel_execution *execution, uint8_t binding[32])
 {
@@ -654,6 +841,27 @@ static lxp_result kernel_execution_binding(
     BIND_U64(execution->authority->kind);
     BIND_BYTES(execution->authority->verified_key, 32U);
     BIND_BYTES(execution->authority->authority_hash, 32U);
+    BIND_U64(execution->allowance != NULL ? 1U : 0U);
+    if (execution->allowance != NULL) {
+        const lxp_transfer_allowance *allowance = execution->allowance;
+        const lxp_authority_scope *scope = allowance->scope;
+        if (scope == NULL) return LXP_ERR_CONTEXT_MISMATCH;
+        BIND_U64(allowance->kind);
+        BIND_BYTES(allowance->grantor, 32U);
+        BIND_BYTES(allowance->grant_id, 32U);
+        BIND_U64(scope->module_mask);
+        BIND_U64(scope->activity_ordinal_min);
+        BIND_U64(scope->activity_ordinal_max);
+        BIND_BYTES(scope->asset_id, 32U);
+        lxp_u128_to_be(scope->maximum_per_activity, scalar);
+        BIND_BYTES(scalar, sizeof(scalar));
+        lxp_u128_to_be(scope->maximum_total, scalar);
+        BIND_BYTES(scalar, sizeof(scalar));
+        BIND_U64(scope->period_length);
+        lxp_u128_to_be(scope->maximum_per_period, scalar);
+        BIND_BYTES(scalar, sizeof(scalar));
+        BIND_BYTES(scope->purpose_hash, 32U);
+    }
 #undef BIND_BYTES
 #undef BIND_U64
     return LXP_OK;
@@ -745,10 +953,20 @@ lxp_result lxp_kernel_batch_snapshot_begin_level(
     if (status == LXP_OK)
         status = level_token_mix(schedule_root, scalar, sizeof(scalar));
     SCHEDULE_U64(snapshot->fee_parameters.multiplier_basis_points);
-    if (snapshot->fee_parameters.version == 2U) {
+    if (snapshot->fee_parameters.version == 2U || snapshot->fee_parameters.version == 3U ||
+        snapshot->fee_parameters.version == 4U) {
         SCHEDULE_U64(snapshot->fee_parameters.asset_price_count);
-        for (index = 0U; status == LXP_OK && index < LXP_ASSET_FEE_PRICE_COUNT; ++index) {
+        for (index = 0U; status == LXP_OK && index <
+             (snapshot->fee_parameters.version >= 3U ? LXP_ASSET_FEE_PRICE_COUNT_V3 :
+                                                       LXP_ASSET_FEE_PRICE_COUNT); ++index) {
             lxp_u128_to_be(snapshot->fee_parameters.asset_prices[index], scalar);
+            status = level_token_mix(schedule_root, scalar, sizeof(scalar));
+        }
+    }
+    if (snapshot->fee_parameters.version == 4U) {
+        SCHEDULE_U64(snapshot->fee_parameters.module_price_count);
+        for (index = 0U; status == LXP_OK && index < LXP_MODULE_FEE_PRICE_COUNT; ++index) {
+            lxp_u128_to_be(snapshot->fee_parameters.module_prices[index], scalar);
             status = level_token_mix(schedule_root, scalar, sizeof(scalar));
         }
     }
@@ -1005,14 +1223,126 @@ lxp_result lxp_kernel_restore_commit_observer_pending(
     return LXP_OK;
 }
 
+typedef struct kernel_fee_transaction {
+    void *inner;
+    bool metered;
+    bool record_existed;
+    uint8_t key[33];
+    uint8_t before[72];
+} kernel_fee_transaction;
+
+static size_t kernel_fee_record_find(const lxp_kernel *kernel, const uint8_t key[33])
+{
+    for (size_t i = 0U; i < kernel->module_kv_count; ++i)
+        if (kernel->module_kv[i].module_id == LXP_MODULE_GOVERNANCE &&
+            kernel->module_kv[i].key_length == 33U &&
+            memcmp(kernel->module_kv[i].key, key, 33U) == 0) return i;
+    return kernel->module_kv_count;
+}
+
+static void kernel_fee_record_restore(lxp_kernel *kernel, const kernel_fee_transaction *token)
+{
+    size_t at;
+    if (!token->metered) return;
+    at = kernel_fee_record_find(kernel, token->key);
+    if (at == kernel->module_kv_count) {
+        kernel->publication_poisoned = true;
+        return;
+    }
+    if (token->record_existed) {
+        kernel->module_kv[at].value_length = sizeof(token->before);
+        (void)memcpy(kernel->module_kv[at].value, token->before, sizeof(token->before));
+    } else {
+        size_t tail = kernel->module_kv_count - at - 1U;
+        if (tail != 0U) (void)memmove(&kernel->module_kv[at], &kernel->module_kv[at + 1U],
+                                      tail * sizeof(kernel->module_kv[0]));
+        --kernel->module_kv_count;
+    }
+}
+
+static lxp_result kernel_fee_prepare(lxp_kernel *kernel, const lxp_activity *activity,
+    const lxp_kernel_execution *execution, lxp_u128 fee, void **transaction)
+{
+    lxp_authority_grant grant;
+    kernel_fee_transaction *token;
+    lxp_result status;
+    if (transaction == NULL || kernel->fee_transaction.prepare == NULL)
+        return LXP_FATAL_INVARIANT;
+    *transaction = NULL;
+    status = lxp_authority_fee_resolve(kernel, execution->authority, activity,
+        execution->batch_timestamp_ms, execution->recorded_fee_schedule_version, fee, &grant);
+    if (status != LXP_OK) return status;
+    token = calloc(1U, sizeof(*token));
+    if (token == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    if (grant.fee_budget.present) {
+        uint8_t value[72];
+        size_t at;
+        status = lxp_authority_fee_charge(&grant.fee_budget, fee, execution->batch_timestamp_ms);
+        if (status == LXP_OK) status = lxp_authority_fee_record_encode(&grant, value);
+        lxp_authority_fee_record_key(grant.grant_id, token->key);
+        at = kernel_fee_record_find(kernel, token->key);
+        if (status == LXP_OK && at == kernel->module_kv_count &&
+            at == LXP_KERNEL_MAX_MODULE_KV) status = LXP_ERR_ARENA_EXHAUSTED;
+        token->record_existed = at != kernel->module_kv_count;
+        if (status == LXP_OK && token->record_existed) {
+            if (kernel->module_kv[at].value_length != sizeof(token->before)) status = LXP_FATAL_INVARIANT;
+            else (void)memcpy(token->before, kernel->module_kv[at].value, sizeof(token->before));
+        }
+        if (status == LXP_OK) {
+            if (!token->record_existed) ++kernel->module_kv_count;
+            kernel->module_kv[at].module_id = LXP_MODULE_GOVERNANCE;
+            kernel->module_kv[at].key_length = sizeof(token->key);
+            kernel->module_kv[at].value_length = sizeof(value);
+            (void)memcpy(kernel->module_kv[at].key, token->key, sizeof(token->key));
+            (void)memcpy(kernel->module_kv[at].value, value, sizeof(value));
+            token->metered = true;
+        }
+    }
+    if (status == LXP_OK)
+        status = kernel->fee_transaction.prepare(kernel, activity, execution->authority, fee, &token->inner);
+    if (status == LXP_OK && token->inner == NULL) status = LXP_FATAL_INVARIANT;
+    if (status != LXP_OK) {
+        if (token->inner != NULL) kernel->fee_transaction.rollback(kernel, token->inner);
+        kernel_fee_record_restore(kernel, token);
+        free(token);
+        return status;
+    }
+    *transaction = token;
+    return LXP_OK;
+}
+
+static void kernel_fee_commit(lxp_kernel *kernel, void *transaction)
+{
+    kernel_fee_transaction *token = transaction;
+    kernel->fee_transaction.commit(kernel, token->inner);
+    free(token);
+}
+
+static void kernel_fee_rollback(lxp_kernel *kernel, void *transaction)
+{
+    kernel_fee_transaction *token = transaction;
+    kernel->fee_transaction.rollback(kernel, token->inner);
+    kernel_fee_record_restore(kernel, token);
+    free(token);
+}
+
+static lxp_result kernel_fee_admission(const lxp_kernel *kernel,
+    const lxp_activity *activity, const lxp_kernel_execution *execution)
+{
+    lxp_authority_grant grant;
+    return lxp_authority_fee_resolve(kernel, execution->authority, activity,
+        execution->batch_timestamp_ms, execution->recorded_fee_schedule_version,
+        activity->fee_limit, &grant);
+}
+
 static void close_failed_fee_transaction(lxp_kernel *kernel,
                                          void *fee_transaction,
                                          lxp_result status)
 {
     if (lxp_result_is_fatal(status))
-        kernel->fee_transaction.commit(kernel, fee_transaction);
+        kernel_fee_commit(kernel, fee_transaction);
     else
-        kernel->fee_transaction.rollback(kernel, fee_transaction);
+        kernel_fee_rollback(kernel, fee_transaction);
 }
 
 lxp_result lxp_kernel_bind_module_runtime(lxp_kernel *kernel,
@@ -1112,6 +1442,205 @@ lxp_result lxp_kernel_set_epoch(lxp_kernel *kernel, uint64_t epoch)
     if (epoch < kernel->epoch) return LXP_ERR_TIMESTAMP_REGRESSION;
     kernel->epoch = epoch;
     return LXP_OK;
+}
+
+/* One module context driven through an epoch hook. Contexts are heap-held so
+ * that every module registered for the departing and the arriving epoch can
+ * stay staged until the single journal of the transition commits. */
+typedef struct epoch_hook_run {
+    lxp_module_ctx ctx;
+    lxp_effect_buffer effects;
+    lx_budget_store *budget_store;
+    lx_budget_store *budget_before;
+} epoch_hook_run;
+
+/* The capacity guarantee a module context takes in prepare_commit is measured
+ * against the kernel tables as they stand, and those tables do not move until
+ * the commit loop at the end of the transition runs. A transition stages every
+ * run before it commits any of them, so the runs are charged against one
+ * shared budget here: each run's non-deleted staged entries are counted as
+ * additions, which is conservative because an entry that overwrites a
+ * committed key consumes no new slot. */
+typedef struct epoch_hook_budget {
+    size_t module_kv;
+    size_t blobs;
+    size_t blob_bytes;
+} epoch_hook_budget;
+
+static lxp_result epoch_hook_budget_charge(const lxp_kernel *kernel,
+                                           const lxp_module_ctx *ctx,
+                                           epoch_hook_budget *budget)
+{
+    size_t i;
+    for (i = 0U; i < ctx->staged_count; ++i)
+        if (!ctx->staged[i].deleted) ++budget->module_kv;
+    for (i = 0U; i < ctx->staged_blob_count; ++i) {
+        if (ctx->staged_blobs[i].deleted) continue;
+        ++budget->blobs;
+        if (SIZE_MAX - budget->blob_bytes < ctx->staged_blobs[i].length)
+            return LXP_ERR_OVERFLOW;
+        budget->blob_bytes += ctx->staged_blobs[i].length;
+    }
+    if (kernel->module_kv_count > (size_t)LXP_KERNEL_MAX_MODULE_KV ||
+        kernel->blob_count > (size_t)LXP_KERNEL_MAX_BLOBS ||
+        kernel->blob_total_bytes > (size_t)LXP_KERNEL_MAX_BLOB_TOTAL_BYTES)
+        return LXP_FATAL_INVARIANT;
+    if (budget->module_kv >
+            (size_t)LXP_KERNEL_MAX_MODULE_KV - kernel->module_kv_count ||
+        budget->blobs > (size_t)LXP_KERNEL_MAX_BLOBS - kernel->blob_count ||
+        budget->blob_bytes > (size_t)LXP_KERNEL_MAX_BLOB_TOTAL_BYTES -
+                                 kernel->blob_total_bytes)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    return LXP_OK;
+}
+
+static lxp_result epoch_hook_run_invoke(lxp_kernel *kernel, uint16_t module_id,
+                                        uint64_t epoch, uint64_t timestamp_ms,
+                                        uint64_t global_sequence,
+                                        lxp_arena *arena, bool begin,
+                                        epoch_hook_run **runs, size_t *count,
+                                        epoch_hook_budget *budget)
+{
+    const lxp_module_registration *registration;
+    lxp_module_epoch_fn hook;
+    epoch_hook_run *run;
+    lxp_result status;
+    status = lxp_kernel_module_by_id(kernel, module_id, epoch, &registration);
+    if (status == LXP_ERR_MODULE_DISABLED) return LXP_OK;
+    if (status != LXP_OK) return status;
+    hook = begin ? registration->iface->epoch_begin :
+                   registration->iface->epoch_end;
+    if (hook == NULL) return LXP_FATAL_INVARIANT;
+    if (*count >= 2U * (size_t)LXP_MODULE_RESERVED_COUNT)
+        return LXP_FATAL_INVARIANT;
+    run = (epoch_hook_run *)calloc(1U, sizeof(*run));
+    if (run == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    status = lxp_module_ctx_init(&run->ctx, kernel, module_id, timestamp_ms,
+                                 epoch, global_sequence, UINT64_MAX, arena,
+                                 true);
+    if (status == LXP_OK) status = lxp_effect_buffer_init(&run->effects);
+    if (status == LXP_OK)
+        status = lxp_module_ctx_bind_effects(&run->ctx, &run->effects);
+    if (status == LXP_OK && module_id == LXP_MODULE_BUDGET) {
+        lx_budget_runtime *runtime =
+            (lx_budget_runtime *)lxp_ctx_module_runtime(&run->ctx);
+        if (runtime != NULL && runtime->store != NULL) {
+            run->budget_before = malloc(sizeof(*run->budget_before));
+            if (run->budget_before == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
+            else {
+                run->budget_store = runtime->store;
+                *run->budget_before = *runtime->store;
+            }
+        }
+    }
+    if (status != LXP_OK) {
+        free(run->budget_before);
+        free(run);
+        return status;
+    }
+    runs[(*count)++] = run;
+    status = hook(&run->ctx, epoch, timestamp_ms);
+    if (status != LXP_OK) return status;
+    status = lxp_module_ctx_prepare_commit(&run->ctx);
+    if (status != LXP_OK) return status;
+    return epoch_hook_budget_charge(kernel, &run->ctx, budget);
+}
+
+static void epoch_hook_runs_rollback(epoch_hook_run **runs, size_t count)
+{
+    while (count != 0U) {
+        epoch_hook_run *run = runs[--count];
+        lxp_module_ctx_rollback(&run->ctx);
+        if (run->budget_before != NULL)
+            *run->budget_store = *run->budget_before;
+    }
+}
+
+static void epoch_hook_runs_free(epoch_hook_run **runs, size_t count)
+{
+    size_t i;
+    for (i = 0U; i < count; ++i) {
+        free(runs[i]->budget_before);
+        free(runs[i]);
+    }
+}
+
+lxp_result lxp_kernel_epoch_transition(lxp_kernel *kernel, uint64_t epoch,
+                                       uint64_t timestamp_ms, lxp_arena *arena)
+{
+    epoch_hook_run *runs[2U * (size_t)LXP_MODULE_RESERVED_COUNT];
+    epoch_hook_budget budget = { 0U, 0U, 0U };
+    size_t run_count = 0U;
+    size_t i;
+    size_t mark;
+    uint16_t module_id;
+    uint64_t previous;
+    uint64_t global_sequence;
+    lxp_result status;
+    if (kernel == NULL || kernel->state == NULL || kernel->journal == NULL ||
+        arena == NULL || timestamp_ms == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    if (epoch < kernel->epoch) return LXP_ERR_TIMESTAMP_REGRESSION;
+    if (epoch == kernel->epoch) return LXP_ERR_IDEMPOTENT_REPLAY;
+    if (kernel->publication_poisoned || kernel->batch_publication_pending ||
+        kernel->journal->open)
+        return LXP_FATAL_INVARIANT;
+    previous = kernel->epoch;
+    global_sequence = kernel->state->next_sequence;
+    if (global_sequence == UINT64_MAX) return LXP_ERR_OVERFLOW;
+    mark = lxp_arena_mark(arena);
+    status = lxp_state_journal_open(kernel->state, global_sequence,
+                                    kernel->journal);
+    if (status != LXP_OK) return status;
+    if (kernel->state->accounts != NULL)
+        status = lxp_state_journal_require_account_root(kernel->journal);
+    for (module_id = 1U;
+         status == LXP_OK && module_id <= LXP_MODULE_RESERVED_COUNT;
+         ++module_id)
+        status = epoch_hook_run_invoke(kernel, module_id, previous,
+                                       timestamp_ms, global_sequence, arena,
+                                       false, runs, &run_count, &budget);
+    if (status == LXP_OK) kernel->epoch = epoch;
+    for (module_id = 1U;
+         status == LXP_OK && module_id <= LXP_MODULE_RESERVED_COUNT;
+         ++module_id)
+        status = epoch_hook_run_invoke(kernel, module_id, epoch, timestamp_ms,
+                                       global_sequence, arena, true, runs,
+                                       &run_count, &budget);
+    if (status == LXP_OK) {
+        status = lxp_state_journal_commit(kernel->journal);
+        if (status != LXP_OK && !kernel->journal->open) {
+            /* The sequence is consumed: the staged module writes belong to
+             * it and must land, exactly as the occupancy finalizer treats a
+             * journal that closed while reporting a failure. */
+            lxp_result committed = LXP_OK;
+            for (i = 0U; i < run_count && committed == LXP_OK; ++i)
+                committed = lxp_module_ctx_commit(&runs[i]->ctx);
+            if (committed == LXP_OK)
+                committed = lxp_state_root(kernel, kernel->current_state_root);
+            epoch_hook_runs_free(runs, run_count);
+            (void)lxp_arena_reset(arena, mark);
+            return committed == LXP_OK ? status : LXP_FATAL_INVARIANT;
+        }
+    }
+    if (status != LXP_OK) {
+        epoch_hook_runs_rollback(runs, run_count);
+        if (kernel->journal->open)
+            (void)lxp_state_journal_rollback(kernel->journal);
+        kernel->epoch = previous;
+        epoch_hook_runs_free(runs, run_count);
+        (void)lxp_arena_reset(arena, mark);
+        return status;
+    }
+    for (i = 0U; i < run_count && status == LXP_OK; ++i)
+        status = lxp_module_ctx_commit(&runs[i]->ctx);
+    if (status == LXP_OK)
+        status = lxp_state_root(kernel, kernel->current_state_root);
+    epoch_hook_runs_free(runs, run_count);
+    (void)lxp_arena_reset(arena, mark);
+    /* The journal has committed: a module write that fails to land after it
+     * leaves the kernel inconsistent with the consumed sequence. */
+    return status == LXP_OK ? LXP_OK : LXP_FATAL_INVARIANT;
 }
 
 lxp_result lxp_kernel_set_capabilities(
@@ -1273,11 +1802,58 @@ lxp_result lxp_kernel_canonical_ledger_apply(
     return status;
 }
 
+static lxp_result program_spend_allowance_prepare(
+    const lxp_transfer_set *set, lxp_transfer_set *authorized,
+    lxp_transfer_source_authority authorities[LXP_MAX_TRANSFER_SET_LEGS],
+    lxp_authority_scope *scope)
+{
+    const lxp_transfer_allowance *allowance = set->context.allowance;
+    lxp_authorization_kind declared;
+    size_t index;
+    lxp_result status;
+    if (allowance == NULL) return LXP_OK;
+    if (allowance->scope == NULL) return LXP_ERR_AUTH_ALLOWANCE;
+    switch (allowance->kind) {
+    case LXP_AUTHORITY_OWNER: declared = LXP_AUTH_OWNER; break;
+    case LXP_AUTHORITY_SESSION_KEY: declared = LXP_AUTH_SESSION_KEY; break;
+    case LXP_AUTHORITY_DELEGATED_CAPABILITY:
+        declared = LXP_AUTH_DELEGATED_CAPABILITY;
+        break;
+    case LXP_AUTHORITY_BUDGET_ALLOWANCE:
+        declared = LXP_AUTH_BUDGET_ALLOWANCE;
+        break;
+    default: return LXP_ERR_AUTH_SCOPE;
+    }
+    *scope = *allowance->scope;
+    for (index = 0U; index < set->leg_count; ++index) {
+        const lxp_transfer_leg *leg = &set->legs[index];
+        const lxp_transfer_source_authority *authority;
+        status = program_spend_leg_authority(set, leg, &authority);
+        if (status != LXP_OK) return status;
+        if (authority->debit_authority_kind == LXP_AUTH_PROGRAM_SPEND)
+            continue;
+        if (authority->protocol_system_capability ||
+            memcmp(leg->from->id, allowance->grantor, 32U) != 0)
+            return LXP_ERR_UNAUTHORIZED_DEBIT;
+        if (authority->debit_authority_kind != declared)
+            return LXP_ERR_AUTH_SCOPE;
+        status = lxp_authority_charge_debit(scope, allowance->kind,
+            leg->asset_id, set->context.origin_module_id, leg->amount,
+            set->context.batch_timestamp);
+        if (status != LXP_OK) return status;
+    }
+    for (index = 0U; index < set->context.source_authority_count; ++index)
+        authorities[index].debit_authority_kind = LXP_AUTH_OWNER;
+    authorized->context.allowance = NULL;
+    return LXP_OK;
+}
+
 lxp_result lxp_kernel_apply_transfer_set(
     lxp_kernel *kernel, const lxp_transfer_set *set, lxp_receipt *receipt)
 {
     lxp_transfer_set authorized;
     lxp_transfer_source_authority authorities[LXP_MAX_TRANSFER_SET_LEGS];
+    lxp_authority_scope charged_scope;
     lxp_result status;
     size_t index;
     bool program_spend = false;
@@ -1304,7 +1880,13 @@ lxp_result lxp_kernel_apply_transfer_set(
         return LXP_ERR_BALANCE_BYPASS;
     status = program_spend_authorized_set(set, &authorized, authorities);
     if (status != LXP_OK) return status;
-    return kernel->apply_transfer_set(kernel, &authorized, receipt);
+    status = program_spend_allowance_prepare(set, &authorized, authorities,
+                                             &charged_scope);
+    if (status != LXP_OK) return status;
+    status = kernel->apply_transfer_set(kernel, &authorized, receipt);
+    if (status == LXP_OK && set->context.allowance != NULL)
+        *set->context.allowance->scope = charged_scope;
+    return status;
 }
 
 lxp_result lxp_kernel_register_module(lxp_kernel *kernel,
@@ -2512,6 +3094,7 @@ lxp_result lxp_kernel_prepare_activity(
     lxp_prepared_transition *prepared = NULL;
     const lxp_module_registration *registration;
     lxp_kernel_execution private_execution;
+    kernel_private_allowance private_allowance;
     lxp_identity *identity;
     const uint8_t *prior_receipt;
     size_t prior_receipt_length;
@@ -2552,13 +3135,18 @@ lxp_result lxp_kernel_prepare_activity(
         lxp_kernel_batch_snapshot_destroy(work);
         return LXP_ERR_ARENA_EXHAUSTED;
     }
-    private_execution = *execution;
+    status = kernel_private_execution_bind(&work->kernel, &work->identities,
+                                            execution,
+                                            &private_execution,
+                                            &private_allowance);
+    if (status != LXP_OK) goto done;
     private_execution.fee_parameters = &work->fee_parameters;
     private_execution.identities = &work->identities;
     private_execution.verified_receipts = &work->verified_receipts;
     private_execution.arena = worker_arena;
     private_execution.sequencer_private_key = NULL;
     private_execution.canonical_events_out = NULL;
+    execution = &private_execution;
     status = lxp_module_version_for_epoch(
         &work->kernel, LXP_MODULE_PROGRAMS, execution->epoch,
         execution->recorded_module_version, &registration);
@@ -2576,6 +3164,8 @@ lxp_result lxp_kernel_prepare_activity(
             work->kernel.state, activity->actor_did.bytes,
             activity->actor_did.length, activity->idempotency_key,
             &prior_receipt, &prior_receipt_length);
+    if (status != LXP_OK) goto done;
+    status = kernel_fee_admission(&work->kernel, activity, execution);
     if (status != LXP_OK) goto done;
     admission_context = (lxp_admission_context){
         execution->network_id, execution->batch_timestamp_ms,
@@ -2618,6 +3208,7 @@ lxp_result lxp_kernel_prepare_activity(
             module_ctx.protocol_version = activity->protocol_version;
             module_ctx.batch_number = execution->batch_number;
             module_ctx.verified_receipts = &work->verified_receipts;
+            module_ctx.allowance = execution->allowance;
             status = snapshot_bind_call_admission(
                 &module_ctx, work, execution, prepared->activity_id,
                 activity->fee_limit, activity->activity_type);
@@ -2727,6 +3318,14 @@ static lxp_result kernel_snapshot_replace(
         target->asset_runtime.accounts = lxp_state_snapshot_accounts_for_prepare(target->state);
         target->kernel.module_runtime[LXP_MODULE_ASSET] = &target->asset_runtime;
     }
+    if (target->escrow_runtime_bound) {
+        target->escrow_runtime.accounts = lxp_state_snapshot_accounts_for_prepare(target->state);
+        target->kernel.module_runtime[LXP_MODULE_ESCROW] = &target->escrow_runtime;
+    }
+    if (target->budget_runtime_bound)
+        target->kernel.module_runtime[LXP_MODULE_BUDGET] = &target->budget_runtime;
+    if (target->stream_runtime_bound)
+        target->kernel.module_runtime[LXP_MODULE_STREAM] = &target->stream_runtime;
     target->programs_runtime.accounts =
         lxp_state_snapshot_accounts_for_prepare(target->state);
     target->programs_runtime.metering_schedule_context = target;
@@ -2744,6 +3343,8 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
     lxp_byte_span *canonical_events)
 {
     lxp_kernel_batch_snapshot *candidate = NULL;
+    lxp_kernel_execution private_execution;
+    kernel_private_allowance private_allowance;
     const lxp_module_registration *registration;
     lxp_module_ctx module_ctx;
     lxp_effect_buffer effects;
@@ -2761,6 +3362,12 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
         return LXP_ERR_NON_CANONICAL;
     if (canonical_events != NULL)
         *canonical_events = (lxp_byte_span){NULL, 0U};
+    status = kernel_private_execution_bind(&snapshot->kernel,
+                                            &snapshot->identities, execution,
+                                            &private_execution,
+                                            &private_allowance);
+    if (status != LXP_OK) return status;
+    execution = &private_execution;
     status = kernel_execution_binding(execution, execution_binding);
     if (status != LXP_OK) return status;
     if (prepared->protocol_version != activity->protocol_version ||
@@ -2776,7 +3383,8 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
         lxp_ct_memcmp(prepared->execution_binding,
                       execution_binding, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
-    status = lxp_activity_encode(activity, execution->arena, &encoded);
+    status = kernel_fee_admission(&snapshot->kernel, activity, execution);
+    if (status == LXP_OK) status = lxp_activity_encode(activity, execution->arena, &encoded);
     if (status == LXP_OK) {
         uint8_t activity_id[32];
         status = lxp_activity_id(encoded.bytes, encoded.length, activity_id);
@@ -2814,6 +3422,7 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
             module_ctx.protocol_version = activity->protocol_version;
             module_ctx.batch_number = execution->batch_number;
             module_ctx.verified_receipts = &candidate->verified_receipts;
+            module_ctx.allowance = execution->allowance;
             status = snapshot_bind_call_admission(
                 &module_ctx, candidate, execution, prepared->activity_id,
                 activity->fee_limit, activity->activity_type);
@@ -2831,12 +3440,15 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
         status = lxp_effect_buffer_init(&effects);
     }
     if (status == LXP_OK && !lxp_u128_is_zero(prepared->fee_charged)) {
-        status = candidate->kernel.fee_transaction.prepare(
-            &candidate->kernel, activity, execution->authority,
+        status = kernel_fee_prepare(&candidate->kernel, activity, execution,
             prepared->fee_charged, &fee_transaction);
         fee_transaction_open = status == LXP_OK;
         if (status == LXP_OK && fee_transaction == NULL)
             status = LXP_FATAL_INVARIANT;
+    }
+    if (status == LXP_OK && fee_transaction_open && module_ctx_initialized) {
+        module_ctx.commit_prepared = false;
+        status = lxp_module_ctx_prepare_commit(&module_ctx);
     }
     if (status == LXP_OK) {
         (void)memset(receipt, 0, sizeof(*receipt));
@@ -2896,10 +3508,7 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
         status = receipt_state_root(
             &candidate->kernel, module_ctx_initialized ? &module_ctx : NULL,
             activity, receipt, execution->arena, receipt->resulting_state_root);
-    if (status == LXP_OK && execution->sequencer_private_key != NULL)
-        status = lxp_receipt_sign(receipt,
-                                  execution->sequencer_private_key,
-                                  execution->arena);
+    if (status == LXP_OK) status = receipt_execution_signature(receipt, execution);
     if (status == LXP_OK)
         status = receipt_store(candidate->kernel.journal, activity, receipt);
     if (status == LXP_OK && canonical_events != NULL)
@@ -2910,8 +3519,7 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
     if (status == LXP_OK && module_ctx_initialized)
         status = lxp_module_ctx_commit(&module_ctx);
     if (status == LXP_OK && fee_transaction_open) {
-        candidate->kernel.fee_transaction.commit(&candidate->kernel,
-                                                  fee_transaction);
+        kernel_fee_commit(&candidate->kernel, fee_transaction);
         fee_transaction_open = false;
         fee_transaction = NULL;
     }
@@ -2929,8 +3537,7 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
     }
     if (module_ctx_initialized) lxp_module_ctx_rollback(&module_ctx);
     if (fee_transaction_open)
-        candidate->kernel.fee_transaction.rollback(&candidate->kernel,
-                                                    fee_transaction);
+        kernel_fee_rollback(&candidate->kernel, fee_transaction);
     if (candidate != NULL && candidate->journal.open)
         (void)lxp_state_journal_rollback(&candidate->journal);
     lxp_kernel_batch_snapshot_destroy(candidate);
@@ -2943,6 +3550,8 @@ static bool kernel_snapshot_matches_live(
 {
     size_t index;
     if (base == NULL || live == NULL || identities == NULL ||
+        live->epoch != base->kernel.epoch ||
+        memcmp(&live->handover, &base->kernel.handover, sizeof(live->handover)) != 0 ||
         live->module_kv_count != base->kernel.module_kv_count ||
         live->blob_count != base->kernel.blob_count ||
         live->blob_total_bytes != base->kernel.blob_total_bytes ||
@@ -3044,7 +3653,7 @@ static lxp_result kernel_settled_snapshot_validate(
     }
     if (encoded_maintenance.length != 0U) {
         lxp_programs_occupancy_receipt maintenance;
-        status = lxp_programs_occupancy_receipt_decode(encoded_maintenance.bytes,
+        status = lxp_batch_maintenance_occupancy_decode(encoded_maintenance.bytes,
             encoded_maintenance.length, &maintenance);
         if (status != LXP_OK) return status;
         if (!have_latest || latest.global_sequence == UINT64_MAX ||
@@ -3078,6 +3687,7 @@ static lxp_result kernel_batch_snapshot_commit(
     lxp_result status;
     if (kernel == NULL || identities == NULL || base == NULL ||
         settled == NULL || base == settled || kernel->publication_poisoned ||
+        settled->kernel.handover.pending ||
         settled->kernel.module_kv_count > LXP_KERNEL_MAX_MODULE_KV ||
         settled->kernel.blob_count > LXP_KERNEL_MAX_BLOBS ||
         settled->identities.count > LXP_IDENTITY_STORE_CAPACITY)
@@ -3149,6 +3759,8 @@ static lxp_result kernel_batch_snapshot_commit(
         kernel->blobs[index].bytes = blob_bytes[index];
         blob_bytes[index] = NULL;
     }
+    kernel->epoch = settled->kernel.epoch;
+    kernel->handover = settled->kernel.handover;
     (void)memcpy(kernel->current_state_root,
                  settled->kernel.current_state_root, 32U);
     lxp_state_snapshot_publish_guarded(guard);
@@ -3246,7 +3858,7 @@ lxp_result lxp_kernel_batch_publication_digest_maintenance(
     lxp_result status;
     if (maintenance.bytes == NULL || maintenance.length == 0U)
         return LXP_ERR_NON_CANONICAL;
-    status = lxp_programs_occupancy_receipt_decode(
+    status = lxp_batch_maintenance_occupancy_decode(
         maintenance.bytes, maintenance.length, &record);
     if (status != LXP_OK) return status;
     if (base == NULL || final == NULL ||
@@ -3380,6 +3992,7 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
 {
     lxp_kernel_prepared_batch *batch = NULL;
     lxp_kernel_execution private_execution;
+    kernel_private_allowance private_allowance;
     kernel_staged_commit record;
     const lx_programs_transfer_runtime *runtime;
     uint8_t receipt_digest[32];
@@ -3422,18 +4035,34 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
     if (status == LXP_OK)
         status = lxp_kernel_batch_snapshot_begin_level(batch->settled);
     if (status != LXP_OK) goto done;
-    private_execution = *execution;
+    status = kernel_private_execution_bind(&batch->settled->kernel,
+                                            &batch->settled->identities,
+                                            execution,
+                                            &private_execution,
+                                            &private_allowance);
+    if (status != LXP_OK) goto done;
     private_execution.arena = &arena;
     private_execution.identities = &batch->settled->identities;
     private_execution.verified_receipts = &batch->settled->verified_receipts;
     private_execution.fee_parameters = &batch->settled->fee_parameters;
+    private_execution.recorded_fee_schedule_version = batch->settled->fee_schedule.version;
+    private_execution.recorded_metering_schedule_version = batch->settled->metering_schedule.version;
     private_execution.canonical_events_out = NULL;
+    if (activity->activity_type == LXP_GOVERNANCE_HANDOVER) {
+        status = lxp_handover_prepare(&batch->settled->kernel, activity,
+                                       execution->batch_number, &arena);
+        if (status != LXP_OK) goto done;
+        private_execution.epoch = batch->settled->kernel.epoch;
+    }
     record = (kernel_staged_commit){execution->arena, {0}, execution->global_sequence, false};
     batch->settled->programs_runtime.state_feed = runtime->state_feed;
     batch->settled->kernel.observe_commit = kernel_stage_commit;
     batch->settled->kernel.commit_observer_context = &record;
     status = lxp_kernel_execute_activity(&batch->settled->kernel, activity,
                                          &private_execution, &batch->receipts[0]);
+    if (status == LXP_OK && activity->activity_type == LXP_GOVERNANCE_HANDOVER &&
+        batch->receipts[0].result_code != LXP_OK)
+        status = (lxp_result)batch->receipts[0].result_code;
     batch->settled->kernel.observe_commit = NULL;
     batch->settled->kernel.commit_observer_context = NULL;
     batch->settled->programs_runtime.state_feed = NULL;
@@ -3481,6 +4110,310 @@ done:
     return status;
 }
 
+typedef struct kernel_maintenance_frame {
+    uint16_t module_id;
+    size_t offset;
+    size_t length;
+} kernel_maintenance_frame;
+
+typedef struct kernel_maintenance_run {
+    lxp_kernel_batch_snapshot *snapshot;
+    const lxp_kernel_execution *execution;
+    uint16_t protocol_version;
+    lxp_arena *arena;
+    uint8_t *bytes;
+    size_t length;
+    size_t capacity;
+    uint16_t frame_count;
+    kernel_maintenance_frame *frames;
+} kernel_maintenance_run;
+
+static lxp_result maintenance_append(kernel_maintenance_run *run,
+    const void *bytes, size_t length)
+{
+    if (length > LXP_BATCH_MAINTENANCE_MAX_BYTES - run->length)
+        return LXP_ERR_LENGTH_LIMIT;
+    if (run->length + length > run->capacity) {
+        size_t capacity = run->capacity == 0U ? 4096U : run->capacity;
+        uint8_t *grown;
+        while (capacity < run->length + length) {
+            if (capacity > LXP_BATCH_MAINTENANCE_MAX_BYTES / 2U) {
+                capacity = LXP_BATCH_MAINTENANCE_MAX_BYTES;
+                break;
+            }
+            capacity *= 2U;
+        }
+        grown = realloc(run->bytes, capacity);
+        if (grown == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+        run->bytes = grown;
+        run->capacity = capacity;
+    }
+    if (length != 0U) (void)memcpy(run->bytes + run->length, bytes, length);
+    run->length += length;
+    return LXP_OK;
+}
+
+static lxp_result maintenance_integer(kernel_maintenance_run *run,
+    uint64_t value, size_t width)
+{
+    uint8_t bytes[8];
+    if (width == 0U || width > sizeof(bytes)) return LXP_FATAL_INVARIANT;
+    for (size_t i = 0U; i < width; ++i)
+        bytes[i] = (uint8_t)(value >> ((width - i - 1U) * 8U));
+    return maintenance_append(run, bytes, width);
+}
+
+static lxp_result maintenance_effect(kernel_maintenance_run *run,
+    const lxp_effect *effect, uint16_t ordinal)
+{
+    lxp_result status = maintenance_integer(run, ordinal, 2U);
+    if (status == LXP_OK) status = maintenance_integer(run, effect->event_type, 2U);
+    if (status == LXP_OK) status = maintenance_integer(run, (uint8_t)effect->kind, 1U);
+    if (status == LXP_OK) status = maintenance_integer(run, effect->monetary ? 1U : 0U, 1U);
+    if (status == LXP_OK) status = maintenance_append(run, effect->transfer_set_root, 32U);
+    if (status == LXP_OK) status = maintenance_integer(run, effect->body_length, 2U);
+    if (status == LXP_OK) status = maintenance_append(run, effect->body, effect->body_length);
+    return status;
+}
+
+static lxp_result maintenance_frame(kernel_maintenance_run *run,
+    const lxp_module_ctx *ctx, const lxp_effect_buffer *effects, uint32_t abi_version)
+{
+    size_t count = ctx->staged_count + effects->count;
+    size_t offset = run->length;
+    kernel_maintenance_frame *frames;
+    lxp_result status;
+    if (count == 0U || count > LXP_MAX_EFFECTS ||
+        run->frame_count == LXP_KERNEL_MAX_MODULE_KV || abi_version != 1U ||
+        ctx->staged_account_count != 0U || ctx->staged_blob_count != 0U)
+        return LXP_ERR_LENGTH_LIMIT;
+    frames = realloc(run->frames, ((size_t)run->frame_count + 1U) * sizeof(*frames));
+    if (frames == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    run->frames = frames;
+    status = maintenance_integer(run, ctx->module_id, 2U);
+    if (status == LXP_OK) status = maintenance_integer(run, abi_version, 4U);
+    if (status == LXP_OK) status = maintenance_integer(run, count, 2U);
+    for (size_t i = 0U; status == LXP_OK && i < ctx->staged_count; ++i) {
+        const lxp_module_kv_change *change = &ctx->staged[i];
+        lxp_effect effect = {0};
+        if (change->key_length > 64U) return LXP_ERR_LENGTH_LIMIT;
+        effect.kind = LXP_EFFECT_STATE;
+        effect.body_length = (uint16_t)(35U + change->key_length);
+        effect.body[0] = (uint8_t)(change->key_length >> 8U);
+        effect.body[1] = (uint8_t)change->key_length;
+        (void)memcpy(effect.body + 2U, change->key, change->key_length);
+        effect.body[2U + change->key_length] = change->deleted ? 1U : 0U;
+        status = lxp_hash_sha256(change->deleted ? NULL : change->value,
+            change->deleted ? 0U : change->value_length,
+            effect.body + 3U + change->key_length);
+        if (status == LXP_OK) status = maintenance_effect(run, &effect, (uint16_t)i);
+    }
+    for (size_t i = 0U; status == LXP_OK && i < effects->count; ++i)
+        status = maintenance_effect(run, &effects->effects[i], (uint16_t)(ctx->staged_count + i));
+    if (status == LXP_OK) {
+        run->frames[run->frame_count] = (kernel_maintenance_frame){
+            ctx->module_id, offset, run->length - offset};
+        ++run->frame_count;
+    }
+    return status;
+}
+
+static lxp_result maintenance_frames_order(kernel_maintenance_run *run)
+{
+    uint8_t *ordered;
+    size_t offset;
+    if (run->frame_count == 0U) return LXP_OK;
+    offset = run->frames[0].offset;
+    if (offset > run->length) return LXP_FATAL_INVARIANT;
+    ordered = malloc(run->length);
+    if (ordered == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    (void)memcpy(ordered, run->bytes, offset);
+    for (uint16_t module = 1U; module <= LXP_MODULE_RESERVED_COUNT; ++module) {
+        for (uint16_t i = 0U; i < run->frame_count; ++i) {
+            const kernel_maintenance_frame *frame = &run->frames[i];
+            if (frame->module_id != module) continue;
+            if (frame->offset > run->length || frame->length > run->length - frame->offset ||
+                frame->length > run->length - offset) {
+                free(ordered);
+                return LXP_FATAL_INVARIANT;
+            }
+            (void)memcpy(ordered + offset, run->bytes + frame->offset, frame->length);
+            offset += frame->length;
+        }
+    }
+    if (offset != run->length) { free(ordered); return LXP_FATAL_INVARIANT; }
+    (void)memcpy(run->bytes, ordered, run->length);
+    free(ordered);
+    return LXP_OK;
+}
+
+bool lxp_kernel_uses_batch_maintenance(const lxp_kernel *kernel, uint16_t protocol_version)
+{
+    return kernel != NULL && protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+}
+
+static lxp_result maintenance_epoch_hooks(kernel_maintenance_run *run)
+{
+    lxp_kernel *kernel = &run->snapshot->kernel;
+    const lxp_handover_certificate *certificate = &kernel->handover.pending_certificate;
+    lxp_module_ctx *ctx;
+    lxp_effect_buffer *effects;
+    lxp_byte_span encoded;
+    uint8_t digest[32];
+    lxp_result status;
+    if (!kernel->handover.pending) return LXP_OK;
+    if (!kernel->handover.enabled || certificate->new_epoch != kernel->epoch ||
+        certificate->activation_batch != run->execution->batch_number ||
+        kernel->journal == NULL || !kernel->journal->open)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_handover_history_latest(kernel, &encoded);
+    if (status == LXP_OK)
+        status = lxp_hash_sha256(encoded.bytes, encoded.length, digest);
+    if (status == LXP_OK && memcmp(digest, kernel->handover.pending_evidence_digest, 32U) != 0)
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status != LXP_OK) return status;
+    ctx = calloc(1U, sizeof(*ctx));
+    effects = calloc(1U, sizeof(*effects));
+    if (ctx == NULL || effects == NULL) { free(ctx); free(effects); return LXP_ERR_ARENA_EXHAUSTED; }
+    for (unsigned phase = 0U; status == LXP_OK && phase < 2U; ++phase) {
+        uint64_t epoch = phase == 0U ? certificate->old_epoch : certificate->new_epoch;
+        for (uint16_t module = 1U; status == LXP_OK && module <= LXP_MODULE_RESERVED_COUNT; ++module) {
+            const lxp_module_registration *registration;
+            lxp_module_epoch_fn hook;
+            size_t mark = lxp_arena_mark(run->arena);
+            bool initialized = false;
+            status = lxp_kernel_module_by_id(kernel, module, epoch, &registration);
+            if (status == LXP_ERR_MODULE_DISABLED) { status = LXP_OK; continue; }
+            if (status != LXP_OK) break;
+            hook = phase == 0U ? registration->iface->epoch_end : registration->iface->epoch_begin;
+            if (hook == NULL) { status = LXP_FATAL_INVARIANT; break; }
+            status = lxp_module_ctx_init(ctx, kernel, module, run->execution->batch_timestamp_ms,
+                epoch, kernel->state->next_sequence, UINT64_MAX, run->arena, true);
+            if (status == LXP_OK) {
+                initialized = true;
+                ctx->protocol_version = run->protocol_version;
+                ctx->batch_number = run->execution->batch_number;
+                status = lxp_effect_buffer_init(effects);
+            }
+            if (status == LXP_OK) status = lxp_module_ctx_bind_effects(ctx, effects);
+            if (status == LXP_OK) status = hook(ctx, epoch, run->execution->batch_timestamp_ms);
+            if (status == LXP_OK) status = lxp_module_ctx_prepare_commit(ctx);
+            if (status == LXP_OK && (ctx->staged_count != 0U || effects->count != 0U))
+                status = maintenance_frame(run, ctx, effects, registration->abi_version);
+            if (status == LXP_OK) status = lxp_module_ctx_commit(ctx);
+            if (initialized && status != LXP_OK) lxp_module_ctx_rollback(ctx);
+            if (lxp_arena_reset(run->arena, mark) != LXP_OK) status = LXP_FATAL_INVARIANT;
+        }
+    }
+    free(effects);
+    free(ctx);
+    if (status == LXP_OK) {
+        kernel->handover.pending = false;
+        (void)memset(&kernel->handover.pending_certificate, 0, sizeof(kernel->handover.pending_certificate));
+        (void)memset(kernel->handover.pending_evidence_digest, 0, sizeof(kernel->handover.pending_evidence_digest));
+    }
+    return status;
+}
+
+static lxp_result kernel_run_batch_maintenance(void *opaque)
+{
+    static const uint8_t domain[] = "LXP/batch-maintenance-effects/v1";
+    static const struct {
+        uint16_t module_id;
+        lxp_result (*hook)(lxp_module_ctx *, bool *);
+    } hooks[] = {
+        {LXP_MODULE_ESCROW, lx_escrow_batch_maintenance},
+        {LXP_MODULE_BUDGET, lx_budget_batch_maintenance},
+        {LXP_MODULE_SERVICE, lx_service_batch_maintenance}
+    };
+    kernel_maintenance_run *run = opaque;
+    lxp_kernel *kernel = &run->snapshot->kernel;
+    lxp_module_ctx *ctx = calloc(1U, sizeof(*ctx));
+    lxp_effect_buffer *effects = calloc(1U, sizeof(*effects));
+    lxp_result status = ctx != NULL && effects != NULL ? LXP_OK : LXP_ERR_ARENA_EXHAUSTED;
+    if (status == LXP_OK) status = maintenance_append(run, domain, sizeof(domain));
+    if (status == LXP_OK) status = maintenance_integer(run, 0U, 2U);
+    if (status == LXP_OK) status = maintenance_epoch_hooks(run);
+    for (size_t i = 0U; status == LXP_OK && i < sizeof(hooks) / sizeof(hooks[0]); ++i) {
+        const lxp_module_registration *registration;
+        bool complete = false;
+        status = lxp_kernel_module_by_id(kernel, hooks[i].module_id, kernel->epoch, &registration);
+        if (status == LXP_ERR_MODULE_DISABLED) {
+            status = LXP_OK;
+            continue;
+        }
+        if (status != LXP_OK) break;
+        for (size_t invocation = 0U; status == LXP_OK && !complete &&
+             invocation <= LXP_KERNEL_MAX_MODULE_KV; ++invocation) {
+            size_t mark = lxp_arena_mark(run->arena);
+            bool initialized = false;
+            status = lxp_module_ctx_init(ctx, kernel, hooks[i].module_id,
+                run->execution->batch_timestamp_ms, kernel->epoch,
+                kernel->state->next_sequence, UINT64_MAX, run->arena, true);
+            if (status == LXP_OK) {
+                initialized = true;
+                ctx->protocol_version = run->protocol_version;
+                ctx->batch_number = run->execution->batch_number;
+                status = lxp_effect_buffer_init(effects);
+            }
+            if (status == LXP_OK) status = lxp_module_ctx_bind_effects(ctx, effects);
+            if (status == LXP_OK) status = hooks[i].hook(ctx, &complete);
+            if (status == LXP_OK && complete &&
+                (ctx->staged_count != 0U || ctx->transfer_applied || effects->count != 0U))
+                status = LXP_FATAL_INVARIANT;
+            if (status == LXP_OK && !complete)
+                status = lxp_module_ctx_prepare_commit(ctx);
+            if (status == LXP_OK && !complete)
+                status = maintenance_frame(run, ctx, effects, registration->abi_version);
+            if (status == LXP_OK && !complete) status = lxp_module_ctx_commit(ctx);
+            if (initialized && (status != LXP_OK || complete)) lxp_module_ctx_rollback(ctx);
+            if (lxp_arena_reset(run->arena, mark) != LXP_OK) status = LXP_FATAL_INVARIANT;
+        }
+        if (status == LXP_OK && !complete) status = LXP_ERR_LENGTH_LIMIT;
+    }
+    if (status == LXP_OK) {
+        run->bytes[sizeof(domain)] = (uint8_t)(run->frame_count >> 8U);
+        run->bytes[sizeof(domain) + 1U] = (uint8_t)run->frame_count;
+        status = maintenance_frames_order(run);
+        if (status == LXP_OK) status = lxp_batch_maintenance_effects_validate((lxp_byte_span){run->bytes, run->length});
+    }
+    free(effects);
+    free(ctx);
+    return status;
+}
+
+static lxp_result kernel_snapshot_finalize_maintenance(
+    lxp_kernel_batch_snapshot *candidate, uint16_t protocol_version,
+    const lxp_kernel_execution *execution, lxp_arena *arena,
+    lxp_programs_occupancy_receipt *record, lxp_byte_span *encoded)
+{
+    kernel_maintenance_run run = {.snapshot = candidate, .execution = execution,
+        .protocol_version = protocol_version, .arena = arena};
+    lxp_byte_span occupancy = {NULL, 0U};
+    lxp_result status;
+    if (!lxp_kernel_uses_batch_maintenance(&candidate->kernel, protocol_version))
+        return lxp_programs_finalize_occupancy_batch_selected(
+            &candidate->kernel, protocol_version, candidate->fee_schedule.version,
+            execution->batch_number, execution->batch_timestamp_ms,
+            candidate->kernel.state->next_sequence, execution->parameter_version,
+            arena, record, encoded);
+    status = lxp_programs_finalize_occupancy_batch_with_maintenance(
+        &candidate->kernel, protocol_version, candidate->fee_schedule.version,
+        execution->batch_number, execution->batch_timestamp_ms,
+        candidate->kernel.state->next_sequence, execution->parameter_version,
+        arena, kernel_run_batch_maintenance, &run, record, &occupancy);
+    if (status == LXP_OK) {
+        lxp_batch_maintenance envelope = {protocol_version, candidate->kernel.epoch,
+            execution->batch_number, execution->batch_timestamp_ms,
+            record->global_sequence, execution->parameter_version, occupancy,
+            {run.bytes, run.length}};
+        status = lxp_batch_maintenance_encode(&envelope, arena, encoded);
+    }
+    free(run.bytes);
+    free(run.frames);
+    return status;
+}
+
 lxp_result lxp_kernel_prepare_batch_maintenance(
     lxp_kernel_prepared_batch *batch, const lxp_activity *activities,
     const lxp_kernel_execution *executions)
@@ -3503,12 +4436,12 @@ lxp_result lxp_kernel_prepare_batch_maintenance(
         status = lxp_kernel_batch_snapshot_clone(batch->settled, &candidate);
     if (status == LXP_OK)
         status = lxp_kernel_batch_snapshot_begin_level(candidate);
-    if (status == LXP_OK)
-        status = lxp_programs_finalize_occupancy_batch_selected(
-            &candidate->kernel, activities[0].protocol_version, candidate->fee_schedule.version,
-            executions[0].batch_number,
-            executions[0].batch_timestamp_ms, candidate->kernel.state->next_sequence,
-            executions[0].parameter_version, &arena, &record, &encoded);
+    if (status == LXP_OK) {
+        lxp_kernel_execution maintenance_execution = executions[0];
+        maintenance_execution.epoch = candidate->kernel.epoch;
+        status = kernel_snapshot_finalize_maintenance(candidate, activities[0].protocol_version,
+            &maintenance_execution, &arena, &record, &encoded);
+    }
     if (status == LXP_OK)
         status = lxp_state_snapshot_seal_level(candidate->state);
     if (status == LXP_OK) {
@@ -3537,6 +4470,49 @@ lxp_byte_span lxp_kernel_prepared_batch_maintenance(
     const lxp_kernel_prepared_batch *batch)
 {
     return batch == NULL ? (lxp_byte_span){NULL, 0U} : batch->maintenance;
+}
+
+lxp_result lxp_kernel_finalize_batch_maintenance(lxp_kernel *kernel,
+    uint16_t protocol_version, const lxp_kernel_execution *execution,
+    lxp_byte_span expected, lxp_replay_activity_output *output)
+{
+    lxp_kernel_batch_snapshot *base = NULL;
+    lxp_kernel_batch_snapshot *candidate = NULL;
+    lxp_programs_occupancy_receipt record;
+    lxp_byte_span encoded = {NULL, 0U};
+    lxp_byte_span events = {NULL, 0U};
+    lxp_result status;
+    if (kernel == NULL || execution == NULL || output == NULL ||
+        kernel->state == NULL || execution->epoch != kernel->epoch ||
+        execution->identities == NULL || execution->arena == NULL ||
+        execution->global_sequence != kernel->state->next_sequence ||
+        !lxp_protocol_version_uses_occupancy(protocol_version))
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_kernel_batch_snapshot_create(kernel, execution->identities,
+        execution->verified_receipts, execution, &base);
+    if (status == LXP_OK) status = lxp_kernel_batch_snapshot_clone(base, &candidate);
+    if (status == LXP_OK) status = lxp_kernel_batch_snapshot_begin_level(candidate);
+    if (status == LXP_OK) status = kernel_snapshot_finalize_maintenance(candidate,
+        protocol_version, execution, execution->arena, &record, &encoded);
+    if (status == LXP_OK && (expected.bytes == NULL || encoded.length != expected.length ||
+        lxp_ct_memcmp(encoded.bytes, expected.bytes, encoded.length) != 0))
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+    if (status == LXP_OK) status = lxp_batch_maintenance_events(encoded, NULL, &events);
+    if (status == LXP_OK) status = lxp_state_snapshot_seal_level(candidate->state);
+    if (status == LXP_OK) status = kernel_batch_snapshot_commit(kernel,
+        execution->identities, base, candidate, encoded);
+    if (status == LXP_OK) {
+        (void)memset(output, 0, sizeof(*output));
+        output->result_code = LXP_OK;
+        output->fee_charged = record.paid_fee_units;
+        output->effects = events.length != 0U ? events : record.settlement_evidence;
+        output->canonical_receipt = encoded;
+        output->canonical_events = events;
+        (void)memcpy(output->resulting_state_root, record.resulting_state_root, 32U);
+    }
+    lxp_kernel_batch_snapshot_destroy(candidate);
+    lxp_kernel_batch_snapshot_destroy(base);
+    return status;
 }
 
 static bool program_planning_refusal(lxp_result status)
@@ -4319,7 +5295,7 @@ lxp_result lxp_kernel_finalize_batch_publication_maintenance(
     const uint8_t fsynced_publication_digest[32])
 {
     lxp_programs_occupancy_receipt record;
-    lxp_result status = lxp_programs_occupancy_receipt_decode(
+    lxp_result status = lxp_batch_maintenance_occupancy_decode(
         maintenance.bytes, maintenance.length, &record);
     if (status != LXP_OK) return status;
     if (receipts == NULL || activity_count == 0U ||
@@ -4483,6 +5459,26 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         execution->authority == NULL || execution->fee_parameters == NULL ||
         execution->arena == NULL || execution->batch_number == 0U)
         return LXP_ERR_NON_CANONICAL;
+    bool enforced = false;
+    lxp_kernel_execution policy_execution;
+    status = lxp_authority_allowance_policy(kernel, &enforced);
+    if (status != LXP_OK) return status;
+    if (!enforced) {
+        policy_execution = *execution;
+        policy_execution.allowance = NULL;
+        execution = &policy_execution;
+    }
+    if (enforced && (execution->authority->kind == LXP_AUTHORITY_DELEGATED_CAPABILITY ||
+         execution->authority->kind == LXP_AUTHORITY_BUDGET_ALLOWANCE) &&
+        (execution->allowance == NULL || execution->allowance->scope == NULL))
+        return LXP_ERR_AUTH_ALLOWANCE;
+    if (execution->allowance != NULL &&
+        (execution->allowance->kind != execution->authority->kind ||
+         memcmp(execution->allowance->grantor,
+                 execution->authority->principal, 32U) != 0 ||
+         !lxp_authority_scope_equal(execution->allowance->scope,
+                                    execution->authority->scope)))
+        return LXP_ERR_CONTEXT_MISMATCH;
     if (kernel->publication_poisoned) return LXP_FATAL_INVARIANT;
     if (lxp_activity_module_id(activity->activity_type) ==
             LXP_MODULE_PROGRAMS &&
@@ -4565,6 +5561,8 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         return status == LXP_OK ? LXP_ERR_IDEMPOTENT_REPLAY : status;
     }
     if (status != LXP_OK) return status;
+    status = kernel_fee_admission(kernel, activity, execution);
+    if (status != LXP_OK) return status;
     admission_context = (lxp_admission_context){
         execution->network_id, execution->batch_timestamp_ms,
         execution->maximum_timestamp_window, identity->next_sequence,
@@ -4600,17 +5598,15 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     if (fee_policy.charge_fee && !programs_call)
         status = kernel->fee_transaction.prepare == NULL ?
                  LXP_FATAL_INVARIANT :
-                 kernel->fee_transaction.prepare(
-                     kernel, activity, execution->authority,
-                     fee_policy.fee_charged,
-                     &fee_transaction);
+                 kernel_fee_prepare(kernel, activity, execution,
+                     fee_policy.fee_charged, &fee_transaction);
     if (status == LXP_OK && fee_policy.charge_fee && !programs_call)
         fee_transaction_open = true;
     if (status == LXP_OK && fee_transaction_open && fee_transaction == NULL)
         status = LXP_FATAL_INVARIANT;
     if (status != LXP_OK) {
         if (fee_transaction_open)
-            kernel->fee_transaction.rollback(kernel, fee_transaction);
+            kernel_fee_rollback(kernel, fee_transaction);
         (void)lxp_state_journal_rollback(kernel->journal);
         return status;
     }
@@ -4629,11 +5625,14 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         if (status == LXP_OK) module_ctx.batch_number = execution->batch_number;
         if (status == LXP_OK)
             module_ctx.verified_receipts = execution->verified_receipts;
+        if (status == LXP_OK) module_ctx.allowance = execution->allowance;
+        if (status == LXP_OK) module_ctx.identities = execution->identities;
         if (status == LXP_OK)
             (void)memcpy(module_ctx.activity_id, canonical_activity_id, 32U);
         if (status == LXP_OK &&
             (activity->activity_type == LX_PROGRAMS_CALL ||
              activity->activity_type == LX_PROGRAMS_WIND_DOWN ||
+             lxp_activity_module_id(activity->activity_type) == LXP_MODULE_BUDGET ||
              lxp_activity_module_id(activity->activity_type) == LXP_MODULE_ASSET))
             status = lxp_kernel_bind_ledger_admission(
                 &module_ctx, execution->authority, activity->activity_type);
@@ -4734,10 +5733,8 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         if (status == LXP_OK && programs_call && fee_policy.charge_fee)
             status = kernel->fee_transaction.prepare == NULL ?
                      LXP_FATAL_INVARIANT :
-                     kernel->fee_transaction.prepare(
-                         kernel, activity, execution->authority,
-                         fee_policy.fee_charged,
-                         &fee_transaction);
+                     kernel_fee_prepare(kernel, activity, execution,
+                         fee_policy.fee_charged, &fee_transaction);
         if (status == LXP_OK && programs_call && fee_policy.charge_fee)
             fee_transaction_open = true;
         if (status == LXP_OK && fee_transaction_open &&
@@ -4808,9 +5805,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         status = receipt_state_root(
             kernel, fee_policy.apply_module_effects ? &module_ctx : NULL,
             activity, receipt, execution->arena, receipt->resulting_state_root);
-    if (status == LXP_OK && execution->sequencer_private_key != NULL)
-        status = lxp_receipt_sign(receipt, execution->sequencer_private_key,
-                                  execution->arena);
+    if (status == LXP_OK) status = receipt_execution_signature(receipt, execution);
     if (status == LXP_OK) status = receipt_store(kernel->journal, activity,
                                                  receipt);
     if (status == LXP_OK && programs_call && fee_policy.apply_module_effects &&
@@ -4838,7 +5833,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
             if (committed_status == LXP_OK)
                 committed_status = receipt_committed_state_check(kernel, receipt);
             if (committed_status == LXP_OK)
-                (void)memcpy(kernel->current_state_root,
+    (void)memcpy(kernel->current_state_root,
                              receipt->resulting_state_root, 32U);
             return committed_status == LXP_OK ? status : LXP_FATAL_INVARIANT;
         }
@@ -4857,7 +5852,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         return status;
     }
     if (fee_transaction_open)
-        kernel->fee_transaction.commit(kernel, fee_transaction);
+        kernel_fee_commit(kernel, fee_transaction);
     status = receipt_committed_state_check(kernel, receipt);
     if (status != LXP_OK) {
         kernel->publication_poisoned = true;
@@ -4986,9 +5981,7 @@ lxp_result lxp_kernel_terminal_rejection(lxp_kernel *kernel,
         status = receipt_state_root(kernel, NULL, activity, receipt,
                                     execution->arena,
                                     receipt->resulting_state_root);
-    if (status == LXP_OK && execution->sequencer_private_key != NULL)
-        status = lxp_receipt_sign(receipt, execution->sequencer_private_key,
-                                  execution->arena);
+    if (status == LXP_OK) status = receipt_execution_signature(receipt, execution);
     if (status == LXP_OK)
         status = receipt_store(kernel->journal, activity, receipt);
     if (status != LXP_OK) {
@@ -5080,6 +6073,8 @@ lxp_result lxp_kernel_prepare_terminal_rejection(
     private_execution.identities = &batch->settled->identities;
     private_execution.verified_receipts = &batch->settled->verified_receipts;
     private_execution.fee_parameters = &batch->settled->fee_parameters;
+    private_execution.recorded_fee_schedule_version = batch->settled->fee_schedule.version;
+    private_execution.recorded_metering_schedule_version = batch->settled->metering_schedule.version;
     private_execution.canonical_events_out = NULL;
     record = (kernel_staged_commit){execution->arena, {0},
                                     execution->global_sequence, false};

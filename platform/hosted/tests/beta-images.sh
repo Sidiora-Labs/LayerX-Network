@@ -38,13 +38,37 @@ image_build_args() {
     esac
 }
 
+registry_manifest_digest() {
+    jq -er '
+        def image_manifest:
+            . == "application/vnd.oci.image.manifest.v1+json"
+            or . == "application/vnd.docker.distribution.manifest.v2+json";
+        def image_index:
+            . == "application/vnd.oci.image.index.v1+json"
+            or . == "application/vnd.docker.distribution.manifest.list.v2+json";
+        def descriptor:
+            type == "object"
+            and (.digest | type == "string" and length == 71 and test("^sha256:[0-9a-f]{64}$"))
+            and (.size | type == "number" and . > 0 and floor == .)
+            and (.mediaType | image_manifest or image_index);
+        if descriptor and (
+            if .mediaType | image_index then
+                .schemaVersion == 2
+                and (.manifests | type == "array" and length > 0 and all(.[]; descriptor))
+            else
+                (has("schemaVersion") | not) and (has("manifests") | not)
+            end
+        ) then .digest else error("invalid registry root manifest descriptor") end
+    '
+}
+
 registry_image_digest() {
     local manifest digest
-    manifest=$(docker manifest inspect --verbose "$1") || return 1
-    digest=$(jq -er '
-        if type == "object" then .Descriptor.digest
-        else error("expected a single-platform beta image manifest") end
-        | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))
-    ' <<<"$manifest") || return 1
+    manifest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$1") || return 1
+    digest=$(registry_manifest_digest <<<"$manifest") || return 1
+    if [[ $1 == *@* ]] && [ "${1##*@}" != "$digest" ]; then
+        printf 'registry root digest does not match the requested digest\n' >&2
+        return 1
+    fi
     printf '%s\n' "$digest"
 }

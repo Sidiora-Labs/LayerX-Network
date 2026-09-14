@@ -33,6 +33,19 @@ fn fixture_field(document: &str, field: &str) -> Vec<u8> {
 }
 
 #[test]
+fn handover_sequencer_identity_matches_native_signed_header() {
+    let document = include_str!(
+        "../../../../platform/hosted/authority/tests/fixtures/real-program-deploy-receipt.json"
+    );
+    let public_key = must(fixture_field(document, "sequencer_public_key_hex").try_into());
+    let header = must(decode_batch_header(&fixture_field(document, "header_hex")));
+    assert_eq!(
+        must(layerx_wire::handover::sequencer_id(&public_key)),
+        header.sequencer_id()
+    );
+}
+
+#[test]
 fn historical_and_maintained_identity_select_distinct_committed_ranges() {
     let document = include_str!(
         "../../../../platform/hosted/authority/tests/fixtures/real-program-deploy-receipt.json"

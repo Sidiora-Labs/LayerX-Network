@@ -13,6 +13,7 @@ use layerx_intents::{Intent, IntentKind, SessionGrant};
 use layerx_sdk::Client;
 use layerx_types::payload::ModuleRegistry;
 use layerx_types::verify::VerificationLevel;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::agents::{
@@ -25,17 +26,58 @@ use crate::store::PrincipalScope;
 use crate::trace::TraceId;
 
 use super::agent_runtime::{
-    AgentCapabilityInstall, AgentLifecycleSeed, AgentOwnerInstall, AgentRuntime, AgentSessionSeed,
+    AgentCapabilityInstall, AgentLifecycleSeed, AgentOwnerInstall, AgentRuntime,
 };
 use super::poll_once_ready;
 
 const PREPARE_DOMAIN: &[u8] = b"layerx-human-journey-prepare/v1";
 const SUBMIT_DOMAIN: &[u8] = b"layerx-human-journey-submit/v1";
 
+#[path = "agent_creation_native.rs"]
+mod native;
+
 #[derive(Clone, Copy)]
 pub struct CreationBounds {
     pub timestamp_span: u64,
     pub fee_limit: u128,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ProtocolPreparation {
+    request_binding: [u8; 32],
+    account_sequence: u64,
+    not_before: u64,
+    not_after: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SessionPreparation {
+    version: u8,
+    request_binding: [u8; 32],
+    started_at: u64,
+    lease_expires_at: u64,
+    native_not_before: u64,
+    native_expires_at: u64,
+    revocation_sequence: u64,
+    expiry_sequence: u64,
+    fee: Option<crate::agents::NativeFeeConsent>,
+    replacement: Option<([u8; 32], [u8; 32])>,
+}
+
+pub struct PreparedProtocolSubmission {
+    inner: PreparedProtocolKind,
+}
+
+enum PreparedProtocolKind {
+    Complete(ProtocolEvidence),
+    Signed {
+        request: SubmitRequest,
+        public_key: [u8; 32],
+        signed_activity: Vec<u8>,
+        action_key: [u8; 32],
+        activity_id: [u8; 32],
+        network_id: u32,
+    },
 }
 
 pub struct ProductionAgentCreation<'a> {
@@ -48,7 +90,11 @@ pub struct ProductionAgentCreation<'a> {
     timestamp_span: u64,
     fee_limit: u128,
     owner_primary_key: Option<[u8; 32]>,
-    latest_session_credential: Option<(zeroize::Zeroizing<[u8; 32]>, u64)>,
+    latest_session_credential: Option<(
+        zeroize::Zeroizing<[u8; 32]>,
+        u64,
+        super::agent_runtime::AgentFinalizationEvidence,
+    )>,
 }
 
 impl<'a> ProductionAgentCreation<'a> {
@@ -90,32 +136,99 @@ impl<'a> ProductionAgentCreation<'a> {
     /// # Errors
     ///
     /// Refuses invalid protocol evidence, custody authorization, or unavailable agent state.
-    pub fn take_latest_session_credential(&mut self) -> Result<([u8; 32], u64), AgentFailure> {
+    pub fn take_latest_session_credential(
+        &mut self,
+    ) -> Result<
+        (
+            [u8; 32],
+            u64,
+            super::agent_runtime::AgentFinalizationEvidence,
+        ),
+        AgentFailure,
+    > {
         self.latest_session_credential
             .take()
-            .map(|(token, generation)| (*token, generation))
+            .map(|(token, generation, evidence)| (*token, generation, evidence))
             .ok_or(AgentFailure::Refused("session token was not provisioned"))
+    }
+
+    fn protocol_preparation(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        action: &ProtocolAction,
+    ) -> Result<ProtocolPreparation, AgentFailure> {
+        let binding: [u8; 32] = Sha256::digest(
+            serde_json::to_vec(&(
+                self.actor.as_str(),
+                self.authority.as_str(),
+                action.compiled.activity_type().value(),
+                action.compiled.payload().as_bytes(),
+                self.fee_limit,
+                self.timestamp_span,
+            ))
+            .map_err(|_| AgentFailure::Refused("invalid protocol preparation"))?,
+        )
+        .into();
+        let key =
+            crate::store::RowKey::new(format!("protocol-prepare-{}", hex(&action.action_key)))
+                .map_err(|_| AgentFailure::Refused("invalid protocol action key"))?;
+        let retained: ProtocolPreparation =
+            if let Some(row) = scope.get(crate::store::Table::Journeys, &key) {
+                let retained: ProtocolPreparation = serde_json::from_slice(row.bytes())
+                    .map_err(|_| AgentFailure::Refused("invalid retained protocol preparation"))?;
+                if retained.request_binding != binding || retained.not_after < retained.not_before {
+                    return Err(AgentFailure::Refused(
+                        "protocol preparation changed on retry",
+                    ));
+                }
+                retained
+            } else {
+                let retained = ProtocolPreparation {
+                    request_binding: binding,
+                    account_sequence: self
+                        .runtime
+                        .account_sequence(&self.actor, &self.authority)
+                        .map_err(map_boundary)?,
+                    not_before: action
+                        .started_at
+                        .checked_mul(1_000)
+                        .ok_or(AgentFailure::Refused("creation preparation bound overflow"))?,
+                    not_after: action
+                        .started_at
+                        .checked_add(self.timestamp_span)
+                        .and_then(|value| value.checked_mul(1_000))
+                        .ok_or(AgentFailure::Refused("creation preparation bound overflow"))?,
+                };
+                scope
+                    .put(
+                        crate::store::Table::Journeys,
+                        key,
+                        action.started_at,
+                        serde_json::to_vec(&retained)
+                            .map_err(|_| AgentFailure::Refused("invalid protocol preparation"))?,
+                    )
+                    .map_err(|_| AgentFailure::Unavailable)?;
+                retained
+            };
+        Ok(retained)
     }
 
     fn prepare_action(
         &mut self,
+        scope: &mut PrincipalScope<'_>,
         action: &ProtocolAction,
     ) -> Result<crate::journeys::AgentPreparation, AgentFailure> {
-        let account_sequence = self
-            .runtime
-            .account_sequence(&self.actor, &self.authority)
-            .map_err(map_boundary)?;
-        let not_after = action
-            .started_at
-            .checked_add(self.timestamp_span)
-            .ok_or(AgentFailure::Refused("creation preparation bound overflow"))?;
+        let retained = self.protocol_preparation(scope, action)?;
+        let account_sequence = retained.account_sequence;
+        let not_before = retained.not_before;
+        let not_after = retained.not_after;
         let request = PrepareRequest {
             protocol_activity_type: action.compiled.activity_type().value(),
             actor: self.actor.clone(),
             authority: self.authority.clone(),
             account_sequence: Sequence(account_sequence),
             timestamp_bound: TimestampBound {
-                not_before: TimestampSeconds(action.started_at),
+                not_before: TimestampSeconds(not_before),
                 not_after: TimestampSeconds(not_after),
             }
             .validate()
@@ -139,7 +252,7 @@ impl<'a> ProductionAgentCreation<'a> {
             || prepared.actor != self.actor
             || prepared.authority != self.authority
             || prepared.account_sequence != account_sequence
-            || prepared.not_before != action.started_at
+            || prepared.not_before != not_before
             || prepared.not_after != not_after
             || prepared.fee_limit != self.fee_limit
             || prepared.payload.as_slice() != action.compiled.payload().as_bytes()
@@ -158,23 +271,51 @@ impl<'a> ProductionAgentCreation<'a> {
         Ok(prepared)
     }
 
-    fn submit_scoped(
+    fn signing_descriptor(
         &mut self,
-        scope: &mut PrincipalScope<'_>,
+        principal: &crate::store::PrincipalId,
         action: &ProtocolAction,
-    ) -> Result<ProtocolEvidence, AgentFailure> {
-        let prepared = self.prepare_action(action)?;
-        let principal = scope.principal().clone();
+    ) -> Result<crate::custody::KeyDescriptor, AgentFailure> {
         let descriptor = self
             .custody
-            .describe_key(&principal, &action.custody_key)
+            .describe_key(principal, &action.custody_key)
             .map_err(|_| AgentFailure::Refused("agent custody key is unavailable"))?;
-        if descriptor.class != crate::custody::KeyClass::AgentPrimary {
+        let expected_class = if action.custody_key.as_str() == "human-primary" {
+            crate::custody::KeyClass::HumanPrimary
+        } else {
+            crate::custody::KeyClass::AgentPrimary
+        };
+        if descriptor.class != expected_class {
             return Err(AgentFailure::Refused(
                 "agent custody key has the wrong class",
             ));
         }
         self.owner_primary_key = Some(descriptor.public_key);
+        Ok(descriptor)
+    }
+
+    fn submit_scoped(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        action: &ProtocolAction,
+    ) -> Result<ProtocolEvidence, AgentFailure> {
+        let prepared = self.prepare_scoped(scope, action)?;
+        self.submit_prepared(prepared)
+    }
+
+    fn prepare_scoped(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        action: &ProtocolAction,
+    ) -> Result<PreparedProtocolSubmission, AgentFailure> {
+        if let Some(evidence) = self.retained_protocol_evidence(scope, action)? {
+            return Ok(PreparedProtocolSubmission {
+                inner: PreparedProtocolKind::Complete(evidence),
+            });
+        }
+        let prepared = self.prepare_action(scope, action)?;
+        let principal = scope.principal().clone();
+        let descriptor = self.signing_descriptor(&principal, action)?;
         let grant = poll_once_ready(self.custody.sign_in_scope(
             scope,
             SignRequest::new(
@@ -189,24 +330,92 @@ impl<'a> ProductionAgentCreation<'a> {
         ))
         .map_err(|_| AgentFailure::Unavailable)?
         .map_err(|_| AgentFailure::Refused("custody refused creation signature"))?;
+        let signature = *grant.signature();
+        let signed_activity = layerx_intents::owner_activity::attach_signature(
+            &prepared.unsigned_canonical_bytes,
+            signature,
+            grant.signer_public_key(),
+            self.runtime.registry(),
+        )
+        .map_err(|_| AgentFailure::Refused("custody signature does not bind preparation"))?;
+        let signed =
+            layerx_intents::owner_activity::verify(&signed_activity, self.runtime.registry())
+                .map_err(|_| AgentFailure::Refused("invalid signed creation activity"))?;
+        let activity_id = layerx_intents::canonical::activity_id(&signed)
+            .map_err(|_| AgentFailure::Refused("invalid signed creation identity"))?;
+        if signed.idempotency_key() != action.action_key {
+            return Err(AgentFailure::Refused("signed creation action differs"));
+        }
+        retain_signed_activity(scope, action, &signed_activity)?;
         let submit = SubmitRequest {
             preparation_ref: prepared.preparation_ref,
             signature: SignatureBytes::new(grant.signature().to_vec())
                 .map_err(|_| AgentFailure::Refused("invalid custody signature"))?,
             approval_release_ref: None,
         };
+        Ok(PreparedProtocolSubmission {
+            inner: PreparedProtocolKind::Signed {
+                request: submit,
+                public_key: descriptor.public_key,
+                network_id: signed.network_id(),
+                signed_activity,
+                action_key: action.action_key,
+                activity_id,
+            },
+        })
+    }
+
+    /// Submits an already retained signed operation without borrowing the principal store.
+    /// # Errors
+    /// Refuses changed canonical authority, submission identity or missing original receipt evidence.
+    pub fn submit_prepared(
+        &mut self,
+        prepared: PreparedProtocolSubmission,
+    ) -> Result<ProtocolEvidence, AgentFailure> {
+        let (submit, public_key, signed_activity, action_key, activity_id, network_id) =
+            match prepared.inner {
+                PreparedProtocolKind::Complete(evidence) => return Ok(evidence),
+                PreparedProtocolKind::Signed {
+                    request,
+                    public_key,
+                    signed_activity,
+                    action_key,
+                    activity_id,
+                    network_id,
+                } => (
+                    request,
+                    public_key,
+                    signed_activity,
+                    action_key,
+                    activity_id,
+                    network_id,
+                ),
+            };
+        let signed =
+            layerx_intents::owner_activity::verify(&signed_activity, self.runtime.registry())
+                .map_err(|_| AgentFailure::Refused("invalid prepared owner activity"))?;
+        if signed.actor_did() != self.actor.as_str().as_bytes()
+            || signed.authority() != public_key
+            || signed.idempotency_key() != action_key
+            || signed.network_id() != network_id
+            || layerx_intents::canonical::activity_id(&signed)
+                .map_err(|_| AgentFailure::Refused("invalid prepared activity identity"))?
+                != activity_id
+        {
+            return Err(AgentFailure::Refused("prepared owner binding differs"));
+        }
         let mut observation = self
             .runtime
             .submit(
                 &self.client.submit(mutation(
-                    action.action_key,
-                    submit_digest(&submit, grant.signer_public_key()),
+                    action_key,
+                    submit_digest(&submit, public_key),
                     submit,
                 )?),
-                grant.signer_public_key(),
+                public_key,
             )
             .map_err(map_boundary)?;
-        if observation.activity_id != action.action_key {
+        if observation.activity_id != activity_id {
             return Err(AgentFailure::Refused(
                 "agent returned a different activity identity",
             ));
@@ -218,7 +427,7 @@ impl<'a> ProductionAgentCreation<'a> {
                     submission_ref: observation.submission.submission_ref.clone(),
                 }))
                 .map_err(map_boundary)?;
-            if tracked.activity_id != action.action_key {
+            if tracked.activity_id != activity_id {
                 return Err(AgentFailure::Refused(
                     "tracked creation activity identity changed",
                 ));
@@ -229,7 +438,7 @@ impl<'a> ProductionAgentCreation<'a> {
             Some(receipt) => receipt,
             None => match self
                 .runtime
-                .receipt_by_idempotency_key(action.action_key, action.action_key)
+                .receipt_by_idempotency_key(action_key, activity_id)
                 .map_err(map_boundary)?
             {
                 ReceiptLookup::Found(receipt) => receipt,
@@ -237,7 +446,11 @@ impl<'a> ProductionAgentCreation<'a> {
             },
         };
         Ok(ProtocolEvidence {
-            action_key: action.action_key,
+            actor: self.actor.as_str().as_bytes().to_vec(),
+            owner_public_key: public_key,
+            network_id,
+            signed_activity,
+            action_key,
             activity_id: observation.activity_id,
             receipt_bytes: receipt.canonical_bytes,
             authorized_batch: receipt.authorised_batch,
@@ -258,13 +471,37 @@ impl<'a> ProductionAgentCreation<'a> {
         custody_key: crate::custody::KeyId,
         started_at: u64,
     ) -> Result<ProtocolEvidence, AgentFailure> {
+        let prepared = self.prepare_lifecycle_intent(
+            scope,
+            registry,
+            intent,
+            action_key,
+            custody_key,
+            started_at,
+        )?;
+        self.submit_prepared(prepared)
+    }
+
+    /// Retains the exact signed lifecycle operation before releasing the store for submission.
+    /// # Errors
+    /// Refuses inconsistent intents, changed retries, unavailable authority or custody denial.
+    pub fn prepare_lifecycle_intent(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        registry: &ModuleRegistry,
+        intent: layerx_intents::Intent,
+        action_key: [u8; 32],
+        custody_key: crate::custody::KeyId,
+        started_at: u64,
+    ) -> Result<PreparedProtocolSubmission, AgentFailure> {
         let compiled = layerx_intents::compile(&intent, registry)
             .map_err(|_| AgentFailure::Refused("lifecycle intent did not compile"))?;
         let disclosure = layerx_intents::DisclosureCheck::verify(&intent, &compiled)
             .map_err(|_| AgentFailure::Refused("lifecycle disclosure did not match"))?;
-        self.submit_scoped(
+        self.prepare_scoped(
             scope,
             &ProtocolAction {
+                actor: None,
                 stage: CreationStage::BudgetCreation,
                 action_key,
                 intent,
@@ -286,13 +523,21 @@ impl<'a> ProductionAgentCreation<'a> {
         expected_operation: u8,
         finalized_at: u64,
     ) -> Result<super::agent_runtime::AgentFinalizationEvidence, AgentFailure> {
-        let verified =
-            layerx_proof::receipt::verify(&evidence.receipt_bytes, &evidence.authorized_batch)
-                .map_err(|_| AgentFailure::Refused("lifecycle receipt verification failed"))?;
-        if evidence.verification_level
-            < layerx_types::verify::VerificationLevel::CHECKPOINT_FINALISED
-            || evidence.verification_level < verified.level()
-        {
+        if evidence.verification_level < VerificationLevel::CHECKPOINT_FINALISED {
+            return Err(AgentFailure::Refused(
+                "lifecycle receipt is not checkpoint-finalized",
+            ));
+        }
+        let kind = layerx_types::payload::ActivityType::new(
+            expected_module,
+            u16::from(expected_operation),
+        )
+        .map_err(|_| AgentFailure::Refused("lifecycle receipt does not prove successful action"))?;
+        evidence.bound_activity(kind).map_err(|_| {
+            AgentFailure::Refused("lifecycle receipt does not prove successful action")
+        })?;
+        let verified = evidence.verify_outcome(kind)?;
+        if evidence.verification_level < verified.level() {
             return Err(AgentFailure::Refused(
                 "lifecycle receipt is not checkpoint-finalized",
             ));
@@ -300,10 +545,9 @@ impl<'a> ProductionAgentCreation<'a> {
         let protocol = verified.receipt().protocol().ok_or(AgentFailure::Refused(
             "lifecycle receipt is not protocol material",
         ))?;
-        if evidence.activity_id != evidence.action_key
-            || protocol.activity_id() != evidence.activity_id
+        if protocol.activity_id() != evidence.activity_id
             || protocol.module_id() != expected_module as u16
-            || protocol.operation() != expected_operation
+            || protocol.operation() != 0
             || protocol.result_code() != 0
         {
             return Err(AgentFailure::Refused(
@@ -420,6 +664,7 @@ impl ProductionAgentCreation<'_> {
         self.latest_session_credential = Some((
             zeroize::Zeroizing::new(installed.token_id.expose()),
             installed.generation,
+            *finalization,
         ));
         Ok(AgentEvidence {
             action_key,
@@ -507,13 +752,161 @@ impl AgentCreationContract for ProductionAgentCreation<'_> {
     }
 }
 
+impl ProductionAgentCreation<'_> {
+    fn session_preparation(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        request: &SessionProvision,
+    ) -> Result<SessionPreparation, AgentFailure> {
+        let fee = request
+            .native_fee_budget
+            .map(|budget| crate::agents::NativeFeeConsent {
+                asset_id: budget.asset,
+                maximum_per_activity: budget.maximum_per_activity,
+                maximum_total: budget.maximum_total,
+                period_length_ms: budget.period_length,
+                maximum_per_period: budget.maximum_per_period,
+            });
+        let replacement = request
+            .replacement
+            .as_ref()
+            .map(|state| (state.grant.grant_id, state.charge_commitment));
+        let activities: Vec<_> = request
+            .activity_types
+            .iter()
+            .map(|value| value.value())
+            .collect();
+        let lifetime = request
+            .expires_at
+            .checked_sub(request.not_before)
+            .ok_or(AgentFailure::Refused("session expiry precedes start"))?;
+        let canonical_request = serde_json::to_vec(&(
+            request.did.as_bytes(),
+            activities,
+            &request.daemon_scopes,
+            request.custody_key.as_str(),
+            request.primary_authority,
+            lifetime,
+            &fee,
+            replacement,
+        ))
+        .map_err(|_| AgentFailure::Refused("invalid session request"))?;
+        let request_binding: [u8; 32] = Sha256::digest(canonical_request).into();
+        let key = crate::store::RowKey::new(format!("session-issue-{}", hex(&request.action_key)))
+            .map_err(|_| AgentFailure::Refused("invalid session action"))?;
+        if let Some(row) = scope.get(crate::store::Table::Journeys, &key) {
+            let stored: SessionPreparation = serde_json::from_slice(row.bytes())
+                .map_err(|_| AgentFailure::Refused("corrupt session preparation"))?;
+            if stored.version != 1 || stored.request_binding != request_binding {
+                return Err(AgentFailure::Refused(
+                    "session preparation changed on retry",
+                ));
+            }
+            return Ok(stored);
+        }
+        let policy = self.runtime.native_fee_policy().map_err(map_boundary)?;
+        if (policy.version == 2 && fee.is_none())
+            || fee
+                .as_ref()
+                .is_some_and(|value| value.asset_id != policy.asset_id)
+        {
+            return Err(AgentFailure::Refused(
+                "explicit native fee budget is required",
+            ));
+        }
+        let actor = std::str::from_utf8(request.did.as_bytes())
+            .map_err(|_| AgentFailure::Refused("invalid agent DID"))?;
+        let identity = self.runtime.identity_resolve(actor).map_err(map_boundary)?;
+        let native_not_before = session_period_anchor(request)?;
+        let plan = SessionPreparation {
+            version: 1,
+            request_binding,
+            started_at: request.not_before,
+            lease_expires_at: request.expires_at,
+            native_not_before,
+            native_expires_at: request
+                .expires_at
+                .checked_mul(1_000)
+                .ok_or(AgentFailure::Refused("session time overflow"))?,
+            revocation_sequence: identity.revocation_sequence,
+            expiry_sequence: self
+                .runtime
+                .head()
+                .map_err(map_boundary)?
+                .chain_sequence
+                .checked_add(1024)
+                .ok_or(AgentFailure::Refused("session issuance sequence overflow"))?,
+            fee,
+            replacement,
+        };
+        scope
+            .put(
+                crate::store::Table::Journeys,
+                key,
+                request.not_before,
+                serde_json::to_vec(&plan)
+                    .map_err(|_| AgentFailure::Refused("invalid session preparation"))?,
+            )
+            .map_err(|_| AgentFailure::Unavailable)?;
+        Ok(plan)
+    }
+
+    fn submit_session_intent(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        registry: &ModuleRegistry,
+        request: &SessionProvision,
+        intent: Intent,
+        started_at: u64,
+    ) -> Result<ProtocolEvidence, AgentFailure> {
+        let actor = AgentDid::new(
+            std::str::from_utf8(request.did.as_bytes())
+                .map_err(|_| AgentFailure::Refused("invalid session DID"))?
+                .to_owned(),
+        )
+        .map_err(|_| AgentFailure::Refused("invalid session DID"))?;
+        let authority = AuthorityRef::new(hex(&request.primary_authority))
+            .map_err(|_| AgentFailure::Refused("invalid session owner"))?;
+        let previous_actor = std::mem::replace(&mut self.actor, actor);
+        let previous_authority = std::mem::replace(&mut self.authority, authority);
+        let result = self.submit_lifecycle_intent(
+            scope,
+            registry,
+            intent,
+            request.action_key,
+            request.custody_key.clone(),
+            started_at,
+        );
+        self.actor = previous_actor;
+        self.authority = previous_authority;
+        result
+    }
+}
+
 impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
     fn submit_protocol_scoped(
         &mut self,
         scope: &mut PrincipalScope<'_>,
         action: ProtocolAction,
     ) -> Result<ProtocolEvidence, AgentFailure> {
-        self.submit_scoped(scope, &action)
+        let Some(actor) = &action.actor else {
+            return self.submit_scoped(scope, &action);
+        };
+        let descriptor = self.signing_descriptor(scope.principal(), &action)?;
+        let actor = AgentDid::new(
+            std::str::from_utf8(actor.as_bytes())
+                .map_err(|_| AgentFailure::Refused("invalid managed actor"))?
+                .to_owned(),
+        )
+        .map_err(|_| AgentFailure::Refused("invalid managed actor"))?;
+        let authority = AuthorityRef::new(hex(&descriptor.public_key))
+            .map_err(|_| AgentFailure::Refused("invalid managed owner"))?;
+        let previous_actor = std::mem::replace(&mut self.actor, actor);
+        let previous_authority = std::mem::replace(&mut self.authority, authority);
+        let result = self.submit_scoped(scope, &action);
+        self.actor = previous_actor;
+        self.authority = previous_authority;
+        result
     }
 
     fn provision_session_scoped(
@@ -525,72 +918,72 @@ impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
         let agent = std::str::from_utf8(request.did.as_bytes())
             .map_err(|_| AgentFailure::Refused("agent DID is not textual"))?
             .to_owned();
-        let live_revocation_sequence = self
+        let plan = self.session_preparation(scope, &request)?;
+        let plan_bytes = serde_json::to_vec(&plan)
+            .map_err(|_| AgentFailure::Refused("invalid session preparation"))?;
+        let session_seed = self
             .runtime
-            .identity_resolve(&agent)
-            .map_err(map_boundary)?
-            .revocation_sequence;
-        let mut seed = [0_u8; 32];
-        getrandom::fill(&mut seed).map_err(|_| AgentFailure::Unavailable)?;
-        let session_seed = AgentSessionSeed::new(seed).map_err(map_boundary)?;
-        let session_public_key = LocalSigner::new(seed).public_key();
-        seed.fill(0);
+            .prepare_session_seed(
+                &agent,
+                request.action_key,
+                Sha256::digest(plan_bytes).into(),
+            )
+            .map_err(map_boundary)?;
+        let session_public_key = LocalSigner::new(*session_seed.expose()).public_key();
+        let grantor = layerx_intents::canonical::did_id_for_protocol(&request.did, 3)
+            .map_err(|_| AgentFailure::Refused("invalid agent identity"))?;
         let issued = issue_session_key(&SessionKeyRequest {
-            grantor: request.grantor,
+            fee_budget: plan
+                .fee
+                .as_ref()
+                .map(|value| value.budget(plan.native_not_before))
+                .transpose()
+                .map_err(|_| AgentFailure::Refused("invalid native fee budget"))?,
+            purpose: layerx_crypto::session::SessionPurpose::Activity,
+            grantor,
             session_public_key,
-            not_before: request.expires_at.checked_sub(self.timestamp_span).ok_or(
-                AgentFailure::Refused("session expiry precedes configured span"),
-            )?,
-            expires_at: Some(request.expires_at),
+            not_before: plan.native_not_before,
+            expires_at: Some(plan.native_expires_at),
             permitted_activity_types: request.activity_types.clone(),
-            revocation_sequence: Some(live_revocation_sequence),
+            revocation_sequence: Some(plan.revocation_sequence),
         })
         .map_err(|_| AgentFailure::Refused("protocol session grant is invalid"))?;
-        let intent = Intent::v1(IntentKind::SessionGrant(
-            SessionGrant::new(issued.registration_payload.clone())
-                .map_err(|_| AgentFailure::Refused("protocol session grant is invalid"))?,
-        ));
-        let protocol =
-            self.submit_lifecycle_intent(
-                scope,
-                registry,
-                intent,
-                request.action_key,
-                request.custody_key.clone(),
-                request.expires_at.checked_sub(self.timestamp_span).ok_or(
-                    AgentFailure::Refused("session expiry precedes configured span"),
-                )?,
-            )?;
-        let finalization =
-            Self::finalization_evidence(
-                &protocol,
-                layerx_types::payload::ModuleId::Governance,
-                5,
-                request.expires_at.checked_sub(self.timestamp_span).ok_or(
-                    AgentFailure::Refused("session expiry precedes configured span"),
-                )?,
-            )?;
-        let not_before =
-            request
-                .expires_at
-                .checked_sub(self.timestamp_span)
-                .ok_or(AgentFailure::Refused(
-                    "session expiry precedes configured span",
-                ))?;
+        let mut grant_intent = SessionGrant::new(
+            issued.registration_payload.clone(),
+            plan.expiry_sequence,
+            request.action_key,
+        )
+        .map_err(|_| AgentFailure::Refused("protocol session grant is invalid"))?;
+        if let Some((predecessor, commitment)) = plan.replacement {
+            grant_intent = grant_intent
+                .replacing(predecessor, commitment)
+                .map_err(|_| AgentFailure::Refused("invalid session replacement"))?;
+        }
+        let protocol = self.submit_session_intent(
+            scope,
+            registry,
+            &request,
+            Intent::v3(IntentKind::SessionGrant(grant_intent)),
+            plan.started_at,
+        )?;
+        let finalization = Self::finalization_evidence(
+            &protocol,
+            layerx_types::payload::ModuleId::Governance,
+            5,
+            plan.started_at,
+        )?;
         let install = AgentOwnerInstall {
             agent,
             authority_kind: 2,
             authority_id: issued.grant_id,
             session_id: request.action_key,
-            // The daemon owns bearer creation. Zero is a wire sentinel and is never installed as
-            // a credential; this keeps retries under the same action key byte-for-byte stable.
             token_id: [0; 32],
             session_public_key: issued.session_public_key,
             registration_payload: issued.registration_payload.clone(),
-            grantor: request.grantor,
-            grant_not_before: not_before,
-            grant_expires_at: request.expires_at,
-            grant_revocation_sequence: live_revocation_sequence,
+            grantor,
+            grant_not_before: plan.native_not_before,
+            grant_expires_at: plan.native_expires_at,
+            grant_revocation_sequence: plan.revocation_sequence,
             session_seed: Some(session_seed),
             permitted_activity_types: request
                 .activity_types
@@ -598,11 +991,12 @@ impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
                 .map(|value| value.ordinal())
                 .collect(),
             scopes: request.daemon_scopes,
-            lease_not_before_unix_ms: not_before
+            lease_not_before_unix_ms: plan
+                .started_at
                 .checked_mul(1_000)
                 .ok_or(AgentFailure::Refused("session time overflow"))?,
-            lease_not_after_unix_ms: request
-                .expires_at
+            lease_not_after_unix_ms: plan
+                .lease_expires_at
                 .checked_mul(1_000)
                 .ok_or(AgentFailure::Refused("session time overflow"))?,
             opening_client: self.actor.as_str().to_owned(),
@@ -694,4 +1088,53 @@ fn digest(parts: &[&[u8]]) -> [u8; 32] {
         digest.update(part);
     }
     digest.finalize().into()
+}
+
+fn retain_signed_activity(
+    scope: &mut PrincipalScope<'_>,
+    action: &ProtocolAction,
+    signed_activity: &[u8],
+) -> Result<(), AgentFailure> {
+    let signed_key =
+        crate::store::RowKey::new(format!("protocol-signed-{}", hex(&action.action_key)))
+            .map_err(|_| AgentFailure::Refused("invalid protocol action key"))?;
+    if let Some(existing) = scope.get(crate::store::Table::Journeys, &signed_key) {
+        if existing.bytes() != signed_activity {
+            return Err(AgentFailure::Refused(
+                "signed protocol activity changed on retry",
+            ));
+        }
+    } else {
+        scope
+            .put(
+                crate::store::Table::Journeys,
+                signed_key,
+                action.started_at,
+                signed_activity.to_vec(),
+            )
+            .map_err(|_| AgentFailure::Unavailable)?;
+    }
+    Ok(())
+}
+
+fn session_period_anchor(request: &SessionProvision) -> Result<u64, AgentFailure> {
+    match &request.replacement {
+        Some(prior) => {
+            if prior.revoked_at_sequence == 0
+                || prior.successor != [0; 32]
+                || prior.grant.fee_budget != request.native_fee_budget
+                || prior.grant.permitted_activity_types != request.activity_types
+                || prior.grant.grantor
+                    != layerx_intents::canonical::did_id_for_protocol(&request.did, 3)
+                        .map_err(|_| AgentFailure::Refused("invalid session DID"))?
+            {
+                return Err(AgentFailure::Refused("session replacement is not bound"));
+            }
+            Ok(prior.grant.not_before)
+        }
+        None => request
+            .not_before
+            .checked_mul(1_000)
+            .ok_or(AgentFailure::Refused("session time overflow")),
+    }
 }

@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog";
+import { copyEntry } from "../../../copy/runtime";
 import type { TimedSecret } from "../../api";
-import { InlineNotice, KitButton } from "../../kit";
+import { InlineNotice } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
 import { secretExpiry } from "./model";
 
 interface TimedSecretViewProps {

@@ -25,8 +25,33 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.91.1 --profile minimal --component clippy
-      - name: Build, lint, enforce boundaries, and test
-        run: make agent-build agent-lint agent-check agent-test
+      - name: Install settlement test tools
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09
+        with:
+          version: v1.8.1
+      - name: Install native fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-venv
+          python3 -m venv .lane-venv
+          .lane-venv/bin/python -m pip install -r tests/bridge/requirements.txt
+          echo "$PWD/.lane-venv/bin" >> "$GITHUB_PATH"
+      - name: Install pinned settlement compiler
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: paxeer-network/go.mod
+          cache: false
+      - name: Download declared settlement modules
+        working-directory: paxeer-network
+        run: go mod download
+      - name: Build, lint, and enforce boundaries
+        run: CARGO_TARGET_DIR="$PWD/.lane-target" CARGO_BUILD_JOBS=4 make agent-build agent-lint agent-check
+      - name: Test with the confined native daemon
+        run: |
+          sudo env "PATH=$PATH" "CARGO_HOME=$HOME/.cargo" "RUSTUP_HOME=$HOME/.rustup" \
+            "GOMODCACHE=$(go env GOMODCACHE)" "GOPATH=$(go env GOPATH)" \
+            "CARGO_TARGET_DIR=$PWD/.lane-target" \
+            sh agent/tools/run-real-node-tests.sh test
       - name: Audit advisories, licenses, sources, and bans
         run: cargo install cargo-deny --locked --version 0.19.0 && cargo deny --manifest-path agent/Cargo.toml check
 
@@ -48,6 +73,9 @@ jobs:
   adversarial:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "1"
+      CARGO_PROFILE_TEST_DEBUG: "1"
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -56,9 +84,34 @@ jobs:
       - name: Install pinned Rust toolchain and fuzz runner
         run: >-
           rustup toolchain install 1.91.1 --profile minimal &&
-          rustup toolchain install nightly-2025-11-10 --profile minimal &&
+          rustup toolchain install nightly-2025-11-10 --profile minimal --component rust-src &&
           cargo install cargo-fuzz --locked
+      - name: Install settlement test tools
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09
+        with:
+          version: v1.8.1
+      - name: Install native fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-venv
+          python3 -m venv .lane-venv
+          .lane-venv/bin/python -m pip install -r tests/bridge/requirements.txt
+          echo "$PWD/.lane-venv/bin" >> "$GITHUB_PATH"
+      - name: Install pinned settlement compiler
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: paxeer-network/go.mod
+          cache: false
+      - name: Download declared settlement modules
+        working-directory: paxeer-network
+        run: go mod download
       - name: Run sanitizer variants
-        run: make agent-test-sanitize
+        run: |
+          sudo env "PATH=$PATH" "CARGO_HOME=$HOME/.cargo" "RUSTUP_HOME=$HOME/.rustup" \
+            "GOMODCACHE=$(go env GOMODCACHE)" "GOPATH=$(go env GOPATH)" \
+            "CARGO_TARGET_DIR=$PWD/.lane-target" \
+            "CARGO_PROFILE_DEV_DEBUG=$CARGO_PROFILE_DEV_DEBUG" \
+            "CARGO_PROFILE_TEST_DEBUG=$CARGO_PROFILE_TEST_DEBUG" \
+            sh agent/tools/run-real-node-tests.sh sanitizers
       - name: Run committed fuzz corpus
         run: make agent-fuzz-long

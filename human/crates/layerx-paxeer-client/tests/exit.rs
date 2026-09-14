@@ -273,7 +273,7 @@ impl Topology {
                 address_word(token),
                 address_word(vault),
                 ASSET,
-                quantity_word(u128::from(layerx_wire::limits::PROTOCOL_VERSION)),
+                quantity_word(u128::from(layerx_intents::canonical::PROTOCOL_VERSION)),
                 quantity_word(u128::from(NETWORK_ID)),
                 quantity_word(100),
                 quantity_word(86_400),
@@ -285,7 +285,7 @@ impl Topology {
             "CheckpointRegistry",
             &[
                 address_word(bond),
-                quantity_word(u128::from(layerx_wire::limits::PROTOCOL_VERSION)),
+                quantity_word(u128::from(layerx_intents::canonical::PROTOCOL_VERSION)),
                 quantity_word(u128::from(NETWORK_ID)),
                 quantity_word(1),
                 quantity_word(1),
@@ -607,7 +607,7 @@ fn signed_checkpoint(
 ) -> ([u8; 32], GuarantorAttestation) {
     let digest = checkpoint_digest(state_root);
     let mut attestation = GuarantorAttestation {
-        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
         network_id: NETWORK_ID,
         paxeer_chain_id: 31_337,
         settlement_contract,
@@ -645,7 +645,7 @@ fn signed_checkpoint(
 fn checkpoint_digest(state_root: [u8; 32]) -> [u8; 32] {
     let mut header = vec![0x00, 0x02, 0x17, 0x01, 0x0f];
     header.extend_from_slice(&[1]);
-    header.extend_from_slice(&layerx_wire::limits::PROTOCOL_VERSION.to_be_bytes());
+    header.extend_from_slice(&layerx_intents::canonical::PROTOCOL_VERSION.to_be_bytes());
     header.extend_from_slice(&[2]);
     header.extend_from_slice(&NETWORK_ID.to_be_bytes());
     for (field, value) in [(3_u8, 1_u64), (4, 1), (5, 1), (6, 100)] {
@@ -701,7 +701,7 @@ fn register_checkpoint_calldata(
     attestation: &GuarantorAttestation,
 ) -> Vec<u8> {
     let mut words = vec![
-        quantity_word(u128::from(layerx_wire::limits::PROTOCOL_VERSION)),
+        quantity_word(u128::from(layerx_intents::canonical::PROTOCOL_VERSION)),
         quantity_word(u128::from(NETWORK_ID)),
         quantity_word(1),
         quantity_word(1),

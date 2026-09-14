@@ -10,8 +10,7 @@ from types import SimpleNamespace
 
 root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(root / 'platform/hosted/human'))
-from guardians import generate
-from owner_native import prepare_admission
+from owner_native import GUARDIAN_ROLES, prepare_admission
 from owner_custody import bootstrap, deposit
 from provision import write_json
 from custody_credit import Rpc, eth_hash
@@ -59,11 +58,17 @@ with tempfile.TemporaryDirectory(prefix='owner-custody-') as directory:
             clock_rpc.call('evm_setNextBlockTimestamp', [wall_clock], allow_missing=True)
             clock_rpc.call('evm_mine', [], allow_missing=True)
             assert int(clock_rpc.call('eth_getBlockByNumber', ['latest', False])['timestamp'], 16) == wall_clock
-            generate(work, work, [bytes([i]).hex() * 32 for i in (1, 2, 3)])
+            guardian_tool = str(root / 'platform/hosted/human/guardians.py')
+            for index, role in enumerate(GUARDIAN_ROLES, 1):
+                subprocess.run([sys.executable, guardian_tool, 'enroll', '--work-dir', str(work),
+                                '--secrets-dir', str(work), '--role', role,
+                                '--identity', bytes([index]).hex() * 32], check=True)
+            subprocess.run([sys.executable, guardian_tool, 'assemble', '--work-dir', str(work)], check=True)
             request = dict(email='owner@example.com', display_name='Owner', idempotency_key='custody-owner', now=1)
             env = dict(os.environ, LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT=str(work / 'lxip'),
                        LAYERX_HUMAN_IDENTITY_PROVIDER_RECOVERY_POLICY_FILE=str(work / 'human-evidence-input/recovery-policy.json'))
-            result = subprocess.run([str(root / 'human/target/debug/layerx-human-identity-provider'), 'provision-owner'],
+            human_target = Path(os.environ.get('CARGO_TARGET_DIR', root / 'human/target'))
+            result = subprocess.run([str(human_target / 'debug/layerx-human-identity-provider'), 'provision-owner'],
                                     input=json.dumps(request).encode(), capture_output=True, env=env, check=True)
             write_json(work / 'human-owner-result.json', json.loads(result.stdout))
             prepare_admission(work, work)

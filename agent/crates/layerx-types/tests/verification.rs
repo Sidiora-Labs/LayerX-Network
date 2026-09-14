@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+#[path = "../../../tests/support/rustc.rs"]
+mod rustc;
 
 use layerx_types::verify::{Projection, VerificationLevel};
 
@@ -43,7 +44,7 @@ fn compile_fails(name: &str, source_text: &str, expected: &str) {
     ));
     let binary = source.with_extension("bin");
     assert!(fs::write(&source, source_text).is_ok());
-    let output = Command::new("rustc")
+    let output = rustc::command(&dependency_dir)
         .arg("--edition=2021")
         .arg(&source)
         .arg("--extern")

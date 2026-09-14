@@ -111,6 +111,22 @@ impl DisclosureCheck {
                 DisclosureField::Version,
             ));
         }
+        if intent.version() == crate::IntentVersion::V3
+            && !matches!(
+                intent.kind(),
+                IntentKind::SessionGrant(_)
+                    | IntentKind::RecoveryRegistration(_)
+                    | IntentKind::NativeOnboarding(_)
+                    | IntentKind::NativeOnboardingConsent(_)
+                    | IntentKind::NativeBudgetCreate(_)
+                    | IntentKind::NativeOwnerRotation(_)
+                    | IntentKind::NativeAssetAccountOpen(_)
+            )
+        {
+            return Err(DisclosureCheckError::FieldMismatch(
+                DisclosureField::Version,
+            ));
+        }
         let expected_type = expected_activity_type(intent)?;
         if compiled.activity_type() != expected_type
             || compiled.payload().activity_type() != expected_type
@@ -121,8 +137,72 @@ impl DisclosureCheck {
         }
 
         let payload = compiled.payload().as_bytes();
+        if matches!(
+            intent.kind(),
+            IntentKind::NativeOnboarding(_)
+                | IntentKind::NativeOnboardingConsent(_)
+                | IntentKind::NativeBudgetCreate(_)
+                | IntentKind::NativeOwnerRotation(_)
+                | IntentKind::NativeAssetAccountOpen(_)
+        ) && intent.version() != crate::IntentVersion::V3
+        {
+            return Err(DisclosureCheckError::FieldMismatch(
+                DisclosureField::Version,
+            ));
+        }
         let mut round_trip = RoundTrip::new(payload);
         match intent.kind() {
+            IntentKind::NativeAssetAccountOpen(asset) => {
+                round_trip.u16(1, DisclosureField::Header)?;
+                round_trip.fixed(&asset.bytes(), DisclosureField::Asset)?;
+            }
+            IntentKind::NativeOnboardingConsent(value) => {
+                let decoded = layerx_crypto::onboarding::OnboardingConsent::decode_payload(
+                    payload,
+                    value.target.clone(),
+                    value.target_public_key,
+                )
+                .map_err(|_| DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes))?;
+                require(decoded == *value, DisclosureField::PayloadBytes)?;
+                round_trip.fixed(
+                    &decoded.payload().map_err(|_| {
+                        DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes)
+                    })?,
+                    DisclosureField::PayloadBytes,
+                )?;
+            }
+            IntentKind::NativeOnboarding(value) => {
+                let decoded = layerx_crypto::onboarding::SponsoredRegistration::decode(payload)
+                    .map_err(|_| {
+                        DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes)
+                    })?;
+                require(decoded == *value, DisclosureField::PayloadBytes)?;
+                round_trip.fixed(
+                    &decoded.payload().map_err(|_| {
+                        DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes)
+                    })?,
+                    DisclosureField::PayloadBytes,
+                )?;
+            }
+            IntentKind::NativeOwnerRotation(value) => {
+                round_trip.fixed(
+                    &value.payload().map_err(|_| {
+                        DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes)
+                    })?,
+                    DisclosureField::PayloadBytes,
+                )?;
+            }
+            IntentKind::NativeBudgetCreate(value) => {
+                value.verify_payload(payload).map_err(|_| {
+                    DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes)
+                })?;
+                round_trip.fixed(
+                    &value.payload().map_err(|_| {
+                        DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes)
+                    })?,
+                    DisclosureField::PayloadBytes,
+                )?;
+            }
             IntentKind::DidRegistration(value) => {
                 round_trip.header(0x7101, 2)?;
                 round_trip.did(&value.did, DisclosureField::Did)?;
@@ -144,7 +224,19 @@ impl DisclosureCheck {
             }
             IntentKind::RecoveryRegistration(value) => {
                 round_trip.header(0x7103, 3)?;
-                round_trip.did(&value.did, DisclosureField::Did)?;
+                if intent.version() == crate::IntentVersion::V3 {
+                    round_trip.fixed(
+                        &hash::did_id_for_protocol(&value.did, 3).map_err(|error| {
+                            DisclosureCheckError::Wire {
+                                field: DisclosureField::Did,
+                                error,
+                            }
+                        })?,
+                        DisclosureField::Did,
+                    )?;
+                } else {
+                    round_trip.did(&value.did, DisclosureField::Did)?;
+                }
                 round_trip.fixed(&value.recovery_root.bytes(), DisclosureField::RecoveryRoot)?;
                 round_trip.u16(value.threshold.value(), DisclosureField::Threshold)?;
             }
@@ -170,12 +262,35 @@ impl DisclosureCheck {
                 round_trip.bytes(&body, 1024, DisclosureField::AuthorityGrant)?;
             }
             IntentKind::SessionGrant(value) => {
-                round_trip.header(0x7105, 1)?;
+                round_trip.header(
+                    0x7105,
+                    if intent.version() != crate::IntentVersion::V3 {
+                        1
+                    } else if value.replacement.is_some() {
+                        0x0205
+                    } else {
+                        0x0103
+                    },
+                )?;
                 round_trip.bytes(
                     &value.registration_payload,
                     1024,
                     DisclosureField::SessionGrant,
                 )?;
+                if intent.version() == crate::IntentVersion::V3 {
+                    round_trip.u64(value.expiry_sequence, DisclosureField::Sequence)?;
+                    round_trip.bytes(&value.action_key, 32, DisclosureField::IdempotencyKey)?;
+                    if let Some((predecessor, commitment)) = value.replacement {
+                        round_trip.bytes(&predecessor, 32, DisclosureField::AuthorityGrant)?;
+                        round_trip.bytes(&commitment, 32, DisclosureField::ContextHash)?;
+                    }
+                } else if value.registration_payload.get(4) != Some(&1)
+                    || value.replacement.is_some()
+                {
+                    return Err(DisclosureCheckError::FieldMismatch(
+                        DisclosureField::Version,
+                    ));
+                }
             }
             IntentKind::SessionRevoke(value) => {
                 round_trip.header(0x7106, 3)?;
@@ -607,17 +722,22 @@ impl<'a> RoundTrip<'a> {
 
 fn expected_activity_type(intent: &Intent) -> Result<ActivityType, DisclosureCheckError> {
     let (module, ordinal) = match intent.kind() {
-        IntentKind::DidRegistration(_) => (ModuleId::Governance, 1),
-        IntentKind::KeyRotation(_) => (ModuleId::Governance, 2),
+        IntentKind::DidRegistration(_)
+        | IntentKind::NativeOnboardingConsent(_)
+        | IntentKind::NativeOnboarding(_) => (ModuleId::Governance, 1),
+        IntentKind::KeyRotation(_) | IntentKind::NativeOwnerRotation(_) => {
+            (ModuleId::Governance, 2)
+        }
         IntentKind::RecoveryRegistration(_) => (ModuleId::Governance, 3),
         IntentKind::EvmPayoutBinding(_) => (ModuleId::Governance, 4),
         IntentKind::AuthorityGrant(_) => (ModuleId::Governance, 8),
         IntentKind::SessionGrant(_) => (ModuleId::Governance, 5),
         IntentKind::SessionRevoke(_) => (ModuleId::Governance, 6),
         IntentKind::LxpSend(_) => (ModuleId::Asset, 5),
+        IntentKind::NativeAssetAccountOpen(_) => (ModuleId::Asset, 4),
         IntentKind::LxpReceive(_) | IntentKind::NativeReceive(_) => (ModuleId::Asset, 6),
         IntentKind::PayerGrantRegistration(_) => (ModuleId::Budget, 4),
-        IntentKind::BudgetCreate(_) => (ModuleId::Budget, 1),
+        IntentKind::BudgetCreate(_) | IntentKind::NativeBudgetCreate(_) => (ModuleId::Budget, 1),
         IntentKind::BudgetFund(_) => (ModuleId::Budget, 2),
         IntentKind::BudgetDefund(_) => (ModuleId::Budget, 7),
         IntentKind::BridgeDepositCredit(_) | IntentKind::NativeCustodyCredit(_) => {

@@ -11,8 +11,8 @@ use layerx_proof::inclusion::{
 };
 use layerx_proof::merkle::{decode_proof, encode_proof, Proof};
 use layerx_proof::receipt::{
-    verify_program_state, verify_program_state_maintained, AuthorizedBatch,
-    MaintainedOutcomeEvidence,
+    verify_program_state, verify_program_state_maintained, verify_program_state_maintained_chain,
+    AuthorizedBatch, MaintainedOutcomeEvidence,
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::{decode_signed, encode_signed};
@@ -86,6 +86,21 @@ pub struct DeploymentProof {
 pub struct DeploymentMaintenanceProof {
     pub receipt: Vec<u8>,
     pub receipt_proof: Proof,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolHeadMaintenanceProof {
+    pub receipt: Vec<u8>,
+    pub receipt_proof: Proof,
+    pub activity_receipts: Vec<Vec<u8>>,
+}
+
+pub struct ProtocolHeadProof<'a> {
+    pub receipt: &'a [u8],
+    pub receipt_proof: &'a Proof,
+    pub header: &'a [u8],
+    pub header_signature: &'a [u8; 64],
+    pub maintenance: Option<&'a ProtocolHeadMaintenanceProof>,
 }
 
 /// Exact cryptographic refusal returned before deployment state is trusted.
@@ -422,6 +437,7 @@ pub struct ProtocolDeploymentVerifier {
     anchors: Vec<SequencerTrustAnchor>,
     current_anchor: usize,
     staleness_limit_ms: u64,
+    signed_history: Option<layerx_proof::signed_authority::SignedAuthorityHistory>,
 }
 
 impl ProtocolDeploymentVerifier {
@@ -468,6 +484,97 @@ impl ProtocolDeploymentVerifier {
             anchors,
             current_anchor,
             staleness_limit_ms,
+            signed_history: None,
+        })
+    }
+
+    /// Derives current authority from signed genesis history without altering protected policy.
+    /// The caller must obtain the projection from its independently finalized Client history.
+    /// # Errors
+    /// Refuses widened policy, revoked authority, unknown configured keys and unverified heads.
+    pub fn with_signed_history(
+        &self,
+        history: &layerx_proof::signed_authority::SignedAuthorityHistory,
+    ) -> Result<Self, ProtocolEvidenceError> {
+        if self.signed_history.is_some()
+            || history.intervals().is_empty()
+            || history.intervals().len() > MAX_TRUST_ANCHORS
+        {
+            return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+        }
+        let head = history
+            .verified_head()
+            .ok_or(ProtocolEvidenceError::TrustAnchorUnavailable)?;
+        let mut anchors = Vec::new();
+        for policy in &self.anchors {
+            if policy.protocol_version != 3
+                || policy.network_id != history.network_id()
+                || !history.intervals().iter().any(|interval| {
+                    interval.epoch() == policy.epoch
+                        && interval.public_key() == policy.sequencer_public_key
+                })
+            {
+                return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+            }
+        }
+        if !self.anchors.iter().any(|policy| {
+            policy.epoch == 1
+                && policy.first_batch == 1
+                && policy.sequencer_public_key == history.initial_public_key()
+        }) {
+            return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+        }
+        for interval in history.intervals() {
+            let configured: Vec<_> = self
+                .anchors
+                .iter()
+                .filter(|policy| {
+                    policy.epoch == interval.epoch()
+                        && policy.sequencer_public_key == interval.public_key()
+                })
+                .collect();
+            if configured.is_empty() {
+                anchors.push(SequencerTrustAnchor {
+                    protocol_version: 3,
+                    network_id: history.network_id(),
+                    epoch: interval.epoch(),
+                    sequencer_id: layerx_wire::handover::sequencer_id(&interval.public_key())
+                        .map_err(|_| ProtocolEvidenceError::InvalidTrustAnchor)?,
+                    sequencer_public_key: interval.public_key(),
+                    first_batch: interval.first_batch(),
+                    last_batch: interval.last_batch(),
+                    revoked_from_batch: None,
+                });
+            } else {
+                for policy in configured {
+                    let first = policy.first_batch.max(interval.first_batch());
+                    let last = policy.last_batch.min(interval.last_batch());
+                    if first <= last {
+                        anchors.push(SequencerTrustAnchor {
+                            first_batch: first,
+                            last_batch: last,
+                            ..*policy
+                        });
+                    }
+                }
+            }
+        }
+        if anchors.len() > MAX_TRUST_ANCHORS {
+            return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+        }
+        let current_anchor = anchors
+            .iter()
+            .position(|anchor| {
+                anchor.epoch == head.header().epoch()
+                    && (anchor.first_batch..=anchor.effective_last_batch())
+                        .contains(&head.header().batch_number())
+            })
+            .ok_or(ProtocolEvidenceError::SequencerRevoked)?;
+        Ok(Self {
+            anchors,
+            current_anchor,
+            staleness_limit_ms: self.staleness_limit_ms,
+            signed_history: Some(history.clone()),
         })
     }
 
@@ -665,6 +772,116 @@ impl ProtocolDeploymentVerifier {
         )
     }
 
+    /// # Errors
+    /// Refuses incomplete or invalid receipt chains and stale current authority.
+    pub fn verify_current_protocol_head_proof(
+        &self,
+        proof: &ProtocolHeadProof<'_>,
+        now_ms: u64,
+    ) -> Result<VerifiedProtocolHead, ProtocolEvidenceError> {
+        self.verify_protocol_head_proof(proof, EvidenceMoment::Current(now_ms))
+    }
+
+    /// # Errors
+    /// Refuses incomplete or invalid historical receipt-chain authority.
+    pub fn verify_historical_protocol_head_proof(
+        &self,
+        proof: &ProtocolHeadProof<'_>,
+    ) -> Result<VerifiedProtocolHead, ProtocolEvidenceError> {
+        self.verify_protocol_head_proof(proof, EvidenceMoment::Historical)
+    }
+
+    fn verify_protocol_head_proof(
+        &self,
+        proof: &ProtocolHeadProof<'_>,
+        moment: EvidenceMoment,
+    ) -> Result<VerifiedProtocolHead, ProtocolEvidenceError> {
+        let Some(maintenance) = proof.maintenance else {
+            return self.verify_protocol_head(
+                proof.receipt,
+                proof.receipt_proof,
+                proof.header,
+                proof.header_signature,
+                moment,
+            );
+        };
+        if maintenance.activity_receipts.is_empty()
+            || maintenance.activity_receipts.len() > 64
+            || maintenance
+                .activity_receipts
+                .iter()
+                .try_fold(0_usize, |total, item| total.checked_add(item.len()))
+                .is_none_or(|total| total > 16 * 1024 * 1024)
+        {
+            return Err(ProtocolEvidenceError::Encoding);
+        }
+        let anchor =
+            self.anchors[self.select_anchor(proof.header, proof.header_signature, moment)?];
+        let decoded = decode_receipt(proof.receipt).map_err(|_| ProtocolEvidenceError::Receipt)?;
+        let protocol = decoded.protocol().ok_or(ProtocolEvidenceError::Receipt)?;
+        let authorization = anchor.authorization();
+        let inclusion = verify_receipt_inclusion(
+            proof.receipt,
+            proof.receipt_proof,
+            proof.header,
+            proof.header_signature,
+            &authorization,
+        )
+        .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
+        let header = inclusion.header().header();
+        if anchor.protocol_version != 3
+            || protocol.protocol_version() != header.protocol_version()
+            || protocol.timestamp() != header.timestamp_ms()
+            || protocol.activity_root() != header.activity_merkle_root()
+        {
+            return Err(ProtocolEvidenceError::ProtocolDomain);
+        }
+        let authorized = AuthorizedBatch::new(
+            protocol.batch_id(),
+            protocol.asset(),
+            header.previous_state_root(),
+            header.resulting_state_root(),
+            anchor.sequencer_public_key,
+        );
+        verify_program_state_maintained_chain(
+            proof.receipt,
+            &authorized,
+            &MaintainedOutcomeEvidence {
+                header: proof.header,
+                header_signature: proof.header_signature,
+                activity_proof: proof.receipt_proof,
+                maintenance: &maintenance.receipt,
+                maintenance_proof: &maintenance.receipt_proof,
+                authorization: &authorization,
+            },
+            &maintenance.activity_receipts,
+        )
+        .map_err(|_| ProtocolEvidenceError::Receipt)?;
+        let observed_at = protocol.timestamp();
+        if observed_at == 0 {
+            return Err(ProtocolEvidenceError::Stale);
+        }
+        if let EvidenceMoment::Current(now_ms) = moment {
+            if now_ms < observed_at || now_ms.saturating_sub(observed_at) > self.staleness_limit_ms
+            {
+                return Err(ProtocolEvidenceError::Stale);
+            }
+        }
+        let unsigned = encode_unsigned(&decoded).map_err(|_| ProtocolEvidenceError::Receipt)?;
+        Ok(VerifiedProtocolHead {
+            activity_id: protocol.activity_id(),
+            receipt_digest: receipt_digest(&unsigned)
+                .map_err(|_| ProtocolEvidenceError::Receipt)?,
+            batch_header_digest: inclusion.header().digest(),
+            state_root: protocol.resulting_state_root(),
+            freshness: ReadFreshness {
+                observed_sequence: protocol.global_sequence(),
+                observed_at,
+            },
+            sequencer_public_key: anchor.sequencer_public_key,
+        })
+    }
+
     /// Verifies a maintenance head under the active signed-header trust anchor.
     /// # Errors
     /// Refuses invalid inclusion, maintenance identity, settlement or freshness.
@@ -712,13 +929,17 @@ impl ProtocolDeploymentVerifier {
         signature: &[u8; 64],
         moment: EvidenceMoment,
     ) -> Result<(crate::AccountStateHead, [u8; 32]), ProtocolEvidenceError> {
-        let anchor = self.anchors[self.select_anchor(header, moment)?];
+        let anchor = self.anchors[self.select_anchor(header, signature, moment)?];
         let inclusion =
             verify_receipt_inclusion(receipt, proof, header, signature, &anchor.authorization())
                 .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
         let header = inclusion.header().header();
-        let record = layerx_wire::maintenance::decode_occupancy_maintenance(receipt)
+        let maintenance = layerx_wire::batch_maintenance::decode_maintenance(receipt)
             .map_err(|_| ProtocolEvidenceError::Receipt)?;
+        maintenance
+            .verify_header(header)
+            .map_err(|_| ProtocolEvidenceError::BatchMismatch)?;
+        let record = maintenance.occupancy();
         let count = header
             .last_sequence()
             .checked_sub(header.first_sequence())
@@ -735,7 +956,7 @@ impl ProtocolDeploymentVerifier {
         {
             return Err(ProtocolEvidenceError::BatchMismatch);
         }
-        verify_maintenance_settlement(&record)?;
+        verify_maintenance_settlement(record)?;
         let observed_at = header.timestamp_ms();
         if observed_at == 0 {
             return Err(ProtocolEvidenceError::Stale);
@@ -803,7 +1024,7 @@ impl ProtocolDeploymentVerifier {
             return self.verify_program_head(&proof.state, moment);
         };
         let state = &proof.state;
-        let selected = self.select_anchor(&state.header, moment)?;
+        let selected = self.select_anchor(&state.header, &state.header_signature, moment)?;
         let anchor = self.anchors[selected];
         if anchor.protocol_version != 3 {
             return Err(ProtocolEvidenceError::ProtocolDomain);
@@ -913,7 +1134,7 @@ impl ProtocolDeploymentVerifier {
         header_signature: &[u8; 64],
         moment: EvidenceMoment,
     ) -> Result<VerifiedReceiptClaims, ProtocolEvidenceError> {
-        let selected = self.select_anchor(header_bytes, moment)?;
+        let selected = self.select_anchor(header_bytes, header_signature, moment)?;
         let anchor = self.anchors[selected];
         let decoded = decode_receipt(receipt).map_err(|_| ProtocolEvidenceError::Receipt)?;
         let protocol = decoded.protocol().ok_or(ProtocolEvidenceError::Receipt)?;
@@ -991,8 +1212,14 @@ impl ProtocolDeploymentVerifier {
     fn select_anchor(
         &self,
         header_bytes: &[u8],
+        header_signature: &[u8; 64],
         moment: EvidenceMoment,
     ) -> Result<usize, ProtocolEvidenceError> {
+        if let Some(history) = &self.signed_history {
+            history
+                .verify_header(header_bytes, header_signature)
+                .map_err(|_| ProtocolEvidenceError::TrustAnchorUnavailable)?;
+        }
         let header = decode_batch_header(header_bytes)
             .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
         let mut selected = None;
@@ -1960,6 +2187,121 @@ fn take_array<const N: usize>(
 }
 
 #[cfg(test)]
+mod maintained_protocol_heads {
+    use super::*;
+    use layerx_proof::merkle::build_proof;
+
+    const RECEIPT: &[u8] = include_bytes!("../tests/fixtures/maintained-head/receipt");
+    const MAINTENANCE: &[u8] =
+        include_bytes!("../tests/fixtures/maintained-head/maintenance.receipt");
+    const HEADER: &[u8] = include_bytes!("../tests/fixtures/maintained-head/header");
+    const SIGNATURE: &[u8; 64] =
+        include_bytes!("../tests/fixtures/maintained-head/header.signature");
+    const PUBLIC: &[u8; 32] = include_bytes!("../tests/fixtures/maintained-head/sequencer.public");
+
+    #[test]
+    fn actual_maintained_state_head_reopens_with_selected_root_and_refuses_substitution() {
+        let header =
+            decode_batch_header(HEADER).unwrap_or_else(|error| panic!("native header: {error:?}"));
+        let decoded =
+            decode_receipt(RECEIPT).unwrap_or_else(|error| panic!("native receipt: {error:?}"));
+        let protocol = decoded
+            .protocol()
+            .unwrap_or_else(|| panic!("native protocol receipt"));
+        assert_eq!(protocol.operation(), 0);
+        assert_eq!(protocol.module_id(), 9);
+        assert_ne!(
+            protocol.resulting_state_root(),
+            header.resulting_state_root()
+        );
+        let verifier = ProtocolDeploymentVerifier {
+            anchors: vec![SequencerTrustAnchor {
+                protocol_version: header.protocol_version(),
+                network_id: header.network_id(),
+                epoch: header.epoch(),
+                sequencer_id: header.sequencer_id(),
+                sequencer_public_key: *PUBLIC,
+                first_batch: header.batch_number(),
+                last_batch: header.batch_number(),
+                revoked_from_batch: None,
+            }],
+            current_anchor: 0,
+            staleness_limit_ms: 1_000,
+            signed_history: None,
+        };
+        let leaves = [RECEIPT, MAINTENANCE];
+        let (receipt_proof, root) = build_proof(&leaves, 0)
+            .unwrap_or_else(|error| panic!("native receipt proof: {error:?}"));
+        assert_eq!(root, header.receipt_merkle_root());
+        let (maintenance_proof, _) = build_proof(&leaves, 1)
+            .unwrap_or_else(|error| panic!("native maintenance proof: {error:?}"));
+        let maintenance = ProtocolHeadMaintenanceProof {
+            receipt: MAINTENANCE.to_vec(),
+            receipt_proof: maintenance_proof,
+            activity_receipts: vec![RECEIPT.to_vec()],
+        };
+        let mut proof = ProtocolHeadProof {
+            receipt: RECEIPT,
+            receipt_proof: &receipt_proof,
+            header: HEADER,
+            header_signature: SIGNATURE,
+            maintenance: Some(&maintenance),
+        };
+        let historical = verifier
+            .verify_historical_protocol_head_proof(&proof)
+            .unwrap_or_else(|error| panic!("actual historical head: {error:?}"));
+        assert_eq!(historical.state_root(), protocol.resulting_state_root());
+        assert_eq!(
+            historical.freshness().observed_sequence,
+            protocol.global_sequence()
+        );
+        assert_eq!(
+            verifier.verify_current_protocol_head_proof(&proof, header.timestamp_ms()),
+            Ok(historical)
+        );
+        assert_eq!(
+            verifier.verify_current_protocol_head_proof(&proof, header.timestamp_ms() + 1_001),
+            Err(ProtocolEvidenceError::Stale)
+        );
+        let mut revoked = verifier.clone();
+        revoked.anchors[0].revoked_from_batch = Some(header.batch_number());
+        assert_eq!(
+            revoked.verify_historical_protocol_head_proof(&proof),
+            Err(ProtocolEvidenceError::SequencerRevoked)
+        );
+        proof.maintenance = None;
+        assert!(verifier
+            .verify_historical_protocol_head_proof(&proof)
+            .is_err());
+        let mut changed = maintenance.clone();
+        changed.activity_receipts.clear();
+        proof.maintenance = Some(&changed);
+        assert!(verifier
+            .verify_historical_protocol_head_proof(&proof)
+            .is_err());
+        let mut changed = maintenance.clone();
+        changed.activity_receipts[0][20] ^= 1;
+        proof.maintenance = Some(&changed);
+        assert!(verifier
+            .verify_historical_protocol_head_proof(&proof)
+            .is_err());
+        let mut changed = maintenance.clone();
+        changed.receipt[20] ^= 1;
+        proof.maintenance = Some(&changed);
+        assert!(verifier
+            .verify_historical_protocol_head_proof(&proof)
+            .is_err());
+        let mut changed = maintenance.clone();
+        changed.activity_receipts = vec![RECEIPT.to_vec(); 65];
+        proof.maintenance = Some(&changed);
+        assert_eq!(
+            verifier.verify_historical_protocol_head_proof(&proof),
+            Err(ProtocolEvidenceError::Encoding)
+        );
+    }
+}
+
+#[cfg(test)]
 mod legacy_lifecycle_vectors {
     use super::*;
 
@@ -2050,5 +2392,198 @@ mod legacy_lifecycle_vectors {
             parse_lifecycle_activity(UPGRADE_ORDINAL, &payload),
             Err(ProtocolEvidenceError::CanonicalActivity)
         );
+    }
+}
+
+#[cfg(test)]
+mod native_batch_maintenance_heads {
+    use super::*;
+
+    const RECEIPT: &[u8] =
+        include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/receipt");
+    const MAINTENANCE: &[u8] =
+        include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/maintenance.receipt");
+    const HEADER: &[u8] =
+        include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/header");
+    const SIGNATURE: &[u8; 64] =
+        include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/header.signature");
+    const PUBLIC: &[u8; 32] =
+        include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/sequencer.public");
+
+    fn verifier(header: &layerx_wire::receipt::BatchHeader) -> ProtocolDeploymentVerifier {
+        ProtocolDeploymentVerifier {
+            anchors: vec![SequencerTrustAnchor {
+                protocol_version: header.protocol_version(),
+                network_id: header.network_id(),
+                epoch: header.epoch(),
+                sequencer_id: header.sequencer_id(),
+                sequencer_public_key: *PUBLIC,
+                first_batch: header.batch_number(),
+                last_batch: header.batch_number(),
+                revoked_from_batch: None,
+            }],
+            current_anchor: 0,
+            staleness_limit_ms: 1_000,
+            signed_history: None,
+        }
+    }
+
+    #[test]
+    fn original_module_maintenance_head_requires_signed_complete_envelope() {
+        let header = decode_batch_header(HEADER)
+            .unwrap_or_else(|error| panic!("native batch header: {error:?}"));
+        let record = layerx_wire::batch_maintenance::decode_batch_maintenance(MAINTENANCE)
+            .unwrap_or_else(|error| panic!("native module maintenance: {error:?}"));
+        let (proof, root) = layerx_proof::merkle::build_proof(&[RECEIPT, MAINTENANCE], 1)
+            .unwrap_or_else(|error| panic!("native maintenance inclusion: {error:?}"));
+        assert_eq!(root, header.receipt_merkle_root());
+        let verifier = verifier(&header);
+        let (head, key) = verifier
+            .verify_current_maintenance_head(
+                MAINTENANCE,
+                &proof,
+                HEADER,
+                SIGNATURE,
+                header.timestamp_ms(),
+            )
+            .unwrap_or_else(|error| panic!("native module head: {error:?}"));
+        assert_eq!(key, *PUBLIC);
+        assert_eq!(head.receipt_digest, crate::hash::sha256(MAINTENANCE));
+        assert_eq!(head.state_root, record.occupancy.resulting_state_root);
+        assert_eq!(head.state_root, header.resulting_state_root());
+        assert_eq!(head.freshness.observed_sequence, header.last_sequence());
+        assert_eq!(head.freshness.observed_at, header.timestamp_ms());
+        assert_eq!(
+            verifier.verify_historical_maintenance_head(MAINTENANCE, &proof, HEADER, SIGNATURE),
+            Ok((head, key))
+        );
+        assert_eq!(
+            verifier.verify_current_maintenance_head(
+                MAINTENANCE,
+                &proof,
+                HEADER,
+                SIGNATURE,
+                header.timestamp_ms() + 1_001
+            ),
+            Err(ProtocolEvidenceError::Stale)
+        );
+        let mut changed = MAINTENANCE.to_vec();
+        let last = changed.len() - 1;
+        changed[last] ^= 1;
+        assert!(verifier
+            .verify_historical_maintenance_head(&changed, &proof, HEADER, SIGNATURE)
+            .is_err());
+        let mut signature = *SIGNATURE;
+        signature[0] ^= 1;
+        assert!(verifier
+            .verify_historical_maintenance_head(MAINTENANCE, &proof, HEADER, &signature)
+            .is_err());
+        let (activity_proof, _) = layerx_proof::merkle::build_proof(&[RECEIPT, MAINTENANCE], 0)
+            .unwrap_or_else(|error| panic!("native activity inclusion: {error:?}"));
+        assert!(verifier
+            .verify_historical_maintenance_head(MAINTENANCE, &activity_proof, HEADER, SIGNATURE)
+            .is_err());
+        let mut revoked = verifier.clone();
+        revoked.anchors[0].revoked_from_batch = Some(header.batch_number());
+        assert_eq!(
+            revoked.verify_historical_maintenance_head(MAINTENANCE, &proof, HEADER, SIGNATURE),
+            Err(ProtocolEvidenceError::SequencerRevoked)
+        );
+    }
+}
+
+#[cfg(test)]
+mod signed_authority_policy_tests {
+    use super::*;
+    use layerx_proof::signed_authority::SignedAuthorityHistory;
+    const GENESIS: &[u8] = include_bytes!(
+        "../../../../agent/crates/layerx-proof/tests/fixtures/signed-authority/genesis.bin"
+    );
+    const HEADERS: &[u8] = include_bytes!(
+        "../../../../agent/crates/layerx-proof/tests/fixtures/signed-authority/headers.bin"
+    );
+    const ACTIVITY: &[u8] = include_bytes!(
+        "../../../../agent/crates/layerx-proof/tests/fixtures/signed-authority/handover.activity"
+    );
+
+    fn must<T, E: std::fmt::Debug>(value: Result<T, E>) -> T {
+        value.unwrap_or_else(|error| panic!("native authority policy: {error:?}"))
+    }
+
+    #[test]
+    fn native_rotation_preserves_protected_policy_and_verified_history_bounds() {
+        let genesis = must(layerx_wire::handover::decode_genesis_trust(GENESIS));
+        let activity = must(decode_signed(ACTIVITY, &genesis.registry));
+        let mut history = must(SignedAuthorityHistory::from_genesis(
+            genesis.network_id,
+            genesis.canonical_state_root,
+            genesis.initial_sequencer_key,
+            genesis.governance_witness,
+        ));
+        let policy = ProtocolDeploymentVerifier {
+            anchors: vec![SequencerTrustAnchor {
+                protocol_version: 3,
+                network_id: genesis.network_id,
+                epoch: 1,
+                sequencer_id: must(layerx_wire::handover::sequencer_id(
+                    &genesis.initial_sequencer_key,
+                )),
+                sequencer_public_key: genesis.initial_sequencer_key,
+                first_batch: 1,
+                last_batch: u64::MAX,
+                revoked_from_batch: None,
+            }],
+            current_anchor: 0,
+            staleness_limit_ms: 1_000,
+            signed_history: None,
+        };
+        assert!(policy.with_signed_history(&history).is_err());
+        let mut before = None;
+        for (index, record) in HEADERS.chunks_exact(418).enumerate() {
+            must(history.advance(
+                &record[..354],
+                &must(record[354..].try_into()),
+                (index >= 13).then_some(activity.payload()),
+            ));
+            if index == 12 {
+                before = Some(must(policy.with_signed_history(&history)));
+            }
+        }
+        let derived = must(policy.with_signed_history(&history));
+        assert_eq!(policy.anchors.len(), 1);
+        assert_eq!(policy.anchors[0].last_batch, u64::MAX);
+        assert_eq!(derived.anchors[0].last_batch, 13);
+        assert_eq!(derived.anchors[1].first_batch, 14);
+        assert_eq!(derived.anchors[1].last_batch, 15);
+        assert!(derived.with_signed_history(&history).is_err());
+        for (index, record) in HEADERS.chunks_exact(418).enumerate() {
+            let signature = must(record[354..].try_into());
+            must(derived.select_anchor(&record[..354], &signature, EvidenceMoment::Historical));
+            if index < 13 {
+                assert!(derived
+                    .select_anchor(&record[..354], &signature, EvidenceMoment::Current(1))
+                    .is_err());
+            } else {
+                assert!(before
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("predecessor authority"))
+                    .select_anchor(&record[..354], &signature, EvidenceMoment::Historical)
+                    .is_err());
+            }
+        }
+        let mut revoked = policy.clone();
+        revoked.anchors[0].revoked_from_batch = Some(10);
+        let revoked = must(revoked.with_signed_history(&history));
+        let tenth = &HEADERS[9 * 418..10 * 418];
+        assert!(revoked
+            .select_anchor(
+                &tenth[..354],
+                &must(tenth[354..].try_into()),
+                EvidenceMoment::Historical
+            )
+            .is_err());
+        let mut unrelated = policy;
+        unrelated.anchors[0].network_id += 1;
+        assert!(unrelated.with_signed_history(&history).is_err());
     }
 }

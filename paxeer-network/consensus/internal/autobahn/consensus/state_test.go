@@ -85,7 +85,7 @@ func TestVoteTimeoutPrepareQC_OnlyCurrentView(t *testing.T) {
 	err := scope.Run(t.Context(), func(ctx context.Context, sc scope.Scope) error {
 		sc.SpawnBg(func() error { return utils.IgnoreCancel(s.Run(ctx)) })
 
-		pqc := makePrepareQC(keys, types.GenProposalAt(rng, types.View{Index: 0, Number: 0}))
+		pqc := makePrepareQC(keys, types.GenProposalForAt(rng, s.Data().Committee(), types.View{Index: 0, Number: 0}))
 		if err := s.pushPrepareQC(ctx, pqc); err != nil {
 			return fmt.Errorf("pushPrepareQC: %w", err)
 		}
@@ -115,7 +115,7 @@ func TestVoteTimeoutPrepareQC_InheritedFromTimeoutQC(t *testing.T) {
 
 		// View (0, 0): push PrepareQC for proposal P.
 		view0 := types.View{Index: 0, Number: 0}
-		pqc0 := makePrepareQC(keys, types.GenProposalAt(rng, view0))
+		pqc0 := makePrepareQC(keys, types.GenProposalForAt(rng, s.Data().Committee(), view0))
 		if err := s.pushPrepareQC(ctx, pqc0); err != nil {
 			return fmt.Errorf("pushPrepareQC: %w", err)
 		}
@@ -172,7 +172,7 @@ func TestVoteTimeoutPrepareQC_CurrentViewHigherThanInherited(t *testing.T) {
 
 		// View (0, 0): PrepareQC for P.
 		view0 := types.View{Index: 0, Number: 0}
-		pqc0 := makePrepareQC(keys, types.GenProposalAt(rng, view0))
+		pqc0 := makePrepareQC(keys, types.GenProposalForAt(rng, s.Data().Committee(), view0))
 		if err := s.pushPrepareQC(ctx, pqc0); err != nil {
 			return fmt.Errorf("pushPrepareQC(pqc0): %w", err)
 		}
@@ -185,7 +185,7 @@ func TestVoteTimeoutPrepareQC_CurrentViewHigherThanInherited(t *testing.T) {
 
 		// Reproposal at (0, 1) succeeds — new PrepareQC at view (0, 1).
 		view1 := types.View{Index: 0, Number: 1}
-		pqc1 := makePrepareQC(keys, types.GenProposalAt(rng, view1))
+		pqc1 := makePrepareQC(keys, types.GenProposalForAt(rng, s.Data().Committee(), view1))
 		if err := s.pushPrepareQC(ctx, pqc1); err != nil {
 			return fmt.Errorf("pushPrepareQC(pqc1): %w", err)
 		}
@@ -229,7 +229,7 @@ func TestVoteTimeoutPrepareQC_CurrentViewPresentInheritedNone(t *testing.T) {
 
 		// Fresh PrepareQC at (0, 1).
 		view1 := types.View{Index: 0, Number: 1}
-		pqc1 := makePrepareQC(keys, types.GenProposalAt(rng, view1))
+		pqc1 := makePrepareQC(keys, types.GenProposalForAt(rng, s.Data().Committee(), view1))
 		if err := s.pushPrepareQC(ctx, pqc1); err != nil {
 			return fmt.Errorf("pushPrepareQC: %w", err)
 		}
@@ -276,7 +276,7 @@ func TestVoteTimeoutPrepareQC_PersistedRestart(t *testing.T) {
 	}
 
 	view0 := types.View{Index: 0, Number: 0}
-	pqc0 := makePrepareQC(keys, types.GenProposalAt(rng, view0))
+	pqc0 := makePrepareQC(keys, types.GenProposalForAt(rng, committee, view0))
 
 	// Session 1: push PrepareQC + TimeoutQC, let runOutputs persist.
 	err := scope.Run(t.Context(), func(ctx context.Context, sc scope.Scope) error {

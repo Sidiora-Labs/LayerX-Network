@@ -401,7 +401,7 @@ impl NativeMovementCodec {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+            protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
         }
     }
     /// Selects the exact `LayerX` protocol for nested checkpoint attestations.

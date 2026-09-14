@@ -52,11 +52,18 @@ typedef lxp_result (*lxp_daemon_finality_authority_verify_fn)(
     const lxp_finalisation_requirements *requirements,
     const struct lxp_daemon_settlement_registration_evidence *registration);
 
+lxp_result lxp_daemon_finality_contents_verify(uint32_t network_id,
+    lxp_byte_span checkpoint_payload, lxp_byte_span finality_proof,
+    lxp_byte_span authenticated_header, const uint8_t checkpoint_id[32],
+    lxp_daemon_finality_authority_verify_fn verify, void *context,
+    lxp_arena *arena);
+
 typedef struct lxp_daemon_evidence_store {
     lxp_log *log;
     const lxp_log *availability_log;
     lxp_checkpoint_registry_state registry;
     lxp_sequencer_authorization authorization;
+    const lxp_handover_trust_chain *handover_chain;
     uint32_t network_id;
     uint64_t record_count;
     uint64_t last_ordinal;
@@ -73,6 +80,14 @@ typedef struct lxp_daemon_signed_header_evidence {
     lxp_byte_span canonical_header;
     uint8_t signature[64];
 } lxp_daemon_signed_header_evidence;
+
+lxp_result lxp_daemon_module_evidence_wire_encode(
+    const lxp_daemon_evidence_store *store, const lxp_kernel *kernel,
+    const lxp_daemon_signed_header_evidence *signed_header,
+    uint16_t module_id, lxp_byte_span key, uint8_t selector_kind,
+    uint64_t selector_batch, const uint8_t selector_checkpoint_id[32],
+    uint8_t requested_rank, lxp_arena *arena,
+    lxp_byte_span *canonical_value, lxp_byte_span *proof_material);
 
 typedef struct lxp_daemon_account_evidence {
     uint16_t format_version;
@@ -126,6 +141,12 @@ typedef struct lxp_daemon_settlement_registration_evidence {
     uint64_t observed_at_ms;
 } lxp_daemon_settlement_registration_evidence;
 
+lxp_result lxp_daemon_evidence_open_history(
+    lxp_daemon_evidence_store *store, lxp_log *log, uint32_t network_id,
+    const lxp_sequencer_authorization *authorization,
+    const uint8_t initial_settlement_anchor[32], bool allow_initialize,
+    lxp_daemon_finality_authority_verify_fn verify_finality_authority,
+    void *finality_authority_context, lxp_arena *arena, const lxp_handover_trust_chain *handover_chain);
 lxp_result lxp_daemon_evidence_open(
     lxp_daemon_evidence_store *store, lxp_log *log, uint32_t network_id,
     const lxp_sequencer_authorization *authorization,
@@ -228,6 +249,7 @@ typedef struct lxp_daemon_receipt_authority_entry {
 typedef struct lxp_daemon_receipt_authority_store {
     lxp_log *log;
     lxp_sequencer_authorization authorization;
+    const lxp_handover_trust_chain *handover_chain;
     lxp_daemon_receipt_authority_entry
         cache[LXP_DAEMON_AUTHORITY_CACHE_RECEIPTS];
     size_t cache_count;
@@ -398,6 +420,13 @@ typedef struct lxp_daemon_lni_server {
 typedef lxp_result (*lxp_daemon_protocol_replay_fn)(
     void *context, lxp_daemon_protocol_owner *owner);
 
+lxp_result lxp_daemon_receipt_authority_header_authorization(
+    const lxp_daemon_receipt_authority_store *store, const lxp_batch_header *header,
+    lxp_sequencer_authorization *authorization);
+lxp_result lxp_daemon_receipt_authority_open_history(
+    lxp_daemon_receipt_authority_store *store, lxp_log *log,
+    const lxp_sequencer_authorization *authorization,
+    const lxp_handover_trust_chain *handover_chain);
 lxp_result lxp_daemon_receipt_authority_open(
     lxp_daemon_receipt_authority_store *store, lxp_log *log,
     const lxp_sequencer_authorization *authorization);

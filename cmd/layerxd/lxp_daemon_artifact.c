@@ -26,7 +26,7 @@ lxp_result lxp_daemon_artifact_read(
         return LXP_ERR_NON_CANONICAL;
     *bytes = NULL;
     *length = 0U;
-    descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (descriptor < 0 || fstat(descriptor, &initial) != 0 ||
         !S_ISREG(initial.st_mode) || initial.st_nlink != 1 ||
         initial.st_size <= 0 ||

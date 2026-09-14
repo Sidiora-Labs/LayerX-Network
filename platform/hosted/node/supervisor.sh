@@ -226,8 +226,22 @@ check_sequencer_environment() {
     sequencer_seed_hex "$key_file"
     derived=$(public_key_hex "$SEQUENCER_SEED")
     SEQUENCER_SEED=""
-    [ "$derived" = "$public_key" ] \
-        || fail "the sequencer key file $key_file does not match the bound sequencer public key"
+    wait_for_settlement "$env_file"
+    (
+        local verifier
+        local -a arguments
+        load_environment "$env_file" < "$env_file"
+        if [ -n "${SETTLEMENT_LINES:-}" ]; then
+            load_environment "the settlement environment" <<< "$SETTLEMENT_LINES"
+        fi
+        verifier=$(resolve_binary "" layerx-handover)
+        arguments=(--verify-key "${LAYERX_NODE_GENESIS_MANIFEST:?}" \
+            "${LAYERX_NODE_CHECKPOINT_DIRECTORY:?}/da-bodies.log" "$derived")
+        if [ -n "${LAYERX_NODE_HANDOVER_ACTIVITY:-}" ]; then
+            arguments+=("$LAYERX_NODE_HANDOVER_ACTIVITY")
+        fi
+        "$verifier" "${arguments[@]}"
+    ) || fail "the sequencer key file does not match the bound sequencer public key or an authorized key in finalized handover history"
     log "sequencer seed bound from $key_file"
 }
 
@@ -286,8 +300,8 @@ start_daemon() {
     [ -r "$config" ] || fail "configuration missing: $config"
     if [ "$mode" = --serve ]; then
         publish_core_environment
-        wait_for_settlement "$env_file"
     fi
+    wait_for_settlement "$env_file"
     (
         load_environment "$env_file" < "$env_file"
         if [ -n "${SETTLEMENT_LINES:-}" ]; then
@@ -460,7 +474,11 @@ wait_for_treasury_signer() {
 
 run_bootstrap() {
     wait_for_treasury_signer
-    "$SCRIPT_DIR/bootstrap.sh" --data-dir "$DATA_DIR" --run-dir "$RUN_DIR" --layerxd "$LAYERXD" "$@"
+    local -a authority=()
+    if [ -n "${LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY:-}" ]; then
+        authority=(--handover-authority "$LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY")
+    fi
+    "$SCRIPT_DIR/bootstrap.sh" --data-dir "$DATA_DIR" --run-dir "$RUN_DIR" --layerxd "$LAYERXD" "${authority[@]}" "$@"
 }
 
 publish_generation() {
@@ -476,6 +494,11 @@ if [ -r "$GENERATION_FILE" ]; then GENERATION=$(cat "$GENERATION_FILE"); fi
 if [ ! -r "$DATA_DIR/node.env" ]; then
     log "bootstrapping $DATA_DIR"
     run_bootstrap --force "${BOOTSTRAP_ARGS[@]}"
+fi
+if [ -n "${LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY:-}" ]; then
+    configured_handover=$(sed -n 's/^LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY=//p' "$DATA_DIR/node.env")
+    [ "$configured_handover" = "$LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY" ] \
+        || fail "configured handover authority differs from committed genesis"
 fi
 check_sequencer_environment "$DATA_DIR/sequencer.env"
 GENERATION=$((GENERATION + 1))

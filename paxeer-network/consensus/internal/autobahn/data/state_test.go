@@ -132,7 +132,7 @@ func TestPushQCStaleQCDoesNotCorruptState(t *testing.T) {
 	// It starts from block 0 (stale) but extends beyond nextQC.
 	badKeys := make([]types.SecretKey, len(keys))
 	for i := range badKeys {
-		badKeys[i] = types.GenSecretKey(rng)
+		badKeys[i] = types.GenSecretKey(rng).ForCommittee(committee)
 	}
 	blocksPerLane := int(nextQC/types.GlobalBlockNumber(committee.Lanes().Len())) + 2
 	laneBlocks := map[types.LaneID][]*types.Block{}

@@ -335,6 +335,21 @@ lxp_result lxp_log_open(lxp_log *log, const char *path)
                                 (uint64_t)information.st_size);
 }
 
+lxp_result lxp_log_open_readonly(lxp_log *log, const char *path)
+{
+    struct stat information;
+    int descriptor;
+    if (log == NULL || path == NULL) return LXP_ERR_NON_CANONICAL;
+    descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (descriptor < 0 || fstat(descriptor, &information) != 0 ||
+        information.st_size < 0 || !S_ISREG(information.st_mode) ||
+        information.st_nlink != 1) {
+        if (descriptor >= 0) (void)close(descriptor);
+        return LXP_ERR_IO;
+    }
+    return log_open_descriptor(log, descriptor, (uint64_t)information.st_size);
+}
+
 lxp_result lxp_log_open_or_create(lxp_log *log, const char *path,
                                   uint64_t initial_size)
 {

@@ -12,7 +12,7 @@ export function singleCurrentSessionId(
   sessions: readonly Readonly<{ session_id: string; current: boolean }>[],
 ): string | undefined {
   const current = sessions.filter((session) => session.current && session.session_id.length > 0);
-  return current.length === 1 ? current[0]!.session_id : undefined;
+  return current.length === 1 ? current.at(0)?.session_id : undefined;
 }
 
 export function csrfTokenFromCookie(cookie: string): string | undefined {

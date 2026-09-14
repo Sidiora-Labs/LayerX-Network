@@ -26,6 +26,7 @@
 #   --socket-group GID        Group that owns the socket; the socket is 0660.
 #   --public-key-file PATH    Publish the treasury public key hex (mode 0644).
 #   --request-timeout-seconds N   Per-connection deadline. Default 5.
+#   --binding-policy PATH    Protected native recipient-binding policy, when enabled.
 #
 # Requests are one line; the reply is one JSON object and the connection closes:
 #
@@ -33,8 +34,11 @@
 #                        "provider":"file"}
 #   sign <64 hex>\n  -> {"public_key":"<64 hex>","digest":"<64 hex>",
 #                        "signature":"<128 hex>"}
+#   bind <240 hex>\n -> {"public_key":"<64 hex>","binding":"<240 hex>",
+#                        "signature":"<128 hex>"}
 #   anything else    -> {"error":{"code":"unknown_request","retry":"never"}}
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -47,20 +51,74 @@ import sys
 import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from provider import ProviderError, load, verify
+from provider import ProviderError, load, verify, verify_binding
 
 DIGEST_PATTERN = re.compile(r'^[0-9a-f]{64}$')
 MAXIMUM_REQUEST_BYTES = 256
+BINDING_PATTERN = re.compile(r'[0-9a-f]{240}')
+
+
+class BindingPolicy:
+    def __init__(self, path):
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 \
+                    or info.st_uid not in (os.geteuid(), 0) \
+                    or stat.S_IMODE(info.st_mode) & 0o027 or info.st_size > 4096:
+                raise ProviderError('recipient binding policy is not protected')
+            encoded = os.read(descriptor, 4097)
+        finally:
+            os.close(descriptor)
+        if len(encoded) > 4096:
+            raise ProviderError('recipient binding policy exceeds its bound')
+        try:
+            value = json.loads(encoded, object_pairs_hook=self._unique)
+            if not isinstance(value, dict) \
+                    or set(value) != {'version', 'network_id', 'asset_id', 'recipient'} \
+                    or type(value['version']) is not int or value['version'] != 1 \
+                    or type(value['network_id']) is not int \
+                    or not 0 < value['network_id'] <= 0xffffffff \
+                    or not isinstance(value['asset_id'], str) \
+                    or re.fullmatch('[0-9a-f]{64}', value['asset_id']) is None \
+                    or not isinstance(value['recipient'], str) \
+                    or re.fullmatch('[0-9a-f]{40}', value['recipient']) is None:
+                raise ProviderError('recipient binding policy is invalid')
+            self.network = value['network_id'].to_bytes(4, 'big')
+            self.asset = bytes.fromhex(value['asset_id'])
+            self.recipient = bytes.fromhex(value['recipient'])
+            if not any(self.asset) or not any(self.recipient):
+                raise ProviderError('recipient binding policy contains a zero identity')
+        except (ValueError, UnicodeDecodeError) as error:
+            raise ProviderError('recipient binding policy is not canonical JSON') from error
+
+    @staticmethod
+    def _unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ProviderError('recipient binding policy has a duplicate field')
+            value[key] = item
+        return value
+
+    def admits(self, binding, account):
+        return len(binding) == 120 and binding[:4] == self.network \
+            and binding[4:36] == account and binding[36:68] == self.asset \
+            and binding[68:88] == self.recipient and any(binding[88:120])
 
 
 class Signer:
-    def __init__(self, backend, allowed_uids):
+    def __init__(self, backend, allowed_uids, binding_policy=None):
         self._backend = backend
         self._allowed_uids = frozenset(allowed_uids) | {os.geteuid()}
         self._lock = threading.Lock()
         self._public_key = backend.public_key()
         if len(self._public_key) != 32:
             raise ProviderError('the provider advertised no Ed25519 public key')
+        self._binding_policy = binding_policy
+        account = ('agent:' + self.did + ':main').encode('ascii')
+        self._binding_account = hashlib.sha256(
+            b'LX:ACCOUNT:v1' + len(account).to_bytes(4, 'big') + account).digest()
 
     @property
     def public_key(self):
@@ -88,6 +146,18 @@ class Signer:
 
     def close(self):
         self._backend.close()
+
+    def bind(self, binding):
+        if self._binding_policy is None \
+                or not self._binding_policy.admits(binding, self._binding_account):
+            raise ProviderError('recipient binding is not authorized')
+        with self._lock:
+            if self._backend.public_key() != self._public_key:
+                raise ProviderError('the provider changed its public key')
+            signature = self._backend.bind(binding)
+        if not verify_binding(self._public_key, binding, signature):
+            raise ProviderError('the recipient binding signature does not verify')
+        return signature
 
 
 class Handler(socketserver.BaseRequestHandler):
@@ -129,10 +199,21 @@ class Handler(socketserver.BaseRequestHandler):
         line = buffered.split(b'\n', 1)[0]
         if len(line) > MAXIMUM_REQUEST_BYTES:
             return ''
-        return line.decode('ascii', 'replace').strip()
+        decoded = line.decode('ascii', 'replace')
+        return decoded if decoded.lstrip().startswith('bind') else decoded.strip()
 
     def answer(self, line):
         signer = self.server.signer
+        if line.startswith('bind '):
+            binding = line[5:]
+            if BINDING_PATTERN.fullmatch(binding) is None:
+                return {'error': {'code': 'binding_refused', 'retry': 'never'}}
+            try:
+                signature = signer.bind(bytes.fromhex(binding))
+            except ProviderError:
+                return {'error': {'code': 'binding_refused', 'retry': 'never'}}
+            return {'public_key': signer.public_key.hex(), 'binding': binding,
+                    'signature': signature.hex()}
         if line == 'public-key':
             return {'public_key': signer.public_key.hex(), 'did': signer.did,
                     'provider': signer.provider_name}
@@ -213,12 +294,14 @@ def main(argv):
     parser.add_argument('--socket-group', default=None, type=int)
     parser.add_argument('--public-key-file', default='')
     parser.add_argument('--request-timeout-seconds', default=5, type=positive)
+    parser.add_argument('--binding-policy', default='')
     arguments = parser.parse_args(argv)
 
+    policy = BindingPolicy(arguments.binding_policy) if arguments.binding_policy else None
     backend = load(arguments.provider, arguments.key_file, arguments.provider_command,
                    arguments.provider_timeout_seconds)
     try:
-        signer = Signer(backend, arguments.allowed_uid)
+        signer = Signer(backend, arguments.allowed_uid, policy)
     except BaseException:
         backend.close()
         raise

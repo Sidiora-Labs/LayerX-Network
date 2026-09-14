@@ -20,6 +20,7 @@ use layerx_wire::receipt::{decode, decode_batch_header, BatchHeader};
 use sha2::{Digest, Sha256};
 
 use crate::config::{read_protected_source, ProtectedSourceError, StartupConfig};
+mod native_owner;
 
 const MAX_AUTHORITY_SOURCE_BYTES: usize = 65_536;
 const AUTHORITY_SOURCE_VERSION: &str = "layerx-sequencer-authority-v1";
@@ -744,6 +745,7 @@ pub enum ReceiptEvidenceError {
     Policy(VerifierPolicyError),
     Inclusion(InclusionError),
     Receipt(VerificationFailure),
+    NativeOwner(layerx_proof::receipt::NativeOwnerOutcomeFailure),
     ProtocolVersion,
     SequenceRange,
     BatchIdentity,
@@ -942,10 +944,15 @@ pub struct VerifiedReceiptEvidence {
 }
 
 impl VerifiedReceiptEvidence {
-    pub(crate) fn verify_authorized_maintained(
+    /// Verifies an outcome against the complete authenticated native batch transition.
+    ///
+    /// # Errors
+    /// Refuses incomplete history, altered maintenance, roots, signatures or network binding.
+    pub fn verify_authorized_maintained(
         raw: &RawReceiptEvidence,
         activity_batch: &AuthorizedBatch,
         evidence: &layerx_proof::receipt::MaintainedOutcomeEvidence<'_>,
+        receipts: &[Vec<u8>],
         protocol_version: u16,
         network_id: u32,
     ) -> Result<Self, ReceiptEvidenceError> {
@@ -963,14 +970,15 @@ impl VerifiedReceiptEvidence {
         let sealed_batch = AuthorizedBatch::new(
             activity_batch.batch_id(),
             activity_batch.asset(),
-            activity_batch.previous_state_root(),
+            header.previous_state_root(),
             header.resulting_state_root(),
             activity_batch.sequencer_public_key(),
         );
-        let authenticated = layerx_proof::receipt::authorized_maintained_activity_batch(
+        let authenticated = layerx_proof::receipt::authorized_maintained_activity_batch_chain(
             &raw.canonical_receipt,
             &sealed_batch,
             evidence,
+            receipts,
         )
         .map_err(|_| ReceiptEvidenceError::BatchIdentity)?;
         if authenticated != *activity_batch {

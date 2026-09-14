@@ -24,8 +24,8 @@ pub use sessions::{
 };
 
 pub use signer::{
-    CustodySigner, Operation, SignAuthorization, SignRequest, SignatureGrant, SigningLimits,
-    StepUpEvidence,
+    CustodySigner, Operation, SettlementRecipientRequest, SignAuthorization, SignRequest,
+    SignatureGrant, SigningLimits, StepUpEvidence,
 };
 
 use std::fmt::{Display, Formatter};

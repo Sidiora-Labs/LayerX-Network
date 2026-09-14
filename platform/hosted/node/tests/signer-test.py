@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -62,9 +63,13 @@ if sys.argv[4] == 'public-key':
                    '-pubout', '-outform', 'DER'], (handle,))
     sys.stdout.write(encoded[-32:].hex())
     sys.exit(0)
-if sys.argv[4] != 'sign':
+if sys.argv[4] not in ('sign', 'bind'):
     sys.exit(2)
 digest = bytes.fromhex(sys.argv[5])
+if sys.argv[4] == 'bind':
+    if MODE == 'legacy' or len(digest) != 120:
+        sys.exit(2)
+    digest = b'LX:SETTLE:RECIPIENT:v1\\0' + digest
 if MODE == 'forging':
     digest = bytes(a ^ 1 for a in digest)
 message = os.memfd_create('provider-digest', 0)
@@ -147,6 +152,8 @@ class SignerCase(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=10)
+            if process.stdout is not None:
+                process.stdout.close()
 
     def seed_file(self, name='treasury.key', mode=0o600, seed=None):
         seed = seed if seed is not None else os.urandom(32)
@@ -351,6 +358,249 @@ class SignerCase(unittest.TestCase):
         self.assertEqual(published.read_text().strip(), public_key_of(seed).hex())
         self.assertEqual(published.stat().st_mode & 0o777, 0o644)
 
+    def binding_policy(self, name='binding.json', value=None):
+        value = value if value is not None else {
+            'version': 1, 'network_id': 77, 'asset_id': ASSET.hex(),
+            'recipient': 'ab' * 20,
+        }
+        path = self.work / name
+        path.write_text(json.dumps(value))
+        os.chmod(path, 0o600)
+        return path
+
+    def binding_fields(self, public_key):
+        name = ('agent:did:layerx:' + public_key.hex() + ':main').encode()
+        account = hashlib.sha256(b'LX:ACCOUNT:v1' + len(name).to_bytes(4, 'big') + name).digest()
+        return 77, account, ASSET, bytes.fromhex('ab' * 20), os.urandom(32)
+
+    def bound_client(self, target, public_key):
+        return SignerClient(str(target), expected_peer_uid=os.geteuid(),
+                            expected_peer_gid=os.getegid(), expected_public_key=public_key)
+
+    def assert_binding(self, client, public_key, fields):
+        signature = client.bind(*fields)
+        payload = fields[0].to_bytes(4, 'big') + b''.join(fields[1:])
+        message = b'LX:SETTLE:RECIPIENT:v1\0' + payload
+        self.assertEqual(len(payload), 120)
+        self.assertTrue(verify(public_key, message, signature))
+        self.assertFalse(verify(public_key, hashlib.sha256(message).digest(), signature))
+        self.assertFalse(verify(public_key, payload, signature))
+        self.assertFalse(verify(public_key, b'LX:SETTLE:RECIPIENT:v2\0' + payload, signature))
+        for offset in (0, 4, 36, 68, 88):
+            changed = bytearray(payload)
+            changed[offset] ^= 1
+            self.assertFalse(verify(public_key, b'LX:SETTLE:RECIPIENT:v1\0' + changed,
+                                    signature))
+        self.assertEqual(client.bind(*fields), signature)
+        return signature
+
+    def test_file_recipient_binding_exact_domain_and_restart(self):
+        policy = self.binding_policy()
+        seed, path, target, process = self.file_signer(extra=['--binding-policy', str(policy)])
+        public_key = public_key_of(seed)
+        fields = self.binding_fields(public_key)
+        client = self.bound_client(target, public_key)
+        signature = self.assert_binding(client, public_key, fields)
+        digest = os.urandom(32)
+        original = client.sign(digest)
+        self.assertTrue(verify(public_key, digest, original))
+        process.terminate()
+        self.assertEqual(process.wait(timeout=10), 0)
+        target, _ = self.start_signer(['--allowed-uid', str(os.getuid()), '--key-file', str(path),
+                                       '--binding-policy', str(policy)], name='restarted.sock')
+        client = self.bound_client(target, public_key)
+        self.assertEqual(client.bind(*fields), signature)
+        self.assertEqual(client.sign(digest), original)
+        self.assertEqual(path.read_bytes(), seed)
+        changed = list(fields)
+        changed[-1] = os.urandom(32)
+        self.assertNotEqual(client.bind(*changed), signature)
+        self.assert_binding(client, public_key, changed)
+
+    def test_binding_refuses_unpinned_or_wrong_coordinates_and_oversize_requests(self):
+        policy = self.binding_policy()
+        seed, _, target, _ = self.file_signer(extra=['--binding-policy', str(policy)])
+        public_key = public_key_of(seed)
+        fields = self.binding_fields(public_key)
+        client = self.bound_client(target, public_key)
+        with self.assertRaises(SignerError):
+            SignerClient(str(target)).bind(*fields)
+        for index in range(5):
+            changed = list(fields)
+            changed[index] = 78 if index == 0 else bytes(len(fields[index]))
+            with self.subTest(field=index), self.assertRaises(SignerError):
+                client.bind(*changed)
+        for index in (1, 2, 3):
+            changed = list(fields)
+            changed[index] = os.urandom(len(fields[index]))
+            with self.subTest(unbound_field=index), self.assertRaises(SignerError):
+                client.bind(*changed)
+        for network in (True, 0, -1, 1 << 32, '77'):
+            with self.subTest(network=network), self.assertRaises(SignerError):
+                client.bind(network, *fields[1:])
+        payload = fields[0].to_bytes(4, 'big') + b''.join(fields[1:])
+        for encoded in (payload.hex()[:-1], payload.hex() + '00', payload.hex().upper(),
+                        payload.hex() + ' ', ' ' + payload.hex(), '0' * 4096):
+            reply = raw_request(target, ('bind ' + encoded + '\n').encode())
+            self.assertIn('error', reply)
+        zero_checkpoint = payload[:88] + bytes(32)
+        self.assertEqual(raw_request(target, b'bind ' + zero_checkpoint.hex().encode() + b'\n')
+                         ['error']['code'], 'binding_refused')
+        self.assert_binding(client, public_key, fields)
+
+    def test_no_binding_policy_preserves_only_digest_signing(self):
+        seed, _, target, _ = self.file_signer()
+        public_key = public_key_of(seed)
+        client = self.bound_client(target, public_key)
+        with self.assertRaises(SignerError):
+            client.bind(*self.binding_fields(public_key))
+        digest = os.urandom(32)
+        self.assertTrue(verify(public_key, digest, client.sign(digest)))
+
+    def test_client_checks_paired_peer_identity_and_pinned_key(self):
+        policy = self.binding_policy()
+        seed, _, target, _ = self.file_signer(extra=['--binding-policy', str(policy)])
+        public_key = public_key_of(seed)
+        fields = self.binding_fields(public_key)
+        for uid, gid in ((os.geteuid() + 1, os.getegid()), (os.geteuid(), os.getegid() + 1)):
+            client = SignerClient(str(target), expected_peer_uid=uid, expected_peer_gid=gid,
+                                  expected_public_key=public_key)
+            with self.assertRaises(SignerError):
+                client.bind(*fields)
+            with self.assertRaises(SignerError):
+                client.public_key()
+        client = SignerClient(str(target), expected_public_key=public_key_of(os.urandom(32)))
+        with self.assertRaises(SignerError):
+            client.bind(*fields)
+        for options in ({'expected_peer_uid': 0}, {'expected_peer_gid': 0},
+                        {'expected_peer_uid': True, 'expected_peer_gid': 0},
+                        {'expected_peer_uid': -1, 'expected_peer_gid': 0},
+                        {'expected_peer_uid': 0, 'expected_peer_gid': 1 << 32},
+                        {'expected_public_key': bytes(31)}):
+            with self.subTest(options=options), self.assertRaises(SignerError):
+                SignerClient(str(target), **options)
+        self.assert_binding(self.bound_client(target, public_key), public_key, fields)
+
+    def test_command_provider_binding_is_explicit_verified_and_replays_after_restart(self):
+        seed = os.urandom(32)
+        public_key = public_key_of(seed)
+        fields = self.binding_fields(public_key)
+        policy = self.binding_policy()
+        program = self.provider_program(seed, 'honest')
+        arguments = ['--allowed-uid', str(os.getuid()), '--provider', 'command',
+                     '--provider-command', program, '--binding-policy', str(policy)]
+        target, process = self.start_signer(arguments, name='binding-command.sock')
+        signature = self.assert_binding(self.bound_client(target, public_key), public_key, fields)
+        process.kill()
+        process.wait(timeout=10)
+        target, _ = self.start_signer(arguments, name='binding-command-restarted.sock')
+        self.assertEqual(self.bound_client(target, public_key).bind(*fields), signature)
+        for mode in ('legacy', 'forging', 'rotating'):
+            target, _ = self.start_signer(
+                ['--allowed-uid', str(os.getuid()), '--provider', 'command',
+                 '--provider-command', self.provider_program(seed, mode),
+                 '--binding-policy', str(policy)], name='binding-' + mode + '.sock')
+            with self.subTest(provider=mode), self.assertRaises(SignerError):
+                self.bound_client(target, public_key).bind(*fields)
+            if mode == 'legacy':
+                digest = os.urandom(32)
+                self.assertTrue(verify(public_key, digest,
+                                       self.bound_client(target, public_key).sign(digest)))
+
+    def test_binding_policy_is_closed_protected_and_required_at_start(self):
+        _, key = self.seed_file()
+        original = {'version': 1, 'network_id': 77, 'asset_id': ASSET.hex(),
+                    'recipient': 'ab' * 20}
+        invalid = []
+        for field, value in [('version', True), ('version', 2), ('network_id', 0),
+                             ('network_id', True), ('network_id', 1 << 32),
+                             ('asset_id', '00' * 32), ('asset_id', 'AB' * 32),
+                             ('recipient', '00' * 20), ('recipient', 'ab' * 21)]:
+            changed = dict(original)
+            changed[field] = value
+            invalid.append(self.binding_policy(f'policy-{len(invalid)}.json', changed))
+        changed = dict(original)
+        changed['account'] = '01' * 32
+        invalid.append(self.binding_policy('extra.json', changed))
+        invalid.append(self.binding_policy('missing-field.json', {'version': 1}))
+        duplicate = self.work / 'duplicate.json'
+        duplicate.write_text(json.dumps(original)[:-1] + ',"version":1}')
+        os.chmod(duplicate, 0o600)
+        invalid.append(duplicate)
+        for name, data in [('malformed.json', b'{'), ('oversize.json', b' ' * 4097)]:
+            path = self.work / name
+            path.write_bytes(data)
+            os.chmod(path, 0o600)
+            invalid.append(path)
+        for mode in (0o644, 0o620):
+            path = self.binding_policy(f'mode-{mode}.json')
+            os.chmod(path, mode)
+            invalid.append(path)
+        protected = self.binding_policy('protected.json')
+        linked = self.work / 'linked.json'
+        linked.symlink_to(protected)
+        invalid.append(linked)
+        hardlink = self.work / 'hardlink.json'
+        os.link(protected, hardlink)
+        invalid.extend([protected, hardlink])
+        fifo = self.work / 'policy-fifo'
+        os.mkfifo(fifo, 0o600)
+        invalid.extend([fifo, self.work, self.work / 'absent.json'])
+        for index, path in enumerate(invalid):
+            with self.subTest(policy=path.name):
+                self.start_signer(['--allowed-uid', str(os.getuid()), '--key-file', str(key),
+                                   '--binding-policy', str(path)], expect_ready=False,
+                                  name=f'bad-binding-policy-{index}.sock')
+
+    def test_binding_cli_and_uid_refusal_preserve_protected_signer(self):
+        self.assertEqual(os.geteuid(), 0, 'this real credential gate requires root')
+        other = 65534
+        policy = self.binding_policy()
+        seed, _, target, _ = self.file_signer(extra=['--binding-policy', str(policy),
+                                                    '--socket-group', str(other)])
+        public_key = public_key_of(seed)
+        fields = self.binding_fields(public_key)
+        payload = fields[0].to_bytes(4, 'big') + b''.join(fields[1:])
+        arguments = [sys.executable, str(SIGNER_DIR / 'client.py'), '--socket', str(target),
+                     '--expected-peer-uid', str(os.geteuid()), '--expected-peer-gid',
+                     str(os.getegid()), '--expected-public-key', public_key.hex(),
+                     'bind', payload.hex()]
+        accepted = subprocess.run(arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        signature = bytes.fromhex(accepted.stdout.decode().strip())
+        self.assertTrue(verify(public_key, b'LX:SETTLE:RECIPIENT:v1\0' + payload, signature))
+        probe = ('import socket,json,sys; s=socket.socket(socket.AF_UNIX); '
+                 's.connect(sys.argv[1]); s.sendall(("bind "+sys.argv[2]+"\\n").encode()); '
+                 'r=json.loads(s.recv(4096)); '
+                 'assert r["error"]["code"]=="peer_refused"; s.close()')
+        refused = subprocess.run(['setpriv', '--reuid', str(other), '--regid', str(other),
+                                  '--clear-groups', sys.executable, '-c', probe,
+                                  str(target), payload.hex()], cwd=str(self.work),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(refused.returncode, 0, refused.stderr)
+        self.assertEqual(self.bound_client(target, public_key).bind(*fields), signature)
+
+    def test_binding_library_import_preserves_peer_key_and_payload_binding(self):
+        policy = self.binding_policy()
+        seed, _, target, _ = self.file_signer(extra=['--binding-policy', str(policy)])
+        public_key = public_key_of(seed)
+        fields = self.binding_fields(public_key)
+        payload = fields[0].to_bytes(4, 'big') + b''.join(fields[1:])
+        program = ('import os,sys; from signer.client import SignerClient; '
+                   'p=bytes.fromhex(sys.argv[3]); '
+                   'c=SignerClient(sys.argv[1],expected_peer_uid=os.geteuid(),'
+                   'expected_peer_gid=os.getegid(),expected_public_key=bytes.fromhex(sys.argv[2])); '
+                   'print(c.bind(int.from_bytes(p[:4],"big"),p[4:36],p[36:68],'
+                   'p[68:88],p[88:120]).hex())')
+        environment = dict(os.environ, PYTHONPATH=str(SIGNER_DIR.parent))
+        result = subprocess.run([sys.executable, '-c', program, str(target), public_key.hex(),
+                                 payload.hex()], cwd=str(self.work), env=environment,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        signature = bytes.fromhex(result.stdout.decode().strip())
+        self.assertTrue(verify(public_key, b'LX:SETTLE:RECIPIENT:v1\0' + payload, signature))
+        self.assertEqual(signature, self.bound_client(target, public_key).bind(*fields))
+
 
 class BootstrapTreasuryCase(unittest.TestCase):
     def setUp(self):
@@ -372,6 +622,10 @@ class BootstrapTreasuryCase(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 self.signer.kill()
                 self.signer.wait(timeout=10)
+        if self.signer is not None:
+            for stream in (self.signer.stdout, self.signer.stderr):
+                if stream is not None:
+                    stream.close()
 
     def seeds(self):
         seeds = {}

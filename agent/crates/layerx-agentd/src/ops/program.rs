@@ -529,6 +529,8 @@ impl<T> ReceiptVerifiedProgramSimulator<T> {
                 sequencer_public_key: self.simulation_public_key,
                 previous_state_root: self.trusted_previous_state_root,
                 activity_id: expected,
+                payload_hash: layerx_wire::hash::payload_hash(&activity)
+                    .map_err(|_| ProgramOperationError::InvalidRequest)?,
                 program_id: self.expected_program.bytes(),
                 guest_abi_version: self.expected_abi_version,
             },

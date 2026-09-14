@@ -6,6 +6,7 @@
 #include "layerx/lxp_batch.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_snapshot.h"
 #include "layerx/lxp_genesis.h"
 
@@ -1030,6 +1031,7 @@ static lxp_result publish_artifact_fixture_batch(
     lxp_kernel_prepared_batch *prepared = NULL;
     lxp_activity signed_activity = *activity;
     lxp_byte_span canonical, receipts[2], header_bytes;
+    lxp_byte_span events[2] = {{0}};
     lxp_batch_roots roots;
     lxp_batch_header header = {0};
     lxp_sequencer_authorization authorization = {0};
@@ -1037,6 +1039,7 @@ static lxp_result publish_artifact_fixture_batch(
     uint8_t signature[64], public_key[32], preimage[88], durable[32];
     uint8_t header_signature[64];
     size_t retry = 0U;
+    size_t event_count = 1U;
     FILE *publication = NULL;
     lxp_result status;
     signed_activity.signature = (lxp_byte_span){signature, sizeof(signature)};
@@ -1086,17 +1089,44 @@ static lxp_result publish_artifact_fixture_batch(
         status = lxp_receipt_encode(receipt, true, execution->arena, &receipts[0]);
     if (status == LXP_OK) {
         receipts[1] = lxp_kernel_prepared_batch_maintenance(prepared);
-        status = lxp_programs_occupancy_receipt_decode(
-            receipts[1].bytes, receipts[1].length, &maintenance);
+        events[0] = *lxp_kernel_prepared_batch_events(prepared);
+        if (activity->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+            lxp_batch_maintenance envelope;
+            if (lxp_programs_occupancy_receipt_decode(receipts[1].bytes,
+                    receipts[1].length, &maintenance) != LXP_ERR_NON_CANONICAL)
+                status = LXP_FATAL_INVARIANT;
+            if (status == LXP_OK)
+                status = lxp_batch_maintenance_decode(receipts[1].bytes,
+                    receipts[1].length, &envelope);
+            if (status == LXP_OK &&
+                (envelope.protocol_version != activity->protocol_version ||
+                 envelope.epoch != execution->epoch ||
+                 envelope.batch_number != execution->batch_number ||
+                 envelope.timestamp_ms != execution->batch_timestamp_ms ||
+                 envelope.global_sequence != execution->global_sequence + 1U ||
+                 envelope.parameter_version != execution->parameter_version))
+                status = LXP_FATAL_INVARIANT;
+            if (status == LXP_OK) {
+                status = lxp_programs_occupancy_receipt_decode(envelope.occupancy.bytes,
+                    envelope.occupancy.length, &maintenance);
+                events[1] = envelope.effects;
+                event_count = 2U;
+            }
+        } else {
+            status = lxp_programs_occupancy_receipt_decode(
+                receipts[1].bytes, receipts[1].length, &maintenance);
+        }
     }
     if (status == LXP_OK &&
         (maintenance.global_sequence != execution->global_sequence + 1U ||
-         maintenance.batch_number != execution->batch_number))
+         maintenance.batch_number != execution->batch_number ||
+         maintenance.parameter_version != execution->parameter_version ||
+         memcmp(maintenance.previous_state_root, receipt->resulting_state_root, 32U) != 0))
         status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK)
         status = lxp_batch_roots_compute(
             &(lxp_batch_root_inputs){&canonical, 1U, receipts, 2U,
-                lxp_kernel_prepared_batch_events(prepared), 1U,
+                events, event_count,
                 NULL, 0U, NULL, 0U}, execution->arena, &roots);
     if (status == LXP_OK) {
         header.protocol_version = activity->protocol_version;
@@ -1129,10 +1159,13 @@ static lxp_result publish_artifact_fixture_batch(
             receipts[0], receipts[1], *lxp_kernel_prepared_batch_events(prepared),
             receipt->program_outcome.terminal_payload,
             receipt->program_outcome.call_graph_payload,
-            {lxp_kernel_prepared_batch_publication_digest(prepared), 32U}};
+            {lxp_kernel_prepared_batch_publication_digest(prepared), 32U},
+            events[1]};
+        const size_t record_count = sizeof(records) / sizeof(records[0]) -
+            (event_count == 1U ? 1U : 0U);
         publication = tmpfile();
         if (publication == NULL) status = LXP_FATAL_INVARIANT;
-        for (size_t i = 0U; status == LXP_OK && i < sizeof(records) / sizeof(records[0]); ++i) {
+        for (size_t i = 0U; status == LXP_OK && i < record_count; ++i) {
             uint8_t length[8];
             write_u64(length, records[i].length);
             if (fwrite(length, 1U, sizeof(length), publication) != sizeof(length) ||
@@ -1416,7 +1449,8 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
     if (lxp_state_store_init(&state, 1U) != LXP_OK ||
         lxp_identity_register(&identities, did, sizeof(did) - 1U,
                               primary_key, &identity) != LXP_OK ||
-        lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        lxp_kernel_create(&kernel, &state, &journal, &parameters,
+                         post_upgrade_batch_regression ? 1U : 0U) != LXP_OK ||
         install_metering_v1(&kernel) != LXP_OK ||
         lxp_kernel_register_module(&kernel, module) !=
             LXP_OK ||
@@ -1448,6 +1482,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
             return artifact_fixture_failure(protocol_version, __LINE__);
     }
     execution.network_id = 7U;
+    execution.epoch = kernel.epoch;
     execution.batch_number = 1U;
     execution.batch_timestamp_ms = 10U;
     execution.maximum_timestamp_window = 100U;

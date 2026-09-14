@@ -66,8 +66,14 @@ fn prepare_root() -> PathBuf {
         &state,
         fs::Permissions::from_mode(0o700),
     ));
+    prepare_tls(&root);
+
+    root
+}
+
+fn prepare_tls(root: &Path) {
     openssl(
-        &root,
+        root,
         &[
             "req",
             "-x509",
@@ -75,33 +81,75 @@ fn prepare_root() -> PathBuf {
             "rsa:2048",
             "-nodes",
             "-keyout",
-            "server.key",
+            "ca.key",
             "-out",
-            "server.pem",
+            "ca.pem",
             "-days",
             "1",
             "-subj",
-            "/CN=localhost",
-            "-addext",
-            "subjectAltName=DNS:localhost,IP:127.0.0.1",
+            "/CN=Human authority test CA",
             "-addext",
             "basicConstraints=critical,CA:TRUE",
+            "-addext",
+            "keyUsage=critical,keyCertSign,cRLSign",
         ],
     );
     openssl(
-        &root,
+        root,
+        &[
+            "req",
+            "-new",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            "server.key",
+            "-out",
+            "server.csr",
+            "-subj",
+            "/CN=localhost",
+        ],
+    );
+    write(
+        &root.join("server.extensions"),
+        b"basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n",
+    );
+    openssl(
+        root,
         &[
             "x509",
+            "-req",
             "-in",
-            "server.pem",
-            "-outform",
-            "DER",
+            "server.csr",
+            "-CA",
+            "ca.pem",
+            "-CAkey",
+            "ca.key",
+            "-CAcreateserial",
+            "-days",
+            "1",
+            "-extfile",
+            "server.extensions",
             "-out",
-            "server.der",
+            "server.pem",
         ],
     );
+    for certificate in ["ca", "server"] {
+        openssl(
+            root,
+            &[
+                "x509",
+                "-in",
+                &format!("{certificate}.pem"),
+                "-outform",
+                "DER",
+                "-out",
+                &format!("{certificate}.der"),
+            ],
+        );
+    }
     openssl(
-        &root,
+        root,
         &[
             "pkcs8",
             "-topk8",
@@ -114,7 +162,6 @@ fn prepare_root() -> PathBuf {
             "key.der",
         ],
     );
-    root
 }
 
 fn seed(root: &Path) {
@@ -264,7 +311,7 @@ fn real_tls_client_and_durable_refusals() {
             ])
             .env("LAYERX_HUMAN_TLS_CHILD", address.to_string())
             .env("LAYERX_HUMAN_TLS_ROOT", &server.root)
-            .env("SSL_CERT_FILE", server.root.join("server.pem"))
+            .env("SSL_CERT_FILE", server.root.join("ca.pem"))
             .env("SSL_CERT_DIR", &server.root)
             .env_remove("HTTPS_PROXY")
             .env_remove("HTTP_PROXY")
@@ -293,7 +340,7 @@ fn wire_status(root: &Path, path: &str) -> u16 {
 
 fn wire_status_at(root: &Path, address: &str, path: &str, token: &str) -> u16 {
     let certificate = must(native_tls::Certificate::from_pem(&must(fs::read(
-        root.join("server.pem"),
+        root.join("ca.pem"),
     ))));
     let connector = must(
         native_tls::TlsConnector::builder()
@@ -404,9 +451,10 @@ fn drive_client() {
         "human-test-token-0000000000000000000000".to_owned(),
         Duration::from_secs(5),
         1_048_576,
-        &must(fs::read(root.join("server.der"))),
+        &must(fs::read(root.join("ca.der"))),
     ));
     let peer = HumanPeer {
+        subject: None,
         uid: 1,
         tenant: "tenant space".to_owned(),
         principal: "principal".to_owned(),
@@ -460,6 +508,7 @@ fn drive_client() {
         Err(HumanOperationError::Refused)
     ));
     let other = HumanPeer {
+        subject: None,
         tenant: "other".to_owned(),
         ..peer.clone()
     };
@@ -503,9 +552,10 @@ fn real_client_balance_context_uses_registry_and_verified_header() {
         "human-test-token-0000000000000000000000".to_owned(),
         Duration::from_secs(5),
         1_048_576,
-        &must(fs::read(server.root.join("server.der"))),
+        &must(fs::read(server.root.join("ca.der"))),
     ));
     let peer = HumanPeer {
+        subject: None,
         uid: 1,
         tenant: "tenant space".to_owned(),
         principal: "principal".to_owned(),

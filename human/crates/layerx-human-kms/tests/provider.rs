@@ -1,7 +1,9 @@
 use layerx_client::lni::framing::{read_frame, write_frame};
 use layerx_client::lni::transport::{Limits, MutualTlsConfig};
+use layerx_client::runtime_clock::RuntimeClock;
 use layerx_human_service::custody::{KeyClass, KeyId, Keystore, KmsProvider, RemoteKmsProvider};
 use layerx_human_service::store::PrincipalId;
+use layerx_types::clock::{Clock, Deadline};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::error::Error;
@@ -11,9 +13,17 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
+#[path = "provider/native_setup.rs"]
+mod native_setup;
+#[path = "provider/owner_bootstrap.rs"]
+mod owner_bootstrap;
+#[path = "provider/owner_rotation.rs"]
+mod owner_rotation;
+#[path = "provider/settlement_recipient.rs"]
+mod settlement_recipient;
 const MAX: usize = 2_097_152;
 struct Host {
     root: PathBuf,
@@ -32,7 +42,9 @@ impl Host {
         let root = std::env::temp_dir().join(format!(
             "lxkp-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+            RuntimeClock::from_environment()?
+                .sample(Duration::from_secs(1))?
+                .monotonic_nanoseconds
         ));
         fs::create_dir(&root)?;
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
@@ -194,7 +206,8 @@ impl Host {
     }
     fn start(&mut self) -> Result<()> {
         self.child = Some(self.launch()?);
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let clock = RuntimeClock::from_environment()?;
+        let mut deadline = Deadline::start(clock.as_ref(), Duration::from_secs(10))?;
         loop {
             if self.remote("client", "beta-kms")?.probe().is_ok() {
                 return Ok(());
@@ -208,7 +221,7 @@ impl Host {
             {
                 return Err("KMS exited at startup".into());
             }
-            if Instant::now() >= deadline {
+            if deadline.remaining(clock.as_ref())?.is_zero() {
                 return Err("KMS startup deadline".into());
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -363,13 +376,14 @@ fn atomic_rotation_lost_response_restart_and_tombstones() -> Result<()> {
         let mut tls = host.connection(Some("client"))?;
         checked(write_frame(&mut tls, &rotate, MAX))?;
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let clock = RuntimeClock::from_environment()?;
+    let mut deadline = Deadline::start(clock.as_ref(), Duration::from_secs(5))?;
     loop {
         let (_, observed) = facts(&host.call(&request(2, binding, &handle, None)?)?)?;
         if observed != original {
             break;
         }
-        if Instant::now() >= deadline {
+        if deadline.remaining(clock.as_ref())?.is_zero() {
             return Err("lost-response rotation was not committed".into());
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -408,13 +422,14 @@ fn atomic_rotation_lost_response_restart_and_tombstones() -> Result<()> {
     encrypted[20] ^= 1;
     fs::write(path, encrypted)?;
     let mut child = host.launch()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let clock = RuntimeClock::from_environment()?;
+    let mut deadline = Deadline::start(clock.as_ref(), Duration::from_secs(5))?;
     loop {
         if let Some(status) = child.try_wait()? {
             assert!(!status.success());
             break;
         }
-        if Instant::now() >= deadline {
+        if deadline.remaining(clock.as_ref())?.is_zero() {
             child.kill()?;
             child.wait()?;
             return Err("tampered state did not fail closed".into());
@@ -431,12 +446,23 @@ fn registry() -> Result<layerx_types::payload::ModuleRegistry> {
             ModuleId::Asset,
             &[
                 checked(ActivityType::new(ModuleId::Asset, 1))?,
+                checked(ActivityType::new(ModuleId::Asset, 4))?,
                 checked(ActivityType::new(ModuleId::Asset, 5))?,
             ],
         ))?,
         checked(ModuleRegistration::new(
+            ModuleId::Budget,
+            &[checked(ActivityType::new(ModuleId::Budget, 1))?],
+        ))?,
+        checked(ModuleRegistration::new(
             ModuleId::Governance,
-            &[checked(ActivityType::new(ModuleId::Governance, 8))?],
+            &[
+                checked(ActivityType::new(ModuleId::Governance, 1))?,
+                checked(ActivityType::new(ModuleId::Governance, 2))?,
+                checked(ActivityType::new(ModuleId::Governance, 3))?,
+                checked(ActivityType::new(ModuleId::Governance, 5))?,
+                checked(ActivityType::new(ModuleId::Governance, 8))?,
+            ],
         ))?,
     ]))
 }
@@ -479,6 +505,17 @@ fn unsigned_payload(
     network: u32,
     payload: layerx_types::payload::Payload,
 ) -> Result<Vec<u8>> {
+    checked(layerx_intents::canonical::unsigned_envelope_bytes(
+        &setup_envelope(public, network, payload, (b"did:layerx:alice", 7, 1))?,
+    ))
+}
+
+fn setup_envelope(
+    public: [u8; 32],
+    network: u32,
+    payload: layerx_types::payload::Payload,
+    (actor, sequence, fee): (&[u8], u64, u128),
+) -> Result<layerx_types::activity::UnsignedEnvelope> {
     use layerx_types::activity::{Authority, EnvelopeBuilder, TimestampBound};
     use layerx_types::amount::Amount;
     use layerx_types::ids::{Did, IdempotencyKey};
@@ -486,21 +523,36 @@ fn unsigned_payload(
     checked(builder.protocol_version(3))?;
     checked(builder.network_id(network))?;
     checked(builder.activity_type(payload.activity_type()))?;
-    checked(builder.actor_did(checked(Did::new(b"did:layerx:alice"))?))?;
+    checked(builder.actor_did(checked(Did::new(actor))?))?;
     checked(builder.authority(checked(Authority::owner(&public))?))?;
-    checked(builder.account_sequence(7))?;
+    checked(builder.account_sequence(sequence))?;
     checked(builder.timestamp_bound(checked(TimestampBound::new(1000, 1010))?))?;
     checked(builder.idempotency_key(IdempotencyKey::new([4; 32])))?;
-    checked(builder.fee_limit(Amount::from_u128(1)))?;
-    checked(builder.payload_hash(checked(layerx_wire::hash::payload_hash_for(&payload))?))?;
+    checked(builder.fee_limit(Amount::from_u128(fee)))?;
+    checked(
+        builder.payload_hash(checked(layerx_intents::canonical::payload_hash_for(
+            &payload,
+        ))?),
+    )?;
     checked(builder.payload(payload))?;
-    checked(layerx_wire::activity::encode_unsigned_envelope(&checked(
-        builder.build(),
-    )?))
+    checked(builder.build())
 }
 
 fn encoded_disclosure(disclosure: &layerx_crypto::disclosure::Disclosure) -> Result<Vec<u8>> {
-    let mut out = vec![1];
+    let fee_grant = disclosure
+        .authority_grant
+        .filter(|grant| grant.fee_budget.is_some());
+    let mut out = vec![
+        if disclosure.onboarding.is_some() || disclosure.native_operation.is_some() {
+            4
+        } else if disclosure.session_grant.is_some() {
+            3
+        } else if fee_grant.is_some() {
+            2
+        } else {
+            1
+        },
+    ];
     out.extend(disclosure.activity_type.value().to_be_bytes());
     blob(&mut out, &disclosure.actor)?;
     blob(&mut out, &disclosure.authority)?;
@@ -531,6 +583,27 @@ fn encoded_disclosure(disclosure: &layerx_crypto::disclosure::Disclosure) -> Res
     out.extend(disclosure.idempotency_key);
     assert!(disclosure.evm_payout_binding.is_none());
     out.push(0);
+    if let Some(grant) = fee_grant {
+        blob(&mut out, &checked(grant.encode())?)?;
+    }
+    if let Some(session) = &disclosure.session_grant {
+        blob(&mut out, &session.grant.registration_payload)?;
+        out.extend(session.expiry_sequence.to_be_bytes());
+        out.extend(session.action_key);
+        if let Some(replacement) = session.replacement {
+            out.push(1);
+            out.extend(replacement.predecessor_grant_id);
+            out.extend(replacement.expected_charge_state);
+        } else {
+            out.push(0);
+        }
+    }
+    if let Some(onboarding) = &disclosure.onboarding {
+        blob(&mut out, &checked(onboarding.encode())?)?;
+    }
+    if let Some(operation) = &disclosure.native_operation {
+        blob(&mut out, &checked(operation.encode())?)?;
+    }
     Ok(out)
 }
 fn checked<T, E: std::fmt::Debug>(value: std::result::Result<T, E>) -> Result<T> {
@@ -556,18 +629,20 @@ fn signing_request(
 fn authorize_canonical_send(host: &Host, binding: [u8; 32], handle: &[u8]) -> Result<[u8; 64]> {
     use layerx_human_service::custody::SendPlanAuthorization;
     use layerx_types::account::AccountId;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let now = RuntimeClock::from_environment()?
+        .sample(Duration::from_secs(1))?
+        .unix_seconds();
     let authorization = SendPlanAuthorization {
         plan_id: [61; 32],
         action_key: [62; 32],
         principal: "alice".into(),
         tenant: "tenant".into(),
         binding_digest: binding,
-        from: checked(layerx_wire::hash::account_id_for_protocol(
+        from: checked(layerx_intents::canonical::account_id_for_protocol(
             &checked(AccountId::parse("agent:did:layerx:alice:main"))?,
             3,
         ))?,
-        to: checked(layerx_wire::hash::account_id_for_protocol(
+        to: checked(layerx_intents::canonical::account_id_for_protocol(
             &checked(AccountId::parse("agent:did:layerx:recipient:main"))?,
             3,
         ))?,
@@ -656,7 +731,7 @@ fn monetary_payloads() -> Result<Vec<layerx_types::payload::Payload>> {
     use layerx_types::ids::Did;
     use layerx_types::payload::{ActivityType, ModuleId, Payload};
     let actor = checked(Did::new(b"did:layerx:alice"))?;
-    let issuer = checked(layerx_wire::hash::did_id_for_protocol(&actor, 3))?;
+    let issuer = checked(layerx_intents::canonical::did_id_for_protocol(&actor, 3))?;
     let registration = Payment::Register(Registration {
         asset: asset_id(&issuer, &[21; 32]),
         salt: [21; 32],
@@ -769,9 +844,38 @@ fn monetary_roles_are_bound_by_the_real_provider_before_and_after_restart() -> R
     Ok(())
 }
 
+fn recovery_authorization(
+    store: &Keystore,
+    principal: &PrincipalId,
+    key: &KeyId,
+    wallet: [u8; 20],
+    now: u64,
+) -> Result<layerx_human_service::custody::EvmPlanAuthorization> {
+    Ok(layerx_human_service::custody::EvmPlanAuthorization {
+        plan_id: [1; 32],
+        action_key: [2; 32],
+        tenant: "tenant".into(),
+        principal: "alice".into(),
+        binding_digest: store.evm_binding(principal, key)?.digest(),
+        wallet,
+        not_before: now,
+        not_after: now + 600,
+        transaction: layerx_human_service::custody::EvmTransaction {
+            chain_id: 31337,
+            nonce: 7,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: 2,
+            gas_limit: 21000,
+            to: [3; 20],
+            value: [0; 32],
+            calldata: vec![],
+        },
+    })
+}
+
 #[test]
 fn evm_authorization_nonce_dedup_and_acknowledgement_recovery() -> Result<()> {
-    use layerx_human_service::custody::{EvmAcknowledgement, EvmPlanAuthorization, EvmTransaction};
+    use layerx_human_service::custody::EvmAcknowledgement;
     let mut host = Host::new()?;
     let principal = PrincipalId::new("alice")?;
     let key = KeyId::new("primary")?;
@@ -784,27 +888,10 @@ fn evm_authorization_nonce_dedup_and_acknowledgement_recovery() -> Result<()> {
     let wallet = store.evm_wallet(&principal, &key)?;
     assert_ne!(wallet, [0; 20]);
     assert_eq!(wallet, store.evm_wallet(&principal, &key)?);
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let authorization = EvmPlanAuthorization {
-        plan_id: [1; 32],
-        action_key: [2; 32],
-        tenant: "tenant".into(),
-        principal: "alice".into(),
-        binding_digest: store.evm_binding(&principal, &key)?.digest(),
-        wallet,
-        not_before: now,
-        not_after: now + 600,
-        transaction: EvmTransaction {
-            chain_id: 31337,
-            nonce: 7,
-            max_priority_fee_per_gas: 1,
-            max_fee_per_gas: 2,
-            gas_limit: 21000,
-            to: [3; 20],
-            value: [0; 32],
-            calldata: vec![],
-        },
-    };
+    let now = RuntimeClock::from_environment()?
+        .sample(Duration::from_secs(1))?
+        .unix_seconds();
+    let authorization = recovery_authorization(&store, &principal, &key, wallet, now)?;
     assert!(store
         .sign_evm_action(&principal, &key, &authorization.action_key)
         .is_err());
@@ -907,7 +994,6 @@ fn executor_certificate_cannot_authorize_or_manage_keys() -> Result<()> {
 #[test]
 fn native_send_authorization_is_scoped_and_durable() -> Result<()> {
     use layerx_human_service::custody::SendPlanAuthorization;
-    use layerx_wire::encode::Encoder;
     use sha2::{Digest, Sha256};
     let mut host = Host::new()?;
     let principal = PrincipalId::new("alice")?;
@@ -918,7 +1004,9 @@ fn native_send_authorization_is_scoped_and_durable() -> Result<()> {
         host.remote("client", "beta-kms")?,
     )?;
     let public = store.create(&principal, &key, KeyClass::HumanPrimary)?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let now = RuntimeClock::from_environment()?
+        .sample(Duration::from_secs(1))?
+        .unix_seconds();
     let authorization = SendPlanAuthorization {
         plan_id: [1; 32],
         action_key: [2; 32],
@@ -939,25 +1027,24 @@ fn native_send_authorization_is_scoped_and_durable() -> Result<()> {
         not_after: now + 600,
     };
     let signature = store.authorize_send(&principal, &key, &authorization)?;
-    let mut message = Encoder::new(512);
-    checked(message.u16(0x5301))?;
-    for value in [authorization.from, authorization.to, authorization.asset] {
-        checked(message.fixed(&value))?;
-    }
-    checked(message.u128(authorization.amount))?;
-    checked(message.u64(authorization.sequence))?;
-    checked(message.fixed(&authorization.idempotency_key))?;
-    checked(message.u64(authorization.expires_at))?;
-    checked(message.fixed(&authorization.context))?;
-    checked(message.u8(0))?;
-    checked(message.u8(1))?;
-    checked(message.fixed(&authorization.from))?;
-    checked(message.fixed(&authorization.context))?;
-    checked(message.u32(authorization.network))?;
-    checked(message.u16(authorization.protocol))?;
+    let debit = layerx_crypto::send::SendDebit {
+        from: authorization.from,
+        to: authorization.to,
+        asset: authorization.asset,
+        amount: authorization.amount,
+        source_sequence: authorization.sequence,
+        idempotency_key: authorization.idempotency_key,
+        expires_at: authorization.expires_at,
+        context_hash: authorization.context,
+        conditions: Vec::new(),
+        authorization_kind: 1,
+        network_id: authorization.network,
+        protocol_version: authorization.protocol,
+    };
+    let message = checked(layerx_intents::vectors::owner_send_authorization(&debit))?;
     let mut hash = Sha256::new();
-    hash.update(layerx_wire::hash::Domain::SignaturePreimage.tag());
-    hash.update(message.finish());
+    hash.update(layerx_intents::canonical::Domain::SignaturePreimage.tag());
+    hash.update(message);
     checked(
         ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
             .verify(&hash.finalize(), &signature),
@@ -1034,7 +1121,9 @@ fn external_signature_verification_and_executor_journal_recovery() -> Result<()>
     store.create(&principal, &key, KeyClass::HumanPrimary)?;
     let binding = store.evm_binding(&principal, &key)?;
     let handle = store.evm_provider_reference(&principal, &key)?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let now = RuntimeClock::from_environment()?
+        .sample(Duration::from_secs(1))?
+        .unix_seconds();
     let authorization = EvmPlanAuthorization {
         plan_id: [1; 32],
         action_key: [2; 32],
@@ -1134,4 +1223,207 @@ fn refuse_cross_scope(
         .sign_evm_action(&other, key, &authorization.action_key)
         .is_err());
     Ok(())
+}
+
+#[test]
+fn owner_fee_grants_bind_every_disclosed_budget_field_across_provider_restart() -> Result<()> {
+    use layerx_crypto::authority_grant::{AuthorityGrant, NativeFeeBudget};
+    use layerx_crypto::disclosure::bind;
+    use layerx_types::ids::Did;
+    use layerx_types::payload::{ActivityType, ModuleId, Payload};
+    let mut host = Host::new()?;
+    let binding = [73; 32];
+    let (handle, public) = facts(&host.call(&request(1, binding, &[], None)?)?)?;
+    let actor = checked(Did::new(b"did:layerx:alice"))?;
+    let issuer = checked(layerx_intents::canonical::did_id_for_protocol(&actor, 3))?;
+    let mut grant = checked(AuthorityGrant::decode(include_bytes!(
+        "../../../../tests/fixtures/authority/native-fee-grants/period-bound/grant.bin"
+    )))?;
+    grant.grantor = issuer;
+    grant.grantee = issuer;
+    let payload = checked(Payload::new(
+        &registry()?,
+        checked(ActivityType::new(ModuleId::Governance, 8))?,
+        &checked(grant.payload())?,
+    ))?;
+    let canonical = unsigned_payload(public, 77, payload)?;
+    let disclosure = checked(bind(&canonical, &registry()?))?;
+    let mutations: &[fn(&mut NativeFeeBudget)] = &[
+        |fee| fee.asset[0] ^= 1,
+        |fee| fee.maximum_per_activity -= 1,
+        |fee| fee.maximum_total += 1,
+        |fee| fee.period_length += 1,
+        |fee| fee.maximum_per_period += 1,
+    ];
+    for pass in 0..2 {
+        if pass == 1 {
+            host.stop();
+            host.start()?;
+        }
+        let encoded = encoded_disclosure(&disclosure)?;
+        assert_eq!(encoded[0], 2);
+        let (signed_request, digest) = signing_request(binding, &handle, &canonical, &encoded)?;
+        let response = host.call(&signed_request)?;
+        assert_eq!(response[7], 0);
+        assert_eq!(response.len(), 72);
+        checked(
+            ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
+                .verify(&digest, &response[8..]),
+        )?;
+        for mutate in mutations {
+            let mut changed = disclosure.clone();
+            let Some(grant) = changed.authority_grant.as_mut() else {
+                return Err("missing grant".into());
+            };
+            let Some(fee) = grant.fee_budget.as_mut() else {
+                return Err("missing fee".into());
+            };
+            mutate(fee);
+            assert_eq!(
+                host.call(
+                    &signing_request(binding, &handle, &canonical, &encoded_disclosure(&changed)?)?
+                        .0
+                )?[7],
+                1
+            );
+        }
+        let mut original_version = encoded.clone();
+        original_version[0] = 1;
+        assert_eq!(
+            host.call(&signing_request(binding, &handle, &canonical, &original_version)?.0)?[7],
+            1
+        );
+        let mut truncated = encoded.clone();
+        truncated.truncate(truncated.len() - 1);
+        assert_eq!(
+            host.call(&signing_request(binding, &handle, &canonical, &truncated)?.0)?[7],
+            1
+        );
+        let mut changed_start = encoded;
+        let last = changed_start.len() - 1;
+        changed_start[last] ^= 1;
+        assert_eq!(
+            host.call(&signing_request(binding, &handle, &canonical, &changed_start)?.0)?[7],
+            1
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn session_registration_and_replacement_disclosures_survive_provider_restart() -> Result<()> {
+    use layerx_crypto::disclosure::bind;
+    let mut host = Host::new()?;
+    let binding = [74; 32];
+    let (handle, public) = facts(&host.call(&request(1, binding, &[], None)?)?)?;
+    let grantor = checked(layerx_intents::canonical::did_id_for_protocol(
+        &checked(layerx_types::ids::Did::new(b"did:layerx:alice"))?,
+        3,
+    ))?;
+    for pass in 0..2 {
+        if pass == 1 {
+            host.stop();
+            host.start()?;
+        }
+        for version in 1..=4 {
+            let issued = session_disclosure_grant(version, grantor)?;
+            let mut grant = checked(layerx_intents::SessionGrant::new(
+                issued.registration_payload,
+                9000,
+                [4; 32],
+            ))?;
+            if version == 4 {
+                grant = checked(grant.replacing([5; 32], [6; 32]))?;
+            }
+            let compiled = checked(layerx_intents::compile(
+                &layerx_intents::Intent::v3(layerx_intents::IntentKind::SessionGrant(grant)),
+                &registry()?,
+            ))?;
+            let canonical = unsigned_payload(public, 77, compiled.payload().clone())?;
+            let disclosure = checked(bind(&canonical, &registry()?))?;
+            let encoded = encoded_disclosure(&disclosure)?;
+            assert_eq!(encoded[0], 3);
+            let (request, digest) = signing_request(binding, &handle, &canonical, &encoded)?;
+            let response = host.call(&request)?;
+            assert_eq!(response[7], 0);
+            checked(
+                ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
+                    .verify(&digest, &response[8..]),
+            )?;
+            for field in 0..4 {
+                let mut changed = disclosure.clone();
+                let session = changed
+                    .session_grant
+                    .as_mut()
+                    .ok_or("missing session disclosure")?;
+                match field {
+                    0 => session.expiry_sequence += 1,
+                    1 => session.action_key[0] ^= 1,
+                    2 => session.grant.registration_payload[9] ^= 1,
+                    _ => {
+                        if let Some(replacement) = session.replacement.as_mut() {
+                            replacement.expected_charge_state[0] ^= 1;
+                        } else {
+                            session.grant.registration_payload.push(0);
+                        }
+                    }
+                }
+                assert_eq!(
+                    host.call(
+                        &signing_request(
+                            binding,
+                            &handle,
+                            &canonical,
+                            &encoded_disclosure(&changed)?
+                        )?
+                        .0
+                    )?[7],
+                    1
+                );
+            }
+            let mut legacy = encoded;
+            legacy[0] = 1;
+            assert_eq!(
+                host.call(&signing_request(binding, &handle, &canonical, &legacy)?.0)?[7],
+                1
+            );
+        }
+    }
+    Ok(())
+}
+
+fn session_disclosure_grant(
+    version: u8,
+    grantor: [u8; 32],
+) -> Result<layerx_crypto::session::IssuedSessionKey> {
+    use layerx_crypto::authority_grant::NativeFeeBudget;
+    use layerx_crypto::local::LocalSigner;
+    use layerx_crypto::session::{issue_session_key, SessionKeyRequest, SessionPurpose};
+    use layerx_crypto::signer::Signer as _;
+    use layerx_types::payload::{ActivityType, ModuleId};
+    checked(issue_session_key(&SessionKeyRequest {
+        grantor,
+        session_public_key: LocalSigner::new([0x67; 32]).public_key(),
+        not_before: 1000,
+        expires_at: Some(3_601_000),
+        revocation_sequence: Some(3),
+        permitted_activity_types: if version == 3 {
+            vec![]
+        } else {
+            vec![checked(ActivityType::new(ModuleId::Asset, 5))?]
+        },
+        fee_budget: matches!(version, 2 | 4).then_some(NativeFeeBudget {
+            asset: [3; 32],
+            maximum_per_activity: 4,
+            maximum_total: 12,
+            period_length: 60_000,
+            maximum_per_period: 8,
+            period_start: 1000,
+        }),
+        purpose: if version == 3 {
+            SessionPurpose::Authentication
+        } else {
+            SessionPurpose::Activity
+        },
+    }))
 }

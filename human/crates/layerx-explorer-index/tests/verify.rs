@@ -1,3 +1,4 @@
+use layerx_intents::vectors::availability_record;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -387,13 +388,6 @@ fn chunk_digest(batch_number: u64, index: u32, class: AvailabilityClass, bytes: 
     hasher.finalize().into()
 }
 
-fn counted(bytes: &[u8]) -> Vec<u8> {
-    let mut encoder = layerx_wire::encode::Encoder::new(1_048_576);
-    assert_eq!(encoder.sequence_length(1, 65_535), Ok(()));
-    assert_eq!(encoder.bytes(bytes, 1_048_576), Ok(()));
-    encoder.finish()
-}
-
 fn availability_material(
     fixture: &CoreFixture,
     canonical: bool,
@@ -408,7 +402,7 @@ fn availability_material(
         (
             AvailabilityClass::Activities,
             if canonical {
-                counted(&records.activities[0])
+                availability_record(&records.activities[0])
             } else {
                 framed(&records.activities[0])
             },
@@ -421,7 +415,7 @@ fn availability_material(
         (
             AvailabilityClass::Oracle,
             if canonical {
-                counted(&records.oracle_inputs[0])
+                availability_record(&records.oracle_inputs[0])
             } else {
                 framed(&records.oracle_inputs[0])
             },

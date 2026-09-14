@@ -542,7 +542,7 @@ through them.
   - [x] 11.3 Implement release and deterministic timeout from batch timestamps
     - Implement lx_escrow_release_execute to return the entire remaining escrow subaccount balance to the owner main account with reason LXP_REASON_ESCROW_RELEASE, leaving the subaccount at zero and the hold closed.
     - Implement lx_escrow_timeout_execute so that when the batch timestamp reaches or passes the recorded expiry and the hold is neither closed nor disputed, the remaining balance is released to the owner deterministically during that batch.
-    - Evaluate expiry solely against the sealed batch timestamp through the module context, never a wall clock, a timer or a background job, and drive lazy evaluation from lx_escrow_epoch_begin plus the first activity that observes the boundary.
+    - Evaluate expiry solely against the sealed batch timestamp through the module context, never a wall clock, a timer or a background job, and drive the production deadline sweep from lx_escrow_batch_maintenance within the signed batch maintenance transition; retain lx_escrow_epoch_begin for authenticated sequencer-term transition callers.
     - Reject any capture attempted against a timed-out hold with HOLD_EXPIRED, and reject any transfer out of the escrow subaccount that is not a capture, release, expiry release or dispute resolution produced by this module with UNAUTHORIZED_ESCROW_SPEND.
     - Add a replay test that runs the identical history under two different real elapsed durations and asserts byte-identical roots, proving timeout depends only on batch time.
     - _Requirements: 15.6, 15.7, 21.4, 27.10, 7.5_
@@ -573,7 +573,7 @@ through them.
     - Implement lx_budget_periods_elapsed as integer division of the batch timestamp minus period start by the period length, with no timer, no cron and no wall-clock read anywhere in the path.
     - Implement lx_budget_rollover to advance the period start by whole period lengths and reset the remaining allowance to the configured per-period limit at the first activity in a batch that observes the boundary.
     - Implement the carry-forward policy by adding unspent allowance into the new period up to the configured carry cap and discarding the excess, and the discard policy by dropping all unspent allowance.
-    - Drive lazy rollover from both lx_budget_epoch_begin and the spend path so a budget untouched for many periods rolls forward identically however it is next observed.
+    - Drive rollover of committed Budget KV records from lx_budget_batch_maintenance and the spend path so a budget untouched for many periods rolls forward identically however it is next observed; retain lx_budget_epoch_begin for authenticated sequencer-term transition callers.
     - Add a replay test crossing several period boundaries in one batch and assert byte-identical resulting state roots on repeat execution.
     - _Requirements: 16.6, 21.4, 27.10, 5.7_
   - [x] 12.3 Implement allowance accounting and budget spends
@@ -669,7 +669,7 @@ through them.
   - [x] 14.5 Implement acceptance, rejection and the deterministic deadline outcome
     - Implement lx_service_accept_execute to mark the agreement accepted and closed for delivery purposes when the buyer accepts within the acceptance window, emitting zero transfer legs.
     - Implement lx_service_reject_execute recording the rejection reason code and the contested deliverable hashes, and holding the agreement in a disputable state until the recorded dispute window closes.
-    - Implement lx_service_acceptance_default to apply the default outcome recorded in the accepted offer terms deterministically during the first batch whose timestamp crosses the acceptance window end, driven from lx_service_epoch_begin.
+    - Implement lx_service_batch_maintenance to apply the default outcome recorded in the accepted offer terms deterministically during the first batch whose timestamp crosses the acceptance window end, as a receipted batch transition; retain lx_service_acceptance_default and lx_service_epoch_begin for authenticated sequencer-term transition callers.
     - Require any resulting payment to execute as a separate 402LXP escrow capture or transfer rather than as an effect of the acceptance activity itself.
     - Add a replay test proving the default outcome applies identically on every replay of the same history and is never influenced by when the replay is run.
     - _Requirements: 18.7, 18.8, 18.9, 7.8, 27.10_

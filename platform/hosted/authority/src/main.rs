@@ -1,12 +1,13 @@
 mod human;
 mod protected;
+mod trust;
 
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::refusal::decode_core_refusal;
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_platform_authority::{
-    authorized_batch_by_activity, hex, parse_replica_evidence, receipt_locator, EvidenceRefusal,
+    authorized_batch_by_activity, hex, receipt_locator, EvidenceRefusal,
 };
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION as PROTOCOL_VERSION;
@@ -19,10 +20,10 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -70,6 +71,8 @@ Environment:
   LAYERX_AUTHORITY_WIRE_VERSION              wire version echoed in every answer, must be the built protocol version (default 3)
   LAYERX_AUTHORITY_SEQUENCER_ID              64-hex sequencer identity pinned for header verification
   LAYERX_AUTHORITY_SEQUENCER_PUBLIC_KEY      64-hex sequencer public key pinned for header and receipt signatures
+  LAYERX_AUTHORITY_GENESIS_TRUST             protected native genesis trust artifact; requires HANDOVER_FINALITY
+  LAYERX_AUTHORITY_HANDOVER_FINALITY         protected independent Paxeer verification policy
   LAYERX_AUTHORITY_FIRST_BATCH               first authorised batch number
   LAYERX_AUTHORITY_LAST_BATCH                last authorised batch number
 ";
@@ -89,10 +92,8 @@ struct Config {
     network_id: String,
     wire_version: String,
     authorization: SequencerAuthorization,
-    sequencer_id: [u8; 32],
-    first_batch: u64,
-    last_batch: u64,
     sequencer_public_key: [u8; 32],
+    trust: Option<trust::Trust>,
 }
 
 struct Request {
@@ -276,6 +277,7 @@ fn config() -> Result<Config, String> {
         );
     }
     Ok(Config {
+        trust: trust::Trust::load(protocol_network_id, sequencer_id, sequencer_public_key)?,
         listen,
         tls,
         human: human::Human::load(&tokens)?,
@@ -289,9 +291,6 @@ fn config() -> Result<Config, String> {
         protocol_network_id,
         network_id,
         wire_version,
-        sequencer_id,
-        first_batch,
-        last_batch,
         authorization: SequencerAuthorization::new(
             sequencer_id,
             sequencer_public_key,
@@ -576,7 +575,9 @@ fn lookup_receipt(config: &Config, activity_id: [u8; 32], wait_publication: bool
             "LNI does not advertise publication notification waits".to_owned(),
         );
     }
-    if handshake.node().authorised_sequencer_key != config.sequencer_public_key {
+    if config.trust.is_none()
+        && handshake.node().authorised_sequencer_key != config.sequencer_public_key
+    {
         return ReceiptSource::KeyMismatch;
     }
     let mut selector = Vec::with_capacity(33);
@@ -585,7 +586,9 @@ fn lookup_receipt(config: &Config, activity_id: [u8; 32], wait_publication: bool
     if wait_publication {
         selector.push(1);
     }
-    let correlation_id = CORRELATION.fetch_add(1, Ordering::AcqRel);
+    let Ok(correlation_id) = trust::correlation(1) else {
+        return ReceiptSource::Unavailable("LNI correlation exhausted".to_owned());
+    };
     let request = match encode_envelope(Envelope {
         version: handshake.node().interface_version,
         message_tag: RECEIPT_LOOKUP_REQUEST,
@@ -634,43 +637,91 @@ fn checkpoint_header(
     config: &Config,
     batch: u64,
 ) -> Result<layerx_client::evidence::VerifiedCheckpoint, ()> {
-    use layerx_client::evidence::{checkpoint, CheckpointSelector, EvidenceContext};
-    let limits = Limits {
-        maximum_frame_bytes: LNI_FRAME_BYTES,
-        maximum_connections: MAX_LNI_CONNECTIONS,
-        maximum_streams: 1,
-        maximum_queued_bytes: LNI_FRAME_BYTES,
-        deadline: IO_TIMEOUT,
-    };
-    let mut transport =
-        Uds::connect(&config.lni_socket, &config.lni_gate, limits).map_err(|_| ())?;
-    let expected = HandshakeConfig {
-        built_interface_version: Version::V1_3,
-        expected_protocol_version: PROTOCOL_VERSION,
-        expected_network_id: config.protocol_network_id,
-    };
-    let handshake = perform(&mut transport, &expected, None).map_err(|_| ())?;
-    if handshake.node().authorised_sequencer_key != config.sequencer_public_key {
-        return Err(());
-    }
-    let verified = checkpoint(
-        &mut transport,
-        CheckpointSelector::Batch(batch),
-        EvidenceContext {
-            interface_version: Version::V1_3,
-            correlation_id: CORRELATION.fetch_add(1, Ordering::AcqRel),
-            expected_protocol_version: PROTOCOL_VERSION,
-            expected_network_id: config.protocol_network_id,
-            handshake_sequencer_key: config.sequencer_public_key,
-        },
+    checkpoint_for(config, Some(batch))
+}
+
+fn checkpoint_for(
+    config: &Config,
+    batch: Option<u64>,
+) -> Result<layerx_client::evidence::VerifiedCheckpoint, ()> {
+    let deadline = Instant::now().checked_add(IO_TIMEOUT).ok_or(())?;
+    let mut transport = Uds::connect(
+        &config.lni_socket,
+        &config.lni_gate,
+        trust::limits(deadline)?,
     )
     .map_err(|_| ())?;
+    let handshake = perform(
+        &mut transport,
+        &HandshakeConfig {
+            built_interface_version: Version::V1_5,
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: config.protocol_network_id,
+        },
+        None,
+    )
+    .map_err(|_| ())?;
+    let history = trust::snapshot(
+        config,
+        handshake.node().latest_sealed_batch,
+        handshake.node().authorised_sequencer_key,
+        deadline,
+    )?;
+    let verified = trust::checkpoint(
+        config,
+        &mut transport,
+        batch.unwrap_or(handshake.node().latest_sealed_batch),
+        handshake.node().interface_version,
+        history.as_ref(),
+    )?;
+    if batch.is_none() {
+        let header = layerx_wire::receipt::decode_batch_header(verified.canonical_header())
+            .map_err(|_| ())?;
+        if header.last_sequence() != handshake.node().chain_head_sequence
+            || header.batch_number() != handshake.node().latest_sealed_batch
+        {
+            return Err(());
+        }
+    }
     Ok(verified)
 }
 
 fn evidence_refusal(refusal_kind: &EvidenceRefusal) -> Response {
     eprintln!("layerx-receipt-authority refused replica evidence: {refusal_kind:?}");
     refusal(502, "evidence_refused", None)
+}
+
+fn await_requested_receipt(
+    config: &Config,
+    activity_id: [u8; 32],
+    wait_publication: bool,
+    deadline: Instant,
+) -> ReceiptSource {
+    loop {
+        let source = lookup_receipt(config, activity_id, wait_publication);
+        if !matches!(source, ReceiptSource::Unknown)
+            || !wait_publication
+            || Instant::now() >= deadline
+        {
+            return source;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn await_replica_evidence(
+    config: &Config,
+    path: &str,
+    wait: bool,
+    deadline: Instant,
+) -> ReplicaAnswer {
+    loop {
+        let answer = replica_get(config, path);
+        if !matches!(answer, ReplicaAnswer::Status(404, _)) || !wait || Instant::now() >= deadline {
+            return answer;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Response {
@@ -680,7 +731,8 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
     if activity_id == [0; 32] {
         return refusal(400, "invalid_activity_id", None);
     }
-    let receipt = match lookup_receipt(config, activity_id, wait_publication) {
+    let deadline = Instant::now() + IO_TIMEOUT;
+    let receipt = match await_requested_receipt(config, activity_id, wait_publication, deadline) {
         ReceiptSource::Found(receipt) => receipt,
         ReceiptSource::Unknown => return refusal(404, "unknown_activity", None),
         ReceiptSource::KeyMismatch => {
@@ -704,7 +756,7 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
         hex::encode(&locator.batch_id),
         hex::encode(&locator.receipt_digest)
     );
-    let document = match replica_get(config, &path) {
+    let document = match await_replica_evidence(config, &path, wait_publication, deadline) {
         ReplicaAnswer::Status(200, body) => body,
         ReplicaAnswer::Status(404, _) => {
             return refusal(503, "replica_evidence_unavailable", Some(1));
@@ -715,13 +767,20 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
         }
         ReplicaAnswer::Unavailable => return refusal(503, "replica_unavailable", Some(5)),
     };
-    let evidence =
-        match parse_replica_evidence(&document, config.replica_id, config.sequencer_public_key) {
-            Ok(evidence) => evidence,
-            Err(error) => return evidence_refusal(&error),
-        };
-    match authorized_batch_by_activity(activity_id, &receipt, &evidence, &config.authorization) {
+    let (evidence, authorization) = match trust::replica(config, &receipt, &document) {
+        Ok(verified) => verified,
+        Err(error) => return evidence_refusal(&error),
+    };
+    if layerx_wire::receipt::decode_batch_header(&evidence.header).map_or(true, |header| {
+        header.network_id() != config.protocol_network_id
+    }) {
+        return refusal(503, "receipt_network_mismatch", Some(5));
+    }
+    match authorized_batch_by_activity(activity_id, &receipt, &evidence, &authorization) {
         Ok(facts) => {
+            if verify_withdrawal_request(config, &receipt, &evidence.header, deadline).is_err() {
+                return refusal(503, "withdrawal_evidence_unavailable", Some(5));
+            }
             if config
                 .human
                 .as_ref()
@@ -738,11 +797,13 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
                 "resulting_state_root": hex::encode(&facts.resulting_state_root),
                 "sequencer_public_key": hex::encode(&facts.sequencer_public_key),
                 "network_id": config.network_id,
+                "protocol_network_id": config.protocol_network_id,
                 "wire_version": config.wire_version,
             });
             if matches!(
                 evidence.batch_identity,
                 layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 { .. }
+                    | layerx_platform_authority::BatchIdentityEvidence::BatchMaintenanceV1 { .. }
             ) {
                 let replica: serde_json::Value = match serde_json::from_slice(&document) {
                     Ok(value) => value,
@@ -754,6 +815,110 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
         }
         Err(error) => evidence_refusal(&error),
     }
+}
+
+fn verify_withdrawal_request(
+    config: &Config,
+    receipt: &[u8],
+    header: &[u8],
+    deadline: Instant,
+) -> Result<(), String> {
+    use layerx_client::evidence::{
+        proof_bundle, EvidenceContext, ProofBundleSelector, VerifiedProofBundle,
+    };
+    use layerx_proof::receipt::{withdrawal, AuthorizedBatch};
+    let decoded = layerx_wire::receipt::decode(receipt).map_err(|error| format!("{error:?}"))?;
+    let protocol = decoded.protocol().ok_or("protocol receipt required")?;
+    if protocol.module_id() != 1 || protocol.operation() != 9 {
+        return Ok(());
+    }
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .ok_or("authority deadline expired")?;
+    let limits = Limits {
+        maximum_frame_bytes: LNI_FRAME_BYTES,
+        maximum_connections: MAX_LNI_CONNECTIONS,
+        maximum_streams: 1,
+        maximum_queued_bytes: LNI_FRAME_BYTES,
+        deadline: remaining,
+    };
+    let mut transport = Uds::connect(&config.lni_socket, &config.lni_gate, limits)
+        .map_err(|error| format!("{error:?}"))?;
+    let handshake = perform(
+        &mut transport,
+        &HandshakeConfig {
+            built_interface_version: Version::V1_5,
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: config.protocol_network_id,
+        },
+        None,
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    let history = trust::snapshot(
+        config,
+        handshake.node().latest_sealed_batch,
+        handshake.node().authorised_sequencer_key,
+        deadline,
+    )
+    .map_err(|()| "withdrawal sequencer history unavailable".to_owned())?;
+    let authorization = match &history {
+        Some(history) => history
+            .authorization_for_sequence(protocol.global_sequence())
+            .map_err(|error| format!("{error:?}"))?,
+        None => config.authorization,
+    };
+    let context = EvidenceContext {
+        interface_version: handshake.node().interface_version,
+        correlation_id: trust::correlation(1)
+            .map_err(|()| "LNI correlation exhausted".to_owned())?,
+        expected_protocol_version: PROTOCOL_VERSION,
+        expected_network_id: config.protocol_network_id,
+        handshake_sequencer_key: authorization.public_key(),
+    };
+    let registry = withdrawal::registry().map_err(|error| format!("{error:?}"))?;
+    let bundle = if let Some(history) = &history {
+        layerx_client::evidence::proof_bundle_with_history(
+            &mut transport,
+            ProofBundleSelector::Activity(protocol.activity_id()),
+            context,
+            &registry,
+            history,
+        )
+    } else {
+        proof_bundle(
+            &mut transport,
+            ProofBundleSelector::Activity(protocol.activity_id()),
+            context,
+            &registry,
+        )
+    }
+    .map_err(|error| format!("{error:?}"))?;
+    let VerifiedProofBundle::Activity {
+        canonical_bytes,
+        signed_header,
+        ..
+    } = bundle
+    else {
+        return Err("withdrawal activity proof required".to_owned());
+    };
+    if signed_header.canonical_bytes != header {
+        return Err("withdrawal header mismatch".to_owned());
+    }
+    let authorized = AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        protocol.previous_state_root(),
+        protocol.resulting_state_root(),
+        authorization.public_key(),
+    );
+    withdrawal::verify(
+        receipt,
+        &authorized,
+        &canonical_bytes,
+        config.protocol_network_id,
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    Ok(())
 }
 
 fn relay(config: &Config, batch_id: &str, query: Option<&str>) -> Response {
@@ -791,6 +956,7 @@ fn readiness(config: &Config) -> Response {
     let body = serde_json::json!({
         "ready": ready,
         "network_id": config.network_id,
+                "protocol_network_id": config.protocol_network_id,
         "wire_version": config.wire_version,
     });
     let mut response = json(if ready { 200 } else { 503 }, &body);
@@ -847,7 +1013,11 @@ fn route(config: &Config, request: &Request) -> Response {
     }
 }
 
-fn handle_connection(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
+fn handle_connection(
+    config: &Arc<Config>,
+    tcp: TcpStream,
+    shutdown: &AtomicBool,
+) -> Result<(), String> {
     tcp.set_nodelay(true).map_err(|error| error.to_string())?;
     tcp.set_read_timeout(Some(IO_TIMEOUT))
         .map_err(|error| error.to_string())?;
@@ -857,6 +1027,9 @@ fn handle_connection(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String>
         ServerConnection::new(Arc::clone(&config.tls)).map_err(|error| error.to_string())?;
     let mut stream = StreamOwned::new(connection, tcp);
     for request_number in 0..MAX_REQUESTS_PER_CONNECTION {
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
         let request = match read_http_message(&mut stream) {
             Ok(request) => request,
             Err(_) if request_number == 0 => {
@@ -865,7 +1038,8 @@ fn handle_connection(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String>
             }
             Err(_) => break,
         };
-        let keep_alive = request_number + 1 < MAX_REQUESTS_PER_CONNECTION
+        let keep_alive = !shutdown.load(Ordering::Acquire)
+            && request_number + 1 < MAX_REQUESTS_PER_CONNECTION
             && request
                 .headers
                 .get("connection")
@@ -900,28 +1074,52 @@ impl Drop for ConnectionPermit {
 }
 
 fn serve(config: Config) -> Result<(), String> {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))
+        .map_err(|error| error.to_string())?;
+    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))
+        .map_err(|error| error.to_string())?;
     let listener = TcpListener::bind(config.listen).map_err(|error| error.to_string())?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
     let config = Arc::new(config);
+    let mut workers = Vec::<thread::JoinHandle<()>>::new();
     eprintln!(
         "layerx-receipt-authority listening with TLS on {}",
         config.listen
     );
-    for connection in listener.incoming() {
-        match connection {
-            Ok(stream) => {
+    while !shutdown.load(Ordering::Acquire) {
+        workers.retain(|worker| !worker.is_finished());
+        match listener.accept() {
+            Ok((stream, _)) => {
                 let Some(permit) = ConnectionPermit::acquire() else {
                     continue;
                 };
                 let shared = Arc::clone(&config);
-                thread::spawn(move || {
+                let stopping = Arc::clone(&shutdown);
+                workers.push(thread::spawn(move || {
                     let _permit = permit;
-                    if let Err(error) = handle_connection(&shared, stream) {
+                    if let Err(error) = handle_connection(&shared, stream, &stopping) {
                         eprintln!("layerx-receipt-authority connection failed: {error}");
                     }
-                });
+                }));
             }
-            Err(error) => eprintln!("layerx-receipt-authority accept failed: {error}"),
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::WouldBlock
+                    && error.kind() != std::io::ErrorKind::Interrupted
+                {
+                    eprintln!("layerx-receipt-authority accept failed: {error}");
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
         }
+    }
+    drop(listener);
+    for worker in workers {
+        worker
+            .join()
+            .map_err(|_| "receipt authority connection worker panicked".to_owned())?;
     }
     Ok(())
 }

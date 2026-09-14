@@ -14,12 +14,17 @@ path = "src/main.rs"
 
 [dependencies]
 layerx-client.workspace = true
+layerx-paxeer-verifier = { path = "../../../agent/crates/layerx-paxeer-verifier" }
+layerx-identity-binding.workspace = true
+layerx-crypto.workspace = true
 layerx-proof.workspace = true
+layerx-types.workspace = true
 layerx-wire.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+signal-hook = "=0.3.18"
 subtle.workspace = true
 zeroize.workspace = true
 
@@ -27,7 +32,6 @@ zeroize.workspace = true
 layerx-agentd = { path = "../../../agent/crates/layerx-agentd" }
 ed25519-dalek.workspace = true
 getrandom.workspace = true
-layerx-types.workspace = true
 native-tls.workspace = true
 
 [lints]

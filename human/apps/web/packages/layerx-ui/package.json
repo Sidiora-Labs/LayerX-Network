@@ -18,6 +18,16 @@
       "import": "./dist/cn.js",
       "require": "./dist/cn.cjs"
     },
+    "./components/*": {
+      "types": "./dist/components/*.d.ts",
+      "import": "./dist/components/*.js",
+      "require": "./dist/components/*.cjs"
+    },
+    "./lib/*": {
+      "types": "./dist/lib/*.d.ts",
+      "import": "./dist/lib/*.js",
+      "require": "./dist/lib/*.cjs"
+    },
     "./styles.css": "./src/styles/tokens.css"
   },
   "files": [
@@ -50,6 +60,8 @@
     "tailwind-merge": "3.6.0"
   },
   "devDependencies": {
+    "@jridgewell/sourcemap-codec": "1.5.5",
+    "source-map": "0.7.6",
     "tsup": "8.5.1",
     "typescript": "5.9.3"
   },

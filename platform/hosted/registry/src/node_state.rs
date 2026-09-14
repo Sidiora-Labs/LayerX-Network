@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use layerx_programs::{
     hex, AccountStateHead, DeploymentProof, ProgramId, ProtocolDeploymentVerifier,
-    VerifiedDeploymentEvidence,
+    ProtocolHeadMaintenanceProof, ProtocolHeadProof, VerifiedDeploymentEvidence,
 };
 use layerx_proof::merkle::Proof;
 use layerx_wire::hash::receipt_digest;
@@ -74,6 +74,7 @@ struct BatchEvidence {
     signature: [u8; 64],
     receipt_proof: Proof,
     batch_identity: Value,
+    maintenance: Option<ProtocolHeadMaintenanceProof>,
 }
 
 impl NodeProgramStateSource {
@@ -469,6 +470,11 @@ impl NodeProgramStateSource {
     fn get_from(&self, endpoint: &str, authorization: &str, path: &str) -> Result<Value, String> {
         let (status, body) = self.fetch_from(endpoint, authorization, path)?;
         if !(200..300).contains(&status) {
+            if let Some(code) = body["error"].as_i64() {
+                return Err(format!(
+                    "node authority GET {path} returned HTTP {status} with protocol result {code}"
+                ));
+            }
             return Err(format!("node authority GET {path} returned HTTP {status}"));
         }
         Ok(body)
@@ -591,20 +597,16 @@ impl NodeProgramStateSource {
             }
             .map_err(|error| format!("maintenance head verification failed: {error}"));
         }
+        let proof = ProtocolHeadProof {
+            receipt,
+            receipt_proof: &evidence.receipt_proof,
+            header: &evidence.header,
+            header_signature: &evidence.signature,
+            maintenance: evidence.maintenance.as_ref(),
+        };
         let claims = match now_ms {
-            Some(now) => verifier.verify_current_protocol_head(
-                receipt,
-                &evidence.receipt_proof,
-                &evidence.header,
-                &evidence.signature,
-                now,
-            ),
-            None => verifier.verify_historical_protocol_head(
-                receipt,
-                &evidence.receipt_proof,
-                &evidence.header,
-                &evidence.signature,
-            ),
+            Some(now) => verifier.verify_current_protocol_head_proof(&proof, now),
+            None => verifier.verify_historical_protocol_head_proof(&proof),
         }
         .map_err(|error| format!("program-state receipt verification failed: {error}"))?;
         Ok((
@@ -622,9 +624,16 @@ fn head_identity(
     receipt: &[u8],
     evidence: &BatchEvidence,
 ) -> Result<([u8; 32], [u8; 32], bool), String> {
-    if receipt.starts_with(b"LXP/programs/occupancy-receipt/v2\0") {
+    let identity_kind = if receipt.starts_with(layerx_wire::batch_maintenance::DOMAIN) {
+        Some("batch_maintenance_v1")
+    } else if receipt.starts_with(b"LXP/programs/occupancy-receipt/v2\0") {
+        Some("occupancy_maintenance_v2")
+    } else {
+        None
+    };
+    if let Some(identity_kind) = identity_kind {
         let identity = &evidence.batch_identity;
-        if field(identity, "kind")? != "occupancy_maintenance_v2"
+        if field(identity, "kind")? != identity_kind
             || hex::decode(field(identity, "receipt_hex")?).map_err(|error| error.to_string())?
                 != receipt
         {
@@ -644,6 +653,11 @@ fn head_identity(
         }
         let header = layerx_wire::receipt::decode_batch_header(&evidence.header)
             .map_err(|_| "maintenance header is invalid".to_owned())?;
+        let record = layerx_wire::batch_maintenance::decode_maintenance(receipt)
+            .map_err(|_| "maintenance receipt is invalid".to_owned())?;
+        record
+            .verify_header(&header)
+            .map_err(|_| "maintenance header binding is invalid".to_owned())?;
         let last_activity = header
             .last_sequence()
             .checked_sub(1)
@@ -693,7 +707,72 @@ fn parse_batch_evidence(value: &Value) -> Result<BatchEvidence, String> {
         signature,
         receipt_proof,
         batch_identity: value["batch_identity"].clone(),
+        maintenance: parse_maintenance(&value["batch_identity"])?,
     })
+}
+
+fn parse_maintenance(value: &Value) -> Result<Option<ProtocolHeadMaintenanceProof>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let kind = field(value, "kind")?;
+    if !matches!(kind, "occupancy_maintenance_v2" | "batch_maintenance_v1") {
+        return Err("unsupported receipt batch identity".to_owned());
+    }
+    let items = value["activity_receipts_hex"]
+        .as_array()
+        .ok_or_else(|| "maintenance evidence omitted the complete receipt chain".to_owned())?;
+    if items.is_empty() || items.len() > 64 {
+        return Err("maintenance receipt count exceeds its bound".to_owned());
+    }
+    let mut remaining = 16 * 1024 * 1024;
+    let mut decode = |encoded: &str| {
+        if !encoded.len().is_multiple_of(2) || encoded.len() / 2 > remaining {
+            return Err("maintenance receipt bytes exceed their bound".to_owned());
+        }
+        remaining -= encoded.len() / 2;
+        hex::decode(encoded).map_err(|error| format!("maintenance receipt encoding: {error}"))
+    };
+    let receipt = decode(field(value, "receipt_hex")?)?;
+    let record = layerx_wire::batch_maintenance::decode_maintenance(&receipt)
+        .map_err(|_| "maintenance identity receipt is noncanonical".to_owned())?;
+    if !matches!(
+        (kind, record),
+        (
+            "occupancy_maintenance_v2",
+            layerx_wire::batch_maintenance::MaintenanceReceipt::Occupancy(_)
+        ) | (
+            "batch_maintenance_v1",
+            layerx_wire::batch_maintenance::MaintenanceReceipt::Batch(_)
+        )
+    ) {
+        return Err("maintenance identity kind disagrees with its receipt".to_owned());
+    }
+    let mut activity_receipts = Vec::with_capacity(items.len());
+    for item in items {
+        activity_receipts
+            .push(decode(item.as_str().ok_or_else(|| {
+                "maintenance receipt is not hexadecimal text".to_owned()
+            })?)?);
+    }
+    let encoded_proof = field(value, "receipt_proof_hex")?;
+    if encoded_proof.len() > 2 * 1_034 {
+        return Err("maintenance proof exceeds its bound".to_owned());
+    }
+    let proof = hex::decode(encoded_proof).map_err(|error| error.to_string())?;
+    let canonical = decode_merkle_proof(&proof)
+        .map_err(|error| format!("maintenance proof encoding: {error:?}"))?;
+    let receipt_proof = Proof::new(
+        canonical.leaf_index(),
+        canonical.leaf_count(),
+        canonical.siblings().to_vec(),
+    )
+    .map_err(|error| format!("maintenance proof structure: {error:?}"))?;
+    Ok(Some(ProtocolHeadMaintenanceProof {
+        receipt,
+        receipt_proof,
+        activity_receipts,
+    }))
 }
 
 fn parse_cursor(value: &Value) -> Result<ProgramStateCursor, String> {
@@ -738,6 +817,72 @@ fn loopback_http(endpoint: &str) -> bool {
 mod tests {
     use super::{classify_head_answer, HeadAnswer};
     use serde_json::json;
+
+    fn legacy_native_proof() -> Vec<u8> {
+        let proof = layerx_proof::merkle::decode_proof(include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-credit-receipt/maintenance.proof"
+        ))
+        .unwrap_or_else(|error| panic!("original public proof: {error:?}"));
+        let mut encoder = layerx_wire::encode::Encoder::new(1_034);
+        encoder
+            .structure_header(0x4d50)
+            .and_then(|()| encoder.u32(proof.leaf_index()))
+            .and_then(|()| encoder.u32(proof.leaf_count()))
+            .and_then(|()| {
+                encoder.u8(u8::try_from(proof.siblings().len())
+                    .unwrap_or_else(|error| panic!("original proof depth: {error}")))
+            })
+            .and_then(|()| encoder.bytes(&proof.siblings().concat(), 1_024))
+            .unwrap_or_else(|error| panic!("native proof encoding: {error:?}"));
+        let bytes = encoder.finish();
+        let decoded = layerx_wire::receipt::decode_merkle_proof(&bytes)
+            .unwrap_or_else(|error| panic!("native proof decoding: {error:?}"));
+        assert_eq!(decoded.leaf_index(), proof.leaf_index());
+        assert_eq!(decoded.leaf_count(), proof.leaf_count());
+        assert_eq!(decoded.siblings(), proof.siblings());
+        bytes
+    }
+
+    #[test]
+    fn maintenance_json_kind_binds_the_original_native_envelope() {
+        let receipt =
+            include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/receipt");
+        let maintenance = include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-module-head/maintenance.receipt"
+        );
+        let proof = include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-module-head/maintenance.proof"
+        );
+        let mut document = json!({
+            "kind": "batch_maintenance_v1",
+            "receipt_hex": layerx_programs::hex::encode(maintenance),
+            "receipt_proof_hex": layerx_programs::hex::encode(proof),
+            "activity_receipts_hex": [layerx_programs::hex::encode(receipt)]
+        });
+        let parsed = super::parse_maintenance(&document)
+            .unwrap_or_else(|error| panic!("native maintenance identity: {error}"))
+            .unwrap_or_else(|| panic!("native maintenance identity missing"));
+        assert_eq!(parsed.receipt, maintenance);
+        assert_eq!(parsed.activity_receipts, [receipt.to_vec()]);
+        document["kind"] = json!("occupancy_maintenance_v2");
+        assert!(super::parse_maintenance(&document).is_err());
+        let legacy = include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-credit-receipt/maintenance.receipt"
+        );
+        document["receipt_hex"] = json!(layerx_programs::hex::encode(legacy));
+        document["receipt_proof_hex"] = json!(layerx_programs::hex::encode(&legacy_native_proof()));
+        document["activity_receipts_hex"] = json!([layerx_programs::hex::encode(include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-credit-receipt/credit.receipt"
+        ))]);
+        assert!(super::parse_maintenance(&document).is_ok());
+        document["kind"] = json!("batch_maintenance_v1");
+        assert!(super::parse_maintenance(&document).is_err());
+        document["kind"] = json!("unknown");
+        assert!(super::parse_maintenance(&document).is_err());
+        document["kind"] = json!("occupancy_maintenance_v2");
+        document["activity_receipts_hex"] = json!([]);
+        assert!(super::parse_maintenance(&document).is_err());
+    }
 
     #[test]
     fn only_the_stale_projection_answer_is_a_pending_head() {

@@ -7,9 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . .
 ARG LXP_REVISION=unknown
 RUN rustup show active-toolchain \
-    && make LXP_REVISION="$LXP_REVISION" layerxd layerx-genesis-build layerxctl layerx-guarantor layerx-module-registry \
+    && make LXP_REVISION="$LXP_REVISION" layerxd layerx-genesis-build layerx-handover layerxctl layerx-guarantor layerx-module-registry \
     && test -x build/bin/layerx-guarantor && test -x build/bin/layerxd && test -x build/bin/layerx-genesis-build \
-    && test -x build/bin/layerxctl && test -x build/bin/layerx-module-registry
+    && test -x build/bin/layerx-handover && test -x build/bin/layerxctl && test -x build/bin/layerx-module-registry
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,16 +20,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chown 4020:4020 /var/lib/layerx /run/layerx
 COPY --from=build /src/build/bin/layerx-guarantor /usr/local/bin/layerx-guarantor
 COPY --from=build /src/cmd/layerx-guarantor/settlement.py /opt/layerx/guarantor/settlement.py
+COPY --from=build /src/cmd/layerx-guarantor/publication.py /opt/layerx/guarantor/publication.py
+COPY --from=build /src/cmd/layerx-guarantor/authorization.py /opt/layerx/guarantor/authorization.py
+COPY --from=build /src/platform/hosted/human/recipient_binding.py /opt/layerx/human/recipient_binding.py
+COPY --from=build /src/platform/hosted/human/onboarding_socket.py /opt/layerx/human/onboarding_socket.py
+COPY --from=build /src/platform/hosted/human/provision.py /opt/layerx/human/provision.py
 COPY --from=build /src/cmd/layerx-guarantor/requirements.txt /opt/layerx/guarantor/requirements.txt
 RUN python3 -m venv /opt/layerx/guarantor/venv \
     && /opt/layerx/guarantor/venv/bin/pip install --no-cache-dir -r /opt/layerx/guarantor/requirements.txt
 COPY --from=build /src/build/bin/layerxd /usr/local/bin/layerxd
 COPY --from=build /src/build/bin/layerx-genesis-build /usr/local/bin/layerx-genesis-build
+COPY --from=build /src/build/bin/layerx-handover /usr/local/bin/layerx-handover
 COPY --from=build /src/build/bin/layerxctl /usr/local/bin/layerxctl
 COPY --from=build /src/build/bin/layerx-module-registry /usr/local/bin/layerx-module-registry
 COPY --from=build /src/migrations/0007_history_index.sql /opt/layerx/migrations/0007_history_index.sql
 COPY --from=build /src/contracts/config/checkpoint-settlement.json /opt/layerx/checkpoint-settlement.json
 COPY --from=build /src/platform/hosted/node/bootstrap.sh /opt/layerx/bootstrap.sh
+COPY --from=build /src/platform/hosted/node/genesis-modules.conf /opt/layerx/genesis-modules.conf
+COPY --from=build /src/platform/hosted/node/genesis_fees.py /opt/layerx/genesis_fees.py
+COPY --from=build /src/platform/hosted/node/genesis-module-fees.json /opt/layerx/genesis-module-fees.json
+COPY --from=build /src/platform/hosted/node/data_directory.py /opt/layerx/data_directory.py
 COPY --from=build /src/platform/hosted/node/supervisor.sh /opt/layerx/supervisor.sh
 COPY --from=build /src/platform/hosted/node/guarantor.sh /opt/layerx/guarantor.sh
 COPY --from=build /src/platform/hosted/node/checkpoint-authority.py /opt/layerx/checkpoint-authority.py

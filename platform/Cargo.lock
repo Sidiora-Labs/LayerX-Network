@@ -1212,6 +1212,8 @@ dependencies = [
  "layerx-agent-api",
  "layerx-client",
  "layerx-crypto",
+ "layerx-identity-binding",
+ "layerx-paxeer-verifier",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
  "layerx-programs-runtime",
@@ -1220,6 +1222,7 @@ dependencies = [
  "layerx-wire",
  "rustix",
  "rustls-native-certs",
+ "serde",
  "serde_json",
  "sha2",
  "ureq",
@@ -1231,9 +1234,11 @@ name = "layerx-client"
 version = "0.1.0"
 dependencies = [
  "layerx-crypto",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustix",
  "rustls",
  "sha2",
 ]
@@ -1256,6 +1261,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-identity-binding"
+version = "0.1.0"
+dependencies = [
+ "layerx-types",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "layerx-intents"
 version = "0.1.0"
 dependencies = [
@@ -1265,6 +1281,7 @@ dependencies = [
  "layerx-sdk",
  "layerx-types",
  "layerx-wire",
+ "sha2",
 ]
 
 [[package]]
@@ -1312,12 +1329,22 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-intents",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-sdk",
  "layerx-types",
+ "sha2",
+]
+
+[[package]]
+name = "layerx-paxeer-verifier"
+version = "0.1.0"
+dependencies = [
+ "layerx-proof",
+ "layerx-types",
  "layerx-wire",
  "rustls",
- "sha2",
+ "sha3",
 ]
 
 [[package]]
@@ -1349,6 +1376,9 @@ dependencies = [
  "getrandom 0.4.3",
  "layerx-agentd",
  "layerx-client",
+ "layerx-crypto",
+ "layerx-identity-binding",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
@@ -1357,6 +1387,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "signal-hook",
  "subtle",
  "zeroize",
 ]
@@ -1403,6 +1434,7 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-intents",
+ "layerx-platform-internal",
  "layerx-programs-registry",
  "layerx-proof",
  "layerx-types",
@@ -1706,6 +1738,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-runtime-clock"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "layerx-client",
+ "layerx-proof",
+ "layerx-sdk",
+ "layerx-types",
+ "layerx-wire",
+ "rustix",
+ "signal-hook",
+]
+
+[[package]]
 name = "layerx-sdk"
 version = "0.1.0"
 dependencies = [
@@ -1716,6 +1762,7 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustls",
  "rustls-native-certs",
  "serde_json",
  "sha2",
@@ -2449,6 +2496,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signal-hook"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2701,6 +2758,9 @@ dependencies = [
  "log",
  "native-tls",
  "rand",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "sha1",
  "thiserror",
 ]

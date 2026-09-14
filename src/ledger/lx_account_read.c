@@ -3,6 +3,39 @@
 
 #include <string.h>
 
+lxp_result lx_account_owner_did(const lx_account *account, uint8_t owner[32])
+{
+    size_t length;
+    lxp_result status;
+    if (account == NULL || owner == NULL) return LXP_ERR_NON_CANONICAL;
+    if ((account->kind < LX_ACCOUNT_AGENT_MAIN ||
+         account->kind > LX_ACCOUNT_AGENT_MARGIN) &&
+        account->kind != LX_ACCOUNT_AGENT_ASSET) return LXP_ERR_UNKNOWN_FIELD;
+    status = lx_account_validate_canonical(account);
+    if (status != LXP_OK) return status;
+    if (account->name_length > 11U &&
+        memcmp(account->name + account->name_length - 5U, ":main", 5U) == 0)
+        length = account->name_length - 11U;
+    else if (account->name_length > 77U &&
+        memcmp(account->name + account->name_length - 71U, ":asset:", 7U) == 0)
+        length = account->name_length - 77U;
+    else {
+        const char *marker = account->kind == LX_ACCOUNT_AGENT_BUDGET ? ":budget:" :
+            account->kind == LX_ACCOUNT_AGENT_ESCROW ? ":escrow:" :
+            account->kind == LX_ACCOUNT_AGENT_STREAM ? ":stream:" :
+            account->kind == LX_ACCOUNT_AGENT_MARGIN ? ":margin:" : NULL;
+        size_t marker_length;
+        length = 0U;
+        if (marker == NULL) return LXP_ERR_NON_CANONICAL;
+        marker_length = strlen(marker);
+        for (size_t offset = 7U; offset + marker_length < account->name_length; ++offset)
+            if (memcmp(account->name + offset, marker, marker_length) == 0)
+                length = offset - 6U;
+        if (length == 0U) return LXP_ERR_NON_CANONICAL;
+    }
+    return lxp_did_id_derive(account->name + 6U, length, owner);
+}
+
 lxp_result lx_account_list_did(const lx_account_registry *registry,
     const uint8_t did_id[32], uint8_t (*account_ids)[32], size_t capacity,
     size_t *count)
@@ -16,38 +49,13 @@ lxp_result lx_account_list_did(const lx_account_registry *registry,
     for (size_t position = 0U; position < registry->count; ++position) {
         const lx_account *account;
         uint8_t owner[32];
-        size_t length;
         size_t i = 0U;
         lxp_result status;
         status = lx_account_registry_index_slot(registry, position, &i);
         if (status != LXP_OK) return status;
         account = &registry->accounts[i];
-        if ((account->kind < LX_ACCOUNT_AGENT_MAIN ||
-             account->kind > LX_ACCOUNT_AGENT_MARGIN) &&
-            account->kind != LX_ACCOUNT_AGENT_ASSET) continue;
-        status = lx_account_validate_canonical(account);
-        if (status != LXP_OK) return status;
-        if (account->name_length > 11U &&
-            memcmp(account->name + account->name_length - 5U, ":main", 5U) == 0)
-            length = account->name_length - 11U;
-        else if (account->name_length > 77U &&
-            memcmp(account->name + account->name_length - 71U, ":asset:", 7U) == 0)
-            length = account->name_length - 77U;
-        else {
-            const char *marker = account->kind == LX_ACCOUNT_AGENT_BUDGET ? ":budget:" :
-                account->kind == LX_ACCOUNT_AGENT_ESCROW ? ":escrow:" :
-                account->kind == LX_ACCOUNT_AGENT_STREAM ? ":stream:" :
-                account->kind == LX_ACCOUNT_AGENT_MARGIN ? ":margin:" : NULL;
-            size_t marker_length;
-            length = 0U;
-            if (marker == NULL) return LXP_ERR_NON_CANONICAL;
-            marker_length = strlen(marker);
-            for (size_t offset = 7U; offset + marker_length < account->name_length; ++offset)
-                if (memcmp(account->name + offset, marker, marker_length) == 0)
-                    length = offset - 6U;
-            if (length == 0U) return LXP_ERR_NON_CANONICAL;
-        }
-        status = lxp_did_id_derive(account->name + 6U, length, owner);
+        status = lx_account_owner_did(account, owner);
+        if (status == LXP_ERR_UNKNOWN_FIELD) continue;
         if (status != LXP_OK) return status;
         if (memcmp(owner, did_id, 32U) != 0) continue;
         if (found == capacity) return LXP_ERR_LENGTH_LIMIT;

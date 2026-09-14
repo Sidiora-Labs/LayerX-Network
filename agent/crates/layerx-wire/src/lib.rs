@@ -2,8 +2,10 @@
 
 pub mod account;
 pub mod activity;
+pub mod batch_maintenance;
 pub mod decode;
 pub mod encode;
+pub mod handover;
 pub mod hash;
 pub mod limits;
 pub mod maintenance;

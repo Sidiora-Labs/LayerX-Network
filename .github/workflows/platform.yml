@@ -42,6 +42,11 @@ jobs:
           swift-version: "6.0.3"
       - name: Install locked platform JavaScript dependencies
         run: make platform-js-install
+      - name: Install Java 21 for JVM dependencies and conformance
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Fetch locked platform workspace crates
         run: cargo fetch --locked --manifest-path platform/Cargo.toml
       - name: Install platform sample and policy dependencies
@@ -289,17 +294,43 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/sdk-v')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "1"
+      CARGO_PROFILE_TEST_DEBUG: "1"
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install native dependencies
-        run: sudo apt-get update && sudo apt-get install --yes build-essential libssl-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install --yes build-essential libssl-dev pkg-config python3-venv
       - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.91.1 --profile minimal && rustup default 1.91.1
+        run: >-
+          rustup toolchain install 1.91.1 --profile minimal &&
+          rustup toolchain install nightly-2025-11-10 --profile minimal --component rust-src &&
+          rustup default 1.91.1
+      - name: Install settlement test tools
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09
+        with:
+          version: v1.8.1
+      - name: Install native fixture dependencies
+        run: |
+          python3 -m venv .lane-venv
+          .lane-venv/bin/python -m pip install -r tests/bridge/requirements.txt
+          echo "$PWD/.lane-venv/bin" >> "$GITHUB_PATH"
       - name: Run the sanitizer variants and record their gate
-        run: tools/ci/release-gate.sh --job agent-sanitizers --ordinal 2 -- make agent-test-sanitize
+        run: |
+          sudo env "PATH=$PATH" "CARGO_HOME=$HOME/.cargo" "RUSTUP_HOME=$HOME/.rustup" \
+            "CARGO_TARGET_DIR=$PWD/.lane-target" \
+            "CARGO_PROFILE_DEV_DEBUG=$CARGO_PROFILE_DEV_DEBUG" \
+            "CARGO_PROFILE_TEST_DEBUG=$CARGO_PROFILE_TEST_DEBUG" \
+            sh agent/tools/run-real-node-tests.sh prepare
+          sudo env "PATH=$PATH" "CARGO_HOME=$HOME/.cargo" "RUSTUP_HOME=$HOME/.rustup" \
+            "CARGO_TARGET_DIR=$PWD/.lane-target" \
+            "CARGO_PROFILE_DEV_DEBUG=$CARGO_PROFILE_DEV_DEBUG" \
+            "CARGO_PROFILE_TEST_DEBUG=$CARGO_PROFILE_TEST_DEBUG" \
+            "LAYERX_TEST_NATIVE_BIN_DIR=$PWD/build/bin" \
+            tools/ci/release-gate.sh --job agent-sanitizers --ordinal 2 -- make agent-test-sanitize
       - name: Retain the gate record and log
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -111,11 +111,11 @@ func Replay(a *App) {
 	}
 }
 
-func BlockTest(a *App, bt *ethtests.BlockTest) {
+func BlockTest(a *App, bt *ethtests.BlockTest, home string) {
 	a.EvmKeeper.BlockTest = bt
 	a.EvmKeeper.EthBlockTestConfig.Enabled = true
 
-	gendoc, err := tmtypes.GenesisDocFromFile(filepath.Join(DefaultNodeHome, "config/genesis.json"))
+	gendoc, err := tmtypes.GenesisDocFromFile(filepath.Join(home, "config/genesis.json"))
 	if err != nil {
 		panic(err)
 	}

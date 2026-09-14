@@ -23,6 +23,8 @@ import {
   decodeMoveCommitRequest,
   decodeMoveQuoteRequest,
   decodeNotificationPreferences,
+  decodeOwnerRotationDisclosureRequest,
+  decodeOwnerRotationRequest,
   decodePasskeyAssertionBegin,
   decodePasskeyAssertionFinish,
   decodePasskeyRegistrationBegin,
@@ -67,6 +69,7 @@ import {
   encodeJourneyPage,
   encodeKeyChallenge,
   encodeMoveQuote,
+  encodeNativeFeeAsset,
   encodeNotificationPage,
   encodeNotificationPreferences,
   encodeNotificationSummary,
@@ -157,6 +160,10 @@ export const conformance: { readonly [name in OperationName]: (run: ConformanceR
     encodeAgent(await run.client.agentResume(runParam(run, "agent_id"), runKey(run))),
   "agent.rotate": async (run) =>
     encodeKeyChallenge(await run.client.agentRotate(runParam(run, "agent_id"), runKey(run))),
+  "agent.rotation.disclosure": async (run) =>
+    encodeSecurityAction(await run.client.agentRotationDisclosure(runParam(run, "agent_id"), decodeOwnerRotationDisclosureRequest(runBody(run), "golden request body"))),
+  "agent.rotation.start": async (run) =>
+    encodeKeyChallenge(await run.client.agentRotationStart(runParam(run, "agent_id"), decodeOwnerRotationRequest(runBody(run), "golden request body"), runKey(run))),
   "approval.approve": async (run) =>
     encodeApprovalDecision(await run.client.approvalApprove(runParam(run, "approval_id"), decodeApprovalApproveRequest(runBody(run), "golden request body"), runKey(run))),
   "approval.get": async (run) =>
@@ -245,6 +252,8 @@ export const conformance: { readonly [name in OperationName]: (run: ConformanceR
     encodeSessionRevocation(await run.client.securitySessionRevoke(runParam(run, "session_id"), decodeSecuritySessionRevocation(runBody(run), "golden request body"), runKey(run))),
   "security.session.revoke-all": async (run) =>
     encodeSessionRevocation(await run.client.securitySessionRevokeAll(decodeSecuritySessionRevocation(runBody(run), "golden request body"), runKey(run))),
+  "session.fee-policy": async (run) =>
+    encodeNativeFeeAsset(await run.client.sessionFeePolicy()),
   "session.list": async (run) =>
     encodeSessionList(await run.client.sessionList()),
   "session.open": async (run) =>

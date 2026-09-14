@@ -56,7 +56,7 @@ static lxp_result sign_manifest(
 static lxp_result materialize_snapshot(
     const lxp_genesis_manifest *manifest, lxp_arena *arena,
     lxp_snapshot_manifest_record *snapshot_manifest,
-    lxp_byte_span *snapshot)
+    lxp_byte_span *snapshot, lxp_byte_span *handover_trust)
 {
     lxp_state_store *state = NULL;
     lxp_state_journal *journal = NULL;
@@ -102,9 +102,13 @@ static lxp_result materialize_snapshot(
         status = LXP_FATAL_REPLAY_DIVERGENCE;
     if (status == LXP_OK)
         (void)memcpy(kernel->current_state_root, receipt_root, 32U);
-    if (status == LXP_OK)
+    if (status == LXP_OK && handover_trust != NULL)
+        status = lxp_handover_kernel_initialize(kernel, manifest, NULL, NULL);
+    if (status == LXP_OK && handover_trust != NULL)
+        status = lxp_handover_genesis_trust_encode(kernel, arena, handover_trust);
+    if (status == LXP_OK && snapshot != NULL)
         status = lxp_snapshot_write(kernel, 0U, arena, snapshot);
-    if (status == LXP_OK)
+    if (status == LXP_OK && snapshot != NULL)
         status = lxp_snapshot_manifest_build(
             snapshot->bytes, snapshot->length, 0U, canonical_root,
             receipt_root, snapshot_manifest);
@@ -121,6 +125,20 @@ done:
     free(kernel);
     free(journal);
     free(state);
+    return status;
+}
+
+lxp_result lxp_genesis_handover_trust_build(
+    const lxp_genesis_manifest *manifest, lxp_arena *arena,
+    lxp_byte_span *encoded)
+{
+    lxp_result status;
+    if (manifest == NULL || arena == NULL || encoded == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *encoded = (lxp_byte_span){NULL, 0U};
+    status = lxp_genesis_verify_signature(manifest, arena);
+    if (status == LXP_OK)
+        status = materialize_snapshot(manifest, arena, NULL, NULL, encoded);
     return status;
 }
 
@@ -145,14 +163,15 @@ static lxp_result build_fresh(
         encoded_manifest == NULL || snapshot == NULL ||
         (draft->protocol_version != LXP_PROTOCOL_VERSION &&
          draft->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT) ||
-        draft->account_count != 0U || draft->module_value_count > LX_ASSET_REGISTRY_CAPACITY + 1U ||
+        draft->account_count != 0U || draft->module_value_count > LX_ASSET_REGISTRY_CAPACITY + 2U ||
         !lxp_ct_is_zero(draft->genesis_state_root, 32U) ||
         !lxp_ct_is_zero(draft->genesis_receipt_state_root, 32U) ||
         !lxp_ct_is_zero(draft->signer_public_key, 32U) ||
         !lxp_ct_is_zero(draft->signature, 64U))
         return LXP_ERR_NON_CANONICAL;
     if (draft->module_value_count != 0U) {
-        bool asset_present = false, schedule_present = false;
+        bool asset_present = false;
+        lxp_byte_span head = {NULL, 0U}, prices = {NULL, 0U};
         for (size_t i = 0U; i < draft->module_value_count; ++i) {
             const lxp_genesis_module_value *value = &draft->module_values[i];
             if (value->module_id == LXP_MODULE_ASSET) {
@@ -163,13 +182,19 @@ static lxp_result build_fresh(
                 if (memcmp(record.asset_id, asset_id, 32U) == 0) asset_present = true;
             } else if (value->module_id == LXP_MODULE_GOVERNANCE &&
                 memcmp(value->key, "fee.schedule", 12U) == 0 && lxp_ct_is_zero(value->key + 12U, 20U)) {
-                lxp_fee_params schedule;
-                if (schedule_present || lxp_fee_params_decode(value->value, value->value_length, &schedule) != LXP_OK ||
-                    schedule.version != 2U) return LXP_ERR_NON_CANONICAL;
-                schedule_present = true;
+                if (head.bytes != NULL || value->value_length > sizeof(value->value)) return LXP_ERR_NON_CANONICAL;
+                head = (lxp_byte_span){value->value, value->value_length};
+            } else if (value->module_id == LXP_MODULE_GOVERNANCE &&
+                memcmp(value->key, "fee.module-prices", 17U) == 0 && lxp_ct_is_zero(value->key + 17U, 15U)) {
+                if (prices.bytes != NULL || value->value_length > sizeof(value->value)) return LXP_ERR_NON_CANONICAL;
+                prices = (lxp_byte_span){value->value, value->value_length};
             } else return LXP_ERR_NON_CANONICAL;
         }
-        if (!asset_present || !schedule_present) return LXP_ERR_ASSET_MISMATCH;
+        if (!asset_present || head.bytes == NULL) return LXP_ERR_ASSET_MISMATCH;
+        lxp_fee_params schedule;
+        if (lxp_fee_stored_schedule_decode(head, prices, &schedule) != LXP_OK ||
+            (schedule.version != 2U && schedule.version != 3U && schedule.version != 4U))
+            return LXP_ERR_NON_CANONICAL;
     }
     candidate = (lxp_genesis_manifest *)malloc(sizeof(*candidate));
     if (candidate == NULL) return LXP_ERR_IO;
@@ -212,7 +237,7 @@ static lxp_result build_fresh(
         status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK)
         status = materialize_snapshot(candidate, arena, snapshot_manifest,
-                                      snapshot);
+                                      snapshot, NULL);
     if (status == LXP_OK)
         status = lxp_genesis_encode(candidate, true, arena,
                                     encoded_manifest);

@@ -1,6 +1,7 @@
 #include "layerx/lx_budget.h"
 
 #include <stddef.h>
+#include <string.h>
 
 lxp_result lx_budget_periods_elapsed(const lx_budget_record *record,
                                      uint64_t batch_timestamp,
@@ -72,4 +73,62 @@ lxp_result lx_budget_epoch_begin(lxp_module_ctx *ctx, uint64_t epoch,
         if (status != LXP_OK) return status;
     }
     return LXP_OK;
+}
+
+typedef struct budget_maintenance_scan {
+    uint64_t timestamp;
+    lx_budget_record record;
+    bool found;
+} budget_maintenance_scan;
+
+static lxp_result budget_maintenance_visit(const uint8_t *key, size_t key_length,
+    const uint8_t *value, size_t value_length, void *opaque)
+{
+    budget_maintenance_scan *scan = opaque;
+    lx_budget_record record;
+    uint64_t elapsed;
+    lxp_result status;
+    if (key == NULL || key_length != LX_BUDGET_STATE_KEY_BYTES)
+        return LXP_ERR_NON_CANONICAL;
+    if (scan->found) return LXP_OK;
+    status = lx_budget_record_decode(value, value_length, &record);
+    if (status != LXP_OK) return status;
+    if (memcmp(key + 7U, record.budget_id, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    if (record.closed || scan->timestamp < record.period_start ||
+        record.expiry <= scan->timestamp)
+        return LXP_OK;
+    status = lx_budget_periods_elapsed(&record, scan->timestamp, &elapsed);
+    if (status != LXP_OK) return status;
+    if (elapsed != 0U) {
+        scan->record = record;
+        scan->found = true;
+    }
+    return LXP_OK;
+}
+
+lxp_result lx_budget_batch_maintenance(lxp_module_ctx *ctx, bool *complete)
+{
+    static const uint8_t prefix[] = "budget:";
+    budget_maintenance_scan scan = {0};
+    uint8_t key[LX_BUDGET_STATE_KEY_BYTES];
+    uint8_t bytes[LX_BUDGET_RECORD_MAX_BYTES];
+    size_t length;
+    lxp_result status;
+    if (ctx == NULL || complete == NULL) return LXP_ERR_NON_CANONICAL;
+    *complete = false;
+    scan.timestamp = lxp_ctx_batch_timestamp_ms(ctx);
+    status = lxp_ctx_kv_iter(ctx, prefix, sizeof(prefix) - 1U,
+        budget_maintenance_visit, &scan);
+    if (status != LXP_OK) return status;
+    if (!scan.found) {
+        *complete = true;
+        return LXP_OK;
+    }
+    status = lx_budget_rollover(&scan.record, scan.timestamp);
+    if (status == LXP_OK) status = lx_budget_state_key(scan.record.budget_id, key);
+    if (status == LXP_OK)
+        status = lx_budget_record_encode(&scan.record, bytes, sizeof(bytes), &length);
+    if (status == LXP_OK) status = lxp_ctx_kv_put(ctx, key, sizeof(key), bytes, length);
+    return status;
 }

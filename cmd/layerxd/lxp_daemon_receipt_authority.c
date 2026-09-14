@@ -1,3 +1,4 @@
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_daemon.h"
 
 #include "layerx/lxp_batch_identity.h"
@@ -58,6 +59,19 @@ static void write_u64(uint8_t bytes[8], uint64_t value)
         bytes[index] = (uint8_t)(value >> (56U - index * 8U));
 }
 
+lxp_result lxp_daemon_receipt_authority_header_authorization(const lxp_daemon_receipt_authority_store *store,
+    const lxp_batch_header *header, lxp_sequencer_authorization *authorization)
+{
+    uint64_t epoch;
+    if (store == NULL || header == NULL || authorization == NULL) return LXP_ERR_NON_CANONICAL;
+    if (store->handover_chain == NULL) { *authorization = store->authorization; return LXP_OK; }
+    lxp_result status = lxp_handover_trust_authorization(store->handover_chain,
+        header->batch_number, authorization, &epoch);
+    if (status == LXP_OK && (header->epoch != epoch ||
+        header->network_id != store->handover_chain->network_id)) status = LXP_ERR_AUTH_SCOPE;
+    return status;
+}
+
 static lxp_result validate_evidence(
     const lxp_daemon_receipt_authority_store *store,
     const uint8_t *receipt_bytes, size_t receipt_length,
@@ -67,6 +81,7 @@ static lxp_result validate_evidence(
     uint8_t receipt_digest[32])
 {
     uint8_t leaf[32];
+    lxp_sequencer_authorization authorization;
     size_t mark;
     lxp_result status;
     if (store == NULL || receipt_bytes == NULL || header_bytes == NULL ||
@@ -75,18 +90,23 @@ static lxp_result validate_evidence(
         receipt_length == 0U || receipt_length > LXP_MAX_ACTIVITY_BYTES ||
         header_length != LXP_BATCH_HEADER_ENCODED_SIZE)
         return LXP_ERR_NON_CANONICAL;
+    authorization = store->authorization;
     mark = lxp_arena_mark(arena);
     status = lxp_receipt_decode(receipt_bytes, receipt_length, true, receipt);
+    if (status == LXP_OK && store->handover_chain != NULL)
+        status = lxp_batch_header_decode(header_bytes, header_length, header);
+    if (status == LXP_OK && store->handover_chain != NULL)
+        status = lxp_daemon_receipt_authority_header_authorization(store, header, &authorization);
     if (status == LXP_OK)
         status = lxp_receipt_verify(receipt,
-                                    store->authorization.public_key, arena);
+                                    authorization.public_key, arena);
     if (status == LXP_OK)
         status = lxp_receipt_digest(receipt, arena, receipt_digest);
     if (status == LXP_OK)
         status = lxp_batch_header_decode(header_bytes, header_length, header);
     if (status == LXP_OK)
         status = lxp_batch_verify_signature(
-            header, header_signature, 64U, &store->authorization, arena);
+            header, header_signature, 64U, &authorization, arena);
     if (status == LXP_OK)
         status = lxp_merkle_leaf_hash(receipt_bytes, receipt_length, leaf);
     if (status == LXP_OK)
@@ -143,18 +163,25 @@ static lxp_result validate_publication(
     }
     if (format_version == 3U) {
         lxp_programs_occupancy_receipt maintenance;
+        lxp_sequencer_authorization authorization;
         uint8_t leaf[32];
         uint64_t committed_last_sequence = 0U;
         if (store == NULL || proof == NULL || arena == NULL ||
             metadata == NULL || header == NULL || digest == NULL)
             return LXP_ERR_NON_CANONICAL;
-        status = lxp_programs_occupancy_receipt_decode(
+        status = lxp_batch_maintenance_occupancy_decode(
             receipt_bytes, receipt_length, &maintenance);
         if (status == LXP_OK)
             status = lxp_batch_header_decode(header_bytes, header_length, header);
+        if (status == LXP_OK) status = lxp_daemon_receipt_authority_header_authorization(store, header, &authorization);
         if (status == LXP_OK)
             status = lxp_batch_verify_signature(header, header_signature, 64U,
-                &store->authorization, arena);
+                &authorization, arena);
+        if (status == LXP_OK) {
+            lxp_byte_span events;
+            status = lxp_batch_maintenance_events((lxp_byte_span){receipt_bytes, receipt_length},
+                header, &events);
+        }
         if (status == LXP_OK &&
             (!lxp_protocol_version_uses_occupancy(header->protocol_version) ||
              header->first_sequence == 0U || header->last_sequence <= header->first_sequence ||
@@ -379,9 +406,10 @@ static lxp_result replay_authority(void *context,
     return status;
 }
 
-lxp_result lxp_daemon_receipt_authority_open(
+lxp_result lxp_daemon_receipt_authority_open_history(
     lxp_daemon_receipt_authority_store *store, lxp_log *log,
-    const lxp_sequencer_authorization *authorization)
+    const lxp_sequencer_authorization *authorization,
+    const lxp_handover_trust_chain *handover_chain)
 {
     if (store == NULL || log == NULL || authorization == NULL ||
         authorization->authorized == 0U ||
@@ -393,12 +421,20 @@ lxp_result lxp_daemon_receipt_authority_open(
     (void)memset(store, 0, sizeof(*store));
     store->log = log;
     store->authorization = *authorization;
+    store->handover_chain = handover_chain;
     {
         lxp_result status = lxp_log_recover_complete_records(
             log, replay_authority, store);
         store->replay_offset = 0U;
         return status;
     }
+}
+
+lxp_result lxp_daemon_receipt_authority_open(
+    lxp_daemon_receipt_authority_store *store, lxp_log *log,
+    const lxp_sequencer_authorization *authorization)
+{
+    return lxp_daemon_receipt_authority_open_history(store, log, authorization, NULL);
 }
 
 static lxp_result append_authority(

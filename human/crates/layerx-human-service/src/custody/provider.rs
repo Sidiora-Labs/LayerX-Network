@@ -668,7 +668,7 @@ impl KmsProvider for RemoteKmsProvider {
         reference: &ProviderKeyReference,
         payload: &[u8],
     ) -> Result<Vec<u8>, KmsError> {
-        if !(6..=12).contains(&operation) {
+        if !(6..=12).contains(&operation) && operation != 13 {
             return Err(KmsError::Refused);
         }
         let mut frame = encode_key_request(
@@ -677,7 +677,8 @@ impl KmsProvider for RemoteKmsProvider {
             binding,
             Some(reference),
         )?;
-        frame[4..6].copy_from_slice(&3_u16.to_be_bytes());
+        let version = if operation == 13 { 4_u16 } else { 3_u16 };
+        frame[4..6].copy_from_slice(&version.to_be_bytes());
         if operation >= 7 {
             let mut writer = WireWriter::from_bytes(frame);
             writer.bytes(payload, PROVIDER_FRAME_LIMIT)?;
@@ -685,7 +686,7 @@ impl KmsProvider for RemoteKmsProvider {
         } else if !payload.is_empty() {
             return Err(KmsError::Refused);
         }
-        self.call_version(operation, 3, &frame)
+        self.call_version(operation, version, &frame)
     }
 
     fn create_key(
@@ -944,8 +945,21 @@ fn encode_sign_request(
 }
 
 fn encode_disclosure(disclosure: &Disclosure) -> Result<Vec<u8>, CustodyError> {
+    let fee_grant = disclosure
+        .authority_grant
+        .filter(|grant| grant.fee_budget.is_some());
     let mut writer = WireWriter::new();
-    writer.u8(1)?;
+    writer.u8(
+        if disclosure.onboarding.is_some() || disclosure.native_operation.is_some() {
+            4
+        } else if disclosure.session_grant.is_some() {
+            3
+        } else if fee_grant.is_some() {
+            2
+        } else {
+            1
+        },
+    )?;
     writer.u32(disclosure.activity_type.value())?;
     writer.bytes(&disclosure.actor, 255)?;
     writer.bytes(&disclosure.authority, 524_288)?;
@@ -989,6 +1003,42 @@ fn encode_disclosure(disclosure: &Disclosure) -> Result<Vec<u8>, CustodyError> {
             writer.fixed(&binding.ownership_signature_digest)?;
         }
         None => writer.u8(0)?,
+    }
+    if let Some(grant) = fee_grant {
+        writer.bytes(
+            &grant
+                .encode()
+                .map_err(|_| CustodyError::Kms(KmsError::InvalidConfiguration))?,
+            1024,
+        )?;
+    }
+    if let Some(session) = &disclosure.session_grant {
+        writer.bytes(&session.grant.registration_payload, 1024)?;
+        writer.fixed(&session.expiry_sequence.to_be_bytes())?;
+        writer.fixed(&session.action_key)?;
+        if let Some(replacement) = session.replacement {
+            writer.u8(1)?;
+            writer.fixed(&replacement.predecessor_grant_id)?;
+            writer.fixed(&replacement.expected_charge_state)?;
+        } else {
+            writer.u8(0)?;
+        }
+    }
+    if let Some(onboarding) = &disclosure.onboarding {
+        writer.bytes(
+            &onboarding
+                .encode()
+                .map_err(|_| CustodyError::Kms(KmsError::InvalidConfiguration))?,
+            2048,
+        )?;
+    }
+    if let Some(operation) = &disclosure.native_operation {
+        writer.bytes(
+            &operation
+                .encode()
+                .map_err(|_| CustodyError::Kms(KmsError::InvalidConfiguration))?,
+            2048,
+        )?;
     }
     Ok(writer.finish())
 }

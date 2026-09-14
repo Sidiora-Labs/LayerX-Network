@@ -183,6 +183,7 @@ typedef struct budget_env {
 } budget_env;
 
 typedef struct budget_call {
+    uint16_t protocol_version;
     uint32_t activity_type;
     const char *did;
     const uint8_t *seed;
@@ -277,6 +278,7 @@ static int submit(const budget_call *call, lxp_effect_buffer *effects,
                   lxp_result *result)
 {
     static uint8_t arena_bytes[262144];
+    static uint8_t native_arena_bytes[LXP_MAX_ACTIVITY_BYTES + sizeof(arena_bytes)];
     static uint8_t wire_bytes[LXP_MAX_ACTIVITY_BYTES];
     uint8_t payload_copy[256];
     uint8_t name[LX_ACCOUNT_NAME_MAX];
@@ -310,7 +312,7 @@ static int submit(const budget_call *call, lxp_effect_buffer *effects,
     }
     CHECK(sign_raw(call->seed, payload_copy, 0U, signature, public_key) == 0);
     (void)memset(&activity, 0, sizeof(activity));
-    activity.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
+    activity.protocol_version = call->protocol_version == 0U ? LXP_PROTOCOL_VERSION_OCCUPANCY : call->protocol_version;
     activity.network_id = 7U;
     activity.activity_type = call->activity_type;
     activity.actor_did.bytes = (const uint8_t *)call->did;
@@ -348,19 +350,24 @@ static int submit(const budget_call *call, lxp_effect_buffer *effects,
     CHECK(lxp_arena_init(&wire_arena, wire_bytes,
                          sizeof(wire_bytes)) == LXP_OK);
     CHECK(lxp_activity_encode(&activity, &wire_arena, &wire) == LXP_OK);
-    CHECK(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
+    CHECK(lxp_arena_init(&arena, call->protocol_version == 3U ? native_arena_bytes : arena_bytes,
+        call->protocol_version == 3U ? sizeof(native_arena_bytes) : sizeof(arena_bytes)) == LXP_OK);
     CHECK(lxp_effect_buffer_init(effects) == LXP_OK);
     ++env.global_sequence;
+    if (activity.protocol_version == 3U)
+        CHECK(lxp_state_journal_open(&env.state, env.global_sequence, &env.journal) == LXP_OK);
     CHECK(lxp_module_ctx_init(&ctx, &env.kernel, LXP_MODULE_BUDGET,
                               call->timestamp, 0U, env.global_sequence,
                               1000000U, &arena, true) == LXP_OK);
-    ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
+    ctx.protocol_version = activity.protocol_version;
     ctx.batch_number = env.global_sequence;
     CHECK(lxp_activity_id(wire.bytes, wire.length, ctx.activity_id) == LXP_OK);
     CHECK(lxp_module_ctx_bind_effects(&ctx, effects) == LXP_OK);
     CHECK(lxp_kernel_dispatch(env.registration, &ctx, &activity, &authority,
                               effects, result) == LXP_OK);
     if (*result == LXP_OK) CHECK(lxp_module_ctx_commit(&ctx) == LXP_OK);
+    if (activity.protocol_version == 3U)
+        CHECK(lxp_state_journal_commit(&env.journal) == LXP_OK);
     return 0;
 }
 
@@ -822,8 +829,108 @@ static int dispatch_path(void)
     return 0;
 }
 
+
+static int native_source_dispatch_path(void)
+{
+    uint8_t create[LX_BUDGET_CREATE_V2_PAYLOAD_BYTES] = {0U, 2U};
+    uint8_t fund[LX_BUDGET_FUND_V2_PAYLOAD_BYTES] = {0U, 2U};
+    uint8_t close_budget[LX_BUDGET_CLOSE_PAYLOAD_BYTES] = {0U, 1U};
+    uint8_t public_key[32], signature[64], encoded[LX_BUDGET_RECORD_MAX_BYTES];
+    char source_name[512], recipient_asset_name[512], asset_hex[65];
+    static const char digits[] = "0123456789abcdef";
+    size_t length;
+    lx_account *source, *recipient_asset;
+    lx_budget_record record, decoded;
+    budget_call call = {0};
+    lxp_effect_buffer effects;
+    lxp_result result;
+    CHECK(env_init() == 0);
+    CHECK(sign_raw(owner_seed, NULL, 0U, signature, public_key) == 0);
+    env.state.next_sequence = 1U;
+    CHECK(lxp_kernel_register_module(&env.kernel, lx_asset_module_iface()) == LXP_OK);
+    CHECK(lxp_kernel_module_for_activity(&env.kernel, LX_BUDGET_CREATE, 0U, &env.registration) == LXP_OK);
+    env.asset.symbol_length = 3U;
+    (void)memcpy(env.asset.symbol, "TST", 4U);
+    env.asset.name_length = 5U;
+    (void)memcpy(env.asset.name, "Asset", 5U);
+    env.asset.issuer_kind = 2U; env.asset.issuer_did32[0] = 1U;
+    env.asset.custody_kind = LX_ASSET_CUSTODY_PAXEER;
+    env.asset.custody_reference[0] = 1U; env.asset.custody_reference_length = 1U;
+    env.asset.total_units.lo = 1000U;
+    uint8_t asset_bytes[512], asset_arena_bytes[4096];
+    lxp_arena asset_arena;
+    lxp_module_ctx asset_ctx;
+    CHECK(lx_asset_record_encode(&env.asset, asset_bytes, sizeof(asset_bytes), &length) == LXP_OK);
+    CHECK(lxp_state_journal_open(&env.state, 1U, &env.journal) == LXP_OK);
+    CHECK(lxp_arena_init(&asset_arena, asset_arena_bytes, sizeof(asset_arena_bytes)) == LXP_OK);
+    CHECK(lxp_module_ctx_init(&asset_ctx, &env.kernel, LXP_MODULE_ASSET, 0U, 0U, 1U, 100000U, &asset_arena, true) == LXP_OK);
+    CHECK(lxp_ctx_kv_put(&asset_ctx, env.asset.asset_id, 32U, asset_bytes, length) == LXP_OK);
+    CHECK(lxp_module_ctx_commit(&asset_ctx) == LXP_OK && lxp_state_journal_commit(&env.journal) == LXP_OK);
+    env.global_sequence = 1U;
+    for (size_t i = 0U; i < 32U; ++i) {
+        asset_hex[2U * i] = digits[env.asset.asset_id[i] >> 4U];
+        asset_hex[2U * i + 1U] = digits[env.asset.asset_id[i] & 15U];
+    }
+    asset_hex[64U] = '\0';
+    int n = snprintf(source_name, sizeof(source_name), "agent:%s:asset:%s", owner_did, asset_hex);
+    CHECK(n > 0 && (size_t)n < sizeof(source_name));
+    n = snprintf(recipient_asset_name, sizeof(recipient_asset_name), "agent:did:key:recv:asset:%s", asset_hex);
+    CHECK(n > 0 && (size_t)n < sizeof(recipient_asset_name));
+    CHECK(open_account(source_name, 1000U, public_key, &source) == 0);
+    CHECK(open_account(recipient_asset_name, 0U, public_key, &recipient_asset) == 0);
+    env.owner->asset_id[0] ^= 0x80U;
+    create[2U] = 0x82U;
+    char canonical_budget[512];
+    n = snprintf(canonical_budget, sizeof(canonical_budget), "agent:%s:budget:82%062u", owner_did, 0U);
+    CHECK(n > 0 && (size_t)n < sizeof(canonical_budget));
+    CHECK(open_account(canonical_budget, 0U, NULL, &env.budget_account) == 0);
+    (void)memcpy(create + 34U, env.budget_account->id, 32U);
+    (void)memcpy(create + 66U, env.asset.asset_id, 32U); create[98U] = 0x73U;
+    put_u128(create + 130U, 0U, 500U); put_u128(create + 162U, 0U, 300U);
+    put_u64(create + 178U, 1000U); put_u64(create + 194U, 1000000U); create[210U] = 1U;
+    (void)memcpy(create + 211U, source->id, 32U);
+    call.protocol_version = 3U; call.did = owner_did; call.seed = owner_seed;
+    call.timestamp = 500U; call.activity_type = LX_BUDGET_CREATE;
+    call.payload = create; call.payload_length = sizeof(create);
+    CHECK(submit(&call, &effects, &result) == 0);
+    if (result != LXP_OK) fprintf(stderr, "native Budget CREATE result=%d\n", result);
+    CHECK(result == LXP_OK);
+    CHECK(source->balance.lo == 700U && source->next_sequence == 1U &&
+        env.owner->balance.lo == 1000U && env.owner->next_sequence == 0U && env.budget_account->balance.lo == 300U);
+    CHECK(read_record(create + 2U, &record) == 0 && record.native_source &&
+        memcmp(record.owner, env.owner->id, 32U) == 0 && memcmp(record.source_account, source->id, 32U) == 0);
+    CHECK(lx_budget_record_encode(&record, encoded, sizeof(encoded), &length) == LXP_OK &&
+        encoded[1U] == 2U && length == LX_BUDGET_RECORD_FIXED_BYTES + 32U);
+    CHECK(lx_budget_record_decode(encoded, length, &decoded) == LXP_OK && decoded.native_source &&
+        memcmp(decoded.source_account, source->id, 32U) == 0);
+    CHECK(lx_budget_record_decode(encoded, length - 1U, &decoded) == LXP_ERR_NON_CANONICAL);
+    encoded[1U] = 1U;
+    CHECK(lx_budget_record_decode(encoded, length, &decoded) == LXP_ERR_NON_CANONICAL);
+    (void)memcpy(fund + 2U, create + 2U, 32U); put_u128(fund + 34U, 0U, 100U);
+    put_u64(fund + 50U, 2U); call.activity_type = LX_BUDGET_FUND; call.payload = fund; call.payload_length = sizeof(fund);
+    CHECK(submit(&call, &effects, &result) == 0 && result == LXP_ERR_CONTEXT_MISMATCH);
+    CHECK(source->balance.lo == 700U && source->next_sequence == 1U && env.budget_account->balance.lo == 300U && env.owner->balance.lo == 1000U);
+    put_u64(fund + 50U, 1U);
+    CHECK(submit(&call, &effects, &result) == 0 && result == LXP_OK);
+    CHECK(source->balance.lo == 600U && source->next_sequence == 2U && env.budget_account->balance.lo == 400U && env.owner->balance.lo == 1000U);
+    uint8_t spend[LX_BUDGET_SPEND_PAYLOAD_BYTES] = {0U, 1U};
+    (void)memcpy(spend + 2U, create + 2U, 32U); (void)memcpy(spend + 34U, recipient_asset->id, 32U);
+    put_u128(spend + 66U, 0U, 50U); call.activity_type = LX_BUDGET_SPEND; call.payload = spend; call.payload_length = sizeof(spend);
+    CHECK(submit(&call, &effects, &result) == 0 && result == LXP_OK);
+    CHECK(recipient_asset->balance.lo == 50U && env.budget_account->balance.lo == 350U && env.owner->balance.lo == 1000U);
+    (void)memcpy(close_budget + 2U, create + 2U, 32U); put_u64(close_budget + 34U, 1U);
+    call.sequence = env.owner->next_sequence; call.activity_type = LX_BUDGET_CLOSE;
+    call.payload = close_budget; call.payload_length = sizeof(close_budget);
+    CHECK(submit(&call, &effects, &result) == 0 && result == LXP_OK);
+    CHECK(source->balance.lo == 950U && env.budget_account->balance.lo == 0U && env.owner->balance.lo == 1000U);
+    CHECK(read_record(create + 2U, &record) == 0 && record.closed && record.native_source && memcmp(record.source_account, source->id, 32U) == 0);
+    CHECK(lxp_state_store_destroy(&env.state) == LXP_OK);
+    return 0;
+}
+
 int main(void)
 {
     if (store_path() != 0) return 1;
-    return dispatch_path();
+    if (dispatch_path() != 0) return 1;
+    return native_source_dispatch_path();
 }

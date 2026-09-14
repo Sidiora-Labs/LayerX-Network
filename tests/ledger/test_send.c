@@ -112,7 +112,7 @@ int main(void)
     asset.registered = true;
     (void)memset(&store, 0, sizeof(store));
     environment = (lxp_send_environment){ &registry, &asset, 1U, &store,
-                                          10U, 7U, LXP_PROTOCOL_VERSION };
+                                          10U, 7U, LXP_PROTOCOL_VERSION, NULL };
     if (lxp_send_execute(&send, &environment, &receipt) != LXP_OK ||
         from->balance.lo != 75U || to->balance.lo != 25U ||
         from->next_sequence != 1U) return 1;
@@ -178,7 +178,7 @@ int main(void)
             lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 0U },
                                          0U) != LXP_OK) return 1;
         spilling_environment = (lxp_send_environment){ &registry, &asset, 1U,
-            &spilling, 10U, 7U, LXP_PROTOCOL_VERSION };
+            &spilling, 10U, 7U, LXP_PROTOCOL_VERSION, NULL };
         (void)memset(&oldest, 0, sizeof(oldest));
         (void)memset(&oldest_send, 0, sizeof(oldest_send));
         send.amount = (lxp_u128){ 0U, 1U };
@@ -238,7 +238,7 @@ int main(void)
             lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 0U },
                                          0U) != LXP_OK) return 1;
         metered_environment = (lxp_send_environment){ &registry, &asset, 1U,
-            &metered, 10U, 7U, LXP_PROTOCOL_VERSION };
+            &metered, 10U, 7U, LXP_PROTOCOL_VERSION, NULL };
         send.amount = (lxp_u128){ 0U, 1U };
         for (index = 0U; index < window; ++index) {
             send.sequence = (uint64_t)index;
@@ -277,7 +277,7 @@ int main(void)
             lxp_ledger_bootstrap_balance(to, asset_id, (lxp_u128){ 0U, 0U },
                                          0U) != LXP_OK) return 1;
         unmetered_environment = (lxp_send_environment){ &registry, &asset, 1U,
-            &unmetered, 10U, 7U, LXP_PROTOCOL_VERSION };
+            &unmetered, 10U, 7U, LXP_PROTOCOL_VERSION, NULL };
         send.amount = (lxp_u128){ 0U, 1U };
         for (index = 0U; index < window; ++index) {
             send.sequence = (uint64_t)index;

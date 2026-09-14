@@ -8,6 +8,7 @@ use crate::programs::{LayerXKeyCredential, ProgramOperationError};
 
 #[derive(Debug)]
 pub enum RpcError {
+    Clock(layerx_types::clock::ClockError),
     Transport,
     Verification,
     Signing(layerx_crypto::signer::SignError),
@@ -557,6 +558,7 @@ pub struct RpcClient {
     credential: Option<LayerXKeyCredential>,
     subscription_tls: Option<std::sync::Arc<rustls::ClientConfig>>,
     next_id: AtomicU64,
+    pub(crate) clock: Option<std::sync::Arc<dyn layerx_types::clock::Clock>>,
 }
 
 macro_rules! read_methods {
@@ -607,6 +609,18 @@ pub fn wallet_account(
 }
 
 impl RpcClient {
+    #[must_use]
+    pub fn with_clock(mut self, clock: std::sync::Arc<dyn layerx_types::clock::Clock>) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
+    pub(crate) fn clock(&self) -> Result<std::sync::Arc<dyn layerx_types::clock::Clock>, RpcError> {
+        self.clock.clone().ok_or(RpcError::Clock(
+            layerx_types::clock::ClockError::Unavailable,
+        ))
+    }
+
     #[must_use]
     pub const fn wallet(&self, native_asset: [u8; 32]) -> RpcWallet<'_> {
         RpcWallet {
@@ -691,6 +705,7 @@ impl RpcClient {
             credential,
             subscription_tls,
             next_id: AtomicU64::new(1),
+            clock: None,
         })
     }
 
@@ -769,6 +784,7 @@ impl RpcClient {
             &self.endpoint,
             self.credential.as_ref(),
             self.subscription_tls.clone(),
+            self.clock()?,
             topic,
             account,
             None,
@@ -791,6 +807,7 @@ impl RpcClient {
             &self.endpoint,
             self.credential.as_ref(),
             self.subscription_tls.clone(),
+            self.clock()?,
             topic,
             account,
             Some(cursor),
@@ -863,6 +880,18 @@ impl RpcClient {
     }
 
     fn call(&self, method: &str, params: &Value) -> Result<Value, RpcError> {
+        self.call_bounded(method, params, Duration::from_secs(30))
+    }
+
+    pub(crate) fn call_bounded(
+        &self,
+        method: &str,
+        params: &Value,
+        timeout: Duration,
+    ) -> Result<Value, RpcError> {
+        if timeout.is_zero() {
+            return Err(RpcError::Transport);
+        }
         let id = self
             .next_id
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
@@ -889,6 +918,9 @@ impl RpcClient {
             request = request.header("Authorization", value);
         }
         let mut response = request
+            .config()
+            .timeout_global(Some(timeout.min(Duration::from_secs(30))))
+            .build()
             .send(body.as_slice())
             .map_err(|_| RpcError::Transport)?;
         if response.status().as_u16() != 200

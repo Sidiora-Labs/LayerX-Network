@@ -120,6 +120,8 @@ fn fixtures() -> Vec<Fixture> {
     let idempotency = || IdempotencyKey::new([3; 32]);
     let amount = || Amount::from_u128(25);
     let issued_session = issue_session_key(&SessionKeyRequest {
+        fee_budget: None,
+        purpose: layerx_crypto::session::SessionPurpose::Activity,
         grantor: [1; 32],
         session_public_key: [2; 32],
         not_before: 10,
@@ -182,7 +184,7 @@ fn fixtures() -> Vec<Fixture> {
             name: "session_grant",
             source: "v1 session_grant canonical_authority_grant=0x2001 grantor=01x32 session_public_key=02x32 module_mask=128 ordinal_min=1 ordinal_max=6 not_before=10 expires=1000 revocation_sequence=3",
             intent: Intent::v1(IntentKind::SessionGrant(
-                SessionGrant::new(issued_session.registration_payload)
+                SessionGrant::new(issued_session.registration_payload, 1000, [13; 32])
                     .unwrap_or_else(|error| panic!("session intent: {error:?}")),
             )),
         },

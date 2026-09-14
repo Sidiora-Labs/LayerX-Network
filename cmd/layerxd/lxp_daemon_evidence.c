@@ -1,3 +1,4 @@
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_daemon.h"
 #include "lxp_daemon_deployment.h"
 
@@ -5,6 +6,7 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_receipt.h"
+#include "layerx/lxp_state_proof.h"
 #include "layerx/programs.h"
 
 #include <stdlib.h>
@@ -441,6 +443,26 @@ static bool authorizations_equal(
         lxp_ct_memcmp(left->public_key, right->public_key, 32U) == 0;
 }
 
+static bool evidence_authorization_matches(const lxp_daemon_evidence_store *store,
+    const lxp_sequencer_authorization *authorization, lxp_byte_span canonical_header)
+{
+    lxp_batch_header header;
+    lxp_sequencer_authorization trusted;
+    uint64_t epoch;
+    if (store == NULL || authorization == NULL) return false;
+    if (store->handover_chain == NULL) return authorizations_equal(authorization, &store->authorization);
+    if (lxp_batch_header_decode(canonical_header.bytes, canonical_header.length, &header) != LXP_OK ||
+        lxp_handover_trust_authorization(store->handover_chain, header.batch_number, &trusted, &epoch) != LXP_OK)
+        return false;
+    return header.network_id == store->network_id && header.epoch == epoch &&
+        authorization->authorized == 1U &&
+        authorization->first_batch_number == trusted.first_batch_number &&
+        (authorization->last_batch_number == trusted.last_batch_number ||
+         authorization->last_batch_number == UINT64_MAX) &&
+        memcmp(authorization->public_key, trusted.public_key, 32U) == 0 &&
+        memcmp(authorization->sequencer_id, trusted.sequencer_id, 32U) == 0;
+}
+
 static lxp_result state_leaf_hash(const uint8_t *key, size_t key_length,
                                   const uint8_t *value, size_t value_length,
                                   uint8_t hash[32])
@@ -523,6 +545,22 @@ static lxp_result state_proof_verify(const uint8_t leaf[32],
     return status;
 }
 
+static lxp_result account_maintenance_decode(uint16_t version, lxp_byte_span encoded,
+    const lxp_batch_header *header, lxp_programs_occupancy_receipt *record)
+{
+    if (version == 2U)
+        return lxp_programs_occupancy_receipt_decode(encoded.bytes, encoded.length, record);
+    if (version == 3U) {
+        lxp_byte_span events;
+        lxp_result status;
+        if (!lxp_batch_maintenance_is_envelope(encoded)) return LXP_ERR_VERSION_UNSUPPORTED;
+        status = lxp_batch_maintenance_events(encoded, header, &events);
+        if (status != LXP_OK) return status;
+        return lxp_batch_maintenance_occupancy_decode(encoded.bytes, encoded.length, record);
+    }
+    return LXP_ERR_VERSION_UNSUPPORTED;
+}
+
 static lxp_result verify_account_evidence(
     const lxp_daemon_account_evidence *evidence, uint32_t network_id,
     lxp_arena *arena)
@@ -547,11 +585,10 @@ static lxp_result verify_account_evidence(
         return LXP_ERR_NON_CANONICAL;
     status = verify_signed_header(&evidence->signed_header, network_id,
                                   arena, &header);
-    if (status == LXP_OK && evidence->format_version == 2U) {
+    if (status == LXP_OK && (evidence->format_version == 2U || evidence->format_version == 3U)) {
         lxp_programs_occupancy_receipt maintenance;
-        status = lxp_programs_occupancy_receipt_decode(
-            evidence->canonical_receipt.bytes, evidence->canonical_receipt.length,
-            &maintenance);
+        status = account_maintenance_decode(evidence->format_version, evidence->canonical_receipt,
+            &header, &maintenance);
         if (status == LXP_OK)
             status = lxp_hash_sha256(evidence->canonical_receipt.bytes,
                 evidence->canonical_receipt.length, digest);
@@ -718,7 +755,8 @@ static lxp_result encode_account_payload(
         evidence->account_leaf_value_length > UINT16_MAX ||
         evidence->canonical_receipt.length > UINT32_MAX)
         return LXP_ERR_NON_CANONICAL;
-    status = writer_u16(&writer, evidence->format_version == 2U ? 2U : EVIDENCE_WIRE_VERSION);
+    status = writer_u16(&writer, evidence->format_version == 3U ? 3U :
+        evidence->format_version == 2U ? 2U : EVIDENCE_WIRE_VERSION);
     if (status == LXP_OK) status = writer_bytes(&writer, evidence->account_id, 32U);
     if (status == LXP_OK) status = writer_bytes(&writer, evidence->receipt_digest, 32U);
     if (status == LXP_OK) status = writer_u64(&writer, evidence->observed_sequence);
@@ -755,7 +793,7 @@ static lxp_result decode_account_payload(
         return LXP_ERR_NON_CANONICAL;
     (void)memset(evidence, 0, sizeof(*evidence));
     status = reader_u16(&reader, &version);
-    if (status == LXP_OK && version != EVIDENCE_WIRE_VERSION && version != 2U)
+    if (status == LXP_OK && version != EVIDENCE_WIRE_VERSION && version != 2U && version != 3U)
         status = LXP_ERR_VERSION_UNSUPPORTED;
     evidence->format_version = status == LXP_OK ? version : 0U;
     if (status == LXP_OK) status = reader_copy(&reader, evidence->account_id, 32U);
@@ -774,7 +812,7 @@ static lxp_result decode_account_payload(
     if (status == LXP_OK) status = read_state_proof(&reader, &evidence->account_tree_proof);
     if (status == LXP_OK) status = read_state_proof(&reader, &evidence->universal_root_proof);
     if (status == LXP_OK) status = reader_u32(&reader, &receipt_length);
-    if (status == LXP_OK && (receipt_length == 0U || receipt_length > (version == 2U ? LXP_MAX_ACTIVITY_BYTES : LXP_STATE_MAX_RECEIPT_BYTES))) status = LXP_ERR_LENGTH_LIMIT;
+    if (status == LXP_OK && (receipt_length == 0U || receipt_length > (version == 3U ? LXP_BATCH_MAINTENANCE_MAX_BYTES : version == 2U ? LXP_MAX_ACTIVITY_BYTES : LXP_STATE_MAX_RECEIPT_BYTES))) status = LXP_ERR_LENGTH_LIMIT;
     if (status == LXP_OK) status = reader_take(&reader, receipt_length, &receipt);
     if (status == LXP_OK) status = lxp_arena_alloc(arena, receipt_length, _Alignof(uint64_t), &copy);
     if (status == LXP_OK) {
@@ -1289,6 +1327,80 @@ static lxp_result decode_finality_proof(
     return status;
 }
 
+static lxp_result verify_finality_contents(
+    uint32_t network_id, lxp_byte_span checkpoint_payload,
+    lxp_byte_span finality_proof, lxp_daemon_finality_authority_verify_fn verify,
+    void *context, lxp_arena *arena, decoded_finality *decoded, uint8_t checkpoint_id[32])
+{
+    uint8_t reference[FINALITY_SETTLEMENT_REFERENCE_BYTES];
+    lxp_result status;
+    if (network_id == 0U || verify == NULL || context == NULL || arena == NULL ||
+        decoded == NULL || checkpoint_id == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memset(decoded, 0, sizeof(*decoded));
+    status = decode_checkpoint_payload(checkpoint_payload, decoded);
+    if (status == LXP_OK) status = decode_finality_proof(finality_proof, decoded);
+    if (status == LXP_OK)
+        status = lxp_checkpoint_certificate_hash(&decoded->certificate.checkpoint, arena, checkpoint_id);
+    if (status == LXP_OK)
+        status = verify(context, &decoded->certificate, &decoded->bonded_set,
+                         &decoded->requirements, &decoded->settlement_registration);
+    if (status == LXP_OK && (decoded->certificate.checkpoint.header.network_id != network_id ||
+        decoded->certificate.attestation_count == 0U ||
+        decoded->requirements.equivocation_detected ||
+        !decoded->requirements.availability_challenges_answered ||
+        decoded->requirements.threshold != decoded->certificate.threshold ||
+        decoded->requirements.checkpoint_epoch != decoded->certificate.checkpoint.header.epoch ||
+        lxp_ct_memcmp(checkpoint_id, decoded->settlement_registration.checkpoint_id, 32U) != 0 ||
+        lxp_ct_memcmp(checkpoint_id, decoded->registered_checkpoint_id, 32U) != 0 ||
+        lxp_ct_memcmp(decoded->certificate.checkpoint.header.resulting_state_root,
+                      decoded->registered_resulting_root, 32U) != 0 ||
+        decoded->certificate.checkpoint.header.batch_number != decoded->registered_batch_number ||
+        decoded->settlement_registration.paxeer_chain_id != decoded->registered_chain_id ||
+        decoded->certificate.attestations[0].paxeer_chain_id != decoded->registered_chain_id ||
+        lxp_ct_memcmp(decoded->settlement_registration.settlement_contract,
+                      decoded->registered_contract, 20U) != 0 ||
+        lxp_ct_memcmp(decoded->certificate.attestations[0].paxeer_settlement_contract,
+                      decoded->registered_contract, 20U) != 0))
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status == LXP_OK)
+        status = settlement_reference_encode(&decoded->settlement_registration, reference);
+    if (status == LXP_OK && (decoded->registered_reference.length != sizeof(reference) ||
+        lxp_ct_memcmp(decoded->registered_reference.bytes, reference, sizeof(reference)) != 0))
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    return status;
+}
+
+lxp_result lxp_daemon_finality_contents_verify(uint32_t network_id,
+    lxp_byte_span checkpoint_payload, lxp_byte_span finality_proof,
+    lxp_byte_span authenticated_header, const uint8_t expected_checkpoint_id[32],
+    lxp_daemon_finality_authority_verify_fn verify, void *context, lxp_arena *arena)
+{
+    decoded_finality *decoded;
+    uint8_t checkpoint_id[32];
+    lxp_byte_span encoded_header;
+    size_t mark;
+    lxp_result status;
+    if (arena == NULL || expected_checkpoint_id == NULL ||
+        authenticated_header.bytes == NULL || authenticated_header.length != LXP_BATCH_HEADER_ENCODED_SIZE)
+        return LXP_ERR_NON_CANONICAL;
+    mark = lxp_arena_mark(arena);
+    decoded = malloc(sizeof(*decoded));
+    if (decoded == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    status = verify_finality_contents(network_id, checkpoint_payload, finality_proof,
+                                       verify, context, arena, decoded, checkpoint_id);
+    if (status == LXP_OK && lxp_ct_memcmp(checkpoint_id, expected_checkpoint_id, 32U) != 0)
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status == LXP_OK)
+        status = lxp_batch_header_encode(&decoded->certificate.checkpoint.header, arena, &encoded_header);
+    if (status == LXP_OK && (encoded_header.length != authenticated_header.length ||
+        lxp_ct_memcmp(encoded_header.bytes, authenticated_header.bytes, encoded_header.length) != 0))
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    free(decoded);
+    if (lxp_arena_reset(arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    return status;
+}
+
 static lxp_result verify_finality_bundle(
     const lxp_daemon_evidence_store *store, lxp_byte_span checkpoint_payload,
     lxp_byte_span finality_proof, lxp_arena *arena,
@@ -1302,17 +1414,9 @@ static lxp_result verify_finality_bundle(
         return LXP_ERR_NON_CANONICAL;
     if (store->verify_finality_authority == NULL)
         return LXP_ERR_MODULE_DISABLED;
-    (void)memset(decoded, 0, sizeof(*decoded));
-    status = decode_checkpoint_payload(checkpoint_payload, decoded);
-    if (status == LXP_OK) status = decode_finality_proof(finality_proof, decoded);
-    if (status == LXP_OK)
-        status = lxp_checkpoint_certificate_hash(
-            &decoded->certificate.checkpoint, arena, checkpoint_id);
-    if (status == LXP_OK)
-        status = store->verify_finality_authority(
-            store->finality_authority_context, &decoded->certificate,
-            &decoded->bonded_set, &decoded->requirements,
-            &decoded->settlement_registration);
+    status = verify_finality_contents(store->network_id, checkpoint_payload, finality_proof,
+        store->verify_finality_authority, store->finality_authority_context, arena,
+        decoded, checkpoint_id);
     if (status == LXP_OK &&
         (decoded->certificate.checkpoint.header.network_id !=
              store->network_id ||
@@ -1734,9 +1838,7 @@ static lxp_result validate_recovered_record(
     if (record->kind == LXP_DAEMON_EVIDENCE_ACCOUNT) {
         lxp_daemon_account_evidence evidence;
         status = decode_account_payload(record->payload, arena, &evidence);
-        if (status == LXP_OK && !authorizations_equal(
-                &evidence.signed_header.authorization,
-                &store->authorization))
+        if (status == LXP_OK && !evidence_authorization_matches(store, &evidence.signed_header.authorization, evidence.signed_header.canonical_header))
             status = LXP_ERR_AUTH_SCOPE;
         if (status == LXP_OK)
             status = verify_account_evidence(&evidence, store->network_id,
@@ -1755,9 +1857,7 @@ static lxp_result validate_recovered_record(
     } else if (record->kind == LXP_DAEMON_EVIDENCE_ACTIVITY) {
         lxp_daemon_activity_evidence evidence;
         status = decode_activity_payload(record->payload, arena, &evidence);
-        if (status == LXP_OK && !authorizations_equal(
-                &evidence.signed_header.authorization,
-                &store->authorization))
+        if (status == LXP_OK && !evidence_authorization_matches(store, &evidence.signed_header.authorization, evidence.signed_header.canonical_header))
             status = LXP_ERR_AUTH_SCOPE;
         if (status == LXP_OK)
             status = verify_activity_evidence(&evidence, store->network_id,
@@ -1788,12 +1888,13 @@ static lxp_result validate_recovered_record(
     return status == LXP_OK ? LXP_OK : LXP_ERR_LOG_CORRUPT;
 }
 
-lxp_result lxp_daemon_evidence_open(
+lxp_result lxp_daemon_evidence_open_history(
     lxp_daemon_evidence_store *store, lxp_log *log, uint32_t network_id,
     const lxp_sequencer_authorization *authorization,
     const uint8_t initial_settlement_anchor[32], bool allow_initialize,
     lxp_daemon_finality_authority_verify_fn verify_finality_authority,
-    void *finality_authority_context, lxp_arena *arena)
+    void *finality_authority_context, lxp_arena *arena,
+    const lxp_handover_trust_chain *handover_chain)
 {
     uint64_t offset = 0U;
     uint8_t (*identities)[33] = NULL;
@@ -1816,6 +1917,7 @@ lxp_result lxp_daemon_evidence_open(
     store->log = log;
     store->network_id = network_id;
     store->authorization = *authorization;
+    store->handover_chain = handover_chain;
     store->verify_finality_authority = verify_finality_authority;
     store->finality_authority_context = finality_authority_context;
     (void)memcpy(store->registry.finalisation.settlement_anchor,
@@ -1877,6 +1979,18 @@ lxp_result lxp_daemon_evidence_open(
     }
     if (status != LXP_OK) (void)memset(store, 0, sizeof(*store));
     return status;
+}
+
+lxp_result lxp_daemon_evidence_open(
+    lxp_daemon_evidence_store *store, lxp_log *log, uint32_t network_id,
+    const lxp_sequencer_authorization *authorization,
+    const uint8_t initial_settlement_anchor[32], bool allow_initialize,
+    lxp_daemon_finality_authority_verify_fn verify_finality_authority,
+    void *finality_authority_context, lxp_arena *arena)
+{
+    return lxp_daemon_evidence_open_history(store, log, network_id, authorization,
+        initial_settlement_anchor, allow_initialize, verify_finality_authority,
+        finality_authority_context, arena, NULL);
 }
 
 lxp_result lxp_daemon_evidence_bind_finality_authority(
@@ -2026,6 +2140,7 @@ lxp_result lxp_daemon_account_evidence_publish(
     const lxp_daemon_account_evidence *evidence, lxp_arena *arena,
     uint8_t record_digest[32])
 {
+    lxp_daemon_account_evidence candidate;
     uint8_t key_material[64];
     uint8_t key[32];
     uint8_t *payload;
@@ -2035,11 +2150,24 @@ lxp_result lxp_daemon_account_evidence_publish(
     if (store == NULL || !store->initialized || store->log == NULL ||
         evidence == NULL || arena == NULL)
         return LXP_ERR_NON_CANONICAL;
-    status = authorizations_equal(&evidence->signed_header.authorization,
-                                  &store->authorization) ?
+    status = evidence_authorization_matches(store, &evidence->signed_header.authorization, evidence->signed_header.canonical_header) ?
         LXP_OK : LXP_ERR_AUTH_SCOPE;
     if (status == LXP_OK)
         status = verify_account_evidence(evidence, store->network_id, arena);
+    if (status == LXP_OK && store->handover_chain != NULL) {
+        lxp_daemon_account_evidence persisted;
+        size_t mark = lxp_arena_mark(arena);
+        status = lxp_daemon_account_evidence_lookup(store, evidence->account_id,
+            evidence->resulting_state_root, arena, &persisted);
+        if (status == LXP_OK) {
+            candidate = *evidence;
+            candidate.signed_header.authorization = persisted.signed_header.authorization;
+            evidence = &candidate;
+            if (!evidence_authorization_matches(store, &evidence->signed_header.authorization,
+                evidence->signed_header.canonical_header)) status = LXP_ERR_AUTH_SCOPE;
+        } else if (status == LXP_ERR_UNKNOWN_FIELD) status = LXP_OK;
+        if (lxp_arena_reset(arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    }
     payload_length = account_payload_length(evidence);
     payload = status == LXP_OK ? (uint8_t *)malloc(payload_length) : NULL;
     if (status == LXP_OK && payload == NULL) status = LXP_ERR_IO;
@@ -2092,7 +2220,7 @@ static lxp_result account_evidence_publish_batch(
         authorization == NULL || canonical_header.bytes == NULL ||
         header_signature == NULL || arena == NULL)
         return LXP_ERR_NON_CANONICAL;
-    if (!authorizations_equal(authorization, &store->authorization))
+    if (!evidence_authorization_matches(store, authorization, canonical_header))
         return LXP_ERR_AUTH_SCOPE;
     accounts = kernel->state->accounts;
     if (accounts->count == 0U ||
@@ -2104,10 +2232,9 @@ static lxp_result account_evidence_publish_batch(
     mark = lxp_arena_mark(arena);
     status = lxp_batch_header_decode(canonical_header.bytes,
                                      canonical_header.length, &header);
-    if (status == LXP_OK && format_version == 2U) {
+    if (status == LXP_OK && (format_version == 2U || format_version == 3U)) {
         lxp_programs_occupancy_receipt maintenance;
-        status = lxp_programs_occupancy_receipt_decode(
-            canonical_head_receipt.bytes, canonical_head_receipt.length, &maintenance);
+        status = account_maintenance_decode(format_version, canonical_head_receipt, &header, &maintenance);
         if (status == LXP_OK)
             status = lxp_hash_sha256(canonical_head_receipt.bytes,
                 canonical_head_receipt.length, receipt_digest);
@@ -2164,7 +2291,7 @@ static lxp_result account_evidence_publish_batch(
         size_t item_mark = lxp_arena_mark(arena);
         status = account_evidence_build(
             format_version, kernel, store->network_id, accounts->accounts[index].id,
-            receipt_digest, format_version == 2U ? header.timestamp_ms : receipt.timestamp,
+            receipt_digest, (format_version == 2U || format_version == 3U) ? header.timestamp_ms : receipt.timestamp,
             canonical_head_receipt,
             head_receipt_proof, authorization, canonical_header,
             header_signature, &paths, arena, &evidence);
@@ -2199,7 +2326,8 @@ lxp_result lxp_daemon_account_evidence_publish_batch_maintenance(
     lxp_byte_span canonical_header, const uint8_t header_signature[64],
     lxp_arena *arena)
 {
-    return account_evidence_publish_batch(2U, store, kernel,
+    return account_evidence_publish_batch(
+        lxp_batch_maintenance_is_envelope(canonical_head_receipt) ? 3U : 2U, store, kernel,
         canonical_head_receipt, head_receipt_proof, authorization,
         canonical_header, header_signature, arena);
 }
@@ -2229,9 +2357,7 @@ lxp_result lxp_daemon_account_evidence_lookup(
             record.kind == LXP_DAEMON_EVIDENCE_ACCOUNT &&
             lxp_ct_memcmp(record.key, key, 32U) == 0) {
             status = decode_account_payload(record.payload, arena, evidence);
-            if (status == LXP_OK && !authorizations_equal(
-                    &evidence->signed_header.authorization,
-                    &store->authorization))
+            if (status == LXP_OK && !evidence_authorization_matches(store, &evidence->signed_header.authorization, evidence->signed_header.canonical_header))
                 status = LXP_ERR_AUTH_SCOPE;
             if (status == LXP_OK)
                 status = verify_account_evidence(evidence, store->network_id,
@@ -2274,9 +2400,7 @@ lxp_result lxp_daemon_account_evidence_lookup_batch(
             lxp_batch_header header;
             size_t candidate_mark = lxp_arena_mark(arena);
             status = decode_account_payload(record.payload, arena, &candidate);
-            if (status == LXP_OK && !authorizations_equal(
-                    &candidate.signed_header.authorization,
-                    &store->authorization))
+            if (status == LXP_OK && !evidence_authorization_matches(store, &candidate.signed_header.authorization, candidate.signed_header.canonical_header))
                 status = LXP_ERR_AUTH_SCOPE;
             if (status == LXP_OK)
                 status = lxp_batch_header_decode(
@@ -2374,8 +2498,7 @@ lxp_result lxp_daemon_account_evidence_wire_encode(
     if (status == LXP_OK &&
         (evidence == NULL ||
          lxp_ct_memcmp(evidence->account_id, account_id, 32U) != 0 ||
-         !authorizations_equal(&evidence->signed_header.authorization,
-                               &store->authorization)))
+         !evidence_authorization_matches(store, &evidence->signed_header.authorization, evidence->signed_header.canonical_header)))
         status = LXP_ERR_AUTH_SCOPE;
     if (status == LXP_OK)
         status = verify_account_evidence(evidence, network_id, arena);
@@ -2447,7 +2570,8 @@ lxp_result lxp_daemon_account_evidence_wire_encode(
     if (status != LXP_OK) return status;
     proof = (uint8_t *)allocation;
     writer = (evidence_writer){proof, proof_length, 0U};
-    status = writer_u16(&writer, evidence->format_version == 2U ? 2U : EVIDENCE_WIRE_VERSION);
+    status = writer_u16(&writer, evidence->format_version == 3U ? 3U :
+        evidence->format_version == 2U ? 2U : EVIDENCE_WIRE_VERSION);
     if (status == LXP_OK) status = writer_u8(&writer, 2U);
     if (status == LXP_OK) status = writer_u8(&writer, selector_kind);
     if (status == LXP_OK && selector_kind == 2U)
@@ -2502,6 +2626,8 @@ lxp_result lxp_daemon_account_evidence_wire_encode(
     return status;
 }
 
+#include "lxp_daemon_evidence_module.h"
+
 lxp_result lxp_daemon_activity_evidence_publish(
     lxp_daemon_evidence_store *store, lxp_byte_span canonical_activity,
     const lxp_merkle_proof *activity_proof,
@@ -2530,7 +2656,7 @@ lxp_result lxp_daemon_activity_evidence_publish(
     evidence.signed_header.authorization = *authorization;
     evidence.signed_header.canonical_header = canonical_header;
     (void)memcpy(evidence.signed_header.signature, header_signature, 64U);
-    status = authorizations_equal(authorization, &store->authorization) ?
+    status = evidence_authorization_matches(store, authorization, canonical_header) ?
         LXP_OK : LXP_ERR_AUTH_SCOPE;
     if (status == LXP_OK)
         status = verify_signed_header(&evidence.signed_header,
@@ -2548,6 +2674,17 @@ lxp_result lxp_daemon_activity_evidence_publish(
         evidence.global_sequence = receipt.global_sequence;
         evidence.batch_number = header.batch_number;
         status = verify_activity_evidence(&evidence, store->network_id, arena);
+    }
+    if (status == LXP_OK && store->handover_chain != NULL) {
+        lxp_daemon_activity_evidence persisted;
+        size_t mark = lxp_arena_mark(arena);
+        status = lxp_daemon_activity_evidence_lookup(store, evidence.activity_id, arena, &persisted);
+        if (status == LXP_OK) {
+            evidence.signed_header.authorization = persisted.signed_header.authorization;
+            if (!evidence_authorization_matches(store, &evidence.signed_header.authorization,
+                evidence.signed_header.canonical_header)) status = LXP_ERR_AUTH_SCOPE;
+        } else if (status == LXP_ERR_UNKNOWN_ACTIVITY) status = LXP_OK;
+        if (lxp_arena_reset(arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
     }
     payload_length = activity_payload_length(&evidence);
     payload = status == LXP_OK ? (uint8_t *)malloc(payload_length) : NULL;
@@ -2584,9 +2721,7 @@ lxp_result lxp_daemon_activity_evidence_lookup(
             record.kind == LXP_DAEMON_EVIDENCE_ACTIVITY &&
             lxp_ct_memcmp(record.key, activity_id, 32U) == 0) {
             status = decode_activity_payload(record.payload, arena, evidence);
-            if (status == LXP_OK && !authorizations_equal(
-                    &evidence->signed_header.authorization,
-                    &store->authorization))
+            if (status == LXP_OK && !evidence_authorization_matches(store, &evidence->signed_header.authorization, evidence->signed_header.canonical_header))
                 status = LXP_ERR_AUTH_SCOPE;
             if (status == LXP_OK)
                 status = verify_activity_evidence(evidence, store->network_id,
@@ -2638,6 +2773,7 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
     size_t count = 0U;
     size_t receipt_count = 0U;
     bool has_maintenance = false;
+    size_t event_count = 0U;
     lxp_programs_occupancy_receipt maintenance;
     size_t index;
     size_t mark;
@@ -2650,9 +2786,10 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
         receipt_authority->log == store->log ||
         receipt_authority->log == canonical_log)
         return LXP_ERR_NON_CANONICAL;
-    if (!authorizations_equal(authorization, &store->authorization) ||
-        !authorizations_equal(&receipt_authority->authorization,
-                              &store->authorization))
+    if (!evidence_authorization_matches(store, authorization, canonical_header) ||
+        (store->handover_chain == NULL ?
+            !authorizations_equal(&receipt_authority->authorization, &store->authorization) :
+            receipt_authority->handover_chain != store->handover_chain))
         return LXP_ERR_AUTH_SCOPE;
     (void)memset(&signed_header, 0, sizeof(signed_header));
     signed_header.authorization = *authorization;
@@ -2762,7 +2899,7 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
     if (status == LXP_OK && has_maintenance) {
         if (activities[count].bytes != NULL) status = LXP_ERR_LOG_CORRUPT;
         if (status == LXP_OK)
-            status = lxp_programs_occupancy_receipt_decode(
+            status = lxp_batch_maintenance_occupancy_decode(
                 receipts[count].bytes, receipts[count].length, &maintenance);
         if (status == LXP_OK &&
             (maintenance.batch_number != header.batch_number ||
@@ -2828,10 +2965,17 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
                            header.resulting_state_root, 32U) != 0 ||
          (has_maintenance && maintenance.parameter_version != decoded[0].parameter_version)))
         status = LXP_FATAL_REPLAY_DIVERGENCE;
+    event_count = count;
+    if (status == LXP_OK && has_maintenance) {
+        lxp_byte_span maintenance_events;
+        status = lxp_batch_maintenance_events(receipts[count], &header, &maintenance_events);
+        if (status == LXP_OK && maintenance_events.length != 0U)
+            events[event_count++] = maintenance_events;
+    }
     if (status == LXP_OK)
         status = lxp_batch_roots_compute(
             &(lxp_batch_root_inputs){activities, count, receipts, receipt_count,
-                                     events, count, NULL, 0U, NULL, 0U},
+                                     events, event_count, NULL, 0U, NULL, 0U},
             arena, &roots);
     if (status == LXP_OK) {
         lxp_batch_body body;
@@ -2841,7 +2985,7 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
             status = lxp_replay_section_encode(activities, count, arena, &body.activities);
         if (status == LXP_OK)
             status = lxp_da_receipt_section_encode(receipts, receipt_count,
-                                                   events, count, arena, &body.receipts);
+                                                   events, event_count, arena, &body.receipts);
         if (status == LXP_OK)
             status = lxp_batch_availability_root(&body, arena, roots.data_availability_root);
     }

@@ -179,6 +179,29 @@ required = ["assertion_id:AssertionId"]
 optional = ["device:SessionDevice"]
 compatibility = "Clients in the production beta service minor supply device metadata. It is optional on the additive wire contract so older decoders remain compatible, but the service fails closed when an opening request omits it because inventing device inventory is forbidden."
 
+[scalar.Milliseconds]
+json = "string"
+format = "decimal"
+rust = "u64"
+typescript = "bigint"
+consensus_integer = true
+
+[type.NativeFeeAsset]
+required = ["asset_id:string","currency:CurrencyCode","decimals:integer"]
+binding = "The asset identifier is 64 lowercase hexadecimal characters from the node's canonical native fee asset. Currency and decimals come from that same registered asset; decimals is between zero and 38. Discovery never authorizes a charge."
+
+[type.NativeFeeBudget]
+required = ["asset_id:string","maximum_per_activity:Amount","maximum_total:Amount","period_length_ms:Milliseconds","maximum_per_period:Amount"]
+validation = "The native asset must match the independently resolved network fee asset. Per-activity and total limits are positive and per-activity cannot exceed total. A zero period length requires a zero period limit; a nonzero period requires a period limit at least as large as the per-activity limit. Native issuance begins with zero spent counters and the authenticated opening time as its period start."
+
+[operation.session.fee-policy]
+authorization_class = "read"
+method = "GET"
+path = "/v1/sessions/fee-policy"
+request = "Empty"
+response = "NativeFeeAsset"
+scope = "Public read of the configured native fee asset for informed session consent. It neither opens a session nor grants authority."
+
 [type.SessionList]
 required = ["sessions:Session[]"]
 

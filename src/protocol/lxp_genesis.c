@@ -11,7 +11,10 @@
 #include "layerx/lxp_bridge_credit.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_authority.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_handover.h"
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_protocol.h"
@@ -233,6 +236,8 @@ lxp_result lxp_genesis_module_plan_resolve(
 {
     lxp_bridge_profile bridge;
     bool bridge_present = false;
+    bool handover_enabled = false;
+    uint8_t handover_authority[32];
     size_t count = sizeof(module_table) / sizeof(module_table[0]);
     size_t index;
     size_t position = 0U;
@@ -244,6 +249,9 @@ lxp_result lxp_genesis_module_plan_resolve(
     if (status == LXP_OK)
         status = lxp_bridge_genesis_profile(manifest, &bridge, &bridge_present);
     if (status == LXP_OK) status = module_enable_flags_known(manifest);
+    if (status == LXP_OK)
+        status = lxp_handover_genesis_authority(manifest, handover_authority,
+                                                &handover_enabled);
     if (status != LXP_OK) return status;
     (void)memset(plan, 0, sizeof(*plan));
     for (index = 0U; index < count; ++index) {
@@ -275,7 +283,11 @@ lxp_result lxp_genesis_module_plan_resolve(
         default:
             return LXP_ERR_UNKNOWN_MODULE;
         }
-        if (selected) plan->modules[position++] = iface;
+        if (selected) {
+            if (entry->module_id == LXP_MODULE_GOVERNANCE)
+                iface = lxp_governance_module_iface_for_handover(handover_enabled);
+            plan->modules[position++] = iface;
+        }
     }
     plan->count = position;
     return plan->count == 0U ? LXP_ERR_UNKNOWN_MODULE : LXP_OK;
@@ -309,7 +321,13 @@ lxp_result lxp_genesis_module_plan_matches(
         const lxp_module_iface *iface = plan->modules[index];
         if (iface == NULL ||
             kernel->modules[index].module_id != iface->module_id ||
-            kernel->modules[index].abi_version != iface->abi_version)
+            kernel->modules[index].abi_version != iface->abi_version ||
+            iface->activity_types == NULL ||
+            iface->activity_type_count == 0U ||
+            iface->activity_type_count > LXP_MODULE_MAX_ACTIVITY_TYPES ||
+            kernel->modules[index].activity_type_count != iface->activity_type_count ||
+            memcmp(kernel->modules[index].activity_types, iface->activity_types,
+                   iface->activity_type_count * sizeof(iface->activity_types[0])) != 0)
             return LXP_ERR_UNKNOWN_MODULE;
     }
     return LXP_OK;
@@ -344,6 +362,10 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
     bool fees = false;
     bool reserve = false;
     bool withdrawals = false;
+    uint8_t handover_authority[32];
+    bool handover_enabled;
+    lxp_result handover_status;
+    lxp_byte_span fee_head = {NULL, 0U}, fee_prices = {NULL, 0U};
     if (manifest == NULL ||
         !lxp_protocol_version_supported(manifest->protocol_version) ||
         manifest->network_id == 0U || manifest->genesis_timestamp_ms == 0U ||
@@ -356,6 +378,8 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
         manifest->module_value_count > LXP_GENESIS_MAX_MODULE_VALUES)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < manifest->parameter_count; ++i) {
+        static const uint8_t fee_authority_key[32] =
+            LXP_NATIVE_FEE_AUTHORITY_PARAMETER;
         if (manifest->parameters[i].module_id == 0U ||
             manifest->parameters[i].module_id > LXP_MODULE_RESERVED_COUNT ||
             lxp_ct_is_zero(manifest->parameters[i].key, 32U) ||
@@ -365,7 +389,16 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
                 manifest->parameters[i].module_id,
                 manifest->parameters[i].key) >= 0))
             return LXP_ERR_UNSORTED_SEQUENCE;
+        if (memcmp(manifest->parameters[i].key, fee_authority_key, 32U) == 0 &&
+            (manifest->parameters[i].module_id != LXP_MODULE_GOVERNANCE ||
+             manifest->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+             !lxp_ct_is_zero(manifest->parameters[i].value, 31U) ||
+             manifest->parameters[i].value[31] != 2U))
+            return LXP_ERR_VERSION_UNSUPPORTED;
     }
+    handover_status = lxp_handover_genesis_authority(manifest, handover_authority,
+                                                    &handover_enabled);
+    if (handover_status != LXP_OK) return handover_status;
     for (i = 0U; i < manifest->guarantor_count; ++i) {
         if (lxp_ct_is_zero(manifest->guarantors[i].guarantor_id, 32U) ||
             lxp_ct_is_zero(manifest->guarantors[i].public_key, 33U) ||
@@ -425,6 +458,18 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
                 manifest->module_values[i].module_id,
                 manifest->module_values[i].key) >= 0))
             return LXP_ERR_UNSORTED_SEQUENCE;
+        const lxp_genesis_module_value *value = &manifest->module_values[i];
+        static const uint8_t head_key[32] = "fee.schedule";
+        static const uint8_t prices_key[32] = "fee.module-prices";
+        if (value->module_id == LXP_MODULE_GOVERNANCE && memcmp(value->key, head_key, 32U) == 0)
+            fee_head = (lxp_byte_span){value->value, value->value_length};
+        if (value->module_id == LXP_MODULE_GOVERNANCE && memcmp(value->key, prices_key, 32U) == 0)
+            fee_prices = (lxp_byte_span){value->value, value->value_length};
+    }
+    if (fee_prices.bytes != NULL || (fee_head.length >= 2U && fee_head.bytes[0] == 0U && fee_head.bytes[1] == 4U)) {
+        lxp_fee_params schedule;
+        lxp_result status = lxp_fee_stored_schedule_decode(fee_head, fee_prices, &schedule);
+        if (status != LXP_OK) return status;
     }
     return LXP_OK;
 }
@@ -902,15 +947,25 @@ lxp_result lxp_genesis_state_root(
 lxp_result lxp_genesis_fresh_empty_accounts(
     lxp_genesis_manifest *manifest, const uint8_t asset_id[32])
 {
-    static const uint16_t kinds[LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT] = {
+    static const uint16_t kinds[] = {
         LX_ACCOUNT_SYSTEM_FEES, LX_ACCOUNT_SYSTEM_PAXEER_RESERVE,
-        LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS
+        LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS, LX_ACCOUNT_SYSTEM_INSURANCE
     };
+    lxp_genesis_module_plan plan;
+    size_t count = LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT;
     size_t index;
+    lxp_result status;
     if (manifest == NULL || asset_id == NULL ||
-        lxp_ct_is_zero(asset_id, 32U) || manifest->account_count != 0U)
+        lxp_ct_is_zero(asset_id, 32U) || manifest->account_count != 0U ||
+        manifest->parameter_count > LXP_GENESIS_MAX_PARAMETERS)
         return LXP_ERR_NON_CANONICAL;
-    for (index = 0U; index < LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT; ++index) {
+    status = lxp_genesis_module_plan_resolve(manifest, &plan);
+    if (status != LXP_OK) return status;
+    for (index = 0U; index < plan.count; ++index)
+        if (plan.modules[index]->module_id == LXP_MODULE_PERPS) ++count;
+    if (count > sizeof(kinds) / sizeof(kinds[0]) ||
+        count > LXP_GENESIS_MAX_ACCOUNTS) return LXP_FATAL_INVARIANT;
+    for (index = 0U; index < count; ++index) {
         lxp_genesis_account *account = &manifest->accounts[index];
         const char *name = fresh_system_name(kinds[index]);
         size_t position = index;
@@ -930,7 +985,7 @@ lxp_result lxp_genesis_fresh_empty_accounts(
             account = &manifest->accounts[position];
         }
     }
-    manifest->account_count = LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT;
+    manifest->account_count = count;
     return LXP_OK;
 }
 

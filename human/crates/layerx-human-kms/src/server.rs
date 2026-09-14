@@ -16,7 +16,10 @@ impl Drop for Permit {
         self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
-pub(crate) fn run(config: Config) -> std::result::Result<(), String> {
+pub(crate) fn run(
+    config: Config,
+    clock: &Arc<dyn layerx_types::clock::Clock>,
+) -> std::result::Result<(), String> {
     let store = Arc::new(Mutex::new(Store::open(&config)?));
     let listener = TcpListener::bind(config.listen).map_err(|_| "KMS listener unavailable")?;
     let config = Arc::new(config);
@@ -36,17 +39,23 @@ pub(crate) fn run(config: Config) -> std::result::Result<(), String> {
         let permit = Permit(Arc::clone(&active));
         let config = Arc::clone(&config);
         let store = Arc::clone(&store);
+        let clock = Arc::clone(clock);
         thread::Builder::new()
             .name("human-kms".into())
             .spawn(move || {
                 let _permit = permit;
-                let _ = connection(stream, &config, &store);
+                let _ = connection(stream, &config, &store, clock.as_ref());
             })
             .map_err(|_| "KMS worker unavailable")?;
     }
     Err("KMS listener stopped".into())
 }
-fn connection(mut tcp: TcpStream, config: &Config, store: &Mutex<Store>) -> Result<()> {
+fn connection(
+    mut tcp: TcpStream,
+    config: &Config,
+    store: &Mutex<Store>,
+    clock: &dyn layerx_types::clock::Clock,
+) -> Result<()> {
     tcp.set_read_timeout(Some(config.deadline))
         .map_err(|_| Error::Unavailable)?;
     tcp.set_write_timeout(Some(config.deadline))
@@ -73,16 +82,20 @@ fn connection(mut tcp: TcpStream, config: &Config, store: &Mutex<Store>) -> Resu
     let mut tls = StreamOwned::new(connection, tcp);
     let frame = Zeroizing::new(read_frame(&mut tls, wire::MAX_FRAME).map_err(|_| Error::Refused)?);
     let request = Request::decode(&frame)?;
+    let now = clock
+        .sample(std::time::Duration::from_secs(1))
+        .map_err(|_| Error::Unavailable)?
+        .unix_seconds();
     let admission = if !service && !matches!(request.operation, 6 | 8..=10 | 12) {
         Err(Error::Refused)
     } else {
-        validate_sign(&request, config)
+        validate_sign(&request, config, now)
     };
     let answer = admission.and_then(|digest| {
         store
             .lock()
             .map_err(|_| Error::Unavailable)?
-            .dispatch(&request, digest)
+            .dispatch(&request, digest, now)
     });
     write_frame(
         &mut tls,
@@ -91,13 +104,16 @@ fn connection(mut tcp: TcpStream, config: &Config, store: &Mutex<Store>) -> Resu
     )
     .map_err(|_| Error::Unavailable)
 }
-fn validate_sign(request: &Request<'_>, config: &Config) -> Result<Option<[u8; 32]>> {
+fn validate_sign(request: &Request<'_>, config: &Config, now: u64) -> Result<Option<[u8; 32]>> {
+    if request.operation == 13 {
+        return if config.protocol == 3 && request.network == config.network && request.class == 1 {
+            Ok(None)
+        } else {
+            Err(Error::Refused)
+        };
+    }
     if request.operation == 11 {
         let value = serde_json::from_slice(request.evm).map_err(|_| Error::Refused)?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| Error::Unavailable)?
-            .as_secs();
         return crate::send::digest(
             &value,
             request.binding,
@@ -110,8 +126,9 @@ fn validate_sign(request: &Request<'_>, config: &Config) -> Result<Option<[u8; 3
     if request.operation != 5 {
         return Ok(None);
     }
-    let activity = layerx_wire::activity::decode_unsigned(request.canonical, &config.registry)
-        .map_err(|_| Error::Refused)?;
+    let activity =
+        layerx_intents::canonical::decode_unsigned_activity(request.canonical, &config.registry)
+            .map_err(|_| Error::Refused)?;
     if activity.network_id() != config.network
         || activity.protocol_version() != config.protocol
         || request.network != config.network

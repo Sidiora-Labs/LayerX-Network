@@ -7,7 +7,15 @@ python3 build/build_site.py ../..
 python3 build/build_site.py --check ../..
 ```
 
-The first form writes. The second asserts, and fails when a generated page or an extracted code block is stale.
+The first form writes. The second asserts, and fails when a generated page or an extracted code block is stale, or when an internal link names a file the standalone site does not generate.
+Link checking ignores query strings and fragments; it validates file targets,
+not heading anchors or remote URL availability.
+
+The write form additionally emits `site/search.js` (a self-contained search
+index and widget, no network assets), `site/manifest.json` (every generated
+page with its byte length and SHA-256 digest) and `site/link-check.json` (the
+number of internal links checked and any problem found). Repository references
+use immutable source URLs so they resolve when the site is hosted alone.
 
 ## What is generated
 

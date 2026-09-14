@@ -1,4 +1,4 @@
-import { copyEntry, human_copy_catalog } from "../../../copy/catalog.ts";
+import { copyEntry, human_copy_catalog } from "../../../copy/runtime.ts";
 import { formatCopy } from "../../../copy/format.ts";
 import {
   HumanApiError,
@@ -14,10 +14,14 @@ import {
   type KeyChallenge,
   type LimitEnforcement,
   type Money,
+  type NativeFeeBudget,
+  type OwnerRotationRequest,
   type MoveQuote,
   type VerificationLevel,
 } from "../../api/index.ts";
+import { browserPasskeyAuthenticator, performStepUp } from "../approvals/ceremony.ts";
 import { type ConfirmationKind, type StatusKey } from "../../kit/model.ts";
+import { nativeFeeBudgetIdentity } from "../../auth/native-fee-budget.ts";
 
 export type {
   Agent,
@@ -44,6 +48,7 @@ export interface CreationDraft {
   readonly purpose: string;
   readonly limitInput: string;
   readonly currency: string;
+  readonly nativeFeeBudget?: NativeFeeBudget;
 }
 
 export interface CreationStep {
@@ -51,6 +56,29 @@ export interface CreationStep {
   readonly labelKey: string;
   readonly helpKey: string;
   readonly complete: boolean;
+}
+
+export interface RotationTiming {
+  readonly delay_seconds: number;
+  readonly window_seconds: number;
+}
+
+export function parseRotationTiming(delay: string, window: string): RotationTiming | undefined {
+  const seconds = (input: string): number | undefined => {
+    const value = input.trim();
+    if (!/^[0-9]{1,10}$/.test(value)) {
+      return undefined;
+    }
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 4_294_967_295
+      ? parsed
+      : undefined;
+  };
+  const delaySeconds = seconds(delay);
+  const windowSeconds = seconds(window);
+  return delaySeconds === undefined || windowSeconds === undefined
+    ? undefined
+    : { delay_seconds: delaySeconds, window_seconds: windowSeconds };
 }
 
 export function parseMonthlyLimit(input: string, currency: string): Money | undefined {
@@ -497,7 +525,12 @@ export function quotePresentation(quote: MoveQuote, locale: string): QuotePresen
   };
 }
 
+class RotationPreparationError extends Error {}
+
 export function apiErrorSentence(error: unknown): string {
+  if (error instanceof RotationPreparationError) {
+    return apiErrorSentence(error.cause);
+  }
   if (error instanceof HumanApiError) {
     const entry = human_copy_catalog().get(error.detail.copy_key);
     if (entry !== undefined) {
@@ -512,7 +545,7 @@ export function apiErrorCode(error: unknown): string | undefined {
 }
 
 export function mutationOutcomeUnknown(error: unknown): boolean {
-  return !(error instanceof HumanApiError);
+  return !(error instanceof HumanApiError) && !(error instanceof RotationPreparationError);
 }
 
 export interface AgentListItemView {
@@ -560,6 +593,7 @@ export class Agents {
   readonly #client: HumanApiClient;
   readonly #idempotencyKey: () => string;
   readonly #pendingKeys = new Map<string, string>();
+  readonly #rotationRequests = new Map<string, OwnerRotationRequest>();
 
   constructor(options: AgentsOptions = {}) {
     this.#client = options.client ?? humanApi();
@@ -587,6 +621,7 @@ export class Agents {
       name: draft.name.trim(),
       purpose: draft.purpose.trim(),
       monthly_limit: monthlyLimit,
+      ...(draft.nativeFeeBudget === undefined ? {} : { native_fee_budget: draft.nativeFeeBudget }),
     };
     return this.#mutate(
       mutationScope(
@@ -595,6 +630,7 @@ export class Agents {
         request.purpose,
         monthlyLimit.currency,
         monthlyLimit.amount.toString(10),
+        ...(draft.nativeFeeBudget === undefined ? [] : [nativeFeeBudgetIdentity(draft.nativeFeeBudget)]),
       ),
       (key) => this.#client.agentCreate(request, key),
     );
@@ -642,6 +678,38 @@ export class Agents {
 
   rotate(agentId: string): Promise<KeyChallenge> {
     return this.#mutate(mutationScope("rotate", agentId), (key) => this.#client.agentRotate(agentId, key));
+  }
+
+  startRotation(agentId: string, timing: RotationTiming): Promise<KeyChallenge> {
+    return this.#mutate(
+      mutationScope("rotation.start", agentId, String(timing.delay_seconds), String(timing.window_seconds)),
+      async (key) => {
+        let request = this.#rotationRequests.get(key);
+        if (request === undefined) {
+          try {
+            const disclosure = await this.#client.agentRotationDisclosure(agentId, {
+              ...timing,
+              idempotency_key: key,
+            });
+            const stepUp = await performStepUp(this.#client, disclosure.confirms, browserPasskeyAuthenticator());
+            request = { ...timing, step_up: stepUp };
+            this.#rotationRequests.set(key, request);
+          } catch (error) {
+            throw new RotationPreparationError("Rotation confirmation did not complete", { cause: error });
+          }
+        }
+        try {
+          const result = await this.#client.agentRotationStart(agentId, request, key);
+          this.#rotationRequests.delete(key);
+          return result;
+        } catch (error) {
+          if (error instanceof HumanApiError && (error.detail.retry === "final" || error.detail.retry === "structural")) {
+            this.#rotationRequests.delete(key);
+          }
+          throw error;
+        }
+      },
+    );
   }
 
   recover(agentId: string): Promise<KeyChallenge> {

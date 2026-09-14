@@ -4,7 +4,7 @@ use layerx_proof::program::{
     verify_authorized_program_execution, AuthorizedProgramExecutionExpectation,
 };
 use layerx_proof::receipt::{
-    authorized_maintained_activity_batch, verify_program_outcome, verify_sequencer_signature,
+    authorized_maintained_activity_batch_chain, verify_program_outcome, verify_sequencer_signature,
     AuthorizedBatch, MaintainedOutcomeEvidence,
 };
 use layerx_wire::hash::{receipt_digest, receipt_execution_batch_id, Domain};
@@ -40,7 +40,30 @@ pub(super) enum BatchIdentity {
     OccupancyMaintenanceV2 {
         receipt_hex: String,
         receipt_proof_hex: String,
+        #[serde(default)]
+        activity_receipts_hex: Vec<String>,
     },
+    BatchMaintenanceV1 {
+        receipt_hex: String,
+        receipt_proof_hex: String,
+        activity_receipts_hex: Vec<String>,
+    },
+}
+
+impl BatchIdentity {
+    fn verify_maintenance_kind(&self, bytes: &[u8], receipts: &[String]) -> Result<(), String> {
+        use layerx_wire::batch_maintenance::{decode_maintenance, MaintenanceReceipt};
+        let record = decode_maintenance(bytes).map_err(error)?;
+        match (self, record) {
+            (Self::OccupancyMaintenanceV2 { .. }, MaintenanceReceipt::Occupancy(_)) => Ok(()),
+            (Self::BatchMaintenanceV1 { .. }, MaintenanceReceipt::Batch(_))
+                if !receipts.is_empty() =>
+            {
+                Ok(())
+            }
+            _ => Err(error("maintenance kind or activity chain")),
+        }
+    }
 }
 
 impl Default for BatchIdentity {
@@ -107,6 +130,8 @@ pub(super) fn verify(
     receipt_bytes: &[u8],
     activity_id: [u8; 32],
     program_id: [u8; 32],
+    payload_hash: [u8; 32],
+    guest_abi_version: u16,
     network_id: u32,
 ) -> Result<(), String> {
     if stored.version != 1 {
@@ -148,18 +173,16 @@ pub(super) fn verify(
     if terminal.is_empty() || graph.is_empty() {
         return Err(error("missing execution artifacts"));
     }
-    let outcome = protocol
-        .program_outcome()
-        .ok_or_else(|| error("program outcome"))?;
     verify_authorized_program_execution(
         receipt_bytes,
         &terminal,
         &graph,
-        AuthorizedProgramExecutionExpectation {
+        &AuthorizedProgramExecutionExpectation {
             authority,
             activity_id,
             program_id,
-            guest_abi_version: outcome.abi_version(),
+            payload_hash,
+            guest_abi_version,
         },
     )
     .map_err(error)?;
@@ -222,8 +245,17 @@ fn authorized_activity_batch(
         BatchIdentity::OccupancyMaintenanceV2 {
             receipt_hex,
             receipt_proof_hex,
+            activity_receipts_hex,
+        }
+        | BatchIdentity::BatchMaintenanceV1 {
+            receipt_hex,
+            receipt_proof_hex,
+            activity_receipts_hex,
         } => {
             let maintenance = canonical_hex(receipt_hex, MAX_ACTIVITY_BYTES)?;
+            evidence
+                .batch_identity
+                .verify_maintenance_kind(&maintenance, activity_receipts_hex)?;
             let wire_proof =
                 decode_merkle_proof(&canonical_hex(receipt_proof_hex, 4096)?).map_err(error)?;
             let maintenance_proof = Proof::new(
@@ -232,7 +264,15 @@ fn authorized_activity_batch(
                 wire_proof.siblings().to_vec(),
             )
             .map_err(error)?;
-            authorized_maintained_activity_batch(
+            let receipts = if activity_receipts_hex.is_empty() {
+                vec![receipt_bytes.to_vec()]
+            } else {
+                activity_receipts_hex
+                    .iter()
+                    .map(|value| canonical_hex(value, MAX_ACTIVITY_BYTES))
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            authorized_maintained_activity_batch_chain(
                 receipt_bytes,
                 &authority,
                 &MaintainedOutcomeEvidence {
@@ -243,6 +283,7 @@ fn authorized_activity_batch(
                     maintenance_proof: &maintenance_proof,
                     authorization: &authorization,
                 },
+                &receipts,
             )
             .map_err(error)
         }
@@ -425,3 +466,7 @@ mod tests {
         assert!(canonical_hex(&"00".repeat(MAX_ACTIVITY_BYTES + 1), MAX_ACTIVITY_BYTES).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "batch_maintenance_tests.rs"]
+mod batch_maintenance_tests;

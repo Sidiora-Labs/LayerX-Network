@@ -54,6 +54,8 @@ fn run() -> Result<(), String> {
                 allowed_origin,
                 service_version: env!("CARGO_PKG_VERSION").to_owned(),
             },
+            layerx_client::runtime_clock::RuntimeClock::from_environment()
+                .map_err(|error| error.to_string())?,
         )
         .map_err(|_| "the human-api router configuration is invalid".to_owned())?,
     );

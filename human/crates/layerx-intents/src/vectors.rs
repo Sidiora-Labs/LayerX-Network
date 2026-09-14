@@ -104,3 +104,22 @@ pub fn receipt_signing_digest(unsigned_receipt: &[u8]) -> Result<[u8; 32], WireE
 pub fn batch_header_signing_digest(header: &[u8]) -> Result<[u8; 32], WireError> {
     hash::batch_header_digest(header)
 }
+
+mod availability;
+mod credit;
+mod native_setup;
+mod proof;
+mod receive;
+mod security;
+mod send;
+mod withdrawal;
+
+pub use availability::{availability_record, small_availability_record};
+pub use credit::{credit_receipt, CreditReceiptFields};
+pub use native_setup::{native_budget_create, native_recovery_policy};
+pub use proof::native_merkle_proof;
+pub use receive::{signed_receive, SignedReceiveRequest};
+pub use security::{security_batch_header, security_program_receipt};
+pub use withdrawal::withdrawal_receipt;
+
+pub use send::owner_send_authorization;

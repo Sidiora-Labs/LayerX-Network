@@ -1,0 +1,10 @@
+{
+  "name": "@layerx/hosted-builder-tools",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "assemblyscript": "0.27.31",
+    "binaryen": "116.0.0-nightly.20240114",
+    "long": "5.3.2"
+  }
+}

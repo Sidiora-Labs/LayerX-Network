@@ -49,11 +49,12 @@ class Chain(COMMON['Chain']):
         assert anchor['hash'] == identity['anchor_hash']
         assert self.account.address == identity['deployer']
 
-    def transaction(self, data, to=None, success=True, value=0):
+    def transaction(self, data, to=None, success=True, value=0, signer=None):
         assert self.rpc('eth_chainId', []) == '0x7d'
+        account = self.account if signer is None else signer
         transaction = {
             'chainId': 125,
-            'nonce': int(self.rpc('eth_getTransactionCount', [self.account.address, 'pending']), 16),
+            'nonce': int(self.rpc('eth_getTransactionCount', [account.address, 'pending']), 16),
             'data': data,
             'gas': 15_000_000,
             'gasPrice': int(self.rpc('eth_gasPrice', []), 16),
@@ -61,7 +62,7 @@ class Chain(COMMON['Chain']):
         }
         if to is not None:
             transaction['to'] = to_checksum_address(to)
-        signed = self.account.sign_transaction(transaction)
+        signed = account.sign_transaction(transaction)
         digest = self.rpc('eth_sendRawTransaction', ['0x' + bytes(signed.raw_transaction).hex()])
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
@@ -72,6 +73,21 @@ class Chain(COMMON['Chain']):
                     evidence.write(json.dumps(receipt, sort_keys=True) + '\n')
                 return receipt
             time.sleep(.1)
+        diagnostic = {'transaction_hash': digest, 'submitted_nonce': transaction['nonce'],
+                      'gas_price': transaction['gasPrice'], 'gas_limit': transaction['gas']}
+        for name, method, parameters in (
+            ('latest_nonce', 'eth_getTransactionCount', [account.address, 'latest']),
+            ('pending_nonce', 'eth_getTransactionCount', [account.address, 'pending']),
+            ('block_number', 'eth_blockNumber', []),
+            ('transaction', 'eth_getTransactionByHash', [digest]),
+            ('pool_status', 'txpool_status', []),
+        ):
+            try:
+                diagnostic[name] = self.rpc(method, parameters)
+            except (OSError, ValueError, AssertionError, http.client.HTTPException) as error:
+                diagnostic[name] = {'error': str(error)}
+        (self.directory / ('transaction-timeout-' + digest.removeprefix('0x') + '.json')).write_text(
+            json.dumps(diagnostic, sort_keys=True) + '\n')
         raise AssertionError('transaction receipt deadline: ' + digest)
 
     def view(self, address, signature, *args):
@@ -121,7 +137,7 @@ def retain_custody_proofs(work, origins, ca, identity, vault):
 
 @contextlib.contextmanager
 def owned_chain(work, artifacts):
-    with tempfile.TemporaryDirectory(prefix='lxp-custody-paxd-', dir='/tmp') as temporary:
+    with tempfile.TemporaryDirectory(prefix='lxp-custody-paxd-') as temporary:
         private = Path(temporary)
         ports, reservations = [], []
         for _ in range(7):
@@ -142,6 +158,7 @@ def owned_chain(work, artifacts):
         chain_home = private / 'chain'
         env = {key: value for key, value in os.environ.items() if not key.startswith('LAYERX_PAXEER_')}
         env.update(LAYERX_PAXEER_HOME=str(chain_home), LAYERX_PAXEER_CHAIN_ID='125',
+                   LAYERX_PAXEER_COMMIT_TIMEOUT_NANOSECONDS='1000000000',
                    LAYERX_PAXEER_DEPLOYER_ADDRESS=account.address,
                    LAYERX_PAXEER_USDL_RUNTIME=str(runtime_file))
         env['GOMAXPROCS'] = str(min(4, int(env.get('GOMAXPROCS', '4'))))
@@ -151,13 +168,27 @@ def owned_chain(work, artifacts):
         with (work / 'paxd-init.log').open('w') as log:
             command('bash', 'platform/hosted/paxeer/init-chain.sh', env=env, stdout=log, stderr=log)
         genesis_bytes = (chain_home / 'config/genesis.json').read_bytes()
+        consensus_timeout = json.loads(genesis_bytes)['consensus_params']['timeout']
+        assert consensus_timeout['commit'] == '1000000000'
+        assert consensus_timeout['bypass_commit_timeout'] is False
+        with (work / 'paxd-reinit.log').open('w') as log:
+            command('bash', 'platform/hosted/paxeer/init-chain.sh', env=env, stdout=log, stderr=log)
+        assert (chain_home / 'config/genesis.json').read_bytes() == genesis_bytes
+        with (work / 'paxd-reinit-mismatch.log').open('w') as log:
+            refused = subprocess.run(['bash', 'platform/hosted/paxeer/init-chain.sh'], cwd=ROOT,
+                env=env | {'LAYERX_PAXEER_COMMIT_TIMEOUT_NANOSECONDS': '500000000'},
+                stdout=log, stderr=log, check=False)
+        assert refused.returncode != 0
+        assert 'requested commit timeout differs from initialised genesis' in (work / 'paxd-reinit-mismatch.log').read_text()
+        assert (chain_home / 'config/genesis.json').read_bytes() == genesis_bytes
         (work / 'paxeer-genesis.json').write_bytes(genesis_bytes)
         for reservation in reservations:
             reservation.close()
         process = None
         try:
             with (work / 'paxd.log').open('w') as log:
-                process = subprocess.Popen([env.get('PAXD', 'paxd'), 'start', '--home', str(chain_home)],
+                process = subprocess.Popen([env.get('PAXD', 'paxd'), 'start', '--home', str(chain_home),
+                                            '--consensus.create-empty-blocks-interval=1s'],
                                            cwd=ROOT, env=env, stdout=log, stderr=log)
             reader = COMMON['Chain'](ports[0])
             deadline = time.monotonic() + 60
@@ -189,6 +220,8 @@ def owned_chain(work, artifacts):
             assert int(chain.view(USDL, 'decimals()'), 16) == 6
             provenance = {
                 'chain_id': 125, 'deployer': account.address, 'usdl': USDL,
+                'create_empty_blocks_interval': '1s',
+                'commit_timeout_nanoseconds': 1000000000,
                 'genesis_sha256': hashlib.sha256(genesis_bytes).hexdigest(),
                 'anchor_number': identity['anchor_number'], 'anchor_hash': identity['anchor_hash'],
                 'token_runtime_sha256': hashlib.sha256(bytes.fromhex(runtime.removeprefix('0x'))).hexdigest(),

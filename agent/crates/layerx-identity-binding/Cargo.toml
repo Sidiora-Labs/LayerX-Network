@@ -1,0 +1,16 @@
+[package]
+name = "layerx-identity-binding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+layerx-types = { path = "../layerx-types" }
+rustix = { version = "=1.1.4", features = ["net", "process"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.149"
+sha2 = "=0.10.9"
+
+[lints]
+workspace = true

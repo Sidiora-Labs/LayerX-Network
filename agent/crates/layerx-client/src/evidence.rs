@@ -1,5 +1,10 @@
 //! Production finality-evidence reads and authenticated registration.
 
+mod module_state;
+pub use module_state::{
+    verify_module_evidence, verify_module_evidence_with_history, VerifiedModuleEvidence,
+};
+
 use std::collections::BTreeSet;
 
 use layerx_proof::checkpoint::{
@@ -36,6 +41,7 @@ const REGISTER_RESPONSE_TAG: u16 = 29;
 const WIRE_VERSION: u16 = 1;
 const MAX_RECEIPT_BYTES: usize = 4_096;
 const MAINTENANCE_WIRE_VERSION: u16 = 2;
+const BATCH_MAINTENANCE_WIRE_VERSION: u16 = 3;
 const MAX_MAINTENANCE_BYTES: usize =
     b"LXP/programs/occupancy-receipt/v2\0".len() + 374 + 256 * 81 + 65_536;
 const MAX_VALIDITY_PROOF_BYTES: usize = 1_048_576;
@@ -135,6 +141,39 @@ pub struct VerifiedCheckpoint {
 }
 
 impl VerifiedCheckpoint {
+    /// Binds exact locally checked finality material to independently verified chain publication.
+    ///
+    /// # Errors
+    /// Refuses substituted certificates, context, domains, membership versions or publication.
+    pub fn from_independent_publication(
+        candidate: FinalityEvidenceCandidate,
+        publication: &layerx_paxeer_verifier::VerifiedCheckpointPublication,
+    ) -> Result<Self, EvidenceError> {
+        let verified = checked_checkpoint(
+            candidate.checkpoint_bytes,
+            candidate.context_bytes,
+            publication.protocol_version(),
+            publication.network_id(),
+        )?;
+        if verified.canonical_header() != publication.canonical_header()
+            || verified.set_version() != publication.set_version()
+            || verified.report().evidence().checkpoint_id() != Some(publication.checkpoint_id())
+            || verified.report().evidence().settlement_reference()
+                != Some(publication.settlement_reference())
+        {
+            return Err(EvidenceError::Registration);
+        }
+        Ok(verified)
+    }
+
+    /// Returns the exact canonically decoded certificate for independent publication verification.
+    ///
+    /// # Errors
+    /// Refuses any certificate that no longer satisfies the original bounded wire decoder.
+    pub fn certificate(&self) -> Result<Certificate, EvidenceError> {
+        Ok(decode_checkpoint_material(&self.checkpoint_bytes)?.certificate)
+    }
+
     #[must_use]
     pub fn checkpoint_bytes(&self) -> &[u8] {
         &self.checkpoint_bytes
@@ -180,6 +219,22 @@ pub struct FinalityEvidenceCandidate {
 }
 
 impl FinalityEvidenceCandidate {
+    /// Decodes the original certificate for independent chain publication verification.
+    ///
+    /// # Errors
+    /// Retains all canonical certificate bounds and signature field decoding checks.
+    pub fn certificate(&self) -> Result<Certificate, EvidenceError> {
+        Ok(decode_checkpoint_material(&self.checkpoint_bytes)?.certificate)
+    }
+
+    /// Returns the exact locally checked bonded-set version.
+    ///
+    /// # Errors
+    /// Retains the original canonical context and bonded-set decoding checks.
+    pub fn set_version(&self) -> Result<u64, EvidenceError> {
+        Ok(decode_checkpoint_context(&self.context_bytes)?.set_version)
+    }
+
     #[must_use]
     pub fn canonical_header(&self) -> &[u8] {
         &self.canonical_header
@@ -311,7 +366,7 @@ impl SignedHeader {
         )
     }
 
-    fn pinned_key_authorization(
+    pub(crate) fn pinned_key_authorization(
         &self,
         handshake_key: [u8; 32],
         expected_protocol_version: u16,
@@ -513,6 +568,30 @@ pub fn proof_bundle(
     context: EvidenceContext,
     registry: &ModuleRegistry,
 ) -> Result<VerifiedProofBundle, EvidenceError> {
+    proof_bundle_with_authority(transport, selector, context, registry, None)
+}
+
+/// Retrieves proof material under independently authenticated handover history.
+///
+/// # Errors
+/// Refuses unknown term ranges and all original proof, domain and selector failures.
+pub fn proof_bundle_with_history(
+    transport: &mut dyn FrameTransport,
+    selector: ProofBundleSelector,
+    context: EvidenceContext,
+    registry: &ModuleRegistry,
+    history: &crate::handover::SequencerHistory,
+) -> Result<VerifiedProofBundle, EvidenceError> {
+    proof_bundle_with_authority(transport, selector, context, registry, Some(history))
+}
+
+fn proof_bundle_with_authority(
+    transport: &mut dyn FrameTransport,
+    selector: ProofBundleSelector,
+    context: EvidenceContext,
+    registry: &ModuleRegistry,
+    history: Option<&crate::handover::SequencerHistory>,
+) -> Result<VerifiedProofBundle, EvidenceError> {
     let (kind, target_activity_id, account_id) = match selector {
         ProofBundleSelector::Activity(identifier) => (1, identifier, None),
         ProofBundleSelector::AccountState {
@@ -554,9 +633,44 @@ pub fn proof_bundle(
             target_activity_id,
             context,
             registry,
+            history,
         );
     }
-    inclusion_proof_bundle(response, kind, target_activity_id, context, registry)
+    inclusion_proof_bundle(
+        response,
+        kind,
+        target_activity_id,
+        context,
+        registry,
+        history,
+    )
+}
+
+fn proof_header_authorization(
+    signed: &SignedHeader,
+    context: EvidenceContext,
+    history: Option<&crate::handover::SequencerHistory>,
+) -> Result<SequencerAuthorization, EvidenceError> {
+    if let Some(history) = history {
+        let header = history
+            .verify_header(&signed.canonical_bytes, &signed.signature)
+            .map_err(|_| EvidenceError::SequencerMismatch)?;
+        let authorization = history
+            .authorization_for_batch(header.header().batch_number())
+            .map_err(|_| EvidenceError::SequencerMismatch)?;
+        signed.pinned_key_authorization(
+            authorization.public_key(),
+            context.expected_protocol_version,
+            context.expected_network_id,
+        )?;
+        Ok(authorization)
+    } else {
+        signed.pinned_key_authorization(
+            context.handshake_sequencer_key,
+            context.expected_protocol_version,
+            context.expected_network_id,
+        )
+    }
 }
 
 fn inclusion_proof_bundle(
@@ -565,6 +679,7 @@ fn inclusion_proof_bundle(
     target_activity_id: [u8; 32],
     context: EvidenceContext,
     registry: &ModuleRegistry,
+    history: Option<&crate::handover::SequencerHistory>,
 ) -> Result<VerifiedProofBundle, EvidenceError> {
     let mut reader = Reader::new(&response.proof);
     if reader.u16()? != WIRE_VERSION || reader.u8()? != kind {
@@ -577,11 +692,7 @@ fn inclusion_proof_bundle(
     let proof = decode_proof(&mut reader)?;
     let signed_header = decode_signed_header(&mut reader)?;
     reader.finish()?;
-    let authorization = signed_header.pinned_key_authorization(
-        context.handshake_sequencer_key,
-        context.expected_protocol_version,
-        context.expected_network_id,
-    )?;
+    let authorization = proof_header_authorization(&signed_header, context, history)?;
     match kind {
         1 => {
             let activity =
@@ -642,6 +753,7 @@ fn account_proof_bundle(
     target_activity_id: [u8; 32],
     context: EvidenceContext,
     registry: &ModuleRegistry,
+    history: Option<&crate::handover::SequencerHistory>,
 ) -> Result<VerifiedProofBundle, EvidenceError> {
     let decoded = decode_nested_evidence(
         &response.proof,
@@ -651,11 +763,7 @@ fn account_proof_bundle(
     if decoded.selector != RootSelector::Latest || decoded.proof.account_id != account {
         return Err(EvidenceError::SelectorMismatch);
     }
-    let authorization = decoded.signed_header.pinned_key_authorization(
-        context.handshake_sequencer_key,
-        context.expected_protocol_version,
-        context.expected_network_id,
-    )?;
+    let authorization = proof_header_authorization(&decoded.signed_header, context, history)?;
     if let AccountEvidenceKind::Maintenance { parameter_version } = decoded.kind {
         let activity_count = decoded
             .proof
@@ -673,8 +781,6 @@ fn account_proof_bundle(
             parameter_version,
         )
         .map_err(EvidenceError::Account)?;
-        let maintenance = decode_occupancy_maintenance(&decoded.proof.receipt_bytes)
-            .map_err(|_| EvidenceError::Receipt)?;
         let mut request = Vec::with_capacity(35);
         request.extend_from_slice(&WIRE_VERSION.to_be_bytes());
         request.push(3);
@@ -691,31 +797,20 @@ fn account_proof_bundle(
             &request,
             &[],
         )?;
-        let receipt_bundle =
-            inclusion_proof_bundle(receipt_response, 3, target_activity_id, context, registry)?;
-        let VerifiedProofBundle::Receipt {
-            canonical_bytes: activity_receipt,
-            activity_id,
-            signed_header,
-            ..
-        } = receipt_bundle
-        else {
-            return Err(EvidenceError::Receipt);
-        };
-        let Receipt::Protocol(receipt) =
-            verify_sequencer_signature(&activity_receipt, authorization.public_key())
-                .map_err(|_| EvidenceError::Receipt)?
-        else {
-            return Err(EvidenceError::Receipt);
-        };
-        if signed_header != decoded.signed_header
-            || receipt.global_sequence().checked_add(1) != Some(maintenance.global_sequence)
-            || receipt.resulting_state_root() != maintenance.previous_state_root
-            || receipt.activity_id() != activity_id
-            || activity_id != target_activity_id
-        {
-            return Err(EvidenceError::SelectorMismatch);
-        }
+        let receipt_bundle = inclusion_proof_bundle(
+            receipt_response,
+            3,
+            target_activity_id,
+            context,
+            registry,
+            history,
+        )?;
+        let (activity_receipt, activity_id) = maintained_activity_link(
+            receipt_bundle,
+            &decoded,
+            target_activity_id,
+            authorization.public_key(),
+        )?;
         return Ok(VerifiedProofBundle::MaintainedAccount {
             canonical_bytes: response.payload,
             proof_material: response.proof,
@@ -743,6 +838,79 @@ fn account_proof_bundle(
         verified: Box::new(verified),
         signed_header: decoded.signed_header,
     })
+}
+
+fn maintained_activity_link(
+    receipt_bundle: VerifiedProofBundle,
+    decoded: &DecodedNestedEvidence,
+    target_activity_id: [u8; 32],
+    sequencer_public_key: [u8; 32],
+) -> Result<(Vec<u8>, [u8; 32]), EvidenceError> {
+    let record = layerx_wire::batch_maintenance::decode_maintenance(&decoded.proof.receipt_bytes)
+        .map_err(|_| EvidenceError::Receipt)?;
+    let maintenance = record.occupancy();
+    let VerifiedProofBundle::Receipt {
+        canonical_bytes: activity_receipt,
+        activity_id,
+        signed_header,
+        ..
+    } = receipt_bundle
+    else {
+        return Err(EvidenceError::Receipt);
+    };
+    let Receipt::Protocol(receipt) =
+        verify_sequencer_signature(&activity_receipt, sequencer_public_key)
+            .map_err(|_| EvidenceError::Receipt)?
+    else {
+        return Err(EvidenceError::Receipt);
+    };
+    if signed_header != decoded.signed_header
+        || receipt.global_sequence().checked_add(1) != Some(maintenance.global_sequence)
+        || receipt.resulting_state_root() != maintenance.previous_state_root
+        || receipt.activity_id() != activity_id
+        || activity_id != target_activity_id
+    {
+        return Err(EvidenceError::SelectorMismatch);
+    }
+    Ok((activity_receipt, activity_id))
+}
+
+/// Verifies account evidence with a key and term derived from authenticated genesis history.
+///
+/// # Errors
+/// Refuses substituted headers, unverified terms and every original account proof failure.
+pub fn verify_account_evidence_with_history(
+    canonical_value: &[u8],
+    proof_material: &[u8],
+    account: [u8; 32],
+    asset: Option<[u8; 32]>,
+    policy: AccountEvidencePolicy,
+    history: &crate::handover::SequencerHistory,
+) -> Result<VerifiedAccountEvidence, EvidenceError> {
+    let decoded = decode_nested_evidence(
+        proof_material,
+        policy.expected_protocol_version,
+        policy.expected_network_id,
+    )?;
+    let header = history
+        .verify_header(
+            &decoded.signed_header.canonical_bytes,
+            &decoded.signed_header.signature,
+        )
+        .map_err(|_| EvidenceError::SequencerMismatch)?;
+    let authorization = history
+        .authorization_for_batch(header.header().batch_number())
+        .map_err(|_| EvidenceError::SequencerMismatch)?;
+    verify_account_evidence(
+        canonical_value,
+        proof_material,
+        account,
+        asset,
+        AccountEvidencePolicy {
+            handshake_sequencer_key: authorization.public_key(),
+            ..policy
+        },
+    )
 }
 
 /// Returns the public-read label naming the level a proof established, and
@@ -777,9 +945,16 @@ pub struct VerifiedAccountEvidence {
     batch_number: u64,
     state_root: [u8; 32],
     signed_header: SignedHeader,
+    receipt_digest: [u8; 32],
 }
 
 impl VerifiedAccountEvidence {
+    /// Returns the authenticated activity-receipt or maintenance-leaf digest.
+    #[must_use]
+    pub const fn receipt_digest(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
+
     /// Borrows the canonical account committed by the proven state root.
     #[must_use]
     pub const fn account(&self) -> &CanonicalAccount {
@@ -846,7 +1021,7 @@ pub fn verify_account_evidence(
         policy.expected_protocol_version,
         policy.expected_network_id,
     )?;
-    let (value, observed_sequence, batch_number) = match decoded.kind {
+    let (value, observed_sequence, batch_number, receipt_digest) = match decoded.kind {
         AccountEvidenceKind::Activity => {
             let verified = verify_nested_account(
                 canonical_value,
@@ -856,10 +1031,17 @@ pub fn verify_account_evidence(
                 &authorization,
             )
             .map_err(EvidenceError::Account)?;
+            let receipt = layerx_wire::receipt::decode(&decoded.proof.receipt_bytes)
+                .map_err(|_| EvidenceError::Malformed)?;
+            let unsigned = layerx_wire::receipt::encode_unsigned(&receipt)
+                .map_err(|_| EvidenceError::Malformed)?;
+            let digest = layerx_wire::hash::receipt_digest(&unsigned)
+                .map_err(|_| EvidenceError::Malformed)?;
             (
                 verified.account().clone(),
                 verified.observed_sequence(),
                 verified.header().header().batch_number(),
+                digest,
             )
         }
         AccountEvidenceKind::Maintenance { parameter_version } => {
@@ -883,6 +1065,7 @@ pub fn verify_account_evidence(
                 verified.account().clone(),
                 verified.header().header().last_sequence(),
                 verified.header().header().batch_number(),
+                verified.maintenance_digest(),
             )
         }
     };
@@ -898,6 +1081,7 @@ pub fn verify_account_evidence(
         batch_number,
         state_root: decoded.proof.resulting_state_root,
         signed_header: decoded.signed_header,
+        receipt_digest,
     })
 }
 
@@ -922,7 +1106,11 @@ pub(crate) fn decode_nested_evidence(
 ) -> Result<DecodedNestedEvidence, EvidenceError> {
     let mut reader = Reader::new(bytes);
     let wire_version = reader.u16()?;
-    if !matches!(wire_version, WIRE_VERSION | MAINTENANCE_WIRE_VERSION) || reader.u8()? != 2 {
+    if !matches!(
+        wire_version,
+        WIRE_VERSION | MAINTENANCE_WIRE_VERSION | BATCH_MAINTENANCE_WIRE_VERSION
+    ) || reader.u8()? != 2
+    {
         return Err(EvidenceError::Malformed);
     }
     let selector = RootSelector::decode(&mut reader)?;
@@ -947,6 +1135,16 @@ pub(crate) fn decode_nested_evidence(
         (
             AccountEvidenceKind::Maintenance {
                 parameter_version: maintenance.parameter_version,
+            },
+            bytes.to_vec(),
+        )
+    } else if wire_version == BATCH_MAINTENANCE_WIRE_VERSION {
+        let bytes = reader.length_prefixed(layerx_wire::batch_maintenance::MAX_BYTES)?;
+        let maintenance = layerx_wire::batch_maintenance::decode_batch_maintenance(bytes)
+            .map_err(|_| EvidenceError::Receipt)?;
+        (
+            AccountEvidenceKind::Maintenance {
+                parameter_version: maintenance.occupancy.parameter_version,
             },
             bytes.to_vec(),
         )

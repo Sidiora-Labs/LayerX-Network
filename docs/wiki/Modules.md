@@ -110,6 +110,10 @@ The kernel understands identities, accounts, assets, authority, sequences, fees,
 
 Each module implements `genesis`, `decode`, `validate` (read-only), `execute` (effects to a buffer only), epoch hooks, and `state_root`. The context handle is the complete capability set: namespaced KV, emit transfer set, emit event, batch timestamp, charge gas. There is no `now()`, no `random()`, no `http()`, and no `set_balance()`.
 
+The kernel provides `lxp_kernel_epoch_transition` (`src/protocol/lxp_kernel.c`) for module epoch hooks, with staged writes, one state journal and a shared capacity budget. Running nodes currently pin the authenticated sequencer term and refuse a different header epoch. Escrow deadlines, Budget rollover and Service default acceptance run within signed protocol-3 batch maintenance, using the batch timestamp. Their effects and the unchanged nested Programs occupancy receipt are committed by the final receipt and event leaves; publication and replay verify the complete transition before committing it.
+
+layerxd and the guarantor bind the module host runtimes beside the ASSET and PROGRAMS runtimes through `lxp_daemon_module_runtimes_bind` (`cmd/layerxd/lxp_daemon_modules.h`): the escrow runtime over the process account and asset registries, the budget runtime over the process budget store, the stream runtime over the transfer state of the process assets. A runtime is bound only for a module the genesis manifest enabled in the kernel; service and perps declare no host runtime, so their registration is their complete binding.
+
 ---
 
 ## Start here

@@ -3,10 +3,11 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import { humanApi } from "../../api/index.ts";
 import type { Journey } from "../../api/index.ts";
-import { ScreenCard, StatusPill } from "../../kit";
+import { ScreenCard } from "../../kit/surface";
+import { StatusPill } from "../../kit/money";
 import { ErrorSurface, errorPresentation, LoadingSurface, StillCheckingSurface } from "../../states";
 import { DEPOSIT_FINAL_STAGE, DepositController, depositPlan } from "../deposit/model.ts";
 import { EXIT_FINAL_STAGE, ExitController, exitPlan } from "../exit/model.ts";

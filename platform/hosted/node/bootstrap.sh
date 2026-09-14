@@ -20,6 +20,8 @@
 #                           data directory.
 #   --network-id N          Decimal network id, 1..4294967295.
 #   --genesis-metadata FILE LXGB v2 suffix: canonical Asset records and named fees.
+#   --withdrawal-fee PRICE Commit an explicit v3 withdrawal price, preserving existing fees.
+#   --module-fees FILE     Commit the exact v4 native module price configuration.
 #   --sequencer-key FILE    Sequencer ed25519 seed: 32 raw bytes or 64 hex
 #                           characters. Signs genesis and every batch. FILE
 #                           must lie outside DATA_DIR; it is read here once to
@@ -41,6 +43,9 @@
 #                           host. Exactly one of the two is required.
 #
 # Options:
+#   --handover-authority HEX64
+#                           Independent governance public key for authenticated
+#                           sequencer replacement. Omission disables handover.
 #   --asset HEX64           Genesis asset id (32 bytes hex). Default: the beta
 #                           asset sha256("layerx-beta-asset:LXT").
 #   --treasury-balance N    Treasury balance the genesis carries. The protocol
@@ -62,7 +67,8 @@
 #                           the sequencer public key.
 #   --genesis-timestamp-ms T  Genesis timestamp in milliseconds. Default: now.
 #   --enable-module NAME    Enable escrow, budget, stream, service or perps in
-#                           the signed genesis parameters. Repeat for each module.
+#                           the signed genesis parameters. All five are enabled
+#                           by default; explicit names select the enabled rows.
 #   --migrations FILE       History migration SQL. Default: repository
 #                           migrations/0007_history_index.sql or
 #                           /opt/layerx/migrations/0007_history_index.sql.
@@ -181,10 +187,26 @@ LAYERXD=""
 GENESIS_BUILD=""
 CUSTODY_PROFILE=""
 GENESIS_METADATA=""
+WITHDRAWAL_FEE=""
+MODULE_FEES=""
 GENESIS_MODULES=()
+HANDOVER_AUTHORITY=""
+HANDOVER_PARAMETER_COUNT=0
 SETTLEMENT_ENV=""
 SETTLEMENT_DOCUMENT=${LAYERX_PAXEER_SETTLEMENT_JSON:-}
 FORCE=0
+
+enable_genesis_module() {
+    local module
+    case "$1" in
+        escrow|budget|stream|service|perps) ;;
+        *) fail "--enable-module requires escrow, budget, stream, service or perps" ;;
+    esac
+    for module in "${GENESIS_MODULES[@]}"; do
+        [ "$module" != "$1" ] || fail "--enable-module repeats $1"
+    done
+    GENESIS_MODULES+=("$1")
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -196,6 +218,12 @@ while [ $# -gt 0 ]; do
         --treasury-signer-socket) TREASURY_SIGNER_SOCKET=$2; shift 2 ;;
         --asset) ASSET_ID=$2; shift 2 ;;
         --genesis-metadata) GENESIS_METADATA=$2; shift 2 ;;
+        --handover-authority)
+            [ "$HANDOVER_PARAMETER_COUNT" -eq 0 ] || fail "--handover-authority repeats"
+            HANDOVER_PARAMETER_COUNT=1
+            HANDOVER_AUTHORITY=${2,,}; shift 2 ;;
+        --withdrawal-fee) WITHDRAWAL_FEE=$2; shift 2 ;;
+        --module-fees) MODULE_FEES=$2; shift 2 ;;
         --treasury-balance) TREASURY_BALANCE=$2; shift 2 ;;
         --program-port) PROGRAM_PORT=$2; shift 2 ;;
         --replica-port) REPLICA_PORT=$2; shift 2 ;;
@@ -206,14 +234,7 @@ while [ $# -gt 0 ]; do
         --replica-id) REPLICA_ID=$2; shift 2 ;;
         --genesis-timestamp-ms) GENESIS_TIMESTAMP_MS=$2; shift 2 ;;
         --enable-module)
-            case "${2:-}" in
-                escrow|budget|stream|service|perps) ;;
-                *) fail "--enable-module requires escrow, budget, stream, service or perps" ;;
-            esac
-            for module in "${GENESIS_MODULES[@]}"; do
-                [ "$module" != "$2" ] || fail "--enable-module repeats $2"
-            done
-            GENESIS_MODULES+=("$2")
+            enable_genesis_module "${2:-}"
             shift 2 ;;
         --migrations) MIGRATIONS=$2; shift 2 ;;
         --layerxd) LAYERXD=$2; shift 2 ;;
@@ -227,8 +248,29 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ "${#GENESIS_MODULES[@]}" -eq 0 ]; then
+    [ -f "$SCRIPT_DIR/genesis-modules.conf" ] && [ -r "$SCRIPT_DIR/genesis-modules.conf" ] \
+        || fail "public testnet genesis module configuration is unavailable"
+    while IFS= read -r module || [ -n "$module" ]; do
+        enable_genesis_module "$module"
+    done < "$SCRIPT_DIR/genesis-modules.conf"
+    [ "${#GENESIS_MODULES[@]}" -eq 5 ] || fail "public testnet genesis requires five configured modules"
+fi
+
 [ -n "$GENESIS_METADATA" ] && [ -f "$GENESIS_METADATA" ] && [ ! -L "$GENESIS_METADATA" ] && [ -r "$GENESIS_METADATA" ] || fail "--genesis-metadata requires an authoritative LXGB v2 metadata file"
 GENESIS_METADATA=$(readlink -f "$GENESIS_METADATA")
+fee_arguments=()
+if [ -n "$MODULE_FEES" ]; then
+    [ -n "$WITHDRAWAL_FEE" ] || fail "--module-fees requires an explicit --withdrawal-fee"
+    [ -f "$MODULE_FEES" ] && [ ! -L "$MODULE_FEES" ] && [ -r "$MODULE_FEES" ] || fail "invalid module fee configuration file"
+    MODULE_FEES=$(readlink -f "$MODULE_FEES")
+    case "$MODULE_FEES" in "$(readlink -m "$DATA_DIR")"/*) fail "module fees must be outside the data directory" ;; esac
+    fee_arguments+=(--module-fees "$MODULE_FEES")
+fi
+if [ -n "$WITHDRAWAL_FEE" ]; then
+    python3 "$SCRIPT_DIR/genesis_fees.py" "$GENESIS_METADATA" "$WITHDRAWAL_FEE" "${fee_arguments[@]}" --check \
+        || fail "invalid withdrawal fee configuration"
+fi
 case "$GENESIS_METADATA" in "$(readlink -m "$DATA_DIR")"/*) fail "genesis metadata must be outside the data directory" ;; esac
 [ -n "$DATA_DIR" ] || fail "--data-dir is required"
 [ -n "$RUN_DIR" ] || fail "--run-dir is required"
@@ -256,6 +298,10 @@ fi
 
 is_decimal() { [[ $1 =~ ^[0-9]+$ ]]; }
 is_hex64() { [[ $1 =~ ^[0-9a-f]{64}$ ]]; }
+
+if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ]; then
+    is_hex64 "$HANDOVER_AUTHORITY" || fail "--handover-authority must be 64 hex characters"
+fi
 
 is_decimal "$NETWORK_ID" || fail "--network-id must be decimal"
 [ "$NETWORK_ID" -ge 1 ] && [ "$NETWORK_ID" -le 4294967295 ] || fail "--network-id out of range"
@@ -327,7 +373,7 @@ if [ -z "$SETTLEMENT_DOCUMENT" ]; then
 fi
 GUARANTOR_COUNT=$(jq -er '.finality_policy.certificate_threshold | select(type == "number" and . == floor and . >= 1 and . <= 32)' "$SETTLEMENT_DOCUMENT") \
     || fail "certificate threshold must be an integer in 1..32 (LXP_GENESIS_MAX_GUARANTORS)"
-GENESIS_METADATA_MAX_BYTES=$((16384 - 314 - 81 * GUARANTOR_COUNT - 66 * ${#GENESIS_MODULES[@]}))
+GENESIS_METADATA_MAX_BYTES=$((16384 - 314 - 81 * GUARANTOR_COUNT - 66 * (${#GENESIS_MODULES[@]} + HANDOVER_PARAMETER_COUNT)))
 GENESIS_METADATA_BYTES=$(stat -c %s "$GENESIS_METADATA")
 [ "$GENESIS_METADATA_BYTES" -gt 219 ] && [ "$GENESIS_METADATA_BYTES" -le "$GENESIS_METADATA_MAX_BYTES" ] \
     || fail "genesis metadata length is outside request bounds: $GENESIS_METADATA_BYTES bytes, expected 220..$GENESIS_METADATA_MAX_BYTES with $GUARANTOR_COUNT guarantors"
@@ -350,8 +396,8 @@ sha256_hex() { sha256sum | cut -c1-64; }
 
 load_seed_hex() {
     local file=$1 name=$2 size text
-    [ -r "$file" ] || fail "$name key file is not readable: $file"
-    size=$(stat -c %s "$file")
+    [ -f "$file" ] && [ -r "$file" ] || fail "$name key file must name a readable regular file: $file"
+    size=$(stat -Lc %s -- "$file")
     if [ "$size" -eq 32 ]; then
         bin_to_hex < "$file"
         return
@@ -421,10 +467,9 @@ else
 fi
 [ "$PROGRAM_TOKEN" != "$REPLICA_TOKEN" ] || fail "program and replica tokens must differ"
 
-DATA_DIR=$(readlink -f "$DATA_DIR" 2>/dev/null || printf '%s' "$DATA_DIR")
-mkdir -p "$DATA_DIR"
-chmod 0700 "$DATA_DIR"
-DATA_DIR=$(readlink -f "$DATA_DIR")
+command -v python3 >/dev/null || fail "python3 is required for safe data directory preparation"
+DATA_DIR=$(python3 "$SCRIPT_DIR/data_directory.py" prepare "$DATA_DIR") \
+    || fail "data directory preparation was refused"
 mkdir -p "$RUN_DIR"
 RUN_DIR=$(readlink -f "$RUN_DIR")
 [ "$DATA_DIR" != "$RUN_DIR" ] || fail "--data-dir and --run-dir must differ"
@@ -432,7 +477,8 @@ case "$RUN_DIR" in "$DATA_DIR"/*) fail "--run-dir must not be inside --data-dir"
 case "$SEQUENCER_KEY_FILE" in "$DATA_DIR"/*) fail "the sequencer key file must be outside the data directory: $SEQUENCER_KEY_FILE" ;; esac
 case "$(readlink -f "$SEQUENCER_KEY_FILE")" in "$DATA_DIR"/*) fail "the sequencer key file must be outside the data directory: $SEQUENCER_KEY_FILE" ;; esac
 if [ "$FORCE" -eq 1 ]; then
-    find "$DATA_DIR" -mindepth 1 -delete
+    python3 "$SCRIPT_DIR/data_directory.py" clear "$DATA_DIR" \
+        || fail "data directory cleanup was refused"
 fi
 if [ -n "$(ls -A "$DATA_DIR")" ]; then
     fail "data directory is not empty: $DATA_DIR (pass --force to discard it)"
@@ -446,6 +492,13 @@ SUPERVISOR_SOCKET="$RUN_DIR/supervisor.sock"
 
 umask 077
 mkdir -p "$DATA_DIR/checkpoints" "$DATA_DIR/logs" "$DATA_DIR/replica" "$DATA_DIR/secrets" "$DATA_DIR/work"
+if [ -n "$WITHDRAWAL_FEE" ]; then
+    python3 "$SCRIPT_DIR/genesis_fees.py" "$GENESIS_METADATA" "$WITHDRAWAL_FEE" "${fee_arguments[@]}" \
+        > "$DATA_DIR/work/withdrawal-metadata.lxgb" || fail "withdrawal metadata generation failed"
+    GENESIS_METADATA="$DATA_DIR/work/withdrawal-metadata.lxgb"
+    [ "$(stat -c %s "$GENESIS_METADATA")" -le "$GENESIS_METADATA_MAX_BYTES" ] \
+        || fail "withdrawal metadata exceeds the genesis request bound"
+fi
 GUARANTOR_KEY_FILE="$DATA_DIR/secrets/guarantor-key.pem"
 GUARANTOR_ENTRIES=()
 declare -A GUARANTOR_KEYS=()
@@ -482,6 +535,9 @@ fi
 PARAMETER_KEY=$(printf 'parameter-version' | bin_to_hex)
 PARAMETER_KEY="$PARAMETER_KEY$(printf '0%.0s' $(seq 1 $(( 64 - ${#PARAMETER_KEY} ))))"
 PARAMETER_VALUE="$(printf '0%.0s' $(seq 1 56))00000001"
+FEE_AUTHORITY_KEY=$(printf 'native-fee-authority-version' | bin_to_hex)
+FEE_AUTHORITY_KEY="$FEE_AUTHORITY_KEY$(printf '0%.0s' $(seq 1 $((64 - ${#FEE_AUTHORITY_KEY}))))"
+FEE_AUTHORITY_VALUE="$(printf '0%.0s' $(seq 1 62))02"
 if [ "${#GENESIS_MODULES[@]}" -gt 0 ]; then
     mapfile -t GENESIS_MODULES < <(printf '%s\n' "${GENESIS_MODULES[@]}" | LC_ALL=C sort)
 fi
@@ -492,7 +548,14 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     hex_to_bin "$(be_hex 3 2)"
     hex_to_bin "$(be_hex "$NETWORK_ID" 4)"
     hex_to_bin "$(be_hex "$GENESIS_TIMESTAMP_MS" 8)"
-    hex_to_bin "$(be_hex "$((1 + ${#GENESIS_MODULES[@]}))" 2)"
+    hex_to_bin "$(be_hex "$((2 + ${#GENESIS_MODULES[@]} + HANDOVER_PARAMETER_COUNT))" 2)"
+    if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ]; then
+        handover_key=$(printf 'handover-authority' | bin_to_hex)
+        handover_key="$handover_key$(printf '0%.0s' $(seq 1 $((64 - ${#handover_key}))))"
+        hex_to_bin "$(be_hex 7 2)"
+        hex_to_bin "$handover_key"
+        hex_to_bin "$HANDOVER_AUTHORITY"
+    fi
     for module in "${GENESIS_MODULES[@]}"; do
         module_key=$(printf 'module-enable:%s' "$module" | bin_to_hex)
         module_key="$module_key$(printf '0%.0s' $(seq 1 $((64 - ${#module_key}))))"
@@ -500,6 +563,9 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
         hex_to_bin "$module_key"
         hex_to_bin "$PARAMETER_VALUE"
     done
+    hex_to_bin "$(be_hex 7 2)"
+    hex_to_bin "$FEE_AUTHORITY_KEY"
+    hex_to_bin "$FEE_AUTHORITY_VALUE"
     hex_to_bin "$(be_hex 7 2)"
     hex_to_bin "$PARAMETER_KEY"
     hex_to_bin "$PARAMETER_VALUE"
@@ -519,7 +585,7 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     for demand in 100 1 1 10 1 1000; do hex_to_bin "$(be_hex "$demand" 8)"; done
     cat "$GENESIS_METADATA"
 } > "$REQUEST"
-[ "$(stat -c %s "$REQUEST")" -eq "$((314 + 81 * GUARANTOR_COUNT + 66 * ${#GENESIS_MODULES[@]} + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
+[ "$(stat -c %s "$REQUEST")" -eq "$((380 + 81 * GUARANTOR_COUNT + 66 * (${#GENESIS_MODULES[@]} + HANDOVER_PARAMETER_COUNT) + $(stat -c %s "$GENESIS_METADATA")))" ] || fail "genesis request has an unexpected length"
 
 SIGNER_KEY="$DATA_DIR/work/genesis-signer.key"
 hex_to_bin "$SEQUENCER_PRIVATE" > "$SIGNER_KEY"
@@ -537,6 +603,9 @@ REGISTRATION_REQUEST="$GENESIS_DIR/paxeer-registration-request.lxrr"
 for artifact in "$MANIFEST" "$SNAPSHOT" "$REGISTRATION_REQUEST" "$GENESIS_DIR/paxeer-deployment-descriptor.lxgd"; do
     [ -s "$artifact" ] || fail "genesis artifact missing: $artifact"
 done
+if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ]; then
+    [ -s "$GENESIS_DIR/genesis-handover-trust.lxt" ] || fail "genesis handover trust artifact missing"
+fi
 RETAINED_REQUEST="$GENESIS_DIR/genesis-request.lxgb"
 mv "$REQUEST" "$RETAINED_REQUEST"
 [ "$(stat -c %s "$REGISTRATION_REQUEST")" -eq 73 ] || fail "registration request has an unexpected length"
@@ -562,6 +631,10 @@ fi
 # --- identities, tokens, configurations ------------------------------------
 IDENTITIES="$DATA_DIR/identities.txt"
 printf '%s:%s:0\n' "$TREASURY_DID_HEX" "$TREASURY_PUBLIC" > "$IDENTITIES"
+if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ] && [ "$HANDOVER_AUTHORITY" != "$TREASURY_PUBLIC" ]; then
+    governance_did=$(printf 'did:layerx:%s' "$HANDOVER_AUTHORITY" | bin_to_hex)
+    printf '%s:%s:0\n' "$governance_did" "$HANDOVER_AUTHORITY" >> "$IDENTITIES"
+fi
 
 for logfile in logs/program-feed.log logs/canonical.log logs/receipt-authority.log logs/batch.log logs/evidence.log replica/receipt-authority.log; do
     : > "$DATA_DIR/$logfile"
@@ -629,6 +702,16 @@ LAYERX_AUTHORITY_BEARER_TOKEN=$REPLICA_TOKEN
 LAYERX_AUTHORITY_ADDRESS=127.0.0.1
 LAYERX_AUTHORITY_PORT=$REPLICA_PORT
 EOF
+if [ "$HANDOVER_PARAMETER_COUNT" -eq 1 ]; then
+    printf 'LAYERX_NODE_GENESIS_HANDOVER_TRUST=%s/genesis-handover-trust.lxt\nLAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY=%s\n' "$GENESIS_DIR" "$HANDOVER_AUTHORITY" >> "$DATA_DIR/node.env"
+    printf 'LAYERX_AUTHORITY_GENESIS_MANIFEST=%s\nLAYERX_AUTHORITY_AVAILABILITY_LOG=%s/checkpoints/da-bodies.log\n' "$MANIFEST" "$DATA_DIR" >> "$DATA_DIR/replica.env"
+    if [ -n "$SETTLEMENT_ENV" ]; then
+        printf 'LAYERX_NODE_SETTLEMENT_ENV=%s\n' "$SETTLEMENT_ENV" >> "$DATA_DIR/replica.env"
+    else
+        printf 'LAYERX_NODE_PAXEER_CHAIN_ID=%s\nLAYERX_NODE_SETTLEMENT_CONTRACT=%s\nLAYERX_NODE_CHECKPOINT_REGISTRY=%s\nLAYERX_NODE_PAXEER_RPC_ADDRESS=%s\nLAYERX_NODE_PAXEER_RPC_PORT=%s\n' \
+            "$PAXEER_CHAIN_ID" "$SETTLEMENT_CONTRACT" "$CHECKPOINT_REGISTRY" "$PAXEER_RPC_ADDRESS" "$PAXEER_RPC_PORT" >> "$DATA_DIR/replica.env"
+    fi
+fi
 
 umask 022
 cat > "$DATA_DIR/node.env.tmp" <<EOF

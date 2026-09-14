@@ -134,7 +134,7 @@ static lxp_result sweep_settle(lxp_module_ctx *ctx,
         const lx_escrow_record *record = &sweep->records[i];
         lx_account *escrow_account;
         lx_account *owner_account;
-        lx_asset_record *asset;
+        const lx_asset_record *asset;
         lxp_u128 remaining;
         size_t j;
         status = lx_escrow_resolve_account(runtime, record->escrow_account,
@@ -147,7 +147,7 @@ static lxp_result sweep_settle(lxp_module_ctx *ctx,
             if (memcmp(authorities[j].authorized_from,
                        escrow_account->id, 32U) == 0)
                 return LXP_FATAL_INVARIANT;
-        status = lx_asset_lookup(runtime->assets, record->asset_id, &asset);
+        status = lx_escrow_resolve_asset(ctx, record->asset_id, &asset);
         if (status != LXP_OK) return status;
         status = sweep_asset_index(assets, &asset_count, asset);
         if (status != LXP_OK) return status;
@@ -182,7 +182,9 @@ static lxp_result sweep_settle(lxp_module_ctx *ctx,
     set.context.actor_sequence = set.legs[0].from->next_sequence;
     set.context.batch_timestamp = timestamp;
     (void)memcpy(set.context.authorized_from, set.legs[0].from->id, 32U);
-    status = lxp_ctx_emit_transfer_set(ctx, &set, receipt);
+    status = ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT ?
+        lxp_ctx_emit_monetary_transfer_set(ctx, &set, receipt) :
+        lxp_ctx_emit_transfer_set(ctx, &set, receipt);
     if (status != LXP_OK) return status;
     *applied = true;
     return LXP_OK;
@@ -252,4 +254,68 @@ lxp_result lx_escrow_epoch_begin(lxp_module_ctx *ctx, uint64_t epoch,
         if (status != LXP_OK) return status;
     }
     return LXP_OK;
+}
+
+typedef struct escrow_maintenance_scan {
+    uint64_t timestamp;
+    lx_escrow_record record;
+    bool found;
+} escrow_maintenance_scan;
+
+static lxp_result escrow_maintenance_visit(const lx_escrow_record *record, void *opaque)
+{
+    escrow_maintenance_scan *scan = opaque;
+    if (!scan->found && lx_escrow_active_state(record->state) &&
+        record->expiry != 0U && scan->timestamp >= record->expiry) {
+        scan->record = *record;
+        scan->found = true;
+    }
+    return LXP_OK;
+}
+
+lxp_result lx_escrow_batch_maintenance(lxp_module_ctx *ctx, bool *complete)
+{
+    escrow_maintenance_scan scan = {0};
+    lx_escrow_runtime *runtime;
+    lx_escrow_release_request request = {0};
+    lxp_receipt receipt;
+    const lx_asset_record *asset;
+    uint8_t event[LX_ESCROW_EVENT_BYTES];
+    lxp_result status;
+    if (ctx == NULL || complete == NULL) return LXP_ERR_NON_CANONICAL;
+    *complete = false;
+    runtime = lx_escrow_require_runtime(ctx);
+    if (runtime == NULL) return LXP_ERR_MODULE_DISABLED;
+    scan.timestamp = lxp_ctx_batch_timestamp_ms(ctx);
+    status = lx_escrow_state_iter(ctx, escrow_maintenance_visit, &scan);
+    if (status != LXP_OK) return status;
+    if (!scan.found) {
+        *complete = true;
+        return LXP_OK;
+    }
+    request.escrow_id = scan.record.escrow_id;
+    status = lx_escrow_resolve_account(runtime, scan.record.escrow_account,
+        &request.escrow_account);
+    if (status == LXP_OK)
+        status = lx_escrow_resolve_account(runtime, scan.record.owner, &request.owner_account);
+    if (status == LXP_OK) status = lx_escrow_resolve_asset(ctx, scan.record.asset_id, &asset);
+    if (status == LXP_OK) {
+        request.asset = asset;
+        status = lx_escrow_timeout_key(&scan.record, request.idempotency_key);
+    }
+    if (status == LXP_OK) status = lx_escrow_timeout_execute(ctx, &request, &receipt);
+    if (status == LXP_OK && !lxp_ct_is_zero(receipt.transfer_set_root, 32U)) {
+        lxp_effect effect = {0};
+        effect.module_id = LXP_MODULE_ESCROW;
+        effect.ordinal = ctx->next_effect_ordinal;
+        effect.kind = LXP_EFFECT_TRANSFER;
+        effect.monetary = true;
+        (void)memcpy(effect.transfer_set_root, receipt.transfer_set_root, 32U);
+        status = lxp_effect_buffer_add(ctx->effects, &effect);
+        if (status == LXP_OK) ++ctx->next_effect_ordinal;
+    }
+    if (status == LXP_OK) status = lx_escrow_lookup(ctx, scan.record.escrow_id, &scan.record);
+    if (status == LXP_OK) status = lx_escrow_event_body(&scan.record, 5U, event);
+    if (status == LXP_OK) status = lxp_ctx_emit_event(ctx, 5U, event, sizeof(event));
+    return status;
 }

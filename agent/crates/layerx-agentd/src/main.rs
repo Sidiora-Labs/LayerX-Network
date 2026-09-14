@@ -8,7 +8,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use layerx_agentd::audit::Redacted;
 use layerx_agentd::budget::{LimitConfig, LimitId, LimitScope};
@@ -284,6 +284,7 @@ fn publish_mcp_binding(
         .get(&configured.peer_uid)
         .ok_or("LAYERX_AGENT_MCP_PEER_UID names no configured human peer")?;
     let peer = HumanPeer {
+        subject: None,
         uid: configured.peer_uid,
         principal: principal.clone(),
         tenant: tenant.clone(),
@@ -407,6 +408,7 @@ fn connect_human_authority(
     for (uid, (principal, tenant)) in peers {
         authority
             .registry(&HumanPeer {
+                subject: None,
                 uid: *uid,
                 principal: principal.clone(),
                 tenant: tenant.clone(),
@@ -653,6 +655,23 @@ fn response(stream: &mut TcpStream, status: u16, body: &str) -> Result<(), Strin
         .map_err(|error| format!("agent response failed: {error}"))
 }
 
+fn refresh_program_authority(
+    route: &mut ProgramBalanceReadRoute,
+    native: &mut Option<NativeReadRoute>,
+) -> Result<(), String> {
+    if let Some(native) = native.as_mut() {
+        if let Some(history) = native
+            .signed_authority()
+            .map_err(|error| format!("program authority history unavailable: {error:?}"))?
+        {
+            route
+                .refresh_authority(&history)
+                .map_err(|error| format!("program authority policy refused: {error:?}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn serve_connection(
     stream: &mut TcpStream,
     bearer: &str,
@@ -693,6 +712,9 @@ fn serve_connection(
         return response(stream, 401, "{\"error\":\"unauthorized\"}");
     }
     if path == "/healthz" {
+        if refresh_program_authority(route, native).is_err() {
+            return response(stream, 503, "{\"ready\":false}");
+        }
         return match route.read(probe_program, now_ms()?) {
             Ok(_) => response(stream, 200, "{\"ready\":true}"),
             Err(_) => response(stream, 503, "{\"ready\":false}"),
@@ -726,6 +748,9 @@ fn serve_connection(
     let Some(program) = program else {
         return response(stream, 400, "{\"error\":\"invalid_program\"}");
     };
+    if refresh_program_authority(route, native).is_err() {
+        return response(stream, 503, "{\"error\":\"program_state_unavailable\"}");
+    }
     let read = route
         .read(program, now_ms()?)
         .map_err(|error| format!("current program state is unavailable: {error:?}"));
@@ -735,10 +760,78 @@ fn serve_connection(
     }
 }
 
+fn native_handover_sources() -> Result<Option<(PathBuf, PathBuf)>, String> {
+    let genesis_trust = match std::env::var("LAYERX_AGENT_GENESIS_TRUST") {
+        Ok(path) => Some(path),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("native genesis trust path is not UTF-8".to_owned())
+        }
+    };
+    let handover_finality = match std::env::var("LAYERX_AGENT_HANDOVER_FINALITY") {
+        Ok(path) => Some(path),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("handover finality policy path is not UTF-8".to_owned())
+        }
+    };
+    match (genesis_trust, handover_finality) {
+        (None, None) => Ok(None),
+        (Some(genesis), Some(finality)) => {
+            Ok(Some((PathBuf::from(genesis), PathBuf::from(finality))))
+        }
+        _ => Err(
+            "native genesis trust and handover finality policy must be configured together"
+                .to_owned(),
+        ),
+    }
+}
+
+struct ProgramAuthorityBoot {
+    verifier: ProtocolDeploymentVerifier,
+    registry: Registry,
+    signed_history: Option<layerx_proof::signed_authority::SignedAuthorityHistory>,
+}
+
+fn program_authority_boot(
+    config: &Config,
+    native: &mut Option<NativeReadRoute>,
+) -> Result<ProgramAuthorityBoot, String> {
+    let verifier = ProtocolDeploymentVerifier::from_protected_history(
+        Path::new(&config.sequencer_trust_history),
+        config.staleness_ms,
+    )
+    .map_err(|error| format!("agent deployment verifier is invalid: {error}"))?;
+    let signed_history = native
+        .as_mut()
+        .map(NativeReadRoute::signed_authority)
+        .transpose()
+        .map_err(|error| format!("program history unavailable: {error:?}"))?
+        .flatten();
+    let admission_verifier = signed_history
+        .as_ref()
+        .map(|history| verifier.with_signed_history(history))
+        .transpose()
+        .map_err(|error| format!("program admission authority refused: {error:?}"))?;
+    let registry = load_registry(
+        Path::new(&config.deployment_journal),
+        admission_verifier.as_ref().unwrap_or(&verifier),
+    )?;
+    Ok(ProgramAuthorityBoot {
+        verifier,
+        registry,
+        signed_history,
+    })
+}
+
 fn serve(config: Config) -> Result<(), String> {
     let mcp = mcp_enrolment()?
         .map(|enrolment| mcp_boot(&config, enrolment))
         .transpose()?;
+    let handover_sources = native_handover_sources()?;
+    if handover_sources.is_some() && mcp.is_none() {
+        return Err("native genesis trust requires the configured native read boundary".to_owned());
+    }
     let mut native = mcp
         .as_ref()
         .map(|boot| {
@@ -753,22 +846,29 @@ fn serve(config: Config) -> Result<(), String> {
                 PathBuf::from(required("LAYERX_AGENT_HUMAN_NODE_LNI")?),
                 limits,
             )?;
-            NativeReadRoute::new(
+            let route = NativeReadRoute::new(
                 client,
                 boot.enrolment.did.clone(),
                 config.bearer.clone(),
-                Instant::now,
+                layerx_client::runtime_clock::RuntimeClock::from_environment()
+                    .map_err(|error| format!("native read clock unavailable: {error}"))?,
             )
-            .map_err(|error| format!("native read route is invalid: {error:?}"))
+            .map_err(|error| format!("native read route is invalid: {error:?}"))?;
+            match handover_sources.as_ref() {
+                Some((genesis, finality)) => route
+                    .with_protected_finality(finality)
+                    .and_then(|route| route.with_protected_genesis(genesis))
+                    .map_err(|error| format!("native genesis trust is invalid: {error:?}")),
+                None => Ok(route),
+            }
         })
         .transpose()?;
     let human = start_human_owner(mcp)?;
-    let verifier = ProtocolDeploymentVerifier::from_protected_history(
-        Path::new(&config.sequencer_trust_history),
-        config.staleness_ms,
-    )
-    .map_err(|error| format!("agent deployment verifier is invalid: {error}"))?;
-    let registry = load_registry(Path::new(&config.deployment_journal), &verifier)?;
+    let ProgramAuthorityBoot {
+        verifier,
+        registry,
+        signed_history,
+    } = program_authority_boot(&config, &mut native)?;
     let reader = LayerxdProgramBalanceReader::connect(
         &config.node_endpoint,
         config.node_bearer,
@@ -783,6 +883,11 @@ fn serve(config: Config) -> Result<(), String> {
     )
     .map_err(|error| format!("agent protocol reader configuration failed: {error:?}"))?;
     let mut route = ProgramBalanceReadRoute::new(reader);
+    if let Some(history) = signed_history.as_ref() {
+        route
+            .refresh_authority(history)
+            .map_err(|error| format!("program authority refused: {error:?}"))?;
+    }
     route
         .read(config.probe_program, now_ms()?)
         .map_err(|error| format!("agent protocol reader is not ready: {error:?}"))?;

@@ -2,7 +2,10 @@ import { defineConfig } from "@playwright/test";
 
 import baseConfig from "./playwright.config";
 
-export default defineConfig(baseConfig, {
+const performanceConfig = { ...baseConfig };
+delete performanceConfig.webServer;
+
+export default defineConfig(performanceConfig, {
   testDir: "./e2e",
   testMatch: "perf.spec.ts",
 });

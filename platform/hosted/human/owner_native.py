@@ -10,12 +10,14 @@ import struct
 import subprocess
 import time
 import urllib.request
+import urllib.error
 import urllib.parse
 
 from provision import Refused, fields, h32, protected_bytes, protected_json, require, uint, write_json
 
 GUARDIAN_ROLES = ('guarantor-1', 'guarantor-2', 'sequencer')
 GUARDIAN_EPOCH_MAXIMUM = 64
+LNI_VERSION = (1, 5)
 
 
 def digest(domain, data):
@@ -66,12 +68,12 @@ def receipt(socket_path, activity_id):
         return bytes(data)
 
     def exchange(connection, tag, correlation, payload):
-        envelope = struct.pack('>HHHQ', 1, 4, tag, correlation) + span(payload) + span(b'')
+        envelope = struct.pack('>HHHQ', *LNI_VERSION, tag, correlation) + span(payload) + span(b'')
         connection.sendall(span(envelope))
         length = int.from_bytes(read_exact(connection, 4), 'big')
         require(22 <= length <= 1212416, socket_path, 'receipt frame bound')
         reader = Reader(read_exact(connection, length), socket_path)
-        require(reader.take(4) == b'\0\1\0\4', socket_path, 'LNI version')
+        require(reader.take(4) == struct.pack('>HH', *LNI_VERSION), socket_path, 'LNI version')
         returned_tag = reader.number(2)
         require(reader.number(8) == correlation, socket_path, 'LNI correlation')
         data = reader.span(1212416)
@@ -91,6 +93,36 @@ def receipt(socket_path, activity_id):
             time.sleep(0.1)
     raise Refused(f'{socket_path}: committed receipt unavailable; do not resubmit with a new idempotency key')
 
+
+
+def authority_document(request, context, path):
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            with urllib.request.urlopen(request, context=context,
+                    timeout=max(0.001, deadline - time.monotonic())) as response:
+                body = response.read(1048577)
+                require(len(body) <= 1048576, path, 'authority document bound')
+                return json.loads(body)
+        except urllib.error.HTTPError as error:
+            if error.code not in (404, 503):
+                raise
+            try:
+                document = json.loads(error.read(4097))
+                refusal = document['error']
+                code = refusal['code']
+                delay = refusal.get('retry_after_seconds', 0.1)
+            except (ValueError, KeyError, TypeError):
+                raise error
+            if code not in ('unknown_activity', 'replica_evidence_unavailable',
+                            'replica_unavailable', 'receipt_source_unavailable'):
+                raise
+            if not isinstance(delay, (int, float)) or isinstance(delay, bool) or not 0 < delay <= 5:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(delay, remaining))
 
 def receipt_fields(data, public_key, path):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -247,7 +279,9 @@ def _produce(work_dir):
     root = Path(work_dir) / 'human-evidence-input'
     path = root / 'owner-native.json'
     config = protected_json(path)
-    fields(config, 'node_socket network_id owner_seed_file pending_seed_file sequencer_public_key layerxctl fee_limit authority_url authority_token_file authority_ca_file authority_state_root', path, 'native producer configuration')
+    kms = 'kms_signer' in config
+    key_fields = 'kms_signer kms_owner_file' if kms else 'owner_seed_file pending_seed_file'
+    fields(config, 'node_socket network_id sequencer_public_key layerxctl fee_limit authority_url authority_token_file authority_ca_file authority_state_root ' + key_fields, path, 'native producer configuration')
     uint(config['network_id'], 32, path, 'network_id', 1)
     uint(config['fee_limit'], 128, path, 'fee_limit')
     h32(config['sequencer_public_key'], path, 'sequencer_public_key')
@@ -259,17 +293,31 @@ def _produce(work_dir):
     info = evidence_dir.lstat()
     require(evidence_dir.is_absolute() and evidence_dir.resolve() == evidence_dir and stat.S_ISDIR(info.st_mode)
             and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700, evidence_dir, 'protected authority state directory')
-    seed = protected_bytes(config['owner_seed_file'], 32)
-    require(len(seed) == 32, config['owner_seed_file'], 'custody owner Ed25519 seed')
-    signer = Ed25519PrivateKey.from_private_bytes(seed)
-    public = signer.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    pending = protected_bytes(config['pending_seed_file'], 32)
-    require(len(pending) == 32, config['pending_seed_file'], 'custody rotation Ed25519 seed')
-    pending_public = Ed25519PrivateKey.from_private_bytes(pending).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    require(pending_public != public, config['pending_seed_file'], 'distinct rotation key')
+    kms_owner = None
+    signer = None
+    if kms:
+        fields(config['kms_signer'], 'socket peer_uid peer_gid', path, 'KMS signer peer')
+        for key in ('peer_uid', 'peer_gid'):
+            uint(config['kms_signer'][key], 32, path, key)
+        kms_owner = protected_json(config['kms_owner_file'])
+        public = bytes(kms_owner['public_key'])
+        pending_public = bytes(kms_owner['pending_key'])
+        require(len(public) == 32 and len(pending_public) == 32 and public != pending_public,
+                path, 'distinct provider-owned keys')
+    else:
+        seed = protected_bytes(config['owner_seed_file'], 32)
+        require(len(seed) == 32, config['owner_seed_file'], 'custody owner Ed25519 seed')
+        signer = Ed25519PrivateKey.from_private_bytes(seed)
+        public = signer.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        pending = protected_bytes(config['pending_seed_file'], 32)
+        require(len(pending) == 32, config['pending_seed_file'], 'custody rotation Ed25519 seed')
+        pending_public = Ed25519PrivateKey.from_private_bytes(pending).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        require(pending_public != public, config['pending_seed_file'], 'distinct rotation key')
     owner_path = Path(work_dir) / 'human-owner-result.json'
     owner = protected_json(owner_path)
     did = owner['did'].encode()
+    if kms:
+        require(kms_owner['did'] == owner['did'] and kms_owner['principal'] == owner['principal'], path, 'KMS provider principal binding')
     require(0 < len(did) <= 255, owner_path, 'owner DID')
     did_id = digest(b'did-id', struct.pack('>H', len(did)) + did)
     name = b'agent:' + did + b':main'
@@ -316,14 +364,20 @@ def _produce(work_dir):
         sequence = state['account_sequence']
         now = time.time_ns() // 1000000
         idempotency = hashlib.sha256(b'LX:DEPOSIT:NULLIFIER:v1' + payload[43:75]).digest() if module == 8 else os.urandom(32)
-        fields_bytes = (b'\1' + struct.pack('>H', 3) + b'\2' + struct.pack('>I', config['network_id'])
-            + b'\3' + struct.pack('>I', (module << 16) | ordinal) + b'\4' + span(did)
-            + b'\5' + span(public) + b'\6' + struct.pack('>Q', sequence)
-            + b'\7' + struct.pack('>QQ', now, now + 300000) + b'\10' + span(idempotency)
-            + b'\11' + config['fee_limit'].to_bytes(16, 'big') + b'\12' + span(digest(b'payload-hash', payload))
-            + b'\13' + span(payload))
-        unsigned = b'\0\3\x10\1\13' + fields_bytes
-        signed = b'\0\3\x10\1\14' + fields_bytes + b'\14' + span(signer.sign(digest(b'signature-preimage', unsigned)))
+        if kms:
+            from owner_kms import sign
+            if label in ('identity', 'recovery'):
+                idempotency = bytes(kms_owner['registration_action' if label == 'identity' else 'recovery_action'])
+            signed = sign(config, kms_owner, label, payload, sequence, now, now + 300000, idempotency)
+        else:
+            fields_bytes = (b'\1' + struct.pack('>H', 3) + b'\2' + struct.pack('>I', config['network_id'])
+                + b'\3' + struct.pack('>I', (module << 16) | ordinal) + b'\4' + span(did)
+                + b'\5' + span(public) + b'\6' + struct.pack('>Q', sequence)
+                + b'\7' + struct.pack('>QQ', now, now + 300000) + b'\10' + span(idempotency)
+                + b'\11' + config['fee_limit'].to_bytes(16, 'big') + b'\12' + span(digest(b'payload-hash', payload))
+                + b'\13' + span(payload))
+            unsigned = b'\0\3\x10\1\13' + fields_bytes
+            signed = b'\0\3\x10\1\14' + fields_bytes + b'\14' + span(signer.sign(digest(b'signature-preimage', unsigned)))
         activity_id = digest(b'activity-id', signed)
         activity_path = run_dir / (label + '.activity')
         protected_write(activity_path, signed)
@@ -336,17 +390,15 @@ def _produce(work_dir):
         require(result['activity_id'] == activity_id.hex() and result['module'] == module and result['version'] == 1,
                 receipt_path, 'receipt activity/module binding')
         token = protected_bytes(config['authority_token_file'], 4096).decode('ascii')
-        request = urllib.request.Request(config['authority_url'].rstrip('/') + '/internal/v1/activities/' + activity_id.hex() + '/authority',
+        request = urllib.request.Request(config['authority_url'].rstrip('/') + '/v1/authorized-batches/wait-by-activity/' + activity_id.hex(),
                                          headers={'Authorization': 'Bearer ' + token})
         context = ssl.create_default_context(cafile=config['authority_ca_file'])
-        with urllib.request.urlopen(request, context=context, timeout=30) as response:
-            verified = json.loads(response.read(1048577))
+        verified = authority_document(request, context, receipt_path)
         require(verified['activity_id'] == activity_id.hex() and verified['batch_id'] == result['batch']
                 and verified['sequencer_public_key'] == config['sequencer_public_key'], receipt_path, 'authorized batch binding')
         proof_url = config['authority_url'].rstrip('/') + '/v1/batches/' + result['batch'] + '/receipt-authority?receipt_digest=' + result['receipt_digest']
         request = urllib.request.Request(proof_url, headers={'Authorization': 'Bearer ' + token})
-        with urllib.request.urlopen(request, context=context, timeout=30) as response:
-            document = json.loads(response.read(1048577))
+        document = authority_document(request, context, receipt_path)
         record = json.dumps(dict(receipt_hex=raw.hex(), replica_document=document),
                             sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
         protected_write(evidence_dir / (activity_id.hex() + '.json'), record)

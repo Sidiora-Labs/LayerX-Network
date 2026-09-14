@@ -7,6 +7,7 @@
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_batch.h"
+#include "layerx/lxp_handover.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -134,11 +135,31 @@ struct lxp_module_ctx {
     size_t staged_reserve;
     lx_account_registration staged_accounts[
         LXP_MODULE_MAX_STAGED_ACCOUNTS];
+    uint8_t staged_account_bindings[LXP_MODULE_MAX_STAGED_ACCOUNTS][32];
     size_t staged_account_count;
+    lxp_identity_store *identities;
+    lxp_identity staged_identity;
+    bool identity_staged;
+    bool owner_rotation_staged;
+    uint8_t owner_rotation_did[32];
+    uint8_t owner_rotation_from[32];
+    uint8_t owner_rotation_to[32];
+    size_t owner_rotation_account_count;
     lxp_module_account_snapshot transfer_snapshots[
         LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
     size_t transfer_snapshot_count;
     bool transfer_applied;
+    /* The live allowance the executing authority draws against. Every
+     * principal-sourced transfer set the module emits presents it to the
+     * ledger; the pre-charge scope is kept so an unwind restores it. A
+     * charged metered scope stages its charge record, written under the
+     * governance module beside the grant it continues when the transition
+     * commits. */
+    struct lxp_transfer_allowance *allowance;
+    lxp_authority_scope allowance_before;
+    bool allowance_charged;
+    lxp_module_kv_change allowance_record;
+    bool allowance_record_staged;
     bool commit_prepared;
 #ifdef LXP_TESTING
     unsigned int bridge_credit_fail_stage;
@@ -179,6 +200,7 @@ typedef struct lxp_kernel {
     size_t blob_count;
     size_t blob_total_bytes;
     uint64_t epoch;
+    lxp_handover_state handover;
     lxp_kernel_parameter_reader read_parameter;
     lxp_kernel_transfer_applier apply_transfer_set;
     lxp_kernel_fee_transaction fee_transaction;
@@ -207,6 +229,21 @@ lxp_result lxp_kernel_create(lxp_kernel *kernel, lxp_state_store *state,
                              lxp_state_journal *journal,
                              const void *parameter_set, uint64_t epoch);
 lxp_result lxp_kernel_set_epoch(lxp_kernel *kernel, uint64_t epoch);
+/* Advances the kernel epoch through the module epoch hooks. Every module
+ * registered for the departing epoch observes epoch_end and every module
+ * registered for the arriving epoch observes epoch_begin, each on a mutable
+ * context sealed at timestamp_ms, inside one state journal opened at the
+ * next global sequence. A hook failure rolls back every staged write, the
+ * journal and the epoch; success commits them together, consumes the
+ * sequence and recomputes current_state_root. Because every hook stages its
+ * writes before any of them commits, their additions are charged against one
+ * shared budget: a transition whose hooks would together carry the module
+ * table or the blob store past its capacity refuses with
+ * LXP_ERR_ARENA_EXHAUSTED before the journal commits. An equal epoch refuses
+ * with LXP_ERR_IDEMPOTENT_REPLAY and a lower one with
+ * LXP_ERR_TIMESTAMP_REGRESSION. */
+lxp_result lxp_kernel_epoch_transition(lxp_kernel *kernel, uint64_t epoch,
+                                       uint64_t timestamp_ms, lxp_arena *arena);
 lxp_result lxp_kernel_set_capabilities(
     lxp_kernel *kernel, lxp_kernel_parameter_reader read_parameter,
     lxp_kernel_transfer_applier apply_transfer_set);
@@ -305,6 +342,10 @@ typedef struct lxp_kernel_execution {
     bool signature_valid;
     lxp_identity_store *identities;
     const lxp_authority_resolved *authority;
+    /* The resolved grant's live scope, presented to the ledger by every
+     * transfer set the activity's module emits from the principal. NULL only
+     * when the caller resolved no grant. */
+    struct lxp_transfer_allowance *allowance;
     const lxp_fee_params *fee_parameters;
     lxp_fee_meter fee_meter;
     lxp_u128 fee_balance;
@@ -313,6 +354,8 @@ typedef struct lxp_kernel_execution {
     uint8_t batch_id[32];
     uint8_t activity_root[32];
     const uint8_t *sequencer_private_key;
+    const lxp_receipt *replay_receipt;
+    const uint8_t *replay_public_key;
     const lxp_verified_receipt_index *verified_receipts;
     /* Output only. On a committed Programs CALL, the kernel writes the exact
      * envelope projection that the replay transition must publish as that
@@ -435,6 +478,12 @@ lxp_result lxp_kernel_batch_publication_digest(
 lxp_result lxp_kernel_prepare_batch_maintenance(
     lxp_kernel_prepared_batch *batch, const lxp_activity *activities,
     const lxp_kernel_execution *executions);
+bool lxp_kernel_uses_batch_maintenance(const lxp_kernel *kernel,
+    uint16_t protocol_version);
+struct lxp_replay_activity_output;
+lxp_result lxp_kernel_finalize_batch_maintenance(lxp_kernel *kernel,
+    uint16_t protocol_version, const lxp_kernel_execution *execution,
+    lxp_byte_span expected, struct lxp_replay_activity_output *output);
 lxp_byte_span lxp_kernel_prepared_batch_maintenance(
     const lxp_kernel_prepared_batch *batch);
 lxp_result lxp_kernel_batch_publication_digest_maintenance(

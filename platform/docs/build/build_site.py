@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import re
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -698,7 +700,7 @@ nav h2{font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:var(-
 nav a{display:block;padding:5px 8px;margin-left:-8px;border-radius:6px;color:var(--ink);text-decoration:none;
 font-size:14px}
 nav a:hover{background:var(--code)}nav a.current{background:var(--code);font-weight:600;color:var(--accent)}
-main{padding:44px 48px 96px;max-width:960px}
+main{padding:44px 48px 96px;max-width:960px;min-width:0;overflow-wrap:anywhere}
 h1{font-size:32px;letter-spacing:-0.02em;margin:0 0 8px}
 h2{font-size:22px;letter-spacing:-0.01em;margin:38px 0 10px;padding-top:14px;border-top:1px solid var(--rule)}
 h3{font-size:17px;margin:26px 0 8px}h4{font-size:15px;margin:20px 0 6px;color:var(--muted)}
@@ -723,13 +725,150 @@ padding:2px 8px;border-radius:999px;border:1px solid currentColor}
 .badge.protocol{color:var(--protocol)}.badge.agent-layer{color:var(--agent-layer)}
 .badge.service{color:var(--service)}.badge.hosted-surface{color:var(--hosted-surface)}
 footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--rule);color:var(--muted);font-size:13px}
-@media (max-width:900px){.shell{grid-template-columns:1fr}nav{position:static;height:auto;
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.search{position:relative;margin:0 0 8px}
+.search input{width:100%;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;
+background:var(--page);color:var(--ink);font-size:14px}
+.search input:focus{outline:2px solid var(--accent);outline-offset:1px}
+.search-results{position:absolute;z-index:10;left:0;right:0;top:calc(100% + 4px);max-height:60vh;
+overflow-y:auto;background:var(--surface);border:1px solid var(--rule);border-radius:10px;
+box-shadow:0 12px 28px rgba(0,0,0,0.18)}
+.search-results a{display:block;padding:8px 12px;color:var(--ink);text-decoration:none;
+border-bottom:1px solid var(--rule)}
+.search-results a:last-child{border-bottom:none}
+.search-results a:hover{background:var(--code)}
+.search-title{display:block;font-weight:600;font-size:14px}
+.search-section{display:block;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted)}
+.search-snippet{display:block;font-size:12.5px;color:var(--muted)}
+.search-empty{padding:10px 12px;margin:0;color:var(--muted);font-size:13px}
+@media (max-width:900px){.shell{grid-template-columns:minmax(0,1fr)}nav{position:static;height:auto;
 border-right:none;border-bottom:1px solid var(--rule)}main{padding:28px 20px 64px}}
 """
 
 
+SEARCH_WIDGET = """(function () {
+  var index = window.LAYERX_SEARCH_INDEX || [];
+  var input = document.getElementById("search");
+  var results = document.getElementById("search-results");
+  if (!input || !results) { return; }
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, function (character) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character];
+    });
+  }
+  function render(query) {
+    var trimmed = query.trim().toLowerCase();
+    if (trimmed.length < 2) { results.hidden = true; results.innerHTML = ""; return; }
+    var terms = trimmed.split(/\\s+/);
+    var hits = [];
+    for (var i = 0; i < index.length; i += 1) {
+      var page = index[i];
+      var haystack = (page.title + " " + page.section + " " + page.summary + " "
+        + page.headings.join(" ") + " " + page.text).toLowerCase();
+      var matched = true;
+      for (var t = 0; t < terms.length; t += 1) {
+        if (haystack.indexOf(terms[t]) < 0) { matched = false; break; }
+      }
+      if (!matched) { continue; }
+      var score = page.title.toLowerCase().indexOf(terms[0]) >= 0 ? 1 : 0;
+      hits.push([score, page]);
+    }
+    hits.sort(function (left, right) { return right[0] - left[0]; });
+    hits = hits.slice(0, 10);
+    if (!hits.length) {
+      results.hidden = false;
+      results.innerHTML = '<p class="search-empty">No matches.</p>';
+      return;
+    }
+    var markup = "";
+    for (var j = 0; j < hits.length; j += 1) {
+      var hit = hits[j][1];
+      var snippet = hit.summary || hit.text.slice(0, 120);
+      markup += '<a href="' + hit.id + '.html">'
+        + '<span class="search-title">' + escapeHtml(hit.title) + '</span>'
+        + '<span class="search-section">' + escapeHtml(hit.section) + '</span>'
+        + '<span class="search-snippet">' + escapeHtml(snippet) + '</span></a>';
+    }
+    results.hidden = false;
+    results.innerHTML = markup;
+  }
+  input.addEventListener("input", function () { render(input.value); });
+  document.addEventListener("keydown", function (event) {
+    var tag = document.activeElement ? document.activeElement.tagName : "";
+    if (event.key === "/" && document.activeElement !== input && !/INPUT|TEXTAREA|SELECT/.test(tag)) {
+      event.preventDefault();
+      input.focus();
+    }
+  });
+}());
+"""
+
+
+def plain_text(document: str) -> str:
+    pieces: list[str] = []
+    in_fence = False
+    for raw in document.splitlines():
+        line = raw.strip()
+        if FENCE.fullmatch(line) is not None:
+            in_fence = not in_fence
+            continue
+        if in_fence or not line:
+            continue
+        if line.startswith(("<!--", "|", "> ")):
+            continue
+        if re.fullmatch(r"[-*]\s+.*", line) or re.fullmatch(r"[0-9]+\.\s+.*", line):
+            line = re.sub(r"^(?:[-*]|[0-9]+\.)\s+", "", line)
+        line = re.sub(r"`([^`]*)`", r"\1", line)
+        line = re.sub(r"\[([^\]]+)]\(([^)]+)\)", r"\1", line)
+        line = line.lstrip("#").strip()
+        if line:
+            pieces.append(line)
+    return " ".join(pieces)
+
+
+def search_entries(
+    documents: dict[str, str], pages: dict[str, Page], sections: dict[str, Section]
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for page in sorted(pages.values(), key=lambda item: (sections[item.section].order, item.order)):
+        document = documents[page.identifier]
+        headings = [
+            re.sub(r"`([^`]*)`", r"\1", match.group(2)).strip()
+            for match in re.finditer(r"^(#{1,4})\s+(.*)$", document, re.MULTILINE)
+        ]
+        entries.append(
+            {
+                "id": page.identifier.replace("/", "-"),
+                "title": page.title,
+                "section": sections[page.section].title,
+                "summary": page.summary,
+                "headings": headings,
+                "text": plain_text(document)[:4000],
+            }
+        )
+    return entries
+
+
+def search_script(entries: list[dict[str, object]]) -> str:
+    return (
+        "// Generated by platform/docs/build/build_site.py. Do not hand-edit.\n"
+        "window.LAYERX_SEARCH_INDEX = "
+        + json.dumps(entries, ensure_ascii=False, separators=(",", ":"))
+        + ";\n"
+        + SEARCH_WIDGET
+    )
+
+
 def navigation(sections: dict[str, Section], pages: dict[str, Page], current: str) -> str:
-    parts: list[str] = []
+    parts: list[str] = [
+        '<form class="search" role="search" onsubmit="return false">'
+        '<label class="visually-hidden" for="search">Search documentation</label>'
+        '<input id="search" type="search" placeholder="Search documentation" autocomplete="off"'
+        ' spellcheck="false" aria-controls="search-results">'
+        '<div id="search-results" class="search-results" hidden></div>'
+        "</form>"
+    ]
     for section in sorted(sections.values(), key=lambda item: item.order):
         entries = sorted(
             (page for page in pages.values() if page.section == section.identifier),
@@ -759,8 +898,49 @@ def render_page(page: Page, body: str, sections: dict[str, Section], pages: dict
         f'<p class="summary">{html.escape(page.summary)}</p>\n{body}\n'
         "<footer>Every capability on this site names the layer that enforces it. Every code block is"
         " extracted from a sample under platform/docs/samples and re-checked on each build.</footer>\n"
-        "</main>\n</div>\n</body>\n</html>\n"
+        "</main>\n</div>\n"
+        '<script src="search.js" defer></script>\n'
+        "</body>\n</html>\n"
     )
+
+
+LINK = re.compile(r'(?:href|src)="([^"]+)"')
+EXTERNAL_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def check_links(
+    pages: dict[str, Page],
+    rendered: dict[str, str],
+    known: set[str],
+) -> tuple[int, list[str]]:
+    checked = 0
+    problems: list[str] = []
+    for page in pages.values():
+        for raw in LINK.findall(rendered[page.identifier]):
+            raw = html.unescape(raw).strip()
+            target = urlsplit(raw).path
+            if not target or target.startswith(("mailto:", "tel:")):
+                continue
+            if EXTERNAL_SCHEME.match(raw) or raw.startswith("//"):
+                continue
+            checked += 1
+            if target.startswith("/"):
+                if target.lstrip("/") not in known:
+                    problems.append(
+                        f"{page.identifier} links to {target}, which no page or asset generates"
+                    )
+                continue
+            if ".." in Path(target).parts:
+                problems.append(
+                    f"{page.identifier} links outside the standalone site to {target}; "
+                    "use an immutable source URL for repository references"
+                )
+                continue
+            if target not in known:
+                problems.append(
+                    f"{page.identifier} links to {target}, which no page or asset generates"
+                )
+    return checked, problems
 
 
 def generated_documents(root: Path, repository: Path, capabilities: dict[str, Capability], samples: dict[str, Sample], measurements: list[dict[str, object]]) -> dict[Path, str]:
@@ -856,16 +1036,66 @@ def build(repository: Path, write: bool) -> list[str]:
         )
 
     output = root / settings["output"]
+    rendered = {
+        page.identifier: render_page(
+            page, render_markdown(documents[page.identifier]), sections, pages, settings
+        )
+        for page in pages.values()
+    }
+    filenames = {
+        page.identifier: f"{page.identifier.replace('/', '-')}.html" for page in pages.values()
+    }
+    known = set(filenames.values()) | {"search.js", "manifest.json", "measurements.json"}
+    checked, problems = check_links(pages, rendered, known)
+    if problems:
+        raise DocumentationError("broken documentation links: " + "; ".join(sorted(problems)))
     if write:
         output.mkdir(parents=True, exist_ok=True)
+        manifest_pages: list[dict[str, object]] = []
         for page in pages.values():
-            target = output / f"{page.identifier.replace('/', '-')}.html"
-            target.write_text(
-                render_page(page, render_markdown(documents[page.identifier]), sections, pages, settings),
-                encoding="utf-8",
+            body = rendered[page.identifier].encode("utf-8")
+            target = output / filenames[page.identifier]
+            target.write_bytes(body)
+            manifest_pages.append(
+                {
+                    "id": page.identifier,
+                    "title": page.title,
+                    "section": sections[page.section].title,
+                    "path": filenames[page.identifier],
+                    "bytes": len(body),
+                    "sha256": hashlib.sha256(body).hexdigest(),
+                }
             )
+        search = search_script(search_entries(documents, pages, sections))
+        (output / "search.js").write_text(search, encoding="utf-8")
         (output / "measurements.json").write_text(
             json.dumps({"schema": 1, "samples": measurements}, indent=2) + "\n", encoding="utf-8"
+        )
+        (output / "link-check.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "generated_pages": len(pages),
+                    "internal_links_checked": checked,
+                    "problems": problems,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (output / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "site": settings["name"],
+                    "pages": manifest_pages,
+                    "search_index": "search.js",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
         )
     return stale
 

@@ -108,12 +108,26 @@ static lxp_result visit_agreement(const uint8_t *key, size_t key_length,
     if (scan->found) return LXP_OK;
     status = lx_service_agreement_decode(value, value_length, &agreement);
     if (status != LXP_OK) return status;
+    if (memcmp(key + LX_SERVICE_KEY_PREFIX_BYTES, agreement.agreement_id, 32U) != 0)
+        return LXP_FATAL_INVARIANT;
     if (agreement.state != LX_SERVICE_AGREEMENT_DELIVERED ||
         scan->batch_timestamp < agreement.acceptance_window_end)
         return LXP_OK;
     (void)memcpy(scan->agreement_id, agreement.agreement_id, 32U);
     scan->found = true;
     return LXP_OK;
+}
+
+static lxp_result emit_default_outcome(lxp_module_ctx *ctx,
+                                       const lx_service_agreement *agreement)
+{
+    uint8_t event[50];
+    (void)memcpy(event, agreement->agreement_id, 32U);
+    event[32U] = (uint8_t)agreement->state;
+    event[33U] = 1U;
+    lx_service_put_u64(event + 34U, agreement->outcome_sequence);
+    lx_service_put_u64(event + 42U, agreement->outcome_timestamp);
+    return lxp_ctx_emit_event(ctx, LX_SERVICE_EVENT_DEFAULT_APPLIED, event, sizeof(event));
 }
 
 lxp_result lx_service_acceptance_default(lxp_module_ctx *ctx,
@@ -143,6 +157,7 @@ lxp_result lx_service_acceptance_default(lxp_module_ctx *ctx,
         agreement.outcome_sequence = global_sequence;
         agreement.outcome_timestamp = batch_timestamp;
         status = lx_service_agreement_put(ctx, &agreement);
+        if (status == LXP_OK) status = emit_default_outcome(ctx, &agreement);
         if (status != LXP_OK) return status;
     }
     return LXP_ERR_ARENA_EXHAUSTED;
@@ -156,4 +171,31 @@ lxp_result lx_service_epoch_begin(lxp_module_ctx *ctx, uint64_t epoch,
         return LXP_ERR_TIMESTAMP_REGRESSION;
     return lx_service_acceptance_default(ctx, timestamp,
                                          lxp_ctx_global_sequence(ctx));
+}
+
+lxp_result lx_service_batch_maintenance(lxp_module_ctx *ctx, bool *complete)
+{
+    default_scan scan = {0};
+    lx_service_agreement agreement;
+    lxp_result status;
+    if (ctx == NULL || complete == NULL) return LXP_ERR_NON_CANONICAL;
+    *complete = false;
+    scan.batch_timestamp = lxp_ctx_batch_timestamp_ms(ctx);
+    status = lxp_ctx_kv_iter(ctx, lx_service_agreement_prefix,
+        LX_SERVICE_KEY_PREFIX_BYTES, visit_agreement, &scan);
+    if (status != LXP_OK) return status;
+    if (!scan.found) {
+        *complete = true;
+        return LXP_OK;
+    }
+    status = lx_service_agreement_lookup(ctx, scan.agreement_id, &agreement);
+    if (status != LXP_OK) return status;
+    agreement.state = agreement.default_outcome == LX_SERVICE_DEFAULT_ACCEPT ?
+        LX_SERVICE_AGREEMENT_ACCEPTED : LX_SERVICE_AGREEMENT_REJECTED;
+    agreement.default_applied = true;
+    agreement.outcome_sequence = lxp_ctx_global_sequence(ctx);
+    agreement.outcome_timestamp = scan.batch_timestamp;
+    status = lx_service_agreement_put(ctx, &agreement);
+    if (status == LXP_OK) status = emit_default_outcome(ctx, &agreement);
+    return status;
 }

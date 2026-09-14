@@ -17,18 +17,23 @@ replica_pid= sequencer_pid= settlement_pid=
 cleanup() {
     result=$?
     for pid in "$sequencer_pid" "$replica_pid" "$settlement_pid"; do
-        if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" || true; fi
+        if [[ -n "$pid" ]]; then
+            kill "$pid" 2>/dev/null || true
+            child_result=0
+            wait "$pid" || child_result=$?
+            printf 'native fixture child pid=%s exit=%s\n' "$pid" "$child_result" >&2
+        fi
     done
     rm -rf "$runtime"
     if [[ "$result" == 0 && -z ${LAYERX_TEST_ADMISSION_LOG_DIR:-} ]]; then rm -rf "$work"; else printf 'native admission evidence: %s\n' "$work" >&2; fi
 }
 trap cleanup EXIT
 chmod 0755 "$work"
-python3 - "$work" <<'PY'
+python3 - "$work" "${2:-}" <<'PY'
 import os, pathlib, socket, sys
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 sys.path.insert(0, "tests/support")
-from lxgb_metadata import metadata
+from lxgb_metadata import metadata, metadata_withdrawal, metadata_modules
 root = pathlib.Path(sys.argv[1])
 for name, value in [('sequencer', 0x22), ('treasury', 0x11)]:
     path = root / name
@@ -43,7 +48,13 @@ for _ in range(3):
     ports.append(str(sock.getsockname()[1]))
 (root / 'ports').write_text(' '.join(ports) + '\n')
 issuer = Ed25519PrivateKey.from_private_bytes(bytes([0x11]) * 32).public_key().public_bytes_raw()
-(root / 'metadata').write_bytes(metadata(bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'), issuer, os.urandom(32)))
+emit_metadata = metadata_withdrawal if sys.argv[2] in ('--withdraw', '--paid-withdrawal') else metadata
+asset = bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898')
+salt = os.urandom(32)
+encoded_metadata = emit_metadata(asset, issuer, salt, *([17] if sys.argv[2] == '--paid-withdrawal' else []))
+if sys.argv[2] in ('--native-onboarding', '--owner-rotation'):
+    encoded_metadata = metadata_modules(asset, issuer, salt, 17, (4, 4, 4, 4, 4, 4, 0))
+(root / 'metadata').write_bytes(encoded_metadata)
 PY
 read -r program_port replica_port rpc_port < "$work/ports"
 mkfifo "$work/replica-ready"
@@ -57,7 +68,7 @@ bootstrap_extra=()
 bootstrap_environment=(env)
 custody_mode=0
 case ${2:-} in
-    --withdraw|--module-maintenance|--metered-allowance) custody_mode=1 ;;
+    --withdraw|--module-maintenance|--metered-allowance|--native-onboarding|--owner-rotation|--paid-withdrawal|--handover) custody_mode=1 ;;
 esac
 if [[ $custody_mode == 1 ]]; then
     bootstrap_extra+=(--custody-profile "$LAYERX_TEST_WITHDRAW_PROFILE" --settlement-env "$work/settlement.env")
@@ -70,10 +81,14 @@ else
         LAYERX_NODE_CHECKPOINT_REGISTRY=0x2222222222222222222222222222222222222222
         LAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1 LAYERX_NODE_PAXEER_RPC_PORT="$rpc_port")
 fi
-if [[ ${2:-} == --module-maintenance ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --native-onboarding || ${2:-} == --handover ]]; then
     for module in escrow budget stream service perps; do
         bootstrap_extra+=(--enable-module "$module")
     done
+fi
+if [[ ${2:-} == --handover ]]; then
+    governance_public=$(python3 -c 'from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; print(Ed25519PrivateKey.from_private_bytes(bytes([0x11])*32).public_key().public_bytes_raw().hex())')
+    bootstrap_extra+=(--handover-authority "$governance_public")
 fi
 "${bootstrap_environment[@]}" \
 bash platform/hosted/node/bootstrap.sh --data-dir "$work/data" --run-dir "$runtime" \
@@ -86,7 +101,10 @@ if [[ $custody_mode == 1 ]]; then
     settlement_lines=$(bash platform/hosted/node/bootstrap.sh --check-settlement "$work/settlement.env")
     while IFS= read -r line; do export "$line"; done <<< "$settlement_lines"
 fi
-if [[ ${2:-} == --module-maintenance ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --handover ]]; then
+    cp "$work/data/genesis/paxeer-registration-request.lxrr" "$work/genesis-registration.lxrr"
+    chmod 0644 "$work/genesis-registration.lxrr"
+    export LAYERX_TEST_GENESIS_REGISTRATION_FILE="$work/genesis-registration.lxrr"
     python3 - "$work/data/identities.txt" <<'PYPROVIDER'
 from pathlib import Path
 import sys
@@ -135,14 +153,38 @@ for attempt in range(200):
 else:
     raise SystemExit("daemon did not accept LNI connections")
 PYWAIT
-if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal || ${2:-} == --handover ]]; then
     client_name=${2#--}
+    if [[ ${2:-} == --handover ]]; then client_name=module-maintenance; fi
     client_name=${client_name//-/_}
     cp "$build_dir/tests/lxp_test_$client_name" "$work/client"
     mkdir "$work/scenario"
     chown 4021:4021 "$work/scenario"
     scenario_state="$work/scenario"
-    if [[ ${2:-} == --metered-allowance ]]; then scenario_state="$work/scenario/state"; fi
+    if [[ ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then scenario_state="$work/scenario/state"; fi
+    if [[ ${2:-} == --metered-allowance ]]; then
+        scenario_state="$work/scenario/state"
+        if [[ -n ${LAYERX_TEST_SESSION_FEE_CLIENT:-} ]]; then
+            : "${LAYERX_TEST_RUNTIME_CLOCK_BIN:?actual runtime clock is required for the session fee client}"
+            cp "$LAYERX_TEST_SESSION_FEE_CLIENT" "$work/session-fee-client"
+            cp "$LAYERX_TEST_RUNTIME_CLOCK_BIN" "$work/session-fee-clock"
+            chmod 0755 "$work/session-fee-client" "$work/session-fee-clock"
+            mkdir "$runtime/session-fee-clock"
+            chown 4021:4021 "$runtime/session-fee-clock"
+            chmod 0700 "$runtime/session-fee-clock"
+            export LAYERX_TEST_SESSION_FEE_CLIENT="$work/session-fee-client"
+            export LAYERX_TEST_SESSION_FEE_CLOCK="$work/session-fee-clock"
+            export LAYERX_TEST_SESSION_FEE_CLOCK_DIRECTORY="$runtime/session-fee-clock"
+        fi
+        install -m 0600 -o 4021 -g 4021 "$work/data/secrets/program-token" "$work/scenario/program-token"
+        export LAYERX_TEST_METERED_PROGRAM_PORT="$program_port"
+        export LAYERX_TEST_METERED_PROGRAM_TOKEN_FILE="$work/scenario/program-token"
+        export LAYERX_TEST_METERED_ARTIFACT_SCRIPT="$work/metered-artifacts.py"
+        LAYERX_TEST_METERED_PYTHON=$("${LAYERX_TEST_PYTHON:-python3}" -c 'import os, sys; print(os.path.realpath(sys.executable))')
+        export LAYERX_TEST_METERED_PYTHON
+        cp "$root/tests/daemon/metered-artifacts.py" "$LAYERX_TEST_METERED_ARTIFACT_SCRIPT"
+        chmod 0644 "$LAYERX_TEST_METERED_ARTIFACT_SCRIPT"
+    fi
 elif [[ ${2:-} == --grant-issuance ]]; then
     cp "$build_dir/tests/lxp_test_grant_issuance" "$work/client"
     mkdir "$work/grants"
@@ -151,6 +193,83 @@ else
     cp "$build_dir/tests/lxp_test_program_admission" "$work/client"
 fi
 chmod 0755 "$work/client"
+if [[ ${2:-} == --handover ]]; then
+    timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-prepare "$scenario_state"
+    "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/handover-chain.py finalize "$work" "$build_dir" "$scenario_state"
+    kill -TERM "$sequencer_pid"
+    wait "$sequencer_pid"
+    sequencer_pid=
+    python3 - "$work/sequencer" "$scenario_state/handover-ready.json" <<'PYHANDOVER'
+from pathlib import Path
+import json, sys, time
+Path(sys.argv[1]).write_bytes(bytes([0x44]) * 32)
+deadline = json.loads(Path(sys.argv[2]).read_text())['deadline']
+while int(time.time() * 1000) <= deadline:
+    time.sleep(.01)
+PYHANDOVER
+    if [[ -n ${LAYERX_TEST_HANDOVER_CRASH_BOUNDARY:-} ]]; then
+        mkfifo "$work/handover-apply-gate"
+        exec {handover_gate_fd}<>"$work/handover-apply-gate"
+        export LXP_TEST_APPLY_GATE_FD="$handover_gate_fd" LXP_TEST_CRASH_BOUNDARY="$LAYERX_TEST_HANDOVER_CRASH_BOUNDARY" LXP_TEST_CRASH_OCCURRENCE=1
+        sequencer_binary="$build_dir/tests/lxp_test_maintenance_crash"
+    fi
+    (source platform/hosted/node/sequencer-env.sh; layerx_sequencer_environment "$work/data/sequencer.env"; exec "$sequencer_binary" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
+    sequencer_pid=$!
+    python3 - "$runtime/layerxd.lni.sock" "$sequencer_pid" <<'PYWAIT'
+import os, socket, sys, time
+for attempt in range(200):
+    os.kill(int(sys.argv[2]), 0)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(sys.argv[1])
+        break
+    except OSError:
+        time.sleep(0.1)
+else:
+    raise SystemExit("handover daemon did not accept LNI connections")
+PYWAIT
+    if [[ -n ${LAYERX_TEST_HANDOVER_CRASH_BOUNDARY:-} ]]; then
+        timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-queue "$scenario_state" "$scenario_state/handover.activity"
+        printf G >&"$handover_gate_fd"
+        result=0
+        wait "$sequencer_pid" || result=$?
+        [[ "$result" == $((128 + LAYERX_TEST_HANDOVER_CRASH_BOUNDARY)) ]]
+        exec {handover_gate_fd}>&-
+        unset LXP_TEST_APPLY_GATE_FD LXP_TEST_CRASH_BOUNDARY LXP_TEST_CRASH_OCCURRENCE
+        sequencer_binary="$native_bin/layerxd"
+    else
+        timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-apply "$scenario_state" "$scenario_state/handover.activity"
+        kill -KILL "$sequencer_pid"
+        wait "$sequencer_pid" || true
+    fi
+    sequencer_pid=
+    kill -KILL "$replica_pid"
+    wait "$replica_pid" || true
+    replica_pid=
+    (set -a; source "$work/data/replica.env"; export LAYERX_AUTHORITY_READY_FD="$replica_ready_fd"; exec "$native_bin/layerxd" --authority-replica "$work/data/replica.conf") >> "$work/replica.log" 2>&1 &
+    replica_pid=$!
+    IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
+    [[ "$replica_ready" == R ]]
+    (source platform/hosted/node/sequencer-env.sh; layerx_sequencer_environment "$work/data/sequencer.env"; exec "$sequencer_binary" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
+    sequencer_pid=$!
+    python3 - "$runtime/layerxd.lni.sock" "$sequencer_pid" <<'PYWAIT'
+import os, socket, sys, time
+for attempt in range(200):
+    os.kill(int(sys.argv[2]), 0)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(sys.argv[1])
+        break
+    except OSError:
+        time.sleep(0.1)
+else:
+    raise SystemExit("handover daemon did not accept LNI connections")
+PYWAIT
+    timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-recovered "$scenario_state" "$scenario_state/handover.activity"
+    LAYERX_TEST_HANDOVER_LNI_SOCKET="$runtime/layerxd.lni.sock" \
+        "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/handover-chain.py replay "$work" "$build_dir" "$scenario_state"
+    exit 0
+fi
 if [[ ${2:-} == --owner-authority ]]; then
     export LAYERX_TEST_OWNER_AUTHORITY_SOCKET="$runtime/layerxd.lni.sock"
     "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/post-lxip.py "$work" --prepare-only
@@ -171,7 +290,22 @@ elif [[ ${2:-} == --post-lxip ]]; then
     exit 0
 elif [[ ${2:-} == --grant-issuance ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --grant-issuance "$work/grants/state"
-elif [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+elif [[ ${2:-} == --owner-rotation ]]; then
+    : "${LAYERX_TEST_OWNER_ROTATION_PROVIDER:?compiled real KMS provider test is required}"
+    cp "$LAYERX_TEST_OWNER_ROTATION_PROVIDER" "$work/rotation-provider"
+    chmod 0755 "$work/rotation-provider"
+    python3 - "$work/rotation-client" "$work/client" <<'PYROTATION'
+import pathlib, shlex, sys
+path = pathlib.Path(sys.argv[1])
+path.write_text('#!/usr/bin/env bash\nset -euo pipefail\nexec setpriv --reuid=4021 --regid=4021 --clear-groups ' + shlex.quote(sys.argv[2]) + ' "$@"\n')
+path.chmod(0o755)
+PYROTATION
+    LAYERX_TEST_OWNER_ROTATION_MODE=native \
+    LAYERX_TEST_OWNER_ROTATION_SOCKET="$runtime/layerxd.lni.sock" \
+    LAYERX_TEST_OWNER_ROTATION_DRIVER="$work/rotation-client" \
+    LAYERX_TEST_OWNER_ROTATION_STATE="$scenario_state" \
+        "$work/rotation-provider" --exact owner_rotation::kms_owner_rotation_disclosure --nocapture --test-threads=1
+elif [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$2" "$scenario_state"
 elif [[ ${2:-} == --maintenance-crash ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --maintenance-queue
@@ -184,8 +318,17 @@ elif [[ ${2:-} == --availability-batches ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --availability-batches > "$work/availability-activity-id"
     cp "$3" "$work/availability-test"
     chmod 0755 "$work/availability-test"
+    availability_clock=()
+    if [[ -n ${LAYERX_TEST_RUNTIME_CLOCK_BIN:-} ]]; then
+        cp "$LAYERX_TEST_RUNTIME_CLOCK_BIN" "$work/runtime-clock"
+        chmod 0755 "$work/runtime-clock"
+        mkdir "$runtime/clock"
+        chown 4021:4021 "$runtime/clock"
+        chmod 0700 "$runtime/clock"
+        availability_clock=("$work/runtime-clock" --runtime-dir "$runtime/clock" --)
+    fi
     LAYERX_TEST_AVAILABILITY_WORK="$work" LAYERX_TEST_AVAILABILITY_SOCKET="$runtime/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=retained \
-        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/availability-test" \
+        setpriv --reuid=4021 --regid=4021 --clear-groups "${availability_clock[@]}" "$work/availability-test" \
         --exact real_daemon_availability_refusals --nocapture --test-threads=1
     for ((attempt=0; attempt<3000; attempt++)); do
         [[ ! -f "$work/availability-finality-ready" ]] || break
@@ -194,7 +337,7 @@ elif [[ ${2:-} == --availability-batches ]]; then
     done
     [[ -f "$work/availability-finality-ready" ]]
     LAYERX_TEST_AVAILABILITY_WORK="$work" LAYERX_TEST_AVAILABILITY_SOCKET="$runtime/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=finalized \
-        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/availability-test" \
+        setpriv --reuid=4021 --regid=4021 --clear-groups "${availability_clock[@]}" "$work/availability-test" \
         --exact real_daemon_availability_refusals --nocapture --test-threads=1
     kill "$sequencer_pid"
     wait "$sequencer_pid"
@@ -214,7 +357,7 @@ PYCORRUPT
         sleep 0.1
     done
     LAYERX_TEST_AVAILABILITY_WORK="$work" LAYERX_TEST_AVAILABILITY_SOCKET="$runtime/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=corrupt \
-        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/availability-test" \
+        setpriv --reuid=4021 --regid=4021 --clear-groups "${availability_clock[@]}" "$work/availability-test" \
         --exact real_daemon_availability_refusals --nocapture --test-threads=1
     exit 0
 else
@@ -222,7 +365,7 @@ else
     kill -0 "$sequencer_pid"
 fi
 
-if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw || ${2:-} == --grant-issuance || ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw || ${2:-} == --grant-issuance || ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then
     if [[ -n "$sequencer_pid" ]]; then
         kill -KILL "$sequencer_pid"
         wait "$sequencer_pid" || true
@@ -231,6 +374,10 @@ if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --wi
     kill -KILL "$replica_pid"
     wait "$replica_pid" || true
     replica_pid=
+    if [[ ${LAYERX_TEST_REPLICA_RECOVERY_PREFIX:-0} == 1 ]]; then
+        [[ ${2:-} == --withdraw || ${2:-} == --paid-withdrawal ]]
+        python3 tests/daemon/retain-replica-prefix.py "$work/data/replica/receipt-authority.log" "$build_dir/tests/lxp_test_replica_prefix"
+    fi
     (set -a; source "$work/data/replica.env"; export LAYERX_AUTHORITY_READY_FD="$replica_ready_fd"; exec "$native_bin/layerxd" --authority-replica "$work/data/replica.conf") >> "$work/replica.log" 2>&1 &
     replica_pid=$!
     IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
@@ -284,16 +431,67 @@ else:
 PYWAIT
     recovered_mode=--maintenance-recovered
     if [[ ${2:-} == --withdraw ]]; then recovered_mode=--withdraw-recovered; fi
-    if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance ]]; then
+    if [[ ${2:-} == --owner-rotation ]]; then
+        "$work/rotation-client" "$runtime/layerxd.lni.sock" "$scenario_state" --recover
+        read -r retired_class retired_code < <(python3 - "$scenario_state.retired-error.json" <<'PYRETIRED'
+import json, sys
+value = json.load(open(sys.argv[1]))
+assert set(value) == {'class', 'code'} and type(value['class']) is int and type(value['code']) is int
+assert 0 < value['class'] < 256 and value['code'] < 0
+print(value['class'], value['code'])
+PYRETIRED
+)
+        "$work/rotation-client" "$runtime/layerxd.lni.sock" "$scenario_state" --refuse "$scenario_state.retired.activity" "$retired_class" "$retired_code"
+        "$work/rotation-client" "$runtime/layerxd.lni.sock" "$scenario_state" --apply "$scenario_state.recovered.activity" 0
+    elif [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$2-recovered" "$scenario_state"
     elif [[ ${2:-} == --grant-issuance ]]; then
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --grant-issuance-recovered "$work/grants/state"
     else
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$recovered_mode"
     fi
+    if [[ ${2:-} == --withdraw || ${2:-} == --paid-withdrawal ]]; then
+        replay_batches=2
+        if [[ ${2:-} == --paid-withdrawal ]]; then replay_batches=6; fi
+        mkdir -m 0700 "$work/guarantor-replay"
+        (source platform/hosted/node/sequencer-env.sh
+         layerx_sequencer_environment "$work/data/sequencer.env"
+         "$build_dir/tests/lxp_test_guarantor_runtime" "$work/data/sequencer.conf" \
+             "$work/guarantor-replay" "$work/data/checkpoints/da-bodies.log" "$replay_batches") \
+             > "$work/guarantor-replay.log" 2>&1
+        cat "$work/guarantor-replay.log"
+    fi
     kill -0 "$sequencer_pid"
     kill -0 "$replica_pid"
-    if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance && ${2:-} != --module-maintenance && ${2:-} != --metered-allowance ]]; then
+    if [[ ${2:-} == --metered-allowance ]]; then
+        kill -KILL "$sequencer_pid" "$replica_pid"
+        wait "$sequencer_pid" || true
+        wait "$replica_pid" || true
+        sequencer_pid= replica_pid=
+        (set -a; source "$work/data/replica.env"; export LAYERX_AUTHORITY_READY_FD="$replica_ready_fd"; exec "$native_bin/layerxd" --authority-replica "$work/data/replica.conf") >> "$work/replica.log" 2>&1 &
+        replica_pid=$!
+        IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
+        [[ "$replica_ready" == R ]]
+        (source platform/hosted/node/sequencer-env.sh; layerx_sequencer_environment "$work/data/sequencer.env"; exec "$native_bin/layerxd" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
+        sequencer_pid=$!
+        python3 - "$runtime/layerxd.lni.sock" "$sequencer_pid" <<'PYN9WAIT'
+import os, socket, sys, time
+for attempt in range(200):
+    os.kill(int(sys.argv[2]), 0)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(sys.argv[1])
+        break
+    except OSError:
+        time.sleep(0.1)
+else:
+    raise SystemExit("replacement replay daemon did not accept LNI connections")
+PYN9WAIT
+        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --metered-session-recovered "$scenario_state.session-replacement"
+        kill -0 "$sequencer_pid"
+        kill -0 "$replica_pid"
+    fi
+    if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance && ${2:-} != --module-maintenance && ${2:-} != --metered-allowance && ${2:-} != --native-onboarding && ${2:-} != --owner-rotation && ${2:-} != --paid-withdrawal ]]; then
         (set -a; source "$work/data/replica.env"; python3 tests/daemon/maintenance-evidence.py)
     fi
 fi

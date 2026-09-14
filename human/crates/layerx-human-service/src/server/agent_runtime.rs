@@ -38,6 +38,10 @@ const APPROVAL_GET: u8 = 10;
 const APPROVAL_APPROVE: u8 = 11;
 const APPROVAL_REJECT: u8 = 12;
 const BALANCE: u8 = 6;
+const NATIVE_FEE_POLICY: u8 = 39;
+const SESSION_FEE_STATE: u8 = 40;
+const SESSION_SEED_PREPARE: u8 = 41;
+const ACCOUNT_STATE: u8 = 42;
 const HEAD: u8 = 7;
 const EVIDENCE: u8 = 8;
 const ACCOUNT_SEQUENCE: u8 = 13;
@@ -72,11 +76,90 @@ pub struct AgentRuntime {
     gate: ConnectionGate,
     limits: Limits,
     registry: ModuleRegistry,
+    subject: Option<Subject>,
+}
+
+#[derive(Clone)]
+struct Subject {
+    principal: String,
+    owner: layerx_types::ids::Did,
+    account: layerx_types::account::AccountId,
+    account_id: [u8; 32],
+    asset_id: [u8; 32],
+}
+
+impl AgentRuntime {
+    /// Creates an isolated handle carrying the principal's provider-bound owner.
+    ///
+    /// # Errors
+    /// Refuses nested scopes and noncanonical or foreign owner account names.
+    pub fn for_subject(
+        &self,
+        principal: &crate::store::PrincipalId,
+        owner: &layerx_types::ids::Did,
+        account: &layerx_types::account::AccountId,
+        asset_id: [u8; 32],
+    ) -> Result<Self, AgentBoundaryError> {
+        if self.subject.is_some() || asset_id == [0; 32] {
+            return Err(AgentBoundaryError::Refused);
+        }
+        let owner_text =
+            std::str::from_utf8(owner.as_bytes()).map_err(|_| AgentBoundaryError::Refused)?;
+        let account_name = account.canonical();
+        if !account_name.starts_with(&format!("agent:{owner_text}:")) {
+            return Err(AgentBoundaryError::Refused);
+        }
+        let account_id = layerx_intents::canonical::account_id_for_protocol(account, 3)
+            .map_err(|_| AgentBoundaryError::Refused)?;
+        Ok(Self {
+            endpoint: self.endpoint.clone(),
+            gate: self.gate.clone(),
+            limits: self.limits,
+            registry: self.registry.clone(),
+            subject: Some(Subject {
+                principal: principal.as_str().to_owned(),
+                owner: owner.clone(),
+                account: account.clone(),
+                account_id,
+                asset_id,
+            }),
+        })
+    }
+
+    fn scoped_request(&self, request: &[u8]) -> Result<Zeroizing<Vec<u8>>, AgentBoundaryError> {
+        let Some(subject) = &self.subject else {
+            return Ok(Zeroizing::new(request.to_vec()));
+        };
+        if request.len() < 9 || &request[..8] != MAGIC || request[8] == 44 {
+            return Err(AgentBoundaryError::Refused);
+        }
+        let mut writer = Writer::new(44);
+        writer.text(&subject.principal)?;
+        writer.text(
+            std::str::from_utf8(subject.owner.as_bytes())
+                .map_err(|_| AgentBoundaryError::Refused)?,
+        )?;
+        writer.bytes(subject.account.canonical().as_bytes())?;
+        writer.fixed(&subject.asset_id);
+        writer.bytes(request)?;
+        let bytes = writer.finish_secret();
+        if bytes.len() > MAX_BYTES {
+            return Err(AgentBoundaryError::Refused);
+        }
+        Ok(bytes)
+    }
 }
 
 pub struct AgentApprovalPage {
     pub approvals: Vec<crate::approvals::AgentApprovalRecord>,
     pub next_cursor: Option<[u8; 32]>,
+}
+
+pub struct NativeFeePolicy {
+    pub version: u8,
+    pub asset_id: [u8; 32],
+    pub currency: String,
+    pub decimals: u8,
 }
 
 pub struct VerifiedBalance {
@@ -154,7 +237,7 @@ impl AgentSessionSeed {
             Ok(Self(Zeroizing::new(seed)))
         }
     }
-    fn expose(&self) -> &[u8; 32] {
+    pub(crate) fn expose(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -986,6 +1069,25 @@ impl AgentRuntime {
         Ok(value)
     }
     /// # Errors
+    /// Refuses unbound original rotation bytes or unavailable checkpoint evidence.
+    pub fn agent_owner_rotated(
+        &mut self,
+        agent_id: &str,
+        custody_key: &str,
+        signed_activity: &[u8],
+        evidence: AgentFinalizationEvidence,
+    ) -> Result<ManagedAgentJourney, AgentBoundaryError> {
+        let mut writer = Writer::new(43);
+        writer.text(agent_id)?;
+        writer.text(custody_key)?;
+        writer.bytes(signed_activity)?;
+        encode_finalization(&mut writer, evidence)?;
+        let mut reader = self.exchange(&writer.finish())?;
+        let value = decode_managed_journey(&mut reader)?;
+        reader.finish()?;
+        Ok(value)
+    }
+    /// # Errors
     /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_key_change(
         &mut self,
@@ -1184,7 +1286,99 @@ impl AgentRuntime {
         Ok(sequence)
     }
     /// # Errors
+    /// Refuses unauthenticated state or a canonical account not bound to the requested ID.
+    pub fn account_state(
+        &mut self,
+        account_id: [u8; 32],
+    ) -> Result<layerx_proof::state::CanonicalAccount, AgentBoundaryError> {
+        let mut writer = Writer::new(ACCOUNT_STATE);
+        writer.fixed(&account_id);
+        let mut reader = self.exchange(&writer.finish())?;
+        let observed: [u8; 32] = reader.fixed()?;
+        let level = reader.u8()?;
+        let bytes = reader.bytes()?;
+        let proof = reader.bytes()?;
+        let sequence = reader.u64()?;
+        reader.finish()?;
+        if observed != account_id
+            || level < layerx_types::verify::VerificationLevel::STATE_PROVEN.wire_rank()
+            || proof.is_empty()
+            || sequence == 0
+        {
+            return Err(AgentBoundaryError::CorruptResponse);
+        }
+        layerx_proof::state::decode_account_value(account_id, &bytes)
+            .map_err(|_| AgentBoundaryError::CorruptResponse)
+    }
+    /// # Errors
     /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
+    pub fn prepare_session_seed(
+        &mut self,
+        agent: &str,
+        action_key: [u8; 32],
+        request_digest: [u8; 32],
+    ) -> Result<AgentSessionSeed, AgentBoundaryError> {
+        let mut writer = Writer::new(SESSION_SEED_PREPARE);
+        writer.text(agent)?;
+        writer.fixed(&action_key);
+        writer.fixed(&request_digest);
+        let mut reader = self.exchange(&writer.finish())?;
+        let seed = AgentSessionSeed::new(reader.fixed()?)?;
+        reader.finish()?;
+        Ok(seed)
+    }
+
+    /// # Errors
+    /// Refuses unbound or unavailable committed session state.
+    pub fn session_fee_state(
+        &mut self,
+        grant_id: [u8; 32],
+    ) -> Result<layerx_crypto::session::SessionFeeState, AgentBoundaryError> {
+        let mut writer = Writer::new(SESSION_FEE_STATE);
+        writer.fixed(&grant_id);
+        let mut reader = self.exchange(&writer.finish())?;
+        let bytes = reader.bytes()?;
+        let sequence = reader.u64()?;
+        let root: [u8; 32] = reader.fixed()?;
+        reader.finish()?;
+        let state = layerx_crypto::session::SessionFeeState::decode(grant_id, &bytes)
+            .map_err(|_| AgentBoundaryError::CorruptResponse)?;
+        if root == [0; 32] || state.revoked_at_sequence > sequence {
+            return Err(AgentBoundaryError::CorruptResponse);
+        }
+        Ok(state)
+    }
+
+    /// # Errors
+    /// Refuses unavailable or malformed native fee metadata.
+    pub fn native_fee_policy(&mut self) -> Result<NativeFeePolicy, AgentBoundaryError> {
+        let mut reader = self.exchange(&Writer::new(NATIVE_FEE_POLICY).finish())?;
+        let value = NativeFeePolicy {
+            version: reader.u8()?,
+            asset_id: reader.fixed()?,
+            currency: reader.text()?,
+            decimals: reader.u8()?,
+        };
+        let _sequence = reader.u64()?;
+        let root: [u8; 32] = reader.fixed()?;
+        reader.finish()?;
+        if !matches!(value.version, 1 | 2)
+            || value.asset_id == [0; 32]
+            || root == [0; 32]
+            || value.currency.is_empty()
+            || !value
+                .currency
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric())
+            || value.decimals > 38
+        {
+            return Err(AgentBoundaryError::CorruptResponse);
+        }
+        Ok(value)
+    }
+
+    /// # Errors
+    /// Refuses unavailable or unauthenticated balance evidence.
     pub fn balance(&mut self) -> Result<VerifiedBalance, AgentBoundaryError> {
         let mut reader = self.exchange(&Writer::new(BALANCE).finish())?;
         let value = VerifiedBalance {
@@ -1209,6 +1403,9 @@ impl AgentRuntime {
             || value.observed_at.is_empty()
             || value.canonical_bytes.is_empty()
             || value.proof_material.is_empty()
+            || self.subject.as_ref().is_some_and(|subject| {
+                value.account != subject.account_id || value.asset != subject.asset_id
+            })
         {
             return Err(AgentBoundaryError::CorruptResponse);
         }
@@ -1322,14 +1519,16 @@ impl AgentRuntime {
             gate: ConnectionGate::new(limits.maximum_connections),
             limits,
             registry,
+            subject: None,
         })
     }
 
     fn exchange(&self, request: &[u8]) -> Result<Reader, AgentBoundaryError> {
+        let request = self.scoped_request(request)?;
         let mut transport = Uds::connect(&self.endpoint, &self.gate, self.limits)
             .map_err(|_| AgentBoundaryError::Unavailable)?;
         transport
-            .send(request)
+            .send(&request)
             .map_err(|_| AgentBoundaryError::Unavailable)?;
         let response = transport
             .receive()
@@ -1347,10 +1546,11 @@ impl AgentRuntime {
     }
 
     fn exchange_secret(&self, request: &Zeroizing<Vec<u8>>) -> Result<Reader, AgentBoundaryError> {
+        let request = self.scoped_request(request)?;
         let mut transport = Uds::connect(&self.endpoint, &self.gate, self.limits)
             .map_err(|_| AgentBoundaryError::Unavailable)?;
         transport
-            .send(request)
+            .send(&request)
             .map_err(|_| AgentBoundaryError::Unavailable)?;
         let response = transport
             .receive()
@@ -2468,5 +2668,95 @@ impl Reader {
         } else {
             Err(AgentBoundaryError::CorruptResponse)
         }
+    }
+}
+
+#[cfg(test)]
+mod subject_tests {
+    use super::*;
+
+    fn runtime() -> AgentRuntime {
+        let kind =
+            ActivityType::new(ModuleId::Governance, 1).unwrap_or_else(|_| panic!("Governance1"));
+        let registry =
+            ModuleRegistry::new(&[ModuleRegistration::new(ModuleId::Governance, &[kind])
+                .unwrap_or_else(|_| panic!("module"))])
+            .unwrap_or_else(|_| panic!("registry"));
+        AgentRuntime::new(
+            "/tmp/lxp-subject-wire.sock",
+            Limits {
+                maximum_frame_bytes: MAX_BYTES,
+                maximum_connections: 2,
+                maximum_streams: 1,
+                maximum_queued_bytes: MAX_BYTES,
+                deadline: std::time::Duration::from_secs(1),
+            },
+            registry,
+        )
+        .unwrap_or_else(|_| panic!("typed runtime"))
+    }
+
+    #[test]
+    fn cloned_subject_handle_binds_every_coordinate_without_changing_original_head_frame() {
+        let prototype = runtime();
+        let principal =
+            crate::store::PrincipalId::new("act_person").unwrap_or_else(|_| panic!("principal"));
+        let owner =
+            layerx_types::ids::Did::new(b"did:layerx:person").unwrap_or_else(|_| panic!("owner"));
+        let account = layerx_types::account::AccountId::parse("agent:did:layerx:person:main")
+            .unwrap_or_else(|_| panic!("account"));
+        let bound = prototype
+            .for_subject(&principal, &owner, &account, [1; 32])
+            .unwrap_or_else(|_| panic!("subject"));
+        let original = Writer::new(HEAD).finish();
+        assert_eq!(
+            prototype
+                .scoped_request(&original)
+                .unwrap_or_else(|_| panic!("legacy"))
+                .as_slice(),
+            original
+        );
+        let wrapped = bound
+            .scoped_request(&original)
+            .unwrap_or_else(|_| panic!("scoped head"));
+        let mut decoded = Reader::new(wrapped.to_vec());
+        assert_eq!(
+            decoded.fixed::<8>().unwrap_or_else(|_| panic!("magic")),
+            *MAGIC
+        );
+        assert_eq!(decoded.u8().unwrap_or_else(|_| panic!("opcode")), 44);
+        assert_eq!(
+            decoded.text().unwrap_or_else(|_| panic!("principal")),
+            "act_person"
+        );
+        assert_eq!(
+            decoded.text().unwrap_or_else(|_| panic!("owner")),
+            "did:layerx:person"
+        );
+        assert_eq!(
+            decoded.bytes().unwrap_or_else(|_| panic!("account")),
+            account.canonical().as_bytes()
+        );
+        assert_eq!(
+            decoded.fixed::<32>().unwrap_or_else(|_| panic!("asset")),
+            [1; 32]
+        );
+        assert_eq!(
+            decoded.bytes().unwrap_or_else(|_| panic!("original")),
+            original
+        );
+        decoded.finish().unwrap_or_else(|_| panic!("exact frame"));
+        assert!(bound
+            .for_subject(&principal, &owner, &account, [1; 32])
+            .is_err());
+        assert!(bound.scoped_request(&wrapped).is_err());
+        assert!(prototype
+            .for_subject(&principal, &owner, &account, [0; 32])
+            .is_err());
+        let other = layerx_types::account::AccountId::parse("agent:did:layerx:other:main")
+            .unwrap_or_else(|_| panic!("other account"));
+        assert!(prototype
+            .for_subject(&principal, &owner, &other, [1; 32])
+            .is_err());
     }
 }

@@ -252,6 +252,10 @@ fn spawn(
         .file_name()
         .is_some_and(|name| name == "supervisor.sh");
     if supervised {
+        let directory = program
+            .parent()
+            .unwrap_or_else(|| panic!("supervisor directory"));
+        command.env("PATH", format!("{}:/usr/bin:/bin", directory.display()));
         command.process_group(0);
     }
     let child = must(command.spawn(), &format!("spawn {}", program.display()));
@@ -348,6 +352,17 @@ fn signed_program_activity(
     ordinal: u16,
     bytes: &[u8],
 ) -> Vec<u8> {
+    signed_program_activity_with_fee(seed, did, sequence, ordinal, bytes, 0)
+}
+
+fn signed_program_activity_with_fee(
+    seed: &[u8; 32],
+    did: &str,
+    sequence: u64,
+    ordinal: u16,
+    bytes: &[u8],
+    fee_limit: u128,
+) -> Vec<u8> {
     let signing_key = SigningKey::from_bytes(seed);
     let public_key = signing_key.verifying_key().to_bytes();
     let activity_type = must(
@@ -383,7 +398,7 @@ fn signed_program_activity(
                 ))
             })
             .and_then(|value| value.idempotency_key(IdempotencyKey::new(random32())))
-            .and_then(|value| value.fee_limit(Amount::from_u128(0)))
+            .and_then(|value| value.fee_limit(Amount::from_u128(fee_limit)))
             .and_then(|value| value.payload_hash(payload_hash))
             .and_then(|value| value.payload(payload))
             .map(|_| ()),
@@ -694,8 +709,9 @@ fn assert_program_simulation(boundary: &Boundary, cluster: &Cluster) {
         execution["program_id"],
         serde_json::json!(hex_encode(&program_id))
     );
-    assert_eq!(execution["terminal_payload"], serde_json::json!(""));
-    assert_eq!(execution["call_graph"], serde_json::json!(""));
+    for field in ["terminal_payload", "call_graph"] {
+        assert!(!execution[field].as_str().unwrap_or_default().is_empty());
+    }
     let receipt_hex = execution["receipt"]
         .as_str()
         .unwrap_or_else(|| panic!("receipt hex"));
@@ -709,6 +725,24 @@ fn assert_program_simulation(boundary: &Boundary, cluster: &Cluster) {
         .unwrap_or_else(|| panic!("protocol receipt"));
     assert!(protocol.result_code() < 0);
     assert_eq!(protocol.module_id(), 9);
+    let outcome = protocol
+        .program_outcome()
+        .unwrap_or_else(|| panic!("refusal outcome"));
+    for (field, expected) in [
+        ("terminal_payload", outcome.terminal_payload_root()),
+        ("call_graph", outcome.call_graph_root()),
+    ] {
+        let bytes = must(
+            layerx_platform_core::hex_decode(
+                execution[field]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("refusal artifact")),
+            ),
+            "refusal artifact bytes",
+        );
+        let digest: [u8; 32] = Sha256::digest(bytes).into();
+        assert_eq!(digest, expected);
+    }
     assert_eq!(
         execution["activity_id"],
         serde_json::json!(hex_encode(&protocol.activity_id()))
@@ -2226,7 +2260,10 @@ fn cluster_artifacts() -> (TestState, PathBuf, PathBuf, PathBuf) {
     ));
     make_dir(&root, 0o755);
     let layerxd = root.join("layerxd");
-    must(fs::hard_link(&layerxd_source, &layerxd), "link layerxd");
+    must(
+        fs::copy(&layerxd_source, &layerxd),
+        "copy qualified layerxd",
+    );
     let migrations = root.join("0007_history_index.sql");
     must(
         fs::copy(
@@ -2450,21 +2487,33 @@ fn finality_environment(node_env: &mut BTreeMap<&'static str, String>) {
 }
 
 fn supervised_files(root: &Path, builder: &Path, keys: [&[u8; 32]; 2], tokens: [&str; 2]) {
-    for name in ["bootstrap.sh", "supervisor.sh"] {
+    for name in ["bootstrap.sh", "supervisor.sh", "data_directory.py"] {
         let bytes = must(
             fs::read(repository_root().join("platform/hosted/node").join(name)),
             "supervisor source",
         );
         write(&root.join(name), &bytes, 0o755);
     }
+    let modules = must(
+        fs::read(repository_root().join("platform/hosted/node/genesis-modules.conf")),
+        "public testnet genesis modules",
+    );
+    write(&root.join("genesis-modules.conf"), &modules, 0o644);
     let settlement = must(
         fs::read(repository_root().join("contracts/config/checkpoint-settlement.json")),
         "settlement document source",
     );
     write(&root.join("checkpoint-settlement.json"), &settlement, 0o644);
     must(
-        fs::hard_link(builder, root.join("layerx-genesis-build")),
-        "link genesis builder",
+        fs::copy(builder, root.join("layerx-genesis-build")),
+        "copy qualified genesis builder",
+    );
+    must(
+        fs::copy(
+            builder.with_file_name("layerx-handover"),
+            root.join("layerx-handover"),
+        ),
+        "copy qualified handover verifier",
     );
     write(&root.join("bootstrap-sequencer.key"), keys[0], 0o600);
     write(&root.join("bootstrap-treasury.key"), keys[1], 0o600);

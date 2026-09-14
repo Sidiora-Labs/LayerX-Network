@@ -89,8 +89,12 @@ impl PreparedScheduleAccess {
         }
         let declaration = AccessDeclaration::canonical_decode(access_declaration)
             .map_err(|_| crate::AbiError::AccessDeclaration)?;
-        let reachable =
-            crate::CapabilitySet::admitted_schedule_accesses(capabilities, program, principal)?;
+        let reachable = crate::CapabilitySet::admitted_schedule_accesses(
+            capabilities,
+            program,
+            principal,
+            canonical_payload,
+        )?;
         let Some(protocol_effects) = protocol_effects else {
             return Ok(Self {
                 access: ScheduleAccess::conservative_absent(),

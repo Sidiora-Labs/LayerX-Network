@@ -11,6 +11,10 @@ use layerx_wire::WireError;
 
 use crate::{Intent, IntentKind, IntentVersion};
 
+#[path = "owner_bootstrap.rs"]
+mod owner_bootstrap;
+pub use owner_bootstrap::NativeOwnerBootstrap;
+
 const ASSET_SEND_TAG: u16 = 0x5301;
 const ASSET_SEND_FIELD_COUNT: u16 = 10;
 
@@ -123,8 +127,82 @@ impl CompileError {
 /// core-negotiated module registry refuses the value.
 #[allow(clippy::too_many_lines)]
 pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledIntent, CompileError> {
+    if intent.version() == IntentVersion::V3
+        && !matches!(
+            intent.kind(),
+            IntentKind::SessionGrant(_)
+                | IntentKind::RecoveryRegistration(_)
+                | IntentKind::NativeOnboarding(_)
+                | IntentKind::NativeOnboardingConsent(_)
+                | IntentKind::NativeBudgetCreate(_)
+                | IntentKind::NativeOwnerRotation(_)
+                | IntentKind::NativeAssetAccountOpen(_)
+        )
+    {
+        return Err(CompileError::wire(
+            CompileField::Version,
+            WireError {
+                result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                offset: 0,
+            },
+        ));
+    }
     let mut encoder = Encoder::new(MAX_PAYLOAD_BYTES);
+    if matches!(
+        intent.kind(),
+        IntentKind::NativeOnboarding(_)
+            | IntentKind::NativeOnboardingConsent(_)
+            | IntentKind::NativeBudgetCreate(_)
+            | IntentKind::NativeOwnerRotation(_)
+            | IntentKind::NativeAssetAccountOpen(_)
+    ) && intent.version() != IntentVersion::V3
+    {
+        return Err(CompileError::wire(
+            CompileField::Version,
+            layerx_wire::WireError {
+                result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                offset: 0,
+            },
+        ));
+    }
     match intent.kind() {
+        IntentKind::NativeAssetAccountOpen(asset) => {
+            wire(CompileField::Header, encoder.u16(1))?;
+            fixed(&mut encoder, &asset.bytes(), CompileField::Asset)?;
+            finish(registry, ModuleId::Asset, 4, encoder)
+        }
+        IntentKind::NativeOnboardingConsent(value) => {
+            fixed(
+                &mut encoder,
+                &value.payload().map_err(|_| native_invalid())?,
+                CompileField::Payload,
+            )?;
+            finish(registry, ModuleId::Governance, 1, encoder)
+        }
+        IntentKind::NativeOnboarding(value) => {
+            fixed(
+                &mut encoder,
+                &value.payload().map_err(|_| native_invalid())?,
+                CompileField::Payload,
+            )?;
+            finish(registry, ModuleId::Governance, 1, encoder)
+        }
+        IntentKind::NativeOwnerRotation(value) => {
+            fixed(
+                &mut encoder,
+                &value.payload().map_err(|_| native_invalid())?,
+                CompileField::Payload,
+            )?;
+            finish(registry, ModuleId::Governance, 2, encoder)
+        }
+        IntentKind::NativeBudgetCreate(value) => {
+            fixed(
+                &mut encoder,
+                &value.payload().map_err(|_| native_invalid())?,
+                CompileField::Payload,
+            )?;
+            finish(registry, ModuleId::Budget, 1, encoder)
+        }
         IntentKind::DidRegistration(value) => {
             header(&mut encoder, 0x7101, 2)?;
             did(&mut encoder, &value.did, CompileField::Did)?;
@@ -159,7 +237,16 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
         }
         IntentKind::RecoveryRegistration(value) => {
             header(&mut encoder, 0x7103, 3)?;
-            did(&mut encoder, &value.did, CompileField::Did)?;
+            if intent.version() == IntentVersion::V3 {
+                fixed(
+                    &mut encoder,
+                    &hash::did_id_for_protocol(&value.did, 3)
+                        .map_err(|error| CompileError::wire(CompileField::Did, error))?,
+                    CompileField::Did,
+                )?;
+            } else {
+                did(&mut encoder, &value.did, CompileField::Did)?;
+            }
             fixed(
                 &mut encoder,
                 &value.recovery_root.bytes(),
@@ -195,11 +282,48 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
             finish(registry, ModuleId::Governance, 8, encoder)
         }
         IntentKind::SessionGrant(value) => {
-            header(&mut encoder, 0x7105, 1)?;
+            if intent.version() != IntentVersion::V3 {
+                if value.registration_payload.get(4) != Some(&1) || value.replacement.is_some() {
+                    return Err(CompileError::wire(
+                        CompileField::Version,
+                        WireError {
+                            result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                            offset: 0,
+                        },
+                    ));
+                }
+                header(&mut encoder, 0x7105, 1)?;
+                wire(
+                    CompileField::SessionGrant,
+                    encoder.bytes(&value.registration_payload, 1024),
+                )?;
+                return finish(registry, ModuleId::Governance, 5, encoder);
+            }
+            header(
+                &mut encoder,
+                0x7105,
+                if value.replacement.is_some() {
+                    0x0205
+                } else {
+                    0x0103
+                },
+            )?;
             wire(
                 CompileField::SessionGrant,
                 encoder.bytes(&value.registration_payload, 1024),
             )?;
+            wire(
+                CompileField::SessionGrant,
+                encoder.u64(value.expiry_sequence),
+            )?;
+            wire(
+                CompileField::SessionGrant,
+                encoder.bytes(&value.action_key, 32),
+            )?;
+            if let Some((predecessor, commitment)) = value.replacement {
+                wire(CompileField::SessionGrant, encoder.bytes(&predecessor, 32))?;
+                wire(CompileField::SessionGrant, encoder.bytes(&commitment, 32))?;
+            }
             finish(registry, ModuleId::Governance, 5, encoder)
         }
         IntentKind::SessionRevoke(value) => {
@@ -529,4 +653,14 @@ fn finish(
         payload,
         payload_hash,
     })
+}
+
+fn native_invalid() -> CompileError {
+    CompileError::wire(
+        CompileField::Payload,
+        WireError {
+            result: layerx_types::result::KnownResult::NonCanonical.into(),
+            offset: 0,
+        },
+    )
 }

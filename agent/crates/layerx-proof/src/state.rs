@@ -331,8 +331,8 @@ pub fn verify_nested_account_maintenance(
     parameter_version: u32,
 ) -> Result<VerifiedMaintenanceAccountState, AccountProofError> {
     use layerx_programs_runtime::occupancy::OccupancySettlement;
+    use layerx_wire::batch_maintenance::decode_maintenance;
     use layerx_wire::limits::protocol_version_uses_occupancy;
-    use layerx_wire::maintenance::decode_occupancy_maintenance;
 
     let (account, header) = verify_account_root_chain(
         account_value,
@@ -342,8 +342,12 @@ pub fn verify_nested_account_maintenance(
         authorization,
     )?;
     let committed = header.header();
-    let record = decode_occupancy_maintenance(&proof.receipt_bytes)
-        .map_err(|_| AccountProofError::ReceiptEncoding)?;
+    let maintenance =
+        decode_maintenance(&proof.receipt_bytes).map_err(|_| AccountProofError::ReceiptEncoding)?;
+    maintenance
+        .verify_header(committed)
+        .map_err(|_| AccountProofError::ReceiptBinding)?;
+    let record = maintenance.occupancy();
     if !protocol_version_uses_occupancy(committed.protocol_version())
         || committed.first_sequence() == 0
         || committed

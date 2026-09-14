@@ -2,7 +2,7 @@
 
 # Agent API reference
 
-Schema `LayerX Agent API`, contract major `1`, minor `1`, generated from `agent/schema/agent-api`.
+Schema `LayerX Agent API`, contract major `1`, minor `2`, generated from `agent/schema/agent-api`.
 
 The agent contract is spoken by `layerx-agentd` and by direct-node SDK deployments. Requests and responses are canonical maps carrying the contract major and minor version; consensus integers are fixed-width in Rust and decimal strings in the dynamic-language SDKs.
 
@@ -26,10 +26,20 @@ Within one major version a release may only add sections or keys. Removing or ch
 | `capability.create` | `identity` | `object` | `AuthorityResponse<CapabilityRecord>` | `tenant`, `agent_did`, `dimensions` |
 | `capability.list` | `identity` | `object` | `AuthorityResponse<CapabilityRecords>` | `tenant`, `agent_did` |
 | `capability.revoke` | `identity` | `object` | `AuthorityResponse<CapabilityRecord>` | `tenant`, `agent_did`, `capability_id` |
+| `faucet.claim` | `identity` | `object` | `FaucetGrant` | `did`, `signer_public_key` |
 | `session.close` | `identity` | `SessionClose` | `AuthorityResponse<SessionRecord>` | `session_id`, `context` |
 | `session.list` | `identity` | `SessionList` | `AuthorityResponse<SessionRecords>` | `context` |
 | `session.open` | `identity` | `SessionOpen` | `AuthorityResponse<SessionRecord>` | `context` |
 | `session.refresh` | `identity` | `SessionRefresh` | `AuthorityResponse<SessionRecord>` | `session_id`, `context` |
+| `program.activity` | `programs` | `ProgramActivitySelector` | `ProgramSubmission` | - |
+| `program.call` | `programs` | `ProgramCallRequest` | `ProgramSubmission` | `idempotency_key` |
+| `program.deploy` | `programs` | `NativeProgramDeployRequest` | `ProgramLifecycleResponse` | `idempotency_key` |
+| `program.discover` | `programs` | `ProgramSelector` | `VerifiedProgramDiscovery` | - |
+| `program.interface` | `programs` | `ProgramSelector` | `VerifiedProgramInterface` | - |
+| `program.receipt` | `programs` | `ProgramReceiptSelector` | `ProgramReceiptResponse` | - |
+| `program.simulate` | `programs` | `ProgramCallRequest` | `ProgramSimulation` | - |
+| `program.upgrade` | `programs` | `NativeProgramUpgradeRequest` | `ProgramLifecycleResponse` | `idempotency_key` |
+| `program.wind-down` | `programs` | `NativeProgramWindDownRequest` | `ProgramLifecycleResponse` | `idempotency_key` |
 | `availability.fetch` | `read` | `object` | `VerifiedRead<AvailabilityReport>` | - |
 | `export.offline` | `read` | `object` | `VerifiedRead<OfflineExport>` | - |
 | `project` | `read` | `object` | `ProjectionResult` | - |
@@ -90,7 +100,44 @@ additive_only
 | `AuthorityResponse` | type | required: `authority`, `value` |
 | `BudgetEnforcement` | type | variants: `ProtocolBudget`, `DaemonLimit` |
 | `CapabilityDimensions` | type | required: `activity_types`, `counterparties`, `assets`, `amount_ceilings`, `rate_ceilings`, `purpose_constraints`, `expiry` |
+| `FaucetGrant` | type | required: `funded`, `funding_id`, `transaction_id`, `amount`, `network` |
 | `SessionContext` | type | required: `tenant`, `agent_did`, `authority_ref`, `permitted_activity_types`, `expiry`, `client`, `policy_version` |
+
+### Module `programs`
+
+additive_only
+
+| Declaration | Kind | Shape |
+|---|---|---|
+| `NativeProgramDeploy` | type | required: `program_id`, `guest_abi`, `policy`, `authority`, `new_hash`, `wasm`<br>optional: `interface` |
+| `NativeProgramDeployRequest` | type | required: `signed_activity` |
+| `NativeProgramUpgrade` | type | required: `program_id`, `guest_abi`, `old_hash`, `new_hash`, `migration_hook`, `clear_interface`, `wasm`<br>optional: `interface` |
+| `NativeProgramUpgradeRequest` | type | required: `signed_activity` |
+| `NativeProgramWindDown` | type | variants: `route`, `deprecate`, `tombstone`, `exit`<br>required: `program_id`, `operation` |
+| `NativeProgramWindDownRequest` | type | required: `signed_activity` |
+| `ProgramActivitySelector` | type | required: `activity_id`, `requested_verification_level` |
+| `ProgramCallBudget` | type | required: `fuel`, `fee_limit` |
+| `ProgramCallRequest` | type | required: `program_id`, `calldata`, `budget`, `capabilities`, `signed_activity` |
+| `ProgramCapability` | type | variants: `storage_read`, `storage_write`, `transfer`, `emit_event`, `compose` |
+| `ProgramExecutionEvidence` | type | required: `activity_id`, `receipt`, `terminal_payload`, `call_graph`, `authority` |
+| `ProgramFailure` | type | variants: `unknown_program`, `reentrancy`, `depth_exceeded`, `fanout_exceeded`, `guest_refused`, `authority`, `resource`, `response`, `fault` |
+| `ProgramLifecycleError` | type | required: `code`, `retry`<br>optional: `retry_after_seconds` |
+| `ProgramLifecycleErrorEnvelope` | type | required: `error` |
+| `ProgramLifecycleReceipt` | type | required: `activity_id`, `receipt` |
+| `ProgramLifecycleReceiptEnvelope` | type | required: `result` |
+| `ProgramLifecycleResponse` | type | variants: `ProgramLifecycleResultEnvelope`, `ProgramLifecycleUnknown`, `ProgramLifecycleErrorEnvelope` |
+| `ProgramLifecycleResult` | type | required: `state`, `activity_id`, `receipt`, `terminal_payload`, `call_graph` |
+| `ProgramLifecycleResultEnvelope` | type | required: `result` |
+| `ProgramLifecycleUnknown` | type | required: `state`, `activity_id`, `retry`, `retry_after_seconds` |
+| `ProgramOutcome` | type | variants: `completed`, `legacy_completed`, `refused` |
+| `ProgramReceiptResponse` | type | variants: `ProgramSubmission`, `ProgramLifecycleReceiptEnvelope` |
+| `ProgramReceiptSelector` | type | required: `idempotency_key`, `expected_activity_id`, `requested_verification_level` |
+| `ProgramSelector` | type | required: `program_id`, `requested_verification_level` |
+| `ProgramSimulation` | type | required: `committed`, `execution`, `simulation_evidence` |
+| `ProgramSource` | type | required: `status:string`<br>optional: `source_digest:string`, `environment_digest:string`, `pipeline:string`, `expected_code_hash:string`, `reproduced_artifact_digest:string` |
+| `ProgramSubmission` | type | required: `state`, `activity_id`, `idempotency_key` |
+| `VerifiedProgramDiscovery` | type | required: `program_id`, `lifecycle`, `version`, `code_hash`, `abi_version`, `receipt_digest`, `state_root`, `observed_sequence`, `observed_at`, `valid_through`, `verification` |
+| `VerifiedProgramInterface` | type | required: `program_id`, `version`, `code_hash`, `abi_version`, `interface`, `interface_digest`, `receipt_digest`, `state_root`, `observed_sequence`, `observed_at`, `valid_through`, `source`, `verification` |
 
 ### Module `read`
 

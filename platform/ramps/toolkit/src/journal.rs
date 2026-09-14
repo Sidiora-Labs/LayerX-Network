@@ -67,6 +67,33 @@ pub struct PaxeerObservation<'a> {
     pub confirmations: u64,
 }
 
+impl<'a> PaxeerObservation<'a> {
+    #[must_use]
+    pub fn from_finality(
+        operation_id: &'a str,
+        report: &layerx_paxeer_client::FinalityReport,
+    ) -> Self {
+        use layerx_paxeer_client::FinalityStage;
+        let (stage, block_hash) = match report.stage() {
+            FinalityStage::Announced => ("announced", None),
+            FinalityStage::Missing { .. } => ("missing", None),
+            FinalityStage::Pooled { .. } => ("pooled", None),
+            FinalityStage::Confirming { inclusion, .. } => {
+                ("confirming", Some(inclusion.block.hash))
+            }
+            FinalityStage::Final { inclusion, .. } => ("final", Some(inclusion.block.hash)),
+            FinalityStage::Displaced { lost, .. } => ("displaced", Some(lost.block.hash)),
+        };
+        Self {
+            operation_id,
+            transaction_hash: report.transaction().bytes(),
+            stage,
+            block_hash,
+            confirmations: report.progress().confirmed,
+        }
+    }
+}
+
 impl TransitionEvidence {
     #[must_use]
     pub const fn empty() -> Self {
@@ -442,6 +469,41 @@ impl Projection {
             || snapshot
                 .transaction_hash
                 .is_some_and(|value| value != transaction_hash)
+        {
+            return Err(RampError::Conflict);
+        }
+        let included = matches!(stage, "confirming" | "final" | "displaced");
+        if !matches!(
+            stage,
+            "broadcast_unknown"
+                | "announced"
+                | "missing"
+                | "pooled"
+                | "confirming"
+                | "final"
+                | "displaced"
+        ) || included != block_hash.is_some()
+            || block_hash == Some([0; 32])
+            || (!included && confirmations != 0)
+            || (stage == "final" && confirmations == 0)
+        {
+            return Err(RampError::Paxeer);
+        }
+        if snapshot.block_hash.is_some() && stage != "displaced" {
+            if block_hash != snapshot.block_hash && snapshot.stage != "displaced" {
+                return Err(RampError::Conflict);
+            }
+            if snapshot.stage != "displaced"
+                && (confirmations < snapshot.confirmations
+                    || (snapshot.stage == "final" && stage != "final"))
+            {
+                return Err(RampError::Conflict);
+            }
+        }
+        if stage == "displaced"
+            && (snapshot.block_hash.is_none()
+                || block_hash != snapshot.block_hash
+                || confirmations != 0)
         {
             return Err(RampError::Conflict);
         }

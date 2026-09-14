@@ -61,13 +61,13 @@ impl From<SchemaError> for BatchHeaderError {
 ///
 /// Refuses invalid selectors, transport or envelope failures, missing headers,
 /// noncanonical bytes, mismatched authority and invalid signatures.
-pub fn lookup(
+fn fetch(
     transport: &mut dyn FrameTransport,
     version: Version,
     batch_number: u64,
     correlation_id: u64,
-    handshake_key: [u8; 32],
-) -> Result<SignedBatchHeader, BatchHeaderError> {
+    expected_key: Option<[u8; 32]>,
+) -> Result<UntrustedBatchHeader, BatchHeaderError> {
     if batch_number == 0 || correlation_id == 0 {
         return Err(BatchHeaderError::Malformed);
     }
@@ -121,7 +121,7 @@ pub fn lookup(
     let signature = proof[82..146]
         .try_into()
         .map_err(|_| BatchHeaderError::Malformed)?;
-    if public_key != handshake_key
+    if expected_key.is_some_and(|key| key != public_key)
         || first == 0
         || last < first
         || batch_number < first
@@ -144,7 +144,7 @@ pub fn lookup(
     let digest = batch_header_digest(&reproduced).map_err(|_| BatchHeaderError::Malformed)?;
     ed25519::verify_digest(&public_key, &signature, &digest)
         .map_err(|_| BatchHeaderError::Signature)?;
-    Ok(SignedBatchHeader {
+    Ok(UntrustedBatchHeader(SignedBatchHeader {
         header,
         canonical_bytes: reproduced,
         sequencer_id,
@@ -152,5 +152,88 @@ pub fn lookup(
         first_batch_number: first,
         last_batch_number: last,
         signature,
-    })
+    }))
+}
+
+/// Canonical self-signed bytes whose signer has not been authorized.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UntrustedBatchHeader(SignedBatchHeader);
+
+impl UntrustedBatchHeader {
+    #[must_use]
+    pub fn canonical_bytes(&self) -> &[u8] {
+        self.0.canonical_bytes()
+    }
+    #[must_use]
+    pub const fn header(&self) -> &BatchHeader {
+        &self.0.header
+    }
+    #[must_use]
+    pub const fn signature(&self) -> &[u8; 64] {
+        &self.0.signature
+    }
+}
+
+/// Retrieves self-signed material for subsequent complete genesis-bound history verification.
+///
+/// # Errors
+/// Refuses malformed envelopes, selector mismatches and invalid self-signatures.
+pub fn lookup_untrusted(
+    transport: &mut dyn FrameTransport,
+    version: Version,
+    batch_number: u64,
+    correlation_id: u64,
+) -> Result<UntrustedBatchHeader, BatchHeaderError> {
+    fetch(transport, version, batch_number, correlation_id, None)
+}
+
+/// Verifies a retrieved header using genesis-bound historical term authority.
+///
+/// # Errors
+/// Refuses unverified ranges, retired signers and malformed or invalid headers.
+pub fn lookup_with_history(
+    transport: &mut dyn FrameTransport,
+    version: Version,
+    batch_number: u64,
+    correlation_id: u64,
+    history: &crate::handover::SequencerHistory,
+) -> Result<SignedBatchHeader, BatchHeaderError> {
+    let authorization = history
+        .authorization_for_batch(batch_number)
+        .map_err(|_| BatchHeaderError::AuthorityMismatch)?;
+    let mut candidate = fetch(
+        transport,
+        version,
+        batch_number,
+        correlation_id,
+        Some(authorization.public_key()),
+    )?
+    .0;
+    history
+        .verify_header(candidate.canonical_bytes(), &candidate.signature)
+        .map_err(|_| BatchHeaderError::AuthorityMismatch)?;
+    candidate.first_batch_number = batch_number;
+    candidate.last_batch_number = batch_number;
+    Ok(candidate)
+}
+
+/// Retrieves a canonical batch header and verifies its independently pinned sequencer.
+///
+/// # Errors
+/// Refuses untrusted keys and all malformed, mismatched or invalid signed material.
+pub fn lookup(
+    transport: &mut dyn FrameTransport,
+    version: Version,
+    batch_number: u64,
+    correlation_id: u64,
+    handshake_key: [u8; 32],
+) -> Result<SignedBatchHeader, BatchHeaderError> {
+    let candidate = fetch(
+        transport,
+        version,
+        batch_number,
+        correlation_id,
+        Some(handshake_key),
+    )?;
+    Ok(candidate.0)
 }

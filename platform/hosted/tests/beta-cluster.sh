@@ -128,7 +128,6 @@ revision() {
     case "${LAYERX_BETA_IMAGE_SOURCE:-build}" in
         build) ;;
         ghcr)
-            [ "$(cluster_mode)" = kind ] || fail "GHCR image source requires a kind cluster"
             rev=${LAYERX_BETA_IMAGE_TAG:-beta}
             [[ $rev =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]] || fail "invalid LAYERX_BETA_IMAGE_TAG"
             printf '%s' "$rev"
@@ -240,18 +239,28 @@ build_images() {
         docker build --file "$dockerfile" --tag "$ref" --label "$IMAGE_LABEL=$CLUSTER_NAME" "${build_args[@]}" - < "$WORK_DIR/context.tar" \
             > "$LOG_DIR/build-$name.log" 2>&1 || { tail -n 40 "$LOG_DIR/build-$name.log" >&2; fail "image build failed for $name (log $LOG_DIR/build-$name.log)"; }
         id=$(docker image inspect --format '{{.Id}}' "$ref")
+        if [ "$name" = paxd ]; then
+            docker run --rm --entrypoint /bin/bash "$ref" -c \
+                'test -r /opt/layerx/init-chain.sh && test -s /opt/layerx/contracts/BetaUsdl.runtime.hex && command -v paxd && command -v jq' \
+                > "$LOG_DIR/contents-$name.log" 2>&1 || fail "Paxeer initialization image is incomplete"
+        fi
         printf '%s %s %s %s\n' "$name" "$canonical" "$ref" "$id" >> "$WORK_DIR/images"
     done
 }
 
 pull_images() {
-    local name canonical dockerfile remote digest ref id
+    local name canonical dockerfile remote digest ref id expected publication candidate
+    publication=${LAYERX_BETA_PUBLICATION_DIR:?verified release publication directory is required for GHCR images}
+    candidate=${LAYERX_BETA_RELEASE_CANDIDATE:?the exact source revision of the GHCR images is required}
+    bash "$SCRIPT_DIR/publish-images.sh" --phase verify --release-candidate "$candidate" --output "$publication"
     mkdir -p "$LOG_DIR"
     : > "$WORK_DIR/images"
     for name in "${IMAGE_NAMES[@]}"; do
         read -r canonical dockerfile <<<"$(image_source "$name")"
         remote="ghcr.io/sidiora-labs/$name"
         digest=$(registry_image_digest "$remote:$REVISION")
+        expected=$(awk -v name="$name" -v repository="$remote" '$1 == name && $2 == repository {print $3}' "$publication/digests.txt")
+        [ "$digest" = "$expected" ] || fail "selected tag does not name the attested release image for $name"
         log "pulling $remote:$REVISION at $digest"
         docker pull "$remote@$digest" > "$LOG_DIR/pull-$name.log" 2>&1 \
             || fail "image pull failed for $name (log $LOG_DIR/pull-$name.log)"
@@ -309,16 +318,37 @@ cluster_create() {
 }
 
 load_images() {
-    local name canonical ref id
+    local name canonical ref id node normalized digest pin observed repository
+    : > "$WORK_DIR/image-pins"
     while read -r name canonical ref id; do
         if [ "$(cluster_mode)" = owner ]; then
-            [ -n "${LAYERX_BETA_IMAGE_REGISTRY:-}" ] || fail "LAYERX_BETA_IMAGE_REGISTRY is required to push images for an owner cluster"
-            log "pushing $ref"
-            docker push "$ref" > "$LOG_DIR/push-$name.log" 2>&1 || fail "docker push failed for $ref"
+            [ "${LAYERX_BETA_IMAGE_SOURCE:-build}" = ghcr ] \
+                || fail "owner clusters require release images published through the GHCR SBOM and attestation gate"
+            repository="ghcr.io/sidiora-labs/$name"
+            pin=$(docker image inspect "$ref" --format '{{json .RepoDigests}}' \
+                | jq -er --arg repository "$repository@" '[.[] | select(startswith($repository))] | unique | if length == 1 then .[0] else error("missing unique registry digest") end') \
+                || fail "no immutable GHCR reference for $name"
         else
             log "loading $ref into kind nodes"
-            "$TOOLS_DIR/kind" load docker-image --name "$CLUSTER_NAME" "$ref" > "$LOG_DIR/load-$name.log" 2>&1 || fail "kind load failed for $ref"
+            "$TOOLS_DIR/kind" load docker-image --name "$CLUSTER_NAME" "$ref" > "$LOG_DIR/load-$name.log" 2>&1 \
+                || fail "kind load failed for $ref"
+            normalized=$ref
+            case "${ref%%/*}" in *.*|*:*|localhost) ;; *) normalized="docker.io/$ref" ;; esac
+            digest=
+            for node in $(kind_nodes); do
+                observed=$(docker exec "$node" ctr -n k8s.io images ls \
+                    | awk -v reference="$normalized" '$1 == reference {print $3}')
+                [[ $observed =~ ^sha256:[0-9a-f]{64}$ ]] || fail "kind did not retain a manifest digest for $ref"
+                [ -z "$digest" ] || [ "$digest" = "$observed" ] || fail "kind nodes loaded different manifests for $ref"
+                digest=$observed
+                pin="${normalized%:*}@$digest"
+                docker exec "$node" ctr -n k8s.io images tag --force "$normalized" "$pin" > /dev/null \
+                    || fail "kind could not retain immutable reference $pin"
+            done
+            [ -n "$digest" ] || fail "no kind node loaded $ref"
         fi
+        [[ $pin =~ @sha256:[0-9a-f]{64}$ ]] || fail "invalid immutable image reference for $name"
+        printf '%s %s\n' "$name" "$pin" >> "$WORK_DIR/image-pins"
     done < "$WORK_DIR/images"
 }
 
@@ -605,8 +635,10 @@ secrets_generate() {
     [ "$(wc -c < "$d/test-source-signer.pub.hex")" -eq 64 ] || fail "test source signer key is not an ed25519 key"
     (umask 077; openssl genpkey -algorithm ed25519 -out "$d/test-destination-signer.key" 2>/dev/null)
     ed25519_public_hex "$d/test-destination-signer.key" > "$d/test-destination-signer.pub.hex"
-    TEST_SOURCE_DID=${LAYERX_BETA_TEST_SOURCE_DID:-did:layerx:beta:$(random_hex 16)}
-    TEST_DESTINATION_DID=${LAYERX_BETA_TEST_DESTINATION_DID:-did:layerx:beta:$(random_hex 16)}
+    TEST_SOURCE_DID=${LAYERX_BETA_TEST_SOURCE_DID:-did:layerx:$(cat "$d/test-source-signer.pub.hex")}
+    TEST_DESTINATION_DID=${LAYERX_BETA_TEST_DESTINATION_DID:-did:layerx:$(cat "$d/test-destination-signer.pub.hex")}
+    [ "$TEST_SOURCE_DID" = "did:layerx:$(cat "$d/test-source-signer.pub.hex")" ] || fail "smoke source DID must be derived from its generated signer"
+    [ "$TEST_DESTINATION_DID" = "did:layerx:$(cat "$d/test-destination-signer.pub.hex")" ] || fail "smoke destination DID must be derived from its generated signer"
     source "$REPO_ROOT/platform/hosted/human/material.sh"
     human_secrets_generate
     [ "$TEST_SOURCE_DID" != "$TEST_DESTINATION_DID" ] || fail "the smoke source and destination DIDs must differ"
@@ -623,6 +655,10 @@ module_registry_generate() {
     decimals=$(sed -n 's/^ASSET_DECIMALS=//p' "$bootstrap")
     local -a args=(generate --network-id "$NODE_NETWORK_ID" --protocol-version 3
         --asset "$NODE_ASSET_ID" --symbol "$symbol" --currency "$currency" --decimals "$decimals")
+    local module
+    while IFS= read -r module || [ -n "$module" ]; do
+        args+=(--enable-module "$module")
+    done < "$REPO_ROOT/platform/hosted/node/genesis-modules.conf"
     local -a mounts=()
     if [ -n "$CUSTODY_PROFILE" ]; then
         mounts+=(--mount "type=bind,src=$(realpath "$CUSTODY_PROFILE"),dst=/run/custody.profile,readonly")
@@ -805,7 +841,6 @@ secrets_apply() {
             --from-file=credentials.json="$s/human-credentials.json" \
             --from-file=producers.json="$s/$service-producers.json" --from-file=producer-token="$s/$producer-event-producer.token"
     done
-    MISSING_INPUTS+=("Authenticated Human principal cookies for journeys/approvals require the passkey assertion and session.open ceremony; credential maps remain empty")
     apply_secret "$ns" layerx-human-tls --from-file=server.crt.der="$c/human/cert.der" \
         --from-file=server.key.der="$c/human/key.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-internal-ca --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
@@ -845,6 +880,7 @@ secrets_apply() {
     apply_secret "$ns" layerx-sequencer-trust-history --from-file=history="$s/trust-history"
     apply_configmap "$ns" layerx-receipt-authority --from-file=replica-id="$s/receipt-authority-replica-id"
     apply_secret "$ns" layerx-node-keys --from-file=sequencer.key="$s/node-sequencer.key" --from-file=treasury.key="$s/node-treasury.key"
+    publication_binding_publish
     if [ -n "$CUSTODY_PROFILE" ]; then
         apply_configmap "$ns" layerx-node-custody-profile --from-file=profile="$CUSTODY_PROFILE"
     fi
@@ -886,8 +922,49 @@ secrets_apply() {
     apply_tls_secret "$dev" layerx-developer-ingress-tls developer
 }
 
+publication_policy_create() {
+    local operation=$1 output=$2 temporary
+    shift 2
+    temporary=$(mktemp -d "$WORK_DIR/publication-policy.XXXXXXXX")
+    chmod 0700 "$temporary"
+    python3 "$REPO_ROOT/platform/hosted/tests/publication-policy.py" "$operation" "$temporary/policy.json" "$@"
+    if [ -e "$output" ] || [ -L "$output" ]; then
+        [ -f "$output" ] && [ ! -L "$output" ] && cmp -s "$temporary/policy.json" "$output" \
+            || fail "publication policy changed: $operation"
+    else
+        mv "$temporary/policy.json" "$output"
+    fi
+}
+
+publication_binding_publish() {
+    local recipient policy="$SECRETS_DIR/publication-binding-policy.json"
+    recipient=$(cat "$SECRETS_DIR/paxeer-deployer.address")
+    publication_policy_create treasury "$policy" "$NODE_NETWORK_ID" "$NODE_ASSET_ID" "${recipient#0x}"
+    local -a authorization=()
+    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
+        [ -f "$SECRETS_DIR/publication-authorization.json" ] && [ ! -L "$SECRETS_DIR/publication-authorization.json" ] \
+            || fail 'retained checkpoint publication authorization is missing'
+        authorization=(--from-file=authorization.json="$SECRETS_DIR/publication-authorization.json")
+    fi
+    apply_secret "$TESTNET_NAMESPACE" layerx-node-publication \
+        --from-file=binding-policy.json="$policy" "${authorization[@]}"
+}
+
+publication_authorization_publish() {
+    local recipient public vault
+    recipient=$(cat "$SECRETS_DIR/paxeer-deployer.address")
+    public=$(sed -n 's/^LAYERX_NODE_TREASURY_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
+    vault=$(jq -er '.vault' "$WORK_DIR/human-evidence-input/owner-custody.json")
+    publication_policy_create authorization "$SECRETS_DIR/publication-authorization.json" \
+        "$NODE_NETWORK_ID" "$PAXEER_CHAIN_ID" "$GUARANTOR_BOND" "$CHECKPOINT_REGISTRY" "$vault" \
+        "$public" "$NODE_ASSET_ID" "${recipient#0x}"
+    apply_secret "$TESTNET_NAMESPACE" layerx-node-publication \
+        --from-file=binding-policy.json="$SECRETS_DIR/publication-binding-policy.json" \
+        --from-file=authorization.json="$SECRETS_DIR/publication-authorization.json"
+}
+
 builder_release_publish() {
-    local ns="$TESTNET_NAMESPACE" ref digest bwrap_digest cgroup_digest sums
+    local ns="$TESTNET_NAMESPACE" ref deployment_ref digest bwrap_digest cgroup_digest sums
     ref=$(image_ref layerx-program-registry)
     sums=$(docker run --rm --entrypoint /bin/sh "$ref" -c 'sha256sum /usr/bin/bwrap /usr/bin/layerx-cgroup-exec')
     bwrap_digest=$(printf '%s\n' "$sums" | awk '$2 == "/usr/bin/bwrap" { print $1 }')
@@ -905,6 +982,8 @@ builder_release_publish() {
     printf '%s' "$digest" > "$SECRETS_DIR/environment-tree-digest"
     apply_configmap "$ns" layerx-program-builder-release --from-file=environment-tree-digest="$SECRETS_DIR/environment-tree-digest" \
         --from-file=bwrap-digest="$SECRETS_DIR/bwrap-digest" --from-file=cgroup-exec-digest="$SECRETS_DIR/cgroup-exec-digest"
+    deployment_ref=$(awk '$1 == "layerx-program-registry" {print $2}' "$WORK_DIR/image-pins")
+    [[ $deployment_ref =~ @sha256:[0-9a-f]{64}$ ]] || fail "missing immutable builder loader image"
     cat > "$MANIFESTS_DIR/builder-release.yaml" <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -920,7 +999,7 @@ spec:
   securityContext: {runAsNonRoot: true, runAsUser: 4030, runAsGroup: 4030, fsGroup: 4030}
   containers:
     - name: loader
-      image: $ref
+      image: $deployment_ref
       imagePullPolicy: $PULL_POLICY
       command: [sh, -c, "while [ ! -f /opt/layerx-builder/.sealed ]; do sleep 1; done"]
       securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
@@ -937,15 +1016,20 @@ EOF
 }
 
 render_manifest() {
-    local src=$1 dst=$2 name canonical ref id
+    local src=$1 dst=$2 name canonical ref id pin
     cp "$src" "$dst"
     while read -r name canonical ref id; do
-        sed -i "s|image: $canonical\$|image: $ref|" "$dst"
+        pin=$ref
+        if [ "$id" != unbuilt ]; then
+            pin=$(awk -v name="$name" '$1 == name {print $2}' "$WORK_DIR/image-pins")
+            [[ $pin =~ @sha256:[0-9a-f]{64}$ ]] || fail "missing immutable deployment digest for $name"
+        fi
+        sed -i "s|image: $canonical\$|image: $pin|" "$dst"
     done < "$WORK_DIR/images"
     sed -i "s|imagePullPolicy: Always|imagePullPolicy: $PULL_POLICY|" "$dst"
     sed -i "s|developers\.layerx\.example|$DEVELOPER_HOST|g" "$dst"
-    if grep -q 'ghcr.io/' "$dst"; then
-        fail "rendered manifest $dst still references an unbuilt image: $(grep -o 'ghcr.io/[^ ]*' "$dst" | sort -u | tr '\n' ' ')"
+    if grep -E 'image: ghcr.io/[^@[:space:]]*:[^@[:space:]]+$' "$dst"; then
+        fail "rendered manifest $dst still references a mutable GHCR image"
     fi
 }
 
@@ -1062,6 +1146,9 @@ for document in documents:
     daemon = next(container for container in pod["containers"] if container["name"] == "layerxd")
     daemon["args"] += ["--custody-profile", "/run/layerx/custody.profile"]
     daemon["volumeMounts"].append({"name": "custody-profile", "mountPath": "/run/layerx/custody.profile", "subPath": "profile", "readOnly": True})
+    movement = next(container for container in pod["containers"] if container["name"] == "human-movement")
+    movement["env"].append({"name": "LAYERX_HUMAN_MOVEMENT_PROVIDER_CUSTODY_PROFILE", "value": "/run/layerx/custody.profile"})
+    movement["volumeMounts"].append({"name": "custody-profile", "mountPath": "/run/layerx/custody.profile", "subPath": "profile", "readOnly": True})
     pod["volumes"].append({"name": "custody-profile", "configMap": {"name": "layerx-node-custody-profile"}})
 with open(path, "w") as output:
     yaml.safe_dump_all(documents, output, sort_keys=False)
@@ -1153,8 +1240,10 @@ registry_deployment_produce() (
     set -euo pipefail
     umask 077
     local input="$WORK_DIR/human-evidence-input" temporary producer
-    local artifact="$REPO_ROOT/programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
-    make -C "$REPO_ROOT" programs-reference-escrow >&2
+    local artifact="$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
+    CARGO_TARGET_DIR="$WORK_DIR/program-target" make -C "$REPO_ROOT" programs-reference-escrow >&2
+    CARGO_TARGET_DIR="$WORK_DIR/smoke-target" cargo build --manifest-path "$REPO_ROOT/platform/Cargo.toml" \
+        -p layerx-platform-cli --bin layerx --example hosted-send >&2
     mkdir -p "$input"
     [ ! -e "$input/program-deployment.lxa" ] && [ ! -L "$input/program-deployment.lxa" ] || fail 'deployment input exists; reconcile before retry'
     temporary=$(mktemp "$input/.program-deployment.XXXXXXXX")
@@ -1290,6 +1379,9 @@ wait_for_node_genesis() {
     node_file_fetch "$data/genesis/paxeer-deployment-descriptor.lxgd" "$WORK_DIR/genesis/paxeer-deployment-descriptor.lxgd"
     node_file_fetch "$data/genesis/paxeer-registration-request.lxrr" "$WORK_DIR/genesis/paxeer-registration-request.lxrr"
     node_file_fetch "$data/node.env" "$WORK_DIR/genesis/node.env"
+    if rg -q '^LAYERX_NODE_GENESIS_HANDOVER_TRUST=' "$WORK_DIR/genesis/node.env"; then
+        node_file_fetch "$data/genesis/genesis-handover-trust.lxt" "$WORK_DIR/genesis/genesis-handover-trust.lxt"
+    fi
     NODE_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")
     NODE_GUARANTOR_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
     NODE_SECOND_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_SECOND_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")
@@ -1419,6 +1511,7 @@ settlement_publish() {
         || fail "the settlement environment was refused by bootstrap.sh --check-settlement"
     apply_configmap "$ns" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env" \
         --from-file=checkpoint-settlement.json="$WORK_DIR/paxeer/checkpoint-settlement.json"
+    publication_authorization_publish
     log "settlement environment published as ConfigMap $ns/layerx-node-settlement"
 }
 
@@ -1499,6 +1592,12 @@ identity_provision() {
         grep -Eq '^ses_[0-9a-f]{32}\.[0-9a-f]{64}$' "$SECRETS_DIR/test-auth.token" || fail "identity returned no session token for the smoke source"
         rm -f "$dir/source-session.response.json"
     fi
+    jq -n --arg sub "$TEST_DESTINATION_DID" '{sub: $sub}' > "$dir/destination-session.json"
+    status=$(identity_request POST /v1/sessions "$dir/destination-session.json" "$dir/destination-session.response.json")
+    [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke destination session with status $status"
+    (umask 077; jq -er '.token' "$dir/destination-session.response.json" > "$SECRETS_DIR/test-destination-auth.token")
+    grep -Eq '^ses_[0-9a-f]{32}\.[0-9a-f]{64}$' "$SECRETS_DIR/test-destination-auth.token" || fail "identity returned no destination session token"
+    rm -f "$dir/destination-session.response.json"
     log "identity provisioned $TEST_SOURCE_DID and $TEST_DESTINATION_DID (session token source: $TEST_AUTH_SOURCE)"
 }
 
@@ -1712,8 +1811,14 @@ env_write() {
         printf 'export LAYERX_TEST_SOURCE_PUBLIC_KEY=%s\n' "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")"
         printf 'export LAYERX_TEST_SOURCE_KEY_FILE=%s\n' "$SECRETS_DIR/test-source-signer.key"
         printf 'export LAYERX_TEST_DESTINATION_DID=%s\n' "$TEST_DESTINATION_DID"
+        printf 'export LAYERX_TEST_DESTINATION_PUBLIC_KEY=%s\n' "$(cat "$SECRETS_DIR/test-destination-signer.pub.hex")"
+        printf 'export LAYERX_TEST_DESTINATION_AUTH_TOKEN_FILE=%s\n' "$SECRETS_DIR/test-destination-auth.token"
+        printf 'export LAYERX_TEST_SEQUENCER_PUBLIC_KEY=%s\n' "$(cat "$SECRETS_DIR/sequencer-public-key")"
+        printf 'export LAYERX_TEST_SEND_ENCODER=%s\n' "$WORK_DIR/smoke-target/debug/examples/hosted-send"
+        printf 'export LAYERX_BIN=%s\n' "$WORK_DIR/smoke-target/debug/layerx"
         printf 'export LAYERX_TEST_ASSET=%s\n' "$NODE_ASSET_ID"
         printf 'export LAYERX_TEST_AMOUNT=%s\n' "$TEST_AMOUNT"
+        printf 'export LAYERX_TEST_ESCROW_WASM=%s\n' "$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
         printf 'export LAYERX_GATEWAY_CA_FILE=%s\n' "$CA_DIR/ca.crt"
         printf 'export WEBHOOKS_URL=%s\n' "$DEVELOPER_URL"
         printf 'export LAYERX_AGENT_BOUNDARY_URL=%s\n' "$AGENT_URL"
@@ -1917,8 +2022,6 @@ beta_cluster_up() {
         identity_provision
         kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
         wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-program-registry 600
-        registry_deployment_produce
-        human_journal_deploy
         (umask 077; mkdir -p "$WORK_DIR/human-evidence-input")
         python3 "$REPO_ROOT/platform/hosted/human/provision.py" --prepare-owner-request \
             --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
@@ -1951,8 +2054,9 @@ beta_cluster_up() {
     else
         retained_principals_apply
     fi
-    internal_apply
     port_forward human "$TESTNET_NAMESPACE" layerx-human 19453 9443
+    human_browser_provision
+    internal_apply
     port_forward developer "$DEVELOPER_NAMESPACE" layerx-webhooks 19450 443
     port_forward pending-core "$TESTNET_NAMESPACE" layerx-pending-core 19446 9443
     port_forward agent-boundary "$TESTNET_NAMESPACE" layerx-agent-boundary 19447 9443
@@ -2028,6 +2132,7 @@ publish_images() {
         check) flags=(--check) ;;
         dry-run) flags=(--dry-run) ;;
         push) flags=(--phase push) ;;
+        verify) flags=(--phase verify) ;;
         promote) flags=(--phase promote) ;;
         self-test) flags=(--self-test) ;;
         "") fail "publish-images requires the caller to name its mode: check, dry-run, push, promote or self-test" ;;

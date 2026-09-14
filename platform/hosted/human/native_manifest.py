@@ -9,9 +9,13 @@ def configure(work_dir, network, sequencer, image, stateful):
     root = Path(work_dir) / 'human-evidence-input'
     work = '/run/owner/work'
     private = work + '/human-evidence-input'
+    kms = (root / 'owner-kms.json').exists()
+    authority = dict(kms_signer=dict(socket='/run/layerx/human/onboarding-signer.sock', peer_uid=4020, peer_gid=4020),
+                     kms_owner_file=private + '/owner-kms.json') if kms else dict(
+        owner_seed_file=private + '/owner.seed', pending_seed_file=private + '/pending.seed')
     write_json(root / 'owner-native.json', dict(node_socket='/run/layerx/node/layerxd.lni.sock',
-        network_id=network, owner_seed_file=private + '/owner.seed', pending_seed_file=private + '/pending.seed',
-        sequencer_public_key=sequencer, layerxctl='/usr/local/bin/layerxctl', fee_limit=0,
+        network_id=network, **authority,
+        sequencer_public_key=sequencer, layerxctl='/usr/local/bin/layerxctl', fee_limit=1000 if kms else 0,
         authority_url='https://localhost:9445', authority_token_file=private + '/authority.token',
         authority_ca_file=private + '/ca.crt', authority_state_root='/run/owner/authority'))
     pod = stateful['spec']['template']['spec']
@@ -25,6 +29,9 @@ for name in owner-native.json recovery-policy.json recovery-guardians.json owner
 done
 install -m 0600 /run/owner/input/human-owner-result.json /run/owner/work/human-owner-result.json
 exec sleep infinity'''
+    if kms:
+        commands = commands.replace('custody-credit.bin owner.seed pending.seed authority.token',
+                                    'custody-credit.bin owner-kms.json authority.token')
     pod['containers'].append(dict(name='owner-producer', image=image, command=['/bin/sh', '-ec'], args=[commands],
         securityContext=dict(runAsUser=4021, runAsGroup=4020, runAsNonRoot=True, allowPrivilegeEscalation=False,
                              readOnlyRootFilesystem=True, capabilities=dict(drop=['ALL'])),

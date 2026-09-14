@@ -22,6 +22,7 @@ export const ROUTE_SCRIPT_BUDGETS = Object.freeze({
   "/explorer/batches/[batchNumber]": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
   "/explorer/checkpoints": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
   "/explorer/checkpoints/[checkpointId]": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/explorer/programs/[programId]": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
   "/explorer/receipts/[receiptId]": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
   "/explorer/verify": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
   "/app": APP_ROUTE_SCRIPT_BUDGET_BYTES,

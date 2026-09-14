@@ -20,6 +20,8 @@ typedef struct receive_transaction {
     lxp_meter_ctx meter_before;
     bool meter_present;
     lxp_send_store *window_backup;
+    lxp_authority_scope allowance_before;
+    bool allowance_present;
 } receive_transaction;
 
 #ifdef LXP_TESTING
@@ -77,6 +79,9 @@ static lxp_result receive_transaction_abort(
     context->invoices->count = transaction->invoice_count;
     if (transaction->meter_present && context->meter != NULL)
         *context->meter = transaction->meter_before;
+    if (transaction->allowance_present)
+        *context->receive_environment->allowance->scope =
+            transaction->allowance_before;
     arena_reset = lxp_arena_reset(context->arena, transaction->arena_mark);
     (void)memset(receipt, 0, sizeof(*receipt));
     return rollback == LXP_OK && kv_rollback == LXP_OK &&
@@ -281,6 +286,7 @@ static lxp_result gateway_receive_claim_locked(
     uint8_t activity_hash[32];
     bool settled = false;
     lxp_result status;
+    lxp_result invoice_status;
     if (context->receive_environment->accounts->count >
             LX_ACCOUNT_REGISTRY_CAPACITY ||
         context->receive_environment->grants->count >
@@ -294,18 +300,21 @@ static lxp_result gateway_receive_claim_locked(
         requirement, context->receive_environment->network_id,
         context->service_public_key);
     if (status != LXP_OK) return status;
-    status = lxp_gateway_invoice_state_locked(
+    if (lxp_ct_memcmp(receive->grant_id,
+                      receive->payer_grant.grant_id, 32U) != 0)
+        return LXP_ERR_GRANT_SCOPE_VIOLATION;
+    invoice_status = lxp_gateway_invoice_state_locked(
         context->invoices, requirement->invoice_id,
         receive->idempotency_key, receipt, &settled);
-    if (status != LXP_OK) return status;
-    if (settled) return LXP_ERR_IDEMPOTENT_REPLAY;
+    if (invoice_status != LXP_OK &&
+        invoice_status != LXP_ERR_INVOICE_ALREADY_SETTLED)
+        return invoice_status;
+    if (invoice_status == LXP_OK && settled)
+        return LXP_ERR_IDEMPOTENT_REPLAY;
     if (context->receive_environment->idempotency == NULL)
         return LXP_ERR_ARENA_EXHAUSTED;
     status = receive_activity_hash(receive, activity_hash);
     if (status != LXP_OK) return status;
-    if (lxp_ct_memcmp(receive->grant_id,
-                      receive->payer_grant.grant_id, 32U) != 0)
-        return LXP_ERR_GRANT_SCOPE_VIOLATION;
     (void)memset(&leg, 0, sizeof(leg));
     leg.from = account_for(context->receive_environment->accounts,
                            receive->from);
@@ -334,6 +343,12 @@ static lxp_result gateway_receive_claim_locked(
             context->receive_environment->grants->grants);
         transaction.grant_before = *existing_grant;
     }
+    if (context->receive_environment->allowance != NULL &&
+        context->receive_environment->allowance->scope != NULL) {
+        transaction.allowance_before =
+            *context->receive_environment->allowance->scope;
+        transaction.allowance_present = true;
+    }
     status = lxp_journal_open(&leg, 1U, &transaction.balances);
     if (status != LXP_OK) return status;
     status = gateway_grant_present_locked(
@@ -357,6 +372,9 @@ static lxp_result gateway_receive_claim_locked(
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
+    if (invoice_status != LXP_OK)
+        return receive_transaction_abort(
+            context, &transaction, receipt, invoice_status);
     status = lx_asset_state_root(
         context->assets, context->receive_environment->accounts,
         previous_state_root);

@@ -43,12 +43,14 @@ typedef struct lxp_transfer_source_authority {
 /* The resolved grant a debit draws against. The ledger binds every debit leg
  * to it and charges the scope before the balance moves; the journal restores
  * the pre-charge scope whenever the transfer set rolls back. The scope is the
- * live one the caller resolved, so the caller persists it once the transition
- * commits. */
+ * live one the caller resolved; grant_id names the persisted grant it
+ * continues, so the module context that charges a metered scope persists the
+ * charged counters beside that grant once the transition commits. */
 typedef struct lxp_transfer_allowance {
     lxp_authority_scope *scope;
     lxp_authority_kind kind;
     uint8_t grantor[32];
+    uint8_t grant_id[32];
 } lxp_transfer_allowance;
 
 typedef struct lxp_transfer_context {

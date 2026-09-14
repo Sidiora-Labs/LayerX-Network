@@ -1,11 +1,14 @@
 package pax_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
+	"github.com/sidiora-labs/paxeer-network/wasm/staticarchive"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,12 +20,83 @@ var linkDirs = []string{
 	"wasm-runtime/internal/api",
 }
 
-// reLDFlag captures the -l<name> argument from a cgo LDFLAGS line, e.g.
-//
-//	// #cgo LDFLAGS: -Wl,-rpath,${SRCDIR} -L${SRCDIR} -lwasmvm155_muslc
-//
-// yields "wasmvm155_muslc".
-var reLDFlag = regexp.MustCompile(`#cgo LDFLAGS:.*?-l(\S+)`)
+var reLDFlags = regexp.MustCompile(`#cgo[^\n]*?LDFLAGS:([^\n]*)`)
+
+func linkLibraries(data []byte) []string {
+	var libraries []string
+	for _, directive := range reLDFlags.FindAllSubmatch(data, -1) {
+		for _, flag := range strings.Fields(string(directive[1])) {
+			if strings.HasPrefix(flag, "-l") && len(flag) > 2 {
+				libraries = append(libraries, flag[2:])
+			}
+		}
+	}
+	return libraries
+}
+
+func resolveLibrary(dir, library string) ([]string, error) {
+	var names []string
+	if strings.HasPrefix(library, ":") {
+		names = []string{strings.TrimPrefix(library, ":")}
+	} else {
+		for _, ext := range linkableExts {
+			names = append(names, "lib"+library+ext)
+		}
+	}
+	for _, name := range names {
+		if filepath.Base(name) != name {
+			return nil, fmt.Errorf("library must be local to source directory: %s", name)
+		}
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("library is not a regular file: %s", path)
+		}
+		if info.Size() > 1024 {
+			return []string{name}, nil
+		}
+		// Packaging at 72f2f44ac preserves the pinned archive objects in
+		// parts selected by a small GNU linker script. Verify their complete
+		// provenance before applying the binary-size floor to every part.
+		if _, err := staticarchive.Verify(dir, name); err != nil {
+			return nil, fmt.Errorf("library is <=1KiB and has no verified archive group: %s: %w", path, err)
+		}
+		script, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		fields := strings.Fields(string(script))
+		if len(fields) < 4 || fields[0] != "GROUP" || fields[1] != "(" || fields[len(fields)-1] != ")" {
+			return nil, fmt.Errorf("invalid archive group: %s", path)
+		}
+		consumed := []string{name}
+		for _, flag := range fields[2 : len(fields)-1] {
+			if !strings.HasPrefix(flag, "-l:") {
+				return nil, fmt.Errorf("invalid archive group flag: %s", flag)
+			}
+			part := strings.TrimPrefix(flag, "-l:")
+			if filepath.Base(part) != part {
+				return nil, fmt.Errorf("archive part must be local: %s", part)
+			}
+			info, err := os.Stat(filepath.Join(dir, part))
+			if err != nil {
+				return nil, err
+			}
+			if !info.Mode().IsRegular() || info.Size() <= 1024 {
+				return nil, fmt.Errorf("archive part is not a regular file >1KiB: %s", part)
+			}
+			consumed = append(consumed, part)
+		}
+		return consumed, nil
+	}
+	return nil, fmt.Errorf("-l%s has no checked-in library in %s", library, dir)
+}
 
 // linkableExts is the set of extensions cgo's linker will accept when
 // resolving -l<name> — it searches for lib<name>.{so,a,dylib} (plus a few
@@ -46,7 +120,7 @@ var linkableExts = []string{".a", ".so", ".dylib"}
 //     to anything. The previous libwasmvm155static.a (Mach-O arm64) was
 //     a textbook example: present in the tree, consumed by nothing.
 //
-// The 1 KiB floor on file size is a sanity gate against the failure
+// The 1 KiB floor on each binary artifact is a sanity gate against the failure
 // mode where a download produced an HTML error page or an LFS pointer
 // (~100–200 bytes) instead of a real archive.
 func TestLinkDirectivesResolve(t *testing.T) {
@@ -62,25 +136,13 @@ func TestLinkDirectivesResolve(t *testing.T) {
 				data, err := os.ReadFile(gofile)
 				require.NoError(t, err)
 
-				m := reLDFlag.FindStringSubmatch(string(data))
-				require.NotEmptyf(t, m,
-					"no `#cgo LDFLAGS: ... -l<name>` directive in %s", gofile)
-				libName := m[1]
-
-				var found string
-				for _, ext := range linkableExts {
-					path := filepath.Join(dir, "lib"+libName+ext)
-					if info, err := os.Stat(path); err == nil && info.Size() > 1024 {
-						found = path
-						break
-					}
+				libraries := linkLibraries(data)
+				require.NotEmptyf(t, libraries, "no cgo library directive in %s", gofile)
+				for _, library := range libraries {
+					consumed, err := resolveLibrary(dir, library)
+					require.NoErrorf(t, err, "%s declares -l%s", gofile, library)
+					t.Logf("ok: %s -l%s -> %v", gofile, library, consumed)
 				}
-				require.NotEmptyf(t, found,
-					"%s declares -l%s but no lib%s.{a,so,dylib} (>1KiB) "+
-						"exists in %s — checked-in artifact is missing, "+
-						"empty, or named inconsistently with the linker directive",
-					gofile, libName, libName, dir)
-				t.Logf("ok: %s -> %s", gofile, found)
 			})
 		}
 	}
@@ -92,27 +154,31 @@ func TestLinkDirectivesResolve(t *testing.T) {
 // like the original libwasmvm155static.a that were never resolved by any
 // directive and sat dormant until someone tried to static-link.
 //
-// Allowed: lib<name>.{a,so,dylib} where some link_*.go in the same dir
-// references -l<name> OR -l<name-without-arch-suffix>. Arch-suffixed
-// siblings (lib<base>_muslc.aarch64.a alongside lib<base>_muslc.a) are
-// permitted because they're swapped in by build-time tooling, not by a
-// distinct cgo directive.
+// Every architecture's directive is checked, including exact -l:filename
+// references and archive parts selected by a verified GNU linker group.
 func TestArtifactsHaveNoOrphans(t *testing.T) {
 	for _, dir := range linkDirs {
 		dir := dir
 		t.Run(dir, func(t *testing.T) {
-			// Collect referenced library base names from every link_*.go.
+			// Resolve every architecture-qualified directive and group part.
 			referenced := map[string]bool{}
-			gofiles, _ := filepath.Glob(filepath.Join(dir, "link_*.go"))
+			gofiles, err := filepath.Glob(filepath.Join(dir, "link_*.go"))
+			require.NoError(t, err)
 			for _, gofile := range gofiles {
-				data, _ := os.ReadFile(gofile)
-				if m := reLDFlag.FindStringSubmatch(string(data)); len(m) > 1 {
-					referenced[m[1]] = true
+				data, err := os.ReadFile(gofile)
+				require.NoError(t, err)
+				libraries := linkLibraries(data)
+				require.NotEmpty(t, libraries)
+				for _, library := range libraries {
+					consumed, err := resolveLibrary(dir, library)
+					require.NoError(t, err)
+					for _, name := range consumed {
+						referenced[name] = true
+					}
 				}
 			}
-
-			// For every lib*.{a,so,dylib} on disk, the basename (with the
-			// arch suffix stripped) must match a referenced -l<name>.
+			// Every library on disk must be consumed by an actual directive
+			// or by its verified GNU archive group.
 			entries, err := os.ReadDir(dir)
 			require.NoError(t, err)
 			for _, e := range entries {
@@ -128,25 +194,10 @@ func TestArtifactsHaveNoOrphans(t *testing.T) {
 				if !isLib {
 					continue
 				}
-				base := name[len("lib") : len(name)-len(ext)]
-				// Strip any .x86_64 / .aarch64 arch suffix.
-				stripped := base
-				for _, s := range []string{".x86_64", ".aarch64"} {
-					stripped = stripSuffix(stripped, s)
-				}
-				if !referenced[base] && !referenced[stripped] {
-					t.Errorf("orphan artifact %s/%s — no link_*.go references "+
-						"-l%s (or -l%s); either delete the file or wire it up",
-						dir, name, base, stripped)
+				if !referenced[name] {
+					t.Errorf("orphan artifact %s/%s — no link_*.go directive or verified archive group consumes it", dir, name)
 				}
 			}
 		})
 	}
-}
-
-func stripSuffix(s, suf string) string {
-	if len(s) >= len(suf) && s[len(s)-len(suf):] == suf {
-		return s[:len(s)-len(suf)]
-	}
-	return s
 }

@@ -44,6 +44,20 @@ spec:
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           volumeMounts:
             - {name: data, mountPath: /var/lib/layerx}
+        - name: publication-policy
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              umask 077
+              install -d -m 0700 /run/layerx/publication
+              install -m 0600 /run/publication-input/binding-policy.json /run/layerx/publication/binding-policy.json
+          securityContext: {runAsUser: 4020, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
+          volumeMounts:
+            - {name: run, mountPath: /run/layerx}
+            - {name: publication-policy, mountPath: /run/publication-input, readOnly: true}
         - name: human-directories
           image: ghcr.io/sidiora-labs/layerx-human:0.1.0
           imagePullPolicy: Always
@@ -53,6 +67,7 @@ spec:
             - |
               install -d -o 4020 -g 4020 -m 0750 /run/layerx/human
               install -d -o 4021 -g 4020 -m 0750 /run/layerx/human/owner
+              install -d -o 4021 -g 4020 -m 0700 /run/layerx/human/authority-clock
               install -d -o 4020 -g 4020 -m 0700 /human-state/components
               install -d -o 4021 -g 4020 -m 0700 /human-state/agent
               install -d -o 4020 -g 4020 -m 0700 /human-state/identity
@@ -97,6 +112,10 @@ spec:
               install -m 0600 /run/authority-input/authority-token /run/authority-private/material/human-agent.token
               install -m 0600 /run/authority-input/principal-policy.json /run/authority-private/material/principal-policy.json
               install -m 0600 /run/module-registry/registry.json /run/authority-private/material/registry.json
+              if [ -e /run/authority-input/genesis-handover-trust.lxt ] || [ -e /run/authority-input/handover-finality.conf ]; then
+                  install -m 0600 /run/authority-input/genesis-handover-trust.lxt /run/authority-private/material/genesis-handover-trust.lxt
+                  install -m 0600 /run/authority-input/handover-finality.conf /run/authority-private/material/handover-finality.conf
+              fi
           securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
           volumeMounts:
@@ -122,6 +141,10 @@ spec:
             - $(LAYERX_NODE_ASSET_ID)
             - --genesis-metadata
             - /run/layerx/genesis/metadata.lxgb
+            - --withdrawal-fee
+            - "0"
+            - --module-fees
+            - /opt/layerx/genesis-module-fees.json
             - --replica-id
             - $(LAYERX_NODE_REPLICA_ID)
             - --sequencer-key
@@ -143,6 +166,12 @@ spec:
             - --settlement-env
             - /run/layerx/settlement/settlement.env
           env:
+            - name: LAYERX_NODE_HANDOVER_AUTHORITY_PUBLIC_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: layerx-node-config
+                  key: handover-authority
+                  optional: true
             - {name: LAYERX_NODE_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
             - {name: LAYERX_NODE_ASSET_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: asset-id}}}
             - {name: LAYERX_NODE_REPLICA_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: replica-id}}}
@@ -174,6 +203,8 @@ spec:
             - "4020"
             - --public-key-file
             - /run/layerx/node/treasury-public-key
+            - --binding-policy
+            - /run/layerx/publication/binding-policy.json
           securityContext: {runAsUser: 4020, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 200m, memory: 128Mi}}
           volumeMounts:
@@ -199,6 +230,7 @@ spec:
             - {name: LAYERX_GUARANTOR_SUBMITTER_KEY_FILE, value: /run/layerx/checkpoint-submitter/key}
             - {name: LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE, value: /var/lib/guarantor-submitter/submitter.lock}
             - {name: LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE, value: /var/lib/guarantor-submitter/checkpoint-authority.pem}
+            - {name: LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE, value: /run/layerx/publication-input/authorization.json}
             - {name: LAYERX_GUARANTOR_PYTHON, value: /opt/layerx/guarantor/venv/bin/python3}
           ports: [{name: guarantor-1-tls, containerPort: 9451}]
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
@@ -209,6 +241,7 @@ spec:
             - {name: guarantor-1-tls, mountPath: /run/layerx/guarantor-tls, readOnly: true}
             - {name: checkpoint-submitter, mountPath: /run/layerx/checkpoint-submitter, readOnly: true}
             - {name: data, mountPath: /var/lib/guarantor-submitter, subPath: guarantor-submitter}
+            - {name: publication-policy, mountPath: /run/layerx/publication-input, readOnly: true}
         - name: guarantor-2
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
           imagePullPolicy: Always
@@ -229,6 +262,7 @@ spec:
             - {name: LAYERX_GUARANTOR_SUBMITTER_KEY_FILE, value: /run/layerx/checkpoint-submitter/key}
             - {name: LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE, value: /var/lib/guarantor-submitter/submitter.lock}
             - {name: LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE, value: /var/lib/guarantor-submitter/checkpoint-authority.pem}
+            - {name: LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE, value: /run/layerx/publication-input/authorization.json}
             - {name: LAYERX_GUARANTOR_PYTHON, value: /opt/layerx/guarantor/venv/bin/python3}
           ports: [{name: guarantor-2-tls, containerPort: 9452}]
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
@@ -239,6 +273,7 @@ spec:
             - {name: guarantor-2-tls, mountPath: /run/layerx/guarantor-tls, readOnly: true}
             - {name: checkpoint-submitter, mountPath: /run/layerx/checkpoint-submitter, readOnly: true}
             - {name: data, mountPath: /var/lib/guarantor-submitter, subPath: guarantor-submitter}
+            - {name: publication-policy, mountPath: /run/layerx/publication-input, readOnly: true}
         - name: paxeer-relay
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
           imagePullPolicy: Always
@@ -328,7 +363,7 @@ spec:
               : "${LAYERX_CORE_SEQUENCER_ID:?generated sequencer identity is required}"
               export LAYERX_AUTHORITY_SEQUENCER_ID="$LAYERX_CORE_SEQUENCER_ID"
               export LAYERX_AUTHORITY_SEQUENCER_PUBLIC_KEY="$(tr -d '\r\n' < /run/layerx/gateway-authority/sequencer-public-key)"
-              exec /usr/local/bin/layerx-receipt-authority
+              exec /usr/local/bin/layerx-runtime-clock --runtime-dir /run/layerx/human/authority-clock -- /usr/local/bin/layerx-receipt-authority
           env:
             - {name: LAYERX_AUTHORITY_LISTEN, value: "0.0.0.0:9445"}
             - {name: LAYERX_AUTHORITY_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-name}}}
@@ -337,6 +372,11 @@ spec:
             - {name: LAYERX_AUTHORITY_TLS_KEY_DER, value: /run/layerx/authority-tls/server.key.der}
             - {name: LAYERX_AUTHORITY_CLIENT_CA_DER, value: /run/layerx/trust/ca.crt.der}
             - {name: LAYERX_AUTHORITY_HUMAN_AGENT_TOKEN_FILE, value: /run/authority-private/material/human-agent.token}
+            - {name: LAYERX_AUTHORITY_IDENTITY_BINDING_SOCKET, value: /run/layerx/human/identity-binding.sock}
+            - {name: LAYERX_AUTHORITY_IDENTITY_BINDING_UID, value: '4020'}
+            - {name: LAYERX_AUTHORITY_IDENTITY_BINDING_GID, value: '4020'}
+            - {name: LAYERX_AUTHORITY_GENESIS_TRUST, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: genesis-trust-file, optional: true}}}
+            - {name: LAYERX_AUTHORITY_HANDOVER_FINALITY, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: handover-finality-file, optional: true}}}
             - {name: LAYERX_AUTHORITY_HUMAN_AGENT_TENANT, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: tenant}}}
             - {name: LAYERX_AUTHORITY_HUMAN_AGENT_PRINCIPAL, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: principal}}}
             - {name: LAYERX_AUTHORITY_PRINCIPAL_POLICY_FILE, value: /run/authority-private/material/principal-policy.json}
@@ -477,7 +517,8 @@ spec:
               mountPath: /run/layerx/human
               subPath: human
           command:
-            - /usr/local/bin/layerx-human-service
+            - /usr/local/bin/human-entrypoint
+            - service
         - name: components
           image: ghcr.io/sidiora-labs/layerx-human:0.1.0
           imagePullPolicy: Always
@@ -507,6 +548,10 @@ spec:
               value: /run/layerx/human/components.sock
             - name: LAYERX_HUMAN_COMPONENT_ALLOWED_UID
               value: '4020'
+            - {name: LAYERX_HUMAN_RECIPIENT_SOCKET, value: /run/layerx/human/recipient.sock}
+            - {name: LAYERX_HUMAN_RECIPIENT_CALLER_UID, value: '4021'}
+            - {name: LAYERX_HUMAN_RECIPIENT_CALLER_GID, value: '4020'}
+            - {name: LAYERX_HUMAN_RECIPIENT_DEADLINE_SECONDS, value: '10'}
             - name: LAYERX_HUMAN_COMPONENT_WORKERS
               value: '4'
             - name: LAYERX_HUMAN_COMPONENT_QUEUE_CAPACITY
@@ -558,6 +603,13 @@ spec:
           env:
             - name: LAYERX_HUMAN_IDENTITY_PROVIDER_SOCKET
               value: /run/layerx/human/identity.sock
+            - {name: LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_SOCKET, value: /run/layerx/human/identity-binding.sock}
+            - name: LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_TENANT
+              valueFrom:
+                secretKeyRef:
+                  name: layerx-human-components-config
+                  key: LAYERX_HUMAN_IDENTITY_BINDING_TENANT
+            - {name: LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_ALLOWED_UIDS, value: '4020,4021'}
             - name: LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT
               value: /var/lib/layerx/human/identity
             - name: LAYERX_HUMAN_IDENTITY_PROVIDER_ALLOWED_UID
@@ -804,6 +856,7 @@ spec:
         - {name: guarantor-1-tls, secret: {secretName: layerx-guarantor-1-tls, defaultMode: 0440}}
         - {name: guarantor-2-tls, secret: {secretName: layerx-guarantor-2-tls, defaultMode: 0440}}
         - {name: checkpoint-submitter, secret: {secretName: paxeer-checkpoint-submitter, defaultMode: 0440}}
+        - {name: publication-policy, secret: {secretName: layerx-node-publication, defaultMode: 0440}}
         - {name: human-authority-private, emptyDir: {medium: Memory, sizeLimit: 32Mi}}
         - {name: human-module-registry, configMap: {name: layerx-core-module-registry}}
         - {name: human-identity-material, secret: {secretName: layerx-human-identity-material, defaultMode: 0440}}

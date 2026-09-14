@@ -3,6 +3,7 @@
 use crate::sign::ProvisionedSessionKey;
 use layerx_crypto::keystore::{Keystore, KeystoreEntropy};
 use layerx_crypto::session::IssuedSessionKey;
+use sha2::{Digest as _, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -64,7 +65,85 @@ impl SessionKeyRegistry {
             owner_uid,
         })
     }
+    /// Prepares one durable encrypted session seed for a bound issuance request.
     ///
+    /// # Errors
+    ///
+    /// Refuses changed request bindings, invalid inputs or unprotected storage.
+    pub fn prepare_seed(
+        &self,
+        namespace: &[u8],
+        request_digest: [u8; 32],
+    ) -> Result<Zeroizing<[u8; 32]>, SessionKeyRegistryError> {
+        if namespace.is_empty() || namespace.len() > 1024 || request_digest == [0; 32] {
+            return Err(SessionKeyRegistryError::Invalid);
+        }
+        let mut hash = Sha256::new();
+        hash.update(b"layerx-agentd/session-preparation/v1\0");
+        hash.update(namespace);
+        let id: [u8; 32] = hash.finalize().into();
+        let mut binding = b"layerx-agentd/session-preparation/v1\0".to_vec();
+        binding.extend(id);
+        binding.extend(request_digest);
+        let path = self.root.join(format!("pending-{}.lxks", hex(id)));
+        if !path.exists() {
+            let mut seed = Zeroizing::new([0; 32]);
+            let mut salt = [0; 16];
+            let mut nonce = [0; 24];
+            getrandom::fill(seed.as_mut()).map_err(|_| SessionKeyRegistryError::Crypto)?;
+            getrandom::fill(&mut salt).map_err(|_| SessionKeyRegistryError::Crypto)?;
+            getrandom::fill(&mut nonce).map_err(|_| SessionKeyRegistryError::Crypto)?;
+            if *seed == [0; 32] {
+                return Err(SessionKeyRegistryError::Crypto);
+            }
+            let envelope = Keystore::seal(
+                &seed,
+                &self.operator_secret,
+                &binding,
+                self.network_id,
+                KeystoreEntropy::new(salt, nonce).map_err(|_| SessionKeyRegistryError::Crypto)?,
+            )
+            .map_err(|_| SessionKeyRegistryError::Crypto)?;
+            let bytes = envelope
+                .to_bytes()
+                .map_err(|_| SessionKeyRegistryError::Crypto)?;
+            let temp = self.root.join(format!(
+                "pending-{}.{}.tmp",
+                hex(id),
+                hex(Sha256::digest(nonce).into())
+            ));
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temp)
+                .map_err(|_| SessionKeyRegistryError::Io)?;
+            if file.write_all(&bytes).is_err() || file.sync_all().is_err() {
+                let _ = fs::remove_file(&temp);
+                return Err(SessionKeyRegistryError::Io);
+            }
+            drop(file);
+            let published = fs::hard_link(&temp, &path);
+            let _ = fs::remove_file(&temp);
+            if let Err(error) = published {
+                if error.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(SessionKeyRegistryError::Io);
+                }
+            }
+            fs::File::open(&self.root)
+                .and_then(|file| file.sync_all())
+                .map_err(|_| SessionKeyRegistryError::Io)?;
+        }
+        let bytes = crate::config::read_protected_source(&path, 8192)
+            .map_err(|_| SessionKeyRegistryError::Unprotected)?;
+        Keystore::from_bytes(&bytes)
+            .map_err(|_| SessionKeyRegistryError::Crypto)?
+            .open_with(&self.operator_secret, &binding, self.network_id, |seed| {
+                Zeroizing::new(*seed)
+            })
+            .map_err(|_| SessionKeyRegistryError::Crypto)
+    }
+
     /// # Errors
     ///
     /// Returns an error if key material, protected files, or registry state cannot be validated or accessed.

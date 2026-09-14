@@ -3,8 +3,10 @@
 #include "layerx/lxp_transfer.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_identity.h"
 #include "layerx/lxp_bridge_credit.h"
 #include "layerx/programs.h"
+#include "layerx/lxp_module_ctx.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -50,12 +52,24 @@ struct lxp_prepared_module_transition {
     size_t staged_count;
     lx_account_registration staged_accounts[
         LXP_MODULE_MAX_STAGED_ACCOUNTS];
+    uint8_t staged_account_bindings[LXP_MODULE_MAX_STAGED_ACCOUNTS][32];
     size_t staged_account_count;
     lxp_prepared_account_change accounts[
         LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
     size_t account_count;
     lxp_module_blob blobs[LXP_KERNEL_MAX_STAGED_BLOBS];
     size_t blob_count;
+    bool allowance_charged;
+    lxp_authority_kind allowance_kind;
+    uint8_t allowance_grantor[32];
+    uint8_t allowance_grant_id[32];
+    lxp_authority_scope allowance_before;
+    lxp_authority_scope allowance_after;
+    bool allowance_record_staged;
+    bool allowance_record_existed;
+    uint32_t allowance_record_before_length;
+    lxp_module_kv_change allowance_record;
+    uint8_t allowance_record_before[LXP_MODULE_MAX_VALUE_BYTES];
 };
 
 static lxp_result asset_staged_record(const lxp_module_ctx *ctx,
@@ -120,11 +134,66 @@ lxp_result lxp_ctx_bind_asset_supply(lxp_module_ctx *ctx,
     return LXP_OK;
 }
 
+static lxp_result module_custody_binding(const lxp_module_ctx *ctx,
+                                         const lx_account *account, uint8_t digest[32])
+{
+    static const uint8_t domain[] = "LXP/module-custody-creation/v1";
+    lxp_hash_context hash;
+    uint8_t integers[20];
+    lxp_result status;
+    if (ctx == NULL || account == NULL || digest == NULL ||
+        ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        lxp_ct_is_zero(ctx->activity_id, 32U) || ctx->global_sequence == 0U ||
+        account->created_at_sequence != ctx->global_sequence ||
+        lx_account_validate_canonical(account) != LXP_OK ||
+        !account->has_asset || lxp_ct_is_zero(account->asset_id, 32U) ||
+        account->has_authority_key || !lxp_ct_is_zero(account->authority_key, 32U) ||
+        account->next_sequence != 0U || account->frozen || account->has_open_reference)
+        return LXP_FATAL_INVARIANT;
+    integers[0] = (uint8_t)(ctx->module_id >> 8U);
+    integers[1] = (uint8_t)ctx->module_id;
+    integers[2] = (uint8_t)((uint16_t)account->kind >> 8U);
+    integers[3] = (uint8_t)account->kind;
+    for (size_t i = 0U; i < 8U; ++i) {
+        integers[4U + i] = (uint8_t)(ctx->global_sequence >> (56U - i * 8U));
+        integers[12U + i] = (uint8_t)((uint64_t)account->name_length >> (56U - i * 8U));
+    }
+    lxp_hash_init(&hash);
+    status = lxp_hash_update(&hash, domain, sizeof(domain));
+    if (status == LXP_OK) status = lxp_hash_update(&hash, ctx->activity_id, 32U);
+    if (status == LXP_OK) status = lxp_hash_update(&hash, integers, sizeof(integers));
+    if (status == LXP_OK) status = lxp_hash_update(&hash, account->id, 32U);
+    if (status == LXP_OK) status = lxp_hash_update(&hash, account->asset_id, 32U);
+    if (status == LXP_OK) status = lxp_hash_update(&hash, account->name, account->name_length);
+    return status == LXP_OK ? lxp_hash_final(&hash, digest) : status;
+}
+
 static lxp_result commit_account(const lxp_module_ctx *ctx,
                                  lx_account_registry *registry,
                                  const lx_account_registration *registration,
                                  lx_account **account)
 {
+    if (ctx->module_id == LXP_MODULE_GOVERNANCE && ctx->identity_staged &&
+        lxp_governance_onboarding_prepared(ctx) == LXP_OK &&
+        registration == &ctx->staged_accounts[0])
+        return lx_account_credit_registration_commit(registry, registration, account);
+
+    if (registration->account.kind != LX_ACCOUNT_MODULE_VALUE &&
+        (ctx->module_id == LXP_MODULE_ESCROW || ctx->module_id == LXP_MODULE_BUDGET ||
+         ctx->module_id == LXP_MODULE_STREAM || ctx->module_id == LXP_MODULE_PERPS)) {
+        uint8_t binding[32];
+        size_t index;
+        if (ctx->staged_account_count > LXP_MODULE_MAX_STAGED_ACCOUNTS)
+            return LXP_FATAL_INVARIANT;
+        for (index = 0U; index < ctx->staged_account_count; ++index)
+            if (registration == &ctx->staged_accounts[index]) break;
+        if (index == ctx->staged_account_count ||
+            module_custody_binding(ctx, &registration->account, binding) != LXP_OK ||
+            memcmp(binding, ctx->staged_account_bindings[index], 32U) != 0)
+            return LXP_FATAL_INVARIANT;
+        return lx_account_module_custody_registration_commit(registry, registration,
+                                                              ctx->module_id, account);
+    }
     if (ctx->module_id == LXP_MODULE_BRIDGE &&
         registration->account.kind == LX_ACCOUNT_AGENT_MAIN)
         return lx_account_credit_registration_commit(registry, registration, account);
@@ -253,6 +322,22 @@ static size_t committed_find(const lxp_module_ctx *ctx, const uint8_t *key,
     for (i = 0U; i < ctx->kernel->module_kv_count; ++i) {
         const lxp_module_kv_entry *entry = &ctx->kernel->module_kv[i];
         if (entry->module_id == ctx->module_id &&
+            key_equal(entry->key, entry->key_length, key, key_length))
+            return i;
+    }
+    return ctx->kernel->module_kv_count;
+}
+
+/* The governance module owns every authority record, so the charge record a
+ * metered allowance persists is located under that module whichever module
+ * charged the scope. */
+static size_t governance_find(const lxp_module_ctx *ctx, const uint8_t *key,
+                              size_t key_length)
+{
+    size_t i;
+    for (i = 0U; i < ctx->kernel->module_kv_count; ++i) {
+        const lxp_module_kv_entry *entry = &ctx->kernel->module_kv[i];
+        if (entry->module_id == LXP_MODULE_GOVERNANCE &&
             key_equal(entry->key, entry->key_length, key, key_length))
             return i;
     }
@@ -439,6 +524,11 @@ static lxp_result account_registry_preview(
             return status;
         }
     }
+    if (ctx->owner_rotation_staged) {
+        status = lxp_governance_rotation_accounts(ctx, preview, true);
+        if (status != LXP_OK) lx_account_registry_release(preview);
+        return status;
+    }
     return LXP_OK;
 }
 
@@ -564,6 +654,181 @@ lxp_result lxp_ctx_asset_account_stage(
     return LXP_OK;
 }
 
+lxp_result lxp_ctx_account_stage_perps_market(lxp_module_ctx *ctx,
+    const lxp_activity *activity, const uint8_t market_id[32],
+    const uint8_t administrator[32], const uint8_t asset_id[32],
+    const uint8_t presented_id[32], lx_account_kind kind, bool stage)
+{
+    static const uint8_t hex[] = "0123456789abcdef";
+    lx_account_registration registration = {0};
+    lx_account *candidate = &registration.account;
+    lx_account *existing;
+    const char *prefix;
+    const char *suffix;
+    lxp_byte_span encoded;
+    uint8_t actor[32], activity_id[32];
+    size_t cursor, mark;
+    lxp_result status;
+    if (ctx == NULL || activity == NULL || market_id == NULL || administrator == NULL ||
+        asset_id == NULL || presented_id == NULL || (stage && !ctx->mutable) || ctx->arena == NULL ||
+        ctx->kernel == NULL || ctx->kernel->state == NULL || ctx->kernel->state->accounts == NULL ||
+        ctx->kernel->journal == NULL || !ctx->kernel->journal->open ||
+        ctx->kernel->journal->store != ctx->kernel->state ||
+        ctx->kernel->journal->global_sequence != ctx->global_sequence ||
+        ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        activity->protocol_version != ctx->protocol_version || ctx->module_id != LXP_MODULE_PERPS ||
+        activity->activity_type != ((uint32_t)LXP_MODULE_PERPS << 16U | 1U) ||
+        lxp_ct_is_zero(market_id, 32U) || lxp_ct_is_zero(asset_id, 32U) ||
+        lxp_ct_is_zero(ctx->activity_id, 32U))
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    switch (kind) {
+    case LX_ACCOUNT_SYSTEM_LIQUIDITY: prefix = "system:liquidity:"; suffix = ""; break;
+    case LX_ACCOUNT_SYSTEM_FUNDING_LONG: prefix = "system:funding:"; suffix = ":long"; break;
+    case LX_ACCOUNT_SYSTEM_FUNDING_SHORT: prefix = "system:funding:"; suffix = ":short"; break;
+    default: return LXP_ERR_UNAUTHORIZED_DEBIT;
+    }
+    status = lxp_did_id_derive(activity->actor_did.bytes, activity->actor_did.length, actor);
+    if (status == LXP_OK && lxp_ct_memcmp(actor, administrator, 32U) != 0)
+        status = LXP_ERR_UNAUTHORIZED_DEBIT;
+    mark = lxp_arena_mark(ctx->arena);
+    if (status == LXP_OK) status = lxp_activity_verify_payload_hash(activity);
+    if (status == LXP_OK) status = lxp_activity_verify_signature(activity);
+    if (status == LXP_OK) status = lxp_activity_encode(activity, ctx->arena, &encoded);
+    if (status == LXP_OK) status = lxp_activity_id(encoded.bytes, encoded.length, activity_id);
+    if (status == LXP_OK && lxp_ct_memcmp(activity_id, ctx->activity_id, 32U) != 0)
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (lxp_arena_reset(ctx->arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    if (status != LXP_OK) return status;
+    cursor = strlen(prefix);
+    (void)memcpy(candidate->name, prefix, cursor);
+    for (size_t i = 0U; i < 32U; ++i) {
+        candidate->name[cursor++] = hex[market_id[i] >> 4U];
+        candidate->name[cursor++] = hex[market_id[i] & 15U];
+    }
+    (void)memcpy(candidate->name + cursor, suffix, strlen(suffix));
+    cursor += strlen(suffix);
+    candidate->name_length = (uint16_t)cursor;
+    candidate->kind = kind;
+    candidate->has_asset = true;
+    (void)memcpy(candidate->asset_id, asset_id, 32U);
+    candidate->created_at_sequence = ctx->global_sequence;
+    status = lx_account_id_from_string(candidate->name, cursor, candidate->id);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(candidate->id, presented_id, 32U) != 0)
+        return LXP_ERR_ACCOUNT_ID_MISMATCH;
+    status = lxp_ctx_account_find(ctx, candidate->id, &existing);
+    if (status == LXP_OK) {
+        status = lx_account_validate_canonical(existing);
+        if (status != LXP_OK) return status;
+        return existing->kind == kind && existing->name_length == cursor &&
+            memcmp(existing->name, candidate->name, cursor) == 0 && existing->has_asset &&
+            lxp_ct_memcmp(existing->asset_id, asset_id, 32U) == 0 && !existing->has_authority_key &&
+            lxp_u128_is_zero(existing->balance) ? LXP_OK : LXP_ERR_CONTEXT_MISMATCH;
+    }
+    if (status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) return status;
+    status = lx_account_validate_canonical(candidate);
+    if (status != LXP_OK || !stage) return status;
+    if (ctx->staged_account_count == LXP_MODULE_MAX_STAGED_ACCOUNTS)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    status = lxp_state_journal_require_account_root(ctx->kernel->journal);
+    if (status != LXP_OK) return status;
+    registration.expected_count = ctx->kernel->state->accounts->count + ctx->staged_account_count;
+    status = module_custody_binding(ctx, candidate,
+                                     ctx->staged_account_bindings[ctx->staged_account_count]);
+    if (status != LXP_OK) return status;
+    ctx->staged_accounts[ctx->staged_account_count++] = registration;
+    return LXP_OK;
+}
+
+lxp_result lxp_ctx_account_stage_module_custody(lxp_module_ctx *ctx,
+    const lxp_activity *activity, const uint8_t object_id[32],
+    const uint8_t asset_id[32], const uint8_t presented_id[32], lx_account **account)
+{
+    static const uint8_t hex[] = "0123456789abcdef";
+    lx_account_registration registration;
+    lx_account *candidate = &registration.account;
+    lx_account *existing;
+    const char *segment;
+    lx_account_kind kind;
+    lxp_byte_span encoded;
+    uint8_t activity_id[32];
+    size_t cursor;
+    size_t mark;
+    lxp_result status;
+    if (ctx == NULL || activity == NULL || object_id == NULL || asset_id == NULL ||
+        presented_id == NULL || account == NULL || !ctx->mutable || ctx->arena == NULL || ctx->kernel == NULL ||
+        ctx->kernel->state == NULL || ctx->kernel->state->accounts == NULL ||
+        ctx->kernel->journal == NULL || !ctx->kernel->journal->open ||
+        ctx->kernel->journal->store != ctx->kernel->state ||
+        ctx->kernel->journal->global_sequence != ctx->global_sequence ||
+        ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        activity->protocol_version != ctx->protocol_version ||
+        activity->activity_type != ((uint32_t)ctx->module_id << 16U | 1U) ||
+        lxp_ct_is_zero(object_id, 32U) || lxp_ct_is_zero(asset_id, 32U) ||
+        lxp_ct_is_zero(ctx->activity_id, 32U) || activity->actor_did.bytes == NULL ||
+        activity->actor_did.length == 0U || activity->actor_did.length > LX_ACCOUNT_NAME_MAX - 78U)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    switch (ctx->module_id) {
+    case LXP_MODULE_ESCROW: segment = ":escrow:"; kind = LX_ACCOUNT_AGENT_ESCROW; break;
+    case LXP_MODULE_BUDGET: segment = ":budget:"; kind = LX_ACCOUNT_AGENT_BUDGET; break;
+    case LXP_MODULE_STREAM: segment = ":stream:"; kind = LX_ACCOUNT_AGENT_STREAM; break;
+    default: return LXP_ERR_UNAUTHORIZED_DEBIT;
+    }
+    mark = lxp_arena_mark(ctx->arena);
+    status = lxp_activity_verify_payload_hash(activity);
+    if (status == LXP_OK) status = lxp_activity_verify_signature(activity);
+    if (status == LXP_OK) status = lxp_activity_encode(activity, ctx->arena, &encoded);
+    if (status == LXP_OK) status = lxp_activity_id(encoded.bytes, encoded.length, activity_id);
+    if (status == LXP_OK && lxp_ct_memcmp(activity_id, ctx->activity_id, 32U) != 0)
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (lxp_arena_reset(ctx->arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    if (status != LXP_OK) return status;
+    (void)memset(&registration, 0, sizeof(registration));
+    (void)memcpy(candidate->name, "agent:", 6U);
+    (void)memcpy(candidate->name + 6U, activity->actor_did.bytes, activity->actor_did.length);
+    cursor = 6U + activity->actor_did.length;
+    (void)memcpy(candidate->name + cursor, segment, 8U);
+    cursor += 8U;
+    for (size_t i = 0U; i < 32U; ++i) {
+        candidate->name[cursor++] = hex[object_id[i] >> 4U];
+        candidate->name[cursor++] = hex[object_id[i] & 15U];
+    }
+    candidate->name_length = (uint16_t)cursor;
+    candidate->kind = kind;
+    candidate->has_asset = true;
+    (void)memcpy(candidate->asset_id, asset_id, 32U);
+    candidate->created_at_sequence = ctx->global_sequence;
+    status = lx_account_id_from_string(candidate->name, cursor, candidate->id);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(candidate->id, presented_id, 32U) != 0)
+        return LXP_ERR_ACCOUNT_ID_MISMATCH;
+    status = lxp_ctx_account_find(ctx, candidate->id, &existing);
+    if (status == LXP_OK) {
+        status = lx_account_validate_canonical(existing);
+        if (status != LXP_OK) return status;
+        if (existing->kind != kind || existing->name_length != cursor ||
+            memcmp(existing->name, candidate->name, cursor) != 0 ||
+            !existing->has_asset || lxp_ct_memcmp(existing->asset_id, asset_id, 32U) != 0 ||
+            existing->has_authority_key || !lxp_u128_is_zero(existing->balance))
+            return LXP_ERR_CONTEXT_MISMATCH;
+        *account = existing;
+        return LXP_OK;
+    }
+    if (status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) return status;
+    if (ctx->staged_account_count == LXP_MODULE_MAX_STAGED_ACCOUNTS)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    status = lx_account_validate_canonical(candidate);
+    if (status == LXP_OK) status = lxp_state_journal_require_account_root(ctx->kernel->journal);
+    if (status != LXP_OK) return status;
+    registration.expected_count = ctx->kernel->state->accounts->count + ctx->staged_account_count;
+    status = module_custody_binding(ctx, candidate,
+                                     ctx->staged_account_bindings[ctx->staged_account_count]);
+    if (status != LXP_OK) return status;
+    ctx->staged_accounts[ctx->staged_account_count] = registration;
+    *account = &ctx->staged_accounts[ctx->staged_account_count++].account;
+    return LXP_OK;
+}
+
 lxp_result lxp_ctx_account_stage_module_value(
     lxp_module_ctx *ctx, const uint8_t account_id[32],
     const uint8_t asset_id[32], lx_account **account, bool *created)
@@ -658,6 +923,13 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
         status = lxp_module_ctx_prepare_commit(ctx);
         if (status != LXP_OK) return status;
     }
+    if (ctx->identity_staged && lxp_governance_onboarding_prepared(ctx) != LXP_OK)
+        return LXP_FATAL_INVARIANT;
+    if (ctx->owner_rotation_staged) {
+        if (lxp_governance_rotation_prepared(ctx) != LXP_OK ||
+            lxp_governance_rotation_accounts(ctx, ctx->kernel->state->accounts, true) != LXP_OK)
+            return LXP_FATAL_INVARIANT;
+    }
     for (i = 0U; i < ctx->staged_account_count; ++i) {
         lx_account *committed;
         status = commit_account(ctx,
@@ -690,6 +962,20 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
         (void)memcpy(ctx->kernel->module_kv[location].value, change->value,
                      change->value_length);
     }
+    if (ctx->allowance_record_staged) {
+        const lxp_module_kv_change *record = &ctx->allowance_record;
+        size_t location = governance_find(ctx, record->key,
+                                          record->key_length);
+        if (location == ctx->kernel->module_kv_count)
+            ++ctx->kernel->module_kv_count;
+        ctx->kernel->module_kv[location].module_id = LXP_MODULE_GOVERNANCE;
+        ctx->kernel->module_kv[location].key_length = record->key_length;
+        ctx->kernel->module_kv[location].value_length = record->value_length;
+        (void)memcpy(ctx->kernel->module_kv[location].key, record->key,
+                     record->key_length);
+        (void)memcpy(ctx->kernel->module_kv[location].value, record->value,
+                     record->value_length);
+    }
     for (i = 0U; i < ctx->staged_blob_count; ++i) {
         lxp_module_blob *staged = &ctx->staged_blobs[i];
         size_t location = committed_blob_find(ctx, staged->key);
@@ -711,6 +997,22 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
             staged->bytes = NULL;
         }
     }
+    if (ctx->owner_rotation_staged) {
+        bool found = false;
+        for (size_t index = 0U; index < ctx->identities->count; ++index) {
+            lxp_identity *identity = &ctx->identities->identities[index];
+            if (memcmp(identity->did_id, ctx->owner_rotation_did, 32U) != 0) continue;
+            if (found || lxp_governance_identity_refresh(ctx->kernel, identity) != LXP_OK)
+                return LXP_FATAL_INVARIANT;
+            found = true;
+        }
+        if (!found) return LXP_FATAL_INVARIANT;
+        ctx->owner_rotation_staged = false;
+    }
+    if (ctx->identity_staged) {
+        ctx->identities->identities[ctx->identities->count++] = ctx->staged_identity;
+        ctx->identity_staged = false;
+    }
     ctx->staged_blob_count = 0U;
     (void)memset(&ctx->ledger_receipt, 0, sizeof(ctx->ledger_receipt));
     ctx->ledger_receipt_present = false;
@@ -718,6 +1020,8 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
     ctx->staged_account_count = 0U;
     ctx->transfer_snapshot_count = 0U;
     ctx->transfer_applied = false;
+    ctx->allowance_charged = false;
+    ctx->allowance_record_staged = false;
     ctx->commit_prepared = false;
     if (ctx->activity_state_release != NULL)
         ctx->activity_state_release(ctx->activity_state);
@@ -737,14 +1041,26 @@ lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx)
     lxp_result status;
     if (ctx == NULL || !ctx->mutable || ctx->commit_prepared)
         return LXP_FATAL_INVARIANT;
+    if (ctx->identity_staged) {
+        status = lxp_governance_onboarding_prepared(ctx);
+        if (status != LXP_OK) return status;
+    }
     for (i = 0U; i < ctx->staged_count; ++i)
         if (!ctx->staged[i].deleted &&
             committed_find(ctx, ctx->staged[i].key,
                            ctx->staged[i].key_length) ==
                 ctx->kernel->module_kv_count) ++additions;
+    if (ctx->allowance_record_staged &&
+        governance_find(ctx, ctx->allowance_record.key,
+                        ctx->allowance_record.key_length) ==
+            ctx->kernel->module_kv_count) ++additions;
     if (additions > LXP_KERNEL_MAX_MODULE_KV - ctx->kernel->module_kv_count)
         return LXP_ERR_ARENA_EXHAUSTED;
-    if (ctx->staged_account_count != 0U) {
+    if (ctx->owner_rotation_staged) {
+        status = lxp_governance_rotation_prepared(ctx);
+        if (status != LXP_OK) return status;
+    }
+    if (ctx->staged_account_count != 0U || ctx->owner_rotation_staged) {
         account_preview = (lx_account_registry *)malloc(
             sizeof(*account_preview));
         if (account_preview == NULL) return LXP_ERR_ARENA_EXHAUSTED;
@@ -840,6 +1156,23 @@ static lxp_result preview_apply_module(const lxp_module_ctx *ctx,
                      change->key_length);
         (void)memcpy(preview->module_kv[location].value, change->value,
                      change->value_length);
+    }
+    if (ctx->allowance_record_staged) {
+        const lxp_module_kv_change *record = &ctx->allowance_record;
+        size_t location = preview_kv_find(preview, LXP_MODULE_GOVERNANCE,
+                                          record->key, record->key_length);
+        if (location == preview->module_kv_count) {
+            if (preview->module_kv_count == LXP_KERNEL_MAX_MODULE_KV)
+                return LXP_FATAL_INVARIANT;
+            ++preview->module_kv_count;
+        }
+        preview->module_kv[location].module_id = LXP_MODULE_GOVERNANCE;
+        preview->module_kv[location].key_length = record->key_length;
+        preview->module_kv[location].value_length = record->value_length;
+        (void)memcpy(preview->module_kv[location].key, record->key,
+                     record->key_length);
+        (void)memcpy(preview->module_kv[location].value, record->value,
+                     record->value_length);
     }
     for (i = 0U; i < ctx->staged_blob_count; ++i) {
         size_t length = ctx->staged_blobs[i].length;
@@ -1006,6 +1339,11 @@ static void restore_transfer_snapshots(lxp_module_ctx *ctx)
             snapshot->account, snapshot->balance, snapshot->asset_id,
             snapshot->has_asset, snapshot->next_sequence);
     }
+    if (ctx->allowance_charged && ctx->allowance != NULL &&
+        ctx->allowance->scope != NULL)
+        *ctx->allowance->scope = ctx->allowance_before;
+    ctx->allowance_charged = false;
+    ctx->allowance_record_staged = false;
     ctx->transfer_snapshot_count = 0U;
     ctx->transfer_applied = false;
 }
@@ -1018,6 +1356,8 @@ void lxp_module_ctx_rollback(lxp_module_ctx *ctx)
     ctx->commit_prepared = false;
     ctx->staged_count = 0U;
     ctx->staged_account_count = 0U;
+    ctx->identity_staged = false;
+    ctx->owner_rotation_staged = false;
     for (i = 0U; i < ctx->staged_blob_count; ++i)
         free(ctx->staged_blobs[i].bytes);
     ctx->staged_blob_count = 0U;
@@ -1329,12 +1669,207 @@ lxp_result lxp_ctx_kv_iter(lxp_module_ctx *ctx, const uint8_t *prefix,
     return LXP_OK;
 }
 
+static lxp_result allowance_declared_kind(lxp_authority_kind kind,
+                                          lxp_authorization_kind *declared)
+{
+    switch (kind) {
+    case LXP_AUTHORITY_OWNER: *declared = LXP_AUTH_OWNER; return LXP_OK;
+    case LXP_AUTHORITY_SESSION_KEY:
+        *declared = LXP_AUTH_SESSION_KEY;
+        return LXP_OK;
+    case LXP_AUTHORITY_DELEGATED_CAPABILITY:
+        *declared = LXP_AUTH_DELEGATED_CAPABILITY;
+        return LXP_OK;
+    case LXP_AUTHORITY_BUDGET_ALLOWANCE:
+        *declared = LXP_AUTH_BUDGET_ALLOWANCE;
+        return LXP_OK;
+    case LXP_AUTHORITY_ESCROW: *declared = LXP_AUTH_ESCROW; return LXP_OK;
+    case LXP_AUTHORITY_PROTOCOL_MODULE:
+        *declared = LXP_AUTH_PROTOCOL_MODULE;
+        return LXP_OK;
+    default: return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
+    }
+}
+
+static bool allowance_metered(lxp_authority_kind kind)
+{
+    return kind == LXP_AUTHORITY_DELEGATED_CAPABILITY ||
+           kind == LXP_AUTHORITY_BUDGET_ALLOWANCE;
+}
+
+/* A metered scope is charged in place and persisted on commit, so the scope
+ * presented must continue the grant exactly as committed: the grant record
+ * exists, carries the allowance's kind, and its persisted counters equal the
+ * live ones. */
+static lxp_result allowance_continues_committed(
+    const lxp_module_ctx *ctx, const lxp_transfer_allowance *allowance)
+{
+    lxp_authority_grant committed;
+    lxp_result status;
+    status = lxp_authority_grant_load(ctx->kernel, allowance->grant_id,
+                                      &committed);
+    if (status == LXP_ERR_UNKNOWN_FIELD) return LXP_ERR_AUTH_ALLOWANCE;
+    if (status != LXP_OK) return status;
+    if (committed.kind != allowance->kind ||
+        !lxp_authority_scope_equal(&committed.scope, allowance->scope))
+        return LXP_ERR_CONTEXT_MISMATCH;
+    return LXP_OK;
+}
+
+/* Binds an emitted set to the executing authority's live allowance. A set
+ * whose every debit leaves the grantor's own account, declared by the module
+ * as the owner's or the grant's own authority, presents the allowance and
+ * declares the grant's kind, so the ledger binds and charges the scope before
+ * any balance moves. A metered grant may not debit the grantor through a set
+ * the ledger cannot bind as a whole. Any other set is applied as the module
+ * built it. */
+static lxp_result bind_allowance(
+    lxp_module_ctx *ctx, lxp_transfer_set *emitted,
+    lxp_transfer_source_authority authorities[LXP_MAX_TRANSFER_SET_LEGS],
+    lxp_transfer_allowance *bound_allowance)
+{
+    lxp_transfer_allowance *allowance = ctx->allowance;
+    lxp_authorization_kind declared;
+    uint8_t principal[32];
+    size_t principal_legs = 0U;
+    size_t i;
+    bool bound;
+    lxp_result status;
+    if (allowance == NULL) return LXP_OK;
+    if (allowance->scope == NULL) return LXP_ERR_AUTH_ALLOWANCE;
+    if (emitted->context.allowance != NULL &&
+        emitted->context.allowance != allowance)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    if (emitted->leg_count > LXP_MAX_TRANSFER_SET_LEGS ||
+        emitted->context.source_authorities == NULL ||
+        emitted->context.source_authority_count == 0U ||
+        emitted->context.source_authority_count > LXP_MAX_TRANSFER_SET_LEGS)
+        return LXP_ERR_NON_CANONICAL;
+    status = allowance_declared_kind(allowance->kind, &declared);
+    if (status != LXP_OK) return status;
+    (void)memcpy(principal, allowance->grantor, 32U);
+    if (ctx->module_id == LXP_MODULE_PROGRAMS &&
+        ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+        ctx->ledger_admission.bound) {
+        const lx_programs_transfer_runtime *runtime = lxp_ctx_module_runtime(ctx);
+        lx_account *principal_account = NULL;
+        if (runtime == NULL) return LXP_ERR_MODULE_DISABLED;
+        for (i = 0U; i < emitted->leg_count; ++i) {
+            lx_account *account;
+            if (emitted->legs[i].from->kind == LX_ACCOUNT_MODULE_VALUE)
+                continue;
+            status = lxp_kernel_program_payment_account(runtime->accounts,
+                allowance->grantor, emitted->legs[i].asset_id,
+                ctx->protocol_version, &account);
+            if (status != LXP_OK) return status;
+            if (account != emitted->legs[i].from)
+                return LXP_ERR_UNAUTHORIZED_DEBIT;
+            if (principal_account != NULL && principal_account != account)
+                return LXP_ERR_ASSET_MISMATCH;
+            principal_account = account;
+        }
+        if (principal_account != NULL)
+            (void)memcpy(principal, principal_account->id, 32U);
+    }
+    for (i = 0U; i < emitted->leg_count; ++i)
+        if (memcmp(emitted->legs[i].from->id, principal, 32U) == 0)
+            ++principal_legs;
+    if (emitted->context.protocol_system_capability)
+        return principal_legs != 0U && allowance_metered(allowance->kind) ?
+                   LXP_ERR_AUTH_ALLOWANCE : LXP_OK;
+    if (principal_legs == 0U) return LXP_OK;
+    bound = true;
+    for (i = 0U; bound && i < emitted->context.source_authority_count; ++i) {
+        const lxp_transfer_source_authority *authority =
+            &emitted->context.source_authorities[i];
+        if (memcmp(authority->authorized_from, principal, 32U) != 0) {
+            bound = ctx->module_id == LXP_MODULE_PROGRAMS &&
+                emitted->context.program_spend_token != 0U &&
+                authority->debit_authority_kind == LXP_AUTH_PROGRAM_SPEND &&
+                !authority->protocol_system_capability;
+            continue;
+        }
+        if (authority->protocol_system_capability ||
+            (authority->debit_authority_kind != LXP_AUTH_OWNER &&
+             authority->debit_authority_kind != declared))
+            bound = false;
+    }
+    if (!bound)
+        return principal_legs != 0U && allowance_metered(allowance->kind) ?
+                   LXP_ERR_AUTH_ALLOWANCE : LXP_OK;
+    if (allowance_metered(allowance->kind) && !ctx->allowance_charged) {
+        status = allowance_continues_committed(ctx, allowance);
+        if (status != LXP_OK) return status;
+    }
+    if (allowance_metered(allowance->kind)) {
+        lxp_u128 activity_amount = {0U, 0U};
+        if (ctx->allowance_charged) {
+            status = lxp_u128_sub(allowance->scope->spent_total,
+                                  ctx->allowance_before.spent_total,
+                                  &activity_amount);
+            if (status != LXP_OK) return status;
+        }
+        for (i = 0U; i < emitted->leg_count; ++i) {
+            if (memcmp(emitted->legs[i].from->id, principal, 32U) != 0)
+                continue;
+            status = lxp_u128_add(activity_amount, emitted->legs[i].amount,
+                                  &activity_amount);
+            if (status != LXP_OK) return status;
+        }
+        if (lxp_u128_cmp(activity_amount,
+                         allowance->scope->maximum_per_activity) > 0)
+            return LXP_ERR_GRANT_EXHAUSTED;
+    }
+    (void)memcpy(authorities, emitted->context.source_authorities,
+                 emitted->context.source_authority_count *
+                     sizeof(authorities[0]));
+    for (i = 0U; i < emitted->context.source_authority_count; ++i)
+        if (memcmp(authorities[i].authorized_from, principal, 32U) == 0)
+            authorities[i].debit_authority_kind = declared;
+    emitted->context.source_authorities = authorities;
+    if (emitted->context.debit_authority_kind == LXP_AUTH_OWNER)
+        emitted->context.debit_authority_kind = declared;
+    *bound_allowance = *allowance;
+    (void)memcpy(bound_allowance->grantor, principal, 32U);
+    emitted->context.allowance = bound_allowance;
+    if (!ctx->allowance_charged) {
+        ctx->allowance_before = *allowance->scope;
+        ctx->allowance_charged = true;
+    }
+    return LXP_OK;
+}
+
+/* Stages the charge record of a charged metered scope so the commit persists
+ * the counters the ledger just advanced. */
+static lxp_result stage_allowance_record(lxp_module_ctx *ctx)
+{
+    const lxp_transfer_allowance *allowance = ctx->allowance;
+    lxp_result status;
+    if (!ctx->allowance_charged || allowance == NULL ||
+        allowance->scope == NULL || !allowance_metered(allowance->kind))
+        return LXP_OK;
+    (void)memset(&ctx->allowance_record, 0, sizeof(ctx->allowance_record));
+    lxp_authority_charge_record_key(allowance->grant_id,
+                                    ctx->allowance_record.key);
+    ctx->allowance_record.key_length =
+        (uint16_t)LXP_AUTHORITY_CHARGE_RECORD_KEY_BYTES;
+    status = lxp_authority_charge_record_encode(
+        allowance->grant_id, allowance->scope, ctx->allowance_record.value);
+    if (status != LXP_OK) return status;
+    ctx->allowance_record.value_length =
+        (uint32_t)LXP_AUTHORITY_CHARGE_RECORD_BYTES;
+    ctx->allowance_record_staged = true;
+    return LXP_OK;
+}
+
 static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
                                     const lxp_transfer_set *set,
                                     lxp_receipt *receipt,
                                     bool programs_maintenance)
 {
     lxp_transfer_set emitted;
+    lxp_transfer_source_authority bound_authorities[LXP_MAX_TRANSFER_SET_LEGS];
+    lxp_transfer_allowance bound_allowance;
     size_t i;
     if (ctx == NULL || set == NULL || receipt == NULL)
         return LXP_ERR_NON_CANONICAL;
@@ -1394,8 +1929,12 @@ static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
             ctx->module_id != LXP_MODULE_PROGRAMS)
             return LXP_ERR_UNAUTHORIZED_DEBIT;
     {
-        lxp_result status = lxp_kernel_apply_transfer_set(ctx->kernel,
-                                                          &emitted, receipt);
+        lxp_result status = bind_allowance(ctx, &emitted, bound_authorities,
+                                          &bound_allowance);
+        if (status == LXP_OK)
+            status = lxp_kernel_apply_transfer_set(ctx->kernel, &emitted,
+                                                   receipt);
+        if (status == LXP_OK) status = stage_allowance_record(ctx);
         if (status != LXP_OK) {
             restore_transfer_snapshots(ctx);
             return status;
@@ -1744,7 +2283,7 @@ lxp_result lxp_ctx_bind_ledger_receipt(
         memcmp(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U) != 0 ||
         ctx->ledger_admission.activity_type !=
             ((uint32_t)LXP_MODULE_ASSET << 16U | input->operation) ||
-        (input->operation != 5U && input->operation != 6U &&
+        (input->operation != 5U && input->operation != 6U && input->operation != 9U &&
          input->operation != 10U && input->operation != 11U) ||
         lxp_u128_is_zero(input->amount) ||
         input->leg_count != 1U || input->global_sequence != ctx->global_sequence ||
@@ -1766,6 +2305,34 @@ lxp_result lxp_ctx_bind_ledger_receipt(
         lxp_u128_cmp(expected_from, input->from_balance_after) != 0 ||
         lxp_u128_cmp(expected_to, input->to_balance_after) != 0)
         return LXP_ERR_NON_CANONICAL;
+    if (input->operation == 9U) {
+        const lx_asset_runtime *runtime = lxp_ctx_module_runtime(ctx);
+        lx_account *from = NULL;
+        lx_account *to = NULL;
+        const uint8_t *stored = NULL;
+        size_t length = 0U;
+        uint8_t key[LX_WITHDRAWAL_STATE_KEY_BYTES];
+        lx_withdrawal_record withdrawal;
+        (void)memcpy(key, "withdrawal:", 11U);
+        (void)memcpy(key + 11U, input->context_hash, 32U);
+        if (runtime == NULL ||
+            lxp_ctx_account_find(ctx, input->from, &from) != LXP_OK ||
+            lxp_ctx_account_find(ctx, input->to, &to) != LXP_OK ||
+            from->kind != LX_ACCOUNT_AGENT_MAIN ||
+            to->kind != LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS ||
+            input->from_sequence == UINT64_MAX ||
+            from->next_sequence != input->from_sequence + 1U ||
+            input->from_sequence != ctx->ledger_admission.next_sequence ||
+            memcmp(input->from, ctx->ledger_admission.account_id, 32U) != 0 ||
+            lxp_ctx_kv_get(ctx, key, sizeof(key), &stored, &length) != LXP_OK ||
+            lx_withdrawal_state_decode(key, sizeof(key), stored, length, &withdrawal) != LXP_OK ||
+            withdrawal.request.network_id != runtime->network_id ||
+            memcmp(withdrawal.request.withdrawal_id, ctx->activity_id, 32U) != 0 ||
+            memcmp(withdrawal.request.account_id, input->from, 32U) != 0 ||
+            memcmp(withdrawal.request.asset_id, input->asset, 32U) != 0 ||
+            lxp_u128_cmp(withdrawal.request.amount, input->amount) != 0)
+            return LXP_ERR_NON_CANONICAL;
+    }
     {
         size_t from_matches = 0U;
         size_t to_matches = 0U;
@@ -1826,7 +2393,7 @@ lxp_result lxp_module_ctx_export_prepared(
     bool prepared_here = false;
     if (ctx == NULL || effects == NULL || level_snapshot_token == NULL ||
         lxp_ct_is_zero(level_snapshot_token, 32U) || prepared == NULL ||
-        *prepared != NULL || !ctx->mutable || ctx->kernel == NULL ||
+        *prepared != NULL || !ctx->mutable || ctx->kernel == NULL || ctx->identity_staged || ctx->owner_rotation_staged ||
         ctx->effects != effects || ctx->next_effect_ordinal != effects->count ||
         !effects_are_canonical(ctx->module_id, effects) ||
         ctx->staged_count > LXP_MODULE_MAX_STAGED_WRITES ||
@@ -1900,6 +2467,8 @@ lxp_result lxp_module_ctx_export_prepared(
     result->staged_account_count = ctx->staged_account_count;
     (void)memcpy(result->staged_accounts, ctx->staged_accounts,
                  ctx->staged_account_count * sizeof(ctx->staged_accounts[0]));
+    (void)memcpy(result->staged_account_bindings, ctx->staged_account_bindings,
+                 ctx->staged_account_count * sizeof(ctx->staged_account_bindings[0]));
     for (i = 0U; i < ctx->transfer_snapshot_count; ++i) {
         const lxp_module_account_snapshot *snapshot =
             &ctx->transfer_snapshots[i];
@@ -1941,6 +2510,39 @@ lxp_result lxp_module_ctx_export_prepared(
         result->blobs[result->blob_count].bytes = copy;
         ++result->blob_count;
     }
+    if (ctx->allowance_charged) {
+        if (ctx->allowance == NULL || ctx->allowance->scope == NULL) {
+            lxp_prepared_module_transition_destroy(result);
+            if (prepared_here) ctx->commit_prepared = false;
+            return LXP_FATAL_INVARIANT;
+        }
+        result->allowance_charged = true;
+        result->allowance_kind = ctx->allowance->kind;
+        (void)memcpy(result->allowance_grantor, ctx->allowance->grantor, 32U);
+        (void)memcpy(result->allowance_grant_id, ctx->allowance->grant_id, 32U);
+        result->allowance_before = ctx->allowance_before;
+        result->allowance_after = *ctx->allowance->scope;
+    }
+    if (ctx->allowance_record_staged) {
+        size_t location = governance_find(ctx, ctx->allowance_record.key,
+                                          ctx->allowance_record.key_length);
+        if (!ctx->allowance_charged) {
+            lxp_prepared_module_transition_destroy(result);
+            if (prepared_here) ctx->commit_prepared = false;
+            return LXP_FATAL_INVARIANT;
+        }
+        result->allowance_record_staged = true;
+        result->allowance_record = ctx->allowance_record;
+        result->allowance_record_existed =
+            location != ctx->kernel->module_kv_count;
+        if (result->allowance_record_existed) {
+            const lxp_module_kv_entry *entry =
+                &ctx->kernel->module_kv[location];
+            result->allowance_record_before_length = entry->value_length;
+            (void)memcpy(result->allowance_record_before, entry->value,
+                         entry->value_length);
+        }
+    }
     *prepared = result;
     return LXP_OK;
 }
@@ -1956,7 +2558,7 @@ lxp_result lxp_module_ctx_import_prepared(
         lxp_ct_is_zero(level_snapshot_token, 32U) || effects == NULL ||
         !ctx->mutable || ctx->kernel == NULL || ctx->kernel->state == NULL ||
         ctx->effects != effects || effects->count != 0U ||
-        ctx->next_effect_ordinal != 0U ||
+        ctx->next_effect_ordinal != 0U || ctx->identity_staged || ctx->owner_rotation_staged ||
         ctx->kernel->state->accounts == NULL || ctx->staged_count != 0U ||
         ctx->staged_account_count != 0U || ctx->staged_blob_count != 0U ||
         ctx->transfer_snapshot_count != 0U || ctx->commit_prepared ||
@@ -2009,6 +2611,56 @@ lxp_result lxp_module_ctx_import_prepared(
             !account_equal(accounts[i], &prepared->accounts[i].before))
             return LXP_ERR_CONTEXT_MISMATCH;
     }
+    /* The prepared charge binds to the live scope exactly as the worker saw
+     * it; a scope another activity moved since is a context mismatch. */
+    if (prepared->allowance_charged &&
+        (ctx->allowance == NULL || ctx->allowance->scope == NULL ||
+         ctx->allowance_charged ||
+         ctx->allowance->kind != prepared->allowance_kind ||
+         memcmp(ctx->allowance->grantor, prepared->allowance_grantor, 32U) != 0 ||
+         memcmp(ctx->allowance->grant_id, prepared->allowance_grant_id, 32U) != 0 ||
+         !lxp_authority_scope_equal(ctx->allowance->scope,
+                                    &prepared->allowance_before)))
+        return LXP_ERR_CONTEXT_MISMATCH;
+    if (prepared->allowance_record_staged) {
+        uint8_t expected[LXP_AUTHORITY_CHARGE_RECORD_BYTES];
+        uint8_t expected_key[LXP_AUTHORITY_CHARGE_RECORD_KEY_BYTES];
+        size_t location;
+        bool existed;
+        lxp_result status;
+        if (!prepared->allowance_charged)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        lxp_authority_charge_record_key(ctx->allowance->grant_id, expected_key);
+        status = allowance_continues_committed(ctx, ctx->allowance);
+        if (status != LXP_OK) return status;
+        if (!prepared->allowance_charged ||
+            prepared->allowance_record.deleted ||
+            prepared->allowance_record.key_length !=
+                LXP_AUTHORITY_CHARGE_RECORD_KEY_BYTES ||
+            memcmp(prepared->allowance_record.key, expected_key,
+                    sizeof(expected_key)) != 0 ||
+            prepared->allowance_record.value_length !=
+                LXP_AUTHORITY_CHARGE_RECORD_BYTES ||
+            prepared->allowance_record_before_length >
+                LXP_MODULE_MAX_VALUE_BYTES ||
+            lxp_authority_charge_record_encode(
+                ctx->allowance->grant_id, &prepared->allowance_after,
+                expected) != LXP_OK ||
+            memcmp(prepared->allowance_record.value, expected,
+                   sizeof(expected)) != 0)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        location = governance_find(ctx, prepared->allowance_record.key,
+                                   prepared->allowance_record.key_length);
+        existed = location != ctx->kernel->module_kv_count;
+        if (existed != prepared->allowance_record_existed ||
+            (existed &&
+             (ctx->kernel->module_kv[location].value_length !=
+                  prepared->allowance_record_before_length ||
+              memcmp(ctx->kernel->module_kv[location].value,
+                     prepared->allowance_record_before,
+                     prepared->allowance_record_before_length) != 0)))
+            return LXP_ERR_CONTEXT_MISMATCH;
+    }
     {
         lxp_result status = outcome_copy_artifacts(
             &ctx->program_outcome, &prepared->program_outcome, ctx->arena);
@@ -2038,6 +2690,8 @@ lxp_result lxp_module_ctx_import_prepared(
     (void)memcpy(ctx->staged_accounts, prepared->staged_accounts,
                  prepared->staged_account_count *
                      sizeof(prepared->staged_accounts[0]));
+    (void)memcpy(ctx->staged_account_bindings, prepared->staged_account_bindings,
+                 prepared->staged_account_count * sizeof(prepared->staged_account_bindings[0]));
     for (i = 0U; i < ctx->staged_account_count; ++i)
         ctx->staged_accounts[i].expected_count =
             ctx->kernel->state->accounts->count + i;
@@ -2053,6 +2707,15 @@ lxp_result lxp_module_ctx_import_prepared(
         *accounts[i] = prepared->accounts[i].after;
     }
     ctx->transfer_applied = prepared->account_count != 0U;
+    if (prepared->allowance_charged) {
+        ctx->allowance_before = prepared->allowance_before;
+        ctx->allowance_charged = true;
+        *ctx->allowance->scope = prepared->allowance_after;
+    }
+    if (prepared->allowance_record_staged) {
+        ctx->allowance_record = prepared->allowance_record;
+        ctx->allowance_record_staged = true;
+    }
     for (i = 0U; i < prepared->blob_count; ++i) {
         ctx->staged_blobs[i] = prepared->blobs[i];
         ctx->staged_blobs[i].bytes = blob_copies[i];
@@ -2149,7 +2812,7 @@ lxp_result lxp_module_savepoint_begin(lxp_module_ctx *ctx,
                                       lxp_module_savepoint *savepoint)
 {
     if (ctx == NULL || savepoint == NULL || savepoint->active ||
-        ctx->effects == NULL || ctx->commit_prepared)
+        ctx->effects == NULL || ctx->commit_prepared || ctx->identity_staged || ctx->owner_rotation_staged)
         return LXP_ERR_NON_CANONICAL;
     *savepoint = (lxp_module_savepoint){
         lxp_arena_mark(ctx->arena), ctx->staged_count,

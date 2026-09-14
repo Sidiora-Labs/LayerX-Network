@@ -1,6 +1,7 @@
 #ifndef LXP_DAEMON_LNI_ACCOUNT_H
 #define LXP_DAEMON_LNI_ACCOUNT_H
 
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_daemon.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/programs.h"
@@ -63,7 +64,7 @@ static lxp_result latest_account_evidence(
     status = latest_receipt_evidence(owner, arena, &head);
     if (status == LXP_OK && head.format_version == 3U) {
         lxp_programs_occupancy_receipt maintenance;
-        status = lxp_programs_occupancy_receipt_decode(
+        status = lxp_batch_maintenance_occupancy_decode(
             head.canonical_receipt.bytes, head.canonical_receipt.length,
             &maintenance);
         if (status == LXP_OK && target_activity_id != NULL) {
@@ -90,7 +91,7 @@ static lxp_result latest_account_evidence(
                 owner->evidence_store, account_id, maintenance.resulting_state_root,
                 arena, evidence);
         if (status == LXP_OK &&
-            (evidence->format_version != 2U ||
+            (evidence->format_version != (lxp_batch_maintenance_is_envelope(head.canonical_receipt) ? 3U : 2U) ||
              evidence->observed_sequence != maintenance.global_sequence ||
              evidence->canonical_receipt.length != head.canonical_receipt.length ||
              lxp_ct_memcmp(evidence->canonical_receipt.bytes,

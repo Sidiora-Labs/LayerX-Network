@@ -400,6 +400,11 @@ impl ProtocolReceipt {
 
 impl Effect {
     #[must_use]
+    pub const fn ordinal(&self) -> u16 {
+        self.ordinal
+    }
+
+    #[must_use]
     pub const fn module_id(&self) -> u16 {
         self.module_id
     }
@@ -668,7 +673,7 @@ fn decode_supply(
     let after = decoder.u128()?;
     let expected = match operation {
         1 if before == 0 => Some(0),
-        4..=8 => Some(before),
+        2..=8 => Some(before),
         10 if amount > 0 => before.checked_add(amount),
         11 if amount > 0 => before.checked_sub(amount),
         _ => None,

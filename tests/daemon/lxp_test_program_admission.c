@@ -5,6 +5,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_arena.h"
 #include "layerx/lxp_daemon.h"
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_history.h"
 #include "layerx/lxp_identity.h"
@@ -167,12 +168,20 @@ static int descriptor_read_all_deadline(int descriptor, uint8_t *bytes,
         ready = poll(&pending, 1U, remaining);
         if (ready < 0 && errno == EINTR) continue;
         if (ready <= 0 ||
-            (pending.revents & (POLLERR | POLLNVAL)) != 0)
+            (pending.revents & (POLLERR | POLLNVAL)) != 0) {
+            (void)fprintf(stderr, "native read poll ready=%d revents=%d offset=%zu length=%zu elapsed=%lld errno=%d\n",
+                ready, (int)pending.revents, offset, length,
+                (long long)(monotonic_milliseconds() - start), errno);
             return 1;
+        }
         ssize_t received = read(descriptor, bytes + offset, length - offset);
         if (received > 0) offset += (size_t)received;
         else if (received < 0 && errno == EINTR) continue;
-        else return 1;
+        else {
+            (void)fprintf(stderr, "native read returned=%lld offset=%zu length=%zu errno=%d\n",
+                (long long)received, offset, length, errno);
+            return 1;
+        }
     }
     return 0;
 }
@@ -349,6 +358,7 @@ static int handshake(int descriptor)
     uint16_t capability_count;
     size_t index;
     bool durable = false;
+    bool session_fee_state = false;
     bool complete;
     if (send_request(descriptor, LNI_MINOR, NODE_INFO_REQUEST, 0U,
                      NULL, 0U) != 0 ||
@@ -368,11 +378,14 @@ static int handshake(int descriptor)
             memcmp(response.payload + cursor,
                    "authenticated_durable_submit", length) == 0)
             durable = true;
+        if (length == sizeof("session_fee_state") - 1U &&
+            memcmp(response.payload + cursor, "session_fee_state", length) == 0)
+            session_fee_state = true;
         cursor += length;
     }
     complete = cursor == response.payload_length;
     release_envelope(&response);
-    return durable && complete ? 0 : 1;
+    return durable && session_fee_state && complete ? 0 : 1;
 }
 
 static int expect_error(int descriptor, uint64_t correlation_id,
@@ -407,6 +420,9 @@ static int expect_ack(int descriptor, uint64_t correlation_id,
         memcmp(response.payload, activity, activity_length) != 0 ||
         response.proof_length != 32U ||
         memcmp(response.proof, activity_id, 32U) != 0) {
+        (void)fprintf(stderr, "submission acknowledgement tag=%u correlation=%llu payload=%zu expected=%zu proof=%zu\n",
+            response.tag, (unsigned long long)response.correlation_id,
+            response.payload_length, activity_length, response.proof_length);
         release_envelope(&response);
         return 1;
     }
@@ -874,6 +890,44 @@ static int governance_registration(int descriptor, const signer *key)
     return 0;
 }
 
+static int withdraw_fee_estimate(int descriptor)
+{
+    uint8_t query[30] = {0};
+    uint8_t canonical[LXP_FEE_PARAMS_V3_BYTES];
+    wire_envelope response;
+    lxp_fee_params schedule;
+    lxp_fee_meter meter = {
+        .canonical_encoded_bytes = 512U,
+        .execution_units = 64U,
+        .storage_units = 8U
+    };
+    lxp_u128 quoted, computed;
+    size_t length;
+    store_u16(query, 1U);
+    store_u32(query + 2U, LX_ASSET_WITHDRAW);
+    store_u64(query + 6U, meter.canonical_encoded_bytes);
+    store_u64(query + 14U, meter.execution_units);
+    store_u64(query + 22U, meter.storage_units);
+    REQUIRE(send_request(descriptor, LNI_MINOR, FEE_ESTIMATE_REQUEST, 88U,
+                         query, sizeof(query)) == 0);
+    REQUIRE(receive_envelope(descriptor, &response) == 0);
+    REQUIRE(response.tag == FEE_ESTIMATE_RESPONSE && response.correlation_id == 88U);
+    REQUIRE(response.proof_length == 0U && response.payload_length == 64U + sizeof(canonical));
+    REQUIRE(load_u16(response.payload) == 1U && load_u64(response.payload + 2U) >= 1U);
+    REQUIRE(load_u32(response.payload + 42U) == 1U);
+    REQUIRE(load_u16(response.payload + 62U) == sizeof(canonical));
+    REQUIRE(lxp_fee_params_decode(response.payload + 64U, sizeof(canonical), &schedule) == LXP_OK);
+    REQUIRE(schedule.version == 3U && schedule.asset_price_count == LXP_ASSET_FEE_PRICE_COUNT_V3);
+    REQUIRE(lxp_u128_is_zero(schedule.asset_prices[LXP_ASSET_FEE_PRICE_COUNT]));
+    REQUIRE(lxp_fee_params_encode(&schedule, canonical, sizeof(canonical), &length) == LXP_OK);
+    REQUIRE(length == sizeof(canonical) && memcmp(canonical, response.payload + 64U, length) == 0);
+    REQUIRE(lxp_u128_from_be(response.payload + 46U, &quoted) == LXP_OK);
+    REQUIRE(lxp_fee_compute(&schedule, LX_ASSET_WITHDRAW, meter, &computed) == LXP_OK);
+    REQUIRE(lxp_u128_is_zero(quoted) && quoted.hi == computed.hi && quoted.lo == computed.lo);
+    release_envelope(&response);
+    return 0;
+}
+
 static int withdraw_admission(int descriptor, const signer *key, bool recovered)
 {
     static const uint8_t asset[32] = {
@@ -884,6 +938,7 @@ static int withdraw_admission(int descriptor, const signer *key, bool recovered)
     size_t length;
     if (recovered) {
         REQUIRE(checked_receipt(descriptor, 3U, NULL, true) == 0);
+        REQUIRE(withdraw_fee_estimate(descriptor) == 0);
         puts("WITHDRAW receipt recovered through daemon replay");
         return 0;
     }
@@ -899,6 +954,7 @@ static int withdraw_admission(int descriptor, const signer *key, bool recovered)
         REQUIRE(expect_ack(descriptor, 89U, encoded, length, id) == 0);
         REQUIRE(checked_receipt(descriptor, 1U, id, true) == 0);
     }
+    REQUIRE(withdraw_fee_estimate(descriptor) == 0);
     memcpy(payload, asset, 32U);
     payload[47] = 1U;
     memset(payload + 48U, 0x31, 20U);
@@ -985,6 +1041,8 @@ int main(int argc, char **argv)
                      strcmp(argv[2], "--withdraw-recovered") == 0)) {
         REQUIRE(withdraw_admission(descriptor, &key,
             strcmp(argv[2], "--withdraw-recovered") == 0) == 0);
+        if (strcmp(argv[2], "--withdraw-recovered") == 0)
+            REQUIRE(maintenance_head(&descriptor, 4U, 2U) == 0);
         REQUIRE(close(descriptor) == 0);
         return 0;
     }

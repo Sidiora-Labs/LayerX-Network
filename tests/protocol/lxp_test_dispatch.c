@@ -92,9 +92,9 @@ int main(void)
     lxp_module_iface iface = { LXP_MODULE_ASSET, 1U, "asset", types, 1U,
         genesis, decode, validate, execute, epoch, epoch, root, NULL };
     lxp_authority_resolved authority = { { 0 }, { 0 }, LXP_AUTHORITY_OWNER,
-                                         { 0 }, NULL, { 0 } };
+                                         { 0 }, NULL, { 0 }, { 0 } };
     lxp_fee_params fee_parameters = { 1U, { 0U, 1U }, { 0U, 0U },
-        { 0U, 0U }, { 0U, 0U }, { 0U, 0U }, 10000U, 0U, {{0U, 0U}} };
+        { 0U, 0U }, { 0U, 0U }, { 0U, 0U }, 10000U, 0U, {{0U, 0U}} , 0U, {{0U, 0U}} };
     lxp_kernel_execution execution;
     lxp_activity activity;
     lxp_receipt receipt;

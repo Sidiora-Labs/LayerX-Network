@@ -8,11 +8,12 @@ import traceback
 import subprocess
 import sys
 import time
+import urllib.error
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 repo = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo / 'platform/hosted/human'))
@@ -20,8 +21,10 @@ from provision import write_json
 from owner_native import produce
 sys.path.insert(0, str(repo / "tests/daemon"))
 from governance_lifecycle import session, lifecycle
-from owner_checkpoint import checkpoint, hosted
+from owner_checkpoint import checkpoint, hosted, module_reads
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+sys.path.insert(0, str(repo / 'tests/support'))
+from lxgb_metadata import metadata
 from custody_credit import Rpc, unhex
 from deploy_local_custody import signer, deploy, calldata, command
 
@@ -43,9 +46,13 @@ def run(work, asset, rpc_port):
         path.write_bytes(os.urandom(32))
         path.chmod(0o600)
     treasury_seed = (work / 'treasury.seed').read_bytes()
+    treasury_public = Ed25519PrivateKey.from_private_bytes(treasury_seed).public_key().public_bytes_raw()
+    genesis_metadata = work / 'genesis-metadata.lxgb'
+    genesis_metadata.write_bytes(metadata(bytes.fromhex(asset), treasury_public, os.urandom(32)))
     env = dict(os.environ)
     bootstrap = ['bash', str(repo / 'platform/hosted/node/bootstrap.sh'), '--data-dir', str(work / 'node'),
         '--run-dir', str(work / 'run'), '--network-id', '77', '--asset', asset,
+        '--genesis-metadata', str(genesis_metadata),
         '--custody-profile', str(inputs / 'custody.profile'), '--settlement-env', str(work / 'settlement.env'), '--sequencer-key', str(work / 'sequencer.seed'),
         '--treasury-key', str(work / 'treasury.seed'), '--lni-uid', '4021', '--lni-gid', '4021',
         '--program-port', str(program_port), '--replica-port', str(replica_port),
@@ -91,16 +98,26 @@ def run(work, asset, rpc_port):
             .not_valid_after(now + datetime.timedelta(days=1))
             .add_extension(x509.SubjectAlternativeName([x509.DNSName('localhost')]), critical=False)
             .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True).sign(key, hashes.SHA256()))
-    (tls / 'cert.der').write_bytes(cert.public_bytes(serialization.Encoding.DER))
+    server_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    server_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'localhost')])
+    server_cert = (x509.CertificateBuilder().subject_name(server_name).issuer_name(cert.subject)
+        .public_key(server_key.public_key()).serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1)).not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName('localhost')]), critical=False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .sign(key, hashes.SHA256()))
+    (tls / 'cert.der').write_bytes(server_cert.public_bytes(serialization.Encoding.DER))
     (tls / 'ca.pem').write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    (tls / 'key.der').write_bytes(key.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    (tls / 'key.der').write_bytes(server_key.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
     token = tls / 'authority.token'
     token.write_text(os.urandom(32).hex())
     # Supply the replica credential directly through its protected generated file.
     authority = work / 'authority'
     authority.mkdir(mode=0o700)
     cli = work / 'layerxctl'
-    shutil.copyfile(repo / 'cmd/layerxctl/target/debug/layerxctl', cli)
+    cli_target = Path(os.environ.get('CARGO_TARGET_DIR', repo / 'cmd/layerxctl/target'))
+    shutil.copyfile(cli_target / 'debug/layerxctl', cli)
     cli.chmod(0o755)
     config = dict(node_socket=str(work / 'run/layerxd.lni.sock'), network_id=77,
         owner_seed_file=str(work / 'human-owner/owner.seed'), pending_seed_file=str(work / 'human-owner/pending.seed'),
@@ -167,7 +184,8 @@ def run(work, asset, rpc_port):
             LAYERX_AUTHORITY_SEQUENCER_PUBLIC_KEY=config['sequencer_public_key'],
             LAYERX_AUTHORITY_FIRST_BATCH='1', LAYERX_AUTHORITY_LAST_BATCH=str(2 ** 64 - 1))
         peer = ['setpriv', '--reuid=4021', '--regid=4021', '--clear-groups']
-        service = start([*peer, str(repo / 'platform/target/debug/layerx-receipt-authority')], 'authority-service', authority_env)
+        platform_target = Path(os.environ.get('CARGO_TARGET_DIR', repo / 'platform/target'))
+        service = start([*peer, str(platform_target / 'debug/layerx-receipt-authority')], 'authority-service', authority_env)
         for _ in range(100):
             assert service.poll() is None, 'authority startup failed'
             try:
@@ -188,7 +206,21 @@ def run(work, asset, rpc_port):
                     os.setuid(4021)
                     try:
                         operation()
-                    except BaseException:
+                    except BaseException as error:
+                        cause = error
+                        while cause is not None:
+                            if isinstance(cause, urllib.error.HTTPError):
+                                body = cause.read(4096)
+                                try:
+                                    document = json.loads(body)
+                                    code = document.get('error', document.get('code'))
+                                    if isinstance(code, dict):
+                                        code = code.get('code')
+                                    if isinstance(code, str) and code.replace('_', '').isalnum():
+                                        print('authority refusal:', cause.code, code, file=sys.stderr)
+                                except (ValueError, AttributeError):
+                                    pass
+                            cause = cause.__cause__
                         traceback.print_exc()
                         sys.stderr.flush()
                         os._exit(1)
@@ -220,6 +252,11 @@ def run(work, asset, rpc_port):
         assert len(list((inputs / 'owner-native-run').glob('*.receipt'))) == 4
         if '--checkpoint' in sys.argv:
             checkpoint(work, public, settlement, rpc, account, start, key, cert, 10)
+            if '--movement-proof' in sys.argv:
+                from movement_proof import run as movement_proof
+                movement_proof(work, settlement, rpc, account, start, key, cert, 10)
+            if '--module-reads' in sys.argv:
+                module_reads(work, public, 10)
             if '--settlement-only' not in sys.argv:
                 hosted(work, config, authority_env, start, service)
         sequencer.terminate()

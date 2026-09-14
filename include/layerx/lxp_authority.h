@@ -33,6 +33,18 @@ typedef struct lxp_authority_scope {
 } lxp_authority_scope;
 #define lxp_authority_scope lxp_authority_scope
 
+typedef struct lxp_authority_fee_budget {
+    bool present;
+    uint8_t asset_id[32];
+    lxp_u128 maximum_per_activity;
+    lxp_u128 maximum_total;
+    lxp_u128 spent_total;
+    uint64_t period_length;
+    lxp_u128 maximum_per_period;
+    lxp_u128 spent_this_period;
+    uint64_t period_start;
+} lxp_authority_fee_budget;
+
 typedef struct lxp_authority_grant {
     uint8_t grant_id[32];
     uint8_t grantor[32];
@@ -46,6 +58,8 @@ typedef struct lxp_authority_grant {
     bool revoked;
     uint64_t revoked_at_sequence;
     uint8_t grantor_signature[64];
+    lxp_authority_fee_budget fee_budget;
+    bool authentication_only;
 } lxp_authority_grant;
 #define lxp_authority_grant lxp_authority_grant
 
@@ -53,6 +67,9 @@ lxp_result lxp_grant_encode(const lxp_authority_grant *grant,
                             lxp_arena *arena, lxp_byte_span *encoded);
 lxp_result lxp_grant_id_compute(const lxp_authority_grant *grant,
                                 uint8_t grant_id[32]);
+lxp_result lxp_authentication_key_bind(lxp_authority_grant *grant,
+    const uint8_t grantor[32], const uint8_t session_key[32],
+    uint64_t not_before, uint64_t not_after, uint64_t revocation_sequence);
 lxp_result lxp_session_key_bind(lxp_authority_grant *grant,
                                 const uint8_t grantor[32],
                                 const uint8_t session_key[32],
@@ -69,6 +86,7 @@ typedef struct lxp_authority_resolved {
     uint8_t verified_key[32];
     const lxp_authority_scope *scope;
     uint8_t authority_hash[32];
+    uint8_t grant_id[32];
 } lxp_authority_resolved;
 #define lxp_authority_resolved lxp_authority_resolved
 
@@ -83,6 +101,28 @@ typedef struct lxp_authority_envelope {
 
 struct lxp_kernel;
 struct lxp_identity;
+struct lxp_transfer_allowance;
+
+#define LXP_NATIVE_FEE_AUTHORITY_PARAMETER "native-fee-authority-version"
+lxp_result lxp_authority_allowance_policy(const struct lxp_kernel *kernel, bool *enforced);
+lxp_result lxp_authority_fee_resolve(const struct lxp_kernel *kernel,
+    const lxp_authority_resolved *authority, const lxp_activity *activity,
+    uint64_t timestamp, uint32_t fee_schedule_version, lxp_u128 amount,
+    lxp_authority_grant *grant);
+lxp_result lxp_authority_fee_charge(lxp_authority_fee_budget *budget,
+    lxp_u128 amount, uint64_t timestamp);
+void lxp_authority_fee_record_key(const uint8_t grant_id[32], uint8_t key[33]);
+void lxp_authority_session_successor_key(const uint8_t grant_id[32], uint8_t key[33]);
+lxp_result lxp_authority_session_charge_commitment(const lxp_authority_grant *grant,
+    uint8_t commitment[32]);
+lxp_result lxp_authority_fee_record_encode(const lxp_authority_grant *grant,
+    uint8_t value[72]);
+
+bool lxp_authority_scope_equal(const lxp_authority_scope *left,
+                                const lxp_authority_scope *right);
+void lxp_authority_allowance_bind(lxp_authority_grant *grant,
+                                  const lxp_authority_resolved *authority,
+                                  struct lxp_transfer_allowance *allowance);
 
 lxp_result lxp_grant_decode(const uint8_t *bytes, size_t length,
                             lxp_authority_grant *grant);
@@ -97,11 +137,38 @@ lxp_result lxp_authority_owner_grant(const struct lxp_identity *identity,
                                      uint64_t not_before, uint64_t not_after,
                                      lxp_authority_grant *grant);
 /* Loads the persisted grant the governance module wrote for verified_key,
- * applying its persisted revocation record. */
+ * applying its persisted revocation and charge records. */
 lxp_result lxp_authority_grant_lookup(const struct lxp_kernel *kernel,
                                       const uint8_t grantor[32],
                                       const uint8_t verified_key[32],
                                       lxp_authority_grant *grant);
+/* Loads the persisted grant named by grant_id with the same records applied;
+ * LXP_ERR_UNKNOWN_FIELD when no grant record carries that identifier. */
+lxp_result lxp_authority_grant_load(const struct lxp_kernel *kernel,
+                                    const uint8_t grant_id[32],
+                                    lxp_authority_grant *grant);
+
+/* The charged counters of a persisted metered grant. A grant identifier
+ * commits to the whole grant encoding, so charging never rewrites the grant
+ * record: the module context that charged the scope persists spent_total,
+ * spent_this_period and period_start in this governance record, keyed by the
+ * charge tag and the grant identifier, and every lookup overlays it. */
+enum {
+    LXP_AUTHORITY_CHARGE_RECORD_KEY_BYTES = 33,
+    LXP_AUTHORITY_CHARGE_RECORD_BYTES = 72
+};
+void lxp_authority_charge_record_key(
+    const uint8_t grant_id[32],
+    uint8_t key[LXP_AUTHORITY_CHARGE_RECORD_KEY_BYTES]);
+lxp_result lxp_authority_charge_record_encode(
+    const uint8_t grant_id[32], const lxp_authority_scope *scope,
+    uint8_t value[LXP_AUTHORITY_CHARGE_RECORD_BYTES]);
+/* Overlays the record's counters onto scope; LXP_ERR_MALFORMED_GRANT when the
+ * record is not a charge record for grant_id. */
+lxp_result lxp_authority_charge_record_decode(const uint8_t *value,
+                                              size_t length,
+                                              const uint8_t grant_id[32],
+                                              lxp_authority_scope *scope);
 /* The single authority entry every executing node uses. The resolved scope
  * points into grant, which the caller must keep alive for the execution. */
 lxp_result lxp_authority_resolve_activity(const struct lxp_kernel *kernel,

@@ -1,6 +1,8 @@
 #include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/programs.h"
+#include "layerx/lxp_handover.h"
 #include <string.h>
 
 enum { STATE_BYTES = 223, DID = 5, PRIMARY = 37, REVOCATION = 69,
@@ -14,6 +16,7 @@ typedef struct governance_payload {
     uint16_t fields;
     size_t length;
     uint8_t bytes[1024];
+    lxp_byte_span handover;
 } governance_payload;
 
 static uint64_t read64(const uint8_t *p)
@@ -32,7 +35,7 @@ bool lxp_governance_activity(uint32_t type)
 {
     return type == 0x00070001U || type == 0x00070002U ||
            type == 0x00070003U || type == 0x00070005U || type == 0x00070006U ||
-           type == 0x00070008U;
+           type == 0x00070008U || type == LXP_GOVERNANCE_HANDOVER;
 }
 
 lxp_result lxp_governance_identity_refresh(const lxp_kernel *kernel,
@@ -57,7 +60,35 @@ lxp_result lxp_governance_identity_refresh(const lxp_kernel *kernel,
         identity->rotation_effective_at = read64(s + BEGIN);
         identity->rotation_lapse_at = read64(s + END);
         identity->rotation_effective_sequence = read64(s + EFFECTIVE);
-        return LXP_OK;
+        return lxp_governance_rotation_refresh(kernel, identity);
+    }
+    return LXP_OK;
+}
+
+lxp_result lxp_governance_identities_restore(const lxp_kernel *kernel,
+                                             lxp_identity_store *identities)
+{
+    if (kernel == NULL || identities == NULL || identities->count > LXP_IDENTITY_STORE_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
+    for (size_t i = 0U; i < kernel->module_kv_count; ++i) {
+        const lxp_module_kv_entry *entry = &kernel->module_kv[i];
+        if (entry->module_id != LXP_MODULE_GOVERNANCE || entry->key_length != 32U ||
+            entry->value_length < 5U || memcmp(entry->value, "LXGI1", 5U) != 0) continue;
+        if (entry->value_length != STATE_BYTES || memcmp(entry->key, entry->value + DID, 32U) != 0 ||
+            !lxp_ed25519_pubkey_is_canonical(entry->value + PRIMARY))
+            return LXP_FATAL_INVARIANT;
+        size_t index = 0U;
+        while (index < identities->count && memcmp(identities->identities[index].did_id, entry->key, 32U) != 0)
+            ++index;
+        if (index == identities->count) {
+            if (index >= LXP_IDENTITY_STORE_CAPACITY) return LXP_ERR_ARENA_EXHAUSTED;
+            lxp_identity *identity = &identities->identities[identities->count++];
+            (void)memset(identity, 0, sizeof(*identity));
+            (void)memcpy(identity->did_id, entry->key, 32U);
+            identity->status = LXP_IDENTITY_ACTIVE;
+        } else continue;
+        lxp_result status = lxp_governance_identity_refresh(kernel, &identities->identities[index]);
+        if (status != LXP_OK) return status;
     }
     return LXP_OK;
 }
@@ -67,16 +98,36 @@ static lxp_result decode(lxp_module_ctx *ctx, uint16_t ordinal,
 {
     governance_payload *p;
     void *memory = NULL;
+    if (ordinal == 9U) {
+        lxp_handover_evidence evidence;
+        lxp_result status;
+        if (ctx == NULL || decoded == NULL) return LXP_ERR_NON_CANONICAL;
+        status = lxp_handover_evidence_decode((lxp_byte_span){bytes, length}, &evidence);
+        if (status == LXP_OK)
+            status = lxp_ctx_arena_alloc(ctx, sizeof(*p), _Alignof(governance_payload), &memory);
+        if (status != LXP_OK) return status;
+        p = memory;
+        (void)memset(p, 0, sizeof(*p));
+        p->ordinal = ordinal;
+        p->length = length;
+        p->handover = (lxp_byte_span){bytes, length};
+        *decoded = p;
+        return LXP_OK;
+    }
     if (bytes == NULL || decoded == NULL || length < 4U || length > 1024U ||
         !lxp_governance_activity(0x00070000U | ordinal) || bytes[0] != 0x71U ||
-        bytes[1] != ordinal || bytes[2] != ((ordinal == 5U || ordinal == 8U) ? 1U : 0U))
+        bytes[1] != ordinal || (ordinal == 1U ? (bytes[2] != 0U && bytes[2] != 2U) :
+        ordinal == 2U ? (bytes[2] != 0U && bytes[2] != 1U && bytes[2] != 3U) :
+        ordinal == 5U ? (bytes[2] != 1U && bytes[2] != 2U) :
+        bytes[2] != (ordinal == 8U ? 1U : 0U)))
         return LXP_ERR_NON_CANONICAL;
     uint16_t fields = bytes[3];
-    if ((ordinal == 1U && (fields != 2U || length != 68U)) ||
-        (ordinal == 2U && (fields != 4U || length != 92U)) ||
+    if ((ordinal == 1U && (bytes[2] == 0U ? (fields != 2U || length != 68U) : (fields != 1U || length < 8U))) ||
+        (ordinal == 2U && (bytes[2] == 0U ? (fields != 4U || length != 92U) :
+            bytes[2] == 1U ? (fields != 1U || length < 8U) : (fields != 2U || length != 68U))) ||
         (ordinal == 3U && !((fields == 3U && length == 70U) ||
                             (fields == 5U && length == 86U))) ||
-        (ordinal == 5U && (fields != 3U || length < 52U)) ||
+        (ordinal == 5U && (fields != (bytes[2] == 2U ? 5U : 3U) || length < 52U)) ||
         (ordinal == 6U && (fields != 3U || length != 45U)) ||
         (ordinal == 8U && (fields != 1U || length < 9U)))
         return LXP_ERR_NON_CANONICAL;
@@ -100,9 +151,66 @@ static lxp_result validate(lxp_module_ctx *ctx, const lxp_activity *activity,
         authority->kind != LXP_AUTHORITY_OWNER ||
         lxp_did_id_derive(activity->actor_did.bytes, activity->actor_did.length, did) != LXP_OK ||
         memcmp(did, authority->actor, 32U) != 0 ||
-        (p->ordinal <= 3U && memcmp(did, p->bytes + 4U, 32U) != 0))
+        (p->ordinal <= 3U && !((p->ordinal == 1U && p->bytes[2] == 2U) || (p->ordinal == 2U && p->bytes[2] == 1U)) &&
+         memcmp(did, p->bytes + 4U, 32U) != 0))
+        return LXP_ERR_AUTH_SCOPE;
+    if (p->ordinal == 9U && (ctx->kernel == NULL || !ctx->kernel->handover.pending ||
+        !ctx->kernel->handover.enabled ||
+        memcmp(authority->verified_key, ctx->kernel->handover.governance_public_key, 32U) != 0 ||
+        p->handover.length != activity->payload.length ||
+        memcmp(p->handover.bytes, activity->payload.bytes, p->handover.length) != 0))
         return LXP_ERR_AUTH_SCOPE;
     return lxp_ctx_charge_gas(ctx, p->length);
+}
+
+static lxp_result grant_scope_validate(lxp_module_ctx *ctx,
+                                        const lxp_authority_grant *grant);
+
+static lxp_result session_inherit_fee(lxp_module_ctx *ctx,
+    const lxp_authority_grant *successor, const uint8_t predecessor_id[32],
+    const uint8_t expected_commitment[32])
+{
+    lxp_authority_grant predecessor, charged;
+    uint8_t key[33], actual_commitment[32], counters[72];
+    const uint8_t *prior;
+    size_t prior_length;
+    lxp_result status;
+    if (successor->authentication_only || successor->revoked || !successor->fee_budget.present ||
+        lxp_ct_is_zero(predecessor_id, 32U) || lxp_ct_is_zero(expected_commitment, 32U) ||
+        memcmp(predecessor_id, successor->grant_id, 32U) == 0) return LXP_ERR_AUTH_SCOPE;
+    status = lxp_authority_grant_load(ctx->kernel, predecessor_id, &predecessor);
+    if (status != LXP_OK) return status;
+    status = lxp_authority_session_charge_commitment(&predecessor, actual_commitment);
+    if (status != LXP_OK) return status;
+    const lxp_authority_fee_budget *a = &predecessor.fee_budget;
+    const lxp_authority_fee_budget *b = &successor->fee_budget;
+    if (memcmp(actual_commitment, expected_commitment, 32U) != 0 ||
+        memcmp(predecessor.grantor, successor->grantor, 32U) != 0 ||
+        memcmp(predecessor.grantee, successor->grantee, 32U) != 0 ||
+        memcmp(predecessor.key, successor->key, 32U) == 0 ||
+        predecessor.revoked_at_sequence >= lxp_ctx_global_sequence(ctx) ||
+        predecessor.not_before != successor->not_before ||
+        !lxp_authority_scope_equal(&predecessor.scope, &successor->scope) ||
+        memcmp(a->asset_id, b->asset_id, 32U) != 0 ||
+        lxp_u128_cmp(a->maximum_per_activity, b->maximum_per_activity) != 0 ||
+        lxp_u128_cmp(a->maximum_total, b->maximum_total) != 0 ||
+        lxp_u128_cmp(a->maximum_per_period, b->maximum_per_period) != 0 ||
+        a->period_length != b->period_length ||
+        (b->period_length != 0U && b->period_start != successor->not_before))
+        return LXP_ERR_AUTH_SCOPE;
+    lxp_authority_session_successor_key(predecessor_id, key);
+    status = lxp_ctx_kv_get(ctx, key, sizeof(key), &prior, &prior_length);
+    if (status != LXP_ERR_UNKNOWN_FIELD) return status == LXP_OK ? LXP_ERR_SEQUENCE_REUSED : status;
+    status = lxp_ctx_kv_put(ctx, key, sizeof(key), successor->grant_id, 32U);
+    if (status != LXP_OK) return status;
+    charged = *successor;
+    charged.fee_budget.spent_total = a->spent_total;
+    charged.fee_budget.spent_this_period = a->spent_this_period;
+    charged.fee_budget.period_start = a->period_start;
+    status = lxp_authority_fee_record_encode(&charged, counters);
+    lxp_authority_fee_record_key(successor->grant_id, key);
+    if (status == LXP_OK) status = lxp_ctx_kv_put(ctx, key, sizeof(key), counters, sizeof(counters));
+    return status;
 }
 
 static lxp_result session(lxp_module_ctx *ctx, const governance_payload *p,
@@ -113,9 +221,8 @@ static lxp_result session(lxp_module_ctx *ctx, const governance_payload *p,
     lxp_byte_span span;
     lxp_authority_grant grant;
     uint64_t expiry_sequence;
-    uint8_t action_key[32];
+    uint8_t action_key[32], predecessor_id[32] = {0}, expected_commitment[32] = {0};
     uint8_t summary[209] = {0};
-    uint8_t tag;
     uint8_t key[33];
     const uint8_t *prior;
     size_t length;
@@ -127,52 +234,34 @@ static lxp_result session(lxp_module_ctx *ctx, const governance_payload *p,
     READ(lxp_codec_read_bytes(&reader, &body, 1024U));
     READ(lxp_codec_read_u64(&reader, &expiry_sequence));
     FIXED(action_key, 32U);
+    if (p->bytes[2] == 2U) { FIXED(predecessor_id, 32U); FIXED(expected_commitment, 32U); }
     READ(lxp_codec_finish(&reader));
     if (expiry_sequence <= lxp_ctx_global_sequence(ctx) || lxp_ct_is_zero(action_key, 32U))
         return LXP_ERR_AUTH_SCOPE;
-    READ(lxp_codec_reader_init(&reader, body.bytes, body.length));
-    READ(lxp_codec_read_struct_header(&reader, 0x2001U));
-    READ(lxp_codec_read_u8(&reader, &tag));
-    if (tag != 1U) return LXP_ERR_NON_CANONICAL;
-    FIXED(grant.grantor, 32U);
-    FIXED(grant.grantee, 32U);
-    READ(lxp_codec_read_u8(&reader, &tag));
-    if (tag != LXP_AUTHORITY_SESSION_KEY) return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
-    grant.kind = LXP_AUTHORITY_SESSION_KEY;
-    FIXED(grant.key, 32U);
-    READ(lxp_codec_read_u64(&reader, &grant.scope.module_mask));
-    READ(lxp_codec_read_u16(&reader, &grant.scope.activity_ordinal_min));
-    READ(lxp_codec_read_u16(&reader, &grant.scope.activity_ordinal_max));
-    FIXED(grant.scope.asset_id, 32U);
-    READ(lxp_codec_read_u128(&reader, &grant.scope.maximum_per_activity));
-    READ(lxp_codec_read_u128(&reader, &grant.scope.maximum_total));
-    READ(lxp_codec_read_u128(&reader, &grant.scope.spent_total));
-    READ(lxp_codec_read_u64(&reader, &grant.scope.period_length));
-    READ(lxp_codec_read_u128(&reader, &grant.scope.maximum_per_period));
-    READ(lxp_codec_read_u128(&reader, &grant.scope.spent_this_period));
-    READ(lxp_codec_read_u64(&reader, &grant.scope.period_start));
-    FIXED(grant.scope.purpose_hash, 32U);
-    READ(lxp_codec_read_u64(&reader, &grant.not_before));
-    READ(lxp_codec_read_u64(&reader, &grant.not_after));
-    READ(lxp_codec_read_u64(&reader, &grant.grantor_revocation_sequence));
-    READ(lxp_codec_read_u8(&reader, &tag));
-    if (tag != 0U) return LXP_ERR_AUTH_REVOKED;
-    READ(lxp_codec_read_u64(&reader, &grant.revoked_at_sequence));
-    FIXED(grant.grantor_signature, 64U);
-    READ(lxp_codec_finish(&reader));
+    READ(lxp_grant_decode(body.bytes, body.length, &grant));
+    if (grant.kind != LXP_AUTHORITY_SESSION_KEY) return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
+    if (grant.revoked) return LXP_ERR_AUTH_REVOKED;
     if (memcmp(grant.grantor, authority->actor, 32U) != 0 ||
         memcmp(grant.grantee, authority->actor, 32U) != 0 ||
         !lxp_ed25519_pubkey_is_canonical(grant.key) ||
         grant.grantor_revocation_sequence != read64(state + REVOCATION) ||
         grant.not_after <= lxp_ctx_batch_timestamp_ms(ctx) ||
-        grant.scope.activity_ordinal_min == 0U ||
+        (!grant.authentication_only && grant.scope.activity_ordinal_min == 0U) ||
         (grant.scope.module_mask & ~UINT64_C(0x3fe)) != 0U ||
         grant.revoked_at_sequence != 0U || !lxp_ct_is_zero(grant.grantor_signature, 64U))
         return LXP_ERR_AUTH_SCOPE;
     lxp_authority_grant canonical;
-    READ(lxp_session_key_bind(&canonical, grant.grantor, grant.key,
-        grant.scope.module_mask, grant.scope.activity_ordinal_min, grant.scope.activity_ordinal_max,
-        grant.not_before, grant.not_after, grant.grantor_revocation_sequence));
+    if (grant.authentication_only) {
+        READ(lxp_authentication_key_bind(&canonical, grant.grantor, grant.key,
+            grant.not_before, grant.not_after, grant.grantor_revocation_sequence));
+    } else {
+        READ(lxp_session_key_bind(&canonical, grant.grantor, grant.key,
+            grant.scope.module_mask, grant.scope.activity_ordinal_min, grant.scope.activity_ordinal_max,
+            grant.not_before, grant.not_after, grant.grantor_revocation_sequence));
+    }
+    canonical.fee_budget = grant.fee_budget;
+    if (canonical.fee_budget.present) READ(grant_scope_validate(ctx, &canonical));
+    READ(lxp_grant_id_compute(&canonical, canonical.grant_id));
     lxp_byte_span encoded;
     READ(lxp_grant_encode(&canonical, ctx->arena, &encoded));
     if (encoded.length != body.length || memcmp(encoded.bytes, body.bytes, body.length) != 0)
@@ -181,6 +270,7 @@ static lxp_result session(lxp_module_ctx *ctx, const governance_payload *p,
     (void)memcpy(key + 1U, canonical.grant_id, 32U);
     status = lxp_ctx_kv_get(ctx, key, sizeof(key), &prior, &length);
     if (status != LXP_ERR_UNKNOWN_FIELD) return status == LXP_OK ? LXP_ERR_SEQUENCE_REUSED : status;
+    if (p->bytes[2] == 2U) READ(session_inherit_fee(ctx, &canonical, predecessor_id, expected_commitment));
     READ(lxp_ctx_kv_put(ctx, key, sizeof(key), body.bytes, body.length));
     (void)memcpy(summary, "LXGS2", 5U);
     (void)memcpy(summary + 5U, canonical.grant_id, 32U);
@@ -200,8 +290,11 @@ static lxp_result session(lxp_module_ctx *ctx, const governance_payload *p,
     key[0] = 0x15U;
     READ(lxp_ctx_kv_put(ctx, key, sizeof(key), summary, sizeof(summary)));
     READ(lxp_ctx_emit_event(ctx, 0x7145U, summary, sizeof(summary)));
-    READ(lxp_ctx_emit_event(ctx, 0x7105U, body.bytes, body.length < 256U ? body.length : 256U));
-    if (body.length > 256U) READ(lxp_ctx_emit_event(ctx, 0x7125U, body.bytes + 256U, body.length - 256U));
+    for (size_t offset = 0U; offset < body.length; offset += 256U) {
+        size_t remaining = body.length - offset;
+        READ(lxp_ctx_emit_event(ctx, offset == 0U ? 0x7105U : 0x7125U,
+            body.bytes + offset, remaining < 256U ? remaining : 256U));
+    }
 #undef FIXED
 #undef READ
     return LXP_OK;
@@ -228,6 +321,17 @@ static lxp_result grant_scope_validate(lxp_module_ctx *ctx,
          (scope->period_start != grant->not_before ||
           lxp_u128_cmp(scope->maximum_per_activity, scope->maximum_per_period) > 0)))
         return LXP_ERR_AUTH_SCOPE;
+    if (grant->fee_budget.present) {
+        bool enforced = false;
+        status = lxp_authority_allowance_policy(ctx->kernel, &enforced);
+        if (status != LXP_OK || !enforced) return status == LXP_OK ? LXP_ERR_AUTH_SCOPE : status;
+        const lxp_authority_fee_budget *fee = &grant->fee_budget;
+        const lx_programs_transfer_runtime *runtime = ctx->kernel->module_runtime[LXP_MODULE_PROGRAMS];
+        if (runtime == NULL || memcmp(fee->asset_id, runtime->occupancy_asset_id, 32U) != 0 ||
+            !lxp_u128_is_zero(fee->spent_total) || !lxp_u128_is_zero(fee->spent_this_period) ||
+            (fee->period_length != 0U && fee->period_start != grant->not_before))
+            return LXP_ERR_AUTH_SCOPE;
+    }
     return LXP_OK;
 }
 
@@ -269,8 +373,11 @@ static lxp_result issue_grant(lxp_module_ctx *ctx, const governance_payload *p,
     if (status == LXP_OK) status = lxp_ctx_emit_event(ctx, 0x7148U, key + 1U, 32U);
     if (status == LXP_OK) status = lxp_ctx_emit_event(ctx, 0x7108U, body.bytes,
                                                     body.length < 256U ? body.length : 256U);
-    if (status == LXP_OK && body.length > 256U)
-        status = lxp_ctx_emit_event(ctx, 0x7128U, body.bytes + 256U, body.length - 256U);
+    for (size_t offset = 256U; status == LXP_OK && offset < body.length; offset += 256U) {
+        size_t remaining = body.length - offset;
+        status = lxp_ctx_emit_event(ctx, 0x7128U, body.bytes + offset,
+                                    remaining < 256U ? remaining : 256U);
+    }
     return status;
 }
 
@@ -282,7 +389,10 @@ static lxp_result execute(lxp_module_ctx *ctx, const lxp_activity *activity,
     const uint8_t *prior;
     size_t length;
     uint8_t state[STATE_BYTES] = {0};
+    if (p->ordinal == 1U && p->bytes[2] == 2U)
+        return lxp_governance_onboard(ctx, activity, authority);
     uint64_t sequence = lxp_ctx_global_sequence(ctx);
+    if (p->ordinal == 9U) return lxp_handover_stage(ctx, activity, authority);
     lxp_result status = lxp_ctx_kv_get(ctx, authority->actor, 32U, &prior, &length);
     (void)activity;
     (void)effects;
@@ -300,7 +410,20 @@ static lxp_result execute(lxp_module_ctx *ctx, const lxp_activity *activity,
         (void)memcpy(state + PRIMARY, authority->verified_key, 32U);
         write64(state + REVOCATION, sequence);
     } else return status;
-    if (p->ordinal == 2U) {
+    if (p->ordinal == 2U && p->bytes[2] == 1U) {
+        uint8_t next[STATE_BYTES];
+        status = lxp_governance_rotation(ctx, activity, authority, state, next);
+        if (status != LXP_OK) return status;
+        (void)memcpy(state, next, sizeof(state));
+    } else if (p->ordinal == 2U && p->bytes[2] == 3U) {
+        uint8_t commitment[32];
+        if (lxp_ct_is_zero(state + PENDING, 32U) ||
+            lxp_ctx_batch_timestamp_ms(ctx) <= read64(state + END)) return LXP_ERR_AUTH_SCOPE;
+        status = lxp_hash_context_value(state, sizeof(state), commitment);
+        if (status != LXP_OK) return status;
+        if (memcmp(commitment, p->bytes + 36U, 32U) != 0) return LXP_ERR_AUTH_SCOPE;
+        (void)memset(state + PENDING, 0, EFFECTIVE + 8U - PENDING);
+    } else if (p->ordinal == 2U) {
         uint64_t begin = read64(p->bytes + 68U);
         uint64_t end = read64(p->bytes + 76U);
         uint64_t effective = read64(p->bytes + 84U);
@@ -339,15 +462,10 @@ static lxp_result execute(lxp_module_ctx *ctx, const lxp_activity *activity,
         (void)memcpy(key + 1U, p->bytes + 4U, 32U);
         status = lxp_ctx_kv_get(ctx, key, sizeof(key), &prior, &length);
         if (status != LXP_OK) return status;
-        lxp_codec_reader reader;
-        lxp_byte_span grantor;
-        uint8_t version;
-        status = lxp_codec_reader_init(&reader, prior, length);
-        if (status == LXP_OK) status = lxp_codec_read_struct_header(&reader, 0x2001U);
-        if (status == LXP_OK) status = lxp_codec_read_u8(&reader, &version);
-        if (status == LXP_OK) status = lxp_codec_read_bytes(&reader, &grantor, 32U);
-        if (status != LXP_OK || version != 1U || grantor.length != 32U ||
-            memcmp(grantor.bytes, authority->actor, 32U) != 0 ||
+        lxp_authority_grant stored_grant;
+        status = lxp_grant_decode(prior, length, &stored_grant);
+        if (status != LXP_OK ||
+            memcmp(stored_grant.grantor, authority->actor, 32U) != 0 ||
             read64(p->bytes + 37U) != sequence || p->bytes[36] == 0U || p->bytes[36] > 5U)
             return LXP_ERR_AUTH_SCOPE;
         (void)memcpy(revoked, p->bytes + 4U, sizeof(revoked));
@@ -379,10 +497,17 @@ static lxp_result root(lxp_module_ctx *ctx, uint8_t digest[32])
 {
     return ctx == NULL ? LXP_ERR_NON_CANONICAL : lxp_state_subtree_root(ctx->kernel, LXP_MODULE_GOVERNANCE, digest);
 }
+const lxp_module_iface *lxp_governance_module_iface_for_handover(bool enabled)
+{
+    static const uint32_t types[] = {0x00070001U, 0x00070002U, 0x00070003U, 0x00070005U, 0x00070006U, 0x00070008U, LXP_GOVERNANCE_HANDOVER};
+    static const lxp_module_iface legacy = {LXP_MODULE_GOVERNANCE, 1U, "governance", types, 6U,
+        genesis, decode, validate, execute, epoch, epoch, root, NULL};
+    static const lxp_module_iface handover = {LXP_MODULE_GOVERNANCE, 1U, "governance", types, 7U,
+        genesis, decode, validate, execute, epoch, epoch, root, NULL};
+    return enabled ? &handover : &legacy;
+}
+
 const lxp_module_iface *lxp_governance_module_iface(void)
 {
-    static const uint32_t types[] = {0x00070001U, 0x00070002U, 0x00070003U, 0x00070005U, 0x00070006U, 0x00070008U};
-    static const lxp_module_iface iface = {LXP_MODULE_GOVERNANCE, 1U, "governance", types, 6U,
-        genesis, decode, validate, execute, epoch, epoch, root, NULL};
-    return &iface;
+    return lxp_governance_module_iface_for_handover(false);
 }

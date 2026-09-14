@@ -133,6 +133,23 @@ def checkpoint(work, public, settlement, rpc, account, launch, ca_key, ca_cert, 
     assert rpc.call('eth_call', [dict(to=custody['vault'], data=calldata('guarantorBond()')), 'latest'])[-40:].lower() == bond[2:].lower()
     assert bytes.fromhex(rpc.call('eth_call', [dict(to=custody['vault'],
         data=calldata('depositRootAuthority()')), 'latest'])[2:]) == deposit_public
+    usdl_asset = '0x' + eth_hash(b'USDL').hex()
+    govern(rpc, account, custody['timelock'], custody['registry'],
+        calldata('registerAsset(bytes32,address,uint8,uint128,uint128)',
+            usdl_asset, usdl, 6, 1, 2 ** 128 - 1))
+    send(rpc, account, usdl, calldata('mint(address,uint256)', account, 1000))
+    send(rpc, account, usdl, calldata('approve(address,uint256)', custody['vault'], 1000))
+    owner = json.loads((work / 'human-evidence-input/owner-admission.json').read_text())
+    send(rpc, account, custody['vault'], calldata('deposit(bytes32,uint256,bytes32)',
+        usdl_asset, 1000, '0x' + owner['owner_account']))
+    for target, signature, args, expected in (
+        (usdl, 'balanceOf(address)', (custody['vault'],), 1000),
+        (custody['vault'], 'totalCustodied(bytes32)', (usdl_asset,), 1000),
+        (bond, 'custodiedValue()', (), 1000),
+        (bond, 'minimumBond()', (), 100),
+    ):
+        assert int(rpc.call('eth_call', [dict(to=target,
+            data=calldata(signature, *args)), 'latest']), 16) == expected
     inputs = work / 'checkpoint-publication-inputs'
     inputs.mkdir(mode=0o750)
     os.chown(inputs, 0, 4021)
@@ -297,7 +314,6 @@ def hosted(work, config, environment, launch, service):
     reader.take(6)
     reference = dict(activity_id=reader.span(32).hex(), receipt_digest=digest(b'receipt', raw[:-69] + b'\0').hex())
     identity = registration['identity']
-    identity['evidence'] = reference
     scope = dict(authority=registration['authority'], action_key=session['action_key'], capability_id=session['grant_id'],
         activity_types=[5], counterparties=[], assets=[], amount_ceiling='0', expiry_sequence=session['expiry_sequence'],
         enforceable_dimensions=[], evidence=reference)
@@ -349,7 +365,33 @@ def hosted(work, config, environment, launch, service):
             time.sleep(0.2)
     assert result['verification'] == 4 and result['expiry_sequence'] == session['expiry_sequence']
     assert result['action_key'] == session['action_key'] and result['canonical_core_bytes'] == session['summary']
-    assert query('identity', {})['verification_level'] == 'checkpoint_finalised'
+    current_identity = query('identity', {})
+    assert current_identity['verification_level'] == 'checkpoint_finalised'
+    assert current_identity['authorities'] == [
+        dict(kind='primary_key', id=registration['authority']),
+        dict(kind='session_key', id=session['grant_id'])]
+    assert current_identity['revocation_sequence'] == identity['revocation_sequence']
+    assert current_identity['head_sequence'] >= session['sequence']
+    current_state = bytes.fromhex(current_identity['canonical_core_bytes'])
+    assert len(current_state) == 223 and current_state[:5] == b'LXGI1'
+    assert int.from_bytes(current_state[215:223], 'big') == session['sequence']
+    session_record = authority_root / (reference['activity_id'] + '.json')
+    held_record = root / 'session-membership-withheld.json'
+    session_record.rename(held_record)
+    try:
+        try:
+            query('identity', {})
+            raise AssertionError('identity accepted incomplete session registration history')
+        except urllib.error.HTTPError as error:
+            assert error.code == 503
+    finally:
+        held_record.rename(session_record)
+    assert query('identity', {})['authorities'] == current_identity['authorities']
+    try:
+        query('identity', dict(principal='another-principal'))
+        raise AssertionError('session membership crossed principal binding')
+    except urllib.error.HTTPError as error:
+        assert error.code == 403
     for recovery in ('true', 'false'):
         assert query('key-policy', dict(recovery=recovery))['verification'] == 4
     for field in ('authority', 'action_key', 'capability_id'):
@@ -360,4 +402,28 @@ def hosted(work, config, environment, launch, service):
             raise AssertionError('mismatched capability binding accepted')
         except urllib.error.HTTPError as error:
             assert error.code == 403
-    print('real checkpoint-finalised identity, key policies and committed capability action/expiry verified positively; mismatched bindings refused', flush=True)
+    print('real checkpoint-finalised identity, session membership, key policies and committed capability action/expiry verified positively; incomplete history and mismatched principal/bindings refused', flush=True)
+
+
+def module_reads(work, public, last_batch):
+    repo = Path(__file__).resolve().parents[2]
+    target = Path(os.environ.get('CARGO_TARGET_DIR', repo / 'agent/target'))
+    binary = target / 'debug/examples/module_state'
+    command = ['setpriv', '--reuid=4021', '--regid=4021', '--groups=' + str(repo.stat().st_gid),
+        str(binary), str(work / 'run/layerxd.lni.sock'), '77',
+        '0x' + public['LAYERX_NODE_SEQUENCER_PUBLIC_KEY'], '0', '0x' + b'sequence'.hex()]
+    values = []
+    for rank in (3, 4):
+        result = subprocess.run([*command, str(rank)], capture_output=True, check=True, timeout=15)
+        value = json.loads(result.stdout)
+        assert value['level'] == rank and value['batch'] == last_batch
+        assert int(value['value'], 16) == value['sequence'] + 1
+        assert len(bytes.fromhex(value['proof'][2:])) > 354
+        values.append(value)
+    assert values[0]['value'] == values[1]['value'] and values[0]['sequence'] == values[1]['sequence']
+    for index, changed in ((6, '78'), (7, '0x' + '00' * 32), (8, '10'), (9, '0x' + b'missing'.hex())):
+        refused = list(command)
+        refused[index] = changed
+        result = subprocess.run([*refused, '4'], capture_output=True, timeout=15)
+        assert result.returncode != 0, 'module read accepted wrong network/key/module/selector'
+    print('actual LNI module state and current checkpoint proofs verify; foreign network/key/module/selector refuse', flush=True)

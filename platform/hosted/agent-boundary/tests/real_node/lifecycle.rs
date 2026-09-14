@@ -1,3 +1,6 @@
+#[path = "lifecycle/post_upgrade.rs"]
+mod post_upgrade;
+
 use super::*;
 use layerx_programs_runtime::{
     derive_program_account, AccessDeclaration, AccessMode, AccessSet, AccountAccess, Capability,
@@ -352,9 +355,13 @@ fn verify_lifecycle_receipt(
                 &bytes,
                 &unhex(field(result, "terminal_payload")),
                 &unhex(field(result, "call_graph")),
-                AuthorizedProgramExecutionExpectation {
+                &AuthorizedProgramExecutionExpectation {
                     authority,
                     activity_id: expected_id,
+                    payload_hash: must(
+                        layerx_wire::hash::payload_hash(&activity),
+                        "call payload hash",
+                    ),
                     program_id: call.program_id.bytes(),
                     guest_abi_version: 2,
                 },
@@ -496,7 +503,7 @@ fn verify_lifecycle_maintenance(
     authorization: &SequencerAuthorization,
     authority: &AuthorizedBatch,
 ) -> AuthorizedBatch {
-    assert_eq!(field(identity, "kind"), "occupancy_maintenance_v2");
+    assert_eq!(field(identity, "kind"), "batch_maintenance_v1");
     let decode_proof = |value: &serde_json::Value| {
         let wire = must(
             decode_merkle_proof(&unhex(field(value, "receipt_proof_hex"))),
@@ -974,9 +981,13 @@ fn real_escrow_requires_registered_destination_account() {
             &bytes,
             &terminal,
             &unhex(field(result, "call_graph")),
-            AuthorizedProgramExecutionExpectation {
+            &AuthorizedProgramExecutionExpectation {
                 authority,
                 activity_id: must(activity_id(&activity), "refused activity id"),
+                payload_hash: must(
+                    layerx_wire::hash::payload_hash(&activity),
+                    "call payload hash",
+                ),
                 program_id: program,
                 guest_abi_version: 2,
             },

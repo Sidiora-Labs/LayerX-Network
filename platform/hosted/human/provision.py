@@ -504,6 +504,12 @@ def assemble(work_dir, registry_path, asset, journal_path):
                 and int(value, 16) != 0, movement_path, key)
     recovery = {'root': owner['recovery_root'], 'threshold': owner['recovery_threshold'],
                 'delay_seconds': owner['recovery_delay_seconds']}
+    onboarding = None
+    if (inputs / 'owner-kms.json').exists():
+        onboarding = protected_json(inputs / 'onboarding-configuration.json')
+        fields(onboarding, 'directory sponsor_principal initial_funding', inputs, 'onboarding configuration')
+        require(onboarding['sponsor_principal'] == owner['principal'], inputs, 'KMS sponsor principal')
+        uint(onboarding['initial_funding'], 128, inputs, 'initial_funding', 1)
     files = {
         'components.json': {'AGENT_ACTOR': owner['did'], 'AGENT_AUTHORITY': registration['authority'],
             'AGENT_OWNER_ACCOUNT': 'agent:' + registration['identity']['did'] + ':main',
@@ -518,6 +524,10 @@ def assemble(work_dir, registry_path, asset, journal_path):
                                                   inputs / 'owner-registration.json'),
         'recovery-policy.json': recovery, 'purpose-catalog.json': catalog,
         'movement-policy.json': dict(movement, **policy['movement'])}
+    if onboarding is not None:
+        files['components.json'].update(ONBOARDING_SPONSOR_PRINCIPAL=onboarding['sponsor_principal'],
+            ONBOARDING_INITIAL_FUNDING=onboarding['initial_funding'])
+        files['onboarding-configuration.json'] = onboarding
     records = journal_records(journal_path)
     lock = work_dir / '.human-evidence-publish'
     try:

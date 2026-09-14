@@ -24,6 +24,7 @@ lxp_result lx_budget_lookup(lx_budget_store *store,
 lxp_result lx_budget_record_validate(const lx_budget_record *record)
 {
     if (record == NULL || lxp_ct_is_zero(record->budget_id, 32U) ||
+        (record->native_source == lxp_ct_is_zero(record->source_account, 32U)) ||
         lxp_u128_is_zero(record->per_period_limit) ||
         record->period_length == 0U || record->expiry == 0U ||
         record->expiry <= record->period_start ||

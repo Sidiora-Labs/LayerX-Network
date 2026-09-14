@@ -15,14 +15,15 @@ PLATFORM_BETA_CLUSTER_ENV ?= build/beta-cluster/env
 	platform-test-docs platform-hosted-smoke platform-hosted-topology-check platform-hosted-agentd-check platform-beta-cluster-up platform-beta-cluster-down \
 	platform-test-agent-install \
 	platform-policy-install platform-sample-preflight platform-sample-install platform-sample-dependencies-ready \
-	platform-install-local-artifacts platform-dependencies-install platform-gradle-qualification
+	platform-install-local-artifacts platform-jvm-dependencies-install platform-dependencies-install platform-gradle-qualification
 
 PLATFORM_PYTHON_ENV := $(CURDIR)/build/platform-python
 PLATFORM_MAVEN_REPOSITORY ?= $(HOME)/.m2/repository
+PLATFORM_MAVEN_OFFLINE ?= -o
 
 platform-policy-install:
 	@cargo deny --version >/dev/null || { echo "cargo-deny is required for Platform policy checks" >&2; exit 1; }
-	cargo deny fetch
+	cd platform && $(PLATFORM_CARGO) deny fetch
 
 platform-sample-preflight:
 	@command -v python3 >/dev/null || { echo "python3 is required for Platform samples" >&2; exit 1; }
@@ -40,12 +41,7 @@ platform-sample-install: platform-sample-preflight
 	cd platform/docs/samples/first-payment-go && go mod download
 	cargo fetch --manifest-path platform/docs/samples/verify-receipt-rust/Cargo.toml --locked
 	cargo fetch --manifest-path platform/examples/marketplace/program/Cargo.toml --locked
-	@set -eu; for pom in platform/sdk/jvm/pom.xml platform/integrations/spring/pom.xml platform/integrations/android/pom.xml \
-		platform/integrations/spring/example/pom.xml \
-		platform/docs/samples/first-payment-jvm/pom.xml platform/docs/samples/paid-endpoint-spring/pom.xml \
-		platform/docs/samples/mobile-payment-android/pom.xml; do \
-		mvn -q -f "$$pom" -Pconformance dependency:go-offline -DexcludeGroupIds=com.sidiora.layerx; \
-	done
+	$(MAKE) platform-jvm-dependencies-install
 	@set -eu; \
 		sdk_lock=$$(sha256sum platform/sdk/swift/Package.resolved | awk '{print $$1}'); \
 		ios_lock=$$(sha256sum platform/integrations/ios/Package.resolved | awk '{print $$1}'); \
@@ -69,9 +65,18 @@ platform-sample-dependencies-ready:
 	@test -s $(PLATFORM_MAVEN_REPOSITORY)/com/sidiora/layerx/layerx-android/0.1.0/layerx-android-0.1.0.jar || { echo "run make platform-dependencies-install to install the local Android integration" >&2; exit 1; }
 
 platform-install-local-artifacts:
-	mvn -o -q -f platform/sdk/jvm/pom.xml -DskipTests install
-	mvn -o -q -f platform/integrations/spring/pom.xml -DskipTests install
-	mvn -o -q -f platform/integrations/android/pom.xml -DskipTests install
+	mvn $(PLATFORM_MAVEN_OFFLINE) -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f platform/sdk/jvm/pom.xml install
+	mvn $(PLATFORM_MAVEN_OFFLINE) -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f platform/integrations/spring/pom.xml install
+	mvn $(PLATFORM_MAVEN_OFFLINE) -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f platform/integrations/android/pom.xml install
+
+platform-jvm-dependencies-install:
+	$(MAKE) platform-install-local-artifacts PLATFORM_MAVEN_OFFLINE=
+	@set -eu; for pom in platform/sdk/jvm/pom.xml platform/integrations/spring/pom.xml platform/integrations/android/pom.xml \
+		platform/integrations/spring/example/pom.xml \
+		platform/docs/samples/first-payment-jvm/pom.xml platform/docs/samples/paid-endpoint-spring/pom.xml \
+		platform/docs/samples/mobile-payment-android/pom.xml; do \
+		mvn -q -Dmaven.repo.local="$(PLATFORM_MAVEN_REPOSITORY)" -f "$$pom" -Pconformance verify dependency:go-offline; \
+	done
 
 
 platform-dependencies-install: platform-sample-preflight
@@ -110,13 +115,13 @@ platform-lint:
 	cargo deny --manifest-path $(PLATFORM_MANIFEST) check --disable-fetch advisories bans sources
 
 platform-test: public-tls-test-prerequisites
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked --workspace --features layerx-platform-cli/test-credential-store
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked --workspace --features layerx-platform-cli/test-credential-store
 
 platform-test-tooling: platform-test-cli-production-credential-refusal public-tls-test-prerequisites
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-cli --features test-credential-store
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-emulator
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-faucet
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-testnet
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-cli --features test-credential-store
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-emulator
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-faucet
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-testnet
 	sh -n platform/hosted/testnet/run-testnet.sh platform/hosted/testnet/reset-testnet.sh \
 		platform/hosted/testnet/render-status.sh platform/hosted/testnet/tests/hosted-smoke.sh \
 		platform/hosted/paxeer/init-chain.sh
@@ -135,7 +140,7 @@ platform-test-cli-production-credential-refusal:
 	bash platform/cli/tests/production-credential-refusal.sh
 
 platform-test-registry:
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-registry
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-registry
 
 platform-test-node: test-layerxctl
 	bash -n platform/hosted/node/bootstrap.sh platform/hosted/node/supervisor.sh platform/hosted/node/sequencer-env.sh platform/hosted/node/tests/node-test.sh
@@ -143,19 +148,19 @@ platform-test-node: test-layerxctl
 	python3 platform/hosted/node/tests/sequencer-seed-test.py
 
 platform-test-core:
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-core
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-core
 
 platform-test-authority:
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-authority
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-authority
 
 platform-test-agent-boundary:
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-agent-boundary
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-agent-boundary
 
 platform-test-identity:
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-identity
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-identity
 
 platform-test-paxeer-boundary:
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-paxeer-boundary
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-paxeer-boundary
 
 platform-test-trusted-boundary: platform-test-core platform-test-authority platform-test-agent-boundary platform-test-identity platform-test-paxeer-boundary
 
@@ -277,7 +282,7 @@ platform-release-plan:
 	$(PLATFORM_CARGO) run --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-release -- --plan platform/release/registries.kvx
 
 platform-release-test:
-	$(PLATFORM_CARGO) test --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-release
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(PLATFORM_CARGO) test --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-release
 
 platform-test-middleware: platform-sample-dependencies-ready
 	npm run build --workspace @sidiora/layerx-seller-middleware

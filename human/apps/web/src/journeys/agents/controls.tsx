@@ -2,16 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import type { Agent, MoveQuote } from "../../api/index.ts";
-import {
-  DesktopConfirmation,
-  InlineNotice,
-  KitButton,
-  KitSectionHeader,
-  KitTextField,
-  MobileConfirmation,
-} from "../../kit";
+import { DesktopConfirmation, MobileConfirmation } from "../../kit/confirm";
+import { InlineNotice } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { KitSectionHeader, KitTextField } from "../../kit/display";
 import { PrivateFigure } from "../../settings";
 import { StillCheckingSurface } from "../../states";
 import {
@@ -25,6 +21,7 @@ import {
   keyChallengePresentation,
   mutationOutcomeUnknown,
   parseMonthlyLimit,
+  parseRotationTiming,
   quotePresentation,
   type AgentControl,
   type AgentsShell,
@@ -34,7 +31,8 @@ import {
 import { JourneyStages } from "./progress.tsx";
 
 type OpenControl =
-  | Readonly<{ id: "pause" | "resume" | "rotate" | "recover" }>
+  | Readonly<{ id: "pause" | "resume" | "recover" }>
+  | Readonly<{ id: "rotate"; delay: string; window: string }>
   | Readonly<{ id: "limit"; input: string }>
   | Readonly<{ id: "reclaim"; input: string }>
   | Readonly<{ id: "fund"; input: string; quote?: MoveQuote }>
@@ -170,7 +168,13 @@ export function AgentControls({
         ));
         onChanged();
       } else if (unknownControl.id === "rotate") {
-        setChallenge(keyChallengePresentation(await agents.rotate(agent.agent_id), AGENT_LOCALE));
+        const timing = parseRotationTiming(unknownControl.delay, unknownControl.window);
+        if (timing === undefined) {
+          setErrorSentence(copyEntry("error.agent.rotation-timing").message);
+          setUnknownControl(undefined);
+          return "resolved";
+        }
+        setChallenge(keyChallengePresentation(await agents.startRotation(agent.agent_id, timing), AGENT_LOCALE));
       } else {
         setChallenge(keyChallengePresentation(await agents.recover(agent.agent_id), AGENT_LOCALE));
       }
@@ -210,6 +214,8 @@ export function AgentControls({
     setErrorSentence(undefined);
     if (control.id === "limit" || control.id === "reclaim" || control.id === "fund") {
       setOpen({ id: control.id, input: "" });
+    } else if (control.id === "rotate") {
+      setOpen({ id: "rotate", delay: "", window: "" });
     } else if (control.id === "archive") {
       setOpen({ id: "archive", phase: "disposition", typed: "" });
     } else {
@@ -273,8 +279,13 @@ export function AgentControls({
           onChanged();
         }
       } else if (open.id === "rotate") {
-        setChallenge(keyChallengePresentation(await agents.rotate(agent.agent_id), AGENT_LOCALE));
-        close();
+        const timing = parseRotationTiming(open.delay, open.window);
+        if (timing === undefined) {
+          setErrorSentence(copyEntry("error.agent.rotation-timing").message);
+        } else {
+          setChallenge(keyChallengePresentation(await agents.startRotation(agent.agent_id, timing), AGENT_LOCALE));
+          close();
+        }
       } else {
         setChallenge(keyChallengePresentation(await agents.recover(agent.agent_id), AGENT_LOCALE));
         close();
@@ -436,6 +447,21 @@ export function AgentControls({
           }}
         >
           <div className="flex flex-col gap-3">
+            {open.id === "rotate" ? (
+              <>
+                <p className="text-sm text-foreground-secondary">{copyEntry("agent.keys.rotation-timing.body").message}</p>
+                <AmountField
+                  labelKey="agent.keys.rotation-delay.label"
+                  value={open.delay}
+                  onChange={(value) => { setOpen({ ...open, delay: value }); }}
+                />
+                <AmountField
+                  labelKey="agent.keys.rotation-window.label"
+                  value={open.window}
+                  onChange={(value) => { setOpen({ ...open, window: value }); }}
+                />
+              </>
+            ) : null}
             {open.id === "limit" ? (
               <AmountField
                 labelKey="agent.limit.amount.label"

@@ -12,16 +12,20 @@ pub mod keystore;
 #[cfg(feature = "custody")]
 pub mod local;
 #[cfg(feature = "custody")]
+pub mod onboarding;
+#[cfg(feature = "custody")]
 pub mod payments;
 #[cfg(feature = "custody")]
 pub mod redact;
 #[cfg(feature = "custody")]
 pub mod remote;
+pub mod rotation;
 pub mod secp256k1;
 #[cfg(feature = "custody")]
 pub mod send;
 #[cfg(feature = "custody")]
 pub mod session;
+pub mod settlement_recipient;
 #[cfg(feature = "custody")]
 pub mod signer;
 

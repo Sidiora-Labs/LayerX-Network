@@ -68,6 +68,7 @@ pub enum Capability {
     Simulate,
     AssetRead,
     FeeEstimate,
+    SessionFeeState,
 }
 
 impl Capability {
@@ -92,6 +93,7 @@ impl Capability {
             Self::Simulate => "simulate",
             Self::AssetRead => "asset_read",
             Self::FeeEstimate => "fee_estimate",
+            Self::SessionFeeState => "session_fee_state",
         }
     }
 }
@@ -115,7 +117,7 @@ pub struct Schema {
     pub capabilities: &'static [Capability],
 }
 
-const CAPABILITIES: [Capability; 17] = [
+const CAPABILITIES: [Capability; 18] = [
     Capability::NodeInfo,
     Capability::Submit,
     Capability::AuthenticatedDurableSubmit,
@@ -133,6 +135,7 @@ const CAPABILITIES: [Capability; 17] = [
     Capability::Simulate,
     Capability::AssetRead,
     Capability::FeeEstimate,
+    Capability::SessionFeeState,
 ];
 
 const fn message(
@@ -153,7 +156,7 @@ const fn message(
     }
 }
 
-const MESSAGES: [MessageDescriptor; 35] = [
+const MESSAGES: [MessageDescriptor; 37] = [
     message(
         "NodeInfoRequest",
         1,
@@ -434,6 +437,22 @@ const MESSAGES: [MessageDescriptor; 35] = [
         true,
         false,
     ),
+    message(
+        "SessionFeeStateRequest",
+        36,
+        MessageKind::Request,
+        Capability::SessionFeeState,
+        true,
+        false,
+    ),
+    message(
+        "SessionFeeStateResponse",
+        37,
+        MessageKind::Response,
+        Capability::SessionFeeState,
+        true,
+        false,
+    ),
 ];
 
 const SCHEMA: Schema = Schema {
@@ -460,7 +479,7 @@ pub struct GoldenVector {
 const NO_PROOF: &[u8] = &[];
 const PROOF: &[u8] = &[0xa5];
 
-const GOLDENS: [GoldenVector; 35] = [
+const GOLDENS: [GoldenVector; 37] = [
     GoldenVector {
         message: "NodeInfoRequest",
         payload: &[1],
@@ -670,6 +689,18 @@ const GOLDENS: [GoldenVector; 35] = [
         payload: &[35],
         proof_material: NO_PROOF,
         encoded_hex: "0001000500230000000000000000000000012300000000",
+    },
+    GoldenVector {
+        message: "SessionFeeStateRequest",
+        payload: &[36],
+        proof_material: NO_PROOF,
+        encoded_hex: "0001000500240000000000000000000000012400000000",
+    },
+    GoldenVector {
+        message: "SessionFeeStateResponse",
+        payload: &[37],
+        proof_material: NO_PROOF,
+        encoded_hex: "0001000500250000000000000000000000012500000000",
     },
 ];
 

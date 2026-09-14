@@ -285,7 +285,7 @@ pub(crate) fn onboarding_status(value: &OnboardingStatus) -> Value {
     let stages = value.stages().iter().map(|stage| json!({
         "stage": match stage.stage() { OnboardingStage::ApplicationIdentity => "application-identity",
             OnboardingStage::CustodyKey => "custody-key", OnboardingStage::DidRegistration => "protocol-identity",
-            OnboardingStage::RecoveryRegistration => "recovery" },
+            OnboardingStage::InitialFunding => "initial-funding", OnboardingStage::RecoveryRegistration => "recovery" },
         "state": stage_state(stage.state()),
         "evidence": stage.evidence().iter().map(|item| json!({"evidence_id": item.row().as_str(),
             "class": match item.class() { EvidenceClass::LocalJourneyState => "local-journey-state",

@@ -156,4 +156,4 @@ export {
   type SegmentedControlOption,
   type SegmentedControlProps,
 } from "./collection";
-export { StatPair } from "@layerx/ui";
+export { StatPair } from "@layerx/ui/components/stat";

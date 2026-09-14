@@ -1,7 +1,5 @@
 use super::{by_activity, hex, json, protected, refusal, Config, Request, Response};
-use layerx_platform_authority::{
-    authorized_batch_by_activity, parse_replica_evidence, receipt_locator, AuthorityFacts,
-};
+use layerx_platform_authority::{authorized_batch_by_activity, receipt_locator, AuthorityFacts};
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_wire::receipt::{decode, decode_batch_header};
 use serde::{Deserialize, Serialize};
@@ -17,6 +15,10 @@ use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 const MAX_FILE: u64 = 16 * 1024 * 1024;
+
+mod budget_state;
+mod dynamic;
+mod session_membership;
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -143,6 +145,7 @@ pub(super) struct Human {
     state_root: PathBuf,
     horizon: u64,
     records: Mutex<()>,
+    binding: Option<layerx_identity_binding::Client>,
 }
 
 fn required(name: &str) -> Result<String, String> {
@@ -268,6 +271,9 @@ impl Human {
                 "MODULE_REGISTRY_FILE",
                 "CORE_CLOCK_HORIZON",
                 "STATE_ROOT",
+                "IDENTITY_BINDING_SOCKET",
+                "IDENTITY_BINDING_UID",
+                "IDENTITY_BINDING_GID",
             ]
             .iter()
             .any(|suffix| std::env::var_os(format!("LAYERX_AUTHORITY_{suffix}")).is_some());
@@ -312,8 +318,10 @@ impl Human {
         if tenant.is_empty() || principal.is_empty() {
             return Err("human tenant and principal must be nonempty".to_owned());
         }
+        let binding = dynamic::binding_client(&tenant)?;
         Ok(Some(Self {
             token,
+            binding,
             tenant,
             principal,
             policy_path,
@@ -420,15 +428,17 @@ fn verify(
 ) -> Result<Verified, ()> {
     let receipt = hex::decode(&record.receipt_hex).map_err(|_| ())?;
     let locator = receipt_locator(&receipt).map_err(|_| ())?;
-    let evidence = parse_replica_evidence(
+    let (evidence, derived) = crate::trust::replica(
+        config,
+        &receipt,
         &serde_json::to_vec(&record.replica_document).map_err(|_| ())?,
-        config.replica_id,
-        config.sequencer_public_key,
     )
     .map_err(|_| ())?;
-    let facts =
-        authorized_batch_by_activity(locator.activity_id, &receipt, &evidence, authorization)
-            .map_err(|_| ())?;
+    if config.trust.is_none() && derived != *authorization {
+        return Err(());
+    }
+    let facts = authorized_batch_by_activity(locator.activity_id, &receipt, &evidence, &derived)
+        .map_err(|_| ())?;
     let header = decode_batch_header(&evidence.header).map_err(|_| ())?;
     if header.network_id() != config.protocol_network_id {
         return Err(());
@@ -515,6 +525,9 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
         .path
         .strip_prefix("/v1/agent/")
         .ok_or_else(|| refusal(404, "not_found", None))?;
+    if dynamic::requested(&params) {
+        return dynamic::dispatch(config, human, p, name, &params);
+    }
     let additional: &[&str] = match name {
         "registry" | "balance-context" | "core-clock" => &[],
         "authorized-batch" => &["activity_id"],
@@ -540,12 +553,22 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
             .iter()
             .find(|e| hex::encode(&e.facts.activity_id) == *activity)
         {
-            return Ok(json(
-                200,
-                &value!({"batch_id": hex::encode(&held.facts.batch_id), "asset": hex::encode(&held.facts.asset), "previous_state_root": hex::encode(&held.facts.previous_state_root), "resulting_state_root": hex::encode(&held.facts.resulting_state_root), "sequencer_public_key": hex::encode(&held.facts.sequencer_public_key)}),
-            ));
+            return selected_activity_authority(
+                value!({"batch_id": hex::encode(&held.facts.batch_id), "asset": hex::encode(&held.facts.asset), "sequencer_public_key": hex::encode(&held.facts.sequencer_public_key)}),
+                &held.record.receipt_hex,
+            );
         }
-        return Ok(by_activity(config, activity, false));
+        let response = by_activity(config, activity, false);
+        if response.status != 200 {
+            return Ok(response);
+        }
+        let document: Value = serde_json::from_slice(&response.body)
+            .map_err(|_| unavailable("state_evidence_refused"))?;
+        let receipt = document["receipt"]
+            .as_str()
+            .ok_or_else(|| unavailable("state_evidence_refused"))?
+            .to_owned();
+        return selected_activity_authority(document, &receipt);
     }
     let mut evidence = human.evidence(config)?;
     if matches!(name, "identity" | "key-policy" | "capability-scope") {
@@ -553,12 +576,42 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
             item.checkpoint = super::checkpoint_header(config, item.facts.batch_number).ok();
         }
     }
+    if name == "identity" {
+        let current = super::checkpoint_for(config, None)
+            .map_err(|()| unavailable("identity_head_checkpoint_unavailable"))?;
+        let latest = evidence
+            .last()
+            .ok_or_else(|| unavailable("identity_state_proof_unavailable"))?;
+        if current.canonical_header() != latest.header {
+            return Err(unavailable("identity_head_evidence_incomplete"));
+        }
+    }
     match name {
         "core-clock" => clock(&evidence, human.horizon),
         "balance-context" => balance_context(p, &human.registry_path, &evidence, config),
-        "budget-state" => budget(p, &params["budget_id"], &evidence),
+        "budget-state" => budget_state::read(config, p, &params["budget_id"])
+            .or_else(|_| budget(p, &params["budget_id"], &evidence)),
         _ => policy_route(name, &params, p, &evidence),
     }
+}
+
+fn selected_activity_authority(
+    mut document: Value,
+    receipt_hex: &str,
+) -> Result<Response, Response> {
+    let bytes = hex::decode(receipt_hex).map_err(|_| unavailable("state_evidence_refused"))?;
+    let receipt = decode(&bytes).map_err(|_| unavailable("state_evidence_refused"))?;
+    let protocol = receipt
+        .protocol()
+        .ok_or_else(|| unavailable("state_evidence_refused"))?;
+    if document["batch_id"].as_str() != Some(hex::encode(&protocol.batch_id()).as_str())
+        || document["asset"].as_str() != Some(hex::encode(&protocol.asset()).as_str())
+    {
+        return Err(unavailable("state_evidence_refused"));
+    }
+    document["previous_state_root"] = value!(hex::encode(&protocol.previous_state_root()));
+    document["resulting_state_root"] = value!(hex::encode(&protocol.resulting_state_root()));
+    Ok(json(200, &document))
 }
 
 fn authorize_activity(p: &PrincipalPolicy, activity: &str) -> Result<(), Response> {
@@ -662,6 +715,8 @@ fn balance_context(
     if age_ms > u128::from(p.maximum_age_seconds) * 1000 {
         return Err(unavailable("balance_evidence_stale"));
     }
+    let authorization = crate::trust::authorization(config, &head.header, &head.header_signature)
+        .map_err(|()| unavailable("sequencer_history_unavailable"))?;
     Ok(json(
         200,
         &value!({
@@ -671,9 +726,9 @@ fn balance_context(
             "observed_at": head.timestamp_ms.to_string(),
             "age_seconds": u64::try_from(age_ms / 1000).map_err(|_| unavailable("clock_unavailable"))?,
             "maximum_age_seconds": p.maximum_age_seconds,
-            "sequencer_id": hex::encode(&config.sequencer_id),
-            "sequencer_public_key": hex::encode(&config.sequencer_public_key),
-            "first_batch_number": config.first_batch, "last_batch_number": config.last_batch,
+            "sequencer_id": hex::encode(&authorization.sequencer_id()),
+            "sequencer_public_key": hex::encode(&authorization.public_key()),
+            "first_batch_number": authorization.first_batch_number(), "last_batch_number": authorization.last_batch_number(),
             "evidence": account_summary(p, evidence)?
         }),
     ))
@@ -845,29 +900,12 @@ fn policy_route(
         return native_capability_scope(identity, params, item, evidence, head);
     }
     if name == "identity" {
-        let state = native_identity_state(item, &identity.did)?;
+        let (state, authorities) = session_membership::current(identity, item, evidence, p)?;
         let revision = native_u64(&state, 69)?;
-        if identity.frozen
-            || identity.revocation_sequence != revision
-            || identity.authorities.len() != 1
-            || identity.authorities[0].kind != "primary_key"
-            || identity.authorities[0].id != hex::encode(&state[37..69])
-        {
-            return Err(unavailable("identity_state_proof_unavailable"));
-        }
-        native_complete_suffix(item, evidence)?;
-        for later in evidence
-            .iter()
-            .filter(|e| e.facts.global_sequence > item.facts.global_sequence)
-        {
-            if native_identity_state(later, &identity.did).is_ok() {
-                return Err(unavailable("identity_state_proof_unavailable"));
-            }
-        }
         return Ok(json(
             200,
             &value!({
-                "authorities": identity.authorities,
+                "authorities": authorities,
                 "canonical_core_bytes": hex::encode(&state),
                 "head_sequence": head, "revocation_sequence": revision,
                 "frozen": false, "verification_level": "checkpoint_finalised"
@@ -1139,14 +1177,17 @@ fn native_complete_suffix(start: &Verified, evidence: &[Verified]) -> Result<(),
         previous_root = Some(header.resulting_state_root());
         let begin = header.first_sequence().max(start.facts.global_sequence);
         let last = header.last_sequence();
-        let maintenance = first
+        let identity_kind = first
             .record
             .replica_document
             .get("batch_evidence")
             .and_then(|e| e.get("batch_identity"))
             .and_then(|e| e.get("kind"))
-            .and_then(Value::as_str)
-            == Some("occupancy_maintenance_v2");
+            .and_then(Value::as_str);
+        let maintenance = matches!(
+            identity_kind,
+            Some("occupancy_maintenance_v2" | "batch_maintenance_v1")
+        );
         let end = if maintenance {
             last.checked_sub(1).ok_or_else(refused)?
         } else {

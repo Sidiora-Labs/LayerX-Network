@@ -189,6 +189,10 @@ typedef struct lxp_send_environment {
     uint64_t batch_timestamp;
     uint32_t network_id;
     uint16_t protocol_version;
+    /* The resolved grant the debit draws against, or NULL when the caller
+     * resolved none; a declared delegated or budget debit is refused without
+     * it. */
+    struct lxp_transfer_allowance *allowance;
 } lxp_send_environment;
 
 typedef struct lxp_payer_grant {
@@ -247,6 +251,7 @@ typedef struct lxp_receive_environment {
     uint64_t global_sequence;
     uint32_t network_id;
     uint16_t protocol_version;
+    struct lxp_transfer_allowance *allowance;
 } lxp_receive_environment;
 
 typedef struct lx_account_index_entry {
@@ -280,6 +285,7 @@ typedef struct lxp_state_proof {
 
 lxp_result lx_account_name_parse(const uint8_t *name, size_t name_length,
                                  lx_account_name *parsed);
+lxp_result lx_account_owner_did(const lx_account *account, uint8_t owner[32]);
 lxp_result lx_account_kind_of(const uint8_t *name, size_t name_length,
                               lx_account_kind *kind);
 lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
@@ -355,6 +361,9 @@ lxp_result lx_account_module_value_prepare(
 lxp_result lx_account_registration_commit(
     lx_account_registry *registry, const lx_account_registration *registration,
     lx_account **account);
+lxp_result lx_account_module_custody_registration_commit(
+    lx_account_registry *registry, const lx_account_registration *registration,
+    uint16_t module_id, lx_account **account);
 lxp_result lx_account_close(lx_account_registry *registry,
                             const uint8_t account_id[LX_ACCOUNT_ID_BYTES]);
 lxp_result lxp_send_decode(const uint8_t *bytes, size_t length, lxp_send *send);

@@ -164,14 +164,21 @@ impl CapabilitySet {
         encoded: &[u8],
         program: ProgramId,
         principal: crate::PrincipalId,
+        canonical_payload: &[u8],
     ) -> Result<crate::AccessSet, AbiError> {
-        Self::decode_canonical(encoded)
-            .and_then(Self::new)
-            .and_then(|capabilities| {
-                capabilities
-                    .reachable_accesses(program, principal)
-                    .map_err(|_| AbiError::AccessDeclaration)
-            })
+        let abi = canonical_payload
+            .get(32..34)
+            .ok_or(AbiError::InvalidEncoding)?;
+        let decoded = match u16::from_be_bytes([abi[0], abi[1]]) {
+            1 => Self::decode_canonical(encoded),
+            2 => Self::decode_v2_canonical(encoded),
+            _ => return Err(AbiError::InvalidEncoding),
+        };
+        decoded.and_then(Self::new).and_then(|capabilities| {
+            capabilities
+                .reachable_accesses(program, principal)
+                .map_err(|_| AbiError::AccessDeclaration)
+        })
     }
 
     pub(crate) fn reachable_accesses(

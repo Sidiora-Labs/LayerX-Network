@@ -1,7 +1,7 @@
-import { encodeNativeProgramCall } from "./native-program-call.js";
+import { decodeNativeProgramCall, encodeNativeProgramCall } from "./native-program-call.js";
 import { decodeNativeCapabilitySet } from "./native-capabilities.js";
 import type { ProgramCall, ProgramOutcome, ProgramUsage } from "./programs.js";
-import type { ProgramReceiptOutcome } from "./verifier.js";
+import type { ProgramReceiptOutcome, ProtocolReceipt } from "./verifier.js";
 
 const ACTIVITY_DOMAIN = bytes("LXP/v1/activity-id\0");
 const PAYLOAD_DOMAIN = bytes("LXP/v1/payload-hash\0");
@@ -15,8 +15,11 @@ const FAILURE = bytes("LXP/programs/failure-detail/v1\0");
 const RESOURCE = bytes("LXP/programs/resource-detail/v1\0");
 const SETTLEMENT = bytes("LXP/programs/settlement-failure/v1\0");
 const CALLBACK = bytes("LXP/programs/callback-failure/v1\0");
+const PRE_RUNTIME_FAILURE = bytes("LXP/v1/context-hash\0LXP/programs/pre-runtime-failure/v1\0");
+const EMPTY_CALL_GRAPH = bytes("LXP/v1/context-hash\0LXP/programs/empty-call-graph/v1\0");
 const TRANSFER_SET_V1 = bytes("LayerX/programs/402LXP/transfer-set/v1\0");
 const TRANSFER_SET_V2 = bytes("LayerX/programs/402LXP/transfer-set/v2\0");
+const ACCOUNT_BOUND_SET = bytes("LayerX/programs/402LXP/account-bound-set/v1\0");
 const PROGRAM_AUTHORITY = bytes("LayerX/programs/402LXP/program-authority/v1\0");
 const PROGRAM_FUNDING = bytes("LayerX/programs/402LXP/program-funding/v1\0");
 const PROGRAM_ACCOUNT = bytes("LayerX/programs/program-account/v1\0");
@@ -138,9 +141,18 @@ export async function decodeAndVerifyProgramTerminal(
   expectedProgramId: string,
   receipt: ProgramReceiptOutcome,
   protocolVersion: number,
+  binding?: Readonly<{ protocol: ProtocolReceipt; signedActivity: Uint8Array }>,
 ): Promise<DecodedProgramTerminal> {
   if (callGraph.length === 0 || !equal(await sha256(callGraph), receipt.callGraphRoot)) fail("program call graph root");
   if (terminalPayload.length === 0 || terminalPayload.length > 1_048_576 || !equal(await sha256(terminalPayload), receipt.terminalPayloadRoot)) fail("program terminal root");
+  if (starts(terminalPayload, PRE_RUNTIME_FAILURE)) {
+    if (binding === undefined) fail("native refusal requires signed activity binding");
+    await verifyPreRuntimeFailure(terminalPayload, callGraph, expectedProgramId, receipt, protocolVersion, binding);
+    return Object.freeze({
+      outcome: Object.freeze({ kind: "refused", failure: Object.freeze({ kind: "guest_refused", code: receipt.resultCode }) }),
+      usage: receiptUsage(receipt), transferVerification: "reconstructed",
+    });
+  }
   let inner = terminalPayload;
   if (receipt.encodingVersion === 4) {
     const domain = bytes("LXP/programs/terminal-applied-legs/v1\0");
@@ -190,6 +202,7 @@ export async function decodeAndVerifyProgramTerminal(
     bindExecutionMetadata(decoded.runtime, 2, decoded.fee, decoded.metering, decoded.usage, receipt);
     if (!equal(decoded.graph, callGraph)) fail("candidate call graph");
     if (decoded.outcome === "success") {
+      if (receipt.resultCode !== 0) fail("candidate response code requires successful execution");
       outcome = Object.freeze({ kind: "completed", code: decoded.code, response: hex(decoded.response) });
       successfulExecution = true;
     } else if (decoded.outcome === "failure") {
@@ -243,12 +256,103 @@ export async function decodeAndVerifyProgramTerminal(
   if (!recorded && (authorityRequired ? (authorization !== undefined) !== transferPresent : authorization !== undefined)) fail("transfer authority presence");
   if (authorization !== undefined) {
     if (authorization.length === 0 || authorityRoot === undefined || !equal(authorityRoot, receipt.transferRoot)) fail("transfer authority root");
-    if (receipt.encodingVersion === 4 && !starts(authorization, TRANSFER_SET_V2)) fail("V2 transfer authority required");
-    await verifyAuthorizationRoot(authorization, authorityRoot);
+    await verifyAuthorizationRoot(authorization, authorityRoot, receipt.encodingVersion === 4);
   }
   if (protocolVersion !== 1 && protocolVersion !== 2 && protocolVersion !== 3) fail("program receipt protocol");
   const boundUsage = usage ?? receiptUsage(receipt);
   return Object.freeze({ outcome, usage: boundUsage, transferVerification: recorded ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed" });
+}
+
+async function verifyPreRuntimeFailure(
+  terminal: Uint8Array, graph: Uint8Array, expectedProgram: string, outcome: ProgramReceiptOutcome,
+  version: number, binding: Readonly<{ protocol: ProtocolReceipt; signedActivity: Uint8Array }>,
+): Promise<void> {
+  const protocol = binding.protocol, zero = new Uint8Array(32);
+  const reader = new Reader(terminal.subarray(PRE_RUNTIME_FAILURE.length));
+  const activity = reader.fixed(32), payloadHash = reader.fixed(32), code = reader.i32();
+  const moduleVersion = reader.u32(), parameterVersion = reader.u32();
+  let encoding = 3, appliedDigest: Uint8Array = zero;
+  if (terminal.length !== PRE_RUNTIME_FAILURE.length + 76) {
+    encoding = reader.byte();
+    if (encoding !== 4) fail("native refusal encoding");
+    appliedDigest = reader.fixed(32);
+  }
+  reader.end();
+  const emptyDigest = encoding === 4 ? await sha256(new Uint8Array()) : zero;
+  if (code >= 0 || code !== protocol.resultCode || code !== outcome.resultCode
+    || !equal(activity, protocol.activityId) || moduleVersion !== protocol.moduleVersion
+    || parameterVersion !== protocol.parameterVersion || encoding !== outcome.encodingVersion
+    || protocol.protocolVersion !== version || protocol.moduleId !== 9 || protocol.operation !== 3
+    || protocol.programOutcome === undefined || !sameReceiptOutcome(outcome, protocol.programOutcome)
+    || outcome.terminalKind !== 2 || outcome.runtimeVersion !== 1
+    || !((version === 2 && encoding === 3) || (version === 3 && encoding === 4))
+    || outcome.memoryBytes !== 0n || outcome.storageReadBytes !== 0n
+    || outcome.outputValues !== 0 || outcome.outputBytes !== 0n) fail("native refusal receipt binding");
+  if (!equal(appliedDigest, emptyDigest) || !equal(outcome.appliedLegsDigest, emptyDigest)
+    || !equal(outcome.transferRoot, zero)) fail("native refusal transfer commitments");
+  if (!equal(outcome.occupancyAssetId, zero) || !equal(outcome.occupancyEvidenceDigest, zero)
+    || !equal(outcome.occupancyTransferRoot, zero) || outcome.occupancyByteBatches !== 0n
+    || outcome.occupancyFeeUnits !== 0n) fail("native refusal occupancy commitments");
+  if (!equal(graph, EMPTY_CALL_GRAPH)) fail("native refusal call graph");
+  const retained = await bindRetainedProgramCall(binding.signedActivity, hex(activity), expectedProgram, version);
+  if (!equal(retained.payloadHash, payloadHash) || retained.guestAbi !== outcome.abiVersion) fail("native refusal payload binding");
+}
+
+function sameReceiptOutcome(left: ProgramReceiptOutcome, right: ProgramReceiptOutcome): boolean {
+  const keys = Object.keys(left) as Array<keyof ProgramReceiptOutcome>;
+  return keys.length === Object.keys(right).length && keys.every((key) => {
+    const value = left[key], other = right[key];
+    if (value instanceof Uint8Array) return other instanceof Uint8Array && equal(value, other);
+    if (Array.isArray(value)) return Array.isArray(other) && value.length === other.length && value.every((item, index) => item === other[index]);
+    return value === other;
+  });
+}
+
+export async function bindRetainedProgramCall(
+  signedActivity: Uint8Array, expectedActivity: string, expectedProgram: string, version: number,
+): Promise<Readonly<{ payloadHash: Uint8Array; guestAbi: number; idempotencyKey: string }>> {
+  const canonical = new Uint8Array(signedActivity);
+  if (canonical.length === 0 || canonical.length > 1_048_576
+    || ![1, 2, 3].includes(version)
+    || hex(await sha256(ACTIVITY_DOMAIN, canonical)) !== expectedActivity) fail("program signed activity mismatch");
+  const call = new Reader(canonical);
+  if (call.u16() !== version || call.u16() !== 0x1001 || call.byte() !== 12) fail("native refusal activity header");
+  field(call, 1); if (call.u16() !== version) fail("native refusal activity protocol");
+  field(call, 2); call.u32();
+  field(call, 3); if (call.u32() !== 0x0009_0003) fail("native refusal activity type");
+  field(call, 4); call.sizedU32(255);
+  field(call, 5); call.sizedU32(524_288);
+  field(call, 6); call.u64();
+  field(call, 7); const notBefore = call.u64(), notAfter = call.u64();
+  field(call, 8); const idempotencyKey = hex(call.sizedU32(32, 32));
+  field(call, 9); call.u128();
+  field(call, 10); const declaredHash = call.sizedU32(32, 32);
+  field(call, 11); const payload = call.sizedU32(524_288);
+  field(call, 12); call.sizedU32(128); call.end();
+  if (notAfter < notBefore || !equal(await sha256(PAYLOAD_DOMAIN, payload), declaredHash)) fail("retained call payload hash");
+  let program: string, guestAbi: number;
+  if (version === 3 || version === 2 && !starts(payload, CALL_DOMAIN)) {
+    const native = decodeNativeProgramCall(payload);
+    if (!equal(encodeNativeProgramCall(native), payload)) fail("retained native call encoding");
+    program = hex(native.programId); guestAbi = native.guestAbi;
+  } else {
+    const legacy = new Reader(payload);
+    if (!equal(legacy.fixed(CALL_DOMAIN.length), CALL_DOMAIN)) fail("retained call domain");
+    program = hex(legacy.fixed(32)); guestAbi = 1;
+    if (legacy.u64() === 0n) fail("retained call budget");
+    legacy.u128();
+    const count = legacy.u16();
+    if (count > 5) fail("retained call capabilities");
+    let prior = 0;
+    for (let index = 0; index < count; index++) {
+      const tag = legacy.byte();
+      if (tag <= prior || tag > 5) fail("retained call capability tag");
+      prior = tag;
+    }
+    legacy.sizedU32(1_048_576); legacy.end();
+  }
+  if (program !== expectedProgram || program === "0".repeat(64)) fail("native refusal payload binding");
+  return Object.freeze({ payloadHash: declaredHash, guestAbi, idempotencyKey });
 }
 
 async function verifyAppliedLegs(encoded: Uint8Array, expected: Uint8Array): Promise<void> {
@@ -491,7 +595,14 @@ interface OccupancyChargeBinding { readonly payer: Uint8Array; readonly amountDu
 interface OccupancySettlementBinding { readonly byteBatches: bigint; readonly feeUnits: bigint; readonly charges: readonly OccupancyChargeBinding[] }
 interface StorageNamespaceBinding { readonly canonical: Uint8Array; readonly wire: Uint8Array; readonly program: Uint8Array; readonly principal?: Uint8Array }
 
-async function verifyAuthorizationRoot(encoded: Uint8Array, expected: Uint8Array): Promise<void> {
+async function verifyAuthorizationRoot(encoded: Uint8Array, expected: Uint8Array, requireV2: boolean): Promise<void> {
+  let names: Reader | undefined;
+  if (starts(encoded, ACCOUNT_BOUND_SET)) {
+    names = new Reader(encoded.subarray(ACCOUNT_BOUND_SET.length));
+    encoded = names.sizedU32(1_048_576);
+    if (starts(encoded, ACCOUNT_BOUND_SET)) fail("nested account-bound transfer set");
+  }
+  if (requireV2 && !starts(encoded, TRANSFER_SET_V2)) fail("V2 transfer authority required");
   const reader = new Reader(encoded);
   const candidate = starts(encoded, TRANSFER_SET_V2);
   const domain = candidate ? TRANSFER_SET_V2 : TRANSFER_SET_V1;
@@ -540,11 +651,39 @@ async function verifyAuthorizationRoot(encoded: Uint8Array, expected: Uint8Array
     if (authority !== undefined && (!equal(authority.owner, program) || !equal(authority.frame, frame)
       || !equal(authority.asset, asset) || !equal(authority.to, to) || authority.amount !== amount)) fail("program transfer authority");
     if (funding !== undefined && (!equal(funding.owner, program) || !equal(funding.destination, to) || !equal(funding.asset, asset))) fail("program funding authority");
+    if (names !== undefined) {
+      const name = names.fixed(names.u16());
+      if (authority !== undefined) {
+        if (name.length !== 0) fail("program source account name");
+      } else {
+        source = await principalPaymentAccount(principal, asset, name);
+      }
+    }
     total = checkedU128Add(total, amount, "transfer total");
     kernelLegs.push(concatenate(Uint8Array.of(0), source, to, asset, bigEndian(amount, 16), bigEndian(1n, 2)));
   }
   reader.end();
+  names?.end();
   if (!equal(await merkleRoot(kernelLegs), expected)) fail("transfer authorization root");
+}
+
+async function principalPaymentAccount(principal: Uint8Array, asset: Uint8Array, name: Uint8Array): Promise<Uint8Array> {
+  if (name.length > 512 || name.some((byte) => !(byte >= 97 && byte <= 122)
+    && !(byte >= 48 && byte <= 57) && ![46, 95, 45, 58].includes(byte))) fail("principal account name");
+  const text = new TextDecoder().decode(name);
+  if (!text.startsWith("agent:") || text.includes("::")) fail("principal account name");
+  const tail = text.slice(6);
+  let did: string;
+  if (tail.endsWith(":main")) did = tail.slice(0, -5);
+  else {
+    const suffix = `:asset:${hex(asset)}`;
+    if (!tail.endsWith(suffix)) fail("principal account asset");
+    did = tail.slice(0, -suffix.length);
+  }
+  if (did.length === 0 || did.startsWith(":") || did.endsWith(":")) fail("principal account DID");
+  const didBytes = bytes(did);
+  if (!equal(await sha256(bytes("LXP/v1/did-id\0"), bigEndian(BigInt(didBytes.length), 2), didBytes), principal)) fail("principal account owner");
+  return sha256(ACCOUNT_DERIVATION, bigEndian(BigInt(name.length), 4), name);
 }
 
 async function decodeProgramAuthority(encoded: Uint8Array): Promise<ProgramAuthorityBinding> {

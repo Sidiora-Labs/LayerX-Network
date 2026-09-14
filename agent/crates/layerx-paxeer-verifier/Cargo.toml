@@ -1,0 +1,16 @@
+[package]
+name = "layerx-paxeer-verifier"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+layerx-types = { path = "../layerx-types" }
+layerx-wire = { path = "../layerx-wire" }
+layerx-proof = { path = "../layerx-proof" }
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+sha3 = "=0.10.8"
+
+[lints]
+workspace = true

@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "runtime.h"
 #include "../layerxd/lxp_daemon_batch_wal.h"
+#include "../layerxd/lxp_daemon_modules.h"
+#include "../layerxd/lxp_daemon_finality_authority.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_activity.h"
 #include "layerx/lxp_batch_identity.h"
@@ -10,6 +12,7 @@
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_genesis.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_snapshot.h"
 #include <errno.h>
@@ -27,14 +30,23 @@ struct gp_runtime {
     lxp_daemon_configuration configuration;
     lx_account_registry accounts;
     lxp_transfer_asset_state assets[LX_ASSET_REGISTRY_CAPACITY];
-    lx_asset_record send_assets[LX_ASSET_REGISTRY_CAPACITY];
+    lx_asset_registry asset_registry;
     lx_asset_runtime asset_runtime;
     size_t asset_count;
     lx_programs_transfer_runtime programs;
+    lxp_daemon_module_runtimes module_runtimes;
     lxp_identity_store identities;
     lxp_fee_params fees;
     lxp_verified_receipt_index verified_receipts;
     lxp_sequencer_authorization sequencer_authorization;
+    lxp_sequencer_authorization prepared_authorization;
+    lxp_handover_state prepared_handover;
+    lxp_daemon_finality_authority finality_authority;
+    lxp_finalisation_state known_finalisation;
+    lxp_batch_header accepted_header;
+    uint8_t accepted_signature[64];
+    lxp_batch_header prepared_header;
+    uint8_t prepared_signature[64];
     lxp_replay_engine engine;
     lxp_arena execution_arena;
     lxp_arena preparation_arena;
@@ -67,7 +79,19 @@ struct gp_runtime {
     struct gp_runtime *transaction;
     lxp_replay_checkpoint *checkpoint;
     off_t transaction_feed_offset;
+    int incident_directory;
 };
+static lxp_result handover_finality_verify(void *context,
+    const lxp_handover_evidence *evidence, lxp_arena *arena)
+{
+    const gp_runtime *runtime = context;
+    if (runtime == NULL || runtime->accepted_header.batch_number == 0U)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    return lxp_daemon_handover_finality_verify(&runtime->finality_authority,
+        &runtime->known_finalisation, &runtime->accepted_header,
+        runtime->accepted_signature, evidence, arena);
+}
+
 static lxp_result parse_u64_text(const char *text, uint64_t *value)
 {
     uint64_t parsed = 0;
@@ -173,27 +197,30 @@ static lxp_result load_identities(const char *path, lxp_identity_store *identiti
 
 static lxp_result collect_assets(gp_runtime *process)
 {
-    size_t account_index;
-    process->asset_count = 0U;
-    for (account_index = 0U; account_index < process->accounts.count; ++account_index) {
-        lx_account *account = &process->accounts.accounts[account_index];
-        size_t asset_index;
-        if (!account->has_asset)
-            continue;
-        for (asset_index = 0U; asset_index < process->asset_count; ++asset_index)
-            if (lxp_ct_memcmp(process->assets[asset_index].asset_id, account->asset_id, 32U) == 0)
+    lxp_result status = lx_asset_registry_init(&process->asset_registry, 0U);
+    if (status == LXP_OK)
+        status = lx_asset_committed_records(&process->kernel,
+            process->asset_registry.assets, LX_ASSET_REGISTRY_CAPACITY,
+            &process->asset_count);
+    if (status != LXP_OK) return status;
+    if (process->asset_count == 0U) return LXP_ERR_ASSET_MISMATCH;
+    process->asset_registry.count = process->asset_count;
+    for (size_t i = 0U; i < process->accounts.count; ++i) {
+        const lx_account *account = &process->accounts.accounts[i];
+        size_t asset;
+        if (!account->has_asset) continue;
+        for (asset = 0U; asset < process->asset_count; ++asset)
+            if (memcmp(account->asset_id,
+                       process->asset_registry.assets[asset].asset_id, 32U) == 0)
                 break;
-        if (asset_index != process->asset_count)
-            continue;
-        if (process->asset_count == LX_ASSET_REGISTRY_CAPACITY)
-            return LXP_ERR_LENGTH_LIMIT;
-        (void)memcpy(process->assets[process->asset_count].asset_id, account->asset_id, 32U);
-        process->assets[process->asset_count].registered = true;
-        process->assets[process->asset_count].paused = false;
-        (void)memcpy(process->send_assets[process->asset_count].asset_id, account->asset_id, 32U);
-        ++process->asset_count;
+        if (asset == process->asset_count) return LXP_ERR_ASSET_MISMATCH;
     }
-    return process->asset_count == 0U ? LXP_ERR_ASSET_MISMATCH : LXP_OK;
+    for (size_t i = 0U; i < process->asset_count; ++i) {
+        status = lx_asset_transfer_state(&process->asset_registry.assets[i],
+                                         &process->assets[i]);
+        if (status != LXP_OK) return status;
+    }
+    return LXP_OK;
 }
 
 static lxp_result occupancy_parameters(void *context, uint32_t recorded_fee_schedule_version,
@@ -295,12 +322,11 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     lxp_u128 principal_balance = {0U, 0U};
     lxp_authority_grant grant;
     lxp_authority_resolved authority;
+    lxp_transfer_allowance allowance;
     lxp_kernel_execution execution;
     lxp_byte_span encoded_receipt;
     uint8_t activity_id[32];
     lxp_result status;
-    uint8_t fee_wire[LXP_FEE_PARAMS_V2_BYTES];
-    size_t fee_wire_length;
     if (process == NULL || canonical_activity == NULL || canonical_receipt == NULL ||
         activity == NULL || receipt == NULL || expected == NULL || activity_length == 0U ||
         receipt_length == 0U || timestamp == 0U ||
@@ -311,11 +337,13 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
         return LXP_ERR_SEQUENCE_GAP;
     if ((expected->module_id != LXP_MODULE_PROGRAMS && expected->module_id != LXP_MODULE_ASSET &&
          expected->module_id != LXP_MODULE_GOVERNANCE &&
+         lxp_daemon_gated_module_version(&process->kernel, expected->module_id) == 0U &&
          !(process->custody_credit_enabled && expected->module_id == LXP_MODULE_BRIDGE)) ||
         expected->module_version == 0U ||
         expected->parameter_version != process->parameter_version)
         return LXP_ERR_VERSION_UNSUPPORTED;
-    status = lxp_fee_params_encode(&process->fees, fee_wire, sizeof(fee_wire), &fee_wire_length);
+    status = lxp_fee_replay_schedule_verify(&process->kernel,
+        expected->parameter_version, &process->fees);
     if (status != LXP_OK) return status;
     status = lxp_activity_decode(canonical_activity, activity_length, activity);
     if (status == LXP_OK && activity->protocol_version != process->protocol_version)
@@ -330,6 +358,7 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
         lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS &&
         activity->activity_type != LX_ASSET_SEND &&
         activity->activity_type != LX_ASSET_WITHDRAW &&
+        !lxp_daemon_gated_activity_supported(&process->kernel, activity->activity_type) &&
         !lxp_governance_activity(activity->activity_type) &&
         !(process->custody_credit_enabled && activity->activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
@@ -338,7 +367,10 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
          ((activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) &&
           expected->module_version != lx_asset_module_iface()->abi_version) ||
          ((activity->activity_type == LXP_BRIDGE_CREDIT ||
-           lxp_governance_activity(activity->activity_type)) && expected->module_version != 1U)))
+           lxp_governance_activity(activity->activity_type)) && expected->module_version != 1U) ||
+         (lxp_daemon_gated_module(expected->module_id) &&
+          expected->module_version != lxp_daemon_gated_module_version(
+              &process->kernel, expected->module_id))))
         status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK)
         status = lxp_identity_resolve(&process->identities, activity->actor_did.bytes,
@@ -394,16 +426,27 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     execution.signature_valid = true;
     execution.identities = &process->identities;
     execution.authority = &authority;
+    lxp_authority_allowance_bind(&grant, &authority, &allowance);
+    execution.allowance = &allowance;
     execution.fee_parameters = &process->fees;
     execution.fee_balance = principal_balance;
     execution.gas_limit = UINT64_MAX;
     execution.arena = &process->execution_arena;
     execution.sequencer_private_key = NULL;
+    execution.replay_receipt = expected;
+    execution.replay_public_key = process->sequencer_authorization.public_key;
     execution.verified_receipts = &process->verified_receipts;
+    {
+        lx_programs_fee_schedule schedule;
+        uint8_t asset_id[32];
+        status = occupancy_parameters(process, execution.recorded_fee_schedule_version,
+            &schedule, asset_id);
+        if (status != LXP_OK) return status;
+        execution.recorded_fee_schedule_version = schedule.version;
+        (void)memcpy(process->programs.occupancy_asset_id, asset_id, 32U);
+    }
     (void)memset(receipt, 0, sizeof(*receipt));
     status = lxp_kernel_execute_activity(&process->kernel, activity, &execution, receipt);
-    if (status == LXP_OK)
-        (void)memcpy(receipt->sequencer_signature, expected->sequencer_signature, 64U);
     if (status == LXP_OK)
         status = lxp_receipt_encode(receipt, true, &process->execution_arena, &encoded_receipt);
     if (status == LXP_OK &&
@@ -594,9 +637,15 @@ static lxp_result durable_receipt_facts(void *context, const uint8_t digest[32],
             break;
         }
         status = lxp_receipt_decode(body, (size_t)length, true, receipt);
-        if (status == LXP_OK)
-            status = lxp_receipt_verify(receipt, runtime->sequencer_authorization.public_key,
-                                        &runtime->execution_arena);
+        if (status == LXP_OK) {
+            lxp_sequencer_authorization authorization = runtime->sequencer_authorization;
+            uint64_t epoch = runtime->kernel.epoch;
+            if (runtime->kernel.handover.enabled)
+                status = lxp_handover_history_resolve_sequence(&runtime->kernel,
+                    receipt->global_sequence, &authorization, &epoch, &runtime->execution_arena);
+            if (status == LXP_OK)
+                status = lxp_receipt_verify(receipt, authorization.public_key, &runtime->execution_arena);
+        }
         if (status == LXP_OK)
             status = lxp_receipt_digest(receipt, &runtime->execution_arena, candidate);
         if (status != LXP_OK)
@@ -690,6 +739,33 @@ static lxp_result replay_transition(void *context, uint16_t version, uint32_t pa
         runtime->poisoned = true;
     return status;
 }
+static lxp_result replay_maintenance(void *context, const lxp_batch_header *header,
+    uint32_t parameters, uint64_t sequence, const uint8_t previous_root[32],
+    lxp_arena *arena, lxp_replay_activity_output *output)
+{
+    gp_runtime *runtime = context;
+    lxp_kernel_execution execution = {0};
+    if (runtime == NULL || header == NULL || previous_root == NULL || arena == NULL ||
+        output == NULL || runtime->poisoned || header->epoch != runtime->kernel.epoch ||
+        parameters != runtime->parameter_version || sequence != header->last_sequence ||
+        lxp_ct_memcmp(previous_root, runtime->kernel.current_state_root, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    if (!lxp_kernel_uses_batch_maintenance(&runtime->kernel, header->protocol_version))
+        return lxp_programs_replay_finalize(&runtime->kernel, header, parameters,
+            sequence, previous_root, arena, output);
+    execution.batch_number = header->batch_number;
+    execution.batch_timestamp_ms = header->timestamp_ms;
+    execution.epoch = header->epoch;
+    execution.global_sequence = sequence;
+    execution.parameter_version = parameters;
+    execution.identities = &runtime->identities;
+    execution.verified_receipts = &runtime->verified_receipts;
+    execution.fee_parameters = &runtime->fees;
+    execution.arena = arena;
+    return lxp_kernel_finalize_batch_maintenance(&runtime->kernel,
+        header->protocol_version, &execution, runtime->published_receipts[runtime->activity_count], output);
+}
+
 static lxp_result copy_feed(FILE *source, FILE *target, off_t begin, off_t end)
 {
     uint8_t bytes[65536];
@@ -735,6 +811,10 @@ static lxp_result replay_transaction_begin(void *context)
     runtime->transaction_feed_offset = info.st_size;
     runtime->transaction = saved;
     runtime->feed_file = staged;
+    runtime->sequencer_authorization = runtime->prepared_authorization;
+    runtime->kernel.handover = runtime->prepared_handover;
+    if (runtime->prepared_handover.pending)
+        runtime->kernel.epoch = runtime->prepared_handover.pending_certificate.new_epoch;
     return LXP_OK;
 }
 
@@ -748,6 +828,7 @@ static lxp_result replay_transaction_finish(void *context, bool commit)
         return LXP_ERR_NON_CANONICAL;
     saved = runtime->transaction;
     if (commit) {
+        if (runtime->kernel.handover.pending) return LXP_FATAL_INVARIANT;
         if (fflush(runtime->feed_file) != 0 ||
             fstat(fileno(runtime->feed_file), &info) != 0 ||
             fseeko(saved->feed_file, runtime->transaction_feed_offset, SEEK_SET) != 0)
@@ -757,6 +838,8 @@ static lxp_result replay_transaction_finish(void *context, bool commit)
         if (status == LXP_OK && fsync(fileno(saved->feed_file)) != 0)
             status = LXP_ERR_IO;
         if (status != LXP_OK) return status;
+        runtime->accepted_header = runtime->prepared_header;
+        (void)memcpy(runtime->accepted_signature, runtime->prepared_signature, 64U);
     } else {
         if (fflush(saved->feed_file) != 0 ||
             ftruncate(fileno(saved->feed_file), runtime->transaction_feed_offset) != 0 ||
@@ -772,13 +855,17 @@ static lxp_result replay_transaction_finish(void *context, bool commit)
         runtime->asset_runtime = saved->asset_runtime;
         runtime->asset_count = saved->asset_count;
         memcpy(runtime->assets, saved->assets, sizeof(runtime->assets));
-        memcpy(runtime->send_assets, saved->send_assets, sizeof(runtime->send_assets));
+        runtime->asset_registry = saved->asset_registry;
+        runtime->module_runtimes = saved->module_runtimes;
         runtime->parameter_version = saved->parameter_version;
         runtime->last_batch = saved->last_batch;
         runtime->poisoned = saved->poisoned;
         runtime->feed_sequence = saved->feed_sequence;
         runtime->feed_ordinal = saved->feed_ordinal;
         runtime->expected = saved->expected;
+        runtime->sequencer_authorization = saved->sequencer_authorization;
+        runtime->accepted_header = saved->accepted_header;
+        (void)memcpy(runtime->accepted_signature, saved->accepted_signature, 64U);
     }
     if (fclose(runtime->feed_file) != 0 && !commit) status = LXP_ERR_IO;
     runtime->feed_file = saved->feed_file;
@@ -797,25 +884,50 @@ lxp_result gp_runtime_prepare(gp_runtime *runtime, const lxp_batch_body *body)
         return LXP_ERR_NON_CANONICAL;
     if (body->header.protocol_version != runtime->protocol_version ||
         body->header.network_id != runtime->network_id ||
-        body->header.first_sequence != runtime->state.next_sequence ||
-        lxp_ct_memcmp(body->header.previous_state_root, runtime->kernel.current_state_root, 32U) ||
+        runtime->last_batch == UINT64_MAX ||
         body->header.batch_number != runtime->last_batch + 1U)
         return LXP_ERR_CONTEXT_MISMATCH;
+    if (runtime->known_finalisation.finalisation_halted) return LXP_ERR_DA_MISSING;
     (void)lxp_arena_reset(&runtime->preparation_arena, 0U);
-    status = lxp_replica_validate_header(
-        body, runtime->network_id, &runtime->sequencer_authorization, &runtime->preparation_arena);
+    uint8_t availability[32];
+    status = lxp_batch_availability_root(body, &runtime->preparation_arena, availability);
+    if (status != LXP_OK) return status;
+    if (memcmp(availability, body->header.data_availability_root, 32U) != 0)
+        return LXP_ERR_ROOT_MISMATCH;
+    runtime->prepared_authorization = runtime->sequencer_authorization;
+    status = lxp_handover_incoming(&runtime->kernel, body, &runtime->preparation_arena,
+        &runtime->prepared_authorization, &runtime->prepared_handover);
     if (status == LXP_OK)
-        status =
-            lxp_replay_section_decode(&body->activities, &runtime->preparation_arena,
-                                      &runtime->published_activities, &runtime->activity_count);
+        status = lxp_replica_validate_header(body, runtime->network_id,
+            &runtime->prepared_authorization, &runtime->preparation_arena);
+    if (status != LXP_OK)
+        return status;
+    if (body->header.first_sequence != runtime->state.next_sequence ||
+        lxp_ct_memcmp(body->header.previous_state_root, runtime->kernel.current_state_root, 32U))
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_replay_section_decode(&body->activities, &runtime->preparation_arena,
+                                       &runtime->published_activities, &runtime->activity_count);
     if (status == LXP_OK)
         status = lxp_da_receipt_section_decode(body->receipts, &runtime->preparation_arena,
                                                &runtime->published_receipts,
                                                &runtime->receipt_count, &events, &event_count);
-    if (status == LXP_OK && (event_count != runtime->activity_count ||
+    if (status == LXP_OK && (event_count != runtime->activity_count +
+                                 (lxp_kernel_uses_batch_maintenance(&runtime->kernel, runtime->protocol_version) ? 1U : 0U) ||
                              runtime->receipt_count < runtime->activity_count ||
                              runtime->receipt_count > runtime->activity_count + 1U))
         status = LXP_ERR_BATCH_GAP;
+    if (status == LXP_OK &&
+        lxp_kernel_uses_batch_maintenance(&runtime->kernel, runtime->protocol_version)) {
+        lxp_byte_span effects;
+        if (runtime->receipt_count != runtime->activity_count + 1U ||
+            !lxp_batch_maintenance_is_envelope(runtime->published_receipts[runtime->activity_count]))
+            return LXP_ERR_VERSION_UNSUPPORTED;
+        status = lxp_batch_maintenance_events(runtime->published_receipts[runtime->activity_count],
+            &body->header, &effects);
+        if (status == LXP_OK && (effects.length != events[runtime->activity_count].length ||
+            lxp_ct_memcmp(effects.bytes, events[runtime->activity_count].bytes, effects.length) != 0))
+            status = LXP_ERR_CONTEXT_MISMATCH;
+    }
     if (status == LXP_OK && runtime->activity_count) {
         void *allocated = NULL;
         lxp_batch_roots roots;
@@ -841,6 +953,8 @@ lxp_result gp_runtime_prepare(gp_runtime *runtime, const lxp_batch_body *body)
             status = LXP_ERR_ROOT_MISMATCH;
     }
     if (status == LXP_OK) {
+        runtime->prepared_header = body->header;
+        (void)memcpy(runtime->prepared_signature, body->sequencer_signature, 64U);
         runtime->prepared_batch = body->header.batch_number;
         runtime->prepared_first_sequence = body->header.first_sequence;
         runtime->prepared_last_sequence = body->header.last_sequence;
@@ -859,6 +973,7 @@ void gp_runtime_close(gp_runtime *runtime)
         return;
     if (runtime->transaction != NULL)
         (void)replay_transaction_finish(runtime, false);
+    if (runtime->incident_directory >= 0) (void)close(runtime->incident_directory);
     if (runtime->feed_file)
         (void)fclose(runtime->feed_file);
     if (runtime->mutex_open)
@@ -889,11 +1004,28 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
         return LXP_ERR_NON_CANONICAL;
     *output = NULL;
     runtime = calloc(1, sizeof(*runtime));
+    if (runtime != NULL) runtime->incident_directory = -1;
     genesis = malloc(sizeof(*genesis));
     if (!runtime || !genesis) {
         free(runtime);
         free(genesis);
         return LXP_ERR_IO;
+    }
+    runtime->incident_directory = open(state_directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (runtime->incident_directory < 0) { free(genesis); gp_runtime_close(runtime); return LXP_ERR_IO; }
+    {
+        int incident = openat(runtime->incident_directory, "replay-halt", O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+        struct stat info;
+        if (incident >= 0) {
+            if (fstat(incident, &info) != 0 || !S_ISREG(info.st_mode) || (info.st_mode & 0022) != 0) {
+                (void)close(incident); free(genesis); gp_runtime_close(runtime); return LXP_ERR_AUTH_SCOPE;
+            }
+            runtime->known_finalisation.finalisation_halted = true;
+            (void)close(incident);
+            free(genesis);
+            gp_runtime_close(runtime);
+            return LXP_ERR_DA_MISSING;
+        } else if (errno != ENOENT) { free(genesis); gp_runtime_close(runtime); return LXP_ERR_IO; }
     }
     runtime->execution_bytes = malloc(3U * LXP_MAX_ACTIVITY_BYTES);
     runtime->preparation_bytes = malloc(LXP_DAEMON_PROTOCOL_SCRATCH_MIN_BYTES);
@@ -961,16 +1093,26 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
                                               &runtime->preparation_arena, &enabled);
     if (status == LXP_OK && !enabled)
         status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status == LXP_OK)
+        status = lxp_handover_kernel_initialize(&runtime->kernel, genesis,
+            handover_finality_verify, runtime);
+    if (status == LXP_OK && runtime->kernel.handover.enabled)
+        status = lxp_daemon_finality_authority_init_pins(&runtime->finality_authority);
     free(genesis);
     if (status == LXP_OK)
         status = collect_assets(runtime);
     if (status == LXP_OK && runtime->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
         runtime->asset_runtime = (lx_asset_runtime){
-            &runtime->accounts,   runtime->send_assets, runtime->asset_count,     runtime->assets,
-            runtime->asset_count, runtime->network_id,  runtime->protocol_version};
+            &runtime->accounts,   runtime->asset_registry.assets, runtime->asset_count,
+            runtime->assets,      runtime->asset_count,           runtime->network_id,
+            runtime->protocol_version};
         status = lxp_kernel_bind_module_runtime(&runtime->kernel, LXP_MODULE_ASSET,
                                                 &runtime->asset_runtime);
     }
+    if (status == LXP_OK)
+        status = lxp_daemon_module_runtimes_bind(&runtime->kernel, &runtime->module_runtimes,
+                                                 &runtime->accounts, &runtime->asset_registry,
+                                                 runtime->assets, runtime->asset_count);
     if (status == LXP_OK)
         status = load_schedule(runtime);
     if (status == LXP_OK)
@@ -991,6 +1133,14 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
                              runtime->sequencer_authorization.first_batch_number >
                                  runtime->sequencer_authorization.last_batch_number))
         status = LXP_ERR_BATCH_GAP;
+    if (status == LXP_OK && runtime->kernel.handover.enabled &&
+        (runtime->sequencer_authorization.first_batch_number != 1U ||
+         runtime->sequencer_authorization.last_batch_number != UINT64_MAX ||
+         memcmp(runtime->sequencer_authorization.public_key,
+                runtime->kernel.handover.genesis_authorization.public_key, 32U) != 0 ||
+         memcmp(runtime->sequencer_authorization.sequencer_id,
+                runtime->kernel.handover.genesis_authorization.sequencer_id, 32U) != 0))
+        status = LXP_ERR_AUTH_SCOPE;
     if (status == LXP_OK) {
         runtime->sequencer_authorization.authorized = 1U;
         runtime->last_batch = runtime->sequencer_authorization.first_batch_number - 1U;
@@ -1057,7 +1207,9 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
         status = lxp_replay_engine_bind_transaction(&runtime->engine,
                     replay_transaction_begin, replay_transaction_finish);
     if (status == LXP_OK)
-        status = lxp_programs_replay_engine_bind(&runtime->engine, &runtime->kernel);
+        status = lxp_replay_engine_bind_kernel(&runtime->engine, &runtime->kernel);
+    if (status == LXP_OK)
+        status = lxp_replay_engine_register_batch_finalizer(&runtime->engine, replay_maintenance, runtime);
     if (status == LXP_OK)
         status = lxp_replay_engine_register(&runtime->engine, runtime->protocol_version,
                                             replay_transition);
@@ -1222,4 +1374,63 @@ lxp_result gp_runtime_settlement_facts(gp_runtime *runtime, FILE *output)
     else (void)fputs("null", output);
     (void)fputc('}', output);
     return ferror(output) ? LXP_ERR_IO : status;
+}
+
+const lxp_sequencer_authorization *gp_runtime_prepared_authorization(const gp_runtime *runtime)
+{
+    return runtime == NULL || runtime->prepared_batch == 0U ? NULL : &runtime->prepared_authorization;
+}
+
+lxp_result gp_runtime_transaction_begin(gp_runtime *runtime)
+{
+    return replay_transaction_begin(runtime);
+}
+
+lxp_result gp_runtime_transaction_finish(gp_runtime *runtime, bool commit)
+{
+    return replay_transaction_finish(runtime, commit);
+}
+
+lxp_result gp_runtime_note_divergence(gp_runtime *runtime, const lxp_batch_header *header,
+                                      lxp_result result)
+{
+    uint8_t record[LXP_BATCH_HEADER_ENCODED_SIZE + 68U];
+    uint8_t memory[LXP_BATCH_HEADER_ENCODED_SIZE * 2U];
+    lxp_arena arena;
+    lxp_byte_span encoded, prepared;
+    size_t offset = 0U;
+    struct stat info;
+    int descriptor;
+    lxp_result status;
+    if (runtime == NULL || header == NULL || runtime->incident_directory < 0 ||
+        header->batch_number != runtime->prepared_header.batch_number ||
+        (result != LXP_FATAL_REPLAY_DIVERGENCE && result != LXP_ERR_ROOT_MISMATCH))
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_arena_init(&arena, memory, sizeof(memory));
+    if (status == LXP_OK) status = lxp_batch_header_encode(header, &arena, &encoded);
+    if (status == LXP_OK) status = lxp_batch_header_encode(&runtime->prepared_header, &arena, &prepared);
+    if (status == LXP_OK && (encoded.length != LXP_BATCH_HEADER_ENCODED_SIZE ||
+        prepared.length != encoded.length || memcmp(encoded.bytes, prepared.bytes, encoded.length) != 0))
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status != LXP_OK) return status;
+    (void)memcpy(record, encoded.bytes, encoded.length);
+    (void)memcpy(record + encoded.length, runtime->prepared_signature, 64U);
+    uint32_t code = (uint32_t)result;
+    for (size_t i = 0U; i < 4U; ++i) record[encoded.length + 64U + i] = (uint8_t)(code >> (24U - i * 8U));
+    runtime->known_finalisation.finalisation_halted = true;
+    descriptor = openat(runtime->incident_directory, "replay-halt",
+        O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
+    if (descriptor < 0) return LXP_ERR_IO;
+    if (fstat(descriptor, &info) != 0 || !S_ISREG(info.st_mode) || (info.st_mode & 0022) != 0)
+        status = LXP_ERR_AUTH_SCOPE;
+    while (status == LXP_OK && info.st_size == 0 && offset < sizeof(record)) {
+        ssize_t count = write(descriptor, record + offset, sizeof(record) - offset);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) status = LXP_ERR_IO;
+        else offset += (size_t)count;
+    }
+    if (status == LXP_OK && fsync(descriptor) != 0) status = LXP_ERR_IO;
+    if (close(descriptor) != 0) status = LXP_ERR_IO;
+    if (fsync(runtime->incident_directory) != 0) status = LXP_ERR_IO;
+    return status;
 }
