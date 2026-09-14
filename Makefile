@@ -13,6 +13,8 @@ FUZZ_QUAL_ITERATIONS ?= 100000
 AGENT_CARGO ?= cargo
 AGENT_MANIFEST := agent/Cargo.toml
 AGENT_FUZZ_TOOLCHAIN ?= nightly-2025-11-10
+AGENT_BOUNDARY_HARNESS := $(abspath $(or $(CARGO_TARGET_DIR),agent/tests/boundary/target))/debug/agent-boundary-conformance
+AGENT_WIRE_HARNESS := $(abspath $(or $(CARGO_TARGET_DIR),agent/tools/wire-differential/target))/debug/agent-wire-differential
 HUMAN_CARGO ?= cargo
 HUMAN_MANIFEST := human/Cargo.toml
 HUMAN_WEB_DIR := human/apps/web
@@ -2575,7 +2577,7 @@ agent-qualify-boundary: $(BUILD_DIR)/agent/layerxd-lni
 	$(AGENT_CARGO) build --manifest-path agent/tests/boundary/Cargo.toml --locked
 	$(AGENT_CARGO) run --manifest-path agent/tests/qualify/Cargo.toml --locked -- boundary \
 		$(CURDIR) $(CURDIR)/$(BUILD_DIR)/agent/layerxd-lni \
-		$(CURDIR)/agent/tests/boundary/target/debug/agent-boundary-conformance
+		$(AGENT_BOUNDARY_HARNESS)
 
 agent-qualify-fabrication:
 	$(MAKE) agent-test-sdk-ts
@@ -2904,7 +2906,7 @@ agent-qualify-wire: $(BUILD_DIR)/agent-wire-reference
 	$(AGENT_CARGO) build --manifest-path agent/tools/wire-differential/Cargo.toml --locked
 	$(AGENT_CARGO) run --manifest-path agent/tests/qualify/Cargo.toml --locked -- wire \
 		$(CURDIR) $(CURDIR)/$(BUILD_DIR)/agent-wire-reference \
-		$(CURDIR)/agent/tools/wire-differential/target/debug/agent-wire-differential
+		$(AGENT_WIRE_HARNESS)
 
 agent-test-sanitize: public-tls-test-prerequisites
 	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" LAYERX_RUNTIME_CLOCK_BIN="$(PUBLIC_TLS_TEST_CLOCK)" LAYERX_TEST_RUNTIME_CLOCK_BIN="$(PUBLIC_TLS_TEST_CLOCK)" sh $(CURDIR)/tools/runtime/run-with-clock.sh sh agent/tools/run-sanitizers.sh

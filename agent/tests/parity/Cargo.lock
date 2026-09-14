@@ -712,6 +712,8 @@ dependencies = [
  "layerx-agent-api",
  "layerx-client",
  "layerx-crypto",
+ "layerx-identity-binding",
+ "layerx-paxeer-verifier",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
  "layerx-programs-runtime",
@@ -720,6 +722,7 @@ dependencies = [
  "layerx-wire",
  "rustix",
  "rustls-native-certs",
+ "serde",
  "serde_json",
  "sha2",
  "ureq",
@@ -731,6 +734,7 @@ name = "layerx-client"
 version = "0.1.0"
 dependencies = [
  "layerx-crypto",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
@@ -757,6 +761,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-identity-binding"
+version = "0.1.0"
+dependencies = [
+ "layerx-types",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "layerx-mirror"
 version = "0.1.0"
 dependencies = [
@@ -775,6 +790,17 @@ dependencies = [
  "sha2",
  "sha3",
  "zeroize",
+]
+
+[[package]]
+name = "layerx-paxeer-verifier"
+version = "0.1.0"
+dependencies = [
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
+ "rustls",
+ "sha3",
 ]
 
 [[package]]
