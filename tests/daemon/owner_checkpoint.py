@@ -403,3 +403,27 @@ def hosted(work, config, environment, launch, service):
         except urllib.error.HTTPError as error:
             assert error.code == 403
     print('real checkpoint-finalised identity, session membership, key policies and committed capability action/expiry verified positively; incomplete history and mismatched principal/bindings refused', flush=True)
+
+
+def module_reads(work, public, last_batch):
+    repo = Path(__file__).resolve().parents[2]
+    target = Path(os.environ.get('CARGO_TARGET_DIR', repo / 'agent/target'))
+    binary = target / 'debug/examples/module_state'
+    command = ['setpriv', '--reuid=4021', '--regid=4021', '--groups=' + str(repo.stat().st_gid),
+        str(binary), str(work / 'run/layerxd.lni.sock'), '77',
+        '0x' + public['LAYERX_NODE_SEQUENCER_PUBLIC_KEY'], '0', '0x' + b'sequence'.hex()]
+    values = []
+    for rank in (3, 4):
+        result = subprocess.run([*command, str(rank)], capture_output=True, check=True, timeout=15)
+        value = json.loads(result.stdout)
+        assert value['level'] == rank and value['batch'] == last_batch
+        assert int(value['value'], 16) == value['sequence'] + 1
+        assert len(bytes.fromhex(value['proof'][2:])) > 354
+        values.append(value)
+    assert values[0]['value'] == values[1]['value'] and values[0]['sequence'] == values[1]['sequence']
+    for index, changed in ((6, '78'), (7, '0x' + '00' * 32), (8, '10'), (9, '0x' + b'missing'.hex())):
+        refused = list(command)
+        refused[index] = changed
+        result = subprocess.run([*refused, '4'], capture_output=True, timeout=15)
+        assert result.returncode != 0, 'module read accepted wrong network/key/module/selector'
+    print('actual LNI module state and current checkpoint proofs verify; foreign network/key/module/selector refuse', flush=True)

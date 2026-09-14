@@ -21,7 +21,7 @@ from provision import write_json
 from owner_native import produce
 sys.path.insert(0, str(repo / "tests/daemon"))
 from governance_lifecycle import session, lifecycle
-from owner_checkpoint import checkpoint, hosted
+from owner_checkpoint import checkpoint, hosted, module_reads
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 sys.path.insert(0, str(repo / 'tests/support'))
 from lxgb_metadata import metadata
@@ -250,6 +250,8 @@ def run(work, asset, rpc_port):
         assert len(list((inputs / 'owner-native-run').glob('*.receipt'))) == 4
         if '--checkpoint' in sys.argv:
             checkpoint(work, public, settlement, rpc, account, start, key, cert, 10)
+            if '--module-reads' in sys.argv:
+                module_reads(work, public, 10)
             if '--settlement-only' not in sys.argv:
                 hosted(work, config, authority_env, start, service)
         sequencer.terminate()
