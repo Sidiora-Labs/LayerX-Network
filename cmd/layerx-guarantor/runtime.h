@@ -6,6 +6,10 @@
 typedef struct gp_runtime gp_runtime;
 lxp_result gp_runtime_open(gp_runtime **, const char *, const char *);
 lxp_result gp_runtime_prepare(gp_runtime *, const lxp_batch_body *);
+const lxp_sequencer_authorization *gp_runtime_prepared_authorization(const gp_runtime *);
+lxp_result gp_runtime_transaction_begin(gp_runtime *);
+lxp_result gp_runtime_transaction_finish(gp_runtime *, bool);
+lxp_result gp_runtime_note_divergence(gp_runtime *, const lxp_batch_header *, lxp_result);
 lxp_replay_engine *gp_runtime_engine(gp_runtime *);
 lxp_result gp_runtime_authority(void *, const lxp_activity *, lxp_byte_span,
                                 lxp_guarantor_authority_verdict *);

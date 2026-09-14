@@ -271,13 +271,13 @@ static int decimal_environment(const char *name, uint64_t maximum, uint64_t *out
     *out = value;
     return 0;
 }
-lxp_result lxp_daemon_finality_authority_init(lxp_daemon_finality_authority *authority, lxp_daemon_evidence_store *store)
+lxp_result lxp_daemon_finality_authority_init_pins(lxp_daemon_finality_authority *authority)
 {
     const char *address = getenv("LAYERX_NODE_PAXEER_RPC_ADDRESS");
     const char *settlement = getenv("LAYERX_NODE_SETTLEMENT_CONTRACT");
     const char *registry = getenv("LAYERX_NODE_CHECKPOINT_REGISTRY");
     uint64_t port;
-    if (authority == NULL || store == NULL) return LXP_ERR_NON_CANONICAL;
+    if (authority == NULL) return LXP_ERR_NON_CANONICAL;
     (void)memset(authority, 0, sizeof(*authority));
     if (address == NULL || strcmp(address, "127.0.0.1") != 0 || settlement == NULL || registry == NULL ||
         decimal_environment("LAYERX_NODE_PAXEER_CHAIN_ID", UINT64_MAX, &authority->paxeer_chain_id) != 0 ||
@@ -285,8 +285,17 @@ lxp_result lxp_daemon_finality_authority_init(lxp_daemon_finality_authority *aut
         hex_bytes(settlement, strlen(settlement), authority->settlement_contract, 20U) != 0 ||
         hex_bytes(registry, strlen(registry), authority->checkpoint_registry, 20U) != 0 ||
         lxp_ct_is_zero(authority->settlement_contract, 20U) || lxp_ct_is_zero(authority->checkpoint_registry, 20U)) return LXP_ERR_NON_CANONICAL;
-    authority->store = store; authority->rpc_port = (uint16_t)port;
+    authority->rpc_port = (uint16_t)port;
     return LXP_OK;
+}
+lxp_result lxp_daemon_finality_authority_init(lxp_daemon_finality_authority *authority,
+    lxp_daemon_evidence_store *store)
+{
+    lxp_result status;
+    if (authority == NULL || store == NULL) return LXP_ERR_NON_CANONICAL;
+    status = lxp_daemon_finality_authority_init_pins(authority);
+    if (status == LXP_OK) authority->store = store;
+    return status;
 }
 static void abi_u64(uint8_t *word, uint64_t value)
 {
@@ -327,9 +336,13 @@ static int registered_event(const json_document *doc, const json_token *receipt,
     }
     return matches == 1U;
 }
-lxp_result lxp_daemon_finality_authority_verify(void *context, const lxp_guarantor_cert *certificate, const lxp_guarantor_set *bonded_set, const lxp_finalisation_requirements *requirements, const lxp_daemon_settlement_registration_evidence *registration)
+lxp_result lxp_daemon_finality_authority_verify_explicit(
+    const lxp_daemon_finality_authority *authority,
+    const lxp_finalisation_state *trusted_finalisation,
+    const lxp_guarantor_cert *certificate, const lxp_guarantor_set *bonded_set,
+    const lxp_finalisation_requirements *requirements,
+    const lxp_daemon_settlement_registration_evidence *registration)
 {
-    lxp_daemon_finality_authority *authority = context;
     uint8_t *memory;
     char *response;
     json_document doc;
@@ -342,7 +355,7 @@ lxp_result lxp_daemon_finality_authority_verify(void *context, const lxp_guarant
     bool finalisable = false;
     lxp_result status;
     size_t i;
-    if (authority == NULL || authority->store == NULL || authority->rpc_port == 0U || certificate == NULL || bonded_set == NULL || requirements == NULL || registration == NULL || certificate->attestation_count == 0U || certificate->attestation_count > LXP_MAX_GUARANTOR_ATTESTATIONS) return LXP_ERR_NON_CANONICAL;
+    if (authority == NULL || trusted_finalisation == NULL || authority->rpc_port == 0U || certificate == NULL || bonded_set == NULL || requirements == NULL || registration == NULL || certificate->attestation_count == 0U || certificate->attestation_count > LXP_MAX_GUARANTOR_ATTESTATIONS) return LXP_ERR_NON_CANONICAL;
     if (registration->paxeer_chain_id != authority->paxeer_chain_id || lxp_ct_memcmp(registration->settlement_contract, authority->settlement_contract, 20U) != 0 || lxp_ct_is_zero(registration->transaction_id, 32U) || registration->observed_block_number == 0U) return LXP_ERR_CONTEXT_MISMATCH;
     for (i = 0U; i < certificate->attestation_count; ++i) {
         if (certificate->attestations[i].paxeer_chain_id != authority->paxeer_chain_id || lxp_ct_memcmp(certificate->attestations[i].paxeer_settlement_contract, authority->settlement_contract, 20U) != 0) return LXP_ERR_CONTEXT_MISMATCH;
@@ -354,7 +367,7 @@ lxp_result lxp_daemon_finality_authority_verify(void *context, const lxp_guarant
     status = lxp_arena_init(&arena, memory, LXP_MAX_VALIDITY_PROOF_BYTES + 1024U * 1024U);
     if (status == LXP_OK) status = lxp_checkpoint_certificate_hash(&certificate->checkpoint, &arena, checkpoint_id);
     if (status == LXP_OK && lxp_ct_memcmp(checkpoint_id, registration->checkpoint_id, 32U) != 0) status = LXP_ERR_CONTEXT_MISMATCH;
-    finalisation = authority->store->registry.finalisation;
+    finalisation = *trusted_finalisation;
     if (status == LXP_OK) status = lxp_checkpoint_finalisable(&finalisation, certificate, bonded_set, requirements, &arena, &finalisable);
     if (status == LXP_OK && !finalisable) status = LXP_ERR_ATTESTATION_THRESHOLD;
     if (status == LXP_OK) status = rpc(authority, "eth_chainId", "[]", response, &doc, &result);
@@ -376,5 +389,69 @@ lxp_result lxp_daemon_finality_authority_verify(void *context, const lxp_guarant
     if (status == LXP_OK) status = rpc(authority, "eth_blockNumber", "[]", response, &doc, &result);
     if (status == LXP_OK && (quantity(result, &value) != 0 || value < registration->observed_block_number)) status = LXP_ERR_CONTEXT_MISMATCH;
     free(doc.tokens); free(response); free(memory);
+    return status;
+}
+
+lxp_result lxp_daemon_finality_authority_verify(void *context,
+    const lxp_guarantor_cert *certificate, const lxp_guarantor_set *bonded_set,
+    const lxp_finalisation_requirements *requirements,
+    const lxp_daemon_settlement_registration_evidence *registration)
+{
+    lxp_daemon_finality_authority *authority = context;
+    if (authority == NULL || authority->store == NULL) return LXP_ERR_NON_CANONICAL;
+    return lxp_daemon_finality_authority_verify_explicit(authority,
+        &authority->store->registry.finalisation, certificate, bonded_set,
+        requirements, registration);
+}
+
+typedef struct handover_finality_context {
+    const lxp_daemon_finality_authority *authority;
+    lxp_finalisation_state finalisation;
+} handover_finality_context;
+
+static lxp_result handover_finality_authority_verify(void *context,
+    const lxp_guarantor_cert *certificate, const lxp_guarantor_set *bonded_set,
+    const lxp_finalisation_requirements *requirements,
+    const lxp_daemon_settlement_registration_evidence *registration)
+{
+    const handover_finality_context *verification = context;
+    if (verification == NULL) return LXP_ERR_NON_CANONICAL;
+    return lxp_daemon_finality_authority_verify_explicit(verification->authority,
+        &verification->finalisation, certificate, bonded_set, requirements, registration);
+}
+
+lxp_result lxp_daemon_handover_finality_verify(
+    const lxp_daemon_finality_authority *authority,
+    const lxp_finalisation_state *known_finalisation,
+    const lxp_batch_header *authenticated_predecessor,
+    const uint8_t predecessor_signature[64],
+    const lxp_handover_evidence *evidence, lxp_arena *arena)
+{
+    handover_finality_context verification;
+    lxp_byte_span header;
+    size_t mark;
+    lxp_result status;
+    if (authority == NULL || known_finalisation == NULL || authenticated_predecessor == NULL ||
+        predecessor_signature == NULL || evidence == NULL || arena == NULL ||
+        authenticated_predecessor->batch_number != evidence->certificate.predecessor_batch ||
+        authenticated_predecessor->network_id != evidence->certificate.network_id ||
+        known_finalisation->finalisation_halted ||
+        lxp_ct_memcmp(predecessor_signature, evidence->predecessor_signature, 64U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    mark = lxp_arena_mark(arena);
+    status = lxp_batch_header_encode(authenticated_predecessor, arena, &header);
+    if (status == LXP_OK && (header.length != evidence->predecessor_header.length ||
+        lxp_ct_memcmp(header.bytes, evidence->predecessor_header.bytes, header.length) != 0))
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    verification.authority = authority;
+    verification.finalisation = *known_finalisation;
+    (void)memcpy(verification.finalisation.settlement_anchor,
+                 authenticated_predecessor->previous_state_root, 32U);
+    if (status == LXP_OK)
+        status = lxp_daemon_finality_contents_verify(authenticated_predecessor->network_id,
+            evidence->checkpoint_payload, evidence->finality_proof, header,
+            evidence->certificate.predecessor_checkpoint_id,
+            handover_finality_authority_verify, &verification, arena);
+    if (lxp_arena_reset(arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
     return status;
 }

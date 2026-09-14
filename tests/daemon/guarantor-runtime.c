@@ -2,6 +2,7 @@
 #include "../../cmd/layerx-guarantor/runtime.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_maintenance.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <signal.h>
+#include <unistd.h>
 
 int main(int argc, char **argv)
 {
@@ -22,6 +24,19 @@ int main(int argc, char **argv)
     assert(argc == 5 && memory);
     count = strtoul(argv[4], &end, 10);
     assert(*end == '\0' && count > 0U);
+    {
+        char directory[4096], path[4096];
+        int length = snprintf(directory, sizeof(directory), "%s/halt-input-XXXXXX", argv[2]);
+        assert(length > 0 && (size_t)length < sizeof(directory));
+        assert(mkdtemp(directory) != NULL);
+        length = snprintf(path, sizeof(path), "%s/replay-halt", directory);
+        assert(length > 0 && (size_t)length < sizeof(path));
+        assert(mkfifo(path, 0600) == 0);
+        (void)alarm(5U);
+        assert(gp_runtime_open(&runtime, argv[1], directory) == LXP_ERR_AUTH_SCOPE);
+        (void)alarm(0U);
+        assert(runtime == NULL && unlink(path) == 0 && rmdir(directory) == 0);
+    }
     assert(lxp_arena_init(&arena, memory, 128U * 1024U * 1024U) == LXP_OK);
     status = gp_runtime_open(&runtime, argv[1], argv[2]);
     if (status != LXP_OK) {
@@ -61,9 +76,65 @@ int main(int argc, char **argv)
         mismatch.header.previous_state_root[0] ^= 1U;
         assert(gp_runtime_prepare(runtime, &mismatch) != LXP_OK);
         assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+        if (engine->kernel->handover.enabled && engine->kernel->epoch > 1U) {
+            lxp_sequencer_authorization retired = engine->kernel->handover.genesis_authorization;
+            uint8_t retired_key[32];
+            uint64_t sequence_before = engine->kernel->state->next_sequence;
+            assert(retired.first_batch_number == 1U && retired.last_batch_number == UINT64_MAX);
+            memset(retired_key, 0x22U, sizeof(retired_key));
+            for (uint64_t claimed_epoch = 1U; claimed_epoch <= body.header.epoch; ++claimed_epoch) {
+                lxp_batch_body forged = body;
+                forged.header.epoch = claimed_epoch;
+                memcpy(forged.header.sequencer_id, retired.sequencer_id, 32U);
+                assert(lxp_batch_availability_root(&forged, &arena,
+                    forged.header.data_availability_root) == LXP_OK);
+                assert(lxp_batch_sign(&forged.header, retired_key, &retired,
+                    forged.sequencer_signature, &arena) == LXP_OK);
+                assert(lxp_batch_verify_signature(&forged.header, forged.sequencer_signature,
+                    sizeof(forged.sequencer_signature), &retired, &arena) == LXP_OK);
+                assert(gp_runtime_prepare(runtime, &forged) != LXP_OK);
+                assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+                assert(engine->kernel->state->next_sequence == sequence_before);
+            }
+            lxp_secure_zero(retired_key, sizeof(retired_key));
+        }
+        if (batch == count && getenv("LAYERX_TEST_HANDOVER_DIVERGENCE") != NULL) {
+            lxp_batch_body divergent = body;
+            lxp_sequencer_authorization authorization;
+            uint64_t epoch;
+            uint8_t replacement_key[32];
+            assert(engine->kernel->handover.enabled && body.header.epoch == 2U);
+            memset(replacement_key, 0x44U, sizeof(replacement_key));
+            assert(lxp_handover_history_resolve(engine->kernel, body.header.batch_number,
+                &authorization, &epoch, &arena) == LXP_OK && epoch == 2U);
+            divergent.header.resulting_state_root[0] ^= 1U;
+            assert(lxp_batch_availability_root(&divergent, &arena,
+                divergent.header.data_availability_root) == LXP_OK);
+            assert(lxp_batch_sign(&divergent.header, replacement_key, &authorization,
+                divergent.sequencer_signature, &arena) == LXP_OK);
+            lxp_secure_zero(replacement_key, sizeof(replacement_key));
+            assert(gp_runtime_prepare(runtime, &divergent) == LXP_OK);
+            assert(engine->transaction_begin(engine->context) == LXP_OK);
+            status = lxp_replay_batch_publication(engine, &divergent, initial_root, &arena, &replay);
+            assert(status == LXP_ERR_ROOT_MISMATCH || status == LXP_FATAL_REPLAY_DIVERGENCE);
+            assert(engine->transaction_finish(engine->context, false) == LXP_OK);
+            assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+            assert(gp_runtime_note_divergence(runtime, &divergent.header, status) == LXP_OK);
+            assert(gp_runtime_prepare(runtime, &body) == LXP_ERR_DA_MISSING);
+            assert(lxp_log_close(&log) == LXP_OK);
+            gp_runtime_close(runtime);
+            runtime = NULL;
+            assert(gp_runtime_open(&runtime, argv[1], argv[2]) != LXP_OK);
+            if (runtime != NULL) gp_runtime_close(runtime);
+            free(memory);
+            puts("authenticated conflicting root refused and local divergence halt survives restart");
+            return 0;
+        }
         status = gp_runtime_prepare(runtime, &body);
-        if (status != LXP_OK)
+        if (status != LXP_OK) {
+            fprintf(stderr, "prepare batch=%lu refused: %d\n", batch, (int)status);
             break;
+        }
         lxp_byte_span *activities;
         size_t activity_count;
         assert(lxp_replay_section_decode(&body.activities, &arena, &activities, &activity_count) ==
@@ -140,8 +211,17 @@ int main(int argc, char **argv)
         if (status != LXP_OK)
             break;
         status = lxp_guarantor_recompute_roots(&body, &replay, &arena, &roots);
-        if (status != LXP_OK)
+        if (status != LXP_OK) {
+            fprintf(stderr, "independent roots batch=%lu refused: %d\n", batch, (int)status);
             break;
+        }
+        if (lxp_batch_maintenance_is_envelope(replay.encoded_batch_maintenance_receipt)) {
+            lxp_replay_batch_result incomplete = replay;
+            lxp_batch_roots rejected;
+            assert(incomplete.event_count == incomplete.activity_count + 1U);
+            incomplete.event_count--;
+            assert(lxp_guarantor_recompute_roots(&body, &incomplete, &arena, &rejected) != LXP_OK);
+        }
         assert(!memcmp(engine->kernel->current_state_root, body.header.resulting_state_root, 32U));
         {
             lxp_state_witness *proof = malloc(sizeof(*proof));

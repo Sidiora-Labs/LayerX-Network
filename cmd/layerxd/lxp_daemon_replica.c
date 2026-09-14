@@ -289,6 +289,7 @@ lxp_result lxp_daemon_replica_serve(const char *configuration_path)
         lxp_byte_span canonical;
         bool acknowledged = false;
         bool eligible = false;
+        bool runtime_prepared = false;
         if (replica_stop_requested != 0) break;
         if (batch_limit != 0U && batch - first_batch >= batch_limit) break;
         status = replica_await_body(&availability_log, availability_path,
@@ -298,14 +299,21 @@ lxp_result lxp_daemon_replica_serve(const char *configuration_path)
             status = LXP_OK;
             break;
         }
-        if (status == LXP_OK) status = gp_runtime_prepare(runtime, &body);
+        if (status == LXP_OK) {
+            status = gp_runtime_prepare(runtime, &body);
+            runtime_prepared = status == LXP_OK;
+        }
         if (status == LXP_OK)
             status = lxp_batch_body_encode(&body, &arena, &canonical);
         if (status == LXP_OK)
             status = lxp_replica_ingest_batch(
                 &replica, canonical.bytes, canonical.length,
-                configuration.network_id, &authorization, &arena,
+                configuration.network_id, gp_runtime_prepared_authorization(runtime), &arena,
                 &acknowledged);
+        if (runtime_prepared && (status == LXP_FATAL_REPLAY_DIVERGENCE || status == LXP_ERR_ROOT_MISMATCH)) {
+            lxp_result recorded = gp_runtime_note_divergence(runtime, &body.header, status);
+            if (recorded != LXP_OK) status = recorded;
+        }
         if (status != LXP_OK) break;
         if (!acknowledged) {
             status = LXP_FATAL_REPLAY_DIVERGENCE;

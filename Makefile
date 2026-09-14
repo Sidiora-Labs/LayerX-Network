@@ -1308,6 +1308,7 @@ LAYERXD_SOURCES = \
 	cmd/layerxd/lxp_daemon_lni.c \
 	cmd/layerxd/lxp_daemon_evidence.c \
 	cmd/layerxd/lxp_daemon_finality_authority.c \
+	cmd/layerxd/lxp_daemon_handover_history.c \
 	cmd/layerxd/lxp_daemon_batch_wal.c \
 	cmd/layerxd/lxp_daemon_artifact.c \
 	cmd/layerxd/lxp_daemon_allowance.c \
@@ -1342,6 +1343,19 @@ $(BUILD_DIR)/bin/layerx-genesis-build: \
 		-lcrypto -pthread -ldl -lm -o $@
 
 layerx-genesis-build: $(BUILD_DIR)/bin/layerx-genesis-build
+
+HANDOVER_OBJECTS = $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS))
+
+$(BUILD_DIR)/bin/layerx-handover: cmd/layerx-handover/main.c $(HANDOVER_OBJECTS) \
+        $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) cmd/layerx-handover/main.c $(HANDOVER_OBJECTS) \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+.PHONY: layerx-handover
+layerx-handover: $(BUILD_DIR)/bin/layerx-handover
+build: layerx-handover
 
 $(BUILD_DIR)/tests/test_layerxd: tests/test_layerxd.c $(LAYERXD_SOURCES) \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -3432,6 +3446,16 @@ $(BUILD_DIR)/tests/lxp_test_module_maintenance: tests/daemon/lxp_test_module_mai
 .PHONY: test-daemon-module-maintenance
 test-daemon-module-maintenance: $(BUILD_DIR)/tests/lxp_test_module_maintenance $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR) --module-maintenance
+
+.PHONY: test-daemon-handover
+test-daemon-handover: $(BUILD_DIR)/tests/lxp_test_module_maintenance $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority $(BUILD_DIR)/tests/lxp_test_guarantor_runtime $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build $(BUILD_DIR)/bin/layerx-handover
+	$(RUN_PREFIX) python3 tests/daemon/withdraw-custody.py $(BUILD_DIR) --handover
+
+.PHONY: test-daemon-handover-crash
+test-daemon-handover-crash: test-daemon-handover $(BUILD_DIR)/tests/lxp_test_maintenance_crash
+	for boundary in 8 9 10 11 12 17 18 19 20; do \
+		$(RUN_PREFIX) env LAYERX_TEST_HANDOVER_CRASH_BOUNDARY=$$boundary python3 tests/daemon/withdraw-custody.py $(BUILD_DIR) --handover || exit $$?; \
+	done
 
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build

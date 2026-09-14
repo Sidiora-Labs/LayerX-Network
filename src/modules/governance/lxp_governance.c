@@ -2,6 +2,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/programs.h"
+#include "layerx/lxp_handover.h"
 #include <string.h>
 
 enum { STATE_BYTES = 223, DID = 5, PRIMARY = 37, REVOCATION = 69,
@@ -15,6 +16,7 @@ typedef struct governance_payload {
     uint16_t fields;
     size_t length;
     uint8_t bytes[1024];
+    lxp_byte_span handover;
 } governance_payload;
 
 static uint64_t read64(const uint8_t *p)
@@ -33,7 +35,7 @@ bool lxp_governance_activity(uint32_t type)
 {
     return type == 0x00070001U || type == 0x00070002U ||
            type == 0x00070003U || type == 0x00070005U || type == 0x00070006U ||
-           type == 0x00070008U;
+           type == 0x00070008U || type == LXP_GOVERNANCE_HANDOVER;
 }
 
 lxp_result lxp_governance_identity_refresh(const lxp_kernel *kernel,
@@ -96,6 +98,22 @@ static lxp_result decode(lxp_module_ctx *ctx, uint16_t ordinal,
 {
     governance_payload *p;
     void *memory = NULL;
+    if (ordinal == 9U) {
+        lxp_handover_evidence evidence;
+        lxp_result status;
+        if (ctx == NULL || decoded == NULL) return LXP_ERR_NON_CANONICAL;
+        status = lxp_handover_evidence_decode((lxp_byte_span){bytes, length}, &evidence);
+        if (status == LXP_OK)
+            status = lxp_ctx_arena_alloc(ctx, sizeof(*p), _Alignof(governance_payload), &memory);
+        if (status != LXP_OK) return status;
+        p = memory;
+        (void)memset(p, 0, sizeof(*p));
+        p->ordinal = ordinal;
+        p->length = length;
+        p->handover = (lxp_byte_span){bytes, length};
+        *decoded = p;
+        return LXP_OK;
+    }
     if (bytes == NULL || decoded == NULL || length < 4U || length > 1024U ||
         !lxp_governance_activity(0x00070000U | ordinal) || bytes[0] != 0x71U ||
         bytes[1] != ordinal || (ordinal == 1U ? (bytes[2] != 0U && bytes[2] != 2U) :
@@ -133,6 +151,12 @@ static lxp_result validate(lxp_module_ctx *ctx, const lxp_activity *activity,
         memcmp(did, authority->actor, 32U) != 0 ||
         (p->ordinal <= 3U && !(p->ordinal == 1U && p->bytes[2] == 2U) &&
          memcmp(did, p->bytes + 4U, 32U) != 0))
+        return LXP_ERR_AUTH_SCOPE;
+    if (p->ordinal == 9U && (ctx->kernel == NULL || !ctx->kernel->handover.pending ||
+        !ctx->kernel->handover.enabled ||
+        memcmp(authority->verified_key, ctx->kernel->handover.governance_public_key, 32U) != 0 ||
+        p->handover.length != activity->payload.length ||
+        memcmp(p->handover.bytes, activity->payload.bytes, p->handover.length) != 0))
         return LXP_ERR_AUTH_SCOPE;
     return lxp_ctx_charge_gas(ctx, p->length);
 }
@@ -366,6 +390,7 @@ static lxp_result execute(lxp_module_ctx *ctx, const lxp_activity *activity,
     if (p->ordinal == 1U && p->bytes[2] == 2U)
         return lxp_governance_onboard(ctx, activity, authority);
     uint64_t sequence = lxp_ctx_global_sequence(ctx);
+    if (p->ordinal == 9U) return lxp_handover_stage(ctx, activity, authority);
     lxp_result status = lxp_ctx_kv_get(ctx, authority->actor, 32U, &prior, &length);
     (void)activity;
     (void)effects;
@@ -459,8 +484,8 @@ static lxp_result root(lxp_module_ctx *ctx, uint8_t digest[32])
 }
 const lxp_module_iface *lxp_governance_module_iface(void)
 {
-    static const uint32_t types[] = {0x00070001U, 0x00070002U, 0x00070003U, 0x00070005U, 0x00070006U, 0x00070008U};
-    static const lxp_module_iface iface = {LXP_MODULE_GOVERNANCE, 1U, "governance", types, 6U,
+    static const uint32_t types[] = {0x00070001U, 0x00070002U, 0x00070003U, 0x00070005U, 0x00070006U, 0x00070008U, LXP_GOVERNANCE_HANDOVER};
+    static const lxp_module_iface iface = {LXP_MODULE_GOVERNANCE, 1U, "governance", types, 7U,
         genesis, decode, validate, execute, epoch, epoch, root, NULL};
     return &iface;
 }

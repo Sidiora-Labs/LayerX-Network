@@ -13,6 +13,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_authority.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_handover.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_protocol.h"
@@ -345,6 +346,9 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
     bool fees = false;
     bool reserve = false;
     bool withdrawals = false;
+    uint8_t handover_authority[32];
+    bool handover_enabled;
+    lxp_result handover_status;
     if (manifest == NULL ||
         !lxp_protocol_version_supported(manifest->protocol_version) ||
         manifest->network_id == 0U || manifest->genesis_timestamp_ms == 0U ||
@@ -375,6 +379,9 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
              manifest->parameters[i].value[31] != 2U))
             return LXP_ERR_VERSION_UNSUPPORTED;
     }
+    handover_status = lxp_handover_genesis_authority(manifest, handover_authority,
+                                                    &handover_enabled);
+    if (handover_status != LXP_OK) return handover_status;
     for (i = 0U; i < manifest->guarantor_count; ++i) {
         if (lxp_ct_is_zero(manifest->guarantors[i].guarantor_id, 32U) ||
             lxp_ct_is_zero(manifest->guarantors[i].public_key, 33U) ||

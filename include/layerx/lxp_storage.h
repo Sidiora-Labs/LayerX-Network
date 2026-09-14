@@ -73,6 +73,7 @@ lxp_result lxp_log_segment_create(lxp_log *log, const char *directory,
                                   uint64_t segment_sequence,
                                   uint64_t segment_size);
 lxp_result lxp_log_open(lxp_log *log, const char *path);
+lxp_result lxp_log_open_readonly(lxp_log *log, const char *path);
 lxp_result lxp_log_open_or_create(lxp_log *log, const char *path,
                                   uint64_t initial_size);
 lxp_result lxp_log_append(lxp_log *log, lxp_log_record_kind kind,

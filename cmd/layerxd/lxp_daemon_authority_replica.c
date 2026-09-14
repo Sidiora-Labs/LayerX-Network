@@ -2,6 +2,8 @@
 
 #include "layerx/lxp_daemon.h"
 #include "lxp_daemon_maintenance_json.h"
+#include "lxp_daemon_artifact.h"
+#include "lxp_daemon_finality_authority.h"
 
 #include "layerx/lxp_crypto.h"
 
@@ -39,6 +41,11 @@ typedef struct authority_replica {
     lxp_log log;
     lxp_daemon_receipt_authority_store store;
     lxp_sequencer_authorization authorization;
+    lxp_handover_trust_chain *handover_chain;
+    lxp_daemon_finality_authority finality_authority;
+    lxp_finalisation_state known_finalisation;
+    const char *availability_path;
+    uint64_t availability_offset;
     uint8_t replica_id[32];
     uint8_t bearer_token[LXP_DAEMON_BEARER_MAX_BYTES];
     size_t bearer_token_length;
@@ -53,6 +60,77 @@ typedef struct authority_replica {
     bool condition_initialized;
     bool stopping;
 } authority_replica;
+
+static lxp_result authority_handover_finality(void *context,
+    const lxp_batch_header *predecessor, const uint8_t signature[64],
+    const lxp_handover_evidence *evidence, lxp_arena *arena)
+{
+    authority_replica *replica = context;
+    return lxp_daemon_handover_finality_verify(&replica->finality_authority,
+        &replica->known_finalisation, predecessor, signature, evidence, arena);
+}
+
+static lxp_result authority_handover_refresh(authority_replica *replica)
+{
+    lxp_log log;
+    struct stat information;
+    lxp_result status;
+    if (replica->handover_chain == NULL) return LXP_OK;
+    if (lstat(replica->availability_path, &information) != 0)
+        return errno == ENOENT && replica->availability_offset == 0U ? LXP_OK : LXP_ERR_IO;
+    if (!S_ISREG(information.st_mode) || information.st_nlink != 1) return LXP_ERR_AUTH_SCOPE;
+    status = lxp_log_open(&log, replica->availability_path);
+    if (status != LXP_OK) return status;
+    if (!log.has_durable_marker) status = LXP_ERR_LOG_CORRUPT;
+    if (status == LXP_OK) {
+        log.write_offset = log.durable_offset;
+        status = lxp_handover_trust_scan_log(replica->handover_chain, &log,
+            &replica->availability_offset, authority_handover_finality, replica, &replica->scratch);
+    }
+    if (lxp_log_close(&log) != LXP_OK && status == LXP_OK) status = LXP_ERR_IO;
+    return status;
+}
+
+static lxp_result authority_handover_open(authority_replica *replica, uint32_t network_id)
+{
+    const char *path = getenv("LAYERX_AUTHORITY_GENESIS_MANIFEST");
+    lxp_genesis_manifest *manifest;
+    uint8_t *bytes = NULL, public_key[32];
+    size_t length = 0U, mark;
+    bool enabled;
+    lxp_result status;
+    if (path == NULL) return LXP_OK;
+    if (*path == '\0') return LXP_ERR_NON_CANONICAL;
+    replica->availability_path = getenv("LAYERX_AUTHORITY_AVAILABILITY_LOG");
+    if (replica->availability_path == NULL || *replica->availability_path == '\0')
+        return LXP_ERR_NON_CANONICAL;
+    manifest = malloc(sizeof(*manifest));
+    if (manifest == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    mark = lxp_arena_mark(&replica->scratch);
+    status = lxp_daemon_artifact_read(path, LXP_GENESIS_MAX_ENCODED_BYTES, 0U, &bytes, &length);
+    if (status == LXP_OK) status = lxp_genesis_parse(bytes, length, LXP_GENESIS_INPUT_MANIFEST, manifest);
+    if (status == LXP_OK) status = lxp_genesis_verify_signature(manifest, &replica->scratch);
+    if (status == LXP_OK) status = lxp_handover_genesis_authority(manifest, public_key, &enabled);
+    if (status == LXP_OK && (!enabled || manifest->network_id != network_id ||
+        replica->authorization.first_batch_number != 1U ||
+        replica->authorization.last_batch_number != UINT64_MAX ||
+        memcmp(replica->authorization.public_key, manifest->signer_public_key, 32U) != 0))
+        status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK) {
+        replica->handover_chain = malloc(sizeof(*replica->handover_chain));
+        if (replica->handover_chain == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
+    }
+    if (status == LXP_OK) status = lxp_handover_trust_initialize(replica->handover_chain, manifest);
+    if (status == LXP_OK && memcmp(replica->authorization.sequencer_id,
+        replica->handover_chain->genesis_authorization.sequencer_id, 32U) != 0)
+        status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK) status = lxp_daemon_finality_authority_init_pins(&replica->finality_authority);
+    if (status == LXP_OK) status = authority_handover_refresh(replica);
+    free(bytes);
+    free(manifest);
+    if (lxp_arena_reset(&replica->scratch, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    return status;
+}
 
 typedef struct authority_connection {
     authority_replica *replica;
@@ -296,7 +374,8 @@ static lxp_result append_wire(authority_replica *replica,
         if (pthread_mutex_lock(&replica->mutex) != 0) return LXP_ERR_IO;
         {
             size_t mark = lxp_arena_mark(&replica->scratch);
-            status = body[4] == '2' ?
+            status = authority_handover_refresh(replica);
+            if (status == LXP_OK) status = body[4] == '2' ?
                 lxp_daemon_receipt_authority_append_maintenance(
                     &replica->store, receipt, receipt_length, header,
                     header_length, signature, &proof, &replica->scratch) :
@@ -318,6 +397,8 @@ static lxp_result evidence_json(authority_replica *replica,
 {
     lxp_daemon_receipt_evidence evidence;
     lxp_batch_header batch;
+    lxp_sequencer_authorization authorization;
+    uint64_t authorization_epoch;
     char *identity_json = NULL;
     size_t identity_length = 0U;
     lxp_codec_writer proof_writer;
@@ -341,6 +422,12 @@ static lxp_result evidence_json(authority_replica *replica,
     if (status == LXP_OK)
         status = lxp_batch_header_decode(evidence.canonical_header.bytes,
             evidence.canonical_header.length, &batch);
+    authorization = replica->authorization;
+    if (status == LXP_OK && replica->handover_chain != NULL)
+        status = lxp_handover_trust_authorization(replica->handover_chain, batch.batch_number,
+            &authorization, &authorization_epoch);
+    if (status == LXP_OK && replica->handover_chain != NULL && authorization_epoch != batch.epoch)
+        status = LXP_ERR_AUTH_SCOPE;
     if (status == LXP_OK && replica->store.last_global_sequence < batch.last_sequence)
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK)
@@ -368,7 +455,7 @@ static lxp_result evidence_json(authority_replica *replica,
             free(proof_hex); free(response); status = LXP_ERR_IO;
         } else {
             hex_encode(replica->replica_id, 32U, replica_hex);
-            hex_encode(replica->authorization.public_key, 32U, key_hex);
+            hex_encode(authorization.public_key, 32U, key_hex);
             hex_encode(evidence.canonical_header.bytes,
                        evidence.canonical_header.length, header_hex);
             hex_encode(evidence.header_signature, 64U, signature_hex);
@@ -746,6 +833,7 @@ lxp_result lxp_daemon_authority_replica_serve(
         status = parse_u64(required("LAYERX_AUTHORITY_LAST_BATCH"), &value);
     if (status == LXP_OK) replica.authorization.last_batch_number = value;
     replica.authorization.authorized = 1U;
+    if (status == LXP_OK) status = authority_handover_open(&replica, configuration.network_id);
     token = required("LAYERX_AUTHORITY_BEARER_TOKEN");
     if (status == LXP_OK &&
         (token == NULL || strlen(token) < 32U ||
@@ -755,8 +843,8 @@ lxp_result lxp_daemon_authority_replica_serve(
         replica.bearer_token_length = strlen(token);
         (void)memcpy(replica.bearer_token, token,
                      replica.bearer_token_length);
-        status = lxp_daemon_receipt_authority_open(
-            &replica.store, &replica.log, &replica.authorization);
+        status = lxp_daemon_receipt_authority_open_history(
+            &replica.store, &replica.log, &replica.authorization, replica.handover_chain);
     }
     if (status == LXP_OK) {
         if (pthread_mutex_init(&replica.mutex, NULL) != 0)
@@ -851,6 +939,7 @@ lxp_result lxp_daemon_authority_replica_serve(
     if (replica.mutex_initialized)
         (void)pthread_mutex_destroy(&replica.mutex);
     lxp_secure_zero(replica.bearer_token, sizeof(replica.bearer_token));
+    free(replica.handover_chain);
     free(replica.scratch_bytes);
     return status;
 }

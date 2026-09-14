@@ -57,7 +57,7 @@ bootstrap_extra=()
 bootstrap_environment=(env)
 custody_mode=0
 case ${2:-} in
-    --withdraw|--module-maintenance|--metered-allowance|--native-onboarding) custody_mode=1 ;;
+    --withdraw|--module-maintenance|--metered-allowance|--native-onboarding|--handover) custody_mode=1 ;;
 esac
 if [[ $custody_mode == 1 ]]; then
     bootstrap_extra+=(--custody-profile "$LAYERX_TEST_WITHDRAW_PROFILE" --settlement-env "$work/settlement.env")
@@ -70,10 +70,14 @@ else
         LAYERX_NODE_CHECKPOINT_REGISTRY=0x2222222222222222222222222222222222222222
         LAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1 LAYERX_NODE_PAXEER_RPC_PORT="$rpc_port")
 fi
-if [[ ${2:-} == --module-maintenance || ${2:-} == --native-onboarding ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --native-onboarding || ${2:-} == --handover ]]; then
     for module in escrow budget stream service perps; do
         bootstrap_extra+=(--enable-module "$module")
     done
+fi
+if [[ ${2:-} == --handover ]]; then
+    governance_public=$(python3 -c 'from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; print(Ed25519PrivateKey.from_private_bytes(bytes([0x11])*32).public_key().public_bytes_raw().hex())')
+    bootstrap_extra+=(--handover-authority "$governance_public")
 fi
 "${bootstrap_environment[@]}" \
 bash platform/hosted/node/bootstrap.sh --data-dir "$work/data" --run-dir "$runtime" \
@@ -86,7 +90,7 @@ if [[ $custody_mode == 1 ]]; then
     settlement_lines=$(bash platform/hosted/node/bootstrap.sh --check-settlement "$work/settlement.env")
     while IFS= read -r line; do export "$line"; done <<< "$settlement_lines"
 fi
-if [[ ${2:-} == --module-maintenance ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --handover ]]; then
     python3 - "$work/data/identities.txt" <<'PYPROVIDER'
 from pathlib import Path
 import sys
@@ -135,8 +139,9 @@ for attempt in range(200):
 else:
     raise SystemExit("daemon did not accept LNI connections")
 PYWAIT
-if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --handover ]]; then
     client_name=${2#--}
+    if [[ ${2:-} == --handover ]]; then client_name=module-maintenance; fi
     client_name=${client_name//-/_}
     cp "$build_dir/tests/lxp_test_$client_name" "$work/client"
     mkdir "$work/scenario"
@@ -160,6 +165,82 @@ else
     cp "$build_dir/tests/lxp_test_program_admission" "$work/client"
 fi
 chmod 0755 "$work/client"
+if [[ ${2:-} == --handover ]]; then
+    timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-prepare "$scenario_state"
+    "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/handover-chain.py finalize "$work" "$build_dir" "$scenario_state"
+    kill -TERM "$sequencer_pid"
+    wait "$sequencer_pid"
+    sequencer_pid=
+    python3 - "$work/sequencer" "$scenario_state/handover-ready.json" <<'PYHANDOVER'
+from pathlib import Path
+import json, sys, time
+Path(sys.argv[1]).write_bytes(bytes([0x44]) * 32)
+deadline = json.loads(Path(sys.argv[2]).read_text())['deadline']
+while int(time.time() * 1000) <= deadline:
+    time.sleep(.01)
+PYHANDOVER
+    if [[ -n ${LAYERX_TEST_HANDOVER_CRASH_BOUNDARY:-} ]]; then
+        mkfifo "$work/handover-apply-gate"
+        exec {handover_gate_fd}<>"$work/handover-apply-gate"
+        export LXP_TEST_APPLY_GATE_FD="$handover_gate_fd" LXP_TEST_CRASH_BOUNDARY="$LAYERX_TEST_HANDOVER_CRASH_BOUNDARY" LXP_TEST_CRASH_OCCURRENCE=1
+        sequencer_binary="$build_dir/tests/lxp_test_maintenance_crash"
+    fi
+    (source platform/hosted/node/sequencer-env.sh; layerx_sequencer_environment "$work/data/sequencer.env"; exec "$sequencer_binary" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
+    sequencer_pid=$!
+    python3 - "$runtime/layerxd.lni.sock" "$sequencer_pid" <<'PYWAIT'
+import os, socket, sys, time
+for attempt in range(200):
+    os.kill(int(sys.argv[2]), 0)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(sys.argv[1])
+        break
+    except OSError:
+        time.sleep(0.1)
+else:
+    raise SystemExit("handover daemon did not accept LNI connections")
+PYWAIT
+    if [[ -n ${LAYERX_TEST_HANDOVER_CRASH_BOUNDARY:-} ]]; then
+        timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-queue "$scenario_state" "$scenario_state/handover.activity"
+        printf G >&"$handover_gate_fd"
+        result=0
+        wait "$sequencer_pid" || result=$?
+        [[ "$result" == $((128 + LAYERX_TEST_HANDOVER_CRASH_BOUNDARY)) ]]
+        exec {handover_gate_fd}>&-
+        unset LXP_TEST_APPLY_GATE_FD LXP_TEST_CRASH_BOUNDARY LXP_TEST_CRASH_OCCURRENCE
+        sequencer_binary="$native_bin/layerxd"
+    else
+        timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-apply "$scenario_state" "$scenario_state/handover.activity"
+        kill -KILL "$sequencer_pid"
+        wait "$sequencer_pid" || true
+    fi
+    sequencer_pid=
+    kill -KILL "$replica_pid"
+    wait "$replica_pid" || true
+    replica_pid=
+    (set -a; source "$work/data/replica.env"; export LAYERX_AUTHORITY_READY_FD="$replica_ready_fd"; exec "$native_bin/layerxd" --authority-replica "$work/data/replica.conf") >> "$work/replica.log" 2>&1 &
+    replica_pid=$!
+    IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
+    [[ "$replica_ready" == R ]]
+    (source platform/hosted/node/sequencer-env.sh; layerx_sequencer_environment "$work/data/sequencer.env"; exec "$sequencer_binary" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
+    sequencer_pid=$!
+    python3 - "$runtime/layerxd.lni.sock" "$sequencer_pid" <<'PYWAIT'
+import os, socket, sys, time
+for attempt in range(200):
+    os.kill(int(sys.argv[2]), 0)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(sys.argv[1])
+        break
+    except OSError:
+        time.sleep(0.1)
+else:
+    raise SystemExit("handover daemon did not accept LNI connections")
+PYWAIT
+    timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-recovered "$scenario_state" "$scenario_state/handover.activity"
+    "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/handover-chain.py replay "$work" "$build_dir" "$scenario_state"
+    exit 0
+fi
 if [[ ${2:-} == --owner-authority ]]; then
     export LAYERX_TEST_OWNER_AUTHORITY_SOCKET="$runtime/layerxd.lni.sock"
     "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/post-lxip.py "$work" --prepare-only

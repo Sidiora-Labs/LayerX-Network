@@ -226,8 +226,22 @@ check_sequencer_environment() {
     sequencer_seed_hex "$key_file"
     derived=$(public_key_hex "$SEQUENCER_SEED")
     SEQUENCER_SEED=""
-    [ "$derived" = "$public_key" ] \
-        || fail "the sequencer key file $key_file does not match the bound sequencer public key"
+    wait_for_settlement "$env_file"
+    (
+        local verifier
+        local -a arguments
+        load_environment "$env_file" < "$env_file"
+        if [ -n "${SETTLEMENT_LINES:-}" ]; then
+            load_environment "the settlement environment" <<< "$SETTLEMENT_LINES"
+        fi
+        verifier=$(resolve_binary "" layerx-handover)
+        arguments=(--verify-key "${LAYERX_NODE_GENESIS_MANIFEST:?}" \
+            "${LAYERX_NODE_CHECKPOINT_DIRECTORY:?}/da-bodies.log" "$derived")
+        if [ -n "${LAYERX_NODE_HANDOVER_ACTIVITY:-}" ]; then
+            arguments+=("$LAYERX_NODE_HANDOVER_ACTIVITY")
+        fi
+        "$verifier" "${arguments[@]}"
+    ) || fail "the sequencer key file is not authorized by genesis and finalized handover history"
     log "sequencer seed bound from $key_file"
 }
 
@@ -286,8 +300,8 @@ start_daemon() {
     [ -r "$config" ] || fail "configuration missing: $config"
     if [ "$mode" = --serve ]; then
         publish_core_environment
-        wait_for_settlement "$env_file"
     fi
+    wait_for_settlement "$env_file"
     (
         load_environment "$env_file" < "$env_file"
         if [ -n "${SETTLEMENT_LINES:-}" ]; then
