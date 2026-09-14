@@ -73,16 +73,24 @@ fn domain(label: &[u8], bytes: &[u8]) -> [u8; 32] {
     hash.update(bytes);
     hash.finalize().into()
 }
-fn signed(
-    client: &mut Client,
-    route: &mut NativeReadRoute,
-    key: &SigningKey,
-    did: &Did,
-    ordinal: u16,
-    payload: &[u8],
-) -> Result<Vec<u8>> {
+fn funded_fee_limit(client: &mut Client, route: &mut NativeReadRoute, did: &Did) -> Result<u128> {
     let history = checked(route.signed_authority())?.ok_or("missing fee authority")?;
     checked(client.reconnect())?;
+    let head = history
+        .verified_head()
+        .ok_or("missing funded head")?
+        .header();
+    assert_eq!(head.batch_number(), client.head().sealed_batch);
+    let interval = history
+        .intervals()
+        .last()
+        .ok_or("missing funding authority")?;
+    let authority = layerx_proof::inclusion::SequencerAuthorization::new(
+        head.sequencer_id(),
+        interval.public_key(),
+        interval.first_batch(),
+        interval.last_batch(),
+    );
     let fee_asset = checked(client.native_fee_policy(398))?.value.asset.asset_id;
     let account_id = checked(layerx_wire::hash::account_id_for_protocol(
         &checked(AccountId::parse(&format!(
@@ -91,11 +99,20 @@ fn signed(
         )))?,
         3,
     ))?;
-    let account = checked(client.account_with_history(
+    let account = checked(client.account(
         account_id,
         layerx_types::verify::VerificationLevel::BATCH_INCLUDED,
         399,
-        &history,
+        authority,
+    ))?;
+    let evidence = checked(layerx_client::evidence::decode_nested_evidence(
+        account.proof_material(),
+        3,
+        77,
+    ))?;
+    checked(history.verify_header(
+        &evidence.signed_header.canonical_bytes,
+        &evidence.signed_header.signature,
     ))?;
     let account = checked(layerx_proof::state::decode_account_value(
         account_id,
@@ -104,7 +121,17 @@ fn signed(
     assert!(!account.frozen);
     let held = account.asset.ok_or("missing funded fee asset")?;
     assert_eq!(held.asset_id, fee_asset);
-    let fee_limit = held.balance.min(1_000_000_000_000);
+    Ok(held.balance.min(1_000_000_000_000))
+}
+fn signed(
+    client: &mut Client,
+    route: &mut NativeReadRoute,
+    key: &SigningKey,
+    did: &Did,
+    ordinal: u16,
+    payload: &[u8],
+) -> Result<Vec<u8>> {
+    let fee_limit = funded_fee_limit(client, route, did)?;
     let state = checked(client.preparation_state(did, 400))?;
     assert_eq!(state.kernel_epoch, 2);
     let timestamp = now()?;
