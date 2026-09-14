@@ -26,5 +26,6 @@ COPY --from=build /src/human/target/release/layerx-human-movement-provider /usr/
 COPY --from=build /src/cmd/layerxctl/target/release/layerxctl /usr/local/bin/layerxctl
 COPY platform/hosted/human/provision.py platform/hosted/human/owner_native.py platform/hosted/human/owner_kms.py platform/hosted/human/onboarding_socket.py platform/hosted/human/onboarding_bootstrap.py platform/hosted/human/onboarding_material.py platform/hosted/human/material.py platform/hosted/human/recipient_binding.py /usr/local/lib/layerx-human/
 COPY --chmod=0555 platform/hosted/human/entrypoint.sh /usr/local/bin/human-entrypoint
+COPY platform/hosted/human/recipient_check.py /usr/local/lib/layerx-human/recipient_check.py
 USER 4020:4020
 ENTRYPOINT ["/usr/local/bin/human-entrypoint", "service"]

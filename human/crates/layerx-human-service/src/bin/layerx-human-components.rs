@@ -32,6 +32,8 @@ fn run() -> Result<(), String> {
             caller_uid: required_number("LAYERX_HUMAN_RECIPIENT_CALLER_UID")?,
             caller_gid: required_number("LAYERX_HUMAN_RECIPIENT_CALLER_GID")?,
             deadline: Duration::from_secs(required_number("LAYERX_HUMAN_RECIPIENT_DEADLINE_SECONDS")?),
+            clock: layerx_client::runtime_clock::RuntimeClock::from_environment()
+                .map_err(|_| "the recipient clock authority is unavailable".to_owned())?,
         }).map_err(|_| "the recipient listener cannot bind".to_owned())?;
     let server = HumanComponentServer::new_maintained(
         backend,

@@ -2,6 +2,7 @@ use super::*;
 use crate::custody::SettlementRecipientRequest;
 use crate::store::PrincipalId;
 use serde::Deserialize;
+use layerx_types::clock::{Clock, Deadline};
 use std::io;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
@@ -31,6 +32,7 @@ pub struct RecipientServerConfig {
     pub caller_uid: u32,
     pub caller_gid: u32,
     pub deadline: Duration,
+    pub clock: Arc<dyn Clock>,
 }
 
 pub struct RecipientServer {
@@ -76,25 +78,37 @@ impl RecipientServer {
     }
 
     fn serve(&self, peer: &OwnedFd) -> io::Result<()> {
+        let mut deadline = Deadline::start(self.config.clock.as_ref(), self.config.deadline)
+            .map_err(|_| invalid())?;
         let credentials = net::sockopt::socket_peercred(peer)?;
         if credentials.uid.as_raw() != self.config.caller_uid
             || credentials.gid.as_raw() != self.config.caller_gid { return Err(invalid()); }
-        for direction in [net::sockopt::Timeout::Recv, net::sockopt::Timeout::Send] {
-            net::sockopt::set_socket_timeout(peer, direction, Some(self.config.deadline))?;
-        }
+        net::sockopt::set_socket_timeout(peer, net::sockopt::Timeout::Recv,
+            Some(self.remaining(&mut deadline)?))?;
         let mut bytes = [0; MAX_PACKET];
         let (_, count) = net::recv(peer, &mut bytes[..], RecvFlags::TRUNC)?;
         if count == 0 || count > bytes.len() { return Err(invalid()); }
+        self.remaining(&mut deadline)?;
         let response = serde_json::from_slice::<Packet>(&bytes[..count]).ok()
             .filter(|packet| packet.version == 1 && packet.operation == "settlement-recipient")
             .and_then(|packet| self.components.sign_recipient(packet.body).ok());
         let value = response.map_or_else(|| json!({"version": 1, "error": "recipient_request_refused"}),
             |result| json!({"version": 1, "result": result}));
         let bytes = serde_json::to_vec(&value).map_err(|_| invalid())?;
+        net::sockopt::set_socket_timeout(peer, net::sockopt::Timeout::Send,
+            Some(self.remaining(&mut deadline)?))?;
         if bytes.len() > MAX_PACKET || net::send(peer, &bytes, SendFlags::NOSIGNAL)? != bytes.len() {
             return Err(invalid());
         }
         Ok(())
+    }
+
+    fn remaining(&self, deadline: &mut Deadline) -> io::Result<Duration> {
+        let remaining = deadline.remaining(self.config.clock.as_ref()).map_err(|_| invalid())?;
+        if remaining.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "recipient operation deadline elapsed"));
+        }
+        Ok(remaining)
     }
 }
 

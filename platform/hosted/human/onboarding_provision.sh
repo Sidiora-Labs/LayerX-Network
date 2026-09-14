@@ -91,6 +91,7 @@ PY
         --url "$HUMAN_URL" --ca "$CA_DIR/ca.crt" --origin "$origin" --request "$request" \
         --authenticator "$REPO_ROOT/human/apps/web/e2e/software-authenticator.ts" \
         --credential "$credential" --result "$result" "${mode[@]}"
+    human_recipient_check
     python3 - "$REPO_ROOT/platform/hosted/human" "$result" "$SECRETS_DIR/human-credentials.json" <<'PY'
 import json, os, sys
 from pathlib import Path
@@ -124,4 +125,29 @@ PY
             --from-file=credentials.json="$SECRETS_DIR/human-credentials.json" --from-file=human-session.credential="$credential" \
             --from-file=producers.json="$SECRETS_DIR/$service-producers.json" --from-file=producer-token="$SECRETS_DIR/human-event-producer.token"
     done
+)
+
+human_recipient_check() (
+    set -euo pipefail
+    umask 077
+    local input="$WORK_DIR/human-recipient-public.json"
+    python3 - "$REPO_ROOT/platform/hosted/human" "$WORK_DIR" "$NODE_NETWORK_ID" "$NODE_ASSET_ID" "$input" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from provision import protected_json, require, write_json
+root = Path(sys.argv[2])
+owner = protected_json(root / 'human-evidence-input/owner-kms.json')
+registration = protected_json(root / 'human-evidence-input/owner-registration.json')
+browser = protected_json(root / 'human-browser-result.json')
+require(registration['identity']['did'] == owner['did']
+        and registration['authority'] == bytes(owner['public_key']).hex(), root, 'original native sponsor authority')
+write_json(Path(sys.argv[5]), dict(principal=owner['principal'], network_id=int(sys.argv[3]),
+    checkpoint=browser['balance']['freshness']['checkpoint'], account=registration['owner_account'],
+    asset=sys.argv[4], authority=registration['authority']))
+PY
+    kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c human-owner -- \
+        python3 /usr/local/lib/layerx-human/recipient_check.py authorized < "$input"
+    kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c components -- \
+        python3 /usr/local/lib/layerx-human/recipient_check.py wrong-peer < "$input"
 )
