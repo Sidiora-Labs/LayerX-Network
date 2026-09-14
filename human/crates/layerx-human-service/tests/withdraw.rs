@@ -74,7 +74,7 @@ mod paxeer_real {
             let (token, vault, bond, checkpoint_registry, challenge_manager, claims) =
                 deploy_suite_for_asset_network(
                     &anvil,
-                    PROTOCOL_VERSION,
+                    3,
                     expectation.asset_id,
                     expectation.network_id,
                 );
@@ -85,6 +85,7 @@ mod paxeer_real {
                 .unwrap_or_else(|| panic!("latest block timestamp exceeds canonical milliseconds"));
             let mut header = checkpoint_header(leaf, timestamp_ms);
             header.network_id = expectation.network_id;
+            header.protocol_version = 3;
             let checkpoint_hash = checkpoint_hash(&header);
             let attestation = signed_attestation(&header, checkpoint_hash, bond);
             anvil.send_checked(
@@ -93,14 +94,17 @@ mod paxeer_real {
                 &register_checkpoint_calldata(&header, &attestation),
                 0,
             );
-            let boundary = WithdrawalBoundary::new(WithdrawalConfig {
-                endpoints: vec![anvil.endpoint.clone()],
-                minimum_endpoint_agreement: 1,
-                claims_contract: claims,
-                required_confirmations: 2,
-                poll_cadence: Duration::from_millis(20),
-                delayed_after_polls: 100,
-            })
+            let boundary = WithdrawalBoundary::new_for_protocol(
+                WithdrawalConfig {
+                    endpoints: vec![anvil.endpoint.clone()],
+                    minimum_endpoint_agreement: 1,
+                    claims_contract: claims,
+                    required_confirmations: 2,
+                    poll_cadence: Duration::from_millis(20),
+                    delayed_after_polls: 100,
+                },
+                3,
+            )
             .unwrap_or_else(|error| panic!("withdrawal boundary: {error:?}"));
             let proof = CheckpointProof {
                 native: None,
@@ -201,7 +205,7 @@ use layerx_agent_api::track::{
 use layerx_agent_api::verify::Level;
 use layerx_agentd::outbox::{Outbox, OutboxError, SubmissionState as OutboxState};
 use layerx_agentd::prepare::{
-    prepare_activity, PreparationDefaults, PrepareRequest, Prepared,
+    prepare_activity_for_protocol, PreparationDefaults, PrepareRequest, Prepared,
     ProductionCorePreparationBoundary,
 };
 use layerx_agentd::receipt::{self as daemon_receipt, ReceiptLookupKey as DaemonReceiptKey};
@@ -374,9 +378,13 @@ impl AgentBoundary for RealWithdrawalAgent {
         let request = &call.request().operation;
         let key = call.request().key.bytes();
         if !self.preparations.contains_key(&key) {
-            let mut core = ProductionCorePreparationBoundary::new(&mut self.node, 10)
-                .map_err(|_| AgentBoundaryError::Unavailable)?;
-            let prepared = prepare_activity(
+            let protocol_version = self.node.handshake().node().protocol_version;
+            let mut core =
+                ProductionCorePreparationBoundary::new(&mut self.node, 10).map_err(|error| {
+                    eprintln!("native preparation initialization: {error:?}");
+                    AgentBoundaryError::Unavailable
+                })?;
+            let prepared = prepare_activity_for_protocol(
                 &mut core,
                 PreparationDefaults {
                     timestamp_span: request
@@ -406,6 +414,7 @@ impl AgentBoundary for RealWithdrawalAgent {
                     payload: request.payload.as_bytes().to_vec(),
                     declared_payload_limit: 1_024,
                 },
+                protocol_version,
             )
             .map_err(|_| AgentBoundaryError::Refused)?;
             self.preparations.insert(key, prepared);
@@ -480,8 +489,12 @@ impl AgentBoundary for RealWithdrawalAgent {
         let submitted = self
             .node
             .submit_signed(&self.registry, signer_public_key, 20, 1, &signed)
-            .map_err(|_| AgentBoundaryError::Unavailable)?;
+            .map_err(|error| {
+                eprintln!("native withdrawal submit: {error:?}");
+                AgentBoundaryError::Unavailable
+            })?;
         let layerx_client::submit::Submission::Acknowledged(ack) = submitted else {
+            eprintln!("native withdrawal submission: {submitted:?}");
             return Err(AgentBoundaryError::Unavailable);
         };
         if ack.activity_id() != activity_id {
@@ -491,7 +504,11 @@ impl AgentBoundary for RealWithdrawalAgent {
             &mut self.node,
             &self.registry,
             activity_id,
-            prepared.envelope.account_sequence() + 1,
+            prepared
+                .envelope
+                .account_sequence()
+                .checked_add(1)
+                .ok_or(AgentBoundaryError::CorruptResponse)?,
         );
         daemon_receipt::store(
             &mut self.store,
@@ -698,7 +715,7 @@ impl Fixture {
             .unwrap_or_else(|error| panic!("agent SDK: {error:?}"));
         let plan = WithdrawalPlan {
             request_anchor: layerx_types::ids::CheckpointId::new([18; 32]),
-            layerx_protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
+            layerx_protocol_version: layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION,
             journey_id: JourneyId::new(format!("jrn_{label}"))
                 .unwrap_or_else(|error| panic!("journey id: {error}")),
             idempotency_key: [0x31; 32],
