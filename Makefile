@@ -3448,8 +3448,12 @@ test-daemon-withdrawal: $(BUILD_DIR)/tests/lxp_test_program_admission \
 .PHONY: test-daemon-withdrawal-replica-recovery
 test-daemon-withdrawal-replica-recovery: $(BUILD_DIR)/tests/lxp_test_program_admission \
 		$(BUILD_DIR)/tests/lxp_test_guarantor_runtime $(BUILD_DIR)/tests/bridge/sign-credit \
-		$(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+		$(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build $(BUILD_DIR)/tests/lxp_test_replica_prefix
 	env LAYERX_TEST_REPLICA_RECOVERY_PREFIX=1 $(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR)
+
+$(BUILD_DIR)/tests/lxp_test_replica_prefix: tests/daemon/lxp_test_replica_prefix.c $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 $(BUILD_DIR)/tests/lxp_test_paid_withdrawal: tests/daemon/lxp_test_paid_withdrawal.c tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)

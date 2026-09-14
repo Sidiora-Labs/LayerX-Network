@@ -241,7 +241,7 @@ if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --wi
     replica_pid=
     if [[ ${LAYERX_TEST_REPLICA_RECOVERY_PREFIX:-0} == 1 ]]; then
         [[ ${2:-} == --withdraw || ${2:-} == --paid-withdrawal ]]
-        python3 tests/daemon/retain-replica-prefix.py "$work/data/replica/receipt-authority.log"
+        python3 tests/daemon/retain-replica-prefix.py "$work/data/replica/receipt-authority.log" "$build_dir/tests/lxp_test_replica_prefix"
     fi
     (set -a; source "$work/data/replica.env"; export LAYERX_AUTHORITY_READY_FD="$replica_ready_fd"; exec "$native_bin/layerxd" --authority-replica "$work/data/replica.conf") >> "$work/replica.log" 2>&1 &
     replica_pid=$!

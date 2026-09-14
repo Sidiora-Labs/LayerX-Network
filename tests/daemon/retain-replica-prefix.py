@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import stat
 import struct
+import subprocess
 import sys
 
 
@@ -14,8 +15,9 @@ def crc32c(data):
     return (~crc) & 0xffffffff
 
 
+assert len(sys.argv) == 3
 path = Path(sys.argv[1])
-assert len(sys.argv) == 2
+builder = Path(sys.argv[2]).resolve(strict=True)
 descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
 with os.fdopen(descriptor, 'r+b') as log:
     info = os.fstat(log.fileno())
@@ -28,13 +30,24 @@ with os.fdopen(descriptor, 'r+b') as log:
     body = log.read(length)
     assert len(body) == length and crc32c(body) == crc and body[:5] == b'LXBE1'
     prefix = header + body
-    with path.with_suffix('.retained-prefix').open('xb') as evidence:
+    retained = path.with_suffix('.retained-prefix')
+    with retained.open('xb') as evidence:
         evidence.write(prefix)
         evidence.flush()
         os.fsync(evidence.fileno())
-    log.truncate(len(prefix))
-    log.flush()
-    os.fsync(log.fileno())
-    log.seek(0)
-    assert log.read() == prefix
+    with retained.open('rb') as evidence:
+        assert evidence.read() == prefix
+    replacement = path.with_suffix('.rebuilt-prefix')
+    subprocess.run([str(builder), str(retained), str(replacement), str(info.st_size)], check=True)
+    with replacement.open('rb') as rebuilt:
+        assert os.fstat(rebuilt.fileno()).st_size == info.st_size
+        assert rebuilt.read(len(prefix)) == prefix
+    os.chown(replacement, info.st_uid, info.st_gid)
+    os.chmod(replacement, stat.S_IMODE(info.st_mode))
+    os.replace(replacement, path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 print('Stopped replica retains exactly its first authenticated receipt record')
