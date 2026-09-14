@@ -359,22 +359,22 @@ mod maintained_consumer_tests {
             match name {
                 "kind" => {
                     changed["batch_identity"]["kind"] =
-                        serde_json::json!("occupancy_maintenance_v2")
+                        serde_json::json!("occupancy_maintenance_v2");
                 }
                 "empty" => {
-                    changed["batch_identity"]["activity_receipts_hex"] = serde_json::json!([])
+                    changed["batch_identity"]["activity_receipts_hex"] = serde_json::json!([]);
                 }
                 "duplicate" => {
                     changed["batch_identity"]["activity_receipts_hex"] =
-                        serde_json::json!([crate::hex(receipt), crate::hex(receipt)])
+                        serde_json::json!([crate::hex(receipt), crate::hex(receipt)]);
                 }
                 "receipt" => {
                     changed["batch_identity"]["receipt_hex"] =
-                        serde_json::json!(crate::hex(receipt))
+                        serde_json::json!(crate::hex(receipt));
                 }
                 "proof" => {
                     changed["receipt_proof_hex"] =
-                        changed["batch_identity"]["receipt_proof_hex"].clone()
+                        changed["batch_identity"]["receipt_proof_hex"].clone();
                 }
                 _ => changed["header_signature"] = serde_json::json!("aa".repeat(64)),
             }
