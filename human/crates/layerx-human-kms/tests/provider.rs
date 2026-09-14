@@ -16,6 +16,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 #[path = "provider/native_setup.rs"]
 mod native_setup;
+#[path = "provider/owner_rotation.rs"]
+mod owner_rotation;
 const MAX: usize = 2_097_152;
 struct Host {
     root: PathBuf,
