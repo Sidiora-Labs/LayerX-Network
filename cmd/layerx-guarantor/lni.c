@@ -56,11 +56,13 @@ static lxp_result transfer(int fd, uint8_t *p, size_t n, bool writing, int64_t d
     }
     return LXP_OK;
 }
-static lxp_result handshake(lxp_guarantor_lni *);
-lxp_result lxp_guarantor_lni_open(lxp_guarantor_lni *c, const char *path, uint32_t timeout_ms)
+static lxp_result handshake_at(lxp_guarantor_lni *, int64_t, bool *);
+static lxp_result open_at(lxp_guarantor_lni *c, const char *path, uint32_t timeout_ms,
+                           int64_t deadline, bool *transport_io)
 {
     struct sockaddr_un address;
-    int flags;
+    lxp_result status;
+    int connected;
     if (c == NULL || path == NULL || timeout_ms == 0U || timeout_ms > 60000U ||
         strlen(path) >= sizeof(address.sun_path))
         return LXP_ERR_NON_CANONICAL;
@@ -71,15 +73,24 @@ lxp_result lxp_guarantor_lni_open(lxp_guarantor_lni *c, const char *path, uint32
     c->fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (c->fd < 0)
         return LXP_ERR_IO;
-    flags = connect(c->fd, (const struct sockaddr *)&address, sizeof(address));
-    if (flags != 0) {
+    connected = connect(c->fd, (const struct sockaddr *)&address, sizeof(address));
+    if (connected != 0) {
+        if (transport_io != NULL)
+            *transport_io = true;
         lxp_guarantor_lni_close(c);
         return LXP_ERR_IO;
     }
-    lxp_result status = handshake(c);
+    status = handshake_at(c, deadline, transport_io);
     if (status != LXP_OK)
         lxp_guarantor_lni_close(c);
     return status;
+}
+lxp_result lxp_guarantor_lni_open(lxp_guarantor_lni *c, const char *path, uint32_t timeout_ms)
+{
+    int64_t started = now();
+    if (started < 0)
+        return LXP_ERR_IO;
+    return open_at(c, path, timeout_ms, started + timeout_ms, NULL);
 }
 void lxp_guarantor_lni_close(lxp_guarantor_lni *c)
 {
@@ -88,8 +99,8 @@ void lxp_guarantor_lni_close(lxp_guarantor_lni *c)
         c->fd = -1;
     }
 }
-static lxp_result request(lxp_guarantor_lni *c, uint16_t tag, lxp_byte_span payload,
-                          lxp_byte_span proof, int64_t deadline)
+static lxp_result request_at(lxp_guarantor_lni *c, uint16_t tag, lxp_byte_span payload,
+                             lxp_byte_span proof, int64_t deadline, bool *transport_io)
 {
     size_t size = 22U + payload.length + proof.length;
     uint8_t *bytes;
@@ -114,17 +125,28 @@ static lxp_result request(lxp_guarantor_lni *c, uint16_t tag, lxp_byte_span payl
         memcpy(bytes + 26U + payload.length, proof.bytes, proof.length);
     status = transfer(c->fd, bytes, size + 4U, true, deadline);
     free(bytes);
+    if (status == LXP_ERR_IO && transport_io != NULL)
+        *transport_io = true;
     return status;
 }
-static lxp_result response(lxp_guarantor_lni *c, lxp_arena *arena, uint16_t *tag,
-                           lxp_byte_span *payload, lxp_byte_span *proof, int64_t deadline)
+static lxp_result request(lxp_guarantor_lni *c, uint16_t tag, lxp_byte_span payload,
+                          lxp_byte_span proof, int64_t deadline)
+{
+    return request_at(c, tag, payload, proof, deadline, NULL);
+}
+static lxp_result response_at(lxp_guarantor_lni *c, lxp_arena *arena, uint16_t *tag,
+                           lxp_byte_span *payload, lxp_byte_span *proof, int64_t deadline,
+                              bool *transport_io)
 {
     uint8_t prefix[4], *bytes;
     void *memory;
     size_t size, plen, qlen;
     lxp_result status = transfer(c->fd, prefix, 4U, false, deadline);
-    if (status != LXP_OK)
+    if (status != LXP_OK) {
+        if (status == LXP_ERR_IO && transport_io != NULL)
+            *transport_io = true;
         return status;
+    }
     size = (size_t)get(prefix, 4U);
     if (size < 22U || size > LXP_GUARANTOR_FRAME_MAX)
         return LXP_ERR_LENGTH_LIMIT;
@@ -133,8 +155,11 @@ static lxp_result response(lxp_guarantor_lni *c, lxp_arena *arena, uint16_t *tag
         return status;
     bytes = memory;
     status = transfer(c->fd, bytes, size, false, deadline);
-    if (status != LXP_OK)
+    if (status != LXP_OK) {
+        if (status == LXP_ERR_IO && transport_io != NULL)
+            *transport_io = true;
         return status;
+    }
     if (get(bytes, 2U) != LNI_INTERFACE_MAJOR ||
         get(bytes + 2U, 2U) != LNI_INTERFACE_MINOR ||
         get(bytes + 6U, 8U) != c->correlation)
@@ -159,21 +184,26 @@ static lxp_result response(lxp_guarantor_lni *c, lxp_arena *arena, uint16_t *tag
     }
     return LXP_OK;
 }
-static lxp_result handshake(lxp_guarantor_lni *c)
+static lxp_result response(lxp_guarantor_lni *c, lxp_arena *arena, uint16_t *tag,
+                           lxp_byte_span *payload, lxp_byte_span *proof, int64_t deadline)
+{
+    return response_at(c, arena, tag, payload, proof, deadline, NULL);
+}
+static lxp_result handshake_at(lxp_guarantor_lni *c, int64_t deadline, bool *transport_io)
 {
     void *memory = malloc(LXP_GUARANTOR_FRAME_MAX);
     lxp_arena arena;
     uint16_t tag;
     lxp_byte_span payload, proof;
-    int64_t deadline = now() + c->timeout_ms;
     lxp_result status;
     if (memory == NULL)
         return LXP_ERR_IO;
     status = lxp_arena_init(&arena, memory, LXP_GUARANTOR_FRAME_MAX);
     if (status == LXP_OK)
-        status = request(c, 1U, (lxp_byte_span){NULL, 0U}, (lxp_byte_span){NULL, 0U}, deadline);
+        status = request_at(c, 1U, (lxp_byte_span){NULL, 0U}, (lxp_byte_span){NULL, 0U},
+                            deadline, transport_io);
     if (status == LXP_OK)
-        status = response(c, &arena, &tag, &payload, &proof, deadline);
+        status = response_at(c, &arena, &tag, &payload, &proof, deadline, transport_io);
     if (status == LXP_OK && (tag != 2U || payload.length < 93U || proof.length != 0U))
         status = LXP_ERR_MALFORMED_ENVELOPE;
     free(memory);
@@ -343,40 +373,99 @@ lxp_result lxp_guarantor_lni_fetch(lxp_guarantor_lni *c, const lxp_batch_header 
     }
     return status;
 }
-lxp_result lxp_guarantor_lni_feedback(lxp_guarantor_lni *c, lxp_byte_span certificate,
-                                      lxp_byte_span proof, lxp_arena *arena)
+static lxp_result feedback_at(lxp_guarantor_lni *c, lxp_byte_span certificate,
+                               lxp_byte_span proof, lxp_arena *arena, int64_t deadline,
+                               bool *transport_io)
 {
     uint16_t tag;
     lxp_byte_span payload, evidence;
-    int64_t deadline;
     lxp_result status;
     if (c == NULL || arena == NULL)
         return LXP_ERR_NON_CANONICAL;
-    deadline = now() + c->timeout_ms;
-    status = request(c, 28U, certificate, proof, deadline);
+    status = request_at(c, 28U, certificate, proof, deadline, transport_io);
     if (status == LXP_OK)
-        status = response(c, arena, &tag, &payload, &evidence, deadline);
+        status = response_at(c, arena, &tag, &payload, &evidence, deadline, transport_io);
     if (status == LXP_OK && (tag != 29U || evidence.length != 0U || payload.length != 74U ||
                              get(payload.bytes, 2U) != 1U))
         status = LXP_ERR_MALFORMED_ENVELOPE;
     return status;
 }
-
-lxp_result lxp_guarantor_lni_checkpoint(lxp_guarantor_lni *c, uint64_t batch, lxp_arena *arena,
-                                        lxp_byte_span *certificate, lxp_byte_span *proof)
+lxp_result lxp_guarantor_lni_feedback(lxp_guarantor_lni *c, lxp_byte_span certificate,
+                                      lxp_byte_span proof, lxp_arena *arena)
+{
+    if (c == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    return feedback_at(c, certificate, proof, arena, now() + c->timeout_ms, NULL);
+}
+static lxp_result checkpoint_at(lxp_guarantor_lni *c, uint64_t batch, lxp_arena *arena,
+                                 lxp_byte_span *certificate, lxp_byte_span *proof, int64_t deadline,
+                                 bool *transport_io)
 {
     uint8_t query[11] = {0U, 1U, 2U};
     uint16_t tag;
     lxp_result status;
     if (c == NULL || arena == NULL || certificate == NULL || proof == NULL || batch == 0U)
         return LXP_ERR_NON_CANONICAL;
-    int64_t deadline = now() + c->timeout_ms;
     put(query + 3U, batch, 8U);
-    status =
-        request(c, 14U, (lxp_byte_span){query, sizeof(query)}, (lxp_byte_span){NULL, 0U}, deadline);
+    status = request_at(c, 14U, (lxp_byte_span){query, sizeof(query)},
+                        (lxp_byte_span){NULL, 0U}, deadline, transport_io);
     if (status == LXP_OK)
-        status = response(c, arena, &tag, certificate, proof, deadline);
+        status = response_at(c, arena, &tag, certificate, proof, deadline, transport_io);
     if (status == LXP_OK && (tag != 15U || certificate->length == 0U || proof->length == 0U))
         status = LXP_ERR_MALFORMED_ENVELOPE;
     return status;
+}
+lxp_result lxp_guarantor_lni_checkpoint(lxp_guarantor_lni *c, uint64_t batch, lxp_arena *arena,
+                                        lxp_byte_span *certificate, lxp_byte_span *proof)
+{
+    if (c == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    return checkpoint_at(c, batch, arena, certificate, proof, now() + c->timeout_ms, NULL);
+}
+lxp_result lxp_guarantor_lni_feedback_confirmed(lxp_guarantor_lni *c, const char *path,
+    uint64_t batch, lxp_byte_span certificate, lxp_byte_span proof, lxp_arena *arena,
+    uint32_t timeout_ms)
+{
+    int64_t started = now(), deadline;
+    size_t mark;
+    if (c == NULL || path == NULL || arena == NULL || batch == 0U ||
+        certificate.bytes == NULL || certificate.length == 0U ||
+        proof.bytes == NULL || proof.length == 0U || timeout_ms == 0U || timeout_ms > 60000U)
+        return LXP_ERR_NON_CANONICAL;
+    if (started < 0)
+        return LXP_ERR_IO;
+    deadline = started + timeout_ms;
+    mark = lxp_arena_mark(arena);
+    for (;;) {
+        bool transport_io = false;
+        lxp_byte_span served = {0}, served_proof = {0};
+        lxp_result status, reset_status;
+        int64_t current = now(), remaining;
+        lxp_guarantor_lni_close(c);
+        if (current < 0 || current >= deadline)
+            return LXP_ERR_IO;
+        status = open_at(c, path, timeout_ms, deadline, &transport_io);
+        if (status == LXP_OK)
+            status = feedback_at(c, certificate, proof, arena, deadline, &transport_io);
+        if (status == LXP_OK)
+            status = checkpoint_at(c, batch, arena, &served, &served_proof, deadline,
+                                    &transport_io);
+        if (status == LXP_OK &&
+            (served.length != certificate.length || served_proof.length != proof.length ||
+             memcmp(served.bytes, certificate.bytes, certificate.length) != 0 ||
+             memcmp(served_proof.bytes, proof.bytes, proof.length) != 0))
+            status = LXP_ERR_CONTEXT_MISMATCH;
+        reset_status = lxp_arena_reset(arena, mark);
+        if (reset_status != LXP_OK)
+            status = reset_status;
+        if (status != LXP_OK)
+            lxp_guarantor_lni_close(c);
+        if (status != LXP_ERR_IO || !transport_io)
+            return status;
+        current = now();
+        if (current < 0 || current >= deadline)
+            return LXP_ERR_IO;
+        remaining = deadline - current;
+        (void)poll(NULL, 0U, (int)(remaining < 25 ? remaining : 25));
+    }
 }

@@ -472,19 +472,8 @@ static lxp_result feedback(lxp_guarantor_lni *client, const char *socket_path,
     if (status == LXP_OK)
         status = gp_file_write(path, proof.bytes, proof.length);
     if (status == LXP_OK)
-        status = lxp_guarantor_lni_open(client, socket_path, 30000U);
-    if (status == LXP_OK)
-        status = lxp_guarantor_lni_feedback(client, payload, proof, arena);
-    if (status == LXP_OK) {
-        lxp_byte_span served, served_proof;
-        status = lxp_guarantor_lni_checkpoint(client, certificate->checkpoint.header.batch_number,
-                                              arena, &served, &served_proof);
-        if (status == LXP_OK &&
-            (served.length != payload.length || served_proof.length != proof.length ||
-             memcmp(served.bytes, payload.bytes, payload.length) != 0 ||
-             memcmp(served_proof.bytes, proof.bytes, proof.length) != 0))
-            status = LXP_ERR_CONTEXT_MISMATCH;
-    }
+        status = lxp_guarantor_lni_feedback_confirmed(client, socket_path,
+            certificate->checkpoint.header.batch_number, payload, proof, arena, 30000U);
     return status;
 }
 static lxp_result remember_replay(struct producer *producer, const lxp_batch_header *header,
