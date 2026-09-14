@@ -67,6 +67,7 @@ spec:
             - |
               install -d -o 4020 -g 4020 -m 0750 /run/layerx/human
               install -d -o 4021 -g 4020 -m 0750 /run/layerx/human/owner
+              install -d -o 4021 -g 4020 -m 0700 /run/layerx/human/authority-clock
               install -d -o 4020 -g 4020 -m 0700 /human-state/components
               install -d -o 4021 -g 4020 -m 0700 /human-state/agent
               install -d -o 4020 -g 4020 -m 0700 /human-state/identity
@@ -362,7 +363,7 @@ spec:
               : "${LAYERX_CORE_SEQUENCER_ID:?generated sequencer identity is required}"
               export LAYERX_AUTHORITY_SEQUENCER_ID="$LAYERX_CORE_SEQUENCER_ID"
               export LAYERX_AUTHORITY_SEQUENCER_PUBLIC_KEY="$(tr -d '\r\n' < /run/layerx/gateway-authority/sequencer-public-key)"
-              exec /usr/local/bin/layerx-receipt-authority
+              exec /usr/local/bin/layerx-runtime-clock --runtime-dir /run/layerx/human/authority-clock -- /usr/local/bin/layerx-receipt-authority
           env:
             - {name: LAYERX_AUTHORITY_LISTEN, value: "0.0.0.0:9445"}
             - {name: LAYERX_AUTHORITY_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-name}}}
@@ -371,6 +372,9 @@ spec:
             - {name: LAYERX_AUTHORITY_TLS_KEY_DER, value: /run/layerx/authority-tls/server.key.der}
             - {name: LAYERX_AUTHORITY_CLIENT_CA_DER, value: /run/layerx/trust/ca.crt.der}
             - {name: LAYERX_AUTHORITY_HUMAN_AGENT_TOKEN_FILE, value: /run/authority-private/material/human-agent.token}
+            - {name: LAYERX_AUTHORITY_IDENTITY_BINDING_SOCKET, value: /run/layerx/human/identity-binding.sock}
+            - {name: LAYERX_AUTHORITY_IDENTITY_BINDING_UID, value: '4020'}
+            - {name: LAYERX_AUTHORITY_IDENTITY_BINDING_GID, value: '4020'}
             - {name: LAYERX_AUTHORITY_GENESIS_TRUST, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: genesis-trust-file, optional: true}}}
             - {name: LAYERX_AUTHORITY_HANDOVER_FINALITY, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: handover-finality-file, optional: true}}}
             - {name: LAYERX_AUTHORITY_HUMAN_AGENT_TENANT, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: tenant}}}
