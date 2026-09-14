@@ -180,8 +180,8 @@ static lxp_result execute(const gp_settlement_config *config, const char *mode, 
     }
     return LXP_OK;
 }
-lxp_result gp_settlement_membership(const gp_settlement_config *config, uint64_t epoch,
-                                    gp_settlement_membership_view *view)
+static lxp_result membership_at(const gp_settlement_config *config, uint64_t epoch,
+                                uint64_t requested_block, gp_settlement_membership_view *view)
 {
     gp_files files;
     FILE *input;
@@ -197,6 +197,8 @@ lxp_result gp_settlement_membership(const gp_settlement_config *config, uint64_t
     status = begin(config, &files, &input);
     if (status != LXP_OK)
         return status;
+    if (requested_block != 0U)
+        (void)fprintf(input, ",\"observed_block_number\":%" PRIu64, requested_block);
     (void)fprintf(input, ",\"epoch\":%" PRIu64 ",\"guarantors\":[", epoch);
     for (i = 0U; i < config->member_count; ++i) {
         uint8_t signer[20];
@@ -224,7 +226,8 @@ lxp_result gp_settlement_membership(const gp_settlement_config *config, uint64_t
     observed_block = read64(wire + 40U);
     governance_sequence = read64(wire + 48U);
     bond_bps = read32(wire + 72U);
-    if (observed_block == 0U || governance_sequence > read64(wire) || bond_bps == 0U ||
+    if (observed_block == 0U || (requested_block != 0U && observed_block != requested_block) ||
+        governance_sequence > read64(wire) || bond_bps == 0U ||
         bond_bps > LXP_BASIS_POINTS_ONE)
         return LXP_ERR_CONTEXT_MISMATCH;
     (void)memset(&result, 0, sizeof(result));
@@ -271,6 +274,11 @@ lxp_result gp_settlement_membership(const gp_settlement_config *config, uint64_t
     view->minimum_bond_bps = bond_bps;
     return LXP_OK;
 }
+lxp_result gp_settlement_membership(const gp_settlement_config *config, uint64_t epoch,
+                                    gp_settlement_membership_view *view)
+{
+    return membership_at(config, epoch, 0U, view);
+}
 static lxp_result sync_from_view(const gp_settlement_config *config, uint64_t epoch,
                                  const gp_settlement_membership_view *view,
                                  lxp_paxeer_bond_state *state,
@@ -306,10 +314,10 @@ lxp_result gp_settlement_membership_sync(const gp_settlement_config *config, uin
         return LXP_ERR_CONTEXT_MISMATCH;
     return sync_from_view(config, epoch, &view, state, availability);
 }
-lxp_result gp_settlement_bond_bind(const gp_settlement_config *config, uint64_t epoch,
-                                   uint16_t protocol_version, lxp_paxeer_bond_state *state,
-                                   gp_settlement_membership_view *view,
-                                   lxp_paxeer_membership_sync_availability *availability)
+static lxp_result bond_bind_at(const gp_settlement_config *config, uint64_t epoch,
+                               uint16_t protocol_version, uint64_t observed_block,
+                               lxp_paxeer_bond_state *state, gp_settlement_membership_view *view,
+                               lxp_paxeer_membership_sync_availability *availability)
 {
     lxp_result status;
     if (!valid_config(config) || state == NULL || view == NULL || availability == NULL ||
@@ -321,7 +329,7 @@ lxp_result gp_settlement_bond_bind(const gp_settlement_config *config, uint64_t 
          config->network_id != state->network_id ||
          memcmp(config->settlement_contract, state->paxeer_settlement_contract, 20U) != 0))
         return LXP_ERR_AUTH_SCOPE;
-    status = gp_settlement_membership(config, epoch, view);
+    status = membership_at(config, epoch, observed_block, view);
     if (status != LXP_OK)
         return status;
     if (state->protocol_version == 0U)
@@ -334,6 +342,35 @@ lxp_result gp_settlement_bond_bind(const gp_settlement_config *config, uint64_t 
     if (status != LXP_OK)
         return status;
     return sync_from_view(config, epoch, view, state, availability);
+}
+lxp_result gp_settlement_bond_bind(const gp_settlement_config *config, uint64_t epoch,
+                                   uint16_t protocol_version, lxp_paxeer_bond_state *state,
+                                   gp_settlement_membership_view *view,
+                                   lxp_paxeer_membership_sync_availability *availability)
+{
+    return bond_bind_at(config, epoch, protocol_version, 0U, state, view, availability);
+}
+lxp_result gp_settlement_bond_restore(const gp_settlement_config *config,
+                                      const lxp_paxeer_bond_binding *previous,
+                                      lxp_paxeer_bond_state *state,
+                                      gp_settlement_membership_view *view,
+                                      lxp_paxeer_membership_sync_availability *availability)
+{
+    lxp_result status;
+    if (!valid_config(config) || previous == NULL ||
+        previous->membership.observed_block_number == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    if (previous->network_id != config->network_id ||
+        previous->membership.paxeer_chain_id != config->chain_id ||
+        memcmp(previous->membership.guarantor_bond_contract,
+               config->settlement_contract, 20U) != 0)
+        return LXP_ERR_AUTH_SCOPE;
+    status = bond_bind_at(config, previous->membership.observed_epoch,
+                          previous->protocol_version, previous->membership.observed_block_number,
+                          state, view, availability);
+    if (status == LXP_OK)
+        status = lxp_paxeer_bond_binding_adopt(state, previous);
+    return status;
 }
 lxp_result gp_settlement_bond_deposit(const gp_settlement_config *config,
                                       const uint8_t *guarantor_id, const uint8_t *transaction_id,

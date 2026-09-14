@@ -14,6 +14,8 @@ lxp_result lxp_guarantor_lni_header(lxp_guarantor_lni *client, uint64_t batch,
                                     const lxp_sequencer_authorization *authority, uint32_t network,
                                     lxp_arena *arena, lxp_batch_header *header,
                                     uint8_t signature[64]);
+lxp_result lxp_guarantor_lni_untrusted_header(lxp_guarantor_lni *client, uint64_t batch,
+    uint32_t network, lxp_arena *arena, lxp_batch_header *header, uint8_t signature[64]);
 lxp_result lxp_guarantor_chunk_verify(lxp_byte_span bytes, lxp_byte_span proof,
                                       const lxp_batch_header *header, uint32_t index,
                                       lxp_da_chunk *chunk, uint32_t *count);

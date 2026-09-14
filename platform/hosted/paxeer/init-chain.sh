@@ -29,6 +29,7 @@ RPC_PORT=${LAYERX_PAXEER_RPC_PORT:-26657}
 P2P_PORT=${LAYERX_PAXEER_P2P_PORT:-26656}
 GRPC_PORT=${LAYERX_PAXEER_GRPC_PORT:-9090}
 GRPC_WEB_PORT=${LAYERX_PAXEER_GRPC_WEB_PORT:-9091}
+COMMIT_TIMEOUT_NANOSECONDS=${LAYERX_PAXEER_COMMIT_TIMEOUT_NANOSECONDS:-}
 MARKER="$HOME_DIR/config/.layerx-beta-initialised"
 
 fail() {
@@ -40,6 +41,12 @@ if [ "$CHAIN_ID" != "125" ]; then
     fail "paxd derives EVM chain id 125 only from hyperpax_125-1; LAYERX_PAXEER_CHAIN_ID=$CHAIN_ID is not mapped"
 fi
 COSMOS_CHAIN_ID="hyperpax_${CHAIN_ID}-1"
+
+if [ -n "$COMMIT_TIMEOUT_NANOSECONDS" ]; then
+    [[ "$COMMIT_TIMEOUT_NANOSECONDS" =~ ^[1-9][0-9]{0,10}$ ]] \
+        && [ "$COMMIT_TIMEOUT_NANOSECONDS" -le 60000000000 ] \
+        || fail "commit timeout must be canonical nanoseconds from 1 through 60000000000"
+fi
 
 if [ -n "${LAYERX_PAXEER_DEPLOYER_ADDRESS_FILE:-}" ]; then
     DEPLOYER_ADDRESS=$(tr -d '\r\n' < "$LAYERX_PAXEER_DEPLOYER_ADDRESS_FILE")
@@ -57,6 +64,12 @@ command -v "$JQ" >/dev/null 2>&1 || fail "jq is not available"
 [ -r "$USDL_RUNTIME" ] || fail "USDL runtime bytecode $USDL_RUNTIME is not readable"
 
 if [ -f "$MARKER" ]; then
+    if [ -n "$COMMIT_TIMEOUT_NANOSECONDS" ]; then
+        "$JQ" -e --arg commit_timeout "$COMMIT_TIMEOUT_NANOSECONDS" \
+            '.consensus_params.timeout.commit == $commit_timeout' \
+            "$HOME_DIR/config/genesis.json" >/dev/null \
+            || fail "requested commit timeout differs from initialised genesis"
+    fi
     echo "init-chain: $HOME_DIR already initialised for $COSMOS_CHAIN_ID" >&2
     exit 0
 fi
@@ -97,7 +110,8 @@ GENESIS="$HOME_DIR/config/genesis.json"
 VALIDATOR_PUBKEY=$("$JQ" -c '.pub_key' "$HOME_DIR/config/priv_validator_key.json")
 "$JQ" --argjson key "$VALIDATOR_PUBKEY" --arg power "$VALIDATOR_POWER" \
     --arg usdl "$USDL_ADDRESS" --arg code "$USDL_CODE_B64" --arg slot "$ZERO_SLOT_B64" --arg owner "$OWNER_WORD_B64" \
-    --arg deployer "$DEPLOYER_ADDRESS" --arg deployer_cast "$DEPLOYER_CAST" '
+    --arg deployer "$DEPLOYER_ADDRESS" --arg deployer_cast "$DEPLOYER_CAST" \
+    --arg commit_timeout "$COMMIT_TIMEOUT_NANOSECONDS" '
     .validators = [{"power": $power, "pub_key": $key}]
     | .app_state.staking.params.max_voting_power_ratio = "1.000000000000000000"
     | .app_state.evm.codes = [{"address": $usdl, "code": $code}]
@@ -105,6 +119,7 @@ VALIDATOR_PUBKEY=$("$JQ" -c '.pub_key' "$HOME_DIR/config/priv_validator_key.json
     | .app_state.evm.address_associations = ((.app_state.evm.address_associations // [])
         | map(select(.eth_address != $deployer)) + [{"eth_address": $deployer, "pax_address": $deployer_cast}])
     | .consensus_params.block.max_gas = "35000000"
+    | if $commit_timeout == "" then . else .consensus_params.timeout.commit = $commit_timeout end
     | .app_state.bank.denom_metadata = [{"denom_units": [{"denom": "uhpx", "exponent": 0, "aliases": ["UHPX"]}],
         "base": "uhpx", "display": "uhpx", "name": "UHPX", "symbol": "UHPX"}]
 ' "$GENESIS" > "$GENESIS.tmp"

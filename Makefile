@@ -1917,6 +1917,7 @@ test-finality-evidence: $(BUILD_DIR)/tests/lxp_test_finality_evidence
 
 $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority: \
 		tests/daemon/lxp_test_finality_authority.c \
+		cmd/layerx-guarantor/producer.c cmd/layerx-guarantor/producer.h \
 		cmd/layerxd/lxp_daemon_finality_authority.c \
 		cmd/layerxd/lxp_daemon_finality_authority.h \
 		cmd/layerxd/lxp_daemon_evidence.c \
@@ -1925,6 +1926,7 @@ $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority: \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
 		tests/daemon/lxp_test_finality_authority.c \
+		cmd/layerx-guarantor/producer.c \
 		cmd/layerxd/lxp_daemon_finality_authority.c \
 		cmd/layerxd/lxp_daemon_evidence.c \
 		cmd/layerxd/lxp_daemon_receipt_authority.c $(LIBRARY) \
@@ -3456,6 +3458,10 @@ test-daemon-handover-crash: test-daemon-handover $(BUILD_DIR)/tests/lxp_test_mai
 	for boundary in 8 9 10 11 12 17 18 19 20; do \
 		$(RUN_PREFIX) env LAYERX_TEST_HANDOVER_CRASH_BOUNDARY=$$boundary python3 tests/daemon/withdraw-custody.py $(BUILD_DIR) --handover || exit $$?; \
 	done
+
+.PHONY: test-daemon-handover-peers
+test-daemon-handover-peers: $(BUILD_DIR)/tests/lxp_test_module_maintenance $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority $(BUILD_DIR)/tests/lxp_test_guarantor_runtime $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build $(BUILD_DIR)/bin/layerx-handover $(BUILD_DIR)/bin/layerx-guarantor
+	$(RUN_PREFIX) env LAYERX_TEST_HANDOVER_PEERS=1 python3 tests/daemon/withdraw-custody.py $(BUILD_DIR) --handover
 
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
