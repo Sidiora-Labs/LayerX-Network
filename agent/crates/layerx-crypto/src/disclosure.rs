@@ -1,5 +1,9 @@
 //! Structured, byte-bound descriptions of canonical activities.
 
+mod native;
+
+pub use native::{DisclosedNativeBudgetCreate, DisclosedNativeOperation, DisclosedRecoveryPolicy};
+
 use std::fmt;
 
 use sha2::{Digest as _, Sha256};
@@ -14,6 +18,7 @@ use layerx_wire::WireError;
 use crate::{
     authority_grant::AuthorityGrant,
     ct,
+    onboarding::{OnboardingConsent, SponsoredRegistration},
     payments::{Grant, Payment},
     session::{decode_session_key, IssuedSessionKey, SessionPurpose},
     SignatureMessage,
@@ -161,8 +166,47 @@ pub struct Disclosure {
     pub payment: Option<Payment>,
     pub authority_grant: Option<AuthorityGrant>,
     pub session_grant: Option<DisclosedSessionGrant>,
+    pub onboarding: Option<DisclosedOnboarding>,
+    pub native_operation: Option<DisclosedNativeOperation>,
     activity: Activity,
     signing_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisclosedOnboarding {
+    Consent(OnboardingConsent),
+    Registration(SponsoredRegistration),
+}
+
+impl DisclosedOnboarding {
+    /// # Errors
+    /// Refuses invalid or altered onboarding commitments.
+    pub fn encode(&self) -> Result<Vec<u8>, DisclosureError> {
+        let mut encoder = Encoder::new(2048);
+        match self {
+            Self::Consent(consent) => {
+                encoder.u8(1)?;
+                encoder.bytes(consent.target.as_bytes(), 255)?;
+                encoder.fixed(&consent.target_public_key)?;
+                encoder.bytes(
+                    &consent
+                        .payload()
+                        .map_err(|_| DisclosureError::MalformedPayload)?,
+                    1024,
+                )?;
+            }
+            Self::Registration(registration) => {
+                encoder.u8(2)?;
+                encoder.bytes(
+                    &registration
+                        .payload()
+                        .map_err(|_| DisclosureError::MalformedPayload)?,
+                    1024,
+                )?;
+            }
+        }
+        Ok(encoder.finish())
+    }
 }
 
 /// Typed refusal produced while deriving or validating a disclosure.
@@ -567,6 +611,8 @@ fn decode_withdraw(activity: &Activity) -> Result<DisclosureFields, DisclosureEr
         idempotency_key: activity.idempotency_key(),
         authority_grant: None,
         session_grant: None,
+        onboarding: None,
+        native_operation: None,
         evm_payout_binding: None,
         withdrawal: Some(DisclosedWithdrawal {
             account_sequence: activity.account_sequence(),
@@ -761,6 +807,8 @@ fn payment_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         idempotency_key: activity.idempotency_key(),
         authority_grant: None,
         session_grant: None,
+        onboarding: None,
+        native_operation: None,
         evm_payout_binding: None,
         withdrawal: None,
         payment: Some(payment),
@@ -789,9 +837,77 @@ fn governance_fields(
         idempotency_key: activity.idempotency_key(),
         authority_grant: None,
         session_grant: None,
+        onboarding: None,
+        native_operation: None,
         evm_payout_binding: Some(binding),
         withdrawal: None,
         payment: None,
+    })
+}
+
+fn onboarding_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
+    let malformed = || DisclosureError::MalformedPayload;
+    if !activity.payload().starts_with(&[0x71, 1, 3, 5])
+        && !activity.payload().starts_with(&[0x71, 1, 2, 1])
+    {
+        return Err(DisclosureError::UnsupportedActivity(
+            activity.activity_type().value(),
+        ));
+    }
+    if activity.protocol_version() != 3 || activity.network_id() == 0 {
+        return Err(malformed());
+    }
+    let key: [u8; 32] = activity.authority().try_into().map_err(|_| malformed())?;
+    if !crate::ed25519::public_key_is_canonical(&key) {
+        return Err(malformed());
+    }
+    let bound = activity.timestamp_bound();
+    let (onboarding, consent) = if activity.payload().starts_with(&[0x71, 1, 3, 5]) {
+        let target = layerx_types::ids::Did::new(activity.actor_did()).map_err(|_| malformed())?;
+        let consent = OnboardingConsent::decode_payload(activity.payload(), target, key)
+            .map_err(|_| malformed())?;
+        if activity.account_sequence() != 0
+            || activity.fee_limit() != 0
+            || activity.idempotency_key() != consent.action_key
+            || bound.not_after != consent.expires_at
+            || bound.not_before >= bound.not_after
+        {
+            return Err(malformed());
+        }
+        (DisclosedOnboarding::Consent(consent.clone()), consent)
+    } else {
+        let registration =
+            SponsoredRegistration::decode(activity.payload()).map_err(|_| malformed())?;
+        registration
+            .validate_outer(activity)
+            .map_err(|_| malformed())?;
+        let consent = registration.consent.clone();
+        (DisclosedOnboarding::Registration(registration), consent)
+    };
+    Ok(DisclosureFields {
+        activity_type: activity.activity_type(),
+        actor: activity.actor_did().to_vec(),
+        authority: activity.authority().to_vec(),
+        counterparties: vec![Counterparty {
+            role: CounterpartyRole::Recipient,
+            account: consent.target_account_id().map_err(|_| malformed())?,
+        }],
+        amounts: Vec::new(),
+        asset: consent.native_asset,
+        fee_limit: activity.fee_limit(),
+        expiry: Expiry {
+            not_before: bound.not_before,
+            not_after: bound.not_after,
+            payload_expires_at: consent.expires_at,
+        },
+        idempotency_key: consent.action_key,
+        evm_payout_binding: None,
+        withdrawal: None,
+        payment: None,
+        authority_grant: None,
+        session_grant: None,
+        onboarding: Some(onboarding),
+        native_operation: None,
     })
 }
 
@@ -841,6 +957,8 @@ fn authority_grant_fields(activity: &Activity) -> Result<DisclosureFields, Discl
         payment: None,
         authority_grant: Some(grant),
         session_grant: None,
+        onboarding: None,
+        native_operation: None,
     })
 }
 
@@ -917,6 +1035,8 @@ fn session_grant_fields(activity: &Activity) -> Result<DisclosureFields, Disclos
         withdrawal: None,
         payment: None,
         authority_grant: None,
+        onboarding: None,
+        native_operation: None,
         session_grant: Some(DisclosedSessionGrant {
             grant,
             expiry_sequence,
@@ -945,6 +1065,15 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         (ModuleId::Asset, 1 | 2 | 3 | 4 | 6 | 7 | 8 | 10 | 11) | (ModuleId::Programs, 5 | 6)
     ) {
         return payment_fields(activity);
+    }
+    if kind == (ModuleId::Governance, 3)
+        || (kind == (ModuleId::Budget, 1)
+            && matches!(activity.payload().get(..2), Some([0, 1] | [0, 2])))
+    {
+        return native::fields(activity);
+    }
+    if kind == (ModuleId::Governance, 1) {
+        return onboarding_fields(activity);
     }
     if kind == (ModuleId::Governance, 8) {
         return authority_grant_fields(activity);
@@ -985,6 +1114,8 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
             idempotency_key: activity.idempotency_key(),
             authority_grant: None,
             session_grant: None,
+            onboarding: None,
+            native_operation: None,
             evm_payout_binding: None,
             withdrawal: None,
             payment: None,
@@ -1019,6 +1150,8 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         idempotency_key: send.idempotency_key,
         authority_grant: None,
         session_grant: None,
+        onboarding: None,
+        native_operation: None,
         evm_payout_binding: None,
         withdrawal: None,
         payment: None,
@@ -1040,6 +1173,8 @@ struct DisclosureFields {
     payment: Option<Payment>,
     authority_grant: Option<AuthorityGrant>,
     session_grant: Option<DisclosedSessionGrant>,
+    onboarding: Option<DisclosedOnboarding>,
+    native_operation: Option<DisclosedNativeOperation>,
 }
 
 impl Disclosure {
@@ -1056,6 +1191,9 @@ impl Disclosure {
     /// # Errors
     /// Returns a payload decoding error for malformed canonical semantics.
     pub fn payload_sequence(&self) -> Result<Option<u64>, DisclosureError> {
+        if let Some(DisclosedNativeOperation::BudgetCreate(budget)) = &self.native_operation {
+            return Ok(Some(budget.source_sequence));
+        }
         if let Some(payment) = &self.payment {
             return Ok(match payment {
                 Payment::Receive { sequence, .. } => Some(*sequence),
@@ -1091,6 +1229,8 @@ impl Disclosure {
         require_field!(withdrawal);
         require_field!(authority_grant);
         require_field!(session_grant);
+        require_field!(onboarding);
+        require_field!(native_operation);
         require_field!(evm_payout_binding);
         require_field!(payment);
         Ok(())
@@ -1123,7 +1263,13 @@ impl Disclosure {
         self.validate_fields()?;
         let mut encoder = Encoder::new(MAX_TRANSPORT_DISCLOSURE_BYTES);
         encoder.structure_header(0x4453)?;
-        encoder.u8(3)?;
+        encoder.u8(
+            if self.onboarding.is_some() || self.native_operation.is_some() {
+                4
+            } else {
+                3
+            },
+        )?;
         encoder.u64(self.envelope_sequence())?;
         match self.payload_sequence()? {
             Some(sequence) => {
@@ -1195,6 +1341,12 @@ impl Disclosure {
                 encoder.fixed(&replacement.expected_charge_state)?;
             }
         }
+        if let Some(onboarding) = &self.onboarding {
+            encoder.bytes(&onboarding.encode()?, 2048)?;
+        }
+        if let Some(operation) = &self.native_operation {
+            encoder.bytes(&operation.encode()?, 2048)?;
+        }
         Ok(encoder.finish())
     }
 
@@ -1243,6 +1395,8 @@ impl Disclosure {
         require_field!(withdrawal);
         require_field!(authority_grant);
         require_field!(session_grant);
+        require_field!(onboarding);
+        require_field!(native_operation);
         let reencoded = self.reencode()?;
         if !ct::eq(&reencoded, canonical) {
             return Err(DisclosureError::FieldMismatch("canonical_bytes"));
@@ -1288,6 +1442,8 @@ pub fn bind(canonical: &[u8], registry: &ModuleRegistry) -> Result<Disclosure, D
         idempotency_key: fields.idempotency_key,
         authority_grant: fields.authority_grant,
         session_grant: fields.session_grant,
+        onboarding: fields.onboarding,
+        native_operation: fields.native_operation,
         evm_payout_binding: fields.evm_payout_binding,
         withdrawal: fields.withdrawal,
         payment: fields.payment,
