@@ -605,7 +605,7 @@ fn encoded_disclosure(disclosure: &layerx_crypto::disclosure::Disclosure) -> Res
         blob(&mut out, &checked(onboarding.encode())?)?;
     }
     if let Some(operation) = &disclosure.native_operation {
-        blob(&mut out, &checked(operation.encode())?)?;
+        blob(&mut out, &native_setup::encoded_native(operation)?)?;
     }
     Ok(out)
 }

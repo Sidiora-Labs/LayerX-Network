@@ -117,6 +117,20 @@ pub(super) fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
         .collect()
 }
 
+pub(super) fn encoded_native(operation: &DisclosedNativeOperation) -> Result<Vec<u8>> {
+    if let DisclosedNativeOperation::BudgetAmend(value) = operation {
+        let mut bytes = vec![7, 0, 1];
+        bytes.extend(value.budget_id);
+        bytes.extend(value.per_period_limit.to_be_bytes());
+        bytes.extend(value.carry_cap.to_be_bytes());
+        bytes.extend(value.expiry_ms.to_be_bytes());
+        bytes.push(value.rollover);
+        Ok(bytes)
+    } else {
+        checked(operation.encode())
+    }
+}
+
 fn sign_setup(
     host: &Host,
     (binding, handle, public): ([u8; 32], &[u8], [u8; 32]),
@@ -220,7 +234,7 @@ fn native_creation_disclosures_sign_through_real_kms_before_and_after_restart() 
         budget_id: [8; 32],
         per_period_limit: 80,
         carry_cap: 0,
-        expiry_ms: 2000,
+        expiry_ms: 2_000_000,
         rollover: 1,
     };
     target_operations.push(setup_envelope(
