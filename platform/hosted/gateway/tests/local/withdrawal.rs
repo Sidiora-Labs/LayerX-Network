@@ -317,6 +317,31 @@ pub(super) fn run(
 }
 
 #[test]
+fn local_gateway_paid_withdrawal_preserves_fees_across_restart() {
+    let (cluster, _funding) = funding::start_withdrawal();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity_service = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let mut gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity_service,
+        &authority,
+        &redis,
+    );
+    let key = issue_local_scoped_key(
+        &certificates,
+        &gateway,
+        &identity_service,
+        &["activity:write", "receipt:read"],
+    );
+    run(&cluster, &certificates, &mut gateway, &key);
+}
+
+#[test]
 fn local_gateway_legacy_genesis_refuses_withdrawal_without_mutation() {
     let (cluster, _funding) = funding::start();
     let certificates = certificates(&cluster.root);
