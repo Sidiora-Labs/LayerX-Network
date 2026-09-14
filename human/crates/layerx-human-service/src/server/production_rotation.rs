@@ -157,11 +157,20 @@ fn checked_identity(agent: &mut AgentRuntime, did: &str) -> Result<OwnerRotation
     if identity.frozen || identity.verification < 4 || identity.verification > 5 {
         return Err(ApiFailure::upstream_degraded());
     }
-    OwnerRotationState::decode(
+    let state = OwnerRotationState::decode(
         &identity.canonical_bytes,
         &Did::new(did.as_bytes()).map_err(|_| ApiFailure::upstream_degraded())?,
     )
-    .map_err(|_| ApiFailure::upstream_degraded())
+    .map_err(|_| ApiFailure::upstream_degraded())?;
+    if state.revocation_sequence != identity.revocation_sequence
+        || state.observed_sequence > identity.head_sequence
+        || !identity
+            .authorities
+            .contains(&(1, state.primary_public_key))
+    {
+        return Err(ApiFailure::upstream_degraded());
+    }
+    Ok(state)
 }
 
 impl ProductionComponents {
