@@ -485,6 +485,76 @@ static int metered_legacy_replay(void)
     return 0;
 }
 
+static int metered_signed_replay(bool refused, bool divergent)
+{
+    metered_fixture *live = calloc(1U, sizeof(*live));
+    metered_fixture *replay = calloc(1U, sizeof(*replay));
+    uint8_t public_key[32], original_root[32];
+    uint8_t live_bytes[LXP_MAX_ACTIVITY_BYTES];
+    uint8_t replay_bytes[LXP_MAX_ACTIVITY_BYTES];
+    lxp_arena live_arena, replay_arena;
+    lxp_byte_span live_receipt, replay_receipt;
+    uint64_t original_sequence;
+    METERED_CHECK(live != NULL && replay != NULL);
+    METERED_CHECK(metered_fixture_init(live, 4U, true) == 0);
+    METERED_CHECK(metered_fixture_init(replay, 4U, true) == 0);
+    live->source->frozen = refused;
+    replay->source->frozen = refused;
+    METERED_CHECK(lxp_state_root(&live->kernel, live->kernel.current_state_root) == LXP_OK);
+    METERED_CHECK(lxp_state_root(&replay->kernel, replay->kernel.current_state_root) == LXP_OK);
+    (void)memcpy(original_root, replay->kernel.current_state_root, 32U);
+    original_sequence = replay->state.next_sequence;
+    METERED_CHECK(lxp_arena_init(&replay->arena, replay->arena_bytes,
+                                 3U * LXP_MAX_ACTIVITY_BYTES) == LXP_OK);
+    METERED_CHECK(metered_activity(live, LX_PROGRAMS_CALL, live->call,
+                                   live->call_length, 0x60U, true) == 0);
+    METERED_CHECK(metered_activity(replay, LX_PROGRAMS_CALL, replay->call,
+                                   replay->call_length, 0x60U, true) == 0);
+    METERED_CHECK(lxp_arena_reset(&live->arena, 0U) == LXP_OK);
+    METERED_CHECK(lxp_arena_reset(&replay->arena, 0U) == LXP_OK);
+    METERED_CHECK(lxp_kernel_execute_activity(&live->kernel, &live->activity,
+                    &live->execution, &live->receipt) == LXP_OK);
+    METERED_CHECK(live->receipt.result_code ==
+                    (refused ? LXP_ERR_PROGRAM_REFUSED : LXP_OK));
+    METERED_CHECK(executed_public_key(executed_sequencer_seed, public_key) == 0);
+    METERED_CHECK(lxp_arena_init(&live_arena, live_bytes, sizeof(live_bytes)) == LXP_OK);
+    METERED_CHECK(lxp_arena_init(&replay_arena, replay_bytes, sizeof(replay_bytes)) == LXP_OK);
+    if (divergent) {
+        ++live->receipt.parameter_version;
+        METERED_CHECK(lxp_receipt_sign(&live->receipt, executed_sequencer_seed,
+                                       &live_arena) == LXP_OK);
+    }
+    METERED_CHECK(lxp_receipt_verify(&live->receipt, public_key, &live_arena) == LXP_OK);
+    replay->execution.sequencer_private_key = NULL;
+    replay->execution.replay_receipt = &live->receipt;
+    replay->execution.replay_public_key = public_key;
+    METERED_CHECK(lxp_kernel_execute_activity(&replay->kernel, &replay->activity,
+                    &replay->execution, &replay->receipt) ==
+                    (divergent ? LXP_FATAL_REPLAY_DIVERGENCE : LXP_OK));
+    if (divergent) {
+        METERED_CHECK(memcmp(original_root, replay->kernel.current_state_root, 32U) == 0);
+        METERED_CHECK(replay->state.next_sequence == original_sequence);
+        METERED_CHECK(replay->payee->balance.lo == 0U && replay->source->balance.lo == 40U);
+    } else {
+        METERED_CHECK(memcmp(live->kernel.current_state_root,
+                             replay->kernel.current_state_root, 32U) == 0);
+        METERED_CHECK(live->state.next_sequence == replay->state.next_sequence);
+        METERED_CHECK(lxp_receipt_encode(&live->receipt, true, &live_arena, &live_receipt) == LXP_OK);
+        METERED_CHECK(lxp_receipt_encode(&replay->receipt, true, &replay_arena, &replay_receipt) == LXP_OK);
+        METERED_CHECK(live_receipt.length == replay_receipt.length);
+        METERED_CHECK(memcmp(live_receipt.bytes, replay_receipt.bytes, live_receipt.length) == 0);
+    }
+    while (live->kernel.blob_count != 0U)
+        free(live->kernel.blobs[--live->kernel.blob_count].bytes);
+    while (replay->kernel.blob_count != 0U)
+        free(replay->kernel.blobs[--replay->kernel.blob_count].bytes);
+    METERED_CHECK(lxp_state_store_destroy(&live->state) == LXP_OK);
+    METERED_CHECK(lxp_state_store_destroy(&replay->state) == LXP_OK);
+    free(live);
+    free(replay);
+    return 0;
+}
+
 static int metered_fee_capacity(void)
 {
     metered_fixture *f = calloc(1U, sizeof(*f));
@@ -552,6 +622,9 @@ int main(void)
     uint8_t root[32];
     uint64_t sequence;
     METERED_CHECK(metered_legacy_replay() == 0);
+    METERED_CHECK(metered_signed_replay(true, false) == 0);
+    METERED_CHECK(metered_signed_replay(false, false) == 0);
+    METERED_CHECK(metered_signed_replay(false, true) == 0);
     METERED_CHECK(metered_fee_capacity() == 0);
     METERED_CHECK(f != NULL && metered_fixture_init(f, 4U, true) == 0);
     f->source->frozen = true;

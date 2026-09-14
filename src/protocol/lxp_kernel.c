@@ -157,6 +157,9 @@ static lxp_result receipt_execution_signature(lxp_receipt *receipt,
     mark = lxp_arena_mark(execution->arena);
     status = lxp_receipt_verify(execution->replay_receipt, execution->replay_public_key, execution->arena);
     if (status == LXP_OK) status = lxp_receipt_encode(receipt, false, execution->arena, &actual);
+    if (status == LXP_OK &&
+        lxp_arena_reset(execution->arena, mark + actual.length) != LXP_OK)
+        status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK)
         status = lxp_receipt_encode(execution->replay_receipt, false, execution->arena, &expected);
     if (status == LXP_OK && (actual.length != expected.length ||
