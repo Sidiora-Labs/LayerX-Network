@@ -64,6 +64,22 @@ struct SessionPreparation {
     replacement: Option<([u8; 32], [u8; 32])>,
 }
 
+pub struct PreparedProtocolSubmission {
+    inner: PreparedProtocolKind,
+}
+
+enum PreparedProtocolKind {
+    Complete(ProtocolEvidence),
+    Signed {
+        request: SubmitRequest,
+        public_key: [u8; 32],
+        signed_activity: Vec<u8>,
+        action_key: [u8; 32],
+        activity_id: [u8; 32],
+        network_id: u32,
+    },
+}
+
 pub struct ProductionAgentCreation<'a> {
     runtime: &'a mut AgentRuntime,
     client: &'a Client,
@@ -283,8 +299,17 @@ impl<'a> ProductionAgentCreation<'a> {
         scope: &mut PrincipalScope<'_>,
         action: &ProtocolAction,
     ) -> Result<ProtocolEvidence, AgentFailure> {
+        let prepared = self.prepare_scoped(scope, action)?;
+        self.submit_prepared(prepared)
+    }
+
+    fn prepare_scoped(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        action: &ProtocolAction,
+    ) -> Result<PreparedProtocolSubmission, AgentFailure> {
         if let Some(evidence) = self.retained_protocol_evidence(scope, action)? {
-            return Ok(evidence);
+            return Ok(PreparedProtocolSubmission { inner: PreparedProtocolKind::Complete(evidence) });
         }
         let prepared = self.prepare_action(scope, action)?;
         let principal = scope.principal().clone();
@@ -326,15 +351,41 @@ impl<'a> ProductionAgentCreation<'a> {
                 .map_err(|_| AgentFailure::Refused("invalid custody signature"))?,
             approval_release_ref: None,
         };
+        Ok(PreparedProtocolSubmission { inner: PreparedProtocolKind::Signed {
+            request: submit, public_key: descriptor.public_key,
+            network_id: signed.network_id(), signed_activity, action_key: action.action_key, activity_id,
+        } })
+    }
+
+    /// Submits an already retained signed operation without borrowing the principal store.
+    /// # Errors
+    /// Refuses changed canonical authority, submission identity or missing original receipt evidence.
+    pub fn submit_prepared(
+        &mut self, prepared: PreparedProtocolSubmission,
+    ) -> Result<ProtocolEvidence, AgentFailure> {
+        let (submit, public_key, signed_activity, action_key, activity_id, network_id) = match prepared.inner {
+            PreparedProtocolKind::Complete(evidence) => return Ok(evidence),
+            PreparedProtocolKind::Signed { request, public_key, signed_activity, action_key, activity_id, network_id } =>
+                (request, public_key, signed_activity, action_key, activity_id, network_id),
+        };
+        let signed = layerx_intents::owner_activity::verify(&signed_activity, self.runtime.registry())
+            .map_err(|_| AgentFailure::Refused("invalid prepared owner activity"))?;
+        if signed.actor_did() != self.actor.as_str().as_bytes()
+            || signed.authority() != public_key || signed.idempotency_key() != action_key
+            || signed.network_id() != network_id
+            || layerx_intents::canonical::activity_id(&signed)
+                .map_err(|_| AgentFailure::Refused("invalid prepared activity identity"))? != activity_id {
+            return Err(AgentFailure::Refused("prepared owner binding differs"));
+        }
         let mut observation = self
             .runtime
             .submit(
                 &self.client.submit(mutation(
-                    action.action_key,
-                    submit_digest(&submit, grant.signer_public_key()),
+                    action_key,
+                    submit_digest(&submit, public_key),
                     submit,
                 )?),
-                grant.signer_public_key(),
+                public_key,
             )
             .map_err(map_boundary)?;
         if observation.activity_id != activity_id {
@@ -360,7 +411,7 @@ impl<'a> ProductionAgentCreation<'a> {
             Some(receipt) => receipt,
             None => match self
                 .runtime
-                .receipt_by_idempotency_key(action.action_key, activity_id)
+                .receipt_by_idempotency_key(action_key, activity_id)
                 .map_err(map_boundary)?
             {
                 ReceiptLookup::Found(receipt) => receipt,
@@ -369,10 +420,10 @@ impl<'a> ProductionAgentCreation<'a> {
         };
         Ok(ProtocolEvidence {
             actor: self.actor.as_str().as_bytes().to_vec(),
-            owner_public_key: descriptor.public_key,
-            network_id: signed.network_id(),
+            owner_public_key: public_key,
+            network_id: network_id,
             signed_activity,
-            action_key: action.action_key,
+            action_key: action_key,
             activity_id: observation.activity_id,
             receipt_bytes: receipt.canonical_bytes,
             authorized_batch: receipt.authorised_batch,
@@ -393,11 +444,23 @@ impl<'a> ProductionAgentCreation<'a> {
         custody_key: crate::custody::KeyId,
         started_at: u64,
     ) -> Result<ProtocolEvidence, AgentFailure> {
+        let prepared = self.prepare_lifecycle_intent(scope, registry, intent, action_key, custody_key, started_at)?;
+        self.submit_prepared(prepared)
+    }
+
+    /// Retains the exact signed lifecycle operation before releasing the store for submission.
+    /// # Errors
+    /// Refuses inconsistent intents, changed retries, unavailable authority or custody denial.
+    pub fn prepare_lifecycle_intent(
+        &mut self, scope: &mut PrincipalScope<'_>, registry: &ModuleRegistry,
+        intent: layerx_intents::Intent, action_key: [u8; 32],
+        custody_key: crate::custody::KeyId, started_at: u64,
+    ) -> Result<PreparedProtocolSubmission, AgentFailure> {
         let compiled = layerx_intents::compile(&intent, registry)
             .map_err(|_| AgentFailure::Refused("lifecycle intent did not compile"))?;
         let disclosure = layerx_intents::DisclosureCheck::verify(&intent, &compiled)
             .map_err(|_| AgentFailure::Refused("lifecycle disclosure did not match"))?;
-        self.submit_scoped(
+        self.prepare_scoped(
             scope,
             &ProtocolAction {
                 actor: None,

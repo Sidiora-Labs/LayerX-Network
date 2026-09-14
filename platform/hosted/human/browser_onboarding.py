@@ -167,7 +167,7 @@ def journey(args):
                 'Human journey', 'executed native owner and recovery')
         stages = {stage['stage']: stage for stage in state['stages']}
         for name in ('protocol-identity', 'initial-funding', 'recovery'):
-            require(stages[name]['state'] == 'done' and any(item['class'] == 'layerx-receipt'
+            require(stages[name]['state'] == 'receipt-verified' and any(item['class'] == 'layerx-receipt'
                 and item['verification'] == 'receipt-verified' for item in stages[name]['evidence']),
                 'Human journey', 'original native ' + name + ' evidence')
         balance = api.result('GET', '/v1/account/balance', 200)

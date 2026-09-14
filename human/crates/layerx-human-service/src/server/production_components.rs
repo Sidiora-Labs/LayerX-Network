@@ -4752,8 +4752,8 @@ impl ProductionComponents {
                 },
             )
             .map_err(|_| ApiFailure::upstream_degraded())?;
-            let evidence = adapter
-                .submit_lifecycle_intent(
+            let signed = adapter
+                .prepare_lifecycle_intent(
                     &mut scope,
                     &registry,
                     intent,
@@ -4762,11 +4762,17 @@ impl ProductionComponents {
                     prepared.opened_at(),
                 )
                 .map_err(|_| ApiFailure::upstream_degraded())?;
+            drop(scope);
+            drop(store);
+            let evidence = adapter.submit_prepared(signed)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
             ProductionAgentCreation::finalization_evidence(&evidence, ModuleId::Governance, 5, now)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
             prepared
                 .bind_protocol_grant(grant_id)
                 .map_err(|error| auth_api_failure(&error))?;
+            let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut scope = store.principal(&principal).map_err(|_| ApiFailure::unavailable())?;
             let grant = Passkeys::commit_open_session(&mut scope, prepared, now)
                 .map_err(|error| auth_api_failure(&error))?;
             self.auth_index
