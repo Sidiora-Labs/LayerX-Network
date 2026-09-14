@@ -818,6 +818,31 @@ mod tests {
     use super::{classify_head_answer, HeadAnswer};
     use serde_json::json;
 
+    fn legacy_native_proof() -> Vec<u8> {
+        let proof = layerx_proof::merkle::decode_proof(include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-credit-receipt/maintenance.proof"
+        ))
+        .unwrap_or_else(|error| panic!("original public proof: {error:?}"));
+        let mut encoder = layerx_wire::encode::Encoder::new(1_034);
+        encoder
+            .structure_header(0x4d50)
+            .and_then(|()| encoder.u32(proof.leaf_index()))
+            .and_then(|()| encoder.u32(proof.leaf_count()))
+            .and_then(|()| {
+                encoder.u8(u8::try_from(proof.siblings().len())
+                    .unwrap_or_else(|error| panic!("original proof depth: {error}")))
+            })
+            .and_then(|()| encoder.bytes(&proof.siblings().concat(), 1_024))
+            .unwrap_or_else(|error| panic!("native proof encoding: {error:?}"));
+        let bytes = encoder.finish();
+        let decoded = layerx_wire::receipt::decode_merkle_proof(&bytes)
+            .unwrap_or_else(|error| panic!("native proof decoding: {error:?}"));
+        assert_eq!(decoded.leaf_index(), proof.leaf_index());
+        assert_eq!(decoded.leaf_count(), proof.leaf_count());
+        assert_eq!(decoded.siblings(), proof.siblings());
+        bytes
+    }
+
     #[test]
     fn maintenance_json_kind_binds_the_original_native_envelope() {
         let receipt =
@@ -845,9 +870,7 @@ mod tests {
             "../../../../tests/fixtures/custody/daemon-credit-receipt/maintenance.receipt"
         );
         document["receipt_hex"] = json!(layerx_programs::hex::encode(legacy));
-        document["receipt_proof_hex"] = json!(layerx_programs::hex::encode(include_bytes!(
-            "../../../../tests/fixtures/custody/daemon-credit-receipt/maintenance.proof"
-        )));
+        document["receipt_proof_hex"] = json!(layerx_programs::hex::encode(&legacy_native_proof()));
         document["activity_receipts_hex"] = json!([layerx_programs::hex::encode(include_bytes!(
             "../../../../tests/fixtures/custody/daemon-credit-receipt/credit.receipt"
         ))]);
