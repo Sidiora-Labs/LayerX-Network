@@ -80,8 +80,15 @@ class RPC:
         require(self.url.scheme in ('http', 'https') and self.url.hostname and not self.url.username and not self.url.password, 'invalid RPC URL')
         require(self.url.scheme == 'https' or self.url.hostname == '127.0.0.1', 'plain RPC must use local relay')
         self.counter = 0
+        self.timings = {}
+
+    def report_timing(self, stage, started):
+        if os.environ.get('LAYERX_GUARANTOR_TIMING') == '1':
+            metrics = ','.join(f'{name}:{count}:{elapsed:.3f}' for name, (count, elapsed) in sorted(self.timings.items()))
+            print(f'settlement timing stage={stage} seconds={time.monotonic() - started:.3f} rpc={metrics}', file=sys.stderr, flush=True)
 
     def call(self, method, params):
+        started = time.monotonic()
         self.counter += 1
         cls = http.client.HTTPSConnection if self.url.scheme == 'https' else http.client.HTTPConnection
         conn = cls(self.url.hostname, self.url.port, timeout=30)
@@ -92,10 +99,22 @@ class RPC:
             body = response.read(4_000_001)
             require(len(body) <= 4_000_000, 'RPC response too large')
             result = json.loads(body)
-            require(result.get('jsonrpc') == '2.0' and result.get('id') == self.counter and 'error' not in result and 'result' in result, 'RPC rejected ' + method)
+            refusal = 'RPC rejected ' + method
+            error = result.get('error')
+            if isinstance(error, dict):
+                if isinstance(error.get('code'), int) and not isinstance(error['code'], bool):
+                    refusal += ' code=' + str(error['code'])
+                data = error.get('data')
+                if isinstance(data, str) and data.startswith('0x') and len(data) >= 10 and all(
+                    character in '0123456789abcdefABCDEF' for character in data[2:10]
+                ):
+                    refusal += ' selector=' + data[:10]
+            require(result.get('jsonrpc') == '2.0' and result.get('id') == self.counter and 'error' not in result and 'result' in result, refusal)
             return result['result']
         finally:
             conn.close()
+            count, elapsed = self.timings.get(method, (0, 0.0))
+            self.timings[method] = count + 1, elapsed + time.monotonic() - started
 
     def view(self, address, signature, inputs=(), args=(), outputs=('uint256',), block='latest'):
         return decode(outputs, raw(self.call('eth_call', [{'to': address, 'data': calldata(signature, inputs, args)}, block])))
@@ -152,6 +171,33 @@ def validate_receipt(receipt, registry, transaction, digest, header, version):
     return block
 
 
+def bounded_event_logs(rpc, target, topics):
+    first = rpc.call('eth_getBlockByNumber', ['earliest', False])
+    require(isinstance(first, dict), 'initial block unavailable')
+    begin = int(first['number'], 16)
+    end = int(rpc.call('eth_blockNumber', []), 16)
+    require(0 <= begin <= end < 2 ** 64 and any(raw(first['hash'], 32)), 'initial block invalid')
+    found = []
+    while begin <= end:
+        last = min(begin + 255, end)
+        logs = rpc.call('eth_getLogs', [{'address': target, 'fromBlock': hex(begin),
+            'toBlock': hex(last), 'topics': topics}])
+        require(isinstance(logs, list) and len(found) + len(logs) <= 1, 'matching event count mismatch')
+        if logs:
+            require(begin <= int(logs[0]['blockNumber'], 16) <= last, 'matching event block mismatch')
+            found.extend(logs)
+        begin = last + 1
+    return found
+
+
+def registered_transaction(rpc, registry, digest):
+    logs = bounded_event_logs(rpc, registry, [EVENT, '0x' + digest.hex()])
+    require(len(logs) == 1, 'existing registration event count mismatch')
+    transaction = logs[0]['transactionHash']
+    raw(transaction, 32)
+    return transaction
+
+
 def register(rpc, request):
     h = values(HEADER_TYPES, request['header'])
     attestations = [values(ATTESTATION_TYPES, a) for a in request['attestations']]
@@ -171,9 +217,7 @@ def register(rpc, request):
     registered = rpc.view(registry, 'registeredAt(bytes32)', ('bytes32',), (digest,))[0] != 0
     if registered:
         require(rpc.view(registry, 'isRecordedCertificate(bytes32,' + ATTESTATION + '[])', ('bytes32', ATTESTATION + '[]'), (digest, attestations), ('bool',))[0], 'registered certificate differs')
-        logs = rpc.call('eth_getLogs', [{'address': registry, 'fromBlock': '0x0', 'toBlock': 'latest', 'topics': [EVENT, '0x' + digest.hex()]}])
-        require(len(logs) == 1, 'existing registration event count mismatch')
-        transaction = logs[0]['transactionHash']
+        transaction = registered_transaction(rpc, registry, digest)
     else:
         key_path = Path(request['submitter_key_file'])
         require(key_path.is_file() and (key_path.stat().st_mode & 0o077) == 0, 'submitter key permissions must be private')
@@ -300,20 +344,36 @@ def configuration(request):
 def main():
     require(len(sys.argv) == 4 and sys.argv[1] in ('membership', 'register', 'config', 'deposit'), 'usage: settlement.py config|membership|register|deposit INPUT.json OUTPUT.json')
     request = json.loads(Path(sys.argv[2]).read_text())
+    started = time.monotonic()
     if sys.argv[1] == 'config':
         result = configuration(request)
     elif sys.argv[1] == 'membership':
-        result = membership(RPC(request['rpc_url']), request)
+        rpc = RPC(request['rpc_url'])
+        block = 'latest'
+        if 'observed_block_number' in request:
+            observed = request['observed_block_number']
+            require(isinstance(observed, int) and not isinstance(observed, bool)
+                    and 0 < observed < 2 ** 64, 'membership observation block invalid')
+            block = hex(observed)
+        result = membership(rpc, request, block)
+        rpc.report_timing('membership', started)
     elif sys.argv[1] == 'deposit':
         result = deposit(RPC(request['rpc_url']), request)
     else:
         lock_path = request.get('submitter_lock_file', request['submitter_key_file'] + '.lock')
         lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o660)
         with os.fdopen(lock_fd, 'r+') as lock:
+            rpc = RPC(request['rpc_url'])
             fcntl.flock(lock, fcntl.LOCK_EX)
-            result = register_with_race_recovery(RPC(request['rpc_url']), request)
+            rpc.report_timing('submitter-lock', started)
+            started = time.monotonic()
+            result = register_with_race_recovery(rpc, request)
+            rpc.report_timing('register', started)
             if 'native_facts' in request:
-                result['publication'] = publish_native(RPC(request['rpc_url']), request)
+                rpc = RPC(request['rpc_url'])
+                started = time.monotonic()
+                result['publication'] = publish_native(rpc, request)
+                rpc.report_timing('publication', started)
     if 'wire_output' in request:
         descriptor = os.open(request['wire_output'], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, 'wb') as wire:

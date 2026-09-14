@@ -222,7 +222,7 @@ def publication_transaction(api, rpc, target, digest, commitment, deposit_root=N
     topics = [hx(api.keccak(text=event)), hx(digest)]
     if deposit_root is not None:
         topics.append(hx(deposit_root))
-    logs = rpc.call('eth_getLogs', [{'address': target, 'fromBlock': '0x0', 'toBlock': 'latest', 'topics': topics}])
+    logs = api.bounded_event_logs(rpc, target, topics)
     require(len(logs) == 1, 'publication event count mismatch')
     log = logs[0]
     data = api.encode(['uint16', 'bytes32'], [2, commitment]) if deposit_root is None else api.encode(['bytes32', 'uint16'], [commitment, 2])

@@ -179,31 +179,40 @@ static lxp_result handshake(lxp_guarantor_lni *c)
     free(memory);
     return status;
 }
-lxp_result lxp_guarantor_lni_header(lxp_guarantor_lni *c, uint64_t batch,
-                                    const lxp_sequencer_authorization *authority, uint32_t network,
-                                    lxp_arena *arena, lxp_batch_header *header,
-                                    uint8_t signature[64])
+static lxp_result header_frame(lxp_guarantor_lni *c, uint64_t batch,
+    lxp_arena *arena, lxp_byte_span *payload, lxp_byte_span *proof)
 {
     uint8_t query[10] = {0U, 1U};
     uint16_t tag;
-    lxp_byte_span payload, proof;
     int64_t deadline;
     lxp_result status;
-    if (c == NULL || authority == NULL || header == NULL || signature == NULL || arena == NULL ||
-        batch == 0U)
+    if (c == NULL || payload == NULL || proof == NULL || arena == NULL || batch == 0U)
         return LXP_ERR_NON_CANONICAL;
     deadline = now() + c->timeout_ms;
     put(query + 2U, batch, 8U);
     status =
         request(c, 12U, (lxp_byte_span){query, sizeof(query)}, (lxp_byte_span){NULL, 0U}, deadline);
     if (status == LXP_OK)
-        status = response(c, arena, &tag, &payload, &proof, deadline);
+        status = response(c, arena, &tag, payload, proof, deadline);
     if (status != LXP_OK)
         return status;
     if (tag != 13U)
         return LXP_ERR_MALFORMED_ENVELOPE;
-    if (payload.length == 0U && proof.length == 0U)
+    if (payload->length == 0U && proof->length == 0U)
         return LXP_ERR_DA_MISSING;
+    return LXP_OK;
+}
+lxp_result lxp_guarantor_lni_header(lxp_guarantor_lni *c, uint64_t batch,
+                                    const lxp_sequencer_authorization *authority, uint32_t network,
+                                    lxp_arena *arena, lxp_batch_header *header,
+                                    uint8_t signature[64])
+{
+    lxp_byte_span payload, proof;
+    if (authority == NULL || header == NULL || signature == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    lxp_result status = header_frame(c, batch, arena, &payload, &proof);
+    if (status != LXP_OK)
+        return status;
     if (proof.length != 146U || get(proof.bytes, 2U) != 1U ||
         memcmp(proof.bytes + 2U, authority->sequencer_id, 32U) != 0 ||
         memcmp(proof.bytes + 34U, authority->public_key, 32U) != 0 ||
@@ -215,6 +224,32 @@ lxp_result lxp_guarantor_lni_header(lxp_guarantor_lni *c, uint64_t batch,
         status = LXP_ERR_CONTEXT_MISMATCH;
     if (status == LXP_OK)
         status = lxp_batch_verify_signature(header, proof.bytes + 82U, 64U, authority, arena);
+    if (status == LXP_OK)
+        memcpy(signature, proof.bytes + 82U, 64U);
+    return status;
+}
+lxp_result lxp_guarantor_lni_untrusted_header(lxp_guarantor_lni *c, uint64_t batch,
+    uint32_t network, lxp_arena *arena, lxp_batch_header *header, uint8_t signature[64])
+{
+    lxp_byte_span payload, proof;
+    lxp_sequencer_authorization claimed = {0};
+    if (header == NULL || signature == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    lxp_result status = header_frame(c, batch, arena, &payload, &proof);
+    if (status != LXP_OK)
+        return status;
+    if (proof.length != 146U || get(proof.bytes, 2U) != 1U)
+        return LXP_ERR_AUTH_SCOPE;
+    memcpy(claimed.sequencer_id, proof.bytes + 2U, 32U);
+    memcpy(claimed.public_key, proof.bytes + 34U, 32U);
+    claimed.first_batch_number = get(proof.bytes + 66U, 8U);
+    claimed.last_batch_number = get(proof.bytes + 74U, 8U);
+    claimed.authorized = 1U;
+    status = lxp_batch_header_decode(payload.bytes, payload.length, header);
+    if (status == LXP_OK && (header->batch_number != batch || header->network_id != network))
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status == LXP_OK)
+        status = lxp_batch_verify_signature(header, proof.bytes + 82U, 64U, &claimed, arena);
     if (status == LXP_OK)
         memcpy(signature, proof.bytes + 82U, 64U);
     return status;

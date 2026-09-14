@@ -53,6 +53,10 @@ def main():
             os.environ['LAYERX_TEST_HANDOVER_DIVERGENCE'] = retained
         assert (state / 'replay-halt').is_file()
         print('independent guarantor replay verified old and new epochs, rollback, every state witness, and persistent authenticated divergence refusal')
+        if os.environ.get('LAYERX_TEST_HANDOVER_PEERS') == '1':
+            peers = runpy.run_path(str(ROOT / 'tests/daemon/handover-peers.py'))
+            peers['run'](native, build, output / f'exports-{count}', count,
+                os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'])
         return
     environment = os.environ.copy()
     settlement = dict(line.split('=', 1) for line in (native / 'settlement.env').read_text().splitlines())
@@ -63,6 +67,10 @@ def main():
     assert chain.rpc('eth_chainId', []) == '0x7d'
     bond = settlement['LAYERX_NODE_SETTLEMENT_CONTRACT']
     registry = settlement['LAYERX_NODE_CHECKPOINT_REGISTRY']
+    submitter = None
+    if os.environ.get('LAYERX_TEST_HANDOVER_PEERS') == '1':
+        peers = runpy.run_path(str(ROOT / 'tests/daemon/handover-peers.py'))
+        submitter = peers['setup'](native, chain)
     administrator = chain.account.address
     chain.send(COMMON['USDL'], 'mint(address,uint256)', administrator, '2000')
     chain.send(COMMON['USDL'], 'approve(address,uint256)', bond, '2000')
@@ -71,6 +79,9 @@ def main():
         chain.send(bond, 'activateGuarantor(bytes32,address,address,uint64,uint64)',
             identifier, signer, administrator, '1', str(index))
         chain.send(bond, 'depositBond(bytes32,uint256)', identifier, '1000')
+    membership_version = int(chain.view(bond, 'membershipVersion()'), 16)
+    assert 4 <= membership_version < 2 ** 64
+    environment['LAYERX_TEST_DA_BONDED_SET_VERSION'] = str(membership_version)
     checkpoint_id = None
     certificate_directory = None
     for batch in range(1, count + 1):
@@ -78,18 +89,25 @@ def main():
         header = bytes.fromhex(exported['canonical_header'].removeprefix('0x'))
         path = output / f'header-{batch}.bin'
         path.write_bytes(header)
+        certificate_directory = output / f'certificate-{batch}'
+        certificate_directory.mkdir(mode=0o700)
         native_environment = environment | {'LAYERX_TEST_DA_HEADER_FILE': str(path)}
-        prepared = subprocess.run([str(build / 'tests/lxp_test_daemon_finality_authority'), 'prepare'],
+        if batch == 1:
+            for invalid_version in ('0', '3', '04', '+4', '4x', str(2 ** 64)):
+                with (output / ('refuse-membership-version-' + invalid_version + '.log')).open('wb') as log:
+                    rejected = subprocess.run([str(build / 'tests/lxp_test_daemon_finality_authority'), 'prepare'],
+                        cwd=ROOT, env=native_environment | {'LAYERX_TEST_DA_BONDED_SET_VERSION': invalid_version},
+                        stdout=log, stderr=log, timeout=30)
+                assert rejected.returncode != 0, 'invalid bonded set version accepted'
+        prepared = subprocess.run([str(build / 'tests/lxp_test_daemon_finality_authority'), 'prepare', str(certificate_directory)],
             cwd=ROOT, env=native_environment, check=True, capture_output=True, timeout=30)
         vector = json.loads(prepared.stdout)
         calldata = COMMON['run']('cast', 'calldata',
             f"registerCheckpoint({COMMON['HEADER']},bytes,{COMMON['ATTESTATION']}[])",
             vector['header'], '0x', vector['attestations'])
-        receipt = chain.transaction(calldata, registry)
+        receipt = chain.transaction(calldata, registry, signer=submitter)
         assert int(receipt['status'], 16) == 1 and receipt['logs']
         observed = int(chain.rpc('eth_getBlockByNumber', [receipt['blockNumber'], False])['timestamp'], 16) * 1000
-        certificate_directory = output / f'certificate-{batch}'
-        certificate_directory.mkdir(mode=0o700)
         invoke([build / 'tests/lxp_test_daemon_finality_authority', 'emit', receipt['transactionHash'],
             int(receipt['blockNumber'], 16), observed, certificate_directory], native_environment,
             output / f'emit-{batch}.log')
