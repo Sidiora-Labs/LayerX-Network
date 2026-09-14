@@ -286,6 +286,7 @@ static lxp_result gateway_receive_claim_locked(
     uint8_t activity_hash[32];
     bool settled = false;
     lxp_result status;
+    lxp_result invoice_status;
     if (context->receive_environment->accounts->count >
             LX_ACCOUNT_REGISTRY_CAPACITY ||
         context->receive_environment->grants->count >
@@ -302,11 +303,14 @@ static lxp_result gateway_receive_claim_locked(
     if (lxp_ct_memcmp(receive->grant_id,
                       receive->payer_grant.grant_id, 32U) != 0)
         return LXP_ERR_GRANT_SCOPE_VIOLATION;
-    status = lxp_gateway_invoice_state_locked(
+    invoice_status = lxp_gateway_invoice_state_locked(
         context->invoices, requirement->invoice_id,
         receive->idempotency_key, receipt, &settled);
-    if (status != LXP_OK) return status;
-    if (settled) return LXP_ERR_IDEMPOTENT_REPLAY;
+    if (invoice_status != LXP_OK &&
+        invoice_status != LXP_ERR_INVOICE_ALREADY_SETTLED)
+        return invoice_status;
+    if (invoice_status == LXP_OK && settled)
+        return LXP_ERR_IDEMPOTENT_REPLAY;
     if (context->receive_environment->idempotency == NULL)
         return LXP_ERR_ARENA_EXHAUSTED;
     status = receive_activity_hash(receive, activity_hash);
@@ -368,6 +372,9 @@ static lxp_result gateway_receive_claim_locked(
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
+    if (invoice_status != LXP_OK)
+        return receive_transaction_abort(
+            context, &transaction, receipt, invoice_status);
     status = lx_asset_state_root(
         context->assets, context->receive_environment->accounts,
         previous_state_root);
