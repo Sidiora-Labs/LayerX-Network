@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "layerx/lxp_storage.h"
 
 #include <errno.h>
@@ -17,7 +18,7 @@ int main(int argc, char **argv)
     lxp_log target = {.descriptor = -1};
     lxp_log_record_header header;
     uint8_t *body;
-    uint64_t head;
+    uint64_t valid_end, last_record, next_sequence;
     uint64_t capacity;
     uint64_t target_capacity;
     char *end = NULL;
@@ -48,7 +49,8 @@ int main(int argc, char **argv)
     REQUIRE(lxp_log_open(&target, argv[2]) == LXP_OK);
     REQUIRE(target.has_durable_marker && target.capacity == target_capacity);
     REQUIRE(target.durable_offset == source.capacity && target.durable_next_sequence == 2U);
-    REQUIRE(lxp_log_durable_head(&target, &head) == LXP_OK && head == 1U);
+    REQUIRE(lxp_log_scan_tail(&target, &valid_end, &last_record, &next_sequence) == LXP_OK);
+    REQUIRE(valid_end == source.capacity && last_record == 0U && next_sequence == 2U);
     REQUIRE(lxp_log_close(&target) == LXP_OK && lxp_log_close(&source) == LXP_OK);
     free(body);
     return 0;
