@@ -4,24 +4,20 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 manifest="$repo_root/agent/Cargo.toml"
 target=x86_64-unknown-linux-gnu
-
-RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zsanitizer=address' \
-    cargo test --manifest-path "$manifest" --locked --workspace --target "$target"
-
-probe_dir=$(mktemp -d)
-probe_log="$probe_dir/thread-sanitizer.log"
-trap 'rm -rf -- "$probe_dir"' EXIT HUP INT TERM
-if CARGO_TARGET_DIR="$probe_dir/target" RUSTC_BOOTSTRAP=1 \
-    RUSTFLAGS='-Zsanitizer=thread' \
-    cargo test --manifest-path "$manifest" --locked --workspace \
-        --target "$target" --no-run >"$probe_log" 2>&1; then
-    CARGO_TARGET_DIR="$probe_dir/target" RUSTC_BOOTSTRAP=1 \
-        RUSTFLAGS='-Zsanitizer=thread' \
-        cargo test --manifest-path "$manifest" --locked --workspace \
-            --target "$target"
-elif grep -q 'ABI mismatch' "$probe_log"; then
-    echo "thread sanitizer unavailable: pinned standard library is not TSan-instrumented"
-else
-    cat "$probe_log" >&2
+tsan_toolchain=nightly-2025-11-10
+rust_source=$(rustc +"$tsan_toolchain" --print sysroot)/lib/rustlib/src/rust/library/Cargo.toml
+if [ ! -f "$rust_source" ]; then
+    echo "rust-src is required to instrument the ThreadSanitizer standard library" >&2
     exit 1
 fi
+
+RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zsanitizer=address' \
+    RUSTDOCFLAGS='-Zsanitizer=address' \
+    cargo test --manifest-path "$manifest" --locked --workspace --target "$target" --no-fail-fast
+
+tsan_target=${LAYERX_AGENT_TSAN_TARGET_DIR:-${CARGO_TARGET_DIR:-$repo_root/agent/target}/thread-sanitizer}
+CARGO_TARGET_DIR="$tsan_target" RUSTUP_TOOLCHAIN="$tsan_toolchain" \
+    LAYERX_TEST_SANITIZER=thread \
+    RUSTFLAGS='-Zsanitizer=thread' RUSTDOCFLAGS='-Zsanitizer=thread' \
+    cargo test -Zbuild-std --manifest-path "$manifest" --locked --workspace \
+        --target "$target" --no-fail-fast

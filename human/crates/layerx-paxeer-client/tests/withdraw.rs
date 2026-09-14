@@ -463,10 +463,49 @@ fn final_report(
     panic!("transaction did not reach finality");
 }
 
-#[allow(clippy::too_many_lines)]
 fn deploy_suite_for_protocol(
     anvil: &Anvil,
     protocol_version: u16,
+) -> (
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+) {
+    deploy_suite_for_asset_network(anvil, protocol_version, ASSET, NETWORK_ID)
+}
+
+fn deploy_suite_for_asset_network(
+    anvil: &Anvil,
+    protocol_version: u16,
+    asset: [u8; 32],
+    network_id: u32,
+) -> (
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+) {
+    deploy_suite_for_genesis(
+        anvil,
+        protocol_version,
+        asset,
+        network_id,
+        [GENESIS_MANIFEST, GENESIS_CANONICAL_STATE, GENESIS],
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn deploy_suite_for_genesis(
+    anvil: &Anvil,
+    protocol_version: u16,
+    asset: [u8; 32],
+    network_id: u32,
+    genesis: [[u8; 32]; 3],
 ) -> (
     EvmAddress,
     EvmAddress,
@@ -508,7 +547,7 @@ fn deploy_suite_for_protocol(
             address_word(vault),
             ASSET,
             quantity_word(&protocol_version.to_be_bytes()),
-            quantity_word(&NETWORK_ID.to_be_bytes()),
+            quantity_word(&network_id.to_be_bytes()),
             quantity_word(&100_u32.to_be_bytes()),
             quantity_word(&86_400_u64.to_be_bytes()),
             [0x23; 32],
@@ -520,14 +559,14 @@ fn deploy_suite_for_protocol(
         &[
             address_word(bond),
             quantity_word(&protocol_version.to_be_bytes()),
-            quantity_word(&NETWORK_ID.to_be_bytes()),
+            quantity_word(&network_id.to_be_bytes()),
             quantity_word(&1_u16.to_be_bytes()),
             quantity_word(&1_u16.to_be_bytes()),
             quantity_word(&3_600_u64.to_be_bytes()),
             quantity_word(&300_u64.to_be_bytes()),
-            GENESIS_MANIFEST,
-            GENESIS_CANONICAL_STATE,
-            GENESIS,
+            genesis[0],
+            genesis[1],
+            genesis[2],
             [0x24; 32],
             quantity_word(&1_u128.to_be_bytes()),
         ],
@@ -572,7 +611,7 @@ fn deploy_suite_for_protocol(
             call_data(
                 REGISTER_ASSET,
                 &[
-                    ASSET,
+                    asset,
                     address_word(token),
                     quantity_word(&6_u8.to_be_bytes()),
                     quantity_word(&1_u128.to_be_bytes()),
@@ -621,7 +660,7 @@ fn deploy_suite_for_protocol(
             call_data(
                 DEPOSIT,
                 &[
-                    ASSET,
+                    asset,
                     quantity_word(&VAULT_BALANCE.to_be_bytes()),
                     [0x28; 32],
                 ],

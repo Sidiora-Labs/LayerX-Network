@@ -593,6 +593,7 @@ static int fixture_start(admission_fixture *fixture,
         lxp_arena_init(&fixture->scratch, fixture->scratch_bytes,
                        OWNER_SCRATCH_BYTES) != LXP_OK ||
         pthread_mutex_init(&fixture->owner.mutex, NULL) != 0 ||
+        pthread_mutex_init(&fixture->owner.receipt_mutex, NULL) != 0 ||
         pthread_mutex_init(&fixture->executor.mutex, NULL) != 0 ||
         pthread_cond_init(&fixture->executor.changed, NULL) != 0)
         return 1;
@@ -610,6 +611,13 @@ static int fixture_start(admission_fixture *fixture,
     (void)memcpy(
         fixture->receipt_authority.authorization.public_key,
         registered_key->public_key, 32U);
+    if (lxp_handover_sequencer_id(registered_key->public_key,
+            fixture->receipt_authority.authorization.sequencer_id) != LXP_OK)
+        return 1;
+    fixture->receipt_authority.authorization.first_batch_number = 1U;
+    fixture->receipt_authority.authorization.last_batch_number =
+        LXP_DAEMON_QUEUE_CAPACITY + 1U;
+    fixture->receipt_authority.authorization.authorized = 1U;
     if (lxp_identity_register(&fixture->identities, REGISTERED_DID,
                               sizeof(REGISTERED_DID) - 1U,
                               registered_key->public_key,
@@ -785,6 +793,7 @@ static int fixture_stop(admission_fixture *fixture, size_t expected_applied)
     fixture->daemon_started = false;
     if (pthread_cond_destroy(&fixture->executor.changed) != 0 ||
         pthread_mutex_destroy(&fixture->executor.mutex) != 0 ||
+        pthread_mutex_destroy(&fixture->owner.receipt_mutex) != 0 ||
         pthread_mutex_destroy(&fixture->owner.mutex) != 0)
         result = 1;
     free(fixture->scratch_bytes);

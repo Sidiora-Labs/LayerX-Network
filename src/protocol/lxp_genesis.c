@@ -236,6 +236,8 @@ lxp_result lxp_genesis_module_plan_resolve(
 {
     lxp_bridge_profile bridge;
     bool bridge_present = false;
+    bool handover_enabled = false;
+    uint8_t handover_authority[32];
     size_t count = sizeof(module_table) / sizeof(module_table[0]);
     size_t index;
     size_t position = 0U;
@@ -247,6 +249,9 @@ lxp_result lxp_genesis_module_plan_resolve(
     if (status == LXP_OK)
         status = lxp_bridge_genesis_profile(manifest, &bridge, &bridge_present);
     if (status == LXP_OK) status = module_enable_flags_known(manifest);
+    if (status == LXP_OK)
+        status = lxp_handover_genesis_authority(manifest, handover_authority,
+                                                &handover_enabled);
     if (status != LXP_OK) return status;
     (void)memset(plan, 0, sizeof(*plan));
     for (index = 0U; index < count; ++index) {
@@ -278,7 +283,11 @@ lxp_result lxp_genesis_module_plan_resolve(
         default:
             return LXP_ERR_UNKNOWN_MODULE;
         }
-        if (selected) plan->modules[position++] = iface;
+        if (selected) {
+            if (entry->module_id == LXP_MODULE_GOVERNANCE)
+                iface = lxp_governance_module_iface_for_handover(handover_enabled);
+            plan->modules[position++] = iface;
+        }
     }
     plan->count = position;
     return plan->count == 0U ? LXP_ERR_UNKNOWN_MODULE : LXP_OK;
@@ -312,7 +321,13 @@ lxp_result lxp_genesis_module_plan_matches(
         const lxp_module_iface *iface = plan->modules[index];
         if (iface == NULL ||
             kernel->modules[index].module_id != iface->module_id ||
-            kernel->modules[index].abi_version != iface->abi_version)
+            kernel->modules[index].abi_version != iface->abi_version ||
+            iface->activity_types == NULL ||
+            iface->activity_type_count == 0U ||
+            iface->activity_type_count > LXP_MODULE_MAX_ACTIVITY_TYPES ||
+            kernel->modules[index].activity_type_count != iface->activity_type_count ||
+            memcmp(kernel->modules[index].activity_types, iface->activity_types,
+                   iface->activity_type_count * sizeof(iface->activity_types[0])) != 0)
             return LXP_ERR_UNKNOWN_MODULE;
     }
     return LXP_OK;
