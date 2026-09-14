@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 const MAX_FRAME: usize = 2048;
 const MAGIC: &[u8; 5] = b"LXIB\x01";
+const DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -86,7 +87,6 @@ pub fn subject_namespace(tenant: &str, principal: &str) -> io::Result<String> {
     }
     let digest: [u8; 32] = digest.finalize().into();
     let mut namespace = String::from("human-v1:");
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     for byte in digest {
         namespace.push(char::from(DIGITS[usize::from(byte >> 4)]));
         namespace.push(char::from(DIGITS[usize::from(byte & 15)]));
@@ -181,7 +181,7 @@ impl Client {
                 Err(error)
                     if error == rustix::io::Errno::AGAIN || error == rustix::io::Errno::INTR =>
                 {
-                    std::thread::sleep(remaining(expires)?.min(Duration::from_millis(5)))
+                    std::thread::sleep(remaining(expires)?.min(Duration::from_millis(5)));
                 }
                 Err(error) => return Err(error.into()),
             }
