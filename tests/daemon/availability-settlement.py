@@ -90,7 +90,7 @@ def main():
                    LAYERX_NODE_CHECKPOINT_REGISTRY=registry,
                    LAYERX_NODE_PAXEER_RPC_ADDRESS='127.0.0.1', LAYERX_NODE_PAXEER_RPC_PORT=str(port),
                    LAYERX_TEST_DA_HEADER_FILE=str(header))
-        vector = json.loads(run(str(binary), 'prepare', env=env))
+        vector = json.loads(run(str(binary), 'prepare', str(work / 'availability-output'), env=env))
         calldata = run('cast', 'calldata',
                        f"registerCheckpoint({COMMON['HEADER']},bytes,{COMMON['ATTESTATION']}[])",
                        vector['header'], '0x', vector['attestations'])
