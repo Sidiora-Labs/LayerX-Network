@@ -1,7 +1,9 @@
 //! Production finality-evidence reads and authenticated registration.
 
 mod module_state;
-pub use module_state::{verify_module_evidence, VerifiedModuleEvidence};
+pub use module_state::{
+    verify_module_evidence, verify_module_evidence_with_history, VerifiedModuleEvidence,
+};
 
 use std::collections::BTreeSet;
 

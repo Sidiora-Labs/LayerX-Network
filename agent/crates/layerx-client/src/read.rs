@@ -359,6 +359,23 @@ pub fn module_state(
     module::read(transport, module_id, key, context)
 }
 
+/// Reads a module-owned value under authenticated historical term authority.
+///
+/// # Errors
+/// Refuses malformed selectors and all original root, witness and checkpoint failures.
+pub fn module_state_with_history(
+    transport: &mut dyn FrameTransport,
+    module_id: u16,
+    key: &[u8],
+    context: ReadContext,
+    history: &crate::handover::SequencerHistory,
+) -> Result<ReadValue, ReadError> {
+    if key.len() > MAX_SELECTOR_KEY_BYTES {
+        return Err(ReadError::PageBound);
+    }
+    module::read_with_history(transport, module_id, key, context, Some(history))
+}
+
 fn point_read(
     transport: &mut dyn FrameTransport,
     selector: &StateSelector,

@@ -128,6 +128,92 @@ fn verify_account(
     Ok(())
 }
 
+fn verify_budget(
+    client: &mut Client,
+    history: &SequencerHistory,
+    stale: &SequencerHistory,
+    account: [u8; 32],
+    budget_id: [u8; 32],
+) -> Result<()> {
+    let key = [b"budget:".as_slice(), &budget_id].concat();
+    checked(client.reconnect())?;
+    let value = checked(client.module_state_with_history(
+        3,
+        &key,
+        VerificationLevel::CHECKPOINT_FINALISED,
+        700,
+        history,
+    ))?;
+    let checkpoint = client.head().finalised_checkpoint;
+    assert_ne!(checkpoint, [0; 32]);
+    let policy = AccountEvidencePolicy {
+        expected_protocol_version: 3,
+        expected_network_id: history.network_id(),
+        handshake_sequencer_key: client.handshake().node().authorised_sequencer_key,
+        root_selector: RootSelector::Checkpoint(checkpoint),
+    };
+    let verify = |value: &[u8], proof: &[u8], key: &[u8], history: &SequencerHistory| {
+        layerx_client::evidence::verify_module_evidence_with_history(
+            value, proof, 3, key, policy, history,
+        )
+    };
+    let module = checked(verify(
+        value.canonical_bytes(),
+        value.proof_material(),
+        &key,
+        history,
+    ))?;
+    assert_eq!(module.checkpoint_id(), Some(checkpoint));
+    assert_eq!(
+        value.canonical_bytes().get(2..34),
+        Some(budget_id.as_slice())
+    );
+    let header = checked(history.verify_header(
+        &module.signed_header().canonical_bytes,
+        &module.signed_header().signature,
+    ))?;
+    assert_eq!(header.header().epoch(), 2);
+    assert!(verify(value.canonical_bytes(), value.proof_material(), &key, stale).is_err());
+    assert!(verify(
+        value.canonical_bytes(),
+        value.proof_material(),
+        b"budget:other",
+        history
+    )
+    .is_err());
+    let mut altered = value.canonical_bytes().to_vec();
+    let end = altered.len() - 1;
+    altered[end] ^= 1;
+    assert!(verify(&altered, value.proof_material(), &key, history).is_err());
+    checked(client.reconnect())?;
+    let account_value = checked(client.account_with_history(
+        account,
+        VerificationLevel::CHECKPOINT_FINALISED,
+        701,
+        history,
+    ))?;
+    let account = checked(verify_account_evidence_with_history(
+        account_value.canonical_bytes(),
+        account_value.proof_material(),
+        account,
+        None,
+        policy,
+        history,
+    ))?;
+    assert_eq!(module.state_root(), account.state_root());
+    assert_eq!(
+        module.signed_header().canonical_bytes,
+        account.signed_header().canonical_bytes
+    );
+    assert_eq!(
+        module.signed_header().signature,
+        account.signed_header().signature
+    );
+    assert!(module.level() >= VerificationLevel::CHECKPOINT_FINALISED);
+    assert!(account.level() >= VerificationLevel::CHECKPOINT_FINALISED);
+    Ok(())
+}
+
 fn verify_route(
     config: ClientConfig,
     actor: Did,
@@ -280,6 +366,7 @@ fn main() -> Result<()> {
     assert_eq!(u64::try_from(page.items.len())?, head.last_sequence());
     let mut activities = Vec::new();
     let mut maintenance = 0;
+    let mut budget_id = None;
     for item in page.items {
         match item.kind {
             HistoryKind::Activity => {
@@ -287,6 +374,17 @@ fn main() -> Result<()> {
                     item.canonical_bytes(),
                     &genesis.registry,
                 ))?;
+                if activity.activity_type().value() == 0x0003_0001 {
+                    assert!(budget_id.is_none());
+                    budget_id = Some(
+                        activity
+                            .payload()
+                            .get(2..34)
+                            .ok_or("budget creation ID")?
+                            .try_into()
+                            .map_err(|_| "budget ID width")?,
+                    );
+                }
                 activities.push(checked(layerx_wire::hash::activity_id(&activity))?);
             }
             HistoryKind::Receipt => {
@@ -312,9 +410,16 @@ fn main() -> Result<()> {
     verify_account(
         &mut client,
         &history,
-        &stale.ok_or("initial history")?,
+        stale.as_ref().ok_or("initial history")?,
         &did,
         account,
+    )?;
+    verify_budget(
+        &mut client,
+        &history,
+        stale.as_ref().ok_or("initial history")?,
+        account,
+        budget_id.ok_or("executed budget creation")?,
     )?;
     verify_route(config, actor, &artifact, account, &history, &activities)?;
     println!("real native history, Agent reads and SDK account evidence verified across replacement and restart; stale and substituted evidence refused");

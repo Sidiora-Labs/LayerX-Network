@@ -154,6 +154,27 @@ impl Client {
         crate::read::account_with_history(transport, account_id, context, history)
     }
 
+    /// Reads module state with genesis-authenticated historical term authority.
+    ///
+    /// # Errors
+    /// Refuses unavailable capabilities, stale history and every original module proof failure.
+    pub fn module_state_with_history(
+        &mut self,
+        module_id: u16,
+        key: &[u8],
+        requested: VerificationLevel,
+        correlation_id: u64,
+        history: &crate::handover::SequencerHistory,
+    ) -> Result<ReadValue, ReadError> {
+        self.require_read_capability(Capability::AccountRead)?;
+        let authorization = history
+            .authorization_for_batch(self.head().sealed_batch)
+            .map_err(|_| ReadError::AuthorityRangeMismatch)?;
+        let context = self.read_context(requested, correlation_id, authorization);
+        let transport = self.transport.as_mut().ok_or(ReadError::Disconnected)?;
+        crate::read::module_state_with_history(transport, module_id, key, context, history)
+    }
+
     /// Reads a bounded history page using independently authenticated signing terms.
     ///
     /// # Errors
