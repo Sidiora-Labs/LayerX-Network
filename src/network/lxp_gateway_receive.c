@@ -299,6 +299,9 @@ static lxp_result gateway_receive_claim_locked(
         requirement, context->receive_environment->network_id,
         context->service_public_key);
     if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(receive->grant_id,
+                      receive->payer_grant.grant_id, 32U) != 0)
+        return LXP_ERR_GRANT_SCOPE_VIOLATION;
     status = lxp_gateway_invoice_state_locked(
         context->invoices, requirement->invoice_id,
         receive->idempotency_key, receipt, &settled);
@@ -308,9 +311,6 @@ static lxp_result gateway_receive_claim_locked(
         return LXP_ERR_ARENA_EXHAUSTED;
     status = receive_activity_hash(receive, activity_hash);
     if (status != LXP_OK) return status;
-    if (lxp_ct_memcmp(receive->grant_id,
-                      receive->payer_grant.grant_id, 32U) != 0)
-        return LXP_ERR_GRANT_SCOPE_VIOLATION;
     (void)memset(&leg, 0, sizeof(leg));
     leg.from = account_for(context->receive_environment->accounts,
                            receive->from);
