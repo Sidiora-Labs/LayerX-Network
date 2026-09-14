@@ -73,6 +73,7 @@ static lxp_result receipt_bytes_match(
 lxp_result lxp_receipt_verify_checkpointed(
     const lxp_receipt *receipt,
     const lxp_augmented_receipt *augmented,
+    const uint8_t sequencer_public_key[32],
     const lxp_guarantor_key_record *guarantor_keys,
     size_t guarantor_key_count,
     const uint8_t registered_checkpoint_id[32],
@@ -87,7 +88,7 @@ lxp_result lxp_receipt_verify_checkpointed(
     uint8_t checkpoint_id[32];
     size_t valid_signatures = 0U;
     lxp_result status;
-    if (receipt == NULL || augmented == NULL ||
+    if (receipt == NULL || augmented == NULL || sequencer_public_key == NULL ||
         augmented->guarantor_certificate == NULL ||
         guarantor_keys == NULL || guarantor_key_count == 0U ||
         registered_checkpoint_id == NULL ||
@@ -157,5 +158,6 @@ lxp_result lxp_receipt_verify_checkpointed(
              registered_paxeer_reference.bytes,
              registered_paxeer_reference.length) != 0))
         status = LXP_ERR_ROOT_MISMATCH;
-    return status;
+    return status == LXP_OK ?
+        lxp_receipt_verify(receipt, sequencer_public_key, arena) : status;
 }

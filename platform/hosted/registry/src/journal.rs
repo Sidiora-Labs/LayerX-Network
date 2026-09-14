@@ -508,31 +508,87 @@ impl FileDeploymentJournal {
     /// # Errors
     /// Refuses a differing committed projection and failed durable pair publication.
     pub fn export_pair(&self, evidence: &VerifiedDeploymentEvidence) -> Result<(), String> {
+        use nix::fcntl::{Flock, FlockArg};
+        use rustix::fs::{renameat_with, RenameFlags, CWD};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         self.audit_projection(evidence)?;
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(nix::libc::O_NOFOLLOW)
+            .open(self.root.join(".pairs.lock"))
+            .map_err(|error| error.to_string())?;
+        let _guard =
+            Flock::lock(lock, FlockArg::LockExclusive).map_err(|(_, error)| error.to_string())?;
         let root = self.root.join("pairs");
-        match fs::DirBuilder::new().mode(0o700).create(&root) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let metadata = fs::symlink_metadata(&root).map_err(|error| error.to_string())?;
+        let previous = match fs::symlink_metadata(&root) {
+            Ok(metadata) => {
                 if !metadata.is_dir() || metadata.permissions().mode() & 0o777 != 0o700 {
                     return Err("deployment export directory is not protected".to_owned());
                 }
+                true
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => return Err(error.to_string()),
-        }
-        File::open(&self.root)
-            .and_then(|directory| directory.sync_all())
+        };
+        let stage = self.root.join(format!(
+            ".pairs-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&stage)
             .map_err(|error| error.to_string())?;
+        if previous {
+            for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
+                let entry = entry.map_err(|error| error.to_string())?;
+                let metadata =
+                    fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+                if !metadata.is_file() || metadata.permissions().mode() & 0o777 != 0o600 {
+                    return Err("deployment export contains an unprotected entry".to_owned());
+                }
+                let bytes = fs::read(entry.path()).map_err(|error| error.to_string())?;
+                protected_replace(&stage.join(entry.file_name()), &bytes)?;
+            }
+        }
         for (suffix, bytes) in [
             (ADMISSION_SUFFIX, evidence.proof().canonical_encoding()),
             (RECORD_SUFFIX, evidence.record().canonical_encoding()),
         ] {
-            let path = root.join(format!(
-                "{}.{}",
-                hex::encode(&evidence.receipt_digest()),
-                suffix
-            ));
+            let name = format!("{}.{}", hex::encode(&evidence.receipt_digest()), suffix);
+            let path = stage.join(name);
+            if path.exists() && fs::read(&path).map_err(|error| error.to_string())? != bytes {
+                return Err("deployment export conflicts with committed bytes".to_owned());
+            }
+            self.reach(if suffix == ADMISSION_SUFFIX {
+                WriteStep::WriteProof
+            } else {
+                WriteStep::WriteRecord
+            })?;
             protected_replace(&path, &bytes)?;
+        }
+        self.reach(WriteStep::SyncTemporary)?;
+        File::open(&stage)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| error.to_string())?;
+        self.reach(WriteStep::Commit)?;
+        if previous {
+            renameat_with(CWD, &stage, CWD, &root, RenameFlags::EXCHANGE)
+                .map_err(|error| error.to_string())?;
+        } else {
+            fs::rename(&stage, &root).map_err(|error| error.to_string())?;
+        }
+        self.reach(WriteStep::SyncDirectory)?;
+        File::open(&self.root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| error.to_string())?;
+        if previous {
+            fs::remove_dir_all(&stage).map_err(|error| error.to_string())?;
         }
         Ok(())
     }

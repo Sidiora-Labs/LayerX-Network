@@ -43,6 +43,18 @@ fn load(name: &str) -> String {
         .unwrap_or_else(|error| panic!("fixture {name}: {error}"))
 }
 
+fn fixture_payload_hash(document: &str) -> [u8; 32] {
+    use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+    let call = ActivityType::new(ModuleId::Programs, 3).unwrap_or_else(|error| panic!("{error:?}"));
+    let registration = ModuleRegistration::new(ModuleId::Programs, &[call])
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    let registry = ModuleRegistry::new(&[registration]).unwrap_or_else(|error| panic!("{error:?}"));
+    let activity =
+        layerx_wire::activity::decode_signed(&bytes(document, "signed_activity_hex"), &registry)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+    layerx_wire::hash::payload_hash(&activity).unwrap_or_else(|error| panic!("{error:?}"))
+}
+
 #[test]
 fn real_executed_v4_and_signed_mutated_leg_refusal() {
     for (name, abi, mutated) in [
@@ -88,11 +100,12 @@ fn real_executed_v4_and_signed_mutated_leg_refusal() {
         let expected = AuthorizedProgramExecutionExpectation {
             authority,
             activity_id: protocol.activity_id(),
+            payload_hash: fixture_payload_hash(&document),
             program_id: array(&document, "program_id_hex"),
             guest_abi_version: abi,
         };
         let graph = bytes(&document, "call_graph_hex");
-        let result = verify_authorized_program_execution(&canonical, &terminal, &graph, expected);
+        let result = verify_authorized_program_execution(&canonical, &terminal, &graph, &expected);
         if mutated {
             assert_eq!(
                 result.err().map(|error| error.check),

@@ -121,6 +121,17 @@ class CommitmentTests(unittest.TestCase):
                 self.signatures,
             )
 
+    def test_original_version_mismatch_batch_is_refused(self):
+        fixture = json.loads(Path(__file__).with_name("batch-version-mismatch.json").read_text())
+        proof = PaymentCommitmentEvidence(
+            7, bytes.fromhex(fixture["header"]), bytes.fromhex(fixture["signature"]),
+            SequencerAuthorization(bytes.fromhex(fixture["sequencer_id"]),
+                                   self.authorized.sequencer_public_key, 1, 1),
+            MerkleProof(0, 1, ()),
+        )
+        with self.assertRaises(PlatformSdkError):
+            self.verify(commitment="batched", evidence=proof)
+
 
 if __name__ == "__main__":
     unittest.main()

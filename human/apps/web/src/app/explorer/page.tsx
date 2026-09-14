@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../copy/catalog";
+import { copyEntry } from "../../../copy/runtime";
 import { batchPage, checkpointPage } from "../../explorer/client";
 import {
   ExplorerFrame,
@@ -6,14 +6,8 @@ import {
   FreshnessDisplay,
   verificationLabel,
 } from "../../explorer/components";
-import {
-  ExplorerLink,
-  ExplorerLookupForm,
-  ExplorerPanel,
-  ExplorerTable,
-  ExplorerVerificationBadge,
-  PlaneRouteAction,
-} from "../../kit";
+import { ExplorerLink, ExplorerLookupForm, ExplorerPanel, ExplorerTable, ExplorerVerificationBadge } from "../../kit/explorer";
+import { PlaneRouteAction } from "../../kit/plane-route-action";
 
 export default async function ExplorerPlanePage() {
   let checkpoints;

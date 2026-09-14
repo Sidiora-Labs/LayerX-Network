@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import { formatCopy } from "../../../copy/format.ts";
 import {
   HumanApiError,

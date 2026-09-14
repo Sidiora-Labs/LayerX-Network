@@ -1,0 +1,143 @@
+[
+  {
+    "package": "@ai-sdk/provider-utils",
+    "version": "5.0.29",
+    "path": "dist/index.d.ts",
+    "before": "004f5cbfb6bbe80be5a203f4932431272854150cd2cd1b037b41d7cbe33f60b4",
+    "after": "8c2b5a22228dd65dfff61d605b16cd35fb4e2649a3ef65a91ba7872703735cb0",
+    "replacements": [
+      [
+        "Partial<Record<keyof T, undefined>>",
+        "Partial<Record<keyof T, never>>"
+      ]
+    ]
+  },
+  {
+    "package": "@langchain/core",
+    "version": "1.2.4",
+    "path": "dist/messages/ai.d.ts",
+    "before": "aa61589008af7232ba88b5ecd00b5ecb9a919ddcd07e2e4c55666ebcc3a24896",
+    "after": "cff487d80800b50d3cd7ed03771078a3c86edc0629265c2635010963726c9943",
+    "replacements": [
+      [
+        "AIMessageFields<TStructure>[\"usage_metadata\"]",
+        "$InferMessageProperty<TStructure, \"ai\", \"usage_metadata\">"
+      ],
+      [
+        "AIMessageChunkFields<TStructure>[\"usage_metadata\"]",
+        "$InferMessageProperty<TStructure, \"ai\", \"usage_metadata\">"
+      ]
+    ]
+  },
+  {
+    "package": "@langchain/core",
+    "version": "1.2.4",
+    "path": "dist/utils/types/zod.d.ts",
+    "before": "a82550c261c6c9715fb748d8c9ca1ae9284762c311d9fef27f467a38779c827a",
+    "after": "8a9d4fc224a698a527e0fce91ca7d8336076f411c5d7621531db2cc357694e77",
+    "replacements": [
+      [
+        "description?: string;",
+        "description?: string | undefined;"
+      ]
+    ]
+  },
+  {
+    "package": "@langchain/core",
+    "version": "1.2.4",
+    "path": "dist/messages/ai.d.cts",
+    "before": "2210a3ba37c8aa1eb0d329268dc265245c2fcd5de985e41387b3bbd6c733a533",
+    "after": "3c2bfb92d5c8b480acd373201aa5a50cabc40a3c15efe01d155f2c21b0f95bca",
+    "replacements": [
+      [
+        "AIMessageFields<TStructure>[\"usage_metadata\"]",
+        "$InferMessageProperty<TStructure, \"ai\", \"usage_metadata\">"
+      ],
+      [
+        "AIMessageChunkFields<TStructure>[\"usage_metadata\"]",
+        "$InferMessageProperty<TStructure, \"ai\", \"usage_metadata\">"
+      ]
+    ]
+  },
+  {
+    "package": "@langchain/core",
+    "version": "1.2.4",
+    "path": "dist/utils/types/zod.d.cts",
+    "before": "10175ebb5554bf79bab9a1ce043a53d31539ccc4b592b6be690841f8252338cb",
+    "after": "cf9e78d06356b3d7528597ac4e780c4f209821dfbe65135d1f1ec23741d30f5e",
+    "replacements": [
+      [
+        "description?: string;",
+        "description?: string | undefined;"
+      ]
+    ]
+  },
+  {
+    "package": "@langchain/core",
+    "version": "1.2.4",
+    "path": "dist/messages/ai.js",
+    "before": "5d3a79af94c3f18e4676cd19afb66dd9710e73f58e378c75fef1335335095eb9",
+    "after": "914f2942526cc612bfafeb888a873caba2f4340c62b6a339f30a2c02017befa7",
+    "replacements": [
+      [
+        "\n\tusage_metadata;",
+        ""
+      ],
+      [
+        "this.usage_metadata = initParams.usage_metadata;",
+        "if (initParams.usage_metadata !== void 0) this.usage_metadata = initParams.usage_metadata;"
+      ]
+    ]
+  },
+  {
+    "package": "@langchain/core",
+    "version": "1.2.4",
+    "path": "dist/messages/ai.cjs",
+    "before": "2c1266c492aef1f490c0fed262a23b1c4e488772e604cb9226fec8bd25b58b7e",
+    "after": "c5d7062913857483629a2b03a8461f2af450a8c38f6ff99a0b767630b6473e30",
+    "replacements": [
+      [
+        "\n\tusage_metadata;",
+        ""
+      ],
+      [
+        "this.usage_metadata = initParams.usage_metadata;",
+        "if (initParams.usage_metadata !== void 0) this.usage_metadata = initParams.usage_metadata;"
+      ]
+    ]
+  },
+  {
+    "package": "langsmith",
+    "version": "0.9.0",
+    "path": "dist/run_trees.d.ts",
+    "before": "49595bc977da53b6e7d7f8b3979eeb381d9824826eeebe27980ed471f945e5d1",
+    "after": "c44ec90b28d31c8231b8bbb61022d58c296c7b2b36e462aa4ed41b85cc91755c",
+    "replacements": [
+      [
+        "events?: KVMap[] | undefined;",
+        "events?: KVMap[];"
+      ]
+    ]
+  },
+  {
+    "package": "langsmith",
+    "version": "0.9.0",
+    "path": "dist/run_trees.js",
+    "before": "849f544e0f86636c39e07dd75b1afa3078359346039ceec0c0548cb12ecf415c",
+    "after": "b238654c56ae1001378d90390a56a591924226f35f3479da4238b09a492d8609",
+    "replacements": [
+      [
+        "        Object.defineProperty(this, \"events\", {\n            enumerable: true,\n            configurable: true,\n            writable: true,\n            value: void 0\n        });\n",
+        ""
+      ],
+      [
+        "Object.assign(this, { ...originalConfig });",
+        "Object.assign(this, { ...originalConfig });\n            if (this.events === undefined) delete this.events;"
+      ],
+      [
+        "Object.assign(this, { ...defaultConfig, ...config, client });",
+        "Object.assign(this, { ...defaultConfig, ...config, client });\n        if (this.events === undefined) delete this.events;"
+      ]
+    ]
+  }
+]

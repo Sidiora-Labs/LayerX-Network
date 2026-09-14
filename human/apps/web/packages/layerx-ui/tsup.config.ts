@@ -1,4 +1,13 @@
 import { defineConfig } from "tsup";
+import { readdirSync } from "node:fs";
+
+const componentEntries = Object.fromEntries(
+  ["components", "lib"].flatMap((directory) =>
+    readdirSync(`src/${directory}`)
+      .filter((name) => /\.tsx?$/u.test(name))
+      .map((name) => [`${directory}/${name.replace(/\.tsx?$/u, "")}`, `src/${directory}/${name}`]),
+  ),
+);
 
 const shared = {
   format: ["esm", "cjs"] as const,
@@ -14,7 +23,8 @@ const shared = {
 export default defineConfig([
   {
     ...shared,
-    entry: ["src/index.ts"],
+    entry: { index: "src/index.ts", ...componentEntries },
+    splitting: true,
     banner: { js: '"use client";' },
   },
   {

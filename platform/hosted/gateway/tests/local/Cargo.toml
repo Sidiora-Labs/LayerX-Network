@@ -18,6 +18,7 @@ float_arithmetic = "deny"
 lossy_float_literal = "deny"
 
 [dependencies]
+layerx-sdk = { path = "../../../../../agent/crates/layerx-sdk" }
 layerx-proof = { path = "../../../../../agent/crates/layerx-proof" }
 layerx-platform-core = { path = "../../../core" }
 layerx-platform-authority = { path = "../../../authority" }
@@ -41,3 +42,7 @@ path = "verifier.rs"
 [[test]]
 name = "lifecycle"
 path = "lifecycle.rs"
+
+[[bin]]
+name = "gateway-lifecycle-sdk-verify"
+path = "lifecycle_sdk.rs"

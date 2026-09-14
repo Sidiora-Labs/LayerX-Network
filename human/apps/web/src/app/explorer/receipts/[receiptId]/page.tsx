@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../../../copy/catalog";
+import { copyEntry } from "../../../../../copy/runtime";
 import { receiptRecord } from "../../../../explorer/client";
 import {
   ExplorerFrame,
@@ -7,12 +7,7 @@ import {
   FreshnessDisplay,
   verificationLabel,
 } from "../../../../explorer/components";
-import {
-  ExplorerLink,
-  ExplorerPanel,
-  ExplorerTable,
-  ExplorerVerificationBadge,
-} from "../../../../kit";
+import { ExplorerLink, ExplorerPanel, ExplorerTable, ExplorerVerificationBadge } from "../../../../kit/explorer";
 
 export default async function ReceiptPage({
   params,

@@ -392,6 +392,10 @@ impl Registrar {
             self.program_state.store(state)?;
         }
         self.program_state.advance(complete)?;
+        self.journal.refresh_head(ObservedHead {
+            sequence: current_head.freshness.observed_sequence,
+            observed_at: current_head.freshness.observed_at,
+        })?;
         let mut balance_reads = self.balance_reads.clone();
         for state in staged {
             let balances = state.into_balances();

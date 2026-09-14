@@ -591,6 +591,7 @@ pub fn verify_activity_operation(
 
 #[derive(Clone, Copy)]
 pub struct ProgramExpectation {
+    pub payload_hash: [u8; 32],
     pub activity_id: [u8; 32],
     pub program_id: [u8; 32],
     pub guest_abi_version: u16,
@@ -623,9 +624,10 @@ pub fn verify_program_operation(
         receipt_bytes,
         terminal_payload,
         call_graph,
-        AuthorizedProgramExecutionExpectation {
+        &AuthorizedProgramExecutionExpectation {
             authority: authority.authorized(),
             activity_id: expected.activity_id,
+            payload_hash: expected.payload_hash,
             program_id: expected.program_id,
             guest_abi_version: expected.guest_abi_version,
         },
@@ -665,6 +667,7 @@ pub fn verify_program_simulation_operation(
             sequencer_public_key: trusted_sequencer_key,
             previous_state_root: trusted_previous_state_root,
             activity_id: expected.activity_id,
+            payload_hash: expected.payload_hash,
             program_id: expected.program_id,
             guest_abi_version: expected.guest_abi_version,
         },

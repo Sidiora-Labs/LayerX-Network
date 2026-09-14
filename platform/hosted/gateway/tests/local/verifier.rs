@@ -249,8 +249,9 @@ fn verify_selected_program_state(
         layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 {
             receipt,
             proof,
+            ..
         }
-        | layerx_platform_authority::BatchIdentityEvidence::BatchMaintenanceV1 { receipt, proof } =>
+        | layerx_platform_authority::BatchIdentityEvidence::BatchMaintenanceV1 { receipt, proof, .. } =>
         {
             let Ok(activity_proof) = layerx_proof::merkle::decode_proof(&evidence.receipt_proof)
             else {
@@ -287,8 +288,9 @@ fn evidence_batch_id(
         layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 {
             receipt,
             proof,
+            ..
         }
-        | layerx_platform_authority::BatchIdentityEvidence::BatchMaintenanceV1 { receipt, proof } =>
+        | layerx_platform_authority::BatchIdentityEvidence::BatchMaintenanceV1 { receipt, proof, .. } =>
         {
             let maintenance_proof =
                 layerx_proof::merkle::decode_proof(proof).required("maintenance inclusion proof");

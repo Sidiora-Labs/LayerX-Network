@@ -2,8 +2,8 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 
-import { copyEntry } from "../../copy/catalog.ts";
-import { InlineNotice } from "../kit";
+import { copyEntry } from "../../copy/runtime.ts";
+import { InlineNotice } from "../kit/surface";
 
 export function OfflineBanner() {
   const [offline, setOffline] = useState(false);

@@ -106,8 +106,8 @@ pub struct BatchEvidence {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BatchIdentityEvidence {
     Historical,
-    OccupancyMaintenanceV2 { receipt: Vec<u8>, proof: Vec<u8> },
-    BatchMaintenanceV1 { receipt: Vec<u8>, proof: Vec<u8> },
+    OccupancyMaintenanceV2 { receipt: Vec<u8>, proof: Vec<u8>, activity_receipts: Vec<Vec<u8>> },
+    BatchMaintenanceV1 { receipt: Vec<u8>, proof: Vec<u8>, activity_receipts: Vec<Vec<u8>> },
 }
 
 fn decode_maintenance_identity(
@@ -213,10 +213,14 @@ enum ReplicaBatchIdentity {
     OccupancyMaintenanceV2 {
         receipt_hex: String,
         receipt_proof_hex: String,
+        #[serde(default)]
+        activity_receipts_hex: Vec<String>,
     },
     BatchMaintenanceV1 {
         receipt_hex: String,
         receipt_proof_hex: String,
+        #[serde(default)]
+        activity_receipts_hex: Vec<String>,
     },
 }
 
@@ -298,6 +302,7 @@ pub fn parse_replica_evidence(
             ReplicaBatchIdentity::OccupancyMaintenanceV2 {
                 receipt_hex,
                 receipt_proof_hex,
+                activity_receipts_hex,
             } => {
                 let receipt =
                     hex::decode(&receipt_hex).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
@@ -316,11 +321,18 @@ pub fn parse_replica_evidence(
                 BatchIdentityEvidence::OccupancyMaintenanceV2 {
                     receipt,
                     proof: encode_proof(&proof),
+                    activity_receipts: activity_receipts_hex
+                        .iter()
+                        .map(|value| {
+                            hex::decode(value).map_err(|_| EvidenceRefusal::EvidenceEncoding)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
                 }
             }
             ReplicaBatchIdentity::BatchMaintenanceV1 {
                 receipt_hex,
                 receipt_proof_hex,
+                activity_receipts_hex,
             } => {
                 let receipt =
                     hex::decode(&receipt_hex).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
@@ -339,6 +351,9 @@ pub fn parse_replica_evidence(
                 BatchIdentityEvidence::BatchMaintenanceV1 {
                     receipt,
                     proof: encode_proof(&proof),
+                    activity_receipts: activity_receipts_hex.iter()
+                        .map(|value| hex::decode(value).map_err(|_| EvidenceRefusal::EvidenceEncoding))
+                        .collect::<Result<Vec<_>, _>>()?,
                 }
             }
         },
@@ -391,10 +406,12 @@ pub fn authorized_batch_by_activity(
         BatchIdentityEvidence::OccupancyMaintenanceV2 {
             receipt: maintenance,
             proof: maintenance_proof,
+            ..
         }
         | BatchIdentityEvidence::BatchMaintenanceV1 {
             receipt: maintenance,
             proof: maintenance_proof,
+            ..
         } => {
             let maintenance_proof =
                 decode_proof(maintenance_proof).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
@@ -568,8 +585,12 @@ fn verify_authorized_receipt(
         if protocol.program_outcome().is_some() {
             return Err(EvidenceRefusal::Receipt(ReceiptCheck::ReceiptShape));
         }
-        verify_program_state(receipt_bytes, authorised)
-            .map_err(|failure| EvidenceRefusal::Receipt(failure.check))?;
+        if protocol.result_code() == 0 {
+            verify_program_state(receipt_bytes, authorised)
+        } else {
+            verify_outcome(receipt_bytes, authorised)
+        }
+        .map_err(|failure| EvidenceRefusal::Receipt(failure.check))?;
     } else {
         verify_outcome(receipt_bytes, authorised)
             .map_err(|failure| EvidenceRefusal::Receipt(failure.check))?;
@@ -585,17 +606,20 @@ fn verify_maintained_receipt(
     receipt_bytes: &[u8],
     authorised: &AuthorizedBatch,
     evidence: &layerx_proof::receipt::MaintainedOutcomeEvidence<'_>,
+    receipts: &[Vec<u8>],
 ) -> Result<(), EvidenceRefusal> {
     use layerx_proof::receipt::{
-        verify_outcome_maintained, verify_program_state_maintained, MaintainedOutcomeFailure,
+        verify_outcome_maintained_chain, verify_program_state_maintained_chain,
+        MaintainedOutcomeFailure,
     };
     let receipt = decode(receipt_bytes).map_err(|_| EvidenceRefusal::ReceiptDecode)?;
     let protocol = receipt.protocol().ok_or(EvidenceRefusal::ReceiptShape)?;
     if matches!(protocol.module_id(), 7 | 8) && protocol.operation() == 0 {
-        let batch = layerx_proof::receipt::authorized_maintained_activity_batch(
+        let batch = layerx_proof::receipt::authorized_maintained_activity_batch_chain(
             receipt_bytes,
             authorised,
             evidence,
+            receipts,
         )
         .map_err(|failure| match failure {
             MaintainedOutcomeFailure::Inclusion(error) => EvidenceRefusal::Inclusion(error),
@@ -609,9 +633,13 @@ fn verify_maintained_receipt(
         if protocol.program_outcome().is_some() {
             return Err(EvidenceRefusal::Receipt(ReceiptCheck::ReceiptShape));
         }
-        verify_program_state_maintained(receipt_bytes, authorised, evidence)
+        if protocol.result_code() == 0 {
+            verify_program_state_maintained_chain(receipt_bytes, authorised, evidence, receipts)
+        } else {
+            verify_outcome_maintained_chain(receipt_bytes, authorised, evidence, receipts)
+        }
     } else {
-        verify_outcome_maintained(receipt_bytes, authorised, evidence)
+        verify_outcome_maintained_chain(receipt_bytes, authorised, evidence, receipts)
     };
     verified.map_err(|failure| match failure {
         MaintainedOutcomeFailure::Inclusion(error) => EvidenceRefusal::Inclusion(error),
@@ -633,10 +661,12 @@ fn verify_selected_authorized_receipt(
         BatchIdentityEvidence::OccupancyMaintenanceV2 {
             receipt,
             proof: maintenance_proof,
+            activity_receipts,
         }
         | BatchIdentityEvidence::BatchMaintenanceV1 {
             receipt,
             proof: maintenance_proof,
+            activity_receipts,
         } => {
             decode_maintenance_identity(&evidence.batch_identity)?;
             let maintenance_proof =
@@ -651,7 +681,12 @@ fn verify_selected_authorized_receipt(
                 maintenance_proof: &maintenance_proof,
                 authorization,
             };
-            verify_maintained_receipt(receipt_bytes, authorised, &maintained)?;
+            let receipts = if activity_receipts.is_empty() {
+                vec![receipt_bytes.to_vec()]
+            } else {
+                activity_receipts.clone()
+            };
+            verify_maintained_receipt(receipt_bytes, authorised, &maintained, &receipts)?;
         }
     }
     Ok(())

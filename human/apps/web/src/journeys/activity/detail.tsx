@@ -3,25 +3,17 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog";
+import { copyEntry } from "../../../copy/runtime";
 import { formatCopy } from "../../../copy/format";
 import { humanApi, type ActivityEntryDetail, type ExportArtefact } from "../../api";
-import {
-  ActivityEvidenceBadge,
-  CopyableIdentifier,
-  DesktopDetail,
-  ExplorerLink,
-  KitButton,
-  KitList,
-  KitListItem,
-  LabelValue,
-  MobileDetail,
-  ScreenCard,
-  SignedWordedAmount,
-  StateFrame,
-  StatusPill,
-  protocolAmount,
-} from "../../kit";
+import { ActivityEvidenceBadge } from "../../kit/activity";
+import { CopyableIdentifier, LabelValue, SignedWordedAmount, StatusPill } from "../../kit/money";
+import { DesktopDetail, MobileDetail } from "../../kit/pattern-detail";
+import { ExplorerLink } from "../../kit/explorer";
+import { KitButton } from "../../kit/control";
+import { KitList, KitListItem } from "../../kit/display";
+import { ScreenCard, StateFrame } from "../../kit/surface";
+import { protocolAmount } from "../../kit/model";
 import { useShellSelection } from "../../shell/app-shell";
 import { PrivateFigure } from "../../settings/privacy";
 import { LoadingSurface, OfflineSurface, StillCheckingSurface } from "../../states/surfaces";

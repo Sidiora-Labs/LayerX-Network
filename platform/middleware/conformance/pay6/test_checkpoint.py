@@ -79,6 +79,13 @@ class CheckpointTests(CommitmentTests):
             evidence = rpc_checkpoint_evidence(fixture, self.batch, self.authority)
             self.verify(commitment="finalised", evidence=evidence)
 
+    def test_original_version_mismatch_checkpoint_is_refused(self):
+        fixture = json.loads(
+            Path(__file__).with_name("checkpoint-version-mismatch.json").read_text()
+        )
+        with self.assertRaises(Exception):
+            rpc_checkpoint_evidence(fixture, self.batch, self.authority)
+
 
 if __name__ == "__main__":
     unittest.main()

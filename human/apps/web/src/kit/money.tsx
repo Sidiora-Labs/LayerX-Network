@@ -1,19 +1,16 @@
 "use client";
 
-import {
-  AmountText,
-  Badge,
-  Button,
-  Card,
-  DetailDisclosure,
-  Input,
-  cn,
-  type AmountTextProps,
-  type PlatformSetting,
-} from "@layerx/ui";
+import { AmountText, type AmountTextProps } from "@layerx/ui/components/amount";
+import { Badge } from "@layerx/ui/components/badge";
+import { Button } from "@layerx/ui/components/button";
+import { Card } from "@layerx/ui/components/card";
+import { DetailDisclosure } from "@layerx/ui/components/detail";
+import { Input } from "@layerx/ui/components/input";
+import { cn } from "@layerx/ui/cn";
+import { type PlatformSetting } from "@layerx/ui/lib/platform";
 import { useId, useState, type ReactNode } from "react";
 
-import { copyEntry } from "../../copy/catalog.ts";
+import { copyEntry } from "../../copy/runtime.ts";
 import { formatExplicitCurrencyAmount, LiveRegion } from "./a11y";
 import {
   directionWord,

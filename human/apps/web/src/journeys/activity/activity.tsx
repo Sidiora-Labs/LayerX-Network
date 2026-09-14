@@ -3,26 +3,16 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog";
+import { copyEntry } from "../../../copy/runtime";
 import { formatCopy } from "../../../copy/format";
 import { humanApi, type ActivityFilter, type ActivityPage, type ExportArtefact } from "../../api";
-import {
-  DesktopActivityFeed,
-  DesktopDetail,
-  DesktopFilters,
-  InlineNotice,
-  KitButton,
-  MobileActivityFeed,
-  MobileDetail,
-  MobileFilters,
-  ScreenCard,
-  SignedWordedAmount,
-  StateEmpty,
-  StateFrame,
-  StatusPill,
-  protocolAmount,
-  type ActivityFeedGroup,
-} from "../../kit";
+import { DesktopActivityFeed, MobileActivityFeed, type ActivityFeedGroup } from "../../kit/activity";
+import { DesktopDetail, MobileDetail } from "../../kit/pattern-detail";
+import { DesktopFilters, MobileFilters } from "../../kit/pattern-filters";
+import { InlineNotice, ScreenCard, StateEmpty, StateFrame } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { SignedWordedAmount, StatusPill } from "../../kit/money";
+import { protocolAmount } from "../../kit/model";
 import { useShellSelection } from "../../shell/app-shell";
 import { PrivateFigure, usePrivacyMode } from "../../settings/privacy";
 import { LoadingSurface, OfflineSurface } from "../../states/surfaces";

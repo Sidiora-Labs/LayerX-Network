@@ -49,7 +49,9 @@ required = ["agents:Agent[]","next_cursor:Cursor"]
 
 [type.AgentCreateRequest]
 required = ["name:string","purpose:string","monthly_limit:Money"]
+optional = ["native_fee_budget:NativeFeeBudget"]
 simplicity = "Creating an agent asks exactly these three things. The service orchestrates everything else as a staged receipt-verified journey."
+fee_authority = "On networks enforcing native fee authority version 2, the owner explicitly approves a finite native_fee_budget alongside the spending limit. Omission refuses creation; changing or rotating a key never silently replenishes fee authority."
 
 [type.AgentLimitRequest]
 required = ["monthly_limit:Money"]

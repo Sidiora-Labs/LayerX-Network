@@ -1,4 +1,5 @@
-import { Card, Skeleton } from "@layerx/ui";
+import { Card } from "@layerx/ui/components/card";
+import { Skeleton } from "@layerx/ui/components/feedback";
 import type { ReactNode } from "react";
 
 export function PerformanceLoadingCard({

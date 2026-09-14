@@ -1,9 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.30;
 
+import {ArchiveSha256} from "./ArchiveSha256.sol";
+
+contract ArchiveChunk {
+    constructor(bytes memory value) {
+        bytes memory runtime = bytes.concat(hex"00", value);
+        assembly ("memory-safe") {
+            return(add(runtime, 32), mload(runtime))
+        }
+    }
+}
+
 /// @notice Immutable, permissionless publication of public LayerX archive
 /// chunks. The contract has no custody, withdrawal, payable or token surface.
 contract LayerXMirrorArchive {
+    using ArchiveSha256 for ArchiveSha256.State;
     uint256 public constant MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
     uint256 public constant MAX_CHUNK_BYTES = 24 * 1024;
     uint256 public constant MAX_CHUNKS = 65_536;
@@ -29,7 +41,13 @@ contract LayerXMirrorArchive {
     }
 
     mapping(bytes32 => ArchiveManifest) private _manifests;
-    mapping(bytes32 => mapping(uint32 => bytes)) private _chunks;
+    struct ChunkStorage {
+        address first;
+        address last;
+    }
+
+    mapping(bytes32 => mapping(uint32 => ChunkStorage)) private _chunks;
+    mapping(bytes32 => ArchiveSha256.State) private _archiveHashes;
 
     event ManifestOpened(
         bytes32 indexed commitment,
@@ -53,6 +71,7 @@ contract LayerXMirrorArchive {
     error ChunkConflict();
     error IncompleteArchive();
     error InvalidPublisher();
+    error ArchiveDigestMismatch();
 
     modifier onlyPublisher() {
         if (msg.sender != publisher) revert InvalidPublisher();
@@ -98,6 +117,7 @@ contract LayerXMirrorArchive {
             nextChunk: 0,
             finalized: false
         });
+        _archiveHashes[commitment].initialize();
         emit ManifestOpened(
             commitment, networkId, batchNumber, totalBytes, totalChunks, archiveDigest
         );
@@ -109,13 +129,21 @@ contract LayerXMirrorArchive {
         if (value.length == 0 || value.length > MAX_CHUNK_BYTES) revert InvalidManifest();
         bytes32 digest = sha256(value);
         if (index < archive.nextChunk) {
-            if (sha256(_chunks[commitment][index]) != digest) revert ChunkConflict();
+            if (sha256(readChunk(commitment, index)) != digest) revert ChunkConflict();
             return;
         }
         if (index != archive.nextChunk || index >= archive.totalChunks) revert ChunkOrder();
         uint256 nextBytes = uint256(archive.receivedBytes) + value.length;
         if (nextBytes > archive.totalBytes) revert InvalidManifest();
-        _chunks[commitment][index] = value;
+        if (value.length == MAX_CHUNK_BYTES) {
+            _chunks[commitment][index] = ChunkStorage({
+                first: address(new ArchiveChunk(value[:MAX_CHUNK_BYTES - 1])),
+                last: address(new ArchiveChunk(value[MAX_CHUNK_BYTES - 1:]))
+            });
+        } else {
+            _chunks[commitment][index].first = address(new ArchiveChunk(value));
+        }
+        _archiveHashes[commitment].update(value);
         archive.observedChunkChain = keccak256(
             abi.encodePacked(archive.observedChunkChain, index, digest, uint32(value.length))
         );
@@ -132,6 +160,9 @@ contract LayerXMirrorArchive {
             archive.receivedBytes != archive.totalBytes ||
             archive.observedChunkChain != archive.expectedChunkChain
         ) revert IncompleteArchive();
+        if (_archiveHashes[commitment].digest(archive.receivedBytes) != archive.archiveDigest) {
+            revert ArchiveDigestMismatch();
+        }
         archive.finalized = true;
         emit ArchiveFinalized(commitment, archive.archiveDigest);
     }
@@ -148,6 +179,22 @@ contract LayerXMirrorArchive {
     }
 
     function chunk(bytes32 commitment, uint32 index) external view returns (bytes memory) {
-        return _chunks[commitment][index];
+        return readChunk(commitment, index);
+    }
+
+    function readChunk(bytes32 commitment, uint32 index) private view returns (bytes memory value) {
+        ChunkStorage storage stored = _chunks[commitment][index];
+        address first = stored.first;
+        address last = stored.last;
+        if (first == address(0)) return new bytes(0);
+        uint256 firstBytes = first.code.length - 1;
+        uint256 lastBytes = last == address(0) ? 0 : last.code.length - 1;
+        value = new bytes(firstBytes + lastBytes);
+        assembly ("memory-safe") {
+            extcodecopy(first, add(value, 32), 1, firstBytes)
+            if lastBytes {
+                extcodecopy(last, add(add(value, 32), firstBytes), 1, lastBytes)
+            }
+        }
     }
 }

@@ -102,6 +102,7 @@ class ProtocolReceipt:
     timestamp: int
     program_outcome: ProgramReceiptOutcome | None
     sequencer_signature: bytes
+    total_units: tuple[int, int] | None = None
 
 @dataclass(frozen=True)
 class AuthorizedReceiptBatch:

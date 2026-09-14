@@ -1,4 +1,6 @@
-import { Badge, Card, Input } from "@layerx/ui";
+import { Badge } from "@layerx/ui/components/badge";
+import { Card } from "@layerx/ui/components/card";
+import { Input } from "@layerx/ui/components/input";
 import { cn } from "@layerx/ui/cn";
 import Link from "next/link";
 import type { ReactNode, TextareaHTMLAttributes } from "react";
@@ -15,6 +17,7 @@ export function ExplorerNavigation({
         <Link
           key={item.href}
           href={item.href}
+          prefetch={false}
           className="inline-flex min-h-11 items-center rounded-full border border-border-strong bg-surface px-4 text-sm font-semibold text-foreground hover:bg-surface-sunken"
         >
           {item.label}
@@ -75,7 +78,7 @@ export function ExplorerTable({
 }
 
 export function ExplorerLink({ href, children }: Readonly<{ href: string; children: ReactNode }>) {
-  return <Link href={href} className="font-semibold text-accent hover:underline">{children}</Link>;
+  return <Link href={href} prefetch={false} className="font-semibold text-accent hover:underline">{children}</Link>;
 }
 
 export function ExplorerVerificationBadge({

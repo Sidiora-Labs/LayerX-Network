@@ -352,9 +352,13 @@ fn verify_lifecycle_receipt(
                 &bytes,
                 &unhex(field(result, "terminal_payload")),
                 &unhex(field(result, "call_graph")),
-                AuthorizedProgramExecutionExpectation {
+                &AuthorizedProgramExecutionExpectation {
                     authority,
                     activity_id: expected_id,
+                    payload_hash: must(
+                        layerx_wire::hash::payload_hash(&activity),
+                        "call payload hash",
+                    ),
                     program_id: call.program_id.bytes(),
                     guest_abi_version: 2,
                 },
@@ -974,9 +978,13 @@ fn real_escrow_requires_registered_destination_account() {
             &bytes,
             &terminal,
             &unhex(field(result, "call_graph")),
-            AuthorizedProgramExecutionExpectation {
+            &AuthorizedProgramExecutionExpectation {
                 authority,
                 activity_id: must(activity_id(&activity), "refused activity id"),
+                payload_hash: must(
+                    layerx_wire::hash::payload_hash(&activity),
+                    "call payload hash",
+                ),
                 program_id: program,
                 guest_abi_version: 2,
             },

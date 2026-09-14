@@ -193,3 +193,132 @@ fn independent_implementation_can_enumerate_vectors() {
         );
     }
 }
+
+#[test]
+fn independent_verifier_accepts_real_native_send_and_refuses_substitutions() -> Result<(), String> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../platform/sdk/conformance/fixtures/receipt-positive-v2.json"
+    ))
+    .map_err(|error| format!("native fixture: {error}"))?;
+    let decode = |value: &str| -> Result<Vec<u8>, String> {
+        assert_eq!(value.len() % 2, 0);
+        (0..value.len())
+            .step_by(2)
+            .map(|index| {
+                u8::from_str_radix(&value[index..index + 2], 16)
+                    .map_err(|error| format!("hex: {error}"))
+            })
+            .collect()
+    };
+    let field = |name: &str| -> Result<[u8; 32], String> {
+        decode(
+            fixture["authorized_batch"][name]
+                .as_str()
+                .ok_or("authority field")?,
+        )?
+        .try_into()
+        .map_err(|_| "authority must be 32 bytes".into())
+    };
+    let trusted = AuthorizedBatch::new(
+        field("batch_id_hex")?,
+        field("asset_hex")?,
+        field("previous_state_root_hex")?,
+        field("resulting_state_root_hex")?,
+        field("sequencer_public_key_hex")?,
+    );
+    let canonical = decode(
+        fixture["canonical_receipt_hex"]
+            .as_str()
+            .ok_or("native receipt")?,
+    )?;
+    let portable = PortableReceipt::export(&canonical, &trusted)
+        .map_err(|error| format!("native receipt: {error}"))?;
+    let bytes = portable
+        .to_json()
+        .map_err(|error| format!("portable encoding: {error}"))?;
+    verify_python_export(&bytes, &fixture)?;
+    let verifier = IndependentVerifier::new("independent-native-receipt");
+    let outcome = verifier
+        .verify_vector_against_trusted_batch(
+            std::str::from_utf8(&bytes).map_err(|error| format!("JSON UTF-8: {error}"))?,
+            &trusted,
+        )
+        .map_err(|error| format!("independent verification: {error:?}"))?;
+    assert_eq!(
+        outcome.receipt_digest.to_vec(),
+        decode(
+            fixture["expected"]["receipt_digest_hex"]
+                .as_str()
+                .ok_or("receipt digest")?
+        )?
+    );
+    for index in [0, canonical.len() / 2, canonical.len() - 1] {
+        let mut altered = canonical.clone();
+        altered[index] ^= 1;
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|error| format!("portable JSON: {error}"))?;
+        document["canonicalReceipt"] = serde_json::json!(URL_SAFE_NO_PAD.encode(altered));
+        assert!(verifier
+            .verify_vector_against_trusted_batch(&document.to_string(), &trusted)
+            .is_err());
+    }
+    for name in [
+        "receiptDigest",
+        "batchId",
+        "asset",
+        "previousStateRoot",
+        "resultingStateRoot",
+        "sequencerPublicKey",
+    ] {
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|error| format!("portable JSON: {error}"))?;
+        document[name] = serde_json::json!(URL_SAFE_NO_PAD.encode([0x91; 32]));
+        assert!(verifier
+            .verify_vector_against_trusted_batch(&document.to_string(), &trusted)
+            .is_err());
+    }
+    Ok(())
+}
+
+fn verify_python_export(bytes: &[u8], fixture: &serde_json::Value) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut python =
+        Command::new(std::env::var_os("LAYERX_TEST_PYTHON").unwrap_or_else(|| "python3".into()))
+            .arg(directory.join("tests/python_portable_verifier.py"))
+            .arg(
+                directory
+                    .join("../../../platform/sdk/conformance/fixtures/receipt-positive-v2.json"),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("independent Python verifier: {error}"))?;
+    python
+        .stdin
+        .take()
+        .ok_or("independent verifier stdin")?
+        .write_all(bytes)
+        .map_err(|error| format!("portable verifier input: {error}"))?;
+    let output = python
+        .wait_with_output()
+        .map_err(|error| format!("independent verifier completion: {error}"))?;
+    assert!(
+        output.status.success(),
+        "Python receipt verification failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let independent: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("independent verification report: {error}"))?;
+    assert_eq!(
+        independent["receipt_digest"],
+        fixture["expected"]["receipt_digest_hex"]
+    );
+    assert_eq!(independent["mutations_refused"], 14);
+    Ok(())
+}

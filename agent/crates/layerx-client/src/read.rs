@@ -2,22 +2,33 @@
 
 use std::cmp::Ordering;
 
-use layerx_proof::inclusion::{
-    verify_activity, verify_receipt, InclusionError, SequencerAuthorization,
-};
-use layerx_proof::merkle::{MerkleError, Proof, MAX_DEPTH};
-use layerx_proof::state::{decode_account_value, AccountProofError};
+use layerx_proof::inclusion::verify_activity;
+use layerx_proof::inclusion::verify_receipt;
+use layerx_proof::inclusion::InclusionError;
+use layerx_proof::inclusion::SequencerAuthorization;
+use layerx_proof::merkle::MerkleError;
+use layerx_proof::merkle::Proof;
+use layerx_proof::merkle::MAX_DEPTH;
+use layerx_proof::state::decode_account_value;
+use layerx_proof::state::AccountProofError;
 use layerx_types::amount::Amount;
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::receipt::decode_batch_header;
 
-use crate::evidence::{
-    decode_nested_evidence, AccountEvidenceKind, DecodedNestedEvidence, EvidenceError, RootSelector,
-};
+use crate::evidence::decode_nested_evidence;
+use crate::evidence::AccountEvidenceKind;
+use crate::evidence::DecodedNestedEvidence;
+use crate::evidence::EvidenceError;
+use crate::evidence::RootSelector;
 use crate::head::Head;
 use crate::lni::refusal::decode_core_refusal;
-use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
-use crate::lni::transport::{FrameTransport, TransportError};
+use crate::lni::schema::decode_envelope;
+use crate::lni::schema::encode_envelope;
+use crate::lni::schema::Envelope;
+use crate::lni::schema::SchemaError;
+use crate::lni::schema::Version;
+use crate::lni::transport::FrameTransport;
+use crate::lni::transport::TransportError;
 
 const ACCOUNT_READ_REQUEST_TAG: u16 = 7;
 const ACCOUNT_READ_RESPONSE_TAG: u16 = 8;
@@ -875,7 +886,8 @@ pub fn did_accounts(
     did: &layerx_types::ids::Did,
     context: ReadContext,
 ) -> Result<Vec<ReadValue>, ReadError> {
-    use sha2::{Digest, Sha256};
+    use sha2::Digest;
+    use sha2::Sha256;
     if context.root_selector != RootSelector::Latest || context.requested.level().wire_rank() > 3 {
         return Err(ReadError::UnavailableCapability);
     }
@@ -957,7 +969,9 @@ pub fn did_accounts(
 
 #[cfg(test)]
 mod history_bounds_tests {
-    use super::{validate_history_progress, validate_history_sequence, ReadError};
+    use super::validate_history_progress;
+    use super::validate_history_sequence;
+    use super::ReadError;
     #[test]
     fn authenticated_history_must_stay_within_selector_and_make_progress() {
         assert_eq!(validate_history_sequence(10, 10, 12), Ok(()));

@@ -1,4 +1,4 @@
-use layerx_paxeer_client::{FinalityReport, FinalityStage, FinalityTracker, TransactionHash};
+use layerx_paxeer_client::{FinalityReport, FinalityTracker, TransactionHash};
 use layerx_types::payload::ModuleRegistry;
 
 use crate::clients::{
@@ -469,34 +469,9 @@ impl InventoryRebalancer<'_> {
             return Err(RampError::Conflict);
         }
         let report = tracker.poll();
-        let (mut stage, block_hash) = match report.stage() {
-            FinalityStage::Announced => ("announced", None),
-            FinalityStage::Missing { .. } => ("missing", None),
-            FinalityStage::Pooled { .. } => ("pooled", None),
-            FinalityStage::Confirming { inclusion, .. } => {
-                ("confirming", Some(inclusion.block.hash))
-            }
-            FinalityStage::Final { inclusion, .. } => ("final", Some(inclusion.block.hash)),
-            FinalityStage::Displaced { lost, .. } => ("displaced", Some(lost.block.hash)),
-        };
-        if block_hash.is_some()
-            && self
-                .journal
-                .paxeer(&idempotency_key)
-                .and_then(|snapshot| snapshot.block_hash)
-                .is_some_and(|previous| Some(previous) != block_hash)
-        {
-            stage = "displaced";
-        }
         self.journal.observe_paxeer(
             idempotency_key,
-            PaxeerObservation {
-                operation_id,
-                transaction_hash: report.transaction().bytes(),
-                stage,
-                block_hash,
-                confirmations: report.progress().confirmed,
-            },
+            PaxeerObservation::from_finality(operation_id, &report),
             now,
         )?;
         Ok(report)

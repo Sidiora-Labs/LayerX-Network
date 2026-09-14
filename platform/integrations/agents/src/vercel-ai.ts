@@ -18,13 +18,15 @@ export interface LayerXVercelAiIntegration extends LayerXAgentIntegration {
 }
 
 export function vercelAiTool(executor: AgentToolExecutor, definition: ToolDefinition): VercelAiTool {
+  const execute = async (input: unknown): Promise<ToolJsonObject> =>
+    renderOutcome(await executor.execute(definition.name, input ?? {}));
   const official = tool({
     type: "function",
     description: definition.description,
     inputSchema: jsonSchema(definition.inputSchema),
-    execute: async (input) => renderOutcome(await executor.execute(definition.name, input ?? {})),
+    execute,
   });
-  return Object.assign(official, { parameters: definition.inputSchema });
+  return Object.assign(official, { parameters: definition.inputSchema, execute });
 }
 
 export function vercelAiToolSet(executor: AgentToolExecutor): VercelAiToolSet {

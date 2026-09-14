@@ -1,9 +1,11 @@
 "use client";
 
-import { Input, ResponsiveDialog, type Platform } from "@layerx/ui";
+import { Input } from "@layerx/ui/components/input";
+import { ResponsiveDialog } from "@layerx/ui/components/responsive-dialog";
+import { type Platform } from "@layerx/ui/lib/platform";
 import type { ReactNode } from "react";
 
-import { copyEntry } from "../../copy/catalog.ts";
+import { copyEntry } from "../../copy/runtime.ts";
 import { formatCopy } from "../../copy/format.ts";
 import { KitButton } from "./control";
 import { confirmationVariant, typedConfirmationReady } from "./model";

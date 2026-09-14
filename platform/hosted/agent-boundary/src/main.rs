@@ -893,6 +893,7 @@ fn fetch_program_execution(
     receipt: &[u8],
     activity_id: [u8; 32],
     program_id: [u8; 32],
+    signed_activity: &[u8],
     sequencer_key: [u8; 32],
 ) -> Result<artifacts::StoredExecution, Response> {
     let invalid = || refusal(503, "program_artifacts_invalid", Some(5));
@@ -942,11 +943,21 @@ fn fetch_program_execution(
         terminal_payload,
         call_graph,
     };
+    let activity = decode_signed(signed_activity, &config.registry).map_err(|_| invalid())?;
+    let call = NativeProgramCall::decode(activity.payload()).map_err(|_| invalid())?;
+    if layerx_wire::hash::activity_id(&activity).map_err(|_| invalid())? != activity_id
+        || call.callee().bytes() != program_id
+    {
+        return Err(invalid());
+    }
+    let payload_hash = layerx_wire::hash::payload_hash(&activity).map_err(|_| invalid())?;
     artifacts::verify(
         &stored,
         receipt,
         activity_id,
         program_id,
+        payload_hash,
+        call.guest_abi,
         config.protocol_network_id,
     )
     .map_err(|detail| {
@@ -1039,6 +1050,8 @@ fn completed_response(config: &Config, record: &JournalRecord) -> Response {
                 &receipt,
                 activity_id,
                 program_id,
+                layerx_wire::hash::payload_hash(&activity).map_err(|error| format!("{error:?}"))?,
+                call.guest_abi,
                 config.protocol_network_id,
             )
         })();
@@ -1065,11 +1078,17 @@ fn complete_record(
         let Some(activity_id) = parse_hex32(&record.activity_id) else {
             return refusal(503, "persistence_invalid", Some(5));
         };
+        let Ok(signed_activity) =
+            artifacts::canonical_hex(&record.signed_activity, MAX_ACTIVITY_BYTES)
+        else {
+            return refusal(503, "persistence_invalid", Some(5));
+        };
         match fetch_program_execution(
             config,
             receipt,
             activity_id,
             program_id,
+            &signed_activity,
             sequencer_public_key,
         ) {
             Ok(execution) => record.program_execution = Some(execution),

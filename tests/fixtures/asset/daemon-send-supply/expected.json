@@ -1,0 +1,10 @@
+{
+  "activity_id": "a1f5977a9aa9cb2d167a315c9a8769083dfa9a68225c757e7e96beef275662e4",
+  "source_account": "3aa29bcf27f39c8bcfe4017be09686802ed23412631c141902d715255ec8acba",
+  "destination_account": "29b27231b5c9eb1fee8193f1334c6a44c34f68f20c38f905001fca9f8ce6b553",
+  "asset": "cd4caf041d0f03a1f172d10218e890ede6e1f93dfa8702c43f25e56c4c2fcdb5",
+  "source_balance_before": "100000000000000",
+  "destination_balance_before": "100000000000000",
+  "source_sequence_before": "0",
+  "identity_sequence_before": "1"
+}

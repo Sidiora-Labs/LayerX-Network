@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import type { ExitEligibility, HumanApiClient, Journey } from "../../api/index.ts";
 import { custodyCopyKey } from "../custody/copy.ts";
 import { exitComplete, presentedJourneyState } from "../custody/evidence.ts";

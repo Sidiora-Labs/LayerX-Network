@@ -160,7 +160,7 @@ export interface LayerXResource {
 }
 
 export interface LayerXResourceHandler {
-  release(request: Request): Promise<LayerXResource>;
+  release(request: Request, idempotencyKey: string): Promise<LayerXResource>;
 }
 
 export interface LayerXWebhookHandlerConsumer {
@@ -415,7 +415,7 @@ function createResourceHandler(runtime: LayerXSellerRuntime): RouteHandler {
       decision = await runtime.seller.handle(
         runtime.principal,
         request.headers.get(PAYMENT_SIGNATURE_HEADER) ?? undefined,
-        () => runtime.resources.release(request),
+        (idempotencyKey) => runtime.resources.release(request, idempotencyKey),
       );
     } catch (error) {
       if (error instanceof MiddlewareError) {
@@ -526,6 +526,9 @@ function jsonResponse(status: number, body: Readonly<Record<string, string>>): R
 function paymentErrorStatus(code: MiddlewareErrorCode): number {
   if (code === "payment-pending") {
     return 202;
+  }
+  if (code === "fulfillment-outcome-unknown") {
+    return 503;
   }
   if (code === "fulfillment-conflict") {
     return 409;
