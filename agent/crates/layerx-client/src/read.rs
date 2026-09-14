@@ -660,12 +660,7 @@ pub fn history(
     )
 }
 
-fn history_with_authority(
-    transport: &mut dyn FrameTransport,
-    range: HistoryRange,
-    context: ReadContext,
-    history: Option<&crate::handover::SequencerHistory>,
-) -> Result<HistoryPage, ReadError> {
+fn history_start(range: HistoryRange, context: ReadContext) -> Result<u64, ReadError> {
     let HistoryRange {
         start_sequence,
         end_sequence,
@@ -693,6 +688,18 @@ fn history_with_authority(
     } else {
         start_sequence
     };
+    Ok(expected_start)
+}
+
+fn history_with_authority(
+    transport: &mut dyn FrameTransport,
+    range: HistoryRange,
+    context: ReadContext,
+    history: Option<&crate::handover::SequencerHistory>,
+) -> Result<HistoryPage, ReadError> {
+    let expected_start = history_start(range, context)?;
+    let end_sequence = range.end_sequence;
+    let page_bound = range.page_bound;
     let mut selector = Vec::with_capacity(28);
     selector.extend_from_slice(&expected_start.to_be_bytes());
     selector.extend_from_slice(&end_sequence.to_be_bytes());
