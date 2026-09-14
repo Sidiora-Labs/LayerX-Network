@@ -502,6 +502,8 @@ static lxp_result compare_unsigned(gp_runtime *runtime, const lxp_receipt *recei
     lxp_result status =
         lxp_receipt_encode(&runtime->expected, false, &runtime->execution_arena, &expected);
     if (status == LXP_OK)
+        status = lxp_arena_reset(&runtime->execution_arena, mark + expected.length);
+    if (status == LXP_OK)
         status = lxp_receipt_encode(receipt, false, &runtime->execution_arena, &actual);
     if (status == LXP_OK && (actual.length != expected.length ||
                              lxp_ct_memcmp(actual.bytes, expected.bytes, actual.length)))

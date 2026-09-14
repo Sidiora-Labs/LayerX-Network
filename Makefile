@@ -3521,7 +3521,7 @@ test-daemon-handover-peers: $(BUILD_DIR)/tests/lxp_test_module_maintenance $(BUI
 	$(RUN_PREFIX) env LAYERX_TEST_HANDOVER_PEERS=1 python3 tests/daemon/withdraw-custody.py $(BUILD_DIR) --handover
 
 .PHONY: test-daemon-handover-consumers
-test-daemon-handover-consumers:
+test-daemon-handover-consumers: test-guarantor-receipt
 	sh programs/sdk/rust/examples/escrow/build.sh
 	cargo build --locked --manifest-path platform/Cargo.toml -p layerx-runtime-clock
 	cargo build --locked --manifest-path agent/Cargo.toml -p layerx-client --example native_handover_history
@@ -3744,6 +3744,17 @@ $(BUILD_DIR)/tests/lxp_test_guarantor_runtime: tests/daemon/guarantor-runtime.c 
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 test-daemon-guarantor-integration: $(BUILD_DIR)/tests/lxp_test_guarantor_runtime
+
+.PHONY: test-guarantor-receipt
+$(BUILD_DIR)/tests/lxp_test_guarantor_receipt: tests/daemon/guarantor-receipt.c \
+	cmd/layerx-guarantor/runtime.c tests/programs/test_call_activity.c \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o $(BUILD_DIR)/obj/cmd/layerx-guarantor/runtime.o,$(LAYERXD_OBJECTS)) \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out %.c,$^) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+test-guarantor-receipt: $(BUILD_DIR)/tests/lxp_test_guarantor_receipt
+	$(RUN_PREFIX) $<
 
 .PHONY: test-state-proof
 $(BUILD_DIR)/tests/lxp_test_state_proof: tests/state/lxp_test_state_proof.c \
