@@ -8,6 +8,9 @@ const MAX_BYTES: usize = 16_777_216;
 #[serde(deny_unknown_fields)]
 struct StoredOutcome {
     version: u8,
+    period_start_ms: u64,
+    period_length_ms: u64,
+    expiry_ms: u64,
     activity: Vec<u8>,
     receipt: Vec<u8>,
     proof: Vec<u8>,
@@ -31,7 +34,10 @@ pub(crate) fn persist_native_outcome(
 ) -> Result<(), Error> {
     let raw = outcome.proof.receipt();
     let stored = StoredOutcome {
-        version: 1,
+        version: 2,
+        period_start_ms: outcome.binding.period_start_ms,
+        period_length_ms: outcome.binding.period_length_ms,
+        expiry_ms: outcome.binding.expiry_ms,
         activity: outcome.proof.canonical_activity().to_vec(),
         receipt: raw.canonical_receipt().to_vec(),
         proof: layerx_proof::merkle::encode_proof(raw.proof()),
@@ -57,19 +63,29 @@ pub(super) fn outcome(
     store: &Store,
     tenant: &TenantId,
     id: [u8; 32],
-) -> Result<RawActivityReceiptEvidence, Error> {
+) -> Result<(RawActivityReceiptEvidence, [u64; 3]), Error> {
     let value = store.get(&key(tenant, id)?).ok_or(Error::Store)?;
     if value.class() != StorageClass::LocalOnly || value.bytes().len() > MAX_BYTES {
         return Err(Error::Store);
     }
     let stored: StoredOutcome = serde_json::from_slice(value.bytes()).map_err(|_| Error::Store)?;
-    if stored.version != 1 {
+    if stored.version != 2 {
         return Err(Error::Store);
     }
     let proof = layerx_proof::merkle::decode_proof(&stored.proof).map_err(|_| Error::Store)?;
     let signature = stored.signature.try_into().map_err(|_| Error::Store)?;
-    Ok(RawActivityReceiptEvidence::from_signed_inclusion(
-        stored.activity,
-        RawReceiptEvidence::new(stored.receipt, proof, stored.header, signature),
+    if stored.period_length_ms == 0 || stored.expiry_ms <= stored.period_start_ms {
+        return Err(Error::Store);
+    }
+    Ok((
+        RawActivityReceiptEvidence::from_signed_inclusion(
+            stored.activity,
+            RawReceiptEvidence::new(stored.receipt, proof, stored.header, signature),
+        ),
+        [
+            stored.period_start_ms,
+            stored.period_length_ms,
+            stored.expiry_ms,
+        ],
     ))
 }

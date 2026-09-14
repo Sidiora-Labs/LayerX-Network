@@ -113,11 +113,14 @@ impl NativeBudgetRuntime {
             .authority_key
             .ok_or(Error::Binding)?;
         }
-        binding.expiry_ms = base.expiry;
+        if retained.is_some() {
+            binding.expiry_ms = record.expiry;
+        }
         let evidence = native_io::history(node, &self.authority, registry, baseline, current)?;
         let reconciled = if retained.is_some() {
             let mut old_binding = binding.clone();
             old_binding.period_start_ms = base.period_start;
+            old_binding.expiry_ms = base.expiry;
             old_binding.owner_public_key = read_binding.owner_public_key;
             let previous = self
                 .authority
@@ -130,14 +133,14 @@ impl NativeBudgetRuntime {
         };
         if let Some(previous) = self.ceilings.get(&(tenant.clone(), binding.budget_id)) {
             previous
-                .clone()
-                .reconcile(reconciled.clone())
+                .recover_after(&reconciled)
                 .map_err(|_| Error::Consumption)?;
         }
         let reservations =
             self.reconcile_outbox(store, tenant, node, registry, &reconciled, outbox)?;
-        let ceiling = NativeCeiling::rebuild(scope.maximum, reconciled.clone(), &reservations)
-            .map_err(|_| Error::Consumption)?;
+        let ceiling =
+            NativeCeiling::restore_holds(scope.maximum, reconciled.clone(), &reservations)
+                .map_err(|_| Error::Consumption)?;
         if retained.is_none() {
             if !reservations.is_empty() {
                 return Err(Error::Baseline);

@@ -32,6 +32,19 @@ impl NativeCeiling {
         if maximum == 0 || reconciliation.spent() > maximum {
             return Err(CeilingError::Exceeded);
         }
+        let result = Self::restore_holds(maximum, reconciliation, reservations)?;
+        result.require_capacity(0)?;
+        Ok(result)
+    }
+
+    pub(crate) fn restore_holds(
+        maximum: u128,
+        reconciliation: NativeBudgetReconciliation,
+        reservations: &[NativeReservation],
+    ) -> Result<Self, CeilingError> {
+        if maximum == 0 {
+            return Err(CeilingError::Exceeded);
+        }
         let mut result = Self {
             maximum,
             reconciliation,
@@ -72,7 +85,11 @@ impl NativeCeiling {
                     .insert(reservation.id, reservation.clone());
             }
         }
-        result.require_capacity(0)?;
+        result
+            .reconciliation
+            .spent()
+            .checked_add(result.held()?)
+            .ok_or(CeilingError::Overflow)?;
         Ok(result)
     }
 
@@ -195,15 +212,7 @@ impl NativeCeiling {
         &mut self,
         next: NativeBudgetReconciliation,
     ) -> Result<Vec<NativeBudgetOutcome>, CeilingError> {
-        if !next.authenticates_owner_after(&self.reconciliation)
-            || next.authority != self.reconciliation.authority
-            || next.observed_sequence() < self.reconciliation.observed_sequence()
-            || next.timestamp_ms() < self.reconciliation.timestamp_ms()
-            || (next.binding.period_start_ms == self.reconciliation.binding.period_start_ms
-                && next.spent() < self.reconciliation.spent())
-        {
-            return Err(CeilingError::Unreconciled);
-        }
+        self.verify_next(&next)?;
         let old: Vec<_> = self.reservations.values().cloned().collect();
         let mut rebuilt = Self::rebuild(self.maximum, next, &old)?;
         let outcomes = rebuilt
@@ -219,6 +228,26 @@ impl NativeCeiling {
         rebuilt.settled.extend(self.settled.iter());
         *self = rebuilt;
         Ok(outcomes)
+    }
+
+    fn verify_next(&self, next: &NativeBudgetReconciliation) -> Result<(), CeilingError> {
+        if !next.authenticates_owner_after(&self.reconciliation)
+            || next.authority != self.reconciliation.authority
+            || next.observed_sequence() < self.reconciliation.observed_sequence()
+            || next.timestamp_ms() < self.reconciliation.timestamp_ms()
+            || (next.binding.period_start_ms == self.reconciliation.binding.period_start_ms
+                && next.spent() < self.reconciliation.spent())
+        {
+            return Err(CeilingError::Unreconciled);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn recover_after(
+        &self,
+        next: &NativeBudgetReconciliation,
+    ) -> Result<(), CeilingError> {
+        self.verify_next(next)
     }
 
     /// # Errors

@@ -37,6 +37,7 @@ make -j4 CC=gcc BUILD_DIR="$LAYERX_TEST_NATIVE_BUILD_DIR" \
     "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_metered_allowance" \
     "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_module_maintenance" \
     "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_guarantor_runtime" \
+    "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_native_budget_finality" \
     "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/bridge/sign-credit"
 make BUILD_DIR="$LAYERX_TEST_NATIVE_BUILD_DIR" PAXEER_GO_JOBS=4 custody-proof-build
 GOMAXPROCS=4 GOFLAGS="${GOFLAGS:-} -p=4" make paxeer-build

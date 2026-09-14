@@ -95,11 +95,19 @@ pub(super) fn terminal(
         exact,
         maximum_sequence,
     } = request;
-    let raw = super::native_durable::outcome(store, tenant, id)?;
+    let (raw, window) = super::native_durable::outcome(store, tenant, id)?;
     if raw.canonical_activity() != exact {
         return Err(Error::Activity);
     }
-    let outcome = authority.restore_native_outcome(binding, &raw)?;
+    let mut historical = binding.clone();
+    if window[1] != binding.period_length_ms
+        || window[0] % window[1] != binding.period_start_ms % binding.period_length_ms
+    {
+        return Err(Error::Binding);
+    }
+    historical.period_start_ms = window[0];
+    historical.expiry_ms = window[2];
+    let outcome = authority.restore_native_outcome(&historical, &raw)?;
     if outcome.idempotency_key != id || outcome.sequence > maximum_sequence {
         return Err(Error::Receipt);
     }

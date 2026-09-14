@@ -126,7 +126,9 @@ pub struct NativeBudgetReconciliation {
 
 impl NativeBudgetReconciliation {
     pub(crate) fn authenticates_owner_after(&self, previous: &Self) -> bool {
-        if self.binding.owner_public_key == previous.binding.owner_public_key {
+        if self.binding.owner_public_key == previous.binding.owner_public_key
+            && self.binding.expiry_ms == previous.binding.expiry_ms
+        {
             return previous.binding.advances(&self.binding);
         }
         if self.predecessor
@@ -140,6 +142,7 @@ impl NativeBudgetReconciliation {
         }
         let mut prior = previous.binding.clone();
         prior.owner_public_key = self.binding.owner_public_key;
+        prior.expiry_ms = self.binding.expiry_ms;
         prior.advances(&self.binding)
     }
 

@@ -39,6 +39,7 @@ pub struct Fixture {
     socket: PathBuf,
     key: SigningKey,
     request: u64,
+    registered_batch: u64,
     clock: std::sync::Arc<layerx_client::runtime_clock::RuntimeClock>,
 }
 
@@ -117,6 +118,7 @@ impl Fixture {
             socket,
             key,
             request: 0,
+            registered_batch: 0,
             clock,
         })
     }
@@ -238,21 +240,13 @@ impl Fixture {
         })
     }
 
-    pub fn close(&mut self, scope: &NativeBudgetScope, id: u8) -> Result<()> {
+    pub fn owner_bytes(&mut self, kind: u32, id: u8, bytes: &[u8]) -> Result<Vec<u8>> {
         use layerx_types::activity::{EnvelopeBuilder, Signature, TimestampBound};
         use layerx_types::payload::Payload;
         checked(self.client.reconnect())?;
         let state = checked(self.client.preparation_state(&self.did, 8200))?;
-        let kind = checked(ActivityType::from_u32(0x0003_0007))?;
-        let mut encoded = Encoder::new(42);
-        checked(encoded.u16(1))?;
-        checked(encoded.fixed(&scope.binding.budget_id))?;
-        checked(encoded.u64(2))?;
-        let payload = checked(Payload::new(
-            &state.module_registry,
-            kind,
-            &encoded.finish(),
-        ))?;
+        let kind = checked(ActivityType::from_u32(kind))?;
+        let payload = checked(Payload::new(&state.module_registry, kind, bytes))?;
         let payload_hash = checked(layerx_wire::hash::payload_hash_for(&payload))?;
         let mut builder = EnvelopeBuilder::new();
         checked(
@@ -282,6 +276,15 @@ impl Fixture {
         let envelope = unsigned.attach_signature(checked(Signature::new(&signature))?);
         let exact = checked(layerx_wire::activity::encode_signed_envelope(&envelope))?;
         self.registry = state.module_registry;
+        Ok(exact)
+    }
+
+    pub fn close(&mut self, scope: &NativeBudgetScope, id: u8) -> Result<()> {
+        let mut encoded = Encoder::new(42);
+        checked(encoded.u16(1))?;
+        checked(encoded.fixed(&scope.binding.budget_id))?;
+        checked(encoded.u64(2))?;
+        let exact = self.owner_bytes(0x0003_0007, id, &encoded.finish())?;
         let result = self.submit(&exact)?;
         assert_eq!(result_code(&result.0)?, 0);
         self.finalize(&result.1)
@@ -399,6 +402,14 @@ impl Fixture {
         }
         assert_eq!(response["version"], 1);
         assert_eq!(response["batch"], batch);
+        checked(self.client.reconnect())?;
+        super::finality::register(
+            &mut self.client,
+            &self.directory,
+            &response,
+            &mut self.registered_batch,
+            batch,
+        )?;
         checked(self.client.reconnect())?;
         let checkpoint = checked(
             self.client
