@@ -120,7 +120,10 @@ fn read_only_binding_authenticates_tenant_principal_peer_and_durable_restart() -
         peer_gid: gid,
         deadline: Duration::from_millis(200),
     };
-    let client = layerx_identity_binding::Client::new(config.clone())?;
+    let client = layerx_identity_binding::Client::new(
+        config.clone(),
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
+    )?;
     let binding = client.lookup(principal)?;
     assert_eq!(binding.principal(), principal);
     assert_eq!(binding.tenant(), "tenant-a");
@@ -136,15 +139,21 @@ fn read_only_binding_authenticates_tenant_principal_peer_and_durable_restart() -
         layerx_identity_binding::subject_namespace("tenant-b", principal)?
     );
     assert!(client.lookup("unknown-principal").is_err());
-    let wrong_tenant = layerx_identity_binding::Client::new(layerx_identity_binding::Config {
-        tenant: "tenant-b".into(),
-        ..config.clone()
-    })?;
+    let wrong_tenant = layerx_identity_binding::Client::new(
+        layerx_identity_binding::Config {
+            tenant: "tenant-b".into(),
+            ..config.clone()
+        },
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
+    )?;
     assert!(wrong_tenant.lookup(principal).is_err());
-    let wrong_peer = layerx_identity_binding::Client::new(layerx_identity_binding::Config {
-        peer_gid: gid.checked_add(1).ok_or("gid overflow")?,
-        ..config.clone()
-    })?;
+    let wrong_peer = layerx_identity_binding::Client::new(
+        layerx_identity_binding::Config {
+            peer_gid: gid.checked_add(1).ok_or("gid overflow")?,
+            ..config.clone()
+        },
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
+    )?;
     assert!(wrong_peer.lookup(principal).is_err());
     read_only_refusals(&reader, &root, &client, &binding, principal)?;
     assert_eq!(
