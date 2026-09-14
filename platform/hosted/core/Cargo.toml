@@ -18,6 +18,7 @@ ed25519-dalek.workspace = true
 layerx-client.workspace = true
 layerx-crypto.workspace = true
 layerx-intents.workspace = true
+layerx-platform-internal.workspace = true
 layerx-proof.workspace = true
 layerx-types.workspace = true
 layerx-wire.workspace = true

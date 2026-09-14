@@ -43,6 +43,27 @@ pub(super) enum BatchIdentity {
         #[serde(default)]
         activity_receipts_hex: Vec<String>,
     },
+    BatchMaintenanceV1 {
+        receipt_hex: String,
+        receipt_proof_hex: String,
+        activity_receipts_hex: Vec<String>,
+    },
+}
+
+impl BatchIdentity {
+    fn verify_maintenance_kind(&self, bytes: &[u8], receipts: &[String]) -> Result<(), String> {
+        use layerx_wire::batch_maintenance::{decode_maintenance, MaintenanceReceipt};
+        let record = decode_maintenance(bytes).map_err(error)?;
+        match (self, record) {
+            (Self::OccupancyMaintenanceV2 { .. }, MaintenanceReceipt::Occupancy(_)) => Ok(()),
+            (Self::BatchMaintenanceV1 { .. }, MaintenanceReceipt::Batch(_))
+                if !receipts.is_empty() =>
+            {
+                Ok(())
+            }
+            _ => Err(error("maintenance kind or activity chain")),
+        }
+    }
 }
 
 impl Default for BatchIdentity {
@@ -225,8 +246,16 @@ fn authorized_activity_batch(
             receipt_hex,
             receipt_proof_hex,
             activity_receipts_hex,
+        }
+        | BatchIdentity::BatchMaintenanceV1 {
+            receipt_hex,
+            receipt_proof_hex,
+            activity_receipts_hex,
         } => {
             let maintenance = canonical_hex(receipt_hex, MAX_ACTIVITY_BYTES)?;
+            evidence
+                .batch_identity
+                .verify_maintenance_kind(&maintenance, activity_receipts_hex)?;
             let wire_proof =
                 decode_merkle_proof(&canonical_hex(receipt_proof_hex, 4096)?).map_err(error)?;
             let maintenance_proof = Proof::new(
@@ -437,3 +466,7 @@ mod tests {
         assert!(canonical_hex(&"00".repeat(MAX_ACTIVITY_BYTES + 1), MAX_ACTIVITY_BYTES).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "batch_maintenance_tests.rs"]
+mod batch_maintenance_tests;

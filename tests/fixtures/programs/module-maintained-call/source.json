@@ -1,0 +1,7 @@
+{
+  "producer_revision": "94b46dc2b24368913adea70f513f2b7e13d7e8c3",
+  "source_log": "native receipt-authority log",
+  "record_count": 16,
+  "all_record_crc32c_valid": true,
+  "original_signed_bytes_unchanged": true
+}

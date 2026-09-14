@@ -279,6 +279,9 @@ static lxp_result execute_withdrawal(lxp_module_ctx *ctx,
     lxp_transfer_source_authority source = {0};
     lx_withdrawal_store *store;
     lxp_receipt receipt = {0};
+    lxp_ledger_receipt_input input = {0};
+    uint8_t state_key[LX_WITHDRAWAL_STATE_KEY_BYTES];
+    uint8_t event[LX_WITHDRAWAL_STATE_VALUE_BYTES + 72U];
     void *memory;
     lxp_result status = withdrawal_context(ctx, activity, authority, value,
                                           &transfer, &withdrawal);
@@ -291,7 +294,36 @@ static lxp_result execute_withdrawal(lxp_module_ctx *ctx,
     (void)memcpy(source.authorized_from, withdrawal.account_id, 32U);
     transfer.context.source_authorities = &source;
     transfer.context.source_authority_count = 1U;
-    return lx_asset_withdraw_request(ctx, &transfer, &withdrawal, store, &receipt);
+    input.from_balance_before = transfer.from->balance;
+    input.to_balance_before = transfer.to->balance;
+    input.from_sequence = transfer.context.actor_sequence;
+    status = lx_asset_withdraw_request(ctx, &transfer, &withdrawal, store, &receipt);
+    if (status != LXP_OK) return status;
+    status = lx_withdrawal_state_encode(&withdrawal, state_key, event);
+    if (status != LXP_OK) return status;
+    (void)memcpy(input.transaction_id, lxp_ctx_activity_id(ctx), 32U);
+    input.operation = 9U;
+    input.global_sequence = lxp_ctx_global_sequence(ctx);
+    (void)memcpy(input.asset, withdrawal.asset_id, 32U);
+    input.amount = withdrawal.amount;
+    (void)memcpy(input.from, transfer.from->id, 32U);
+    (void)memcpy(input.to, transfer.to->id, 32U);
+    input.from_balance_after = transfer.from->balance;
+    input.to_balance_after = transfer.to->balance;
+    (void)memcpy(input.transfer_set_root, receipt.transfer_set_root, 32U);
+    (void)memcpy(input.context_hash, state_key + 11U, 32U);
+    status = lxp_activity_signing_preimage(activity, input.authorization_hash);
+    if (status != LXP_OK) return status;
+    input.timestamp = lxp_ctx_batch_timestamp_ms(ctx);
+    input.leg_count = 1U;
+    status = lxp_ctx_bind_ledger_receipt(ctx, &input);
+    if (status != LXP_OK) return status;
+    (void)memcpy(event + LX_WITHDRAWAL_STATE_VALUE_BYTES, activity->payload_hash, 32U);
+    (void)memcpy(event + LX_WITHDRAWAL_STATE_VALUE_BYTES + 32U,
+                 activity->idempotency_key, 32U);
+    (void)memcpy(event + LX_WITHDRAWAL_STATE_VALUE_BYTES + 64U,
+                 value->payload + 100U, 8U);
+    return lxp_ctx_emit_event(ctx, 9U, event, sizeof(event));
 }
 
 static lxp_result module_genesis(lxp_module_ctx *ctx, const uint8_t *manifest,

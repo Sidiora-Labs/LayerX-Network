@@ -1406,6 +1406,7 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-intents",
+ "layerx-platform-internal",
  "layerx-programs-registry",
  "layerx-proof",
  "layerx-types",

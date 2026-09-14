@@ -34,8 +34,9 @@ Exact real-process request and response pairs:
 
 Reads are unauthenticated. `lx_sendActivity` requires a `LayerX-Key` with
 `activity:write` and the route scope for Programs operations. It admits Asset
-ordinals `1`, `4`, `5`, `6`, `7`, `8`, `10`, `11` and Programs ordinals `1`,
-`2`, `3`, `5`, `6`, `7`. It returns success only with a verified receipt and
+ordinals `1`, `4`, `5`, `6`, `7`, `8`, `9`, `10`, `11` and Programs ordinals `1`,
+`2`, `3`, `5`, `6`, `7`. Asset `9` additionally requires a committed withdrawal fee schedule, enabled
+Bridge runtime, and matching custody-backed asset metadata. It returns success only with a verified receipt and
 the exact requested `executed`, `batched`, or `finalised` evidence.
 
 # Canonical module registry
@@ -53,7 +54,7 @@ receipt authority. The required shape is:
     "symbol": "$"
   }],
   "modules": [
-    {"module": 1, "ordinals": [1, 4, 5, 6, 7, 8, 10, 11]},
+    {"module": 1, "ordinals": [1, 4, 5, 6, 7, 8, 9, 10, 11]},
     {"module": 9, "ordinals": [1, 2, 3, 5, 6, 7]}
   ]
 }

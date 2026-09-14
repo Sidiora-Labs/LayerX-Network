@@ -191,12 +191,30 @@ fn executed(http: &Http, authorization: &str, params: &serde_json::Value) -> ser
     }
 }
 
+fn complete_module_registry(gateway: &Gateway) {
+    let bytes = fs::read(&gateway.environment["LAYERX_GATEWAY_MODULE_REGISTRY_FILE"])
+        .required("gateway committed module registry");
+    let document: serde_json::Value =
+        serde_json::from_slice(&bytes).required("gateway module registry JSON");
+    let modules = document["modules"]
+        .as_array()
+        .required("committed module declarations")
+        .iter()
+        .map(|entry| entry["module"].as_u64().required("module identifier"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        modules,
+        layerx_types::payload::ModuleId::ALL.map(|module| u64::from(module as u16))
+    );
+}
+
 pub(super) fn run(
     cluster: &Cluster,
     certificates: &Certificates,
     gateway: &mut Gateway,
     key: &serde_json::Value,
 ) {
+    complete_module_registry(gateway);
     let http = Http {
         port: gateway.port,
         ca: Certificate::from_der(&certificates.ca_der).required("gateway CA"),
@@ -253,6 +271,15 @@ pub(super) fn run(
     );
     assert_eq!(verified.activity_id(), activity_id);
     assert_eq!(verified.fee_charged(), 17);
+    let authorized = layerx_proof::receipt::AuthorizedBatch::new(
+        verified.batch_id(),
+        verified.asset(),
+        verified.previous_state_root(),
+        verified.resulting_state_root(),
+        cluster.sequencer_key,
+    );
+    layerx_proof::receipt::withdrawal::verify(&receipt, &authorized, &canonical, NETWORK_ID)
+        .required("withdrawal receipt bound to original owner activity and monetary effects");
     let after = names.map(|name| account(&http, &authorization, name, cluster));
     assert_eq!(after[0].balance() + 18, before[0].balance());
     assert_eq!(after[1].balance(), before[1].balance() + 17);
@@ -295,7 +322,34 @@ pub(super) fn run(
             response
         );
     }
-    println!("public owner withdrawal binds the native receipt, exact fee, verified balances and restart replay");
+    println!(
+        "public owner withdrawal binds the native receipt, exact fee, verified balances and restart replay"
+    );
+}
+
+#[test]
+fn local_gateway_paid_withdrawal_preserves_fees_across_restart() {
+    let (cluster, _funding) = funding::start_withdrawal();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity_service = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let mut gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity_service,
+        &authority,
+        &redis,
+    );
+    let key = issue_local_scoped_key(
+        &certificates,
+        &gateway,
+        &identity_service,
+        &["activity:write", "receipt:read"],
+    );
+    run(&cluster, &certificates, &mut gateway, &key);
 }
 
 #[test]

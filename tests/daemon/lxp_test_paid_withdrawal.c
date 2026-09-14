@@ -94,6 +94,24 @@ static int paid_receipt(int descriptor, paid_record *record, lxp_result result,
             REQUIRE(memcmp(receipt.activity_id, record->activity_id, 32U) == 0);
             REQUIRE(receipt.module_id == lxp_activity_module_id(activity.activity_type));
             REQUIRE(receipt.result_code == result && receipt.fee_charged.hi == 0U && receipt.fee_charged.lo == fee);
+            if (result == LXP_OK && activity.activity_type == LX_ASSET_WITHDRAW) {
+                uint8_t authorization[32];
+                REQUIRE(receipt.operation == 9U && receipt.effects.count == 2U);
+                REQUIRE(receipt.amount.hi == 0U && receipt.amount.lo == 1U);
+                REQUIRE(receipt.effects.effects[0].kind == LXP_EFFECT_TRANSFER &&
+                    receipt.effects.effects[0].monetary &&
+                    memcmp(receipt.transfer_set_root,
+                        receipt.effects.effects[0].transfer_set_root, 32U) == 0);
+                REQUIRE(receipt.effects.effects[1].kind == LXP_EFFECT_EVENT &&
+                    receipt.effects.effects[1].event_type == 9U &&
+                    receipt.effects.effects[1].body_length == 254U);
+                REQUIRE(memcmp(receipt.effects.effects[1].body + 182U,
+                    activity.payload_hash, 32U) == 0);
+                REQUIRE(memcmp(receipt.effects.effects[1].body + 214U,
+                    activity.idempotency_key, 32U) == 0);
+                REQUIRE(lxp_activity_signing_preimage(&activity, authorization) == LXP_OK);
+                REQUIRE(memcmp(receipt.authorization_hash, authorization, 32U) == 0);
+            }
             REQUIRE(receipt.parameter_version == 1U);
             REQUIRE(response.payload_length <= sizeof(record->receipt));
             if (replay) {

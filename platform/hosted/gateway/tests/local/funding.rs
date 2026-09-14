@@ -679,7 +679,13 @@ fn start_node(
     let treasury_key = SigningKey::from_bytes(&treasury_seed)
         .verifying_key()
         .to_bytes();
-    let genesis = funded_genesis(&root, &builder, &sequencer_seed, profile, funding.withdrawal);
+    let genesis = funded_genesis(
+        &root,
+        &builder,
+        &sequencer_seed,
+        profile,
+        funding.withdrawal,
+    );
     let settlement = start_checkpoint_settlement(funding, &root, &genesis);
     let replica_token = token();
     let program_token = token();

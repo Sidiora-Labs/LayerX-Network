@@ -2283,7 +2283,7 @@ lxp_result lxp_ctx_bind_ledger_receipt(
         memcmp(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U) != 0 ||
         ctx->ledger_admission.activity_type !=
             ((uint32_t)LXP_MODULE_ASSET << 16U | input->operation) ||
-        (input->operation != 5U && input->operation != 6U &&
+        (input->operation != 5U && input->operation != 6U && input->operation != 9U &&
          input->operation != 10U && input->operation != 11U) ||
         lxp_u128_is_zero(input->amount) ||
         input->leg_count != 1U || input->global_sequence != ctx->global_sequence ||
@@ -2305,6 +2305,34 @@ lxp_result lxp_ctx_bind_ledger_receipt(
         lxp_u128_cmp(expected_from, input->from_balance_after) != 0 ||
         lxp_u128_cmp(expected_to, input->to_balance_after) != 0)
         return LXP_ERR_NON_CANONICAL;
+    if (input->operation == 9U) {
+        const lx_asset_runtime *runtime = lxp_ctx_module_runtime(ctx);
+        lx_account *from = NULL;
+        lx_account *to = NULL;
+        const uint8_t *stored = NULL;
+        size_t length = 0U;
+        uint8_t key[LX_WITHDRAWAL_STATE_KEY_BYTES];
+        lx_withdrawal_record withdrawal;
+        (void)memcpy(key, "withdrawal:", 11U);
+        (void)memcpy(key + 11U, input->context_hash, 32U);
+        if (runtime == NULL ||
+            lxp_ctx_account_find(ctx, input->from, &from) != LXP_OK ||
+            lxp_ctx_account_find(ctx, input->to, &to) != LXP_OK ||
+            from->kind != LX_ACCOUNT_AGENT_MAIN ||
+            to->kind != LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS ||
+            input->from_sequence == UINT64_MAX ||
+            from->next_sequence != input->from_sequence + 1U ||
+            input->from_sequence != ctx->ledger_admission.next_sequence ||
+            memcmp(input->from, ctx->ledger_admission.account_id, 32U) != 0 ||
+            lxp_ctx_kv_get(ctx, key, sizeof(key), &stored, &length) != LXP_OK ||
+            lx_withdrawal_state_decode(key, sizeof(key), stored, length, &withdrawal) != LXP_OK ||
+            withdrawal.request.network_id != runtime->network_id ||
+            memcmp(withdrawal.request.withdrawal_id, ctx->activity_id, 32U) != 0 ||
+            memcmp(withdrawal.request.account_id, input->from, 32U) != 0 ||
+            memcmp(withdrawal.request.asset_id, input->asset, 32U) != 0 ||
+            lxp_u128_cmp(withdrawal.request.amount, input->amount) != 0)
+            return LXP_ERR_NON_CANONICAL;
+    }
     {
         size_t from_matches = 0U;
         size_t to_matches = 0U;

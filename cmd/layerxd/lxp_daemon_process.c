@@ -5677,6 +5677,8 @@ static lxp_result open_process(lxp_daemon_process *process,
             &process->kernel, 0U, &fee_schedule, occupancy_asset_id);
     }
     bearer = required_environment("LAYERX_NODE_PROGRAM_BEARER_TOKEN");
+    if (status == LXP_OK) stage = "replica prefix recovery";
+    if (status == LXP_OK) status = replicate_authority_history(process);
     if (status == LXP_OK) stage = "protocol owner";
     if (status == LXP_OK)
         status = lxp_daemon_protocol_owner_attach(
