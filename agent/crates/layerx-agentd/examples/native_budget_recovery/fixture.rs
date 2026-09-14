@@ -40,6 +40,7 @@ pub struct Fixture {
     key: SigningKey,
     request: u64,
     registered_batch: u64,
+    fee_authority: super::fees::Authority,
     clock: std::sync::Arc<layerx_client::runtime_clock::RuntimeClock>,
 }
 
@@ -100,12 +101,18 @@ impl Fixture {
             format!("did:layerx:{}", hex::encode(&public)).as_bytes(),
         ))?;
         let mut client = checked(Client::connect(configuration(&socket)))?;
-        let registry = checked(client.preparation_state(&did, 8000))?.module_registry;
+        let initial = checked(client.preparation_state(&did, 8000))?;
+        let registry = initial.module_registry;
         let authority = checked(EvidenceAuthority::native_budget_authority(
             3,
             77,
             Path::new(&std::env::var("LAYERX_TEST_NATIVE_BUDGET_AUTHORITY")?),
         ))?;
+        let fee_authority = super::fees::authority(
+            Path::new(&std::env::var("LAYERX_TEST_NATIVE_BUDGET_AUTHORITY")?),
+            client.handshake().node().authorised_sequencer_key,
+            initial.kernel_epoch,
+        )?;
         let clock = layerx_client::runtime_clock::RuntimeClock::from_environment()?;
         Ok(Self {
             client,
@@ -119,6 +126,7 @@ impl Fixture {
             key,
             request: 0,
             registered_batch: 0,
+            fee_authority,
             clock,
         })
     }
@@ -130,6 +138,12 @@ impl Fixture {
 
     pub fn signed(&mut self, kind: u32, id: u8, payload: Vec<u8>) -> Result<VerifiedSubmission> {
         checked(self.client.reconnect())?;
+        let funding = super::fees::funding(
+            &mut self.client,
+            &self.fee_authority,
+            &self.did,
+            self.public,
+        )?;
         let mut boundary = checked(ProductionCorePreparationBoundary::new(
             &mut self.client,
             8001,
@@ -138,7 +152,7 @@ impl Fixture {
             &mut boundary,
             PreparationDefaults {
                 timestamp_span: 30_000,
-                fee_limit: Amount::from_u128(1_000_000),
+                fee_limit: Amount::from_u128(funding.balance),
                 maximum_payload_bytes: 4096,
             },
             PrepareRequest {
@@ -154,11 +168,11 @@ impl Fixture {
             },
             3,
         ))?;
-        self.registry = boundary
+        let state = boundary
             .last_state()
-            .ok_or("preparation snapshot missing")?
-            .module_registry
-            .clone();
+            .ok_or("preparation snapshot missing")?;
+        assert_eq!(state.observed_head_sequence, funding.sequence);
+        self.registry = state.module_registry.clone();
         if kind == 0x0003_0006 {
             let Some(layerx_crypto::disclosure::DisclosedNativeOperation::BudgetSpend(spend)) =
                 &prepared.disclosure.native_operation
@@ -244,7 +258,15 @@ impl Fixture {
         use layerx_types::activity::{EnvelopeBuilder, Signature, TimestampBound};
         use layerx_types::payload::Payload;
         checked(self.client.reconnect())?;
+        let funding = super::fees::funding(
+            &mut self.client,
+            &self.fee_authority,
+            &self.did,
+            self.public,
+        )?;
         let state = checked(self.client.preparation_state(&self.did, 8200))?;
+        assert_eq!(state.observed_head_sequence, funding.sequence);
+        assert_eq!(state.observed_state_root, funding.root);
         let kind = checked(ActivityType::from_u32(kind))?;
         let payload = checked(Payload::new(&state.module_registry, kind, bytes))?;
         let payload_hash = checked(layerx_wire::hash::payload_hash_for(&payload))?;
@@ -266,7 +288,7 @@ impl Fixture {
                     )?)
                 })
                 .and_then(|value| value.idempotency_key(IdempotencyKey::new([id; 32])))
-                .and_then(|value| value.fee_limit(Amount::from_u128(1_000_000)))
+                .and_then(|value| value.fee_limit(Amount::from_u128(funding.balance)))
                 .and_then(|value| value.payload_hash(payload_hash))
                 .and_then(|value| value.payload(payload)),
         )?;
@@ -396,7 +418,9 @@ impl Fixture {
         if std::fs::metadata(&response)?.len() > 1_048_576 {
             return Err("publication response exceeded bound".into());
         }
-        let response: serde_json::Value = serde_json::from_slice(&std::fs::read(response)?)?;
+        let response_bytes = std::fs::read(response)
+            .map_err(|error| format!("checkpoint response read: {error}"))?;
+        let response: serde_json::Value = serde_json::from_slice(&response_bytes)?;
         if response.get("error").is_some() {
             return Err(format!("publication refused: {response}").into());
         }

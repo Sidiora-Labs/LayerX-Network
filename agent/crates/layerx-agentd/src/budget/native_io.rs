@@ -268,15 +268,15 @@ pub(super) fn history(
                 )
                 .map_err(|_| Error::History)?;
             for item in page.items {
-                if item.kind != HistoryKind::Receipt {
-                    return Err(Error::History);
-                }
                 let proof =
                     HistoryProof::decode(item.proof_material()).map_err(|_| Error::History)?;
                 if proof.header != header.canonical_bytes() {
                     return Err(Error::History);
                 }
                 if item.global_sequence == header.header.last_sequence() {
+                    if item.kind != HistoryKind::Receipt {
+                        return Err(Error::History);
+                    }
                     layerx_wire::batch_maintenance::decode_maintenance(item.canonical_bytes())
                         .map_err(|_| Error::History)?
                         .verify_header(&header.header)
@@ -289,7 +289,11 @@ pub(super) fn history(
                     ));
                     continue;
                 }
-                history.push(activity_entry(client, registry, &item, proof)?);
+                history.push(match item.kind {
+                    HistoryKind::Receipt => activity_entry(client, registry, &item, proof)?,
+                    HistoryKind::Activity => receipt_entry(client, registry, &item, &proof)?,
+                    HistoryKind::Event => return Err(Error::History),
+                });
             }
             cursor = page.cursor;
             if cursor.is_none() {
@@ -390,6 +394,55 @@ fn activity_entry(
             proof.proof,
             proof.header,
             proof.header_signature,
+        ),
+    ))
+}
+
+fn receipt_entry(
+    client: &mut Client,
+    registry: &ModuleRegistry,
+    item: &layerx_client::read::HistoryItem,
+    inclusion: &HistoryProof,
+) -> Result<RawActivityReceiptEvidence, Error> {
+    let activity = layerx_wire::activity::decode_signed(item.canonical_bytes(), registry)
+        .map_err(|_| Error::Activity)?;
+    if layerx_wire::activity::encode_signed(&activity).map_err(|_| Error::Activity)?
+        != item.canonical_bytes()
+    {
+        return Err(Error::Activity);
+    }
+    let id = layerx_wire::hash::activity_id(&activity).map_err(|_| Error::Activity)?;
+    let receipt = client
+        .proof_bundle(ProofBundleSelector::Receipt(id), 6203, registry)
+        .map_err(|_| Error::Receipt)?;
+    let VerifiedProofBundle::Receipt {
+        canonical_bytes,
+        activity_id,
+        proof,
+        signed_header,
+    } = receipt
+    else {
+        return Err(Error::Receipt);
+    };
+    let decoded = decode(&canonical_bytes).map_err(|_| Error::Receipt)?;
+    let protocol = decoded.protocol().ok_or(Error::Receipt)?;
+    if activity_id != id
+        || protocol.activity_id() != id
+        || protocol.global_sequence() != item.global_sequence
+        || signed_header.canonical_bytes != inclusion.header
+        || signed_header.signature != inclusion.header_signature
+        || proof.leaf_index() != inclusion.proof.leaf_index()
+        || inclusion.proof.leaf_count().checked_add(1) != Some(proof.leaf_count())
+    {
+        return Err(Error::History);
+    }
+    Ok(RawActivityReceiptEvidence::from_signed_inclusion(
+        item.canonical_bytes().to_vec(),
+        RawReceiptEvidence::new(
+            canonical_bytes,
+            proof,
+            signed_header.canonical_bytes,
+            signed_header.signature,
         ),
     ))
 }

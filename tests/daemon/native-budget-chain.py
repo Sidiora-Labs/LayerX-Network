@@ -26,9 +26,21 @@ def client_directory(path):
 
 
 def client_json(path, value):
-    CODEC.atomic_json(path, value)
-    os.chown(path, 4021, 4021)
-    path.chmod(0o600)
+    pending = path.with_name(path.name + '.pending')
+    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'w') as output:
+        json.dump(value, output, sort_keys=True)
+        output.write('\n')
+        output.flush()
+        os.fchown(output.fileno(), 4021, 4021)
+        os.fchmod(output.fileno(), 0o600)
+        os.fsync(output.fileno())
+    os.replace(pending, path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def unique_fields(pairs):
