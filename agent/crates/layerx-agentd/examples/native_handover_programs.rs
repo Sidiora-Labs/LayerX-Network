@@ -105,23 +105,30 @@ fn funded_fee_limit(client: &mut Client, route: &mut NativeReadRoute, did: &Did)
         399,
         authority,
     ))?;
-    let evidence = checked(layerx_client::evidence::decode_nested_evidence(
+    let evidence = checked(layerx_client::evidence::verify_account_evidence(
+        account.canonical_bytes(),
         account.proof_material(),
-        3,
-        77,
+        account_id,
+        Some(fee_asset),
+        layerx_client::evidence::AccountEvidencePolicy {
+            expected_protocol_version: 3,
+            expected_network_id: 77,
+            handshake_sequencer_key: interval.public_key(),
+            root_selector: layerx_client::evidence::RootSelector::Latest,
+        },
     ))?;
     checked(history.verify_header(
-        &evidence.signed_header.canonical_bytes,
-        &evidence.signed_header.signature,
+        &evidence.signed_header().canonical_bytes,
+        &evidence.signed_header().signature,
     ))?;
     let account = checked(layerx_proof::state::decode_account_value(
         account_id,
         account.canonical_bytes(),
     ))?;
     assert!(!account.frozen);
-    let held = account.asset.ok_or("missing funded fee asset")?;
-    assert_eq!(held.asset_id, fee_asset);
-    Ok(held.balance.min(1_000_000_000_000))
+    let funding = account.asset.ok_or("missing funded fee asset")?;
+    assert_eq!(funding.asset_id, fee_asset);
+    Ok(funding.balance.min(1_000_000_000_000))
 }
 fn signed(
     client: &mut Client,
