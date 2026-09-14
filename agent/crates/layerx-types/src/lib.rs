@@ -5,6 +5,8 @@ pub mod activity;
 pub mod amount;
 pub mod batch;
 pub mod checkpoint;
+pub mod clock;
+pub mod clock_protocol;
 pub mod error;
 pub mod ids;
 pub mod intent;

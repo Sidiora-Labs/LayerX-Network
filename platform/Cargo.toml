@@ -7,6 +7,7 @@ members = [
     "hosted/faucet",
     "hosted/core",
     "hosted/authority",
+    "hosted/runtime-clock",
     "hosted/agent-boundary",
     "hosted/identity",
     "hosted/internal",
