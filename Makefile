@@ -1990,10 +1990,16 @@ test-daemon-maintenance-protocol: $(BUILD_DIR)/tests/lxp_test_maintenance_protoc
 
 $(BUILD_DIR)/tests/lxp_test_finality_json: tests/daemon/lxp_test_finality_json.c \
 		cmd/layerxd/lxp_daemon_finality_authority.c \
-		cmd/layerxd/lxp_daemon_finality_authority.h $(LIBRARY)
+		cmd/layerxd/lxp_daemon_finality_authority.h \
+		cmd/layerxd/lxp_daemon_evidence.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(LIBRARY) \
-		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< \
+		cmd/layerxd/lxp_daemon_evidence.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-daemon-finality-authority: $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority $(BUILD_DIR)/tests/lxp_test_finality_json layerxd layerx-genesis-build
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_finality_json
