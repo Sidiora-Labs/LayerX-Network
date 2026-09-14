@@ -1,10 +1,9 @@
 #!/bin/sh
-# Replays the registry's exact bwrap invocation (platform/hosted/registry/src/builder.rs)
-# against the flattened rootfs for one source tree and one plan command, and
-# checks the declared artifact exists.
+# Runs one source tree and plan command with the registry's namespace and
+# filesystem isolation, then checks the declared artifact exists.
 set -eu
 rootfs=$1; source=$2; artifact=$3; shift 3
-bwrap --unshare-all --die-with-parent --new-session --disable-userns --cap-drop ALL --clearenv \
+bwrap --unshare-user --unshare-all --die-with-parent --new-session --disable-userns --cap-drop ALL --clearenv \
     --ro-bind "$rootfs" / --dir /build --bind "$source" /build \
     --dir /tmp --tmpfs /tmp --proc /proc --dev /dev \
     --chdir /build --setenv HOME /tmp --setenv TMPDIR /tmp \
