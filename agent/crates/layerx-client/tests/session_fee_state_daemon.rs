@@ -119,7 +119,7 @@ fn real_daemon_session_fee_state() {
         evidence.display()
     );
     let stdout = checked(std::str::from_utf8(&output.stdout));
-    assert!(stdout.matches("actual Rust Client session fee state matches committed native grant and fee counters").count() >= 6,
+    assert_eq!(stdout.matches("actual Rust Client session fee state matches committed native grant and fee counters").count(), 9,
         "native success, charge, revocation, replacement and restart probes missing; evidence {}", evidence.display());
     println!(
         "actual native and Rust session fee qualification evidence: {}",
