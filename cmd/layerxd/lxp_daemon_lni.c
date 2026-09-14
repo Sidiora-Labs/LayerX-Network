@@ -1359,25 +1359,25 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     static const char *sequencer_capabilities[] = {
         "asset_read", "authenticated_durable_submit", "batch_header", "fee_estimate", "node_info",
         "preparation_state",
-        "receipt_lookup", "submit"
+        "receipt_lookup", "session_fee_state", "submit"
     };
     static const char *evidence_capabilities[] = {
         "account_read", "asset_read", "authenticated_durable_submit", "batch_header",
         "checkpoint", "fee_estimate", "historical_proofs", "history_range", "node_info",
-        "preparation_state", "proof_bundle", "receipt_lookup", "submit"
+        "preparation_state", "proof_bundle", "receipt_lookup", "session_fee_state", "submit"
     };
     static const char *finalizer_capabilities[] = {
         "account_read", "asset_read", "authenticated_durable_submit", "batch_header",
         "checkpoint", "fee_estimate", "finality_evidence_register", "historical_proofs", "history_range",
-        "node_info", "preparation_state", "proof_bundle", "receipt_lookup",
+        "node_info", "preparation_state", "proof_bundle", "receipt_lookup", "session_fee_state",
         "submit"
     };
     static const char *reader_capabilities[] = {
-        "asset_read", "batch_header", "fee_estimate", "node_info", "receipt_lookup"
+        "asset_read", "batch_header", "fee_estimate", "node_info", "receipt_lookup", "session_fee_state"
     };
     static const char *evidence_reader_capabilities[] = {
         "account_read", "asset_read", "batch_header", "checkpoint", "fee_estimate", "historical_proofs", "history_range",
-        "node_info", "proof_bundle", "receipt_lookup"
+        "node_info", "proof_bundle", "receipt_lookup", "session_fee_state"
     };
     static const char simulate_capability[] = "simulate";
     bool evidence_available = server->owner->evidence_store != NULL;
@@ -1391,7 +1391,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                   sequencer_capabilities) :
             (evidence_available ? evidence_reader_capabilities :
                                   reader_capabilities);
-    const char *capabilities[17];
+    const char *capabilities[18];
     uint8_t payload[512];
     lxp_sequencer_authorization authorization;
     uint64_t head;
