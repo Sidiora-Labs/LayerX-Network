@@ -56,6 +56,18 @@ pub fn verify_digest(
     signature: &[u8; 64],
     digest: &[u8; 32],
 ) -> Result<(), VerifyError> {
+    verify_message(public_key, signature, digest)
+}
+
+/// Verifies the exact native raw-message signature domain.
+///
+/// # Errors
+/// Refuses the same noncanonical, weak keys and signatures as digest verification.
+pub fn verify_message(
+    public_key: &[u8; 32],
+    signature: &[u8; 64],
+    message: &[u8],
+) -> Result<(), VerifyError> {
     if !public_key_is_canonical(public_key) {
         return Err(VerifyError::BadSignature);
     }
@@ -66,6 +78,6 @@ pub fn verify_digest(
     }
     let signature = Signature::from_bytes(signature);
     verifying_key
-        .verify_strict(digest, &signature)
+        .verify_strict(message, &signature)
         .map_err(|_| VerifyError::BadSignature)
 }
