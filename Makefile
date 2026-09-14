@@ -45,9 +45,6 @@ LIBRARY := $(BUILD_DIR)/liblayerx.a
 TEST_LIB_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/test-obj/%.o,$(LIB_SOURCES))
 TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 
-$(LIB_OBJECTS) $(TEST_LIB_OBJECTS): CFLAGS += $(CONSENSUS_CFLAGS)
-$(LIB_OBJECTS) $(TEST_LIB_OBJECTS): Makefile
-
 .PHONY: all build clean reproducible layerxd layerx-genesis-build test \
 	test-harness list-tests \
 	test-result test-protocol test-arena test-sanitizer-smoke \
@@ -197,6 +194,9 @@ mirror-verify-live:
 		./scripts/qualify-mirror-verification-live.sh
 
 build: $(LIBRARY)
+
+$(LIB_OBJECTS) $(TEST_LIB_OBJECTS): CFLAGS += $(CONSENSUS_CFLAGS)
+$(LIB_OBJECTS) $(TEST_LIB_OBJECTS): Makefile
 
 $(LIBRARY): $(LIB_OBJECTS)
 	@mkdir -p $(@D)
