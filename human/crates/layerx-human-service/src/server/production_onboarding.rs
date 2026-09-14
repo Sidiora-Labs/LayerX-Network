@@ -5,6 +5,14 @@ use crate::onboarding::{NativePlan, NativeSponsor, OnboardingStatus};
 use crate::store::{PrincipalId, PrincipalScope};
 use layerx_intents::owner_activity::OwnerEnvelopeContext;
 
+struct NativeExecution<'a> {
+    principal: &'a PrincipalId,
+    plan: &'a NativePlan,
+    trace: &'a TraceId,
+    observed_at: u64,
+    registry: &'a layerx_types::payload::ModuleRegistry,
+}
+
 impl ProductionComponents {
     pub(super) fn advance_native_onboarding(
         &self,
@@ -14,25 +22,14 @@ impl ProductionComponents {
     ) -> Result<OnboardingStatus, ApiFailure> {
         let trace = TraceId::parse(trace).map_err(|_| ApiFailure::invalid_request(None))?;
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-        let mut journey = {
-            let mut scope = store
-                .principal(principal)
-                .map_err(|_| ApiFailure::unavailable())?;
-            let mut journey = OnboardingJourney::load(&scope)
-                .map_err(|_| ApiFailure::upstream_degraded())?
-                .ok_or_else(ApiFailure::not_found)?;
-            self.custody
-                .resume_onboarding_local(&mut journey, &mut scope, observed_at)
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-            if matches!(
-                journey.status().state(),
-                crate::onboarding::OnboardingState::Complete
-                    | crate::onboarding::OnboardingState::Refused
-            ) {
-                return Ok(journey.status());
-            }
-            journey
-        };
+        let mut journey = self.load_native_onboarding(&mut store, principal, observed_at)?;
+        if matches!(
+            journey.status().state(),
+            crate::onboarding::OnboardingState::Complete
+                | crate::onboarding::OnboardingState::Refused
+        ) {
+            return Ok(journey.status());
+        }
         if principal == &self.onboarding_sponsor_principal {
             return self.finalize_onboarding_sponsor(
                 &mut store,
@@ -91,16 +88,59 @@ impl ProductionComponents {
             )?
             .submit_prepared(prepared)
             .map_err(|_| ApiFailure::upstream_degraded())?;
+        self.fund_native_onboarding(
+            &NativeExecution {
+                principal,
+                plan: &plan,
+                trace: &trace,
+                observed_at,
+                registry: &registry,
+            },
+            &mut agent,
+            &registration,
+        )
+    }
+
+    fn load_native_onboarding(
+        &self,
+        store: &mut PrincipalStore,
+        principal: &PrincipalId,
+        observed_at: u64,
+    ) -> Result<OnboardingJourney, ApiFailure> {
+        let mut scope = store
+            .principal(principal)
+            .map_err(|_| ApiFailure::unavailable())?;
+        let mut journey = OnboardingJourney::load(&scope)
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .ok_or_else(ApiFailure::not_found)?;
+        self.custody
+            .resume_onboarding_local(&mut journey, &mut scope, observed_at)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(journey)
+    }
+
+    fn fund_native_onboarding(
+        &self,
+        stage: &NativeExecution<'_>,
+        agent: &mut AgentRuntime,
+        registration: &crate::agents::ProtocolEvidence,
+    ) -> Result<OnboardingStatus, ApiFailure> {
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
         {
             let mut scope = store
-                .principal(principal)
+                .principal(stage.principal)
                 .map_err(|_| ApiFailure::unavailable())?;
-            journey = OnboardingJourney::load(&scope)
+            let mut journey = OnboardingJourney::load(&scope)
                 .map_err(|_| ApiFailure::upstream_degraded())?
                 .ok_or_else(ApiFailure::not_found)?;
             journey
-                .accept_native_registration(&mut scope, &plan, &registration, &trace, observed_at)
+                .accept_native_registration(
+                    &mut scope,
+                    stage.plan,
+                    registration,
+                    stage.trace,
+                    stage.observed_at,
+                )
                 .map_err(|_| ApiFailure::upstream_degraded())?;
             if journey.status().state() == crate::onboarding::OnboardingState::Refused {
                 return Ok(journey.status());
@@ -111,27 +151,30 @@ impl ProductionComponents {
                 .principal(&self.onboarding_sponsor_principal)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
             let mut adapter = self.onboarding_adapter(
-                &mut agent,
-                &trace,
+                agent,
+                stage.trace,
                 self.agent_actor.clone(),
                 self.agent_authority.clone(),
             )?;
-            let started_at = retained_stage_time(&mut scope, plan.funding_action, observed_at)?;
+            let started_at =
+                retained_stage_time(&mut scope, stage.plan.funding_action, stage.observed_at)?;
             adapter
                 .prepare_native_funding(
                     &mut scope,
                     &NativeFundingRequest {
                         stage: CreationStage::MainFunding,
-                        source: plan
+                        source: stage
+                            .plan
                             .source_account()
                             .map_err(|_| ApiFailure::upstream_degraded())?,
-                        destination: plan
+                        destination: stage
+                            .plan
                             .target_account()
                             .map_err(|_| ApiFailure::upstream_degraded())?,
-                        asset: plan.asset,
-                        amount: plan.initial_funding,
-                        action_key: plan.funding_action,
-                        network_id: plan.network_id,
+                        asset: stage.plan.asset,
+                        amount: stage.plan.initial_funding,
+                        action_key: stage.plan.funding_action,
+                        network_id: stage.plan.network_id,
                         started_at,
                     },
                 )
@@ -140,23 +183,37 @@ impl ProductionComponents {
         drop(store);
         let evidence = self
             .onboarding_adapter(
-                &mut agent,
-                &trace,
+                agent,
+                stage.trace,
                 self.agent_actor.clone(),
                 self.agent_authority.clone(),
             )?
             .submit_prepared(prepared)
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let funded = crate::agents::NativeFundingEvidence { evidence, intent };
+        self.recover_native_onboarding(stage, &funded)
+    }
+
+    fn recover_native_onboarding(
+        &self,
+        stage: &NativeExecution<'_>,
+        funded: &crate::agents::NativeFundingEvidence,
+    ) -> Result<OnboardingStatus, ApiFailure> {
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
         let mut scope = store
-            .principal(principal)
+            .principal(stage.principal)
             .map_err(|_| ApiFailure::unavailable())?;
-        journey = OnboardingJourney::load(&scope)
+        let mut journey = OnboardingJourney::load(&scope)
             .map_err(|_| ApiFailure::upstream_degraded())?
             .ok_or_else(ApiFailure::not_found)?;
         journey
-            .accept_native_funding(&mut scope, &plan, &funded, &registry, observed_at)
+            .accept_native_funding(
+                &mut scope,
+                stage.plan,
+                funded,
+                stage.registry,
+                stage.observed_at,
+            )
             .map_err(|_| ApiFailure::upstream_degraded())?;
         if journey.status().state() == crate::onboarding::OnboardingState::Refused {
             return Ok(journey.status());
@@ -165,36 +222,45 @@ impl ProductionComponents {
         let owner = owner::resolve_principal_owner(self, &scope, &mut agent)?;
         let mut adapter = self.onboarding_adapter(
             &mut agent,
-            &trace,
+            stage.trace,
             owner.actor.clone(),
             owner.authority.clone(),
         )?;
         let prepared = adapter
             .prepare_lifecycle_intent(
                 &mut scope,
-                &registry,
-                plan.recovery_intent()
+                stage.registry,
+                stage
+                    .plan
+                    .recovery_intent()
                     .map_err(|_| ApiFailure::upstream_degraded())?,
-                plan.recovery_action,
+                stage.plan.recovery_action,
                 primary_key()?,
-                observed_at,
+                stage.observed_at,
             )
             .map_err(|_| ApiFailure::upstream_degraded())?;
         drop(scope);
         drop(store);
         let recovery = self
-            .onboarding_adapter(&mut agent, &trace, owner.actor, owner.authority)?
+            .onboarding_adapter(&mut agent, stage.trace, owner.actor, owner.authority)?
             .submit_prepared(prepared)
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
         let mut scope = store
-            .principal(principal)
+            .principal(stage.principal)
             .map_err(|_| ApiFailure::unavailable())?;
         journey = OnboardingJourney::load(&scope)
             .map_err(|_| ApiFailure::upstream_degraded())?
             .ok_or_else(ApiFailure::not_found)?;
         journey
-            .accept_native_recovery(&mut scope, &plan, &recovery, &registry, &trace, observed_at)
+            .accept_native_recovery(
+                &mut scope,
+                stage.plan,
+                &recovery,
+                stage.registry,
+                stage.trace,
+                stage.observed_at,
+            )
             .map_err(|_| ApiFailure::upstream_degraded())?;
         Ok(journey.status())
     }
