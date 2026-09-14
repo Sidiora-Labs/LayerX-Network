@@ -466,20 +466,20 @@ impl CreationJourney {
             now,
             evidence.signed_activity.clone(),
         )?;
-        let state = self.stage_mut(stage);
-        if state
+        let progress = self.stage_mut(stage);
+        if progress
             .evidence_digest
             .is_some_and(|old| old != receipt_digest)
         {
             return Err(AgentCreationError::EvidenceConflict);
         }
-        state.state = if protocol.result_code() == 0 {
+        progress.state = if protocol.result_code() == 0 {
             StageState::ReceiptVerified
         } else {
             StageState::Refused
         };
-        state.evidence_digest = Some(receipt_digest);
-        state.object_id = Some(evidence.activity_id);
+        progress.evidence_digest = Some(receipt_digest);
+        progress.object_id = Some(evidence.activity_id);
         if stage == CreationStage::DidRegistration && protocol.result_code() == 0 {
             self.stage_mut(CreationStage::Custody).state = StageState::ReceiptVerified;
             self.stage_mut(CreationStage::Custody).evidence_digest = Some(receipt_digest);

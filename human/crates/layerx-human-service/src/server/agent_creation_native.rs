@@ -244,7 +244,7 @@ impl NativeAgentCreationContract for ProductionAgentCreation<'_> {
 }
 
 impl ProductionAgentCreation<'_> {
-    fn retained_protocol_evidence(
+    pub(super) fn retained_protocol_evidence(
         &mut self,
         scope: &mut PrincipalScope<'_>,
         action: &ProtocolAction,
