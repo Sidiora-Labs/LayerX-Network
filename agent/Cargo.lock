@@ -803,6 +803,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-paxeer-verifier"
+version = "0.1.0"
+dependencies = [
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
+ "rustls",
+ "sha3",
+]
+
+[[package]]
 name = "layerx-program-sdk"
 version = "0.1.0"
 dependencies = [
