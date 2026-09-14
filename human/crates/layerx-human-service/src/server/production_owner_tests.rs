@@ -1,33 +1,55 @@
 use super::*;
 use layerx_types::payload::{ActivityType, ModuleRegistration, ModuleRegistry};
 
-fn native_identity() -> (Did, [u8; 32], super::super::super::agent_runtime::AgentCoreIdentity) {
-    const ACTIVITY: &[u8] = include_bytes!("../../../../../tests/fixtures/governance/owner-rotation/activity");
-    const RECEIPT: &[u8] = include_bytes!("../../../../../tests/fixtures/governance/owner-rotation/receipt");
-    const SEQUENCER: &[u8; 32] = include_bytes!("../../../../../tests/fixtures/governance/owner-rotation/sequencer-public");
+fn native_identity() -> (
+    Did,
+    [u8; 32],
+    super::super::super::agent_runtime::AgentCoreIdentity,
+) {
+    const ACTIVITY: &[u8] =
+        include_bytes!("../../../../../tests/fixtures/governance/owner-rotation/activity");
+    const RECEIPT: &[u8] =
+        include_bytes!("../../../../../tests/fixtures/governance/owner-rotation/receipt");
+    const SEQUENCER: &[u8; 32] =
+        include_bytes!("../../../../../tests/fixtures/governance/owner-rotation/sequencer-public");
     let activity_type = ActivityType::new(ModuleId::Governance, 2).expect("native rotation type");
-    let registry = ModuleRegistry::new(&[
-        ModuleRegistration::new(ModuleId::Governance, &[activity_type]).expect("registry row"),
-    ]).expect("registry");
-    let activity = layerx_wire::activity::decode_signed(ACTIVITY, &registry).expect("actual native rotation");
+    let registry =
+        ModuleRegistry::new(&[
+            ModuleRegistration::new(ModuleId::Governance, &[activity_type]).expect("registry row"),
+        ])
+        .expect("registry");
+    let activity =
+        layerx_wire::activity::decode_signed(ACTIVITY, &registry).expect("actual native rotation");
     let receipt = layerx_proof::receipt::verify_sequencer_signature(RECEIPT, *SEQUENCER)
         .expect("actual signed native receipt");
     let receipt = receipt.protocol().expect("native receipt");
-    assert_eq!(receipt.activity_id(), layerx_wire::hash::activity_id(&activity).expect("activity id"));
+    assert_eq!(
+        receipt.activity_id(),
+        layerx_wire::hash::activity_id(&activity).expect("activity id")
+    );
     assert_eq!(receipt.result_code(), 0);
-    let state = receipt.effects().iter().find(|effect| effect.module_id() == 7 && effect.event_type() == 0x7110)
-        .expect("executed native identity transition").body().to_vec();
+    let state = receipt
+        .effects()
+        .iter()
+        .find(|effect| effect.module_id() == 7 && effect.event_type() == 0x7110)
+        .expect("executed native identity transition")
+        .body()
+        .to_vec();
     let did = Did::new(activity.actor_did()).expect("actual owner DID");
     let decoded = OwnerRotationState::decode(&state, &did).expect("canonical native identity");
     let key = decoded.primary_public_key;
-    (did, key, super::super::super::agent_runtime::AgentCoreIdentity {
-        head_sequence: decoded.observed_sequence,
-        revocation_sequence: decoded.revocation_sequence,
-        verification: 1,
-        frozen: false,
-        authorities: vec![(1, key)],
-        canonical_bytes: state,
-    })
+    (
+        did,
+        key,
+        super::super::super::agent_runtime::AgentCoreIdentity {
+            head_sequence: decoded.observed_sequence,
+            revocation_sequence: decoded.revocation_sequence,
+            verification: 1,
+            frozen: false,
+            authorities: vec![(1, key)],
+            canonical_bytes: state,
+        },
+    )
 }
 
 #[test]
