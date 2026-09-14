@@ -48,10 +48,17 @@ jobs:
       - name: Install Human and custody fixture dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-venv python3-pytest python3-yaml
+          sudo apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config python3-venv python3-pytest python3-yaml
           python3 -m venv --system-site-packages .lane-venv
           .lane-venv/bin/python -m pip install -r tests/bridge/requirements.txt
           echo "$PWD/.lane-venv/bin" >> "$GITHUB_PATH"
+      - name: Build the real withdrawal fixture prerequisites
+        run: |
+          make -j4 CC=gcc LXP_REVISION="$(git rev-parse HEAD)" \
+            PROGRAMS_TARGET_DIR="$CARGO_TARGET_DIR" \
+            PROGRAMS_RUNTIME_LIB="$CARGO_TARGET_DIR/debug/liblayerx_programs_sandbox.a" \
+            build/bin/layerxd build/bin/layerx-genesis-build build/tests/bridge/sign-credit
+          echo "LAYERX_TEST_SIGN_CREDIT_BIN=$PWD/build/tests/bridge/sign-credit" >> "$GITHUB_ENV"
       - name: Install locked Human web dependencies
         run: make human-js-install
       - name: Enforce component-library integrity, copy, policies, and strict lints
