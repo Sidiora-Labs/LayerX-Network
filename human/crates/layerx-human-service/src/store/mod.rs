@@ -2,9 +2,9 @@
 
 mod codec;
 mod migrate;
+mod provider;
 mod retention;
 mod tenancy;
-mod provider;
 pub use provider::PrincipalTenancyAuthority;
 
 pub use migrate::MigrationError;

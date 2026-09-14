@@ -30,14 +30,19 @@ fn run() -> Result<(), String> {
         clock.clone(),
     )?);
     let recipient = layerx_human_service::server::production_components::RecipientServer::bind(
-        Arc::clone(&backend), layerx_human_service::server::production_components::RecipientServerConfig {
+        Arc::clone(&backend),
+        layerx_human_service::server::production_components::RecipientServerConfig {
             socket: PathBuf::from(required("LAYERX_HUMAN_RECIPIENT_SOCKET")?),
             caller_uid: required_number("LAYERX_HUMAN_RECIPIENT_CALLER_UID")?,
             caller_gid: required_number("LAYERX_HUMAN_RECIPIENT_CALLER_GID")?,
-            deadline: Duration::from_secs(required_number("LAYERX_HUMAN_RECIPIENT_DEADLINE_SECONDS")?),
+            deadline: Duration::from_secs(required_number(
+                "LAYERX_HUMAN_RECIPIENT_DEADLINE_SECONDS",
+            )?),
             clock: layerx_client::runtime_clock::RuntimeClock::from_environment()
                 .map_err(|_| "the recipient clock authority is unavailable".to_owned())?,
-        }).map_err(|_| "the recipient listener cannot bind".to_owned())?;
+        },
+    )
+    .map_err(|_| "the recipient listener cannot bind".to_owned())?;
     let server = HumanComponentServer::new_maintained(
         backend,
         Duration::from_secs(required_number(
@@ -64,7 +69,9 @@ fn run() -> Result<(), String> {
     });
     let result = server.run();
     shutdown.request();
-    worker.join().map_err(|_| "the recipient listener panicked".to_owned())?
+    worker
+        .join()
+        .map_err(|_| "the recipient listener panicked".to_owned())?
         .map_err(|_| "the recipient listener failed".to_owned())?;
     result.map_err(|_| "the privileged component listener failed".to_owned())
 }

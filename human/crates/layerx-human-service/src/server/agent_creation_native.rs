@@ -187,7 +187,9 @@ impl ProductionAgentCreation<'_> {
     /// # Errors
     /// Refuses incorrect native account, asset, custody or repeated request bindings.
     pub fn prepare_native_funding(
-        &mut self, scope: &mut PrincipalScope<'_>, request: &NativeFundingRequest,
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        request: &NativeFundingRequest,
     ) -> Result<(PreparedProtocolSubmission, LxpSend), AgentFailure> {
         let key = KeyId::new("human-primary")
             .map_err(|_| AgentFailure::Refused("invalid funding key"))?;

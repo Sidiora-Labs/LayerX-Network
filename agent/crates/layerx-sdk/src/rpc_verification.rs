@@ -490,7 +490,14 @@ impl RpcClient {
                     activity_id: activity,
                 });
             }
-            match self.receipt_at_commitment(&id, activity, commitment, policy, &mut deadline, history) {
+            match self.receipt_at_commitment(
+                &id,
+                activity,
+                commitment,
+                policy,
+                &mut deadline,
+                history,
+            ) {
                 Ok(Some(receipt)) => return Ok(receipt),
                 Ok(None)
                 | Err(RpcError::Remote {

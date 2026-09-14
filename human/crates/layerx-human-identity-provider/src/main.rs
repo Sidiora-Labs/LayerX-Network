@@ -149,7 +149,10 @@ fn run() -> io::Result<()> {
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
     let mut server = Server::bind(
-        &socket, state, uid, Duration::from_secs(deadline),
+        &socket,
+        state,
+        uid,
+        Duration::from_secs(deadline),
         clock.ok_or_else(|| io::Error::other("clock authority required"))?,
     )?;
     let binding_names = [

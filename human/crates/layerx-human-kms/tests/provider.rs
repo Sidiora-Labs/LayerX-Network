@@ -527,7 +527,11 @@ fn setup_envelope(
     checked(builder.timestamp_bound(checked(TimestampBound::new(1000, 1010))?))?;
     checked(builder.idempotency_key(IdempotencyKey::new([4; 32])))?;
     checked(builder.fee_limit(Amount::from_u128(fee)))?;
-    checked(builder.payload_hash(checked(layerx_intents::canonical::payload_hash_for(&payload))?))?;
+    checked(
+        builder.payload_hash(checked(layerx_intents::canonical::payload_hash_for(
+            &payload,
+        ))?),
+    )?;
     checked(builder.payload(payload))?;
     checked(builder.build())
 }
