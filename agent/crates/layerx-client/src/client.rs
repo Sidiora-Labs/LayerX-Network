@@ -369,6 +369,41 @@ impl Client {
         )
     }
 
+    /// Retrieves an owner module outcome against the retained original signing request.
+    ///
+    /// # Errors
+    /// Refuses network or protocol mismatch, missing capability, disconnection,
+    /// altered original activity and unverifiable or mismatched receipt evidence.
+    pub fn lookup_native_owner_receipt(
+        &mut self,
+        selector: ReceiptSelector,
+        correlation_id: u64,
+        authorised_batch: AuthorizedBatch,
+        expected: &layerx_proof::receipt::NativeOwnerOutcomeContext<'_>,
+    ) -> Result<Lookup, ReceiptError> {
+        if expected.network_id != self.config.handshake.expected_network_id
+            || self.config.handshake.expected_protocol_version != 3
+        {
+            return Err(ReceiptError::NativeOwnerVerification(
+                layerx_proof::receipt::NativeOwnerOutcomeFailure::ActivityBinding,
+            ));
+        }
+        if !self.handshake.capabilities().contains(Capability::ReceiptLookup) {
+            return Err(ReceiptError::UnavailableCapability);
+        }
+        let transport = self.transport.as_mut().ok_or(ReceiptError::Disconnected)?;
+        crate::receipt::lookup_native_owner(
+            transport,
+            selector,
+            LookupContext {
+                interface_version: self.handshake.node().interface_version,
+                correlation_id,
+                authorised_batch,
+            },
+            expected,
+        )
+    }
+
     /// Retrieves and independently verifies one canonical signed batch header.
     ///
     /// # Errors
