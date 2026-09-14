@@ -269,8 +269,8 @@ fn real_daemon_availability_refusals() {
         .args(["build", "--availability-batches"])
         .arg(std::env::current_exe().unwrap_or_else(|error| panic!("test executable: {error}")))
         .env("LAYERX_TEST_NATIVE_BIN_DIR", binaries)
-        .env("CARGO_BUILD_JOBS", "6")
-        .env("MAKEFLAGS", "-j6")
+        .env("CARGO_BUILD_JOBS", "4")
+        .env("MAKEFLAGS", "-j4")
         .current_dir(&repository)
         .status()
         .unwrap_or_else(|error| panic!("daemon harness: {error}"));

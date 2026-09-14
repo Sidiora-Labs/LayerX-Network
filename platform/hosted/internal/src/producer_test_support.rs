@@ -230,6 +230,8 @@ pub struct Webhooks {
 
 impl Webhooks {
     pub fn start(root: &Path, sources: &[(&str, u16)]) -> Self {
+        let executable = std::env::var_os("LAYERX_TEST_WEBHOOKS_BIN")
+            .unwrap_or_else(|| panic!("LAYERX_TEST_WEBHOOKS_BIN required"));
         let port = free_port();
         let redis_port = free_port();
         fs::write(
@@ -244,10 +246,7 @@ impl Webhooks {
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap_or_else(|error| panic!("{error}"));
-        let mut command = Command::new(
-            std::env::var_os("LAYERX_TEST_WEBHOOKS_BIN")
-                .unwrap_or_else(|| panic!("LAYERX_TEST_WEBHOOKS_BIN required")),
-        );
+        let mut command = Command::new(executable);
         command
             .env_clear()
             .stdout(std::process::Stdio::null())

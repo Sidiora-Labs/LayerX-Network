@@ -1,12 +1,13 @@
 //! Production composition root for the privileged human component process.
 
+use layerx_types::clock::Clock;
 use std::env;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use layerx_agent_api::identity::{AgentDid, AuthorityRef};
@@ -348,6 +349,7 @@ impl ProductionComponentsConfig {
 
 /// In-process owners used by the privileged component listener.
 pub struct ProductionComponents {
+    clock: Arc<dyn Clock>,
     store: Arc<Mutex<PrincipalStore>>,
     event_outbox: Arc<crate::event_producer::HumanOutbox>,
     passkeys: Passkeys,
@@ -408,7 +410,7 @@ use owner::resolve_principal_owner;
 impl ProductionComponents {
     /// # Errors
     /// Refuses unverified production dependencies or invalid configuration.
-    pub fn open(config: ProductionComponentsConfig) -> Result<Self, String> {
+    pub fn open(config: ProductionComponentsConfig, clock: Arc<dyn Clock>) -> Result<Self, String> {
         validate_production_configuration(&config)?;
         let withdrawal_boundary = production_withdrawal_boundary(&config)?;
         let provider = production_kms_provider(&config)?;
@@ -464,6 +466,7 @@ impl ProductionComponents {
             SettlementDomain::new(config.settlement_chain_id, config.exit_contract.bytes());
         let event_outbox = crate::event_producer::HumanOutbox::start(Arc::clone(&store))?;
         Ok(Self {
+            clock,
             store,
             event_outbox,
             passkeys,
@@ -536,7 +539,7 @@ impl ProductionComponents {
                 .map_err(|_| ApiFailure::upstream_degraded())?,
             ));
             let key = action_key(&format!("{}:{session_id}", required_idempotency(request)?));
-            let current = now()?;
+            let current = self.now()?;
             let mut adapter = ProductionAgentCreation::new(
                 &mut agent,
                 &self.agent_contract,
@@ -579,7 +582,7 @@ impl HumanApiComponents for ProductionComponents {
         credentials: SessionCredentials<'_>,
         trace: &str,
     ) -> Result<PrincipalContext, ApiFailure> {
-        let now = now()?;
+        let now = self.now()?;
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
         if operation.name == "session.refresh" {
             let csrf = credentials.csrf_token.ok_or_else(ApiFailure::forbidden)?;
@@ -682,7 +685,7 @@ impl HumanApiComponents for ProductionComponents {
                 idempotency_key: request.idempotency_key.as_deref(),
                 trace: &request.trace,
             },
-            now()?,
+            self.now()?,
         )
         .map_err(|error| auth_failure(&error))?;
         let principal = context.principal.clone();
@@ -1727,11 +1730,13 @@ fn auth_failure(error: &super::production_auth::ProductionAuthError) -> ApiFailu
     }
 }
 
-fn now() -> Result<u64, ApiFailure> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_secs())
-        .map_err(|_| ApiFailure::unavailable())
+impl ProductionComponents {
+    fn now(&self) -> Result<u64, ApiFailure> {
+        self.clock
+            .sample(Duration::from_secs(1))
+            .map(layerx_types::clock::ClockReading::unix_seconds)
+            .map_err(|_| ApiFailure::unavailable())
+    }
 }
 
 fn mutual_tls(
@@ -1928,7 +1933,7 @@ fn hex20(name: &str) -> Result<[u8; 20], String> {
 }
 
 fn selected_protocol(value: Option<&str>) -> Result<u16, String> {
-    let protocol = value.map_or(Ok(layerx_wire::limits::PROTOCOL_VERSION), |value| {
+    let protocol = value.map_or(Ok(layerx_intents::canonical::PROTOCOL_VERSION), |value| {
         value
             .parse::<u16>()
             .map_err(|_| "LAYERX_HUMAN_PROTOCOL_VERSION is invalid".to_owned())
@@ -2352,7 +2357,7 @@ impl ProductionComponents {
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
-        let current = now()?;
+        let current = self.now()?;
         let limit = request
             .body
             .get("monthly_limit")
@@ -2494,7 +2499,7 @@ impl ProductionComponents {
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
         let registry = agent.registry().clone();
-        let current = now()?;
+        let current = self.now()?;
         let mut adapter = ProductionAgentCreation::new(
             &mut agent,
             &self.agent_contract,
@@ -2525,7 +2530,7 @@ impl ProductionComponents {
             &receipt,
             ModuleId::Governance,
             6,
-            now()?,
+            self.now()?,
         )
         .map_err(|_| ApiFailure::upstream_degraded())?;
         let observation = agent
@@ -2577,7 +2582,7 @@ impl ProductionComponents {
                 ProtocolAmount::ZERO,
                 PurposeHash::new(context.seed.purpose_hash),
                 TimestampSeconds::from_u64(
-                    now()?
+                    self.now()?
                         .checked_add(context.seed.budget_expiry_seconds)
                         .ok_or_else(ApiFailure::upstream_degraded)?,
                 ),
@@ -2587,7 +2592,7 @@ impl ProductionComponents {
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
         let registry = agent.registry().clone();
-        let current = now()?;
+        let current = self.now()?;
         let mut adapter = ProductionAgentCreation::new(
             &mut agent,
             &self.agent_contract,
@@ -2614,9 +2619,13 @@ impl ProductionComponents {
                 current,
             )
             .map_err(|_| ApiFailure::upstream_degraded())?;
-        let evidence =
-            ProductionAgentCreation::finalization_evidence(&receipt, ModuleId::Budget, 1, now()?)
-                .map_err(|_| ApiFailure::upstream_degraded())?;
+        let evidence = ProductionAgentCreation::finalization_evidence(
+            &receipt,
+            ModuleId::Budget,
+            1,
+            self.now()?,
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
         let value = agent
             .agent_limit(agent_id, amount, currency, replacement_budget_id, evidence)
             .map_err(agent_failure)?;
@@ -2662,7 +2671,7 @@ impl ProductionComponents {
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
         let registry = agent.registry().clone();
-        let current = now()?;
+        let current = self.now()?;
         let mut adapter = ProductionAgentCreation::new(
             &mut agent,
             &self.agent_contract,
@@ -2689,9 +2698,13 @@ impl ProductionComponents {
                 current,
             )
             .map_err(|_| ApiFailure::upstream_degraded())?;
-        let evidence =
-            ProductionAgentCreation::finalization_evidence(&receipt, ModuleId::Budget, 7, now()?)
-                .map_err(|_| ApiFailure::upstream_degraded())?;
+        let evidence = ProductionAgentCreation::finalization_evidence(
+            &receipt,
+            ModuleId::Budget,
+            7,
+            self.now()?,
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
         let post = agent
             .agent_budget_state(context.active_budget_id)
             .map_err(agent_failure)?;
@@ -2758,7 +2771,7 @@ impl ProductionComponents {
             )
             .map_err(|_| ApiFailure::upstream_degraded())?,
         ));
-        let current = now()?;
+        let current = self.now()?;
         let mut adapter = ProductionAgentCreation::new(
             &mut agent,
             &self.agent_contract,
@@ -2789,7 +2802,7 @@ impl ProductionComponents {
             &receipt,
             ModuleId::Governance,
             6,
-            now()?,
+            self.now()?,
         )
         .map_err(|_| ApiFailure::upstream_degraded())?;
         let session_observation = agent
@@ -2858,7 +2871,7 @@ impl ProductionComponents {
         );
         let challenge = self
             .passkeys
-            .begin_step_up_authorized(scope, digest, now()?)
+            .begin_step_up_authorized(scope, digest, self.now()?)
             .map_err(|error| auth_api_failure(&error))?;
         self.auth_index
             .bind_step_up(&challenge.challenge_id, principal, challenge.expires_at)
@@ -2880,7 +2893,7 @@ impl ProductionComponents {
                 scope,
                 path(request, "challenge_id")?,
                 text_field(&request.body, "credential")?,
-                now()?,
+                self.now()?,
             )
             .map_err(|error| auth_api_failure(&error))?;
         Ok(BackendResponse {
@@ -2899,11 +2912,12 @@ impl ProductionComponents {
     }
 
     fn execute_profile_update(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
         Ok(BackendResponse {
-            result: identity_dispatch::update_profile(scope, &request.body, now()?)
+            result: identity_dispatch::update_profile(scope, &request.body, self.now()?)
                 .map_err(|error| identity_failure(&error))?,
             session: None,
         })
@@ -2926,7 +2940,7 @@ impl ProductionComponents {
         request: &ScopedRequest<'_>,
         principal: &crate::store::PrincipalId,
     ) -> Result<BackendResponse, ApiFailure> {
-        let status = self.advance_native_onboarding(principal, &request.trace, now()?)?;
+        let status = self.advance_native_onboarding(principal, &request.trace, self.now()?)?;
         Ok(BackendResponse {
             result: identity_dispatch::onboarding_status(&status),
             session: None,
@@ -2950,7 +2964,7 @@ impl ProductionComponents {
             layerx_types::intent::NetworkId::new(self.network_id)
                 .map_err(|_| ApiFailure::upstream_degraded())?,
             EvmAddress::new(bytes),
-            now()?,
+            self.now()?,
             self.binding_statement_ttl_seconds,
         )
         .map_err(|_| ApiFailure::invalid_request(Some("address")))?;
@@ -2958,7 +2972,7 @@ impl ProductionComponents {
             .put(
                 Table::Journeys,
                 RowKey::new("wallet-binding-issued").map_err(|_| ApiFailure::unavailable())?,
-                now()?,
+                self.now()?,
                 serde_json::to_vec(&statement).map_err(|_| ApiFailure::upstream_degraded())?,
             )
             .map_err(|_| ApiFailure::unavailable())?;
@@ -3006,13 +3020,13 @@ impl ProductionComponents {
                 owner.actor,
                 owner.authority,
                 sequence,
-                now()?,
-                now()?
+                self.now()?,
+                self.now()?
                     .checked_add(self.agent_timestamp_span_seconds)
                     .ok_or_else(ApiFailure::unavailable)?,
                 self.agent_fee_limit,
                 false,
-                now()?,
+                self.now()?,
             )
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let trace =
@@ -3024,7 +3038,7 @@ impl ProductionComponents {
             &self.custody,
             &registry,
             &trace,
-            now()?,
+            self.now()?,
         ))
         .map_err(|_| ApiFailure::upstream_degraded())?
         .map_err(|_| ApiFailure::upstream_degraded())?;
@@ -3100,7 +3114,7 @@ impl ProductionComponents {
             layerx_types::intent::NetworkId::new(self.network_id)
                 .map_err(|_| ApiFailure::upstream_degraded())?,
             EvmAddress::new(address),
-            now()?,
+            self.now()?,
             self.binding_statement_ttl_seconds,
         )
         .map_err(|_| ApiFailure::invalid_request(Some("address")))?;
@@ -3113,7 +3127,7 @@ impl ProductionComponents {
             .put(
                 Table::Journeys,
                 RowKey::new("wallet-rebinding-issued").map_err(|_| ApiFailure::unavailable())?,
-                now()?,
+                self.now()?,
                 serde_json::to_vec(&(statement.clone(), confirms))
                     .map_err(|_| ApiFailure::upstream_degraded())?,
             )
@@ -3160,13 +3174,13 @@ impl ProductionComponents {
                 owner.actor,
                 owner.authority,
                 sequence,
-                now()?,
-                now()?
+                self.now()?,
+                self.now()?
                     .checked_add(self.agent_timestamp_span_seconds)
                     .ok_or_else(ApiFailure::unavailable)?,
                 self.agent_fee_limit,
                 true,
-                now()?,
+                self.now()?,
             )
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let trace =
@@ -3194,7 +3208,7 @@ impl ProductionComponents {
                 .ok_or_else(ApiFailure::forbidden)?;
             let auth = self
                 .passkeys
-                .load_step_up_evidence(scope, challenge, now()?)
+                .load_step_up_evidence(scope, challenge, self.now()?)
                 .map_err(|error| auth_api_failure(&error))?;
             Some(
                 CustodySigner::bind_authenticated_step_up(
@@ -3205,7 +3219,7 @@ impl ProductionComponents {
                     crate::custody::Operation::WalletRebinding,
                     prepared,
                     context.request_digest(),
-                    now()?,
+                    self.now()?,
                 )
                 .map_err(|_| ApiFailure::forbidden())?,
             )
@@ -3220,7 +3234,7 @@ impl ProductionComponents {
             &registry,
             &trace,
             custody_evidence.as_ref(),
-            now()?,
+            self.now()?,
         ))
         .map_err(|_| ApiFailure::upstream_degraded())?
         .map_err(|_| ApiFailure::upstream_degraded())?;
@@ -3235,7 +3249,7 @@ impl ProductionComponents {
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
-        let planning = movement_request(self, request, scope, now()?)?;
+        let planning = movement_request(self, request, scope, self.now()?)?;
         let mut movement = self
             .movement
             .lock()
@@ -3264,7 +3278,7 @@ impl ProductionComponents {
                 scope,
                 quote_id,
                 action_key(required_idempotency(request)?),
-                now()?,
+                self.now()?,
             )
             .map_err(movement_failure)?;
         let registry = self.principal_agent(scope)?.registry().clone();
@@ -3273,7 +3287,7 @@ impl ProductionComponents {
             &plan,
             crate::journeys::MoveAuthorization::Allowed,
             &registry,
-            now()?,
+            self.now()?,
         )
         .map_err(move_journey_failure)?;
         let trace =
@@ -3286,13 +3300,13 @@ impl ProductionComponents {
             &self.custody,
             &registry,
             &trace,
-            now()?,
+            self.now()?,
         ))
         .map_err(|_| ApiFailure::upstream_degraded())?
         .map_err(move_journey_failure)?;
-        schedule_continuation(scope, "move", status.journey_id(), now()?)?;
+        schedule_continuation(scope, "move", status.journey_id(), self.now()?)?;
         Ok(BackendResponse {
-            result: move_public_json(scope, self.settlement_domain, &status, now()?)?,
+            result: move_public_json(scope, self.settlement_domain, &status, self.now()?)?,
             session: None,
         })
     }
@@ -3302,7 +3316,7 @@ impl ProductionComponents {
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
-        let planning = movement_request(self, request, scope, now()?)?;
+        let planning = movement_request(self, request, scope, self.now()?)?;
         let movement = self
             .movement
             .lock()
@@ -3310,11 +3324,11 @@ impl ProductionComponents {
         let plan = movement.deposit_plan(planning).map_err(movement_failure)?;
         let binding =
             crate::binding::BindingJourney::new(self.principal_agent(scope)?.registry().clone());
-        let journey = crate::journeys::DepositJourney::start(scope, &binding, &plan, now()?)
+        let journey = crate::journeys::DepositJourney::start(scope, &binding, &plan, self.now()?)
             .map_err(deposit_journey_failure)?;
         let status = journey.status().map_err(deposit_journey_failure)?;
         Ok(BackendResponse {
-            result: deposit_public_json(scope, self.settlement_domain, &status, now()?)?,
+            result: deposit_public_json(scope, self.settlement_domain, &status, self.now()?)?,
             session: None,
         })
     }
@@ -3338,7 +3352,7 @@ impl ProductionComponents {
             .lock()
             .map_err(|_| ApiFailure::unavailable())?;
         journey
-            .confirm_external_transaction(scope, &mut *movement, transaction, now()?)
+            .confirm_external_transaction(scope, &mut *movement, transaction, self.now()?)
             .map_err(deposit_journey_failure)?;
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
@@ -3353,12 +3367,12 @@ impl ProductionComponents {
                 &self.custody,
                 &registry,
                 &trace,
-                now()?,
+                self.now()?,
             )
             .map_err(deposit_journey_failure)?;
-        schedule_continuation(scope, "deposit", status.journey_id(), now()?)?;
+        schedule_continuation(scope, "deposit", status.journey_id(), self.now()?)?;
         Ok(BackendResponse {
-            result: deposit_public_json(scope, self.settlement_domain, &status, now()?)?,
+            result: deposit_public_json(scope, self.settlement_domain, &status, self.now()?)?,
             session: None,
         })
     }
@@ -3372,7 +3386,7 @@ impl ProductionComponents {
             .principal
             .as_ref()
             .ok_or_else(ApiFailure::unauthenticated)?;
-        let planning = movement_request(self, request, scope, now()?)?;
+        let planning = movement_request(self, request, scope, self.now()?)?;
         let challenge = request
             .body
             .get("step_up")
@@ -3381,7 +3395,7 @@ impl ProductionComponents {
             .ok_or_else(ApiFailure::forbidden)?;
         let step_up = self
             .passkeys
-            .load_step_up_evidence(scope, challenge, now()?)
+            .load_step_up_evidence(scope, challenge, self.now()?)
             .map_err(|error| auth_api_failure(&error))?;
         let mut movement = self
             .movement
@@ -3394,7 +3408,7 @@ impl ProductionComponents {
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
         let mut agent = self.principal_agent(scope)?;
         let registry = agent.registry().clone();
-        let observed_at = now()?;
+        let observed_at = self.now()?;
         let mut journey = movement
             .start_withdrawal(scope, &plan, observed_at)
             .map_err(withdrawal_journey_failure)?;
@@ -3441,9 +3455,9 @@ impl ProductionComponents {
                 break;
             }
         }
-        schedule_continuation(scope, "withdraw", status.journey_id(), now()?)?;
+        schedule_continuation(scope, "withdraw", status.journey_id(), self.now()?)?;
         Ok(BackendResponse {
-            result: withdrawal_public_json(scope, self.settlement_domain, &status, now()?)?,
+            result: withdrawal_public_json(scope, self.settlement_domain, &status, self.now()?)?,
             session: None,
         })
     }
@@ -3465,11 +3479,11 @@ impl ProductionComponents {
             .lock()
             .map_err(|_| ApiFailure::unavailable())?;
         let status = movement
-            .claim_withdrawal(scope, &mut journey, &signature, now()?)
+            .claim_withdrawal(scope, &mut journey, &signature, self.now()?)
             .map_err(withdrawal_journey_failure)?;
-        schedule_continuation(scope, "withdraw", status.journey_id(), now()?)?;
+        schedule_continuation(scope, "withdraw", status.journey_id(), self.now()?)?;
         Ok(BackendResponse {
-            result: withdrawal_public_json(scope, self.settlement_domain, &status, now()?)?,
+            result: withdrawal_public_json(scope, self.settlement_domain, &status, self.now()?)?,
             session: None,
         })
     }
@@ -3486,7 +3500,7 @@ impl ProductionComponents {
         .map_err(|_| ApiFailure::invalid_request(Some("confirmation")))?;
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
-        let planning = movement_request(self, request, scope, now()?)?;
+        let planning = movement_request(self, request, scope, self.now()?)?;
         let mut movement = self
             .movement
             .lock()
@@ -3499,12 +3513,12 @@ impl ProductionComponents {
                 &self.emergency_exit,
                 &plan,
                 confirmation,
-                now()?,
+                self.now()?,
             )
             .map_err(exit_journey_failure)?;
-        schedule_continuation(scope, "exit", status.journey_id(), now()?)?;
+        schedule_continuation(scope, "exit", status.journey_id(), self.now()?)?;
         Ok(BackendResponse {
-            result: exit_public_json(scope, &status, now()?)?,
+            result: exit_public_json(scope, &status, self.now()?)?,
             session: None,
         })
     }
@@ -3554,7 +3568,12 @@ impl ProductionComponents {
                 .map_err(|error| auth_api_failure(&error))?;
         let challenge = self
             .passkeys
-            .begin_registration(scope, &account, text_field(&request.body, "label")?, now()?)
+            .begin_registration(
+                scope,
+                &account,
+                text_field(&request.body, "label")?,
+                self.now()?,
+            )
             .map_err(|error| auth_api_failure(&error))?;
         self.auth_index
             .bind_registration(&challenge.registration_id, principal, challenge.expires_at)
@@ -3575,7 +3594,7 @@ impl ProductionComponents {
         let registration_id = path(request, "registration_id")?;
         if self
             .auth_index
-            .resolve_registration(registration_id, now()?)
+            .resolve_registration(registration_id, self.now()?)
             .map_err(|error| auth_failure(&error))?
             != *principal
         {
@@ -3587,7 +3606,7 @@ impl ProductionComponents {
                 scope,
                 registration_id,
                 text_field(&request.body, "credential")?,
-                now()?,
+                self.now()?,
             )
             .map_err(|error| auth_api_failure(&error))?;
         response(passkey)
@@ -3620,7 +3639,7 @@ impl ProductionComponents {
             .ok_or_else(ApiFailure::unauthenticated)?;
         let grant = self
             .passkeys
-            .refresh_authorized(scope, refresh, csrf, now()?)
+            .refresh_authorized(scope, refresh, csrf, self.now()?)
             .map_err(|error| auth_api_failure(&error))?;
         self.auth_index
             .bind_session(&grant, principal)
@@ -3639,8 +3658,8 @@ impl ProductionComponents {
                 access_token: grant.access_token().expose().to_owned(),
                 refresh_token: grant.refresh_token().expose().to_owned(),
                 csrf_token: grant.csrf_token().expose().to_owned(),
-                access_max_age_seconds: grant.access_expires_at().saturating_sub(now()?),
-                refresh_max_age_seconds: grant.refresh_expires_at().saturating_sub(now()?),
+                access_max_age_seconds: grant.access_expires_at().saturating_sub(self.now()?),
+                refresh_max_age_seconds: grant.refresh_expires_at().saturating_sub(self.now()?),
             }),
         })
     }
@@ -3672,7 +3691,7 @@ impl ProductionComponents {
             .lock()
             .map_err(|_| ApiFailure::unavailable())?;
         let challenge = provider
-            .begin_setup(principal, text_field(&request.body, "label")?, now()?)
+            .begin_setup(principal, text_field(&request.body, "label")?, self.now()?)
             .map_err(|_| ApiFailure::upstream_degraded())?;
         Ok(BackendResponse {
             result: json!({"setup_id": challenge.setup_id,
@@ -3696,7 +3715,7 @@ impl ProductionComponents {
                 principal,
                 path(request, "setup_id")?,
                 text_field(&request.body, "code")?,
-                now()?,
+                self.now()?,
             )
             .map_err(|_| ApiFailure::upstream_degraded())?;
         Ok(BackendResponse {
@@ -3717,7 +3736,7 @@ impl ProductionComponents {
             .lock()
             .map_err(|_| ApiFailure::unavailable())?;
         let status = provider
-            .disable(principal, path(request, "authenticator_id")?, now()?)
+            .disable(principal, path(request, "authenticator_id")?, self.now()?)
             .map_err(|_| ApiFailure::upstream_degraded())?;
         Ok(BackendResponse {
             result: authenticator_status_json(&status),
@@ -3734,7 +3753,7 @@ impl ProductionComponents {
             .lock()
             .map_err(|_| ApiFailure::unavailable())?;
         let codes = provider
-            .rotate_backup_codes(principal, now()?)
+            .rotate_backup_codes(principal, self.now()?)
             .map_err(|_| ApiFailure::upstream_degraded())?;
         Ok(BackendResponse {
             result: json!({"codes": codes.expose(), "remask_at": codes.remask_at(),
@@ -3753,7 +3772,11 @@ impl ProductionComponents {
             .lock()
             .map_err(|_| ApiFailure::unavailable())?;
         let secret = provider
-            .reveal_verified_receipt(principal, text_field(&request.body, "evidence_id")?, now()?)
+            .reveal_verified_receipt(
+                principal,
+                text_field(&request.body, "evidence_id")?,
+                self.now()?,
+            )
             .map_err(|_| ApiFailure::upstream_degraded())?;
         Ok(BackendResponse {
             result: timed_secret_json(&secret),
@@ -3789,7 +3812,7 @@ impl ProductionComponents {
         let grant = Passkeys::protocol_grant_for_session(scope, target)
             .map_err(|error| auth_api_failure(&error))?;
         self.revoke_browser_grants(scope, request, &[(target.to_owned(), grant)])?;
-        let revoked = Passkeys::revoke_session_authorized(scope, target, now()?)
+        let revoked = Passkeys::revoke_session_authorized(scope, target, self.now()?)
             .map_err(|error| auth_api_failure(&error))?;
         Ok(BackendResponse {
             result: json!({"revoked_session_ids": revoked.revoked_session_ids,
@@ -3806,7 +3829,7 @@ impl ProductionComponents {
         let grants = Passkeys::active_protocol_session_grants(scope)
             .map_err(|error| auth_api_failure(&error))?;
         self.revoke_browser_grants(scope, request, &grants)?;
-        let revoked = Passkeys::revoke_all_sessions_authorized(scope, now()?)
+        let revoked = Passkeys::revoke_all_sessions_authorized(scope, self.now()?)
             .map_err(|error| auth_api_failure(&error))?;
         Ok(BackendResponse {
             result: json!({"revoked_session_ids": revoked.revoked_session_ids,
@@ -3935,6 +3958,7 @@ impl ProductionComponents {
     }
 
     fn execute_support_create(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
@@ -3955,18 +3979,20 @@ impl ProductionComponents {
                 TraceId::parse(trace).map_err(|_| ApiFailure::invalid_request(Some("trace_id")))?,
             );
         }
-        let value = SupportService::create(scope, now()?, required_idempotency(request)?, &create)
-            .map_err(|error| support_failure(&error))?;
+        let value =
+            SupportService::create(scope, self.now()?, required_idempotency(request)?, &create)
+                .map_err(|error| support_failure(&error))?;
         response(value)
     }
 
     fn execute_support_reply(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
         let value = SupportService::reply(
             scope,
-            now()?,
+            self.now()?,
             path(request, "conversation_id")?,
             required_idempotency(request)?,
             text_field(&request.body, "body")?,
@@ -3976,12 +4002,13 @@ impl ProductionComponents {
     }
 
     fn execute_support_read(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
         let conversation = SupportService::mark_read(
             scope,
-            now()?,
+            self.now()?,
             path(request, "conversation_id")?,
             text_field(&request.body, "through_message_id")?,
         )
@@ -4010,6 +4037,7 @@ impl ProductionComponents {
     }
 
     fn execute_support_feedback(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
@@ -4020,7 +4048,7 @@ impl ProductionComponents {
             .ok_or_else(|| ApiFailure::invalid_request(Some("helpful")))?;
         let value = SupportService::feedback(
             scope,
-            now()?,
+            self.now()?,
             path(request, "conversation_id")?,
             text_field(&request.body, "message_id")?,
             helpful,
@@ -4030,10 +4058,11 @@ impl ProductionComponents {
     }
 
     fn execute_notification_list(
+        &self,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
         let inventory =
-            DeepLinks::inventory(scope, now()?).map_err(|error| notify_failure(&error))?;
+            DeepLinks::inventory(scope, self.now()?).map_err(|error| notify_failure(&error))?;
         let groups = inventory
             .groups()
             .iter()
@@ -4053,13 +4082,14 @@ impl ProductionComponents {
     }
 
     fn execute_notification_read(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
         let id = NotificationId::new(path(request, "notification_id")?)
             .map_err(|error| notify_failure(&error))?;
-        let summary =
-            DeepLinks::mark_read(scope, now()?, &id).map_err(|error| notify_failure(&error))?;
+        let summary = DeepLinks::mark_read(scope, self.now()?, &id)
+            .map_err(|error| notify_failure(&error))?;
         let value = notification_json(&summary)?;
         super::stream_journal::StreamJournal::append(
             scope,
@@ -4085,11 +4115,12 @@ impl ProductionComponents {
     }
 
     fn execute_notification_preferences_set(
+        &self,
         request: &ScopedRequest<'_>,
         scope: &mut crate::store::PrincipalScope<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
         let preferences = parse_preferences(&request.body)?;
-        Dispatcher::update_preferences(scope, now()?, &preferences)
+        Dispatcher::update_preferences(scope, self.now()?, &preferences)
             .map_err(|error| notify_failure(&error))?;
         Ok(BackendResponse {
             result: preferences_json(&preferences),
@@ -4129,7 +4160,7 @@ impl ProductionComponents {
                 Table::Cache,
                 RowKey::new(format!("state-proof-{}", hex_bytes(&evidence_digest)))
                     .map_err(|_| ApiFailure::upstream_degraded())?,
-                now()?,
+                self.now()?,
                 material,
             )
             .map_err(|_| ApiFailure::unavailable())?;
@@ -4164,7 +4195,7 @@ impl ProductionComponents {
             .map_err(|error| activity_feed_failure(&error))?;
         let recent_page = self
             .feed
-            .page(scope, PageRequest::new(20, filters), now()?, sequence)
+            .page(scope, PageRequest::new(20, filters), self.now()?, sequence)
             .map_err(|error| activity_feed_failure(&error))?;
         let recent = recent_page
             .entries()
@@ -4216,7 +4247,7 @@ impl ProductionComponents {
                 Table::Cache,
                 RowKey::new(format!("state-proof-{}", hex_bytes(&evidence_digest)))
                     .map_err(|_| ApiFailure::upstream_degraded())?,
-                now()?,
+                self.now()?,
                 material,
             )
             .map_err(|_| ApiFailure::unavailable())?;
@@ -4270,7 +4301,7 @@ impl ProductionComponents {
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let statement = EvidenceExport::new(self.feed, self.activity_export_maximum_bytes)
             .map_err(activity_export_failure)?
-            .statement(scope, &filters, now()?, head.chain_sequence)
+            .statement(scope, &filters, self.now()?, head.chain_sequence)
             .map_err(activity_export_failure)?;
         let digest: [u8; 32] = sha2::Sha256::digest(statement.content()).into();
         let digest_text = hex_bytes(&digest);
@@ -4279,12 +4310,12 @@ impl ProductionComponents {
                 Table::Cache,
                 RowKey::new(format!("activity-export-{digest_text}"))
                     .map_err(|_| ApiFailure::upstream_degraded())?,
-                now()?,
+                self.now()?,
                 statement.content().to_vec(),
             )
             .map_err(|_| ApiFailure::unavailable())?;
         Ok(BackendResponse {
-            result: json!({"export_id":format!("exp_{digest_text}"),"kind":"statement","download_path":format!("/v1/evidence/evd_{digest_text}"),"content_type":"text/csv; charset=utf-8","created_at":now()?.to_string(),"evidence":[]}),
+            result: json!({"export_id":format!("exp_{digest_text}"),"kind":"statement","download_path":format!("/v1/evidence/evd_{digest_text}"),"content_type":"text/csv; charset=utf-8","created_at":self.now()?.to_string(),"evidence":[]}),
             session: None,
         })
     }
@@ -4355,7 +4386,7 @@ impl ProductionComponents {
                 exports,
                 self.settlement_domain,
                 &receipt_authority,
-                now()?,
+                self.now()?,
                 head.chain_sequence,
             )
             .map_err(activity_export_failure)?;
@@ -4374,12 +4405,12 @@ impl ProductionComponents {
                 Table::Cache,
                 RowKey::new(format!("activity-evidence-{text}"))
                     .map_err(|_| ApiFailure::upstream_degraded())?,
-                now()?,
+                self.now()?,
                 bytes,
             )
             .map_err(|_| ApiFailure::unavailable())?;
         Ok(BackendResponse {
-            result: json!({"export_id":format!("exp_{text}"),"kind":"evidence-bundle","download_path":format!("/v1/evidence/evd_{text}"),"content_type":"application/vnd.layerx.evidence-bundle","created_at":now()?.to_string(),"evidence":bundle.entries().iter().flat_map(|entry|entry.receipt_references().iter()).map(|reference|json!({"evidence_id":format!("evd_{reference}"),"class":"layerx-receipt","verification":verification})).collect::<Vec<_>>() }),
+            result: json!({"export_id":format!("exp_{text}"),"kind":"evidence-bundle","download_path":format!("/v1/evidence/evd_{text}"),"content_type":"application/vnd.layerx.evidence-bundle","created_at":self.now()?.to_string(),"evidence":bundle.entries().iter().flat_map(|entry|entry.receipt_references().iter()).map(|reference|json!({"evidence_id":format!("evd_{reference}"),"class":"layerx-receipt","verification":verification})).collect::<Vec<_>>() }),
             session: None,
         })
     }
@@ -4420,7 +4451,7 @@ impl ProductionComponents {
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let page = self
             .feed
-            .page(scope, page_request, now()?, head.chain_sequence)
+            .page(scope, page_request, self.now()?, head.chain_sequence)
             .map_err(|error| activity_feed_failure(&error))?;
         let mut groups =
             std::collections::BTreeMap::<u64, (u128, u128, String, Vec<serde_json::Value>)>::new();
@@ -4501,7 +4532,7 @@ impl ProductionComponents {
         &self,
         request: &ScopedRequest<'_>,
     ) -> Result<BackendResponse, ApiFailure> {
-        let observed_at = now()?;
+        let observed_at = self.now()?;
         match request.operation.name.as_str() {
             "account.create" => self.bootstrap_account_create(request, observed_at),
             "passkey.register.begin" => self.bootstrap_passkey_register_begin(request, observed_at),
@@ -4819,7 +4850,7 @@ impl ProductionComponents {
             "stepup.begin" => self.execute_stepup_begin(request, scope, principal),
             "stepup.finish" => self.execute_stepup_finish(request, scope),
             "profile.get" => Self::execute_profile_get(scope),
-            "profile.update" => Self::execute_profile_update(request, scope),
+            "profile.update" => self.execute_profile_update(request, scope),
             "onboarding.status" => Self::execute_onboarding_status(scope),
             "binding.statement" => self.execute_binding_statement(request, scope),
             "binding.submit" => self.execute_binding_submit(request, scope),
@@ -4864,16 +4895,16 @@ impl ProductionComponents {
             "approval.get" => self.execute_approval_get(request, scope),
             "approval.approve" | "approval.reject" => self.execute_approval_approve(request, scope),
             "support.list" => Self::execute_support_list(scope),
-            "support.create" => Self::execute_support_create(request, scope),
-            "support.reply" => Self::execute_support_reply(request, scope),
-            "support.read" => Self::execute_support_read(request, scope),
+            "support.create" => self.execute_support_create(request, scope),
+            "support.reply" => self.execute_support_reply(request, scope),
+            "support.read" => self.execute_support_read(request, scope),
             "support.status" => Self::execute_support_status(request, scope),
-            "support.feedback" => Self::execute_support_feedback(request, scope),
-            "notification.list" => Self::execute_notification_list(scope),
-            "notification.read" => Self::execute_notification_read(request, scope),
+            "support.feedback" => self.execute_support_feedback(request, scope),
+            "notification.list" => self.execute_notification_list(scope),
+            "notification.read" => self.execute_notification_read(request, scope),
             "notification.preferences.get" => Self::execute_notification_preferences_get(scope),
             "notification.preferences.set" => {
-                Self::execute_notification_preferences_set(request, scope)
+                self.execute_notification_preferences_set(request, scope)
             }
             "home.summary" => self.execute_home_summary(scope),
             "account.balance" => self.execute_account_balance(scope),
@@ -4914,7 +4945,7 @@ impl ProductionComponents {
             .map_err(agent_failure)?;
         validate_resumed_session(&prior_session, &context.agent_did)?;
         let operation_key = action_key(required_idempotency(request)?);
-        let current = now()?;
+        let current = self.now()?;
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
         let registry = agent.registry().clone();
@@ -5032,7 +5063,7 @@ impl ProductionComponents {
             )
             .map_err(|_| ApiFailure::upstream_degraded())?,
         ));
-        let current = now()?;
+        let current = self.now()?;
         let mut adapter = ProductionAgentCreation::new(
             agent,
             &self.agent_contract,
@@ -5059,7 +5090,7 @@ impl ProductionComponents {
                 current,
             )
             .map_err(|_| ApiFailure::upstream_degraded())?;
-        ProductionAgentCreation::finalization_evidence(&receipt, ModuleId::Budget, 7, now()?)
+        ProductionAgentCreation::finalization_evidence(&receipt, ModuleId::Budget, 7, self.now()?)
             .map_err(|_| ApiFailure::upstream_degraded())?;
         Ok(())
     }

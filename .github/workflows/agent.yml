@@ -25,8 +25,24 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.91.1 --profile minimal --component clippy
-      - name: Build, lint, enforce boundaries, and test
-        run: make agent-build agent-lint agent-check agent-test
+      - name: Install settlement test tools
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09
+        with:
+          version: v1.8.1
+      - name: Install native fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-venv
+          python3 -m venv .lane-venv
+          .lane-venv/bin/python -m pip install -r tests/bridge/requirements.txt
+          echo "$PWD/.lane-venv/bin" >> "$GITHUB_PATH"
+      - name: Build, lint, and enforce boundaries
+        run: CARGO_TARGET_DIR="$PWD/.lane-target" CARGO_BUILD_JOBS=4 make agent-build agent-lint agent-check
+      - name: Test with the confined native daemon
+        run: |
+          sudo env "PATH=$PATH" "CARGO_HOME=$HOME/.cargo" "RUSTUP_HOME=$HOME/.rustup" \
+            "CARGO_TARGET_DIR=$PWD/.lane-target" \
+            sh agent/tools/run-real-node-tests.sh test
       - name: Audit advisories, licenses, sources, and bans
         run: cargo install cargo-deny --locked --version 0.19.0 && cargo deny --manifest-path agent/Cargo.toml check
 
@@ -58,7 +74,21 @@ jobs:
           rustup toolchain install 1.91.1 --profile minimal &&
           rustup toolchain install nightly-2025-11-10 --profile minimal &&
           cargo install cargo-fuzz --locked
+      - name: Install settlement test tools
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09
+        with:
+          version: v1.8.1
+      - name: Install native fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-venv
+          python3 -m venv .lane-venv
+          .lane-venv/bin/python -m pip install -r tests/bridge/requirements.txt
+          echo "$PWD/.lane-venv/bin" >> "$GITHUB_PATH"
       - name: Run sanitizer variants
-        run: make agent-test-sanitize
+        run: |
+          sudo env "PATH=$PATH" "CARGO_HOME=$HOME/.cargo" "RUSTUP_HOME=$HOME/.rustup" \
+            "CARGO_TARGET_DIR=$PWD/.lane-target" \
+            sh agent/tools/run-real-node-tests.sh sanitizers
       - name: Run committed fuzz corpus
         run: make agent-fuzz-long

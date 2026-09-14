@@ -609,9 +609,9 @@ fn encode_receipt(
     signature: Option<[u8; 64]>,
 ) -> Vec<u8> {
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
+    push_u16(&mut bytes, layerx_intents::canonical::PROTOCOL_VERSION);
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
+    push_u16(&mut bytes, layerx_intents::canonical::PROTOCOL_VERSION);
     push_bytes(&mut bytes, &activity_id);
     push_u64(&mut bytes, sequence);
     push_bytes(&mut bytes, &previous);
@@ -743,14 +743,14 @@ impl Fixture {
             self.public_key
         );
         let debit = layerx_crypto::send::SendDebit {
-            from: layerx_wire::hash::account_id_for_protocol(
+            from: layerx_intents::canonical::account_id_for_protocol(
                 &account("agent:did:layerx:human:main"),
-                layerx_wire::limits::PROTOCOL_VERSION,
+                layerx_intents::canonical::PROTOCOL_VERSION,
             )
             .unwrap_or_else(|error| panic!("source account: {error:?}")),
-            to: layerx_wire::hash::account_id_for_protocol(
+            to: layerx_intents::canonical::account_id_for_protocol(
                 &account("agent:did:layerx:worker:main"),
-                layerx_wire::limits::PROTOCOL_VERSION,
+                layerx_intents::canonical::PROTOCOL_VERSION,
             )
             .unwrap_or_else(|error| panic!("destination account: {error:?}")),
             asset: [0x33; 32],
@@ -762,7 +762,7 @@ impl Fixture {
             conditions: Vec::new(),
             authorization_kind: SendAuthorizationKind::Owner as u8,
             network_id: NETWORK_ID,
-            protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+            protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
         };
 
         let request = RouteRequest {
@@ -784,7 +784,7 @@ impl Fixture {
                 ),
                 network_id: NetworkId::new(NETWORK_ID)
                     .unwrap_or_else(|error| panic!("network: {error:?}")),
-                protocol_version: ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
+                protocol_version: ProtocolVersion::new(layerx_intents::canonical::PROTOCOL_VERSION)
                     .unwrap_or_else(|error| panic!("protocol: {error:?}")),
             }),
             asset: AssetId::new(ASSET),

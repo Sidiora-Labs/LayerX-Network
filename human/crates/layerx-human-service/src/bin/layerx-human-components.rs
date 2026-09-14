@@ -23,8 +23,11 @@ fn run() -> Result<(), String> {
     if rustix::process::getuid().as_raw() != allowed_uid {
         return Err("the configured component UID does not own this process".to_owned());
     }
+    let clock = layerx_client::runtime_clock::RuntimeClock::from_environment()
+        .map_err(|error| error.to_string())?;
     let backend = Arc::new(ProductionComponents::open(
         ProductionComponentsConfig::from_environment()?,
+        clock.clone(),
     )?);
     let recipient = layerx_human_service::server::production_components::RecipientServer::bind(
         Arc::clone(&backend), layerx_human_service::server::production_components::RecipientServerConfig {
@@ -41,6 +44,7 @@ fn run() -> Result<(), String> {
             "LAYERX_HUMAN_MAINTENANCE_INTERVAL_SECONDS",
         )?),
         required_number("LAYERX_HUMAN_MAINTENANCE_MAXIMUM_ITEMS")?,
+        clock,
     )
     .map_err(|_| "the component maintenance policy is invalid".to_owned())?
     .bind(ComponentServerConfig {

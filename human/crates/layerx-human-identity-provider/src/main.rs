@@ -59,7 +59,7 @@ fn provision_account() -> io::Result<()> {
     }
     let account = layerx_types::account::AccountId::parse(&format!("agent:{}:main", request.did))
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid account"))?;
-    let id = layerx_wire::hash::account_id_for_protocol(&account, 3)
+    let id = layerx_intents::canonical::account_id_for_protocol(&account, 3)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid protocol account"))?;
     let account_hex: String = id
         .iter()
@@ -96,6 +96,14 @@ fn run() -> io::Result<()> {
             "expected serve, bind-device, provision-owner or provision-account",
         ));
     }
+    let clock = if matches!(command.as_deref(), None | Some("serve")) {
+        Some(
+            layerx_client::runtime_clock::RuntimeClock::from_environment()
+                .map_err(io::Error::other)?,
+        )
+    } else {
+        None
+    };
     if command.as_deref() == Some("validate-account-head") {
         return provision_head::run();
     }
@@ -140,7 +148,10 @@ fn run() -> io::Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
-    let mut server = Server::bind(&socket, state, uid, Duration::from_secs(deadline))?;
+    let mut server = Server::bind(
+        &socket, state, uid, Duration::from_secs(deadline),
+        clock.ok_or_else(|| io::Error::other("clock authority required"))?,
+    )?;
     let binding_names = [
         "LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_SOCKET",
         "LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_TENANT",

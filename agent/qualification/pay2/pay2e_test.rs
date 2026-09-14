@@ -952,13 +952,15 @@ fn pay2e_funded_sdk_send_and_mcp_grant_draw() {
         Some(pay2_credential(&payer_key)),
         &certificates.ca_der,
     )
-    .required("PAY2 payer RPC");
+    .required("PAY2 payer RPC")
+    .with_clock(layerx_client::runtime_clock::RuntimeClock::from_environment().required("PAY2 clock"));
     let recipient_rpc = layerx_sdk::rpc::RpcClient::connect_with_ca_der(
         &endpoint,
         Some(pay2_credential(&recipient_key)),
         &certificates.ca_der,
     )
-    .required("PAY2 recipient RPC");
+    .required("PAY2 recipient RPC")
+    .with_clock(layerx_client::runtime_clock::RuntimeClock::from_environment().required("PAY2 clock"));
     let receipt_policy = layerx_sdk::rpc_verification::ReceiptPolicy {
         protocol_version: PROTOCOL_VERSION,
         network_id: NETWORK_ID,

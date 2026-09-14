@@ -839,9 +839,9 @@ impl RouteResolver {
             (Endpoint::Agent(from), Endpoint::Human(to), Relationship::PayerGrant(route)) => {
                 let receive = &route.receive;
                 let protocol = receive.protocol_version();
-                if layerx_wire::hash::account_id_for_protocol(from, protocol).ok()
+                if layerx_intents::canonical::account_id_for_protocol(from, protocol).ok()
                     != Some(receive.from())
-                    || layerx_wire::hash::account_id_for_protocol(to, protocol).ok()
+                    || layerx_intents::canonical::account_id_for_protocol(to, protocol).ok()
                         != Some(receive.to())
                     || request.asset.bytes() != receive.asset()
                     || request.amount.value() != receive.amount()

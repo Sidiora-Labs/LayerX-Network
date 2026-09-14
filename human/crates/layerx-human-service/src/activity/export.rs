@@ -1,6 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter, Write as _};
 
+use layerx_intents::canonical::receipt_digest as protocol_receipt_digest;
+use layerx_intents::canonical::{
+    decode_receipt, unsigned_receipt_bytes as encode_unsigned_receipt,
+};
 use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::export::{
     verify as verify_offline, ExportVerificationError, OfflineExport, ReceiptFact,
@@ -8,8 +12,6 @@ use layerx_proof::export::{
 };
 use layerx_proof::merkle::encode_proof;
 use layerx_proof::receipt::AuthorizedBatch;
-use layerx_wire::hash::receipt_digest as protocol_receipt_digest;
-use layerx_wire::receipt::{decode as decode_receipt, encode_unsigned as encode_unsigned_receipt};
 use sha2::{Digest as _, Sha256};
 
 use crate::audit::{verify_export as verify_audit, AuditChain, AuditError};

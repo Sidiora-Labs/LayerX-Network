@@ -12,11 +12,13 @@ use layerx_client::lni::schema::{
     decode_envelope, encode_envelope, Capability, Envelope, SchemaError, Version,
 };
 use layerx_crypto::{ed25519, SignatureMessage};
+use layerx_intents::canonical::{activity_id, payload_hash, Domain};
+use layerx_intents::canonical::{
+    decode_signed_activity as decode_signed, unsigned_activity_bytes as encode_unsigned,
+};
+use layerx_intents::canonical::{MAX_MESSAGE_BYTES, PROTOCOL_VERSION};
 use layerx_types::payload::ModuleRegistry;
 use layerx_types::result::{KnownResult, ResultCode};
-use layerx_wire::activity::{decode_signed, encode_unsigned};
-use layerx_wire::hash::{activity_id, payload_hash, Domain};
-use layerx_wire::limits::{MAX_MESSAGE_BYTES, PROTOCOL_VERSION};
 use sha2::{Digest as _, Sha256};
 
 const NODE_INFO_REQUEST_TAG: u16 = 1;

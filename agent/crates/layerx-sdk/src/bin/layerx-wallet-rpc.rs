@@ -122,6 +122,9 @@ fn execute(v: &Value) -> Result<Value, BridgeError> {
         RpcClient::connect(text(c, "endpoint")?, credential)
     }
     .map_err(|_| ())?;
+    let rpc = rpc.with_clock(
+        layerx_client::runtime_clock::RuntimeClock::from_environment().map_err(|_| ())?,
+    );
     let policy = ReceiptPolicy {
         protocol_version: u16::try_from(number(c, "protocol_version")?).map_err(|_| ())?,
         network_id: u32::try_from(number(c, "network_id")?).map_err(|_| ())?,

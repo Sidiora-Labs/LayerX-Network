@@ -1,8 +1,8 @@
 use super::verify_native_credit_receipt;
 use crate::{AttestedNativeCustodyCredit, NativeCustodyExpectation};
 use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_intents::canonical::decode_receipt as decode;
 use layerx_proof::receipt::AuthorizedBatch;
-use layerx_wire::receipt::decode;
 
 const RECEIPT: &[u8] =
     include_bytes!("../../../../tests/fixtures/custody/native-credit-receipt/receipt.unsigned");
@@ -19,7 +19,7 @@ fn field<const N: usize>(bytes: &[u8], offset: usize) -> [u8; N] {
 
 fn signed(unsigned: &[u8], key: &SigningKey) -> Vec<u8> {
     assert_eq!(unsigned.last(), Some(&0));
-    let digest = layerx_wire::hash::receipt_digest(unsigned)
+    let digest = layerx_intents::canonical::receipt_digest(unsigned)
         .unwrap_or_else(|error| panic!("receipt digest: {error:?}"));
     let mut bytes = unsigned.to_vec();
     bytes.pop();
@@ -125,7 +125,9 @@ fn actual_daemon_credit_passes_signed_batch_and_custody_verification() {
     let read = |name: &str| checked(std::fs::read(root.join(name)));
     let receipt_bytes = read("credit.receipt");
     let header_bytes = read("header");
-    let header = checked(layerx_wire::receipt::decode_batch_header(&header_bytes));
+    let header = checked(layerx_intents::canonical::decode_batch_header(
+        &header_bytes,
+    ));
     let receipt = checked(decode(&receipt_bytes));
     let protocol = receipt
         .protocol()
@@ -176,12 +178,12 @@ fn actual_daemon_credit_passes_signed_batch_and_custody_verification() {
         &[activity_type],
     ));
     let registry = checked(layerx_types::payload::ModuleRegistry::new(&[registration]));
-    let activity = checked(layerx_wire::activity::decode_signed(
+    let activity = checked(layerx_intents::canonical::decode_signed_activity(
         &read("activity"),
         &registry,
     ));
     assert_eq!(activity.payload(), payload);
-    let activity_id = checked(layerx_wire::hash::activity_id(&activity));
+    let activity_id = checked(layerx_intents::canonical::activity_id(&activity));
     let reserve = field(&profile, 129);
     assert_eq!(
         verify_native_credit_receipt(

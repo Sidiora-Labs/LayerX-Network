@@ -5,14 +5,17 @@ use layerx_agentd::boot::handshake_gate;
 use layerx_client::lni::schema::{Capability, Version};
 use layerx_client::submit::{submit_signed, Submission, SubmissionContext, SubmitError};
 use layerx_crypto::SignatureMessage;
+use layerx_intents::canonical::PROTOCOL_VERSION;
+use layerx_intents::canonical::{activity_id, payload_hash_for, Domain};
+use layerx_intents::canonical::{
+    decode_signed_activity as decode_signed, signed_envelope_bytes as encode_signed_envelope,
+    unsigned_envelope_bytes as encode_unsigned_envelope,
+};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistry, Payload};
 use layerx_types::result::{KnownResult, ResultCode};
-use layerx_wire::activity::{decode_signed, encode_signed_envelope, encode_unsigned_envelope};
-use layerx_wire::hash::{activity_id, payload_hash_for, Domain};
-use layerx_wire::limits::PROTOCOL_VERSION;
 
 use support::evidence_node::AdmissionJournal;
 use support::EVIDENCE_NETWORK_ID;

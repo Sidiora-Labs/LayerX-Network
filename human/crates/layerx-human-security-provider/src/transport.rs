@@ -1,4 +1,5 @@
 use crate::{Error, Result, Store};
+use layerx_types::clock::{Clock, Deadline};
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -6,7 +7,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use zeroize::Zeroizing;
 
 const MAX_FRAME: usize = 1_048_576;
@@ -55,7 +56,7 @@ impl Config {
         Ok(())
     }
 }
-pub fn serve(config: Config, shutdown: Arc<AtomicBool>) -> Result<()> {
+pub fn serve(config: Config, shutdown: Arc<AtomicBool>, clock: Arc<dyn Clock>) -> Result<()> {
     config.validate()?;
     let mut store = Store::open(&config.state_root, &config.trust_history)?;
     let parent = config.socket.parent().ok_or(Error::Configuration)?;
@@ -82,21 +83,34 @@ pub fn serve(config: Config, shutdown: Arc<AtomicBool>) -> Result<()> {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((mut stream, _)) => {
-                let deadline = Instant::now() + config.deadline;
+                let mut deadline =
+                    Deadline::start(clock.as_ref(), config.deadline).map_err(|_| Error::Refused)?;
                 let peer =
                     rustix::net::sockopt::socket_peercred(&stream).map_err(|_| Error::Refused)?;
                 if peer.uid.as_raw() != config.allowed_uid {
-                    let _ = send(&mut stream, &frame(1, &[])?, deadline, &shutdown);
-                    discard(&mut stream, deadline, &shutdown);
+                    let _ = send(
+                        &mut stream,
+                        &frame(1, &[])?,
+                        &mut deadline,
+                        clock.as_ref(),
+                        &shutdown,
+                    );
+                    discard(&mut stream, &mut deadline, clock.as_ref(), &shutdown);
                     continue;
                 }
-                let response = receive(&mut stream, deadline, &shutdown)
+                let response = receive(&mut stream, &mut deadline, clock.as_ref(), &shutdown)
                     .and_then(|(op, fields)| store.dispatch(op, &fields));
                 let bytes = match response {
                     Ok(fields) => frame(0, &fields)?,
                     Err(_) => frame(1, &[])?,
                 };
-                let _ = send(&mut stream, &bytes, deadline, &shutdown);
+                let _ = send(
+                    &mut stream,
+                    &bytes,
+                    &mut deadline,
+                    clock.as_ref(),
+                    &shutdown,
+                );
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(10))
@@ -123,13 +137,13 @@ impl Drop for SocketCleanup {
         }
     }
 }
-fn timeout(deadline: Instant, shutdown: &AtomicBool) -> Result<Duration> {
+fn timeout(deadline: &mut Deadline, clock: &dyn Clock, shutdown: &AtomicBool) -> Result<Duration> {
     if shutdown.load(Ordering::Relaxed) {
         return Err(Error::Refused);
     }
     let left = deadline
-        .checked_duration_since(Instant::now())
-        .ok_or(Error::Refused)?;
+        .remaining_bounded(clock, Duration::from_millis(100))
+        .map_err(|_| Error::Refused)?;
     if left.is_zero() {
         return Err(Error::Refused);
     }
@@ -137,17 +151,18 @@ fn timeout(deadline: Instant, shutdown: &AtomicBool) -> Result<Duration> {
 }
 fn receive(
     stream: &mut UnixStream,
-    deadline: Instant,
+    deadline: &mut Deadline,
+    clock: &dyn Clock,
     shutdown: &AtomicBool,
 ) -> Result<(u8, Vec<Vec<u8>>)> {
     let mut prefix = [0; 4];
-    read(stream, &mut prefix, deadline, shutdown)?;
+    read(stream, &mut prefix, deadline, clock, shutdown)?;
     let length = u32::from_be_bytes(prefix) as usize;
     if !(10..=MAX_FRAME).contains(&length) {
         return Err(Error::Refused);
     }
     let mut payload = Zeroizing::new(vec![0; length]);
-    read(stream, &mut payload, deadline, shutdown)?;
+    read(stream, &mut payload, deadline, clock, shutdown)?;
     if &payload[..5] != b"LXSP\x01" {
         return Err(Error::Refused);
     }
@@ -183,11 +198,12 @@ fn receive(
 fn read(
     stream: &mut UnixStream,
     mut bytes: &mut [u8],
-    deadline: Instant,
+    deadline: &mut Deadline,
+    clock: &dyn Clock,
     shutdown: &AtomicBool,
 ) -> Result<()> {
     while !bytes.is_empty() {
-        stream.set_read_timeout(Some(timeout(deadline, shutdown)?))?;
+        stream.set_read_timeout(Some(timeout(deadline, clock, shutdown)?))?;
         match stream.read(bytes) {
             Ok(0) => return Err(Error::Refused),
             Ok(n) => bytes = &mut bytes[n..],
@@ -206,11 +222,12 @@ fn read(
 fn send(
     stream: &mut UnixStream,
     mut bytes: &[u8],
-    deadline: Instant,
+    deadline: &mut Deadline,
+    clock: &dyn Clock,
     shutdown: &AtomicBool,
 ) -> Result<()> {
     while !bytes.is_empty() {
-        stream.set_write_timeout(Some(timeout(deadline, shutdown)?))?;
+        stream.set_write_timeout(Some(timeout(deadline, clock, shutdown)?))?;
         match stream.write(bytes) {
             Ok(0) => return Err(Error::Refused),
             Ok(n) => bytes = &bytes[n..],
@@ -243,9 +260,14 @@ fn frame(code: u8, fields: &[Vec<u8>]) -> Result<Zeroizing<Vec<u8>>> {
     Ok(bytes)
 }
 
-fn discard(stream: &mut UnixStream, deadline: Instant, shutdown: &AtomicBool) {
+fn discard(
+    stream: &mut UnixStream,
+    deadline: &mut Deadline,
+    clock: &dyn Clock,
+    shutdown: &AtomicBool,
+) {
     let mut buffer = [0; 1024];
-    while let Ok(remaining) = timeout(deadline, shutdown) {
+    while let Ok(remaining) = timeout(deadline, clock, shutdown) {
         if stream.set_read_timeout(Some(remaining)).is_err() {
             break;
         }
