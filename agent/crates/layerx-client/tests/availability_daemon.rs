@@ -260,8 +260,8 @@ fn probe(socket: &Path, stage: &str) {
 
 /// Fixed bytes an LXGB v2 genesis request carries before the guarantor array:
 /// the magic and envelope version, the protocol version, the network identifier,
-/// the genesis timestamp, the single genesis parameter and the guarantor count.
-const REQUEST_PREFIX_BYTES: usize = 89;
+/// the genesis timestamp, the seven genesis parameters and the guarantor count.
+const REQUEST_PREFIX_BYTES: usize = 485;
 /// One guarantor record: a 32-byte identifier, a 33-byte compressed secp256k1
 /// public key and a 16-byte bond.
 const GUARANTOR_RECORD_BYTES: usize = 81;
@@ -295,6 +295,26 @@ fn certificate_threshold(repository: &Path) -> usize {
     threshold
 }
 
+fn assert_genesis_parameters(parameters: &[u8]) {
+    let expected = [
+        (b"module-enable:budget".as_slice(), 1_u8),
+        (b"module-enable:escrow".as_slice(), 1),
+        (b"module-enable:perps".as_slice(), 1),
+        (b"module-enable:service".as_slice(), 1),
+        (b"module-enable:stream".as_slice(), 1),
+        (b"native-fee-authority-version".as_slice(), 2),
+        (b"parameter-version".as_slice(), 1),
+    ];
+    assert_eq!(parameters.len(), 7 * 66, "genesis parameter bytes");
+    for ((key, value), parameter) in expected.iter().zip(parameters.chunks_exact(66)) {
+        let mut record = [0_u8; 66];
+        record[..2].copy_from_slice(&7_u16.to_be_bytes());
+        record[2..2 + key.len()].copy_from_slice(key);
+        record[65] = *value;
+        assert_eq!(parameter, record, "genesis parameter identity/value/order");
+    }
+}
+
 /// The bootstrap builds one guarantor record per configured certificate
 /// threshold, so the length it accepts has to follow that threshold instead of
 /// describing a single-guarantor request. The request is read from the copy the
@@ -315,10 +335,11 @@ fn assert_genesis_request(work: &Path, threshold: usize) {
     assert_eq!(request[4], 2, "LXGB envelope version");
     assert_eq!(
         u16::from_be_bytes([request[19], request[20]]),
-        1,
+        7,
         "genesis parameter count"
     );
-    let count = usize::from(u16::from_be_bytes([request[87], request[88]]));
+    assert_genesis_parameters(&request[21..483]);
+    let count = usize::from(u16::from_be_bytes([request[483], request[484]]));
     assert_eq!(count, threshold, "genesis guarantor count");
     assert_eq!(
         request.len(),
