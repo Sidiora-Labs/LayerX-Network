@@ -52,7 +52,7 @@ fn recovery(extended: bool) -> Result<Vec<u8>> {
     ))
 }
 
-fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
+pub(super) fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
     let mutations: &[fn(&mut DisclosedNativeBudgetCreate)] = &[
         |v| v.encoding_version ^= 1,
         |v| v.budget_id[0] ^= 1,
@@ -71,6 +71,7 @@ fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
         |v| v.source_sequence += 1,
     ];
     let count = match &disclosure.native_operation {
+        Some(DisclosedNativeOperation::IdentityRegistration(_)) => 2,
         Some(DisclosedNativeOperation::BudgetCreate(_)) => mutations.len(),
         Some(DisclosedNativeOperation::RecoveryPolicy(_)) => 4,
         Some(DisclosedNativeOperation::OwnerRotation(_)) | None => 0,
@@ -79,6 +80,10 @@ fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
         .map(|field| {
             let mut changed = disclosure.clone();
             match changed.native_operation.as_mut() {
+                Some(DisclosedNativeOperation::IdentityRegistration(value)) => match field {
+                    0 => value.did_id[0] ^= 1,
+                    _ => value.primary_key[0] ^= 1,
+                },
                 Some(DisclosedNativeOperation::BudgetCreate(value)) => mutations[field](value),
                 Some(DisclosedNativeOperation::RecoveryPolicy(value)) => match field {
                     0 => value.did_id[0] ^= 1,

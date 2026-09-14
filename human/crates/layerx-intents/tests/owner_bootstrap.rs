@@ -123,6 +123,38 @@ fn native_owner_bootstrap_is_disclosed_signed_and_bound_to_every_envelope_field(
 }
 
 #[test]
+fn native_identity_disclosure_refuses_foreign_subject_and_signing_key() -> Result<(), String> {
+    let checked = |error| format!("owner DID: {error:?}");
+    let owner = Did::new(b"did:layerx:owner-bootstrap").map_err(checked)?;
+    let foreign = Did::new(b"did:layerx:foreign-owner").map_err(checked)?;
+    let public = LocalSigner::new([71; 32]).public_key();
+    let registry = registry(&[1]);
+    let context = OwnerEnvelopeContext {
+        actor: owner.clone(),
+        owner_public_key: public,
+        network_id: 77,
+        account_sequence: 10,
+        not_before_ms: 1_000,
+        not_after_ms: 61_000,
+        action_key: [1; 32],
+        fee_limit: 100,
+    };
+    for (did, primary_key) in [
+        (foreign, public),
+        (owner, LocalSigner::new([72; 32]).public_key()),
+    ] {
+        let compiled = NativeOwnerBootstrap::Identity {
+            did,
+            primary_key: PublicKey::new(primary_key),
+        }
+        .compile(&registry)
+        .map_err(|error| format!("native identity: {error:?}"))?;
+        assert!(unsigned_native(&compiled, &context, &registry).is_err());
+    }
+    Ok(())
+}
+
+#[test]
 fn native_bootstrap_refuses_missing_module_and_invalid_authority_policy() {
     let did =
         Did::new(b"did:layerx:owner-bootstrap").unwrap_or_else(|error| panic!("DID: {error:?}"));

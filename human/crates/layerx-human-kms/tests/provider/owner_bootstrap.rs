@@ -67,6 +67,11 @@ fn typed_owner_bootstrap_signs_through_real_kms_and_replays_after_restart() -> R
             assert_eq!(activity.payload(), compiled.payload().as_bytes());
             assert_eq!(activity.activity_type(), compiled.activity_type());
             assert!(attach_signature(&unsigned, signature, pending, &registry).is_err());
+            for changed in super::native_setup::mutated_native(&disclosure) {
+                let packet =
+                    signing_request(binding, &handle, &unsigned, &encoded_disclosure(&changed)?)?.0;
+                assert_eq!(host.call(&packet)?[7], 1);
+            }
             let mut changed = disclosure.clone();
             changed.actor[0] ^= 1;
             let refused =
