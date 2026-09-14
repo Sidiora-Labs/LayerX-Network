@@ -301,7 +301,7 @@ PYWAIT
     fi
     if [[ ${2:-} == --withdraw || ${2:-} == --paid-withdrawal ]]; then
         replay_batches=2
-        if [[ ${2:-} == --paid-withdrawal ]]; then replay_batches=5; fi
+        if [[ ${2:-} == --paid-withdrawal ]]; then replay_batches=6; fi
         mkdir -m 0700 "$work/guarantor-replay"
         (source platform/hosted/node/sequencer-env.sh
          layerx_sequencer_environment "$work/data/sequencer.env"

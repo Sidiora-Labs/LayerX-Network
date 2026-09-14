@@ -5,7 +5,7 @@ int program_admission_client_main(int argc, char **argv);
 #include "layerx/lxp_authority.h"
 #include "layerx/lxp_codec.h"
 
-enum { PAID_RECORDS = 5, PAID_RECEIPT_BYTES = 8192 };
+enum { PAID_RECORDS = 6, PAID_RECEIPT_BYTES = 8192 };
 
 typedef struct paid_account {
     uint64_t balance;
@@ -196,7 +196,7 @@ static int paid_withdraw(const signer *key, uint64_t sequence, uint64_t limit, p
     return paid_encode(key, sequence, LX_ASSET_WITHDRAW, limit, payload, sizeof(payload), record);
 }
 
-static int paid_grant(const signer *owner, const signer *delegate, paid_record *record)
+static int paid_grant(const signer *owner, const signer *delegate, uint64_t generation, paid_record *record)
 {
     uint8_t storage[4096];
     lxp_authority_grant grant = {0};
@@ -217,6 +217,7 @@ static int paid_grant(const signer *owner, const signer *delegate, paid_record *
     grant.scope.purpose_hash[0] = 0x67U;
     grant.not_before = (uint64_t)now.tv_sec * 1000U - 60000U;
     grant.not_after = grant.not_before + 3600000U;
+    grant.grantor_revocation_sequence = generation;
     grant.fee_budget.present = true;
     (void)memcpy(grant.fee_budget.asset_id, paid_asset, 32U);
     grant.fee_budget.maximum_per_activity = (lxp_u128){0U, 17U};
@@ -227,15 +228,15 @@ static int paid_grant(const signer *owner, const signer *delegate, paid_record *
     REQUIRE(lxp_codec_write_u16(&writer, 0x7108U) == LXP_OK);
     REQUIRE(lxp_codec_write_u16(&writer, 0x0101U) == LXP_OK);
     REQUIRE(lxp_codec_write_bytes(&writer, body.bytes, body.length, 1024U) == LXP_OK);
-    return paid_encode(owner, 3U, 0x00070008U, 0U, writer.bytes, writer.length, record);
+    return paid_encode(owner, 4U, 0x00070008U, 0U, writer.bytes, writer.length, record);
 }
 
 static int paid_replay(int *descriptor, paid_state *state)
 {
     static const lxp_result results[PAID_RECORDS] = {
-        LXP_OK, LXP_ERR_FEE_LIMIT, LXP_OK, LXP_OK, LXP_ERR_NON_CANONICAL
+        LXP_OK, LXP_ERR_FEE_LIMIT, LXP_OK, LXP_OK, LXP_ERR_NON_CANONICAL, LXP_OK
     };
-    static const uint64_t fees[PAID_RECORDS] = {0U, 16U, 17U, 0U, 17U};
+    static const uint64_t fees[PAID_RECORDS] = {0U, 16U, 17U, 0U, 17U, 0U};
     paid_state after = {0};
     REQUIRE(paid_quote(*descriptor) == 0);
     REQUIRE(paid_snapshot(*descriptor, &after) == 0);
@@ -244,7 +245,7 @@ static int paid_replay(int *descriptor, paid_state *state)
     REQUIRE(memcmp(after.state_root, state->state_root, 32U) == 0);
     for (size_t i = 0U; i < PAID_RECORDS; ++i)
         REQUIRE(paid_submit(*descriptor, &state->records[i], results[i], fees[i], true) == 0);
-    REQUIRE(maintenance_head(descriptor, 10U, 5U) == 0);
+    REQUIRE(maintenance_head(descriptor, 12U, 6U) == 0);
     REQUIRE(paid_snapshot(*descriptor, &after) == 0);
     REQUIRE(memcmp(after.accounts, state->accounts, sizeof(after.accounts)) == 0);
     REQUIRE(after.identity_sequence == state->identity_sequence);
@@ -295,15 +296,28 @@ int main(int argc, char **argv)
         REQUIRE(transferred.accounts[0].balance + 18U == limited.accounts[0].balance);
         REQUIRE(transferred.accounts[1].balance == 33U && transferred.accounts[2].balance == 1U);
         REQUIRE(transferred.accounts[0].sequence == limited.accounts[0].sequence + 1U && transferred.identity_sequence == 3U);
-        REQUIRE(paid_grant(&owner, &delegate, &state.records[3]) == 0);
+        {
+            uint8_t rotation[68] = {0x71U, 1U, 0U, 2U};
+            lxp_receipt receipt;
+            REQUIRE(lxp_did_id_derive(REGISTERED_DID, 75U, rotation + 4U) == LXP_OK);
+            (void)memcpy(rotation + 36U, owner.public_key, 32U);
+            REQUIRE(paid_encode(&owner, 3U, 0x00070001U, 0U,
+                rotation, sizeof(rotation), &state.records[5]) == 0);
+            REQUIRE(paid_submit(descriptor, &state.records[5], LXP_OK, 0U, false) == 0);
+            REQUIRE(maintenance_head(&descriptor, 8U, 4U) == 0);
+            REQUIRE(lxp_receipt_decode(state.records[5].receipt,
+                state.records[5].receipt_length, true, &receipt) == LXP_OK);
+            REQUIRE(receipt.global_sequence == 6U);
+            REQUIRE(paid_grant(&owner, &delegate, receipt.global_sequence, &state.records[3]) == 0);
+        }
         REQUIRE(paid_submit(descriptor, &state.records[3], LXP_OK, 0U, false) == 0);
-        REQUIRE(maintenance_head(&descriptor, 8U, 4U) == 0);
-        REQUIRE(paid_withdraw(&delegate, 4U, 17U, &state.records[4]) == 0);
+        REQUIRE(maintenance_head(&descriptor, 10U, 5U) == 0);
+        REQUIRE(paid_withdraw(&delegate, 5U, 17U, &state.records[4]) == 0);
         REQUIRE(paid_submit(descriptor, &state.records[4], LXP_ERR_NON_CANONICAL, 17U, false) == 0);
-        REQUIRE(maintenance_head(&descriptor, 10U, 5U) == 0 && paid_snapshot(descriptor, &state) == 0);
+        REQUIRE(maintenance_head(&descriptor, 12U, 6U) == 0 && paid_snapshot(descriptor, &state) == 0);
         REQUIRE(state.accounts[0].balance + 17U == transferred.accounts[0].balance);
         REQUIRE(state.accounts[1].balance == 50U && state.accounts[2].balance == 1U);
-        REQUIRE(state.accounts[0].sequence == transferred.accounts[0].sequence && state.identity_sequence == 5U);
+        REQUIRE(state.accounts[0].sequence == transferred.accounts[0].sequence && state.identity_sequence == 6U);
         REQUIRE(paid_replay(&descriptor, &state) == 0);
         file = fopen(argv[3], "wbx");
         REQUIRE(file != NULL && fwrite(&state, sizeof(state), 1U, file) == 1U);
