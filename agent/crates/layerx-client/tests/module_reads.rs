@@ -5,7 +5,9 @@ use layerx_types::verify::VerificationLevel;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn fixture() -> Result<(JsonValue, AccountEvidencePolicy), Box<dyn std::error::Error>> {
-    let vector = parse(include_str!("../../../../tests/vectors/native-module-evidence.json"))?;
+    let vector = parse(include_str!(
+        "../../../../tests/vectors/native-module-evidence.json"
+    ))?;
     let policy = AccountEvidencePolicy {
         expected_network_id: 42,
         expected_protocol_version: 3,
@@ -26,11 +28,15 @@ fn native_module_proof_is_independently_verified() -> TestResult {
     assert_eq!(verified.state_root(), vector.hex_array_at("root")?);
     assert_eq!(verified.level(), VerificationLevel::STATE_PROVEN);
     assert_eq!(verified.checkpoint_id(), None);
-    let header = layerx_wire::receipt::decode_batch_header(&verified.signed_header().canonical_bytes)
-        .map_err(|error| format!("{error:?}"))?;
+    let header =
+        layerx_wire::receipt::decode_batch_header(&verified.signed_header().canonical_bytes)
+            .map_err(|error| format!("{error:?}"))?;
     assert_eq!(header.network_id(), 42);
     assert_eq!(header.protocol_version(), 3);
-    assert_eq!(u64::from_be_bytes(value.as_slice().try_into()?), header.last_sequence() + 1);
+    assert_eq!(
+        u64::from_be_bytes(value.as_slice().try_into()?),
+        header.last_sequence() + 1
+    );
     Ok(())
 }
 
@@ -61,7 +67,17 @@ fn native_module_evidence_refuses_malformed_or_substituted_fields() -> TestResul
     }
     assert!(verify_module_evidence(&value, &proof, 0, b"other", policy).is_err());
     for selector in [RootSelector::Batch(1), RootSelector::Checkpoint([1; 32])] {
-        assert!(verify_module_evidence(&value, &proof, 0, &key, AccountEvidencePolicy { root_selector: selector, ..policy }).is_err());
+        assert!(verify_module_evidence(
+            &value,
+            &proof,
+            0,
+            &key,
+            AccountEvidencePolicy {
+                root_selector: selector,
+                ..policy
+            }
+        )
+        .is_err());
     }
     Ok(())
 }
@@ -73,13 +89,43 @@ fn native_module_evidence_refuses_foreign_network_version_or_signer() -> TestRes
     let key = vector.hex_at("key")?;
     let proof = vector.hex_at("proof")?;
     for network in [0, 41, 43] {
-        assert!(verify_module_evidence(&value, &proof, 0, &key, AccountEvidencePolicy { expected_network_id: network, ..policy }).is_err());
+        assert!(verify_module_evidence(
+            &value,
+            &proof,
+            0,
+            &key,
+            AccountEvidencePolicy {
+                expected_network_id: network,
+                ..policy
+            }
+        )
+        .is_err());
     }
     for version in [0, 1, 2, 4] {
-        assert!(verify_module_evidence(&value, &proof, 0, &key, AccountEvidencePolicy { expected_protocol_version: version, ..policy }).is_err());
+        assert!(verify_module_evidence(
+            &value,
+            &proof,
+            0,
+            &key,
+            AccountEvidencePolicy {
+                expected_protocol_version: version,
+                ..policy
+            }
+        )
+        .is_err());
     }
     for signer in [[0; 32], [1; 32]] {
-        assert!(verify_module_evidence(&value, &proof, 0, &key, AccountEvidencePolicy { handshake_sequencer_key: signer, ..policy }).is_err());
+        assert!(verify_module_evidence(
+            &value,
+            &proof,
+            0,
+            &key,
+            AccountEvidencePolicy {
+                handshake_sequencer_key: signer,
+                ..policy
+            }
+        )
+        .is_err());
     }
     Ok(())
 }

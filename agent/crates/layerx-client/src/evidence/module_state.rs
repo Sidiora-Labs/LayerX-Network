@@ -3,8 +3,8 @@ use layerx_proof::state_witness::StateWitness;
 
 use super::{
     bind_selector, checked_checkpoint, decode_signed_header, AccountEvidencePolicy, EvidenceError,
-    Reader, RootSelector, SignedHeader, VerificationLevel, ATTESTATION_BYTES,
-    MAX_GUARANTORS, MAX_HEADER_BYTES, MAX_VALIDITY_PROOF_BYTES,
+    Reader, RootSelector, SignedHeader, VerificationLevel, ATTESTATION_BYTES, MAX_GUARANTORS,
+    MAX_HEADER_BYTES, MAX_VALIDITY_PROOF_BYTES,
 };
 
 const MAX_WITNESS_BYTES: usize = 35 + 129 + 1_048_576 + 96 * 32;
@@ -80,11 +80,20 @@ pub fn verify_module_evidence(
     )
     .map_err(EvidenceError::Inclusion)?;
     let state_root = header.header().resulting_state_root();
-    witness.verify(state_root).map_err(|_| EvidenceError::Malformed)?;
+    witness
+        .verify(state_root)
+        .map_err(|_| EvidenceError::Malformed)?;
     let checkpoint = match reader.u8()? {
         0 => None,
         1 => {
-            let bytes = reader.length_prefixed(MAX_VALIDITY_PROOF_BYTES + MAX_HEADER_BYTES + 16 + MAX_GUARANTORS * ATTESTATION_BYTES)?.to_vec();
+            let bytes = reader
+                .length_prefixed(
+                    MAX_VALIDITY_PROOF_BYTES
+                        + MAX_HEADER_BYTES
+                        + 16
+                        + MAX_GUARANTORS * ATTESTATION_BYTES,
+                )?
+                .to_vec();
             let context = reader.length_prefixed(128 * 1024)?.to_vec();
             Some(checked_checkpoint(
                 bytes,
@@ -99,8 +108,14 @@ pub fn verify_module_evidence(
     bind_selector(selector, &signed_header, checkpoint.as_ref())?;
     Ok(VerifiedModuleEvidence {
         state_root,
-        level: checkpoint.as_ref().map_or(VerificationLevel::STATE_PROVEN, |value| value.report().level()),
-        checkpoint_id: checkpoint.as_ref().and_then(|value| value.report().evidence().checkpoint_id()),
+        level: checkpoint
+            .as_ref()
+            .map_or(VerificationLevel::STATE_PROVEN, |value| {
+                value.report().level()
+            }),
+        checkpoint_id: checkpoint
+            .as_ref()
+            .and_then(|value| value.report().evidence().checkpoint_id()),
         signed_header,
     })
 }

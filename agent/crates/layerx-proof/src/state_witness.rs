@@ -232,4 +232,3 @@ impl std::fmt::Display for StateProofError {
     }
 }
 impl std::error::Error for StateProofError {}
-

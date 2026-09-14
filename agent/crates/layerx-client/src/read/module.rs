@@ -21,7 +21,11 @@ pub(super) fn read(
     let mut selector = 1_u16.to_be_bytes().to_vec();
     selector.push(4);
     selector.extend_from_slice(&module_id.to_be_bytes());
-    selector.extend_from_slice(&u16::try_from(key.len()).map_err(|_| ReadError::PageBound)?.to_be_bytes());
+    selector.extend_from_slice(
+        &u16::try_from(key.len())
+            .map_err(|_| ReadError::PageBound)?
+            .to_be_bytes(),
+    );
     selector.extend_from_slice(key);
     context.root_selector.encode(&mut selector);
     selector.push(context.requested.level().wire_rank());
@@ -34,12 +38,18 @@ pub(super) fn read(
     })?)?;
     let bytes = transport.receive()?;
     let response = decode_envelope(&bytes)?;
-    if response.version != context.interface_version || response.correlation_id != context.correlation_id {
+    if response.version != context.interface_version
+        || response.correlation_id != context.correlation_id
+    {
         return Err(ReadError::UnexpectedResponse);
     }
     if response.message_tag == ERROR_RESPONSE_TAG && response.proof_material.is_empty() {
-        let refusal = decode_core_refusal(response.canonical_payload).ok_or(ReadError::UnexpectedResponse)?;
-        return Err(ReadError::CoreRefusal { class: refusal.class, result: refusal.result });
+        let refusal =
+            decode_core_refusal(response.canonical_payload).ok_or(ReadError::UnexpectedResponse)?;
+        return Err(ReadError::CoreRefusal {
+            class: refusal.class,
+            result: refusal.result,
+        });
     }
     if response.message_tag != ACCOUNT_READ_RESPONSE_TAG {
         return Err(ReadError::UnexpectedResponse);
@@ -55,16 +65,22 @@ pub(super) fn read(
             expected_network_id: context.expected_network_id,
             handshake_sequencer_key: context.handshake_sequencer_key,
         },
-    ).map_err(ReadError::ProductionEvidence)?;
+    )
+    .map_err(ReadError::ProductionEvidence)?;
     if verified.signed_header().response_authorization() != context.sequencer_authorization {
         return Err(ReadError::AuthorityRangeMismatch);
     }
-    let header = layerx_wire::receipt::decode_batch_header(&verified.signed_header().canonical_bytes)
-        .map_err(|_| ReadError::MalformedValue)?;
+    let header =
+        layerx_wire::receipt::decode_batch_header(&verified.signed_header().canonical_bytes)
+            .map_err(|_| ReadError::MalformedValue)?;
     if context.root_selector == RootSelector::Latest
-        && (header.batch_number() != context.head.sealed_batch || header.last_sequence() != context.head.chain_sequence)
+        && (header.batch_number() != context.head.sealed_batch
+            || header.last_sequence() != context.head.chain_sequence)
     {
-        return Err(ReadError::HeadMismatch { expected_batch: context.head.sealed_batch, actual_batch: header.batch_number() });
+        return Err(ReadError::HeadMismatch {
+            expected_batch: context.head.sealed_batch,
+            actual_batch: header.batch_number(),
+        });
     }
     require_level(context.requested, verified.level())?;
     Ok(ReadValue {
@@ -75,7 +91,9 @@ pub(super) fn read(
             global_sequence: header.last_sequence(),
             batch_number: header.batch_number(),
             observed_head_sequence: context.head.chain_sequence,
-            observed_checkpoint: verified.checkpoint_id().unwrap_or(context.head.finalised_checkpoint),
+            observed_checkpoint: verified
+                .checkpoint_id()
+                .unwrap_or(context.head.finalised_checkpoint),
         },
     })
 }

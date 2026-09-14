@@ -3,7 +3,9 @@ use layerx_types::json::parse;
 
 #[test]
 fn exact_native_vectors_and_negative_paths() -> Result<(), Box<dyn std::error::Error>> {
-    let document = parse(include_str!("../../../../contracts/config/native-state-proofs.json"))?;
+    let document = parse(include_str!(
+        "../../../../contracts/config/native-state-proofs.json"
+    ))?;
     let vectors = document.array_at("vectors")?;
     assert_eq!(vectors.len(), 10);
     for vector in vectors {
