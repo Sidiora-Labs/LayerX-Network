@@ -142,7 +142,7 @@ static int named_parameters(void)
     REQUIRE(lxp_module_fee_name(7U) == NULL);
     REQUIRE(lxp_fee_schedule(&table, 2U, NULL, &schedule, &version) == LXP_OK);
     lxp_fee_params expected = module_schedule();
-    REQUIRE(version == 1U && memcmp(&schedule, &expected, sizeof(schedule)) == 0);
+    REQUIRE(version == 25U && memcmp(&schedule, &expected, sizeof(schedule)) == 0);
     return 0;
 }
 
