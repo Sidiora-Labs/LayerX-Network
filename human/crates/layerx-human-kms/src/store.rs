@@ -11,6 +11,8 @@ use std::path::PathBuf;
 use zeroize::{Zeroize, Zeroizing};
 
 const MAX_STATE: usize = 8 * 1024 * 1024;
+#[path = "settlement_recipient.rs"]
+mod settlement_recipient;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -25,6 +27,8 @@ struct Record {
     wallet: Option<crate::evm::Wallet>,
     #[serde(default)]
     send_actions: BTreeMap<String, (crate::evm_types::SendPlanAuthorization, Vec<u8>)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recipient_identity: Option<[u8; 32]>,
 }
 impl Drop for Record {
     fn drop(&mut self) {
@@ -243,6 +247,9 @@ impl Store {
         if request.operation == 11 {
             return self.authorize_send(request, signing_digest.ok_or(Error::Refused)?);
         }
+        if request.operation == 13 {
+            return self.authorize_recipient(request);
+        }
         if request.operation >= 6 {
             return self.evm(request);
         }
@@ -407,6 +414,7 @@ impl Store {
             generation: 0,
             wallet: None,
             send_actions: BTreeMap::new(),
+            recipient_identity: None,
         };
         let response = description(&record)?;
         self.state.records.insert(key, record);
@@ -455,6 +463,7 @@ fn validate(state: &State, config: &Config) -> std::result::Result<(), String> {
             || !handles.insert(record.handle)
             || (record.generation == 0) != record.previous.is_none()
             || record.previous == Some(record.public)
+            || record.recipient_identity == Some([0; 32])
         {
             return Err("state invariant failed".into());
         }

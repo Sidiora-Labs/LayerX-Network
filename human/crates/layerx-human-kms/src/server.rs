@@ -92,6 +92,13 @@ fn connection(mut tcp: TcpStream, config: &Config, store: &Mutex<Store>) -> Resu
     .map_err(|_| Error::Unavailable)
 }
 fn validate_sign(request: &Request<'_>, config: &Config) -> Result<Option<[u8; 32]>> {
+    if request.operation == 13 {
+        return if config.protocol == 3 && request.network == config.network && request.class == 1 {
+            Ok(None)
+        } else {
+            Err(Error::Refused)
+        };
+    }
     if request.operation == 11 {
         let value = serde_json::from_slice(request.evm).map_err(|_| Error::Refused)?;
         let now = std::time::SystemTime::now()
