@@ -1522,7 +1522,7 @@ fn decode_operation_2(
             agent_id: reader.text()?,
             kind: HumanAgentJourneyKind::OwnerRotated {
                 custody_key: reader.text()?,
-                signed_activity: reader.bytes()?.to_vec(),
+                signed_activity: reader.bytes()?.clone(),
             },
             pre_observation: [0; 32],
             post_observation: [0; 32],

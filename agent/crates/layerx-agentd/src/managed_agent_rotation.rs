@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    action_record_key, agent_key, decode, encode, finalization_digest, hex, journey_response, key,
+    load_agent, Digest, FinalizationEvidence, HumanOperationError, HumanResponse,
+    InvalidationReason, ManagedAgent, ModuleId, ObjectKind, RevocationEvent, SessionId, Sha256,
+    StorageClass, Store, TenantId, VerificationLevel, PREFIX,
+};
 use crate::identity::{CoreIdentity, ProtocolAuthority};
 use crate::session::SessionRegistry;
 use layerx_crypto::rotation::{OwnerRotation, OwnerRotationState};
@@ -69,6 +74,58 @@ pub(crate) fn prepare(
         return Err(HumanOperationError::Refused);
     }
     let did = Did::new(agent.agent_did.as_bytes()).map_err(|_| HumanOperationError::Refused)?;
+    let state = verified_state(store, tenant, &agent, &did, request)?;
+    let session = sessions
+        .get(tenant, SessionId(agent.session_id))
+        .ok_or(HumanOperationError::Refused)?;
+    if session.request.agent != did
+        || session.request.token_id != agent.session_token_id
+        || session.generation != agent.session_generation
+    {
+        return Err(HumanOperationError::Refused);
+    }
+    if session.open {
+        agent.session_generation = agent
+            .session_generation
+            .checked_add(1)
+            .ok_or(HumanOperationError::Refused)?;
+    }
+    agent.context.actor = agent.agent_did.clone();
+    request
+        .custody_key
+        .clone_into(&mut agent.context.custody_key);
+    agent.context.custody_public_key = state.primary_public_key;
+    agent.context.primary_authority = hex(&state.primary_public_key);
+    agent.updated_at = evidence.finalized_at;
+    agent.verified_evidence.push(evidence.receipt_digest);
+    agent.validate()?;
+    let response = journey_response(&agent, 1, evidence)?;
+    let mut replay = binding.to_vec();
+    replay.extend_from_slice(response.bytes());
+    let aggregate_key = agent_key(tenant, agent_id)?;
+    let mut updates = related_generations(store, sessions, &did, &aggregate_key)?;
+    updates.push((aggregate_key, encode(&agent)?));
+    updates.push((replay_key, replay));
+    Ok(Prepared::Commit {
+        event: RevocationEvent {
+            did,
+            authority: None,
+            reason: InvalidationReason::PrimaryKeyRotated,
+            observed_sequence: evidence.observed_sequence,
+        },
+        updates,
+        response,
+    })
+}
+
+fn verified_state(
+    store: &Store,
+    tenant: &TenantId,
+    agent: &ManagedAgent,
+    did: &Did,
+    request: &Projection<'_>,
+) -> Result<OwnerRotationState, HumanOperationError> {
+    let evidence = request.evidence;
     let activity = layerx_wire::activity::decode_signed(request.signed_activity, request.registry)
         .map_err(|_| HumanOperationError::Refused)?;
     let OwnerRotation::Commit(commit) =
@@ -77,7 +134,7 @@ pub(crate) fn prepare(
         return Err(HumanOperationError::Refused);
     };
     if commit.network_id != agent.context.network_id
-        || commit.consent.owner != did
+        || commit.consent.owner != *did
         || commit.consent.current_public_key != agent.context.custody_public_key
         || commit.consent.action_key != evidence.action_key
     {
@@ -116,8 +173,8 @@ pub(crate) fn prepare(
     {
         return Err(HumanOperationError::Refused);
     }
-    let owner_id = layerx_wire::hash::did_id_for_protocol(&did, 3)
-        .map_err(|_| HumanOperationError::Refused)?;
+    let owner_id =
+        layerx_wire::hash::did_id_for_protocol(did, 3).map_err(|_| HumanOperationError::Refused)?;
     let mut expected = b"LXOR1".to_vec();
     expected.extend_from_slice(&owner_id);
     expected.extend_from_slice(&commit.consent.current_public_key);
@@ -137,7 +194,7 @@ pub(crate) fn prepare(
     {
         return Err(HumanOperationError::Refused);
     }
-    let state = OwnerRotationState::decode(&request.identity.canonical_bytes, &did)
+    let state = OwnerRotationState::decode(&request.identity.canonical_bytes, did)
         .map_err(|_| HumanOperationError::Refused)?;
     if request.identity.verification_level < VerificationLevel::CHECKPOINT_FINALISED
         || request.identity.frozen
@@ -154,45 +211,7 @@ pub(crate) fn prepare(
     {
         return Err(HumanOperationError::Refused);
     }
-    let session = sessions
-        .get(tenant, SessionId(agent.session_id))
-        .ok_or(HumanOperationError::Refused)?;
-    if session.request.agent != did
-        || session.request.token_id != agent.session_token_id
-        || session.generation != agent.session_generation
-    {
-        return Err(HumanOperationError::Refused);
-    }
-    if session.open {
-        agent.session_generation = agent
-            .session_generation
-            .checked_add(1)
-            .ok_or(HumanOperationError::Refused)?;
-    }
-    agent.context.actor = agent.agent_did.clone();
-    agent.context.custody_key = request.custody_key.to_owned();
-    agent.context.custody_public_key = state.primary_public_key;
-    agent.context.primary_authority = hex(&state.primary_public_key);
-    agent.updated_at = evidence.finalized_at;
-    agent.verified_evidence.push(evidence.receipt_digest);
-    agent.validate()?;
-    let response = journey_response(&agent, 1, evidence)?;
-    let mut replay = binding.to_vec();
-    replay.extend_from_slice(response.bytes());
-    let aggregate_key = agent_key(tenant, agent_id)?;
-    let mut updates = related_generations(store, sessions, &did, &aggregate_key)?;
-    updates.push((aggregate_key, encode(&agent)?));
-    updates.push((replay_key, replay));
-    Ok(Prepared::Commit {
-        event: RevocationEvent {
-            did,
-            authority: None,
-            reason: InvalidationReason::PrimaryKeyRotated,
-            observed_sequence: evidence.observed_sequence,
-        },
-        updates,
-        response,
-    })
+    Ok(state)
 }
 
 fn related_generations(

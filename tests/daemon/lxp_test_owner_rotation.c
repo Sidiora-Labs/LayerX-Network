@@ -69,7 +69,17 @@ static int rotation_save(int descriptor, const char *prefix, rotation_run *run)
     uint8_t commitment[32];
     lxp_u128 balance;
     uint64_t account_sequence;
+    uint8_t preparation[79];
+    wire_envelope head;
     REQUIRE(rotation_account(descriptor, run->account, run->identity + 37U, &balance, &account_sequence) == 0);
+    store_u16(preparation, 1U); store_u16(preparation + 2U, 75U);
+    (void)memcpy(preparation + 4U, REGISTERED_DID, 75U);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 26U, 731U, preparation, sizeof(preparation)) == 0);
+    REQUIRE(receive_envelope(descriptor, &head) == 0 && head.tag == 27U &&
+        head.correlation_id == 731U && head.payload_length >= 139U);
+    uint64_t head_sequence = load_u64(head.payload + 99U);
+    REQUIRE(head_sequence > run->global_sequence && memcmp(head.payload + 107U, run->history.root, 32U) == 0);
+    release_envelope(&head);
     REQUIRE(lxp_hash_context_value(run->identity, sizeof(run->identity), commitment) == LXP_OK);
     REQUIRE(snprintf(path, sizeof(path), "%s.bin", prefix) > 0);
     FILE *output = fopen(path, "wb");
@@ -84,9 +94,9 @@ static int rotation_save(int descriptor, const char *prefix, rotation_run *run)
     (void)fprintf(output, "\",\"identity\":\""); rotation_hex(output, run->identity, sizeof(run->identity));
     (void)fprintf(output, "\",\"announcement\":\""); rotation_hex(output, commitment, 32U);
     (void)fprintf(output, "\",\"root\":\""); rotation_hex(output, run->history.root, 32U);
-    (void)fprintf(output, "\",\"activity_sequence\":%llu,\"account_sequence\":%llu,\"global_sequence\":%llu,\"balance_hi\":%llu,\"balance_lo\":%llu,\"receipts\":%zu}\n",
+    (void)fprintf(output, "\",\"activity_sequence\":%llu,\"account_sequence\":%llu,\"global_sequence\":%llu,\"head_sequence\":%llu,\"balance_hi\":%llu,\"balance_lo\":%llu,\"receipts\":%zu}\n",
         (unsigned long long)run->history.target_sequence, (unsigned long long)account_sequence,
-        (unsigned long long)run->global_sequence, (unsigned long long)balance.hi,
+        (unsigned long long)run->global_sequence, (unsigned long long)head_sequence, (unsigned long long)balance.hi,
         (unsigned long long)balance.lo, run->history.count);
     REQUIRE(fflush(output) == 0 && fsync(fileno(output)) == 0 && fclose(output) == 0);
     return 0;
