@@ -1,5 +1,9 @@
 //! Durable, receipt-gated human identity onboarding.
 
+mod native;
+
+pub(crate) use native::{NativePlan, NativeSponsor};
+
 use std::fmt::{Display, Formatter};
 
 use layerx_agent_api::error::RequestId;
