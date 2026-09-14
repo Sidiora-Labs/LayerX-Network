@@ -3,7 +3,9 @@
 use std::thread;
 
 use layerx_proof::receipt::{verify, AuthorizedBatch, VerificationFailure, VerifiedReceipt};
-use layerx_proof::receipt::{verify_native_owner_outcome, NativeOwnerOutcomeContext, NativeOwnerOutcomeFailure};
+use layerx_proof::receipt::{
+    verify_native_owner_outcome, NativeOwnerOutcomeContext, NativeOwnerOutcomeFailure,
+};
 
 use crate::client::ReconnectPolicy;
 use crate::lni::refusal::decode_core_refusal;

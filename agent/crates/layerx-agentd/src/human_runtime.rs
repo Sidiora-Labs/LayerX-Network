@@ -2539,7 +2539,8 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
                 {
                     return Err(HumanOperationError::Refused);
                 }
-                let terminal = self.terminal_receipt_evidence(&receipt_evidence, authority, native)?;
+                let terminal =
+                    self.terminal_receipt_evidence(&receipt_evidence, authority, native)?;
                 let terminal_state = if terminal.result_code() == 0 {
                     SubmissionState::Executed
                 } else {
@@ -3145,20 +3146,36 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         let authority = self
             .authority
             .authorized_batch(peer, expected_activity_id)?;
-        let original = self.outbox.exact_signed_bytes(idempotency_key)
-            .map_err(|_| HumanOperationError::Refused)?.to_vec();
+        let original = self
+            .outbox
+            .exact_signed_bytes(idempotency_key)
+            .map_err(|_| HumanOperationError::Refused)?
+            .to_vec();
         let registry = self.authority.registry(peer).map_err(map_core)?;
-        let retained = RetainedNativeOwner::decode(original, &registry, self.node.handshake().node(),
-            idempotency_key, expected_activity_id)?;
+        let retained = RetainedNativeOwner::decode(
+            original,
+            &registry,
+            self.node.handshake().node(),
+            idempotency_key,
+            expected_activity_id,
+        )?;
         let native = retained.as_ref().map(RetainedNativeOwner::context);
-        let selector = ReceiptSelector::IdempotencyKey { idempotency_key, expected_activity_id };
-        let correlation = u64::from_be_bytes(idempotency_key[..8].try_into()
-            .map_err(|_| HumanOperationError::Refused)?);
+        let selector = ReceiptSelector::IdempotencyKey {
+            idempotency_key,
+            expected_activity_id,
+        };
+        let correlation = u64::from_be_bytes(
+            idempotency_key[..8]
+                .try_into()
+                .map_err(|_| HumanOperationError::Refused)?,
+        );
         let lookup = if let Some(expected) = &native {
-            self.node.lookup_native_owner_receipt(selector, correlation, authority, expected)
+            self.node
+                .lookup_native_owner_receipt(selector, correlation, authority, expected)
         } else {
             self.node.lookup_receipt(selector, correlation, authority)
-        }.map_err(native_receipt::map_lookup_error)?;
+        }
+        .map_err(native_receipt::map_lookup_error)?;
         let mut out = Encoder::new();
         match lookup {
             Lookup::Absent => out.u8(0),
@@ -3176,15 +3193,21 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                         .map_err(|_| HumanOperationError::Unavailable)?;
                     let ingress = if let Some(expected) = &native {
                         crate::receipt::store_native_owner_if_absent(
-                            &mut store, tenant.clone(), receipt.canonical_bytes(), &authority, expected,
+                            &mut store,
+                            tenant.clone(),
+                            receipt.canonical_bytes(),
+                            &authority,
+                            expected,
                         )
-                    } else { crate::receipt::store_verified_if_absent(
-                        &mut store,
-                        tenant.clone(),
-                        idempotency_key,
-                        receipt.canonical_bytes(),
-                        &authority,
-                    ) };
+                    } else {
+                        crate::receipt::store_verified_if_absent(
+                            &mut store,
+                            tenant.clone(),
+                            idempotency_key,
+                            receipt.canonical_bytes(),
+                            &authority,
+                        )
+                    };
                     ingress.map_err(|error| match error {
                         crate::receipt::ReceiptStoreError::Missing
                         | crate::receipt::ReceiptStoreError::Store(_) => {
