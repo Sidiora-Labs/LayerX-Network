@@ -81,7 +81,7 @@ Timeouts, expiries and settlement windows are real, and waiting for them in wall
 
 It is a single local process holding state in memory. It is not a network, so it has no consensus, no other validators, and no external anchoring - `settlement-anchored` is not something a local run establishes. Differential conformance against the hosted testnet is what closes that gap, and it is a separate exercise from local development.
 
-For an environment with real finality and other participants, use the [testnet quickstart](../../../../docs/wiki/Quickstart.md).
+For an environment with real finality and other participants, use the [testnet quickstart](https://github.com/Sidiora-Labs/LayerX-Network/blob/86fa9803386b75d1fea152cb40cacb3f1069cf4a/docs/wiki/Quickstart.md).
 
 ## Enforced by
 
