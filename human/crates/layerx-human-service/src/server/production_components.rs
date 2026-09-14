@@ -391,6 +391,9 @@ mod owner_rotation;
 
 #[path = "production_onboarding.rs"]
 mod onboarding_native;
+#[path = "production_owner.rs"]
+mod owner;
+use owner::resolve_principal_owner;
 
 impl ProductionComponents {
     /// # Errors
@@ -503,6 +506,7 @@ impl ProductionComponents {
         grants: &[(String, [u8; 32])],
     ) -> Result<(), ApiFailure> {
         let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let owner = resolve_principal_owner(self, scope, &mut agent)?;
         let registry = agent.registry().clone();
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
@@ -528,8 +532,8 @@ impl ProductionComponents {
                 &self.agent_contract,
                 &self.custody,
                 &trace,
-                self.agent_actor.clone(),
-                self.agent_authority.clone(),
+                owner.actor.clone(),
+                owner.authority.clone(),
                 super::agent_creation::CreationBounds {
                     timestamp_span: self.agent_timestamp_span_seconds,
                     fee_limit: self.agent_fee_limit,
@@ -1999,30 +2003,13 @@ fn resolve_movement_context(
     scope: &crate::store::PrincipalScope<'_>,
     observed_at: u64,
 ) -> Result<super::movement_provider::PlanningContext, ApiFailure> {
-    let (actor, account) = movement_principal_account(scope)?;
-    let key =
-        crate::custody::KeyId::new("human-primary").map_err(|_| ApiFailure::upstream_degraded())?;
-    let descriptor = components
-        .custody
-        .describe_key(scope.principal(), &key)
-        .map_err(|_| ApiFailure::forbidden())?;
-    let mut agent = components
-        .agent
-        .lock()
-        .map_err(|_| ApiFailure::unavailable())?;
-    let identity = agent
-        .identity_resolve(actor.as_str())
-        .map_err(agent_failure)?;
-    if identity.frozen
-        || identity.verification < 3
-        || !identity
-            .authorities
-            .iter()
-            .any(|(_, public)| *public == descriptor.public_key)
-        || identity.canonical_bytes.is_empty()
-    {
-        return Err(ApiFailure::forbidden());
-    }
+    let key = KeyId::new("human-primary").map_err(|_| ApiFailure::upstream_degraded())?;
+    let mut agent = components.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+    let owner = resolve_principal_owner(components, scope, &mut agent)?;
+    let actor = owner.actor;
+    let account = owner.account;
+    let identity = owner.identity;
+    let authority = owner.authority;
     let active = movement_active_binding(scope, agent.registry(), components.network_id)?;
     let wallet = components
         .custody
@@ -2047,7 +2034,6 @@ fn resolve_movement_context(
     if currency != balance.currency || amount == 0 {
         return Err(ApiFailure::invalid_request(Some("money")));
     }
-    let authority = components.agent_authority.clone();
     let account_sequence = agent
         .account_sequence(&actor, &authority)
         .map_err(agent_failure)?;
@@ -2381,11 +2367,14 @@ impl ProductionComponents {
         .map_err(|_| ApiFailure::invalid_request(None))?;
         let idempotency_key: [u8; 32] =
             Sha256::digest(required_idempotency(request)?.as_bytes()).into();
+        let mut runtime = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let owner = resolve_principal_owner(self, scope, &mut runtime)?;
+        let (human_recovery_root, recovery_threshold) = owner.recovery_policy()?;
         let creation_context = CreationContext {
             idempotency_key,
-            owner_account: self.agent_owner_account.clone(),
-            human_recovery_root: self.agent_recovery_root,
-            recovery_threshold: self.agent_recovery_threshold,
+            owner_account: owner.account.canonical().to_owned(),
+            human_recovery_root,
+            recovery_threshold,
             network_id: self.network_id,
             protocol_time: current,
         };
@@ -2401,15 +2390,14 @@ impl ProductionComponents {
         .map_err(|error| agent_creation_failure(&error))?;
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
-        let mut runtime = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
         let registry = runtime.registry().clone();
         let mut adapter = ProductionAgentCreation::new(
             &mut runtime,
             &self.agent_contract,
             &self.custody,
             &trace,
-            self.agent_actor.clone(),
-            self.agent_authority.clone(),
+            owner.actor,
+            owner.authority,
             super::agent_creation::CreationBounds {
                 timestamp_span: self.agent_timestamp_span_seconds,
                 fee_limit: self.agent_fee_limit,
@@ -2991,8 +2979,9 @@ impl ProductionComponents {
             .map_err(|()| ApiFailure::invalid_request(Some("signature")))?;
         let key: [u8; 32] = sha2::Sha256::digest(required_idempotency(request)?.as_bytes()).into();
         let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let owner = resolve_principal_owner(self, scope, &mut agent)?;
         let sequence = agent
-            .account_sequence(&self.agent_actor, &self.agent_authority)
+            .account_sequence(&owner.actor, &owner.authority)
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let registry = agent.registry().clone();
         let binding = BindingJourney::new(registry.clone());
@@ -3002,8 +2991,8 @@ impl ProductionComponents {
                 &statement,
                 &signature,
                 layerx_types::ids::IdempotencyKey::new(key),
-                self.agent_actor.clone(),
-                self.agent_authority.clone(),
+                owner.actor,
+                owner.authority,
                 sequence,
                 now()?,
                 now()?
@@ -3144,8 +3133,9 @@ impl ProductionComponents {
             .map_err(|()| ApiFailure::invalid_request(Some("signature")))?;
         let key: [u8; 32] = sha2::Sha256::digest(required_idempotency(request)?.as_bytes()).into();
         let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let owner = resolve_principal_owner(self, scope, &mut agent)?;
         let sequence = agent
-            .account_sequence(&self.agent_actor, &self.agent_authority)
+            .account_sequence(&owner.actor, &owner.authority)
             .map_err(|_| ApiFailure::upstream_degraded())?;
         let registry = agent.registry().clone();
         let binding = BindingJourney::new(registry.clone());
@@ -3155,8 +3145,8 @@ impl ProductionComponents {
                 &statement,
                 &signature,
                 layerx_types::ids::IdempotencyKey::new(key),
-                self.agent_actor.clone(),
-                self.agent_authority.clone(),
+                owner.actor,
+                owner.authority,
                 sequence,
                 now()?,
                 now()?
