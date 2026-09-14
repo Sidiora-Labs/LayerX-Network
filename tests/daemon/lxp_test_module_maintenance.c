@@ -11,6 +11,7 @@
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_storage.h"
+#include "layerx/lxp_state_proof.h"
 
 #include "layerx/programs.h"
 #include "layerx/lxp_da.h"
@@ -945,6 +946,59 @@ static int genesis_state_check(int descriptor)
     return 0;
 }
 
+static int authenticated_balance(int descriptor, const uint8_t account[32],
+    const batch_evidence *expected, lxp_u128 *balance)
+{
+    uint8_t query[37] = {0U, 1U, 2U};
+    wire_envelope response;
+    lxp_state_witness *witness = calloc(1U, sizeof(*witness));
+    size_t cursor = 132U;
+    REQUIRE(witness != NULL);
+    memcpy(query + 3U, account, 32U);
+    query[35U] = 1U;
+    query[36U] = 3U;
+    REQUIRE(send_request(descriptor, LNI_MINOR, 7U, 2998U, query, sizeof(query)) == 0);
+    REQUIRE(receive_envelope(descriptor, &response) == 0);
+    REQUIRE(response.major == LNI_MAJOR && response.minor == LNI_MINOR &&
+        response.tag == 8U && response.correlation_id == 2998U &&
+        response.proof_length >= cursor && response.payload_length >= 2U &&
+        response.payload_length <= LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES);
+    REQUIRE(load_u16(response.proof) == 3U && response.proof[2U] == 2U &&
+        response.proof[3U] == 1U && memcmp(response.proof + 4U, account, 32U) == 0 &&
+        memcmp(response.proof + 100U, expected->body.header.resulting_state_root, 32U) == 0);
+    witness->version = LXP_STATE_WITNESS_VERSION;
+    witness->key_length = 33U;
+    witness->key[0] = 4U;
+    memcpy(witness->key + 1U, account, 32U);
+    witness->value_length = (uint32_t)response.payload_length;
+    memcpy(witness->value, response.payload, response.payload_length);
+    lxp_state_proof *paths[3] = {
+        &witness->account_path, &witness->layer_a, &witness->layer_b
+    };
+    for (size_t i = 0U; i < 3U; ++i) {
+        lxp_state_proof *path = paths[i];
+        REQUIRE(cursor <= response.proof_length && response.proof_length - cursor >= 9U);
+        path->leaf_index = load_u32(response.proof + cursor);
+        path->leaf_count = load_u32(response.proof + cursor + 4U);
+        path->depth = response.proof[cursor + 8U];
+        cursor += 9U;
+        REQUIRE(path->depth <= LXP_STATE_PROOF_MAX_DEPTH &&
+            (size_t)path->depth * 32U <= response.proof_length - cursor);
+        memcpy(path->siblings, response.proof + cursor, (size_t)path->depth * 32U);
+        cursor += (size_t)path->depth * 32U;
+    }
+    REQUIRE(lxp_state_proof_verify(witness, expected->body.header.resulting_state_root) == LXP_OK);
+    cursor = 3U + load_u16(response.payload);
+    REQUIRE(cursor <= response.payload_length && response.payload_length - cursor >= 49U);
+    REQUIRE(response.payload[cursor - 1U] == LX_ACCOUNT_AGENT_MAIN &&
+        response.payload[cursor + 48U] == 1U &&
+        memcmp(response.payload + cursor + 16U, asset_id, 32U) == 0);
+    REQUIRE(lxp_u128_from_be(response.payload + cursor, balance) == LXP_OK);
+    free(witness);
+    release_envelope(&response);
+    return 0;
+}
+
 static int scenario_start(int descriptor, const char *directory, scenario_state *state,
                            const signer *owner, const signer *provider, bool handover)
 {
@@ -996,14 +1050,19 @@ static int scenario_start(int descriptor, const char *directory, scenario_state 
     REQUIRE(submit(descriptor, state, owner, &state->owner_sequence, LX_ESCROW_OPEN,
         payload, LX_ESCROW_OPEN_PAYLOAD_BYTES, LXP_ERR_ACCOUNT_ID_MISMATCH, &evidence) == 0);
     REQUIRE(maintenance_effects_check(&evidence, false) == 0);
+    lxp_u128 funded_balance, insufficient_amount, refused_balance;
+    REQUIRE(authenticated_balance(descriptor, owner_main, &evidence, &funded_balance) == 0);
+    REQUIRE(lxp_u128_add(funded_balance, (lxp_u128){0U, 1U}, &insufficient_amount) == LXP_OK);
     free(evidence.storage);
     payload[64U] ^= 1U;
-    store_u64(payload + 200U, 1000001U);
+    REQUIRE(lxp_u128_to_be(insufficient_amount, payload + 192U) == LXP_OK);
     REQUIRE(submit(descriptor, state, owner, &state->owner_sequence, LX_ESCROW_OPEN,
         payload, LX_ESCROW_OPEN_PAYLOAD_BYTES, LXP_ERR_INSUFFICIENT_BALANCE, &evidence) == 0);
     REQUIRE(maintenance_effects_check(&evidence, false) == 0);
+    REQUIRE(authenticated_balance(descriptor, owner_main, &evidence, &refused_balance) == 0);
+    REQUIRE(lxp_u128_cmp(refused_balance, funded_balance) == 0);
     free(evidence.storage);
-    store_u64(payload + 200U, 100U);
+    REQUIRE(lxp_u128_to_be((lxp_u128){0U, 100U}, payload + 192U) == LXP_OK);
     REQUIRE(submit_release(descriptor, state, owner, &state->owner_sequence, LX_ESCROW_OPEN,
         payload, LX_ESCROW_OPEN_PAYLOAD_BYTES) == 0);
     memset(payload, 0, sizeof(payload));

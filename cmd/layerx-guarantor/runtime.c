@@ -310,6 +310,34 @@ static lxp_result load_schedule(gp_runtime *process)
                                       &process->fees);
 }
 
+static lxp_result compare_signed(const lxp_receipt *receipt, lxp_byte_span published,
+                                  lxp_arena *arena)
+{
+    lxp_byte_span encoded;
+    size_t mark = lxp_arena_mark(arena);
+    lxp_result status = lxp_receipt_encode(receipt, true, arena, &encoded);
+    if (status == LXP_OK &&
+        (encoded.length != published.length ||
+         lxp_ct_memcmp(encoded.bytes, published.bytes, published.length) != 0))
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+    lxp_result reset_status = lxp_arena_reset(arena, mark);
+    return reset_status == LXP_OK ? status : reset_status;
+}
+
+static lxp_result replay_execute_terminal(lxp_kernel *kernel, const lxp_activity *activity,
+    const lxp_kernel_execution *execution, lxp_receipt *receipt)
+{
+    lxp_result status;
+    if (execution == NULL || execution->replay_receipt == NULL ||
+        execution->replay_public_key == NULL || execution->sequencer_private_key != NULL)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_kernel_execute_activity(kernel, activity, execution, receipt);
+    if (status != LXP_OK && status == execution->replay_receipt->result_code &&
+        lxp_terminal_rejection_applies(status))
+        status = lxp_kernel_terminal_rejection(kernel, activity, execution, status, receipt);
+    return status;
+}
+
 static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_sequence,
                                           const uint8_t *canonical_activity, size_t activity_length,
                                           const uint8_t *canonical_receipt, size_t receipt_length,
@@ -324,7 +352,6 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     lxp_authority_resolved authority;
     lxp_transfer_allowance allowance;
     lxp_kernel_execution execution;
-    lxp_byte_span encoded_receipt;
     uint8_t activity_id[32];
     lxp_result status;
     if (process == NULL || canonical_activity == NULL || canonical_receipt == NULL ||
@@ -446,13 +473,10 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
         (void)memcpy(process->programs.occupancy_asset_id, asset_id, 32U);
     }
     (void)memset(receipt, 0, sizeof(*receipt));
-    status = lxp_kernel_execute_activity(&process->kernel, activity, &execution, receipt);
+    status = replay_execute_terminal(&process->kernel, activity, &execution, receipt);
     if (status == LXP_OK)
-        status = lxp_receipt_encode(receipt, true, &process->execution_arena, &encoded_receipt);
-    if (status == LXP_OK &&
-        (encoded_receipt.length != receipt_length ||
-         lxp_ct_memcmp(encoded_receipt.bytes, canonical_receipt, receipt_length) != 0))
-        status = LXP_FATAL_REPLAY_DIVERGENCE;
+        status = compare_signed(receipt, (lxp_byte_span){canonical_receipt, receipt_length},
+                                 &process->execution_arena);
     return status;
 }
 static lxp_result read_artifact(const char *path, size_t maximum, uint8_t **bytes, size_t *length)
@@ -501,6 +525,8 @@ static lxp_result compare_unsigned(gp_runtime *runtime, const lxp_receipt *recei
     size_t mark = lxp_arena_mark(&runtime->execution_arena);
     lxp_result status =
         lxp_receipt_encode(&runtime->expected, false, &runtime->execution_arena, &expected);
+    if (status == LXP_OK)
+        status = lxp_arena_reset(&runtime->execution_arena, mark + expected.length);
     if (status == LXP_OK)
         status = lxp_receipt_encode(receipt, false, &runtime->execution_arena, &actual);
     if (status == LXP_OK && (actual.length != expected.length ||

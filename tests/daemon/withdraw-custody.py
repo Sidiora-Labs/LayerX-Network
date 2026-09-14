@@ -124,7 +124,9 @@ def main():
             '--module-maintenance' if args.module_maintenance else
             '--metered-allowance' if args.metered_allowance else
             '--paid-withdrawal' if args.paid_withdrawal else '--withdraw')
-    amount = 1000000000 if args.metered_allowance or args.native_onboarding or args.owner_rotation else 1000000
+    programs_handover = args.handover and bool(os.environ.get('LAYERX_TEST_HANDOVER_PROGRAM_CONSUMER_BIN'))
+    amount = 1000000000 if (args.metered_allowance or args.native_onboarding or
+                           args.owner_rotation or programs_handover) else 1000000
     assert os.environ.get('LAYERX_TEST_SETTLEMENT_PUBLICATION') != '1' or mode == '--withdraw'
     logs = ROOT / 'qual-logs/set1'
     logs.mkdir(parents=True, exist_ok=True)

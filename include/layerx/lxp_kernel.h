@@ -59,6 +59,8 @@ typedef struct lxp_module_account_snapshot {
     uint8_t asset_id[32];
     bool has_asset;
     uint64_t next_sequence;
+    lxp_u128 minimum_balance;
+    lxp_u128 maximum_balance;
 } lxp_module_account_snapshot;
 
 typedef struct lxp_ledger_admission_facts {

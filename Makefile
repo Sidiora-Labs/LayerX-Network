@@ -3520,13 +3520,17 @@ test-daemon-handover-crash: test-daemon-handover $(BUILD_DIR)/tests/lxp_test_mai
 test-daemon-handover-peers: $(BUILD_DIR)/tests/lxp_test_module_maintenance $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority $(BUILD_DIR)/tests/lxp_test_guarantor_runtime $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build $(BUILD_DIR)/bin/layerx-handover $(BUILD_DIR)/bin/layerx-guarantor
 	$(RUN_PREFIX) env LAYERX_TEST_HANDOVER_PEERS=1 python3 tests/daemon/withdraw-custody.py $(BUILD_DIR) --handover
 
+.PHONY: test-daemon-guarantor-feedback
+test-daemon-guarantor-feedback: $(BUILD_DIR)/tests/lxp_test_guarantor_feedback
+	$(MAKE) test-daemon-handover-peers LAYERX_TEST_GUARANTOR_FEEDBACK_BIN=$(abspath $(BUILD_DIR)/tests/lxp_test_guarantor_feedback)
+
 .PHONY: test-daemon-handover-consumers
-test-daemon-handover-consumers:
+test-daemon-handover-consumers: test-guarantor-receipt $(BUILD_DIR)/tests/lxp_test_guarantor_feedback
 	sh programs/sdk/rust/examples/escrow/build.sh
 	cargo build --locked --manifest-path platform/Cargo.toml -p layerx-runtime-clock
 	cargo build --locked --manifest-path agent/Cargo.toml -p layerx-client --example native_handover_history
 	cargo build --locked --manifest-path agent/Cargo.toml -p layerx-agentd --example native_handover_reads --example native_handover_programs
-	$(MAKE) test-daemon-handover-peers LAYERX_TEST_HANDOVER_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_history) LAYERX_TEST_HANDOVER_READ_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_reads) LAYERX_TEST_HANDOVER_CLOCK_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),platform/target)/debug/layerx-runtime-clock) LAYERX_TEST_HANDOVER_PROGRAM_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_programs) LAYERX_TEST_HANDOVER_ESCROW_WASM=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),programs/sdk/rust/examples/escrow/target)/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm)
+	$(MAKE) test-daemon-handover-peers LAYERX_TEST_GUARANTOR_FEEDBACK_BIN=$(abspath $(BUILD_DIR)/tests/lxp_test_guarantor_feedback) LAYERX_TEST_HANDOVER_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_history) LAYERX_TEST_HANDOVER_READ_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_reads) LAYERX_TEST_HANDOVER_CLOCK_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),platform/target)/debug/layerx-runtime-clock) LAYERX_TEST_HANDOVER_PROGRAM_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_programs) LAYERX_TEST_HANDOVER_ESCROW_WASM=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),programs/sdk/rust/examples/escrow/target)/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm)
 
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
@@ -3744,6 +3748,34 @@ $(BUILD_DIR)/tests/lxp_test_guarantor_runtime: tests/daemon/guarantor-runtime.c 
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 test-daemon-guarantor-integration: $(BUILD_DIR)/tests/lxp_test_guarantor_runtime
+
+$(BUILD_DIR)/tests/lxp_test_guarantor_feedback: tests/daemon/guarantor-feedback.c \
+	$(BUILD_DIR)/obj/cmd/layerx-guarantor/lni.o $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-guarantor-receipt
+$(BUILD_DIR)/tests/lxp_test_guarantor_receipt: tests/daemon/guarantor-receipt.c \
+	cmd/layerx-guarantor/runtime.c tests/programs/test_call_activity.c \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o $(BUILD_DIR)/obj/cmd/layerx-guarantor/runtime.o,$(LAYERXD_OBJECTS)) \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out %.c,$^) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+test-guarantor-receipt: $(BUILD_DIR)/tests/lxp_test_guarantor_receipt test-guarantor-terminal-rejection
+	$(RUN_PREFIX) $<
+
+.PHONY: test-guarantor-terminal-rejection
+$(BUILD_DIR)/tests/lxp_test_guarantor_terminal_rejection: tests/daemon/guarantor-terminal-rejection.c \
+	cmd/layerx-guarantor/runtime.c tests/protocol/lxp_test_terminal_rejection.c tests/programs/test_call_activity.c \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o $(BUILD_DIR)/obj/cmd/layerx-guarantor/runtime.o,$(LAYERXD_OBJECTS)) \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(filter-out %.c,$^) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+test-guarantor-terminal-rejection: $(BUILD_DIR)/tests/lxp_test_guarantor_terminal_rejection
+	$(RUN_PREFIX) $<
 
 .PHONY: test-state-proof
 $(BUILD_DIR)/tests/lxp_test_state_proof: tests/state/lxp_test_state_proof.c \
