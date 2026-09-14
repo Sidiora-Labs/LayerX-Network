@@ -2377,13 +2377,23 @@ fn verify_withdrawal_submission(
 ) -> Result<(), ()> {
     let decoded = layerx_wire::receipt::decode(receipt).map_err(|_| ())?;
     let protocol = decoded.protocol().ok_or(())?;
-    if protocol.module_id() != 1 || protocol.operation() != 9 { return Ok(()); }
+    if protocol.module_id() != 1 || protocol.operation() != 9 {
+        return Ok(());
+    }
     let authorized = layerx_proof::receipt::AuthorizedBatch::new(
-        protocol.batch_id(), protocol.asset(), protocol.previous_state_root(),
-        protocol.resulting_state_root(), config.sequencer_authorization.public_key(),
+        protocol.batch_id(),
+        protocol.asset(),
+        protocol.previous_state_root(),
+        protocol.resulting_state_root(),
+        config.sequencer_authorization.public_key(),
     );
-    layerx_proof::receipt::withdrawal::verify(receipt, &authorized, &operation.canonical, config.protocol_network_id)
-        .map_err(|_| ())?;
+    layerx_proof::receipt::withdrawal::verify(
+        receipt,
+        &authorized,
+        &operation.canonical,
+        config.protocol_network_id,
+    )
+    .map_err(|_| ())?;
     Ok(())
 }
 

@@ -806,37 +806,78 @@ fn verify_withdrawal_request(
     header: &[u8],
     deadline: Instant,
 ) -> Result<(), String> {
-    use layerx_client::evidence::{proof_bundle, EvidenceContext, ProofBundleSelector, VerifiedProofBundle};
+    use layerx_client::evidence::{
+        proof_bundle, EvidenceContext, ProofBundleSelector, VerifiedProofBundle,
+    };
     use layerx_proof::receipt::{withdrawal, AuthorizedBatch};
     let decoded = layerx_wire::receipt::decode(receipt).map_err(|error| format!("{error:?}"))?;
     let protocol = decoded.protocol().ok_or("protocol receipt required")?;
-    if protocol.module_id() != 1 || protocol.operation() != 9 { return Ok(()); }
-    let remaining = deadline.checked_duration_since(Instant::now()).ok_or("authority deadline expired")?;
-    let limits = Limits { maximum_frame_bytes: LNI_FRAME_BYTES, maximum_connections: MAX_LNI_CONNECTIONS,
-        maximum_streams: 1, maximum_queued_bytes: LNI_FRAME_BYTES, deadline: remaining };
-    let mut transport = Uds::connect(&config.lni_socket, &config.lni_gate, limits).map_err(|error| format!("{error:?}"))?;
-    let handshake = perform(&mut transport, &HandshakeConfig {
-        built_interface_version: Version::V1_5, expected_protocol_version: PROTOCOL_VERSION,
-        expected_network_id: config.protocol_network_id,
-    }, None).map_err(|error| format!("{error:?}"))?;
+    if protocol.module_id() != 1 || protocol.operation() != 9 {
+        return Ok(());
+    }
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .ok_or("authority deadline expired")?;
+    let limits = Limits {
+        maximum_frame_bytes: LNI_FRAME_BYTES,
+        maximum_connections: MAX_LNI_CONNECTIONS,
+        maximum_streams: 1,
+        maximum_queued_bytes: LNI_FRAME_BYTES,
+        deadline: remaining,
+    };
+    let mut transport = Uds::connect(&config.lni_socket, &config.lni_gate, limits)
+        .map_err(|error| format!("{error:?}"))?;
+    let handshake = perform(
+        &mut transport,
+        &HandshakeConfig {
+            built_interface_version: Version::V1_5,
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: config.protocol_network_id,
+        },
+        None,
+    )
+    .map_err(|error| format!("{error:?}"))?;
     if handshake.node().authorised_sequencer_key != config.sequencer_public_key {
         return Err("withdrawal sequencer key mismatch".to_owned());
     }
-    let bundle = proof_bundle(&mut transport, ProofBundleSelector::Activity(protocol.activity_id()), EvidenceContext {
-        interface_version: handshake.node().interface_version,
-        correlation_id: CORRELATION.fetch_add(1, Ordering::AcqRel),
-        expected_protocol_version: PROTOCOL_VERSION, expected_network_id: config.protocol_network_id,
-        handshake_sequencer_key: config.sequencer_public_key,
-    }, &withdrawal::registry().map_err(|error| format!("{error:?}"))?)
-        .map_err(|error| format!("{error:?}"))?;
-    let VerifiedProofBundle::Activity { canonical_bytes, signed_header, .. } = bundle else {
+    let bundle = proof_bundle(
+        &mut transport,
+        ProofBundleSelector::Activity(protocol.activity_id()),
+        EvidenceContext {
+            interface_version: handshake.node().interface_version,
+            correlation_id: CORRELATION.fetch_add(1, Ordering::AcqRel),
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: config.protocol_network_id,
+            handshake_sequencer_key: config.sequencer_public_key,
+        },
+        &withdrawal::registry().map_err(|error| format!("{error:?}"))?,
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    let VerifiedProofBundle::Activity {
+        canonical_bytes,
+        signed_header,
+        ..
+    } = bundle
+    else {
         return Err("withdrawal activity proof required".to_owned());
     };
-    if signed_header.canonical_bytes != header { return Err("withdrawal header mismatch".to_owned()); }
-    let authorized = AuthorizedBatch::new(protocol.batch_id(), protocol.asset(), protocol.previous_state_root(),
-        protocol.resulting_state_root(), config.sequencer_public_key);
-    withdrawal::verify(receipt, &authorized, &canonical_bytes, config.protocol_network_id)
-        .map_err(|error| format!("{error:?}"))?;
+    if signed_header.canonical_bytes != header {
+        return Err("withdrawal header mismatch".to_owned());
+    }
+    let authorized = AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        protocol.previous_state_root(),
+        protocol.resulting_state_root(),
+        config.sequencer_public_key,
+    );
+    withdrawal::verify(
+        receipt,
+        &authorized,
+        &canonical_bytes,
+        config.protocol_network_id,
+    )
+    .map_err(|error| format!("{error:?}"))?;
     Ok(())
 }
 

@@ -7,7 +7,9 @@ use super::{
 use layerx_types::account::AccountId;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload};
 use layerx_wire::activity::{decode_signed, encode_signed, encode_unsigned as unsigned_activity};
-use layerx_wire::hash::{account_id_for_protocol, activity_id, payload_hash, payload_hash_for, Domain};
+use layerx_wire::hash::{
+    account_id_for_protocol, activity_id, payload_hash, payload_hash_for, Domain,
+};
 use layerx_wire::receipt::ProtocolReceipt;
 
 fn refused() -> VerificationFailure {
@@ -37,8 +39,12 @@ fn shape(receipt: &ProtocolReceipt) -> Result<(), VerificationFailure> {
         || receipt.from() == [0; 32]
         || receipt.to() == [0; 32]
         || receipt.from() == receipt.to()
-        || receipt.debit_balance_before().checked_sub(receipt.amount()) != Some(receipt.debit_balance_after())
-        || receipt.credit_balance_before().checked_add(receipt.amount()) != Some(receipt.credit_balance_after())
+        || receipt.debit_balance_before().checked_sub(receipt.amount())
+            != Some(receipt.debit_balance_after())
+        || receipt
+            .credit_balance_before()
+            .checked_add(receipt.amount())
+            != Some(receipt.credit_balance_after())
         || receipt.authorization_hash() == [0; 32]
         || receipt.context_hash() == [0; 32]
         || receipt.transfer_set_root() == [0; 32]
@@ -100,17 +106,26 @@ fn effects(receipt: &ProtocolReceipt) -> Result<&[u8], VerificationFailure> {
     let [transfer, event] = receipt.effects() else {
         return Err(refused());
     };
-    if transfer.module_id() != 1 || transfer.kind() != 2 || !transfer.monetary()
-        || transfer.event_type() != 0 || !transfer.body().is_empty()
-        || event.module_id() != 1 || event.kind() != 3 || event.monetary()
-        || event.event_type() != 9 || event.transfer_set_root() != [0; 32]
+    if transfer.module_id() != 1
+        || transfer.kind() != 2
+        || !transfer.monetary()
+        || transfer.event_type() != 0
+        || !transfer.body().is_empty()
+        || event.module_id() != 1
+        || event.kind() != 3
+        || event.monetary()
+        || event.event_type() != 9
+        || event.transfer_set_root() != [0; 32]
     {
         return Err(refused());
     }
     let body = event.body();
     let payload = payload(body)?;
     if body[6..38] != receipt.activity_id()
-        || receipt.fee_charged() > u128::from(u64::from_be_bytes(payload[100..].try_into().map_err(|_| refused())?))
+        || receipt.fee_charged()
+            > u128::from(u64::from_be_bytes(
+                payload[100..].try_into().map_err(|_| refused())?,
+            ))
     {
         return Err(refused());
     }
@@ -128,12 +143,15 @@ fn effects(receipt: &ProtocolReceipt) -> Result<&[u8], VerificationFailure> {
     nullifier.update(&body[2..118]);
     nullifier.update(&body[150..182]);
     let nullifier: [u8; 32] = nullifier.finalize().into();
-    if receipt.asset() != body[70..102] || receipt.from() != body[38..70]
+    if receipt.asset() != body[70..102]
+        || receipt.from() != body[38..70]
         || receipt.to() != destination
-        || receipt.amount() != u128::from_be_bytes(payload[32..48].try_into().map_err(|_| refused())?)
+        || receipt.amount()
+            != u128::from_be_bytes(payload[32..48].try_into().map_err(|_| refused())?)
         || receipt.context_hash() != nullifier
         || receipt.transfer_set_root() != transfer.transfer_set_root()
-        || crate::merkle::leaf_hash(&leg).map_err(|_| refused())? != transfer.transfer_set_root() {
+        || crate::merkle::leaf_hash(&leg).map_err(|_| refused())? != transfer.transfer_set_root()
+    {
         return Err(refused());
     }
     Ok(body)
@@ -145,7 +163,9 @@ pub(super) fn verify_effects(
 ) -> Result<VerifiedReceipt, VerificationFailure> {
     let verified = authenticate(bytes, authorized)?;
     let receipt = verified.receipt().protocol().ok_or_else(refused)?;
-    if receipt.result_code() != 0 { return Err(refused()); }
+    if receipt.result_code() != 0 {
+        return Err(refused());
+    }
     effects(receipt)?;
     Ok(verified)
 }
@@ -161,19 +181,30 @@ pub fn verify(
     network_id: u32,
 ) -> Result<VerifiedReceipt, VerificationFailure> {
     let activity = decode_signed(signed_activity, &registry()?).map_err(|_| refused())?;
-    if activity.protocol_version() != 3 || activity.network_id() != network_id || network_id == 0
+    if activity.protocol_version() != 3
+        || activity.network_id() != network_id
+        || network_id == 0
         || encode_signed(&activity).map_err(|_| refused())? != signed_activity
-        || activity.authority().len() != 32 || activity.payload().len() != 108
+        || activity.authority().len() != 32
+        || activity.payload().len() != 108
         || payload_hash(&activity).map_err(|_| refused())? != activity.payload_hash()
-    { return Err(refused()); }
+    {
+        return Err(refused());
+    }
     let unsigned = unsigned_activity(&activity).map_err(|_| refused())?;
-    let message = layerx_crypto::SignatureMessage::new(Domain::SignaturePreimage, 3, network_id, &unsigned)
-        .map_err(|_| refused())?;
+    let message =
+        layerx_crypto::SignatureMessage::new(Domain::SignaturePreimage, 3, network_id, &unsigned)
+            .map_err(|_| refused())?;
     layerx_crypto::ed25519::verify(
         &activity.authority().try_into().map_err(|_| refused())?,
-        &activity.signature().ok_or_else(refused)?.try_into().map_err(|_| refused())?,
+        &activity
+            .signature()
+            .ok_or_else(refused)?
+            .try_into()
+            .map_err(|_| refused())?,
         message,
-    ).map_err(|_| refused())?;
+    )
+    .map_err(|_| refused())?;
     let signing_digest = message.digest();
     let verified = authenticate(bytes, authorized)?;
     let receipt = verified.receipt().protocol().ok_or_else(refused)?;
@@ -182,8 +213,15 @@ pub fn verify(
         || receipt.timestamp() < activity.timestamp_bound().not_before
         || receipt.timestamp() > activity.timestamp_bound().not_after
         || receipt.fee_charged() > activity.fee_limit()
-        || activity.fee_limit() != u128::from(u64::from_be_bytes(activity.payload()[100..].try_into().map_err(|_| refused())?))
-    { return Err(refused()); }
+        || activity.fee_limit()
+            != u128::from(u64::from_be_bytes(
+                activity.payload()[100..]
+                    .try_into()
+                    .map_err(|_| refused())?,
+            ))
+    {
+        return Err(refused());
+    }
     if receipt.result_code() == 0 {
         let body = effects(receipt)?;
         let actor = std::str::from_utf8(activity.actor_did()).map_err(|_| refused())?;
@@ -192,7 +230,11 @@ pub fn verify(
             || body[38..70] != account_id_for_protocol(&source, 3).map_err(|_| refused())?
             || payload(body)?.as_slice() != activity.payload()
             || body[214..246] != activity.idempotency_key()
-        { return Err(refused()); }
-    } else if !receipt.effects().is_empty() { return Err(refused()); }
+        {
+            return Err(refused());
+        }
+    } else if !receipt.effects().is_empty() {
+        return Err(refused());
+    }
     Ok(verified)
 }

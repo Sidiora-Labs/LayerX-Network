@@ -272,8 +272,11 @@ pub(super) fn run(
     assert_eq!(verified.activity_id(), activity_id);
     assert_eq!(verified.fee_charged(), 17);
     let authorized = layerx_proof::receipt::AuthorizedBatch::new(
-        verified.batch_id(), verified.asset(), verified.previous_state_root(),
-        verified.resulting_state_root(), cluster.sequencer_key,
+        verified.batch_id(),
+        verified.asset(),
+        verified.previous_state_root(),
+        verified.resulting_state_root(),
+        cluster.sequencer_key,
     );
     layerx_proof::receipt::withdrawal::verify(&receipt, &authorized, &canonical, NETWORK_ID)
         .required("withdrawal receipt bound to original owner activity and monetary effects");
@@ -319,7 +322,9 @@ pub(super) fn run(
             response
         );
     }
-    println!("public owner withdrawal binds the native receipt, exact fee, verified balances and restart replay");
+    println!(
+        "public owner withdrawal binds the native receipt, exact fee, verified balances and restart replay"
+    );
 }
 
 #[test]
