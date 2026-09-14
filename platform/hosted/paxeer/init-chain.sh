@@ -64,6 +64,12 @@ command -v "$JQ" >/dev/null 2>&1 || fail "jq is not available"
 [ -r "$USDL_RUNTIME" ] || fail "USDL runtime bytecode $USDL_RUNTIME is not readable"
 
 if [ -f "$MARKER" ]; then
+    if [ -n "$COMMIT_TIMEOUT_NANOSECONDS" ]; then
+        "$JQ" -e --arg commit_timeout "$COMMIT_TIMEOUT_NANOSECONDS" \
+            '.consensus_params.timeout.commit == $commit_timeout' \
+            "$HOME_DIR/config/genesis.json" >/dev/null \
+            || fail "requested commit timeout differs from initialised genesis"
+    fi
     echo "init-chain: $HOME_DIR already initialised for $COSMOS_CHAIN_ID" >&2
     exit 0
 fi

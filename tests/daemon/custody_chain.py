@@ -171,6 +171,16 @@ def owned_chain(work, artifacts):
         consensus_timeout = json.loads(genesis_bytes)['consensus_params']['timeout']
         assert consensus_timeout['commit'] == '1000000000'
         assert consensus_timeout['bypass_commit_timeout'] is False
+        with (work / 'paxd-reinit.log').open('w') as log:
+            command('bash', 'platform/hosted/paxeer/init-chain.sh', env=env, stdout=log, stderr=log)
+        assert (chain_home / 'config/genesis.json').read_bytes() == genesis_bytes
+        with (work / 'paxd-reinit-mismatch.log').open('w') as log:
+            refused = subprocess.run(['bash', 'platform/hosted/paxeer/init-chain.sh'], cwd=ROOT,
+                env=env | {'LAYERX_PAXEER_COMMIT_TIMEOUT_NANOSECONDS': '500000000'},
+                stdout=log, stderr=log, check=False)
+        assert refused.returncode != 0
+        assert 'requested commit timeout differs from initialised genesis' in (work / 'paxd-reinit-mismatch.log').read_text()
+        assert (chain_home / 'config/genesis.json').read_bytes() == genesis_bytes
         (work / 'paxeer-genesis.json').write_bytes(genesis_bytes)
         for reservation in reservations:
             reservation.close()
