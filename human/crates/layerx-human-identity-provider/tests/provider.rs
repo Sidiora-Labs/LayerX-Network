@@ -120,7 +120,10 @@ fn read_only_binding_authenticates_tenant_principal_peer_and_durable_restart() -
         peer_gid: gid,
         deadline: Duration::from_millis(200),
     };
-    let client = layerx_identity_binding::Client::new(config.clone())?;
+    let client = layerx_identity_binding::Client::new(
+        config.clone(),
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
+    )?;
     let binding = client.lookup(principal)?;
     assert_eq!(binding.principal(), principal);
     assert_eq!(binding.tenant(), "tenant-a");
@@ -136,19 +139,57 @@ fn read_only_binding_authenticates_tenant_principal_peer_and_durable_restart() -
         layerx_identity_binding::subject_namespace("tenant-b", principal)?
     );
     assert!(client.lookup("unknown-principal").is_err());
-    let wrong_tenant = layerx_identity_binding::Client::new(layerx_identity_binding::Config {
-        tenant: "tenant-b".into(),
-        ..config.clone()
-    })?;
+    let wrong_tenant = layerx_identity_binding::Client::new(
+        layerx_identity_binding::Config {
+            tenant: "tenant-b".into(),
+            ..config.clone()
+        },
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
+    )?;
     assert!(wrong_tenant.lookup(principal).is_err());
-    let wrong_peer = layerx_identity_binding::Client::new(layerx_identity_binding::Config {
-        peer_gid: gid.checked_add(1).ok_or("gid overflow")?,
-        ..config.clone()
-    })?;
+    let wrong_peer = layerx_identity_binding::Client::new(
+        layerx_identity_binding::Config {
+            peer_gid: gid.checked_add(1).ok_or("gid overflow")?,
+            ..config.clone()
+        },
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
+    )?;
     assert!(wrong_peer.lookup(principal).is_err());
+    read_only_refusals(&reader, &root, &client, &binding, principal)?;
+    assert_eq!(
+        call(&socket, 2, &[b"reader-one@example.com"])?,
+        vec![first[0].clone()]
+    );
+    running.stop()?;
+    assert!(!reader.exists());
+    let running = Running::start_with_reader(&socket, &reader, &root, uid, &[uid], "tenant-a")?;
+    assert_eq!(client.lookup(principal)?, binding);
+    running.stop()?;
+    assert!(Running::start_with_reader(&socket, &reader, &root, uid, &[uid], "tenant-b").is_err());
+    let running = Running::start_with_reader(
+        &socket,
+        &reader,
+        &root,
+        uid,
+        &[uid.checked_add(1).ok_or("uid overflow")?],
+        "tenant-a",
+    )?;
+    assert!(client.lookup(principal).is_err());
+    assert!(call(&socket, 0, &[])?.is_empty());
+    running.stop()?;
+    Ok(())
+}
+
+fn read_only_refusals(
+    reader: &Path,
+    root: &Path,
+    client: &layerx_identity_binding::Client,
+    binding: &layerx_identity_binding::Binding,
+    principal: &str,
+) -> Result {
     let original = fs::read(root.join("state.json"))?;
     let mutation = exchange(
-        &reader,
+        reader,
         &request(
             1,
             &[
@@ -172,35 +213,14 @@ fn read_only_binding_authenticates_tenant_principal_peer_and_durable_restart() -
     ] {
         let mut packet = b"LXIB\x01".to_vec();
         packet.extend(serde_json::to_vec(&document)?);
-        let response = exchange(&reader, &packet)?;
+        let response = exchange(reader, &packet)?;
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&response[5..])?,
             serde_json::json!({"status":"refused"})
         );
-        assert_eq!(client.lookup(principal)?, binding);
+        assert_eq!(&client.lookup(principal)?, binding);
     }
     assert_eq!(fs::read(root.join("state.json"))?, original);
-    assert_eq!(
-        call(&socket, 2, &[b"reader-one@example.com"])?,
-        vec![first[0].clone()]
-    );
-    running.stop()?;
-    assert!(!reader.exists());
-    let running = Running::start_with_reader(&socket, &reader, &root, uid, &[uid], "tenant-a")?;
-    assert_eq!(client.lookup(principal)?, binding);
-    running.stop()?;
-    assert!(Running::start_with_reader(&socket, &reader, &root, uid, &[uid], "tenant-b").is_err());
-    let running = Running::start_with_reader(
-        &socket,
-        &reader,
-        &root,
-        uid,
-        &[uid.checked_add(1).ok_or("uid overflow")?],
-        "tenant-a",
-    )?;
-    assert!(client.lookup(principal).is_err());
-    assert!(call(&socket, 0, &[])?.is_empty());
-    running.stop()?;
     Ok(())
 }
 

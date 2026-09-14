@@ -179,7 +179,7 @@ fn exact_signed_queue_is_partitioned_before_transmission_and_restores_independen
     )
     .is_err());
     drop(store);
-    let store = must(Store::open(&root));
+    let mut store = must(Store::open(&root));
     let mut alice_queue = Outbox::default();
     let mut bob_queue = Outbox::default();
     must(alice_queue.restore(&store, must(TenantId::new(alice.tenant)), id));
@@ -199,5 +199,16 @@ fn exact_signed_queue_is_partitioned_before_transmission_and_restores_independen
             .unwrap_or_else(|| panic!("restored bob"))
             .state,
         SubmissionState::Queued
+    );
+    assert_eq!(
+        must(begin_transmission(&mut bob_queue, &mut store, id)),
+        original
+    );
+    assert_eq!(
+        bob_queue
+            .status(id)
+            .unwrap_or_else(|| panic!("resumed Bob queue"))
+            .state,
+        SubmissionState::Submitted
     );
 }

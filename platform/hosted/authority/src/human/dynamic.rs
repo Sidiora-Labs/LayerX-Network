@@ -6,7 +6,6 @@ use super::{
 use layerx_identity_binding::{Binding, Client, Config as BindingConfig};
 use layerx_types::{
     account::AccountId,
-    ids::Did,
     payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry},
 };
 use layerx_wire::activity::{decode_signed, encode_signed, encode_unsigned, Activity};
@@ -15,26 +14,46 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub(super) fn requested(params: &BTreeMap<String, String>) -> bool {
+    params.keys().any(|key| {
+        matches!(
+            key.as_str(),
+            "subject_principal"
+                | "owner_did"
+                | "owner_account"
+                | "asset_id"
+                | "registration"
+                | "signed_activity"
+        )
+    })
+}
+
 pub(super) fn binding_client(tenant: &str) -> Result<Option<Client>, String> {
     let names = [
         "LAYERX_AUTHORITY_IDENTITY_BINDING_SOCKET",
         "LAYERX_AUTHORITY_IDENTITY_BINDING_UID",
         "LAYERX_AUTHORITY_IDENTITY_BINDING_GID",
     ];
-    let values = names.map(|name| std::env::var(name).ok());
-    if values.iter().all(Option::is_none) {
+    if names.iter().all(|name| std::env::var_os(name).is_none()) {
         return Ok(None);
     }
-    let [Some(socket), Some(uid), Some(gid)] = values else {
-        return Err("identity binding configuration is incomplete".to_owned());
-    };
-    Client::new(BindingConfig {
-        socket: PathBuf::from(socket),
-        tenant: tenant.to_owned(),
-        peer_uid: uid.parse().map_err(|_| "invalid identity binding UID")?,
-        peer_gid: gid.parse().map_err(|_| "invalid identity binding GID")?,
-        deadline: Duration::from_secs(5),
-    })
+    let values = names.map(|name| {
+        std::env::var(name)
+            .map_err(|_| "identity binding configuration is incomplete or invalid".to_owned())
+    });
+    let [socket, uid, gid] = values;
+    let (socket, uid, gid) = (socket?, uid?, gid?);
+    Client::new(
+        BindingConfig {
+            socket: PathBuf::from(socket),
+            tenant: tenant.to_owned(),
+            peer_uid: uid.parse().map_err(|_| "invalid identity binding UID")?,
+            peer_gid: gid.parse().map_err(|_| "invalid identity binding GID")?,
+            deadline: Duration::from_secs(5),
+        },
+        layerx_client::runtime_clock::RuntimeClock::from_environment()
+            .map_err(|_| "identity binding clock unavailable")?,
+    )
     .map(Some)
     .map_err(|_| "identity binding configuration is invalid".to_owned())
 }
@@ -98,10 +117,12 @@ fn current(
     policy: &PrincipalPolicy,
 ) -> Result<Current, Response> {
     let refused = || unavailable("subject_checkpoint_proof_unavailable");
-    let mut session = budget_state::Session::open(config).map_err(|_| refused())?;
-    let key = budget_state::identity_key(&subject.did).map_err(|_| refused())?;
-    let state = session.module(7, &key).map_err(|_| refused())?;
-    let account = session.account(subject.account_id).map_err(|_| refused())?;
+    let mut session = budget_state::Session::open(config).map_err(|()| refused())?;
+    let key = budget_state::identity_key(&subject.did).map_err(|()| refused())?;
+    let state = session.module(7, &key).map_err(|()| refused())?;
+    let account = session
+        .account(subject.account_id)
+        .map_err(|()| refused())?;
     let account = account.account();
     if state.len() != 223
         || &state[..5] != b"LXGI1"
@@ -128,7 +149,7 @@ fn current(
     {
         return Err(unavailable("subject_checkpoint_stale"));
     }
-    session.unchanged().map_err(|_| refused())?;
+    session.unchanged().map_err(|()| refused())?;
     Ok(Current {
         state,
         head: session.context.head.chain_sequence,
@@ -152,7 +173,7 @@ fn registry(human: &Human) -> Result<ModuleRegistry, Response> {
             ModuleRegistration::new(id, &types).map_err(|_| ())
         })
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| unavailable("module_registry_invalid"))?;
+        .map_err(|()| unavailable("module_registry_invalid"))?;
     ModuleRegistry::new(&modules).map_err(|_| unavailable("module_registry_invalid"))
 }
 
@@ -176,7 +197,7 @@ fn signed(bytes: &[u8], registry: &ModuleRegistry, network: u32) -> Result<Activ
     let message =
         layerx_crypto::SignatureMessage::new(Domain::SignaturePreimage, 3, network, &unsigned)
             .map_err(|_| refused())?;
-    layerx_crypto::ed25519::verify(&key, signature, message).map_err(|_| refused())?;
+    layerx_crypto::ed25519::verify(&key, &signature, message).map_err(|_| refused())?;
     Ok(activity)
 }
 
@@ -439,7 +460,9 @@ fn authority(
     let protocol = receipt
         .protocol()
         .ok_or_else(|| unavailable("state_evidence_refused"))?;
-    if protocol.network_id() != activity.network_id()
+    let header = layerx_wire::receipt::decode_batch_header(&item.header)
+        .map_err(|_| unavailable("state_evidence_refused"))?;
+    if header.network_id() != activity.network_id()
         || protocol.protocol_version() != activity.protocol_version()
         || protocol.module_id() != activity.activity_type().module() as u16
     {

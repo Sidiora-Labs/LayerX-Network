@@ -4,7 +4,7 @@ use super::*;
 fn genuine_sponsored_activity_binds_owner_target_network_and_every_original_byte() {
     let bytes = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../tests/fixtures/authority/provider-subject/onboarding.activity"
+        "/../../../tests/fixtures/authority/provider-subject/sponsored.activity"
     ));
     let kind = ActivityType::new(ModuleId::Governance, 1).unwrap_or_else(|_| panic!("Governance1"));
     let registry = ModuleRegistry::new(&[ModuleRegistration::new(ModuleId::Governance, &[kind])
