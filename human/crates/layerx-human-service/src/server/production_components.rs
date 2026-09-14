@@ -302,9 +302,10 @@ impl ProductionComponentsConfig {
                 .map_err(|_| "LAYERX_HUMAN_AGENT_AUTHORITY is invalid".to_owned())?,
             agent_timestamp_span_seconds: number("LAYERX_HUMAN_AGENT_TIMESTAMP_SPAN_SECONDS")?,
             agent_fee_limit: number("LAYERX_HUMAN_AGENT_FEE_LIMIT")?,
-            onboarding_sponsor_principal: crate::store::PrincipalId::new(
-                required("LAYERX_HUMAN_ONBOARDING_SPONSOR_PRINCIPAL")?,
-            ).map_err(|_| "invalid onboarding sponsor principal".to_owned())?,
+            onboarding_sponsor_principal: crate::store::PrincipalId::new(required(
+                "LAYERX_HUMAN_ONBOARDING_SPONSOR_PRINCIPAL",
+            )?)
+            .map_err(|_| "invalid onboarding sponsor principal".to_owned())?,
             onboarding_initial_funding: number("LAYERX_HUMAN_ONBOARDING_INITIAL_FUNDING")?,
             evm_gas_limit: number("LAYERX_HUMAN_EVM_GAS_LIMIT")?,
             evm_max_fee_per_gas: number("LAYERX_HUMAN_EVM_MAX_FEE_PER_GAS")?,
@@ -420,8 +421,12 @@ impl ProductionComponents {
         let agent_purpose_catalog =
             PurposePresetCatalog::from_json(&read_nonempty(&config.agent_purpose_catalog)?)
                 .map_err(|_| "agent purpose catalog was refused".to_owned())?;
-        let store =
-            production_principal_store(config.store_root, config.retention, config.tenancy_digest, config.identity_binding)?;
+        let store = production_principal_store(
+            config.store_root,
+            config.retention,
+            config.tenancy_digest,
+            config.identity_binding,
+        )?;
         let auth_index = production_auth_index(config.auth_index_root, config.auth_index_key)?;
         let agent_contract = layerx_sdk::Client::daemon(
             config.agent_socket.clone(),
@@ -789,7 +794,10 @@ impl ComponentMaintenance for ProductionComponents {
             .active_principals(observed_at)
             .map_err(|error| auth_failure(&error))?;
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-        for principal in store.known_principals().map_err(|_| ApiFailure::upstream_degraded())? {
+        for principal in store
+            .known_principals()
+            .map_err(|_| ApiFailure::upstream_degraded())?
+        {
             if !principals.contains(&principal) {
                 principals.push(principal);
             }
@@ -4583,7 +4591,8 @@ impl ProductionComponents {
                 .map_err(|_| ApiFailure::unavailable())?;
             let mut journey = OnboardingJourney::start(&mut scope, &provisioned.onboarding, now)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
-            self.custody.resume_onboarding_local(&mut journey, &mut scope, now)
+            self.custody
+                .resume_onboarding_local(&mut journey, &mut scope, now)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
             identity_dispatch::update_profile(
                 &mut scope,
@@ -4799,7 +4808,8 @@ impl ProductionComponents {
                 .map_err(|_| ApiFailure::upstream_degraded())?;
             drop(scope);
             drop(store);
-            let evidence = adapter.submit_prepared(signed)
+            let evidence = adapter
+                .submit_prepared(signed)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
             ProductionAgentCreation::finalization_evidence(&evidence, ModuleId::Governance, 5, now)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
@@ -4807,7 +4817,9 @@ impl ProductionComponents {
                 .bind_protocol_grant(grant_id)
                 .map_err(|error| auth_api_failure(&error))?;
             let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-            let mut scope = store.principal(&principal).map_err(|_| ApiFailure::unavailable())?;
+            let mut scope = store
+                .principal(&principal)
+                .map_err(|_| ApiFailure::unavailable())?;
             let grant = Passkeys::commit_open_session(&mut scope, prepared, now)
                 .map_err(|error| auth_api_failure(&error))?;
             self.auth_index
@@ -5468,10 +5480,14 @@ fn production_principal_store(
         .map_err(|_| "principal clock capability unavailable".to_owned())?;
     let provider = layerx_identity_binding::Client::new(binding, clock)
         .map_err(|_| "identity binding provider configuration refused".to_owned())?;
-    PrincipalStore::open_with_authority(root, retention, TenancyDigest::new(tenancy_digest),
-        Arc::new(IdentityTenancy(provider)))
-        .map(|store| Arc::new(Mutex::new(store)))
-        .map_err(|_| "principal store refused startup".to_owned())
+    PrincipalStore::open_with_authority(
+        root,
+        retention,
+        TenancyDigest::new(tenancy_digest),
+        Arc::new(IdentityTenancy(provider)),
+    )
+    .map(|store| Arc::new(Mutex::new(store)))
+    .map_err(|_| "principal store refused startup".to_owned())
 }
 
 fn production_auth_index(root: PathBuf, key: [u8; 32]) -> Result<AuthDiscoveryIndex, String> {
@@ -5521,7 +5537,10 @@ fn validate_resumed_session(
 struct IdentityTenancy(layerx_identity_binding::Client);
 
 impl crate::store::PrincipalTenancyAuthority for IdentityTenancy {
-    fn tenant_for(&self, principal: &crate::store::PrincipalId) -> Result<crate::store::AgentTenantId, crate::store::StoreError> {
+    fn tenant_for(
+        &self,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<crate::store::AgentTenantId, crate::store::StoreError> {
         let binding = self.0.lookup(principal.as_str())?;
         if binding.principal() != principal.as_str() {
             return Err(crate::store::StoreError::InvalidPrincipal);

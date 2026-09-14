@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 use layerx_agentd::read::NativeReadRoute;
@@ -227,7 +227,7 @@ fn verify_route(
         checked(Client::connect(config.clone()))?,
         actor.clone(),
         "native-handover-history-cursor-bound".to_owned(),
-        Instant::now,
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
     ))?;
     route = checked(route.with_protected_finality(&finality))?;
     route = checked(route.with_protected_genesis(artifact))?;
@@ -238,7 +238,7 @@ fn verify_route(
         checked(Client::connect(config.clone()))?,
         actor.clone(),
         "native-handover-history-cursor-bound".to_owned(),
-        Instant::now,
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
     ))?;
     let invalid = checked(invalid.with_protected_finality(&finality))?;
     assert!(invalid.with_protected_genesis(&invalid_path).is_err());
@@ -250,7 +250,7 @@ fn verify_route(
         checked(Client::connect(config.clone()))?,
         actor.clone(),
         "native-handover-history-cursor-bound".to_owned(),
-        Instant::now,
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
     ))?;
     let invalid = checked(invalid.with_protected_finality(&finality))?;
     assert!(invalid.with_protected_genesis(&invalid_path).is_err());
@@ -310,7 +310,7 @@ fn verify_route(
         checked(Client::connect(config))?,
         actor,
         "native-handover-history-cursor-bound".to_owned(),
-        Instant::now,
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
     ))?;
     let reopened = checked(reopened.with_protected_finality(&finality))?;
     checked(reopened.with_protected_genesis(artifact))?;
@@ -427,7 +427,9 @@ fn main() -> Result<()> {
             stale = Some(history.clone());
         }
     }
+    eprintln!("native reads: complete independently finalized signer history");
     let facts = history_facts(&mut client, &history, &genesis.registry, count)?;
+    eprintln!("native reads: complete signed activity and maintenance history");
     let public = SigningKey::from_bytes(&[0x11; 32])
         .verifying_key()
         .to_bytes();
@@ -444,6 +446,7 @@ fn main() -> Result<()> {
         &did,
         account,
     )?;
+    eprintln!("native reads: complete account and SDK verification");
     verify_budget(
         &mut client,
         &history,
@@ -451,6 +454,7 @@ fn main() -> Result<()> {
         account,
         facts.budget_id,
     )?;
+    eprintln!("native reads: complete Budget and account checkpoint verification");
     verify_route(
         config,
         actor,

@@ -855,9 +855,14 @@ impl OnboardingJourney {
             ],
         };
         if let Some(record) = &self.record.native_funding {
-            status.stages.insert(3, self.protocol_status(
-                OnboardingStage::InitialFunding, record, native::funding_row(),
-            ));
+            status.stages.insert(
+                3,
+                self.protocol_status(
+                    OnboardingStage::InitialFunding,
+                    record,
+                    native::funding_row(),
+                ),
+            );
         }
         status
     }
@@ -1237,10 +1242,14 @@ fn validate_record(record: &JourneyRecord) -> Result<(), OnboardingError> {
     validate_protocol_record(&record.recovery_registration)?;
     if let Some(funding) = &record.native_funding {
         validate_protocol_record(funding)?;
-        if funding.state == ProtocolState::Verified && record.did_registration.state != ProtocolState::Verified
-            || record.recovery_registration.state == ProtocolState::Verified && funding.state != ProtocolState::Verified
+        if funding.state == ProtocolState::Verified
+            && record.did_registration.state != ProtocolState::Verified
+            || record.recovery_registration.state == ProtocolState::Verified
+                && funding.state != ProtocolState::Verified
         {
-            return Err(OnboardingError::CorruptJourney("native funding order is invalid"));
+            return Err(OnboardingError::CorruptJourney(
+                "native funding order is invalid",
+            ));
         }
     }
     if record.did_registration.state != ProtocolState::Verified

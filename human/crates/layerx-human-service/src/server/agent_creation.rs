@@ -309,7 +309,9 @@ impl<'a> ProductionAgentCreation<'a> {
         action: &ProtocolAction,
     ) -> Result<PreparedProtocolSubmission, AgentFailure> {
         if let Some(evidence) = self.retained_protocol_evidence(scope, action)? {
-            return Ok(PreparedProtocolSubmission { inner: PreparedProtocolKind::Complete(evidence) });
+            return Ok(PreparedProtocolSubmission {
+                inner: PreparedProtocolKind::Complete(evidence),
+            });
         }
         let prepared = self.prepare_action(scope, action)?;
         let principal = scope.principal().clone();
@@ -351,30 +353,55 @@ impl<'a> ProductionAgentCreation<'a> {
                 .map_err(|_| AgentFailure::Refused("invalid custody signature"))?,
             approval_release_ref: None,
         };
-        Ok(PreparedProtocolSubmission { inner: PreparedProtocolKind::Signed {
-            request: submit, public_key: descriptor.public_key,
-            network_id: signed.network_id(), signed_activity, action_key: action.action_key, activity_id,
-        } })
+        Ok(PreparedProtocolSubmission {
+            inner: PreparedProtocolKind::Signed {
+                request: submit,
+                public_key: descriptor.public_key,
+                network_id: signed.network_id(),
+                signed_activity,
+                action_key: action.action_key,
+                activity_id,
+            },
+        })
     }
 
     /// Submits an already retained signed operation without borrowing the principal store.
     /// # Errors
     /// Refuses changed canonical authority, submission identity or missing original receipt evidence.
     pub fn submit_prepared(
-        &mut self, prepared: PreparedProtocolSubmission,
+        &mut self,
+        prepared: PreparedProtocolSubmission,
     ) -> Result<ProtocolEvidence, AgentFailure> {
-        let (submit, public_key, signed_activity, action_key, activity_id, network_id) = match prepared.inner {
-            PreparedProtocolKind::Complete(evidence) => return Ok(evidence),
-            PreparedProtocolKind::Signed { request, public_key, signed_activity, action_key, activity_id, network_id } =>
-                (request, public_key, signed_activity, action_key, activity_id, network_id),
-        };
-        let signed = layerx_intents::owner_activity::verify(&signed_activity, self.runtime.registry())
-            .map_err(|_| AgentFailure::Refused("invalid prepared owner activity"))?;
+        let (submit, public_key, signed_activity, action_key, activity_id, network_id) =
+            match prepared.inner {
+                PreparedProtocolKind::Complete(evidence) => return Ok(evidence),
+                PreparedProtocolKind::Signed {
+                    request,
+                    public_key,
+                    signed_activity,
+                    action_key,
+                    activity_id,
+                    network_id,
+                } => (
+                    request,
+                    public_key,
+                    signed_activity,
+                    action_key,
+                    activity_id,
+                    network_id,
+                ),
+            };
+        let signed =
+            layerx_intents::owner_activity::verify(&signed_activity, self.runtime.registry())
+                .map_err(|_| AgentFailure::Refused("invalid prepared owner activity"))?;
         if signed.actor_did() != self.actor.as_str().as_bytes()
-            || signed.authority() != public_key || signed.idempotency_key() != action_key
+            || signed.authority() != public_key
+            || signed.idempotency_key() != action_key
             || signed.network_id() != network_id
             || layerx_intents::canonical::activity_id(&signed)
-                .map_err(|_| AgentFailure::Refused("invalid prepared activity identity"))? != activity_id {
+                .map_err(|_| AgentFailure::Refused("invalid prepared activity identity"))?
+                != activity_id
+        {
             return Err(AgentFailure::Refused("prepared owner binding differs"));
         }
         let mut observation = self
@@ -444,7 +471,14 @@ impl<'a> ProductionAgentCreation<'a> {
         custody_key: crate::custody::KeyId,
         started_at: u64,
     ) -> Result<ProtocolEvidence, AgentFailure> {
-        let prepared = self.prepare_lifecycle_intent(scope, registry, intent, action_key, custody_key, started_at)?;
+        let prepared = self.prepare_lifecycle_intent(
+            scope,
+            registry,
+            intent,
+            action_key,
+            custody_key,
+            started_at,
+        )?;
         self.submit_prepared(prepared)
     }
 
@@ -452,9 +486,13 @@ impl<'a> ProductionAgentCreation<'a> {
     /// # Errors
     /// Refuses inconsistent intents, changed retries, unavailable authority or custody denial.
     pub fn prepare_lifecycle_intent(
-        &mut self, scope: &mut PrincipalScope<'_>, registry: &ModuleRegistry,
-        intent: layerx_intents::Intent, action_key: [u8; 32],
-        custody_key: crate::custody::KeyId, started_at: u64,
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        registry: &ModuleRegistry,
+        intent: layerx_intents::Intent,
+        action_key: [u8; 32],
+        custody_key: crate::custody::KeyId,
+        started_at: u64,
     ) -> Result<PreparedProtocolSubmission, AgentFailure> {
         let compiled = layerx_intents::compile(&intent, registry)
             .map_err(|_| AgentFailure::Refused("lifecycle intent did not compile"))?;

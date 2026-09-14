@@ -1,7 +1,7 @@
 use super::*;
-use std::sync::Arc;
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::io::Write as _;
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::sync::Arc;
 
 pub trait PrincipalTenancyAuthority: std::fmt::Debug + Send + Sync {
     /// # Errors
@@ -13,7 +13,9 @@ impl PrincipalStore {
     /// # Errors
     /// Preserves pinned static tenancy checks and refuses changed provider bindings.
     pub fn open_with_authority(
-        root: impl AsRef<Path>, retention: RetentionPolicy, tenancy_digest: TenancyDigest,
+        root: impl AsRef<Path>,
+        retention: RetentionPolicy,
+        tenancy_digest: TenancyDigest,
         authority: Arc<dyn PrincipalTenancyAuthority>,
     ) -> Result<Self, StoreError> {
         let root = root.as_ref();
@@ -49,12 +51,17 @@ impl PrincipalStore {
         Ok(principals.into_iter().collect())
     }
 
-    pub(super) fn resolve_tenant(&self, principal: &PrincipalId) -> Result<AgentTenantId, StoreError> {
+    pub(super) fn resolve_tenant(
+        &self,
+        principal: &PrincipalId,
+    ) -> Result<AgentTenantId, StoreError> {
         let configured = self.tenancy.tenant_for(principal);
         let Some(provider) = &self.provider else {
             return configured.cloned().map_err(StoreError::from);
         };
-        if self.provider_lock.is_none() { return Err(StoreError::Tenancy(TenancyError::DigestMismatch)); }
+        if self.provider_lock.is_none() {
+            return Err(StoreError::Tenancy(TenancyError::DigestMismatch));
+        }
         let tenant = provider.tenant_for(principal)?;
         if configured.is_ok_and(|value| value != &tenant) {
             return Err(StoreError::Tenancy(TenancyError::DigestMismatch));
@@ -69,15 +76,28 @@ impl PrincipalStore {
         }
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
         match fs::symlink_metadata(&path) {
-            Ok(_) => { verify_binding_file(&path, bytes)?; return Ok(tenant); }
+            Ok(_) => {
+                verify_binding_file(&path, bytes)?;
+                return Ok(tenant);
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => (),
             Err(error) => return Err(error.into()),
         }
         {
             let pending = directory.join("provider-binding.pending");
-            match fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&pending) {
-                Ok(mut file) => { file.write_all(bytes)?; file.sync_all()?; }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => verify_binding_file(&pending, bytes)?,
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&pending)
+            {
+                Ok(mut file) => {
+                    file.write_all(bytes)?;
+                    file.sync_all()?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    verify_binding_file(&pending, bytes)?
+                }
                 Err(error) => return Err(error.into()),
             }
             fs::rename(pending, path)?;
@@ -90,8 +110,11 @@ impl PrincipalStore {
 
 fn verify_binding_file(path: &Path, expected: &[u8]) -> Result<(), StoreError> {
     let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_file() || metadata.nlink() != 1 || metadata.len() > 255
-        || metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o077 != 0
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.len() > 255
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
         || fs::read(path)? != expected
     {
         return Err(StoreError::Tenancy(TenancyError::DigestMismatch));
@@ -100,12 +123,20 @@ fn verify_binding_file(path: &Path, expected: &[u8]) -> Result<(), StoreError> {
 }
 
 fn provider_lock(root: &Path) -> Result<fs::File, StoreError> {
-    let lock = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
-        .mode(0o600).custom_flags(rustix::fs::OFlags::NOFOLLOW.bits())
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits())
         .open(root.join("provider.lock"))?;
     let metadata = lock.metadata()?;
-    if !metadata.is_file() || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.nlink() != 1 || metadata.mode() & 0o077 != 0 {
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o077 != 0
+    {
         return Err(StoreError::Tenancy(TenancyError::DigestMismatch));
     }
     rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
