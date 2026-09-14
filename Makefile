@@ -2283,13 +2283,7 @@ human-e2e-foundation:
 	$(HUMAN_NPM) run build
 
 human-e2e-perf:
-	$(HUMAN_NPM) run build
-	HUMAN_E2E_REAL_STACK=1 \
-	HUMAN_E2E_LOCAL_PRODUCTION=1 \
-	HUMAN_E2E_BASE_URL=http://127.0.0.1:3105 \
-	LAYERX_RUM_STORAGE_DIRECTORY=$(abspath human/apps/web/.next/rum-data) \
-	LAYERX_HUMAN_WEB_ORIGIN=http://127.0.0.1:3105 \
-		$(HUMAN_NPM) run test:perf
+	bash $(HUMAN_WEB_DIR)/e2e/run-production-perf.sh
 
 human-test-journey:
 	$(HUMAN_NPM) run test:journey
