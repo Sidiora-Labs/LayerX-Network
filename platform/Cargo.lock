@@ -1212,6 +1212,7 @@ dependencies = [
  "layerx-agent-api",
  "layerx-client",
  "layerx-crypto",
+ "layerx-identity-binding",
  "layerx-paxeer-verifier",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
@@ -1221,6 +1222,7 @@ dependencies = [
  "layerx-wire",
  "rustix",
  "rustls-native-certs",
+ "serde",
  "serde_json",
  "sha2",
  "ureq",
@@ -1236,6 +1238,7 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustix",
  "rustls",
  "sha2",
 ]
@@ -1255,6 +1258,17 @@ dependencies = [
  "sha3",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "layerx-identity-binding"
+version = "0.1.0"
+dependencies = [
+ "layerx-types",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1364,6 +1378,7 @@ dependencies = [
  "layerx-agentd",
  "layerx-client",
  "layerx-crypto",
+ "layerx-identity-binding",
  "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-types",
@@ -1721,6 +1736,20 @@ dependencies = [
  "serde",
  "serde_json",
  "subtle",
+]
+
+[[package]]
+name = "layerx-runtime-clock"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "layerx-client",
+ "layerx-proof",
+ "layerx-sdk",
+ "layerx-types",
+ "layerx-wire",
+ "rustix",
+ "signal-hook",
 ]
 
 [[package]]

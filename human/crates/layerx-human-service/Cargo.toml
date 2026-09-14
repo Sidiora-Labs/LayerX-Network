@@ -6,7 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-layerx-identity-binding.workspace = true
 layerx-platform-internal.workspace = true
 base64.workspace = true
 getrandom.workspace = true
