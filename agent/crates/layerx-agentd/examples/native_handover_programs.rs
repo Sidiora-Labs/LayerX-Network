@@ -451,6 +451,16 @@ fn main() -> Result<()> {
     let state = checked(client.preparation_state(&did, 403))?;
     let activity = checked(decode_signed(&canonical, &state.module_registry))?;
     verify_call_artifacts(&receipt, &activity, key, (&endpoint, &token), program)?;
+    let included = checked(route.read(&format!(
+        "/v1/reads/receipt/{}",
+        hex::encode(&checked(activity_id(&activity))?)
+    )))?;
+    assert_eq!(field(&included, "canonical_hex")?, hex::encode(&receipt));
+    assert_eq!(field(&included, "sequencer_public_key")?, hex::encode(&key));
+    assert_eq!(
+        included["verification_level"],
+        layerx_types::verify::VerificationLevel::BATCH_INCLUDED.wire_rank()
+    );
     let final_history = checked(route.signed_authority())?.ok_or("missing CALL history")?;
     assert!(reader
         .read(checked(ProgramId::new(program))?, now()?)
