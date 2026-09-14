@@ -8,6 +8,8 @@ case "$1" in recovery|unknown|refusals) ;; *) echo "expected recovery, unknown o
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo_root"
 export CARGO_BUILD_JOBS=4
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$repo_root/.lane-target}
+export LAYERX_PAXEER_BOUNDARY_BIN=${LAYERX_PAXEER_BOUNDARY_BIN:-$CARGO_TARGET_DIR/debug/layerx-paxeer-boundary}
 export LAYERX_TEST_NATIVE_BUDGET_SCENARIO=$1
 export LAYERX_TEST_NATIVE_BUILD_DIR=${LAYERX_TEST_NATIVE_BUILD_DIR:-$repo_root/build}
 export LAYERX_TEST_NATIVE_BIN_DIR=${LAYERX_TEST_NATIVE_BIN_DIR:-$LAYERX_TEST_NATIVE_BUILD_DIR/bin}
@@ -20,7 +22,7 @@ for executable in "$LAYERX_TEST_NATIVE_BUDGET_CLIENT" "$LAYERX_TEST_RUNTIME_CLOC
     "$LAYERX_TEST_NATIVE_BIN_DIR/layerxd" "$LAYERX_TEST_NATIVE_BIN_DIR/layerx-genesis-build" \
     "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_module_maintenance" \
     "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_guarantor_runtime" \
-    "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/bridge/sign-credit" "$PAXD" "$LAYERX_CUSTODY_PROOF_BIN"; do
+    "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/bridge/sign-credit" "$PAXD" "$LAYERX_CUSTODY_PROOF_BIN" "$LAYERX_PAXEER_BOUNDARY_BIN"; do
     test -x "$executable"
 done
 exec "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/withdraw-custody.py "$LAYERX_TEST_NATIVE_BUILD_DIR" --native-budget
