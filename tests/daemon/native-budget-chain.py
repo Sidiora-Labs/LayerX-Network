@@ -73,17 +73,20 @@ def authority(native, control, export):
     path.chmod(0o600)
 
 
-def finalize(native, private, control, build, chain_config, url, submitter, state, inputs, number, batch):
+def finalize(native, private, control, build, chain_config, url, submitter, state, inputs, number, first_batch, batch):
     evidence = private / f'request-{number}'
     evidence.mkdir(mode=0o700)
     export = PUBLICATION['replay'](native, evidence, batch, build)
-    header = PUBLICATION['decode_header'](export['canonical_header'])
-    assert header[0] == 3 and header[1] == 77 and header[3] == batch
-    request = PUBLICATION['certificate'](export, chain_config, url, submitter, state, inputs)
-    PUBLICATION['authorize'](request, inputs, chain_config['vault'])
-    result = PUBLICATION['publish'](request, evidence, 'checkpoint')
-    assert result['checkpoint_id'] == request['checkpoint_id']
-    assert result['publication']['checkpoint_id'] == request['checkpoint_id']
+    assert 1 <= first_batch <= batch
+    for current in range(first_batch, batch + 1):
+        committed = json.loads((evidence / f'exports-{batch}/{current}.json').read_text())
+        header = PUBLICATION['decode_header'](committed['canonical_header'])
+        assert header[0] == 3 and header[1] == 77 and header[3] == current
+        request = PUBLICATION['certificate'](committed, chain_config, url, submitter, state, inputs)
+        PUBLICATION['authorize'](request, inputs, chain_config['vault'])
+        result = PUBLICATION['publish'](request, evidence, f'checkpoint-{current}')
+        assert result['checkpoint_id'] == request['checkpoint_id']
+        assert result['publication']['checkpoint_id'] == request['checkpoint_id']
     public = control / 'proofs' / str(number)
     client_directory(public)
     client_json(public / 'request.json', request)
@@ -139,7 +142,7 @@ def drive(work, environment, url):
             authority(native, control, export)
             chain_config = json.loads((native / 'publication-chain.json').read_text())
             client_json(control / 'ready.json', {'version': 1, 'funded_batch': 1})
-            next_request, last_batch = 1, 1
+            next_request, last_requested_batch, last_finalized_batch = 1, 1, 0
             deadline = time.monotonic() + 900
             while process.poll() is None:
                 assert time.monotonic() < deadline, 'native Budget scenario deadline'
@@ -147,10 +150,10 @@ def drive(work, environment, url):
                 if request_path.exists():
                     assert next_request <= MAX_REQUESTS, 'native Budget request count bound'
                     request = read_request(request_path)
-                    assert request['batch'] > last_batch, 'Budget checkpoint must advance the actual native batch'
+                    assert request['batch'] > last_requested_batch, 'Budget checkpoint must advance the actual native batch'
                     finalize(native, private, control, build, chain_config, url, submitter_path,
-                             state, inputs, next_request, request['batch'])
-                    last_batch = request['batch']
+                             state, inputs, next_request, last_finalized_batch + 1, request['batch'])
+                    last_requested_batch = last_finalized_batch = request['batch']
                     next_request += 1
                 else:
                     time.sleep(.05)
