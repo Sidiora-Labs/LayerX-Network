@@ -1312,6 +1312,15 @@ static lxp_result replay_execute_activity(
     execution.arena = &process->execution_arena;
     execution.sequencer_private_key = process->sequencer_private_key;
     execution.verified_receipts = &process->verified_receipts;
+    {
+        lx_programs_fee_schedule schedule;
+        uint8_t asset_id[32];
+        status = occupancy_parameters(process, execution.recorded_fee_schedule_version,
+            &schedule, asset_id);
+        if (status != LXP_OK) return status;
+        execution.recorded_fee_schedule_version = schedule.version;
+        (void)memcpy(process->programs.occupancy_asset_id, asset_id, 32U);
+    }
     (void)memset(receipt, 0, sizeof(*receipt));
     status = lxp_kernel_execute_activity(&process->kernel, activity,
                                          &execution, receipt);
