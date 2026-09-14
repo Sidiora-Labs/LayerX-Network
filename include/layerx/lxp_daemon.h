@@ -74,6 +74,14 @@ typedef struct lxp_daemon_signed_header_evidence {
     uint8_t signature[64];
 } lxp_daemon_signed_header_evidence;
 
+lxp_result lxp_daemon_module_evidence_wire_encode(
+    const lxp_daemon_evidence_store *store, const lxp_kernel *kernel,
+    const lxp_daemon_signed_header_evidence *signed_header,
+    uint16_t module_id, lxp_byte_span key, uint8_t selector_kind,
+    uint64_t selector_batch, const uint8_t selector_checkpoint_id[32],
+    uint8_t requested_rank, lxp_arena *arena,
+    lxp_byte_span *canonical_value, lxp_byte_span *proof_material);
+
 typedef struct lxp_daemon_account_evidence {
     uint16_t format_version;
     uint8_t account_id[32];

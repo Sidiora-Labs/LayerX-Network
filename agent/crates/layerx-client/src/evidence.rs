@@ -1,5 +1,8 @@
 //! Production finality-evidence reads and authenticated registration.
 
+mod module_state;
+pub use module_state::{verify_module_evidence, VerifiedModuleEvidence};
+
 use std::collections::BTreeSet;
 
 use layerx_proof::checkpoint::{

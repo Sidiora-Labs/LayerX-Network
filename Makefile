@@ -266,7 +266,7 @@ test-harness: $(BUILD_DIR)/tests/lxp_test_harness
 list-tests: $(BUILD_DIR)/tests/lxp_test_harness
 	$(BUILD_DIR)/tests/lxp_test_harness --list
 
-test: test-state-diff test-da-verified test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-daemon-lni-account test-daemon-allowance test-arena test-harness test-codec \
+test: test-state-diff test-da-verified test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-daemon-lni-account test-daemon-lni-module test-daemon-allowance test-arena test-harness test-codec \
 	test-codec-limits test-codec-version test-codec-vectors fuzz-codec-smoke \
 	test-crypto-suite test-arith-u128 test-arith-u256 test-arith-rounding \
 	test-arith-property test-arith-nofloat test-log test-log-durability \
@@ -3490,6 +3490,22 @@ $(BUILD_DIR)/tests/lxp_test_lni_account: tests/daemon/lxp_test_lni_account.c \
 
 test-daemon-lni-account: $(BUILD_DIR)/tests/lxp_test_lni_account
 	python3 tests/daemon/lni-account.py $(BUILD_DIR)/tests/lxp_test_lni_account
+
+.PHONY: test-daemon-lni-module
+$(BUILD_DIR)/tests/lxp_test_lni_module: tests/daemon/lxp_test_lni_module.c \
+        tests/storage/lxp_test_finality_evidence.c cmd/layerxd/lxp_daemon_evidence_module.h \
+        cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_evidence.c \
+        $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) tests/daemon/lxp_test_lni_module.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_evidence.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+test-daemon-lni-module: $(BUILD_DIR)/tests/lxp_test_lni_module
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_lni_module
+	$(BUILD_DIR)/tests/lxp_test_lni_module --vector > $(BUILD_DIR)/tests/native-module-evidence.json
+	cmp $(BUILD_DIR)/tests/native-module-evidence.json tests/vectors/native-module-evidence.json
 
 .PHONY: test-daemon-allowance
 $(BUILD_DIR)/tests/lxp_test_daemon_allowance: tests/daemon/lxp_test_daemon_allowance.c \

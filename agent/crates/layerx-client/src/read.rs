@@ -2,6 +2,8 @@
 
 use std::cmp::Ordering;
 
+mod module;
+
 use layerx_proof::inclusion::verify_activity;
 use layerx_proof::inclusion::verify_receipt;
 use layerx_proof::inclusion::InclusionError;
@@ -336,8 +338,7 @@ pub fn module_state(
     if key.len() > MAX_SELECTOR_KEY_BYTES {
         return Err(ReadError::PageBound);
     }
-    let _ = (transport, module_id, context);
-    Err(ReadError::UnavailableCapability)
+    module::read(transport, module_id, key, context)
 }
 
 fn point_read(

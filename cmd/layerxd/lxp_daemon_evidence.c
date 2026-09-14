@@ -6,6 +6,7 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_receipt.h"
+#include "layerx/lxp_state_proof.h"
 #include "layerx/programs.h"
 
 #include <stdlib.h>
@@ -2519,6 +2520,8 @@ lxp_result lxp_daemon_account_evidence_wire_encode(
     }
     return status;
 }
+
+#include "lxp_daemon_evidence_module.h"
 
 lxp_result lxp_daemon_activity_evidence_publish(
     lxp_daemon_evidence_store *store, lxp_byte_span canonical_activity,

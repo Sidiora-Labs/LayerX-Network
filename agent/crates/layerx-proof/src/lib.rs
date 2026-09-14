@@ -11,3 +11,4 @@ pub mod program;
 pub mod receipt;
 pub mod settlement;
 pub mod state;
+pub mod state_witness;

@@ -3129,6 +3129,8 @@ static lxp_result evidence_refusal(
                         4U, public_status, deadline);
 }
 
+#include "lxp_daemon_lni_module.h"
+
 static lxp_result parse_account_read_request(
     const lni_envelope *request, uint8_t *kind,
     const uint8_t **account_id, const uint8_t **asset_id,
@@ -3288,6 +3290,8 @@ static lxp_result send_account_read(
             request->minor < 2U ? LXP_ERR_VERSION_UNSUPPORTED :
                                   LXP_ERR_MALFORMED_ENVELOPE,
             deadline);
+    if (request->payload_length >= 3U && request->payload[2] == 4U)
+        return send_module_read(server, descriptor, request, deadline);
     status = parse_account_read_request(
         request, &kind, &account_id, &asset_id, &selector_kind,
         &selector_batch, &selector_checkpoint, &requested_rank);
