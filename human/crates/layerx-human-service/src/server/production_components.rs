@@ -24,7 +24,6 @@ use layerx_paxeer_client::{
 use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::export::OfflineExport;
 use layerx_types::account::AccountId;
-use layerx_types::activity::TimestampBound;
 use layerx_types::amount::Amount as ProtocolAmount;
 use layerx_types::ids::Did;
 use layerx_types::ids::{AssetId, IdempotencyKey};
