@@ -2187,6 +2187,14 @@ human-test: $(BUILD_DIR)/tests/explorer_fixture human-test-hosted-provisioning
 	$(HUMAN_NPM) test
 
 HUMAN_TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),$(CURDIR)/human/target)
+
+MOVEMENT_PROOF_TARGET = $(abspath $(or $(CARGO_TARGET_DIR),.lane-target))
+.PHONY: test-owner-movement-proof
+test-owner-movement-proof: build/bin/layerxd build/bin/layerx-genesis-build build/bin/layerx-guarantor build/tests/lxp_test_guarantor_runtime
+	cargo build --locked --manifest-path human/Cargo.toml --target-dir $(MOVEMENT_PROOF_TARGET) -p layerx-human-identity-provider -p layerx-human-movement-provider
+	cargo build --locked --manifest-path platform/Cargo.toml --target-dir $(MOVEMENT_PROOF_TARGET) -p layerx-platform-authority -p layerx-platform-paxeer-boundary -p layerx-runtime-clock
+	cargo build --locked --manifest-path cmd/layerxctl/Cargo.toml --target-dir $(MOVEMENT_PROOF_TARGET)
+	CARGO_TARGET_DIR=$(MOVEMENT_PROOF_TARGET) LAYERX_RUNTIME_CLOCK_BIN=$(MOVEMENT_PROOF_TARGET)/debug/layerx-runtime-clock sh tools/runtime/run-with-clock.sh python3 tests/bridge/owner-custody.py --native --governance --checkpoint --settlement-only --movement-proof
 HUMAN_TEST_PAXD := $(abspath paxeer-network/build/paxd)
 HUMAN_TEST_CUSTODY_PROOF := $(abspath $(BUILD_DIR)/bin/layerx-custody-proof)
 
