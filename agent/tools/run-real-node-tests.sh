@@ -35,9 +35,14 @@ make -j4 CC=gcc BUILD_DIR="$LAYERX_TEST_NATIVE_BUILD_DIR" \
     "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_daemon_finality_authority" \
     "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_program_admission" \
     "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_metered_allowance" \
+    "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_module_maintenance" \
+    "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/lxp_test_guarantor_runtime" \
     "$LAYERX_TEST_NATIVE_BUILD_DIR/tests/bridge/sign-credit"
 make BUILD_DIR="$LAYERX_TEST_NATIVE_BUILD_DIR" PAXEER_GO_JOBS=4 custody-proof-build
 GOMAXPROCS=4 GOFLAGS="${GOFLAGS:-} -p=4" make paxeer-build
+make public-tls-test-prerequisites
+cargo build --manifest-path agent/Cargo.toml --locked -p layerx-agentd \
+    --example native_budget_recovery --target-dir "$CARGO_TARGET_DIR"
 
 export LAYERX_TEST_NATIVE_BIN_DIR=$LAYERX_TEST_NATIVE_BUILD_DIR/bin
 export LAYERX_CUSTODY_PROOF_BIN=$LAYERX_TEST_NATIVE_BIN_DIR/layerx-custody-proof

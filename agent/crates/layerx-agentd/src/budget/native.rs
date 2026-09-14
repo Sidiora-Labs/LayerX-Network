@@ -17,6 +17,24 @@ pub struct NativeBudgetBinding {
     pub expiry_ms: u64,
 }
 
+impl NativeBudgetBinding {
+    pub(crate) fn advances(&self, next: &Self) -> bool {
+        self.budget_id == next.budget_id
+            && self.owner_account == next.owner_account
+            && self.budget_account == next.budget_account
+            && self.asset == next.asset
+            && self.owner_did == next.owner_did
+            && self.owner_public_key == next.owner_public_key
+            && self.period_length_ms == next.period_length_ms
+            && self.expiry_ms == next.expiry_ms
+            && self.period_length_ms > 0
+            && next
+                .period_start_ms
+                .checked_sub(self.period_start_ms)
+                .is_some_and(|delta| delta % self.period_length_ms == 0)
+    }
+}
+
 /// Exported canonical value and its complete native account proof.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,17 +78,26 @@ pub struct NativeBudgetOutcome {
     pub(crate) idempotency_key: [u8; 32],
     pub(crate) result_code: i32,
     pub(crate) canonical_receipt: Vec<u8>,
+    pub(crate) proof: RawActivityReceiptEvidence,
 }
 
 impl NativeBudgetOutcome {
     #[must_use]
-    pub const fn activity_id(&self) -> [u8; 32] { self.activity_id }
+    pub const fn activity_id(&self) -> [u8; 32] {
+        self.activity_id
+    }
     #[must_use]
-    pub const fn receipt_digest(&self) -> [u8; 32] { self.receipt_digest }
+    pub const fn receipt_digest(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
     #[must_use]
-    pub const fn amount(&self) -> u128 { self.amount }
+    pub const fn amount(&self) -> u128 {
+        self.amount
+    }
     #[must_use]
-    pub const fn succeeded(&self) -> bool { self.succeeded }
+    pub const fn succeeded(&self) -> bool {
+        self.succeeded
+    }
 }
 
 /// Opaque native reconciliation, issued only after all proof and history checks.
@@ -89,21 +116,37 @@ pub struct NativeBudgetReconciliation {
 
 impl NativeBudgetReconciliation {
     #[must_use]
-    pub fn binding(&self) -> &NativeBudgetBinding { &self.binding }
+    pub fn binding(&self) -> &NativeBudgetBinding {
+        &self.binding
+    }
     #[must_use]
-    pub const fn spent(&self) -> u128 { self.spent }
+    pub const fn spent(&self) -> u128 {
+        self.spent
+    }
     #[must_use]
-    pub const fn remaining(&self) -> u128 { self.remaining }
+    pub const fn remaining(&self) -> u128 {
+        self.remaining
+    }
     #[must_use]
-    pub const fn observed_sequence(&self) -> u64 { self.observed_sequence }
+    pub const fn observed_sequence(&self) -> u64 {
+        self.observed_sequence
+    }
     #[must_use]
-    pub const fn timestamp_ms(&self) -> u64 { self.timestamp_ms }
+    pub const fn timestamp_ms(&self) -> u64 {
+        self.timestamp_ms
+    }
     #[must_use]
-    pub const fn period_end_ms(&self) -> u64 { self.period_end_ms }
+    pub const fn period_end_ms(&self) -> u64 {
+        self.period_end_ms
+    }
     #[must_use]
-    pub const fn checkpoint_id(&self) -> [u8; 32] { self.checkpoint_id }
+    pub const fn checkpoint_id(&self) -> [u8; 32] {
+        self.checkpoint_id
+    }
     #[must_use]
-    pub fn outcomes(&self) -> &[NativeBudgetOutcome] { &self.outcomes }
+    pub fn outcomes(&self) -> &[NativeBudgetOutcome] {
+        &self.outcomes
+    }
 }
 
 /// Exact native reconciliation refusal, without accepting legacy raw leaves.

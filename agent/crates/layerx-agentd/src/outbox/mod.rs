@@ -6,11 +6,11 @@ use crate::protocol_evidence::VerifiedReceiptEvidence;
 use crate::sign::VerifiedSubmission;
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
+mod native_budget;
 #[path = "unknown.rs"]
 mod resolution;
 #[path = "recover.rs"]
 mod restart;
-mod native_budget;
 
 pub use resolution::{
     resolve_unknown, ReceiptLookup, ResendObservation, ResolutionObservation, UnknownAge,
@@ -303,7 +303,10 @@ impl Outbox {
 
     #[must_use]
     pub fn statuses(&self) -> Vec<SubmissionStatus> {
-        self.records.values().map(|record| record.status.clone()).collect()
+        self.records
+            .values()
+            .map(|record| record.status.clone())
+            .collect()
     }
 
     #[must_use]

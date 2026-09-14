@@ -243,19 +243,29 @@ fn budget(activity: &Activity) -> Result<DisclosedNativeBudgetCreate, Disclosure
     Ok(value)
 }
 
-fn spend(activity: &Activity) -> Result<DisclosedNativeBudgetSpend,DisclosureError> {
-    let mut decoder=Decoder::new(activity.payload(),0);
-    if decoder.u16()? != 1 { return Err(DisclosureError::MalformedPayload); }
-    let budget_id=fixed(&mut decoder)?;
-    let recipient=fixed(&mut decoder)?;
-    let amount=decoder.u128()?;
+fn spend(activity: &Activity) -> Result<DisclosedNativeBudgetSpend, DisclosureError> {
+    let mut decoder = Decoder::new(activity.payload(), 0);
+    if decoder.u16()? != 1 {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    let budget_id = fixed(&mut decoder)?;
+    let recipient = fixed(&mut decoder)?;
+    let amount = decoder.u128()?;
     decoder.finish()?;
-    if budget_id==[0;32] || recipient==[0;32] || amount==0 { return Err(DisclosureError::MalformedPayload); }
-    let actor=std::str::from_utf8(activity.actor_did()).map_err(|_| DisclosureError::MalformedPayload)?;
-    let name=AccountId::parse(&format!("agent:{actor}:budget:{}",hex(&budget_id)))
+    if budget_id == [0; 32] || recipient == [0; 32] || amount == 0 {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    let actor =
+        std::str::from_utf8(activity.actor_did()).map_err(|_| DisclosureError::MalformedPayload)?;
+    let name = AccountId::parse(&format!("agent:{actor}:budget:{}", hex(&budget_id)))
         .map_err(|_| DisclosureError::MalformedPayload)?;
-    let budget_account=hash::account_id_for_protocol(&name,activity.protocol_version())?;
-    Ok(DisclosedNativeBudgetSpend {budget_id,budget_account,recipient,amount})
+    let budget_account = hash::account_id_for_protocol(&name, activity.protocol_version())?;
+    Ok(DisclosedNativeBudgetSpend {
+        budget_id,
+        budget_account,
+        recipient,
+        amount,
+    })
 }
 
 pub(super) fn fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
@@ -287,10 +297,21 @@ pub(super) fn fields(activity: &Activity) -> Result<DisclosureFields, Disclosure
         )),
         (ModuleId::Governance, 3) => DisclosedNativeOperation::RecoveryPolicy(recovery(activity)?),
         (ModuleId::Budget, 6) => {
-            let value=spend(activity)?;
-            counterparties.extend([Counterparty {role:CounterpartyRole::Payer,account:value.budget_account},
-                Counterparty {role:CounterpartyRole::Recipient,account:value.recipient}]);
-            amounts.push(DisclosedAmount {role:AmountRole::Transfer,value:value.amount});
+            let value = spend(activity)?;
+            counterparties.extend([
+                Counterparty {
+                    role: CounterpartyRole::Payer,
+                    account: value.budget_account,
+                },
+                Counterparty {
+                    role: CounterpartyRole::Recipient,
+                    account: value.recipient,
+                },
+            ]);
+            amounts.push(DisclosedAmount {
+                role: AmountRole::Transfer,
+                value: value.amount,
+            });
             DisclosedNativeOperation::BudgetSpend(value)
         }
         (ModuleId::Budget, 1) => {

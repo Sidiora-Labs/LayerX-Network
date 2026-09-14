@@ -20,8 +20,8 @@ use layerx_wire::receipt::{decode, decode_batch_header, BatchHeader};
 use sha2::{Digest, Sha256};
 
 use crate::config::{read_protected_source, ProtectedSourceError, StartupConfig};
-mod native_owner;
 mod native_budget;
+mod native_owner;
 
 const MAX_AUTHORITY_SOURCE_BYTES: usize = 65_536;
 const AUTHORITY_SOURCE_VERSION: &str = "layerx-sequencer-authority-v1";
@@ -146,20 +146,30 @@ impl ProtocolEvidenceVerifier {
     }
 
     pub(crate) fn load(config: &StartupConfig) -> Result<Self, VerifierPolicyError> {
-        Self::load_source(config.expected_protocol_version, config.network_id,
-            &config.sequencer_authority_source)
+        Self::load_source(
+            config.expected_protocol_version,
+            config.network_id,
+            &config.sequencer_authority_source,
+        )
     }
 
-    fn load_source(protocol_version: u16, network_id: u32, source: &std::path::Path)
-        -> Result<Self, VerifierPolicyError> {
-        let bytes = read_protected_source(source, MAX_AUTHORITY_SOURCE_BYTES)
-        .map_err(|failure| match failure {
-            ProtectedSourceError::Unavailable => VerifierPolicyError::AuthoritySourceUnavailable,
-            ProtectedSourceError::TooLarge => VerifierPolicyError::AuthoritySourceMalformed,
-            ProtectedSourceError::Unprotected | ProtectedSourceError::Changed => {
-                VerifierPolicyError::AuthoritySourceUnprotected
-            }
-        })?;
+    fn load_source(
+        protocol_version: u16,
+        network_id: u32,
+        source: &std::path::Path,
+    ) -> Result<Self, VerifierPolicyError> {
+        let bytes =
+            read_protected_source(source, MAX_AUTHORITY_SOURCE_BYTES).map_err(|failure| {
+                match failure {
+                    ProtectedSourceError::Unavailable => {
+                        VerifierPolicyError::AuthoritySourceUnavailable
+                    }
+                    ProtectedSourceError::TooLarge => VerifierPolicyError::AuthoritySourceMalformed,
+                    ProtectedSourceError::Unprotected | ProtectedSourceError::Changed => {
+                        VerifierPolicyError::AuthoritySourceUnprotected
+                    }
+                }
+            })?;
         if bytes.is_empty() {
             return Err(VerifierPolicyError::AuthoritySourceMalformed);
         }

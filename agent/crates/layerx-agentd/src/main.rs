@@ -463,7 +463,8 @@ fn start_human_owner(mcp: Option<McpBoot>) -> Result<mpsc::Receiver<Result<(), S
     )
     .map_err(|error| format!("human operations are invalid: {error:?}"))?;
     if let Some(source) = optional("LAYERX_SEQUENCER_AUTHORITY_SOURCE") {
-        operations.configure_native_budget_recovery(Path::new(&source), &peers)
+        operations
+            .configure_native_budget_recovery(Path::new(&source), &peers)
             .map_err(|error| format!("native Budget recovery failed: {error:?}"))?;
     }
     let socket_uid = required("LAYERX_AGENT_HUMAN_SOCKET_UID")?

@@ -3,8 +3,8 @@
 mod native;
 
 pub use native::{
-    DisclosedNativeBudgetCreate, DisclosedNativeBudgetSpend, DisclosedNativeIdentity, DisclosedNativeOperation,
-    DisclosedRecoveryPolicy,
+    DisclosedNativeBudgetCreate, DisclosedNativeBudgetSpend, DisclosedNativeIdentity,
+    DisclosedNativeOperation, DisclosedRecoveryPolicy,
 };
 
 use std::fmt;

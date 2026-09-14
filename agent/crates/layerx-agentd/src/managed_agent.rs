@@ -275,34 +275,74 @@ pub fn validate_tenant(store: &Store, tenant: &TenantId) -> Result<(), HumanOper
 /// refused if the corresponding restored session has ever advanced.
 /// # Errors
 /// Refuses missing or duplicate configured Budget identities and malformed account coordinates.
-pub fn native_budget_scope(store: &Store, tenant: &TenantId, budget_id: [u8;32])
-    -> Result<crate::budget::NativeBudgetScope, HumanOperationError> {
+pub fn native_budget_scope(
+    store: &Store,
+    tenant: &TenantId,
+    budget_id: [u8; 32],
+) -> Result<crate::budget::NativeBudgetScope, HumanOperationError> {
     let mut selected = None;
-    for id in store.list_object_ids(tenant,ObjectKind::Configuration) {
-        if !id.starts_with(PREFIX) { continue; }
-        let object_key = key(tenant.clone(),ObjectKind::Configuration,id)
+    for id in store.list_object_ids(tenant, ObjectKind::Configuration) {
+        if !id.starts_with(PREFIX) {
+            continue;
+        }
+        let object_key = key(tenant.clone(), ObjectKind::Configuration, id)
             .map_err(|_| HumanOperationError::Refused)?;
-        let value = store.get(&object_key).ok_or(HumanOperationError::Unavailable)?;
-        if value.class() != StorageClass::LocalOnly { return Err(HumanOperationError::Refused); }
-        let agent=decode(value.bytes())?;
-        if agent.active_budget_id != budget_id { continue; }
-        if selected.is_some() { return Err(HumanOperationError::Refused); }
-        let context=&agent.context;
-        let owner=layerx_types::account::AccountId::parse(&context.owner_account)
+        let value = store
+            .get(&object_key)
+            .ok_or(HumanOperationError::Unavailable)?;
+        if value.class() != StorageClass::LocalOnly {
+            return Err(HumanOperationError::Refused);
+        }
+        let agent = decode(value.bytes())?;
+        if agent.active_budget_id != budget_id {
+            continue;
+        }
+        if selected.is_some() {
+            return Err(HumanOperationError::Refused);
+        }
+        let context = &agent.context;
+        let owner = layerx_types::account::AccountId::parse(&context.owner_account)
             .map_err(|_| HumanOperationError::Refused)?;
-        let account=layerx_types::account::AccountId::parse(&format!("agent:{}:budget:{}",context.actor,
-            layerx_programs::hex::encode(&budget_id))).map_err(|_| HumanOperationError::Refused)?;
-        let period=context.budget_period_seconds.checked_mul(1000).ok_or(HumanOperationError::Refused)?;
-        let start=context.period_start.checked_mul(1000).ok_or(HumanOperationError::Refused)?;
-        let lifetime=context.budget_expiry_seconds.checked_mul(1000).ok_or(HumanOperationError::Refused)?;
-        selected=Some(crate::budget::NativeBudgetScope {network_id:context.network_id,write_enabled:agent.state==1,
-            binding:crate::budget::NativeBudgetBinding {budget_id,
-                owner_account:layerx_wire::hash::account_id_for_protocol(&owner,3).map_err(|_| HumanOperationError::Refused)?,
-                budget_account:layerx_wire::hash::account_id_for_protocol(&account,3).map_err(|_| HumanOperationError::Refused)?,
-                asset:context.budget_asset,owner_did:layerx_types::ids::Did::new(context.actor.as_bytes())
-                    .map_err(|_| HumanOperationError::Refused)?,owner_public_key:context.custody_public_key,
-                period_start_ms:start,period_length_ms:period,expiry_ms:start.checked_add(lifetime).ok_or(HumanOperationError::Refused)?},
-            maximum:agent.monthly_limit.min(context.amount_ceiling),maximum_lifetime_ms:lifetime});
+        let account = layerx_types::account::AccountId::parse(&format!(
+            "agent:{}:budget:{}",
+            context.actor,
+            layerx_programs::hex::encode(&budget_id)
+        ))
+        .map_err(|_| HumanOperationError::Refused)?;
+        let period = context
+            .budget_period_seconds
+            .checked_mul(1000)
+            .ok_or(HumanOperationError::Refused)?;
+        let start = context
+            .period_start
+            .checked_mul(1000)
+            .ok_or(HumanOperationError::Refused)?;
+        let lifetime = context
+            .budget_expiry_seconds
+            .checked_mul(1000)
+            .ok_or(HumanOperationError::Refused)?;
+        selected = Some(crate::budget::NativeBudgetScope {
+            network_id: context.network_id,
+            write_enabled: agent.state == 1,
+            binding: crate::budget::NativeBudgetBinding {
+                budget_id,
+                owner_account: layerx_wire::hash::account_id_for_protocol(&owner, 3)
+                    .map_err(|_| HumanOperationError::Refused)?,
+                budget_account: layerx_wire::hash::account_id_for_protocol(&account, 3)
+                    .map_err(|_| HumanOperationError::Refused)?,
+                asset: context.budget_asset,
+                owner_did: layerx_types::ids::Did::new(context.actor.as_bytes())
+                    .map_err(|_| HumanOperationError::Refused)?,
+                owner_public_key: context.custody_public_key,
+                period_start_ms: start,
+                period_length_ms: period,
+                expiry_ms: start
+                    .checked_add(lifetime)
+                    .ok_or(HumanOperationError::Refused)?,
+            },
+            maximum: agent.monthly_limit.min(context.amount_ceiling),
+            maximum_lifetime_ms: lifetime,
+        });
     }
     selected.ok_or(HumanOperationError::Refused)
 }

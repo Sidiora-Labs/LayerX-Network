@@ -105,4 +105,3 @@ impl BudgetRecord {
         self.limit.saturating_sub(self.spent).min(balance)
     }
 }
-

@@ -139,16 +139,29 @@ fn persist_verified(
 
 /// # Errors
 /// Refuses conflicting durable indexes; accepts only the opaque complete native Budget outcome.
-pub fn store_native_budget(durable: &mut Store, tenant: TenantId,
-    outcome: &crate::budget::NativeBudgetOutcome) -> Result<ReceiptMetadata, ReceiptStoreError> {
-    let metadata = ReceiptMetadata {activity_id:outcome.activity_id(),idempotency_key:outcome.idempotency_key,
-        global_sequence:outcome.sequence,verification_level:VerificationLevel::CHECKPOINT_FINALISED,
-        result:classify(ResultCode::from_raw(outcome.result_code))};
-    match serve(durable,tenant.clone(),ReceiptLookupKey::Idempotency(outcome.idempotency_key)) {
+pub fn store_native_budget(
+    durable: &mut Store,
+    tenant: TenantId,
+    outcome: &crate::budget::NativeBudgetOutcome,
+) -> Result<ReceiptMetadata, ReceiptStoreError> {
+    let metadata = ReceiptMetadata {
+        activity_id: outcome.activity_id(),
+        idempotency_key: outcome.idempotency_key,
+        global_sequence: outcome.sequence,
+        verification_level: VerificationLevel::CHECKPOINT_FINALISED,
+        result: classify(ResultCode::from_raw(outcome.result_code)),
+    };
+    match serve(
+        durable,
+        tenant.clone(),
+        ReceiptLookupKey::Idempotency(outcome.idempotency_key),
+    ) {
         Ok(existing) => {
-            let mut retained=existing.metadata;
-            if retained.verification_level < metadata.verification_level { return Err(ReceiptStoreError::Corrupt); }
-            retained.verification_level=metadata.verification_level;
+            let mut retained = existing.metadata;
+            if retained.verification_level < metadata.verification_level {
+                return Err(ReceiptStoreError::Corrupt);
+            }
+            retained.verification_level = metadata.verification_level;
             if existing.canonical_bytes != outcome.canonical_receipt || retained != metadata {
                 return Err(ReceiptStoreError::Corrupt);
             }
@@ -157,11 +170,26 @@ pub fn store_native_budget(durable: &mut Store, tenant: TenantId,
         Err(ReceiptStoreError::Missing) => {}
         Err(error) => return Err(error),
     }
-    let indexes = [lookup_key(tenant.clone(),ReceiptLookupKey::Activity(metadata.activity_id))?,
-        lookup_key(tenant.clone(),ReceiptLookupKey::Idempotency(metadata.idempotency_key))?,
-        lookup_key(tenant.clone(),ReceiptLookupKey::GlobalSequence(metadata.global_sequence))?];
-    durable.record_verified_receipt(&indexes,&outcome.canonical_receipt,
-        metadata_key(tenant,outcome.receipt_digest())?,encode_metadata(metadata))?;
+    let indexes = [
+        lookup_key(
+            tenant.clone(),
+            ReceiptLookupKey::Activity(metadata.activity_id),
+        )?,
+        lookup_key(
+            tenant.clone(),
+            ReceiptLookupKey::Idempotency(metadata.idempotency_key),
+        )?,
+        lookup_key(
+            tenant.clone(),
+            ReceiptLookupKey::GlobalSequence(metadata.global_sequence),
+        )?,
+    ];
+    durable.record_verified_receipt(
+        &indexes,
+        &outcome.canonical_receipt,
+        metadata_key(tenant, outcome.receipt_digest())?,
+        encode_metadata(metadata),
+    )?;
     Ok(metadata)
 }
 

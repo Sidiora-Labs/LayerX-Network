@@ -219,20 +219,40 @@ fn state_key(tenant: TenantId, submission_id: [u8; 32]) -> Result<TenantKey, Sto
     TenantKey::new(tenant, ObjectKind::Configuration, object_id)
 }
 
-pub(super) fn begin_native_attempt(outbox: &Outbox, store: &mut Store,
-    submission_id: [u8;32], observed_at_ms: u64) -> Result<bool,UnknownResolutionError> {
-    let record=outbox.records.get(&submission_id).ok_or(OutboxError::NotFound)?;
-    if record.status.state!=SubmissionState::Unknown { return Err(UnknownResolutionError::NotUnknown); }
-    let key=state_key(record.tenant.clone(),submission_id)?;
-    let mut age=match store.get(&key) {
-        Some(value)=>decode_state(value.bytes(),observed_at_ms)?,
-        None=>UnknownAge {first_observed_at_ms:observed_at_ms,age_ms:0,attempt_count:0,next_attempt_at_ms:observed_at_ms},
+pub(super) fn begin_native_attempt(
+    outbox: &Outbox,
+    store: &mut Store,
+    submission_id: [u8; 32],
+    observed_at_ms: u64,
+) -> Result<bool, UnknownResolutionError> {
+    let record = outbox
+        .records
+        .get(&submission_id)
+        .ok_or(OutboxError::NotFound)?;
+    if record.status.state != SubmissionState::Unknown {
+        return Err(UnknownResolutionError::NotUnknown);
+    }
+    let key = state_key(record.tenant.clone(), submission_id)?;
+    let mut age = match store.get(&key) {
+        Some(value) => decode_state(value.bytes(), observed_at_ms)?,
+        None => UnknownAge {
+            first_observed_at_ms: observed_at_ms,
+            age_ms: 0,
+            attempt_count: 0,
+            next_attempt_at_ms: observed_at_ms,
+        },
     };
-    if observed_at_ms<age.next_attempt_at_ms { return Ok(false); }
-    age.attempt_count=age.attempt_count.checked_add(1).ok_or(UnknownResolutionError::Arithmetic)?;
-    age.next_attempt_at_ms=observed_at_ms.checked_add(backoff_ms(submission_id,age.attempt_count))
+    if observed_at_ms < age.next_attempt_at_ms {
+        return Ok(false);
+    }
+    age.attempt_count = age
+        .attempt_count
+        .checked_add(1)
         .ok_or(UnknownResolutionError::Arithmetic)?;
-    store.put_local(key,encode_state(age))?;
+    age.next_attempt_at_ms = observed_at_ms
+        .checked_add(backoff_ms(submission_id, age.attempt_count))
+        .ok_or(UnknownResolutionError::Arithmetic)?;
+    store.put_local(key, encode_state(age))?;
     Ok(true)
 }
 

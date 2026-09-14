@@ -4,12 +4,17 @@
 mod accounting;
 mod create;
 mod native;
+mod native_durable;
 mod native_io;
+pub(crate) use native_durable::persist_native_outcome;
 pub use native_io::retrieve as retrieve_native_budget_evidence;
 mod native_runtime;
-pub use native_runtime::{NativeBudgetRuntime, NativeBudgetScope};
+pub use native::{
+    NativeAccountCandidate, NativeBudgetBinding, NativeBudgetCandidate, NativeBudgetError,
+    NativeBudgetOutcome, NativeBudgetReconciliation, NativeBudgetRecoveryEvidence,
+};
 pub(crate) use native_runtime::spend as native_spend;
-pub use native::{NativeAccountCandidate, NativeBudgetBinding, NativeBudgetCandidate, NativeBudgetError, NativeBudgetOutcome, NativeBudgetReconciliation, NativeBudgetRecoveryEvidence};
+pub use native_runtime::{NativeBudgetRuntime, NativeBudgetScope};
 #[path = "divergence.rs"]
 mod divergence_reporting;
 #[path = "hold.rs"]
