@@ -100,7 +100,9 @@ def finalize(native, private, control, build, chain_config, url, submitter, stat
         header = PUBLICATION['decode_header'](committed['canonical_header'])
         assert header[0] == 3 and header[1] == 77 and header[3] == current
         request = PUBLICATION['certificate'](committed, chain_config, url, submitter, state, inputs)
-        PUBLICATION['authorize'](request, inputs, chain_config['vault'])
+        owners = [PUBLICATION['Ed25519PrivateKey'].from_private_bytes(bytes([value]) * 32)
+                  for value in (0x11, 0x22, 0x33)]
+        PUBLICATION['authorize'](request, inputs, chain_config['vault'], owners)
         result = PUBLICATION['publish'](request, evidence, f'checkpoint-{current}')
         assert result['checkpoint_id'] == request['checkpoint_id']
         assert result['publication']['checkpoint_id'] == request['checkpoint_id']

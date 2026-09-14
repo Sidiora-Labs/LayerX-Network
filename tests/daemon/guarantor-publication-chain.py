@@ -127,13 +127,18 @@ def certificate(export, chain_config, url, submitter, state, inputs):
         submitter_key_file=str(submitter), publication_state_dir=str(state), publication_inputs_dir=str(inputs), native_facts=export['native_facts'])
 
 
-def authorize(request, inputs, vault):
+def authorize(request, inputs, vault, owners=None):
     h = s.values(s.HEADER_TYPES, request['header'])
     digest = s.raw(request['checkpoint_id'], 32)
     balances, _, deposits, _ = p.native_request(s, request, h, digest)
-    owner = Ed25519PrivateKey.from_private_bytes(bytes([0x11]) * 32)
+    if owners is None:
+        owners = [Ed25519PrivateKey.from_private_bytes(bytes([0x11]) * 32)]
+    signing_keys = {owner.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw): owner for owner in owners}
+    assert len(signing_keys) == len(owners), 'duplicate publication signing authority'
     bindings = []
     for fact in balances:
+        assert fact['authority'] in signing_keys, 'publication owner signing authority unavailable'
+        owner = signing_keys[fact['authority']]
         recipient = bytes([0x31]) * 20
         message = b'LX:SETTLE:RECIPIENT:v1\0' + h[1].to_bytes(4, 'big') + fact['account'] + fact['asset'] + recipient + digest
         bindings.append(dict(account=p.hx(fact['account']), asset=p.hx(fact['asset']), recipient=p.hx(recipient), request_anchor=p.hx(digest), signature=p.hx(owner.sign(message))))
