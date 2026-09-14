@@ -3,7 +3,7 @@ use layerx_proof::receipt::{
 };
 
 #[test]
-fn historical_withdrawal_without_ledger_binding_is_not_verified() {
+fn historical_withdrawal_without_ledger_binding_is_not_verified() -> Result<(), String> {
     let receipt =
         include_bytes!("../../../../tests/fixtures/asset/unbound-native-withdrawal/receipt");
     let activity =
@@ -14,9 +14,10 @@ fn historical_withdrawal_without_ledger_binding_is_not_verified() {
     let header = layerx_wire::receipt::decode_batch_header(include_bytes!(
         "../../../../tests/fixtures/asset/unbound-native-withdrawal/header"
     ))
-    .expect("original native header");
-    let signed = verify_sequencer_signature(receipt, key).expect("original native signature");
-    let protocol = signed.protocol().expect("native receipt");
+    .map_err(|error| format!("original native header: {error:?}"))?;
+    let signed = verify_sequencer_signature(receipt, key)
+        .map_err(|error| format!("original native signature: {error:?}"))?;
+    let protocol = signed.protocol().ok_or("native receipt required")?;
     assert_eq!(
         (
             protocol.module_id(),
@@ -36,4 +37,5 @@ fn historical_withdrawal_without_ledger_binding_is_not_verified() {
     );
     assert!(verify_outcome(receipt, &authorized).is_err());
     assert!(withdrawal::verify(receipt, &authorized, activity, header.network_id()).is_err());
+    Ok(())
 }
