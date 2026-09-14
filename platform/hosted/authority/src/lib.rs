@@ -14,6 +14,8 @@ use layerx_wire::hash::{
 use layerx_wire::receipt::{decode, decode_merkle_proof, encode_unsigned};
 use serde::Deserialize;
 
+mod native_state;
+
 /// Lower-case hexadecimal helpers shared by the service and its tests.
 /// Refusal of hexadecimal text that is not well formed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -591,6 +593,9 @@ fn verify_authorized_receipt(
 ) -> Result<(), EvidenceRefusal> {
     let receipt = decode(receipt_bytes).map_err(|_| EvidenceRefusal::ReceiptDecode)?;
     let protocol = receipt.protocol().ok_or(EvidenceRefusal::ReceiptShape)?;
+    if native_state::selected(protocol) {
+        return native_state::verify(receipt_bytes, authorised);
+    }
     if matches!(protocol.module_id(), 7 | 8) && protocol.operation() == 0 {
         return verify_native_owner_receipt(receipt_bytes, authorised);
     }
@@ -615,6 +620,10 @@ fn verify_authorized_receipt(
 #[path = "../tests/support/lifecycle_dispatch.rs"]
 mod lifecycle_dispatch;
 
+#[cfg(test)]
+#[path = "../tests/support/native_module_outcomes.rs"]
+mod native_module_outcomes;
+
 fn verify_maintained_receipt(
     receipt_bytes: &[u8],
     authorised: &AuthorizedBatch,
@@ -627,7 +636,7 @@ fn verify_maintained_receipt(
     };
     let receipt = decode(receipt_bytes).map_err(|_| EvidenceRefusal::ReceiptDecode)?;
     let protocol = receipt.protocol().ok_or(EvidenceRefusal::ReceiptShape)?;
-    if matches!(protocol.module_id(), 7 | 8) && protocol.operation() == 0 {
+    if (2..=8).contains(&protocol.module_id()) && protocol.operation() == 0 {
         let batch = layerx_proof::receipt::authorized_maintained_activity_batch_chain(
             receipt_bytes,
             authorised,
@@ -640,7 +649,7 @@ fn verify_maintained_receipt(
             MaintainedOutcomeFailure::SequenceRange => EvidenceRefusal::SequenceRange,
             MaintainedOutcomeFailure::Receipt(check) => EvidenceRefusal::Receipt(check),
         })?;
-        return verify_native_owner_receipt(receipt_bytes, &batch);
+        return verify_authorized_receipt(receipt_bytes, &batch);
     }
     let verified = if protocol.module_id() == 9 && protocol.operation() == 0 {
         if protocol.program_outcome().is_some() {
