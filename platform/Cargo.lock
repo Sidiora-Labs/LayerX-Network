@@ -1236,6 +1236,7 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustix",
  "rustls",
  "sha2",
 ]
@@ -1721,6 +1722,20 @@ dependencies = [
  "serde",
  "serde_json",
  "subtle",
+]
+
+[[package]]
+name = "layerx-runtime-clock"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "layerx-client",
+ "layerx-proof",
+ "layerx-sdk",
+ "layerx-types",
+ "layerx-wire",
+ "rustix",
+ "signal-hook",
 ]
 
 [[package]]
