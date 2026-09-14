@@ -515,9 +515,9 @@ fn malformed_proof_candidates_are_refused_over_the_real_socket() -> Result {
 #[test]
 fn published_evidence_is_private_complete_and_never_overwrites_an_existing_path() -> Result {
     let dir = Directory::new()?;
-    let codec = NativeMovementCodec::for_protocol(3)?;
-    let original = codec.encode_response(&Response::Unavailable)?;
-    let changed = codec.encode_response(&Response::ContractViolation)?;
+    let codec = checked(NativeMovementCodec::for_protocol(3))?;
+    let original = checked(codec.encode_response(&Response::Unavailable))?;
+    let changed = checked(codec.encode_response(&Response::ContractViolation))?;
     let path = dir.0.join("evidence.bin");
     assert!(crate::journal::publish_private(&path, &original)?);
     assert_eq!(read_private(&path, MAX_FRAME)?, original);
