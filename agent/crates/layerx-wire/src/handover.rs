@@ -64,7 +64,7 @@ pub fn sequencer_id(public_key: &[u8; 32]) -> Result<[u8; 32], HandoverError> {
         return Err(HandoverError::Certificate);
     }
     let mut preimage = [0_u8; 81];
-    preimage[..17].copy_from_slice(b"layerx-sequencer:\0");
+    preimage[..17].copy_from_slice(b"layerx-sequencer:");
     let digits = b"0123456789abcdef";
     for (index, byte) in public_key.iter().enumerate() {
         preimage[17 + index * 2] = digits[usize::from(byte >> 4)];
