@@ -258,7 +258,10 @@ impl AgentCreationContract for InProcessAgentLayer {
                     .put_core_cache(key, receipt.receipt_bytes.clone())
                     .map_err(|_| AgentFailure::Refused("fund receipt persistence failed"))?;
             }
-            CreationStage::BudgetCreation
+            CreationStage::MainFunding
+            | CreationStage::AssetAccountOpening
+            | CreationStage::InitialFunding
+            | CreationStage::BudgetCreation
             | CreationStage::DidRegistration
             | CreationStage::RecoveryRegistration => {}
             CreationStage::Custody
@@ -651,7 +654,10 @@ fn durable_kind(stage: CreationStage) -> ObjectKind {
         CreationStage::DidRegistration
         | CreationStage::RecoveryRegistration
         | CreationStage::BudgetCreation
-        | CreationStage::BudgetFunding => ObjectKind::Receipt,
+        | CreationStage::BudgetFunding
+        | CreationStage::MainFunding
+        | CreationStage::AssetAccountOpening
+        | CreationStage::InitialFunding => ObjectKind::Receipt,
         CreationStage::SessionProvision => ObjectKind::Session,
         CreationStage::CapabilityNarrowing => ObjectKind::Capability,
         CreationStage::Custody => unreachable!(),
