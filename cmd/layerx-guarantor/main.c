@@ -34,6 +34,10 @@ struct producer {
     size_t threshold;
     uint64_t delay;
     lxp_sequencer_authorization authority;
+    lxp_sequencer_authorization history[LXP_HANDOVER_MAX_TRANSITIONS + 1U];
+    uint64_t history_epochs[LXP_HANDOVER_MAX_TRANSITIONS + 1U];
+    size_t history_count;
+    uint64_t replayed_batch;
     bool prepared;
     bool bound;
     char evidence[4096];
@@ -171,6 +175,7 @@ static int historical(struct producer *p, const uint8_t id[32], uint8_t *out, si
     size_t size;
     char path[4096];
     lxp_result status = LXP_ERR_IO;
+    const lxp_sequencer_authorization *authorization = NULL;
     if (memory == NULL || bonds == NULL || view == NULL)
         goto finish;
     if (id_path(path, p->state, id, "header") != 0 ||
@@ -182,9 +187,20 @@ static int historical(struct producer *p, const uint8_t id[32], uint8_t *out, si
         status = lxp_batch_header_decode(header_bytes, LXP_BATCH_HEADER_ENCODED_SIZE,
                                          &checkpoint.header);
     if (status == LXP_OK)
+        for (size_t index = 0U; index < p->history_count; ++index)
+            if (checkpoint.header.batch_number <= p->replayed_batch &&
+                checkpoint.header.batch_number >= p->history[index].first_batch_number &&
+                checkpoint.header.batch_number <= p->history[index].last_batch_number &&
+                checkpoint.header.epoch == p->history_epochs[index]) {
+                authorization = &p->history[index];
+                break;
+            }
+    if (status == LXP_OK && authorization == NULL)
+        status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK)
         status = lxp_batch_verify_signature(&checkpoint.header,
                                             header_bytes + LXP_BATCH_HEADER_ENCODED_SIZE, 64U,
-                                            &p->authority, &arena);
+                                            authorization, &arena);
     if (status == LXP_OK)
         status = lxp_checkpoint_certificate_hash(&checkpoint, &arena, digest);
     if (status == LXP_OK && memcmp(digest, id, 32U) != 0)
@@ -466,6 +482,43 @@ static lxp_result feedback(lxp_guarantor_lni *client, struct producer *p,
     }
     return status;
 }
+static lxp_result remember_replay(struct producer *producer, const lxp_batch_header *header,
+    const lxp_sequencer_authorization *authorization)
+{
+    size_t count = producer->history_count;
+    if (authorization == NULL || !authorization->authorized ||
+        producer->replayed_batch == UINT64_MAX ||
+        header->batch_number != producer->replayed_batch + 1U ||
+        header->batch_number < authorization->first_batch_number ||
+        header->batch_number > authorization->last_batch_number ||
+        memcmp(header->sequencer_id, authorization->sequencer_id, 32U) != 0)
+        return LXP_ERR_AUTH_SCOPE;
+    if (count != 0U && authorization->first_batch_number == producer->history[count - 1U].first_batch_number) {
+        const lxp_sequencer_authorization *previous = &producer->history[count - 1U];
+        if (header->epoch != producer->history_epochs[count - 1U] ||
+            authorization->last_batch_number != previous->last_batch_number ||
+            memcmp(authorization->sequencer_id, previous->sequencer_id, 32U) != 0 ||
+            memcmp(authorization->public_key, previous->public_key, 32U) != 0)
+            return LXP_ERR_AUTH_SCOPE;
+    } else {
+        if (count >= LXP_HANDOVER_MAX_TRANSITIONS + 1U ||
+            authorization->first_batch_number != header->batch_number)
+            return LXP_ERR_LENGTH_LIMIT;
+        if (count != 0U) {
+            if (producer->history_epochs[count - 1U] == UINT64_MAX ||
+                header->epoch != producer->history_epochs[count - 1U] + 1U ||
+                producer->history[count - 1U].last_batch_number != UINT64_MAX)
+                return LXP_ERR_AUTH_SCOPE;
+            producer->history[count - 1U].last_batch_number = header->batch_number - 1U;
+        }
+        producer->history[count] = *authorization;
+        producer->history_epochs[count] = header->epoch;
+        producer->history_count = count + 1U;
+    }
+    producer->replayed_batch = header->batch_number;
+    return LXP_OK;
+}
+
 int main(int argc, char **argv)
 {
     struct producer *p = calloc(1U, sizeof(*p));
@@ -508,6 +561,7 @@ int main(int argc, char **argv)
     authority.authorized = 1U;
     ctx.sequencer_authorization = &authority;
     p->authority = authority;
+    p->replayed_batch = batch - 1U;
     p->state = state;
     if (mkdir(state, 0700) != 0 && errno != EEXIST)
         goto done;
@@ -586,9 +640,12 @@ int main(int argc, char **argv)
         status = lxp_guarantor_lni_open(&client, socket_path, 30000U);
         if (status != LXP_OK)
             goto batch_failed;
-        field = "tag12 signed header";
-        status = lxp_guarantor_lni_header(&client, batch, &authority, ctx.network_id, &arena,
-                                          &header, signature);
+        field = fetch_only ? "tag12 signed header" : "tag12 untrusted header";
+        status = fetch_only ?
+            lxp_guarantor_lni_header(&client, batch, &authority, ctx.network_id, &arena,
+                                     &header, signature) :
+            lxp_guarantor_lni_untrusted_header(&client, batch, ctx.network_id, &arena,
+                                               &header, signature);
         if (status != LXP_OK)
             goto batch_failed;
         field = "tag18 selector05 candidate";
@@ -601,6 +658,15 @@ int main(int argc, char **argv)
                     bundle.chunk_count);
             break;
         }
+        field = "authenticated batch history";
+        status = lxp_da_bundle_body(&bundle, &header, &arena, &body);
+        if (status == LXP_OK) {
+            memcpy(body.sequencer_signature, signature, 64U);
+            status = gp_runtime_prepare(runtime, &body);
+        }
+        if (status != LXP_OK)
+            goto batch_failed;
+        runtime_prepared = true;
         ctx.last_completed_duty = LXP_GUARANTOR_DUTY_NONE;
         ctx.protocol_version = header.protocol_version;
         field = "bonded membership";
@@ -640,14 +706,6 @@ int main(int argc, char **argv)
             goto batch_failed;
         }
         field = "independent replay";
-        status = lxp_da_bundle_body(&bundle, &header, &arena, &body);
-        if (status == LXP_OK) {
-            memcpy(body.sequencer_signature, signature, 64U);
-            status = gp_runtime_prepare(runtime, &body);
-        }
-        if (status != LXP_OK)
-            goto batch_failed;
-        runtime_prepared = true;
         if (path_for(path, state, batch, ctx.guarantor_id) != 0) {
             status = LXP_ERR_LENGTH_LIMIT;
             goto batch_failed;
@@ -678,10 +736,15 @@ int main(int argc, char **argv)
         if (status != LXP_OK)
             goto batch_failed;
         (void)pthread_mutex_lock(&p->mutex);
-        p->checkpoint = (lxp_checkpoint_certificate){header, {NULL, 0U}};
-        p->count = 0U;
-        p->prepared = true;
+        status = remember_replay(p, &header, ctx.sequencer_authorization);
+        if (status == LXP_OK) {
+            p->checkpoint = (lxp_checkpoint_certificate){header, {NULL, 0U}};
+            p->count = 0U;
+            p->prepared = true;
+        }
         (void)pthread_mutex_unlock(&p->mutex);
+        if (status != LXP_OK)
+            goto batch_failed;
         lxp_byte_span canonical_header;
         uint8_t saved_header[LXP_BATCH_HEADER_ENCODED_SIZE + 64U];
         status = lxp_batch_header_encode(&header, &arena, &canonical_header);

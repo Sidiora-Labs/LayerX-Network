@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "lxp_daemon_finality_authority.h"
+#include "../../cmd/layerx-guarantor/producer.h"
 #include "layerx/lxp_crypto.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -233,6 +234,15 @@ int main(int argc, char **argv)
             if (length < 0 || (size_t)length >= sizeof(path)) FAIL();
             output = fopen(path, "wb");
             if (output == NULL || fwrite(bytes.bytes, 1U, bytes.length, output) != bytes.length ||
+                fclose(output) != 0) FAIL();
+        }
+        for (size_t i = 0U; i < certificate.attestation_count; ++i) {
+            uint8_t canonical[GP_ATTESTATION_BYTES];
+            int length = snprintf(path, sizeof(path), "%s/guarantor-%zu.attestation", argv[5], i + 1U);
+            if (length < 0 || (size_t)length >= sizeof(path) ||
+                gp_attestation_encode(&certificate.attestations[i], canonical) != LXP_OK) FAIL();
+            output = fopen(path, "wb");
+            if (output == NULL || fwrite(canonical, 1U, sizeof(canonical), output) != sizeof(canonical) ||
                 fclose(output) != 0) FAIL();
         }
         return 0;

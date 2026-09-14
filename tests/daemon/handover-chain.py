@@ -53,6 +53,10 @@ def main():
             os.environ['LAYERX_TEST_HANDOVER_DIVERGENCE'] = retained
         assert (state / 'replay-halt').is_file()
         print('independent guarantor replay verified old and new epochs, rollback, every state witness, and persistent authenticated divergence refusal')
+        if os.environ.get('LAYERX_TEST_HANDOVER_PEERS') == '1':
+            peers = runpy.run_path(str(ROOT / 'tests/daemon/handover-peers.py'))
+            peers['run'](native, build, output / f'exports-{count}', count,
+                os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'])
         return
     environment = os.environ.copy()
     settlement = dict(line.split('=', 1) for line in (native / 'settlement.env').read_text().splitlines())

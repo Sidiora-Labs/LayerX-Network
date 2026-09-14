@@ -11,6 +11,7 @@
 #include <sys/resource.h>
 #include <signal.h>
 #include <unistd.h>
+#include <openssl/evp.h>
 
 int main(int argc, char **argv)
 {
@@ -76,6 +77,34 @@ int main(int argc, char **argv)
         mismatch.header.previous_state_root[0] ^= 1U;
         assert(gp_runtime_prepare(runtime, &mismatch) != LXP_OK);
         assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+        if (engine->kernel->handover.enabled) {
+            lxp_batch_body forged = body;
+            lxp_sequencer_authorization claimed = {0};
+            uint8_t unauthorized_key[32];
+            uint64_t sequence_before = engine->kernel->state->next_sequence;
+            memset(unauthorized_key, 0x66U, sizeof(unauthorized_key));
+            EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
+                unauthorized_key, sizeof(unauthorized_key));
+            size_t key_length = sizeof(claimed.public_key);
+            assert(key != NULL && EVP_PKEY_get_raw_public_key(key, claimed.public_key, &key_length) == 1 &&
+                key_length == sizeof(claimed.public_key));
+            EVP_PKEY_free(key);
+            assert(lxp_handover_sequencer_id(claimed.public_key, claimed.sequencer_id) == LXP_OK);
+            claimed.first_batch_number = 1U;
+            claimed.last_batch_number = UINT64_MAX;
+            claimed.authorized = 1U;
+            memcpy(forged.header.sequencer_id, claimed.sequencer_id, 32U);
+            assert(lxp_batch_availability_root(&forged, &arena,
+                forged.header.data_availability_root) == LXP_OK);
+            assert(lxp_batch_sign(&forged.header, unauthorized_key, &claimed,
+                forged.sequencer_signature, &arena) == LXP_OK);
+            assert(lxp_batch_verify_signature(&forged.header, forged.sequencer_signature,
+                sizeof(forged.sequencer_signature), &claimed, &arena) == LXP_OK);
+            assert(gp_runtime_prepare(runtime, &forged) != LXP_OK);
+            assert(!memcmp(initial_root, engine->kernel->current_state_root, 32U));
+            assert(engine->kernel->state->next_sequence == sequence_before);
+            lxp_secure_zero(unauthorized_key, sizeof(unauthorized_key));
+        }
         if (engine->kernel->handover.enabled && engine->kernel->epoch > 1U) {
             lxp_sequencer_authorization retired = engine->kernel->handover.genesis_authorization;
             uint8_t retired_key[32];

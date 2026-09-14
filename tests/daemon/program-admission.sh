@@ -229,7 +229,8 @@ else:
     raise SystemExit("handover daemon did not accept LNI connections")
 PYWAIT
     timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-recovered "$scenario_state" "$scenario_state/handover.activity"
-    "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/handover-chain.py replay "$work" "$build_dir" "$scenario_state"
+    LAYERX_TEST_HANDOVER_LNI_SOCKET="$runtime/layerxd.lni.sock" \
+        "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/handover-chain.py replay "$work" "$build_dir" "$scenario_state"
     exit 0
 fi
 if [[ ${2:-} == --owner-authority ]]; then
