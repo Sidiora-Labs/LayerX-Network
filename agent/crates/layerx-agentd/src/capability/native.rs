@@ -87,7 +87,7 @@ impl NativeCeiling {
             .checked_add(held)
             .ok_or(CeilingError::Overflow)?
             > self.maximum
-            || held > self.reconciliation.remaining()
+            || (self.reconciliation.write_eligible() && held > self.reconciliation.remaining())
         {
             return Err(CeilingError::Exceeded);
         }
@@ -149,7 +149,8 @@ impl NativeCeiling {
         current_ms: u64,
         current_sequence: u64,
     ) -> Result<(), CeilingError> {
-        if current_ms < self.reconciliation.timestamp_ms()
+        if !self.reconciliation.write_eligible()
+            || current_ms < self.reconciliation.timestamp_ms()
             || current_ms >= self.reconciliation.period_end_ms()
             || current_sequence != self.reconciliation.observed_sequence()
             || expiry_ms <= current_ms

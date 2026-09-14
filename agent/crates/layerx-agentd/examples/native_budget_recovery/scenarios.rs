@@ -221,7 +221,7 @@ pub fn reservation(
     })
 }
 
-fn assert_actions(session: &Session, id: u8, queued: bool, unknown: bool) -> Result<()> {
+fn assert_actions(session: &Session, id: u8, queued: bool, unknown: bool) {
     let statuses = session.outbox.statuses();
     assert_eq!(statuses.len(), 1);
     assert_eq!(
@@ -239,7 +239,6 @@ fn assert_actions(session: &Session, id: u8, queued: bool, unknown: bool) -> Res
         usize::from(unknown)
     );
     assert_eq!(statuses[0].submission_id, [id; 32]);
-    Ok(())
 }
 
 pub fn recovery(fixture: &mut Fixture) -> Result<()> {
@@ -274,7 +273,7 @@ pub fn recovery(fixture: &mut Fixture) -> Result<()> {
                 id,
                 stage == SubmissionState::Queued,
                 stage == SubmissionState::Submitted,
-            )?;
+            );
             session.assert_accounting(0, 25)?;
         } else {
             if stage == SubmissionState::Unknown {
@@ -290,7 +289,7 @@ pub fn recovery(fixture: &mut Fixture) -> Result<()> {
                 .ok_or("submission missing")?
                 .activity_id;
             let (receipt, header) = fixture.receipt(activity)?;
-            let success = checked(layerx_wire::receipt::decode(&receipt))?.result_code() == 0;
+            let success = super::fixture::result_code(&receipt)? == 0;
             assert_eq!(success, stage != SubmissionState::Failed);
             session = session.restart(fixture)?;
             assert!(
@@ -313,7 +312,7 @@ pub fn recovery(fixture: &mut Fixture) -> Result<()> {
                 expected
             );
             session.assert_accounting(if success { 25 } else { 0 }, 0)?;
-            assert_actions(&session, id, false, false)?;
+            assert_actions(&session, id, false, false);
             let transitions = session
                 .outbox
                 .status([id; 32])
@@ -343,7 +342,7 @@ pub fn unknown(fixture: &mut Fixture) -> Result<()> {
     session.transition(id, SubmissionState::Submitted)?;
     session = session.restart(fixture)?;
     session.reconcile(fixture)?;
-    assert_actions(&session, id, false, true)?;
+    assert_actions(&session, id, false, true);
     session.assert_accounting(0, 25)?;
     let before = now_ms()?;
     assert!(checked(session.outbox.begin_native_retry(
@@ -402,5 +401,33 @@ pub fn unknown(fixture: &mut Fixture) -> Result<()> {
     session.reconcile(fixture)?;
     session.assert_accounting(25, 0)?;
     assert_eq!(checked(session.outbox.exact_signed_bytes([id; 32]))?, exact);
+    let changed = fixture.spend(&session.scope, id, 26, session.scope.binding.owner_account)?;
+    assert_ne!(changed.exact_bytes(), exact);
+    assert_ne!(changed.activity_id(), activity);
+    let transitions = session
+        .outbox
+        .status([id; 32])
+        .ok_or("terminal missing")?
+        .transitions
+        .clone();
+    assert!(matches!(
+        session.outbox.enqueue(
+            &mut session.store,
+            session.tenant.clone(),
+            [id; 32],
+            changed
+        ),
+        Err(layerx_agentd::outbox::OutboxError::Duplicate)
+    ));
+    assert_eq!(
+        session
+            .outbox
+            .status([id; 32])
+            .ok_or("terminal missing")?
+            .transitions,
+        transitions
+    );
+    assert_eq!(checked(session.outbox.exact_signed_bytes([id; 32]))?, exact);
+    session.assert_accounting(25, 0)?;
     Ok(())
 }

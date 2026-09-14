@@ -114,6 +114,48 @@ impl NativeBudgetRuntime {
                 .reconcile(reconciled.clone())
                 .map_err(|_| Error::Consumption)?;
         }
+        let reservations =
+            self.reconcile_outbox(store, tenant, node, registry, &reconciled, outbox)?;
+        let ceiling = NativeCeiling::rebuild(scope.maximum, reconciled.clone(), &reservations)
+            .map_err(|_| Error::Consumption)?;
+        if retained.is_none() {
+            if !reservations.is_empty() {
+                return Err(Error::Baseline);
+            }
+            native_io::retain_baseline(store, tenant, binding.budget_id, &evidence.baseline)?;
+        }
+        for reservation in &reservations {
+            if let Some(outcome) = reconciled
+                .outcomes()
+                .iter()
+                .find(|outcome| outcome.activity_id() == reservation.expected_activity_id)
+            {
+                outbox
+                    .settle_native_budget(store, reservation.id, outcome)
+                    .map_err(|_| Error::Outbox)?;
+            }
+        }
+        native_io::advance_anchor(store, tenant, binding.budget_id, &evidence.current)?;
+        if scope.write_enabled {
+            self.paused.remove(&(tenant.clone(), binding.budget_id));
+        } else {
+            self.paused.insert((tenant.clone(), binding.budget_id));
+        }
+        self.ceilings
+            .insert((tenant.clone(), binding.budget_id), ceiling);
+        Ok(reconciled)
+    }
+
+    fn reconcile_outbox(
+        &self,
+        store: &mut Store,
+        tenant: &TenantId,
+        node: &mut Client,
+        registry: &ModuleRegistry,
+        reconciled: &NativeBudgetReconciliation,
+        outbox: &mut Outbox,
+    ) -> Result<Vec<NativeReservation>, Error> {
+        let binding = reconciled.binding();
         let mut reservations = Vec::new();
         for status in outbox.statuses() {
             let Some((budget_id, mut reservation)) = spend(
@@ -149,14 +191,16 @@ impl NativeBudgetRuntime {
                     let outcome = native_io::terminal(
                         node,
                         &self.authority,
-                        &binding,
+                        binding,
                         store,
                         tenant,
-                        status.submission_id,
-                        outbox
-                            .exact_signed_bytes(status.submission_id)
-                            .map_err(|_| Error::Outbox)?,
-                        reconciled.observed_sequence(),
+                        native_io::TerminalRequest {
+                            id: status.submission_id,
+                            exact: outbox
+                                .exact_signed_bytes(status.submission_id)
+                                .map_err(|_| Error::Outbox)?,
+                            maximum_sequence: reconciled.observed_sequence(),
+                        },
                     )?;
                     if outcome.succeeded() != (status.state == SubmissionState::Executed)
                         || outcome.activity_id() != status.activity_id
@@ -190,34 +234,7 @@ impl NativeBudgetRuntime {
             }
             reservations.push(reservation);
         }
-        let ceiling = NativeCeiling::rebuild(scope.maximum, reconciled.clone(), &reservations)
-            .map_err(|_| Error::Consumption)?;
-        if retained.is_none() {
-            if !reservations.is_empty() {
-                return Err(Error::Baseline);
-            }
-            native_io::retain_baseline(store, tenant, binding.budget_id, &evidence.baseline)?;
-        }
-        for reservation in &reservations {
-            if let Some(outcome) = reconciled
-                .outcomes()
-                .iter()
-                .find(|outcome| outcome.activity_id() == reservation.expected_activity_id)
-            {
-                outbox
-                    .settle_native_budget(store, reservation.id, outcome)
-                    .map_err(|_| Error::Outbox)?;
-            }
-        }
-        native_io::advance_anchor(store, tenant, binding.budget_id, &evidence.current)?;
-        if scope.write_enabled {
-            self.paused.remove(&(tenant.clone(), binding.budget_id));
-        } else {
-            self.paused.insert((tenant.clone(), binding.budget_id));
-        }
-        self.ceilings
-            .insert((tenant.clone(), binding.budget_id), ceiling);
-        Ok(reconciled)
+        Ok(reservations)
     }
 
     /// # Errors

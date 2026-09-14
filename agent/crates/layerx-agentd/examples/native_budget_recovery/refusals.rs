@@ -246,5 +246,6 @@ pub fn run(fixture: &mut Fixture) -> Result<()> {
         )
         .is_err());
     super::scenarios::rollover(fixture)?;
+    super::expiry::run(fixture)?;
     Ok(())
 }

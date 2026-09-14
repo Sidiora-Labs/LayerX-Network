@@ -66,6 +66,13 @@ fn configuration(socket: &Path) -> ClientConfig {
     }
 }
 
+pub fn result_code(bytes: &[u8]) -> Result<i32> {
+    Ok(checked(layerx_wire::receipt::decode(bytes))?
+        .protocol()
+        .ok_or("native protocol receipt missing")?
+        .result_code())
+}
+
 pub fn account(name: &str) -> Result<[u8; 32]> {
     checked(account_id_for_protocol(
         &checked(AccountId::parse(name))?,
@@ -176,12 +183,21 @@ impl Fixture {
     }
 
     pub fn create_with_period(&mut self, id: u8, period_length: u64) -> Result<NativeBudgetScope> {
+        self.create_with_lifetime(id, period_length, 3_600_000)
+    }
+
+    pub fn create_with_lifetime(
+        &mut self,
+        id: u8,
+        period_length: u64,
+        lifetime: u64,
+    ) -> Result<NativeBudgetScope> {
         checked(self.client.reconnect())?;
         let start = checked(self.client.preparation_state(&self.did, 8002))?.protocol_timestamp;
         let did = std::str::from_utf8(self.did.as_bytes())?;
         let owner = account(&format!("agent:{did}:main"))?;
         let budget = account(&format!("agent:{did}:budget:{}", hex::encode(&[id; 32])))?;
-        let end = start.checked_add(3_600_000).ok_or("period overflow")?;
+        let end = start.checked_add(lifetime).ok_or("period overflow")?;
         let mut payload = Encoder::new(211);
         checked(payload.u16(1))?;
         for value in [[id; 32], budget, self.asset, [0x73; 32]] {
@@ -196,10 +212,7 @@ impl Fixture {
         checked(payload.u8(1))?;
         let signed = self.signed(0x0003_0001, id, payload.finish())?;
         let receipt = self.submit(signed.exact_bytes())?;
-        assert_eq!(
-            checked(layerx_wire::receipt::decode(&receipt.0))?.result_code(),
-            0
-        );
+        assert_eq!(super::fixture::result_code(&receipt.0)?, 0);
         self.finalize(&receipt.1)?;
         Ok(NativeBudgetScope {
             network_id: 77,
@@ -218,6 +231,55 @@ impl Fixture {
                 expiry_ms: end,
             },
         })
+    }
+
+    pub fn close(&mut self, scope: &NativeBudgetScope, id: u8) -> Result<()> {
+        use layerx_types::activity::{EnvelopeBuilder, Signature, TimestampBound};
+        use layerx_types::payload::Payload;
+        checked(self.client.reconnect())?;
+        let state = checked(self.client.preparation_state(&self.did, 8200))?;
+        let kind = checked(ActivityType::from_u32(0x0003_0007))?;
+        let mut encoded = Encoder::new(42);
+        checked(encoded.u16(1))?;
+        checked(encoded.fixed(&scope.binding.budget_id))?;
+        checked(encoded.u64(2))?;
+        let payload = checked(Payload::new(
+            &state.module_registry,
+            kind,
+            &encoded.finish(),
+        ))?;
+        let payload_hash = checked(layerx_wire::hash::payload_hash_for(&payload))?;
+        let mut builder = EnvelopeBuilder::new();
+        checked(
+            builder
+                .protocol_version(3)
+                .and_then(|value| value.network_id(state.network_id))
+                .and_then(|value| value.activity_type(kind))
+                .and_then(|value| value.actor_did(self.did.clone()))
+                .and_then(|value| value.authority(Authority::owner(&self.public)?))
+                .and_then(|value| value.account_sequence(state.account_sequence))
+                .and_then(|value| {
+                    value.timestamp_bound(TimestampBound::new(
+                        state.protocol_timestamp,
+                        state.protocol_timestamp.checked_add(30_000).ok_or(
+                            layerx_types::activity::ActivityBuildError::InvalidTimestampBound,
+                        )?,
+                    )?)
+                })
+                .and_then(|value| value.idempotency_key(IdempotencyKey::new([id; 32])))
+                .and_then(|value| value.fee_limit(Amount::from_u128(1_000_000)))
+                .and_then(|value| value.payload_hash(payload_hash))
+                .and_then(|value| value.payload(payload)),
+        )?;
+        let unsigned = checked(builder.build())?;
+        let preimage = checked(layerx_wire::sign::preimage_unsigned(&unsigned))?;
+        let signature = self.key.sign(preimage.as_bytes()).to_bytes();
+        let envelope = unsigned.attach_signature(checked(Signature::new(&signature))?);
+        let exact = checked(layerx_wire::activity::encode_signed_envelope(&envelope))?;
+        self.registry = state.module_registry;
+        let result = self.submit(&exact)?;
+        assert_eq!(result_code(&result.0)?, 0);
+        self.finalize(&result.1)
     }
 
     pub fn spend(

@@ -112,6 +112,7 @@ pub struct NativeBudgetReconciliation {
     pub(crate) period_end_ms: u64,
     pub(crate) checkpoint_id: [u8; 32],
     pub(crate) outcomes: Vec<NativeBudgetOutcome>,
+    pub(crate) write_eligible: bool,
 }
 
 impl NativeBudgetReconciliation {
@@ -142,6 +143,10 @@ impl NativeBudgetReconciliation {
     #[must_use]
     pub const fn checkpoint_id(&self) -> [u8; 32] {
         self.checkpoint_id
+    }
+    #[must_use]
+    pub const fn write_eligible(&self) -> bool {
+        self.write_eligible
     }
     #[must_use]
     pub fn outcomes(&self) -> &[NativeBudgetOutcome] {

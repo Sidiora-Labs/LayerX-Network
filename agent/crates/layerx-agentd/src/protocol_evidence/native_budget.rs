@@ -21,6 +21,7 @@ struct State {
     header: BatchHeader,
     remaining: u128,
     period_end: u64,
+    write_eligible: bool,
 }
 
 fn account(
@@ -133,8 +134,6 @@ impl EvidenceAuthority {
             || record.expiry != binding.expiry_ms
             || record.revocation == 0
             || record.revocation > header.last_sequence()
-            || record.closed
-            || record.revoked
         {
             return Err(Error::Binding);
         }
@@ -143,9 +142,30 @@ impl EvidenceAuthority {
             .checked_add(record.period_length)
             .ok_or(Error::Arithmetic)?
             .min(record.expiry);
-        if header.timestamp_ms() < record.period_start || header.timestamp_ms() >= period_end {
+        if header.timestamp_ms() < record.period_start {
             return Err(Error::Window);
         }
+        let (balance, frozen) =
+            Self::native_budget_accounts(binding, raw, &record, policy, module.state_root())?;
+        let write_eligible =
+            !record.closed && !record.revoked && !frozen && header.timestamp_ms() < period_end;
+        let remaining = record.remaining(balance, header.timestamp_ms(), frozen);
+        Ok(State {
+            record,
+            header,
+            remaining,
+            period_end,
+            write_eligible,
+        })
+    }
+
+    fn native_budget_accounts(
+        binding: &NativeBudgetBinding,
+        raw: &NativeBudgetCandidate,
+        record: &BudgetRecord,
+        policy: AccountEvidencePolicy,
+        state_root: [u8; 32],
+    ) -> Result<(u128, bool), Error> {
         let owner = account(
             &raw.owner,
             binding.owner_account,
@@ -157,7 +177,6 @@ impl EvidenceAuthority {
         if owner.account().name != owner_name
             || owner.account().kind != 1
             || owner.account().authority_key != Some(binding.owner_public_key)
-            || owner.account().frozen
         {
             return Err(Error::Binding);
         }
@@ -177,12 +196,12 @@ impl EvidenceAuthority {
         .concat();
         if budget.account().name != budget_name
             || budget.account().kind != 2
-            || budget.account().frozen
-            || budget.state_root() != module.state_root()
-            || owner.state_root() != module.state_root()
+            || budget.state_root() != state_root
+            || owner.state_root() != state_root
         {
             return Err(Error::Binding);
         }
+        let mut frozen = owner.account().frozen || budget.account().frozen;
         match (record.source, &raw.source) {
             (Some(id), Some(candidate)) if id != record.owner => {
                 let source = account(
@@ -192,6 +211,7 @@ impl EvidenceAuthority {
                     policy,
                     &raw.canonical_header,
                 )?;
+                frozen |= source.account().frozen;
                 let source_name = [
                     b"agent:".as_slice(),
                     binding.owner_did.as_bytes(),
@@ -202,8 +222,7 @@ impl EvidenceAuthority {
                 if source.account().kind != 1
                     || source.account().name != source_name
                     || source.account().authority_key != Some(binding.owner_public_key)
-                    || source.account().frozen
-                    || source.state_root() != module.state_root()
+                    || source.state_root() != state_root
                 {
                     return Err(Error::Binding);
                 }
@@ -220,13 +239,7 @@ impl EvidenceAuthority {
             }
             _ => return Err(Error::Binding),
         }
-        let remaining = record.remaining(budget.account().balance(), header.timestamp_ms(), false);
-        Ok(State {
-            record,
-            header,
-            remaining,
-            period_end,
-        })
+        Ok((budget.account().balance(), frozen))
     }
 
     /// Reconciles native Budget state against a complete authenticated period history.
@@ -258,6 +271,7 @@ impl EvidenceAuthority {
             period_end_ms: state.period_end,
             checkpoint_id: candidate.checkpoint_id,
             outcomes: Vec::new(),
+            write_eligible: state.write_eligible,
         })
     }
 
@@ -284,7 +298,9 @@ impl EvidenceAuthority {
         let current = self.native_budget_state(binding, &evidence.current)?;
         if !prior_binding.advances(binding)
             || baseline.header.timestamp_ms() > current.header.timestamp_ms()
-            || baseline.record.revocation != current.record.revocation
+            || baseline.record.revocation > current.record.revocation
+            || (baseline.record.closed && !current.record.closed)
+            || (baseline.record.revoked && !current.record.revoked)
         {
             return Err(Error::Baseline);
         }
@@ -309,13 +325,20 @@ impl EvidenceAuthority {
         let verified = self.native_budget_history(
             &baseline.header,
             &current.header,
-            current.period_end,
+            current
+                .header
+                .timestamp_ms()
+                .checked_add(1)
+                .ok_or(Error::Arithmetic)?,
             evidence,
         )?;
         let mut outcomes = Vec::new();
         for (entry, receipt) in evidence.history.iter().zip(verified) {
-            if let Some(outcome) = self.native_budget_outcome(binding, entry, &receipt)? {
+            if let Some(outcome) = Self::native_budget_outcome(binding, entry, &receipt)? {
                 if outcome.succeeded() && outcome.timestamp_ms >= binding.period_start_ms {
+                    if outcome.timestamp_ms >= current.period_end {
+                        return Err(Error::Window);
+                    }
                     spent = spent
                         .checked_add(outcome.amount())
                         .ok_or(Error::Arithmetic)?;
@@ -336,6 +359,7 @@ impl EvidenceAuthority {
             period_end_ms: current.period_end,
             checkpoint_id: evidence.current.checkpoint_id,
             outcomes,
+            write_eligible: current.write_eligible,
         })
     }
 
@@ -348,12 +372,10 @@ impl EvidenceAuthority {
             .verifier
             .verify_signed_receipt_inclusion(entry.receipt())
             .map_err(|_| Error::Receipt)?;
-        self.native_budget_outcome(binding, entry, &verified)?
-            .ok_or(Error::Receipt)
+        Self::native_budget_outcome(binding, entry, &verified)?.ok_or(Error::Receipt)
     }
 
     fn native_budget_outcome(
-        &self,
         binding: &NativeBudgetBinding,
         entry: &super::RawActivityReceiptEvidence,
         receipt: &VerifiedCumulativeReceipt,
@@ -404,13 +426,14 @@ impl EvidenceAuthority {
         {
             return Err(Error::Receipt);
         }
-        if header.timestamp_ms() >= binding.expiry_ms {
+        if succeeded && header.timestamp_ms() >= binding.expiry_ms {
             return Err(Error::Window);
         }
         let mut outcome_binding = binding.clone();
         let remainder = binding.period_start_ms % binding.period_length_ms;
         outcome_binding.period_start_ms = header
             .timestamp_ms()
+            .min(binding.expiry_ms.checked_sub(1).ok_or(Error::Window)?)
             .checked_sub(remainder)
             .ok_or(Error::Window)?
             / binding.period_length_ms

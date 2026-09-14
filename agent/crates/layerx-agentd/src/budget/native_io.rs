@@ -75,16 +75,26 @@ pub(super) fn advance_anchor(
         .map_err(|_| Error::Store)
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct TerminalRequest<'a> {
+    pub id: [u8; 32],
+    pub exact: &'a [u8],
+    pub maximum_sequence: u64,
+}
+
 pub(super) fn terminal(
     client: &mut Client,
     authority: &EvidenceAuthority,
     binding: &NativeBudgetBinding,
     store: &Store,
     tenant: &TenantId,
-    id: [u8; 32],
-    exact: &[u8],
-    maximum_sequence: u64,
+    request: TerminalRequest<'_>,
 ) -> Result<super::NativeBudgetOutcome, Error> {
+    let TerminalRequest {
+        id,
+        exact,
+        maximum_sequence,
+    } = request;
     let raw = super::native_durable::outcome(store, tenant, id)?;
     if raw.canonical_activity() != exact {
         return Err(Error::Activity);
@@ -242,32 +252,7 @@ pub(super) fn history(
                     ));
                     continue;
                 }
-                let receipt = decode(item.canonical_bytes()).map_err(|_| Error::Receipt)?;
-                let id = receipt.protocol().ok_or(Error::Receipt)?.activity_id();
-                let activity = client
-                    .proof_bundle(ProofBundleSelector::Activity(id), 6202, registry)
-                    .map_err(|_| Error::Activity)?;
-                let VerifiedProofBundle::Activity {
-                    canonical_bytes,
-                    activity_id,
-                    signed_header,
-                    ..
-                } = activity
-                else {
-                    return Err(Error::Activity);
-                };
-                if activity_id != id || signed_header.canonical_bytes != proof.header {
-                    return Err(Error::Activity);
-                }
-                history.push(RawActivityReceiptEvidence::from_signed_inclusion(
-                    canonical_bytes,
-                    RawReceiptEvidence::new(
-                        item.canonical_bytes().to_vec(),
-                        proof.proof,
-                        proof.header,
-                        proof.header_signature,
-                    ),
-                ));
+                history.push(activity_entry(client, registry, &item, proof)?);
             }
             cursor = page.cursor;
             if cursor.is_none() {
@@ -281,6 +266,40 @@ pub(super) fn history(
         history,
         maintenance,
     })
+}
+
+fn activity_entry(
+    client: &mut Client,
+    registry: &ModuleRegistry,
+    item: &layerx_client::read::HistoryItem,
+    proof: HistoryProof,
+) -> Result<RawActivityReceiptEvidence, Error> {
+    let receipt = decode(item.canonical_bytes()).map_err(|_| Error::Receipt)?;
+    let id = receipt.protocol().ok_or(Error::Receipt)?.activity_id();
+    let activity = client
+        .proof_bundle(ProofBundleSelector::Activity(id), 6202, registry)
+        .map_err(|_| Error::Activity)?;
+    let VerifiedProofBundle::Activity {
+        canonical_bytes,
+        activity_id,
+        signed_header,
+        ..
+    } = activity
+    else {
+        return Err(Error::Activity);
+    };
+    if activity_id != id || signed_header.canonical_bytes != proof.header {
+        return Err(Error::Activity);
+    }
+    Ok(RawActivityReceiptEvidence::from_signed_inclusion(
+        canonical_bytes,
+        RawReceiptEvidence::new(
+            item.canonical_bytes().to_vec(),
+            proof.proof,
+            proof.header,
+            proof.header_signature,
+        ),
+    ))
 }
 
 /// Retrieves the actual finalized native proof bundle and bounded complete receipt history.

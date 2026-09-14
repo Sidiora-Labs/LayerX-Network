@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    managed_agent, map_core, subject, Arc, BTreeMap, HumanAuthorityBoundary, HumanOperationError,
+    HumanPeer, HumanResponse, ModuleRegistry, ProductionHumanOperations, SubmissionState, TenantId,
+    UnifiedAgentOwner,
+};
 use crate::budget::{NativeBudgetReconciliation, NativeBudgetRuntime};
 
 fn now_ms() -> Result<u64, HumanOperationError> {
@@ -71,7 +75,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         Ok(ids)
     }
 
-    fn require_native_budget_recovery(
+    pub(super) fn require_native_budget_recovery(
         &self,
         peers: &BTreeMap<u32, (String, String)>,
     ) -> Result<(), HumanOperationError> {
@@ -133,7 +137,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             .map_err(|_| HumanOperationError::Unavailable)
     }
 
-    fn reserve_native_spend(
+    pub(super) fn reserve_native_spend(
         &mut self,
         peer: &HumanPeer,
         bytes: &[u8],
@@ -161,7 +165,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         Ok(Some(id))
     }
 
-    fn authorize_native_preparation(
+    pub(super) fn authorize_native_preparation(
         &mut self,
         peer: &HumanPeer,
         prepared: &crate::prepare::Prepared,
@@ -204,7 +208,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             .map_err(|_| HumanOperationError::Refused)
     }
 
-    fn native_dispatch_hold(
+    pub(super) fn native_dispatch_hold(
         &mut self,
         peer: &HumanPeer,
         id: [u8; 32],
@@ -230,7 +234,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             .map_err(|_| HumanOperationError::Refused)
     }
 
-    fn track_native_budget(
+    pub(super) fn track_native_budget(
         &mut self,
         peer: &HumanPeer,
         id: [u8; 32],
