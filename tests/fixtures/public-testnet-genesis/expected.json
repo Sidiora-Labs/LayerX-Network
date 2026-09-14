@@ -1,5 +1,14 @@
 {
-  "canonical_state_root": "194dca071ac042f1ce65053f1b93fff604fa193b9922fd164a0e90582458c258",
+  "canonical_state_root": "c5a48d59efafef958e97fe03c011829227a13f872012849ac0e3105c469d47ed",
+  "module_prices": {
+    "bridge": 0,
+    "budget": 4,
+    "escrow": 4,
+    "governance": 4,
+    "perps": 4,
+    "service": 4,
+    "stream": 4
+  },
   "modules": [
     "budget",
     "escrow",
@@ -8,18 +17,18 @@
     "stream"
   ],
   "native_fee_authority_version": 2,
-  "native_fee_schedule_version": 3,
+  "native_fee_schedule_version": 4,
   "network_id": 77,
-  "previous_canonical_state_root": "931e6e2711ca946cad467ea3ad65dcbb74611d3dbe8578ae7f06157e73fd8754",
-  "previous_receipt_state_root": "e59b387c6e31993ba6ca8d9c2397f7815e3373863127f6609f04408fdaaf15ca",
+  "previous_canonical_state_root": "a03fa5215092db963f9479d0f2582a08a4ff168d8af5c6af2f2f5a3e67b3587e",
+  "previous_receipt_state_root": "7f6f70368110df290b2db6e995c0f26d1b841adb2826f6aff13968aba70748da",
   "protocol_version": 3,
-  "receipt_state_root": "5c4473eda28947a9b7ef450615c73706b9cca7edf49d27bc965d45362add11e0",
-  "sequencer_public_key": "58a179348aa669054996e1d4ee8b71de684b7e496c5fa90cba45d1f15064f229",
+  "receipt_state_root": "675874db63e61ffb6954414ff7aa2361e33fbf963c951907c569512edc26786b",
+  "sequencer_public_key": "24962d3a5ac32b171270c4acc2269f6f7ea37f64e034e22bab8c03baaf3b3de5",
   "sha256": {
-    "00000000000000000000.lxs": "b68d57e290ffa9ef558192641d4940c38d93186a5b870078545b91076fd69f95",
-    "genesis.manifest": "98ad80ab902e3e49f8a4e4b1fa3a7e6d3b7fc589d499803939f36193a61347f1",
-    "paxeer-deployment-descriptor.lxgd": "ea7487963c12df6ae8aeebf1105bfe82f02e9bb1287cd0403a97a2ef5c45b432",
-    "paxeer-registration-request.lxrr": "1fb46a1069cab37653d9b62cfdb1c76bc83eadb9746e5ddef3171bb5b6b752f5"
+    "00000000000000000000.lxs": "f521586fc2ec4bf90194061ec5ea47832e3af0900917f8fd63581664b5e47138",
+    "genesis.manifest": "0f7296423019f3679cbb3d52dda6748efc7ded8a1d40c615ad52000debb2f052",
+    "paxeer-deployment-descriptor.lxgd": "3242aabfcb668bed9ee2550768f372c94b944f6dece0b0bc57e3517637761086",
+    "paxeer-registration-request.lxrr": "86ffe2439ced26c6abb47ea32aa695b9d00adbf806227d5d77667f2e0218a9ee"
   },
   "withdrawal_price": 0
 }
