@@ -38,6 +38,15 @@ def metadata_withdrawal(asset, issuer_public, salt, withdrawal_price=0):
     return legacy[:-249] + len(schedule).to_bytes(2, 'big') + schedule
 
 
+def metadata_modules(asset, issuer_public, salt, withdrawal_price, prices):
+    if len(prices) != 7 or any(type(price) is not int or not 0 <= price < 2**128 for price in prices):
+        raise ValueError('exactly seven uint128 module fee prices are required')
+    legacy = metadata_withdrawal(asset, issuer_public, salt, withdrawal_price)
+    schedule = b'\0\x04' + legacy[-253:] + b'\x07'
+    schedule += b''.join(price.to_bytes(16, 'big') for price in prices)
+    return legacy[:-257] + len(schedule).to_bytes(2, 'big') + schedule
+
+
 def check():
     encoded = metadata(VECTOR_ASSET, VECTOR_ISSUER_PUBLIC, VECTOR_SALT)
     digest = hashlib.sha256(encoded).hexdigest()

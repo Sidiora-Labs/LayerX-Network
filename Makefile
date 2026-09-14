@@ -1138,9 +1138,17 @@ $(BUILD_DIR)/tests/test_fees_v3: tests/test_fees_v3.c $(LIBRARY) \
 		$(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -ldl -lm -o $@
 
-test-fees: $(BUILD_DIR)/tests/test_fees $(BUILD_DIR)/tests/test_fees_v3
+$(BUILD_DIR)/tests/test_fees_v4: tests/test_fees_v4.c $(LIBRARY) \
+        $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-fees: $(BUILD_DIR)/tests/test_fees $(BUILD_DIR)/tests/test_fees_v3 $(BUILD_DIR)/tests/test_fees_v4
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_fees
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_fees_v3
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_fees_v4
 
 $(BUILD_DIR)/tests/test_metering: tests/test_metering.c fuzz/fuzz_meter.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build

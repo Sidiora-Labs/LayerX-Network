@@ -376,10 +376,10 @@ static int check_perps_insurance(void)
     return 0;
 }
 
-static int fixture_read(const char *name, uint8_t *bytes, size_t capacity, size_t *length)
+static int fixture_read(const char *directory, const char *name, uint8_t *bytes, size_t capacity, size_t *length)
 {
     char path[256];
-    int count = snprintf(path, sizeof(path), "tests/fixtures/public-testnet-genesis/%s", name);
+    int count = snprintf(path, sizeof(path), "%s/%s", directory, name);
     REQUIRE(count > 0 && (size_t)count < sizeof(path));
     FILE *file = fopen(path, "rb");
     REQUIRE(file != NULL);
@@ -388,7 +388,62 @@ static int fixture_read(const char *name, uint8_t *bytes, size_t capacity, size_
     return 0;
 }
 
-static int check_public_fixture(void)
+static int check_fee_pair(const lxp_genesis_manifest *original)
+{
+    static uint8_t storage[8388608U];
+    static lxp_genesis_manifest changed;
+    static const uint8_t head_key[32] = "fee.schedule", prices_key[32] = "fee.module-prices";
+    size_t head = SIZE_MAX, prices = SIZE_MAX;
+    lxp_arena arena;
+    lxp_byte_span encoded;
+    uint8_t root[32];
+    for (size_t i = 0U; i < original->module_value_count; ++i) {
+        const lxp_genesis_module_value *value = &original->module_values[i];
+        REQUIRE(value->value_length <= LXP_GENESIS_MODULE_VALUE_BYTES);
+        if (value->module_id == LXP_MODULE_GOVERNANCE && memcmp(value->key, head_key, 32U) == 0) head = i;
+        if (value->module_id == LXP_MODULE_GOVERNANCE && memcmp(value->key, prices_key, 32U) == 0) prices = i;
+    }
+    REQUIRE(head != SIZE_MAX && prices != SIZE_MAX && prices < head);
+    REQUIRE(original->module_values[head].value_length == 256U && original->module_values[prices].value_length == 112U);
+    REQUIRE(lxp_arena_init(&arena, storage, sizeof(storage)) == LXP_OK);
+    for (size_t index = 0U; index < 2U; ++index) {
+        size_t remove = index == 0U ? head : prices;
+        changed = *original;
+        (void)memmove(changed.module_values + remove, changed.module_values + remove + 1U,
+            (changed.module_value_count - remove - 1U) * sizeof(changed.module_values[0]));
+        --changed.module_value_count;
+        REQUIRE(lxp_genesis_encode(&changed, true, &arena, &encoded) != LXP_OK);
+        changed = *original;
+        --changed.module_values[remove].value_length;
+        REQUIRE(lxp_genesis_encode(&changed, true, &arena, &encoded) != LXP_OK);
+    }
+    changed = *original;
+    changed.module_values[head] = original->module_values[prices];
+    REQUIRE(lxp_genesis_encode(&changed, true, &arena, &encoded) == LXP_ERR_UNSORTED_SEQUENCE);
+    changed = *original;
+    changed.module_values[head] = original->module_values[prices];
+    changed.module_values[prices] = original->module_values[head];
+    REQUIRE(lxp_genesis_encode(&changed, true, &arena, &encoded) == LXP_ERR_UNSORTED_SEQUENCE);
+    changed = *original;
+    changed.module_values[head].value[1] = 3U;
+    changed.module_values[head].value_length = 255U;
+    REQUIRE(lxp_genesis_encode(&changed, true, &arena, &encoded) != LXP_OK);
+    changed = *original;
+    changed.module_values[head].value[255] = 6U;
+    REQUIRE(lxp_genesis_encode(&changed, true, &arena, &encoded) != LXP_OK);
+    for (size_t i = 0U; i < 7U; ++i) {
+        changed = *original;
+        changed.module_values[prices].value[15U + 16U * i] ^= 1U;
+        REQUIRE(lxp_arena_reset(&arena, 0U) == LXP_OK);
+        REQUIRE(lxp_genesis_verify_signature(&changed, &arena) != LXP_OK);
+        REQUIRE(lxp_arena_reset(&arena, 0U) == LXP_OK);
+        REQUIRE(lxp_genesis_state_root(&changed, &arena, root) == LXP_OK);
+        REQUIRE(memcmp(root, original->genesis_state_root, 32U) != 0);
+    }
+    return 0;
+}
+
+static int check_public_fixture(const char *directory, uint16_t fee_version)
 {
     static uint8_t arena_bytes[8388608U], manifest_bytes[LXP_GENESIS_MAX_ENCODED_BYTES];
     static lxp_genesis_manifest manifest;
@@ -411,14 +466,17 @@ static int check_public_fixture(void)
     lxp_fee_params fee_schedule;
     bool fee_authority = false;
     bool enabled = false;
-    REQUIRE(fixture_read("sequencer.public", public_key, sizeof(public_key), &length) == 0 && length == sizeof(public_key));
-    REQUIRE(fixture_read("genesis.manifest", manifest_bytes, sizeof(manifest_bytes), &length) == 0);
+    REQUIRE(fixture_read(directory, "sequencer.public", public_key, sizeof(public_key), &length) == 0 && length == sizeof(public_key));
+    REQUIRE(fixture_read(directory, "genesis.manifest", manifest_bytes, sizeof(manifest_bytes), &length) == 0);
     REQUIRE(lxp_genesis_parse(manifest_bytes, length, LXP_GENESIS_INPUT_MANIFEST, &manifest) == LXP_OK);
     REQUIRE(manifest.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT && manifest.network_id == 77U);
     REQUIRE(memcmp(public_key, manifest.signer_public_key, 32U) == 0);
     REQUIRE(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
     REQUIRE(lxp_genesis_verify_signature(&manifest, &arena) == LXP_OK);
-    REQUIRE(lxp_snapshot_store_read("tests/fixtures/public-testnet-genesis/00000000000000000000.lxs",
+    char snapshot_path[256];
+    int path_length = snprintf(snapshot_path, sizeof(snapshot_path), "%s/00000000000000000000.lxs", directory);
+    REQUIRE(path_length > 0 && (size_t)path_length < sizeof(snapshot_path));
+    REQUIRE(lxp_snapshot_store_read(snapshot_path,
                                    &arena, &snapshot_manifest, &snapshot) == LXP_OK);
     REQUIRE(lxp_genesis_module_plan_resolve(&manifest, &plan) == LXP_OK);
     REQUIRE(plan.count == sizeof(expected_modules) / sizeof(expected_modules[0]));
@@ -430,7 +488,15 @@ static int check_public_fixture(void)
     REQUIRE(lxp_genesis_module_plan_register(&plan, &kernel) == LXP_OK);
     REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length, &snapshot_manifest, &kernel) == LXP_OK);
     REQUIRE(lxp_fee_committed_schedule(&kernel, 1U, &fee_schedule) == LXP_OK);
-    REQUIRE(fee_schedule.version == 3U && fee_schedule.asset_price_count == 11U);
+    if (fee_version == 3U) {
+        REQUIRE(fee_schedule.version == 3U && fee_schedule.asset_price_count == 11U);
+    } else {
+        REQUIRE(fee_version == 4U && fee_schedule.version == 4U && fee_schedule.asset_price_count == 11U);
+        REQUIRE(fee_schedule.module_price_count == 7U);
+        for (size_t i = 0U; i < 7U; ++i)
+            REQUIRE(fee_schedule.module_prices[i].hi == 0U && fee_schedule.module_prices[i].lo == (i == 6U ? 0U : 4U));
+        REQUIRE(check_fee_pair(&manifest) == 0);
+    }
     REQUIRE(lxp_u128_is_zero(fee_schedule.asset_prices[10]));
     REQUIRE(lxp_authority_allowance_policy(&kernel, &fee_authority) == LXP_OK && fee_authority);
     REQUIRE(accounts.count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT + 1U);
@@ -532,7 +598,8 @@ int main(void)
     REQUIRE(check_defaults() == 0);
     REQUIRE(check_enable_flag() == 0);
     REQUIRE(check_perps_insurance() == 0);
-    REQUIRE(check_public_fixture() == 0);
+    REQUIRE(check_public_fixture("tests/fixtures/public-testnet-genesis-v3", 3U) == 0);
+    REQUIRE(check_public_fixture("tests/fixtures/public-testnet-genesis", 4U) == 0);
     REQUIRE(check_allowance_policy() == 0);
     return 0;
 }

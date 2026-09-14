@@ -269,10 +269,14 @@ pub fn estimate_fee(
     })
 }
 
-fn canonical_fee_schedule(schedule: &[u8]) -> bool {
+pub(crate) fn canonical_fee_schedule(schedule: &[u8]) -> bool {
     (schedule.len() == 86 && schedule[..2] == [0, 1])
         || (schedule.len() == 247 && schedule[..2] == [0, 2] && schedule[86] == 10)
         || (schedule.len() == 255 && schedule[..2] == [0, 3] && schedule[86] == 11)
+        || (schedule.len() == 368
+            && schedule[..2] == [0, 4]
+            && schedule[86] == 11
+            && schedule[255] == 7)
 }
 
 #[cfg(test)]
@@ -280,6 +284,33 @@ mod tests {
     use super::canonical_fee_schedule;
 
     const WITHDRAWAL: &[u8] = include_bytes!("../../../../tests/fixtures/fee-params-v3.bin");
+    const MODULES: &[u8] = include_bytes!("../../../../tests/fixtures/fee-params-v4.bin");
+
+    #[test]
+    fn native_module_fee_encoding_is_exact_and_bounded() {
+        assert_eq!(MODULES.len(), 368);
+        assert!(canonical_fee_schedule(MODULES));
+        assert_eq!(&MODULES[2..255], &WITHDRAWAL[2..255]);
+        for (index, price) in [4_u128, 4, 4, 4, 4, 4, 0].iter().enumerate() {
+            assert_eq!(
+                &MODULES[256 + 16 * index..272 + 16 * index],
+                &price.to_be_bytes()
+            );
+        }
+        for prefix in 0..MODULES.len() {
+            assert!(!canonical_fee_schedule(&MODULES[..prefix]));
+        }
+        let mut extra = MODULES.to_vec();
+        extra.push(0);
+        assert!(!canonical_fee_schedule(&extra));
+        for (offset, valid) in [(1, 4), (86, 11), (255, 7)] {
+            for value in 0..=u8::MAX {
+                let mut invalid = MODULES.to_vec();
+                invalid[offset] = value;
+                assert_eq!(canonical_fee_schedule(&invalid), value == valid);
+            }
+        }
+    }
 
     #[test]
     fn native_withdrawal_fee_encoding_is_exact_and_bounded() {

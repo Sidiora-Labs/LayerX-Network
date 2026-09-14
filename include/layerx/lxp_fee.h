@@ -21,9 +21,13 @@ typedef struct lxp_fee_meter {
 enum { LXP_ASSET_FEE_PRICE_COUNT = 10,
        LXP_ASSET_FEE_PRICE_COUNT_V3 = 11,
        LXP_ASSET_FEE_PRICE_MAX = LXP_ASSET_FEE_PRICE_COUNT_V3 };
+enum { LXP_MODULE_FEE_PRICE_COUNT = 7 };
 enum { LXP_FEE_PARAMS_V1_BYTES = 86,
        LXP_FEE_PARAMS_V2_BYTES = 87 + 16 * LXP_ASSET_FEE_PRICE_COUNT,
-       LXP_FEE_PARAMS_V3_BYTES = LXP_FEE_PARAMS_V2_BYTES + 8 };
+       LXP_FEE_PARAMS_V3_BYTES = LXP_FEE_PARAMS_V2_BYTES + 8,
+       LXP_FEE_PARAMS_V4_HEAD_BYTES = LXP_FEE_PARAMS_V3_BYTES + 1,
+       LXP_FEE_PARAMS_V4_PRICES_BYTES = 16 * LXP_MODULE_FEE_PRICE_COUNT,
+       LXP_FEE_PARAMS_V4_BYTES = LXP_FEE_PARAMS_V4_HEAD_BYTES + LXP_FEE_PARAMS_V4_PRICES_BYTES };
 
 typedef struct lxp_fee_params {
     uint16_t version;
@@ -35,6 +39,8 @@ typedef struct lxp_fee_params {
     uint32_t multiplier_basis_points;
     uint8_t asset_price_count;
     lxp_u128 asset_prices[LXP_ASSET_FEE_PRICE_MAX];
+    uint8_t module_price_count;
+    lxp_u128 module_prices[LXP_MODULE_FEE_PRICE_COUNT];
 } lxp_fee_params;
 #define lxp_fee_params lxp_fee_params
 
@@ -74,10 +80,13 @@ typedef struct lxp_fee_replay_entry {
 
 const char *lxp_asset_fee_name(size_t index);
 const char *lxp_asset_fee_name_for_version(uint16_t version, size_t index);
+const char *lxp_module_fee_name(size_t index);
 lxp_result lxp_fee_params_encode(const lxp_fee_params *parameters,
     uint8_t *bytes, size_t capacity, size_t *length);
 lxp_result lxp_fee_params_decode(const uint8_t *bytes, size_t length,
     lxp_fee_params *parameters);
+lxp_result lxp_fee_stored_schedule_decode(lxp_byte_span head,
+    lxp_byte_span module_prices, lxp_fee_params *parameters);
 struct lxp_kernel;
 lxp_result lxp_fee_committed_schedule(const struct lxp_kernel *kernel,
     uint32_t parameter_version, lxp_fee_params *schedule);

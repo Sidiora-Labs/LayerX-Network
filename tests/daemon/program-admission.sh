@@ -28,7 +28,7 @@ python3 - "$work" "${2:-}" <<'PY'
 import os, pathlib, socket, sys
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 sys.path.insert(0, "tests/support")
-from lxgb_metadata import metadata, metadata_withdrawal
+from lxgb_metadata import metadata, metadata_withdrawal, metadata_modules
 root = pathlib.Path(sys.argv[1])
 for name, value in [('sequencer', 0x22), ('treasury', 0x11)]:
     path = root / name
@@ -44,7 +44,12 @@ for _ in range(3):
 (root / 'ports').write_text(' '.join(ports) + '\n')
 issuer = Ed25519PrivateKey.from_private_bytes(bytes([0x11]) * 32).public_key().public_bytes_raw()
 emit_metadata = metadata_withdrawal if sys.argv[2] in ('--withdraw', '--paid-withdrawal') else metadata
-(root / 'metadata').write_bytes(emit_metadata(bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'), issuer, os.urandom(32), *([17] if sys.argv[2] == '--paid-withdrawal' else [])))
+asset = bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898')
+salt = os.urandom(32)
+encoded_metadata = emit_metadata(asset, issuer, salt, *([17] if sys.argv[2] == '--paid-withdrawal' else []))
+if sys.argv[2] == '--native-onboarding':
+    encoded_metadata = metadata_modules(asset, issuer, salt, 17, (4, 4, 4, 4, 4, 4, 0))
+(root / 'metadata').write_bytes(encoded_metadata)
 PY
 read -r program_port replica_port rpc_port < "$work/ports"
 mkfifo "$work/replica-ready"

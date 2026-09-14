@@ -11,7 +11,7 @@ import tempfile
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from lxgb_metadata import metadata, metadata_withdrawal
+from lxgb_metadata import metadata, metadata_modules
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,7 +40,8 @@ def main():
         members.append({'guarantor_id': index.to_bytes(32, 'big').hex(),
                         'public_key': member.public_bytes(Encoding.X962, PublicFormat.CompressedPoint).hex()})
     for name, modules in (('previous', ()), ('current', producer.genesis_modules())):
-        suffix = (metadata if name == 'previous' else metadata_withdrawal)(asset, issuer, salt)
+        suffix = metadata(asset, issuer, salt) if name == 'previous' else metadata_modules(
+            asset, issuer, salt, 0, producer.module_prices(ROOT / 'platform/hosted/node/genesis-module-fees.json'))
         request = producer.genesis_request(members, 77, asset.hex(), 1700000000000, suffix, modules)
         request_path = work / (name + '.lxgb')
         request_path.write_bytes(request)
@@ -59,7 +60,9 @@ def main():
     assert len(roots) == len(previous) == 73 and roots[:9] == previous[:9] == b'LXRR\x01' + (77).to_bytes(4, 'big')
     assert roots[9:41] != previous[9:41] and roots[41:] != previous[41:]
     expected = {'protocol_version': 3, 'network_id': 77, 'modules': list(producer.genesis_modules()),
-                'native_fee_schedule_version': 3, 'native_fee_authority_version': 2,
+                'native_fee_schedule_version': 4, 'native_fee_authority_version': 2,
+                'module_prices': dict(zip(producer.MODULE_NAMES,
+                    producer.module_prices(ROOT / 'platform/hosted/node/genesis-module-fees.json'))),
                 'withdrawal_price': 0,
                 'canonical_state_root': roots[9:41].hex(), 'receipt_state_root': roots[41:].hex(),
                 'previous_canonical_state_root': previous[9:41].hex(),

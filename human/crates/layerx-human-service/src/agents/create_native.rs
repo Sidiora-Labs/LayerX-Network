@@ -33,7 +33,22 @@ pub struct NativeFundingEvidence {
     pub intent: LxpSend,
 }
 
+pub struct NativeIdentityRevisionRequest {
+    pub did: Did,
+    pub public_key: [u8; 32],
+    pub minimum_sequence: u64,
+    pub action_key: [u8; 32],
+    pub started_at: u64,
+}
+
 pub trait NativeAgentCreationContract: ScopedAgentCreationContract {
+    /// # Errors
+    /// Refuses an unfinalised identity, mismatched owner key or conflicting retained revision.
+    fn identity_revision_scoped(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        request: &NativeIdentityRevisionRequest,
+    ) -> Result<u64, AgentFailure>;
     /// # Errors
     /// Refuses an invalid target consent, sponsor or durable registration outcome.
     fn onboard_scoped(
@@ -84,6 +99,33 @@ pub(super) fn stages(
 }
 
 impl CreationJourney {
+    fn native_recovery_sequence(
+        &self,
+        scope: &PrincipalScope<'_>,
+    ) -> Result<u64, AgentCreationError> {
+        let stage = self.stage(CreationStage::RecoveryRegistration);
+        if stage.state != StageState::ReceiptVerified {
+            return Err(AgentCreationError::EvidenceConflict);
+        }
+        let row = scope
+            .get(
+                Table::Journeys,
+                &evidence_row(self.record.agent_id, CreationStage::RecoveryRegistration)?,
+            )
+            .ok_or(AgentCreationError::EvidenceConflict)?;
+        let digest: [u8; 32] = Sha256::digest(row.bytes()).into();
+        let receipt = layerx_intents::canonical::decode_receipt(row.bytes())
+            .map_err(|_| AgentCreationError::EvidenceConflict)?;
+        if Some(digest) != stage.evidence_digest
+            || Some(receipt.activity_id()) != stage.object_id
+            || receipt.protocol_version() != 3
+            || receipt.result_code() != 0
+            || receipt.global_sequence() == 0
+        {
+            return Err(AgentCreationError::EvidenceConflict);
+        }
+        Ok(receipt.global_sequence())
+    }
     /// # Errors
     /// Refuses an invalid native fee asset, lifetime or conflicting creation retry.
     pub fn start_native(
@@ -356,6 +398,17 @@ impl CreationJourney {
             )),
             CreationStage::BudgetCreation => {
                 let source = self.native_account(&self.did()?, self.record.preset.budget_asset)?;
+                let revision = NativeIdentityRevisionRequest {
+                    did: self.did()?,
+                    public_key: self
+                        .record
+                        .public_key
+                        .ok_or(AgentCreationError::EvidenceConflict)?,
+                    minimum_sequence: self.native_recovery_sequence(scope)?,
+                    action_key: self.stage(stage).action_key,
+                    started_at: self.record.started_at,
+                };
+                let revocation_sequence = agent.identity_revision_scoped(scope, &revision)?;
                 let sequence = agent.source_sequence_scoped(
                     scope,
                     &source,
@@ -387,7 +440,7 @@ impl CreationJourney {
                         .checked_add(self.record.preset.budget_expiry_seconds)
                         .and_then(|value| value.checked_mul(1_000))
                         .ok_or(AgentCreationError::InvalidPresetConfig)?,
-                    revocation_sequence: 0,
+                    revocation_sequence,
                     rollover: 1,
                     source_account: source,
                     source_sequence: sequence,

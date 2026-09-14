@@ -21,6 +21,7 @@
 #   --network-id N          Decimal network id, 1..4294967295.
 #   --genesis-metadata FILE LXGB v2 suffix: canonical Asset records and named fees.
 #   --withdrawal-fee PRICE Commit an explicit v3 withdrawal price, preserving existing fees.
+#   --module-fees FILE     Commit the exact v4 native module price configuration.
 #   --sequencer-key FILE    Sequencer ed25519 seed: 32 raw bytes or 64 hex
 #                           characters. Signs genesis and every batch. FILE
 #                           must lie outside DATA_DIR; it is read here once to
@@ -184,6 +185,7 @@ GENESIS_BUILD=""
 CUSTODY_PROFILE=""
 GENESIS_METADATA=""
 WITHDRAWAL_FEE=""
+MODULE_FEES=""
 GENESIS_MODULES=()
 SETTLEMENT_ENV=""
 SETTLEMENT_DOCUMENT=${LAYERX_PAXEER_SETTLEMENT_JSON:-}
@@ -212,6 +214,7 @@ while [ $# -gt 0 ]; do
         --asset) ASSET_ID=$2; shift 2 ;;
         --genesis-metadata) GENESIS_METADATA=$2; shift 2 ;;
         --withdrawal-fee) WITHDRAWAL_FEE=$2; shift 2 ;;
+        --module-fees) MODULE_FEES=$2; shift 2 ;;
         --treasury-balance) TREASURY_BALANCE=$2; shift 2 ;;
         --program-port) PROGRAM_PORT=$2; shift 2 ;;
         --replica-port) REPLICA_PORT=$2; shift 2 ;;
@@ -247,8 +250,16 @@ fi
 
 [ -n "$GENESIS_METADATA" ] && [ -f "$GENESIS_METADATA" ] && [ ! -L "$GENESIS_METADATA" ] && [ -r "$GENESIS_METADATA" ] || fail "--genesis-metadata requires an authoritative LXGB v2 metadata file"
 GENESIS_METADATA=$(readlink -f "$GENESIS_METADATA")
+fee_arguments=()
+if [ -n "$MODULE_FEES" ]; then
+    [ -n "$WITHDRAWAL_FEE" ] || fail "--module-fees requires an explicit --withdrawal-fee"
+    [ -f "$MODULE_FEES" ] && [ ! -L "$MODULE_FEES" ] && [ -r "$MODULE_FEES" ] || fail "invalid module fee configuration file"
+    MODULE_FEES=$(readlink -f "$MODULE_FEES")
+    case "$MODULE_FEES" in "$(readlink -m "$DATA_DIR")"/*) fail "module fees must be outside the data directory" ;; esac
+    fee_arguments+=(--module-fees "$MODULE_FEES")
+fi
 if [ -n "$WITHDRAWAL_FEE" ]; then
-    python3 "$SCRIPT_DIR/genesis_fees.py" "$GENESIS_METADATA" "$WITHDRAWAL_FEE" --check \
+    python3 "$SCRIPT_DIR/genesis_fees.py" "$GENESIS_METADATA" "$WITHDRAWAL_FEE" "${fee_arguments[@]}" --check \
         || fail "invalid withdrawal fee configuration"
 fi
 case "$GENESIS_METADATA" in "$(readlink -m "$DATA_DIR")"/*) fail "genesis metadata must be outside the data directory" ;; esac
@@ -469,7 +480,7 @@ SUPERVISOR_SOCKET="$RUN_DIR/supervisor.sock"
 umask 077
 mkdir -p "$DATA_DIR/checkpoints" "$DATA_DIR/logs" "$DATA_DIR/replica" "$DATA_DIR/secrets" "$DATA_DIR/work"
 if [ -n "$WITHDRAWAL_FEE" ]; then
-    python3 "$SCRIPT_DIR/genesis_fees.py" "$GENESIS_METADATA" "$WITHDRAWAL_FEE" \
+    python3 "$SCRIPT_DIR/genesis_fees.py" "$GENESIS_METADATA" "$WITHDRAWAL_FEE" "${fee_arguments[@]}" \
         > "$DATA_DIR/work/withdrawal-metadata.lxgb" || fail "withdrawal metadata generation failed"
     GENESIS_METADATA="$DATA_DIR/work/withdrawal-metadata.lxgb"
     [ "$(stat -c %s "$GENESIS_METADATA")" -le "$GENESIS_METADATA_MAX_BYTES" ] \

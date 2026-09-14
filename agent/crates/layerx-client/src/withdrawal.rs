@@ -1,5 +1,5 @@
 use crate::lni::preparation::{preparation_state, PreparationStateContext};
-use crate::payments::{estimate_fee, get_asset, SnapshotContext};
+use crate::payments::{canonical_fee_schedule, estimate_fee, get_asset, SnapshotContext};
 use layerx_types::ids::Did;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistry};
 use layerx_wire::activity::Activity;
@@ -36,9 +36,8 @@ pub fn registry(
     }
     let schedule =
         estimate_fee(transport, 0x0001_0005, 0, 0, 0, context).map_err(|_| unavailable())?;
-    if schedule.value.canonical_schedule.len() != 255
-        || schedule.value.canonical_schedule[..2] != [0, 3]
-        || schedule.value.canonical_schedule[86] != 11
+    if !canonical_fee_schedule(&schedule.value.canonical_schedule)
+        || !matches!(schedule.value.canonical_schedule.get(1), Some(3 | 4))
     {
         return Err(unsupported());
     }

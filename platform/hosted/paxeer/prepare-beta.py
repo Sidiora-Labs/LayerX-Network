@@ -11,7 +11,7 @@ import time
 ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'node'))
-from genesis_fees import withdrawal_metadata
+from genesis_fees import MODULE_NAMES, module_metadata, module_prices
 BETA_PROTOCOL_VERSION = 3
 BETA_ASSET_ID = 'b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898'
 
@@ -90,9 +90,10 @@ def main():
     parser.add_argument('--asset-id', default=BETA_ASSET_ID)
     parser.add_argument('--genesis-metadata', type=Path, required=True)
     parser.add_argument('--withdrawal-fee', type=int, default=0)
+    parser.add_argument('--module-fees', type=Path, default=ROOT.parent / 'node/genesis-module-fees.json')
     parser.add_argument('--timestamp-ms', type=int, default=int(time.time() * 1000))
     args = parser.parse_args()
-    metadata = withdrawal_metadata(args.genesis_metadata.read_bytes(), args.withdrawal_fee)
+    metadata = module_metadata(args.genesis_metadata.read_bytes(), args.withdrawal_fee, module_prices(args.module_fees))
     os.umask(0o077)
     target = args.directory.resolve()
     target.mkdir(mode=0o700, parents=False, exist_ok=False)

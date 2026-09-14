@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents::{
     NativeAgentCreationContract, NativeFundingEvidence, NativeFundingRequest,
-    NativeOnboardingRequest,
+    NativeIdentityRevisionRequest, NativeOnboardingRequest,
 };
 use crate::custody::{KeyClass, KeyId, SendPlanAuthorization};
 use crate::store::{RowKey, Table};
@@ -19,7 +19,79 @@ struct SourceSequence {
     sequence: u64,
 }
 
+#[derive(Serialize, Deserialize)]
+struct IdentityRevision {
+    did: [u8; 32],
+    public_key: [u8; 32],
+    minimum_sequence: u64,
+    revocation_sequence: u64,
+}
+
 impl NativeAgentCreationContract for ProductionAgentCreation<'_> {
+    fn identity_revision_scoped(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        request: &NativeIdentityRevisionRequest,
+    ) -> Result<u64, AgentFailure> {
+        let did = layerx_intents::canonical::did_id_for_protocol(&request.did, 3)
+            .map_err(|_| AgentFailure::Refused("invalid native owner identity"))?;
+        let key = RowKey::new(format!(
+            "native-identity-revision-{}",
+            hex(&request.action_key)
+        ))
+        .map_err(|_| AgentFailure::Refused("invalid native identity action"))?;
+        let retained = if let Some(row) = scope.get(Table::Journeys, &key) {
+            serde_json::from_slice::<IdentityRevision>(row.bytes())
+                .map_err(|_| AgentFailure::Refused("invalid retained owner revision"))?
+        } else {
+            let actor = std::str::from_utf8(request.did.as_bytes())
+                .map_err(|_| AgentFailure::Refused("invalid native owner DID"))?;
+            let identity = self.runtime.identity_resolve(actor).map_err(map_boundary)?;
+            if !matches!(identity.verification, 4 | 5)
+                || identity.frozen
+                || identity.head_sequence < request.minimum_sequence
+                || identity.revocation_sequence == 0
+                || identity.revocation_sequence > identity.head_sequence
+                || !identity.authorities.contains(&(1, request.public_key))
+                || identity.canonical_bytes.len() != 223
+                || &identity.canonical_bytes[..5] != b"LXGI1"
+                || identity.canonical_bytes[5..37] != did
+                || identity.canonical_bytes[37..69] != request.public_key
+                || identity.canonical_bytes[69..77] != identity.revocation_sequence.to_be_bytes()
+            {
+                return Err(AgentFailure::Refused(
+                    "native owner revision is not checkpoint verified",
+                ));
+            }
+            let retained = IdentityRevision {
+                did,
+                public_key: request.public_key,
+                minimum_sequence: request.minimum_sequence,
+                revocation_sequence: identity.revocation_sequence,
+            };
+            scope
+                .put(
+                    Table::Journeys,
+                    key,
+                    request.started_at,
+                    serde_json::to_vec(&retained)
+                        .map_err(|_| AgentFailure::Refused("invalid owner revision preparation"))?,
+                )
+                .map_err(|_| AgentFailure::Unavailable)?;
+            retained
+        };
+        if retained.did != did
+            || retained.public_key != request.public_key
+            || retained.minimum_sequence != request.minimum_sequence
+            || retained.revocation_sequence == 0
+        {
+            return Err(AgentFailure::Refused(
+                "native owner revision changed on retry",
+            ));
+        }
+        Ok(retained.revocation_sequence)
+    }
+
     fn source_sequence_scoped(
         &mut self,
         scope: &mut PrincipalScope<'_>,
