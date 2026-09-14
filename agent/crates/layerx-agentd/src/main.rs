@@ -735,10 +735,41 @@ fn serve_connection(
     }
 }
 
+fn native_handover_sources() -> Result<Option<(PathBuf, PathBuf)>, String> {
+    let genesis_trust = match std::env::var("LAYERX_AGENT_GENESIS_TRUST") {
+        Ok(path) => Some(path),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("native genesis trust path is not UTF-8".to_owned())
+        }
+    };
+    let handover_finality = match std::env::var("LAYERX_AGENT_HANDOVER_FINALITY") {
+        Ok(path) => Some(path),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("handover finality policy path is not UTF-8".to_owned())
+        }
+    };
+    match (genesis_trust, handover_finality) {
+        (None, None) => Ok(None),
+        (Some(genesis), Some(finality)) => {
+            Ok(Some((PathBuf::from(genesis), PathBuf::from(finality))))
+        }
+        _ => Err(
+            "native genesis trust and handover finality policy must be configured together"
+                .to_owned(),
+        ),
+    }
+}
+
 fn serve(config: Config) -> Result<(), String> {
     let mcp = mcp_enrolment()?
         .map(|enrolment| mcp_boot(&config, enrolment))
         .transpose()?;
+    let handover_sources = native_handover_sources()?;
+    if handover_sources.is_some() && mcp.is_none() {
+        return Err("native genesis trust requires the configured native read boundary".to_owned());
+    }
     let mut native = mcp
         .as_ref()
         .map(|boot| {
@@ -753,13 +784,20 @@ fn serve(config: Config) -> Result<(), String> {
                 PathBuf::from(required("LAYERX_AGENT_HUMAN_NODE_LNI")?),
                 limits,
             )?;
-            NativeReadRoute::new(
+            let route = NativeReadRoute::new(
                 client,
                 boot.enrolment.did.clone(),
                 config.bearer.clone(),
                 Instant::now,
             )
-            .map_err(|error| format!("native read route is invalid: {error:?}"))
+            .map_err(|error| format!("native read route is invalid: {error:?}"))?;
+            match handover_sources.as_ref() {
+                Some((genesis, finality)) => route
+                    .with_protected_finality(finality)
+                    .and_then(|route| route.with_protected_genesis(genesis))
+                    .map_err(|error| format!("native genesis trust is invalid: {error:?}")),
+                None => Ok(route),
+            }
         })
         .transpose()?;
     let human = start_human_owner(mcp)?;

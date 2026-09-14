@@ -7,6 +7,7 @@
 #include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_replica.h"
+#include "layerx/lxp_state_proof.h"
 
 #include <openssl/evp.h>
 #include <stdlib.h>
@@ -17,6 +18,86 @@ static const uint8_t evidence_domain[] = "LXP/sequencer-handover-evidence/v1";
 static const uint8_t finality_domain[] = "LXP/handover-finality/v1";
 static const uint8_t recovery_domain[] = "LXP/recovery-with-handover/v1";
 static const uint8_t authority_key[32] = "handover-authority";
+
+lxp_result lxp_handover_genesis_trust_encode(const lxp_kernel *kernel,
+    lxp_arena *arena, lxp_byte_span *encoded)
+{
+    static const uint8_t domain[] = "LXP/public-handover-genesis/v1";
+    lxp_state_witness *proof;
+    uint8_t *proof_bytes;
+    uint8_t state_root[32], receipt_root[32];
+    size_t proof_length = 0U;
+    const lxp_module_registration *ordered[9] = {NULL};
+    lxp_codec_writer writer;
+    lxp_result status;
+    if (kernel == NULL || arena == NULL || encoded == NULL ||
+        !kernel->handover.enabled || kernel->handover.pending ||
+        kernel->epoch != 1U || kernel->state == NULL ||
+        kernel->state->next_sequence != 1U || kernel->module_count > 9U)
+        return LXP_ERR_AUTH_SCOPE;
+    *encoded = (lxp_byte_span){NULL, 0U};
+    proof = malloc(sizeof(*proof));
+    proof_bytes = malloc(LXP_STATE_WITNESS_MAX_BYTES);
+    if (proof == NULL || proof_bytes == NULL) {
+        free(proof);
+        free(proof_bytes);
+        return LXP_ERR_IO;
+    }
+    status = lxp_state_root(kernel, state_root);
+    if (status == LXP_OK)
+        status = lxp_genesis_receipt_state_root(kernel->handover.network_id,
+            state_root, receipt_root);
+    if (status == LXP_OK && memcmp(receipt_root, kernel->current_state_root, 32U) != 0)
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+    if (status == LXP_OK)
+        status = lxp_state_proof_build(kernel, LXP_MODULE_GOVERNANCE,
+            (lxp_byte_span){authority_key, sizeof(authority_key)}, proof);
+    if (status == LXP_OK)
+        status = lxp_state_proof_verify(proof, state_root);
+    if (status == LXP_OK && (proof->value_length != 32U ||
+        memcmp(proof->value, kernel->handover.governance_public_key, 32U) != 0))
+        status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK)
+        status = lxp_state_proof_encode(proof, proof_bytes,
+            LXP_STATE_WITNESS_MAX_BYTES, &proof_length);
+    if (status == LXP_OK)
+        status = lxp_codec_writer_init(&writer, arena, proof_length + 4096U);
+    if (status == LXP_OK) {
+        memcpy(writer.bytes, domain, sizeof(domain));
+        writer.length = sizeof(domain);
+        status = lxp_codec_write_u32(&writer, kernel->handover.network_id);
+    }
+    if (status == LXP_OK) status = lxp_codec_write_bytes(&writer, state_root, 32U, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(&writer,
+            kernel->handover.genesis_authorization.public_key, 32U, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(&writer, proof_bytes, proof_length,
+            LXP_STATE_WITNESS_MAX_BYTES);
+    if (status == LXP_OK) status = lxp_codec_write_u32(&writer, (uint32_t)kernel->module_count);
+    for (size_t i = 0U; status == LXP_OK && i < kernel->module_count; ++i) {
+        const lxp_module_registration *module = &kernel->modules[i];
+        if (module->activity_type_count > 64U || module->module_id == 0U ||
+            module->module_id > 9U || ordered[module->module_id - 1U] != NULL) {
+            status = LXP_ERR_NON_CANONICAL;
+            break;
+        }
+        ordered[module->module_id - 1U] = module;
+    }
+    for (size_t i = 0U; status == LXP_OK && i < 9U; ++i) {
+        const lxp_module_registration *module = ordered[i];
+        if (module == NULL) continue;
+        status = lxp_codec_write_u16(&writer, module->module_id);
+        if (status == LXP_OK)
+            status = lxp_codec_write_u32(&writer, (uint32_t)module->activity_type_count);
+        for (size_t j = 0U; status == LXP_OK && j < module->activity_type_count; ++j)
+            status = lxp_codec_write_u32(&writer, module->activity_types[j]);
+    }
+    if (status == LXP_OK) *encoded = (lxp_byte_span){writer.bytes, writer.length};
+    free(proof_bytes);
+    free(proof);
+    return status;
+}
 
 static uint64_t read_integer(const uint8_t *bytes, size_t width)
 {
