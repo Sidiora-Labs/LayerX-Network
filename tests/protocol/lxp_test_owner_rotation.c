@@ -13,6 +13,7 @@ typedef struct rotation_fixture {
     lxp_state_store store;
     lxp_state_journal journal;
     lxp_kernel kernel;
+    lxp_fee_params parameters;
     lxp_identity_store identities;
     lx_account_registry accounts;
     lxp_module_ctx ctx;
@@ -67,7 +68,9 @@ static int fixture_init(rotation_fixture *fixture)
     CHECK(account(fixture, "agent:did:layerx:unrelated:main", fixture->other_public) == 0);
     CHECK(lxp_state_store_bind_accounts(&fixture->store, &fixture->accounts) == LXP_OK &&
         lxp_state_store_require_account_root(&fixture->store) == LXP_OK);
-    CHECK(lxp_kernel_create(&fixture->kernel, &fixture->store, &fixture->journal, NULL, 1U) == LXP_OK &&
+    fixture->parameters.version = 1U;
+    fixture->parameters.multiplier_basis_points = 10000U;
+    CHECK(lxp_kernel_create(&fixture->kernel, &fixture->store, &fixture->journal, &fixture->parameters, 1U) == LXP_OK &&
         lxp_kernel_register_module(&fixture->kernel, lxp_governance_module_iface()) == LXP_OK);
     CHECK(lxp_identity_register(&fixture->identities, owner_did, sizeof(owner_did) - 1U,
         fixture->old_public, &identity) == LXP_OK);
