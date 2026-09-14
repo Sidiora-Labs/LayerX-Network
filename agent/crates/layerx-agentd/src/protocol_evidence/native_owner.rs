@@ -9,6 +9,9 @@ use layerx_proof::receipt::{
 use layerx_wire::hash::receipt_execution_batch_id;
 use sha2::{Digest as _, Sha256};
 
+#[cfg(test)]
+mod tests;
+
 impl VerifiedReceiptEvidence {
     pub(crate) fn verify_authorized_native_owner(
         raw: &RawReceiptEvidence,
