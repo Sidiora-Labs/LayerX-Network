@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from cryptography import x509
@@ -35,6 +36,13 @@ def authorize(export, inputs, recipient, vault):
     request = dict(chain_id=125,
         header=[CODEC.hx(value) if isinstance(value, bytes) else value for value in header],
         checkpoint_id=CODEC.hx(checkpoint), native_facts=export['native_facts'])
+    authorize_request(request, inputs, recipient, vault)
+
+
+def authorize_request(request, inputs, recipient, vault):
+    header = SETTLEMENT.values(SETTLEMENT.HEADER_TYPES, request['header'])
+    checkpoint = SETTLEMENT.checkpoint_hash(header, b'')
+    assert request['chain_id'] == 125 and request['checkpoint_id'] == CODEC.hx(checkpoint)
     balances, _, deposits, profile = CODEC.native_request(SETTLEMENT, request, header, checkpoint)
     authorities = {}
     for value in (0x11, 0x33):
@@ -69,6 +77,37 @@ def authorize(export, inputs, recipient, vault):
         recipient_bindings=bindings, deposit_registration=registration))
     os.chown(destination, 0, 4021)
     destination.chmod(0o440)
+
+
+def consume_with_publication(consumer, processes, output, inputs, recipient, vault):
+    stopped = threading.Event()
+    failures = []
+
+    def publish_inputs():
+        try:
+            while not stopped.is_set():
+                assert all(process.poll() is None for process in processes), 'consumer guarantor exited'
+                for request_file in output.glob('producer-*/*.publication-request.json'):
+                    request = json.loads(request_file.read_text())
+                    checkpoint = CODEC.raw(request['checkpoint_id'], 32)
+                    if not (inputs / (checkpoint.hex() + '.json')).exists():
+                        authorize_request(request, inputs, recipient, vault)
+                stopped.wait(.05)
+        except Exception as error:
+            failures.append(error)
+            stopped.set()
+
+    publisher = threading.Thread(target=publish_inputs, name='handover-publication-inputs')
+    publisher.start()
+    try:
+        consumer()
+    finally:
+        stopped.set()
+        publisher.join(timeout=10)
+        assert not publisher.is_alive(), 'publication authorizer did not stop'
+        if failures:
+            raise failures[0]
+    assert all(process.poll() is None for process in processes), 'consumer guarantor exited'
 
 
 def tls_files(directory):
@@ -138,7 +177,7 @@ def setup(native, chain):
     return submitter
 
 
-def run(native, build, exports, count, lni_socket):
+def run(native, build, exports, count, lni_socket, consumer=None):
     chain = from_environment(os.environ['LAYERX_TEST_WITHDRAW_RPC'])
     assert chain.rpc('eth_chainId', []) == '0x7d' and count >= 3
     settlement = environment_file(native / 'settlement.env')
@@ -279,6 +318,19 @@ def run(native, build, exports, count, lni_socket):
                     submitted = nonce
                 else:
                     assert nonce == submitted, 'guarantor restart repeated a settled transaction'
+                    if consumer is not None:
+                        consume_with_publication(consumer, processes, output, inputs,
+                            bytes.fromhex(chain.account.address[2:]), vault)
+                        if os.environ.get('LAYERX_TEST_HANDOVER_PROGRAM_CONSUMER_BIN') is not None:
+                            deadline = time.monotonic() + 30
+                            finalities = [output / f'producer-{index}/{batch:020d}.finality'
+                                for batch in range(count + 1, count + 4) for index in (1, 2)]
+                            while not all(path.is_file() for path in finalities):
+                                assert all(process.poll() is None for process in processes), 'Programs guarantor exited'
+                                assert time.monotonic() < deadline, 'Programs peer finality deadline'
+                                time.sleep(.05)
+                            for batch in range(count + 1, count + 4):
+                                assert int(chain.view(registry, 'checkpointAtBatch(uint64)', str(batch)), 16) != 0
                 stop_processes()
             print('two live bonded guarantors replayed both epochs, finalized replacement-key batches, and rebuilt historical signer trust after restart', flush=True)
         finally:
