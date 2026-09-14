@@ -549,6 +549,48 @@ impl RpcClient {
         result.map(Some)
     }
 
+    fn verify_finalised_checkpoint(
+        &self,
+        evidence: &VerifiedBatchEvidence,
+        policy: &ReceiptPolicy,
+        deadline: &mut Deadline,
+    ) -> Result<bool, RpcError> {
+        let clock = self.clock()?;
+        if deadline
+            .remaining(clock.as_ref())
+            .map_err(RpcError::Clock)?
+            .is_zero()
+        {
+            return Ok(false);
+        }
+        let Some(node) =
+            self.read_before_deadline("lx_getNodeInfo", &serde_json::json!([]), deadline)?
+        else {
+            return Ok(false);
+        };
+        let checkpoint_id = node
+            .get("latest_finalised_checkpoint")
+            .and_then(Value::as_str)
+            .ok_or(RpcError::InvalidResponse)?;
+        if deadline
+            .remaining(clock.as_ref())
+            .map_err(RpcError::Clock)?
+            .is_zero()
+        {
+            return Ok(false);
+        }
+        let Some(checkpoint) = self.read_before_deadline(
+            "lx_getCheckpoint",
+            &serde_json::json!([checkpoint_id]),
+            deadline,
+        )?
+        else {
+            return Ok(false);
+        };
+        verify_rpc_checkpoint(&checkpoint, evidence.canonical_header(), policy)?;
+        Ok(true)
+    }
+
     fn receipt_at_commitment(
         &self,
         id: &str,
@@ -629,39 +671,10 @@ impl RpcClient {
                     .verify_header(evidence.canonical_header(), &evidence.header_signature())
                     .map_err(|_| RpcError::Verification)?;
             }
-            if commitment == Commitment::Finalised {
-                if deadline
-                    .remaining(clock.as_ref())
-                    .map_err(RpcError::Clock)?
-                    .is_zero()
-                {
-                    return Ok(None);
-                }
-                let Some(node) =
-                    self.read_before_deadline("lx_getNodeInfo", &serde_json::json!([]), deadline)?
-                else {
-                    return Ok(None);
-                };
-                let checkpoint_id = node
-                    .get("latest_finalised_checkpoint")
-                    .and_then(Value::as_str)
-                    .ok_or(RpcError::InvalidResponse)?;
-                if deadline
-                    .remaining(clock.as_ref())
-                    .map_err(RpcError::Clock)?
-                    .is_zero()
-                {
-                    return Ok(None);
-                }
-                let Some(checkpoint) = self.read_before_deadline(
-                    "lx_getCheckpoint",
-                    &serde_json::json!([checkpoint_id]),
-                    deadline,
-                )?
-                else {
-                    return Ok(None);
-                };
-                verify_rpc_checkpoint(&checkpoint, evidence.canonical_header(), policy)?;
+            if commitment == Commitment::Finalised
+                && !self.verify_finalised_checkpoint(&evidence, policy, deadline)?
+            {
+                return Ok(None);
             }
             Some(evidence)
         };
