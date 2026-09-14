@@ -33,11 +33,20 @@ CPPFLAGS := -Iinclude -I$(BUILD_DIR)/generated \
 CFLAGS := -std=c17 -pedantic -Werror -Wall -Wextra -Wconversion -Wshadow -Wvla \
 	-fno-strict-aliasing -ffp-contract=off $(OPT_LEVEL) $(EXTRA_CFLAGS)
 
+C_TARGET_ARCH := $(firstword $(subst -, ,$(shell $(CC) -dumpmachine)))
+CONSENSUS_CFLAGS :=
+ifneq ($(filter x86_64 i386 i486 i586 i686 aarch64 arm64,$(C_TARGET_ARCH)),)
+CONSENSUS_CFLAGS := -mgeneral-regs-only
+endif
+
 LIB_SOURCES := $(filter-out src/storage/lxp_projection.c,$(shell find src -type f -name '*.c' -print | LC_ALL=C sort))
 LIB_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LIB_SOURCES))
 LIBRARY := $(BUILD_DIR)/liblayerx.a
 TEST_LIB_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/test-obj/%.o,$(LIB_SOURCES))
 TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
+
+$(LIB_OBJECTS) $(TEST_LIB_OBJECTS): CFLAGS += $(CONSENSUS_CFLAGS)
+$(LIB_OBJECTS) $(TEST_LIB_OBJECTS): Makefile
 
 .PHONY: all build clean reproducible layerxd layerx-genesis-build test \
 	test-harness list-tests \
