@@ -5,6 +5,7 @@ members = [
     "crates/layerx-crypto",
     "crates/layerx-proof",
     "crates/layerx-client",
+    "crates/layerx-identity-binding",
     "crates/layerx-agent-api",
     "crates/layerx-agentd",
     "crates/layerx-mcp",

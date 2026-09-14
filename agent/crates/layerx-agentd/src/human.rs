@@ -47,6 +47,7 @@ const NATIVE_FEE_POLICY: u8 = 39;
 const SESSION_FEE_STATE: u8 = 40;
 const SESSION_SEED_PREPARE: u8 = 41;
 const ACCOUNT_STATE: u8 = 42;
+const SUBJECT: u8 = 44;
 const HEAD: u8 = 7;
 const EVIDENCE: u8 = 8;
 const MAX_TEXT: usize = 255;
@@ -58,9 +59,29 @@ pub struct HumanPeer {
     pub uid: u32,
     pub principal: String,
     pub tenant: String,
+    pub subject: Option<HumanSubject>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HumanSubject {
+    pub transport_tenant: String,
+    pub transport_principal: String,
+    pub owner: String,
+    pub account: String,
+    pub asset: [u8; 32],
+    pub registration: Option<Vec<u8>>,
 }
 
 impl HumanPeer {
+    #[must_use]
+    pub fn transport_tenant(&self) -> &str {
+        self.subject
+            .as_ref()
+            .map_or(self.tenant.as_str(), |subject| {
+                subject.transport_tenant.as_str()
+            })
+    }
+
     fn validate(&self) -> Result<(), HumanProtocolError> {
         if self.principal.is_empty()
             || self.tenant.is_empty()
@@ -234,6 +255,13 @@ pub enum HumanAgentJourneyKind {
 }
 
 pub enum HumanRequest {
+    Subject {
+        principal: String,
+        owner: String,
+        account: String,
+        asset: [u8; 32],
+        request: Box<HumanRequest>,
+    },
     Prepare(MutationEnvelope<HumanPrepare>),
     Submit(MutationEnvelope<HumanSubmit>),
     Track {
@@ -406,6 +434,9 @@ impl HumanResponse {
 /// Narrow adapter over the existing daemon operation owners. It deliberately
 /// has no sign method: Human custody supplies the public signature to submit.
 pub trait HumanOperations {
+    /// # Errors
+    /// Refuses a subject without provider binding and current native checkpoint authority.
+    fn authorize_subject(&mut self, peer: &HumanPeer) -> Result<(), HumanOperationError>;
     /// # Errors
     /// Refuses unavailable, unauthenticated or mismatched canonical account state.
     fn account_state(
@@ -785,6 +816,7 @@ impl<O: HumanOperations> HumanUnixServer<O> {
                 uid,
                 principal: principal.clone(),
                 tenant: tenant.clone(),
+                subject: None,
             };
             let mut transport = AcceptedTransport::new(
                 stream,
@@ -886,6 +918,37 @@ fn decode_request(bytes: Vec<u8>) -> Result<HumanRequest, HumanProtocolError> {
         return Err(HumanProtocolError::Malformed);
     }
     let operation = reader.u8()?;
+    if operation == SUBJECT {
+        let principal = reader.text()?;
+        let owner = reader.text()?;
+        let account =
+            String::from_utf8(reader.bytes()?).map_err(|_| HumanProtocolError::Malformed)?;
+        let asset = reader.fixed()?;
+        let encoded = reader.bytes()?;
+        reader.finish()?;
+        if encoded.get(8) == Some(&SUBJECT) || asset == [0; 32] {
+            return Err(HumanProtocolError::Malformed);
+        }
+        let did = layerx_types::ids::Did::new(owner.as_bytes())
+            .map_err(|_| HumanProtocolError::Malformed)?;
+        let parsed = layerx_types::account::AccountId::parse(&account)
+            .map_err(|_| HumanProtocolError::Malformed)?;
+        if parsed.canonical() != account
+            || !account.starts_with(&format!(
+                "agent:{}:",
+                std::str::from_utf8(did.as_bytes()).map_err(|_| HumanProtocolError::Malformed)?
+            ))
+        {
+            return Err(HumanProtocolError::Malformed);
+        }
+        return Ok(HumanRequest::Subject {
+            principal,
+            owner,
+            account,
+            asset,
+            request: Box::new(decode_request(encoded)?),
+        });
+    }
     let request = decode_operation(operation, &mut reader)?;
     reader.finish()?;
     Ok(request)
@@ -1180,6 +1243,34 @@ fn dispatch_request<O: HumanOperations>(
     operations: &mut O,
 ) -> Result<HumanResponse, HumanOperationError> {
     match request {
+        HumanRequest::Subject {
+            principal,
+            owner,
+            account,
+            asset,
+            request,
+        } => {
+            if peer.subject.is_some() {
+                return Err(HumanOperationError::Refused);
+            }
+            let tenant = layerx_identity_binding::subject_namespace(&peer.tenant, &principal)
+                .map_err(|_| HumanOperationError::Refused)?;
+            let scoped = HumanPeer {
+                uid: peer.uid,
+                principal,
+                tenant,
+                subject: Some(HumanSubject {
+                    transport_tenant: peer.tenant.clone(),
+                    transport_principal: peer.principal.clone(),
+                    owner,
+                    account,
+                    asset,
+                    registration: None,
+                }),
+            };
+            operations.authorize_subject(&scoped)?;
+            dispatch_request(*request, &scoped, operations)
+        }
         HumanRequest::Prepare(request) => operations.prepare(peer, request),
         HumanRequest::Submit(request) => operations.submit_external(peer, request),
         HumanRequest::Track { submission_ref } => operations.track(peer, &submission_ref),
@@ -1723,4 +1814,102 @@ fn decode_operation_4(
         }
         _ => return Err(HumanProtocolError::Malformed),
     })
+}
+
+#[cfg(test)]
+mod subject_tests {
+    use super::*;
+
+    fn frame(
+        principal: &str,
+        owner: &str,
+        account: &str,
+        asset: [u8; 32],
+        inner: &[u8],
+    ) -> Vec<u8> {
+        let mut bytes = MAGIC.to_vec();
+        bytes.push(SUBJECT);
+        for value in [principal.as_bytes(), owner.as_bytes(), account.as_bytes()] {
+            bytes.extend_from_slice(
+                &u32::try_from(value.len())
+                    .unwrap_or_else(|_| panic!("length"))
+                    .to_be_bytes(),
+            );
+            bytes.extend_from_slice(value);
+        }
+        bytes.extend_from_slice(&asset);
+        bytes.extend_from_slice(
+            &u32::try_from(inner.len())
+                .unwrap_or_else(|_| panic!("length"))
+                .to_be_bytes(),
+        );
+        bytes.extend_from_slice(inner);
+        bytes
+    }
+
+    #[test]
+    fn scoped_wire_preserves_original_request_and_rejects_nesting_cross_owner_or_extra_bytes() {
+        let mut original = MAGIC.to_vec();
+        original.push(HEAD);
+        assert!(matches!(
+            decode_request(original.clone()),
+            Ok(HumanRequest::Head)
+        ));
+        let bytes = frame(
+            "act_person",
+            "did:layerx:person",
+            "agent:did:layerx:person:main",
+            [1; 32],
+            &original,
+        );
+        match decode_request(bytes.clone()) {
+            Ok(HumanRequest::Subject {
+                principal,
+                owner,
+                account,
+                asset,
+                request,
+            }) => {
+                assert_eq!(principal, "act_person");
+                assert_eq!(owner, "did:layerx:person");
+                assert_eq!(account, "agent:did:layerx:person:main");
+                assert_eq!(asset, [1; 32]);
+                assert!(matches!(*request, HumanRequest::Head));
+            }
+            _ => panic!("canonical scoped request"),
+        }
+        assert!(decode_request(frame(
+            "act_person",
+            "did:layerx:person",
+            "agent:did:layerx:person:main",
+            [1; 32],
+            &bytes
+        ))
+        .is_err());
+        assert!(decode_request(frame(
+            "act_person",
+            "did:layerx:person",
+            "agent:did:layerx:other:main",
+            [1; 32],
+            &original
+        ))
+        .is_err());
+        assert!(decode_request(frame(
+            "act_person",
+            "did:layerx:person",
+            "agent:did:layerx:person:main",
+            [0; 32],
+            &original
+        ))
+        .is_err());
+        for end in 0..bytes.len() {
+            assert!(
+                decode_request(bytes[..end].to_vec()).is_err(),
+                "truncation {end}"
+            );
+        }
+        let mut extra = bytes;
+        extra.push(0);
+        assert!(decode_request(extra).is_err());
+    }
 }

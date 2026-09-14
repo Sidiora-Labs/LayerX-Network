@@ -42,6 +42,7 @@ layerx-fiat = { path = "../interop/crates/layerx-fiat" }
 layerx-proof = { path = "../agent/crates/layerx-proof" }
 layerx-sdk = { path = "../agent/crates/layerx-sdk" }
 layerx-client = { path = "../agent/crates/layerx-client" }
+layerx-identity-binding = { path = "../agent/crates/layerx-identity-binding" }
 layerx-crypto = { path = "../agent/crates/layerx-crypto" }
 layerx-types = { path = "../agent/crates/layerx-types" }
 layerx-wire = { path = "../agent/crates/layerx-wire" }

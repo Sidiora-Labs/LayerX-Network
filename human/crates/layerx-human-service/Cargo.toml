@@ -16,6 +16,7 @@ layerx-types.workspace = true
 layerx-crypto.workspace = true
 layerx-proof.workspace = true
 layerx-client.workspace = true
+layerx-identity-binding.workspace = true
 layerx-sdk.workspace = true
 layerx-paxeer-client.workspace = true
 layerx-wire.workspace = true
