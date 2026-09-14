@@ -206,11 +206,11 @@ static int onboard_account(int descriptor, const uint8_t id[32], const uint8_t a
         REQUIRE(response.tag == ERROR_RESPONSE && response.payload_length == 5U &&
             (lxp_result)load_u32(response.payload + 1U) == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE);
     } else {
-        REQUIRE(response.tag == 8U && response.payload_length >= 102U && response.proof_length != 0U);
+        REQUIRE(response.tag == 8U && response.payload_length >= 103U && response.proof_length != 0U);
         const uint8_t *value = response.payload;
         size_t names = load_u16(value), offset = 3U + names;
         uint8_t actual[32];
-        REQUIRE(names != 0U && names <= LX_ACCOUNT_NAME_MAX && response.payload_length == names + 102U);
+        REQUIRE(names != 0U && names <= LX_ACCOUNT_NAME_MAX && response.payload_length == names + 103U);
         REQUIRE(lx_account_id_from_string(value + 2U, names, actual) == LXP_OK && memcmp(actual, id, 32U) == 0);
         REQUIRE(lxp_u128_from_be(value + offset, balance) == LXP_OK);
         REQUIRE(memcmp(value + offset + 16U, asset, 32U) == 0 && value[offset + 48U] == 1U);
