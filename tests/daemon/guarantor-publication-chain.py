@@ -59,6 +59,19 @@ def setup(work, url):
     govern(chain, custody['timelock'], vault, 'setGuarantorBond(address)', bond)
     authority = Ed25519PrivateKey.from_private_bytes(bytes([0x77]) * 32).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     govern(chain, custody['timelock'], vault, 'setDepositRootAuthority(bytes32)', '0x' + authority.hex())
+    usdl_asset = r.run('cast', 'keccak', 'USDL')
+    govern(chain, custody['timelock'], custody['registry'],
+        'registerAsset(bytes32,address,uint8,uint128,uint128)', usdl_asset, r.USDL, '6', '1', str(2 ** 128 - 1))
+    chain.send(r.USDL, 'mint(address,uint256)', admin, '1000')
+    chain.send(r.USDL, 'approve(address,uint256)', vault, '1000')
+    chain.send(vault, 'deposit(bytes32,uint256,bytes32)', usdl_asset, '1000', custody['beneficiary'])
+    for target, signature, arguments, expected in (
+        (r.USDL, 'balanceOf(address)', (vault,), 1000),
+        (vault, 'totalCustodied(bytes32)', (usdl_asset,), 1000),
+        (bond, 'custodiedValue()', (), 1000),
+        (bond, 'minimumBond()', (), 100),
+    ):
+        assert int(chain.view(target, signature, *arguments), 16) == expected
     (work / 'data/genesis/genesis.registration').write_bytes(b'LXGR\x01' + (77).to_bytes(4, 'big') + bytes(8) + request[41:73] * 2 + b'\x01')
     (work / 'publication-chain.json').write_text(json.dumps({'bond': bond, 'registry': registry, 'vault': vault, 'chain_id': 125}))
     module = load('publication_custody', ROOT / 'tests/daemon/withdraw-custody.py')
