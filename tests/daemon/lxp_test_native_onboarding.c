@@ -269,7 +269,9 @@ static int onboard_budget(int descriptor, onboarding_run *run, const signer *own
     (void)memcpy(create + 66U, onboarding_asset, 32U); create[98U] = 0x91U;
     store_u64(create + 138U, 2000U); store_u64(create + 170U, 1000U);
     store_u64(create + 178U, 60000U); store_u64(create + 186U, (uint64_t)now.tv_sec * 1000U);
-    store_u64(create + 194U, (uint64_t)now.tv_sec * 1000U + 300000U); create[210U] = 1U;
+    store_u64(create + 194U, (uint64_t)now.tv_sec * 1000U + 300000U);
+    REQUIRE(run->generation != 0U && run->generation < UINT64_MAX);
+    store_u64(create + 202U, run->generation); create[210U] = 1U;
     REQUIRE(onboard_account(descriptor, target_id, onboarding_asset, &before, &sequence, true) == 0);
     (void)memcpy(create + 211U, owner_id, 32U); store_u64(create + 243U, sequence);
     REQUIRE(onboard_execute(descriptor, run, target, &run->target_sequence, LX_BUDGET_CREATE, create, sizeof(create), LXP_ERR_UNAUTHORIZED_DEBIT, &receipt) == 0);
@@ -294,7 +296,7 @@ static int onboard_budget(int descriptor, onboarding_run *run, const signer *own
     REQUIRE(onboard_account(descriptor, target_id, onboarding_asset, &after, &sequence, true) == 0 && lxp_u128_cmp(after, expected) == 0);
     REQUIRE(onboard_account(descriptor, budget_account, onboarding_asset, &budget_balance, &budget_sequence, true) == 0 && budget_balance.hi == 0U && budget_balance.lo == 1200U);
     before = after;
-    (void)memcpy(close_budget + 2U, budget_id, 32U); store_u64(close_budget + 34U, 1U);
+    (void)memcpy(close_budget + 2U, budget_id, 32U); store_u64(close_budget + 34U, run->generation + 1U);
     REQUIRE(onboard_execute(descriptor, run, target, &run->target_sequence, LX_BUDGET_CLOSE, close_budget, sizeof(close_budget), LXP_OK, &receipt) == 0);
     REQUIRE(lxp_u128_sub(before, receipt.fee_charged, &expected) == LXP_OK && lxp_u128_add(expected, (lxp_u128){0U, 1200U}, &expected) == LXP_OK);
     REQUIRE(onboard_account(descriptor, target_id, onboarding_asset, &after, &sequence, true) == 0 && lxp_u128_cmp(after, expected) == 0);
@@ -383,7 +385,7 @@ static int onboard_initial(int descriptor, const signer *owner, const signer *ta
         if (variant == 6U) REQUIRE(onboard_wrong_network(target, inner, &inner_length) == 0);
         if (variant == 7U) {
             REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 706U, inner, inner_length) == 0);
-            REQUIRE(expect_error(descriptor, 706U, 4U, LXP_ERR_UNKNOWN_DID) == 0);
+            REQUIRE(expect_error(descriptor, 706U, 6U, LXP_ERR_UNKNOWN_DID) == 0);
         }
         payload[0] = 0x71U; payload[1] = 1U; payload[2] = 2U; payload[3] = 1U;
         REQUIRE(inner_length <= sizeof(payload) - 8U);
