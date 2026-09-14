@@ -294,7 +294,7 @@ fn main() -> Result<()> {
     let socket = Path::new(&arguments[1]);
     let directory = Path::new(&arguments[2]);
     let count: u64 = arguments[3].parse()?;
-    if count < 3 || count > 512 {
+    if !(3..=512).contains(&count) {
         return Err("bounded native history required".into());
     }
     let genesis = Genesis::read(directory)?;
