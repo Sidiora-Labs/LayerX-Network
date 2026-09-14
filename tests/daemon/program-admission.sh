@@ -68,7 +68,7 @@ bootstrap_extra=()
 bootstrap_environment=(env)
 custody_mode=0
 case ${2:-} in
-    --withdraw|--module-maintenance|--metered-allowance|--native-onboarding|--owner-rotation|--paid-withdrawal|--handover) custody_mode=1 ;;
+    --withdraw|--native-budget|--module-maintenance|--metered-allowance|--native-onboarding|--owner-rotation|--paid-withdrawal|--handover) custody_mode=1 ;;
 esac
 if [[ $custody_mode == 1 ]]; then
     bootstrap_extra+=(--custody-profile "$LAYERX_TEST_WITHDRAW_PROFILE" --settlement-env "$work/settlement.env")
@@ -81,7 +81,7 @@ else
         LAYERX_NODE_CHECKPOINT_REGISTRY=0x2222222222222222222222222222222222222222
         LAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1 LAYERX_NODE_PAXEER_RPC_PORT="$rpc_port")
 fi
-if [[ ${2:-} == --module-maintenance || ${2:-} == --native-onboarding || ${2:-} == --handover ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --native-onboarding || ${2:-} == --handover || ${2:-} == --native-budget ]]; then
     for module in escrow budget stream service perps; do
         bootstrap_extra+=(--enable-module "$module")
     done
@@ -101,7 +101,7 @@ if [[ $custody_mode == 1 ]]; then
     settlement_lines=$(bash platform/hosted/node/bootstrap.sh --check-settlement "$work/settlement.env")
     while IFS= read -r line; do export "$line"; done <<< "$settlement_lines"
 fi
-if [[ ${2:-} == --module-maintenance || ${2:-} == --handover ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --handover || ${2:-} == --native-budget ]]; then
     cp "$work/data/genesis/paxeer-registration-request.lxrr" "$work/genesis-registration.lxrr"
     chmod 0644 "$work/genesis-registration.lxrr"
     export LAYERX_TEST_GENESIS_REGISTRATION_FILE="$work/genesis-registration.lxrr"
@@ -153,9 +153,9 @@ for attempt in range(200):
 else:
     raise SystemExit("daemon did not accept LNI connections")
 PYWAIT
-if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal || ${2:-} == --handover ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal || ${2:-} == --handover || ${2:-} == --native-budget ]]; then
     client_name=${2#--}
-    if [[ ${2:-} == --handover ]]; then client_name=module-maintenance; fi
+    if [[ ${2:-} == --handover || ${2:-} == --native-budget ]]; then client_name=module-maintenance; fi
     client_name=${client_name//-/_}
     cp "$build_dir/tests/lxp_test_$client_name" "$work/client"
     mkdir "$work/scenario"
@@ -193,6 +193,30 @@ else
     cp "$build_dir/tests/lxp_test_program_admission" "$work/client"
 fi
 chmod 0755 "$work/client"
+if [[ ${2:-} == --native-budget ]]; then
+    : "${LAYERX_TEST_NATIVE_BUDGET_WORK:?actual Budget control directory is required}"
+    : "${LAYERX_TEST_NATIVE_BUDGET_CLIENT:?compiled real Budget client is required}"
+    : "${LAYERX_TEST_RUNTIME_CLOCK_BIN:?actual runtime clock is required}"
+    case ${LAYERX_TEST_NATIVE_BUDGET_SCENARIO:-} in recovery|unknown|refusals) ;; *) exit 2 ;; esac
+    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --native-budget-fund "$scenario_state"
+    cp "$LAYERX_TEST_NATIVE_BUDGET_CLIENT" "$work/native-budget-client"
+    cp "$LAYERX_TEST_RUNTIME_CLOCK_BIN" "$work/native-budget-clock"
+    chmod 0755 "$work/native-budget-client" "$work/native-budget-clock"
+    mkdir "$runtime/budget-clock"
+    chown 4021:4021 "$runtime/budget-clock"
+    chmod 0700 "$runtime/budget-clock"
+    "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/native-budget-chain.py funded "$work" "$LAYERX_TEST_NATIVE_BUDGET_WORK"
+    export LAYERX_TEST_NATIVE_BUDGET_SOCKET="$runtime/layerxd.lni.sock"
+    export LAYERX_TEST_NATIVE_BUDGET_AUTHORITY="$LAYERX_TEST_NATIVE_BUDGET_WORK/authority.csv"
+    LAYERX_TEST_NATIVE_BUDGET_ASSET=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["asset"])' "$work/data/treasury.json")
+    LAYERX_TEST_NATIVE_BUDGET_ACTOR_PUBLIC_KEY=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["public_key"])' "$work/data/treasury.json")
+    export LAYERX_TEST_NATIVE_BUDGET_ASSET LAYERX_TEST_NATIVE_BUDGET_ACTOR_PUBLIC_KEY
+    timeout --signal=TERM --kill-after=5s 900s setpriv --reuid=4021 --regid=4021 --clear-groups \
+        "$work/native-budget-clock" --runtime-dir "$runtime/budget-clock" -- \
+        "$work/native-budget-client" "$LAYERX_TEST_NATIVE_BUDGET_SCENARIO"
+    kill -0 "$sequencer_pid" "$replica_pid"
+    exit 0
+fi
 if [[ ${2:-} == --handover ]]; then
     timeout --signal=TERM --kill-after=5s 180s setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --handover-prepare "$scenario_state"
     "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/handover-chain.py finalize "$work" "$build_dir" "$scenario_state"

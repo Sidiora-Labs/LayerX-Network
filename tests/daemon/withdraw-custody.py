@@ -38,6 +38,10 @@ def retain_public_evidence(work, evidence):
 
 
 def register(work, url):
+    if os.environ.get('LAYERX_TEST_NATIVE_BUDGET_PUBLICATION') == '1':
+        module = runpy.run_path(str(ROOT / 'tests/daemon/guarantor-publication-chain.py'))
+        module['setup'](work, url)
+        return
     if os.environ.get('LAYERX_TEST_SETTLEMENT_PUBLICATION') == '1':
         module = runpy.run_path(str(ROOT / 'tests/daemon/guarantor-publication-chain.py'))
         module['setup'](work, url)
@@ -110,6 +114,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('build_dir', nargs='?', default='build')
     modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--native-budget', action='store_true')
     modes.add_argument('--module-maintenance', action='store_true')
     modes.add_argument('--handover', action='store_true')
     modes.add_argument('--metered-allowance', action='store_true')
@@ -118,7 +123,8 @@ def main():
     modes.add_argument('--paid-withdrawal', action='store_true')
     args = parser.parse_args()
     build = (ROOT / args.build_dir).resolve()
-    mode = ('--owner-rotation' if args.owner_rotation else
+    mode = ('--native-budget' if args.native_budget else
+            '--owner-rotation' if args.owner_rotation else
             '--native-onboarding' if args.native_onboarding else
             '--handover' if args.handover else
             '--module-maintenance' if args.module_maintenance else
@@ -222,7 +228,10 @@ def main():
                         'LAYERX_TEST_ADMISSION_LOG_DIR': str(work), 'LAYERX_TEST_PYTHON': sys.executable,
                         'LAYERX_TEST_CUSTODY_ARTIFACTS': str(artifacts), 'LAYERX_TEST_CUSTODY_FILE': str(work / 'custody.json'),
                         'LAYERX_TEST_CUSTODY_CHAIN_FILE': str(first.identity_path), 'LAYERX_TEST_CUSTODY_BUILD_DIR': str(build)}
-                    if os.environ.get('LAYERX_TEST_SETTLEMENT_PUBLICATION') == '1':
+                    if args.native_budget:
+                        module = runpy.run_path(str(ROOT / 'tests/daemon/native-budget-chain.py'))
+                        module['drive'](work, env, first.url)
+                    elif os.environ.get('LAYERX_TEST_SETTLEMENT_PUBLICATION') == '1':
                         module = runpy.run_path(str(ROOT / 'tests/daemon/guarantor-publication-chain.py'))
                         module['drive'](work, env, first.url)
                     else:
