@@ -151,7 +151,7 @@ fn lookup_verified(
     transport: &mut dyn FrameTransport,
     selector: ReceiptSelector,
     context: LookupContext,
-    verifier: impl FnOnce(&[u8]) -> Result<VerifiedReceipt, ReceiptError>,
+    authenticate: impl FnOnce(&[u8]) -> Result<VerifiedReceipt, ReceiptError>,
 ) -> Result<Lookup, ReceiptError> {
     let mut selector_bytes = selector.encode();
     if context.interface_version.minor >= 5 {
@@ -188,7 +188,7 @@ fn lookup_verified(
     if response.canonical_payload.is_empty() {
         return Ok(Lookup::Absent);
     }
-    let verified = verifier(response.canonical_payload)?;
+    let verified = authenticate(response.canonical_payload)?;
     let Some(receipt) = verified.receipt().protocol() else {
         return Err(ReceiptError::Verification(VerificationFailure {
             check: layerx_proof::receipt::ReceiptCheck::ReceiptShape,
