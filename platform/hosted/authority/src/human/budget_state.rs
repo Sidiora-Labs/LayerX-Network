@@ -224,7 +224,7 @@ fn identity(session: &mut Session<'_>, did: &str, owner: &CanonicalAccount) -> R
     if bytes.len() != 223
         || &bytes[..5] != b"LXGI1"
         || bytes[5..37] != key
-        || owner.authority_key.as_ref().map(|key| key.as_slice()) != Some(&bytes[37..69])
+        || owner.authority_key.as_ref().map(<[u8; 32]>::as_slice) != Some(&bytes[37..69])
     {
         return Err(());
     }
