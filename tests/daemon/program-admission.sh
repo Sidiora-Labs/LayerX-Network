@@ -159,6 +159,11 @@ if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} 
     if [[ ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then scenario_state="$work/scenario/state"; fi
     if [[ ${2:-} == --metered-allowance ]]; then
         scenario_state="$work/scenario/state"
+        if [[ -n ${LAYERX_TEST_SESSION_FEE_CLIENT:-} ]]; then
+            cp "$LAYERX_TEST_SESSION_FEE_CLIENT" "$work/session-fee-client"
+            chmod 0755 "$work/session-fee-client"
+            export LAYERX_TEST_SESSION_FEE_CLIENT="$work/session-fee-client"
+        fi
         install -m 0600 -o 4021 -g 4021 "$work/data/secrets/program-token" "$work/scenario/program-token"
         export LAYERX_TEST_METERED_PROGRAM_PORT="$program_port"
         export LAYERX_TEST_METERED_PROGRAM_TOKEN_FILE="$work/scenario/program-token"

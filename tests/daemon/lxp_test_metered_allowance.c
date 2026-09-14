@@ -642,6 +642,43 @@ static int metered_session_issue(int descriptor, const signer *owner, metered_ru
     return 0;
 }
 
+static int metered_session_client(int descriptor, const uint8_t id[32],
+                                  const wire_envelope *response)
+{
+    const char *client = getenv("LAYERX_TEST_SESSION_FEE_CLIENT");
+    struct sockaddr_un address;
+    socklen_t address_length = sizeof(address);
+    char id_hex[65], payload_hex[2801];
+    static const char digits[] = "0123456789abcdef";
+    int child_status;
+    if (client == NULL) return 0;
+    REQUIRE(response->payload_length <= 1400U);
+    REQUIRE(getpeername(descriptor, (struct sockaddr *)&address, &address_length) == 0);
+    for (size_t i = 0U; i < 32U; ++i) {
+        id_hex[i * 2U] = digits[id[i] >> 4U];
+        id_hex[i * 2U + 1U] = digits[id[i] & 15U];
+    }
+    id_hex[64] = '\0';
+    for (size_t i = 0U; i < response->payload_length; ++i) {
+        payload_hex[i * 2U] = digits[response->payload[i] >> 4U];
+        payload_hex[i * 2U + 1U] = digits[response->payload[i] & 15U];
+    }
+    payload_hex[response->payload_length * 2U] = '\0';
+    pid_t child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        if (setenv("LAYERX_TEST_SESSION_FEE_SOCKET", address.sun_path, 1) != 0 ||
+            setenv("LAYERX_TEST_SESSION_FEE_GRANT", id_hex, 1) != 0 ||
+            setenv("LAYERX_TEST_SESSION_FEE_EXPECTED", payload_hex, 1) != 0) _exit(125);
+        execl(client, client, "--exact", "real_daemon_session_fee_state", "--nocapture",
+              "--test-threads=1", (char *)NULL);
+        _exit(126);
+    }
+    REQUIRE(waitpid(child, &child_status, 0) == child);
+    REQUIRE(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0);
+    return 0;
+}
+
 static int metered_session_read_refusals(int descriptor, const uint8_t authentication_id[32])
 {
     uint8_t request[34] = {0};
@@ -691,6 +728,7 @@ static int metered_session_read(int descriptor, const uint8_t id[32],
         REQUIRE(lxp_authority_session_charge_commitment(grant, computed) == LXP_OK);
         REQUIRE(memcmp(commitment, computed, 32U) == 0);
     } else REQUIRE(lxp_ct_is_zero(commitment, 32U));
+    REQUIRE(metered_session_client(descriptor, expected_id, &response) == 0);
     release_envelope(&response);
     return 0;
 }
