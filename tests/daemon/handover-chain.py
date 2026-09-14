@@ -2,6 +2,8 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shutil
+import tempfile
 import subprocess
 import sys
 import time
@@ -60,9 +62,24 @@ def main():
         consumer = os.environ.get('LAYERX_TEST_HANDOVER_CONSUMER_BIN')
         if consumer is not None:
             assert os.environ.get('LAYERX_TEST_HANDOVER_PEERS') == '1'
-            invoke([consumer, os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'],
-                    output / f'exports-{count}', count], os.environ,
-                   output / 'public-history-consumer.log')
+            public_exports = output / f'exports-{count}'
+            assert (public_exports / 'handover-genesis.bin').read_bytes() == (
+                native / 'data/genesis/genesis-handover-trust.lxt').read_bytes()
+            with tempfile.TemporaryDirectory(prefix='lxp-handover-consumer-', dir='/tmp') as temporary:
+                client_directory = Path(temporary)
+                client_directory.chmod(0o755)
+                executable = client_directory / 'native-handover-history'
+                shutil.copyfile(consumer, executable)
+                executable.chmod(0o755)
+                for public_file in public_exports.iterdir():
+                    if public_file.name == 'handover-genesis.bin' or public_file.name.startswith(('retired-', 'unauthorized-')):
+                        destination = client_directory / public_file.name
+                        shutil.copyfile(public_file, destination)
+                        destination.chmod(0o644)
+                invoke(['setpriv', '--reuid=4021', '--regid=4021', '--clear-groups',
+                        executable, os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'],
+                        client_directory, count], os.environ,
+                       output / 'public-history-consumer.log')
         return
     environment = os.environ.copy()
     settlement = dict(line.split('=', 1) for line in (native / 'settlement.env').read_text().splitlines())

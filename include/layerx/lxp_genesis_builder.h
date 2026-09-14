@@ -24,6 +24,10 @@ lxp_result lxp_genesis_registration_request_encode(
     const lxp_genesis_manifest *manifest,
     uint8_t encoded[LXP_GENESIS_REGISTRATION_REQUEST_BYTES]);
 
+lxp_result lxp_genesis_handover_trust_build(
+    const lxp_genesis_manifest *manifest, lxp_arena *arena,
+    lxp_byte_span *encoded);
+
 lxp_result lxp_genesis_build_fresh_custody(
     const lxp_genesis_manifest *draft, const uint8_t asset_id[32],
     const lx_programs_metering_schedule *metering,

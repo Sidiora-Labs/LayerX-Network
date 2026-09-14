@@ -5,6 +5,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_fee.h"
+#include "layerx/lxp_handover.h"
 #include "layerx/lxp_protocol.h"
 
 #include <fcntl.h>
@@ -369,6 +370,7 @@ static lxp_result build_artifacts(
     static const char request_name[] = "paxeer-registration-request.lxrr";
     static const char descriptor_name[] =
         "paxeer-deployment-descriptor.lxgd";
+    static const char handover_trust_name[] = "genesis-handover-trust.lxt";
     uint8_t registration_request[LXP_GENESIS_REGISTRATION_REQUEST_BYTES];
     uint8_t deployment_descriptor[LXP_GENESIS_DEPLOYMENT_DESCRIPTOR_BYTES];
     uint8_t asset_id[32];
@@ -387,12 +389,16 @@ static lxp_result build_artifacts(
     lxp_snapshot_manifest_record snapshot_manifest;
     lxp_byte_span encoded_manifest;
     lxp_byte_span snapshot;
+    lxp_byte_span handover_trust = {NULL, 0U};
+    bool handover_enabled = false;
+    uint8_t governance_public_key[32];
     lxp_arena arena;
     char manifest_path[4096];
     char snapshot_path[4096];
     char snapshot_temporary_path[4096];
     char registration_request_path[4096];
     char deployment_descriptor_path[4096];
+    char handover_trust_path[4096];
     int directory_descriptor = -1;
     bool directory_created = false;
     lxp_result status;
@@ -443,6 +449,11 @@ static lxp_result build_artifacts(
         status = lxp_genesis_deployment_descriptor_encode(
             manifest, &arena, deployment_descriptor);
     if (status == LXP_OK)
+        status = lxp_handover_genesis_authority(manifest, governance_public_key,
+            &handover_enabled);
+    if (status == LXP_OK && handover_enabled)
+        status = lxp_genesis_handover_trust_build(manifest, &arena, &handover_trust);
+    if (status == LXP_OK)
         status = join_path(manifest_path, sizeof(manifest_path),
                            output_directory, manifest_name);
     if (status == LXP_OK)
@@ -460,6 +471,9 @@ static lxp_result build_artifacts(
         status = join_path(deployment_descriptor_path,
                            sizeof(deployment_descriptor_path),
                            output_directory, descriptor_name);
+    if (status == LXP_OK)
+        status = join_path(handover_trust_path, sizeof(handover_trust_path),
+            output_directory, handover_trust_name);
     if (status == LXP_OK && mkdir(output_directory, 0700) != 0)
         status = LXP_ERR_IO;
     else if (status == LXP_OK)
@@ -479,6 +493,9 @@ static lxp_result build_artifacts(
         status = write_exclusive(deployment_descriptor_path,
                                  deployment_descriptor,
                                  sizeof(deployment_descriptor));
+    if (status == LXP_OK && handover_enabled)
+        status = write_exclusive(handover_trust_path, handover_trust.bytes,
+            handover_trust.length);
     if (status == LXP_OK) {
         directory_descriptor = open(output_directory,
                                     O_RDONLY | O_DIRECTORY | O_CLOEXEC |
@@ -490,6 +507,7 @@ static lxp_result build_artifacts(
         status == LXP_OK)
         status = LXP_ERR_IO;
     if (status != LXP_OK && directory_created) {
+        (void)unlink(handover_trust_path);
         (void)unlink(deployment_descriptor_path);
         (void)unlink(registration_request_path);
         (void)unlink(snapshot_temporary_path);

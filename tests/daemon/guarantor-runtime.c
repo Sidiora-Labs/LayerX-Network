@@ -37,39 +37,16 @@ static void export_genesis(gp_runtime *runtime)
     const lxp_kernel *kernel = gp_runtime_engine(runtime)->kernel;
     if (!kernel->handover.enabled || getenv("LAYERX_TEST_PUBLICATION_EXPORT_DIR") == NULL)
         return;
-    uint8_t key[32] = "handover-authority";
-    uint8_t state_root[32], receipt_root[32];
-    lxp_state_witness *proof = malloc(sizeof(*proof));
-    uint8_t *encoded = malloc(LXP_STATE_WITNESS_MAX_BYTES);
-    size_t length = 0U;
-    assert(proof != NULL && encoded != NULL);
-    assert(lxp_state_root(kernel, state_root) == LXP_OK);
-    assert(lxp_genesis_receipt_state_root(kernel->handover.network_id, state_root,
-        receipt_root) == LXP_OK);
-    assert(memcmp(receipt_root, kernel->current_state_root, 32U) == 0);
-    assert(gp_runtime_state_proof(runtime, LXP_MODULE_GOVERNANCE,
-        (lxp_byte_span){key, sizeof(key)}, proof) == LXP_OK);
-    assert(lxp_state_proof_verify(proof, state_root) == LXP_OK);
-    assert(lxp_state_proof_encode(proof, encoded, LXP_STATE_WITNESS_MAX_BYTES, &length) == LXP_OK);
-    assert(length <= UINT32_MAX && kernel->module_count <= UINT32_MAX);
+    uint8_t *memory = malloc(LXP_STATE_WITNESS_MAX_BYTES + 8192U);
+    lxp_arena arena;
+    lxp_byte_span encoded;
+    assert(memory != NULL);
+    assert(lxp_arena_init(&arena, memory, LXP_STATE_WITNESS_MAX_BYTES + 8192U) == LXP_OK);
+    assert(lxp_handover_genesis_trust_encode(kernel, &arena, &encoded) == LXP_OK);
     FILE *output = public_export("handover-genesis.bin");
-    write_u32(output, kernel->handover.network_id);
-    assert(fwrite(state_root, 32U, 1U, output) == 1U);
-    assert(fwrite(kernel->handover.genesis_authorization.public_key, 32U, 1U, output) == 1U);
-    write_u32(output, (uint32_t)length);
-    assert(fwrite(encoded, length, 1U, output) == 1U);
-    write_u32(output, (uint32_t)kernel->module_count);
-    for (size_t i = 0U; i < kernel->module_count; ++i) {
-        const lxp_module_registration *module = &kernel->modules[i];
-        write_u32(output, module->module_id);
-        assert(module->activity_type_count <= UINT32_MAX);
-        write_u32(output, (uint32_t)module->activity_type_count);
-        for (size_t j = 0U; j < module->activity_type_count; ++j)
-            write_u32(output, module->activity_types[j]);
-    }
+    assert(fwrite(encoded.bytes, encoded.length, 1U, output) == 1U);
     assert(fclose(output) == 0);
-    free(encoded);
-    free(proof);
+    free(memory);
 }
 
 static void export_forgery(const lxp_batch_body *body, const char *kind, lxp_arena *arena)

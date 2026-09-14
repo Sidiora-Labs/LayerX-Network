@@ -1,5 +1,74 @@
 use crate::hash::{batch_header_digest, sha256};
 use crate::receipt::decode_batch_header;
+use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+
+pub const GENESIS_TRUST_MAX_BYTES: usize = 1_048_576;
+
+pub struct GenesisTrust<'a> {
+    pub network_id: u32,
+    pub canonical_state_root: [u8; 32],
+    pub initial_sequencer_key: [u8; 32],
+    pub governance_witness: &'a [u8],
+    pub registry: ModuleRegistry,
+}
+
+/// Decodes public builder output without conferring trust on its root or keys.
+///
+/// # Errors
+/// Refuses noncanonical, truncated, oversized or unsupported genesis material.
+pub fn decode_genesis_trust(bytes: &[u8]) -> Result<GenesisTrust<'_>, HandoverError> {
+    if bytes.len() > GENESIS_TRUST_MAX_BYTES {
+        return Err(HandoverError::Bounds);
+    }
+    let mut reader = Reader(bytes);
+    reader.domain(b"LXP/public-handover-genesis/v1\0")?;
+    let network_id = u32::from_be_bytes(reader.array()?);
+    let canonical_state_root = reader
+        .span(32)?
+        .try_into()
+        .map_err(|_| HandoverError::Encoding)?;
+    let initial_sequencer_key = reader
+        .span(32)?
+        .try_into()
+        .map_err(|_| HandoverError::Encoding)?;
+    let governance_witness = reader.span(GENESIS_TRUST_MAX_BYTES)?;
+    let count = u32::from_be_bytes(reader.array()?);
+    if network_id == 0 || count == 0 || count > 9 {
+        return Err(HandoverError::Bounds);
+    }
+    let mut modules = Vec::new();
+    let mut previous = 0;
+    for _ in 0..count {
+        let module = u16::from_be_bytes(reader.array()?);
+        let count = u32::from_be_bytes(reader.array()?);
+        if module <= previous || count == 0 || count > 64 {
+            return Err(HandoverError::Encoding);
+        }
+        previous = module;
+        let mut activities = Vec::new();
+        for _ in 0..count {
+            activities.push(
+                ActivityType::from_u32(u32::from_be_bytes(reader.array()?))
+                    .map_err(|_| HandoverError::Encoding)?,
+            );
+        }
+        modules.push(
+            ModuleRegistration::new(
+                ModuleId::from_u16(module).map_err(|_| HandoverError::Encoding)?,
+                &activities,
+            )
+            .map_err(|_| HandoverError::Encoding)?,
+        );
+    }
+    reader.finish()?;
+    Ok(GenesisTrust {
+        network_id,
+        canonical_state_root,
+        initial_sequencer_key,
+        governance_witness,
+        registry: ModuleRegistry::new(&modules).map_err(|_| HandoverError::Encoding)?,
+    })
+}
 
 pub const CERTIFICATE_BYTES: usize = 392;
 pub const MAX_EVIDENCE_BYTES: usize = 1_048_576;

@@ -11,8 +11,10 @@ use layerx_client::lni::schema::Version;
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_proof::availability::{AvailabilityClass, RootCommitments};
 use layerx_proof::inclusion::verify_header;
-use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
-use layerx_wire::handover::{decode_certificate, decode_evidence, decode_recovery};
+use layerx_types::payload::ModuleRegistry;
+use layerx_wire::handover::{
+    decode_certificate, decode_evidence, decode_genesis_trust, decode_recovery,
+};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -49,43 +51,19 @@ struct Genesis {
 impl Genesis {
     fn read(directory: &Path) -> Result<Self> {
         let bytes = std::fs::read(directory.join("handover-genesis.bin"))?;
-        let mut reader = Reader(&bytes);
-        let network = reader.u32()?;
-        let root = reader.array()?;
-        let key = reader.array()?;
-        let witness = reader.span(1_048_576)?;
-        let count = reader.u32()?;
-        if count > 9 {
-            return Err("module count".into());
+        let decoded = decode_genesis_trust(&bytes).map_err(|error| format!("{error:?}"))?;
+        for end in [0, 1, 29, bytes.len() - 1] {
+            assert!(decode_genesis_trust(&bytes[..end]).is_err());
         }
-        let mut modules = Vec::new();
-        for _ in 0..count {
-            let module = ModuleId::from_u16(u16::try_from(reader.u32()?)?)
-                .map_err(|error| format!("{error:?}"))?;
-            let kinds = reader.u32()?;
-            if kinds > 64 {
-                return Err("activity count".into());
-            }
-            let mut activities = Vec::new();
-            for _ in 0..kinds {
-                activities.push(
-                    ActivityType::from_u32(reader.u32()?).map_err(|error| format!("{error:?}"))?,
-                );
-            }
-            modules.push(
-                ModuleRegistration::new(module, &activities)
-                    .map_err(|error| format!("{error:?}"))?,
-            );
-        }
-        if !reader.0.is_empty() {
-            return Err("trailing genesis export".into());
-        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(decode_genesis_trust(&trailing).is_err());
         Ok(Self {
-            network,
-            root,
-            key,
-            witness,
-            registry: ModuleRegistry::new(&modules).map_err(|error| format!("{error:?}"))?,
+            network: decoded.network_id,
+            root: decoded.canonical_state_root,
+            key: decoded.initial_sequencer_key,
+            witness: decoded.governance_witness.to_vec(),
+            registry: decoded.registry,
         })
     }
 

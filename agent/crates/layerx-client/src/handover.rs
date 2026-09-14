@@ -60,6 +60,33 @@ pub struct SequencerHistory {
 }
 
 impl SequencerHistory {
+    /// Verifies real builder output against independently configured genesis pins.
+    ///
+    /// # Errors
+    /// Refuses substituted roots, domains, keys or uncommitted governance authority.
+    pub fn from_genesis_artifact(
+        bytes: &[u8],
+        network_id: u32,
+        canonical_state_root: [u8; 32],
+        initial_sequencer_key: [u8; 32],
+    ) -> Result<Self, HistoryError> {
+        let material = layerx_wire::handover::decode_genesis_trust(bytes)
+            .map_err(|_| HistoryError::Genesis)?;
+        if material.network_id != network_id
+            || material.canonical_state_root != canonical_state_root
+            || material.initial_sequencer_key != initial_sequencer_key
+        {
+            return Err(HistoryError::Genesis);
+        }
+        Self::from_genesis(
+            network_id,
+            canonical_state_root,
+            initial_sequencer_key,
+            material.governance_witness,
+            material.registry,
+        )
+    }
+
     /// Reads the next contiguous native batch through a caller-authenticated transport.
     /// No signer claim from the transport becomes trusted before complete history verification.
     ///
