@@ -18,6 +18,46 @@ enum MaintainedIdentityDocument {
         #[serde(default)]
         activity_receipts_hex: Vec<String>,
     },
+    BatchMaintenanceV1 {
+        receipt_hex: String,
+        receipt_proof_hex: String,
+        activity_receipts_hex: Vec<String>,
+    },
+}
+
+impl MaintainedIdentityDocument {
+    fn fields(&self) -> (&str, &str, &[String]) {
+        match self {
+            Self::OccupancyMaintenanceV2 {
+                receipt_hex,
+                receipt_proof_hex,
+                activity_receipts_hex,
+            }
+            | Self::BatchMaintenanceV1 {
+                receipt_hex,
+                receipt_proof_hex,
+                activity_receipts_hex,
+            } => (receipt_hex, receipt_proof_hex, activity_receipts_hex),
+        }
+    }
+
+    fn verify_kind(&self, bytes: &[u8]) -> Result<(), &'static str> {
+        use layerx_wire::batch_maintenance::{decode_maintenance, MaintenanceReceipt};
+        let record = decode_maintenance(bytes).map_err(|_| "maintained receipt encoding")?;
+        if !matches!(
+            (self, record),
+            (
+                Self::OccupancyMaintenanceV2 { .. },
+                MaintenanceReceipt::Occupancy(_)
+            ) | (
+                Self::BatchMaintenanceV1 { .. },
+                MaintenanceReceipt::Batch(_)
+            )
+        ) {
+            return Err("maintained receipt kind");
+        }
+        Ok(())
+    }
 }
 
 impl MaintainedBatchDocument {
@@ -63,12 +103,16 @@ impl MaintainedBatchDocument {
             .try_into()
             .map_err(|_| "maintained signature encoding")?;
         let activity_proof = proof(&self.receipt_proof_hex)?;
-        let MaintainedIdentityDocument::OccupancyMaintenanceV2 {
-            receipt_hex,
-            receipt_proof_hex,
-            activity_receipts_hex,
-        } = &self.batch_identity;
+        let (receipt_hex, receipt_proof_hex, activity_receipts_hex) = self.batch_identity.fields();
         let maintenance = bytes(receipt_hex)?;
+        self.batch_identity.verify_kind(&maintenance)?;
+        if matches!(
+            self.batch_identity,
+            MaintainedIdentityDocument::BatchMaintenanceV1 { .. }
+        ) && activity_receipts_hex.is_empty()
+        {
+            return Err("maintained activity receipts required");
+        }
         let maintenance_proof = proof(receipt_proof_hex)?;
         let receipts = if activity_receipts_hex.is_empty() {
             vec![receipt.to_vec()]
@@ -247,5 +291,103 @@ mod maintained_consumer_tests {
         assert!(document
             .authorize(&receipt, &historical_facts, &pins(&capture))
             .is_err());
+    }
+
+    fn native_withdrawal_document() -> serde_json::Value {
+        let encoded = |bytes: &[u8]| crate::hex(bytes);
+        let receipt =
+            include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/receipt");
+        serde_json::json!({
+            "header_hex": encoded(include_bytes!(
+                "../../../../tests/fixtures/asset/bound-native-withdrawal/header")),
+            "header_signature": encoded(include_bytes!(
+                "../../../../tests/fixtures/asset/bound-native-withdrawal/header.signature")),
+            "receipt_proof_hex": encoded(include_bytes!(
+                "../../../../tests/fixtures/asset/bound-native-withdrawal/receipt.proof")),
+            "batch_identity": {
+                "kind": "batch_maintenance_v1",
+                "receipt_hex": encoded(include_bytes!(
+                    "../../../../tests/fixtures/asset/bound-native-withdrawal/maintenance.receipt")),
+                "receipt_proof_hex": encoded(include_bytes!(
+                    "../../../../tests/fixtures/asset/bound-native-withdrawal/maintenance.proof")),
+                "activity_receipts_hex": [encoded(receipt)],
+            },
+        })
+    }
+
+    #[test]
+    fn actual_withdrawal_requires_the_complete_native_maintenance_variant() {
+        let receipt =
+            include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/receipt");
+        let key = *include_bytes!(
+            "../../../../tests/fixtures/asset/bound-native-withdrawal/sequencer.public"
+        );
+        let capture = native_withdrawal_document();
+        let header = required(layerx_wire::receipt::decode_batch_header(&bytes(&field(
+            &capture,
+            "header_hex",
+        ))));
+        let decoded = required(layerx_wire::receipt::decode(receipt));
+        let protocol = decoded
+            .protocol()
+            .unwrap_or_else(|| panic!("protocol receipt"));
+        let facts = AuthorizedBatch::new(
+            protocol.batch_id(),
+            protocol.asset(),
+            header.previous_state_root(),
+            header.resulting_state_root(),
+            key,
+        );
+        let pins = SequencerAuthorization::new(
+            header.sequencer_id(),
+            key,
+            header.batch_number(),
+            header.batch_number(),
+        );
+        let document: MaintainedBatchDocument = required(serde_json::from_value(capture.clone()));
+        let selected = required(document.authorize(receipt, &facts, &pins));
+        assert!(verify_outcome(receipt, &selected).is_ok());
+        for name in [
+            "kind",
+            "empty",
+            "duplicate",
+            "receipt",
+            "proof",
+            "signature",
+        ] {
+            let mut changed = capture.clone();
+            match name {
+                "kind" => {
+                    changed["batch_identity"]["kind"] =
+                        serde_json::json!("occupancy_maintenance_v2")
+                }
+                "empty" => {
+                    changed["batch_identity"]["activity_receipts_hex"] = serde_json::json!([])
+                }
+                "duplicate" => {
+                    changed["batch_identity"]["activity_receipts_hex"] =
+                        serde_json::json!([crate::hex(receipt), crate::hex(receipt)])
+                }
+                "receipt" => {
+                    changed["batch_identity"]["receipt_hex"] =
+                        serde_json::json!(crate::hex(receipt))
+                }
+                "proof" => {
+                    changed["receipt_proof_hex"] =
+                        changed["batch_identity"]["receipt_proof_hex"].clone()
+                }
+                _ => changed["header_signature"] = serde_json::json!("aa".repeat(64)),
+            }
+            let document: MaintainedBatchDocument = required(serde_json::from_value(changed));
+            assert!(
+                document.authorize(receipt, &facts, &pins).is_err(),
+                "{name}"
+            );
+        }
+        let legacy = captured();
+        let mut changed = legacy["authority"]["batch_evidence"].clone();
+        changed["batch_identity"]["kind"] = serde_json::json!("batch_maintenance_v1");
+        let document: MaintainedBatchDocument = required(serde_json::from_value(changed));
+        assert!(document.authorize(receipt, &facts, &pins).is_err());
     }
 }
