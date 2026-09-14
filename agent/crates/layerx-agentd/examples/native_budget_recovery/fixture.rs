@@ -185,7 +185,7 @@ impl Fixture {
             let mut changed = prepared.clone();
             changed.disclosure.amounts[0].value = spend
                 .amount
-                .checked_add(1)
+                .checked_sub(1)
                 .ok_or("disclosure amount overflow")?;
             assert!(layerx_agentd::prepare::verify_disclosure_binding(&changed).is_err());
         }
