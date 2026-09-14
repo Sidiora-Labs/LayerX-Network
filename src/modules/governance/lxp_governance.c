@@ -497,10 +497,17 @@ static lxp_result root(lxp_module_ctx *ctx, uint8_t digest[32])
 {
     return ctx == NULL ? LXP_ERR_NON_CANONICAL : lxp_state_subtree_root(ctx->kernel, LXP_MODULE_GOVERNANCE, digest);
 }
-const lxp_module_iface *lxp_governance_module_iface(void)
+const lxp_module_iface *lxp_governance_module_iface_for_handover(bool enabled)
 {
     static const uint32_t types[] = {0x00070001U, 0x00070002U, 0x00070003U, 0x00070005U, 0x00070006U, 0x00070008U, LXP_GOVERNANCE_HANDOVER};
-    static const lxp_module_iface iface = {LXP_MODULE_GOVERNANCE, 1U, "governance", types, 7U,
+    static const lxp_module_iface legacy = {LXP_MODULE_GOVERNANCE, 1U, "governance", types, 6U,
         genesis, decode, validate, execute, epoch, epoch, root, NULL};
-    return &iface;
+    static const lxp_module_iface handover = {LXP_MODULE_GOVERNANCE, 1U, "governance", types, 7U,
+        genesis, decode, validate, execute, epoch, epoch, root, NULL};
+    return enabled ? &handover : &legacy;
+}
+
+const lxp_module_iface *lxp_governance_module_iface(void)
+{
+    return lxp_governance_module_iface_for_handover(false);
 }
