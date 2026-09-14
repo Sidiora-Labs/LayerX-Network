@@ -95,7 +95,9 @@ static lxp_result budget_maintenance_visit(const uint8_t *key, size_t key_length
     if (status != LXP_OK) return status;
     if (memcmp(key + 7U, record.budget_id, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
-    if (record.closed || scan->timestamp < record.period_start) return LXP_OK;
+    if (record.closed || scan->timestamp < record.period_start ||
+        record.expiry <= scan->timestamp)
+        return LXP_OK;
     status = lx_budget_periods_elapsed(&record, scan->timestamp, &elapsed);
     if (status != LXP_OK) return status;
     if (elapsed != 0U) {
