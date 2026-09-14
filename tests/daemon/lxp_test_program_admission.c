@@ -350,6 +350,7 @@ static int handshake(int descriptor)
     uint16_t capability_count;
     size_t index;
     bool durable = false;
+    bool session_fee_state = false;
     bool complete;
     if (send_request(descriptor, LNI_MINOR, NODE_INFO_REQUEST, 0U,
                      NULL, 0U) != 0 ||
@@ -369,11 +370,14 @@ static int handshake(int descriptor)
             memcmp(response.payload + cursor,
                    "authenticated_durable_submit", length) == 0)
             durable = true;
+        if (length == sizeof("session_fee_state") - 1U &&
+            memcmp(response.payload + cursor, "session_fee_state", length) == 0)
+            session_fee_state = true;
         cursor += length;
     }
     complete = cursor == response.payload_length;
     release_envelope(&response);
-    return durable && complete ? 0 : 1;
+    return durable && session_fee_state && complete ? 0 : 1;
 }
 
 static int expect_error(int descriptor, uint64_t correlation_id,

@@ -642,6 +642,22 @@ static int metered_session_issue(int descriptor, const signer *owner, metered_ru
     return 0;
 }
 
+static int metered_session_read_refusals(int descriptor, const uint8_t authentication_id[32])
+{
+    uint8_t request[34] = {0};
+    store_u16(request, 1U);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 36U, 636U, request, sizeof(request)) == 0);
+    REQUIRE(expect_error(descriptor, 636U, 1U, LXP_ERR_NON_CANONICAL) == 0);
+    (void)memcpy(request + 2U, authentication_id, 32U);
+    REQUIRE(send_request(descriptor, LNI_MINOR - 1U, 36U, 637U, request, sizeof(request)) == 0);
+    REQUIRE(expect_error(descriptor, 637U, 1U, LXP_ERR_NON_CANONICAL) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 36U, 638U, request, sizeof(request) - 1U) == 0);
+    REQUIRE(expect_error(descriptor, 638U, 1U, LXP_ERR_NON_CANONICAL) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 36U, 639U, request, sizeof(request)) == 0);
+    REQUIRE(expect_error(descriptor, 639U, 4U, LXP_ERR_AUTH_SCOPE) == 0);
+    return 0;
+}
+
 static int metered_session_read(int descriptor, const uint8_t id[32],
     lxp_authority_grant *grant, uint8_t successor[32], uint8_t commitment[32])
 {
@@ -737,6 +753,7 @@ static int metered_sessions_initial(int descriptor, const signer *owner, metered
                 lxp_ct_is_zero(successor, 32U) && !grant.revoked);
         }
     }
+    REQUIRE(metered_session_read_refusals(descriptor, run->session_ids[2]) == 0);
     REQUIRE(metered_session_refuse(descriptor, run, 0x51U, payload, payload_length, LXP_ERR_AUTH_ALLOWANCE) == 0);
     REQUIRE(metered_session_refuse(descriptor, run, 0x53U, payload, payload_length, LXP_ERR_AUTH_SCOPE) == 0);
     REQUIRE(metered_session_refuse(descriptor, run, 0x54U, payload, payload_length, LXP_ERR_GRANT_EXHAUSTED) == 0);

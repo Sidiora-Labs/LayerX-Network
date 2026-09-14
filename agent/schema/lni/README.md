@@ -18,7 +18,7 @@ current head through the programs runtime without committing anything, and
 `SimulateResponse` returns the execution (activity id, sequencer-signed
 receipt, terminal payload, call graph) with sequencer-signed simulation
 evidence as proof material.
-Version 1.5 adds `asset_read`, `fee_estimate`, and event-driven receipt
+Version 1.5 adds `asset_read`, `fee_estimate`, `session_fee_state`, and event-driven receipt
 publication waiting. Clients negotiate minor 5 before using these additions.
 
 ## Authenticated durable submission
@@ -93,6 +93,8 @@ authentication-and-durability guarantee only when
 | 33 | `AssetReadResponse` | response | `asset_read` |
 | 34 | `FeeEstimateRequest` | request | `fee_estimate` |
 | 35 | `FeeEstimateResponse` | response | `fee_estimate` |
+| 36 | `SessionFeeStateRequest` | request | `session_fee_state` |
+| 37 | `SessionFeeStateResponse` | response | `session_fee_state` |
 
 AvailabilityFetchRequest carries only the canonical selector and empty proof material. AvailabilityChunk carries exact chunk bytes and inclusion metadata. AvailabilityEnd has empty canonical payload and empty proof material.
 
@@ -139,3 +141,11 @@ deadline expires. It does not use a fixed polling interval. A successful
 lookup returns the canonical signed receipt through `ReceiptLookupResponse`;
 an admission acknowledgement is never substituted for an executed receipt.
 Legacy selectors remain supported without the trailing wait field.
+
+`SessionFeeStateRequest` requires the negotiated `session_fee_state` capability
+and minor 5. It carries version u16 = 1 and a nonzero grant id32. The response
+carries version u16 = 1, observed sequence u64, committed root32, the original
+canonical grant prefixed by its u16 length, revoked sequence u64, committed
+fee counters72, successor grant id32 and charge commitment32. Authentication-only
+grants, malformed selectors and unavailable state are refused. As with the other
+committed reads, these bytes do not establish checkpoint finality.
