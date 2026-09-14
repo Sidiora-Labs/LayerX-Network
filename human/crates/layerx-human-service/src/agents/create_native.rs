@@ -114,8 +114,11 @@ impl CreationJourney {
             )
             .ok_or(AgentCreationError::EvidenceConflict)?;
         let digest: [u8; 32] = Sha256::digest(row.bytes()).into();
-        let receipt = layerx_intents::canonical::decode_receipt(row.bytes())
+        let decoded = layerx_intents::canonical::decode_receipt(row.bytes())
             .map_err(|_| AgentCreationError::EvidenceConflict)?;
+        let receipt = decoded
+            .protocol()
+            .ok_or(AgentCreationError::EvidenceConflict)?;
         if Some(digest) != stage.evidence_digest
             || Some(receipt.activity_id()) != stage.object_id
             || receipt.protocol_version() != 3
