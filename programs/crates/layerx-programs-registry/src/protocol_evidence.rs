@@ -437,6 +437,7 @@ pub struct ProtocolDeploymentVerifier {
     anchors: Vec<SequencerTrustAnchor>,
     current_anchor: usize,
     staleness_limit_ms: u64,
+    signed_history: Option<layerx_proof::signed_authority::SignedAuthorityHistory>,
 }
 
 impl ProtocolDeploymentVerifier {
@@ -483,6 +484,97 @@ impl ProtocolDeploymentVerifier {
             anchors,
             current_anchor,
             staleness_limit_ms,
+            signed_history: None,
+        })
+    }
+
+    /// Derives current authority from signed genesis history without altering protected policy.
+    /// The caller must obtain the projection from its independently finalized Client history.
+    /// # Errors
+    /// Refuses widened policy, revoked authority, unknown configured keys and unverified heads.
+    pub fn with_signed_history(
+        &self,
+        history: &layerx_proof::signed_authority::SignedAuthorityHistory,
+    ) -> Result<Self, ProtocolEvidenceError> {
+        if self.signed_history.is_some()
+            || history.intervals().is_empty()
+            || history.intervals().len() > MAX_TRUST_ANCHORS
+        {
+            return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+        }
+        let head = history
+            .verified_head()
+            .ok_or(ProtocolEvidenceError::TrustAnchorUnavailable)?;
+        let mut anchors = Vec::new();
+        for policy in &self.anchors {
+            if policy.protocol_version != 3
+                || policy.network_id != history.network_id()
+                || !history.intervals().iter().any(|interval| {
+                    interval.epoch() == policy.epoch
+                        && interval.public_key() == policy.sequencer_public_key
+                })
+            {
+                return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+            }
+        }
+        if !self.anchors.iter().any(|policy| {
+            policy.epoch == 1
+                && policy.first_batch == 1
+                && policy.sequencer_public_key == history.initial_public_key()
+        }) {
+            return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+        }
+        for interval in history.intervals() {
+            let configured: Vec<_> = self
+                .anchors
+                .iter()
+                .filter(|policy| {
+                    policy.epoch == interval.epoch()
+                        && policy.sequencer_public_key == interval.public_key()
+                })
+                .collect();
+            if configured.is_empty() {
+                anchors.push(SequencerTrustAnchor {
+                    protocol_version: 3,
+                    network_id: history.network_id(),
+                    epoch: interval.epoch(),
+                    sequencer_id: layerx_wire::handover::sequencer_id(&interval.public_key())
+                        .map_err(|_| ProtocolEvidenceError::InvalidTrustAnchor)?,
+                    sequencer_public_key: interval.public_key(),
+                    first_batch: interval.first_batch(),
+                    last_batch: interval.last_batch(),
+                    revoked_from_batch: None,
+                });
+            } else {
+                for policy in configured {
+                    let first = policy.first_batch.max(interval.first_batch());
+                    let last = policy.last_batch.min(interval.last_batch());
+                    if first <= last {
+                        anchors.push(SequencerTrustAnchor {
+                            first_batch: first,
+                            last_batch: last,
+                            ..*policy
+                        });
+                    }
+                }
+            }
+        }
+        if anchors.len() > MAX_TRUST_ANCHORS {
+            return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+        }
+        let current_anchor = anchors
+            .iter()
+            .position(|anchor| {
+                anchor.epoch == head.header().epoch()
+                    && (anchor.first_batch..=anchor.effective_last_batch())
+                        .contains(&head.header().batch_number())
+            })
+            .ok_or(ProtocolEvidenceError::SequencerRevoked)?;
+        Ok(Self {
+            anchors,
+            current_anchor,
+            staleness_limit_ms: self.staleness_limit_ms,
+            signed_history: Some(history.clone()),
         })
     }
 
@@ -723,7 +815,8 @@ impl ProtocolDeploymentVerifier {
         {
             return Err(ProtocolEvidenceError::Encoding);
         }
-        let anchor = self.anchors[self.select_anchor(proof.header, moment)?];
+        let anchor =
+            self.anchors[self.select_anchor(proof.header, proof.header_signature, moment)?];
         let decoded = decode_receipt(proof.receipt).map_err(|_| ProtocolEvidenceError::Receipt)?;
         let protocol = decoded.protocol().ok_or(ProtocolEvidenceError::Receipt)?;
         let authorization = anchor.authorization();
@@ -836,7 +929,7 @@ impl ProtocolDeploymentVerifier {
         signature: &[u8; 64],
         moment: EvidenceMoment,
     ) -> Result<(crate::AccountStateHead, [u8; 32]), ProtocolEvidenceError> {
-        let anchor = self.anchors[self.select_anchor(header, moment)?];
+        let anchor = self.anchors[self.select_anchor(header, header_signature, moment)?];
         let inclusion =
             verify_receipt_inclusion(receipt, proof, header, signature, &anchor.authorization())
                 .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
@@ -931,7 +1024,7 @@ impl ProtocolDeploymentVerifier {
             return self.verify_program_head(&proof.state, moment);
         };
         let state = &proof.state;
-        let selected = self.select_anchor(&state.header, moment)?;
+        let selected = self.select_anchor(&state.header, &state.header_signature, moment)?;
         let anchor = self.anchors[selected];
         if anchor.protocol_version != 3 {
             return Err(ProtocolEvidenceError::ProtocolDomain);
@@ -1041,7 +1134,7 @@ impl ProtocolDeploymentVerifier {
         header_signature: &[u8; 64],
         moment: EvidenceMoment,
     ) -> Result<VerifiedReceiptClaims, ProtocolEvidenceError> {
-        let selected = self.select_anchor(header_bytes, moment)?;
+        let selected = self.select_anchor(header_bytes, header_signature, moment)?;
         let anchor = self.anchors[selected];
         let decoded = decode_receipt(receipt).map_err(|_| ProtocolEvidenceError::Receipt)?;
         let protocol = decoded.protocol().ok_or(ProtocolEvidenceError::Receipt)?;
@@ -1119,8 +1212,14 @@ impl ProtocolDeploymentVerifier {
     fn select_anchor(
         &self,
         header_bytes: &[u8],
+        header_signature: &[u8; 64],
         moment: EvidenceMoment,
     ) -> Result<usize, ProtocolEvidenceError> {
+        if let Some(history) = &self.signed_history {
+            history
+                .verify_header(header_bytes, header_signature)
+                .map_err(|_| ProtocolEvidenceError::TrustAnchorUnavailable)?;
+        }
         let header = decode_batch_header(header_bytes)
             .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
         let mut selected = None;
@@ -2128,6 +2227,7 @@ mod maintained_protocol_heads {
             }],
             current_anchor: 0,
             staleness_limit_ms: 1_000,
+            signed_history: None,
         };
         let leaves = [RECEIPT, MAINTENANCE];
         let (receipt_proof, root) = build_proof(&leaves, 0)
@@ -2324,6 +2424,7 @@ mod native_batch_maintenance_heads {
             }],
             current_anchor: 0,
             staleness_limit_ms: 1_000,
+            signed_history: None,
         }
     }
 
@@ -2388,5 +2489,101 @@ mod native_batch_maintenance_heads {
             revoked.verify_historical_maintenance_head(MAINTENANCE, &proof, HEADER, SIGNATURE),
             Err(ProtocolEvidenceError::SequencerRevoked)
         );
+    }
+}
+
+#[cfg(test)]
+mod signed_authority_policy_tests {
+    use super::*;
+    use layerx_proof::signed_authority::SignedAuthorityHistory;
+    const GENESIS: &[u8] = include_bytes!(
+        "../../../../agent/crates/layerx-proof/tests/fixtures/signed-authority/genesis.bin"
+    );
+    const HEADERS: &[u8] = include_bytes!(
+        "../../../../agent/crates/layerx-proof/tests/fixtures/signed-authority/headers.bin"
+    );
+    const ACTIVITY: &[u8] = include_bytes!(
+        "../../../../agent/crates/layerx-proof/tests/fixtures/signed-authority/handover.activity"
+    );
+
+    fn must<T, E: std::fmt::Debug>(value: Result<T, E>) -> T {
+        value.unwrap_or_else(|error| panic!("native authority policy: {error:?}"))
+    }
+
+    #[test]
+    fn native_rotation_preserves_protected_policy_and_verified_history_bounds() {
+        let genesis = must(layerx_wire::handover::decode_genesis_trust(GENESIS));
+        let activity = must(decode_signed(ACTIVITY, &genesis.registry));
+        let mut history = must(SignedAuthorityHistory::from_genesis(
+            genesis.network_id,
+            genesis.canonical_state_root,
+            genesis.initial_sequencer_key,
+            genesis.governance_witness,
+        ));
+        let policy = ProtocolDeploymentVerifier {
+            anchors: vec![SequencerTrustAnchor {
+                protocol_version: 3,
+                network_id: genesis.network_id,
+                epoch: 1,
+                sequencer_id: must(layerx_wire::handover::sequencer_id(
+                    &genesis.initial_sequencer_key,
+                )),
+                sequencer_public_key: genesis.initial_sequencer_key,
+                first_batch: 1,
+                last_batch: u64::MAX,
+                revoked_from_batch: None,
+            }],
+            current_anchor: 0,
+            staleness_limit_ms: 1_000,
+            signed_history: None,
+        };
+        assert!(policy.with_signed_history(&history).is_err());
+        let mut before = None;
+        for (index, record) in HEADERS.chunks_exact(418).enumerate() {
+            must(history.advance(
+                &record[..354],
+                &must(record[354..].try_into()),
+                (index >= 13).then_some(activity.payload()),
+            ));
+            if index == 12 {
+                before = Some(must(policy.with_signed_history(&history)));
+            }
+        }
+        let derived = must(policy.with_signed_history(&history));
+        assert_eq!(policy.anchors.len(), 1);
+        assert_eq!(policy.anchors[0].last_batch, u64::MAX);
+        assert_eq!(derived.anchors[0].last_batch, 13);
+        assert_eq!(derived.anchors[1].first_batch, 14);
+        assert_eq!(derived.anchors[1].last_batch, 15);
+        assert!(derived.with_signed_history(&history).is_err());
+        for (index, record) in HEADERS.chunks_exact(418).enumerate() {
+            let signature = must(record[354..].try_into());
+            must(derived.select_anchor(&record[..354], &signature, EvidenceMoment::Historical));
+            if index < 13 {
+                assert!(derived
+                    .select_anchor(&record[..354], &signature, EvidenceMoment::Current(1))
+                    .is_err());
+            } else {
+                assert!(before
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("predecessor authority"))
+                    .select_anchor(&record[..354], &signature, EvidenceMoment::Historical)
+                    .is_err());
+            }
+        }
+        let mut revoked = policy.clone();
+        revoked.anchors[0].revoked_from_batch = Some(10);
+        let revoked = must(revoked.with_signed_history(&history));
+        let tenth = &HEADERS[9 * 418..10 * 418];
+        assert!(revoked
+            .select_anchor(
+                &tenth[..354],
+                &must(tenth[354..].try_into()),
+                EvidenceMoment::Historical
+            )
+            .is_err());
+        let mut unrelated = policy;
+        unrelated.anchors[0].network_id += 1;
+        assert!(unrelated.with_signed_history(&history).is_err());
     }
 }

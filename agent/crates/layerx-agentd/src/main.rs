@@ -653,6 +653,23 @@ fn response(stream: &mut TcpStream, status: u16, body: &str) -> Result<(), Strin
         .map_err(|error| format!("agent response failed: {error}"))
 }
 
+fn refresh_program_authority(
+    route: &mut ProgramBalanceReadRoute,
+    native: &mut Option<NativeReadRoute>,
+) -> Result<(), String> {
+    if let Some(native) = native.as_mut() {
+        if let Some(history) = native
+            .signed_authority()
+            .map_err(|error| format!("program authority history unavailable: {error:?}"))?
+        {
+            route
+                .refresh_authority(&history)
+                .map_err(|error| format!("program authority policy refused: {error:?}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn serve_connection(
     stream: &mut TcpStream,
     bearer: &str,
@@ -693,6 +710,9 @@ fn serve_connection(
         return response(stream, 401, "{\"error\":\"unauthorized\"}");
     }
     if path == "/healthz" {
+        if refresh_program_authority(route, native).is_err() {
+            return response(stream, 503, "{\"ready\":false}");
+        }
         return match route.read(probe_program, now_ms()?) {
             Ok(_) => response(stream, 200, "{\"ready\":true}"),
             Err(_) => response(stream, 503, "{\"ready\":false}"),
@@ -726,6 +746,9 @@ fn serve_connection(
     let Some(program) = program else {
         return response(stream, 400, "{\"error\":\"invalid_program\"}");
     };
+    if refresh_program_authority(route, native).is_err() {
+        return response(stream, 503, "{\"error\":\"program_state_unavailable\"}");
+    }
     let read = route
         .read(program, now_ms()?)
         .map_err(|error| format!("current program state is unavailable: {error:?}"));
@@ -807,7 +830,21 @@ fn serve(config: Config) -> Result<(), String> {
         config.staleness_ms,
     )
     .map_err(|error| format!("agent deployment verifier is invalid: {error}"))?;
-    let registry = load_registry(Path::new(&config.deployment_journal), &verifier)?;
+    let signed_history = native
+        .as_mut()
+        .map(NativeReadRoute::signed_authority)
+        .transpose()
+        .map_err(|error| format!("program history unavailable: {error:?}"))?
+        .flatten();
+    let admission_verifier = signed_history
+        .as_ref()
+        .map(|history| verifier.with_signed_history(history))
+        .transpose()
+        .map_err(|error| format!("program admission authority refused: {error:?}"))?;
+    let registry = load_registry(
+        Path::new(&config.deployment_journal),
+        admission_verifier.as_ref().unwrap_or(&verifier),
+    )?;
     let reader = LayerxdProgramBalanceReader::connect(
         &config.node_endpoint,
         config.node_bearer,
@@ -822,6 +859,11 @@ fn serve(config: Config) -> Result<(), String> {
     )
     .map_err(|error| format!("agent protocol reader configuration failed: {error:?}"))?;
     let mut route = ProgramBalanceReadRoute::new(reader);
+    if let Some(history) = signed_history.as_ref() {
+        route
+            .refresh_authority(history)
+            .map_err(|error| format!("program authority refused: {error:?}"))?;
+    }
     route
         .read(config.probe_program, now_ms()?)
         .map_err(|error| format!("agent protocol reader is not ready: {error:?}"))?;

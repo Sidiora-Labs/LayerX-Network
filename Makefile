@@ -3490,10 +3490,11 @@ test-daemon-handover-peers: $(BUILD_DIR)/tests/lxp_test_module_maintenance $(BUI
 
 .PHONY: test-daemon-handover-consumers
 test-daemon-handover-consumers:
+	sh programs/sdk/rust/examples/escrow/build.sh
 	cargo build --locked --manifest-path platform/Cargo.toml -p layerx-runtime-clock
 	cargo build --locked --manifest-path agent/Cargo.toml -p layerx-client --example native_handover_history
-	cargo build --locked --manifest-path agent/Cargo.toml -p layerx-agentd --example native_handover_reads
-	$(MAKE) test-daemon-handover-peers LAYERX_TEST_HANDOVER_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_history) LAYERX_TEST_HANDOVER_READ_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_reads) LAYERX_TEST_HANDOVER_CLOCK_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),platform/target)/debug/layerx-runtime-clock)
+	cargo build --locked --manifest-path agent/Cargo.toml -p layerx-agentd --example native_handover_reads --example native_handover_programs
+	$(MAKE) test-daemon-handover-peers LAYERX_TEST_HANDOVER_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_history) LAYERX_TEST_HANDOVER_READ_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_reads) LAYERX_TEST_HANDOVER_CLOCK_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),platform/target)/debug/layerx-runtime-clock) LAYERX_TEST_HANDOVER_PROGRAM_CONSUMER_BIN=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),agent/target)/debug/examples/native_handover_programs) LAYERX_TEST_HANDOVER_ESCROW_WASM=$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),programs/sdk/rust/examples/escrow/target)/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm)
 
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build

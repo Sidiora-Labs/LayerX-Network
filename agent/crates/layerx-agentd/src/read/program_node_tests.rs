@@ -111,3 +111,54 @@ fn native_maintained_heads_refuse_public_or_trailing_proof_encodings() {
         }
     }
 }
+
+#[test]
+fn native_batch_maintenance_identity_retains_exact_variant_and_proof_bindings() {
+    const RECEIPT: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../tests/fixtures/custody/daemon-module-head/receipt"
+    ));
+    const MAINTENANCE: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../tests/fixtures/custody/daemon-module-head/maintenance.receipt"
+    ));
+    const HEADER: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../tests/fixtures/custody/daemon-module-head/header"
+    ));
+    const SIGNATURE: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../tests/fixtures/custody/daemon-module-head/header.signature"
+    ));
+    let (receipt_proof, root) = must(build_proof(&[RECEIPT, MAINTENANCE], 0));
+    let (maintenance_proof, same) = must(build_proof(&[RECEIPT, MAINTENANCE], 1));
+    assert_eq!(root, same);
+    assert_eq!(
+        root,
+        must(decode_batch_header(HEADER)).receipt_merkle_root()
+    );
+    assert!(matches!(
+        must(layerx_wire::batch_maintenance::decode_maintenance(
+            MAINTENANCE
+        )),
+        layerx_wire::batch_maintenance::MaintenanceReceipt::Batch(_)
+    ));
+    let mut document = serde_json::json!({
+        "header_hex": hex::encode(HEADER), "header_signature": hex::encode(SIGNATURE),
+        "receipt_proof_hex": hex::encode(&native_encoding(&maintenance_proof)),
+        "batch_identity": { "kind": "batch_maintenance_v1", "receipt_hex": hex::encode(MAINTENANCE),
+            "receipt_proof_hex": hex::encode(&native_encoding(&maintenance_proof)),
+            "activity_receipts_hex": [hex::encode(RECEIPT)] }
+    });
+    let parsed = must(batch_evidence(&document));
+    assert_eq!(
+        must(head_identity(MAINTENANCE, &parsed)).1,
+        digest(MAINTENANCE)
+    );
+    document["batch_identity"]["kind"] = serde_json::json!("occupancy_maintenance_v2");
+    assert!(batch_evidence(&document).is_err());
+    document["batch_identity"]["kind"] = serde_json::json!("batch_maintenance_v1");
+    document["receipt_proof_hex"] =
+        serde_json::json!(hex::encode(&native_encoding(&receipt_proof)));
+    assert!(head_identity(MAINTENANCE, &must(batch_evidence(&document))).is_err());
+}

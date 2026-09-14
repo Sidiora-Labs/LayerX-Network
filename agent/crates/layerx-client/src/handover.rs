@@ -63,6 +63,7 @@ pub struct SequencerHistory {
     predecessor_signature: [u8; 64],
     latest_evidence: Option<[u8; 32]>,
     registry: ModuleRegistry,
+    signed_authority: layerx_proof::signed_authority::SignedAuthorityHistory,
 }
 
 impl SequencerHistory {
@@ -317,7 +318,16 @@ impl SequencerHistory {
         {
             return Err(HistoryError::Genesis);
         }
+        let signed_authority =
+            layerx_proof::signed_authority::SignedAuthorityHistory::from_genesis(
+                network_id,
+                genesis_root,
+                initial_sequencer_key,
+                authority_witness,
+            )
+            .map_err(|_| HistoryError::Genesis)?;
         Ok(Self {
+            signed_authority,
             network_id,
             governance_key,
             genesis_root: genesis_receipt_root(network_id, genesis_root),
@@ -401,6 +411,10 @@ impl SequencerHistory {
         let authorization = interval_authorization(&next, header.batch_number())?;
         let verified = verify_header(canonical_header, signature, &authorization)
             .map_err(|_| HistoryError::Header)?;
+        let mut signed_authority = self.signed_authority.clone();
+        signed_authority
+            .advance(canonical_header, signature, packet)
+            .map_err(|_| HistoryError::Header)?;
         if transition {
             let previous = self.intervals.last_mut().ok_or(HistoryError::Genesis)?;
             previous.last_batch = header.batch_number() - 1;
@@ -408,6 +422,7 @@ impl SequencerHistory {
             self.intervals.push(next);
             self.latest_evidence = packet.map(|bytes| Sha256::digest(bytes).into());
         }
+        self.signed_authority = signed_authority;
         self.predecessor = Some(verified);
         self.predecessor_signature = *signature;
         Ok(())
@@ -501,6 +516,14 @@ impl SequencerHistory {
             return Err(HistoryError::Finality);
         }
         Ok(())
+    }
+
+    /// Exports signed authority provenance only from the fully verified Client history.
+    #[must_use]
+    pub const fn signed_authority(
+        &self,
+    ) -> &layerx_proof::signed_authority::SignedAuthorityHistory {
+        &self.signed_authority
     }
 
     /// # Errors

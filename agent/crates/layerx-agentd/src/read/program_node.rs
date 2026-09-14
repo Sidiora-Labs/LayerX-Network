@@ -33,6 +33,7 @@ pub struct LayerxdProgramBalanceReader {
     authority_authorization: String,
     authority_replica_id: [u8; 32],
     verifier: ProtocolDeploymentVerifier,
+    protected_verifier: ProtocolDeploymentVerifier,
     registry: Registry,
     staleness_limit: u64,
 }
@@ -91,9 +92,23 @@ impl LayerxdProgramBalanceReader {
             authority_authorization,
             authority_replica_id,
             staleness_limit: verifier.staleness_limit_ms(),
+            protected_verifier: verifier.clone(),
             verifier,
             registry,
         })
+    }
+
+    /// # Errors
+    /// Refuses a projection conflicting with immutable protected policy or revocations.
+    pub fn refresh_authority(
+        &mut self,
+        history: &layerx_proof::signed_authority::SignedAuthorityHistory,
+    ) -> Result<(), ProtocolAdapterError> {
+        self.verifier = self
+            .protected_verifier
+            .with_signed_history(history)
+            .map_err(|_| ProtocolAdapterError::NonCanonicalView)?;
+        Ok(())
     }
 
     /// Reads and locally re-verifies one complete current protocol state.
@@ -224,7 +239,7 @@ impl LayerxdProgramBalanceReader {
         evidence: &BatchEvidence,
         now_ms: u64,
     ) -> Result<(AccountStateHead, [u8; 32]), ProtocolAdapterError> {
-        if receipt.starts_with(b"LXP/programs/occupancy-receipt/v2\0") {
+        if layerx_wire::batch_maintenance::decode_maintenance(receipt).is_ok() {
             return self
                 .verifier
                 .verify_current_maintenance_head(
@@ -294,6 +309,15 @@ impl ProgramBalanceReadRoute {
         Self { reader }
     }
 
+    /// # Errors
+    /// Propagates protected policy and authenticated-history refusals unchanged.
+    pub fn refresh_authority(
+        &mut self,
+        history: &layerx_proof::signed_authority::SignedAuthorityHistory,
+    ) -> Result<(), ProtocolAdapterError> {
+        self.reader.refresh_authority(history)
+    }
+
     /// Serves one verified balance read through the connected reader.
     ///
     /// # Errors
@@ -330,7 +354,7 @@ fn head_identity(
     receipt: &[u8],
     evidence: &BatchEvidence,
 ) -> Result<([u8; 32], [u8; 32]), ProtocolAdapterError> {
-    if receipt.starts_with(b"LXP/programs/occupancy-receipt/v2\0") {
+    if layerx_wire::batch_maintenance::decode_maintenance(receipt).is_ok() {
         let maintenance = evidence
             .maintenance
             .as_ref()
@@ -371,7 +395,8 @@ fn maintenance_proof(
     if value.is_null() {
         return Ok(None);
     }
-    if field(value, "kind")? != "occupancy_maintenance_v2" {
+    let kind = field(value, "kind")?;
+    if !matches!(kind, "occupancy_maintenance_v2" | "batch_maintenance_v1") {
         return Err(ProtocolAdapterError::NonCanonicalView);
     }
     let items = value["activity_receipts_hex"]
@@ -389,6 +414,15 @@ fn maintenance_proof(
         hex::decode(encoded).map_err(|_| ProtocolAdapterError::NonCanonicalView)
     };
     let receipt = decode(field(value, "receipt_hex")?)?;
+    let maintenance = layerx_wire::batch_maintenance::decode_maintenance(&receipt)
+        .map_err(|_| ProtocolAdapterError::NonCanonicalView)?;
+    if matches!(
+        maintenance,
+        layerx_wire::batch_maintenance::MaintenanceReceipt::Batch(_)
+    ) != (kind == "batch_maintenance_v1")
+    {
+        return Err(ProtocolAdapterError::NonCanonicalView);
+    }
     let mut activity_receipts = Vec::with_capacity(items.len());
     for item in items {
         activity_receipts.push(decode(

@@ -140,6 +140,28 @@ impl NativeReadRoute {
         Ok(self)
     }
 
+    /// Refreshes fully verified history before exporting its signed authority projection.
+    /// # Errors
+    /// Refuses unavailable clocks, transports, history or independent finality.
+    pub fn signed_authority(
+        &mut self,
+    ) -> Result<Option<layerx_proof::signed_authority::SignedAuthorityHistory>, NativeReadError>
+    {
+        if self.sequencer_history.is_none() {
+            return Ok(None);
+        }
+        self.deadline = Deadline::start(self.clock.as_ref(), Duration::from_secs(10))
+            .map_err(|_| NativeReadError::Unavailable)?;
+        self.client
+            .reconnect()
+            .map_err(|_| NativeReadError::Unavailable)?;
+        self.refresh_history()?;
+        Ok(self
+            .sequencer_history
+            .as_ref()
+            .map(|history| history.signed_authority().clone()))
+    }
+
     fn refresh_history(&mut self) -> Result<(), NativeReadError> {
         if self.sequencer_history.is_none() {
             return Ok(());
