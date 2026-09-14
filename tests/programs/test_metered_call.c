@@ -38,6 +38,8 @@ typedef struct metered_fixture {
     lxp_activity activity;
     lxp_receipt receipt;
     uint8_t signature[64];
+    lxp_u128 signed_fee_limit;
+    unsigned recipient_mode;
 } metered_fixture;
 
 static const uint8_t metered_owner_seed[32] = {0x33U};
@@ -185,7 +187,8 @@ static int metered_activity(metered_fixture *f, uint32_t type,
     f->activity.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
     f->activity.account_sequence = f->identity->next_sequence;
     f->activity.idempotency_key[31] = marker;
-    f->activity.fee_limit = (lxp_u128){0U, 67108864U};
+    f->activity.fee_limit = lxp_u128_is_zero(f->signed_fee_limit) ?
+        (lxp_u128){0U, 67108864U} : f->signed_fee_limit;
     f->activity.signature = (lxp_byte_span){f->signature, sizeof(f->signature)};
     METERED_CHECK(lxp_hash_payload(payload, length, f->activity.payload_hash) ==
                   LXP_OK);
@@ -256,6 +259,8 @@ static int metered_fixture_init(metered_fixture *f, uint64_t activity_limit,
     METERED_CHECK(metered_account(f, "agent:did:lxp:metered-payee:main", 0U,
                                    &f->payee) == 0);
     METERED_CHECK(metered_account(f, "system:fees", 0U, &treasury) == 0);
+    if (f->recipient_mode == 1U) f->payee = f->actor;
+    if (f->recipient_mode == 2U) f->payee = treasury;
     f->actor->has_authority_key = true;
     (void)memcpy(f->actor->authority_key, f->owner_key, 32U);
     METERED_CHECK(lxp_state_store_init(&f->state, 1U) == LXP_OK);
@@ -555,6 +560,221 @@ static int metered_signed_replay(bool refused, bool divergent)
     return 0;
 }
 
+static int metered_release(metered_fixture *f)
+{
+    while (f->kernel.blob_count != 0U)
+        free(f->kernel.blobs[--f->kernel.blob_count].bytes);
+    METERED_CHECK(lxp_state_store_destroy(&f->state) == LXP_OK);
+    free(f);
+    return 0;
+}
+
+static int metered_fee_first(unsigned recipient_mode, bool insufficient,
+                             bool exact_balance, bool divergent)
+{
+    metered_fixture *measured = calloc(1U, sizeof(*measured));
+    metered_fixture *live = calloc(1U, sizeof(*live));
+    metered_fixture *replay = calloc(1U, sizeof(*replay));
+    uint8_t public_key[32], original_root[32];
+    uint8_t live_bytes[LXP_MAX_ACTIVITY_BYTES], replay_bytes[LXP_MAX_ACTIVITY_BYTES];
+    lxp_arena live_arena, replay_arena;
+    lxp_byte_span live_receipt, replay_receipt;
+    lxp_u128 initial, expected, fee;
+    uint64_t original_sequence;
+    METERED_CHECK(measured != NULL && live != NULL && replay != NULL);
+    measured->recipient_mode = recipient_mode;
+    live->recipient_mode = recipient_mode;
+    replay->recipient_mode = recipient_mode;
+    METERED_CHECK(metered_fixture_init(measured, 4U, true) == 0);
+    METERED_CHECK(metered_activity(measured, LX_PROGRAMS_CALL, measured->call,
+        measured->call_length, 0x61U, false) == 0);
+    METERED_CHECK(lxp_arena_reset(&measured->arena, 0U) == LXP_OK);
+    METERED_CHECK(lxp_kernel_execute_activity(&measured->kernel, &measured->activity,
+        &measured->execution, &measured->receipt) == LXP_OK);
+    METERED_CHECK(measured->receipt.result_code == LXP_OK);
+    fee = measured->receipt.fee_charged;
+    METERED_CHECK(!lxp_u128_is_zero(fee));
+    for (size_t i = 0U; i < 2U; ++i) {
+        metered_fixture *f = i == 0U ? live : replay;
+        METERED_CHECK(metered_fixture_init(f, 4U, true) == 0);
+        if (exact_balance || insufficient) {
+            const lxp_program_outcome *outcome = &measured->receipt.program_outcome;
+            const uint64_t usage[7] = {outcome->cpu_fuel, outcome->memory_bytes,
+                outcome->storage_read_bytes, outcome->storage_write_bytes,
+                outcome->output_values, outcome->output_bytes, 4096U};
+            for (size_t dimension = 0U; dimension < 7U; ++dimension)
+                write_u64(f->call + 50U + dimension * 8U, usage[dimension]);
+            METERED_CHECK(lxp_u128_add(fee, (lxp_u128){0U, insufficient ? (recipient_mode == 1U ? 1U : 3U) : 4U},
+                &initial) == LXP_OK);
+            METERED_CHECK(lxp_ledger_bootstrap_balance(f->actor, f->asset.asset_id,
+                initial, f->actor->next_sequence) == LXP_OK);
+        }
+        f->signed_fee_limit = f->actor->balance;
+        METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
+        METERED_CHECK(metered_activity(f, LX_PROGRAMS_CALL, f->call,
+            f->call_length, 0x62U, false) == 0);
+        METERED_CHECK(lxp_u128_cmp(f->activity.fee_limit, f->actor->balance) == 0);
+        METERED_CHECK(lxp_arena_reset(&f->arena, 0U) == LXP_OK);
+    }
+    initial = live->actor->balance;
+    original_sequence = live->state.next_sequence;
+    (void)memcpy(original_root, live->kernel.current_state_root, 32U);
+    METERED_CHECK(lxp_kernel_execute_activity(&live->kernel, &live->activity,
+        &live->execution, &live->receipt) == LXP_OK);
+    METERED_CHECK(live->receipt.result_code ==
+        (insufficient ? LXP_ERR_INSUFFICIENT_BALANCE : LXP_OK));
+    METERED_CHECK(lxp_u128_cmp(live->receipt.fee_charged, fee) == 0);
+    METERED_CHECK(lxp_u128_sub(initial, fee, &expected) == LXP_OK);
+    if (!insufficient && recipient_mode != 1U)
+        METERED_CHECK(lxp_u128_sub(expected, (lxp_u128){0U, 4U}, &expected) == LXP_OK);
+    if (!insufficient && recipient_mode == 1U)
+        METERED_CHECK(lxp_u128_add(expected, (lxp_u128){0U, 5U}, &expected) == LXP_OK);
+    METERED_CHECK(lxp_u128_cmp(live->actor->balance, expected) == 0);
+    METERED_CHECK(live->source->balance.lo == (insufficient ? 40U : 35U));
+    METERED_CHECK(live->state.next_sequence == original_sequence + 1U);
+    METERED_CHECK(live->receipt.program_outcome.terminal_kind ==
+        (insufficient ? LXP_PROGRAM_TERMINAL_FAILURE : LXP_PROGRAM_TERMINAL_SUCCESS));
+    if (insufficient) {
+        METERED_CHECK(live->receipt.effects.count == 0U);
+        METERED_CHECK(lxp_program_outcome_validate_for_protocol(&live->receipt.program_outcome,
+            live->receipt.protocol_version) == LXP_OK);
+        METERED_CHECK(lxp_u128_cmp(live->receipt.program_outcome.fee_units,
+            measured->receipt.program_outcome.fee_units) == 0);
+        METERED_CHECK(lxp_u128_is_zero(live->receipt.program_outcome.occupancy_fee_units));
+        METERED_CHECK(lxp_u128_is_zero(live->receipt.program_outcome.occupancy_byte_batches));
+        METERED_CHECK(lxp_ct_is_zero(live->receipt.program_outcome.occupancy_evidence_digest, 32U));
+        METERED_CHECK(lxp_ct_is_zero(live->receipt.program_outcome.occupancy_asset_id, 32U));
+        METERED_CHECK(lxp_ct_is_zero(live->receipt.program_outcome.occupancy_transfer_root, 32U));
+        if (recipient_mode != 1U) METERED_CHECK(live->payee->balance.lo == 0U);
+        METERED_CHECK(lxp_ct_is_zero(live->receipt.program_outcome.transfer_root, 32U));
+        METERED_CHECK(live->kernel.module_kv_count == replay->kernel.module_kv_count);
+    } else if (recipient_mode == 0U) {
+        METERED_CHECK(live->payee->balance.lo == 9U);
+    }
+    lx_account *treasury;
+    METERED_CHECK(lxp_fee_treasury_account(&live->accounts, &treasury) == LXP_OK);
+    expected = fee;
+    if (recipient_mode == 2U)
+        METERED_CHECK(lxp_u128_add(expected, (lxp_u128){0U, 9U}, &expected) == LXP_OK);
+    METERED_CHECK(lxp_u128_cmp(treasury->balance, expected) == 0);
+    METERED_CHECK(executed_public_key(executed_sequencer_seed, public_key) == 0);
+    METERED_CHECK(lxp_arena_init(&live_arena, live_bytes, sizeof(live_bytes)) == LXP_OK);
+    METERED_CHECK(lxp_arena_init(&replay_arena, replay_bytes, sizeof(replay_bytes)) == LXP_OK);
+    if (divergent) {
+        ++live->receipt.parameter_version;
+        METERED_CHECK(lxp_receipt_sign(&live->receipt, executed_sequencer_seed,
+            &live_arena) == LXP_OK);
+    }
+    replay->execution.sequencer_private_key = NULL;
+    replay->execution.replay_receipt = &live->receipt;
+    replay->execution.replay_public_key = public_key;
+    METERED_CHECK(lxp_kernel_execute_activity(&replay->kernel, &replay->activity,
+        &replay->execution, &replay->receipt) ==
+        (divergent ? LXP_FATAL_REPLAY_DIVERGENCE : LXP_OK));
+    if (divergent) {
+        METERED_CHECK(memcmp(original_root, replay->kernel.current_state_root, 32U) == 0);
+        METERED_CHECK(replay->state.next_sequence == original_sequence);
+        METERED_CHECK(lxp_u128_cmp(replay->actor->balance, initial) == 0);
+        METERED_CHECK(replay->source->balance.lo == 40U && replay->payee->balance.lo == 0U);
+    } else {
+        METERED_CHECK(memcmp(live->kernel.current_state_root,
+            replay->kernel.current_state_root, 32U) == 0);
+        METERED_CHECK(lxp_receipt_encode(&live->receipt, true, &live_arena, &live_receipt) == LXP_OK);
+        METERED_CHECK(lxp_receipt_encode(&replay->receipt, true, &replay_arena, &replay_receipt) == LXP_OK);
+        METERED_CHECK(live_receipt.length == replay_receipt.length &&
+            memcmp(live_receipt.bytes, replay_receipt.bytes, live_receipt.length) == 0);
+    }
+    METERED_CHECK(metered_release(measured) == 0);
+    METERED_CHECK(metered_release(live) == 0);
+    METERED_CHECK(metered_release(replay) == 0);
+    return 0;
+}
+
+static int metered_treasury_binding(bool sequence_overflow)
+{
+    metered_fixture *f = calloc(1U, sizeof(*f));
+    lxp_module_ctx ctx;
+    lxp_effect_buffer effects;
+    lxp_prepared_module_transition *prepared = NULL;
+    lxp_transfer_set transfer = {0};
+    lxp_transfer_source_authority source_authority = {0};
+    lxp_transfer_context fee_context = {0};
+    lxp_transfer_result fee_result;
+    lxp_receipt receipt = {0};
+    lxp_module_fee_transfer fee = {0};
+    lxp_transfer_asset_state assets[2];
+    lxp_result refusal;
+    lx_account *treasury;
+    uint8_t token[32], empty_asset[32] = {0};
+    METERED_CHECK(f != NULL && metered_fixture_init(f, 4U, true) == 0);
+    assets[0] = f->asset; assets[1] = f->asset; assets[1].asset_id[0] = 10U;
+    const size_t module_asset = sequence_overflow ? 0U : 1U;
+    METERED_CHECK(lxp_fee_treasury_account(&f->accounts, &treasury) == LXP_OK);
+    METERED_CHECK(lxp_ledger_restore_account_snapshot(treasury,
+        (lxp_u128){0U, 0U}, empty_asset, false,
+        sequence_overflow ? UINT64_MAX - 1U : 0U) == LXP_OK);
+    METERED_CHECK(lxp_ledger_bootstrap_balance(f->payee, assets[module_asset].asset_id,
+        (lxp_u128){0U, 10U}, 0U) == LXP_OK);
+    METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
+    (void)memcpy(token, f->kernel.current_state_root, 32U);
+    METERED_CHECK(lxp_state_journal_open(&f->state, f->state.next_sequence, &f->journal) == LXP_OK);
+    METERED_CHECK(lxp_arena_reset(&f->arena, 0U) == LXP_OK);
+    METERED_CHECK(lxp_module_ctx_init(&ctx, &f->kernel, LXP_MODULE_PROGRAMS,
+        10U, 0U, f->state.next_sequence, 1000000U, &f->arena, true) == LXP_OK);
+    ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    METERED_CHECK(lxp_effect_buffer_init(&effects) == LXP_OK);
+    METERED_CHECK(lxp_module_ctx_bind_effects(&ctx, &effects) == LXP_OK);
+    transfer.leg_count = 1U;
+    transfer.legs[0].from = f->payee; transfer.legs[0].to = treasury;
+    transfer.legs[0].amount = (lxp_u128){0U, 1U};
+    transfer.legs[0].reason = LXP_REASON_PAYMENT;
+    (void)memcpy(transfer.legs[0].asset_id, assets[module_asset].asset_id, 32U);
+    transfer.context.assets = assets; transfer.context.asset_count = 2U;
+    transfer.context.debit_authority_kind = LXP_AUTH_OWNER;
+    transfer.context.sequence_account = sequence_overflow ? treasury : f->payee;
+    transfer.context.actor_sequence = transfer.context.sequence_account->next_sequence;
+    (void)memcpy(transfer.context.authorized_from, f->payee->id, 32U);
+    (void)memcpy(source_authority.authorized_from, f->payee->id, 32U);
+    source_authority.debit_authority_kind = LXP_AUTH_OWNER;
+    transfer.context.source_authorities = &source_authority;
+    transfer.context.source_authority_count = 1U;
+    lxp_result transfer_status = lxp_ctx_emit_monetary_transfer_set(&ctx, &transfer, &receipt);
+    if (transfer_status != LXP_OK) (void)fprintf(stderr, "treasury transfer result %d\n", transfer_status);
+    METERED_CHECK(transfer_status == LXP_OK);
+    METERED_CHECK(treasury->has_asset && memcmp(treasury->asset_id, assets[module_asset].asset_id, 32U) == 0);
+    METERED_CHECK(lxp_module_ctx_export_prepared(&ctx, &effects, token, &prepared) == LXP_OK);
+    lxp_module_ctx_rollback(&ctx);
+    METERED_CHECK(lxp_state_journal_rollback(&f->journal) == LXP_OK);
+    METERED_CHECK(!treasury->has_asset && f->payee->balance.lo == 10U);
+    fee.payer_before = *f->actor; fee.treasury_before = *treasury;
+    fee.amount = (lxp_u128){0U, 3U};
+    fee_context.assets = assets; fee_context.asset_count = 2U;
+    fee_context.protocol_system_capability = true;
+    fee_context.sequence_account = treasury;
+    fee_context.actor_sequence = treasury->next_sequence;
+    fee_context.debit_authority_kind = LXP_AUTH_OWNER;
+    (void)memcpy(fee_context.authorized_from, f->actor->id, 32U);
+    METERED_CHECK(lxp_fee_charge(f->actor, treasury, assets[0].asset_id,
+        fee.amount, fee.payer_before.balance, &fee_context, &receipt, &fee_result) == LXP_OK);
+    METERED_CHECK(lxp_state_journal_open(&f->state, f->state.next_sequence, &f->journal) == LXP_OK);
+    METERED_CHECK(lxp_module_ctx_init(&ctx, &f->kernel, LXP_MODULE_PROGRAMS,
+        10U, 0U, f->state.next_sequence, 1000000U, &f->arena, true) == LXP_OK);
+    ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    METERED_CHECK(lxp_effect_buffer_init(&effects) == LXP_OK);
+    METERED_CHECK(lxp_module_ctx_bind_effects(&ctx, &effects) == LXP_OK);
+    METERED_CHECK(lxp_module_ctx_import_prepared_after_fee(&ctx, prepared,
+        token, &effects, &fee, &refusal) == LXP_OK);
+    METERED_CHECK(refusal == (sequence_overflow ? LXP_ERR_SEQUENCE_EXHAUSTED : LXP_ERR_ASSET_MISMATCH) && effects.count == 0U);
+    METERED_CHECK(f->payee->balance.lo == 10U && treasury->balance.lo == 3U);
+    METERED_CHECK(treasury->has_asset && memcmp(treasury->asset_id, assets[0].asset_id, 32U) == 0);
+    METERED_CHECK(treasury->next_sequence == (sequence_overflow ? UINT64_MAX : 1U));
+    lxp_module_ctx_rollback(&ctx);
+    METERED_CHECK(lxp_state_journal_rollback(&f->journal) == LXP_OK);
+    lxp_prepared_module_transition_destroy(prepared);
+    METERED_CHECK(metered_release(f) == 0);
+    return 0;
+}
+
 static int metered_fee_capacity(void)
 {
     metered_fixture *f = calloc(1U, sizeof(*f));
@@ -626,6 +846,15 @@ int main(void)
     METERED_CHECK(metered_signed_replay(false, false) == 0);
     METERED_CHECK(metered_signed_replay(false, true) == 0);
     METERED_CHECK(metered_fee_capacity() == 0);
+    METERED_CHECK(metered_fee_first(0U, false, false, false) == 0);
+    METERED_CHECK(metered_fee_first(0U, false, true, false) == 0);
+    METERED_CHECK(metered_fee_first(0U, true, false, false) == 0);
+    METERED_CHECK(metered_fee_first(0U, true, false, true) == 0);
+    METERED_CHECK(metered_fee_first(1U, false, false, false) == 0);
+    METERED_CHECK(metered_fee_first(1U, true, false, false) == 0);
+    METERED_CHECK(metered_fee_first(2U, false, false, false) == 0);
+    METERED_CHECK(metered_treasury_binding(false) == 0);
+    METERED_CHECK(metered_treasury_binding(true) == 0);
     METERED_CHECK(f != NULL && metered_fixture_init(f, 4U, true) == 0);
     f->source->frozen = true;
     METERED_CHECK(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);

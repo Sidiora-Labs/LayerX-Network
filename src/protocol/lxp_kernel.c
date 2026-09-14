@@ -3340,6 +3340,47 @@ static lxp_result kernel_snapshot_replace(
     return LXP_OK;
 }
 
+static lxp_result kernel_settlement_refusal(
+    lxp_module_ctx *ctx, const lxp_prepared_transition *prepared,
+    lxp_result refusal)
+{
+    static const uint8_t domain[] = "LXP/programs/settlement-failure/v1";
+    const lxp_program_outcome *executed = lxp_prepared_module_outcome(prepared->module);
+    lxp_program_outcome outcome;
+    uint8_t *payload;
+    void *allocation = NULL;
+    size_t length = sizeof(domain) + 32U + 32U + 4U;
+    lxp_result status;
+    if (executed == NULL || !executed->present ||
+        executed->terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
+        (refusal != LXP_ERR_INSUFFICIENT_BALANCE && refusal != LXP_ERR_OVERFLOW &&
+         refusal != LXP_ERR_SEQUENCE_EXHAUSTED && refusal != LXP_ERR_ASSET_MISMATCH))
+        return LXP_FATAL_INVARIANT;
+    outcome = *executed;
+    outcome.terminal_kind = LXP_PROGRAM_TERMINAL_FAILURE;
+    outcome.result_code = refusal;
+    outcome.occupancy_byte_batches = (lxp_u128){0U, 0U};
+    outcome.occupancy_fee_units = (lxp_u128){0U, 0U};
+    (void)memset(outcome.occupancy_asset_id, 0, 32U);
+    (void)memset(outcome.occupancy_evidence_digest, 0, 32U);
+    (void)memset(outcome.occupancy_transfer_root, 0, 32U);
+    (void)memset(outcome.transfer_root, 0, 32U);
+    status = outcome.encoding_version == 4U ?
+        lxp_hash_sha256("", 0U, outcome.applied_legs_digest) : LXP_OK;
+    if (status == LXP_OK) status = lxp_arena_alloc(ctx->arena, length, 1U, &allocation);
+    if (status != LXP_OK) return status;
+    payload = allocation;
+    (void)memcpy(payload, domain, sizeof(domain));
+    (void)memcpy(payload + sizeof(domain), prepared->activity_id, 32U);
+    (void)memcpy(payload + sizeof(domain) + 32U, executed->terminal_payload_root, 32U);
+    store_u32(payload + sizeof(domain) + 64U, (uint32_t)refusal);
+    outcome.terminal_payload = (lxp_byte_span){payload, length};
+    status = lxp_hash_sha256(payload, length, outcome.terminal_payload_root);
+    if (status == LXP_OK) status = lxp_ctx_bind_program_outcome(ctx, &outcome);
+    if (status == LXP_OK) status = lxp_module_ctx_prepare_commit(ctx);
+    return status;
+}
+
 lxp_result lxp_kernel_snapshot_apply_prepared(
     lxp_kernel_batch_snapshot *snapshot, const lxp_activity *activity,
     const lxp_kernel_execution *execution,
@@ -3360,10 +3401,13 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
     bool module_ctx_initialized = false;
     bool fee_transaction_open = false;
     void *fee_transaction = NULL;
+    lxp_module_fee_transfer fee_transfer = {0};
+    lxp_result settlement_result;
     if (snapshot == NULL || activity == NULL || execution == NULL ||
         prepared == NULL || prepared->module == NULL || receipt == NULL ||
         execution->authority == NULL || execution->fee_parameters == NULL)
         return LXP_ERR_NON_CANONICAL;
+    settlement_result = prepared->result_code;
     if (canonical_events != NULL)
         *canonical_events = (lxp_byte_span){NULL, 0U};
     status = kernel_private_execution_bind(&snapshot->kernel,
@@ -3436,23 +3480,38 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
             if (status == LXP_OK)
                 status = lxp_module_ctx_bind_effects(&module_ctx, &effects);
         }
-        if (status == LXP_OK)
-            status = lxp_module_ctx_import_prepared(
-                &module_ctx, prepared->module,
-                candidate->active_level_token, &effects);
     } else if (status == LXP_OK) {
         status = lxp_effect_buffer_init(&effects);
     }
     if (status == LXP_OK && !lxp_u128_is_zero(prepared->fee_charged)) {
-        status = kernel_fee_prepare(&candidate->kernel, activity, execution,
-            prepared->fee_charged, &fee_transaction);
+        lx_account *payer, *treasury;
+        status = lxp_kernel_program_payment_account(candidate->programs_runtime.accounts,
+            execution->authority->principal, candidate->occupancy_asset_id,
+            activity->protocol_version, &payer);
+        if (status == LXP_OK)
+            status = lxp_fee_treasury_account(candidate->programs_runtime.accounts, &treasury);
+        if (status == LXP_OK) {
+            fee_transfer.payer_before = *payer;
+            fee_transfer.treasury_before = *treasury;
+            fee_transfer.amount = prepared->fee_charged;
+            status = kernel_fee_prepare(&candidate->kernel, activity, execution,
+                prepared->fee_charged, &fee_transaction);
+        }
         fee_transaction_open = status == LXP_OK;
         if (status == LXP_OK && fee_transaction == NULL)
             status = LXP_FATAL_INVARIANT;
     }
-    if (status == LXP_OK && fee_transaction_open && module_ctx_initialized) {
-        module_ctx.commit_prepared = false;
-        status = lxp_module_ctx_prepare_commit(&module_ctx);
+    if (status == LXP_OK && module_ctx_initialized) {
+        lxp_result settlement_refusal = LXP_OK;
+        status = fee_transaction_open ?
+            lxp_module_ctx_import_prepared_after_fee(&module_ctx, prepared->module,
+                candidate->active_level_token, &effects, &fee_transfer, &settlement_refusal) :
+            lxp_module_ctx_import_prepared(&module_ctx, prepared->module,
+                candidate->active_level_token, &effects);
+        if (status == LXP_OK && settlement_refusal != LXP_OK) {
+            settlement_result = settlement_refusal;
+            status = kernel_settlement_refusal(&module_ctx, prepared, settlement_result);
+        }
     }
     if (status == LXP_OK) {
         (void)memset(receipt, 0, sizeof(*receipt));
@@ -3461,7 +3520,7 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
         receipt->global_sequence = execution->global_sequence;
         (void)memcpy(receipt->previous_state_root,
                      candidate->kernel.current_state_root, 32U);
-        receipt->result_code = prepared->result_code;
+        receipt->result_code = settlement_result;
         receipt->fee_charged = prepared->fee_charged;
         receipt->module_id = prepared->module_id;
         receipt->module_version = prepared->module_version;
