@@ -34,6 +34,7 @@ pub type SessionRestrictionUpdate = (
 );
 
 mod native_budget;
+mod native_limit;
 
 #[path = "managed_agent_rotation.rs"]
 pub(crate) mod rotation;
@@ -590,6 +591,15 @@ pub fn finalize_limit(
 ) -> Result<HumanResponse, HumanOperationError> {
     if monthly_limit == 0 || currency.is_empty() || replacement_budget_id == [0; 32] {
         return Err(HumanOperationError::Refused);
+    }
+    if native_limit::applies(store, tenant, evidence)? {
+        return native_limit::finalize(
+            store,
+            tenant,
+            agent_id,
+            (monthly_limit, currency, replacement_budget_id),
+            evidence,
+        );
     }
     let mut body = Vec::new();
     body.push(27);

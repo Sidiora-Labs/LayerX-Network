@@ -16,8 +16,7 @@ use layerx_crypto::local::LocalSigner;
 use layerx_crypto::session::{issue_session_key, SessionKeyRequest};
 use layerx_crypto::signer::Signer as _;
 use layerx_intents::{
-    BudgetCreate, BudgetDefund, Intent, IntentKind, SessionGrant as ProtocolSessionGrant,
-    SessionRevoke,
+    BudgetDefund, Intent, IntentKind, SessionGrant as ProtocolSessionGrant, SessionRevoke,
 };
 use layerx_paxeer_client::{
     raw_call, EmergencyExit, EndpointConfig, EndpointTransport, ExitConfig, ExitEligibility,
@@ -30,10 +29,7 @@ use layerx_types::ids::Did;
 use layerx_types::ids::{AssetId, IdempotencyKey};
 use layerx_types::intent::EvmAddress;
 use layerx_types::intent::{AuthorityGrantId, PublicKey, SessionRevocationReason};
-use layerx_types::intent::{
-    BudgetId, PeriodLength, PurposeHash, RolloverPolicy, Sequence as ProtocolSequence,
-    TimestampSeconds,
-};
+use layerx_types::intent::{BudgetId, Sequence as ProtocolSequence, TimestampSeconds};
 use layerx_types::payload::ModuleId;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::RootCertStore;
@@ -2564,41 +2560,11 @@ impl ProductionComponents {
             return Err(ApiFailure::invalid_request(Some("monthly_limit")));
         }
         let operation_key = action_key(required_idempotency(request)?);
-        let replacement_budget_id: [u8; 32] = Sha256::digest(
-            [
-                b"layerx-human/agent-limit-budget/v1".as_slice(),
-                context.active_budget_id.as_slice(),
-                operation_key.as_slice(),
-            ]
-            .concat(),
-        )
-        .into();
-        let intent = Intent::v1(IntentKind::BudgetCreate(
-            BudgetCreate::new(
-                BudgetId::new(replacement_budget_id),
-                AccountId::parse(&context.seed.owner_account)
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                AccountId::parse(&context.seed.budget_account)
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                AssetId::new(context.seed.budget_asset),
-                ProtocolAmount::from_u128(amount),
-                PeriodLength::new(context.seed.budget_period_seconds)
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                RolloverPolicy::None,
-                ProtocolAmount::ZERO,
-                PurposeHash::new(context.seed.purpose_hash),
-                TimestampSeconds::from_u64(
-                    self.now()?
-                        .checked_add(context.seed.budget_expiry_seconds)
-                        .ok_or_else(ApiFailure::upstream_degraded)?,
-                ),
-            )
-            .map_err(|_| ApiFailure::upstream_degraded())?,
-        ));
+        let current = self.now()?;
+        let intent = super::native_limit::intent(&context, amount, currency, current)?;
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
         let registry = agent.registry().clone();
-        let current = self.now()?;
         let mut adapter = ProductionAgentCreation::new(
             &mut agent,
             &self.agent_contract,
@@ -2628,12 +2594,18 @@ impl ProductionComponents {
         let evidence = ProductionAgentCreation::finalization_evidence(
             &receipt,
             ModuleId::Budget,
-            1,
+            3,
             self.now()?,
         )
         .map_err(|_| ApiFailure::upstream_degraded())?;
         let value = agent
-            .agent_limit(agent_id, amount, currency, replacement_budget_id, evidence)
+            .agent_limit(
+                agent_id,
+                amount,
+                currency,
+                context.active_budget_id,
+                evidence,
+            )
             .map_err(agent_failure)?;
         Ok(BackendResponse {
             result: managed_agent_json(&value),

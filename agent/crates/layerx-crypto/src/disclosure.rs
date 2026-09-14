@@ -3,8 +3,8 @@
 mod native;
 
 pub use native::{
-    DisclosedNativeBudgetCreate, DisclosedNativeBudgetSpend, DisclosedNativeIdentity,
-    DisclosedNativeOperation, DisclosedRecoveryPolicy,
+    DisclosedNativeBudgetAmend, DisclosedNativeBudgetCreate, DisclosedNativeBudgetSpend,
+    DisclosedNativeIdentity, DisclosedNativeOperation, DisclosedRecoveryPolicy,
 };
 
 use std::fmt;
@@ -1116,6 +1116,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         || (kind == (ModuleId::Budget, 1)
             && matches!(activity.payload().get(..2), Some([0, 1 | 2])))
         || kind == (ModuleId::Budget, 6)
+        || (activity.protocol_version() == 3 && kind == (ModuleId::Budget, 3))
     {
         return native::fields(activity);
     }

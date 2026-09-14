@@ -92,6 +92,7 @@ pub enum IntentKind {
     NativeOnboardingConsent(layerx_crypto::onboarding::OnboardingConsent),
     NativeOnboarding(layerx_crypto::onboarding::SponsoredRegistration),
     NativeBudgetCreate(crate::NativeBudgetCreate),
+    NativeBudgetAmend(crate::NativeBudgetAmend),
     NativeOwnerRotation(layerx_crypto::rotation::OwnerRotation),
     NativeAssetAccountOpen(AssetId),
     /// Identity security: announce a governance identity-key rotation.
@@ -146,6 +147,7 @@ impl IntentKind {
             | Self::BridgeWithdrawRequest(_) => ModuleId::Asset,
             Self::PayerGrantRegistration(_)
             | Self::NativeBudgetCreate(_)
+            | Self::NativeBudgetAmend(_)
             | Self::BudgetCreate(_)
             | Self::BudgetFund(_)
             | Self::BudgetDefund(_) => ModuleId::Budget,

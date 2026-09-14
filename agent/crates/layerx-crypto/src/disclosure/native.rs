@@ -41,6 +41,66 @@ pub struct DisclosedNativeBudgetCreate {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisclosedNativeBudgetAmend {
+    pub budget_id: [u8; 32],
+    pub per_period_limit: u128,
+    pub carry_cap: u128,
+    pub expiry_ms: u64,
+    pub rollover: u8,
+}
+
+impl DisclosedNativeBudgetAmend {
+    /// # Errors
+    /// Refuses invalid native Budget amendment fields.
+    pub fn payload(&self) -> Result<Vec<u8>, DisclosureError> {
+        if self.budget_id == [0; 32]
+            || self.per_period_limit == 0
+            || self.expiry_ms == 0
+            || !matches!(self.rollover, 1 | 2)
+            || (self.rollover == 1 && self.carry_cap != 0)
+        {
+            return Err(DisclosureError::MalformedPayload);
+        }
+        let mut encoded = Encoder::new(75);
+        encoded.u16(1)?;
+        encoded.fixed(&self.budget_id)?;
+        encoded.u128(self.per_period_limit)?;
+        encoded.u128(self.carry_cap)?;
+        encoded.u64(self.expiry_ms)?;
+        encoded.u8(self.rollover)?;
+        Ok(encoded.finish())
+    }
+
+    /// # Errors
+    /// Refuses noncanonical or invalid native Budget amendment bytes.
+    pub fn decode_payload(bytes: &[u8]) -> Result<Self, DisclosureError> {
+        let mut reader = Decoder::new(bytes, 0);
+        if reader.u16()? != 1 {
+            return Err(DisclosureError::MalformedPayload);
+        }
+        let value = Self {
+            budget_id: fixed(&mut reader)?,
+            per_period_limit: reader.u128()?,
+            carry_cap: reader.u128()?,
+            expiry_ms: reader.u64()?,
+            rollover: reader.u8()?,
+        };
+        reader.finish()?;
+        value.verify_payload(bytes)?;
+        Ok(value)
+    }
+
+    /// # Errors
+    /// Refuses any payload field differing from the disclosed amendment.
+    pub fn verify_payload(&self, bytes: &[u8]) -> Result<(), DisclosureError> {
+        if self.payload()? != bytes {
+            return Err(DisclosureError::FieldMismatch("native_budget_amend"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisclosedNativeBudgetSpend {
     pub budget_id: [u8; 32],
     pub budget_account: [u8; 32],
@@ -55,6 +115,7 @@ pub enum DisclosedNativeOperation {
     OwnerRotation(Box<crate::rotation::OwnerRotation>),
     BudgetCreate(Box<DisclosedNativeBudgetCreate>),
     BudgetSpend(DisclosedNativeBudgetSpend),
+    BudgetAmend(DisclosedNativeBudgetAmend),
 }
 
 impl DisclosedNativeOperation {
@@ -93,6 +154,10 @@ impl DisclosedNativeOperation {
                 } else {
                     encoder.u8(0)?;
                 }
+            }
+            Self::BudgetAmend(amend) => {
+                encoder.u8(7)?;
+                encoder.fixed(&amend.payload()?)?;
             }
             Self::BudgetSpend(spend) => {
                 encoder.u8(6)?;
@@ -268,7 +333,17 @@ fn spend(activity: &Activity) -> Result<DisclosedNativeBudgetSpend, DisclosureEr
     })
 }
 
-pub(super) fn fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
+fn amendment(activity: &Activity) -> Result<DisclosedNativeBudgetAmend, DisclosureError> {
+    let value = DisclosedNativeBudgetAmend::decode_payload(activity.payload())?;
+    if value.expiry_ms <= activity.timestamp_bound().not_before {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    Ok(value)
+}
+
+fn owner_bound(
+    activity: &Activity,
+) -> Result<layerx_wire::activity::TimestampBound, DisclosureError> {
     if activity.protocol_version() != 3 || activity.network_id() == 0 {
         return Err(DisclosureError::MalformedPayload);
     }
@@ -279,10 +354,14 @@ pub(super) fn fields(activity: &Activity) -> Result<DisclosureFields, Disclosure
     if !crate::ed25519::public_key_is_canonical(&key) {
         return Err(DisclosureError::MalformedPayload);
     }
+    Ok(activity.timestamp_bound())
+}
+
+pub(super) fn fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
+    let bound = owner_bound(activity)?;
     let mut counterparties = Vec::new();
     let mut amounts = Vec::new();
     let mut asset = [0; 32];
-    let bound = activity.timestamp_bound();
     let mut expiry = bound.not_after;
     let operation = match (
         activity.activity_type().module(),
@@ -296,6 +375,15 @@ pub(super) fn fields(activity: &Activity) -> Result<DisclosureFields, Disclosure
                 .map_err(|_| DisclosureError::MalformedPayload)?,
         )),
         (ModuleId::Governance, 3) => DisclosedNativeOperation::RecoveryPolicy(recovery(activity)?),
+        (ModuleId::Budget, 3) => {
+            let value = amendment(activity)?;
+            amounts.push(DisclosedAmount {
+                role: AmountRole::SpendingLimit,
+                value: value.per_period_limit,
+            });
+            expiry = value.expiry_ms;
+            DisclosedNativeOperation::BudgetAmend(value)
+        }
         (ModuleId::Budget, 6) => {
             let value = spend(activity)?;
             counterparties.extend([

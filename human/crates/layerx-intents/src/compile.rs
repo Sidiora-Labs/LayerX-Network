@@ -135,6 +135,7 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
                 | IntentKind::NativeOnboarding(_)
                 | IntentKind::NativeOnboardingConsent(_)
                 | IntentKind::NativeBudgetCreate(_)
+                | IntentKind::NativeBudgetAmend(_)
                 | IntentKind::NativeOwnerRotation(_)
                 | IntentKind::NativeAssetAccountOpen(_)
         )
@@ -153,6 +154,7 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
         IntentKind::NativeOnboarding(_)
             | IntentKind::NativeOnboardingConsent(_)
             | IntentKind::NativeBudgetCreate(_)
+            | IntentKind::NativeBudgetAmend(_)
             | IntentKind::NativeOwnerRotation(_)
             | IntentKind::NativeAssetAccountOpen(_)
     ) && intent.version() != IntentVersion::V3
@@ -194,6 +196,14 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
                 CompileField::Payload,
             )?;
             finish(registry, ModuleId::Governance, 2, encoder)
+        }
+        IntentKind::NativeBudgetAmend(value) => {
+            fixed(
+                &mut encoder,
+                &value.payload().map_err(|_| native_invalid())?,
+                CompileField::Payload,
+            )?;
+            finish(registry, ModuleId::Budget, 3, encoder)
         }
         IntentKind::NativeBudgetCreate(value) => {
             fixed(

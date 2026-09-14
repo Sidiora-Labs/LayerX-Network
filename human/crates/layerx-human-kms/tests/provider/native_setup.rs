@@ -73,7 +73,10 @@ pub(super) fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
     let count = match &disclosure.native_operation {
         Some(DisclosedNativeOperation::IdentityRegistration(_)) => 2,
         Some(DisclosedNativeOperation::BudgetCreate(_)) => mutations.len(),
-        Some(DisclosedNativeOperation::RecoveryPolicy(_)) => 4,
+        Some(
+            DisclosedNativeOperation::RecoveryPolicy(_) | DisclosedNativeOperation::BudgetSpend(_),
+        ) => 4,
+        Some(DisclosedNativeOperation::BudgetAmend(_)) => 5,
         Some(DisclosedNativeOperation::OwnerRotation(_)) | None => 0,
     };
     (0..count)
@@ -90,6 +93,19 @@ pub(super) fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
                     1 => value.recovery_root[0] ^= 1,
                     2 => value.threshold += 1,
                     _ => value.delay_bounds = Some((1, 2)),
+                },
+                Some(DisclosedNativeOperation::BudgetAmend(value)) => match field {
+                    0 => value.budget_id[0] ^= 1,
+                    1 => value.per_period_limit += 1,
+                    2 => value.carry_cap += 1,
+                    3 => value.expiry_ms += 1,
+                    _ => value.rollover ^= 1,
+                },
+                Some(DisclosedNativeOperation::BudgetSpend(value)) => match field {
+                    0 => value.budget_id[0] ^= 1,
+                    1 => value.budget_account[0] ^= 1,
+                    2 => value.recipient[0] ^= 1,
+                    _ => value.amount += 1,
                 },
                 Some(DisclosedNativeOperation::OwnerRotation(_)) => {
                     panic!("unexpected rotation disclosure")
@@ -200,6 +216,19 @@ fn native_creation_disclosures_sign_through_real_kms_before_and_after_restart() 
             (b"did:layerx:alice", 7, 1),
         )?);
     }
+    let amendment = layerx_intents::NativeBudgetAmend {
+        budget_id: [8; 32],
+        per_period_limit: 80,
+        carry_cap: 0,
+        expiry_ms: 2000,
+        rollover: 1,
+    };
+    target_operations.push(setup_envelope(
+        target_public,
+        77,
+        payload(ModuleId::Budget, 3, &checked(amendment.payload())?)?,
+        (b"did:layerx:alice", 7, 1),
+    )?);
     let opening = checked(
         layerx_crypto::payments::Payment::OpenAccount { asset: [3; 32] }
             .encode(b"did:layerx:alice"),

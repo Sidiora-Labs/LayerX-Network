@@ -18,6 +18,7 @@ pub use compiler::{
     compile, CompileError, CompileErrorReason, CompileField, CompiledIntent, NativeOwnerBootstrap,
 };
 pub use disclosure::{DisclosureCheck, DisclosureCheckError, DisclosureField};
+pub use layerx_crypto::disclosure::DisclosedNativeBudgetAmend as NativeBudgetAmend;
 pub use native_budget::NativeBudgetCreate;
 pub use native_custody::NativeCustodyCredit;
 pub use native_receive::NativeReceive;

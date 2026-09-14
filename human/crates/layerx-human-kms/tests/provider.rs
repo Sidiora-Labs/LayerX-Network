@@ -452,7 +452,10 @@ fn registry() -> Result<layerx_types::payload::ModuleRegistry> {
         ))?,
         checked(ModuleRegistration::new(
             ModuleId::Budget,
-            &[checked(ActivityType::new(ModuleId::Budget, 1))?],
+            &[
+                checked(ActivityType::new(ModuleId::Budget, 1))?,
+                checked(ActivityType::new(ModuleId::Budget, 3))?,
+            ],
         ))?,
         checked(ModuleRegistration::new(
             ModuleId::Governance,

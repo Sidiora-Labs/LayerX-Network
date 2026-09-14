@@ -119,6 +119,7 @@ impl DisclosureCheck {
                     | IntentKind::NativeOnboarding(_)
                     | IntentKind::NativeOnboardingConsent(_)
                     | IntentKind::NativeBudgetCreate(_)
+                    | IntentKind::NativeBudgetAmend(_)
                     | IntentKind::NativeOwnerRotation(_)
                     | IntentKind::NativeAssetAccountOpen(_)
             )
@@ -142,6 +143,7 @@ impl DisclosureCheck {
             IntentKind::NativeOnboarding(_)
                 | IntentKind::NativeOnboardingConsent(_)
                 | IntentKind::NativeBudgetCreate(_)
+                | IntentKind::NativeBudgetAmend(_)
                 | IntentKind::NativeOwnerRotation(_)
                 | IntentKind::NativeAssetAccountOpen(_)
         ) && intent.version() != crate::IntentVersion::V3
@@ -191,6 +193,12 @@ impl DisclosureCheck {
                     })?,
                     DisclosureField::PayloadBytes,
                 )?;
+            }
+            IntentKind::NativeBudgetAmend(value) => {
+                value.verify_payload(payload).map_err(|_| {
+                    DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes)
+                })?;
+                round_trip.fixed(payload, DisclosureField::PayloadBytes)?;
             }
             IntentKind::NativeBudgetCreate(value) => {
                 value.verify_payload(payload).map_err(|_| {
@@ -738,6 +746,7 @@ fn expected_activity_type(intent: &Intent) -> Result<ActivityType, DisclosureChe
         IntentKind::LxpReceive(_) | IntentKind::NativeReceive(_) => (ModuleId::Asset, 6),
         IntentKind::PayerGrantRegistration(_) => (ModuleId::Budget, 4),
         IntentKind::BudgetCreate(_) | IntentKind::NativeBudgetCreate(_) => (ModuleId::Budget, 1),
+        IntentKind::NativeBudgetAmend(_) => (ModuleId::Budget, 3),
         IntentKind::BudgetFund(_) => (ModuleId::Budget, 2),
         IntentKind::BudgetDefund(_) => (ModuleId::Budget, 7),
         IntentKind::BridgeDepositCredit(_) | IntentKind::NativeCustodyCredit(_) => {
