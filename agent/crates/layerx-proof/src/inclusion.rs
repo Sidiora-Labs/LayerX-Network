@@ -152,7 +152,11 @@ impl InclusionEvidence {
     }
 }
 
-pub(crate) fn verify_header(
+/// Verifies a canonical batch header under independently selected sequencer authority.
+///
+/// # Errors
+/// Refuses invalid encoding, batch ranges, sequencer identity and signatures.
+pub fn verify_header(
     header_bytes: &[u8],
     signature: &[u8; 64],
     authorization: &SequencerAuthorization,
