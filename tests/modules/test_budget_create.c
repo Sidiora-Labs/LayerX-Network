@@ -278,6 +278,7 @@ static int submit(const budget_call *call, lxp_effect_buffer *effects,
                   lxp_result *result)
 {
     static uint8_t arena_bytes[262144];
+    static uint8_t native_arena_bytes[LXP_MAX_ACTIVITY_BYTES + sizeof(arena_bytes)];
     static uint8_t wire_bytes[LXP_MAX_ACTIVITY_BYTES];
     uint8_t payload_copy[256];
     uint8_t name[LX_ACCOUNT_NAME_MAX];
@@ -349,7 +350,8 @@ static int submit(const budget_call *call, lxp_effect_buffer *effects,
     CHECK(lxp_arena_init(&wire_arena, wire_bytes,
                          sizeof(wire_bytes)) == LXP_OK);
     CHECK(lxp_activity_encode(&activity, &wire_arena, &wire) == LXP_OK);
-    CHECK(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
+    CHECK(lxp_arena_init(&arena, call->protocol_version == 3U ? native_arena_bytes : arena_bytes,
+        call->protocol_version == 3U ? sizeof(native_arena_bytes) : sizeof(arena_bytes)) == LXP_OK);
     CHECK(lxp_effect_buffer_init(effects) == LXP_OK);
     ++env.global_sequence;
     if (activity.protocol_version == 3U)
