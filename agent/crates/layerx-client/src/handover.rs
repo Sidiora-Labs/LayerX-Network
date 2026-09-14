@@ -12,6 +12,7 @@ use layerx_wire::handover::{
 use layerx_wire::hash::{activity_id, payload_hash};
 use layerx_wire::receipt::{decode_batch_header, BatchHeader};
 use sha2::{Digest as _, Sha256};
+use std::fmt::Write as _;
 
 use crate::availability::AvailabilityResult;
 use crate::evidence::VerifiedCheckpoint;
@@ -457,7 +458,6 @@ fn verify_activation(
 ) -> Result<(), HistoryError> {
     let bound = activity.timestamp_bound();
     let mut expected_did = String::from("did:layerx:");
-    use std::fmt::Write as _;
     for byte in governance_key {
         write!(expected_did, "{byte:02x}").map_err(|_| HistoryError::Activity)?;
     }
