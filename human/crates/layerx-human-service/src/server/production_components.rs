@@ -240,19 +240,20 @@ pub struct ProductionComponentsConfig {
     continuation_unknown_deadline_seconds: u64,
 }
 
+fn bounded_limits(prefix: &str) -> Result<Limits, String> {
+    Ok(Limits {
+        maximum_frame_bytes: number(&format!("{prefix}_MAX_FRAME_BYTES"))?,
+        maximum_connections: number(&format!("{prefix}_MAX_CONNECTIONS"))?,
+        maximum_streams: number(&format!("{prefix}_MAX_STREAMS"))?,
+        maximum_queued_bytes: number(&format!("{prefix}_MAX_QUEUED_BYTES"))?,
+        deadline: Duration::from_secs(number(&format!("{prefix}_DEADLINE_SECONDS"))?),
+    })
+}
+
 impl ProductionComponentsConfig {
     /// # Errors
     /// Refuses incomplete, invalid, or unsupported production dependency configuration.
     pub fn from_environment() -> Result<Self, String> {
-        let bounded_limits = |prefix: &str| -> Result<Limits, String> {
-            Ok(Limits {
-                maximum_frame_bytes: number(&format!("{prefix}_MAX_FRAME_BYTES"))?,
-                maximum_connections: number(&format!("{prefix}_MAX_CONNECTIONS"))?,
-                maximum_streams: number(&format!("{prefix}_MAX_STREAMS"))?,
-                maximum_queued_bytes: number(&format!("{prefix}_MAX_QUEUED_BYTES"))?,
-                deadline: Duration::from_secs(number(&format!("{prefix}_DEADLINE_SECONDS"))?),
-            })
-        };
         Ok(Self {
             store_root: absolute("LAYERX_HUMAN_STORE_ROOT")?,
             custody_root: absolute("LAYERX_HUMAN_CUSTODY_ROOT")?,
@@ -428,17 +429,8 @@ impl ProductionComponents {
             config.identity_binding,
         )?;
         let auth_index = production_auth_index(config.auth_index_root, config.auth_index_key)?;
-        let agent_contract = layerx_sdk::Client::daemon(
-            config.agent_socket.clone(),
-            layerx_agent_api::agent_api_schema_v1().version,
-        )
-        .map_err(|_| "agent SDK contract refused startup".to_owned())?;
-        let mut agent = AgentRuntime::connect(config.agent_socket, config.agent_limits)
-            .map_err(|_| "agent boundary refused startup".to_owned())?;
-        let native_asset = agent
-            .native_fee_policy()
-            .map_err(|_| "authenticated native asset refused startup".to_owned())?
-            .asset_id;
+        let (agent_contract, agent, native_asset) =
+            production_agent(config.agent_socket, config.agent_limits)?;
         let keystore = Keystore::open_production(config.custody_root, config.network_id, provider)
             .map_err(|_| "KMS or custody storage refused startup".to_owned())?;
         let custody = Arc::new(CustodySigner::new_shared(
@@ -4831,13 +4823,7 @@ impl ProductionComponents {
             let result = json!({"session_id": grant.session_id(), "device": {"device_id": session_view.device.device_id(),
                         "label": session_view.device.label(), "platform": session_view.device.platform()}, "opened_at": session_view.opened_at,
                         "last_active_at": session_view.last_active_at, "current": true});
-            let session = SessionSecrets {
-                access_token: grant.access_token().expose().to_owned(),
-                refresh_token: grant.refresh_token().expose().to_owned(),
-                csrf_token: grant.csrf_token().expose().to_owned(),
-                access_max_age_seconds: grant.access_expires_at().saturating_sub(now),
-                refresh_max_age_seconds: grant.refresh_expires_at().saturating_sub(now),
-            };
+            let session = session_secrets(&grant, now);
             (principal, result, Some(session))
         };
         Ok(BackendResponse { result, session })
@@ -5470,6 +5456,34 @@ fn stored_rebinding_statement(
     )
     .map_err(|_| ApiFailure::upstream_degraded())?;
     Ok((statement, confirms))
+}
+
+fn session_secrets(grant: &crate::auth::SessionGrant, now: u64) -> SessionSecrets {
+    SessionSecrets {
+        access_token: grant.access_token().expose().to_owned(),
+        refresh_token: grant.refresh_token().expose().to_owned(),
+        csrf_token: grant.csrf_token().expose().to_owned(),
+        access_max_age_seconds: grant.access_expires_at().saturating_sub(now),
+        refresh_max_age_seconds: grant.refresh_expires_at().saturating_sub(now),
+    }
+}
+
+fn production_agent(
+    socket: PathBuf,
+    limits: Limits,
+) -> Result<(layerx_sdk::Client, AgentRuntime, [u8; 32]), String> {
+    let agent_contract = layerx_sdk::Client::daemon(
+        socket.clone(),
+        layerx_agent_api::agent_api_schema_v1().version,
+    )
+    .map_err(|_| "agent SDK contract refused startup".to_owned())?;
+    let mut agent = AgentRuntime::connect(socket, limits)
+        .map_err(|_| "agent boundary refused startup".to_owned())?;
+    let native_asset = agent
+        .native_fee_policy()
+        .map_err(|_| "authenticated native asset refused startup".to_owned())?
+        .asset_id;
+    Ok((agent_contract, agent, native_asset))
 }
 
 fn production_principal_store(

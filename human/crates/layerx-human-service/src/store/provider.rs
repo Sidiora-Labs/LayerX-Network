@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    fs, io, verify_principals_tree, AgentTenantId, BTreeSet, Path, PrincipalId, PrincipalStore,
+    RetentionPolicy, StoreError, TenancyDigest, TenancyError, PRINCIPALS_DIR,
+};
 use std::io::Write as _;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::sync::Arc;
@@ -96,7 +99,7 @@ impl PrincipalStore {
                     file.sync_all()?;
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    verify_binding_file(&pending, bytes)?
+                    verify_binding_file(&pending, bytes)?;
                 }
                 Err(error) => return Err(error.into()),
             }
