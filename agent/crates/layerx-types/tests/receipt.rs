@@ -1,5 +1,6 @@
 use std::fs;
-use std::process::Command;
+#[path = "../../../tests/support/rustc.rs"]
+mod rustc;
 
 use layerx_types::batch::BATCH_HEADER_FIELDS;
 use layerx_types::checkpoint::GUARANTOR_ATTESTATION_FIELDS;
@@ -79,7 +80,7 @@ fn receipt_has_no_arbitrary_local_constructor() {
         "extern crate layerx_types;\nuse layerx_types::receipt::LxpReceipt;\nfn main() { let _ = LxpReceipt::new(); }\n",
     )
     .is_ok());
-    let output = Command::new("rustc")
+    let output = rustc::command(&dependency_dir)
         .arg("--edition=2021")
         .arg(&source)
         .arg("--extern")

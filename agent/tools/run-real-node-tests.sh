@@ -4,7 +4,8 @@ set -eu
 case "${1-}" in
     test) test_target=agent-test ;;
     sanitizers) test_target=agent-test-sanitize ;;
-    *) echo "expected test or sanitizers" >&2; exit 2 ;;
+    prepare) test_target= ;;
+    *) echo "expected test, sanitizers or prepare" >&2; exit 2 ;;
 esac
 if [ "$#" -ne 1 ] || [ "$(id -u)" -ne 0 ]; then
     echo "real-node tests require root to launch the daemon under its distinct uid" >&2
@@ -31,4 +32,6 @@ make -j4 CC=gcc \
 export LAYERX_TEST_NATIVE_BIN_DIR=$repo_root/build/bin
 sha256sum "$LAYERX_TEST_NATIVE_BIN_DIR/layerxd" \
     "$LAYERX_TEST_NATIVE_BIN_DIR/layerx-genesis-build"
-make "$test_target"
+if [ -n "$test_target" ]; then
+    make "$test_target"
+fi

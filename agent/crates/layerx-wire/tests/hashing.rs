@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+#[path = "../../../tests/support/rustc.rs"]
+mod rustc;
 
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::settlement::{DeclaredCheckpointSettlement, CHECKPOINT_SETTLEMENT_PATH};
@@ -184,7 +185,7 @@ fn raw_text_and_debug_values_cannot_enter_consensus_hashing() {
         "extern crate layerx_wire;\nuse layerx_wire::hash::{domain, Domain};\nfn main() { let _ = domain(Domain::ActivityId, b\"debug text\"); }\n",
     )
     .is_ok());
-    let output = Command::new("rustc")
+    let output = rustc::command(&dependency_dir)
         .arg("--edition=2021")
         .arg(&source)
         .arg("--extern")
