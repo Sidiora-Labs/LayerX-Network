@@ -90,7 +90,7 @@ impl NativeOwnerBootstrap {
             }
         }
         let compiled = finish(registry, ModuleId::Governance, ordinal, encoder)?;
-        let mut decoder = Decoder::new(compiled.payload().as_bytes());
+        let mut decoder = Decoder::new(compiled.payload().as_bytes(), 0);
         let invalid = |_| native_invalid();
         if decoder.u16().map_err(invalid)? != tag
             || decoder.u16().map_err(invalid)? != count
