@@ -526,7 +526,7 @@ fn maintained_activity_batch_inner(
             evidence,
             receipts,
             header,
-            &maintenance,
+            maintenance,
             count,
         )?;
     } else if count != 1 {
