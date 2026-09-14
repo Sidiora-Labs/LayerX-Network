@@ -36,7 +36,10 @@ impl<'a> Request<'a> {
         }
         let version = u16::from_be_bytes(r.fixed()?);
         let operation = r.byte()?;
-        if !matches!((version, operation), (1, 0..=5) | (2, 3) | (3, 6..=12)) {
+        if !matches!(
+            (version, operation),
+            (1, 0..=5) | (2, 3) | (3, 6..=12) | (4, 13)
+        ) {
             return Err(Error::Refused);
         }
         let provider = std::str::from_utf8(r.blob(256)?).map_err(|_| Error::Refused)?;
