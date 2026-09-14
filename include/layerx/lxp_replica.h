@@ -110,6 +110,7 @@ typedef struct lxp_replay_batch_result {
     lxp_byte_span *encoded_receipts;
     lxp_byte_span *encoded_events;
     size_t activity_count;
+    size_t event_count;
     lxp_replay_activity_output batch_maintenance_output;
     lxp_byte_span encoded_batch_maintenance_receipt;
     size_t receipt_count;

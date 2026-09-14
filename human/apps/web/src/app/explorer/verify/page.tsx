@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../../copy/catalog";
+import { copyEntry } from "../../../../copy/runtime";
 import { ExplorerFrame } from "../../../explorer/components";
 import { EvidenceVerifier } from "../../../explorer/verifier";
 

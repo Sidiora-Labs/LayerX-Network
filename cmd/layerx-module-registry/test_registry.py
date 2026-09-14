@@ -26,6 +26,20 @@ expected = {'schema_version': 2, 'assets': [{'asset': asset, 'symbol': 'LXT',
              {'module': 9, 'ordinals': list(range(1, 11))}]}
 assert json.loads(run(base)) == expected
 assert run(base) == run(base)
+configuration = Path(__file__).resolve().parents[2] / 'platform/hosted/node/genesis-modules.conf'
+modules = configuration.read_text().splitlines()
+assert modules == ['budget', 'escrow', 'perps', 'service', 'stream']
+enabled_args = [argument for module in modules for argument in ('--enable-module', module)]
+enabled = json.loads(run(base + enabled_args))
+assert enabled['assets'] == expected['assets']
+assert [module['module'] for module in enabled['modules']] == [1, 2, 3, 4, 5, 6, 7, 9]
+assert [module for module in enabled['modules'] if module['module'] in (1, 7, 9)] == expected['modules']
+assert run(base + enabled_args) == run(base + [argument for module in reversed(modules)
+                                            for argument in ('--enable-module', module)])
+for module in enabled['modules']:
+    assert module['ordinals'] and module['ordinals'] == sorted(set(module['ordinals']))
+for selection in [('',), ('asset',), ('programs',), ('Stream',), ('stream', 'stream')]:
+    run(base + [argument for module in selection for argument in ('--enable-module', module)], False)
 for option, values in {
     '--asset': ['', '0' * 64, asset.upper(), asset[:-1], 'g' * 64],
     '--symbol': ['', 'x', 'A"', 'A\n', 'A' * 33],

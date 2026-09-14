@@ -91,6 +91,7 @@ export type MiddlewareErrorCode =
   | "payment-refused"
   | "verification-failure"
   | "fulfillment-conflict"
+  | "fulfillment-outcome-unknown"
   | "invalid-webhook"
   | "webhook-replay";
 
@@ -211,7 +212,7 @@ export class SellerMiddleware<T> {
   public async handle(
     principal: string,
     paymentHeader: string | undefined,
-    release: () => Promise<T>,
+    release: (idempotencyKey: string) => Promise<T>,
   ): Promise<SellerDecision<T>> {
     if (paymentHeader === undefined) {
       return this.paymentRequired();
@@ -249,7 +250,7 @@ export class SellerMiddleware<T> {
       authorizedBatch: outcome.authorizedBatch,
     };
     const verification = await verifyPaymentReceipt(proposed, requirements, this.#commitments);
-    const stored = await this.#fulfillments.fulfill(proposed, release);
+    const stored = await this.#fulfillments.fulfill(proposed, () => release(idempotencyKey));
     if (stored.idempotencyKey !== idempotencyKey || stored.requestDigest !== requestDigest) {
       throw new MiddlewareError("fulfillment-conflict");
     }

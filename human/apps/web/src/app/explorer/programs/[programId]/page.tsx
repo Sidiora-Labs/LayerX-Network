@@ -1,15 +1,11 @@
-import { copyEntry } from "../../../../../copy/catalog";
+import { copyEntry } from "../../../../../copy/runtime";
 import { programRecord } from "../../../../explorer/client";
 import {
   ExplorerFrame,
   ExplorerUnavailable,
   verificationLabel,
 } from "../../../../explorer/components";
-import {
-  ExplorerFreshness,
-  ExplorerTable,
-  ExplorerVerificationBadge,
-} from "../../../../kit";
+import { ExplorerFreshness, ExplorerTable, ExplorerVerificationBadge } from "../../../../kit/explorer";
 
 export default async function ProgramPage({
   params,

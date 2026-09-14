@@ -1,0 +1,25 @@
+{
+  "canonical_state_root": "194dca071ac042f1ce65053f1b93fff604fa193b9922fd164a0e90582458c258",
+  "modules": [
+    "budget",
+    "escrow",
+    "perps",
+    "service",
+    "stream"
+  ],
+  "native_fee_authority_version": 2,
+  "native_fee_schedule_version": 3,
+  "network_id": 77,
+  "previous_canonical_state_root": "931e6e2711ca946cad467ea3ad65dcbb74611d3dbe8578ae7f06157e73fd8754",
+  "previous_receipt_state_root": "e59b387c6e31993ba6ca8d9c2397f7815e3373863127f6609f04408fdaaf15ca",
+  "protocol_version": 3,
+  "receipt_state_root": "5c4473eda28947a9b7ef450615c73706b9cca7edf49d27bc965d45362add11e0",
+  "sequencer_public_key": "58a179348aa669054996e1d4ee8b71de684b7e496c5fa90cba45d1f15064f229",
+  "sha256": {
+    "00000000000000000000.lxs": "b68d57e290ffa9ef558192641d4940c38d93186a5b870078545b91076fd69f95",
+    "genesis.manifest": "98ad80ab902e3e49f8a4e4b1fa3a7e6d3b7fc589d499803939f36193a61347f1",
+    "paxeer-deployment-descriptor.lxgd": "ea7487963c12df6ae8aeebf1105bfe82f02e9bb1287cd0403a97a2ef5c45b432",
+    "paxeer-registration-request.lxrr": "1fb46a1069cab37653d9b62cfdb1c76bc83eadb9746e5ddef3171bb5b6b752f5"
+  },
+  "withdrawal_price": 0
+}

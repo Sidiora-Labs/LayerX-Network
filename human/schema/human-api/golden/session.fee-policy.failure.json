@@ -1,0 +1,13 @@
+{
+  "status": 503,
+  "body": {
+    "ok": false,
+    "error": {
+      "code": "unavailable",
+      "copy_key": "error.service.unavailable",
+      "retry": "retriable-after",
+      "retry_after_ms": 5000
+    },
+    "trace": "trc_01j2gx4v2ka1b2c3d4e5f6g7h8"
+  }
+}

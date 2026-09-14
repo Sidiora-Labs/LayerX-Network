@@ -615,6 +615,18 @@ pub fn bind_verified_agent(
     store: &mut impl CredentialBindingStore,
     trace: &TraceId,
 ) -> Result<CredentialBinding, TapError> {
+    let binding = verified_agent_binding(layerx_agent, verified)?;
+    store.put(principal, &binding, trace)?;
+    Ok(binding)
+}
+
+/// Derives display evidence from a verified credential without consuming its nonce.
+/// # Errors
+/// Refuses an absent or mismatched `LayerX` agent.
+pub fn verified_agent_binding(
+    layerx_agent: [u8; 32],
+    verified: &VerifiedTrustedAgent,
+) -> Result<CredentialBinding, TapError> {
     if layerx_agent == [0; 32] {
         return Err(TapError::InvalidLayerxAgent);
     }
@@ -630,15 +642,13 @@ pub fn bind_verified_agent(
     hash.update([0]);
     hash.update(verified.key_id.as_bytes());
     hash.update(verified.signature_digest);
-    let binding = CredentialBinding {
+    Ok(CredentialBinding {
         layerx_agent,
         trusted_agent_id: verified.agent_id.clone(),
         trusted_agent_domain: verified.agent_domain.clone(),
         key_id: verified.key_id.clone(),
         evidence_digest: hash.finalize().into(),
-    };
-    store.put(principal, &binding, trace)?;
-    Ok(binding)
+    })
 }
 
 /// Builds the typed, non-authoritative intent handoff after persisting the

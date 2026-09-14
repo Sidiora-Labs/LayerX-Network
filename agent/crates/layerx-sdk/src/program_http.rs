@@ -150,16 +150,27 @@ impl HttpProgramTransport {
                 retained_signed_activity: request.signed_activity().to_vec(),
             });
         }
-        if !exact_fields(
-            value,
+        let gateway_result = value.contains_key("result_code");
+        let fields = if gateway_result {
             &[
                 "state",
                 "activity_id",
                 "receipt",
                 "terminal_payload",
                 "call_graph",
-            ],
-        ) || fixed(value, "activity_id")? != request.bound_activity_id()
+                "result_code",
+            ][..]
+        } else {
+            &[
+                "state",
+                "activity_id",
+                "receipt",
+                "terminal_payload",
+                "call_graph",
+            ][..]
+        };
+        if !exact_fields(value, fields)
+            || fixed(value, "activity_id")? != request.bound_activity_id()
             || !required_string(value, "terminal_payload")?.is_empty()
             || !required_string(value, "call_graph")?.is_empty()
         {
@@ -179,10 +190,17 @@ impl HttpProgramTransport {
             .ok_or(ProgramOperationError::Verification)?;
         if required_string(value, "state")?
             != if protocol.result_code() == 0 {
-                "executed"
+                if gateway_result {
+                    "completed"
+                } else {
+                    "executed"
+                }
             } else {
                 "refused"
             }
+            || (gateway_result
+                && value.get("result_code").and_then(Value::as_i64)
+                    != Some(i64::from(protocol.result_code())))
         {
             return Err(ProgramOperationError::Verification);
         }
@@ -365,6 +383,11 @@ impl ProgramTransport for HttpProgramTransport {
         let key = request.bound_idempotency_key();
         let value = self.dispatch("program.receipt", Method::Get, &format!("/v1/programs/receipts/by-idempotency/{}", hex(&key)),
             &json!({"idempotency_key":hex(&key),"expected_activity_id":hex(&request.bound_activity_id()),"requested_verification_level":"sequencer-signed"}), None)?;
+        if value.get("idempotency_key").is_some()
+            && value.get("idempotency_key").and_then(Value::as_str) != Some(hex(&key).as_str())
+        {
+            return Err(ProgramOperationError::IdentityMismatch);
+        }
         decode_lifecycle_recovery(
             &value,
             request.bound_activity_id(),
@@ -616,6 +639,23 @@ fn decode_agent_document(
     if matches!(
         operation,
         "program.deploy" | "program.upgrade" | "program.wind-down"
+    ) && envelope.contains_key("ok")
+    {
+        if !(200..300).contains(&status)
+            || !exact_fields(envelope, &["ok", "result", "trace"])
+            || envelope.get("ok") != Some(&Value::Bool(true))
+            || !valid_request_id(required_string(envelope, "trace")?)
+        {
+            return Err(ProgramOperationError::Decode);
+        }
+        return envelope
+            .get("result")
+            .cloned()
+            .ok_or(ProgramOperationError::Decode);
+    }
+    if matches!(
+        operation,
+        "program.deploy" | "program.upgrade" | "program.wind-down"
     ) || (operation == "program.receipt"
         && (envelope.contains_key("result") || envelope.contains_key("error")))
     {
@@ -684,13 +724,54 @@ fn decode_lifecycle_recovery(
     sequencer: [u8; 32],
 ) -> Result<layerx_wire::receipt::Receipt, ProgramOperationError> {
     let value = object(value)?;
-    if !exact_fields(value, &["activity_id", "receipt"])
-        || fixed(value, "activity_id")? != expected_activity
-    {
+    let gateway_result = value.contains_key("state");
+    let fields = if gateway_result && value.contains_key("idempotency_key") {
+        &[
+            "activity_id",
+            "receipt",
+            "state",
+            "result_code",
+            "terminal_payload",
+            "call_graph",
+            "idempotency_key",
+        ][..]
+    } else if gateway_result {
+        &[
+            "activity_id",
+            "receipt",
+            "state",
+            "result_code",
+            "terminal_payload",
+            "call_graph",
+        ][..]
+    } else {
+        &["activity_id", "receipt"][..]
+    };
+    if !exact_fields(value, fields) || fixed(value, "activity_id")? != expected_activity {
         return Err(ProgramOperationError::IdentityMismatch);
     }
     let receipt = bounded_hex(value, "receipt", MAX_SIGNED_ACTIVITY_BYTES, None)?;
-    crate::program_lifecycle::verify_lifecycle_receipt(&receipt, expected_activity, sequencer)
+    let verified =
+        crate::program_lifecycle::verify_lifecycle_receipt(&receipt, expected_activity, sequencer)?;
+    if gateway_result {
+        let result_code = verified
+            .protocol()
+            .ok_or(ProgramOperationError::Verification)?
+            .result_code();
+        if value.get("result_code").and_then(Value::as_i64) != Some(i64::from(result_code))
+            || required_string(value, "state")?
+                != if result_code == 0 {
+                    "completed"
+                } else {
+                    "refused"
+                }
+            || !required_string(value, "terminal_payload")?.is_empty()
+            || !required_string(value, "call_graph")?.is_empty()
+        {
+            return Err(ProgramOperationError::Verification);
+        }
+    }
+    Ok(verified)
 }
 
 fn decode_boundary_error(
@@ -939,6 +1020,7 @@ fn decode_simulation(
             .ok_or(ProgramOperationError::Decode)?,
         Some(ExecutionState::Simulated),
         trusted_sequencer_public_key,
+        request.signed_activity(),
     )?;
     if decoded.activity_id != request.bound_activity_id()
         || decoded.program_id != request.request_program()
@@ -1045,7 +1127,22 @@ fn decode_submission(
             retained_signed_activity: retained,
         });
     }
-    let decoded = decode_execution(value, None, expected.trusted_sequencer_public_key)?;
+    let retained = if let Some(signed) = expected.retained_signed_activity {
+        signed.to_vec()
+    } else {
+        bounded_hex(
+            object,
+            "retained_signed_activity",
+            MAX_SIGNED_ACTIVITY_BYTES,
+            None,
+        )?
+    };
+    let decoded = decode_execution(
+        value,
+        None,
+        expected.trusted_sequencer_public_key,
+        &retained,
+    )?;
     if !matches!(
         decoded.state,
         ExecutionState::Executed | ExecutionState::Refused
@@ -1085,10 +1182,51 @@ fn decode_execution_authority(
     ))
 }
 
+fn execution_call_binding(
+    signed_activity: &[u8],
+    activity_id: [u8; 32],
+    program_id: [u8; 32],
+    guest_abi_version: u16,
+) -> Result<([u8; 32], u16), ProgramOperationError> {
+    let registry = crate::program_lifecycle::programs_module_registry()?;
+    let activity = layerx_wire::activity::decode_signed(signed_activity, &registry)
+        .map_err(|_| ProgramOperationError::Decode)?;
+    if layerx_wire::hash::activity_id(&activity).map_err(|_| ProgramOperationError::Decode)?
+        != activity_id
+    {
+        return Err(ProgramOperationError::IdentityMismatch);
+    }
+    if activity.activity_type().module() != layerx_types::payload::ModuleId::Programs
+        || activity.activity_type().ordinal() != 3
+    {
+        return Err(ProgramOperationError::IdentityMismatch);
+    }
+    let bound_program = if activity.protocol_version() == 3 {
+        let call = layerx_types::program_call::NativeProgramCall::decode(activity.payload())
+            .map_err(|_| ProgramOperationError::Decode)?;
+        if call.guest_abi != guest_abi_version {
+            return Err(ProgramOperationError::IdentityMismatch);
+        }
+        call.callee().bytes()
+    } else {
+        layerx_types::intent::ProgramCall::from_canonical_payload(activity.payload())
+            .map_err(|_| ProgramOperationError::Decode)?
+            .callee()
+            .bytes()
+    };
+    if bound_program != program_id {
+        return Err(ProgramOperationError::IdentityMismatch);
+    }
+    let payload_hash =
+        layerx_wire::hash::payload_hash(&activity).map_err(|_| ProgramOperationError::Decode)?;
+    Ok((payload_hash, activity.protocol_version()))
+}
+
 fn decode_execution(
     value: &Value,
     expected_state: Option<ExecutionState>,
     trusted_sequencer_public_key: [u8; 32],
+    signed_activity: &[u8],
 ) -> Result<DecodedExecution, ProgramOperationError> {
     let value = object(value)?;
     let state = match required_string(value, "state")? {
@@ -1133,7 +1271,10 @@ fn decode_execution(
     let output_bytes = decimal_u64(usage, "output_bytes")?;
     let fee_units = decimal_u128(usage, "fee_units")?;
     let outcome = value.get("outcome").ok_or(ProgramOperationError::Decode)?;
+    let (payload_hash, protocol_version) =
+        execution_call_binding(signed_activity, activity_id, program_id, guest_abi_version)?;
     let evidence = ProgramExecutionEvidence {
+        payload_hash,
         receipt,
         terminal_payload,
         call_graph,
@@ -1153,7 +1294,8 @@ fn decode_execution(
         .evidence()
         .receipt_digest()
         .ok_or(ProgramOperationError::Verification)?;
-    if protocol.module_version() != module_version
+    if protocol.protocol_version() != protocol_version
+        || protocol.module_version() != module_version
         || protocol.batch_id() != batch_id
         || protocol.global_sequence() != global_sequence
         || protocol.result_code() != result_code

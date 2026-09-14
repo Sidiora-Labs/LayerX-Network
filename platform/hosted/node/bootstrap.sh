@@ -20,6 +20,7 @@
 #                           data directory.
 #   --network-id N          Decimal network id, 1..4294967295.
 #   --genesis-metadata FILE LXGB v2 suffix: canonical Asset records and named fees.
+#   --withdrawal-fee PRICE Commit an explicit v3 withdrawal price, preserving existing fees.
 #   --sequencer-key FILE    Sequencer ed25519 seed: 32 raw bytes or 64 hex
 #                           characters. Signs genesis and every batch. FILE
 #                           must lie outside DATA_DIR; it is read here once to
@@ -62,7 +63,8 @@
 #                           the sequencer public key.
 #   --genesis-timestamp-ms T  Genesis timestamp in milliseconds. Default: now.
 #   --enable-module NAME    Enable escrow, budget, stream, service or perps in
-#                           the signed genesis parameters. Repeat for each module.
+#                           the signed genesis parameters. All five are enabled
+#                           by default; explicit names select the enabled rows.
 #   --migrations FILE       History migration SQL. Default: repository
 #                           migrations/0007_history_index.sql or
 #                           /opt/layerx/migrations/0007_history_index.sql.
@@ -181,10 +183,23 @@ LAYERXD=""
 GENESIS_BUILD=""
 CUSTODY_PROFILE=""
 GENESIS_METADATA=""
+WITHDRAWAL_FEE=""
 GENESIS_MODULES=()
 SETTLEMENT_ENV=""
 SETTLEMENT_DOCUMENT=${LAYERX_PAXEER_SETTLEMENT_JSON:-}
 FORCE=0
+
+enable_genesis_module() {
+    local module
+    case "$1" in
+        escrow|budget|stream|service|perps) ;;
+        *) fail "--enable-module requires escrow, budget, stream, service or perps" ;;
+    esac
+    for module in "${GENESIS_MODULES[@]}"; do
+        [ "$module" != "$1" ] || fail "--enable-module repeats $1"
+    done
+    GENESIS_MODULES+=("$1")
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -196,6 +211,7 @@ while [ $# -gt 0 ]; do
         --treasury-signer-socket) TREASURY_SIGNER_SOCKET=$2; shift 2 ;;
         --asset) ASSET_ID=$2; shift 2 ;;
         --genesis-metadata) GENESIS_METADATA=$2; shift 2 ;;
+        --withdrawal-fee) WITHDRAWAL_FEE=$2; shift 2 ;;
         --treasury-balance) TREASURY_BALANCE=$2; shift 2 ;;
         --program-port) PROGRAM_PORT=$2; shift 2 ;;
         --replica-port) REPLICA_PORT=$2; shift 2 ;;
@@ -206,14 +222,7 @@ while [ $# -gt 0 ]; do
         --replica-id) REPLICA_ID=$2; shift 2 ;;
         --genesis-timestamp-ms) GENESIS_TIMESTAMP_MS=$2; shift 2 ;;
         --enable-module)
-            case "${2:-}" in
-                escrow|budget|stream|service|perps) ;;
-                *) fail "--enable-module requires escrow, budget, stream, service or perps" ;;
-            esac
-            for module in "${GENESIS_MODULES[@]}"; do
-                [ "$module" != "$2" ] || fail "--enable-module repeats $2"
-            done
-            GENESIS_MODULES+=("$2")
+            enable_genesis_module "${2:-}"
             shift 2 ;;
         --migrations) MIGRATIONS=$2; shift 2 ;;
         --layerxd) LAYERXD=$2; shift 2 ;;
@@ -227,8 +236,21 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ "${#GENESIS_MODULES[@]}" -eq 0 ]; then
+    [ -f "$SCRIPT_DIR/genesis-modules.conf" ] && [ -r "$SCRIPT_DIR/genesis-modules.conf" ] \
+        || fail "public testnet genesis module configuration is unavailable"
+    while IFS= read -r module || [ -n "$module" ]; do
+        enable_genesis_module "$module"
+    done < "$SCRIPT_DIR/genesis-modules.conf"
+    [ "${#GENESIS_MODULES[@]}" -eq 5 ] || fail "public testnet genesis requires five configured modules"
+fi
+
 [ -n "$GENESIS_METADATA" ] && [ -f "$GENESIS_METADATA" ] && [ ! -L "$GENESIS_METADATA" ] && [ -r "$GENESIS_METADATA" ] || fail "--genesis-metadata requires an authoritative LXGB v2 metadata file"
 GENESIS_METADATA=$(readlink -f "$GENESIS_METADATA")
+if [ -n "$WITHDRAWAL_FEE" ]; then
+    python3 "$SCRIPT_DIR/genesis_fees.py" "$GENESIS_METADATA" "$WITHDRAWAL_FEE" --check \
+        || fail "invalid withdrawal fee configuration"
+fi
 case "$GENESIS_METADATA" in "$(readlink -m "$DATA_DIR")"/*) fail "genesis metadata must be outside the data directory" ;; esac
 [ -n "$DATA_DIR" ] || fail "--data-dir is required"
 [ -n "$RUN_DIR" ] || fail "--run-dir is required"
@@ -421,10 +443,9 @@ else
 fi
 [ "$PROGRAM_TOKEN" != "$REPLICA_TOKEN" ] || fail "program and replica tokens must differ"
 
-DATA_DIR=$(readlink -f "$DATA_DIR" 2>/dev/null || printf '%s' "$DATA_DIR")
-mkdir -p "$DATA_DIR"
-chmod 0700 "$DATA_DIR"
-DATA_DIR=$(readlink -f "$DATA_DIR")
+command -v python3 >/dev/null || fail "python3 is required for safe data directory preparation"
+DATA_DIR=$(python3 "$SCRIPT_DIR/data_directory.py" prepare "$DATA_DIR") \
+    || fail "data directory preparation was refused"
 mkdir -p "$RUN_DIR"
 RUN_DIR=$(readlink -f "$RUN_DIR")
 [ "$DATA_DIR" != "$RUN_DIR" ] || fail "--data-dir and --run-dir must differ"
@@ -432,7 +453,8 @@ case "$RUN_DIR" in "$DATA_DIR"/*) fail "--run-dir must not be inside --data-dir"
 case "$SEQUENCER_KEY_FILE" in "$DATA_DIR"/*) fail "the sequencer key file must be outside the data directory: $SEQUENCER_KEY_FILE" ;; esac
 case "$(readlink -f "$SEQUENCER_KEY_FILE")" in "$DATA_DIR"/*) fail "the sequencer key file must be outside the data directory: $SEQUENCER_KEY_FILE" ;; esac
 if [ "$FORCE" -eq 1 ]; then
-    find "$DATA_DIR" -mindepth 1 -delete
+    python3 "$SCRIPT_DIR/data_directory.py" clear "$DATA_DIR" \
+        || fail "data directory cleanup was refused"
 fi
 if [ -n "$(ls -A "$DATA_DIR")" ]; then
     fail "data directory is not empty: $DATA_DIR (pass --force to discard it)"
@@ -446,6 +468,13 @@ SUPERVISOR_SOCKET="$RUN_DIR/supervisor.sock"
 
 umask 077
 mkdir -p "$DATA_DIR/checkpoints" "$DATA_DIR/logs" "$DATA_DIR/replica" "$DATA_DIR/secrets" "$DATA_DIR/work"
+if [ -n "$WITHDRAWAL_FEE" ]; then
+    python3 "$SCRIPT_DIR/genesis_fees.py" "$GENESIS_METADATA" "$WITHDRAWAL_FEE" \
+        > "$DATA_DIR/work/withdrawal-metadata.lxgb" || fail "withdrawal metadata generation failed"
+    GENESIS_METADATA="$DATA_DIR/work/withdrawal-metadata.lxgb"
+    [ "$(stat -c %s "$GENESIS_METADATA")" -le "$GENESIS_METADATA_MAX_BYTES" ] \
+        || fail "withdrawal metadata exceeds the genesis request bound"
+fi
 GUARANTOR_KEY_FILE="$DATA_DIR/secrets/guarantor-key.pem"
 GUARANTOR_ENTRIES=()
 declare -A GUARANTOR_KEYS=()

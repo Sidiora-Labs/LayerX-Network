@@ -1,4 +1,4 @@
-import { copyEntry } from "../../copy/catalog.ts";
+import { copyEntry } from "../../copy/runtime.ts";
 
 export function human_web_app_scaffold() {
   return Object.freeze({

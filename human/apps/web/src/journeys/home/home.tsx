@@ -3,24 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import { humanApi } from "../../api/index.ts";
-import {
-  ActionGrid,
-  BalanceSummary,
-  CountBadge,
-  KitButton,
-  KitList,
-  KitListItem,
-  KitSectionHeader,
-  KitViewAllChip,
-  LabelValue,
-  ScreenCard,
-  SignedWordedAmount,
-  StateFrame,
-  StatusPill,
-  protocolAmount,
-} from "../../kit";
+import { ActionGrid, BalanceSummary, CountBadge, KitList, KitListItem, KitSectionHeader, KitViewAllChip } from "../../kit/display";
+import { KitButton } from "../../kit/control";
+import { LabelValue, SignedWordedAmount, StatusPill } from "../../kit/money";
+import { ScreenCard, StateFrame } from "../../kit/surface";
+import { protocolAmount } from "../../kit/model";
 import { useShellSelection } from "../../shell/app-shell";
 import { PrivateFigure, usePrivacyMode } from "../../settings/privacy";
 import { LoadingSurface, OfflineSurface } from "../../states/surfaces";

@@ -2,17 +2,12 @@
 
 import { useState, type SyntheticEvent } from "react";
 
-import { copyEntry } from "../../copy/catalog";
+import { copyEntry } from "../../copy/runtime";
 import { formatCopy } from "../../copy/format";
-import {
-  ExplorerEvidenceInput,
-  ExplorerPanel,
-  ExplorerTable,
-  ExplorerVerificationBadge,
-  InlineNotice,
-  KitButton,
-  SettingsSegmentedControl,
-} from "../kit";
+import { ExplorerEvidenceInput, ExplorerPanel, ExplorerTable, ExplorerVerificationBadge } from "../kit/explorer";
+import { InlineNotice } from "../kit/surface";
+import { KitButton } from "../kit/control";
+import { SettingsSegmentedControl } from "../kit/settings";
 import { FreshnessDisplay, MirrorFreshnessDisplay, verificationLabel } from "./components";
 import {
   decodeVerificationReport,

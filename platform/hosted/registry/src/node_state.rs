@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use layerx_programs::{
     hex, AccountStateHead, DeploymentProof, ProgramId, ProtocolDeploymentVerifier,
-    VerifiedDeploymentEvidence,
+    ProtocolHeadMaintenanceProof, ProtocolHeadProof, VerifiedDeploymentEvidence,
 };
 use layerx_proof::merkle::Proof;
 use layerx_wire::hash::receipt_digest;
@@ -74,6 +74,7 @@ struct BatchEvidence {
     signature: [u8; 64],
     receipt_proof: Proof,
     batch_identity: Value,
+    maintenance: Option<ProtocolHeadMaintenanceProof>,
 }
 
 impl NodeProgramStateSource {
@@ -469,6 +470,11 @@ impl NodeProgramStateSource {
     fn get_from(&self, endpoint: &str, authorization: &str, path: &str) -> Result<Value, String> {
         let (status, body) = self.fetch_from(endpoint, authorization, path)?;
         if !(200..300).contains(&status) {
+            if let Some(code) = body["error"].as_i64() {
+                return Err(format!(
+                    "node authority GET {path} returned HTTP {status} with protocol result {code}"
+                ));
+            }
             return Err(format!("node authority GET {path} returned HTTP {status}"));
         }
         Ok(body)
@@ -591,20 +597,16 @@ impl NodeProgramStateSource {
             }
             .map_err(|error| format!("maintenance head verification failed: {error}"));
         }
+        let proof = ProtocolHeadProof {
+            receipt,
+            receipt_proof: &evidence.receipt_proof,
+            header: &evidence.header,
+            header_signature: &evidence.signature,
+            maintenance: evidence.maintenance.as_ref(),
+        };
         let claims = match now_ms {
-            Some(now) => verifier.verify_current_protocol_head(
-                receipt,
-                &evidence.receipt_proof,
-                &evidence.header,
-                &evidence.signature,
-                now,
-            ),
-            None => verifier.verify_historical_protocol_head(
-                receipt,
-                &evidence.receipt_proof,
-                &evidence.header,
-                &evidence.signature,
-            ),
+            Some(now) => verifier.verify_current_protocol_head_proof(&proof, now),
+            None => verifier.verify_historical_protocol_head_proof(&proof),
         }
         .map_err(|error| format!("program-state receipt verification failed: {error}"))?;
         Ok((
@@ -705,7 +707,57 @@ fn parse_batch_evidence(value: &Value) -> Result<BatchEvidence, String> {
         signature,
         receipt_proof,
         batch_identity: value["batch_identity"].clone(),
+        maintenance: parse_maintenance(&value["batch_identity"])?,
     })
+}
+
+fn parse_maintenance(value: &Value) -> Result<Option<ProtocolHeadMaintenanceProof>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    if field(value, "kind")? != "occupancy_maintenance_v2" {
+        return Err("unsupported receipt batch identity".to_owned());
+    }
+    let items = value["activity_receipts_hex"]
+        .as_array()
+        .ok_or_else(|| "maintenance evidence omitted the complete receipt chain".to_owned())?;
+    if items.is_empty() || items.len() > 64 {
+        return Err("maintenance receipt count exceeds its bound".to_owned());
+    }
+    let mut remaining = 16 * 1024 * 1024;
+    let mut decode = |encoded: &str| {
+        if !encoded.len().is_multiple_of(2) || encoded.len() / 2 > remaining {
+            return Err("maintenance receipt bytes exceed their bound".to_owned());
+        }
+        remaining -= encoded.len() / 2;
+        hex::decode(encoded).map_err(|error| format!("maintenance receipt encoding: {error}"))
+    };
+    let receipt = decode(field(value, "receipt_hex")?)?;
+    let mut activity_receipts = Vec::with_capacity(items.len());
+    for item in items {
+        activity_receipts
+            .push(decode(item.as_str().ok_or_else(|| {
+                "maintenance receipt is not hexadecimal text".to_owned()
+            })?)?);
+    }
+    let encoded_proof = field(value, "receipt_proof_hex")?;
+    if encoded_proof.len() > 2 * 1_034 {
+        return Err("maintenance proof exceeds its bound".to_owned());
+    }
+    let proof = hex::decode(encoded_proof).map_err(|error| error.to_string())?;
+    let canonical = decode_merkle_proof(&proof)
+        .map_err(|error| format!("maintenance proof encoding: {error:?}"))?;
+    let receipt_proof = Proof::new(
+        canonical.leaf_index(),
+        canonical.leaf_count(),
+        canonical.siblings().to_vec(),
+    )
+    .map_err(|error| format!("maintenance proof structure: {error:?}"))?;
+    Ok(Some(ProtocolHeadMaintenanceProof {
+        receipt,
+        receipt_proof,
+        activity_receipts,
+    }))
 }
 
 fn parse_cursor(value: &Value) -> Result<ProgramStateCursor, String> {

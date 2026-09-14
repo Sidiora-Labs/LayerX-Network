@@ -1,8 +1,9 @@
 use std::io::{self, Read, Write};
 
 use layerx_proof::inclusion::{verify_receipt, SequencerAuthorization};
-use layerx_proof::merkle::decode_proof;
+use layerx_proof::merkle::Proof;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +55,49 @@ fn hex(value: &str) -> io::Result<Vec<u8>> {
         .collect()
 }
 
+fn native_proof(bytes: &[u8]) -> io::Result<Proof> {
+    let proof = layerx_wire::receipt::decode_merkle_proof(bytes).map_err(|_| refused())?;
+    Proof::new(
+        proof.leaf_index(),
+        proof.leaf_count(),
+        proof.siblings().to_vec(),
+    )
+    .map_err(|_| refused())
+}
+
+fn authenticated_digest(
+    bytes: &[u8],
+    proof: &Proof,
+    header: &layerx_wire::receipt::BatchHeader,
+    authorization: &SequencerAuthorization,
+    observed_at: u64,
+) -> io::Result<[u8; 32]> {
+    if bytes.starts_with(b"LXP/programs/occupancy-receipt/v2\0") {
+        let receipt =
+            layerx_wire::maintenance::decode_occupancy_maintenance(bytes).map_err(|_| refused())?;
+        if header.first_sequence() == 0
+            || header.last_sequence() <= header.first_sequence()
+            || header.last_sequence().checked_sub(header.first_sequence())
+                != Some(u64::from(proof.leaf_index()))
+            || receipt.batch_number != header.batch_number()
+            || receipt.global_sequence != header.last_sequence()
+            || receipt.resulting_state_root != header.resulting_state_root()
+            || proof.leaf_index().checked_add(1) != Some(proof.leaf_count())
+            || observed_at != header.timestamp_ms()
+        {
+            return Err(refused());
+        }
+        return Ok(Sha256::digest(bytes).into());
+    }
+    let receipt =
+        layerx_proof::receipt::verify_sequencer_signature(bytes, authorization.public_key())
+            .map_err(|_| refused())?;
+    layerx_wire::hash::receipt_digest(
+        &layerx_wire::receipt::encode_unsigned(&receipt).map_err(|_| refused())?,
+    )
+    .map_err(|_| refused())
+}
+
 pub(super) fn run() -> io::Result<()> {
     let mut bytes = Vec::new();
     io::stdin().take(1_048_577).read_to_end(&mut bytes)?;
@@ -68,14 +112,8 @@ pub(super) fn run() -> io::Result<()> {
     let signature: [u8; 64] = hex(&head.batch_evidence.header_signature)?
         .try_into()
         .map_err(|_| refused())?;
-    let proof =
-        decode_proof(&hex(&head.batch_evidence.receipt_proof_hex)?).map_err(|_| refused())?;
+    let proof = native_proof(&hex(&head.batch_evidence.receipt_proof_hex)?)?;
     let receipt_bytes = hex(&head.receipt_hex)?;
-    let receipt = layerx_proof::receipt::verify_sequencer_signature(
-        &receipt_bytes,
-        authorization.public_key(),
-    )
-    .map_err(|_| refused())?;
     let verified = verify_receipt(
         &receipt_bytes,
         &proof,
@@ -85,6 +123,13 @@ pub(super) fn run() -> io::Result<()> {
     )
     .map_err(|_| refused())?;
     let header = verified.header().header();
+    let digest = authenticated_digest(
+        &receipt_bytes,
+        &proof,
+        header,
+        &authorization,
+        head.observed_at,
+    )?;
     if !head.current
         || header.network_id() != input.network_id
         || header.protocol_version() != 3
@@ -92,12 +137,7 @@ pub(super) fn run() -> io::Result<()> {
         || header.last_sequence() != head.observed_sequence
         || header.resulting_state_root().as_slice() != hex(&head.state_root)?
         || head.observed_at == 0
-        || layerx_wire::hash::receipt_digest(
-            &layerx_wire::receipt::encode_unsigned(&receipt).map_err(|_| refused())?,
-        )
-        .map_err(|_| refused())?
-        .as_slice()
-            != hex(&head.receipt_digest)?
+        || digest.as_slice() != hex(&head.receipt_digest)?
     {
         return Err(refused());
     }

@@ -3,19 +3,15 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import type { Agent } from "../../api/index.ts";
 import { useActiveAccountId } from "../../auth/use-active-account.ts";
-import {
-  Badge,
-  CopyableIdentifier,
-  InlineNotice,
-  KitButton,
-  KitSectionHeader,
-  LabelValue,
-  ScreenCard,
-  StatPair,
-} from "../../kit";
+import { Badge } from "../../kit/collection";
+import { CopyableIdentifier, LabelValue } from "../../kit/money";
+import { InlineNotice, ScreenCard } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { KitSectionHeader } from "../../kit/display";
+import { StatPair } from "@layerx/ui/components/stat";
 import {
   ErrorSurface,
   LoadingSurface,
@@ -32,7 +28,6 @@ import {
   formatPlainTimestamp,
   journeyProgress,
   spendPresentation,
-  type AgentsShell,
   type JourneyProgress,
 } from "./model.ts";
 import { JourneyStages } from "./progress.tsx";
@@ -73,20 +68,18 @@ function SpendSection({ agent }: Readonly<{ agent: Agent }>) {
 }
 
 export function AgentDetailScreen({
-  shell: initialShell,
   agentId,
   ownerAccount,
   embedded = false,
   onChanged,
 }: Readonly<{
-  shell: AgentsShell;
   agentId: string;
   ownerAccount?: string;
   embedded?: boolean;
   onChanged?: () => void;
 }>) {
   const router = useRouter();
-  const shell = useAgentsShell(initialShell);
+  const shell = useAgentsShell();
   const agents = useMemo(() => new Agents(), []);
   const accountId = useActiveAccountId(ownerAccount);
   const [agent, setAgent] = useState<Agent | undefined>(undefined);

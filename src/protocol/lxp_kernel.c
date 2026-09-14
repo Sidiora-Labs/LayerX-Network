@@ -924,9 +924,11 @@ lxp_result lxp_kernel_batch_snapshot_begin_level(
     if (status == LXP_OK)
         status = level_token_mix(schedule_root, scalar, sizeof(scalar));
     SCHEDULE_U64(snapshot->fee_parameters.multiplier_basis_points);
-    if (snapshot->fee_parameters.version == 2U) {
+    if (snapshot->fee_parameters.version == 2U || snapshot->fee_parameters.version == 3U) {
         SCHEDULE_U64(snapshot->fee_parameters.asset_price_count);
-        for (index = 0U; status == LXP_OK && index < LXP_ASSET_FEE_PRICE_COUNT; ++index) {
+        for (index = 0U; status == LXP_OK && index <
+             (snapshot->fee_parameters.version == 3U ? LXP_ASSET_FEE_PRICE_COUNT_V3 :
+                                                       LXP_ASSET_FEE_PRICE_COUNT); ++index) {
             lxp_u128_to_be(snapshot->fee_parameters.asset_prices[index], scalar);
             status = level_token_mix(schedule_root, scalar, sizeof(scalar));
         }
@@ -4004,6 +4006,8 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
     private_execution.identities = &batch->settled->identities;
     private_execution.verified_receipts = &batch->settled->verified_receipts;
     private_execution.fee_parameters = &batch->settled->fee_parameters;
+    private_execution.recorded_fee_schedule_version = batch->settled->fee_schedule.version;
+    private_execution.recorded_metering_schedule_version = batch->settled->metering_schedule.version;
     private_execution.canonical_events_out = NULL;
     record = (kernel_staged_commit){execution->arena, {0}, execution->global_sequence, false};
     batch->settled->programs_runtime.state_feed = runtime->state_feed;
@@ -5911,6 +5915,8 @@ lxp_result lxp_kernel_prepare_terminal_rejection(
     private_execution.identities = &batch->settled->identities;
     private_execution.verified_receipts = &batch->settled->verified_receipts;
     private_execution.fee_parameters = &batch->settled->fee_parameters;
+    private_execution.recorded_fee_schedule_version = batch->settled->fee_schedule.version;
+    private_execution.recorded_metering_schedule_version = batch->settled->metering_schedule.version;
     private_execution.canonical_events_out = NULL;
     record = (kernel_staged_commit){execution->arena, {0},
                                     execution->global_sequence, false};

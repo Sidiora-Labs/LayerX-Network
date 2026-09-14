@@ -1,4 +1,6 @@
-import { Card, EmptyState, Skeleton, SkeletonRow } from "@layerx/ui";
+import { Card } from "@layerx/ui/components/card";
+import { EmptyState } from "@layerx/ui/components/empty-state";
+import { Skeleton, SkeletonRow } from "@layerx/ui/components/feedback";
 import { cn } from "@layerx/ui/cn";
 import type { ReactNode } from "react";
 

@@ -3,7 +3,10 @@
 use layerx_crypto::ed25519;
 use layerx_proof::inclusion::{verify_state, InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::{build_proof, verify_path, MerkleError, Proof};
-use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck, VerifiedReceipt};
+use layerx_proof::receipt::{
+    authorized_maintained_activity_batch_chain, verify_outcome, AuthorizedBatch,
+    MaintainedOutcomeEvidence, ReceiptCheck, VerifiedReceipt,
+};
 use layerx_wire::hash::batch_header_digest;
 use layerx_wire::receipt::{decode, decode_batch_header};
 
@@ -244,10 +247,79 @@ impl MirrorVerifier {
         }
         verify_path(canonical_receipt, &proof, &root)
             .map_err(MirrorVerifyError::ReceiptInclusion)?;
-        let decoded = decode(canonical_receipt).map_err(|_| MirrorVerifyError::ReceiptDecode)?;
-        let receipt = decoded.protocol().ok_or(MirrorVerifyError::ReceiptDecode)?;
         let header = decode_batch_header(&self.archive.canonical_batch_header)
             .map_err(|_| MirrorVerifyError::Header)?;
+        let authorised = self.authorize_receipt(canonical_receipt, &proof, &header)?;
+        let value = verify_outcome(canonical_receipt, &authorised)
+            .map_err(|failure| MirrorVerifyError::Receipt(failure.check))?;
+        Ok(self.report(value, MirrorEvidenceLevel::BatchIncluded))
+    }
+
+    fn authorize_receipt(
+        &self,
+        canonical: &[u8],
+        proof: &Proof,
+        header: &layerx_wire::receipt::BatchHeader,
+    ) -> Result<AuthorizedBatch, MirrorVerifyError> {
+        let decoded = decode(canonical).map_err(|_| MirrorVerifyError::ReceiptDecode)?;
+        let receipt = decoded.protocol().ok_or(MirrorVerifyError::ReceiptDecode)?;
+        let last = self
+            .archive
+            .records
+            .receipts
+            .last()
+            .ok_or(MirrorVerifyError::ReceiptMissing)?;
+        let maintenance = layerx_wire::maintenance::decode_occupancy_maintenance(last).ok();
+        if maintenance.is_none() {
+            decode(last).map_err(|_| MirrorVerifyError::ReceiptDecode)?;
+        }
+        let batch_id = layerx_wire::hash::receipt_execution_batch_id_for_evidence(
+            receipt,
+            header,
+            maintenance.as_ref(),
+        )
+        .map_err(|_| MirrorVerifyError::ReceiptBatchMismatch)?;
+        if batch_id != receipt.batch_id() {
+            return Err(MirrorVerifyError::ReceiptBatchMismatch);
+        }
+        let authorised = AuthorizedBatch::new(
+            batch_id,
+            receipt.asset(),
+            header.previous_state_root(),
+            header.resulting_state_root(),
+            self.trust.sequencer_public_key,
+        );
+        if maintenance.is_some() {
+            let leaves = self
+                .archive
+                .records
+                .receipts
+                .iter()
+                .map(Vec::as_slice)
+                .collect::<Vec<_>>();
+            let (maintenance_proof, _) = build_proof(&leaves, leaves.len() - 1)
+                .map_err(MirrorVerifyError::ReceiptInclusion)?;
+            let authorization = SequencerAuthorization::new(
+                self.trust.sequencer_id,
+                self.trust.sequencer_public_key,
+                self.trust.first_batch_number,
+                self.trust.last_batch_number,
+            );
+            return authorized_maintained_activity_batch_chain(
+                canonical,
+                &authorised,
+                &MaintainedOutcomeEvidence {
+                    header: &self.archive.canonical_batch_header,
+                    header_signature: &self.archive.batch_authorization.header_signature,
+                    activity_proof: proof,
+                    maintenance: last,
+                    maintenance_proof: &maintenance_proof,
+                    authorization: &authorization,
+                },
+                &self.archive.records.receipts[..leaves.len() - 1],
+            )
+            .map_err(|_| MirrorVerifyError::ReceiptBatchMismatch);
+        }
         if receipt.previous_state_root() != header.previous_state_root()
             || receipt.resulting_state_root() != header.resulting_state_root()
             || receipt.global_sequence() < header.first_sequence()
@@ -255,16 +327,7 @@ impl MirrorVerifier {
         {
             return Err(MirrorVerifyError::ReceiptBatchMismatch);
         }
-        let authorised = AuthorizedBatch::new(
-            receipt.batch_id(),
-            receipt.asset(),
-            receipt.previous_state_root(),
-            receipt.resulting_state_root(),
-            self.trust.sequencer_public_key,
-        );
-        let value = verify_outcome(canonical_receipt, &authorised)
-            .map_err(|failure| MirrorVerifyError::Receipt(failure.check))?;
-        Ok(self.report(value, MirrorEvidenceLevel::BatchIncluded))
+        Ok(authorised)
     }
 
     /// Verifies caller-supplied state inclusion against this archive's signed

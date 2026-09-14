@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { copyEntry } from "../../copy/catalog";
+import { copyEntry } from "../../copy/runtime";
 
 const STORAGE_PREFIX = "layerx.privacy-mode.v1";
 

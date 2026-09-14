@@ -898,6 +898,36 @@ static int reconnect(int descriptor)
     return 0;
 }
 
+static int genesis_state_check(int descriptor)
+{
+    const char *path = getenv("LAYERX_TEST_GENESIS_REGISTRATION_FILE");
+    uint8_t registration[73];
+    const uint8_t request[] = {0U, 1U, 1U};
+    wire_envelope response;
+    lx_asset_record record;
+    REQUIRE(path != NULL);
+    FILE *file = fopen(path, "rb");
+    REQUIRE(file != NULL && fread(registration, sizeof(registration), 1U, file) == 1U);
+    REQUIRE(fgetc(file) == EOF && !ferror(file) && fclose(file) == 0);
+    REQUIRE(memcmp(registration, "LXRR\x01", 5U) == 0 && load_u32(registration + 5U) == NETWORK_ID);
+    REQUIRE(!lxp_ct_is_zero(registration + 9U, 32U));
+    REQUIRE(send_request(descriptor, LNI_MINOR, ASSET_READ_REQUEST, UINT64_MAX,
+                          request, sizeof(request)) == 0);
+    REQUIRE(receive_envelope(descriptor, &response) == 0);
+    REQUIRE(response.major == LNI_MAJOR && response.minor == LNI_MINOR &&
+             response.tag == ASSET_READ_RESPONSE && response.correlation_id == UINT64_MAX &&
+             response.proof_length == 0U && response.payload_length >= 46U);
+    REQUIRE(load_u16(response.payload) == 1U && load_u64(response.payload + 2U) == 0U);
+    REQUIRE(memcmp(response.payload + 10U, registration + 41U, 32U) == 0);
+    REQUIRE(load_u16(response.payload + 42U) == 1U);
+    REQUIRE((size_t)load_u16(response.payload + 44U) == response.payload_length - 46U);
+    REQUIRE(lx_asset_record_decode(response.payload + 46U, response.payload_length - 46U, &record) == LXP_OK);
+    REQUIRE(memcmp(record.asset_id, asset_id, 32U) == 0);
+    release_envelope(&response);
+    puts("daemon genesis receipt-chain root equals the builder commitment before the first activity");
+    return 0;
+}
+
 static int scenario_start(int descriptor, const char *directory, scenario_state *state,
                            const signer *owner, const signer *provider)
 {
@@ -907,6 +937,7 @@ static int scenario_start(int descriptor, const char *directory, scenario_state 
     size_t length;
     batch_evidence evidence;
     const char *credit = getenv("LAYERX_TEST_WITHDRAW_CREDIT");
+    REQUIRE(genesis_state_check(descriptor) == 0);
     REQUIRE(credit != NULL);
     FILE *file = fopen(credit, "rb");
     REQUIRE(file != NULL);

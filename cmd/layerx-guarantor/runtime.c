@@ -306,8 +306,6 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     lxp_byte_span encoded_receipt;
     uint8_t activity_id[32];
     lxp_result status;
-    uint8_t fee_wire[LXP_FEE_PARAMS_V2_BYTES];
-    size_t fee_wire_length;
     if (process == NULL || canonical_activity == NULL || canonical_receipt == NULL ||
         activity == NULL || receipt == NULL || expected == NULL || activity_length == 0U ||
         receipt_length == 0U || timestamp == 0U ||
@@ -323,7 +321,8 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
         expected->module_version == 0U ||
         expected->parameter_version != process->parameter_version)
         return LXP_ERR_VERSION_UNSUPPORTED;
-    status = lxp_fee_params_encode(&process->fees, fee_wire, sizeof(fee_wire), &fee_wire_length);
+    status = lxp_fee_replay_schedule_verify(&process->kernel,
+        expected->parameter_version, &process->fees);
     if (status != LXP_OK) return status;
     status = lxp_activity_decode(canonical_activity, activity_length, activity);
     if (status == LXP_OK && activity->protocol_version != process->protocol_version)
@@ -414,6 +413,15 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     execution.arena = &process->execution_arena;
     execution.sequencer_private_key = NULL;
     execution.verified_receipts = &process->verified_receipts;
+    {
+        lx_programs_fee_schedule schedule;
+        uint8_t asset_id[32];
+        status = occupancy_parameters(process, execution.recorded_fee_schedule_version,
+            &schedule, asset_id);
+        if (status != LXP_OK) return status;
+        execution.recorded_fee_schedule_version = schedule.version;
+        (void)memcpy(process->programs.occupancy_asset_id, asset_id, 32U);
+    }
     (void)memset(receipt, 0, sizeof(*receipt));
     status = lxp_kernel_execute_activity(&process->kernel, activity, &execution, receipt);
     if (status == LXP_OK)

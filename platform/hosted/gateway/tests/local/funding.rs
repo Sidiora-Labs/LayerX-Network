@@ -20,6 +20,7 @@ pub(super) struct Funding {
     nodes: Vec<Daemon>,
     root: PathBuf,
     checkpoint_output: Option<PathBuf>,
+    withdrawal: bool,
     pub(super) recipient_did: String,
     pub(super) recipient_seed: [u8; 32],
 }
@@ -47,7 +48,7 @@ impl Drop for Funding {
         for node in &mut self.nodes {
             node.stop();
         }
-        if !thread::panicking() {
+        if !thread::panicking() && std::env::var_os("LAYERX_TEST_RETAIN_STATE").is_none() {
             let _ = fs::remove_dir_all(&self.root);
         }
     }
@@ -203,16 +204,34 @@ fn producer(script: &str, args: &[&str]) {
     );
 }
 
-pub(super) fn start() -> (Cluster, Funding) {
-    let root =
-        std::env::temp_dir().join(format!("pay4-funding-{}-{}", std::process::id(), now_ms()));
+fn funding_root() -> PathBuf {
+    let root = std::env::temp_dir().join(format!(
+        "pay4-funding-{}-{}-{}",
+        std::process::id(),
+        now_ms(),
+        NEXT_CLUSTER.fetch_add(1, Ordering::Relaxed),
+    ));
     make_dir(&root, 0o700);
+    root
+}
+
+pub(super) fn start() -> (Cluster, Funding) {
+    start_configured(false)
+}
+
+pub(super) fn start_withdrawal() -> (Cluster, Funding) {
+    start_configured(true)
+}
+
+fn start_configured(withdrawal: bool) -> (Cluster, Funding) {
+    let root = funding_root();
     let recipient_seed = random32();
     let recipient_did = treasury_did(&recipient_seed);
     let mut funding = Funding {
         nodes: Vec::new(),
         root,
         checkpoint_output: None,
+        withdrawal,
         recipient_did: recipient_did.clone(),
         recipient_seed,
     };
@@ -516,7 +535,7 @@ fn submit_credit(cluster: &Cluster, signed: &[u8], seed: &[u8; 32]) {
     };
     let mut selector = vec![1];
     selector.extend_from_slice(&ack.activity_id());
-    selector.extend_from_slice(&3000_u32.to_be_bytes());
+    selector.push(1);
     drop(transport);
     thread::sleep(Duration::from_millis(100));
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -583,6 +602,7 @@ fn funded_genesis(
     builder: &Path,
     sequencer_seed: &[u8; 32],
     profile: &Path,
+    withdrawal: bool,
 ) -> Genesis {
     let directory = root.join("genesis");
     make_dir(&directory, 0o755);
@@ -598,6 +618,9 @@ fn funded_genesis(
     request[schedule + 151..schedule + 167].copy_from_slice(&4_u128.to_be_bytes());
     request[schedule + 167..schedule + 183].copy_from_slice(&4_u128.to_be_bytes());
     request[schedule + 183..schedule + 199].copy_from_slice(&4_u128.to_be_bytes());
+    if withdrawal {
+        request = super::withdrawal::configure_genesis(&request);
+    }
     write(&directory.join("request.lxgb"), &request, 0o600);
     write(&directory.join("signer.key"), sequencer_seed, 0o600);
     let artifacts = directory.join("artifacts");
@@ -656,7 +679,7 @@ fn start_node(
     let treasury_key = SigningKey::from_bytes(&treasury_seed)
         .verifying_key()
         .to_bytes();
-    let genesis = funded_genesis(&root, &builder, &sequencer_seed, profile);
+    let genesis = funded_genesis(&root, &builder, &sequencer_seed, profile, funding.withdrawal);
     let settlement = start_checkpoint_settlement(funding, &root, &genesis);
     let replica_token = token();
     let program_token = token();
@@ -756,7 +779,7 @@ fn start_checkpoint_settlement(
             text(&genesis.directory),
         ])
         .env_clear()
-        .env("PATH", "/root/.foundry/bin:/usr/bin:/bin")
+        .env("PATH", std::env::var_os("PATH").required("test tool PATH"))
         .current_dir(&repository)
         .stdin(Stdio::null())
         .stdout(Stdio::from(must(

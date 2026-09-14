@@ -2,16 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import type { Agent, MoveQuote } from "../../api/index.ts";
-import {
-  DesktopConfirmation,
-  InlineNotice,
-  KitButton,
-  KitSectionHeader,
-  KitTextField,
-  MobileConfirmation,
-} from "../../kit";
+import { DesktopConfirmation, MobileConfirmation } from "../../kit/confirm";
+import { InlineNotice } from "../../kit/surface";
+import { KitButton } from "../../kit/control";
+import { KitSectionHeader, KitTextField } from "../../kit/display";
 import { PrivateFigure } from "../../settings";
 import { StillCheckingSurface } from "../../states";
 import {

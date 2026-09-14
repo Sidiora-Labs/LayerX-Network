@@ -1,4 +1,4 @@
-import { copyEntry } from "../../../copy/catalog.ts";
+import { copyEntry } from "../../../copy/runtime.ts";
 import { formatCopy } from "../../../copy/format.ts";
 import {
   type AccountBalance,
@@ -105,7 +105,7 @@ export function homeBalance(balance?: AccountBalance): HomeBalance {
     currency: balance.money.currency,
     verification: verificationWord(balance.verification),
     freshness: formatCopy("home.balance.freshness", {
-      when: `${balance.freshness.age_seconds} seconds ago against ${balance.freshness.source_head}${
+      when: `${String(balance.freshness.age_seconds)} seconds ago against ${balance.freshness.source_head}${
         balance.freshness.within_bound ? "" : " (out of date)"
       }`,
     }),

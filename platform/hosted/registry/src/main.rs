@@ -708,7 +708,7 @@ fn isolated_route(
         .arg(&worker_group.build_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
     else {
         return refusal(

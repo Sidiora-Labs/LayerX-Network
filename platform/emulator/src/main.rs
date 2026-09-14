@@ -253,6 +253,7 @@ struct CoreAccountView {
 }
 
 struct DecodedProgramActivity {
+    payload_hash: [u8; 32],
     signed: Vec<u8>,
     program_id: [u8; 32],
     protocol_version: u16,
@@ -1294,6 +1295,8 @@ fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, 
         let activity = decode_signed(&request.body, &registry)
             .map_err(|_| "invalid signed lifecycle activity".to_owned())?;
         return Ok(DecodedProgramActivity {
+            payload_hash: layerx_wire::hash::payload_hash(&activity)
+                .map_err(|_| "invalid program payload hash".to_owned())?,
             activity_id: derive_activity_id(&activity)
                 .map_err(|_| "invalid lifecycle activity identity".to_owned())?,
             idempotency_key: activity.idempotency_key(),
@@ -1307,6 +1310,8 @@ fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, 
             let activity = decode_signed(&signed, &registry)
                 .map_err(|_| "signed native activity is invalid".to_owned())?;
             return Ok(DecodedProgramActivity {
+                payload_hash: layerx_wire::hash::payload_hash(&activity)
+                    .map_err(|_| "invalid program payload hash".to_owned())?,
                 activity_id: derive_activity_id(&activity)
                     .map_err(|_| "signed native activity identity is invalid".to_owned())?,
                 idempotency_key: activity.idempotency_key(),
@@ -1341,6 +1346,8 @@ fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, 
         }
         let program_id = native_call::from_activity(&activity)?;
         return Ok(DecodedProgramActivity {
+            payload_hash: layerx_wire::hash::payload_hash(&activity)
+                .map_err(|_| "invalid program payload hash".to_owned())?,
             activity_id: derive_activity_id(&activity)
                 .map_err(|_| "signed native activity identity is invalid".to_owned())?,
             idempotency_key: activity.idempotency_key(),
@@ -1360,6 +1367,8 @@ fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, 
     let activity_id = derive_activity_id(&activity)
         .map_err(|_| "signed program activity identity is invalid".to_owned())?;
     Ok(DecodedProgramActivity {
+        payload_hash: layerx_wire::hash::payload_hash(&activity)
+            .map_err(|_| "invalid program payload hash".to_owned())?,
         signed,
         program_id: call.callee().bytes(),
         protocol_version: activity.protocol_version(),
@@ -2874,6 +2883,7 @@ fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> R
             sequencer_public_key: emulator.signing_key.verifying_key().to_bytes(),
             previous_state_root: head.state_root,
             activity_id: decoded.activity_id,
+            payload_hash: decoded.payload_hash,
             program_id,
             guest_abi_version: head.abi_version,
         },
@@ -4325,6 +4335,7 @@ fn retain_program_execution(
             sequencer_public_key: emulator.signing_key.verifying_key().to_bytes(),
             previous_state_root: before.receipt_state_root,
             activity_id: decoded.activity_id,
+            payload_hash: decoded.payload_hash,
             program_id,
             guest_abi_version: head.abi_version,
         },
@@ -4349,7 +4360,7 @@ fn retain_program_execution(
             )
         }
     };
-    let document = match verified_program_document(
+    let mut document = match verified_program_document(
         &verified,
         ProgramDocumentFields {
             terminal_payload: &material.terminal_payload,
@@ -4364,6 +4375,7 @@ fn retain_program_execution(
         Ok(document) => document,
         Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
     };
+    document["retained_signed_activity"] = serde_json::Value::String(hex_encode(&decoded.signed));
     let response = document.to_string();
     let receipt_hex = hex_encode(&material.receipt);
     remember_receipt(emulator, activity_id.clone(), receipt_hex);

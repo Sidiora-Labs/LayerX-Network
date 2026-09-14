@@ -1,22 +1,12 @@
 "use client";
 
-import {
-  Badge,
-  BalanceHeader,
-  IconTile,
-  Input,
-  List,
-  ListItem,
-  OptionList,
-  QuickActions,
-  SectionHeader,
-  ViewAllChip,
-  formatRecency,
-  type BadgeProps,
-  type InputProps,
-  type ListItemProps,
-  type OptionListItem,
-} from "@layerx/ui";
+import { Badge, type BadgeProps } from "@layerx/ui/components/badge";
+import { BalanceHeader } from "@layerx/ui/components/balance-header";
+import { IconTile, List, ListItem, SectionHeader, ViewAllChip, type ListItemProps } from "@layerx/ui/components/list";
+import { Input, type InputProps } from "@layerx/ui/components/input";
+import { OptionList, type OptionListItem } from "@layerx/ui/components/option-list";
+import { QuickActions } from "@layerx/ui/components/quick-actions";
+import { formatRecency } from "@layerx/ui/lib/format";
 import { useId, type ComponentProps, type ReactNode } from "react";
 
 import { protocolAmount, type ProtocolAmount } from "./model";

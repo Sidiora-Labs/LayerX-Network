@@ -1,7 +1,9 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { test } from "./production-fixture.ts";
 
 import {
   PERFORMANCE_SAMPLE_COUNT,
@@ -130,6 +132,7 @@ async function installMetricObservers(page: Page): Promise<void> {
 
 async function labMetrics(page: Page, route: string): Promise<LabMetrics> {
   await page.goto(route, { waitUntil: "networkidle" });
+  expect(new URL(page.url()).pathname).toBe(route);
   await page.waitForTimeout(250);
   return page.evaluate(() => ({ ...window.__layerxLabMetrics }));
 }
@@ -149,9 +152,9 @@ test("production routes stay split and within their declared script budgets", as
   }
 });
 
-test("representative pages meet p75 paint interaction and layout budgets", async ({ page }) => {
+test("representative pages meet p75 paint interaction and layout budgets", async ({ page, authenticatedSession }) => {
+  expect(authenticatedSession.session.current).toBe(true);
   await installMetricObservers(page);
-  await page.setExtraHTTPHeaders({ "x-layerx-authenticated": "1" });
   for (const route of ["/", "/explorer", "/app"] as const) {
     const largestPaints: number[] = [];
     const layoutShifts: number[] = [];
@@ -176,6 +179,7 @@ test("representative pages meet p75 paint interaction and layout budgets", async
 });
 
 test("redacted RUM, cache controls, and 3G journey progress use the production server", async ({
+  authenticatedSession,
   context,
   page,
   request,
@@ -259,7 +263,7 @@ test("redacted RUM, cache controls, and 3G journey progress use the production s
     timeout: 30_000,
   });
 
-  await context.setExtraHTTPHeaders({ "x-layerx-authenticated": "1" });
+  expect(authenticatedSession.session.current).toBe(true);
   const journeyNavigation = page.goto("/app/move", { waitUntil: "networkidle" });
   await expect(page.locator('[data-honest-progress="app"]')).toBeVisible();
   await journeyNavigation;

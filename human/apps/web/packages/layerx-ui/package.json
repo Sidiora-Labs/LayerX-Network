@@ -18,6 +18,16 @@
       "import": "./dist/cn.js",
       "require": "./dist/cn.cjs"
     },
+    "./components/*": {
+      "types": "./dist/components/*.d.ts",
+      "import": "./dist/components/*.js",
+      "require": "./dist/components/*.cjs"
+    },
+    "./lib/*": {
+      "types": "./dist/lib/*.d.ts",
+      "import": "./dist/lib/*.js",
+      "require": "./dist/lib/*.cjs"
+    },
     "./styles.css": "./src/styles/tokens.css"
   },
   "files": [

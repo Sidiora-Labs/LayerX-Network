@@ -38,8 +38,9 @@ pub use interface::{
 pub use pipeline::{BuildAttempt, BuildPlan, BuildRefusal, BuildRunner, SourceVerifier};
 pub use protocol_evidence::{
     DeploymentMaintenanceProof, DeploymentProof, ProgramLifecycleProof, ProgramStateProof,
-    ProtocolDeploymentVerifier, ProtocolEvidenceError, StateLeafWitness,
-    VerifiedDeploymentEvidence, VerifiedProgramHead, VerifiedProtocolHead,
+    ProtocolDeploymentVerifier, ProtocolEvidenceError, ProtocolHeadMaintenanceProof,
+    ProtocolHeadProof, StateLeafWitness, VerifiedDeploymentEvidence, VerifiedProgramHead,
+    VerifiedProtocolHead,
 };
 pub use resolver::{ExecutableAdmissionError, VerifiedProgramCatalog};
 

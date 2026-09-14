@@ -1,6 +1,7 @@
 "use client";
 
-import { Input, cn } from "@layerx/ui";
+import { Input } from "@layerx/ui/components/input";
+import { cn } from "@layerx/ui/cn";
 import { useId, type ComponentProps } from "react";
 
 type InputBaseProps = Omit<ComponentProps<typeof Input>, "id" | "aria-describedby" | "aria-invalid">;

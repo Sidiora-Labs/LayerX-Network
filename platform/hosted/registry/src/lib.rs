@@ -95,5 +95,9 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .open(&temporary)?;
     file.write_all(bytes)?;
     file.sync_all()?;
-    fs::rename(&temporary, path)
+    fs::rename(&temporary, path)?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
 }

@@ -122,6 +122,8 @@ spec:
             - $(LAYERX_NODE_ASSET_ID)
             - --genesis-metadata
             - /run/layerx/genesis/metadata.lxgb
+            - --withdrawal-fee
+            - "0"
             - --replica-id
             - $(LAYERX_NODE_REPLICA_ID)
             - --sequencer-key

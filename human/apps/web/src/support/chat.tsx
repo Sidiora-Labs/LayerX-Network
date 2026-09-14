@@ -7,17 +7,13 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import { copyEntry } from "../../copy/catalog.ts";
+import { copyEntry } from "../../copy/runtime.ts";
 import { formatCopy } from "../../copy/format.ts";
 import type { TraceId } from "../api";
-import {
-  InlineNotice,
-  KitButton,
-  KitTextField,
-  LiveRegion,
-  ScreenCard,
-  StateEmpty,
-} from "../kit";
+import { InlineNotice, ScreenCard, StateEmpty } from "../kit/surface";
+import { KitButton } from "../kit/control";
+import { KitTextField } from "../kit/display";
+import { LiveRegion } from "../kit/a11y";
 import { OfflineSurface } from "../states";
 import {
   SupportChatSession,

@@ -231,6 +231,7 @@ export interface ProtocolReceipt {
   readonly authorizationHash: Uint8Array;
   readonly contextHash: Uint8Array;
   readonly timestamp: bigint;
+  readonly totalUnits?: readonly [bigint, bigint];
   readonly programOutcome?: ProgramReceiptOutcome;
   readonly sequencerSignature: Uint8Array;
 }
@@ -458,11 +459,15 @@ export function decodeBatchHeader(canonicalHeader: Uint8Array): BatchHeader {
     return verificationFailure();
   }
   const decoder = new Decoder(canonicalHeader);
-  if (decoder.u16() !== 1 || decoder.u16() !== 0x1701 || decoder.u8() !== 15) {
+  const envelopeVersion = decoder.u16();
+  if (![1, 2, 3].includes(envelopeVersion) || decoder.u16() !== 0x1701 || decoder.u8() !== 15) {
     return verificationFailure();
   }
   field(decoder, 1);
   const protocolVersion = decoder.u16();
+  if (protocolVersion !== envelopeVersion) {
+    return verificationFailure();
+  }
   field(decoder, 2);
   const networkId = decoder.u32();
   field(decoder, 3);
@@ -846,9 +851,10 @@ function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
   }
   const decoder = new Decoder(canonicalReceipt);
   const envelopeVersion = decoder.u16();
+  const structureTag = decoder.u16();
   if (
     (envelopeVersion !== LEGACY_PROTOCOL_VERSION && !isSelectableProtocolVersion(envelopeVersion))
-    || decoder.u16() !== 0x5201
+    || (structureTag !== 0x5201 && structureTag !== 0x5202)
   ) {
     return receiptFailure(ReceiptFailureCode.Decode);
   }
@@ -908,6 +914,20 @@ function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
   const authorizationHash = decoder.bounded(32);
   const contextHash = decoder.bounded(32);
   const timestamp = decoder.u64();
+  let totalUnits: readonly [bigint, bigint] | undefined;
+  if (structureTag === 0x5202) {
+    const before = decoder.u128();
+    const after = decoder.u128();
+    const expected = operation === 1 && before === 0n ? 0n
+      : operation >= 2 && operation <= 8 ? before
+      : operation === 10 && amount > 0n && before + amount <= MAX_U128 ? before + amount
+      : operation === 11 && amount > 0n && before >= amount ? before - amount
+      : undefined;
+    if (moduleId !== 1 || resultCode !== 0 || allZero(asset) || expected !== after) {
+      return receiptFailure(ReceiptFailureCode.CanonicalEncoding);
+    }
+    totalUnits = Object.freeze([before, after]);
+  }
   if (globalSequence === 0n) {
     return receiptFailure(ReceiptFailureCode.GlobalSequence);
   }
@@ -972,6 +992,7 @@ function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
       authorizationHash,
       contextHash,
       timestamp,
+      ...(totalUnits === undefined ? {} : { totalUnits }),
       ...(programOutcome === undefined ? {} : { programOutcome }),
       sequencerSignature,
     }),
