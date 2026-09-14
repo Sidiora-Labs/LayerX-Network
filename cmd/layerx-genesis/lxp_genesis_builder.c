@@ -103,6 +103,8 @@ static lxp_result materialize_snapshot(
     if (status == LXP_OK)
         (void)memcpy(kernel->current_state_root, receipt_root, 32U);
     if (status == LXP_OK && handover_trust != NULL)
+        status = lxp_handover_kernel_initialize(kernel, manifest, NULL, NULL);
+    if (status == LXP_OK && handover_trust != NULL)
         status = lxp_handover_genesis_trust_encode(kernel, arena, handover_trust);
     if (status == LXP_OK && snapshot != NULL)
         status = lxp_snapshot_write(kernel, 0U, arena, snapshot);
