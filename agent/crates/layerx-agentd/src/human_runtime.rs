@@ -2747,7 +2747,6 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         authority: &AuthorizedBatch,
         native: Option<&layerx_proof::receipt::NativeOwnerOutcomeContext<'_>>,
     ) -> Result<crate::receipt::ServedReceipt, HumanOperationError> {
-        let expected_activity_id = served.metadata.activity_id;
         let registry = self.authority.registry(peer).map_err(map_core)?;
         let correlation = u64::from_be_bytes(
             idempotency_key[..8]
@@ -2755,12 +2754,12 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
                 .map_err(|_| HumanOperationError::Refused)?,
         ) | 1;
         let activity_evidence = self.node.proof_bundle(
-            ProofBundleSelector::Activity(expected_activity_id),
+            ProofBundleSelector::Activity(served.metadata.activity_id),
             correlation,
             &registry,
         );
         let receipt_evidence = self.node.proof_bundle(
-            ProofBundleSelector::Receipt(expected_activity_id),
+            ProofBundleSelector::Receipt(served.metadata.activity_id),
             correlation
                 .checked_add(1)
                 .ok_or(HumanOperationError::Refused)?,
