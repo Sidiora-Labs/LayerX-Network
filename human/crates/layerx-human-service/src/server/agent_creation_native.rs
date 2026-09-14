@@ -172,45 +172,8 @@ impl NativeAgentCreationContract for ProductionAgentCreation<'_> {
             not_before: request.started_at,
             not_after,
         };
-        let signature_key = RowKey::new(format!(
-            "native-funding-signature-{}",
-            hex(&request.action_key)
-        ))
-        .map_err(|_| AgentFailure::Refused("invalid funding signature key"))?;
-        let signature = if let Some(row) = scope.get(Table::Journeys, &signature_key) {
-            <[u8; 64]>::try_from(row.bytes())
-                .map_err(|_| AgentFailure::Refused("invalid retained funding signature"))?
-        } else {
-            let signature = self
-                .custody
-                .authorize_send(scope.principal(), &key, &authorization)
-                .map_err(|_| AgentFailure::Refused("custody refused native funding"))?;
-            scope
-                .put(
-                    Table::Journeys,
-                    signature_key,
-                    request.started_at,
-                    signature.to_vec(),
-                )
-                .map_err(|_| AgentFailure::Unavailable)?;
-            signature
-        };
-        let debit = layerx_crypto::send::SendDebit {
-            from,
-            to,
-            asset: request.asset,
-            amount: request.amount,
-            source_sequence: sequence,
-            idempotency_key: request.action_key,
-            expires_at,
-            context_hash: context,
-            conditions: Vec::new(),
-            authorization_kind: 1,
-            network_id: request.network_id,
-            protocol_version: 3,
-        };
-        layerx_intents::canonical::signed_send_payload(&debit, descriptor.public_key, signature)
-            .map_err(|_| AgentFailure::Refused("retained funding signature differs"))?;
+        let signature =
+            self.authorize_native_funding(scope, &key, &authorization, descriptor.public_key)?;
         let intent = LxpSend::new(
             request.source.clone(),
             request.destination.clone(),
@@ -244,6 +207,55 @@ impl NativeAgentCreationContract for ProductionAgentCreation<'_> {
 }
 
 impl ProductionAgentCreation<'_> {
+    fn authorize_native_funding(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        key: &KeyId,
+        authorization: &SendPlanAuthorization,
+        public_key: [u8; 32],
+    ) -> Result<[u8; 64], AgentFailure> {
+        let signature_key = RowKey::new(format!(
+            "native-funding-signature-{}",
+            hex(&authorization.action_key)
+        ))
+        .map_err(|_| AgentFailure::Refused("invalid funding signature key"))?;
+        let signature = if let Some(row) = scope.get(Table::Journeys, &signature_key) {
+            <[u8; 64]>::try_from(row.bytes())
+                .map_err(|_| AgentFailure::Refused("invalid retained funding signature"))?
+        } else {
+            let signature = self
+                .custody
+                .authorize_send(scope.principal(), key, authorization)
+                .map_err(|_| AgentFailure::Refused("custody refused native funding"))?;
+            scope
+                .put(
+                    Table::Journeys,
+                    signature_key,
+                    authorization.not_before,
+                    signature.to_vec(),
+                )
+                .map_err(|_| AgentFailure::Unavailable)?;
+            signature
+        };
+        let debit = layerx_crypto::send::SendDebit {
+            from: authorization.from,
+            to: authorization.to,
+            asset: authorization.asset,
+            amount: authorization.amount,
+            source_sequence: authorization.sequence,
+            idempotency_key: authorization.action_key,
+            expires_at: authorization.expires_at,
+            context_hash: authorization.context,
+            conditions: Vec::new(),
+            authorization_kind: 1,
+            network_id: authorization.network,
+            protocol_version: 3,
+        };
+        layerx_intents::canonical::signed_send_payload(&debit, public_key, signature)
+            .map_err(|_| AgentFailure::Refused("retained funding signature differs"))?;
+        Ok(signature)
+    }
+
     pub(super) fn retained_protocol_evidence(
         &mut self,
         scope: &mut PrincipalScope<'_>,
