@@ -76,7 +76,7 @@ lxp_result lxp_guarantor_recompute_roots(
     inputs = (lxp_batch_root_inputs){
         activities, activity_count,
         replay->encoded_receipts, replay->receipt_count,
-        replay->encoded_events, replay->activity_count,
+        replay->encoded_events, replay->event_count,
         oracles, oracle_count, NULL, 0U
     };
     status = lxp_batch_roots_compute(&inputs, arena, roots);
