@@ -13,7 +13,6 @@ use layerx_types::intent::{
 #[cfg(test)]
 use layerx_types::intent::{AuthorizationSignature, SendAuthorizationKind};
 use layerx_types::payload::ModuleId;
-use layerx_wire::decode::Decoder;
 
 const MAX_SESSION_GRANT_BYTES: usize = 1024;
 

@@ -26,7 +26,7 @@ use crate::store::PrincipalScope;
 use crate::trace::TraceId;
 
 use super::agent_runtime::{
-    AgentCapabilityInstall, AgentLifecycleSeed, AgentOwnerInstall, AgentRuntime, AgentSessionSeed,
+    AgentCapabilityInstall, AgentLifecycleSeed, AgentOwnerInstall, AgentRuntime,
 };
 use super::poll_once_ready;
 
