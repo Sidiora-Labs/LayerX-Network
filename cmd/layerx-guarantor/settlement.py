@@ -152,6 +152,28 @@ def validate_receipt(receipt, registry, transaction, digest, header, version):
     return block
 
 
+def registered_transaction(rpc, registry, digest):
+    first = rpc.call('eth_getBlockByNumber', ['earliest', False])
+    require(isinstance(first, dict), 'initial block unavailable')
+    begin = int(first['number'], 16)
+    end = int(rpc.call('eth_blockNumber', []), 16)
+    require(0 <= begin <= end < 2 ** 64 and any(raw(first['hash'], 32)), 'initial block invalid')
+    transaction = None
+    while begin <= end:
+        last = min(begin + 255, end)
+        logs = rpc.call('eth_getLogs', [{'address': registry, 'fromBlock': hex(begin),
+            'toBlock': hex(last), 'topics': [EVENT, '0x' + digest.hex()]}])
+        require(isinstance(logs, list) and len(logs) <= 1, 'existing registration event count mismatch')
+        if logs:
+            require(transaction is None and begin <= int(logs[0]['blockNumber'], 16) <= last,
+                'existing registration event count mismatch')
+            transaction = logs[0]['transactionHash']
+            raw(transaction, 32)
+        begin = last + 1
+    require(transaction is not None, 'existing registration event count mismatch')
+    return transaction
+
+
 def register(rpc, request):
     h = values(HEADER_TYPES, request['header'])
     attestations = [values(ATTESTATION_TYPES, a) for a in request['attestations']]
@@ -171,9 +193,7 @@ def register(rpc, request):
     registered = rpc.view(registry, 'registeredAt(bytes32)', ('bytes32',), (digest,))[0] != 0
     if registered:
         require(rpc.view(registry, 'isRecordedCertificate(bytes32,' + ATTESTATION + '[])', ('bytes32', ATTESTATION + '[]'), (digest, attestations), ('bool',))[0], 'registered certificate differs')
-        logs = rpc.call('eth_getLogs', [{'address': registry, 'fromBlock': '0x0', 'toBlock': 'latest', 'topics': [EVENT, '0x' + digest.hex()]}])
-        require(len(logs) == 1, 'existing registration event count mismatch')
-        transaction = logs[0]['transactionHash']
+        transaction = registered_transaction(rpc, registry, digest)
     else:
         key_path = Path(request['submitter_key_file'])
         require(key_path.is_file() and (key_path.stat().st_mode & 0o077) == 0, 'submitter key permissions must be private')
