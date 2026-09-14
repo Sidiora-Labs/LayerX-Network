@@ -1,5 +1,7 @@
 use super::{checked, encoded_disclosure, facts, registry, request, signing_request, Host, Result};
-use layerx_intents::owner_activity::{attach_signature, unsigned_native, verify, OwnerEnvelopeContext};
+use layerx_intents::owner_activity::{
+    attach_signature, unsigned_native, verify, OwnerEnvelopeContext,
+};
 use layerx_intents::NativeOwnerBootstrap;
 use layerx_types::activity::TimestampBound;
 use layerx_types::ids::Did;
@@ -42,9 +44,14 @@ fn typed_owner_bootstrap_signs_through_real_kms_and_replays_after_restart() -> R
         for operation in &operations {
             let compiled = checked(operation.compile(&registry))?;
             let context = OwnerEnvelopeContext {
-                actor: did.clone(), owner_public_key: public, network_id: 77,
-                account_sequence: 10, not_before_ms: 1_000, not_after_ms: 61_000,
-                action_key: [u8::try_from(compiled.activity_type().ordinal())?; 32], fee_limit: 100,
+                actor: did.clone(),
+                owner_public_key: public,
+                network_id: 77,
+                account_sequence: 10,
+                not_before_ms: 1_000,
+                not_after_ms: 61_000,
+                action_key: [u8::try_from(compiled.activity_type().ordinal())?; 32],
+                fee_limit: 100,
             };
             let (unsigned, disclosure) = checked(unsigned_native(&compiled, &context, &registry))?;
             let encoded = encoded_disclosure(&disclosure)?;
@@ -62,9 +69,13 @@ fn typed_owner_bootstrap_signs_through_real_kms_and_replays_after_restart() -> R
             assert!(attach_signature(&unsigned, signature, pending, &registry).is_err());
             let mut changed = disclosure.clone();
             changed.actor[0] ^= 1;
-            let refused = signing_request(binding, &handle, &unsigned, &encoded_disclosure(&changed)?)?.0;
+            let refused =
+                signing_request(binding, &handle, &unsigned, &encoded_disclosure(&changed)?)?.0;
             assert_eq!(host.call(&refused)?[7], 1);
-            assert_eq!(host.call(&signing_request([83; 32], &handle, &unsigned, &encoded)?.0)?[7], 2);
+            assert_eq!(
+                host.call(&signing_request([83; 32], &handle, &unsigned, &encoded)?.0)?[7],
+                2
+            );
             signed_operations.push(signed);
         }
         if pass == 0 {

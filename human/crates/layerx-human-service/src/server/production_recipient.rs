@@ -177,7 +177,9 @@ impl ProductionComponents {
         }
         let principal = PrincipalId::new(request.principal).map_err(|_| ApiFailure::forbidden())?;
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-        let mut scope = store.principal(&principal).map_err(|_| ApiFailure::forbidden())?;
+        let mut scope = store
+            .principal(&principal)
+            .map_err(|_| ApiFailure::forbidden())?;
         let key = KeyId::new("human-primary").map_err(|_| ApiFailure::forbidden())?;
         let recipient = self
             .custody
