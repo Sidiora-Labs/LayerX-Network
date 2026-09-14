@@ -9,8 +9,9 @@ fn configuration() -> String {
 }
 
 #[test]
-fn explicit_policy_preserves_all_trust_inputs() {
-    let policy = decode_finality_policy(configuration().as_bytes()).expect("valid explicit policy");
+fn explicit_policy_preserves_all_trust_inputs() -> Result<(), String> {
+    let policy = decode_finality_policy(configuration().as_bytes())
+        .map_err(|error| format!("valid explicit policy: {error:?}"))?;
     assert_eq!(policy.endpoint.expected_chain_id, 125);
     assert_eq!(policy.endpoint.url, "http://127.0.0.1:18546");
     assert_eq!(policy.endpoint.request_timeout.as_millis(), 8000);
@@ -21,6 +22,7 @@ fn explicit_policy_preserves_all_trust_inputs() {
     assert_eq!(policy.network_id, 77);
     assert_eq!(policy.canonical_genesis_root, [0x56; 32]);
     assert_eq!(policy.confirmations, 2);
+    Ok(())
 }
 
 #[test]
