@@ -33,6 +33,9 @@ use super::poll_once_ready;
 const PREPARE_DOMAIN: &[u8] = b"layerx-human-journey-prepare/v1";
 const SUBMIT_DOMAIN: &[u8] = b"layerx-human-journey-submit/v1";
 
+#[path = "agent_creation_native.rs"]
+mod native;
+
 #[derive(Clone, Copy)]
 pub struct CreationBounds {
     pub timestamp_span: u64,
@@ -280,6 +283,7 @@ impl<'a> ProductionAgentCreation<'a> {
         scope: &mut PrincipalScope<'_>,
         action: &ProtocolAction,
     ) -> Result<ProtocolEvidence, AgentFailure> {
+        if let Some(evidence) = self.retained_protocol_evidence(scope, action)? { return Ok(evidence); }
         let prepared = self.prepare_action(scope, action)?;
         let principal = scope.principal().clone();
         let descriptor = self.signing_descriptor(&principal, action)?;
@@ -394,6 +398,7 @@ impl<'a> ProductionAgentCreation<'a> {
         self.submit_scoped(
             scope,
             &ProtocolAction {
+                actor: None,
                 stage: CreationStage::BudgetCreation,
                 action_key,
                 intent,
@@ -781,7 +786,19 @@ impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
         scope: &mut PrincipalScope<'_>,
         action: ProtocolAction,
     ) -> Result<ProtocolEvidence, AgentFailure> {
-        self.submit_scoped(scope, &action)
+        let Some(actor) = &action.actor else { return self.submit_scoped(scope, &action); };
+        let descriptor = self.signing_descriptor(scope.principal(), &action)?;
+        let actor = AgentDid::new(std::str::from_utf8(actor.as_bytes())
+            .map_err(|_| AgentFailure::Refused("invalid managed actor"))?.to_owned())
+            .map_err(|_| AgentFailure::Refused("invalid managed actor"))?;
+        let authority = AuthorityRef::new(hex(&descriptor.public_key))
+            .map_err(|_| AgentFailure::Refused("invalid managed owner"))?;
+        let previous_actor = std::mem::replace(&mut self.actor, actor);
+        let previous_authority = std::mem::replace(&mut self.authority, authority);
+        let result = self.submit_scoped(scope, &action);
+        self.actor = previous_actor;
+        self.authority = previous_authority;
+        result
     }
 
     fn provision_session_scoped(

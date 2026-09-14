@@ -5200,6 +5200,8 @@ static lxp_result open_process(lxp_daemon_process *process,
             required_environment("LAYERX_NODE_IDENTITIES"),
             &process->identities);
     if (status == LXP_OK && checkpoint_selected)
+        status = lxp_governance_identities_restore(&process->kernel, &process->identities);
+    if (status == LXP_OK && checkpoint_selected)
         status = identity_checkpoint_load(snapshot_path,
                                            manifest.global_sequence,
                                            &process->identities);

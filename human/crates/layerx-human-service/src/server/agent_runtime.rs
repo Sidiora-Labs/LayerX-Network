@@ -41,6 +41,7 @@ const BALANCE: u8 = 6;
 const NATIVE_FEE_POLICY: u8 = 39;
 const SESSION_FEE_STATE: u8 = 40;
 const SESSION_SEED_PREPARE: u8 = 41;
+const ACCOUNT_STATE: u8 = 42;
 const HEAD: u8 = 7;
 const EVIDENCE: u8 = 8;
 const ACCOUNT_SEQUENCE: u8 = 13;
@@ -1192,6 +1193,26 @@ impl AgentRuntime {
         let sequence = reader.u64()?;
         reader.finish()?;
         Ok(sequence)
+    }
+    /// # Errors
+    /// Refuses unauthenticated state or a canonical account not bound to the requested ID.
+    pub fn account_state(&mut self, account_id: [u8; 32])
+        -> Result<layerx_proof::state::CanonicalAccount, AgentBoundaryError> {
+        let mut writer = Writer::new(ACCOUNT_STATE);
+        writer.fixed(&account_id);
+        let mut reader = self.exchange(&writer.finish())?;
+        let observed: [u8; 32] = reader.fixed()?;
+        let level = reader.u8()?;
+        let bytes = reader.bytes()?;
+        let proof = reader.bytes()?;
+        let sequence = reader.u64()?;
+        reader.finish()?;
+        if observed != account_id || level < layerx_types::verify::VerificationLevel::STATE_PROVEN.wire_rank()
+            || proof.is_empty() || sequence == 0 {
+            return Err(AgentBoundaryError::CorruptResponse);
+        }
+        layerx_proof::state::decode_account_value(account_id, &bytes)
+            .map_err(|_| AgentBoundaryError::CorruptResponse)
     }
     /// # Errors
     /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.

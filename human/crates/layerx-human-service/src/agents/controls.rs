@@ -603,6 +603,7 @@ impl<B: AgentControlContract> AgentControls<B> {
         let kind = compiled.activity_type();
         let payload = compiled.payload().as_bytes().to_vec();
         let evidence = self.boundary.submit_protocol_limit(ProtocolAction {
+            actor: None,
             stage: CreationStage::BudgetCreation,
             action_key,
             intent,

@@ -10,6 +10,25 @@ use crate::disclosure::{bind, Disclosure, DisclosureError};
 use crate::signer::{SignError, Signer, SigningRequest};
 use crate::SignatureMessage;
 
+/// Commits the debit, credit, asset, amount and idempotency under the native Send context domain.
+#[must_use]
+pub fn send_context_hash(
+    source: &[u8; 32],
+    destination: &[u8; 32],
+    asset: &[u8; 32],
+    amount: u128,
+    idempotency: &[u8; 32],
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(Domain::ContextHash.tag());
+    digest.update(source);
+    digest.update(destination);
+    digest.update(asset);
+    digest.update(amount.to_be_bytes());
+    digest.update(idempotency);
+    digest.finalize().into()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SendCondition {
     pub kind: u8,

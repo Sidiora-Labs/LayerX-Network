@@ -2365,12 +2365,14 @@ impl ProductionComponents {
             network_id: self.network_id,
             protocol_time: current,
         };
-        let mut journey = CreationJourney::start(
+        let mut journey = CreationJourney::start_native(
             scope,
             &creation,
             &creation_context,
             &self.agent_purpose_catalog,
             current,
+            fee_policy.asset_id,
+            self.agent_timestamp_span_seconds,
         )
         .map_err(|error| agent_creation_failure(&error))?;
         let trace =
@@ -2391,7 +2393,7 @@ impl ProductionComponents {
         )
         .map_err(|_| ApiFailure::upstream_degraded())?;
         let status = journey
-            .resume(
+            .resume_native(
                 scope,
                 self.custody.creation_keystore(),
                 &registry,

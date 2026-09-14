@@ -13,6 +13,43 @@ pub enum OwnerActivityError {
     Signature,
 }
 
+pub struct OwnerEnvelopeContext {
+    pub actor: Did,
+    pub owner_public_key: [u8; 32],
+    pub network_id: u32,
+    pub account_sequence: u64,
+    pub not_before_ms: u64,
+    pub not_after_ms: u64,
+    pub action_key: [u8; 32],
+    pub fee_limit: u128,
+}
+
+/// # Errors
+/// Refuses invalid native owner envelope fields or undisclosable typed payloads.
+pub fn unsigned_native(
+    compiled: &crate::CompiledIntent,
+    context: &OwnerEnvelopeContext,
+    registry: &ModuleRegistry,
+) -> Result<(Vec<u8>, layerx_crypto::disclosure::Disclosure), OwnerActivityError> {
+    let invalid = |_| OwnerActivityError::Encoding;
+    let mut builder = EnvelopeBuilder::new();
+    builder.protocol_version(3).map_err(invalid)?;
+    builder.network_id(context.network_id).map_err(invalid)?;
+    builder.activity_type(compiled.activity_type()).map_err(invalid)?;
+    builder.actor_did(context.actor.clone()).map_err(invalid)?;
+    builder.authority(Authority::owner(&context.owner_public_key).map_err(invalid)?).map_err(invalid)?;
+    builder.account_sequence(context.account_sequence).map_err(invalid)?;
+    builder.timestamp_bound(TimestampBound::new(context.not_before_ms, context.not_after_ms).map_err(invalid)?).map_err(invalid)?;
+    builder.idempotency_key(IdempotencyKey::new(context.action_key)).map_err(invalid)?;
+    builder.fee_limit(Amount::from_u128(context.fee_limit)).map_err(invalid)?;
+    builder.payload_hash(compiled.payload_hash()).map_err(invalid)?;
+    builder.payload(compiled.payload().clone()).map_err(invalid)?;
+    let envelope = builder.build().map_err(invalid)?;
+    let bytes = canonical::unsigned_envelope_bytes(&envelope).map_err(|_| OwnerActivityError::Encoding)?;
+    let disclosure = layerx_crypto::disclosure::bind(&bytes, registry).map_err(|_| OwnerActivityError::Binding)?;
+    Ok((bytes, disclosure))
+}
+
 /// # Errors
 /// Refuses malformed canonical bytes, mismatched payload hashes or invalid owner signatures.
 pub fn verify(bytes: &[u8], registry: &ModuleRegistry) -> Result<Activity, OwnerActivityError> {

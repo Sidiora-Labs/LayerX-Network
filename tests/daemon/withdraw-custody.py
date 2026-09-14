@@ -112,10 +112,11 @@ def main():
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--module-maintenance', action='store_true')
     modes.add_argument('--metered-allowance', action='store_true')
+    modes.add_argument('--native-onboarding', action='store_true')
     args = parser.parse_args()
     build = (ROOT / args.build_dir).resolve()
-    mode = '--module-maintenance' if args.module_maintenance else '--metered-allowance' if args.metered_allowance else '--withdraw'
-    amount = 1000000000 if args.metered_allowance else 1000000
+    mode = '--native-onboarding' if args.native_onboarding else '--module-maintenance' if args.module_maintenance else '--metered-allowance' if args.metered_allowance else '--withdraw'
+    amount = 1000000000 if args.metered_allowance or args.native_onboarding else 1000000
     assert os.environ.get('LAYERX_TEST_SETTLEMENT_PUBLICATION') != '1' or mode == '--withdraw'
     logs = ROOT / 'qual-logs/set1'
     logs.mkdir(parents=True, exist_ok=True)

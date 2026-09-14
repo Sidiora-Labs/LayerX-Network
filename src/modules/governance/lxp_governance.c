@@ -63,6 +63,34 @@ lxp_result lxp_governance_identity_refresh(const lxp_kernel *kernel,
     return LXP_OK;
 }
 
+lxp_result lxp_governance_identities_restore(const lxp_kernel *kernel,
+                                             lxp_identity_store *identities)
+{
+    if (kernel == NULL || identities == NULL || identities->count > LXP_IDENTITY_STORE_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
+    for (size_t i = 0U; i < kernel->module_kv_count; ++i) {
+        const lxp_module_kv_entry *entry = &kernel->module_kv[i];
+        if (entry->module_id != LXP_MODULE_GOVERNANCE || entry->key_length != 32U ||
+            entry->value_length < 5U || memcmp(entry->value, "LXGI1", 5U) != 0) continue;
+        if (entry->value_length != STATE_BYTES || memcmp(entry->key, entry->value + DID, 32U) != 0 ||
+            !lxp_ed25519_pubkey_is_canonical(entry->value + PRIMARY))
+            return LXP_FATAL_INVARIANT;
+        size_t index = 0U;
+        while (index < identities->count && memcmp(identities->identities[index].did_id, entry->key, 32U) != 0)
+            ++index;
+        if (index == identities->count) {
+            if (index >= LXP_IDENTITY_STORE_CAPACITY) return LXP_ERR_ARENA_EXHAUSTED;
+            lxp_identity *identity = &identities->identities[identities->count++];
+            (void)memset(identity, 0, sizeof(*identity));
+            (void)memcpy(identity->did_id, entry->key, 32U);
+            identity->status = LXP_IDENTITY_ACTIVE;
+        } else continue;
+        lxp_result status = lxp_governance_identity_refresh(kernel, &identities->identities[index]);
+        if (status != LXP_OK) return status;
+    }
+    return LXP_OK;
+}
+
 static lxp_result decode(lxp_module_ctx *ctx, uint16_t ordinal,
                           const uint8_t *bytes, size_t length, void **decoded)
 {
@@ -70,11 +98,12 @@ static lxp_result decode(lxp_module_ctx *ctx, uint16_t ordinal,
     void *memory = NULL;
     if (bytes == NULL || decoded == NULL || length < 4U || length > 1024U ||
         !lxp_governance_activity(0x00070000U | ordinal) || bytes[0] != 0x71U ||
-        bytes[1] != ordinal || (ordinal == 5U ? (bytes[2] != 1U && bytes[2] != 2U) :
+        bytes[1] != ordinal || (ordinal == 1U ? (bytes[2] != 0U && bytes[2] != 2U) :
+        ordinal == 5U ? (bytes[2] != 1U && bytes[2] != 2U) :
         bytes[2] != (ordinal == 8U ? 1U : 0U)))
         return LXP_ERR_NON_CANONICAL;
     uint16_t fields = bytes[3];
-    if ((ordinal == 1U && (fields != 2U || length != 68U)) ||
+    if ((ordinal == 1U && (bytes[2] == 0U ? (fields != 2U || length != 68U) : (fields != 1U || length < 8U))) ||
         (ordinal == 2U && (fields != 4U || length != 92U)) ||
         (ordinal == 3U && !((fields == 3U && length == 70U) ||
                             (fields == 5U && length == 86U))) ||
@@ -102,7 +131,8 @@ static lxp_result validate(lxp_module_ctx *ctx, const lxp_activity *activity,
         authority->kind != LXP_AUTHORITY_OWNER ||
         lxp_did_id_derive(activity->actor_did.bytes, activity->actor_did.length, did) != LXP_OK ||
         memcmp(did, authority->actor, 32U) != 0 ||
-        (p->ordinal <= 3U && memcmp(did, p->bytes + 4U, 32U) != 0))
+        (p->ordinal <= 3U && !(p->ordinal == 1U && p->bytes[2] == 2U) &&
+         memcmp(did, p->bytes + 4U, 32U) != 0))
         return LXP_ERR_AUTH_SCOPE;
     return lxp_ctx_charge_gas(ctx, p->length);
 }
@@ -333,6 +363,8 @@ static lxp_result execute(lxp_module_ctx *ctx, const lxp_activity *activity,
     const uint8_t *prior;
     size_t length;
     uint8_t state[STATE_BYTES] = {0};
+    if (p->ordinal == 1U && p->bytes[2] == 2U)
+        return lxp_governance_onboard(ctx, activity, authority);
     uint64_t sequence = lxp_ctx_global_sequence(ctx);
     lxp_result status = lxp_ctx_kv_get(ctx, authority->actor, 32U, &prior, &length);
     (void)activity;

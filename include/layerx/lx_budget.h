@@ -25,10 +25,12 @@ enum {
 enum {
     LX_BUDGET_RECORD_FIXED_BYTES = 278,
     LX_BUDGET_RECORD_MAX_BYTES =
-        LX_BUDGET_RECORD_FIXED_BYTES + LX_BUDGET_MAX_DELEGATES * 32,
+        LX_BUDGET_RECORD_FIXED_BYTES + LX_BUDGET_MAX_DELEGATES * 32 + 32,
     LX_BUDGET_STATE_KEY_BYTES = 39,
     LX_BUDGET_CREATE_PAYLOAD_BYTES = 211,
+    LX_BUDGET_CREATE_V2_PAYLOAD_BYTES = 251,
     LX_BUDGET_FUND_PAYLOAD_BYTES = 50,
+    LX_BUDGET_FUND_V2_PAYLOAD_BYTES = 58,
     LX_BUDGET_AMEND_PAYLOAD_BYTES = 75,
     LX_BUDGET_DELEGATE_PAYLOAD_BYTES = 66,
     LX_BUDGET_SPEND_PAYLOAD_BYTES = 82,
@@ -41,6 +43,8 @@ typedef enum lx_budget_rollover_policy {
 } lx_budget_rollover_policy;
 
 typedef struct lx_budget_record {
+    bool native_source;
+    uint8_t source_account[32];
     uint8_t budget_id[32];
     uint8_t owner[32];
     uint8_t budget_account[32];
@@ -128,6 +132,7 @@ typedef struct lx_budget_close_request {
 } lx_budget_close_request;
 
 typedef struct lx_budget_create_payload {
+    uint16_t encoding_version;
     uint8_t budget_id[32];
     uint8_t budget_account[32];
     uint8_t asset_id[32];
@@ -140,9 +145,13 @@ typedef struct lx_budget_create_payload {
     uint64_t expiry;
     uint64_t revocation_sequence;
     uint8_t rollover_policy;
+    uint8_t source_account[32];
+    uint64_t source_sequence;
 } lx_budget_create_payload;
 
 typedef struct lx_budget_amount_payload {
+    uint16_t encoding_version;
+    uint64_t source_sequence;
     uint8_t budget_id[32];
     lxp_u128 amount;
 } lx_budget_amount_payload;

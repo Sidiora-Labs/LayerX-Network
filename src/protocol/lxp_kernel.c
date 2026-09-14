@@ -4964,6 +4964,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         if (status == LXP_OK)
             module_ctx.verified_receipts = execution->verified_receipts;
         if (status == LXP_OK) module_ctx.allowance = execution->allowance;
+        if (status == LXP_OK) module_ctx.identities = execution->identities;
         if (status == LXP_OK)
             (void)memcpy(module_ctx.activity_id, canonical_activity_id, 32U);
         if (status == LXP_OK &&

@@ -135,6 +135,9 @@ struct lxp_module_ctx {
     lx_account_registration staged_accounts[
         LXP_MODULE_MAX_STAGED_ACCOUNTS];
     size_t staged_account_count;
+    lxp_identity_store *identities;
+    lxp_identity staged_identity;
+    bool identity_staged;
     lxp_module_account_snapshot transfer_snapshots[
         LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
     size_t transfer_snapshot_count;

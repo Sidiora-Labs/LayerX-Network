@@ -3368,6 +3368,14 @@ $(BUILD_DIR)/tests/lxp_test_metered_allowance: tests/daemon/lxp_test_metered_all
 test-daemon-metered-allowance: $(BUILD_DIR)/tests/lxp_test_metered_allowance $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR) --metered-allowance
 
+$(BUILD_DIR)/tests/lxp_test_native_onboarding: tests/daemon/lxp_test_native_onboarding.c tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-daemon-native-onboarding
+test-daemon-native-onboarding: $(BUILD_DIR)/tests/lxp_test_native_onboarding $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR) --native-onboarding
+
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR)

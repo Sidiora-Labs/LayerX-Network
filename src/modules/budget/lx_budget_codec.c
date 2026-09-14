@@ -37,11 +37,11 @@ lxp_result lx_budget_record_encode(const lx_budget_record *record,
     lxp_result status = lx_budget_record_validate(record);
     if (status != LXP_OK) return status;
     if (bytes == NULL || length == NULL) return LXP_ERR_NON_CANONICAL;
-    encoded = (size_t)LX_BUDGET_RECORD_FIXED_BYTES + record->delegate_count * 32U;
+    encoded = (size_t)LX_BUDGET_RECORD_FIXED_BYTES + record->delegate_count * 32U + (record->native_source ? 32U : 0U);
     if (capacity < encoded) return LXP_ERR_LENGTH_LIMIT;
     (void)memset(bytes, 0, encoded);
     bytes[0] = 0U;
-    bytes[1] = 1U;
+    bytes[1] = record->native_source ? 2U : 1U;
     (void)memcpy(bytes + 2U, record->budget_id, 32U);
     (void)memcpy(bytes + 34U, record->owner, 32U);
     (void)memcpy(bytes + 66U, record->budget_account, 32U);
@@ -68,6 +68,7 @@ lxp_result lx_budget_record_encode(const lx_budget_record *record,
     for (i = 0U; i < record->delegate_count; ++i)
         (void)memcpy(bytes + LX_BUDGET_RECORD_FIXED_BYTES + i * 32U,
                      record->delegates[i], 32U);
+    if (record->native_source) (void)memcpy(bytes + encoded - 32U, record->source_account, 32U);
     *length = encoded;
     return LXP_OK;
 }
@@ -81,14 +82,16 @@ lxp_result lx_budget_record_decode(const uint8_t *bytes, size_t length,
     lxp_result status;
     if (bytes == NULL || record == NULL ||
         length < (size_t)LX_BUDGET_RECORD_FIXED_BYTES ||
-        bytes[0] != 0U || bytes[1] != 1U || bytes[275U] > 1U ||
+        bytes[0] != 0U || (bytes[1] != 1U && bytes[1] != 2U) || bytes[275U] > 1U ||
         bytes[276U] > 1U)
         return LXP_ERR_NON_CANONICAL;
     count = bytes[277U];
     if (count > (size_t)LX_BUDGET_MAX_DELEGATES ||
-        length != (size_t)LX_BUDGET_RECORD_FIXED_BYTES + count * 32U)
+        length != (size_t)LX_BUDGET_RECORD_FIXED_BYTES + count * 32U + (bytes[1] == 2U ? 32U : 0U))
         return LXP_ERR_NON_CANONICAL;
     (void)memset(&value, 0, sizeof(value));
+    value.native_source = bytes[1] == 2U;
+    if (value.native_source) (void)memcpy(value.source_account, bytes + length - 32U, 32U);
     (void)memcpy(value.budget_id, bytes + 2U, 32U);
     (void)memcpy(value.owner, bytes + 34U, 32U);
     (void)memcpy(value.budget_account, bytes + 66U, 32U);
@@ -130,10 +133,11 @@ lxp_result lx_budget_create_decode(const uint8_t *bytes, size_t length,
     lx_budget_create_payload value;
     lxp_result status;
     if (bytes == NULL || payload == NULL ||
-        length != (size_t)LX_BUDGET_CREATE_PAYLOAD_BYTES ||
-        bytes[0] != 0U || bytes[1] != 1U)
+        !((length == (size_t)LX_BUDGET_CREATE_PAYLOAD_BYTES && bytes[0] == 0U && bytes[1] == 1U) ||
+          (length == (size_t)LX_BUDGET_CREATE_V2_PAYLOAD_BYTES && bytes[0] == 0U && bytes[1] == 2U)))
         return LXP_ERR_NON_CANONICAL;
     (void)memset(&value, 0, sizeof(value));
+    value.encoding_version = bytes[1];
     (void)memcpy(value.budget_id, bytes + 2U, 32U);
     (void)memcpy(value.budget_account, bytes + 34U, 32U);
     (void)memcpy(value.asset_id, bytes + 66U, 32U);
@@ -149,6 +153,12 @@ lxp_result lx_budget_create_decode(const uint8_t *bytes, size_t length,
     value.expiry = budget_u64_read(bytes + 194U);
     value.revocation_sequence = budget_u64_read(bytes + 202U);
     value.rollover_policy = bytes[210U];
+    if (value.encoding_version == 2U) {
+        (void)memcpy(value.source_account, bytes + 211U, 32U);
+        value.source_sequence = budget_u64_read(bytes + 243U);
+        if (lxp_ct_is_zero(value.source_account, 32U) || value.source_sequence == UINT64_MAX)
+            return LXP_ERR_NON_CANONICAL;
+    }
     if (lxp_ct_is_zero(value.budget_id, 32U) ||
         lxp_ct_is_zero(value.budget_account, 32U) ||
         lxp_ct_is_zero(value.asset_id, 32U))
@@ -166,10 +176,15 @@ lxp_result lx_budget_amount_decode(const uint8_t *bytes, size_t length,
     lx_budget_amount_payload value;
     lxp_result status;
     if (bytes == NULL || payload == NULL ||
-        length != (size_t)LX_BUDGET_FUND_PAYLOAD_BYTES ||
-        bytes[0] != 0U || bytes[1] != 1U)
+        !((length == (size_t)LX_BUDGET_FUND_PAYLOAD_BYTES && bytes[0] == 0U && bytes[1] == 1U) ||
+          (length == (size_t)LX_BUDGET_FUND_V2_PAYLOAD_BYTES && bytes[0] == 0U && bytes[1] == 2U)))
         return LXP_ERR_NON_CANONICAL;
     (void)memset(&value, 0, sizeof(value));
+    value.encoding_version = bytes[1];
+    if (value.encoding_version == 2U) {
+        value.source_sequence = budget_u64_read(bytes + 50U);
+        if (value.source_sequence == UINT64_MAX) return LXP_ERR_NON_CANONICAL;
+    }
     (void)memcpy(value.budget_id, bytes + 2U, 32U);
     status = lxp_u128_from_be(bytes + 34U, &value.amount);
     if (status != LXP_OK) return status;

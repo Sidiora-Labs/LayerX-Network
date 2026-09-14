@@ -167,6 +167,25 @@ static lxp_result budget_transfer(lxp_module_ctx *ctx,
     set.context.asset_count = 1U;
     set.context.sequence_account = sequence_account;
     set.context.actor_sequence = activity->account_sequence;
+    if (activity->protocol_version == 3U && activity->activity_type == LX_BUDGET_CREATE &&
+        activity->payload.length == LX_BUDGET_CREATE_V2_PAYLOAD_BYTES) {
+        lx_budget_create_payload payload;
+        status = lx_budget_create_decode(activity->payload.bytes, activity->payload.length, &payload);
+        if (status != LXP_OK) return status;
+        if (payload.encoding_version != 2U || memcmp(payload.source_account, sequence_account->id, 32U) != 0 ||
+            payload.source_sequence != sequence_account->next_sequence)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        set.context.actor_sequence = payload.source_sequence;
+    }
+    if (activity->protocol_version == 3U && activity->activity_type == LX_BUDGET_FUND &&
+        activity->payload.length == LX_BUDGET_FUND_V2_PAYLOAD_BYTES) {
+        lx_budget_amount_payload payload;
+        status = lx_budget_amount_decode(activity->payload.bytes, activity->payload.length, &payload);
+        if (status != LXP_OK) return status;
+        if (payload.encoding_version != 2U || payload.source_sequence != sequence_account->next_sequence)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        set.context.actor_sequence = payload.source_sequence;
+    }
     set.context.batch_timestamp = lxp_ctx_batch_timestamp_ms(ctx);
     set.context.debit_authority_kind = authority_kind;
     (void)memcpy(set.context.authorized_from, from->id, 32U);
@@ -233,6 +252,23 @@ static lxp_result budget_authorized_signer(
         LXP_ERR_SEQUENCE_GAP : LXP_OK;
 }
 
+static lxp_result budget_business_source(lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lx_account *owner, const uint8_t asset[32], const uint8_t source_id[32], lx_account **source)
+{
+    uint8_t actor[32];
+    lxp_result status;
+    if (activity->protocol_version != 3U) return LXP_ERR_VERSION_UNSUPPORTED;
+    status = lxp_did_id_derive(activity->actor_did.bytes, activity->actor_did.length, actor);
+    if (status == LXP_OK) status = lxp_kernel_program_payment_account(ctx->kernel->state->accounts,
+        actor, asset, activity->protocol_version, source);
+    if (status != LXP_OK) return status;
+    if (memcmp((*source)->id, source_id, 32U) != 0 || !(*source)->has_authority_key ||
+        lx_account_validate_canonical(*source) != LXP_OK || !owner->has_authority_key ||
+        memcmp((*source)->authority_key, owner->authority_key, 32U) != 0)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    return LXP_OK;
+}
+
 static lxp_result budget_execute_create(lxp_module_ctx *ctx,
                                         const lxp_activity *activity,
                                         const lx_budget_create_payload *payload,
@@ -240,6 +276,7 @@ static lxp_result budget_execute_create(lxp_module_ctx *ctx,
 {
     lx_budget_record record;
     lx_account *budget_account = NULL;
+    lx_account *source = owner;
     uint8_t event[80];
     lxp_result status = budget_load(ctx, payload->budget_id, &record);
     if (status == LXP_OK) return LXP_ERR_SEQUENCE_REUSED;
@@ -268,10 +305,16 @@ static lxp_result budget_execute_create(lxp_module_ctx *ctx,
     record.revocation_sequence = payload->revocation_sequence;
     record.rollover_policy =
         (lx_budget_rollover_policy)payload->rollover_policy;
+    if (payload->encoding_version == 2U) {
+        status = budget_business_source(ctx, activity, owner, record.asset_id, payload->source_account, &source);
+        if (status != LXP_OK) return status;
+        record.native_source = true;
+        (void)memcpy(record.source_account, source->id, 32U);
+    }
     status = lx_budget_record_validate(&record);
     if (status == LXP_OK)
-        status = budget_transfer(ctx, activity, record.asset_id, owner,
-                                 budget_account, owner, payload->amount,
+        status = budget_transfer(ctx, activity, record.asset_id, source,
+                                 budget_account, source, payload->amount,
                                  LXP_REASON_BUDGET_FUND, LXP_AUTH_OWNER);
     if (status == LXP_OK) status = budget_save(ctx, &record);
     if (status != LXP_OK) return status;
@@ -289,6 +332,7 @@ static lxp_result budget_execute_fund(lxp_module_ctx *ctx,
 {
     lx_budget_record record;
     lx_account *budget_account;
+    lx_account *source = owner;
     uint8_t event[48];
     lxp_result status = budget_load(ctx, payload->budget_id, &record);
     if (status != LXP_OK) return status;
@@ -298,8 +342,13 @@ static lxp_result budget_execute_fund(lxp_module_ctx *ctx,
         return LXP_ERR_UNAUTHORIZED_DEBIT;
     status = lxp_ctx_account_find(ctx, record.budget_account, &budget_account);
     if (status != LXP_OK) return status;
-    status = budget_transfer(ctx, activity, record.asset_id, owner,
-                             budget_account, owner, payload->amount,
+    if (record.native_source != (payload->encoding_version == 2U)) return LXP_ERR_VERSION_UNSUPPORTED;
+    if (record.native_source) {
+        status = budget_business_source(ctx, activity, owner, record.asset_id, record.source_account, &source);
+        if (status != LXP_OK) return status;
+    }
+    status = budget_transfer(ctx, activity, record.asset_id, source,
+                             budget_account, source, payload->amount,
                              LXP_REASON_BUDGET_FUND, LXP_AUTH_OWNER);
     if (status != LXP_OK) return status;
     (void)memcpy(event, record.budget_id, 32U);
@@ -384,7 +433,8 @@ static lxp_result budget_execute_spend(lxp_module_ctx *ctx,
         status = lxp_ctx_account_find(ctx, payload->recipient, &recipient);
     if (status != LXP_OK) return status;
     if (budget_account->kind != LX_ACCOUNT_AGENT_BUDGET ||
-        recipient->kind != LX_ACCOUNT_AGENT_MAIN)
+        (recipient->kind != LX_ACCOUNT_AGENT_MAIN &&
+         !(record.native_source && recipient->kind == LX_ACCOUNT_AGENT_ASSET)))
         return LXP_ERR_NON_CANONICAL;
     status = lxp_state_balance_get(budget_account, record.asset_id, &balance);
     if (status != LXP_OK) return status;
@@ -411,6 +461,7 @@ static lxp_result budget_execute_close(lxp_module_ctx *ctx,
 {
     lx_budget_record record;
     lx_account *budget_account;
+    lx_account *refund = owner;
     lxp_u128 balance;
     uint8_t event[56];
     lxp_result status = budget_load(ctx, payload->budget_id, &record);
@@ -424,9 +475,13 @@ static lxp_result budget_execute_close(lxp_module_ctx *ctx,
     if (status != LXP_OK) return status;
     status = lxp_state_balance_get(budget_account, record.asset_id, &balance);
     if (status != LXP_OK) return status;
+    if (record.native_source) {
+        status = budget_business_source(ctx, activity, owner, record.asset_id, record.source_account, &refund);
+        if (status != LXP_OK) return status;
+    }
     if (!lxp_u128_is_zero(balance))
         status = budget_transfer(ctx, activity, record.asset_id,
-                                 budget_account, owner, owner, balance,
+                                 budget_account, refund, owner, balance,
                                  LXP_REASON_BUDGET_DEFUND,
                                  LXP_AUTH_BUDGET_ALLOWANCE);
     if (status != LXP_OK) return status;

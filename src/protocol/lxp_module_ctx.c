@@ -5,6 +5,7 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_bridge_credit.h"
 #include "layerx/programs.h"
+#include "layerx/lxp_module_ctx.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -136,6 +137,10 @@ static lxp_result commit_account(const lxp_module_ctx *ctx,
                                  const lx_account_registration *registration,
                                  lx_account **account)
 {
+    if (ctx->module_id == LXP_MODULE_GOVERNANCE && ctx->identity_staged &&
+        lxp_governance_onboarding_prepared(ctx) == LXP_OK &&
+        registration == &ctx->staged_accounts[0])
+        return lx_account_credit_registration_commit(registry, registration, account);
     if (ctx->module_id == LXP_MODULE_BRIDGE &&
         registration->account.kind == LX_ACCOUNT_AGENT_MAIN)
         return lx_account_credit_registration_commit(registry, registration, account);
@@ -685,6 +690,8 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
         status = lxp_module_ctx_prepare_commit(ctx);
         if (status != LXP_OK) return status;
     }
+    if (ctx->identity_staged && lxp_governance_onboarding_prepared(ctx) != LXP_OK)
+        return LXP_FATAL_INVARIANT;
     for (i = 0U; i < ctx->staged_account_count; ++i) {
         lx_account *committed;
         status = commit_account(ctx,
@@ -752,6 +759,10 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
             staged->bytes = NULL;
         }
     }
+    if (ctx->identity_staged) {
+        ctx->identities->identities[ctx->identities->count++] = ctx->staged_identity;
+        ctx->identity_staged = false;
+    }
     ctx->staged_blob_count = 0U;
     (void)memset(&ctx->ledger_receipt, 0, sizeof(ctx->ledger_receipt));
     ctx->ledger_receipt_present = false;
@@ -780,6 +791,10 @@ lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx)
     lxp_result status;
     if (ctx == NULL || !ctx->mutable || ctx->commit_prepared)
         return LXP_FATAL_INVARIANT;
+    if (ctx->identity_staged) {
+        status = lxp_governance_onboarding_prepared(ctx);
+        if (status != LXP_OK) return status;
+    }
     for (i = 0U; i < ctx->staged_count; ++i)
         if (!ctx->staged[i].deleted &&
             committed_find(ctx, ctx->staged[i].key,
@@ -1087,6 +1102,7 @@ void lxp_module_ctx_rollback(lxp_module_ctx *ctx)
     ctx->commit_prepared = false;
     ctx->staged_count = 0U;
     ctx->staged_account_count = 0U;
+    ctx->identity_staged = false;
     for (i = 0U; i < ctx->staged_blob_count; ++i)
         free(ctx->staged_blobs[i].bytes);
     ctx->staged_blob_count = 0U;
@@ -2094,7 +2110,7 @@ lxp_result lxp_module_ctx_export_prepared(
     bool prepared_here = false;
     if (ctx == NULL || effects == NULL || level_snapshot_token == NULL ||
         lxp_ct_is_zero(level_snapshot_token, 32U) || prepared == NULL ||
-        *prepared != NULL || !ctx->mutable || ctx->kernel == NULL ||
+        *prepared != NULL || !ctx->mutable || ctx->kernel == NULL || ctx->identity_staged ||
         ctx->effects != effects || ctx->next_effect_ordinal != effects->count ||
         !effects_are_canonical(ctx->module_id, effects) ||
         ctx->staged_count > LXP_MODULE_MAX_STAGED_WRITES ||
@@ -2257,7 +2273,7 @@ lxp_result lxp_module_ctx_import_prepared(
         lxp_ct_is_zero(level_snapshot_token, 32U) || effects == NULL ||
         !ctx->mutable || ctx->kernel == NULL || ctx->kernel->state == NULL ||
         ctx->effects != effects || effects->count != 0U ||
-        ctx->next_effect_ordinal != 0U ||
+        ctx->next_effect_ordinal != 0U || ctx->identity_staged ||
         ctx->kernel->state->accounts == NULL || ctx->staged_count != 0U ||
         ctx->staged_account_count != 0U || ctx->staged_blob_count != 0U ||
         ctx->transfer_snapshot_count != 0U || ctx->commit_prepared ||
@@ -2509,7 +2525,7 @@ lxp_result lxp_module_savepoint_begin(lxp_module_ctx *ctx,
                                       lxp_module_savepoint *savepoint)
 {
     if (ctx == NULL || savepoint == NULL || savepoint->active ||
-        ctx->effects == NULL || ctx->commit_prepared)
+        ctx->effects == NULL || ctx->commit_prepared || ctx->identity_staged)
         return LXP_ERR_NON_CANONICAL;
     *savepoint = (lxp_module_savepoint){
         lxp_arena_mark(ctx->arena), ctx->staged_count,

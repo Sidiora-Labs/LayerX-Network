@@ -45,6 +45,7 @@ const BALANCE: u8 = 6;
 const NATIVE_FEE_POLICY: u8 = 39;
 const SESSION_FEE_STATE: u8 = 40;
 const SESSION_SEED_PREPARE: u8 = 41;
+const ACCOUNT_STATE: u8 = 42;
 const HEAD: u8 = 7;
 const EVIDENCE: u8 = 8;
 const MAX_TEXT: usize = 255;
@@ -261,6 +262,7 @@ pub enum HumanRequest {
     },
     Balance,
     NativeFeePolicy,
+    AccountState { account_id: [u8; 32] },
     SessionFeeState {
         grant_id: [u8; 32],
     },
@@ -397,6 +399,10 @@ impl HumanResponse {
 /// Narrow adapter over the existing daemon operation owners. It deliberately
 /// has no sign method: Human custody supplies the public signature to submit.
 pub trait HumanOperations {
+    /// # Errors
+    /// Refuses unavailable, unauthenticated or mismatched canonical account state.
+    fn account_state(&mut self, peer: &HumanPeer, account_id: [u8; 32])
+        -> Result<HumanResponse, HumanOperationError>;
     /// Returns the exact core-negotiated module registry encoded as count,
     /// module id, activity count and packed activity ids.
     /// # Errors
@@ -1208,6 +1214,7 @@ fn dispatch_request<O: HumanOperations>(
         HumanRequest::Balance => operations.balance(peer),
         HumanRequest::NativeFeePolicy => operations.native_fee_policy(peer),
         HumanRequest::SessionFeeState { grant_id } => operations.session_fee_state(peer, grant_id),
+        HumanRequest::AccountState { account_id } => operations.account_state(peer, account_id),
         HumanRequest::SessionSeedPrepare {
             agent,
             action_key,
@@ -1427,6 +1434,7 @@ fn decode_operation_1(
     Ok(match operation {
         BALANCE => HumanRequest::Balance,
         NATIVE_FEE_POLICY => HumanRequest::NativeFeePolicy,
+        ACCOUNT_STATE => HumanRequest::AccountState { account_id: reader.fixed()? },
         SESSION_FEE_STATE => HumanRequest::SessionFeeState {
             grant_id: reader.fixed()?,
         },
