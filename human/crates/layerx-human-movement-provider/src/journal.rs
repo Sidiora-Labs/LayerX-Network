@@ -79,6 +79,47 @@ fn check_file(file: &File) -> Result<(), Error> {
     Ok(())
 }
 
+pub(crate) fn publish_private(path: &Path, bytes: &[u8]) -> Result<bool, Error> {
+    if bytes.is_empty() || bytes.len() > MAX_FRAME {
+        return Err(Error::Capacity);
+    }
+    let parent = path.parent().ok_or(Error::Integrity)?;
+    private_directory(parent)?;
+    let mut nonce = [0; 16];
+    getrandom::fill(&mut nonce).map_err(|_| Error::Integrity)?;
+    let temporary = parent.join(format!("proof-pending-{}", hex_string(&nonce)));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(nofollow()?)
+        .open(&temporary)?;
+    let result = (|| {
+        check_file(&file)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        match rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            &temporary,
+            rustix::fs::CWD,
+            path,
+            rustix::fs::RenameFlags::NOREPLACE,
+        ) {
+            Ok(()) => {
+                File::open(parent)?.sync_all()?;
+                Ok(true)
+            }
+            Err(rustix::io::Errno::EXIST) => Ok(false),
+            Err(error) => Err(std::io::Error::from(error).into()),
+        }
+    })();
+    if temporary.exists() {
+        fs::remove_file(&temporary)?;
+        File::open(parent)?.sync_all()?;
+    }
+    result
+}
+
 impl Journal {
     pub fn open(root: &Path, protocol: u16) -> Result<Self, Error> {
         NativeMovementCodec::for_protocol(protocol).map_err(|_| Error::Configuration)?;

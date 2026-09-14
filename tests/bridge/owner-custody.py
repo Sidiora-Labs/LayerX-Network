@@ -67,7 +67,8 @@ with tempfile.TemporaryDirectory(prefix='owner-custody-') as directory:
             request = dict(email='owner@example.com', display_name='Owner', idempotency_key='custody-owner', now=1)
             env = dict(os.environ, LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT=str(work / 'lxip'),
                        LAYERX_HUMAN_IDENTITY_PROVIDER_RECOVERY_POLICY_FILE=str(work / 'human-evidence-input/recovery-policy.json'))
-            result = subprocess.run([str(root / 'human/target/debug/layerx-human-identity-provider'), 'provision-owner'],
+            human_target = Path(os.environ.get('CARGO_TARGET_DIR', root / 'human/target'))
+            result = subprocess.run([str(human_target / 'debug/layerx-human-identity-provider'), 'provision-owner'],
                                     input=json.dumps(request).encode(), capture_output=True, env=env, check=True)
             write_json(work / 'human-owner-result.json', json.loads(result.stdout))
             prepare_admission(work, work)

@@ -2187,6 +2187,14 @@ human-test: $(BUILD_DIR)/tests/explorer_fixture human-test-hosted-provisioning
 	$(HUMAN_NPM) test
 
 HUMAN_TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),$(CURDIR)/human/target)
+
+MOVEMENT_PROOF_TARGET = $(abspath $(or $(CARGO_TARGET_DIR),.lane-target))
+.PHONY: test-owner-movement-proof
+test-owner-movement-proof: build/bin/layerxd build/bin/layerx-genesis-build build/bin/layerx-guarantor build/tests/lxp_test_guarantor_runtime
+	cargo build --locked --manifest-path human/Cargo.toml --target-dir $(MOVEMENT_PROOF_TARGET) -p layerx-human-identity-provider -p layerx-human-movement-provider
+	cargo build --locked --manifest-path platform/Cargo.toml --target-dir $(MOVEMENT_PROOF_TARGET) -p layerx-platform-authority -p layerx-platform-paxeer-boundary -p layerx-runtime-clock
+	cargo build --locked --manifest-path cmd/layerxctl/Cargo.toml --target-dir $(MOVEMENT_PROOF_TARGET)
+	CARGO_TARGET_DIR=$(MOVEMENT_PROOF_TARGET) LAYERX_RUNTIME_CLOCK_BIN=$(MOVEMENT_PROOF_TARGET)/debug/layerx-runtime-clock sh tools/runtime/run-with-clock.sh python3 tests/bridge/owner-custody.py --native --governance --checkpoint --settlement-only --movement-proof
 HUMAN_TEST_PAXD := $(abspath paxeer-network/build/paxd)
 HUMAN_TEST_CUSTODY_PROOF := $(abspath $(BUILD_DIR)/bin/layerx-custody-proof)
 
@@ -2299,25 +2307,13 @@ human-test-journey:
 	$(HUMAN_NPM) run test:journey
 
 human-e2e-journeys:
-	$(HUMAN_NPM) run build
-	HUMAN_E2E_REAL_STACK=1 \
-	HUMAN_E2E_LOCAL_PRODUCTION=1 \
-	HUMAN_E2E_BASE_URL=http://127.0.0.1:3105 \
-		$(HUMAN_NPM) run test:journey
+	bash $(HUMAN_WEB_DIR)/e2e/run-production-browser.sh test:journey
 
 human-e2e-settings:
-	$(HUMAN_NPM) run build
-	HUMAN_E2E_REAL_STACK=1 \
-	HUMAN_E2E_LOCAL_PRODUCTION=1 \
-	HUMAN_E2E_BASE_URL=http://127.0.0.1:3105 \
-		$(HUMAN_NPM) run test:settings
+	bash $(HUMAN_WEB_DIR)/e2e/run-production-browser.sh test:settings
 
 human-e2e-explorer:
-	$(HUMAN_NPM) run build
-	HUMAN_E2E_REAL_STACK=1 \
-	HUMAN_E2E_LOCAL_PRODUCTION=1 \
-	HUMAN_E2E_BASE_URL=http://127.0.0.1:3105 \
-		$(HUMAN_NPM) run test:explorer
+	bash $(HUMAN_WEB_DIR)/e2e/run-production-browser.sh test:explorer
 
 human-test-e2e:
 	$(HUMAN_NPM) run test:e2e
@@ -3525,7 +3521,7 @@ test-daemon-handover-peers: $(BUILD_DIR)/tests/lxp_test_module_maintenance $(BUI
 	$(RUN_PREFIX) env LAYERX_TEST_HANDOVER_PEERS=1 python3 tests/daemon/withdraw-custody.py $(BUILD_DIR) --handover
 
 .PHONY: test-daemon-handover-consumers
-test-daemon-handover-consumers:
+test-daemon-handover-consumers: test-guarantor-receipt
 	sh programs/sdk/rust/examples/escrow/build.sh
 	cargo build --locked --manifest-path platform/Cargo.toml -p layerx-runtime-clock
 	cargo build --locked --manifest-path agent/Cargo.toml -p layerx-client --example native_handover_history
@@ -3755,6 +3751,28 @@ $(BUILD_DIR)/tests/lxp_test_guarantor_runtime: tests/daemon/guarantor-runtime.c 
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 test-daemon-guarantor-integration: $(BUILD_DIR)/tests/lxp_test_guarantor_runtime
+
+.PHONY: test-guarantor-receipt
+$(BUILD_DIR)/tests/lxp_test_guarantor_receipt: tests/daemon/guarantor-receipt.c \
+	cmd/layerx-guarantor/runtime.c tests/programs/test_call_activity.c \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o $(BUILD_DIR)/obj/cmd/layerx-guarantor/runtime.o,$(LAYERXD_OBJECTS)) \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out %.c,$^) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+test-guarantor-receipt: $(BUILD_DIR)/tests/lxp_test_guarantor_receipt test-guarantor-terminal-rejection
+	$(RUN_PREFIX) $<
+
+.PHONY: test-guarantor-terminal-rejection
+$(BUILD_DIR)/tests/lxp_test_guarantor_terminal_rejection: tests/daemon/guarantor-terminal-rejection.c \
+	cmd/layerx-guarantor/runtime.c tests/protocol/lxp_test_terminal_rejection.c tests/programs/test_call_activity.c \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o $(BUILD_DIR)/obj/cmd/layerx-guarantor/runtime.o,$(LAYERXD_OBJECTS)) \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(filter-out %.c,$^) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+test-guarantor-terminal-rejection: $(BUILD_DIR)/tests/lxp_test_guarantor_terminal_rejection
+	$(RUN_PREFIX) $<
 
 .PHONY: test-state-proof
 $(BUILD_DIR)/tests/lxp_test_state_proof: tests/state/lxp_test_state_proof.c \
