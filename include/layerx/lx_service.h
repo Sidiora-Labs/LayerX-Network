@@ -43,6 +43,7 @@ enum {
     LX_SERVICE_EVENT_OUTCOME_REJECTED = 11,
     LX_SERVICE_EVENT_DISPUTE_OPENED = 12,
     LX_SERVICE_EVENT_DISPUTE_RESOLVED = 13,
+    LX_SERVICE_EVENT_DEFAULT_APPLIED = 14,
     LX_SERVICE_EVENT_BODY_BYTES = 73
 };
 
@@ -417,6 +418,7 @@ lxp_result lx_service_acceptance_default(lxp_module_ctx *ctx,
                                          uint64_t global_sequence);
 lxp_result lx_service_epoch_begin(lxp_module_ctx *ctx, uint64_t epoch,
                                   uint64_t timestamp);
+lxp_result lx_service_batch_maintenance(lxp_module_ctx *ctx, bool *complete);
 lxp_result lx_service_dispute_open_execute(
     lxp_module_ctx *ctx, const lx_service_dispute_request *request,
     lx_service_dispute *result);

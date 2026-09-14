@@ -36,6 +36,7 @@ const REGISTER_RESPONSE_TAG: u16 = 29;
 const WIRE_VERSION: u16 = 1;
 const MAX_RECEIPT_BYTES: usize = 4_096;
 const MAINTENANCE_WIRE_VERSION: u16 = 2;
+const BATCH_MAINTENANCE_WIRE_VERSION: u16 = 3;
 const MAX_MAINTENANCE_BYTES: usize =
     b"LXP/programs/occupancy-receipt/v2\0".len() + 374 + 256 * 81 + 65_536;
 const MAX_VALIDITY_PROOF_BYTES: usize = 1_048_576;
@@ -673,8 +674,6 @@ fn account_proof_bundle(
             parameter_version,
         )
         .map_err(EvidenceError::Account)?;
-        let maintenance = decode_occupancy_maintenance(&decoded.proof.receipt_bytes)
-            .map_err(|_| EvidenceError::Receipt)?;
         let mut request = Vec::with_capacity(35);
         request.extend_from_slice(&WIRE_VERSION.to_be_bytes());
         request.push(3);
@@ -693,29 +692,12 @@ fn account_proof_bundle(
         )?;
         let receipt_bundle =
             inclusion_proof_bundle(receipt_response, 3, target_activity_id, context, registry)?;
-        let VerifiedProofBundle::Receipt {
-            canonical_bytes: activity_receipt,
-            activity_id,
-            signed_header,
-            ..
-        } = receipt_bundle
-        else {
-            return Err(EvidenceError::Receipt);
-        };
-        let Receipt::Protocol(receipt) =
-            verify_sequencer_signature(&activity_receipt, authorization.public_key())
-                .map_err(|_| EvidenceError::Receipt)?
-        else {
-            return Err(EvidenceError::Receipt);
-        };
-        if signed_header != decoded.signed_header
-            || receipt.global_sequence().checked_add(1) != Some(maintenance.global_sequence)
-            || receipt.resulting_state_root() != maintenance.previous_state_root
-            || receipt.activity_id() != activity_id
-            || activity_id != target_activity_id
-        {
-            return Err(EvidenceError::SelectorMismatch);
-        }
+        let (activity_receipt, activity_id) = maintained_activity_link(
+            receipt_bundle,
+            &decoded,
+            target_activity_id,
+            authorization.public_key(),
+        )?;
         return Ok(VerifiedProofBundle::MaintainedAccount {
             canonical_bytes: response.payload,
             proof_material: response.proof,
@@ -743,6 +725,41 @@ fn account_proof_bundle(
         verified: Box::new(verified),
         signed_header: decoded.signed_header,
     })
+}
+
+fn maintained_activity_link(
+    receipt_bundle: VerifiedProofBundle,
+    decoded: &DecodedNestedEvidence,
+    target_activity_id: [u8; 32],
+    sequencer_public_key: [u8; 32],
+) -> Result<(Vec<u8>, [u8; 32]), EvidenceError> {
+    let record = layerx_wire::batch_maintenance::decode_maintenance(&decoded.proof.receipt_bytes)
+        .map_err(|_| EvidenceError::Receipt)?;
+    let maintenance = record.occupancy();
+    let VerifiedProofBundle::Receipt {
+        canonical_bytes: activity_receipt,
+        activity_id,
+        signed_header,
+        ..
+    } = receipt_bundle
+    else {
+        return Err(EvidenceError::Receipt);
+    };
+    let Receipt::Protocol(receipt) =
+        verify_sequencer_signature(&activity_receipt, sequencer_public_key)
+            .map_err(|_| EvidenceError::Receipt)?
+    else {
+        return Err(EvidenceError::Receipt);
+    };
+    if signed_header != decoded.signed_header
+        || receipt.global_sequence().checked_add(1) != Some(maintenance.global_sequence)
+        || receipt.resulting_state_root() != maintenance.previous_state_root
+        || receipt.activity_id() != activity_id
+        || activity_id != target_activity_id
+    {
+        return Err(EvidenceError::SelectorMismatch);
+    }
+    Ok((activity_receipt, activity_id))
 }
 
 /// Returns the public-read label naming the level a proof established, and
@@ -922,7 +939,11 @@ pub(crate) fn decode_nested_evidence(
 ) -> Result<DecodedNestedEvidence, EvidenceError> {
     let mut reader = Reader::new(bytes);
     let wire_version = reader.u16()?;
-    if !matches!(wire_version, WIRE_VERSION | MAINTENANCE_WIRE_VERSION) || reader.u8()? != 2 {
+    if !matches!(
+        wire_version,
+        WIRE_VERSION | MAINTENANCE_WIRE_VERSION | BATCH_MAINTENANCE_WIRE_VERSION
+    ) || reader.u8()? != 2
+    {
         return Err(EvidenceError::Malformed);
     }
     let selector = RootSelector::decode(&mut reader)?;
@@ -947,6 +968,16 @@ pub(crate) fn decode_nested_evidence(
         (
             AccountEvidenceKind::Maintenance {
                 parameter_version: maintenance.parameter_version,
+            },
+            bytes.to_vec(),
+        )
+    } else if wire_version == BATCH_MAINTENANCE_WIRE_VERSION {
+        let bytes = reader.length_prefixed(layerx_wire::batch_maintenance::MAX_BYTES)?;
+        let maintenance = layerx_wire::batch_maintenance::decode_batch_maintenance(bytes)
+            .map_err(|_| EvidenceError::Receipt)?;
+        (
+            AccountEvidenceKind::Maintenance {
+                parameter_version: maintenance.occupancy.parameter_version,
             },
             bytes.to_vec(),
         )

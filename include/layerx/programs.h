@@ -889,6 +889,13 @@ lxp_result lxp_programs_finalize_occupancy_batch_selected(
     uint64_t batch_number, uint64_t batch_timestamp_ms,
     uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,
     lxp_programs_occupancy_receipt *receipt, lxp_byte_span *encoded);
+typedef lxp_result (*lxp_programs_batch_maintenance_fn)(void *context);
+lxp_result lxp_programs_finalize_occupancy_batch_with_maintenance(
+    struct lxp_kernel *kernel, uint16_t protocol_version, uint32_t schedule_version,
+    uint64_t batch_number, uint64_t batch_timestamp_ms,
+    uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,
+    lxp_programs_batch_maintenance_fn maintenance, void *maintenance_context,
+    lxp_programs_occupancy_receipt *receipt, lxp_byte_span *encoded);
 lxp_result lxp_programs_finalize_occupancy_batch(
     lxp_kernel *kernel, uint64_t batch_number, uint64_t batch_timestamp_ms,
     uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,

@@ -197,18 +197,8 @@ static lxp_result module_validate(lxp_module_ctx *ctx,
     return lxp_ctx_charge_gas(ctx, activity->payload.length + 1U);
 }
 
-static lxp_result resolve_asset(lx_escrow_runtime *runtime,
-                                const uint8_t asset_id[32],
-                                const lx_asset_record **asset)
-{
-    lx_asset_record *record;
-    lxp_result status = lx_asset_lookup(runtime->assets, asset_id, &record);
-    if (status != LXP_OK) return status;
-    *asset = record;
-    return LXP_OK;
-}
-
 static lxp_result execute_open(lxp_module_ctx *ctx,
+                               const lxp_activity *activity,
                                lx_escrow_runtime *runtime,
                                const lxp_authority_resolved *authority,
                                const escrow_open_payload *payload,
@@ -219,12 +209,14 @@ static lxp_result execute_open(lxp_module_ctx *ctx,
     (void)memset(&request, 0, sizeof(request));
     status = lx_escrow_resolve_account(runtime, payload->record.owner,
                                        &request.owner);
+    if (status == LXP_OK && ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_ctx_account_stage_module_custody(ctx, activity, payload->record.escrow_id,
+            payload->record.asset_id, payload->record.escrow_account, &request.escrow_account);
+    else if (status == LXP_OK)
+        status = lx_escrow_resolve_account(runtime, payload->record.escrow_account,
+            &request.escrow_account);
     if (status == LXP_OK)
-        status = lx_escrow_resolve_account(runtime,
-                                           payload->record.escrow_account,
-                                           &request.escrow_account);
-    if (status == LXP_OK)
-        status = resolve_asset(runtime, payload->record.asset_id,
+        status = lx_escrow_resolve_asset(ctx, payload->record.asset_id,
                                &request.asset);
     if (status != LXP_OK) return status;
     if (memcmp(authority->principal, payload->record.owner, 32U) != 0)
@@ -253,7 +245,7 @@ static lxp_result execute_capture_activity(
         status = lx_escrow_resolve_account(runtime, record.owner,
                                            &request.owner_account);
     if (status == LXP_OK)
-        status = resolve_asset(runtime, record.asset_id, &request.asset);
+        status = lx_escrow_resolve_asset(ctx, record.asset_id, &request.asset);
     if (status != LXP_OK) return status;
     request.escrow_id = payload->escrow_id;
     request.amount = payload->amount;
@@ -280,7 +272,7 @@ static lxp_result execute_release_activity(
         status = lx_escrow_resolve_account(runtime, record.owner,
                                            &request.owner_account);
     if (status == LXP_OK)
-        status = resolve_asset(runtime, record.asset_id, &request.asset);
+        status = lx_escrow_resolve_asset(ctx, record.asset_id, &request.asset);
     if (status != LXP_OK) return status;
     request.escrow_id = payload->escrow_id;
     request.authority = authority;
@@ -309,7 +301,7 @@ static lxp_result execute_dispute_activity(
         status = lx_escrow_resolve_account(runtime, record.owner,
                                            &request.owner_account);
     if (status == LXP_OK)
-        status = resolve_asset(runtime, record.asset_id, &request.asset);
+        status = lx_escrow_resolve_asset(ctx, record.asset_id, &request.asset);
     if (status != LXP_OK) return status;
     request.escrow_id = payload->escrow_id;
     request.authority = authority;
@@ -353,7 +345,7 @@ static lxp_result module_execute(lxp_module_ctx *ctx,
     switch (value->ordinal) {
     case 1U:
         escrow_id = value->value.open.record.escrow_id;
-        status = execute_open(ctx, runtime, authority, &value->value.open,
+        status = execute_open(ctx, activity, runtime, authority, &value->value.open,
                               &receipt);
         break;
     case 2U:

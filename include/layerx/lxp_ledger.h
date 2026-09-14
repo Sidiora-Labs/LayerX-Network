@@ -360,6 +360,9 @@ lxp_result lx_account_module_value_prepare(
 lxp_result lx_account_registration_commit(
     lx_account_registry *registry, const lx_account_registration *registration,
     lx_account **account);
+lxp_result lx_account_module_custody_registration_commit(
+    lx_account_registry *registry, const lx_account_registration *registration,
+    uint16_t module_id, lx_account **account);
 lxp_result lx_account_close(lx_account_registry *registry,
                             const uint8_t account_id[LX_ACCOUNT_ID_BYTES]);
 lxp_result lxp_send_decode(const uint8_t *bytes, size_t length, lxp_send *send);

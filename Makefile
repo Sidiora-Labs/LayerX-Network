@@ -291,8 +291,20 @@ $(BUILD_DIR)/tests/lxp_test_kernel: tests/protocol/lxp_test_kernel.c \
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
-test-kernel: $(BUILD_DIR)/tests/lxp_test_kernel
+$(BUILD_DIR)/tests/lxp_test_module_custody: \
+		tests/daemon/lxp_test_module_custody.c \
+		tests/daemon/lxp_test_epoch_modules.h \
+		cmd/layerxd/lxp_daemon_modules.h $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-kernel: $(BUILD_DIR)/tests/lxp_test_kernel \
+		$(BUILD_DIR)/tests/lxp_test_module_custody
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_kernel
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_module_custody
 
 $(BUILD_DIR)/tests/lxp_test_module_ctx: \
 		tests/protocol/lxp_test_module_ctx.c $(LIBRARY) \
@@ -509,8 +521,20 @@ $(BUILD_DIR)/tests/test_escrow_timeout: tests/modules/test_escrow_timeout.c \
 		$(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -ldl -lm -o $@
 
-test-escrow-timeout: $(BUILD_DIR)/tests/test_escrow_timeout
+$(BUILD_DIR)/tests/lxp_test_epoch_escrow_timeout: \
+		tests/daemon/lxp_test_epoch_escrow_timeout.c \
+		tests/daemon/lxp_test_epoch_modules.h \
+		cmd/layerxd/lxp_daemon_modules.h $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-escrow-timeout: $(BUILD_DIR)/tests/test_escrow_timeout \
+		$(BUILD_DIR)/tests/lxp_test_epoch_escrow_timeout
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_escrow_timeout
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_epoch_escrow_timeout
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_escrow_dispute: tests/modules/test_escrow_dispute.c \
@@ -554,8 +578,20 @@ $(BUILD_DIR)/tests/test_budget_period: tests/modules/test_budget_period.c \
 		$(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -ldl -lm -o $@
 
-test-budget-period: $(BUILD_DIR)/tests/test_budget_period
+$(BUILD_DIR)/tests/lxp_test_epoch_budget_rollback: \
+		tests/daemon/lxp_test_epoch_budget_rollback.c \
+		tests/daemon/lxp_test_epoch_modules.h \
+		cmd/layerxd/lxp_daemon_modules.h $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-budget-period: $(BUILD_DIR)/tests/test_budget_period \
+		$(BUILD_DIR)/tests/lxp_test_epoch_budget_rollback
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_budget_period
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_epoch_budget_rollback
 
 $(BUILD_DIR)/tests/test_budget_spend: tests/modules/test_budget_spend.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -699,8 +735,20 @@ $(BUILD_DIR)/tests/test_service_acceptance: \
 		$(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -ldl -lm -o $@
 
-test-service-acceptance: $(BUILD_DIR)/tests/test_service_acceptance
+$(BUILD_DIR)/tests/lxp_test_epoch_service_acceptance: \
+		tests/daemon/lxp_test_epoch_service_acceptance.c \
+		tests/daemon/lxp_test_epoch_modules.h \
+		cmd/layerxd/lxp_daemon_modules.h $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-service-acceptance: $(BUILD_DIR)/tests/test_service_acceptance \
+		$(BUILD_DIR)/tests/lxp_test_epoch_service_acceptance
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_service_acceptance
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_epoch_service_acceptance
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_service_dispute: \
@@ -3375,6 +3423,14 @@ $(BUILD_DIR)/tests/lxp_test_native_onboarding: tests/daemon/lxp_test_native_onbo
 .PHONY: test-daemon-native-onboarding
 test-daemon-native-onboarding: $(BUILD_DIR)/tests/lxp_test_native_onboarding $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR) --native-onboarding
+
+$(BUILD_DIR)/tests/lxp_test_module_maintenance: tests/daemon/lxp_test_module_maintenance.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-daemon-module-maintenance
+test-daemon-module-maintenance: $(BUILD_DIR)/tests/lxp_test_module_maintenance $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR) --module-maintenance
 
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build

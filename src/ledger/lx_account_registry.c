@@ -3,6 +3,7 @@
 
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_module.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -701,6 +702,39 @@ lxp_result lx_account_registration_commit(
     *account = &registry->accounts[registry->count];
     ++registry->count;
     return LXP_OK;
+}
+
+lxp_result lx_account_module_custody_registration_commit(
+    lx_account_registry *registry, const lx_account_registration *registration,
+    uint16_t module_id, lx_account **account)
+{
+    lx_account_kind kind;
+    size_t slot;
+    lxp_result status;
+    if (registry == NULL || registration == NULL || account == NULL ||
+        registry->count != registration->expected_count)
+        return LXP_FATAL_INVARIANT;
+    kind = registration->account.kind;
+    if (!((module_id == LXP_MODULE_ESCROW && kind == LX_ACCOUNT_AGENT_ESCROW) ||
+          (module_id == LXP_MODULE_BUDGET && kind == LX_ACCOUNT_AGENT_BUDGET) ||
+          (module_id == LXP_MODULE_STREAM && kind == LX_ACCOUNT_AGENT_STREAM) ||
+          (module_id == LXP_MODULE_PERPS &&
+           (kind == LX_ACCOUNT_SYSTEM_LIQUIDITY || kind == LX_ACCOUNT_SYSTEM_FUNDING_LONG ||
+            kind == LX_ACCOUNT_SYSTEM_FUNDING_SHORT))) ||
+        lx_account_validate_canonical(&registration->account) != LXP_OK ||
+        !registration->account.has_asset || bytes_zero(registration->account.asset_id, 32U) ||
+        registration->account.has_authority_key ||
+        !bytes_zero(registration->account.authority_key, 32U) ||
+        registration->account.created_at_sequence == 0U ||
+        registration->account.next_sequence != 0U || registration->account.frozen ||
+        registration->account.has_open_reference)
+        return LXP_FATAL_INVARIANT;
+    status = lx_account_registry_index_lookup(registry, registration->account.id, &slot);
+    if (status == LXP_OK) return LXP_FATAL_INVARIANT;
+    if (status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) return status;
+    status = lx_account_registry_slot_insert(registry, &registration->account, &slot);
+    if (status == LXP_OK) *account = &registry->accounts[slot];
+    return status;
 }
 
 lxp_result lx_account_credit_registration_commit(

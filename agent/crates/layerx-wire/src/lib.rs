@@ -2,6 +2,7 @@
 
 pub mod account;
 pub mod activity;
+pub mod batch_maintenance;
 pub mod decode;
 pub mod encode;
 pub mod hash;

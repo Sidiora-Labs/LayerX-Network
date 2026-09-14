@@ -1,3 +1,4 @@
+#include "layerx/lxp_maintenance.h"
 #include "layerx/programs.h"
 
 #include "layerx/lxp_crypto.h"
@@ -642,7 +643,13 @@ static lxp_result maintenance_head(
     lxp_programs_occupancy_receipt record;
     uint8_t body[FEED_HEAD_BYTES] = {0}, digest[32];
     uint64_t offset = validation_offset == NULL ? 0U : *validation_offset;
-    lxp_result status = lxp_programs_occupancy_receipt_decode(encoded.bytes, encoded.length, &record);
+    lxp_result status = lxp_batch_maintenance_occupancy_decode(encoded.bytes, encoded.length, &record);
+    if (status == LXP_OK && lxp_batch_maintenance_is_envelope(encoded)) {
+        lxp_batch_maintenance envelope;
+        status = lxp_batch_maintenance_decode(encoded.bytes, encoded.length, &envelope);
+        if (status == LXP_OK && envelope.timestamp_ms != timestamp)
+            status = LXP_ERR_CONTEXT_MISMATCH;
+    }
     if (status == LXP_OK) status = lxp_hash_sha256(encoded.bytes, encoded.length, digest);
     if (status != LXP_OK) return status;
     if (timestamp == 0U || record.global_sequence == 0U) return LXP_ERR_NON_CANONICAL;
@@ -702,8 +709,15 @@ static lxp_result observe_maintenance(void *context, const lxp_kernel *kernel,
         feed->context == NULL || kernel == NULL || encoded.length > LXP_MAX_ACTIVITY_BYTES - 13U)
         return LXP_ERR_NON_CANONICAL;
     store = feed->context;
-    status = lxp_programs_occupancy_receipt_decode(encoded.bytes, encoded.length, &record);
+    status = lxp_batch_maintenance_occupancy_decode(encoded.bytes, encoded.length, &record);
     if (status != LXP_OK) return status;
+    if (lxp_batch_maintenance_is_envelope(encoded)) {
+        lxp_batch_maintenance envelope;
+        status = lxp_batch_maintenance_decode(encoded.bytes, encoded.length, &envelope);
+        if (status != LXP_OK) return status;
+        if (envelope.epoch != kernel->epoch || envelope.timestamp_ms != timestamp)
+            return LXP_ERR_CONTEXT_MISMATCH;
+    }
     if (lxp_ct_memcmp(record.resulting_state_root, kernel->current_state_root, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
     length = 13U + encoded.length;
@@ -794,7 +808,7 @@ static lxp_result recover_canonical(lx_programs_state_feed_store *store,
             header.body_length > 13U && memcmp(body, "LXPM1", 5U) == 0) {
             lxp_programs_occupancy_receipt record;
             lxp_byte_span encoded = {body + 13U, header.body_length - 13U};
-            status = lxp_programs_occupancy_receipt_decode(encoded.bytes, encoded.length, &record);
+            status = lxp_batch_maintenance_occupancy_decode(encoded.bytes, encoded.length, &record);
             if (status == LXP_OK && (pending || activity_bytes != NULL ||
                 record.global_sequence != header.global_sequence ||
                 record.global_sequence != expected_sequence || expected_sequence == UINT64_MAX))

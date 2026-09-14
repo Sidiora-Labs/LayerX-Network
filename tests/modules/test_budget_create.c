@@ -352,6 +352,8 @@ static int submit(const budget_call *call, lxp_effect_buffer *effects,
     CHECK(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
     CHECK(lxp_effect_buffer_init(effects) == LXP_OK);
     ++env.global_sequence;
+    if (activity.protocol_version == 3U)
+        CHECK(lxp_state_journal_open(&env.state, env.global_sequence, &env.journal) == LXP_OK);
     CHECK(lxp_module_ctx_init(&ctx, &env.kernel, LXP_MODULE_BUDGET,
                               call->timestamp, 0U, env.global_sequence,
                               1000000U, &arena, true) == LXP_OK);
@@ -362,6 +364,8 @@ static int submit(const budget_call *call, lxp_effect_buffer *effects,
     CHECK(lxp_kernel_dispatch(env.registration, &ctx, &activity, &authority,
                               effects, result) == LXP_OK);
     if (*result == LXP_OK) CHECK(lxp_module_ctx_commit(&ctx) == LXP_OK);
+    if (activity.protocol_version == 3U)
+        CHECK(lxp_state_journal_commit(&env.journal) == LXP_OK);
     return 0;
 }
 
@@ -840,6 +844,7 @@ static int native_source_dispatch_path(void)
     lxp_result result;
     CHECK(env_init() == 0);
     CHECK(sign_raw(owner_seed, NULL, 0U, signature, public_key) == 0);
+    env.state.next_sequence = 1U;
     for (size_t i = 0U; i < 32U; ++i) {
         asset_hex[2U * i] = digits[env.asset.asset_id[i] >> 4U];
         asset_hex[2U * i + 1U] = digits[env.asset.asset_id[i] & 15U];
@@ -853,6 +858,10 @@ static int native_source_dispatch_path(void)
     CHECK(open_account(recipient_asset_name, 0U, public_key, &recipient_asset) == 0);
     env.owner->asset_id[0] ^= 0x80U;
     create[2U] = 0x82U;
+    char canonical_budget[512];
+    n = snprintf(canonical_budget, sizeof(canonical_budget), "agent:%s:budget:82%062u", owner_did, 0U);
+    CHECK(n > 0 && (size_t)n < sizeof(canonical_budget));
+    CHECK(open_account(canonical_budget, 0U, NULL, &env.budget_account) == 0);
     (void)memcpy(create + 34U, env.budget_account->id, 32U);
     (void)memcpy(create + 66U, env.asset.asset_id, 32U); create[98U] = 0x73U;
     put_u128(create + 130U, 0U, 500U); put_u128(create + 162U, 0U, 300U);

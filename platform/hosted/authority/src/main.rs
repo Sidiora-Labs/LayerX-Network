@@ -743,6 +743,7 @@ fn by_activity(config: &Config, requested: &str, wait_publication: bool) -> Resp
             if matches!(
                 evidence.batch_identity,
                 layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 { .. }
+                    | layerx_platform_authority::BatchIdentityEvidence::BatchMaintenanceV1 { .. }
             ) {
                 let replica: serde_json::Value = match serde_json::from_slice(&document) {
                     Ok(value) => value,

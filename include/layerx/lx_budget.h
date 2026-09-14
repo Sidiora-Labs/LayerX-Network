@@ -221,6 +221,7 @@ lxp_result lx_budget_rollover(lx_budget_record *record,
                               uint64_t batch_timestamp);
 lxp_result lx_budget_epoch_begin(lxp_module_ctx *ctx, uint64_t epoch,
                                  uint64_t timestamp);
+lxp_result lx_budget_batch_maintenance(lxp_module_ctx *ctx, bool *complete);
 lxp_result lx_budget_allowance_debit(lx_budget_record *record,
                                      lxp_u128 amount);
 lxp_result lx_budget_remaining(lx_budget_record *record,

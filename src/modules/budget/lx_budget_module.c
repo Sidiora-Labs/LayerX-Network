@@ -1,4 +1,5 @@
 #include "layerx/lx_budget.h"
+#include "../asset/committed.h"
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_identity.h"
@@ -47,6 +48,11 @@ static lxp_result budget_asset_state(lxp_module_ctx *ctx,
         state == NULL || ctx->kernel->module_kv_count >
                              LXP_KERNEL_MAX_MODULE_KV)
         return LXP_ERR_NON_CANONICAL;
+    if (ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        const lx_asset_record *record;
+        lxp_result status = lxp_module_committed_asset(ctx, asset_id, &record);
+        return status == LXP_OK ? lx_asset_transfer_state(record, state) : status;
+    }
     for (i = 0U; i < ctx->kernel->module_kv_count; ++i) {
         const lxp_module_kv_entry *entry = &ctx->kernel->module_kv[i];
         lx_asset_record record;
@@ -136,6 +142,30 @@ static lxp_result budget_capacity(lxp_module_ctx *ctx)
         LXP_ERR_ARENA_EXHAUSTED : LXP_OK;
 }
 
+static lxp_result budget_execution_sequence(lxp_module_ctx *ctx,
+    const lxp_activity *activity, const lx_account *account, uint64_t *sequence)
+{
+    const lxp_ledger_admission_facts *facts = &ctx->ledger_admission;
+    uint8_t actor[32];
+    lxp_result status;
+    *sequence = activity->account_sequence;
+    if (!facts->bound) return LXP_OK;
+    if (ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        ctx->module_id != LXP_MODULE_BUDGET || !facts->account_present ||
+        facts->activity_type != activity->activity_type ||
+        memcmp(facts->activity_binding, ctx->activity_id, 32U) != 0 ||
+        memcmp(facts->account_id, account->id, 32U) != 0 ||
+        activity->authority.length != 32U || activity->authority.bytes == NULL ||
+        memcmp(facts->verified_key, activity->authority.bytes, 32U) != 0 ||
+        facts->next_sequence != account->next_sequence)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_did_id_derive(activity->actor_did.bytes, activity->actor_did.length, actor);
+    if (status != LXP_OK) return status;
+    if (memcmp(actor, facts->actor, 32U) != 0) return LXP_ERR_CONTEXT_MISMATCH;
+    *sequence = facts->next_sequence;
+    return LXP_OK;
+}
+
 static lxp_result budget_transfer(lxp_module_ctx *ctx,
                                   const lxp_activity *activity,
                                   const uint8_t asset_id[32],
@@ -148,11 +178,16 @@ static lxp_result budget_transfer(lxp_module_ctx *ctx,
     lxp_transfer_source_authority source;
     lxp_transfer_asset_state asset_state;
     lxp_receipt receipt;
+    uint64_t sequence = activity->account_sequence;
+    bool native_source = activity->protocol_version == 3U &&
+        ((activity->activity_type == LX_BUDGET_CREATE && activity->payload.length == LX_BUDGET_CREATE_V2_PAYLOAD_BYTES) ||
+         (activity->activity_type == LX_BUDGET_FUND && activity->payload.length == LX_BUDGET_FUND_V2_PAYLOAD_BYTES));
     lxp_result status;
     if (from == NULL || to == NULL || sequence_account == NULL)
         return LXP_ERR_NON_CANONICAL;
     if (sequence_account->next_sequence == UINT64_MAX) return LXP_ERR_OVERFLOW;
-    status = budget_asset_state(ctx, asset_id, &asset_state);
+    status = native_source ? LXP_OK : budget_execution_sequence(ctx, activity, sequence_account, &sequence);
+    if (status == LXP_OK) status = budget_asset_state(ctx, asset_id, &asset_state);
     if (status != LXP_OK) return status;
     (void)memset(&set, 0, sizeof(set));
     (void)memset(&source, 0, sizeof(source));
@@ -166,7 +201,7 @@ static lxp_result budget_transfer(lxp_module_ctx *ctx,
     set.context.assets = &asset_state;
     set.context.asset_count = 1U;
     set.context.sequence_account = sequence_account;
-    set.context.actor_sequence = activity->account_sequence;
+    set.context.actor_sequence = sequence;
     if (activity->protocol_version == 3U && activity->activity_type == LX_BUDGET_CREATE &&
         activity->payload.length == LX_BUDGET_CREATE_V2_PAYLOAD_BYTES) {
         lx_budget_create_payload payload;
@@ -223,6 +258,7 @@ static lxp_result budget_authorized_signer(
     lx_account **signer)
 {
     uint8_t actor[32];
+    uint64_t sequence;
     lxp_result status;
     if (authority == NULL || activity == NULL || value == NULL ||
         value->typed == NULL || authority->kind != LXP_AUTHORITY_OWNER ||
@@ -246,9 +282,11 @@ static lxp_result budget_authorized_signer(
         !(*signer)->has_authority_key ||
         memcmp((*signer)->authority_key, authority->verified_key, 32U) != 0)
         return LXP_ERR_UNAUTHORIZED_DEBIT;
-    if (activity->account_sequence < (*signer)->next_sequence)
+    status = budget_execution_sequence(ctx, activity, *signer, &sequence);
+    if (status != LXP_OK) return status;
+    if (sequence < (*signer)->next_sequence)
         return LXP_ERR_SEQUENCE_REUSED;
-    return activity->account_sequence > (*signer)->next_sequence ?
+    return sequence > (*signer)->next_sequence ?
         LXP_ERR_SEQUENCE_GAP : LXP_OK;
 }
 
@@ -282,9 +320,11 @@ static lxp_result budget_execute_create(lxp_module_ctx *ctx,
     if (status == LXP_OK) return LXP_ERR_SEQUENCE_REUSED;
     if (status != LXP_ERR_UNKNOWN_FIELD) return status;
     status = budget_capacity(ctx);
-    if (status == LXP_OK)
-        status = lxp_ctx_account_find(ctx, payload->budget_account,
-                                      &budget_account);
+    if (status == LXP_OK && ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_ctx_account_stage_module_custody(ctx, activity, payload->budget_id,
+            payload->asset_id, payload->budget_account, &budget_account);
+    else if (status == LXP_OK)
+        status = lxp_ctx_account_find(ctx, payload->budget_account, &budget_account);
     if (status != LXP_OK) return status;
     if (budget_account->kind != LX_ACCOUNT_AGENT_BUDGET ||
         !budget_name_binds_actor(budget_account, activity, ":budget:", 8U,

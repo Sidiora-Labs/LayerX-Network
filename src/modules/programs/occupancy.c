@@ -827,7 +827,8 @@ static lxp_result finalize_occupancy_batch(
     lxp_kernel *kernel, uint16_t protocol_version, uint32_t schedule_version,
     uint64_t batch_number, uint64_t batch_timestamp_ms,
     uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,
-    lxp_programs_occupancy_receipt *receipt, lxp_byte_span *encoded)
+    lxp_programs_occupancy_receipt *receipt, lxp_byte_span *encoded,
+    lxp_programs_batch_maintenance_fn maintenance, void *maintenance_context)
 {
     lx_programs_transfer_runtime *runtime;
     lx_programs_fee_schedule schedule;
@@ -874,8 +875,9 @@ static lxp_result finalize_occupancy_batch(
         (void)lxp_state_journal_rollback(kernel->journal);
         return status;
     }
-    status = lxp_programs_sandbox_finalize_expiry_batch(
-        &ctx, batch_number);
+    if (maintenance != NULL) status = maintenance(maintenance_context);
+    if (status == LXP_OK)
+        status = lxp_programs_sandbox_finalize_expiry_batch(&ctx, batch_number);
     if (status != LXP_OK) {
         lxp_module_ctx_rollback(&ctx);
         (void)lxp_state_journal_rollback(kernel->journal);
@@ -939,7 +941,7 @@ lxp_result lxp_programs_finalize_occupancy_batch(
 {
     return finalize_occupancy_batch(kernel, LXP_PROTOCOL_VERSION_OCCUPANCY, 0U,
         batch_number, batch_timestamp_ms, global_sequence, parameter_version,
-        arena, receipt, encoded);
+        arena, receipt, encoded, NULL, NULL);
 }
 
 lxp_result lxp_programs_finalize_occupancy_batch_selected(
@@ -952,7 +954,22 @@ lxp_result lxp_programs_finalize_occupancy_batch_selected(
         return LXP_ERR_VERSION_UNSUPPORTED;
     return finalize_occupancy_batch(kernel, protocol_version, schedule_version,
         batch_number, batch_timestamp_ms, global_sequence, parameter_version,
-        arena, receipt, encoded);
+        arena, receipt, encoded, NULL, NULL);
+}
+
+lxp_result lxp_programs_finalize_occupancy_batch_with_maintenance(
+    lxp_kernel *kernel, uint16_t protocol_version, uint32_t schedule_version,
+    uint64_t batch_number, uint64_t batch_timestamp_ms,
+    uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,
+    lxp_programs_batch_maintenance_fn maintenance, void *maintenance_context,
+    lxp_programs_occupancy_receipt *receipt, lxp_byte_span *encoded)
+{
+    if (protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        schedule_version == 0U || maintenance == NULL || maintenance_context == NULL)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    return finalize_occupancy_batch(kernel, protocol_version, schedule_version,
+        batch_number, batch_timestamp_ms, global_sequence, parameter_version,
+        arena, receipt, encoded, maintenance, maintenance_context);
 }
 
 static lxp_result receipt_length(const lxp_programs_occupancy_receipt *receipt,
@@ -1240,7 +1257,7 @@ lxp_result lxp_programs_replay_finalize(
         return LXP_ERR_ROOT_MISMATCH;
     status = finalize_occupancy_batch(
         kernel, header->protocol_version, 0U, header->batch_number, header->timestamp_ms,
-        system_sequence, parameter_version, arena, &receipt, &encoded);
+        system_sequence, parameter_version, arena, &receipt, &encoded, NULL, NULL);
     if (status != LXP_OK) return status;
     (void)memset(output, 0, sizeof(*output));
     output->result_code = LXP_OK;

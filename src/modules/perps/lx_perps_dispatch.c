@@ -1,4 +1,5 @@
 #include "layerx/lx_perps.h"
+#include "../asset/committed.h"
 
 #include "lx_perps_codec.h"
 
@@ -202,6 +203,11 @@ static lxp_result quote_asset_state(lxp_module_ctx *ctx,
     if (ctx == NULL || ctx->kernel == NULL || asset_id == NULL ||
         state == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        const lx_asset_record *committed;
+        lxp_result status = lxp_module_committed_asset(ctx, asset_id, &committed);
+        return status == LXP_OK ? lx_asset_transfer_state(committed, state) : status;
+    }
     for (i = 0U; i < ctx->kernel->module_kv_count; ++i) {
         const lxp_module_kv_entry *entry = &ctx->kernel->module_kv[i];
         if (entry->module_id != LXP_MODULE_ASSET ||
@@ -548,7 +554,33 @@ static lxp_result position_loaded(lxp_module_ctx *ctx,
         LXP_OK : LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
 }
 
+static lxp_result prepare_market_accounts(lxp_module_ctx *ctx,
+    const lxp_activity *activity, const lx_perps_market *market, bool stage)
+{
+    static const lx_account_kind kinds[] = {LX_ACCOUNT_SYSTEM_LIQUIDITY,
+        LX_ACCOUNT_SYSTEM_FUNDING_LONG, LX_ACCOUNT_SYSTEM_FUNDING_SHORT};
+    const uint8_t *ids[] = {market->liquidity_account_id,
+        market->long_funding_account_id, market->short_funding_account_id};
+    lx_account *insurance;
+    lxp_transfer_asset_state asset;
+    lxp_result status = quote_asset_state(ctx, market->quote_asset, &asset);
+    if (status != LXP_OK) return status;
+    if (!asset.registered) return LXP_ERR_ASSET_MISMATCH;
+    if (asset.paused) return LXP_ERR_ASSET_PAUSED;
+    status = system_account(ctx, market->insurance_account_id, LX_ACCOUNT_SYSTEM_INSURANCE, &insurance);
+    if (status != LXP_OK) return status;
+    if (!insurance->has_asset || memcmp(insurance->asset_id, market->quote_asset, 32U) != 0)
+        return LXP_ERR_ASSET_MISMATCH;
+    for (size_t i = 0U; i < 3U; ++i) {
+        status = lxp_ctx_account_stage_perps_market(ctx, activity, market->market_id,
+            market->administrator, market->quote_asset, ids[i], kinds[i], stage);
+        if (status != LXP_OK) return status;
+    }
+    return LXP_OK;
+}
+
 static lxp_result validate_market_create(lxp_module_ctx *ctx,
+                                         const lxp_activity *activity,
                                          const lxp_authority_resolved *authority,
                                          const lx_perps_market *market)
 {
@@ -556,7 +588,8 @@ static lxp_result validate_market_create(lxp_module_ctx *ctx,
     lxp_result status;
     if (memcmp(authority->actor, market->administrator, 32U) != 0)
         return LXP_ERR_UNAUTHORIZED_DEBIT;
-    status = market_accounts_check(ctx, market);
+    status = ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT ?
+        prepare_market_accounts(ctx, activity, market, false) : market_accounts_check(ctx, market);
     if (status != LXP_OK) return status;
     status = lx_perps_market_lookup(ctx, market->market_id, &existing);
     if (status == LXP_OK) return LXP_ERR_MARKET_ALREADY_EXISTS;
@@ -791,10 +824,13 @@ static lxp_result validate_adl(lxp_module_ctx *ctx,
 }
 
 static lxp_result execute_market_create(lxp_module_ctx *ctx,
+                                        const lxp_activity *activity,
                                         const lx_perps_market *market)
 {
     lx_perps_funding_state funding;
-    lxp_result status = lx_perps_market_create_execute(ctx, market);
+    lxp_result status = ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT ?
+        prepare_market_accounts(ctx, activity, market, true) : LXP_OK;
+    if (status == LXP_OK) status = lx_perps_market_create_execute(ctx, market);
     if (status != LXP_OK) return status;
     (void)memset(&funding, 0, sizeof(funding));
     (void)memcpy(funding.market_id, market->market_id, 32U);
@@ -1563,7 +1599,7 @@ static lxp_result module_validate(lxp_module_ctx *ctx,
     if (status != LXP_OK) return status;
     switch (value->ordinal) {
     case 1U:
-        return validate_market_create(ctx, authority, &value->typed->market);
+        return validate_market_create(ctx, activity, authority, &value->typed->market);
     case 2U:
         return validate_market_halt(ctx, authority, &value->typed->halt);
     case 3U:
@@ -1604,7 +1640,7 @@ static lxp_result module_execute(lxp_module_ctx *ctx,
         return LXP_ERR_UNKNOWN_ACTIVITY;
     switch (value->ordinal) {
     case 1U:
-        return execute_market_create(ctx, &value->typed->market);
+        return execute_market_create(ctx, activity, &value->typed->market);
     case 2U:
         return execute_market_halt(ctx, &value->typed->halt);
     case 3U:

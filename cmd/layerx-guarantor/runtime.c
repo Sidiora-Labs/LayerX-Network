@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "runtime.h"
 #include "../layerxd/lxp_daemon_batch_wal.h"
+#include "../layerxd/lxp_daemon_modules.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_activity.h"
 #include "layerx/lxp_batch_identity.h"
@@ -10,6 +11,7 @@
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_genesis.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_snapshot.h"
 #include <errno.h>
@@ -27,10 +29,11 @@ struct gp_runtime {
     lxp_daemon_configuration configuration;
     lx_account_registry accounts;
     lxp_transfer_asset_state assets[LX_ASSET_REGISTRY_CAPACITY];
-    lx_asset_record send_assets[LX_ASSET_REGISTRY_CAPACITY];
+    lx_asset_registry asset_registry;
     lx_asset_runtime asset_runtime;
     size_t asset_count;
     lx_programs_transfer_runtime programs;
+    lxp_daemon_module_runtimes module_runtimes;
     lxp_identity_store identities;
     lxp_fee_params fees;
     lxp_verified_receipt_index verified_receipts;
@@ -173,27 +176,30 @@ static lxp_result load_identities(const char *path, lxp_identity_store *identiti
 
 static lxp_result collect_assets(gp_runtime *process)
 {
-    size_t account_index;
-    process->asset_count = 0U;
-    for (account_index = 0U; account_index < process->accounts.count; ++account_index) {
-        lx_account *account = &process->accounts.accounts[account_index];
-        size_t asset_index;
-        if (!account->has_asset)
-            continue;
-        for (asset_index = 0U; asset_index < process->asset_count; ++asset_index)
-            if (lxp_ct_memcmp(process->assets[asset_index].asset_id, account->asset_id, 32U) == 0)
+    lxp_result status = lx_asset_registry_init(&process->asset_registry, 0U);
+    if (status == LXP_OK)
+        status = lx_asset_committed_records(&process->kernel,
+            process->asset_registry.assets, LX_ASSET_REGISTRY_CAPACITY,
+            &process->asset_count);
+    if (status != LXP_OK) return status;
+    if (process->asset_count == 0U) return LXP_ERR_ASSET_MISMATCH;
+    process->asset_registry.count = process->asset_count;
+    for (size_t i = 0U; i < process->accounts.count; ++i) {
+        const lx_account *account = &process->accounts.accounts[i];
+        size_t asset;
+        if (!account->has_asset) continue;
+        for (asset = 0U; asset < process->asset_count; ++asset)
+            if (memcmp(account->asset_id,
+                       process->asset_registry.assets[asset].asset_id, 32U) == 0)
                 break;
-        if (asset_index != process->asset_count)
-            continue;
-        if (process->asset_count == LX_ASSET_REGISTRY_CAPACITY)
-            return LXP_ERR_LENGTH_LIMIT;
-        (void)memcpy(process->assets[process->asset_count].asset_id, account->asset_id, 32U);
-        process->assets[process->asset_count].registered = true;
-        process->assets[process->asset_count].paused = false;
-        (void)memcpy(process->send_assets[process->asset_count].asset_id, account->asset_id, 32U);
-        ++process->asset_count;
+        if (asset == process->asset_count) return LXP_ERR_ASSET_MISMATCH;
     }
-    return process->asset_count == 0U ? LXP_ERR_ASSET_MISMATCH : LXP_OK;
+    for (size_t i = 0U; i < process->asset_count; ++i) {
+        status = lx_asset_transfer_state(&process->asset_registry.assets[i],
+                                         &process->assets[i]);
+        if (status != LXP_OK) return status;
+    }
+    return LXP_OK;
 }
 
 static lxp_result occupancy_parameters(void *context, uint32_t recorded_fee_schedule_version,
@@ -312,6 +318,7 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
         return LXP_ERR_SEQUENCE_GAP;
     if ((expected->module_id != LXP_MODULE_PROGRAMS && expected->module_id != LXP_MODULE_ASSET &&
          expected->module_id != LXP_MODULE_GOVERNANCE &&
+         lxp_daemon_gated_module_version(&process->kernel, expected->module_id) == 0U &&
          !(process->custody_credit_enabled && expected->module_id == LXP_MODULE_BRIDGE)) ||
         expected->module_version == 0U ||
         expected->parameter_version != process->parameter_version)
@@ -331,6 +338,7 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
         lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS &&
         activity->activity_type != LX_ASSET_SEND &&
         activity->activity_type != LX_ASSET_WITHDRAW &&
+        !lxp_daemon_gated_activity_supported(&process->kernel, activity->activity_type) &&
         !lxp_governance_activity(activity->activity_type) &&
         !(process->custody_credit_enabled && activity->activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
@@ -339,7 +347,10 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
          ((activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) &&
           expected->module_version != lx_asset_module_iface()->abi_version) ||
          ((activity->activity_type == LXP_BRIDGE_CREDIT ||
-           lxp_governance_activity(activity->activity_type)) && expected->module_version != 1U)))
+           lxp_governance_activity(activity->activity_type)) && expected->module_version != 1U) ||
+         (lxp_daemon_gated_module(expected->module_id) &&
+          expected->module_version != lxp_daemon_gated_module_version(
+              &process->kernel, expected->module_id))))
         status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK)
         status = lxp_identity_resolve(&process->identities, activity->actor_did.bytes,
@@ -693,6 +704,33 @@ static lxp_result replay_transition(void *context, uint16_t version, uint32_t pa
         runtime->poisoned = true;
     return status;
 }
+static lxp_result replay_maintenance(void *context, const lxp_batch_header *header,
+    uint32_t parameters, uint64_t sequence, const uint8_t previous_root[32],
+    lxp_arena *arena, lxp_replay_activity_output *output)
+{
+    gp_runtime *runtime = context;
+    lxp_kernel_execution execution = {0};
+    if (runtime == NULL || header == NULL || previous_root == NULL || arena == NULL ||
+        output == NULL || runtime->poisoned || header->epoch != runtime->kernel.epoch ||
+        parameters != runtime->parameter_version || sequence != header->last_sequence ||
+        lxp_ct_memcmp(previous_root, runtime->kernel.current_state_root, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    if (!lxp_kernel_uses_batch_maintenance(&runtime->kernel, header->protocol_version))
+        return lxp_programs_replay_finalize(&runtime->kernel, header, parameters,
+            sequence, previous_root, arena, output);
+    execution.batch_number = header->batch_number;
+    execution.batch_timestamp_ms = header->timestamp_ms;
+    execution.epoch = header->epoch;
+    execution.global_sequence = sequence;
+    execution.parameter_version = parameters;
+    execution.identities = &runtime->identities;
+    execution.verified_receipts = &runtime->verified_receipts;
+    execution.fee_parameters = &runtime->fees;
+    execution.arena = arena;
+    return lxp_kernel_finalize_batch_maintenance(&runtime->kernel,
+        header->protocol_version, &execution, runtime->published_receipts[runtime->activity_count], output);
+}
+
 static lxp_result copy_feed(FILE *source, FILE *target, off_t begin, off_t end)
 {
     uint8_t bytes[65536];
@@ -775,7 +813,8 @@ static lxp_result replay_transaction_finish(void *context, bool commit)
         runtime->asset_runtime = saved->asset_runtime;
         runtime->asset_count = saved->asset_count;
         memcpy(runtime->assets, saved->assets, sizeof(runtime->assets));
-        memcpy(runtime->send_assets, saved->send_assets, sizeof(runtime->send_assets));
+        runtime->asset_registry = saved->asset_registry;
+        runtime->module_runtimes = saved->module_runtimes;
         runtime->parameter_version = saved->parameter_version;
         runtime->last_batch = saved->last_batch;
         runtime->poisoned = saved->poisoned;
@@ -800,25 +839,40 @@ lxp_result gp_runtime_prepare(gp_runtime *runtime, const lxp_batch_body *body)
         return LXP_ERR_NON_CANONICAL;
     if (body->header.protocol_version != runtime->protocol_version ||
         body->header.network_id != runtime->network_id ||
-        body->header.first_sequence != runtime->state.next_sequence ||
-        lxp_ct_memcmp(body->header.previous_state_root, runtime->kernel.current_state_root, 32U) ||
-        body->header.batch_number != runtime->last_batch + 1U)
+        body->header.batch_number != runtime->last_batch + 1U ||
+        body->header.epoch != runtime->kernel.epoch)
         return LXP_ERR_CONTEXT_MISMATCH;
     (void)lxp_arena_reset(&runtime->preparation_arena, 0U);
     status = lxp_replica_validate_header(
         body, runtime->network_id, &runtime->sequencer_authorization, &runtime->preparation_arena);
-    if (status == LXP_OK)
-        status =
-            lxp_replay_section_decode(&body->activities, &runtime->preparation_arena,
-                                      &runtime->published_activities, &runtime->activity_count);
+    if (status != LXP_OK)
+        return status;
+    if (body->header.first_sequence != runtime->state.next_sequence ||
+        lxp_ct_memcmp(body->header.previous_state_root, runtime->kernel.current_state_root, 32U))
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_replay_section_decode(&body->activities, &runtime->preparation_arena,
+                                       &runtime->published_activities, &runtime->activity_count);
     if (status == LXP_OK)
         status = lxp_da_receipt_section_decode(body->receipts, &runtime->preparation_arena,
                                                &runtime->published_receipts,
                                                &runtime->receipt_count, &events, &event_count);
-    if (status == LXP_OK && (event_count != runtime->activity_count ||
+    if (status == LXP_OK && (event_count != runtime->activity_count +
+                                 (lxp_kernel_uses_batch_maintenance(&runtime->kernel, runtime->protocol_version) ? 1U : 0U) ||
                              runtime->receipt_count < runtime->activity_count ||
                              runtime->receipt_count > runtime->activity_count + 1U))
         status = LXP_ERR_BATCH_GAP;
+    if (status == LXP_OK &&
+        lxp_kernel_uses_batch_maintenance(&runtime->kernel, runtime->protocol_version)) {
+        lxp_byte_span effects;
+        if (runtime->receipt_count != runtime->activity_count + 1U ||
+            !lxp_batch_maintenance_is_envelope(runtime->published_receipts[runtime->activity_count]))
+            return LXP_ERR_VERSION_UNSUPPORTED;
+        status = lxp_batch_maintenance_events(runtime->published_receipts[runtime->activity_count],
+            &body->header, &effects);
+        if (status == LXP_OK && (effects.length != events[runtime->activity_count].length ||
+            lxp_ct_memcmp(effects.bytes, events[runtime->activity_count].bytes, effects.length) != 0))
+            status = LXP_ERR_CONTEXT_MISMATCH;
+    }
     if (status == LXP_OK && runtime->activity_count) {
         void *allocated = NULL;
         lxp_batch_roots roots;
@@ -969,11 +1023,16 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
         status = collect_assets(runtime);
     if (status == LXP_OK && runtime->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
         runtime->asset_runtime = (lx_asset_runtime){
-            &runtime->accounts,   runtime->send_assets, runtime->asset_count,     runtime->assets,
-            runtime->asset_count, runtime->network_id,  runtime->protocol_version};
+            &runtime->accounts,   runtime->asset_registry.assets, runtime->asset_count,
+            runtime->assets,      runtime->asset_count,           runtime->network_id,
+            runtime->protocol_version};
         status = lxp_kernel_bind_module_runtime(&runtime->kernel, LXP_MODULE_ASSET,
                                                 &runtime->asset_runtime);
     }
+    if (status == LXP_OK)
+        status = lxp_daemon_module_runtimes_bind(&runtime->kernel, &runtime->module_runtimes,
+                                                 &runtime->accounts, &runtime->asset_registry,
+                                                 runtime->assets, runtime->asset_count);
     if (status == LXP_OK)
         status = load_schedule(runtime);
     if (status == LXP_OK)
@@ -1060,7 +1119,9 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
         status = lxp_replay_engine_bind_transaction(&runtime->engine,
                     replay_transaction_begin, replay_transaction_finish);
     if (status == LXP_OK)
-        status = lxp_programs_replay_engine_bind(&runtime->engine, &runtime->kernel);
+        status = lxp_replay_engine_bind_kernel(&runtime->engine, &runtime->kernel);
+    if (status == LXP_OK)
+        status = lxp_replay_engine_register_batch_finalizer(&runtime->engine, replay_maintenance, runtime);
     if (status == LXP_OK)
         status = lxp_replay_engine_register(&runtime->engine, runtime->protocol_version,
                                             replay_transition);
