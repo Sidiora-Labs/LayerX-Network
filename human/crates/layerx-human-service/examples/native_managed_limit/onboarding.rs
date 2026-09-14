@@ -63,7 +63,7 @@ fn consent(fixture: &mut Fixture, identity: &Identity) -> Result<Vec<u8>> {
         &unsigned.attach_signature(signature),
     ))
 }
-fn fund(fixture: &mut Fixture, identity: &Identity, registration: &Receipt) -> Result<()> {
+fn fund(fixture: &mut Fixture, identity: &Identity, registration: &Receipt) -> Result<Receipt> {
     checked(fixture.client.reconnect())?;
     let state = checked(fixture.client.preparation_state(&fixture.did, 8591))?;
     let from = super::fixture::account(&format!(
@@ -140,6 +140,7 @@ fn fund(fixture: &mut Fixture, identity: &Identity, registration: &Receipt) -> R
         },
     ))?;
     let preimage = checked(layerx_wire::sign::preimage_unsigned(&envelope.envelope))?;
+    let kind = envelope.envelope.activity_type().value();
     let signature = checked(Signature::new(&key.sign(preimage.as_bytes()).to_bytes()))?;
     let exact = checked(layerx_wire::activity::encode_signed_envelope(
         &envelope.envelope.attach_signature(signature),
@@ -147,14 +148,26 @@ fn fund(fixture: &mut Fixture, identity: &Identity, registration: &Receipt) -> R
     let (receipt, header) = fixture.submit(&exact)?;
     assert_eq!(super::fixture::result_code(&receipt)?, 0);
     fixture.finalize(&header)?;
-    Ok(())
+    Ok(Receipt {
+        signed: exact,
+        kind,
+        bytes: receipt,
+        header,
+    })
 }
-pub fn bind(fixture: &mut Fixture, identity: &Identity) -> Result<Receipt> {
+pub struct Bound {
+    pub registration: Receipt,
+    pub funding: Receipt,
+}
+pub fn bind(fixture: &mut Fixture, identity: &Identity) -> Result<Bound> {
     let consent = consent(fixture, identity)?;
     let registration = checked(SponsoredRegistration::from_signed_consent(&consent))?;
     let receipt = creation::submit(fixture, 0x0007_0001, 0xb6, checked(registration.payload())?)?;
-    fund(fixture, identity, &receipt)?;
+    let funding = fund(fixture, identity, &receipt)?;
     fixture.did = identity.did.clone();
     fixture.replace_signer(SigningKey::from_bytes(&[0x22; 32]));
-    Ok(receipt)
+    Ok(Bound {
+        registration: receipt,
+        funding,
+    })
 }

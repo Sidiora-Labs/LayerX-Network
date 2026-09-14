@@ -134,7 +134,11 @@ fn configure(
         &pending,
         serde_json::to_vec(
             &json!({"version":1,"policy":created.policy(fixture)?,"binding":created.provider.binding,
-            "clock": clock_fields, "receipts": references}),
+            "clock": clock_fields, "receipts": references,
+            "subject": {"subject_principal": created.provider.principal,
+                "owner_did": std::str::from_utf8(fixture.did.as_bytes())?,
+                "owner_account": created.budget.source_account.canonical(),
+                "asset_id": layerx_programs::hex::encode(&fixture.asset)}}),
         )?,
     )?;
     std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o600))?;

@@ -20,8 +20,10 @@ mod owner;
 mod transport;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
+#[track_caller]
 fn checked<T, E: std::fmt::Debug>(value: std::result::Result<T, E>) -> Result<T> {
-    value.map_err(|error| format!("{error:?}").into())
+    let location = std::panic::Location::caller();
+    value.map_err(|error| format!("{location}: {error:?}").into())
 }
 
 fn main() -> Result<()> {

@@ -8,6 +8,8 @@ import ssl
 import subprocess
 import time
 import urllib.request
+import urllib.error
+import urllib.parse
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -104,9 +106,9 @@ class Authority:
         self.generation = 0
         self.start()
 
-    def query(self, route):
+    def query(self, route, token=None):
         request = urllib.request.Request(self.url + route,
-            headers={'Authorization': 'Bearer ' + self.token.read_text()})
+            headers={'Authorization': 'Bearer ' + (self.token if token is None else token).read_text()})
         with urllib.request.urlopen(request, context=self.context, timeout=15) as response:
             return json.load(response)
 
@@ -135,7 +137,7 @@ class Authority:
             self.log = None
 
     def configure(self, request):
-        assert set(request) == {'version', 'policy', 'binding', 'clock', 'receipts'} and request['version'] == 1
+        assert set(request) == {'version', 'policy', 'binding', 'clock', 'receipts', 'subject'} and request['version'] == 1
         records = request['receipts']
         assert isinstance(records, list) and 5 <= len(records) <= 16
         identifiers = []
@@ -172,4 +174,15 @@ class Authority:
                 LAYERX_AUTHORITY_PRINCIPAL_POLICY_FILE=str(policy_path), LAYERX_AUTHORITY_MODULE_REGISTRY_FILE=str(self.registry),
                 LAYERX_AUTHORITY_CORE_CLOCK_HORIZON='10000', LAYERX_AUTHORITY_STATE_ROOT=str(self.state))
             self.start()
+        subject = request['subject']
+        assert set(subject) == {'subject_principal', 'owner_did', 'owner_account', 'asset_id'}
+        params = urllib.parse.urlencode(dict(tenant='native-managed-limit', principal='owner', **subject))
+        for name in ('subject-context', 'core-clock'):
+            try:
+                self.query('/v1/agent/' + name + '?' + params, self.human_token)
+            except urllib.error.HTTPError as error:
+                refusal = json.loads(error.read(4096))
+                code = refusal['error']['code']
+                assert isinstance(code, str) and len(code) <= 128
+                raise AssertionError(f'actual managed Authority {name} refused: HTTP {error.code}, {code}') from None
         return {'version': 1, 'endpoint': self.url, 'token': str(self.human_token), 'ca': str(self.ca)}

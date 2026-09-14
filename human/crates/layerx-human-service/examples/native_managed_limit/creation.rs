@@ -84,6 +84,8 @@ pub struct Created {
     pub operator_secret: zeroize::Zeroizing<Vec<u8>>,
     pub session_expiry_sequence: u64,
     pub recovery_root: [u8; 32],
+    pub sponsor: Receipt,
+    pub funding: Receipt,
     pub identity: Receipt,
     pub rotation: Receipt,
     pub recovery: Receipt,
@@ -131,7 +133,9 @@ fn policy(receipt: &Receipt, recovery: bool) -> Result<Value> {
 impl Created {
     pub fn references(&self) -> Result<Vec<Value>> {
         [
+            &self.sponsor,
             &self.identity,
+            &self.funding,
             &self.rotation,
             &self.recovery,
             &self.creation,
@@ -164,16 +168,20 @@ impl Created {
     }
 }
 
-fn governance(
-    fixture: &mut Fixture,
-    provider: &super::identity::Identity,
-) -> Result<(Receipt, Receipt, Receipt, [u8; 32])> {
+struct Governance {
+    sponsor: Receipt,
+    owner: super::onboarding::Bound,
+    rotation: Receipt,
+    recovery: Receipt,
+    root: [u8; 32],
+}
+fn governance(fixture: &mut Fixture, provider: &super::identity::Identity) -> Result<Governance> {
     let did = checked(layerx_wire::hash::did_id_for_protocol(&fixture.did, 3))?;
     let mut identity = vec![0x71, 1, 0, 2];
     identity.extend(did);
     identity.extend(fixture.public);
-    submit(fixture, 0x0007_0001, 0xb8, identity)?;
-    let identity = super::onboarding::bind(fixture, provider)?;
+    let sponsor = submit(fixture, 0x0007_0001, 0xb8, identity)?;
+    let owner = super::onboarding::bind(fixture, provider)?;
     let did = checked(layerx_wire::hash::did_id_for_protocol(&fixture.did, 3))?;
     checked(fixture.client.reconnect())?;
     let state = checked(fixture.client.preparation_state(&fixture.did, 8600))?;
@@ -204,7 +212,13 @@ fn governance(
     recovery.extend(60_u64.to_be_bytes());
     recovery.extend(60_u64.to_be_bytes());
     let recovery = submit(fixture, 0x0007_0003, 0xba, recovery)?;
-    Ok((identity, rotation, recovery, root))
+    Ok(Governance {
+        sponsor,
+        owner,
+        rotation,
+        recovery,
+        root,
+    })
 }
 
 fn budget(fixture: &mut Fixture, recovery: &Receipt) -> Result<NativeBudgetCreate> {
@@ -251,7 +265,13 @@ fn budget(fixture: &mut Fixture, recovery: &Receipt) -> Result<NativeBudgetCreat
 
 pub fn create(fixture: &mut Fixture) -> Result<Created> {
     let provider = super::identity::start(fixture)?;
-    let (identity, rotation, recovery, recovery_root) = governance(fixture, &provider)?;
+    let Governance {
+        sponsor,
+        owner,
+        rotation,
+        recovery,
+        root: recovery_root,
+    } = governance(fixture, &provider)?;
     let budget = budget(fixture, &recovery)?;
     let creation = submit(fixture, 0x0003_0001, 0xbb, checked(budget.payload())?)?;
     let directory = fixture.directory.join("managed-session-keys");
@@ -302,6 +322,8 @@ pub fn create(fixture: &mut Fixture) -> Result<Created> {
         compiled.payload().as_bytes().to_vec(),
     )?;
     Ok(Created {
+        sponsor,
+        funding: owner.funding,
         provider,
         budget,
         granted,
@@ -310,7 +332,7 @@ pub fn create(fixture: &mut Fixture) -> Result<Created> {
         operator_secret: zeroize::Zeroizing::new(secret),
         session_expiry_sequence,
         recovery_root,
-        identity,
+        identity: owner.registration,
         rotation,
         recovery,
         creation,
