@@ -152,6 +152,8 @@ class SignerCase(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=10)
+            if process.stdout is not None:
+                process.stdout.close()
 
     def seed_file(self, name='treasury.key', mode=0o600, seed=None):
         seed = seed if seed is not None else os.urandom(32)
@@ -599,6 +601,10 @@ class BootstrapTreasuryCase(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 self.signer.kill()
                 self.signer.wait(timeout=10)
+        if self.signer is not None:
+            for stream in (self.signer.stdout, self.signer.stderr):
+                if stream is not None:
+                    stream.close()
 
     def seeds(self):
         seeds = {}
