@@ -2315,6 +2315,9 @@ fn complete_activity(
         Err(error) => return error,
     };
     pay_timing("gateway.complete.receipt", verify_started);
+    if verify_withdrawal_submission(config, operation, &receipt).is_err() {
+        return response(502, "withdrawal_verification_failed", None);
+    }
     if !operation.program_mutation && verified_result_code != 0 {
         return complete_activity_refusal(
             config,
@@ -2365,6 +2368,23 @@ fn complete_activity(
     let response = activity_terminal_response(config, operation, result, trace_id);
     pay_timing("gateway.complete.total", total_started);
     response
+}
+
+fn verify_withdrawal_submission(
+    config: &Config,
+    operation: &ActivityOperation,
+    receipt: &[u8],
+) -> Result<(), ()> {
+    let decoded = layerx_wire::receipt::decode(receipt).map_err(|_| ())?;
+    let protocol = decoded.protocol().ok_or(())?;
+    if protocol.module_id() != 1 || protocol.operation() != 9 { return Ok(()); }
+    let authorized = layerx_proof::receipt::AuthorizedBatch::new(
+        protocol.batch_id(), protocol.asset(), protocol.previous_state_root(),
+        protocol.resulting_state_root(), config.sequencer_authorization.public_key(),
+    );
+    layerx_proof::receipt::withdrawal::verify(receipt, &authorized, &operation.canonical, config.protocol_network_id)
+        .map_err(|_| ())?;
+    Ok(())
 }
 
 fn submitted_unknown_response(

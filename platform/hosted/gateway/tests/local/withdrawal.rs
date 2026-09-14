@@ -271,6 +271,12 @@ pub(super) fn run(
     );
     assert_eq!(verified.activity_id(), activity_id);
     assert_eq!(verified.fee_charged(), 17);
+    let authorized = layerx_proof::receipt::AuthorizedBatch::new(
+        verified.batch_id(), verified.asset(), verified.previous_state_root(),
+        verified.resulting_state_root(), cluster.sequencer_key,
+    );
+    layerx_proof::receipt::withdrawal::verify(&receipt, &authorized, &canonical, NETWORK_ID)
+        .required("withdrawal receipt bound to original owner activity and monetary effects");
     let after = names.map(|name| account(&http, &authorization, name, cluster));
     assert_eq!(after[0].balance() + 18, before[0].balance());
     assert_eq!(after[1].balance(), before[1].balance() + 17);

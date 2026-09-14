@@ -9,6 +9,7 @@ use crate::evidence::Evidence;
 use crate::level::achieved;
 
 mod native_credit;
+pub mod withdrawal;
 
 const PROGRAMS_MODULE_ID: u32 = 9;
 const PROGRAMS_STATE_OPERATION: u16 = 0;
@@ -264,6 +265,9 @@ pub fn verify_outcome(
     }
     if protocol.module_id() == 8 && protocol.operation() == 0 {
         return native_credit::verify(receipt_bytes, authorised);
+    }
+    if protocol.module_id() == 1 && protocol.operation() == 9 {
+        return withdrawal::verify_effects(receipt_bytes, authorised);
     }
     if u32::from(protocol.module_id()) == PROGRAMS_MODULE_ID && protocol.operation() == 0 {
         return verify_program_state_outcome(receipt_bytes, authorised);
