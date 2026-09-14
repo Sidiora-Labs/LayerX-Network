@@ -222,6 +222,29 @@ pub enum DepositBoundaryError {
 }
 
 /// Real Paxeer/wallet operations consumed by the durable state machine.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DepositAdmission {
+    Published(Box<DepositProof>),
+    Native(Box<layerx_paxeer_client::NativeDepositAdmission>),
+}
+
+impl DepositAdmission {
+    fn nullifier(&self) -> [u8; 32] {
+        match self {
+            Self::Published(proof) => proof.nullifier(),
+            Self::Native(admission) => admission.nullifier(),
+        }
+    }
+    fn credit_intent(&self, reserve: &AccountId, recipient: &AccountId)
+        -> Result<layerx_intents::Intent, DepositFailure>
+    {
+        match self {
+            Self::Published(proof) => proof.credit_intent(reserve, recipient),
+            Self::Native(admission) => admission.credit_intent(reserve, recipient),
+        }
+    }
+}
+
 pub trait DepositRuntime {
     /// Verifies that a wallet-supplied transaction is the exact external
     /// custody action committed by `request`. Implementations must read the
@@ -267,6 +290,21 @@ pub trait DepositRuntime {
         &mut self,
         transaction: TransactionHash,
     ) -> Result<DepositProof, DepositFailure>;
+
+    /// # Errors
+    /// Refuses unavailable or mismatched custody evidence before credit submission.
+    fn admit_credit(&mut self, request: &WalletCustodyRequest,
+        transaction: TransactionHash, recipient: &AccountId, protocol_version: u16) -> Result<DepositAdmission, DepositFailure>
+    {
+        let proof = self.obtain_proof(transaction)?;
+        if proof.transaction() != transaction || proof.protocol_version() != protocol_version
+            || proof.custody().beneficiary != request.beneficiary
+            || layerx_paxeer_client::account_address_for_protocol(recipient, protocol_version).ok()
+                != Some(request.beneficiary) {
+            return Err(DepositFailure::ProofUnavailable(ProofFault::EvidenceSourceMismatch));
+        }
+        Ok(DepositAdmission::Published(Box::new(proof)))
+    }
 }
 
 /// Agent boundary extension that reads the independently authorized receipt
@@ -815,7 +853,8 @@ impl DepositJourney {
                 }
             }
             Phase::Proving => {
-                let proof = match runtime.obtain_proof(self.transaction()?) {
+                let proof = match runtime.admit_credit(&self.wallet_request(scope)?, self.transaction()?, &self.recipient()?,
+                    self.record.layerx_protocol_version.ok_or(DepositJourneyError::InvalidPlan)?) {
                     Ok(proof) => proof,
                     Err(DepositFailure::ProofUnavailable(ProofFault::NotFinal { .. })) => {
                         self.transition(scope, Phase::Confirming, now)?;
@@ -840,6 +879,11 @@ impl DepositJourney {
                         self.fail(scope, StoredFailure::CustodyFailed, now)?;
                         return self.status();
                     }
+                    Err(DepositFailure::ProofUnavailable(ProofFault::ProducerUnavailable))
+                        if self.record.layerx_protocol_version == Some(3) => {
+                        self.persist_at(scope, now)?;
+                        return self.status();
+                    }
                     Err(DepositFailure::ProofUnavailable(_)) => {
                         self.fail(scope, StoredFailure::ProofUnavailable, now)?;
                         return self.status();
@@ -849,7 +893,7 @@ impl DepositJourney {
                         return self.status();
                     }
                 };
-                self.validate_proof(&proof)?;
+                self.validate_admission(&proof)?;
                 self.record.deposit_nullifier = Some(proof.nullifier());
                 let inner = match self.credit_plan(&proof) {
                     Ok(plan) => plan,
@@ -1040,7 +1084,7 @@ impl DepositJourney {
         })
     }
 
-    fn credit_plan(&self, proof: &DepositProof) -> Result<JourneyPlan, DepositJourneyError> {
+    fn credit_plan(&self, proof: &DepositAdmission) -> Result<JourneyPlan, DepositJourneyError> {
         let recipient = self.recipient()?;
         let reserve = self.reserve()?;
         let intent = proof
@@ -1048,7 +1092,7 @@ impl DepositJourney {
             .map_err(DepositJourneyError::Deposit)?;
         let leg = JourneyLeg::new(
             intent,
-            proof.idempotency_key().bytes(),
+            proof.nullifier(),
             AgentDid::new(self.record.actor.clone())?,
             AuthorityRef::new(self.record.authority.clone())?,
             self.record.account_sequence,
@@ -1067,6 +1111,27 @@ impl DepositJourney {
             vec![leg],
         )
         .map_err(Into::into)
+    }
+
+    fn validate_admission(&self, admission: &DepositAdmission) -> Result<(), DepositJourneyError> {
+        let value = match admission {
+            DepositAdmission::Published(proof) => return self.validate_proof(proof),
+            DepositAdmission::Native(value) => value,
+        };
+        let custody = value.custody();
+        if value.transaction() != self.transaction()?
+            || value.vault().bytes() != self.record.vault
+            || Some(value.chain_id()) != self.record.paxeer_chain_id
+            || Some(value.network_id()) != self.record.layerx_network_id
+            || self.record.layerx_protocol_version != Some(3)
+            || custody.payer.bytes() != self.record.wallet
+            || custody.asset.bytes() != self.record.asset
+            || custody.amount.value() != self.record.amount
+            || custody.beneficiary != layerx_paxeer_client::account_address_for_protocol(
+                &self.recipient()?, 3).map_err(|_| DepositJourneyError::InvalidPlan)?
+            || self.record.deposit_nullifier.is_some_and(|stored| stored != value.nullifier())
+        { return Err(DepositJourneyError::ProofMismatch); }
+        Ok(())
     }
 
     fn validate_proof(&self, proof: &DepositProof) -> Result<(), DepositJourneyError> {

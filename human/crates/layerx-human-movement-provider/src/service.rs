@@ -1,3 +1,5 @@
+mod deposit_ingress;
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -118,6 +120,10 @@ impl EvidenceService {
         let file = self
             .evidence_root
             .join(format!("deposit-{}.bin", hex_string(&transaction.bytes())));
+        if !file.try_exists().map_err(|_| proof_error(ProofFault::EvidenceSourceMismatch))? {
+            self.refresh_publication(transaction)
+                .map_err(|_| proof_error(ProofFault::ProducerUnavailable))?;
+        }
         let bytes = read_private(&file, MAX_FRAME).map_err(|error| match error {
             Error::Io(io) if io.kind() == std::io::ErrorKind::NotFound => {
                 proof_error(ProofFault::ProducerUnavailable)
@@ -156,27 +162,8 @@ impl EvidenceService {
         {
             return Err(proof_error(ProofFault::EvidenceSourceMismatch));
         }
-        if let Some(profile) = &self.custody_profile {
-            let path = self
-                .evidence_root
-                .join(format!("credit-{}.bin", hex_string(&transaction.bytes())));
-            let payload = read_private(&path, 427)
-                .map_err(|_| proof_error(ProofFault::ProducerUnavailable))?;
-            let owner_key = payload
-                .get(139..171)
-                .ok_or_else(|| proof_error(ProofFault::EvidenceSourceMismatch))?
-                .try_into()
-                .map_err(|_| proof_error(ProofFault::EvidenceSourceMismatch))?;
-            let credit = layerx_paxeer_client::AttestedNativeCustodyCredit::verify(
-                profile,
-                &payload,
-                layerx_paxeer_client::NativeCustodyExpectation {
-                    network_id: verified.network_id(),
-                    beneficiary: verified.custody().beneficiary,
-                    owner_key,
-                },
-            )
-            .map_err(|_| proof_error(ProofFault::EvidenceSourceMismatch))?;
+        if self.custody_profile.is_some() {
+            let credit = self.read_credit(transaction, verified.custody().beneficiary)?;
             return verified.with_native_credit(credit);
         }
         Ok(verified)
@@ -189,6 +176,16 @@ impl EvidenceService {
     ) -> Response {
         if request.chain_id != self.chain_id || request.vault != self.vault {
             return Response::ContractViolation;
+        }
+        if self.policy.layerx_protocol_version == 3 {
+            let Ok(plan) = self.journal.authorized_plan(&request.identity) else {
+                return Response::ContractViolation;
+            };
+            if plan.operation != "deposit.start" || plan.context.asset != request.asset
+                || plan.context.amount != request.amount
+            { return Response::ContractViolation; }
+            return self.custody_for_request(request, transaction, &plan.context.account)
+                .map_or(Response::Unavailable, |_| Response::VerifiedDeposit(transaction));
         }
         let Ok(proof) = self.obtain(transaction) else {
             return Response::Unavailable;
@@ -214,7 +211,7 @@ impl EvidenceService {
                 ) else {
                     return false;
                 };
-                transaction_matches(&value, request, &proof, &expected_input)
+                transaction_matches(&value, request, proof.transaction(), proof.inclusion(), &expected_input)
             })
             .count();
         if agreement < self.tracker_config.minimum_endpoint_agreement {
@@ -267,6 +264,8 @@ impl EvidenceService {
                 request,
                 transaction,
             } => self.verify_external(request, *transaction),
+            Request::AdmitDepositCredit { request, transaction, recipient } =>
+                Response::DepositAdmission(self.admit(request, *transaction, recipient)),
             Request::PlanMove(plan)
             | Request::PlanDeposit(plan)
             | Request::PlanWithdrawal(plan)
@@ -606,7 +605,8 @@ fn deposit_calldata(request: &WalletCustodyRequest) -> Vec<u8> {
 fn transaction_matches(
     value: &Json,
     request: &WalletCustodyRequest,
-    proof: &DepositProof,
+    transaction: TransactionHash,
+    inclusion: layerx_paxeer_client::TransactionInclusion,
     input: &[u8],
 ) -> bool {
     let text = |key| value.member(key).and_then(Json::as_text);
@@ -617,9 +617,9 @@ fn transaction_matches(
             .and_then(|v| v.strip_prefix("0x"))
             .and_then(|v| u64::from_str_radix(v, 16).ok())
     };
-    bytes32("hash") == Some(proof.transaction().bytes())
-        && bytes32("blockHash") == Some(proof.inclusion().block.hash)
-        && quantity("blockNumber") == Some(proof.inclusion().block.number)
+    bytes32("hash") == Some(transaction.bytes())
+        && bytes32("blockHash") == Some(inclusion.block.hash)
+        && quantity("blockNumber") == Some(inclusion.block.number)
         && quantity("chainId") == Some(request.chain_id)
         && quantity("value") == Some(0)
         && address("from") == Some(request.wallet.bytes())

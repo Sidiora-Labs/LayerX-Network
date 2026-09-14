@@ -290,6 +290,31 @@ impl Journal {
         })
     }
 
+    pub fn deposit_recipient(&self, transaction: layerx_paxeer_client::TransactionHash)
+        -> Result<layerx_types::account::AccountId, Error>
+    {
+        if !self.healthy { return Err(Error::Integrity); }
+        let codec = NativeMovementCodec::for_protocol(self.protocol).map_err(|_| Error::Integrity)?;
+        let mut recipient = None;
+        for record in self.records.values() {
+            let Request::AdmitDepositCredit { transaction: observed, recipient: account, .. } =
+                codec.decode_request(&record.request).map_err(|_| Error::Integrity)?
+            else { continue; };
+            if observed != transaction { continue; }
+            let Some(bytes) = &record.response else { continue; };
+            let Response::DepositAdmission(Ok(admission)) =
+                codec.decode_response(bytes).map_err(|_| Error::Integrity)?
+            else { continue; };
+            if admission.transaction() != transaction
+                || layerx_paxeer_client::account_address_for_protocol(&account, self.protocol)
+                    .map_err(|_| Error::Integrity)? != admission.custody().beneficiary
+                || recipient.as_ref().is_some_and(|prior| prior != &account)
+            { return Err(Error::Conflict); }
+            recipient = Some(account);
+        }
+        recipient.ok_or(Error::Integrity)
+    }
+
     pub fn next_nonce(
         &self,
         wallet: layerx_types::intent::EvmAddress,
@@ -402,6 +427,7 @@ fn validate_response(request: &[u8], bytes: &[u8], protocol: u16) -> Result<(), 
                 Response::DepositFinality(_)
             )
             | (Request::ObtainDepositProof(_), Response::DepositProof(_))
+            | (Request::AdmitDepositCredit { .. }, Response::DepositAdmission(_))
             | (
                 Request::VerifyClaimSignature { .. },
                 Response::ClaimTransaction(_)

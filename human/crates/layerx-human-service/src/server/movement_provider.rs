@@ -17,7 +17,7 @@ use rustix::net::sockopt::socket_peercred;
 
 use crate::audit::AuditChain;
 use crate::journeys::{
-    DepositBoundaryError, DepositPlan, DepositRuntime, ExitBoundaryError, ExitJourney,
+    DepositAdmission, DepositBoundaryError, DepositPlan, DepositRuntime, ExitBoundaryError, ExitJourney,
     ExitJourneyError, ExitPlan, ExitStatus, ExitWallet, ExitWalletOutcome, ExitWalletRequest,
     IrreversibleExitConfirmation, MovePlan, PaxeerAction, PaxeerActionOutcome,
     WalletCustodyOutcome, WalletCustodyRequest, WithdrawalBoundaryError, WithdrawalJourney,
@@ -310,6 +310,7 @@ pub enum MovementProviderRequest {
     SubmitDepositCustody(WalletCustodyRequest),
     PollDepositFinality(TransactionHash),
     ObtainDepositProof(TransactionHash),
+    AdmitDepositCredit { request: WalletCustodyRequest, transaction: TransactionHash, recipient: layerx_types::account::AccountId },
     VerifyClaimSignature {
         request: WithdrawalTransactionRequest,
         signature: Vec<u8>,
@@ -344,6 +345,7 @@ pub enum MovementProviderResponse {
     DepositCustody(WalletCustodyOutcome),
     DepositFinality(FinalityReport),
     DepositProof(Result<DepositProof, DepositFailure>),
+    DepositAdmission(Result<layerx_paxeer_client::NativeDepositAdmission, DepositFailure>),
     ClaimTransaction(Vec<u8>),
     CheckpointProof(Option<CheckpointProof>),
     Withdrawal(PaxeerActionOutcome),
@@ -458,6 +460,13 @@ impl MovementProviderCodec for NativeMovementCodec {
                 w.tag(8);
                 w.fixed(&v.bytes());
             }
+            MovementProviderRequest::AdmitDepositCredit { request, transaction, recipient } => {
+                if self.protocol_version != 3 { return Err(MovementProviderError::ContractViolation); }
+                w.tag(17);
+                w.wallet_custody(request)?;
+                w.fixed(&transaction.bytes());
+                w.text(&recipient.canonical(), 4096)?;
+            }
             MovementProviderRequest::VerifyClaimSignature { request, signature } => {
                 w.tag(9);
                 w.withdrawal_request(request)?;
@@ -537,6 +546,11 @@ impl MovementProviderCodec for NativeMovementCodec {
             6 => MovementProviderRequest::SubmitDepositCustody(r.wallet_custody()?),
             7 => MovementProviderRequest::PollDepositFinality(TransactionHash::new(r.fixed()?)),
             8 => MovementProviderRequest::ObtainDepositProof(TransactionHash::new(r.fixed()?)),
+            17 if self.protocol_version == 3 => MovementProviderRequest::AdmitDepositCredit {
+                request: r.wallet_custody()?, transaction: TransactionHash::new(r.fixed()?),
+                recipient: layerx_types::account::AccountId::parse(&r.text(4096)?)
+                    .map_err(|_| MovementProviderError::ContractViolation)?,
+            },
             9 => MovementProviderRequest::VerifyClaimSignature {
                 request: r.withdrawal_request()?,
                 signature: r.blob(262_144)?.to_vec(),
@@ -624,6 +638,22 @@ impl MovementProviderCodec for NativeMovementCodec {
                         .map_err(|_| MovementProviderError::ContractViolation)?,
                     262_144,
                 )?;
+            }
+            MovementProviderResponse::DepositAdmission(value) => {
+                if self.protocol_version != 3 { return Err(MovementProviderError::ContractViolation); }
+                w.tag(18);
+                match value {
+                    Ok(value) => {
+                        w.u8(1);
+                        w.blob(&layerx_paxeer_client::wire::encode_native_deposit_admission(value, 786)
+                            .map_err(|_| MovementProviderError::ContractViolation)?, 786)?;
+                    }
+                    Err(error) => {
+                        w.u8(2);
+                        w.blob(&layerx_paxeer_client::wire::encode_deposit_failure(error, 262_144)
+                            .map_err(|_| MovementProviderError::ContractViolation)?, 262_144)?;
+                    }
+                }
             }
             MovementProviderResponse::ClaimTransaction(v) => {
                 w.tag(9);
@@ -714,6 +744,13 @@ impl MovementProviderCodec for NativeMovementCodec {
                     262_144,
                 )
                 .map_err(|_| MovementProviderError::ContractViolation)?),
+                _ => return Err(MovementProviderError::ContractViolation),
+            }),
+            18 if self.protocol_version == 3 => MovementProviderResponse::DepositAdmission(match r.u8()? {
+                1 => Ok(layerx_paxeer_client::wire::decode_native_deposit_admission(r.blob(786)?, 786)
+                    .map_err(|_| MovementProviderError::ContractViolation)?),
+                2 => Err(layerx_paxeer_client::wire::decode_deposit_failure(r.blob(262_144)?, 262_144)
+                    .map_err(|_| MovementProviderError::ContractViolation)?),
                 _ => return Err(MovementProviderError::ContractViolation),
             }),
             9 => MovementProviderResponse::ClaimTransaction(r.blob(262_144)?.to_vec()),
@@ -1801,6 +1838,29 @@ impl UnixMovementProvider {
 }
 
 impl DepositRuntime for UnixMovementProvider {
+    fn admit_credit(&mut self, request: &WalletCustodyRequest,
+        transaction: TransactionHash, recipient: &layerx_types::account::AccountId, protocol_version: u16) -> Result<DepositAdmission, DepositFailure>
+    {
+        if protocol_version != 3 {
+            let proof = self.obtain_proof(transaction)?;
+            if proof.protocol_version() != protocol_version || proof.transaction() != transaction {
+                return Err(DepositFailure::ProofUnavailable(
+                    layerx_paxeer_client::ProofFault::EvidenceSourceMismatch));
+            }
+            return Ok(DepositAdmission::Published(Box::new(proof)));
+        }
+        match self.call(&MovementProviderRequest::AdmitDepositCredit {
+            request: request.clone(), transaction, recipient: recipient.clone(),
+        }) {
+            Ok(MovementProviderResponse::DepositAdmission(value)) =>
+                value.map(|value| DepositAdmission::Native(Box::new(value))),
+            Err(MovementProviderError::Unavailable) => Err(DepositFailure::ProofUnavailable(
+                layerx_paxeer_client::ProofFault::ProducerUnavailable)),
+            _ => Err(DepositFailure::ProofUnavailable(
+                layerx_paxeer_client::ProofFault::EvidenceSourceMismatch)),
+        }
+    }
+
     fn verify_external_deposit(
         &mut self,
         request: &WalletCustodyRequest,

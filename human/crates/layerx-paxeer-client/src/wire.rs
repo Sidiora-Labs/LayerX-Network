@@ -14,6 +14,8 @@ const CHECKPOINT_TAG: u8 = 2;
 const FINALITY_TAG: u8 = 3;
 const DEPOSIT_TAG: u8 = 4;
 const DEPOSIT_FAILURE_TAG: u8 = 5;
+const NATIVE_DEPOSIT_ADMISSION_TAG: u8 = 6;
+pub const MAX_NATIVE_DEPOSIT_ADMISSION_BYTES: usize = 786;
 const LEGACY_DEPOSIT_PROOF_BYTES: usize = 2 + DEPOSIT_NATIVE_PAYLOAD_MAX;
 pub const MAX_DEPOSIT_PROOF_BYTES: usize = LEGACY_DEPOSIT_PROOF_BYTES + 4 + 207 + 427;
 pub const MAX_DEPOSIT_FAILURE_BYTES: usize = 65_538;
@@ -122,6 +124,27 @@ pub fn decode_deposit_proof(
         }
         _ => Err(NativeWireError::Encoding),
     }
+}
+
+/// # Errors
+/// Refuses a frame that exceeds the caller's bound.
+pub fn encode_native_deposit_admission(value: &crate::NativeDepositAdmission,
+    maximum_bytes: usize) -> Result<Vec<u8>, NativeWireError>
+{
+    let mut out = vec![VERSION, NATIVE_DEPOSIT_ADMISSION_TAG];
+    out.extend_from_slice(&value.encode_native());
+    bounded(out, maximum_bytes.min(MAX_NATIVE_DEPOSIT_ADMISSION_BYTES))
+}
+
+/// # Errors
+/// Refuses malformed or mismatched custody attestations on the privileged provider boundary.
+pub fn decode_native_deposit_admission(bytes: &[u8], maximum_bytes: usize)
+    -> Result<crate::NativeDepositAdmission, NativeWireError>
+{
+    if bytes.len() != MAX_NATIVE_DEPOSIT_ADMISSION_BYTES || bytes.len() > maximum_bytes
+        || bytes.get(..2) != Some(&[VERSION, NATIVE_DEPOSIT_ADMISSION_TAG])
+    { return Err(NativeWireError::Encoding); }
+    crate::NativeDepositAdmission::decode_native(&bytes[2..]).map_err(map_deposit_error)
 }
 
 fn map_deposit_error(error: DepositNativeError) -> NativeWireError {

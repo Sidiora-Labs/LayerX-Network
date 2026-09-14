@@ -20,7 +20,7 @@ pub use deposit::{
     deposit_root_registration_message, AccountAddressError, AdmittedCustody, AgentCreditContext,
     CreditFault, CreditPath, CustodyDeposit, CustodyFault, DepositFailure, DepositProof,
     DepositProofConfig, DepositProofConfigError, DepositProofVerifier, DepositRootRegistration,
-    ProofFault, PublishedDepositProof,
+    ProofFault, PublishedDepositProof, NativeDepositAdmission,
 };
 pub use exit::{
     balance_leaf, emergency_withdrawal_id, exit_nullifier, merkle_node, EmergencyExit, ExitClaim,

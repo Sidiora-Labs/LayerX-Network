@@ -9,7 +9,7 @@ mod wire;
 mod withdraw;
 
 pub use deposit::{
-    DepositActivity, DepositAgentBoundary, DepositAgentPlan, DepositBoundaryError,
+    DepositActivity, DepositAdmission, DepositAgentBoundary, DepositAgentPlan, DepositBoundaryError,
     DepositFailureKind, DepositJourney, DepositJourneyError, DepositNotification, DepositPlan,
     DepositProofIdentity, DepositRuntime, DepositStage, DepositStatus, FinalityDelay,
     WalletCustodyOutcome, WalletCustodyRequest,

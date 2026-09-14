@@ -11,9 +11,9 @@ use crate::journal::{private_directory, publish_private, read_private};
 use crate::Error;
 
 pub(crate) struct Request {
-    transaction: TransactionHash,
-    checkpoint: [u8; 32],
-    recipient: AccountId,
+    pub(crate) transaction: TransactionHash,
+    pub(crate) checkpoint: [u8; 32],
+    pub(crate) recipient: AccountId,
 }
 
 impl Request {
@@ -45,37 +45,48 @@ impl Request {
 }
 
 pub(crate) fn publish(config: &Config, request: &Request) -> Result<(), Error> {
-    private_directory(&config.evidence_root)?;
-    if config.tracker.endpoints != config.proof.endpoints
-        || config.tracker.minimum_endpoint_agreement != config.proof.minimum_endpoint_agreement
-        || config.tracker.required_confirmations != config.proof.required_confirmations
-        || config.listener.protocol != config.proof.layerx_protocol_version
+    if config.listener.protocol != config.proof.layerx_protocol_version {
+        return Err(Error::Configuration);
+    }
+    publish_registered(&config.tracker, &config.proof, config.vault,
+        config.checkpoint_registry, &config.evidence_root, request)
+}
+
+pub(crate) fn publish_registered(tracker: &layerx_paxeer_client::TrackerConfig,
+    policy: &layerx_paxeer_client::DepositProofConfig, vault: layerx_types::intent::EvmAddress,
+    registry: layerx_types::intent::EvmAddress, evidence_root: &std::path::Path,
+    request: &Request) -> Result<(), Error>
+{
+    private_directory(evidence_root)?;
+    if tracker.endpoints != policy.endpoints
+        || tracker.minimum_endpoint_agreement != policy.minimum_endpoint_agreement
+        || tracker.required_confirmations != policy.required_confirmations
     {
         return Err(Error::Configuration);
     }
-    let mut tracker = FinalityTracker::new(config.tracker.clone(), request.transaction)
+    let mut tracker = FinalityTracker::new(tracker.clone(), request.transaction)
         .map_err(|_| Error::Configuration)?;
     let report = tracker.poll();
     let verifier =
-        DepositProofVerifier::new(config.proof.clone()).map_err(|_| Error::Configuration)?;
+        DepositProofVerifier::new(policy.clone()).map_err(|_| Error::Configuration)?;
     let custody = verifier
-        .admit_custody(&report, config.vault, &request.recipient)
+        .admit_custody(&report, vault, &request.recipient)
         .map_err(|_| Error::Integrity)?;
-    let codec = NativeMovementCodec::for_protocol(config.listener.protocol)
+    let codec = NativeMovementCodec::for_protocol(policy.layerx_protocol_version)
         .map_err(|_| Error::Configuration)?;
     let mut candidates = Vec::new();
-    for endpoint in &config.proof.endpoints {
+    for endpoint in &policy.endpoints {
         let Ok(published) = PublishedDepositProof::fetch_published(
             endpoint,
-            config.vault,
-            config.checkpoint_registry,
+            vault,
+            registry,
             request.checkpoint,
             custody.custody(),
-            config.proof.required_confirmations,
+            policy.required_confirmations,
         ) else {
             continue;
         };
-        let Ok(proof) = verifier.obtain(&report, config.vault, published) else {
+        let Ok(proof) = verifier.obtain(&report, vault, published) else {
             continue;
         };
         let bytes = codec
@@ -93,10 +104,10 @@ pub(crate) fn publish(config: &Config, request: &Request) -> Result<(), Error> {
                 .iter()
                 .filter(|(_, other)| other == bytes)
                 .count()
-                >= config.proof.minimum_endpoint_agreement
+                >= policy.minimum_endpoint_agreement
         })
         .ok_or(Error::Integrity)?;
-    let path = config.evidence_root.join(format!(
+    let path = evidence_root.join(format!(
         "deposit-{}.bin",
         hex_string(&request.transaction.bytes())
     ));

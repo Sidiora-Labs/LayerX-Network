@@ -961,6 +961,9 @@ pub struct DepositProofVerifier {
     layerx_protocol_version: u16,
 }
 
+mod admission;
+pub use admission::NativeDepositAdmission;
+
 /// Custody facts admitted from actual quorum evidence for one expected recipient.
 /// This records admission at the report's observation; it does not attest a
 /// checkpoint, register a deposit root, or authorize native credit.
