@@ -47,7 +47,9 @@ impl OnboardingConsent {
         encoded.fixed(&CONSENT_HEADER).map_err(encoding)?;
         encoded.fixed(&self.sponsor).map_err(encoding)?;
         encoded.fixed(&self.native_asset).map_err(encoding)?;
-        encoded.fixed(&self.target_account_id()?).map_err(encoding)?;
+        encoded
+            .fixed(&self.target_account_id()?)
+            .map_err(encoding)?;
         encoded.fixed(&self.action_key).map_err(encoding)?;
         encoded.u64(self.expires_at).map_err(encoding)?;
         Ok(encoded.finish())
@@ -56,9 +58,10 @@ impl OnboardingConsent {
     /// # Errors
     /// Refuses a target DID which cannot name its canonical native MAIN account.
     pub fn target_account_id(&self) -> Result<[u8; 32], OnboardingError> {
-        let did = std::str::from_utf8(self.target.as_bytes()).map_err(|_| OnboardingError::Binding)?;
-        let account = AccountId::parse(&format!("agent:{did}:main"))
-            .map_err(|_| OnboardingError::Binding)?;
+        let did =
+            std::str::from_utf8(self.target.as_bytes()).map_err(|_| OnboardingError::Binding)?;
+        let account =
+            AccountId::parse(&format!("agent:{did}:main")).map_err(|_| OnboardingError::Binding)?;
         hash::account_id_for_protocol(&account, 3).map_err(encoding)
     }
 
@@ -73,13 +76,36 @@ impl OnboardingConsent {
             return Err(OnboardingError::Encoding);
         }
         let mut reader = Decoder::new(&payload[4..], 1024);
-        let sponsor = reader.fixed(32).map_err(encoding)?.try_into().map_err(|_| OnboardingError::Encoding)?;
-        let native_asset = reader.fixed(32).map_err(encoding)?.try_into().map_err(|_| OnboardingError::Encoding)?;
-        let account: [u8; 32] = reader.fixed(32).map_err(encoding)?.try_into().map_err(|_| OnboardingError::Encoding)?;
-        let action_key = reader.fixed(32).map_err(encoding)?.try_into().map_err(|_| OnboardingError::Encoding)?;
+        let sponsor = reader
+            .fixed(32)
+            .map_err(encoding)?
+            .try_into()
+            .map_err(|_| OnboardingError::Encoding)?;
+        let native_asset = reader
+            .fixed(32)
+            .map_err(encoding)?
+            .try_into()
+            .map_err(|_| OnboardingError::Encoding)?;
+        let account: [u8; 32] = reader
+            .fixed(32)
+            .map_err(encoding)?
+            .try_into()
+            .map_err(|_| OnboardingError::Encoding)?;
+        let action_key = reader
+            .fixed(32)
+            .map_err(encoding)?
+            .try_into()
+            .map_err(|_| OnboardingError::Encoding)?;
         let expires_at = reader.u64().map_err(encoding)?;
         reader.finish().map_err(encoding)?;
-        let consent = Self { sponsor, target, target_public_key, native_asset, action_key, expires_at };
+        let consent = Self {
+            sponsor,
+            target,
+            target_public_key,
+            native_asset,
+            action_key,
+            expires_at,
+        };
         if consent.target_account_id()? != account || consent.payload()? != payload {
             return Err(OnboardingError::Binding);
         }
@@ -112,7 +138,10 @@ impl SponsoredRegistration {
         {
             return Err(OnboardingError::Binding);
         }
-        let key = activity.authority().try_into().map_err(|_| OnboardingError::Binding)?;
+        let key = activity
+            .authority()
+            .try_into()
+            .map_err(|_| OnboardingError::Binding)?;
         let target = Did::new(activity.actor_did()).map_err(|_| OnboardingError::Binding)?;
         let consent = OnboardingConsent::decode_payload(activity.payload(), target, key)?;
         let bound = activity.timestamp_bound();
@@ -123,12 +152,25 @@ impl SponsoredRegistration {
             return Err(OnboardingError::Binding);
         }
         let unsigned = activity::encode_unsigned(&activity).map_err(encoding)?;
-        let signature = activity.signature().ok_or(OnboardingError::Signature)?
-            .try_into().map_err(|_| OnboardingError::Signature)?;
-        let message = SignatureMessage::new(Domain::SignaturePreimage, 3, activity.network_id(), &unsigned)
+        let signature = activity
+            .signature()
+            .ok_or(OnboardingError::Signature)?
+            .try_into()
             .map_err(|_| OnboardingError::Signature)?;
+        let message = SignatureMessage::new(
+            Domain::SignaturePreimage,
+            3,
+            activity.network_id(),
+            &unsigned,
+        )
+        .map_err(|_| OnboardingError::Signature)?;
         ed25519::verify(&key, signature, message).map_err(|_| OnboardingError::Signature)?;
-        Ok(Self { consent, network_id: activity.network_id(), not_before: bound.not_before, signed_consent: bytes.to_vec() })
+        Ok(Self {
+            consent,
+            network_id: activity.network_id(),
+            not_before: bound.not_before,
+            signed_consent: bytes.to_vec(),
+        })
     }
 
     /// # Errors
@@ -151,12 +193,16 @@ impl SponsoredRegistration {
         }
         let mut encoded = Encoder::new(1024);
         encoded.fixed(&REGISTRATION_HEADER).map_err(encoding)?;
-        encoded.bytes(&self.signed_consent, 1016).map_err(encoding)?;
+        encoded
+            .bytes(&self.signed_consent, 1016)
+            .map_err(encoding)?;
         Ok(encoded.finish())
     }
 
     #[must_use]
-    pub fn signed_consent(&self) -> &[u8] { &self.signed_consent }
+    pub fn signed_consent(&self) -> &[u8] {
+        &self.signed_consent
+    }
 
     /// # Errors
     /// Refuses a different sponsor, network, action key, operation or validity interval.
@@ -187,4 +233,6 @@ fn registry() -> Result<ModuleRegistry, OnboardingError> {
     ModuleRegistry::new(&[module]).map_err(|_| OnboardingError::Encoding)
 }
 
-const fn encoding(_: layerx_wire::WireError) -> OnboardingError { OnboardingError::Encoding }
+const fn encoding(_: layerx_wire::WireError) -> OnboardingError {
+    OnboardingError::Encoding
+}

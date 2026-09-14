@@ -948,13 +948,17 @@ fn encode_disclosure(disclosure: &Disclosure) -> Result<Vec<u8>, CustodyError> {
         .authority_grant
         .filter(|grant| grant.fee_budget.is_some());
     let mut writer = WireWriter::new();
-    writer.u8(if disclosure.session_grant.is_some() {
-        3
-    } else if fee_grant.is_some() {
-        2
-    } else {
-        1
-    })?;
+    writer.u8(
+        if disclosure.onboarding.is_some() || disclosure.native_operation.is_some() {
+            4
+        } else if disclosure.session_grant.is_some() {
+            3
+        } else if fee_grant.is_some() {
+            2
+        } else {
+            1
+        },
+    )?;
     writer.u32(disclosure.activity_type.value())?;
     writer.bytes(&disclosure.actor, 255)?;
     writer.bytes(&disclosure.authority, 524_288)?;
@@ -1018,6 +1022,22 @@ fn encode_disclosure(disclosure: &Disclosure) -> Result<Vec<u8>, CustodyError> {
         } else {
             writer.u8(0)?;
         }
+    }
+    if let Some(onboarding) = &disclosure.onboarding {
+        writer.bytes(
+            &onboarding
+                .encode()
+                .map_err(|_| CustodyError::Kms(KmsError::InvalidConfiguration))?,
+            2048,
+        )?;
+    }
+    if let Some(operation) = &disclosure.native_operation {
+        writer.bytes(
+            &operation
+                .encode()
+                .map_err(|_| CustodyError::Kms(KmsError::InvalidConfiguration))?,
+            2048,
+        )?;
     }
     Ok(writer.finish())
 }

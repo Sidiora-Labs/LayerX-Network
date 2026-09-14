@@ -14,6 +14,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
+#[path = "provider/native_setup.rs"]
+mod native_setup;
 const MAX: usize = 2_097_152;
 struct Host {
     root: PathBuf,
@@ -431,12 +433,22 @@ fn registry() -> Result<layerx_types::payload::ModuleRegistry> {
             ModuleId::Asset,
             &[
                 checked(ActivityType::new(ModuleId::Asset, 1))?,
+                checked(ActivityType::new(ModuleId::Asset, 4))?,
                 checked(ActivityType::new(ModuleId::Asset, 5))?,
             ],
         ))?,
         checked(ModuleRegistration::new(
+            ModuleId::Budget,
+            &[checked(ActivityType::new(ModuleId::Budget, 1))?],
+        ))?,
+        checked(ModuleRegistration::new(
             ModuleId::Governance,
-            &[checked(ActivityType::new(ModuleId::Governance, 8))?],
+            &[
+                checked(ActivityType::new(ModuleId::Governance, 1))?,
+                checked(ActivityType::new(ModuleId::Governance, 3))?,
+                checked(ActivityType::new(ModuleId::Governance, 5))?,
+                checked(ActivityType::new(ModuleId::Governance, 8))?,
+            ],
         ))?,
     ]))
 }
@@ -479,6 +491,17 @@ fn unsigned_payload(
     network: u32,
     payload: layerx_types::payload::Payload,
 ) -> Result<Vec<u8>> {
+    checked(layerx_wire::activity::encode_unsigned_envelope(
+        &setup_envelope(public, network, payload, (b"did:layerx:alice", 7, 1))?,
+    ))
+}
+
+fn setup_envelope(
+    public: [u8; 32],
+    network: u32,
+    payload: layerx_types::payload::Payload,
+    (actor, sequence, fee): (&[u8], u64, u128),
+) -> Result<layerx_types::activity::UnsignedEnvelope> {
     use layerx_types::activity::{Authority, EnvelopeBuilder, TimestampBound};
     use layerx_types::amount::Amount;
     use layerx_types::ids::{Did, IdempotencyKey};
@@ -486,30 +509,32 @@ fn unsigned_payload(
     checked(builder.protocol_version(3))?;
     checked(builder.network_id(network))?;
     checked(builder.activity_type(payload.activity_type()))?;
-    checked(builder.actor_did(checked(Did::new(b"did:layerx:alice"))?))?;
+    checked(builder.actor_did(checked(Did::new(actor))?))?;
     checked(builder.authority(checked(Authority::owner(&public))?))?;
-    checked(builder.account_sequence(7))?;
+    checked(builder.account_sequence(sequence))?;
     checked(builder.timestamp_bound(checked(TimestampBound::new(1000, 1010))?))?;
     checked(builder.idempotency_key(IdempotencyKey::new([4; 32])))?;
-    checked(builder.fee_limit(Amount::from_u128(1)))?;
+    checked(builder.fee_limit(Amount::from_u128(fee)))?;
     checked(builder.payload_hash(checked(layerx_wire::hash::payload_hash_for(&payload))?))?;
     checked(builder.payload(payload))?;
-    checked(layerx_wire::activity::encode_unsigned_envelope(&checked(
-        builder.build(),
-    )?))
+    checked(builder.build())
 }
 
 fn encoded_disclosure(disclosure: &layerx_crypto::disclosure::Disclosure) -> Result<Vec<u8>> {
     let fee_grant = disclosure
         .authority_grant
         .filter(|grant| grant.fee_budget.is_some());
-    let mut out = vec![if disclosure.session_grant.is_some() {
-        3
-    } else if fee_grant.is_some() {
-        2
-    } else {
-        1
-    }];
+    let mut out = vec![
+        if disclosure.onboarding.is_some() || disclosure.native_operation.is_some() {
+            4
+        } else if disclosure.session_grant.is_some() {
+            3
+        } else if fee_grant.is_some() {
+            2
+        } else {
+            1
+        },
+    ];
     out.extend(disclosure.activity_type.value().to_be_bytes());
     blob(&mut out, &disclosure.actor)?;
     blob(&mut out, &disclosure.authority)?;
@@ -554,6 +579,12 @@ fn encoded_disclosure(disclosure: &layerx_crypto::disclosure::Disclosure) -> Res
         } else {
             out.push(0);
         }
+    }
+    if let Some(onboarding) = &disclosure.onboarding {
+        blob(&mut out, &checked(onboarding.encode())?)?;
+    }
+    if let Some(operation) = &disclosure.native_operation {
+        blob(&mut out, &checked(operation.encode())?)?;
     }
     Ok(out)
 }

@@ -141,13 +141,17 @@ pub(crate) fn disclosure(value: &Disclosure) -> Result<Vec<u8>> {
     let fee_grant = value
         .authority_grant
         .filter(|grant| grant.fee_budget.is_some());
-    let mut out = vec![if value.session_grant.is_some() {
-        3
-    } else if fee_grant.is_some() {
-        2
-    } else {
-        1
-    }];
+    let mut out = vec![
+        if value.onboarding.is_some() || value.native_operation.is_some() {
+            4
+        } else if value.session_grant.is_some() {
+            3
+        } else if fee_grant.is_some() {
+            2
+        } else {
+            1
+        },
+    ];
     out.extend(value.activity_type.value().to_be_bytes());
     blob(&mut out, &value.actor)?;
     blob(&mut out, &value.authority)?;
@@ -207,6 +211,12 @@ pub(crate) fn disclosure(value: &Disclosure) -> Result<Vec<u8>> {
         } else {
             out.push(0);
         }
+    }
+    if let Some(onboarding) = &value.onboarding {
+        blob(&mut out, &onboarding.encode().map_err(|_| Error::Refused)?)?;
+    }
+    if let Some(operation) = &value.native_operation {
+        blob(&mut out, &operation.encode().map_err(|_| Error::Refused)?)?;
     }
     Ok(out)
 }
