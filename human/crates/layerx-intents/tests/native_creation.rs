@@ -13,7 +13,7 @@ use layerx_types::intent::{ApprovalThreshold, RecoveryRoot};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 
 fn registry() -> TestResult<ModuleRegistry> {
-    Ok(ModuleRegistry::new(&[
+    ModuleRegistry::new(&[
         ModuleRegistration::new(
             ModuleId::Governance,
             &[ActivityType::new(ModuleId::Governance, 3).map_err(test_error)?],
@@ -30,7 +30,7 @@ fn registry() -> TestResult<ModuleRegistry> {
         )
         .map_err(test_error)?,
     ])
-    .map_err(test_error)?)
+    .map_err(test_error)
 }
 
 fn budget() -> TestResult<NativeBudgetCreate> {

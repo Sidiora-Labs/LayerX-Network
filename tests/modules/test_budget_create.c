@@ -847,6 +847,8 @@ static int native_source_dispatch_path(void)
     CHECK(env_init() == 0);
     CHECK(sign_raw(owner_seed, NULL, 0U, signature, public_key) == 0);
     env.state.next_sequence = 1U;
+    CHECK(lxp_kernel_register_module(&env.kernel, lx_asset_module_iface()) == LXP_OK);
+    CHECK(lxp_kernel_module_for_activity(&env.kernel, LX_BUDGET_CREATE, 0U, &env.registration) == LXP_OK);
     env.asset.symbol_length = 3U;
     (void)memcpy(env.asset.symbol, "TST", 4U);
     env.asset.name_length = 5U;
