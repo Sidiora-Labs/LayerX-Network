@@ -396,8 +396,8 @@ sha256_hex() { sha256sum | cut -c1-64; }
 
 load_seed_hex() {
     local file=$1 name=$2 size text
-    [ -r "$file" ] || fail "$name key file is not readable: $file"
-    size=$(stat -c %s "$file")
+    [ -f "$file" ] && [ -r "$file" ] || fail "$name key file must name a readable regular file: $file"
+    size=$(stat -Lc %s -- "$file")
     if [ "$size" -eq 32 ]; then
         bin_to_hex < "$file"
         return
