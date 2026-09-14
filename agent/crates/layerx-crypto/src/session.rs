@@ -270,10 +270,37 @@ pub fn issue_session_key(
     })
 }
 
+fn session_activities(
+    module_mask: u64,
+    minimum: u16,
+    maximum: u16,
+) -> Result<Vec<ActivityType>, SessionIssueError> {
+    use layerx_types::payload::ModuleId;
+    let invalid = || SessionIssueError::Encoding;
+    let activity_count = usize::try_from(module_mask.count_ones())
+        .map_err(|_| invalid())?
+        .checked_mul(usize::from(maximum - minimum) + 1)
+        .ok_or_else(invalid)?;
+    if activity_count > MAX_SESSION_ACTIVITY_TYPES {
+        return Err(invalid());
+    }
+    let mut permitted_activity_types = Vec::with_capacity(activity_count);
+    for module in 1_u16..10 {
+        if module_mask & (1_u64 << module) == 0 {
+            continue;
+        }
+        let module = ModuleId::from_u16(module).map_err(|_| invalid())?;
+        for ordinal in minimum..=maximum {
+            permitted_activity_types
+                .push(ActivityType::new(module, ordinal).map_err(|_| invalid())?);
+        }
+    }
+    Ok(permitted_activity_types)
+}
+
 /// # Errors
 /// Refuses any noncanonical session scope, unsupported version, or initial charge.
 pub fn decode_session_key(bytes: &[u8]) -> Result<IssuedSessionKey, SessionIssueError> {
-    use layerx_types::payload::ModuleId;
     let invalid = || SessionIssueError::Encoding;
     if bytes.len() > MAX_GRANT_BYTES {
         return Err(invalid());
@@ -344,24 +371,7 @@ pub fn decode_session_key(bytes: &[u8]) -> Result<IssuedSessionKey, SessionIssue
         return Err(invalid());
     }
     decoder.finish().map_err(|_| invalid())?;
-    let activity_count = usize::try_from(module_mask.count_ones())
-        .map_err(|_| invalid())?
-        .checked_mul(usize::from(maximum - minimum) + 1)
-        .ok_or_else(invalid)?;
-    if activity_count > MAX_SESSION_ACTIVITY_TYPES {
-        return Err(invalid());
-    }
-    let mut permitted_activity_types = Vec::with_capacity(activity_count);
-    for module in 1_u16..10 {
-        if module_mask & (1_u64 << module) == 0 {
-            continue;
-        }
-        let module = ModuleId::from_u16(module).map_err(|_| invalid())?;
-        for ordinal in minimum..=maximum {
-            permitted_activity_types
-                .push(ActivityType::new(module, ordinal).map_err(|_| invalid())?);
-        }
-    }
+    let permitted_activity_types = session_activities(module_mask, minimum, maximum)?;
     let issued = issue_session_key(&SessionKeyRequest {
         grantor,
         session_public_key,
