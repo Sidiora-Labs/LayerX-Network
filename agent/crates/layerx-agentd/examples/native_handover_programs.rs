@@ -89,7 +89,7 @@ fn funded_fee_limit(client: &mut Client, route: &mut NativeReadRoute, did: &Did)
         head.sequencer_id(),
         interval.public_key(),
         interval.first_batch(),
-        interval.last_batch(),
+        u64::MAX,
     );
     let fee_asset = checked(client.native_fee_policy(398))?.value.asset.asset_id;
     let account_id = checked(layerx_wire::hash::account_id_for_protocol(
