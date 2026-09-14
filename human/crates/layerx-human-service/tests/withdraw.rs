@@ -486,6 +486,10 @@ impl AgentBoundary for RealWithdrawalAgent {
                 None,
             )
             .map_err(|_| AgentBoundaryError::Refused)?;
+        self.node.reconnect().map_err(|error| {
+            eprintln!("native withdrawal reconnect before first submit: {error:?}");
+            AgentBoundaryError::Unavailable
+        })?;
         let submitted = self
             .node
             .submit_signed(&self.registry, signer_public_key, 20, 1, &signed)
