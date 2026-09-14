@@ -16,6 +16,7 @@ path = "src/main.rs"
 layerx-client.workspace = true
 layerx-crypto.workspace = true
 layerx-proof.workspace = true
+layerx-types.workspace = true
 layerx-wire.workspace = true
 rustls.workspace = true
 serde.workspace = true
@@ -29,7 +30,6 @@ zeroize.workspace = true
 layerx-agentd = { path = "../../../agent/crates/layerx-agentd" }
 ed25519-dalek.workspace = true
 getrandom.workspace = true
-layerx-types.workspace = true
 native-tls.workspace = true
 
 [lints]

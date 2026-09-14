@@ -797,9 +797,16 @@ pub struct VerifiedAccountEvidence {
     batch_number: u64,
     state_root: [u8; 32],
     signed_header: SignedHeader,
+    receipt_digest: [u8; 32],
 }
 
 impl VerifiedAccountEvidence {
+    /// Returns the authenticated activity-receipt or maintenance-leaf digest.
+    #[must_use]
+    pub const fn receipt_digest(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
+
     /// Borrows the canonical account committed by the proven state root.
     #[must_use]
     pub const fn account(&self) -> &CanonicalAccount {
@@ -866,7 +873,7 @@ pub fn verify_account_evidence(
         policy.expected_protocol_version,
         policy.expected_network_id,
     )?;
-    let (value, observed_sequence, batch_number) = match decoded.kind {
+    let (value, observed_sequence, batch_number, receipt_digest) = match decoded.kind {
         AccountEvidenceKind::Activity => {
             let verified = verify_nested_account(
                 canonical_value,
@@ -876,10 +883,17 @@ pub fn verify_account_evidence(
                 &authorization,
             )
             .map_err(EvidenceError::Account)?;
+            let receipt = layerx_wire::receipt::decode(&decoded.proof.receipt_bytes)
+                .map_err(|_| EvidenceError::Malformed)?;
+            let unsigned = layerx_wire::receipt::encode_unsigned(&receipt)
+                .map_err(|_| EvidenceError::Malformed)?;
+            let digest = layerx_wire::hash::receipt_digest(&unsigned)
+                .map_err(|_| EvidenceError::Malformed)?;
             (
                 verified.account().clone(),
                 verified.observed_sequence(),
                 verified.header().header().batch_number(),
+                digest,
             )
         }
         AccountEvidenceKind::Maintenance { parameter_version } => {
@@ -903,6 +917,7 @@ pub fn verify_account_evidence(
                 verified.account().clone(),
                 verified.header().header().last_sequence(),
                 verified.header().header().batch_number(),
+                verified.maintenance_digest(),
             )
         }
     };
@@ -918,6 +933,7 @@ pub fn verify_account_evidence(
         batch_number,
         state_root: decoded.proof.resulting_state_root,
         signed_header: decoded.signed_header,
+        receipt_digest,
     })
 }
 

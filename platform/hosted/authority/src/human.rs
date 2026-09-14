@@ -18,6 +18,7 @@ use zeroize::Zeroizing;
 
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 
+mod budget_state;
 mod session_membership;
 
 #[derive(Clone, Deserialize)]
@@ -578,7 +579,8 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
     match name {
         "core-clock" => clock(&evidence, human.horizon),
         "balance-context" => balance_context(p, &human.registry_path, &evidence, config),
-        "budget-state" => budget(p, &params["budget_id"], &evidence),
+        "budget-state" => budget_state::read(config, p, &params["budget_id"])
+            .or_else(|_| budget(p, &params["budget_id"], &evidence)),
         _ => policy_route(name, &params, p, &evidence),
     }
 }
