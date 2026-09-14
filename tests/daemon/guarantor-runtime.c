@@ -38,18 +38,23 @@ static void export_genesis(gp_runtime *runtime)
     if (!kernel->handover.enabled || getenv("LAYERX_TEST_PUBLICATION_EXPORT_DIR") == NULL)
         return;
     uint8_t key[32] = "handover-authority";
+    uint8_t state_root[32], receipt_root[32];
     lxp_state_witness *proof = malloc(sizeof(*proof));
     uint8_t *encoded = malloc(LXP_STATE_WITNESS_MAX_BYTES);
     size_t length = 0U;
     assert(proof != NULL && encoded != NULL);
+    assert(lxp_state_root(kernel, state_root) == LXP_OK);
+    assert(lxp_genesis_receipt_state_root(kernel->handover.network_id, state_root,
+        receipt_root) == LXP_OK);
+    assert(memcmp(receipt_root, kernel->current_state_root, 32U) == 0);
     assert(gp_runtime_state_proof(runtime, LXP_MODULE_GOVERNANCE,
         (lxp_byte_span){key, sizeof(key)}, proof) == LXP_OK);
-    assert(lxp_state_proof_verify(proof, kernel->current_state_root) == LXP_OK);
+    assert(lxp_state_proof_verify(proof, state_root) == LXP_OK);
     assert(lxp_state_proof_encode(proof, encoded, LXP_STATE_WITNESS_MAX_BYTES, &length) == LXP_OK);
     assert(length <= UINT32_MAX && kernel->module_count <= UINT32_MAX);
     FILE *output = public_export("handover-genesis.bin");
     write_u32(output, kernel->handover.network_id);
-    assert(fwrite(kernel->current_state_root, 32U, 1U, output) == 1U);
+    assert(fwrite(state_root, 32U, 1U, output) == 1U);
     assert(fwrite(kernel->handover.genesis_authorization.public_key, 32U, 1U, output) == 1U);
     write_u32(output, (uint32_t)length);
     assert(fwrite(encoded, length, 1U, output) == 1U);

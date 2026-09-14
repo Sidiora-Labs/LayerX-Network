@@ -190,7 +190,7 @@ impl SequencerHistory {
         Ok(Self {
             network_id,
             governance_key,
-            genesis_root,
+            genesis_root: genesis_receipt_root(network_id, genesis_root),
             registry,
             intervals: vec![Interval {
                 epoch: 1,
@@ -377,6 +377,14 @@ impl SequencerHistory {
             .ok_or(HistoryError::UnverifiedRange)?;
         interval_authorization(interval, head.header().batch_number())
     }
+}
+
+fn genesis_receipt_root(network_id: u32, state_root: [u8; 32]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"LXP/v1/genesis-receipt-root\0");
+    hash.update(network_id.to_be_bytes());
+    hash.update(state_root);
+    hash.finalize().into()
 }
 
 fn interval_authorization(
