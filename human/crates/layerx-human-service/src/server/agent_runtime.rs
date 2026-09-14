@@ -997,6 +997,25 @@ impl AgentRuntime {
         Ok(value)
     }
     /// # Errors
+    /// Refuses unbound original rotation bytes or unavailable checkpoint evidence.
+    pub fn agent_owner_rotated(
+        &mut self,
+        agent_id: &str,
+        custody_key: &str,
+        signed_activity: &[u8],
+        evidence: AgentFinalizationEvidence,
+    ) -> Result<ManagedAgentJourney, AgentBoundaryError> {
+        let mut writer = Writer::new(43);
+        writer.text(agent_id)?;
+        writer.text(custody_key)?;
+        writer.bytes(signed_activity)?;
+        encode_finalization(&mut writer, evidence)?;
+        let mut reader = self.exchange(&writer.finish())?;
+        let value = decode_managed_journey(&mut reader)?;
+        reader.finish()?;
+        Ok(value)
+    }
+    /// # Errors
     /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_key_change(
         &mut self,

@@ -447,7 +447,10 @@ static int onboard_initial(int descriptor, const signer *owner, const signer *ta
     return 0;
 }
 
-int main(int argc, char **argv)
+#ifndef ONBOARDING_CLIENT_MAIN
+#define ONBOARDING_CLIENT_MAIN main
+#endif
+int ONBOARDING_CLIENT_MAIN(int argc, char **argv)
 {
     struct sockaddr_un address = {0};
     onboarding_run run = {0};

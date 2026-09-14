@@ -472,3 +472,96 @@ impl ProductionAgentCreation<'_> {
         Ok(signed)
     }
 }
+
+impl ProductionAgentCreation<'_> {
+    /// # Errors
+    /// Refuses changed consent, noncanonical key authority, or a failed custody signature.
+    pub fn sign_rotation_consent(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        consent: &layerx_crypto::rotation::OwnerRotationConsent,
+        network_id: u32,
+        started_at: u64,
+        custody_key: &KeyId,
+    ) -> Result<Vec<u8>, AgentFailure> {
+        let key = RowKey::new(format!(
+            "owner-rotation-consent-{}",
+            hex(&consent.action_key)
+        ))
+        .map_err(|_| AgentFailure::Refused("invalid rotation consent key"))?;
+        let descriptor = self
+            .custody
+            .describe_key(scope.principal(), custody_key)
+            .map_err(|_| AgentFailure::Refused("rotation custody is unavailable"))?;
+        if descriptor.class != KeyClass::AgentPrimary
+            || descriptor.public_key != consent.pending_public_key
+        {
+            return Err(AgentFailure::Refused("rotation custody differs"));
+        }
+        let signed = if let Some(row) = scope.get(Table::Journeys, &key) {
+            row.bytes().to_vec()
+        } else {
+            let intent = Intent::v3(IntentKind::NativeOwnerRotation(
+                layerx_crypto::rotation::OwnerRotation::Consent(consent.clone()),
+            ));
+            let compiled = compile(&intent, self.runtime.registry())
+                .map_err(|_| AgentFailure::Refused("invalid rotation consent intent"))?;
+            let context = layerx_intents::owner_activity::OwnerEnvelopeContext {
+                actor: consent.owner.clone(),
+                owner_public_key: descriptor.public_key,
+                network_id,
+                account_sequence: 0,
+                not_before_ms: started_at
+                    .checked_mul(1_000)
+                    .ok_or(AgentFailure::Refused("rotation consent time overflow"))?,
+                not_after_ms: consent.expires_at,
+                action_key: consent.action_key,
+                fee_limit: 0,
+            };
+            let (unsigned, disclosure) = layerx_intents::owner_activity::unsigned_native(
+                &compiled,
+                &context,
+                self.runtime.registry(),
+            )
+            .map_err(|_| AgentFailure::Refused("rotation consent disclosure failed"))?;
+            let principal = scope.principal().clone();
+            let grant = poll_once_ready(self.custody.sign_in_scope(
+                scope,
+                SignRequest::new(
+                    &principal,
+                    custody_key,
+                    self.trace,
+                    SignAuthorization::new(Operation::ProtocolMutation, None),
+                    &unsigned,
+                    &disclosure,
+                    started_at,
+                ),
+            ))
+            .map_err(|_| AgentFailure::Unavailable)?
+            .map_err(|_| AgentFailure::Refused("custody refused rotation consent"))?;
+            let signed = layerx_intents::owner_activity::attach_signature(
+                &unsigned,
+                *grant.signature(),
+                grant.signer_public_key(),
+                self.runtime.registry(),
+            )
+            .map_err(|_| AgentFailure::Refused("rotation consent signature differs"))?;
+            scope
+                .put(Table::Journeys, key, started_at, signed.clone())
+                .map_err(|_| AgentFailure::Unavailable)?;
+            signed
+        };
+        let commit = layerx_crypto::rotation::OwnerRotationCommit::from_signed_consent(&signed)
+            .map_err(|_| AgentFailure::Refused("invalid retained rotation consent"))?;
+        if commit.consent != *consent
+            || commit.network_id != network_id
+            || commit.not_before
+                != started_at
+                    .checked_mul(1_000)
+                    .ok_or(AgentFailure::Refused("rotation consent time overflow"))?
+        {
+            return Err(AgentFailure::Refused("retained rotation consent differs"));
+        }
+        Ok(signed)
+    }
+}

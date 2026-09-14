@@ -58,7 +58,7 @@ lxp_result lxp_governance_identity_refresh(const lxp_kernel *kernel,
         identity->rotation_effective_at = read64(s + BEGIN);
         identity->rotation_lapse_at = read64(s + END);
         identity->rotation_effective_sequence = read64(s + EFFECTIVE);
-        return LXP_OK;
+        return lxp_governance_rotation_refresh(kernel, identity);
     }
     return LXP_OK;
 }
@@ -99,12 +99,14 @@ static lxp_result decode(lxp_module_ctx *ctx, uint16_t ordinal,
     if (bytes == NULL || decoded == NULL || length < 4U || length > 1024U ||
         !lxp_governance_activity(0x00070000U | ordinal) || bytes[0] != 0x71U ||
         bytes[1] != ordinal || (ordinal == 1U ? (bytes[2] != 0U && bytes[2] != 2U) :
+        ordinal == 2U ? (bytes[2] != 0U && bytes[2] != 1U && bytes[2] != 3U) :
         ordinal == 5U ? (bytes[2] != 1U && bytes[2] != 2U) :
         bytes[2] != (ordinal == 8U ? 1U : 0U)))
         return LXP_ERR_NON_CANONICAL;
     uint16_t fields = bytes[3];
     if ((ordinal == 1U && (bytes[2] == 0U ? (fields != 2U || length != 68U) : (fields != 1U || length < 8U))) ||
-        (ordinal == 2U && (fields != 4U || length != 92U)) ||
+        (ordinal == 2U && (bytes[2] == 0U ? (fields != 4U || length != 92U) :
+            bytes[2] == 1U ? (fields != 1U || length < 8U) : (fields != 2U || length != 68U))) ||
         (ordinal == 3U && !((fields == 3U && length == 70U) ||
                             (fields == 5U && length == 86U))) ||
         (ordinal == 5U && (fields != (bytes[2] == 2U ? 5U : 3U) || length < 52U)) ||
@@ -131,7 +133,7 @@ static lxp_result validate(lxp_module_ctx *ctx, const lxp_activity *activity,
         authority->kind != LXP_AUTHORITY_OWNER ||
         lxp_did_id_derive(activity->actor_did.bytes, activity->actor_did.length, did) != LXP_OK ||
         memcmp(did, authority->actor, 32U) != 0 ||
-        (p->ordinal <= 3U && !(p->ordinal == 1U && p->bytes[2] == 2U) &&
+        (p->ordinal <= 3U && !((p->ordinal == 1U && p->bytes[2] == 2U) || (p->ordinal == 2U && p->bytes[2] == 1U)) &&
          memcmp(did, p->bytes + 4U, 32U) != 0))
         return LXP_ERR_AUTH_SCOPE;
     return lxp_ctx_charge_gas(ctx, p->length);
@@ -383,7 +385,20 @@ static lxp_result execute(lxp_module_ctx *ctx, const lxp_activity *activity,
         (void)memcpy(state + PRIMARY, authority->verified_key, 32U);
         write64(state + REVOCATION, sequence);
     } else return status;
-    if (p->ordinal == 2U) {
+    if (p->ordinal == 2U && p->bytes[2] == 1U) {
+        uint8_t next[STATE_BYTES];
+        status = lxp_governance_rotation(ctx, activity, authority, state, next);
+        if (status != LXP_OK) return status;
+        (void)memcpy(state, next, sizeof(state));
+    } else if (p->ordinal == 2U && p->bytes[2] == 3U) {
+        uint8_t commitment[32];
+        if (lxp_ct_is_zero(state + PENDING, 32U) ||
+            lxp_ctx_batch_timestamp_ms(ctx) <= read64(state + END)) return LXP_ERR_AUTH_SCOPE;
+        status = lxp_hash_context_value(state, sizeof(state), commitment);
+        if (status != LXP_OK) return status;
+        if (memcmp(commitment, p->bytes + 36U, 32U) != 0) return LXP_ERR_AUTH_SCOPE;
+        (void)memset(state + PENDING, 0, EFFECTIVE + 8U - PENDING);
+    } else if (p->ordinal == 2U) {
         uint64_t begin = read64(p->bytes + 68U);
         uint64_t end = read64(p->bytes + 76U);
         uint64_t effective = read64(p->bytes + 84U);

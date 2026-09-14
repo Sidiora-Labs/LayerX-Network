@@ -1020,3 +1020,12 @@ pub struct ScopeRestriction {
     pub scopes: BTreeSet<String>,
     pub permitted_activity_types: BTreeSet<u16>,
 }
+
+pub(crate) fn invalidate_with_projection(
+    store: &mut Store,
+    registry: &mut SessionRegistry,
+    event: &RevocationEvent,
+    updates: Vec<(crate::store::TenantKey, Vec<u8>)>,
+) -> Result<InvalidationReport, SessionError> {
+    revocation::apply_revocation_with_updates(store, registry, &mut [], event, updates)
+}

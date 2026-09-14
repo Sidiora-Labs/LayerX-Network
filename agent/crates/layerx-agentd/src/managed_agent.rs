@@ -33,6 +33,9 @@ pub type SessionRestrictionUpdate = (
     Vec<u8>,
 );
 
+#[path = "managed_agent_rotation.rs"]
+pub(crate) mod rotation;
+
 const PREFIX: &[u8] = b"managed-agent-v1:";
 const VERSION: u8 = 4;
 const LEGACY_VERSION: u8 = 3;

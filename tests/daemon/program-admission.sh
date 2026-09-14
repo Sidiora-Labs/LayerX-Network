@@ -47,7 +47,7 @@ emit_metadata = metadata_withdrawal if sys.argv[2] in ('--withdraw', '--paid-wit
 asset = bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898')
 salt = os.urandom(32)
 encoded_metadata = emit_metadata(asset, issuer, salt, *([17] if sys.argv[2] == '--paid-withdrawal' else []))
-if sys.argv[2] == '--native-onboarding':
+if sys.argv[2] in ('--native-onboarding', '--owner-rotation'):
     encoded_metadata = metadata_modules(asset, issuer, salt, 17, (4, 4, 4, 4, 4, 4, 0))
 (root / 'metadata').write_bytes(encoded_metadata)
 PY
@@ -63,7 +63,7 @@ bootstrap_extra=()
 bootstrap_environment=(env)
 custody_mode=0
 case ${2:-} in
-    --withdraw|--module-maintenance|--metered-allowance|--native-onboarding|--paid-withdrawal) custody_mode=1 ;;
+    --withdraw|--module-maintenance|--metered-allowance|--native-onboarding|--owner-rotation|--paid-withdrawal) custody_mode=1 ;;
 esac
 if [[ $custody_mode == 1 ]]; then
     bootstrap_extra+=(--custody-profile "$LAYERX_TEST_WITHDRAW_PROFILE" --settlement-env "$work/settlement.env")
@@ -139,14 +139,14 @@ for attempt in range(200):
 else:
     raise SystemExit("daemon did not accept LNI connections")
 PYWAIT
-if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --paid-withdrawal ]]; then
+if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then
     client_name=${2#--}
     client_name=${client_name//-/_}
     cp "$build_dir/tests/lxp_test_$client_name" "$work/client"
     mkdir "$work/scenario"
     chown 4021:4021 "$work/scenario"
     scenario_state="$work/scenario"
-    if [[ ${2:-} == --native-onboarding || ${2:-} == --paid-withdrawal ]]; then scenario_state="$work/scenario/state"; fi
+    if [[ ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then scenario_state="$work/scenario/state"; fi
     if [[ ${2:-} == --metered-allowance ]]; then
         scenario_state="$work/scenario/state"
         install -m 0600 -o 4021 -g 4021 "$work/data/secrets/program-token" "$work/scenario/program-token"
@@ -184,7 +184,22 @@ elif [[ ${2:-} == --post-lxip ]]; then
     exit 0
 elif [[ ${2:-} == --grant-issuance ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --grant-issuance "$work/grants/state"
-elif [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --paid-withdrawal ]]; then
+elif [[ ${2:-} == --owner-rotation ]]; then
+    : "${LAYERX_TEST_OWNER_ROTATION_PROVIDER:?compiled real KMS provider test is required}"
+    cp "$LAYERX_TEST_OWNER_ROTATION_PROVIDER" "$work/rotation-provider"
+    chmod 0755 "$work/rotation-provider"
+    python3 - "$work/rotation-client" "$work/client" <<'PYROTATION'
+import pathlib, shlex, sys
+path = pathlib.Path(sys.argv[1])
+path.write_text('#!/usr/bin/env bash\nset -euo pipefail\nexec setpriv --reuid=4021 --regid=4021 --clear-groups ' + shlex.quote(sys.argv[2]) + ' "$@"\n')
+path.chmod(0o755)
+PYROTATION
+    LAYERX_TEST_OWNER_ROTATION_MODE=native \
+    LAYERX_TEST_OWNER_ROTATION_SOCKET="$runtime/layerxd.lni.sock" \
+    LAYERX_TEST_OWNER_ROTATION_DRIVER="$work/rotation-client" \
+    LAYERX_TEST_OWNER_ROTATION_STATE="$scenario_state" \
+        "$work/rotation-provider" --exact owner_rotation::kms_owner_rotation_disclosure --nocapture --test-threads=1
+elif [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$2" "$scenario_state"
 elif [[ ${2:-} == --maintenance-crash ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --maintenance-queue
@@ -235,7 +250,7 @@ else
     kill -0 "$sequencer_pid"
 fi
 
-if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw || ${2:-} == --grant-issuance || ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --paid-withdrawal ]]; then
+if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw || ${2:-} == --grant-issuance || ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then
     if [[ -n "$sequencer_pid" ]]; then
         kill -KILL "$sequencer_pid"
         wait "$sequencer_pid" || true
@@ -297,7 +312,19 @@ else:
 PYWAIT
     recovered_mode=--maintenance-recovered
     if [[ ${2:-} == --withdraw ]]; then recovered_mode=--withdraw-recovered; fi
-    if [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --paid-withdrawal ]]; then
+    if [[ ${2:-} == --owner-rotation ]]; then
+        "$work/rotation-client" "$runtime/layerxd.lni.sock" "$scenario_state" --recover
+        read -r retired_class retired_code < <(python3 - "$scenario_state.retired-error.json" <<'PYRETIRED'
+import json, sys
+value = json.load(open(sys.argv[1]))
+assert set(value) == {'class', 'code'} and type(value['class']) is int and type(value['code']) is int
+assert 0 < value['class'] < 256 and value['code'] < 0
+print(value['class'], value['code'])
+PYRETIRED
+)
+        "$work/rotation-client" "$runtime/layerxd.lni.sock" "$scenario_state" --refuse "$scenario_state.retired.activity" "$retired_class" "$retired_code"
+        "$work/rotation-client" "$runtime/layerxd.lni.sock" "$scenario_state" --apply "$scenario_state.recovered.activity" 0
+    elif [[ ${2:-} == --module-maintenance || ${2:-} == --metered-allowance || ${2:-} == --native-onboarding || ${2:-} == --owner-rotation || ${2:-} == --paid-withdrawal ]]; then
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" "$2-recovered" "$scenario_state"
     elif [[ ${2:-} == --grant-issuance ]]; then
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$runtime/layerxd.lni.sock" --grant-issuance-recovered "$work/grants/state"
@@ -345,7 +372,7 @@ PYN9WAIT
         kill -0 "$sequencer_pid"
         kill -0 "$replica_pid"
     fi
-    if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance && ${2:-} != --module-maintenance && ${2:-} != --metered-allowance && ${2:-} != --native-onboarding && ${2:-} != --paid-withdrawal ]]; then
+    if [[ ${2:-} != --withdraw && ${2:-} != --grant-issuance && ${2:-} != --module-maintenance && ${2:-} != --metered-allowance && ${2:-} != --native-onboarding && ${2:-} != --owner-rotation && ${2:-} != --paid-withdrawal ]]; then
         (set -a; source "$work/data/replica.env"; python3 tests/daemon/maintenance-evidence.py)
     fi
 fi

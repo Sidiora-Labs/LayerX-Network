@@ -29,6 +29,7 @@ const AGENT_LIST: u8 = 24;
 const AGENT_GET: u8 = 25;
 const AGENT_CONTROL: u8 = 26;
 const AGENT_LIMIT: u8 = 27;
+const AGENT_OWNER_ROTATED: u8 = 43;
 const AGENT_JOURNEY: u8 = 28;
 const AGENT_ARCHIVE: u8 = 29;
 const CAPABILITY_INSTALL: u8 = 30;
@@ -214,6 +215,10 @@ pub struct HumanFinalizationEvidence {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HumanAgentJourneyKind {
+    OwnerRotated {
+        custody_key: String,
+        signed_activity: Vec<u8>,
+    },
     Reclaim {
         amount: u128,
         currency: String,
@@ -1513,6 +1518,16 @@ fn decode_operation_2(
     reader: &mut Reader,
 ) -> Result<HumanRequest, HumanProtocolError> {
     Ok(match operation {
+        AGENT_OWNER_ROTATED => HumanRequest::AgentJourney {
+            agent_id: reader.text()?,
+            kind: HumanAgentJourneyKind::OwnerRotated {
+                custody_key: reader.text()?,
+                signed_activity: reader.bytes()?.to_vec(),
+            },
+            pre_observation: [0; 32],
+            post_observation: [0; 32],
+            evidence: finalization(reader)?,
+        },
         AGENT_JOURNEY => {
             let tag = reader.u8()?;
             let agent_id = reader.text()?;

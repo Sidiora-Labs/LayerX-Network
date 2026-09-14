@@ -37,6 +37,7 @@ pub struct DisclosedNativeBudgetCreate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisclosedNativeOperation {
     RecoveryPolicy(DisclosedRecoveryPolicy),
+    OwnerRotation(Box<crate::rotation::OwnerRotation>),
     BudgetCreate(Box<DisclosedNativeBudgetCreate>),
 }
 
@@ -46,6 +47,19 @@ impl DisclosedNativeOperation {
     pub fn encode(&self) -> Result<Vec<u8>, DisclosureError> {
         let mut encoder = Encoder::new(2048);
         match self {
+            Self::OwnerRotation(rotation) => {
+                encoder.u8(5)?;
+                encoder.bytes(rotation.owner().as_bytes(), 512)?;
+                if let crate::rotation::OwnerRotation::Consent(consent) = rotation.as_ref() {
+                    encoder.fixed(&consent.pending_public_key)?;
+                }
+                encoder.bytes(
+                    &rotation
+                        .payload()
+                        .map_err(|_| DisclosureError::MalformedPayload)?,
+                    1024,
+                )?;
+            }
             Self::RecoveryPolicy(policy) => {
                 encoder.u8(3)?;
                 encoder.fixed(&policy.did_id)?;
@@ -201,6 +215,10 @@ pub(super) fn fields(activity: &Activity) -> Result<DisclosureFields, Disclosure
         activity.activity_type().module(),
         activity.activity_type().ordinal(),
     ) {
+        (ModuleId::Governance, 2) => DisclosedNativeOperation::OwnerRotation(Box::new(
+            crate::rotation::OwnerRotation::from_activity(activity)
+                .map_err(|_| DisclosureError::MalformedPayload)?,
+        )),
         (ModuleId::Governance, 3) => DisclosedNativeOperation::RecoveryPolicy(recovery(activity)?),
         (ModuleId::Budget, 1) => {
             let value = budget(activity)?;
