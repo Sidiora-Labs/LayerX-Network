@@ -1,5 +1,23 @@
-import { defineConfig } from "tsup";
-import { readdirSync } from "node:fs";
+import { defineConfig, type Plugin } from "tsup";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { formatCommonJs, formatCommonJsMap } from "./format-commonjs";
+
+const commonJsWhitespace: Plugin = {
+  name: "commonjs-whitespace",
+  buildEnd({ writtenFiles }) {
+    for (const file of writtenFiles) {
+      if (!file.name.endsWith(".cjs")) continue;
+      const code = readFileSync(file.name, "utf8");
+      const formatted = formatCommonJs(code, file.name);
+      if (formatted !== code) {
+        const mapPath = `${file.name}.map`;
+        const map = formatCommonJsMap(readFileSync(mapPath, "utf8"), code, formatted, file.name);
+        writeFileSync(file.name, formatted);
+        writeFileSync(mapPath, map);
+      }
+    }
+  },
+};
 
 const componentEntries = Object.fromEntries(
   ["components", "lib"].flatMap((directory) =>
@@ -15,6 +33,7 @@ const shared = {
   sourcemap: true,
   clean: false,
   external: ["react", "react-dom", "tailwindcss"],
+  plugins: [commonJsWhitespace],
   esbuildOptions(options: { jsx: string }) {
     options.jsx = "automatic";
   },

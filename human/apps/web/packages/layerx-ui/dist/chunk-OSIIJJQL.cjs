@@ -10,12 +10,12 @@ function QuickActions({
   onAction,
   className
 }) {
-  return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
     "div",
     {
       className: _chunkMD6ORKN4cjs.cn.call(void 0, "grid gap-2", className),
       style: { gridTemplateColumns: `repeat(${Math.min(actions.length, 5)}, minmax(0, 1fr))` },
-      children: actions.map((a) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+      children: actions.map((a) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
         "button",
         {
           type: "button",

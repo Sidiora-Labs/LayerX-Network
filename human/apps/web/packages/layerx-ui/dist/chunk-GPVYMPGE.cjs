@@ -25,10 +25,10 @@ function CommandBar({
 }) {
   return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Dialog.Root, { open, onOpenChange, children: /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, Dialog.Portal, { container: _nullishCoalesce(portalContainer, () => ( void 0)), children: [
     /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Dialog.Overlay, { className: "fixed inset-0 z-40 bg-black/40 data-[state=open]:animate-fade-in" }),
-    /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
       Dialog.Content,
       {
-        className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+        className: _chunkMD6ORKN4cjs.cn.call(void 0,
           "fixed top-[18%] left-1/2 z-50 w-[calc(100vw-2rem)] max-w-[560px] -translate-x-1/2",
           "overflow-hidden rounded-xl bg-surface shadow-overlay outline-none",
           "data-[state=open]:animate-fade-in"
@@ -38,7 +38,7 @@ function CommandBar({
           /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, _cmdk.Command, { label: "Global search", className: "flex flex-col", children: [
             /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: "flex items-center gap-3 border-b border-border px-4", children: [
               /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _lucidereact.Search, { className: "size-[18px] shrink-0 text-muted-foreground", "aria-hidden": true }),
-              /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+              /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
                 _cmdk.Command.Input,
                 {
                   autoFocus: true,
@@ -50,12 +50,12 @@ function CommandBar({
             ] }),
             /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, _cmdk.Command.List, { className: "lx-scroll max-h-[320px] overflow-y-auto p-2", children: [
               /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _cmdk.Command.Empty, { className: "py-10 text-center text-sm text-muted-foreground", children: "No results found." }),
-              groups.map((g) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+              groups.map((g) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
                 _cmdk.Command.Group,
                 {
                   heading: g.label,
                   className: "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-bold [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-faint-foreground [&_[cmdk-group-heading]]:uppercase",
-                  children: g.items.map((item) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+                  children: g.items.map((item) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
                     _cmdk.Command.Item,
                     {
                       value: `${item.title} ${_nullishCoalesce(item.subtitle, () => ( ""))} ${(_nullishCoalesce(item.keywords, () => ( []))).join(" ")}`,
@@ -105,7 +105,7 @@ function SearchScreen({
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkRA3A4XJ2cjs.IconButton, { variant: "outline", size: "sm", onClick: () => onOpenChange(false), "aria-label": "Back", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _lucidereact.ArrowLeft, {}) }),
       /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: "flex h-10 flex-1 items-center gap-2.5 rounded-full border border-border bg-surface px-4 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20", children: [
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _lucidereact.Search, { className: "size-4 shrink-0 text-muted-foreground", "aria-hidden": true }),
-        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+        /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
           "input",
           {
             autoFocus: true,
@@ -120,7 +120,7 @@ function SearchScreen({
     /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: "lx-scroll flex-1 overflow-y-auto p-4", children: [
       !q && recents && recents.length > 0 && /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "section", { children: [
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "h4", { className: "pb-1 text-xs font-bold tracking-wide text-faint-foreground uppercase", children: "Recent" }),
-        recents.map((item) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+        recents.map((item) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
           "button",
           {
             type: "button",
@@ -142,7 +142,7 @@ function SearchScreen({
       ] }),
       shownGroups.map((g) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "section", { className: "pt-3", children: [
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "h4", { className: "pb-1 text-xs font-bold tracking-wide text-faint-foreground uppercase", children: g.label }),
-        g.items.map((item) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+        g.items.map((item) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
           "button",
           {
             type: "button",
@@ -193,7 +193,7 @@ function GlobalSearch({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [enableHotkey, resolved, open, onOpenChange]);
-  return resolved === "mobile" ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+  return resolved === "mobile" ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
     SearchScreen,
     {
       open,
@@ -203,7 +203,7 @@ function GlobalSearch({
       recents,
       placeholder
     }
-  ) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+  ) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
     CommandBar,
     {
       open,

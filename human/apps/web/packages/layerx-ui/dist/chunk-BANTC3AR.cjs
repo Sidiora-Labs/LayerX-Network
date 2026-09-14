@@ -11,20 +11,20 @@ var _react = require('react'); var React = _interopRequireWildcard(_react);
 var _jsxruntime = require('react/jsx-runtime');
 function BankCard({ data, className }) {
   const dark = data.theme === "dark";
-  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
     "div",
     {
-      className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+      className: _chunkMD6ORKN4cjs.cn.call(void 0,
         "relative flex aspect-[8/5] w-full flex-col justify-between overflow-hidden rounded-lg p-5 shadow-card",
         dark ? "bg-[#101418] text-white" : "bg-[linear-gradient(135deg,#eef3fa_0%,#e2eaf5_55%,#dbe5f2_100%)] text-foreground",
         className
       ),
       children: [
-        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+        /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
           "div",
           {
             "aria-hidden": true,
-            className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+            className: _chunkMD6ORKN4cjs.cn.call(void 0,
               "pointer-events-none absolute inset-0",
               dark ? "bg-[radial-gradient(120%_90%_at_80%_0%,rgb(255_255_255/0.08),transparent_60%)]" : "bg-[radial-gradient(120%_90%_at_80%_0%,rgb(255_255_255/0.7),transparent_60%)]"
             )
@@ -66,7 +66,7 @@ function CardCarousel({
     setActive(Math.max(0, Math.min(cards.length - 1, i)));
   };
   return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: _chunkMD6ORKN4cjs.cn.call(void 0, "flex flex-col gap-3", className), children: [
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       "div",
       {
         ref: trackRef,
@@ -75,10 +75,10 @@ function CardCarousel({
         children: cards.map((c, i) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "w-full shrink-0 snap-center", children: renderCard ? renderCard(c, i) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0, BankCard, { data: c }) }, i))
       }
     ),
-    cards.length > 1 && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "flex items-center justify-center gap-1.5", "aria-hidden": true, children: cards.map((_, i) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    cards.length > 1 && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "flex items-center justify-center gap-1.5", "aria-hidden": true, children: cards.map((_, i) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       "span",
       {
-        className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+        className: _chunkMD6ORKN4cjs.cn.call(void 0,
           "size-1.5 rounded-full transition-colors",
           i === active ? "bg-foreground" : "bg-border-strong"
         )

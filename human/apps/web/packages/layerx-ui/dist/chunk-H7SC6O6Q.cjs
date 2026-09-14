@@ -33,7 +33,7 @@ function BottomTabBar({
   const right = items.slice(2, 4);
   const Tab = ({ item }) => {
     const active = item.id === activeId;
-    return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+    return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
       "button",
       {
         type: "button",
@@ -42,10 +42,10 @@ function BottomTabBar({
         className: "relative flex flex-col items-center gap-0.5 py-1 outline-none",
         children: [
           /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "span", { className: _chunkMD6ORKN4cjs.cn.call(void 0, "transition-colors", active ? "text-accent" : "text-faint-foreground"), children: _nullishCoalesce(_nullishCoalesce(item.icon, () => ( DEFAULT_ICONS[item.id])), () => ( /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _lucidereact.Grid2x2, { className: "size-[22px]" }))) }),
-          /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+          /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
             "span",
             {
-              className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+              className: _chunkMD6ORKN4cjs.cn.call(void 0,
                 "text-[11px] font-semibold transition-colors",
                 active ? "text-accent" : "text-faint-foreground"
               ),
@@ -57,18 +57,18 @@ function BottomTabBar({
       }
     );
   };
-  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
     "nav",
     {
       "aria-label": "Primary",
-      className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+      className: _chunkMD6ORKN4cjs.cn.call(void 0,
         "relative z-30 grid grid-cols-5 items-end border-t border-border bg-surface px-2 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))]",
         className
       ),
       children: [
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Tab, { item: left[0] }),
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Tab, { item: left[1] }),
-        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "flex justify-center", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "flex justify-center", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
           "button",
           {
             type: "button",
@@ -96,10 +96,10 @@ function Sidebar({
   user,
   className
 }) {
-  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
     "aside",
     {
-      className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+      className: _chunkMD6ORKN4cjs.cn.call(void 0,
         "flex h-full w-[248px] shrink-0 flex-col border-r border-border bg-surface",
         className
       ),
@@ -111,13 +111,13 @@ function Sidebar({
         /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "nav", { "aria-label": "Primary", className: "flex flex-1 flex-col gap-1 px-3 py-2", children: [
           items.map((item) => {
             const active = item.id === activeId;
-            return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+            return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
               "button",
               {
                 type: "button",
                 onClick: () => _optionalChain([onNavigate, 'optionalCall', _2 => _2(item.id)]),
                 "aria-current": active ? "page" : void 0,
-                className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+                className: _chunkMD6ORKN4cjs.cn.call(void 0,
                   "flex items-center gap-3 rounded-md px-3 py-2.5 text-[15px] font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
                   active ? "bg-surface-sunken text-foreground" : "text-muted-foreground hover:bg-surface-sunken/60 hover:text-foreground"
                 ),
@@ -130,7 +130,7 @@ function Sidebar({
               item.id
             );
           }),
-          /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+          /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
             "button",
             {
               type: "button",
@@ -144,7 +144,7 @@ function Sidebar({
           )
         ] }),
         /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: "border-t border-border p-3", children: [
-          /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+          /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
             "button",
             {
               type: "button",
@@ -194,7 +194,7 @@ function AppShell({
     return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: _chunkMD6ORKN4cjs.cn.call(void 0, "flex h-dvh flex-col bg-background", className), children: [
       /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "header", { className: "flex items-center gap-3 border-b border-border bg-surface px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3", children: [
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkJWRSDZ7Hcjs.Avatar, { alt: _nullishCoalesce(_optionalChain([user, 'optionalAccess', _3 => _3.name]), () => ( "Account")), src: _optionalChain([user, 'optionalAccess', _4 => _4.avatarSrc]), initials: _optionalChain([user, 'optionalAccess', _5 => _5.initials]), size: "sm", tone: "primary" }),
-        /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+        /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
           "button",
           {
             type: "button",
@@ -212,7 +212,7 @@ function AppShell({
         ] })))
       ] }),
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "main", { className: "lx-scroll flex-1 overflow-y-auto", children }),
-      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
         BottomTabBar,
         {
           items: nav,
@@ -225,7 +225,7 @@ function AppShell({
     ] });
   }
   return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: _chunkMD6ORKN4cjs.cn.call(void 0, "flex h-dvh bg-background", className), children: [
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       Sidebar,
       {
         items: nav,
@@ -241,7 +241,7 @@ function AppShell({
       /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "header", { className: "flex h-16 shrink-0 items-center gap-4 border-b border-border bg-surface px-6", children: [
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "h1", { className: "text-lg font-bold text-foreground", children: title }),
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "flex-1" }),
-        /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+        /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
           "button",
           {
             type: "button",

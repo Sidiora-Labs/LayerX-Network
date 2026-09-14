@@ -10,11 +10,11 @@ var _jsxruntime = require('react/jsx-runtime');
 function Drawer({ open, onOpenChange, children, portalContainer, width = 420 }) {
   return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Dialog.Root, { open, onOpenChange, children: /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, Dialog.Portal, { container: _nullishCoalesce(portalContainer, () => ( void 0)), children: [
     /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Dialog.Overlay, { className: "fixed inset-0 z-40 bg-black/30 data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out" }),
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       Dialog.Content,
       {
         style: { width: `min(${typeof width === "number" ? `${width}px` : width}, 100vw)` },
-        className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+        className: _chunkMD6ORKN4cjs.cn.call(void 0,
           "fixed top-0 right-0 z-50 flex h-dvh flex-col overscroll-contain bg-surface pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-overlay outline-none",
           "data-[state=open]:animate-drawer-in data-[state=closed]:animate-drawer-out"
         ),
@@ -34,7 +34,7 @@ function DrawerHeader({
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Dialog.Title, { className: "text-lg font-bold text-foreground", children: title }),
       description && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Dialog.Description, { asChild: true, children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "p", { className: "text-sm text-muted-foreground", children: description }) })
     ] }),
-    onClose && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    onClose && /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       "button",
       {
         type: "button",

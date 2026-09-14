@@ -63,12 +63,12 @@ function FilterBar({
   };
   if (resolved === "mobile") {
     return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, _jsxruntime.Fragment, { children: [
-      /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
         "button",
         {
           type: "button",
           onClick: openSheet,
-          className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+          className: _chunkMD6ORKN4cjs.cn.call(void 0,
             "flex h-11 items-center gap-2 rounded-full border border-border bg-surface px-4 text-sm font-semibold text-foreground-secondary transition-colors hover:bg-surface-sunken/60",
             className
           ),
@@ -83,7 +83,7 @@ function FilterBar({
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkKJXR3TMYcjs.SheetHeader, { title: "Filter" }),
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkKJXR3TMYcjs.SheetBody, { className: "flex flex-col gap-6", children: filters.map((def) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "section", { className: "flex flex-col gap-1", children: [
           /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "h4", { className: "pb-1 text-[15px] font-bold text-foreground", children: def.label }),
-          def.type === "options" ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+          def.type === "options" ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
             _chunkIOJALOHMcjs.OptionList,
             {
               "aria-label": def.label,
@@ -91,7 +91,7 @@ function FilterBar({
               value: _nullishCoalesce(_nullishCoalesce(draft[def.id], () => ( _optionalChain([def, 'access', _5 => _5.options, 'optionalAccess', _6 => _6[0], 'optionalAccess', _7 => _7.value]))), () => ( "")),
               onValueChange: (v) => setDraft((d) => ({ ...d, [def.id]: v }))
             }
-          ) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "rounded-md border border-border p-2", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+          ) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "rounded-md border border-border p-2", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
             _reactdaypicker.DayPicker,
             {
               mode: "range",
@@ -104,7 +104,7 @@ function FilterBar({
           ) })
         ] }, def.id)) }),
         /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, _chunkKJXR3TMYcjs.SheetFooter, { children: [
-          /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+          /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
             _chunkRA3A4XJ2cjs.Button,
             {
               variant: "secondary",
@@ -119,7 +119,7 @@ function FilterBar({
               children: "Clear"
             }
           ),
-          /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+          /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
             _chunkRA3A4XJ2cjs.Button,
             {
               size: "lg",
@@ -139,7 +139,7 @@ function FilterBar({
     const summary = filterSummary(def, v);
     const active = isFilterActive(v);
     if (def.type === "date-range") {
-      return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+      return /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
         _chunkLXK76CWPcjs.CalendarRangePicker,
         {
           value: _nullishCoalesce(v, () => ( void 0)),
@@ -150,11 +150,11 @@ function FilterBar({
       );
     }
     return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, _chunk7SUKWFMOcjs.Popover, { children: [
-      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunk7SUKWFMOcjs.PopoverTrigger, { asChild: true, children: /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunk7SUKWFMOcjs.PopoverTrigger, { asChild: true, children: /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
         "button",
         {
           type: "button",
-          className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+          className: _chunkMD6ORKN4cjs.cn.call(void 0,
             "flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
             active ? "border-accent/40 bg-accent-soft text-accent-strong" : "border-border bg-surface text-foreground-secondary hover:bg-surface-sunken/60"
           ),
@@ -164,7 +164,7 @@ function FilterBar({
           ]
         }
       ) }),
-      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunk7SUKWFMOcjs.PopoverContent, { className: "w-[240px] p-2", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunk7SUKWFMOcjs.PopoverContent, { className: "w-[240px] p-2", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
         _chunkIOJALOHMcjs.OptionList,
         {
           "aria-label": def.label,

@@ -12,10 +12,10 @@ function EmptyState({
   action,
   className
 }) {
-  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
     "div",
     {
-      className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+      className: _chunkMD6ORKN4cjs.cn.call(void 0,
         "flex flex-col items-center gap-2.5 rounded-lg bg-surface px-6 py-10 text-center",
         className
       ),
