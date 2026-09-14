@@ -22,7 +22,10 @@ def bootstrap(documents):
                      'LAYERX_AUTHORITY_PRINCIPAL_POLICY_FILE',
                      'LAYERX_AUTHORITY_MODULE_REGISTRY_FILE',
                      'LAYERX_AUTHORITY_CORE_CLOCK_HORIZON',
-                     'LAYERX_AUTHORITY_STATE_ROOT'}
+                     'LAYERX_AUTHORITY_STATE_ROOT',
+                     'LAYERX_AUTHORITY_IDENTITY_BINDING_SOCKET',
+                     'LAYERX_AUTHORITY_IDENTITY_BINDING_UID',
+                     'LAYERX_AUTHORITY_IDENTITY_BINDING_GID'}
         authority['env'] = [e for e in authority['env'] if e['name'] not in human_env]
         authority['volumeMounts'] = [v for v in authority['volumeMounts']
                                      if v['name'] != 'human-authority-private']
