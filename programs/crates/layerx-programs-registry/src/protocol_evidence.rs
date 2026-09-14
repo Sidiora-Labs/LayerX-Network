@@ -841,8 +841,12 @@ impl ProtocolDeploymentVerifier {
             verify_receipt_inclusion(receipt, proof, header, signature, &anchor.authorization())
                 .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
         let header = inclusion.header().header();
-        let record = layerx_wire::maintenance::decode_occupancy_maintenance(receipt)
+        let maintenance = layerx_wire::batch_maintenance::decode_maintenance(receipt)
             .map_err(|_| ProtocolEvidenceError::Receipt)?;
+        maintenance
+            .verify_header(header)
+            .map_err(|_| ProtocolEvidenceError::BatchMismatch)?;
+        let record = maintenance.occupancy();
         let count = header
             .last_sequence()
             .checked_sub(header.first_sequence())
@@ -859,7 +863,7 @@ impl ProtocolDeploymentVerifier {
         {
             return Err(ProtocolEvidenceError::BatchMismatch);
         }
-        verify_maintenance_settlement(&record)?;
+        verify_maintenance_settlement(record)?;
         let observed_at = header.timestamp_ms();
         if observed_at == 0 {
             return Err(ProtocolEvidenceError::Stale);
@@ -2287,6 +2291,102 @@ mod legacy_lifecycle_vectors {
         assert_eq!(
             parse_lifecycle_activity(UPGRADE_ORDINAL, &payload),
             Err(ProtocolEvidenceError::CanonicalActivity)
+        );
+    }
+}
+
+#[cfg(test)]
+mod native_batch_maintenance_heads {
+    use super::*;
+
+    const RECEIPT: &[u8] =
+        include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/receipt");
+    const MAINTENANCE: &[u8] =
+        include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/maintenance.receipt");
+    const HEADER: &[u8] =
+        include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/header");
+    const SIGNATURE: &[u8; 64] =
+        include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/header.signature");
+    const PUBLIC: &[u8; 32] =
+        include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/sequencer.public");
+
+    fn verifier(header: &layerx_wire::receipt::BatchHeader) -> ProtocolDeploymentVerifier {
+        ProtocolDeploymentVerifier {
+            anchors: vec![SequencerTrustAnchor {
+                protocol_version: header.protocol_version(),
+                network_id: header.network_id(),
+                epoch: header.epoch(),
+                sequencer_id: header.sequencer_id(),
+                sequencer_public_key: *PUBLIC,
+                first_batch: header.batch_number(),
+                last_batch: header.batch_number(),
+                revoked_from_batch: None,
+            }],
+            current_anchor: 0,
+            staleness_limit_ms: 1_000,
+        }
+    }
+
+    #[test]
+    fn original_module_maintenance_head_requires_signed_complete_envelope() {
+        let header = decode_batch_header(HEADER)
+            .unwrap_or_else(|error| panic!("native batch header: {error:?}"));
+        let record = layerx_wire::batch_maintenance::decode_batch_maintenance(MAINTENANCE)
+            .unwrap_or_else(|error| panic!("native module maintenance: {error:?}"));
+        let (proof, root) = layerx_proof::merkle::build_proof(&[RECEIPT, MAINTENANCE], 1)
+            .unwrap_or_else(|error| panic!("native maintenance inclusion: {error:?}"));
+        assert_eq!(root, header.receipt_merkle_root());
+        let verifier = verifier(&header);
+        let (head, key) = verifier
+            .verify_current_maintenance_head(
+                MAINTENANCE,
+                &proof,
+                HEADER,
+                SIGNATURE,
+                header.timestamp_ms(),
+            )
+            .unwrap_or_else(|error| panic!("native module head: {error:?}"));
+        assert_eq!(key, *PUBLIC);
+        assert_eq!(head.receipt_digest, crate::hash::sha256(MAINTENANCE));
+        assert_eq!(head.state_root, record.occupancy.resulting_state_root);
+        assert_eq!(head.state_root, header.resulting_state_root());
+        assert_eq!(head.freshness.observed_sequence, header.last_sequence());
+        assert_eq!(head.freshness.observed_at, header.timestamp_ms());
+        assert_eq!(
+            verifier.verify_historical_maintenance_head(MAINTENANCE, &proof, HEADER, SIGNATURE),
+            Ok((head, key))
+        );
+        assert_eq!(
+            verifier.verify_current_maintenance_head(
+                MAINTENANCE,
+                &proof,
+                HEADER,
+                SIGNATURE,
+                header.timestamp_ms() + 1_001
+            ),
+            Err(ProtocolEvidenceError::Stale)
+        );
+        let mut changed = MAINTENANCE.to_vec();
+        let last = changed.len() - 1;
+        changed[last] ^= 1;
+        assert!(verifier
+            .verify_historical_maintenance_head(&changed, &proof, HEADER, SIGNATURE)
+            .is_err());
+        let mut signature = *SIGNATURE;
+        signature[0] ^= 1;
+        assert!(verifier
+            .verify_historical_maintenance_head(MAINTENANCE, &proof, HEADER, &signature)
+            .is_err());
+        let (activity_proof, _) = layerx_proof::merkle::build_proof(&[RECEIPT, MAINTENANCE], 0)
+            .unwrap_or_else(|error| panic!("native activity inclusion: {error:?}"));
+        assert!(verifier
+            .verify_historical_maintenance_head(MAINTENANCE, &activity_proof, HEADER, SIGNATURE)
+            .is_err());
+        let mut revoked = verifier.clone();
+        revoked.anchors[0].revoked_from_batch = Some(header.batch_number());
+        assert_eq!(
+            revoked.verify_historical_maintenance_head(MAINTENANCE, &proof, HEADER, SIGNATURE),
+            Err(ProtocolEvidenceError::SequencerRevoked)
         );
     }
 }

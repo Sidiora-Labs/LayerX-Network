@@ -715,7 +715,8 @@ fn parse_maintenance(value: &Value) -> Result<Option<ProtocolHeadMaintenanceProo
     if value.is_null() {
         return Ok(None);
     }
-    if field(value, "kind")? != "occupancy_maintenance_v2" {
+    let kind = field(value, "kind")?;
+    if !matches!(kind, "occupancy_maintenance_v2" | "batch_maintenance_v1") {
         return Err("unsupported receipt batch identity".to_owned());
     }
     let items = value["activity_receipts_hex"]
@@ -733,6 +734,20 @@ fn parse_maintenance(value: &Value) -> Result<Option<ProtocolHeadMaintenanceProo
         hex::decode(encoded).map_err(|error| format!("maintenance receipt encoding: {error}"))
     };
     let receipt = decode(field(value, "receipt_hex")?)?;
+    let record = layerx_wire::batch_maintenance::decode_maintenance(&receipt)
+        .map_err(|_| "maintenance identity receipt is noncanonical".to_owned())?;
+    if !matches!(
+        (kind, record),
+        (
+            "occupancy_maintenance_v2",
+            layerx_wire::batch_maintenance::MaintenanceReceipt::Occupancy(_)
+        ) | (
+            "batch_maintenance_v1",
+            layerx_wire::batch_maintenance::MaintenanceReceipt::Batch(_)
+        )
+    ) {
+        return Err("maintenance identity kind disagrees with its receipt".to_owned());
+    }
     let mut activity_receipts = Vec::with_capacity(items.len());
     for item in items {
         activity_receipts
@@ -802,6 +817,49 @@ fn loopback_http(endpoint: &str) -> bool {
 mod tests {
     use super::{classify_head_answer, HeadAnswer};
     use serde_json::json;
+
+    #[test]
+    fn maintenance_json_kind_binds_the_original_native_envelope() {
+        let receipt =
+            include_bytes!("../../../../tests/fixtures/custody/daemon-module-head/receipt");
+        let maintenance = include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-module-head/maintenance.receipt"
+        );
+        let proof = include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-module-head/maintenance.proof"
+        );
+        let mut document = json!({
+            "kind": "batch_maintenance_v1",
+            "receipt_hex": layerx_programs::hex::encode(maintenance),
+            "receipt_proof_hex": layerx_programs::hex::encode(proof),
+            "activity_receipts_hex": [layerx_programs::hex::encode(receipt)]
+        });
+        let parsed = super::parse_maintenance(&document)
+            .unwrap_or_else(|error| panic!("native maintenance identity: {error}"))
+            .unwrap_or_else(|| panic!("native maintenance identity missing"));
+        assert_eq!(parsed.receipt, maintenance);
+        assert_eq!(parsed.activity_receipts, [receipt.to_vec()]);
+        document["kind"] = json!("occupancy_maintenance_v2");
+        assert!(super::parse_maintenance(&document).is_err());
+        let legacy = include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-credit-receipt/maintenance.receipt"
+        );
+        document["receipt_hex"] = json!(layerx_programs::hex::encode(legacy));
+        document["receipt_proof_hex"] = json!(layerx_programs::hex::encode(include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-credit-receipt/maintenance.proof"
+        )));
+        document["activity_receipts_hex"] = json!([layerx_programs::hex::encode(include_bytes!(
+            "../../../../tests/fixtures/custody/daemon-credit-receipt/credit.receipt"
+        ))]);
+        assert!(super::parse_maintenance(&document).is_ok());
+        document["kind"] = json!("batch_maintenance_v1");
+        assert!(super::parse_maintenance(&document).is_err());
+        document["kind"] = json!("unknown");
+        assert!(super::parse_maintenance(&document).is_err());
+        document["kind"] = json!("occupancy_maintenance_v2");
+        document["activity_receipts_hex"] = json!([]);
+        assert!(super::parse_maintenance(&document).is_err());
+    }
 
     #[test]
     fn only_the_stale_projection_answer_is_a_pending_head() {
