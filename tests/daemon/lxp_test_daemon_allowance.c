@@ -130,6 +130,16 @@ static int fixture_init(fixture *f, uint8_t marker_offset)
           LXP_OK);
     (void)memset(&f->asset, 0, sizeof(f->asset));
     f->asset.asset_id[0] = 6U;
+    (void)memcpy(f->asset.symbol, "NAT", 4U);
+    f->asset.symbol_length = 3U;
+    (void)memcpy(f->asset.name, "Allowance Asset", 15U);
+    f->asset.name_length = 15U;
+    f->asset.custody_kind = LX_ASSET_CUSTODY_NATIVE;
+    f->asset.issuer_kind = 1U;
+    CHECK(lxp_did_id_derive(did, sizeof(did) - 1U,
+                            f->asset.issuer_did32) == LXP_OK);
+    f->asset.supply_cap = (lxp_u128){0U, 100U};
+    f->asset.total_units = (lxp_u128){0U, 100U};
     CHECK(lx_asset_transfer_state(&f->asset, &f->asset_state) == LXP_OK);
     f->runtime.assets = &f->asset_state;
     f->runtime.asset_count = 1U;
@@ -164,6 +174,16 @@ static int fixture_init(fixture *f, uint8_t marker_offset)
     f->parameters = 1U;
     CHECK(lxp_kernel_create(&f->kernel, &f->state, &f->journal,
                             &f->parameters, 0U) == LXP_OK);
+    {
+        size_t encoded_length;
+        lxp_module_kv_entry *record = &f->kernel.module_kv[f->kernel.module_kv_count++];
+        record->module_id = LXP_MODULE_ASSET;
+        record->key_length = 32U;
+        (void)memcpy(record->key, f->asset.asset_id, 32U);
+        CHECK(lx_asset_record_encode(&f->asset, record->value,
+                                      sizeof(record->value), &encoded_length) == LXP_OK);
+        record->value_length = (uint32_t)encoded_length;
+    }
     {
         lxp_module_kv_entry *policy = &f->kernel.module_kv[f->kernel.module_kv_count++];
         (void)memset(policy, 0, sizeof(*policy));
