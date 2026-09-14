@@ -1911,6 +1911,7 @@ test-finality-evidence: $(BUILD_DIR)/tests/lxp_test_finality_evidence
 
 $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority: \
 		tests/daemon/lxp_test_finality_authority.c \
+		cmd/layerx-guarantor/producer.c cmd/layerx-guarantor/producer.h \
 		cmd/layerxd/lxp_daemon_finality_authority.c \
 		cmd/layerxd/lxp_daemon_finality_authority.h \
 		cmd/layerxd/lxp_daemon_evidence.c \
@@ -1919,6 +1920,7 @@ $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority: \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
 		tests/daemon/lxp_test_finality_authority.c \
+		cmd/layerx-guarantor/producer.c \
 		cmd/layerxd/lxp_daemon_finality_authority.c \
 		cmd/layerxd/lxp_daemon_evidence.c \
 		cmd/layerxd/lxp_daemon_receipt_authority.c $(LIBRARY) \

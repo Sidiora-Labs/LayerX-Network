@@ -178,7 +178,7 @@ def main():
             LAYERX_NODE_PAXEER_RPC_PORT=str(port),
             LAYERX_TEST_DA_HEADER_FILE=str(header),
         )
-        vector = json.loads(run(str(binary), "prepare", env=environment))
+        vector = json.loads(run(str(binary), "prepare", str(output), env=environment))
         calldata = run(
             "cast",
             "calldata",
