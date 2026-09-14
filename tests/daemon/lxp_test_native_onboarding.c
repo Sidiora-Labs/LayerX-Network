@@ -402,6 +402,7 @@ static int onboard_initial(int descriptor, const signer *owner, const signer *ta
             REQUIRE(lxp_u128_is_zero(balance) && account_sequence == 0U);
             run->generation = receipt.global_sequence;
             uint8_t replay_id[32];
+            REQUIRE(lxp_activity_id(encoded, length, replay_id) == LXP_OK);
             REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 705U, encoded, length) == 0);
             REQUIRE(expect_ack(descriptor, 705U, encoded, length, replay_id) == 0);
             REQUIRE(memcmp(replay_id, run->ids[run->count - 1U], 32U) == 0);
