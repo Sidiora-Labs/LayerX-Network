@@ -176,6 +176,21 @@ lxp_result lxp_module_ctx_import_prepared(
     lxp_module_ctx *ctx, const lxp_prepared_module_transition *prepared,
     const uint8_t level_snapshot_token[32], lxp_effect_buffer *effects);
 
+struct lxp_program_outcome;
+
+typedef struct lxp_module_fee_transfer {
+    lx_account payer_before;
+    lx_account treasury_before;
+    lxp_u128 amount;
+} lxp_module_fee_transfer;
+
+lxp_result lxp_module_ctx_import_prepared_after_fee(
+    lxp_module_ctx *ctx, const lxp_prepared_module_transition *prepared,
+    const uint8_t level_snapshot_token[32], lxp_effect_buffer *effects,
+    const lxp_module_fee_transfer *fee, lxp_result *settlement_refusal);
+const struct lxp_program_outcome *lxp_prepared_module_outcome(
+    const lxp_prepared_module_transition *prepared);
+
 void lxp_prepared_module_transition_destroy(
     lxp_prepared_module_transition *prepared);
 

@@ -320,6 +320,13 @@ def run(native, build, exports, count, lni_socket, consumer=None):
                     submitted = nonce
                 else:
                     assert nonce == submitted, 'guarantor restart repeated a settled transaction'
+                    feedback_binary = os.environ.get('LAYERX_TEST_GUARANTOR_FEEDBACK_BIN')
+                    if feedback_binary is not None:
+                        feedback_gate = runpy.run_path(str(ROOT / 'tests/daemon/guarantor-feedback.py'))
+                        producer_state = output / 'producer-1'
+                        feedback_gate['run'](feedback_binary, lni_socket, count,
+                            producer_state / f'{count:020d}.checkpoint',
+                            producer_state / f'{count:020d}.finality', output / 'feedback.log')
                     if consumer is not None:
                         consume_with_publication(consumer, processes, output, inputs,
                             bytes.fromhex(chain.account.address[2:]), vault)

@@ -25,4 +25,7 @@ lxp_result lxp_guarantor_lni_feedback(lxp_guarantor_lni *client, lxp_byte_span c
                                       lxp_byte_span proof, lxp_arena *arena);
 lxp_result lxp_guarantor_lni_checkpoint(lxp_guarantor_lni *, uint64_t, lxp_arena *, lxp_byte_span *,
                                         lxp_byte_span *);
+lxp_result lxp_guarantor_lni_feedback_confirmed(lxp_guarantor_lni *client, const char *path,
+    uint64_t batch, lxp_byte_span certificate, lxp_byte_span proof, lxp_arena *arena,
+    uint32_t timeout_ms);
 #endif
