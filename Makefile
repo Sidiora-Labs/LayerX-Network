@@ -2195,10 +2195,12 @@ human-test human-test-integration: human-test-custody-prerequisites
 human-test human-test-integration: export PAXD = $(HUMAN_TEST_PAXD)
 human-test human-test-integration: export LAYERX_CUSTODY_PROOF_BIN = $(HUMAN_TEST_CUSTODY_PROOF)
 human-test human-test-integration: export LAYERX_TEST_NATIVE_BIN_DIR = $(abspath $(BUILD_DIR)/bin)
+human-test human-test-integration: export LAYERX_TEST_SIGN_CREDIT_BIN = $(abspath $(BUILD_DIR)/tests/bridge/sign-credit)
 human-test-custody-prerequisites:
 	$(MAKE) public-tls-test-prerequisites
 	$(MAKE) PAXEER_GO_JOBS=4 custody-proof-build
-	$(MAKE) LXP_REVISION="$(shell git rev-parse HEAD)" layerx-genesis-build
+	$(MAKE) -j4 LXP_REVISION="$(shell git rev-parse HEAD)" \
+		layerxd layerx-genesis-build $(BUILD_DIR)/tests/bridge/sign-credit
 	GOMAXPROCS=4 GOFLAGS="$(GOFLAGS) -p=4" $(MAKE) paxeer-build
 
 HUMAN_IDENTITY_PROVIDER := $(HUMAN_TARGET_DIR)/debug/layerx-human-identity-provider

@@ -32,13 +32,13 @@ function CodeInput({
     if (clean.length === length) _optionalChain([onComplete, 'optionalCall', _5 => _5(clean)]);
   };
   const activeIndex = Math.min(value.length, length - 1);
-  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
     "div",
     {
       className: _chunkMD6ORKN4cjs.cn.call(void 0, "relative", className),
       onClick: () => !readOnly && _optionalChain([inputRef, 'access', _6 => _6.current, 'optionalAccess', _7 => _7.focus, 'call', _8 => _8()]),
       children: [
-        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+        /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
           "input",
           {
             ref: inputRef,
@@ -47,7 +47,7 @@ function CodeInput({
             autoComplete: "one-time-code",
             "aria-invalid": error || void 0,
             "aria-label": _nullishCoalesce(aria["aria-label"], () => ( "Verification code")),
-            className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+            className: _chunkMD6ORKN4cjs.cn.call(void 0,
               "absolute inset-0 h-full w-full opacity-0",
               readOnly ? "pointer-events-none" : "cursor-text"
             ),
@@ -66,10 +66,10 @@ function CodeInput({
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: "flex items-center justify-center gap-2.5", "aria-hidden": true, children: Array.from({ length }).map((_, i) => {
           const char = value[i];
           const isActive = focused && !disabled && i === activeIndex;
-          return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+          return /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
             "span",
             {
-              className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+              className: _chunkMD6ORKN4cjs.cn.call(void 0,
                 "flex size-12 items-center justify-center rounded-md border bg-surface text-xl font-semibold tabular-nums transition-colors",
                 error ? "border-destructive text-destructive" : isActive ? "border-accent ring-2 ring-accent/20 text-foreground" : "border-border text-foreground",
                 disabled && "opacity-50"
@@ -103,7 +103,7 @@ function Keypad({
     { main: "back" }
   ];
   return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "div", { className: _chunkMD6ORKN4cjs.cn.call(void 0, "grid grid-cols-3 gap-px overflow-hidden rounded-lg bg-border", className), children: keys.map(
-    (k) => k.main === "back" ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    (k) => k.main === "back" ? /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       "button",
       {
         type: "button",
@@ -113,7 +113,7 @@ function Keypad({
         children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _lucidereact.Delete, { className: "size-5" })
       },
       "back"
-    ) : /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+    ) : /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
       "button",
       {
         type: "button",

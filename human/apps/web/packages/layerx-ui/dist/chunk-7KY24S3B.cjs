@@ -27,7 +27,7 @@ function CodeEntry({
   const resolved = _chunkI62LU2PGcjs.usePlatform.call(void 0, platform);
   const mobile = resolved === "mobile";
   return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: _chunkMD6ORKN4cjs.cn.call(void 0, "flex flex-col gap-4", className), children: [
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       _chunkMOEIKVUAcjs.CodeInput,
       {
         length,
@@ -48,7 +48,7 @@ function CodeEntry({
         "00:",
         String(resendIn).padStart(2, "0")
       ] })
-    ] }) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    ] }) : /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       "button",
       {
         type: "button",
@@ -57,7 +57,7 @@ function CodeEntry({
         children: "Resend code"
       }
     ) }),
-    mobile && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    mobile && /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       _chunkMOEIKVUAcjs.Keypad,
       {
         className: "mt-2",

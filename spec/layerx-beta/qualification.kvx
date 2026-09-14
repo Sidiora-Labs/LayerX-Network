@@ -14225,29 +14225,6 @@ observed = "The genuine withdrawal fixture explicitly selects fee encoding 3 thr
 assumption = "These are explicit remaining configuration and public API dependencies outside the native fee encoding and replay repair. The existing authoritative metadata input and public refusal assertion were preserved. No production default flip, historical schedule reinterpretation, public RPC acceptance or automatic genesis migration is claimed."
 severity = "blocker"
 
-[observation.3.7.9801]
-task = "3.7"
-file = "agent/crates/layerx-agentd/examples/native_handover_programs.rs tests/daemon/handover-peers.py tests/daemon/handover-chain.py"
-symbol = "funded_fee_limit submit wait_finalized authorize_request consume_with_publication"
-observed = "At revision bc42a08c059dc215f6536ee52938ea8976a58a37, Agentd formatting, locked all-target Clippy with warnings denied, native_handover_programs example build and the same-source receipt Authority build each exited 0. The Programs consumer derives its signed fee limit from the verified funded account and requires a successful signed Deploy receipt. It obtains the receipt's actual inclusion header and requires both its exact canonical bytes and batch number to match independently verified finalized checkpoint evidence. Its publication poll accepts only the native route's exact pending-receipt refusal representations within the original deadline. The peer fixture keeps both genuine guarantors active during consumer execution and publishes owner-authorized inputs atomically after setting their required ownership and permissions."
-assumption = "These focused results do not qualify the full handover consumer gate. The original two-peer recovery, signed authority, stale-authority refusals, inclusion/finality checks and all existing time bounds remain enforced."
-severity = "note"
-
-[observation.3.7.9802]
-task = "3.7"
-file = "cmd/layerxd/lxp_daemon_process.c src/protocol/lxp_kernel.c agent/crates/layerx-agentd/examples/native_handover_programs.rs"
-symbol = "apply_canonical_batch lxp_kernel_prepare_serial_activity_batch wait_get"
-observed = "At revision bc42a08c059dc215f6536ee52938ea8976a58a37, the original make test-daemon-handover-consumers invocation exited 2. The real funded predecessor batches, authorized epoch transition, forced restart, both guarantors and public Client, Agent, SDK, Budget and TLS Authority stages passed. Programs reached its unchanged publication deadline because the native process rejected sequence 31 with result -3 during preparation before sealing a Deploy receipt or batch 16. The retained admitted Deploy has the same payload, fee limit, actor sequence, nonce and WASM as an earlier successful Deploy; only its timestamp and signature differ. The exact native rejection cause remains unresolved."
-assumption = "Raw command, source revision, exit and retained public process evidence are in consumer-live-51 and its custody archive on the qualification host. Prior Deploy success does not qualify this failing invocation or the remaining registration, CALL and replay stages."
-severity = "blocker"
-
-[observation.3.7.9803]
-task = "3.7"
-file = "cmd/layerxd/lxp_daemon_process.c src/protocol/lxp_kernel.c tests/daemon/lxp_test_module_maintenance.c"
-symbol = "apply_canonical_batch lxp_kernel_prepare_serial_activity_batch scenario_start"
-observed = "Optional existing payment timing diagnostics now name failing serial preparation calls and daemon preparation stages. The first diagnostic build at 07aa61467 exited 2 because strict GCC exposed potentially uninitialized timestamp storage; 7252a42ad4372fb824f478870e39c4d37602e28c initializes that storage while preserving the clock-result gate on all preparation and commit. At 7252a42ad4372fb824f478870e39c4d37602e28c, strict native builds and the same-source Authority build passed, and the ten real Comet proof/refusal tests passed in 86.445 seconds. The original full consumer invocation then exited 2 before handover: Service Deliver returned -727 DELIVERY_DEADLINE_PASSED against the unchanged 30-second scenario window. Actual batch logs retained multi-second durability sync and history refresh durations during concurrent host disk activity."
-assumption = "The diagnostic build failure and original-deadline failure remain retained as consumer-live-52 and consumer-live-53. Neither is a passing live handover result. No result code, assertion, limit, timeout or verification selector was weakened. Task qualification remains open."
-severity = "blocker"
 [observation.6.11.7498]
 task = "6.11"
 file = "tests/fixtures/public-testnet-genesis tests/fixtures/public-testnet-genesis-v3 tests/test_genesis_module_table.c"
@@ -14271,6 +14248,30 @@ symbol = "test test-genesis-bootstrap"
 observed = "At exact clean revision 2900fbcdaaecae58e23a79a04a84c3d07c814d2b, command make -k -j4 CC=gcc LXP_REVISION=2900fbcdaaecae58e23a79a04a84c3d07c814d2b test-genesis-bootstrap exited zero, followed by the full make -k -j4 CC=gcc LXP_REVISION=2900fbcdaaecae58e23a79a04a84c3d07c814d2b test aggregate exiting zero. Both commands explicitly selected the existing Programs host-FFI target and runtime library. This completes the clean-revision native rerun left pending in observation.6.11.7499. Existing tests and assertions were retained."
 assumption = "The qualification checkout and index were checked clean against the exact revision before both commands. Required installed Rust, Python and source-audit tools were present on PATH. Raw native-2900-test-genesis-bootstrap and native-2900-test logs and exit records are retained. This establishes the named native gates on the committed source, not a final-main, external-cluster, publication or release readiness result."
 severity = "note"
+
+[observation.3.7.9801]
+task = "3.7"
+file = "agent/crates/layerx-agentd/examples/native_handover_programs.rs tests/daemon/handover-peers.py tests/daemon/handover-chain.py"
+symbol = "funded_fee_limit submit wait_finalized authorize_request consume_with_publication"
+observed = "At revision bc42a08c059dc215f6536ee52938ea8976a58a37, Agentd formatting, locked all-target Clippy with warnings denied, native_handover_programs example build and the same-source receipt Authority build each exited 0. The Programs consumer derives its signed fee limit from the verified funded account and requires a successful signed Deploy receipt. It obtains the receipt's actual inclusion header and requires both its exact canonical bytes and batch number to match independently verified finalized checkpoint evidence. Its publication poll accepts only the native route's exact pending-receipt refusal representations within the original deadline. The peer fixture keeps both genuine guarantors active during consumer execution and publishes owner-authorized inputs atomically after setting their required ownership and permissions."
+assumption = "These focused results do not qualify the full handover consumer gate. The original two-peer recovery, signed authority, stale-authority refusals, inclusion/finality checks and all existing time bounds remain enforced."
+severity = "note"
+
+[observation.3.7.9802]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c src/protocol/lxp_kernel.c agent/crates/layerx-agentd/examples/native_handover_programs.rs"
+symbol = "apply_canonical_batch lxp_kernel_prepare_serial_activity_batch wait_get"
+observed = "At revision bc42a08c059dc215f6536ee52938ea8976a58a37, the original make test-daemon-handover-consumers invocation exited 2. The real funded predecessor batches, authorized epoch transition, forced restart, both guarantors and public Client, Agent, SDK, Budget and TLS Authority stages passed. Programs reached its unchanged publication deadline because the native process rejected sequence 31 with result -3 during preparation before sealing a Deploy receipt or batch 16. The retained admitted Deploy has the same payload, fee limit, actor sequence, nonce and WASM as an earlier successful Deploy; only its timestamp and signature differ. The exact native rejection cause remains unresolved."
+assumption = "Raw command, source revision, exit and retained public process evidence are in consumer-live-51 and its custody archive on the qualification host. Prior Deploy success does not qualify this failing invocation or the remaining registration, CALL and replay stages."
+severity = "blocker"
+
+[observation.3.7.9803]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c src/protocol/lxp_kernel.c tests/daemon/lxp_test_module_maintenance.c"
+symbol = "apply_canonical_batch lxp_kernel_prepare_serial_activity_batch scenario_start"
+observed = "Optional existing payment timing diagnostics now name failing serial preparation calls and daemon preparation stages. The first diagnostic build at 07aa61467 exited 2 because strict GCC exposed potentially uninitialized timestamp storage; 7252a42ad4372fb824f478870e39c4d37602e28c initializes that storage while preserving the clock-result gate on all preparation and commit. At 7252a42ad4372fb824f478870e39c4d37602e28c, strict native builds and the same-source Authority build passed, and the ten real Comet proof/refusal tests passed in 86.445 seconds. The original full consumer invocation then exited 2 before handover: Service Deliver returned -727 DELIVERY_DEADLINE_PASSED against the unchanged 30-second scenario window. Actual batch logs retained multi-second durability sync and history refresh durations during concurrent host disk activity."
+assumption = "The diagnostic build failure and original-deadline failure remain retained as consumer-live-52 and consumer-live-53. Neither is a passing live handover result. No result code, assertion, limit, timeout or verification selector was weakened. Task qualification remains open."
+severity = "blocker"
 
 [observation.3.7.9804]
 task = "3.7"

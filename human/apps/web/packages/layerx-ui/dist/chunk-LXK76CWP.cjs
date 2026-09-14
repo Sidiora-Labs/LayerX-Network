@@ -44,11 +44,11 @@ function CalendarRangePicker({
 }) {
   const label = _optionalChain([value, 'optionalAccess', _ => _.from]) && _optionalChain([value, 'optionalAccess', _2 => _2.to]) ? `${_datefns.format.call(void 0, value.from, "MMM d, yyyy")} \u2013 ${_datefns.format.call(void 0, value.to, "MMM d, yyyy")}` : _optionalChain([value, 'optionalAccess', _3 => _3.from]) ? `${_datefns.format.call(void 0, value.from, "MMM d, yyyy")} \u2013 \u2026` : placeholder;
   return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, _chunk7SUKWFMOcjs.Popover, { children: [
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunk7SUKWFMOcjs.PopoverTrigger, { asChild: true, children: /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunk7SUKWFMOcjs.PopoverTrigger, { asChild: true, children: /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
       "button",
       {
         type: "button",
-        className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+        className: _chunkMD6ORKN4cjs.cn.call(void 0,
           "flex h-11 items-center justify-between gap-2 rounded-md border border-border bg-surface px-3.5 text-sm font-medium transition-colors",
           "hover:bg-surface-sunken/50 focus-visible:ring-2 focus-visible:ring-accent/30 outline-none",
           _optionalChain([value, 'optionalAccess', _4 => _4.from]) ? "text-foreground" : "text-faint-foreground",
@@ -63,7 +63,7 @@ function CalendarRangePicker({
         ]
       }
     ) }),
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunk7SUKWFMOcjs.PopoverContent, { className: "p-3", align: "end", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunk7SUKWFMOcjs.PopoverContent, { className: "p-3", align: "end", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       _reactdaypicker.DayPicker,
       {
         mode: "range",
