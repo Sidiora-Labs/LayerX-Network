@@ -73,10 +73,12 @@ def authorize_request(request, inputs, recipient, vault):
         key = ed25519.Ed25519PrivateKey.from_private_bytes(bytes([0x77]) * 32)
         registration = dict(vault=vault, custody_reference=CODEC.hx(reference), signature=CODEC.hx(key.sign(statement)))
     destination = inputs / (checkpoint.hex() + '.json')
-    CODEC.atomic_json(destination, dict(version=2, checkpoint_id=CODEC.hx(checkpoint),
+    pending = inputs / (checkpoint.hex() + '.pending')
+    CODEC.atomic_json(pending, dict(version=2, checkpoint_id=CODEC.hx(checkpoint),
         recipient_bindings=bindings, deposit_registration=registration))
-    os.chown(destination, 0, 4021)
-    destination.chmod(0o440)
+    os.chown(pending, 0, 4021)
+    pending.chmod(0o440)
+    os.replace(pending, destination)
 
 
 def consume_with_publication(consumer, processes, output, inputs, recipient, vault):

@@ -26,8 +26,10 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
+#[track_caller]
 fn checked<T, E: std::fmt::Debug>(value: std::result::Result<T, E>) -> Result<T> {
-    value.map_err(|error| format!("{error:?}").into())
+    let location = std::panic::Location::caller();
+    value.map_err(|error| format!("{error:?} at {location}").into())
 }
 fn now() -> Result<u64> {
     Ok(u64::try_from(
@@ -279,12 +281,18 @@ fn submit(
         ),
     )?;
     assert_eq!(field(&value, "activity_id")?, hex::encode(&expected));
-    wait_finalized(client)?;
-    checked(hex::decode(field(&value, "receipt")?))
+    let receipt = checked(hex::decode(field(&value, "receipt")?))?;
+    let included = checked(client.proof_bundle(
+        layerx_client::evidence::ProofBundleSelector::Receipt(expected),
+        405,
+        &state.module_registry,
+    ))?;
+    assert_eq!(included.canonical_bytes(), receipt);
+    wait_finalized(client, checked(included.signed_header().batch_number())?)?;
+    Ok(receipt)
 }
-fn wait_finalized(client: &mut Client) -> Result<()> {
+fn wait_finalized(client: &mut Client, batch: u64) -> Result<()> {
     checked(client.reconnect())?;
-    let batch = client.head().sealed_batch;
     let clock = layerx_client::runtime_clock::RuntimeClock::from_environment()?;
     let mut deadline = checked(Deadline::start(clock.as_ref(), Duration::from_secs(30)))?;
     loop {
