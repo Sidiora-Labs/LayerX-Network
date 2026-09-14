@@ -69,16 +69,21 @@ static int rotation_save(int descriptor, const char *prefix, rotation_run *run)
     uint8_t commitment[32];
     lxp_u128 balance;
     uint64_t account_sequence;
-    uint8_t preparation[79];
+    uint8_t preparation[516];
     wire_envelope head;
     REQUIRE(rotation_account(descriptor, run->account, run->identity + 37U, &balance, &account_sequence) == 0);
-    store_u16(preparation, 1U); store_u16(preparation + 2U, 75U);
-    (void)memcpy(preparation + 4U, REGISTERED_DID, 75U);
-    REQUIRE(send_request(descriptor, LNI_MINOR, 26U, 731U, preparation, sizeof(preparation)) == 0);
+    REQUIRE(run->did_length != 0U && run->did_length <= sizeof(run->did));
+    store_u16(preparation, 1U); store_u16(preparation + 2U, run->did_length);
+    (void)memcpy(preparation + 4U, run->did, run->did_length);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 26U, 731U, preparation, 4U + run->did_length) == 0);
     REQUIRE(receive_envelope(descriptor, &head) == 0 && head.tag == 27U &&
-        head.correlation_id == 731U && head.payload_length >= 139U);
-    uint64_t head_sequence = load_u64(head.payload + 99U);
-    REQUIRE(head_sequence > run->global_sequence && memcmp(head.payload + 107U, run->history.root, 32U) == 0);
+        head.correlation_id == 731U && head.payload_length >= 64U + run->did_length &&
+        load_u16(head.payload) == 1U && load_u16(head.payload + 2U) == run->did_length &&
+        memcmp(head.payload + 4U, run->did, run->did_length) == 0 &&
+        load_u32(head.payload + 4U + run->did_length) == NETWORK_ID &&
+        load_u64(head.payload + 8U + run->did_length) == run->history.target_sequence);
+    uint64_t head_sequence = load_u64(head.payload + 24U + run->did_length);
+    REQUIRE(head_sequence > run->global_sequence && memcmp(head.payload + 32U + run->did_length, run->history.root, 32U) == 0);
     release_envelope(&head);
     REQUIRE(lxp_hash_context_value(run->identity, sizeof(run->identity), commitment) == LXP_OK);
     REQUIRE(snprintf(path, sizeof(path), "%s.bin", prefix) > 0);
@@ -186,16 +191,18 @@ static int rotation_prepare(int descriptor, signer *sponsor, const char *input, 
 
 static int rotation_apply(int descriptor, rotation_run *run, const char *input, lxp_result expected)
 {
-    uint8_t bytes[ACTIVITY_CAPACITY], sponsor_account[32];
+    uint8_t bytes[ACTIVITY_CAPACITY], sponsor_account[32], treasury_account[32];
     size_t length;
     lxp_activity original;
     lxp_receipt receipt;
     signer sponsor;
-    lxp_u128 before, after, wanted, sponsor_before, sponsor_after;
-    uint64_t sequence_before, sequence_after, sponsor_sequence, sponsor_after_sequence;
+    lxp_u128 before, after, wanted, sponsor_before, sponsor_after, treasury_before, treasury_after;
+    uint64_t sequence_before, sequence_after, sponsor_sequence, sponsor_after_sequence, treasury_sequence, treasury_after_sequence;
     REQUIRE(onboard_owner(&sponsor) == 0 && onboard_main_id(&sponsor, sponsor_account) == 0);
     REQUIRE(rotation_account(descriptor, sponsor_account, sponsor.public_key, &sponsor_before, &sponsor_sequence) == 0);
     REQUIRE(rotation_account(descriptor, run->account, run->identity + 37U, &before, &sequence_before) == 0);
+    REQUIRE(lx_account_id_from_string((const uint8_t *)"system:fees", 11U, treasury_account) == LXP_OK);
+    REQUIRE(onboard_account(descriptor, treasury_account, onboarding_asset, &treasury_before, &treasury_sequence, true) == 0);
     REQUIRE(rotation_read(input, bytes, sizeof(bytes), &length) == 0);
     REQUIRE(lxp_activity_decode(bytes, length, &original) == LXP_OK &&
         original.actor_did.length == run->did_length && memcmp(original.actor_did.bytes, run->did, run->did_length) == 0 &&
@@ -208,7 +215,11 @@ static int rotation_apply(int descriptor, rotation_run *run, const char *input, 
     REQUIRE(rotation_state(&receipt, run, expected == LXP_OK) == 0);
     REQUIRE(rotation_account(descriptor, run->account, run->identity + 37U, &after, &sequence_after) == 0);
     REQUIRE(lxp_u128_sub(before, receipt.fee_charged, &wanted) == LXP_OK && lxp_u128_cmp(after, wanted) == 0);
-    REQUIRE(sequence_before < UINT64_MAX && sequence_after == sequence_before + 1U);
+    REQUIRE(sequence_after == sequence_before);
+    REQUIRE(onboard_account(descriptor, treasury_account, onboarding_asset, &treasury_after, &treasury_after_sequence, true) == 0);
+    REQUIRE(lxp_u128_add(treasury_before, receipt.fee_charged, &wanted) == LXP_OK &&
+        lxp_u128_cmp(treasury_after, wanted) == 0 && treasury_sequence < UINT64_MAX &&
+        treasury_after_sequence == treasury_sequence + 1U);
     REQUIRE(rotation_account(descriptor, sponsor_account, sponsor.public_key, &sponsor_after, &sponsor_after_sequence) == 0);
     REQUIRE(lxp_u128_cmp(sponsor_before, sponsor_after) == 0 && sponsor_sequence == sponsor_after_sequence);
     return 0;

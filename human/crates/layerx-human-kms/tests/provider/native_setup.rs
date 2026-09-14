@@ -93,8 +93,7 @@ fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
     let count = match &disclosure.native_operation {
         Some(DisclosedNativeOperation::BudgetCreate(_)) => mutations.len(),
         Some(DisclosedNativeOperation::RecoveryPolicy(_)) => 4,
-        Some(DisclosedNativeOperation::OwnerRotation(_)) => 0,
-        None => 0,
+        Some(DisclosedNativeOperation::OwnerRotation(_)) | None => 0,
     };
     (0..count)
         .map(|field| {
