@@ -156,7 +156,15 @@ if audit_rg "$secret_scan_allowlist" -i "$secret_shapes"; then
 fi
 
 for script in tools/*.sh tools/ci/*.sh; do
-    sh -n "$script"
+    IFS= read -r interpreter < "$script"
+    case "$interpreter" in
+        '#!/bin/sh' | '#!/usr/bin/env sh') sh -n "$script" ;;
+        '#!/bin/bash' | '#!/usr/bin/env bash') bash -n "$script" ;;
+        *)
+            echo "unsupported shell interpreter: $script" >&2
+            exit 1
+            ;;
+    esac
 done
 
 if command -v go >/dev/null 2>&1; then
