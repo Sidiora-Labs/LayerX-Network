@@ -2725,6 +2725,19 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         Ok(items)
     }
 
+    fn retained_activity(
+        &self,
+        peer: &HumanPeer,
+        idempotency_key: [u8; 32],
+    ) -> Result<Vec<u8>, HumanOperationError> {
+        self.outboxes
+            .get(&peer.tenant)
+            .ok_or(HumanOperationError::Refused)?
+            .exact_signed_bytes(idempotency_key)
+            .map(<[u8]>::to_vec)
+            .map_err(|_| HumanOperationError::Refused)
+    }
+
     fn augment_receipt_evidence(
         &mut self,
         peer: &HumanPeer,
@@ -2756,12 +2769,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         match (activity_evidence, receipt_evidence) {
             (Ok(activity_evidence), Ok(receipt_evidence)) => {
                 if activity_evidence.canonical_bytes()
-                    != self
-                        .outboxes
-                        .entry(peer.tenant.clone())
-                        .or_default()
-                        .exact_signed_bytes(idempotency_key)
-                        .map_err(|_| HumanOperationError::Refused)?
+                    != self.retained_activity(peer, idempotency_key)?
                     || receipt_evidence.canonical_bytes() != served.canonical_bytes
                 {
                     return Err(HumanOperationError::Refused);
@@ -3384,13 +3392,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         {
             return Err(HumanOperationError::Refused);
         }
-        let original = self
-            .outboxes
-            .entry(peer.tenant.clone())
-            .or_default()
-            .exact_signed_bytes(idempotency_key)
-            .map_err(|_| HumanOperationError::Refused)?
-            .to_vec();
+        let original = self.retained_activity(peer, idempotency_key)?;
         let registry = self.authority.registry(peer).map_err(map_core)?;
         let proof_peer = subject::for_activity(&self.store, peer, &original, &registry)?;
         let authority =
