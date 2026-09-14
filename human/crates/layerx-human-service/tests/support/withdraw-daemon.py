@@ -99,8 +99,10 @@ def main():
             f"LAYERX_NODE_SETTLEMENT_CONTRACT={configuration['bond']}\n"
             f"LAYERX_NODE_CHECKPOINT_REGISTRY={configuration['registry']}\n"
             f"LAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1\nLAYERX_NODE_PAXEER_RPC_PORT={endpoint.port}\n")
-        subprocess.run(['bash', str(node / 'bootstrap.sh'), '--check-settlement', str(work / 'settlement.env')],
-                       check=True, stdout=subprocess.DEVNULL)
+        validated_settlement = subprocess.run(
+            ['bash', str(node / 'bootstrap.sh'), '--check-settlement', str(work / 'settlement.env')],
+            check=True, capture_output=True, text=True).stdout
+        environment.update(line.split('=', 1) for line in validated_settlement.splitlines())
         subprocess.run([str(binaries / 'sign-credit'), str(work / 'profile'), str(work / 'credit'),
                         'did:layerx:' + owner.hex(), str(work / 'owner'), '0', str(int(time.time() * 1000)),
                         str(work / 'credit.activity')], check=True, timeout=20)
@@ -137,7 +139,7 @@ def main():
         else:
             raise RuntimeError('native fixture LNI readiness timed out')
         (work / 'ready.json').write_text(json.dumps({'socket': str(endpoint), 'credit': str(work / 'credit.activity')}))
-        preserve = bool(sys.stdin.buffer.read())
+        preserve = sys.stdin.buffer.read() != b'success'
     finally:
         for child in reversed(children):
             if child.poll() is None:

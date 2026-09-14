@@ -487,8 +487,12 @@ impl AgentBoundary for RealWithdrawalAgent {
         if ack.activity_id() != activity_id {
             return Err(AgentBoundaryError::CorruptResponse);
         }
-        let (material, verified) =
-            withdraw_native::receipt(&mut self.node, &self.registry, activity_id);
+        let (material, verified) = withdraw_native::receipt(
+            &mut self.node,
+            &self.registry,
+            activity_id,
+            prepared.envelope.account_sequence() + 1,
+        );
         daemon_receipt::store(
             &mut self.store,
             self.tenant.clone(),

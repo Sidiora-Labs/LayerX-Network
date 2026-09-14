@@ -545,7 +545,7 @@ fn deploy_suite_for_genesis(
             address_word(owner),
             address_word(token),
             address_word(vault),
-            asset,
+            ASSET,
             quantity_word(&protocol_version.to_be_bytes()),
             quantity_word(&network_id.to_be_bytes()),
             quantity_word(&100_u32.to_be_bytes()),

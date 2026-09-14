@@ -16,6 +16,7 @@ use layerx_types::ids::Did;
 use layerx_types::payload::ModuleRegistry;
 use layerx_types::verify::VerificationLevel;
 
+#[track_caller]
 fn checked<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
     result.unwrap_or_else(|error| panic!("real withdrawal node: {error:?}"))
 }
@@ -107,7 +108,7 @@ impl NativeFixture {
         let layerx_client::submit::Submission::Acknowledged(ack) = submission else {
             panic!("actual custody credit was not acknowledged: {submission:?}");
         };
-        let (_, evidence) = receipt(&mut node, &state.module_registry, ack.activity_id());
+        let (_, evidence) = receipt(&mut node, &state.module_registry, ack.activity_id(), 1);
         assert_eq!(evidence.result_code(), 0);
         let state = checked(node.preparation_state(&actor, 3));
         Self {
@@ -123,10 +124,13 @@ impl NativeFixture {
 
 impl Drop for NativeFixture {
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            if let Some(input) = self.child.stdin.as_mut() {
-                let _ = input.write_all(b"preserve");
-            }
+        if let Some(input) = self.child.stdin.as_mut() {
+            let outcome: &[u8] = if std::thread::panicking() {
+                b"preserve"
+            } else {
+                b"success"
+            };
+            let _ = input.write_all(outcome);
         }
         drop(self.child.stdin.take());
         let _ = self.child.wait();
@@ -166,9 +170,24 @@ pub fn receipt(
     node: &mut Client,
     registry: &ModuleRegistry,
     activity_id: [u8; 32],
+    next_account_sequence: u64,
 ) -> (super::ReceiptMaterial, VerifiedReceiptEvidence) {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut correlation = 100;
+    let actor = checked(Did::new(super::owner_did().as_bytes()));
+    loop {
+        correlation += 1;
+        let observed = checked(node.preparation_state(&actor, correlation));
+        assert!(observed.account_sequence <= next_account_sequence);
+        if observed.account_sequence == next_account_sequence {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "actual custody-funded activity did not commit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let bundle = loop {
         correlation += 1;
         match node.proof_bundle(
@@ -181,6 +200,12 @@ pub fn receipt(
                 if Instant::now() < deadline =>
             {
                 std::thread::sleep(Duration::from_millis(20))
+            }
+            Err(layerx_client::evidence::EvidenceError::CoreRefusal { result, .. })
+                if result.retriability() == layerx_types::result::Retriability::Retriable
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
             }
             Err(error) => panic!("actual withdrawal receipt proof: {error:?}"),
         }
@@ -258,6 +283,22 @@ pub fn receipt(
         maintenance_proof: &maintenance_proof.proof,
         authorization: &authorization,
     };
+    let sealed = AuthorizedBatch::new(
+        authority.batch_id(),
+        authority.asset(),
+        header.previous_state_root(),
+        header.resulting_state_root(),
+        signed_header.public_key,
+    );
+    let authenticated = checked(
+        layerx_proof::receipt::authorized_maintained_activity_batch_chain(
+            raw.canonical_receipt(),
+            &sealed,
+            &evidence,
+            &receipts,
+        ),
+    );
+    assert_eq!(authenticated, authority);
     let terminal = checked(VerifiedReceiptEvidence::verify_authorized_maintained(
         &raw,
         &authority,
