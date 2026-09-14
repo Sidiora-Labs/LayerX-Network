@@ -3224,36 +3224,14 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                     .ok_or(HumanOperationError::Refused)?;
                 let tenant =
                     TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
-                let mut served = {
-                    let mut store = self
-                        .store
-                        .lock()
-                        .map_err(|_| HumanOperationError::Unavailable)?;
-                    let ingress = if let Some(expected) = &native {
-                        crate::receipt::store_native_owner_if_absent(
-                            &mut store,
-                            tenant.clone(),
-                            receipt.canonical_bytes(),
-                            &authority,
-                            expected,
-                        )
-                    } else {
-                        crate::receipt::store_verified_if_absent(
-                            &mut store,
-                            tenant.clone(),
-                            idempotency_key,
-                            receipt.canonical_bytes(),
-                            &authority,
-                        )
-                    };
-                    ingress.map_err(|error| match error {
-                        crate::receipt::ReceiptStoreError::Missing
-                        | crate::receipt::ReceiptStoreError::Store(_) => {
-                            HumanOperationError::Unavailable
-                        }
-                        _ => HumanOperationError::Refused,
-                    })?
-                };
+                let mut served = native_receipt::persist(
+                    &self.store,
+                    tenant.clone(),
+                    idempotency_key,
+                    &receipt,
+                    &authority,
+                    native.as_ref(),
+                )?;
                 if served.canonical_bytes != receipt.canonical_bytes()
                     || served.metadata.idempotency_key != idempotency_key
                     || served.metadata.activity_id != expected_activity_id
