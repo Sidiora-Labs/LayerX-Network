@@ -307,7 +307,7 @@ int main(int argc, char **argv)
             REQUIRE(maintenance_head(&descriptor, 8U, 4U) == 0);
             REQUIRE(lxp_receipt_decode(state.records[5].receipt,
                 state.records[5].receipt_length, true, &receipt) == LXP_OK);
-            REQUIRE(receipt.global_sequence == 6U);
+            REQUIRE(receipt.global_sequence == 7U);
             REQUIRE(paid_grant(&owner, &delegate, receipt.global_sequence, &state.records[3]) == 0);
         }
         REQUIRE(paid_submit(descriptor, &state.records[3], LXP_OK, 0U, false) == 0);
