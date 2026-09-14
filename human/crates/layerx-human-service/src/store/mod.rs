@@ -383,6 +383,7 @@ pub struct PrincipalStore {
     retention: RetentionPolicy,
     tenancy: TenancyMap,
     provider: Option<std::sync::Arc<dyn PrincipalTenancyAuthority>>,
+    provider_lock: Option<fs::File>,
 }
 
 impl PrincipalStore {
@@ -428,6 +429,7 @@ impl PrincipalStore {
             retention,
             tenancy,
             provider: None,
+            provider_lock: None,
         })
     }
 

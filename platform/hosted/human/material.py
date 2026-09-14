@@ -63,10 +63,8 @@ def assemble_policy(evidence, deployment, registry_path, output, network, chain)
     write(Path(output).parent, Path(output).name, json.dumps(policy))
 
 
-def main():
-    root = Path(sys.argv[1])
-    network, chain = int(sys.argv[2]), int(sys.argv[3])
-    config = {
+def component_defaults(network, chain):
+    return {
         'RP_ID': 'human.testnet.layerx.network', 'RP_NAME': 'LayerX Human',
         'ORIGIN': 'https://human.testnet.layerx.network',
         'CEREMONY_TTL_SECONDS': 300, 'ASSERTION_TTL_SECONDS': 60,
@@ -93,6 +91,11 @@ def main():
         'EXIT_POLL_CADENCE_SECONDS': 5, 'EXIT_DELAYED_AFTER_POLLS': 12,
         'CONTINUATION_UNKNOWN_DEADLINE_SECONDS': 300,
     }
+
+def main():
+    root = Path(sys.argv[1])
+    network, chain = int(sys.argv[2]), int(sys.argv[3])
+    config = component_defaults(network, chain)
     policy = protected_json(sys.argv[4]) if sys.argv[4] else None
     onboarding = policy.get('onboarding_configuration') if policy else None
     if onboarding is not None:
@@ -249,7 +252,10 @@ def main():
                 raise ValueError('Human authority value refused')
             write(root / 'authority-config', key, value)
         write(root / 'authority', 'principal-policy.json', json.dumps(policy['principal_policy']))
-        write(root / 'identity', 'recovery-policy.json', json.dumps(recovery))
+        if onboarding is None:
+            write(root / 'identity', 'recovery-policy.json', json.dumps(recovery))
+        elif protected_json(root / 'identity/recovery-policy.json') != recovery:
+            raise ValueError('retained KMS recovery policy changed')
         if onboarding is not None:
             if (set(onboarding) != {'directory', 'sponsor_principal', 'initial_funding'}
                     or policy['components']['ONBOARDING_SPONSOR_PRINCIPAL'] != onboarding['sponsor_principal']
@@ -263,7 +269,10 @@ def main():
         config.update(policy['components'])
         agent.update(policy['agent'])
         write(root / 'components', 'purpose-catalog.json', json.dumps(policy['purpose_catalog']))
-        write(root / 'kms', 'registry.json', json.dumps(policy['registry']))
+        if onboarding is None:
+            write(root / 'kms', 'registry.json', json.dumps(policy['registry']))
+        elif protected_json(root / 'kms/registry.json') != policy['registry']:
+            raise ValueError('retained KMS registry changed')
         source = Path(policy['journal_directory'])
         if not source.is_absolute() or source.is_symlink() or not source.is_dir():
             raise ValueError('Human deployment journal directory refused')

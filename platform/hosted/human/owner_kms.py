@@ -7,6 +7,13 @@ from provision import fields, protected_bytes, protected_json, require, write_js
 from owner_native import protected_write, digest, span
 
 
+def retain_json(path, value):
+    if path.exists():
+        require(protected_json(path) == value, path, 'identical retained KMS result')
+    else:
+        write_json(path, value)
+
+
 def prepare(work_dir, executable, config_directory):
     root = Path(work_dir) / 'human-evidence-input'
     config_directory = Path(config_directory)
@@ -31,16 +38,17 @@ def prepare(work_dir, executable, config_directory):
                 and any(owner[name]), root, name)
     require(owner['public_key'] != owner['pending_key']
             and owner['did'] == 'did:layerx:' + owner['principal'], root, 'actual provider and KMS identity binding')
-    write_json(root / 'owner-kms.json', owner)
-    write_json(root / 'onboarding-configuration.json', dict(directory=str(config_directory),
+    retain_json(root / 'owner-kms.json', owner)
+    retain_json(root / 'onboarding-configuration.json', dict(directory=str(config_directory),
         sponsor_principal=owner['principal'], initial_funding=funding))
-    write_json(Path(work_dir) / 'human-owner-result.json', {key: owner[key] for key in
+    retain_json(Path(work_dir) / 'human-owner-result.json', {key: owner[key] for key in
         ('principal', 'did', 'recovery_root', 'recovery_threshold', 'recovery_delay_seconds')})
     public = bytes(owner['public_key'])
     import hashlib
     account = hashlib.sha256(b'LX:ACCOUNT:v1' + span(('agent:' + owner['did'] + ':main').encode())).hexdigest()
-    write_json(root / 'owner-admission.json', dict(did=owner['did'], public_key=public.hex(), owner_account=account))
-    protected_write(root / 'owner-admission.txt', owner['did'].encode().hex().encode() + b':' + public.hex().encode() + b':0\n')
+    retain_json(root / 'owner-admission.json', dict(did=owner['did'], public_key=public.hex(), owner_account=account))
+    from onboarding_material import write
+    write(root / 'owner-admission.txt', owner['did'].encode().hex().encode() + b':' + public.hex().encode() + b':0\n')
 
 
 def sign(config, owner, label, payload, sequence, not_before, not_after, action):

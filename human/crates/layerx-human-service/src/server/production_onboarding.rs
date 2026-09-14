@@ -66,7 +66,7 @@ impl ProductionComponents {
                 source: plan.source_account().map_err(|_| ApiFailure::upstream_degraded())?,
                 destination: plan.target_account().map_err(|_| ApiFailure::upstream_degraded())?,
                 asset: plan.asset, amount: plan.initial_funding, action_key: plan.funding_action,
-                network_id: plan.network_id, started_at: plan.started_at,
+                network_id: plan.network_id, started_at: observed_at,
             }).map_err(|_| ApiFailure::upstream_degraded())?
         };
         let mut scope = store.principal(principal).map_err(|_| ApiFailure::unavailable())?;
@@ -80,7 +80,7 @@ impl ProductionComponents {
         let mut adapter = self.onboarding_adapter(&mut agent, &trace, owner.actor, owner.authority)?;
         let recovery = adapter.submit_lifecycle_intent(&mut scope, &registry,
             plan.recovery_intent().map_err(|_| ApiFailure::upstream_degraded())?,
-            plan.recovery_action, primary_key()?, plan.started_at)
+            plan.recovery_action, primary_key()?, observed_at)
             .map_err(|_| ApiFailure::upstream_degraded())?;
         journey.accept_native_recovery(&mut scope, &plan, &recovery, &registry, &trace, observed_at)
             .map_err(|_| ApiFailure::upstream_degraded())?;

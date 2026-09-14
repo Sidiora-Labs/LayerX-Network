@@ -113,8 +113,9 @@ impl ProductionComponents {
         let principal = PrincipalId::new(request.principal).map_err(|_| ApiFailure::forbidden())?;
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
         let mut scope = store.principal(&principal).map_err(|_| ApiFailure::forbidden())?;
-        let mut agent = self.principal_agent(&scope)?;
-        if request.asset != agent.native_fee_policy().map_err(agent_failure)?.asset_id {
+        let asset = self.agent.lock().map_err(|_| ApiFailure::unavailable())?
+            .native_fee_policy().map_err(agent_failure)?.asset_id;
+        if request.asset != asset {
             return Err(ApiFailure::forbidden());
         }
         let key = KeyId::new("human-primary").map_err(|_| ApiFailure::forbidden())?;

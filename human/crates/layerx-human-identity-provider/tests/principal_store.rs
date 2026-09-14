@@ -103,6 +103,7 @@ fn actual_provider_binding_preserves_dynamic_store_isolation_and_restart() -> Re
     let store_root = root.join("store");
     let digest = TenancyMap::new([])?.install(&store_root)?;
     let mut store = open(&store_root, digest, client.clone())?;
+    assert!(open(&store_root, digest, client.clone()).is_err());
     let key = RowKey::new("record")?;
     {
         let mut scope = store.principal(&alice)?;

@@ -566,6 +566,13 @@ spec:
           env:
             - name: LAYERX_HUMAN_IDENTITY_PROVIDER_SOCKET
               value: /run/layerx/human/identity.sock
+            - {name: LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_SOCKET, value: /run/layerx/human/identity-binding.sock}
+            - name: LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_TENANT
+              valueFrom:
+                secretKeyRef:
+                  name: layerx-human-components-config
+                  key: LAYERX_HUMAN_IDENTITY_BINDING_TENANT
+            - {name: LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_ALLOWED_UIDS, value: '4020,4021'}
             - name: LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT
               value: /var/lib/layerx/human/identity
             - name: LAYERX_HUMAN_IDENTITY_PROVIDER_ALLOWED_UID

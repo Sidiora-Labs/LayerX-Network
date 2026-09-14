@@ -29,7 +29,7 @@ k256.workspace = true
 subtle.workspace = true
 zeroize.workspace = true
 rustls = { version = "0.23.32", default-features = false, features = ["ring", "std", "tls12"] }
-rustix.workspace = true
+rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 layerx-human-test-support = { path = "../layerx-human-test-support" }

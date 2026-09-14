@@ -19,6 +19,15 @@ case "$role" in
         copy_material purpose-catalog.json
         exec /usr/local/bin/layerx-human-components "$@"
         ;;
+    onboarding-bootstrap)
+        private=/run/human-private/components
+        mkdir -p "$private"
+        chmod 0700 "$private"
+        copy_material kms-client.der
+        copy_material kms-client-key.der
+        copy_material ca.der
+        exec python3 /usr/local/lib/layerx-human/onboarding_bootstrap.py "$@"
+        ;;
     onboarding-signer)
         copy_material kms-client.der
         copy_material kms-client-key.der

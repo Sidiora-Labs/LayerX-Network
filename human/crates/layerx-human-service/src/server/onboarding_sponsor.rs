@@ -79,10 +79,7 @@ pub fn onboarding_sponsor_command(operation: &str, input: &[u8]) -> Result<Vec<u
     if input.len() > 1_048_576 { return Err("sponsor request exceeds bound".to_owned()); }
     if operation == "initialize-store" {
         if !input.is_empty() { return Err("store initialization has no input body".to_owned()); }
-        let root = absolute("LAYERX_HUMAN_STORE_ROOT")?;
-        if root.exists() { return Err("store initialization requires an absent destination".to_owned()); }
-        let map = TenancyMap::new([]).map_err(refused)?;
-        let digest = map.install(&root).map_err(refused)?;
+        let digest = initialize_store()?;
         return serde_json::to_vec(&json!({"tenancy_digest": URL_SAFE_NO_PAD.encode(digest.bytes())})).map_err(refused);
     }
     let runtime = Runtime::open()?;
@@ -93,6 +90,37 @@ pub fn onboarding_sponsor_command(operation: &str, input: &[u8]) -> Result<Vec<u
         _ => return Err("unknown sponsor operation".to_owned()),
     };
     serde_json::to_vec(&value).map_err(refused)
+}
+
+fn initialize_store() -> Result<crate::store::TenancyDigest, String> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let root = absolute("LAYERX_HUMAN_STORE_ROOT")?;
+    let parent = root.parent().ok_or_else(|| refused(()))?;
+    if fs::canonicalize(parent).map_err(refused)? != parent { return Err(refused(())); }
+    let map = TenancyMap::new([]).map_err(refused)?;
+    let sealed = map.seal().map_err(refused)?;
+    match fs::create_dir(&root) {
+        Ok(()) => fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).map_err(refused)?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(refused(error)),
+    }
+    let info = fs::symlink_metadata(&root).map_err(refused)?;
+    if !info.is_dir() || info.uid() != rustix::process::geteuid().as_raw() || info.mode() & 0o077 != 0 {
+        return Err(refused(()));
+    }
+    for entry in fs::read_dir(&root).map_err(refused)? {
+        let entry = entry.map_err(refused)?;
+        let name = entry.file_name();
+        if name != "tenancy.map" && name != "tenancy.map.tmp" { return Err(refused(())); }
+        let info = fs::symlink_metadata(entry.path()).map_err(refused)?;
+        if !info.is_file() || info.nlink() != 1 || info.uid() != rustix::process::geteuid().as_raw()
+            || info.mode() & 0o077 != 0 || fs::read(entry.path()).map_err(refused)? != sealed {
+            return Err(refused(()));
+        }
+    }
+    let digest = map.install(&root).map_err(refused)?;
+    fs::File::open(parent).and_then(|file| file.sync_all()).map_err(refused)?;
+    Ok(digest)
 }
 
 impl Runtime {
