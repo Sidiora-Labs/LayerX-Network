@@ -65,3 +65,38 @@ pub(super) fn map_lookup_error(error: ReceiptError) -> HumanOperationError {
         _ => HumanOperationError::Refused,
     }
 }
+
+pub(super) fn persist(
+    shared: &std::sync::Mutex<crate::store::Store>,
+    tenant: crate::store::TenantId,
+    action: [u8; 32],
+    receipt: &layerx_proof::receipt::VerifiedReceipt,
+    batch: &layerx_proof::receipt::AuthorizedBatch,
+    native: Option<&NativeOwnerOutcomeContext<'_>>,
+) -> Result<crate::receipt::ServedReceipt, HumanOperationError> {
+    let mut store = shared
+        .lock()
+        .map_err(|_| HumanOperationError::Unavailable)?;
+    let ingress = if let Some(expected) = native {
+        crate::receipt::store_native_owner_if_absent(
+            &mut store,
+            tenant,
+            receipt.canonical_bytes(),
+            batch,
+            expected,
+        )
+    } else {
+        crate::receipt::store_verified_if_absent(
+            &mut store,
+            tenant,
+            action,
+            receipt.canonical_bytes(),
+            batch,
+        )
+    };
+    ingress.map_err(|error| match error {
+        crate::receipt::ReceiptStoreError::Missing
+        | crate::receipt::ReceiptStoreError::Store(_) => HumanOperationError::Unavailable,
+        _ => HumanOperationError::Refused,
+    })
+}
