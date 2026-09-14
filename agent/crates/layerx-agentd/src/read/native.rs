@@ -108,8 +108,11 @@ impl NativeReadRoute {
         .map_err(|_| NativeReadError::InvalidRequest)?;
         let pins = layerx_wire::handover::decode_genesis_trust(&bytes)
             .map_err(|_| NativeReadError::Verification)?;
-        let policy = self.checkpoint_verifier.as_ref()
-            .ok_or(NativeReadError::InvalidRequest)?.policy();
+        let policy = self
+            .checkpoint_verifier
+            .as_ref()
+            .ok_or(NativeReadError::InvalidRequest)?
+            .policy();
         if pins.network_id != self.client.handshake().node().network_id
             || self.client.handshake().node().protocol_version != 3
             || policy.protocol_version != 3

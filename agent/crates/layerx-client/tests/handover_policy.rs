@@ -40,13 +40,18 @@ fn refuses_ambiguous_incomplete_and_insecure_policy() {
         ("transport=local-emulator", "transport=pinned-tls"),
         ("trust_anchor_der=", "trust_anchor_der=01"),
     ] {
-        assert!(decode_finality_policy(original.replace(before, after).as_bytes()).is_err(), "{before}");
+        assert!(
+            decode_finality_policy(original.replace(before, after).as_bytes()).is_err(),
+            "{before}"
+        );
     }
     for suffix in ["network_id=77\n", "unknown=1\n", "\n", "\0"] {
         assert!(decode_finality_policy(format!("{original}{suffix}").as_bytes()).is_err());
     }
     for line in original.lines() {
-        assert!(decode_finality_policy(original.replace(&format!("{line}\n"), "").as_bytes()).is_err());
+        assert!(
+            decode_finality_policy(original.replace(&format!("{line}\n"), "").as_bytes()).is_err()
+        );
     }
     assert!(decode_finality_policy(&vec![b'a'; 1_048_577]).is_err());
     assert!(decode_finality_policy(b"version=1\xff").is_err());

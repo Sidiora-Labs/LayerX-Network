@@ -6,10 +6,10 @@ use layerx_client::availability::{
     self, AvailabilitySelector, FetchContext, FetchOutcome, Provider, ProviderSet, RetrievalLimits,
 };
 use layerx_client::handover::SequencerHistory;
-use layerx_paxeer_verifier::PaxeerCheckpointVerifier;
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::schema::Version;
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
+use layerx_paxeer_verifier::PaxeerCheckpointVerifier;
 use layerx_proof::availability::{AvailabilityClass, RootCommitments};
 use layerx_proof::inclusion::verify_header;
 use layerx_types::payload::ModuleRegistry;
@@ -197,7 +197,14 @@ fn reject_missing_material(
         let (_, packet) = decode_recovery(&recovery).map_err(|error| format!("{error:?}"))?;
         let packet = packet.ok_or("missing genuine handover packet")?;
         let evidence = decode_evidence(packet).map_err(|error| format!("{error:?}"))?;
-        reject_substituted_context(socket, history, &candidate, &availability, &evidence, verifier)?;
+        reject_substituted_context(
+            socket,
+            history,
+            &candidate,
+            &availability,
+            &evidence,
+            verifier,
+        )?;
         for end in [0, 1, 31, 392, packet.len() - 1] {
             assert!(decode_evidence(&packet[..end]).is_err());
         }
@@ -232,25 +239,54 @@ fn reject_substituted_context(
     evidence: &layerx_wire::handover::Evidence<'_>,
     verifier: &PaxeerCheckpointVerifier,
 ) -> Result<()> {
-    use layerx_client::evidence::{checkpoint, CheckpointSelector, EvidenceContext, FinalityEvidenceCandidate};
+    use layerx_client::evidence::{
+        checkpoint, CheckpointSelector, EvidenceContext, FinalityEvidenceCandidate,
+    };
     let original = FinalityEvidenceCandidate::from_exact_bytes(
-        evidence.checkpoint_payload.to_vec(), evidence.finality_proof.to_vec(), 3, history.network_id()
-    ).map_err(|error| format!("original handover finality: {error:?}"))?;
-    let publication = verifier.verify(&original.certificate().map_err(|error| format!("{error:?}"))?,
-        original.set_version().map_err(|error| format!("{error:?}"))?)
+        evidence.checkpoint_payload.to_vec(),
+        evidence.finality_proof.to_vec(),
+        3,
+        history.network_id(),
+    )
+    .map_err(|error| format!("original handover finality: {error:?}"))?;
+    let publication = verifier
+        .verify(
+            &original
+                .certificate()
+                .map_err(|error| format!("{error:?}"))?,
+            original
+                .set_version()
+                .map_err(|error| format!("{error:?}"))?,
+        )
         .map_err(|error| format!("independent predecessor publication: {error:?}"))?;
     let mut transport = connect(socket, history.network_id())?;
-    let served = checkpoint(&mut transport, CheckpointSelector::Batch(candidate.header().batch_number() - 1),
-        EvidenceContext { interface_version: Version::V1_5, correlation_id: 1,
-            expected_protocol_version: 3, expected_network_id: history.network_id(),
-            handshake_sequencer_key: history.authorization_for_batch(candidate.header().batch_number() - 1)
-                .map_err(|error| format!("{error:?}"))?.public_key() })
-        .map_err(|error| format!("served predecessor finality: {error:?}"))?;
+    let served = checkpoint(
+        &mut transport,
+        CheckpointSelector::Batch(candidate.header().batch_number() - 1),
+        EvidenceContext {
+            interface_version: Version::V1_5,
+            correlation_id: 1,
+            expected_protocol_version: 3,
+            expected_network_id: history.network_id(),
+            handshake_sequencer_key: history
+                .authorization_for_batch(candidate.header().batch_number() - 1)
+                .map_err(|error| format!("{error:?}"))?
+                .public_key(),
+        },
+    )
+    .map_err(|error| format!("served predecessor finality: {error:?}"))?;
     assert_eq!(served.checkpoint_bytes(), evidence.checkpoint_payload);
     assert_ne!(served.context_bytes(), evidence.finality_proof);
     let mut attempted = history.clone();
-    assert!(attempted.advance_with_publication(candidate.canonical_bytes(), candidate.signature(),
-        availability, Some(&served), Some(&publication)).is_err());
+    assert!(attempted
+        .advance_with_publication(
+            candidate.canonical_bytes(),
+            candidate.signature(),
+            availability,
+            Some(&served),
+            Some(&publication)
+        )
+        .is_err());
     assert_eq!(&attempted, history);
     Ok(())
 }
@@ -311,9 +347,10 @@ fn main() -> Result<()> {
         return Err("bounded native history required".into());
     }
     let genesis = Genesis::read(directory)?;
-    let policy = layerx_client::handover::decode_finality_policy(
-        &std::fs::read(directory.join("handover-finality.conf"))?
-    ).map_err(|error| format!("{error:?}"))?;
+    let policy = layerx_client::handover::decode_finality_policy(&std::fs::read(
+        directory.join("handover-finality.conf"),
+    )?)
+    .map_err(|error| format!("{error:?}"))?;
     let verifier = PaxeerCheckpointVerifier::new(policy).map_err(|error| format!("{error:?}"))?;
     genesis.reject_substitutions();
     let mut expected = None;
@@ -326,7 +363,13 @@ fn main() -> Result<()> {
             }
             let mut transport = connect(socket, genesis.network)?;
             history
-                .fetch_next_with_finality(&mut transport, Version::V1_5, 1, limits(), Some(&verifier))
+                .fetch_next_with_finality(
+                    &mut transport,
+                    Version::V1_5,
+                    1,
+                    limits(),
+                    Some(&verifier),
+                )
                 .map_err(|error| format!("native history batch {batch}: {error:?}"))?;
             assert_eq!(
                 history

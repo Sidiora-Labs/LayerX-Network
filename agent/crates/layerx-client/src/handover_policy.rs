@@ -37,7 +37,9 @@ pub fn decode_finality_policy(bytes: &[u8]) -> Result<PaxeerCheckpointPolicy, Hi
         let (key, value) = line.split_once('=').ok_or(HistoryError::Finality)?;
         if !FIELDS.contains(&key)
             || fields.insert(key, value).is_some()
-            || value.bytes().any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+            || value
+                .bytes()
+                .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
         {
             return Err(HistoryError::Finality);
         }
@@ -96,7 +98,9 @@ fn fixed_hex<const N: usize>(value: &str) -> Result<[u8; N], HistoryError> {
 
 fn hexadecimal(value: &str) -> Result<Vec<u8>, HistoryError> {
     if !value.len().is_multiple_of(2)
-        || !value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(HistoryError::Finality);
     }

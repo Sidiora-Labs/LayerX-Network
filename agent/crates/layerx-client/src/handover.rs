@@ -256,10 +256,16 @@ impl SequencerHistory {
             evidence.finality_proof.to_vec(),
             3,
             self.network_id,
-        ).map_err(|_| HistoryError::Finality)?;
-        let certificate = candidate.certificate().map_err(|_| HistoryError::Finality)?;
-        let set_version = candidate.set_version().map_err(|_| HistoryError::Finality)?;
-        let publication = verifier.verify(&certificate, set_version)
+        )
+        .map_err(|_| HistoryError::Finality)?;
+        let certificate = candidate
+            .certificate()
+            .map_err(|_| HistoryError::Finality)?;
+        let set_version = candidate
+            .set_version()
+            .map_err(|_| HistoryError::Finality)?;
+        let publication = verifier
+            .verify(&certificate, set_version)
             .map_err(|_| HistoryError::Finality)?;
         let checkpoint = VerifiedCheckpoint::from_independent_publication(candidate, &publication)
             .map_err(|_| HistoryError::Finality)?;

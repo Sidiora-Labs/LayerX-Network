@@ -397,9 +397,11 @@ fn main() -> Result<()> {
     let genesis = checked(layerx_wire::handover::decode_genesis_trust(&bytes))?;
     let count: u64 = arguments[3].parse()?;
     let finality_policy = checked(layerx_client::handover::decode_finality_policy(
-        &std::fs::read(artifact.with_file_name("handover-finality.conf"))?
+        &std::fs::read(artifact.with_file_name("handover-finality.conf"))?,
     ))?;
-    let finality = checked(layerx_paxeer_verifier::PaxeerCheckpointVerifier::new(finality_policy))?;
+    let finality = checked(layerx_paxeer_verifier::PaxeerCheckpointVerifier::new(
+        finality_policy,
+    ))?;
     let mut history = checked(SequencerHistory::from_genesis_artifact(
         &bytes,
         genesis.network_id,

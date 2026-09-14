@@ -754,7 +754,10 @@ fn serve(config: Config) -> Result<(), String> {
         }
     };
     if genesis_trust.is_some() != handover_finality.is_some() {
-        return Err("native genesis trust and handover finality policy must be configured together".to_owned());
+        return Err(
+            "native genesis trust and handover finality policy must be configured together"
+                .to_owned(),
+        );
     }
     if genesis_trust.is_some() && mcp.is_none() {
         return Err("native genesis trust requires the configured native read boundary".to_owned());
@@ -782,8 +785,11 @@ fn serve(config: Config) -> Result<(), String> {
             .map_err(|error| format!("native read route is invalid: {error:?}"))?;
             match genesis_trust.as_deref() {
                 Some(path) => route
-                    .with_protected_finality(Path::new(handover_finality.as_deref()
-                        .ok_or("handover finality policy is absent")?))
+                    .with_protected_finality(Path::new(
+                        handover_finality
+                            .as_deref()
+                            .ok_or("handover finality policy is absent")?,
+                    ))
                     .and_then(|route| route.with_protected_genesis(Path::new(path)))
                     .map_err(|error| format!("native genesis trust is invalid: {error:?}")),
                 None => Ok(route),
