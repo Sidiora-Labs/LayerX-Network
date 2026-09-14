@@ -4006,6 +4006,8 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
     private_execution.identities = &batch->settled->identities;
     private_execution.verified_receipts = &batch->settled->verified_receipts;
     private_execution.fee_parameters = &batch->settled->fee_parameters;
+    private_execution.recorded_fee_schedule_version = batch->settled->fee_schedule.version;
+    private_execution.recorded_metering_schedule_version = batch->settled->metering_schedule.version;
     private_execution.canonical_events_out = NULL;
     record = (kernel_staged_commit){execution->arena, {0}, execution->global_sequence, false};
     batch->settled->programs_runtime.state_feed = runtime->state_feed;
@@ -5912,6 +5914,8 @@ lxp_result lxp_kernel_prepare_terminal_rejection(
     private_execution.identities = &batch->settled->identities;
     private_execution.verified_receipts = &batch->settled->verified_receipts;
     private_execution.fee_parameters = &batch->settled->fee_parameters;
+    private_execution.recorded_fee_schedule_version = batch->settled->fee_schedule.version;
+    private_execution.recorded_metering_schedule_version = batch->settled->metering_schedule.version;
     private_execution.canonical_events_out = NULL;
     record = (kernel_staged_commit){execution->arena, {0},
                                     execution->global_sequence, false};
