@@ -305,69 +305,71 @@ pub fn parse_replica_evidence(
         header,
         header_signature,
         receipt_proof: encode_proof(&proof),
-        batch_identity: match document.batch_evidence.batch_identity {
-            ReplicaBatchIdentity::Historical {} => BatchIdentityEvidence::Historical,
-            ReplicaBatchIdentity::OccupancyMaintenanceV2 {
-                receipt_hex,
-                receipt_proof_hex,
-                activity_receipts_hex,
-            } => {
-                let receipt =
-                    hex::decode(&receipt_hex).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-                layerx_wire::maintenance::decode_occupancy_maintenance(&receipt)
-                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-                let canonical = hex::decode(&receipt_proof_hex)
-                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-                let decoded = decode_merkle_proof(&canonical)
-                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-                let proof = Proof::new(
-                    decoded.leaf_index(),
-                    decoded.leaf_count(),
-                    decoded.siblings().to_vec(),
-                )
+        batch_identity: parse_batch_identity(document.batch_evidence.batch_identity)?,
+    })
+}
+
+fn parse_batch_identity(
+    identity: ReplicaBatchIdentity,
+) -> Result<BatchIdentityEvidence, EvidenceRefusal> {
+    Ok(match identity {
+        ReplicaBatchIdentity::Historical {} => BatchIdentityEvidence::Historical,
+        ReplicaBatchIdentity::OccupancyMaintenanceV2 {
+            receipt_hex,
+            receipt_proof_hex,
+            activity_receipts_hex,
+        } => {
+            let receipt =
+                hex::decode(&receipt_hex).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            layerx_wire::maintenance::decode_occupancy_maintenance(&receipt)
                 .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-                BatchIdentityEvidence::OccupancyMaintenanceV2 {
-                    receipt,
-                    proof: encode_proof(&proof),
-                    activity_receipts: activity_receipts_hex
-                        .iter()
-                        .map(|value| {
-                            hex::decode(value).map_err(|_| EvidenceRefusal::EvidenceEncoding)
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                }
+            let canonical =
+                hex::decode(&receipt_proof_hex).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            let decoded =
+                decode_merkle_proof(&canonical).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            let proof = Proof::new(
+                decoded.leaf_index(),
+                decoded.leaf_count(),
+                decoded.siblings().to_vec(),
+            )
+            .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            BatchIdentityEvidence::OccupancyMaintenanceV2 {
+                receipt,
+                proof: encode_proof(&proof),
+                activity_receipts: activity_receipts_hex
+                    .iter()
+                    .map(|value| hex::decode(value).map_err(|_| EvidenceRefusal::EvidenceEncoding))
+                    .collect::<Result<Vec<_>, _>>()?,
             }
-            ReplicaBatchIdentity::BatchMaintenanceV1 {
-                receipt_hex,
-                receipt_proof_hex,
-                activity_receipts_hex,
-            } => {
-                let receipt =
-                    hex::decode(&receipt_hex).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-                layerx_wire::batch_maintenance::decode_batch_maintenance(&receipt)
-                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-                let canonical = hex::decode(&receipt_proof_hex)
-                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-                let decoded = decode_merkle_proof(&canonical)
-                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-                let proof = Proof::new(
-                    decoded.leaf_index(),
-                    decoded.leaf_count(),
-                    decoded.siblings().to_vec(),
-                )
+        }
+        ReplicaBatchIdentity::BatchMaintenanceV1 {
+            receipt_hex,
+            receipt_proof_hex,
+            activity_receipts_hex,
+        } => {
+            let receipt =
+                hex::decode(&receipt_hex).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            layerx_wire::batch_maintenance::decode_batch_maintenance(&receipt)
                 .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
-                BatchIdentityEvidence::BatchMaintenanceV1 {
-                    receipt,
-                    proof: encode_proof(&proof),
-                    activity_receipts: activity_receipts_hex
-                        .iter()
-                        .map(|value| {
-                            hex::decode(value).map_err(|_| EvidenceRefusal::EvidenceEncoding)
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                }
+            let canonical =
+                hex::decode(&receipt_proof_hex).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            let decoded =
+                decode_merkle_proof(&canonical).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            let proof = Proof::new(
+                decoded.leaf_index(),
+                decoded.leaf_count(),
+                decoded.siblings().to_vec(),
+            )
+            .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            BatchIdentityEvidence::BatchMaintenanceV1 {
+                receipt,
+                proof: encode_proof(&proof),
+                activity_receipts: activity_receipts_hex
+                    .iter()
+                    .map(|value| hex::decode(value).map_err(|_| EvidenceRefusal::EvidenceEncoding))
+                    .collect::<Result<Vec<_>, _>>()?,
             }
-        },
+        }
     })
 }
 
