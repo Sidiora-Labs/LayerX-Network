@@ -12,6 +12,7 @@ mod native_runtime;
 pub use native::{
     NativeAccountCandidate, NativeBudgetBinding, NativeBudgetCandidate, NativeBudgetError,
     NativeBudgetOutcome, NativeBudgetReconciliation, NativeBudgetRecoveryEvidence,
+    NativeOwnerHistoryCandidate,
 };
 pub(crate) use native_runtime::spend as native_spend;
 pub use native_runtime::{NativeBudgetRuntime, NativeBudgetScope};

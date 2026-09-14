@@ -22,6 +22,7 @@ struct State {
     remaining: u128,
     period_end: u64,
     write_eligible: bool,
+    root: [u8; 32],
 }
 
 fn account(
@@ -156,6 +157,7 @@ impl EvidenceAuthority {
             remaining,
             period_end,
             write_eligible,
+            root: module.state_root(),
         })
     }
 
@@ -272,10 +274,14 @@ impl EvidenceAuthority {
             checkpoint_id: candidate.checkpoint_id,
             outcomes: Vec::new(),
             write_eligible: state.write_eligible,
+            predecessor: None,
         })
     }
 
-    pub(crate) fn advance_native_budget(
+    /// Advances an opaque verified Budget anchor through complete authenticated history.
+    /// # Errors
+    /// Refuses substituted anchors, incomplete receipt history and unproven owner or period transitions.
+    pub fn advance_native_budget(
         &self,
         binding: &NativeBudgetBinding,
         evidence: &NativeBudgetRecoveryEvidence,
@@ -294,9 +300,14 @@ impl EvidenceAuthority {
             .map_err(|_| Error::Baseline)?;
         let mut prior_binding = binding.clone();
         prior_binding.period_start_ms = record.period_start;
+        if let Some(previous) = previous {
+            prior_binding.owner_public_key = previous.binding.owner_public_key;
+        }
         let baseline = self.native_budget_state(&prior_binding, &evidence.baseline)?;
         let current = self.native_budget_state(binding, &evidence.current)?;
-        if !prior_binding.advances(binding)
+        let mut coordinates = prior_binding.clone();
+        coordinates.owner_public_key = binding.owner_public_key;
+        if !coordinates.advances(binding)
             || baseline.header.timestamp_ms() > current.header.timestamp_ms()
             || baseline.record.revocation > current.record.revocation
             || (baseline.record.closed && !current.record.closed)
@@ -332,6 +343,13 @@ impl EvidenceAuthority {
                 .ok_or(Error::Arithmetic)?,
             evidence,
         )?;
+        self.native_budget_rotation_chain(
+            &prior_binding,
+            binding,
+            evidence,
+            &verified,
+            current.root,
+        )?;
         let mut outcomes = Vec::new();
         for (entry, receipt) in evidence.history.iter().zip(verified) {
             if let Some(outcome) = Self::native_budget_outcome(binding, entry, &receipt)? {
@@ -360,6 +378,13 @@ impl EvidenceAuthority {
             checkpoint_id: evidence.current.checkpoint_id,
             outcomes,
             write_eligible: current.write_eligible,
+            predecessor: previous.map(|value| {
+                (
+                    value.checkpoint_id(),
+                    value.binding.owner_public_key,
+                    value.observed_sequence(),
+                )
+            }),
         })
     }
 

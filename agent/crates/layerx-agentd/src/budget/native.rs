@@ -43,6 +43,13 @@ pub struct NativeAccountCandidate {
     pub proof_material: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeOwnerHistoryCandidate {
+    pub canonical_record: Vec<u8>,
+    pub proof_material: Vec<u8>,
+}
+
 /// One checkpoint-bound native Budget, owner and debit-account proof bundle.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,6 +57,7 @@ pub struct NativeBudgetCandidate {
     pub canonical_record: Vec<u8>,
     pub module_proof_material: Vec<u8>,
     pub owner: NativeAccountCandidate,
+    pub owner_history: Option<NativeOwnerHistoryCandidate>,
     pub account: NativeAccountCandidate,
     pub source: Option<NativeAccountCandidate>,
     pub canonical_header: Vec<u8>,
@@ -113,9 +121,28 @@ pub struct NativeBudgetReconciliation {
     pub(crate) checkpoint_id: [u8; 32],
     pub(crate) outcomes: Vec<NativeBudgetOutcome>,
     pub(crate) write_eligible: bool,
+    pub(crate) predecessor: Option<([u8; 32], [u8; 32], u64)>,
 }
 
 impl NativeBudgetReconciliation {
+    pub(crate) fn authenticates_owner_after(&self, previous: &Self) -> bool {
+        if self.binding.owner_public_key == previous.binding.owner_public_key {
+            return previous.binding.advances(&self.binding);
+        }
+        if self.predecessor
+            != Some((
+                previous.checkpoint_id(),
+                previous.binding.owner_public_key,
+                previous.observed_sequence(),
+            ))
+        {
+            return false;
+        }
+        let mut prior = previous.binding.clone();
+        prior.owner_public_key = self.binding.owner_public_key;
+        prior.advances(&self.binding)
+    }
+
     #[must_use]
     pub fn binding(&self) -> &NativeBudgetBinding {
         &self.binding

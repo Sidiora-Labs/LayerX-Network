@@ -195,7 +195,7 @@ impl NativeCeiling {
         &mut self,
         next: NativeBudgetReconciliation,
     ) -> Result<Vec<NativeBudgetOutcome>, CeilingError> {
-        if !self.reconciliation.binding.advances(&next.binding)
+        if !next.authenticates_owner_after(&self.reconciliation)
             || next.authority != self.reconciliation.authority
             || next.observed_sequence() < self.reconciliation.observed_sequence()
             || next.timestamp_ms() < self.reconciliation.timestamp_ms()

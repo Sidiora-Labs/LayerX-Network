@@ -121,6 +121,11 @@ impl Fixture {
         })
     }
 
+    pub fn replace_signer(&mut self, key: SigningKey) {
+        self.public = key.verifying_key().to_bytes();
+        self.key = key;
+    }
+
     pub fn signed(&mut self, kind: u32, id: u8, payload: Vec<u8>) -> Result<VerifiedSubmission> {
         checked(self.client.reconnect())?;
         let mut boundary = checked(ProductionCorePreparationBoundary::new(

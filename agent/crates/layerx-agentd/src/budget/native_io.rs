@@ -165,6 +165,31 @@ pub(super) fn current(
         .map_err(|_| Error::StateProof)?;
     let record = BudgetRecord::decode(module.canonical_bytes()).map_err(|_| Error::Record)?;
     let owner = account(client, binding.owner_account, 6102, authorization)?;
+    let owner_key =
+        layerx_proof::state::decode_account_value(binding.owner_account, &owner.canonical_value)
+            .map_err(|_| Error::AccountProof)?
+            .authority_key
+            .ok_or(Error::Binding)?;
+    let owner_history = if owner_key == binding.owner_public_key {
+        None
+    } else {
+        let did = layerx_wire::hash::did_id_for_protocol(&binding.owner_did, 3)
+            .map_err(|_| Error::Binding)?;
+        let key = [&[0x0a][..], &did].concat();
+        let value = client
+            .module_state(
+                7,
+                &key,
+                VerificationLevel::CHECKPOINT_FINALISED,
+                6105,
+                authorization,
+            )
+            .map_err(|_| Error::StateProof)?;
+        Some(super::NativeOwnerHistoryCandidate {
+            canonical_record: value.canonical_bytes().to_vec(),
+            proof_material: value.proof_material().to_vec(),
+        })
+    };
     let budget = account(client, binding.budget_account, 6103, authorization)?;
     let source = record
         .source
@@ -175,6 +200,7 @@ pub(super) fn current(
         canonical_record: module.canonical_bytes().to_vec(),
         module_proof_material: module.proof_material().to_vec(),
         owner,
+        owner_history,
         account: budget,
         source,
         canonical_header: checkpoint.canonical_header().to_vec(),
@@ -187,8 +213,11 @@ pub(super) fn history(
     authority: &EvidenceAuthority,
     registry: &ModuleRegistry,
     baseline: NativeBudgetCandidate,
-    current: NativeBudgetCandidate,
+    mut current: NativeBudgetCandidate,
 ) -> Result<NativeBudgetRecoveryEvidence, Error> {
+    if baseline.canonical_header == current.canonical_header && current.owner_history.is_none() {
+        current.owner_history.clone_from(&baseline.owner_history);
+    }
     let first = decode_batch_header(&baseline.canonical_header).map_err(|_| Error::Baseline)?;
     let last = decode_batch_header(&current.canonical_header).map_err(|_| Error::Checkpoint)?;
     let mut history = Vec::new();
@@ -260,12 +289,67 @@ pub(super) fn history(
             }
         }
     }
+    owner_history_for_interval(client, authority, &mut current, &history)?;
     Ok(NativeBudgetRecoveryEvidence {
         baseline,
         current,
         history,
         maintenance,
     })
+}
+
+fn owner_history_for_interval(
+    client: &mut Client,
+    authority: &EvidenceAuthority,
+    current: &mut NativeBudgetCandidate,
+    history: &[RawActivityReceiptEvidence],
+) -> Result<(), Error> {
+    if current.owner_history.is_some() {
+        return Ok(());
+    }
+    let record = BudgetRecord::decode(&current.canonical_record).map_err(|_| Error::Record)?;
+    let owner =
+        layerx_proof::state::decode_account_value(record.owner, &current.owner.canonical_value)
+            .map_err(|_| Error::AccountProof)?;
+    let name = std::str::from_utf8(&owner.name).map_err(|_| Error::Binding)?;
+    let did = layerx_types::ids::Did::new(
+        name.strip_prefix("agent:")
+            .and_then(|value| value.strip_suffix(":main"))
+            .ok_or(Error::Binding)?
+            .as_bytes(),
+    )
+    .map_err(|_| Error::Binding)?;
+    let did = layerx_wire::hash::did_id_for_protocol(&did, 3).map_err(|_| Error::Binding)?;
+    let mut changed = false;
+    for entry in history {
+        let decoded = decode(entry.receipt().canonical_receipt()).map_err(|_| Error::Receipt)?;
+        let receipt = decoded.protocol().ok_or(Error::Receipt)?;
+        changed |= receipt.module_id() == 7
+            && receipt.result_code() == 0
+            && receipt.effects().iter().any(|effect| {
+                effect.event_type() == 0x7142 && effect.body().get(5..37) == Some(did.as_slice())
+            });
+    }
+    if !changed {
+        return Ok(());
+    }
+    let header = decode_batch_header(&current.canonical_header).map_err(|_| Error::Checkpoint)?;
+    let authorization = authority.native_authorization(header.batch_number())?;
+    let key = [&[0x0a][..], &did].concat();
+    let value = client
+        .module_state(
+            7,
+            &key,
+            VerificationLevel::CHECKPOINT_FINALISED,
+            6106,
+            authorization,
+        )
+        .map_err(|_| Error::StateProof)?;
+    current.owner_history = Some(super::NativeOwnerHistoryCandidate {
+        canonical_record: value.canonical_bytes().to_vec(),
+        proof_material: value.proof_material().to_vec(),
+    });
+    Ok(())
 }
 
 fn activity_entry(

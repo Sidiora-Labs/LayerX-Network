@@ -6,6 +6,8 @@ mod expiry;
 mod fixture;
 #[path = "native_budget_recovery/refusals.rs"]
 mod refusals;
+#[path = "native_budget_recovery/rotation.rs"]
+mod rotation;
 #[path = "native_budget_recovery/scenarios.rs"]
 mod scenarios;
 

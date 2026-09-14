@@ -429,5 +429,6 @@ pub fn unknown(fixture: &mut Fixture) -> Result<()> {
     );
     assert_eq!(checked(session.outbox.exact_signed_bytes([id; 32]))?, exact);
     session.assert_accounting(25, 0)?;
+    super::rotation::run(fixture)?;
     Ok(())
 }

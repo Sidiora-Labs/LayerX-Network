@@ -78,7 +78,18 @@ impl NativeBudgetRuntime {
         if scope.network_id != node.handshake().node().network_id {
             return Err(Error::Binding);
         }
-        let current = native_io::current(node, &self.authority, &scope.binding)?;
+        let retained = native_io::baseline(store, tenant, scope.binding.budget_id)?;
+        let mut read_binding = scope.binding.clone();
+        if let Some(anchor) = &retained {
+            read_binding.owner_public_key = layerx_proof::state::decode_account_value(
+                read_binding.owner_account,
+                &anchor.owner.canonical_value,
+            )
+            .map_err(|_| Error::AccountProof)?
+            .authority_key
+            .ok_or(Error::Binding)?;
+        }
+        let current = native_io::current(node, &self.authority, &read_binding)?;
         let record = BudgetRecord::decode(&current.canonical_record).map_err(|_| Error::Record)?;
         if record.period_length != scope.binding.period_length_ms
             || record
@@ -89,16 +100,25 @@ impl NativeBudgetRuntime {
         {
             return Err(Error::Window);
         }
-        let retained = native_io::baseline(store, tenant, scope.binding.budget_id)?;
         let baseline = retained.as_ref().unwrap_or(&current).clone();
         let base = BudgetRecord::decode(&baseline.canonical_record).map_err(|_| Error::Baseline)?;
         let mut binding = scope.binding.clone();
         binding.period_start_ms = record.period_start;
+        if retained.is_some() {
+            binding.owner_public_key = layerx_proof::state::decode_account_value(
+                binding.owner_account,
+                &current.owner.canonical_value,
+            )
+            .map_err(|_| Error::AccountProof)?
+            .authority_key
+            .ok_or(Error::Binding)?;
+        }
         binding.expiry_ms = base.expiry;
         let evidence = native_io::history(node, &self.authority, registry, baseline, current)?;
         let reconciled = if retained.is_some() {
             let mut old_binding = binding.clone();
             old_binding.period_start_ms = base.period_start;
+            old_binding.owner_public_key = read_binding.owner_public_key;
             let previous = self
                 .authority
                 .restore_native_anchor(&old_binding, &evidence.baseline)?;

@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{read_protected_source, ProtectedSourceError, StartupConfig};
 mod native_budget;
+mod native_budget_rotation;
 mod native_owner;
 
 const MAX_AUTHORITY_SOURCE_BYTES: usize = 65_536;
