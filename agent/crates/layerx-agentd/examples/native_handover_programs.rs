@@ -279,7 +279,34 @@ fn submit(
         ),
     )?;
     assert_eq!(field(&value, "activity_id")?, hex::encode(&expected));
+    wait_finalized(client)?;
     checked(hex::decode(field(&value, "receipt")?))
+}
+fn wait_finalized(client: &mut Client) -> Result<()> {
+    checked(client.reconnect())?;
+    let batch = client.head().sealed_batch;
+    let clock = layerx_client::runtime_clock::RuntimeClock::from_environment()?;
+    let mut deadline = checked(Deadline::start(clock.as_ref(), Duration::from_secs(30)))?;
+    loop {
+        if checked(deadline.remaining(clock.as_ref()))?.is_zero() {
+            return Err(
+                format!("Programs checkpoint publication deadline for batch {batch}").into(),
+            );
+        }
+        match client.checkpoint_evidence(
+            layerx_client::evidence::CheckpointSelector::Batch(batch),
+            404,
+        ) {
+            Ok(checkpoint) => {
+                assert_eq!(checkpoint.report().batch_number(), batch);
+                return Ok(());
+            }
+            Err(layerx_client::evidence::EvidenceError::CoreRefusal { class: 4, result })
+                if result.known() == Some(layerx_types::result::KnownResult::UnknownField) => {}
+            Err(error) => return Err(format!("Programs checkpoint verification: {error:?}").into()),
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 fn call_payload(
     program: [u8; 32],
