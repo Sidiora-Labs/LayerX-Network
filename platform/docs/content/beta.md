@@ -66,6 +66,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | hosted-authority | independent receipt authority replica: layerx-receipt-authority | hosted | deployment_proven | source_present | platform/hosted/authority |
 | hosted-agent-boundary | agent boundary: layerx-agent-boundary LNI submissions for the gateway and the registry | hosted | deployment_proven | source_present | platform/hosted/agent-boundary |
 | hosted-agentd | layerx-agentd Service on the node: the agentd loopback health surface published through a mutually authenticated TLS boundary that answers only for an internal-CA client certificate carrying the agent program bearer | hosted | deployment_proven | source_present | platform/hosted/agentd |
+| hosted-runtime-clock | supervised runtime clock with authenticated local socket capabilities and bounded child-process shutdown | hosted | deployment_proven | source_present | platform/hosted/runtime-clock |
 | hosted-identity | identity service: principals, sessions, introspection and service tokens | hosted | deployment_proven | source_present | platform/hosted/identity |
 | hosted-paxeer | Paxeer chain 125 node with its JSON-RPC boundary, chain initialisation and settlement contract deployment | hosted | deployment_proven | source_present | platform/hosted/paxeer |
 | hosted-human | Human HTTPS API and privileged components; readiness requires the production providers | hosted | deployment_proven | source_present | platform/hosted/human |
