@@ -132,19 +132,21 @@ human_recipient_check() (
     umask 077
     local input="$WORK_DIR/human-recipient-public.json"
     python3 - "$REPO_ROOT/platform/hosted/human" "$WORK_DIR" "$NODE_NETWORK_ID" "$NODE_ASSET_ID" "$input" <<'PY'
-import sys
+import json, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from provision import protected_json, require, write_json
+from provision import protected_json, require
+from onboarding_material import write
 root = Path(sys.argv[2])
 owner = protected_json(root / 'human-evidence-input/owner-kms.json')
 registration = protected_json(root / 'human-evidence-input/owner-registration.json')
 browser = protected_json(root / 'human-browser-result.json')
 require(registration['identity']['did'] == owner['did']
         and registration['authority'] == bytes(owner['public_key']).hex(), root, 'original native sponsor authority')
-write_json(Path(sys.argv[5]), dict(principal=owner['principal'], network_id=int(sys.argv[3]),
+value = dict(principal=owner['principal'], network_id=int(sys.argv[3]),
     checkpoint=browser['balance']['freshness']['checkpoint'], account=registration['owner_account'],
-    asset=sys.argv[4], authority=registration['authority']))
+    asset=sys.argv[4], authority=registration['authority'])
+write(Path(sys.argv[5]), (json.dumps(value, separators=(',', ':')) + '\n').encode())
 PY
     kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c human-owner -- \
         python3 /usr/local/lib/layerx-human/recipient_check.py authorized < "$input"
