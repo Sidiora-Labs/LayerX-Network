@@ -106,8 +106,16 @@ pub struct BatchEvidence {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BatchIdentityEvidence {
     Historical,
-    OccupancyMaintenanceV2 { receipt: Vec<u8>, proof: Vec<u8>, activity_receipts: Vec<Vec<u8>> },
-    BatchMaintenanceV1 { receipt: Vec<u8>, proof: Vec<u8>, activity_receipts: Vec<Vec<u8>> },
+    OccupancyMaintenanceV2 {
+        receipt: Vec<u8>,
+        proof: Vec<u8>,
+        activity_receipts: Vec<Vec<u8>>,
+    },
+    BatchMaintenanceV1 {
+        receipt: Vec<u8>,
+        proof: Vec<u8>,
+        activity_receipts: Vec<Vec<u8>>,
+    },
 }
 
 fn decode_maintenance_identity(
@@ -351,8 +359,11 @@ pub fn parse_replica_evidence(
                 BatchIdentityEvidence::BatchMaintenanceV1 {
                     receipt,
                     proof: encode_proof(&proof),
-                    activity_receipts: activity_receipts_hex.iter()
-                        .map(|value| hex::decode(value).map_err(|_| EvidenceRefusal::EvidenceEncoding))
+                    activity_receipts: activity_receipts_hex
+                        .iter()
+                        .map(|value| {
+                            hex::decode(value).map_err(|_| EvidenceRefusal::EvidenceEncoding)
+                        })
                         .collect::<Result<Vec<_>, _>>()?,
                 }
             }
