@@ -418,7 +418,9 @@ impl Fixture {
         if std::fs::metadata(&response)?.len() > 1_048_576 {
             return Err("publication response exceeded bound".into());
         }
-        let response: serde_json::Value = serde_json::from_slice(&std::fs::read(response)?)?;
+        let response_bytes = std::fs::read(response)
+            .map_err(|error| format!("checkpoint response read: {error}"))?;
+        let response: serde_json::Value = serde_json::from_slice(&response_bytes)?;
         if response.get("error").is_some() {
             return Err(format!("publication refused: {response}").into());
         }
