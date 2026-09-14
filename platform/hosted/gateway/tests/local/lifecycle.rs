@@ -421,7 +421,7 @@ fn gateway_configuration(
             local_secret(
                 &cluster.root,
                 "modules.json",
-                &serde_json::json!({"schema_version":2,"assets":[{"asset":hex_encode(&cluster.asset),"currency":"NATIVE","decimals":0,"symbol":"LXR"}],"modules":[{"module":1,"ordinals":[1,4,5,6,7,8,10,11]},{"module":9,"ordinals":[1,2,3,5,6,7]}]}).to_string(),
+                &serde_json::json!({"schema_version":2,"assets":[{"asset":hex_encode(&cluster.asset),"currency":"NATIVE","decimals":0,"symbol":"LXR"}],"modules":[{"module":1,"ordinals":[1,4,5,6,7,8,9,10,11]},{"module":9,"ordinals":[1,2,3,5,6,7]}]}).to_string(),
             ),
         ),
     ]);
