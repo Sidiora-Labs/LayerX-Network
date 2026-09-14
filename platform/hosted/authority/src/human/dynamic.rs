@@ -177,7 +177,7 @@ fn signed(bytes: &[u8], registry: &ModuleRegistry, network: u32) -> Result<Activ
     let message =
         layerx_crypto::SignatureMessage::new(Domain::SignaturePreimage, 3, network, &unsigned)
             .map_err(|_| refused())?;
-    layerx_crypto::ed25519::verify(&key, signature, message).map_err(|_| refused())?;
+    layerx_crypto::ed25519::verify(&key, &signature, message).map_err(|_| refused())?;
     Ok(activity)
 }
 
@@ -440,7 +440,9 @@ fn authority(
     let protocol = receipt
         .protocol()
         .ok_or_else(|| unavailable("state_evidence_refused"))?;
-    if protocol.network_id() != activity.network_id()
+    let header = layerx_wire::receipt::decode_batch_header(&item.header)
+        .map_err(|_| unavailable("state_evidence_refused"))?;
+    if header.network_id() != activity.network_id()
         || protocol.protocol_version() != activity.protocol_version()
         || protocol.module_id() != activity.activity_type().module() as u16
     {
