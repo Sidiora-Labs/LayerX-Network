@@ -14,6 +14,7 @@ use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::schema::Version;
 use layerx_client::lni::transport::{Limits, Uds};
 use layerx_client::read::{self, ReadContext, ReadValue, Requested};
+use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::state::CanonicalAccount;
 use layerx_types::verify::VerificationLevel;
 use serde_json::json as value;
@@ -159,8 +160,15 @@ impl<'a> Session<'a> {
             },
         )
         .map_err(|_| ())?;
-        if account.signed_header().canonical_bytes != self.checkpoint.canonical_header()
-            || account.signed_header().response_authorization() != self.config.authorization
+        let header = account.signed_header();
+        let authorization = SequencerAuthorization::new(
+            header.sequencer_id,
+            header.public_key,
+            header.first_batch_number,
+            header.last_batch_number,
+        );
+        if header.canonical_bytes != self.checkpoint.canonical_header()
+            || authorization != self.config.authorization
         {
             return Err(());
         }
