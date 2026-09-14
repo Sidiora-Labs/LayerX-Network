@@ -28,6 +28,7 @@ layerx-wire = { path = "../agent/crates/layerx-wire" }
 layerx-crypto = { path = "../agent/crates/layerx-crypto" }
 layerx-proof = { path = "../agent/crates/layerx-proof" }
 layerx-client = { path = "../agent/crates/layerx-client" }
+layerx-identity-binding = { path = "../agent/crates/layerx-identity-binding" }
 layerx-sdk = { path = "../agent/crates/layerx-sdk" }
 layerx-mirror = { path = "../interop/crates/layerx-mirror" }
 layerx-programs = { package = "layerx-programs-registry", path = "../programs/crates/layerx-programs-registry" }

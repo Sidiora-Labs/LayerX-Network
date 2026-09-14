@@ -1,3 +1,5 @@
+use layerx_client::runtime_clock::RuntimeClock;
+use layerx_types::clock::{Clock, Deadline};
 use std::error::Error;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -7,7 +9,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use layerx_human_identity_provider::{Policy, Server, State};
 use layerx_human_service::auth::Device;
@@ -32,12 +34,37 @@ struct Running {
 }
 
 impl Running {
+    fn start_with_reader(
+        socket: &Path,
+        reader: &Path,
+        root: &Path,
+        uid: u32,
+        readers: &[u32],
+        tenant: &str,
+    ) -> Result<Self> {
+        let server = Server::bind(
+            socket,
+            State::open(root, policy())?,
+            uid,
+            Duration::from_millis(200),
+            RuntimeClock::from_environment()?,
+        )?
+        .with_binding_reader(reader, tenant, readers)?;
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&shutdown);
+        Ok(Self {
+            shutdown,
+            worker: Some(thread::spawn(move || server.run(&flag))),
+        })
+    }
+
     fn start(socket: &Path, root: &Path, uid: u32) -> Result<Self> {
         let server = Server::bind(
             socket,
             State::open(root, policy())?,
             uid,
             Duration::from_millis(200),
+            RuntimeClock::from_environment()?,
         )?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&shutdown);
@@ -56,6 +83,149 @@ impl Running {
             .map_err(|_| "worker panicked")??;
         Ok(())
     }
+}
+
+#[test]
+fn read_only_binding_authenticates_tenant_principal_peer_and_durable_restart() -> Result {
+    let directory = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()?;
+    let root = directory.path().join("state");
+    let socket = directory.path().join("identity.sock");
+    let reader = directory.path().join("binding.sock");
+    let uid = rustix::process::geteuid().as_raw();
+    let gid = rustix::process::getegid().as_raw();
+    let running = Running::start_with_reader(&socket, &reader, &root, uid, &[uid], "tenant-a")?;
+    let first = call(
+        &socket,
+        1,
+        &[
+            b"reader-one@example.com",
+            b"One",
+            b"reader-one",
+            &1_u64.to_be_bytes(),
+        ],
+    )?;
+    let second = call(
+        &socket,
+        1,
+        &[
+            b"reader-two@example.com",
+            b"Two",
+            b"reader-two",
+            &2_u64.to_be_bytes(),
+        ],
+    )?;
+    let principal = std::str::from_utf8(&first[0])?;
+    let config = layerx_identity_binding::Config {
+        socket: reader.clone(),
+        tenant: "tenant-a".into(),
+        peer_uid: uid,
+        peer_gid: gid,
+        deadline: Duration::from_millis(200),
+    };
+    let client = layerx_identity_binding::Client::new(
+        config.clone(),
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
+    )?;
+    let binding = client.lookup(principal)?;
+    assert_eq!(binding.principal(), principal);
+    assert_eq!(binding.tenant(), "tenant-a");
+    assert_eq!(binding.did().as_bytes(), first[1]);
+    assert_ne!(
+        binding.agent_tenant(),
+        client
+            .lookup(std::str::from_utf8(&second[0])?)?
+            .agent_tenant()
+    );
+    assert_ne!(
+        binding.agent_tenant(),
+        layerx_identity_binding::subject_namespace("tenant-b", principal)?
+    );
+    assert!(client.lookup("unknown-principal").is_err());
+    let wrong_tenant = layerx_identity_binding::Client::new(
+        layerx_identity_binding::Config {
+            tenant: "tenant-b".into(),
+            ..config.clone()
+        },
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
+    )?;
+    assert!(wrong_tenant.lookup(principal).is_err());
+    let wrong_peer = layerx_identity_binding::Client::new(
+        layerx_identity_binding::Config {
+            peer_gid: gid.checked_add(1).ok_or("gid overflow")?,
+            ..config.clone()
+        },
+        layerx_client::runtime_clock::RuntimeClock::from_environment()?,
+    )?;
+    assert!(wrong_peer.lookup(principal).is_err());
+    read_only_refusals(&reader, &root, &client, &binding, principal)?;
+    assert_eq!(
+        call(&socket, 2, &[b"reader-one@example.com"])?,
+        vec![first[0].clone()]
+    );
+    running.stop()?;
+    assert!(!reader.exists());
+    let running = Running::start_with_reader(&socket, &reader, &root, uid, &[uid], "tenant-a")?;
+    assert_eq!(client.lookup(principal)?, binding);
+    running.stop()?;
+    assert!(Running::start_with_reader(&socket, &reader, &root, uid, &[uid], "tenant-b").is_err());
+    let running = Running::start_with_reader(
+        &socket,
+        &reader,
+        &root,
+        uid,
+        &[uid.checked_add(1).ok_or("uid overflow")?],
+        "tenant-a",
+    )?;
+    assert!(client.lookup(principal).is_err());
+    assert!(call(&socket, 0, &[])?.is_empty());
+    running.stop()?;
+    Ok(())
+}
+
+fn read_only_refusals(
+    reader: &Path,
+    root: &Path,
+    client: &layerx_identity_binding::Client,
+    binding: &layerx_identity_binding::Binding,
+    principal: &str,
+) -> Result {
+    let original = fs::read(root.join("state.json"))?;
+    let mutation = exchange(
+        reader,
+        &request(
+            1,
+            &[
+                b"injected@example.com",
+                b"Injected",
+                b"injected",
+                &3_u64.to_be_bytes(),
+            ],
+        )?,
+    )?;
+    assert_eq!(&mutation[..5], b"LXIB\x01");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&mutation[5..])?,
+        serde_json::json!({"status":"refused"})
+    );
+    assert_eq!(fs::read(root.join("state.json"))?, original);
+    for document in [
+        serde_json::json!({"operation":"provision","tenant":"tenant-a","principal":principal}),
+        serde_json::json!({"operation":"principal","tenant":"tenant-a","principal":principal,"did":"did:layerx:injected"}),
+        serde_json::json!({"operation":"principal","tenant":"tenant-a"}),
+    ] {
+        let mut packet = b"LXIB\x01".to_vec();
+        packet.extend(serde_json::to_vec(&document)?);
+        let response = exchange(reader, &packet)?;
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&response[5..])?,
+            serde_json::json!({"status":"refused"})
+        );
+        assert_eq!(&client.lookup(principal)?, binding);
+    }
+    assert_eq!(fs::read(root.join("state.json"))?, original);
+    Ok(())
 }
 
 impl Drop for Running {
@@ -258,9 +428,10 @@ fn refuses_conflicts_unknowns_and_malformed_frames() -> Result {
     let mut slow = UnixStream::connect(&socket)?;
     slow.write_all(&100_u32.to_be_bytes())?;
     slow.write_all(b"L")?;
-    let start = Instant::now();
+    let clock = RuntimeClock::from_environment()?;
+    let start = clock.sample(Duration::from_secs(1))?;
     assert!(call(&socket, 0, &[])?.is_empty());
-    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(clock.sample(Duration::from_secs(1))?.elapsed_since(start)? < Duration::from_secs(2));
     running.stop()
 }
 
@@ -359,13 +530,17 @@ fn binary_sigterm_and_crash_restart() -> Result {
     );
     let pid = rustix::process::Pid::from_raw(i32::try_from(child.0.id())?).ok_or("invalid pid")?;
     rustix::process::kill_process(pid, rustix::process::Signal::TERM)?;
-    let expires = Instant::now() + Duration::from_secs(3);
+    let clock = RuntimeClock::from_environment()?;
+    let mut expires = Deadline::start(clock.as_ref(), Duration::from_secs(3))?;
     loop {
         if let Some(status) = child.0.try_wait()? {
             assert!(status.success());
             break;
         }
-        assert!(Instant::now() < expires, "SIGTERM shutdown deadline");
+        assert!(
+            !expires.remaining(clock.as_ref())?.is_zero(),
+            "SIGTERM shutdown deadline"
+        );
         thread::sleep(Duration::from_millis(10));
     }
     assert!(!socket.exists());
@@ -383,8 +558,9 @@ impl Drop for OwnedChild {
 }
 
 fn wait_ready(socket: &Path, child: &mut std::process::Child) -> Result {
-    let expires = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < expires {
+    let clock = RuntimeClock::from_environment()?;
+    let mut expires = Deadline::start(clock.as_ref(), Duration::from_secs(5))?;
+    while !expires.remaining(clock.as_ref())?.is_zero() {
         if exchange(socket, &request(0, &[])?).is_ok() {
             return Ok(());
         }
@@ -428,16 +604,37 @@ fn refuses_live_sockets_regular_files_and_socket_symlinks() -> Result {
     let uid = rustix::process::geteuid().as_raw();
     let running = Running::start(&socket, &directory.path().join("first"), uid)?;
     let state = State::open(&directory.path().join("second"), policy())?;
-    assert!(Server::bind(&socket, state, uid, Duration::from_secs(1)).is_err());
+    assert!(Server::bind(
+        &socket,
+        state,
+        uid,
+        Duration::from_secs(1),
+        RuntimeClock::from_environment()?
+    )
+    .is_err());
     running.stop()?;
     fs::write(&socket, b"keep this file")?;
     let state = State::open(&directory.path().join("second"), policy())?;
-    assert!(Server::bind(&socket, state, uid, Duration::from_secs(1)).is_err());
+    assert!(Server::bind(
+        &socket,
+        state,
+        uid,
+        Duration::from_secs(1),
+        RuntimeClock::from_environment()?
+    )
+    .is_err());
     assert_eq!(fs::read(&socket)?, b"keep this file");
     fs::remove_file(&socket)?;
     std::os::unix::fs::symlink(directory.path().join("missing"), &socket)?;
     let state = State::open(&directory.path().join("second"), policy())?;
-    assert!(Server::bind(&socket, state, uid, Duration::from_secs(1)).is_err());
+    assert!(Server::bind(
+        &socket,
+        state,
+        uid,
+        Duration::from_secs(1),
+        RuntimeClock::from_environment()?
+    )
+    .is_err());
     assert!(fs::symlink_metadata(&socket)?.file_type().is_symlink());
     Ok(())
 }

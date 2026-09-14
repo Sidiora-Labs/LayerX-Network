@@ -8,6 +8,12 @@ use super::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisclosedNativeIdentity {
+    pub did_id: [u8; 32],
+    pub primary_key: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisclosedRecoveryPolicy {
     pub did_id: [u8; 32],
     pub recovery_root: [u8; 32],
@@ -36,6 +42,7 @@ pub struct DisclosedNativeBudgetCreate {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisclosedNativeOperation {
+    IdentityRegistration(DisclosedNativeIdentity),
     RecoveryPolicy(DisclosedRecoveryPolicy),
     OwnerRotation(Box<crate::rotation::OwnerRotation>),
     BudgetCreate(Box<DisclosedNativeBudgetCreate>),
@@ -47,6 +54,11 @@ impl DisclosedNativeOperation {
     pub fn encode(&self) -> Result<Vec<u8>, DisclosureError> {
         let mut encoder = Encoder::new(2048);
         match self {
+            Self::IdentityRegistration(identity) => {
+                encoder.u8(1)?;
+                encoder.fixed(&identity.did_id)?;
+                encoder.fixed(&identity.primary_key)?;
+            }
             Self::OwnerRotation(rotation) => {
                 encoder.u8(5)?;
                 encoder.bytes(rotation.owner().as_bytes(), 512)?;
@@ -109,6 +121,26 @@ fn hex(value: &[u8; 32]) -> String {
         encoded.push(char::from(DIGITS[usize::from(byte & 15)]));
     }
     encoded
+}
+
+fn identity(activity: &Activity) -> Result<DisclosedNativeIdentity, DisclosureError> {
+    let malformed = || DisclosureError::MalformedPayload;
+    let mut reader = Decoder::new(activity.payload(), 0);
+    if reader.u16()? != 0x7101 || reader.u16()? != 2 {
+        return Err(malformed());
+    }
+    let value = DisclosedNativeIdentity {
+        did_id: fixed(&mut reader)?,
+        primary_key: fixed(&mut reader)?,
+    };
+    reader.finish()?;
+    let did = Did::new(activity.actor_did()).map_err(|_| malformed())?;
+    if hash::did_id_for_protocol(&did, 3)? != value.did_id
+        || activity.authority() != value.primary_key
+    {
+        return Err(malformed());
+    }
+    Ok(value)
 }
 
 fn recovery(activity: &Activity) -> Result<DisclosedRecoveryPolicy, DisclosureError> {
@@ -215,6 +247,9 @@ pub(super) fn fields(activity: &Activity) -> Result<DisclosureFields, Disclosure
         activity.activity_type().module(),
         activity.activity_type().ordinal(),
     ) {
+        (ModuleId::Governance, 1) => {
+            DisclosedNativeOperation::IdentityRegistration(identity(activity)?)
+        }
         (ModuleId::Governance, 2) => DisclosedNativeOperation::OwnerRotation(Box::new(
             crate::rotation::OwnerRotation::from_activity(activity)
                 .map_err(|_| DisclosureError::MalformedPayload)?,

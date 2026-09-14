@@ -2168,90 +2168,112 @@ human-gen-api:
 	$(HUMAN_CARGO) run --manifest-path human/tools/api-gen/Cargo.toml --locked -- human/schema/human-api human/apps/web/src/api/generated
 
 human-build:
-	$(HUMAN_CARGO) test --manifest-path human/tools/api-gen/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path human/tools/api-gen/Cargo.toml --locked
 	$(HUMAN_CARGO) run --manifest-path human/tools/api-gen/Cargo.toml --locked -- --check human/schema/human-api human/apps/web/src/api/generated
 	$(HUMAN_CARGO) build --manifest-path $(HUMAN_MANIFEST) --locked --workspace
 	$(HUMAN_NPM) run build
 
 human-test: $(BUILD_DIR)/tests/explorer_fixture human-test-hosted-provisioning
 	LAYERX_EXPLORER_CORE_FIXTURE=$(abspath $(BUILD_DIR)/tests/explorer_fixture) \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace
+		sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace
 	$(HUMAN_NPM) test
 
 HUMAN_TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),$(CURDIR)/human/target)
+HUMAN_TEST_PAXD := $(abspath paxeer-network/build/paxd)
+HUMAN_TEST_CUSTODY_PROOF := $(abspath $(BUILD_DIR)/bin/layerx-custody-proof)
+
+.PHONY: human-test-custody-prerequisites
+human-test human-test-integration: human-test-custody-prerequisites
+human-test human-test-integration: export PAXD = $(HUMAN_TEST_PAXD)
+human-test human-test-integration: export LAYERX_CUSTODY_PROOF_BIN = $(HUMAN_TEST_CUSTODY_PROOF)
+human-test human-test-integration: export LAYERX_TEST_NATIVE_BIN_DIR = $(abspath $(BUILD_DIR)/bin)
+human-test-custody-prerequisites:
+	$(MAKE) public-tls-test-prerequisites
+	$(MAKE) PAXEER_GO_JOBS=4 custody-proof-build
+	$(MAKE) LXP_REVISION="$(shell git rev-parse HEAD)" layerx-genesis-build
+	GOMAXPROCS=4 GOFLAGS="$(GOFLAGS) -p=4" $(MAKE) paxeer-build
+
 HUMAN_IDENTITY_PROVIDER := $(HUMAN_TARGET_DIR)/debug/layerx-human-identity-provider
+HUMAN_TEST_WEBHOOKS := $(HUMAN_TARGET_DIR)/debug/layerx-webhooks
+
+.PHONY: human-test-webhooks
+human-test human-test-unit human-test-integration human-test-service: human-test-webhooks
+human-test human-test-unit human-test-integration human-test-service: export LAYERX_TEST_WEBHOOKS_BIN = $(HUMAN_TEST_WEBHOOKS)
+human-test-webhooks:
+	CARGO_BUILD_JOBS=4 cargo build --locked --manifest-path platform/Cargo.toml \
+		--target-dir $(HUMAN_TARGET_DIR) -p layerx-platform-webhooks --bin layerx-webhooks
 
 .PHONY: human-test-hosted-provisioning
 human-test-hosted-provisioning:
-	@python3 -c 'import cryptography, pytest, yaml' || \
-		{ echo "pytest, PyYAML and cryptography are required for the hosted Human provisioning tests" >&2; exit 1; }
+	@python3 -c 'import cryptography, pytest, yaml; from Crypto.Hash import keccak; from eth_account import Account; from eth_utils import to_checksum_address' || \
+		{ echo "pytest, PyYAML and tests/bridge/requirements.txt are required for Human qualification" >&2; exit 1; }
 	$(HUMAN_CARGO) build --manifest-path $(HUMAN_MANIFEST) --locked \
 		--target-dir $(HUMAN_TARGET_DIR) -p layerx-human-identity-provider
 	test -x $(HUMAN_IDENTITY_PROVIDER)
 	LAYERX_HUMAN_IDENTITY_PROVIDER_BIN=$(HUMAN_IDENTITY_PROVIDER) \
-		python3 -m pytest platform/hosted/human -q
+		sh $(CURDIR)/tools/runtime/run-with-clock.sh python3 -m pytest platform/hosted/human -q
 
 human-test-unit:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace --lib
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace --lib
 
 human-test-integration: $(BUILD_DIR)/tests/explorer_fixture
 	LAYERX_EXPLORER_CORE_FIXTURE=$(abspath $(BUILD_DIR)/tests/explorer_fixture) \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace --tests
+		sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace --tests
 
 human-test-intents:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-intents
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-intents
 
 human-test-service:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service
 
 human-test-agents: test-rotation
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test agent_create
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test agent_controls
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test spend
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test reclaim
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test archive
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test agent_recovery
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test agent_create
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test agent_controls
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test spend
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test reclaim
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test archive
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test agent_recovery
 
 human-test-journeys:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test resolver
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test journey_faults
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test deposit
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test withdraw
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test exit
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test move_money
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test resolver
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test journey_faults
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test deposit
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test withdraw
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test exit
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test move_money
 
 human-test-explorer: $(BUILD_DIR)/tests/explorer_fixture
 	LAYERX_EXPLORER_CORE_FIXTURE=$(abspath $<) \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked \
+		sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked \
 		-p layerx-explorer-index
 
 human-test-notify:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test notify
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test links
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test notify
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test links
 
 human-test-approvals:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test approvals
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test render
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test decide
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test approvals
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test render
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test decide
 
 human-test-activity:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test activity
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test detail
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test export
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --doc activity::export::VerificationStatus
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test activity
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test detail
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test export
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --doc activity::export::VerificationStatus
 
 human-test-paxeer: test-bridge-deposit
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-paxeer-client
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-paxeer-client
 
 human-fuzz-intents:
 	cargo +nightly-2025-11-10 fuzz run intent --fuzz-dir human/crates/layerx-intents/fuzz -- -max_total_time=120 -timeout=10
 
 human-test-property:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace property_
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace property_
 
 human-test-fault:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test journey_faults
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test move_money
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test journey_faults
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test move_money
 
 human-test-component:
 	$(HUMAN_NPM) run test:component
@@ -2261,13 +2283,7 @@ human-e2e-foundation:
 	$(HUMAN_NPM) run build
 
 human-e2e-perf:
-	$(HUMAN_NPM) run build
-	HUMAN_E2E_REAL_STACK=1 \
-	HUMAN_E2E_LOCAL_PRODUCTION=1 \
-	HUMAN_E2E_BASE_URL=http://127.0.0.1:3105 \
-	LAYERX_RUM_STORAGE_DIRECTORY=$(abspath human/apps/web/.next/rum-data) \
-	LAYERX_HUMAN_WEB_ORIGIN=http://127.0.0.1:3105 \
-		$(HUMAN_NPM) run test:perf
+	bash $(HUMAN_WEB_DIR)/e2e/run-production-perf.sh
 
 human-test-journey:
 	$(HUMAN_NPM) run test:journey
@@ -2304,7 +2320,7 @@ human-test-e2e-long:
 
 human-lint: human-lint-copy
 	$(HUMAN_CARGO) clippy --manifest-path $(HUMAN_MANIFEST) --locked --workspace --all-targets -- -D warnings
-	$(HUMAN_CARGO) test --manifest-path human/tools/boundary-check/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path human/tools/boundary-check/Cargo.toml --locked
 	$(HUMAN_CARGO) run --manifest-path human/tools/boundary-check/Cargo.toml --locked -- human/crates
 	sh human/tools/dependency-policy.sh
 	cargo deny --manifest-path $(HUMAN_MANIFEST) check advisories bans sources
@@ -2312,14 +2328,14 @@ human-lint: human-lint-copy
 
 human-lint-copy:
 	$(HUMAN_CARGO) clippy --manifest-path human/tools/copy-lint/Cargo.toml --locked --all-targets -- -D warnings
-	$(HUMAN_CARGO) test --manifest-path human/tools/copy-lint/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path human/tools/copy-lint/Cargo.toml --locked
 	$(HUMAN_CARGO) run --manifest-path human/tools/copy-lint/Cargo.toml --locked -- human/apps/web
 	$(HUMAN_NPM) run typecheck
 	$(HUMAN_NPM) test
 
 human-check-ui:
 	$(HUMAN_CARGO) clippy --manifest-path human/tools/ui-gate/Cargo.toml --locked --all-targets -- -D warnings
-	$(HUMAN_CARGO) test --manifest-path human/tools/ui-gate/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path human/tools/ui-gate/Cargo.toml --locked
 	$(HUMAN_CARGO) run --manifest-path human/tools/ui-gate/Cargo.toml --locked -- human/apps/web
 	$(HUMAN_NPM) run build:ui
 	$(HUMAN_NPM) run typecheck
@@ -2327,9 +2343,9 @@ human-check-ui:
 
 human-check:
 	$(HUMAN_CARGO) check --manifest-path $(HUMAN_MANIFEST) --locked --workspace
-	$(HUMAN_CARGO) test --manifest-path human/tools/boundary-check/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path human/tools/boundary-check/Cargo.toml --locked
 	$(HUMAN_CARGO) run --manifest-path human/tools/boundary-check/Cargo.toml --locked -- human/crates
-	$(HUMAN_CARGO) test --manifest-path human/tools/schema-check/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(HUMAN_CARGO) test --manifest-path human/tools/schema-check/Cargo.toml --locked
 	$(HUMAN_CARGO) run --manifest-path human/tools/schema-check/Cargo.toml --locked -- human/schema/human-api
 	$(HUMAN_NPM) run typecheck
 
@@ -2372,7 +2388,7 @@ public-tls-test-prerequisites:
 	cargo build --manifest-path platform/Cargo.toml --locked -p layerx-platform-paxeer-boundary --target-dir "$(PUBLIC_TLS_TEST_TARGET_DIR)"
 
 agent-test: public-tls-test-prerequisites
-	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked --workspace
+	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked --workspace
 
 agent-lint:
 	$(AGENT_CARGO) clippy --manifest-path $(AGENT_MANIFEST) --locked --workspace --all-targets -- -D warnings
@@ -2445,83 +2461,83 @@ agent-check: agent-check-boundary agent-check-secrets agent-test-boundary
 	$(AGENT_CARGO) check --manifest-path $(AGENT_MANIFEST) --locked --workspace --all-targets
 
 agent-test-errors:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test errors
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test errors
 
 agent-test-types-ids:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test ids
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test ids
 
 agent-test-types-activity:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test activity
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test activity
 
 agent-test-types-receipt:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test receipt
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test receipt
 
 agent-test-types-verification:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test verification
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test verification
 
 agent-test-vectors:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test vectors
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-types --test vectors
 
 agent-test-wire-primitives:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-wire --test primitives
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-wire --test primitives
 
 agent-test-wire-structures:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-wire --test structures
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-wire --test structures
 
 agent-test-wire-rejection:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-wire --test rejection
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-wire --test rejection
 
 agent-test-wire-hashing:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-wire --test hashing
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-wire --test hashing
 
 agent-test-crypto-verify: test-crypto-ed25519 test-crypto-secp256k1
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test verify
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test verify
 
 agent-test-crypto-signer:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test signer
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test signer
 
 agent-test-crypto-disclosure:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test disclosure
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test signer
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test disclosure
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test signer
 
 agent-test-crypto-keystore: test-grants
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test keystore
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test keystore
 
 agent-test-crypto-remote:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test remote -- --test-threads=1
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test remote -- --test-threads=1
 
 agent-test-proof-merkle:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --test merkle
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --test merkle
 
 agent-test-proof-receipt:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --test receipt
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --test receipt
 
 agent-test-proof-inclusion:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --test inclusion
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --test inclusion
 
 agent-test-proof-checkpoint:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --test checkpoint
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --test checkpoint
 
 agent-test-proof-availability:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --test availability
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --test availability
 
 agent-test-proof-levels:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --tests
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --tests
 	$(AGENT_CARGO) check --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --example offline_verify
 
 agent-test-lni-schema:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test lni_schema
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test lni_schema
 
 agent-test-lni-transport:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test lni_transport
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test lni_transport
 	$(AGENT_CARGO) check --manifest-path agent/fuzz/Cargo.toml --locked --bin lni_frame
 
 agent-test-lni-handshake:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test lni_handshake
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test lni_handshake
 
 agent-test-lni-abi:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test lni_abi
-	$(AGENT_CARGO) test --manifest-path agent/tools/boundary-check/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test lni_abi
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tools/boundary-check/Cargo.toml --locked
 	$(AGENT_CARGO) run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent
 
 $(BUILD_DIR)/agent/layerxd-lni: agent/tests/boundary/node/layerxd_lni.c \
@@ -2543,7 +2559,7 @@ $(BUILD_DIR)/agent/lni-preparation-state: \
 agent-test-boundary: $(BUILD_DIR)/agent/layerxd-lni \
 		$(BUILD_DIR)/agent/lni-preparation-state
 	$(RUN_PREFIX) $(BUILD_DIR)/agent/lni-preparation-state
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked \
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked \
 		-p layerx-client --test lni_preparation
 	$(AGENT_CARGO) run --manifest-path agent/tests/boundary/Cargo.toml --locked -- \
 		$(CURDIR)/$(BUILD_DIR)/agent/layerxd-lni $(CURDIR)
@@ -2570,269 +2586,269 @@ agent-qualify-fuzz:
 agent-test-capability-report: agent-test-boundary
 
 agent-test-client-connection:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test connection
-	$(AGENT_CARGO) test --manifest-path agent/tools/boundary-check/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test connection
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tools/boundary-check/Cargo.toml --locked
 	$(AGENT_CARGO) run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent
 
 agent-test-client-submit:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test submit
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test submit
 	$(AGENT_CARGO) run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent
 
 agent-test-client-submit-focused:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test submit
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test submit
 
 agent-test-client-receipt:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test receipt
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test receipt
 	$(AGENT_CARGO) run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent
 
 agent-test-client-reads:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test reads
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test reads
 	$(AGENT_CARGO) run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent
 
 agent-test-client-stream:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test stream
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test stream
 	$(AGENT_CARGO) run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent
 
 agent-test-client-availability:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test availability
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test availability
 	$(AGENT_CARGO) run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent
 
 agent-test-contract-schema:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test schema
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test schema
 
 agent-test-contract-identity:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test identity
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test identity
 
 agent-test-contract-write:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test write
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test write
 
 agent-test-contract-read:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test read
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test read
 
 agent-test-contract-stream:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test stream
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test stream
 
 agent-test-contract-errors:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test errors
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agent-api --test errors
 
 agent-test-agentd-store:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test store
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test store
 
 agent-test-agentd-identity:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test identity
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test identity
 
 agent-test-agentd-session:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test session
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test session
 
 agent-test-agentd-authority:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test authority
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test authority
 
 agent-test-agentd-revocation:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test revocation
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test revocation
 
 agent-test-agentd-capability:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test capability
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test capability
 
 agent-test-agentd-narrowing:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test narrowing
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test narrowing
 
 agent-test-agentd-attenuation:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test attenuation
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test attenuation
 
 agent-test-agentd-ceiling:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test ceiling
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test ceiling
 
 agent-test-agentd-enforcement-report:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test enforcement_report
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test enforcement_report
 
 agent-test-agentd-budget-create:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test budget_create
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test budget_create
 
 agent-test-agentd-budget-reconcile:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test budget_reconcile
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test budget_reconcile
 
 agent-test-agentd-budget-reserve:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test budget_reserve
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test budget_reserve
 
 agent-test-agentd-budget-unknown:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test budget_unknown
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test budget_unknown
 
 agent-test-agentd-budget-divergence:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test budget_divergence
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test budget_divergence
 
 agent-test-agentd-policy:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test policy
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test policy
 
 agent-test-agentd-policy-version:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test policy_version
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test policy_version
 	$(AGENT_CARGO) check --manifest-path agent/fuzz/Cargo.toml --locked --bin policy_loader
 
 agent-test-agentd-policy-dryrun:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test policy_dryrun
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test policy_dryrun
 
 agent-test-agentd-approval:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test approval
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test approval
 
 agent-test-approvals:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test approval --test approval_ops --test approval_semantics --test approval_events
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test approval
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test approval --test approval_ops --test approval_semantics --test approval_events
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test approval
 
 agent-test-policy-adversarial:
-	$(AGENT_CARGO) test --manifest-path agent/tools/policy-harness/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tools/policy-harness/Cargo.toml --locked
 	$(AGENT_CARGO) run --manifest-path agent/tools/policy-harness/Cargo.toml --locked --quiet
 
 agent-test-agentd-prepare:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test prepare
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test prepare
 
 agent-test-agentd-disclosure:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test disclosure
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test disclosure
 
 agent-test-agentd-signing:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test signing
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test signing
 
 agent-test-agentd-signature-binding:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test signature_binding
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test signature_binding
 
 agent-test-agentd-prepare-expiry:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test prepare_expiry
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test prepare_expiry
 
 agent-test-agentd-outbox:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test outbox
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test outbox
 
 agent-test-agentd-idempotency:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test idempotency
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test idempotency
 
 agent-test-agentd-unknown:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test unknown
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test unknown
 
 agent-test-agentd-receipts:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test receipts
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test receipts
 
 agent-test-agentd-finality:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test finality
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test finality
 
 agent-test-agentd-recovery:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test recovery
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test recovery
 
 agent-test-agentd-balance:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test balance
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test balance
 
 agent-test-agentd-history:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test history
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test history
 
 agent-test-agentd-checkpoint:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test checkpoint
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test checkpoint
 
 agent-test-agentd-availability:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test availability
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test availability
 
 agent-test-agentd-cache:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test cache
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test cache
 
 agent-test-agentd-export:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test export
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test export
 	$(AGENT_CARGO) check --manifest-path $(AGENT_MANIFEST) --locked -p layerx-proof --example offline_export
 
 agent-test-agentd-ingest:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test ingest
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test ingest
 
 agent-test-agentd-subscription:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test subscription
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test subscription
 
 agent-test-agentd-delivery:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test delivery
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test delivery
 
 agent-test-agentd-gaps:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test gaps
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test gaps
 
 agent-test-agentd-webhook:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test webhook
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test webhook
 
 agent-test-agentd-ratelimit:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test ratelimit
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test ratelimit
 
 agent-test-agentd-admission:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test admission
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test admission
 
 agent-test-agentd-deadlines:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test deadlines
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test deadlines
 
 agent-test-agentd-quota:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test quota
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test quota
 
 agent-test-limits-exactly-once:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test limits-exactly-once
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test limits-exactly-once
 
 agent-test-agentd-tenant-store:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test tenant_store
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test tenant_store
 	$(AGENT_CARGO) check --manifest-path agent/fuzz/Cargo.toml --locked --bin tenant_key
 
 agent-test-agentd-tenant-resolve:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test tenant_resolve
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test tenant_resolve
 
 agent-test-agentd-tenant-isolation:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test tenant_isolation
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test tenant_isolation
 
 agent-test-agentd-tenant-leakage:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test tenant_leakage
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test tenant_leakage
 
 agent-test-agentd-audit-chain:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test audit_chain
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test audit_chain
 	$(AGENT_CARGO) check --manifest-path agent/tools/audit-verify/Cargo.toml --locked
 
 agent-test-agentd-audit-coverage:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test audit_coverage
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test audit_coverage
 
 agent-test-agentd-redaction:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test redaction
-	$(AGENT_CARGO) test --manifest-path agent/tools/secret-check/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test redaction
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tools/secret-check/Cargo.toml --locked
 	$(AGENT_CARGO) run --manifest-path agent/tools/secret-check/Cargo.toml --locked --quiet -- agent
 
 agent-test-agentd-observability:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test observability
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test observability
 
 agent-test-agentd-audit-export:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test audit_export
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test audit_export
 	$(AGENT_CARGO) check --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --example review_audit_export
 
 agent-test-agentd-config:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test config
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test config
 
 agent-test-agentd-handshake-gate:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test handshake_gate
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test handshake_gate
 
 agent-test-agentd-degraded:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test degraded
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test degraded
 
 agent-test-agentd-migration:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test migration
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test migration
 	$(MAKE) agent-test-boundary
 
 agent-test-agentd-operator:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test operator
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-agentd --test operator
 	$(AGENT_CARGO) run --manifest-path agent/tools/secret-check/Cargo.toml --locked --quiet -- agent
 
 agent-test-mcp-scope:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test scope
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test scope
 
 agent-test-mcp-read:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test read
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test read
 
 agent-test-mcp-write:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test write
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test write
 
 agent-test-mcp-approval:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test approval
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test approval
 
 agent-test-mcp-injection:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test injection
-	$(AGENT_CARGO) test --manifest-path agent/tests/isolation/Cargo.toml --locked mcp_untrusted
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test injection
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tests/isolation/Cargo.toml --locked mcp_untrusted
 
 agent-test-mcp-readonly:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test readonly
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-mcp --test readonly
 
 agent-test-sdk-rust:
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-sdk --test sdk
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-sdk --test sdk
 
 agent-sdk-generate:
 	cargo run --manifest-path agent/tools/sdk-gen/Cargo.toml --locked -- --write
@@ -2859,14 +2875,14 @@ agent-test-sdk-parity: $(BUILD_DIR)/agent/layerxd-lni
 agent-test-sdk-compat:
 	$(MAKE) agent-test-contract-schema
 	$(MAKE) agent-test-sdk-generate
-	$(AGENT_CARGO) test --manifest-path agent/tools/doc-check/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tools/doc-check/Cargo.toml --locked
 	$(AGENT_CARGO) run --manifest-path agent/tools/doc-check/Cargo.toml --locked -- $(CURDIR)
 
 agent-test-mcp-untrusted-input:
-	$(AGENT_CARGO) test --manifest-path agent/tests/isolation/Cargo.toml --locked mcp_untrusted
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tests/isolation/Cargo.toml --locked mcp_untrusted
 
 agent-test-isolation: agent-test-policy-adversarial agent-test-mcp-untrusted-input
-	$(AGENT_CARGO) test --manifest-path agent/tests/isolation/Cargo.toml --locked agent_isolation
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tests/isolation/Cargo.toml --locked agent_isolation
 	$(AGENT_CARGO) run --manifest-path agent/tests/isolation/Cargo.toml --locked --quiet
 
 $(BUILD_DIR)/agent-wire-reference: agent/tools/wire-differential/reference.c $(LIBRARY)
@@ -2875,7 +2891,7 @@ $(BUILD_DIR)/agent-wire-reference: agent/tools/wire-differential/reference.c $(L
 
 agent-test-wire-parity: $(BUILD_DIR)/agent-wire-reference
 	LAYERX_REPOSITORY_ROOT=$(CURDIR) LAYERX_C_REFERENCE=$(CURDIR)/$(BUILD_DIR)/agent-wire-reference \
-		$(AGENT_CARGO) test --manifest-path agent/tools/wire-differential/Cargo.toml --locked
+		sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tools/wire-differential/Cargo.toml --locked
 
 agent-qualify-wire: $(BUILD_DIR)/agent-wire-reference
 	$(AGENT_CARGO) build --manifest-path agent/tools/wire-differential/Cargo.toml --locked
@@ -2884,16 +2900,16 @@ agent-qualify-wire: $(BUILD_DIR)/agent-wire-reference
 		$(CURDIR)/agent/tools/wire-differential/target/debug/agent-wire-differential
 
 agent-test-sanitize: public-tls-test-prerequisites
-	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" sh agent/tools/run-sanitizers.sh
+	LAYERX_PAXEER_BOUNDARY_BIN="$(PUBLIC_TLS_TEST_BOUNDARY)" sh $(CURDIR)/tools/runtime/run-with-clock.sh sh agent/tools/run-sanitizers.sh
 
 agent-check-boundary:
-	$(AGENT_CARGO) test --manifest-path agent/tools/boundary-check/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tools/boundary-check/Cargo.toml --locked
 	$(AGENT_CARGO) run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent
 
 agent-check-secrets:
-	$(AGENT_CARGO) test --manifest-path agent/tools/secret-check/Cargo.toml --locked
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path agent/tools/secret-check/Cargo.toml --locked
 	$(AGENT_CARGO) run --manifest-path agent/tools/secret-check/Cargo.toml --locked --quiet -- agent
-	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test secrets
+	sh $(CURDIR)/tools/runtime/run-with-clock.sh $(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test secrets
 
 ci: public-audit test reproducible scan-consensus test-sanitizers
 

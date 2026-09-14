@@ -14,7 +14,9 @@ mod reject;
 pub mod vectors;
 mod vocabulary;
 
-pub use compiler::{compile, CompileError, CompileErrorReason, CompileField, CompiledIntent};
+pub use compiler::{
+    compile, CompileError, CompileErrorReason, CompileField, CompiledIntent, NativeOwnerBootstrap,
+};
 pub use disclosure::{DisclosureCheck, DisclosureCheckError, DisclosureField};
 pub use native_budget::NativeBudgetCreate;
 pub use native_custody::NativeCustodyCredit;

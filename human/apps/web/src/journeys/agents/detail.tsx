@@ -10,8 +10,7 @@ import { Badge } from "../../kit/collection";
 import { CopyableIdentifier, LabelValue } from "../../kit/money";
 import { InlineNotice, ScreenCard } from "../../kit/surface";
 import { KitButton } from "../../kit/control";
-import { KitSectionHeader } from "../../kit/display";
-import { StatPair } from "@layerx/ui/components/stat";
+import { KitSectionHeader, StatPair } from "../../kit/display";
 import {
   ErrorSurface,
   LoadingSurface,

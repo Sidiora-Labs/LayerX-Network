@@ -33,11 +33,11 @@ use layerx_human_service::audit::{AuditChain, AuditEvent, SecurityChangeKind, St
 use layerx_human_service::notify::ActivityEntryId;
 use layerx_human_service::store::{PrincipalStore, RowKey, Table};
 use layerx_human_service::trace::TraceId;
+use layerx_intents::canonical::PROTOCOL_VERSION;
 use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::receipt::{verify as verify_receipt, AuthorizedBatch};
 use layerx_types::result::ResultCode;
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
 
 fn text<T, E: std::fmt::Debug>(value: Result<T, E>, label: &str) -> T {

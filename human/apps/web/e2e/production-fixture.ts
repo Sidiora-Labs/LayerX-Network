@@ -28,9 +28,8 @@ export const test = base.extend<{
     const directory = await mkdtemp(path.join(WEB_ROOT, ".next", "rum-test-"));
     const logPath = path.join(directory, "server.log");
     const log = await open(logPath, "wx", 0o600);
-    const child = spawn(process.execPath, [
-      path.join(WEB_ROOT, "node_modules/next/dist/bin/next"),
-      "start", "--hostname", "127.0.0.1", "--port", "3105",
+    const child = spawn("authbind", [
+      "--deep", process.execPath, path.join(WEB_ROOT, "e2e/production-server.mjs"),
     ], {
       cwd: WEB_ROOT,
       env: { ...process.env, LAYERX_RUM_STORAGE_DIRECTORY: path.join(directory, "records") },

@@ -19,7 +19,12 @@ fn run() -> Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGTERM, stop.clone())?;
     signal_hook::flag::register(signal_hook::consts::SIGINT, stop.clone())?;
-    serve(Config::from_env()?, stop)
+    serve(
+        Config::from_env()?,
+        stop,
+        layerx_client::runtime_clock::RuntimeClock::from_environment()
+            .map_err(|_| Error::Configuration)?,
+    )
 }
 fn main() -> std::process::ExitCode {
     match run() {

@@ -943,7 +943,10 @@ fn sdk_rpc(
                 .map_err(|_| "gateway credential is malformed".to_owned())
         })
         .transpose()?;
-    layerx_sdk::rpc::RpcClient::connect(endpoint, credential).map_err(rpc_error)
+    let clock = crate::process_clock().map_err(|error| error.to_string())?;
+    layerx_sdk::rpc::RpcClient::connect(endpoint, credential)
+        .map(|client| client.with_clock(clock))
+        .map_err(rpc_error)
 }
 
 #[derive(serde::Deserialize)]

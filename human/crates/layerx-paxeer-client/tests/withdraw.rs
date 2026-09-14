@@ -7,6 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_intents::canonical::receipt_digest;
+use layerx_intents::canonical::PROTOCOL_VERSION;
 use layerx_paxeer_client::{
     raw_call, CancelledFundsDisposition, ChallengeKind, CheckpointProof, ClaimProgress,
     CommittedWithdrawalDebit, DebitExpectation, DebitFault, EndpointConfig, EndpointTransport,
@@ -16,9 +18,6 @@ use layerx_paxeer_client::{
 };
 use layerx_proof::receipt::{AuthorizedBatch, ReceiptCheck, VerificationFailure};
 use layerx_types::intent::EvmAddress;
-use layerx_wire::encode::Encoder;
-use layerx_wire::hash::receipt_digest;
-use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
 
 const FUNDED: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
@@ -727,44 +726,14 @@ fn committed_debit_for_protocol(
 
 fn withdraw_receipt_for_protocol(protocol_version: u16) -> Vec<u8> {
     let signer = SigningKey::from_bytes(&[0x51; 32]);
-    let encode = |signature: Option<[u8; 64]>| {
-        let mut encoder = Encoder::new(4_096);
-        assert_eq!(
-            encoder.structure_header_version(0x5201, protocol_version),
-            Ok(())
-        );
-        assert_eq!(encoder.u16(protocol_version), Ok(()));
-        assert_eq!(encoder.bytes(&[0x31; 32], 32), Ok(()));
-        assert_eq!(encoder.u64(1), Ok(()));
-        assert_eq!(encoder.bytes(&[0x41; 32], 32), Ok(()));
-        assert_eq!(encoder.bytes(&[0x42; 32], 32), Ok(()));
-        assert_eq!(encoder.bytes(&[0x44; 32], 32), Ok(()));
-        assert_eq!(encoder.i32(0), Ok(()));
-        assert_eq!(encoder.sequence_length(0, 512), Ok(()));
-        assert_eq!(encoder.u128(1), Ok(()));
-        assert_eq!(encoder.bytes(&[0x43; 32], 32), Ok(()));
-        assert_eq!(encoder.u16(8), Ok(()));
-        assert_eq!(encoder.u32(2), Ok(()));
-        assert_eq!(encoder.u32(1), Ok(()));
-        assert_eq!(encoder.u8(1), Ok(()));
-        assert_eq!(encoder.bytes(&ASSET, 32), Ok(()));
-        assert_eq!(encoder.u128(AMOUNT), Ok(()));
-        assert_eq!(encoder.bytes(&[0x33; 32], 32), Ok(()));
-        assert_eq!(encoder.u128(VAULT_BALANCE), Ok(()));
-        assert_eq!(encoder.u128(VAULT_BALANCE - AMOUNT), Ok(()));
-        assert_eq!(encoder.u64(1), Ok(()));
-        assert_eq!(encoder.bytes(&[0x34; 32], 32), Ok(()));
-        assert_eq!(encoder.u128(0), Ok(()));
-        assert_eq!(encoder.u128(AMOUNT), Ok(()));
-        assert_eq!(encoder.bytes(&[0x45; 32], 32), Ok(()));
-        assert_eq!(encoder.bytes(&[0x46; 32], 32), Ok(()));
-        assert_eq!(encoder.bytes(&[0x47; 32], 32), Ok(()));
-        assert_eq!(encoder.u64(1_000), Ok(()));
-        assert_eq!(encoder.u8(u8::from(signature.is_some())), Ok(()));
-        if let Some(signature) = signature {
-            assert_eq!(encoder.bytes(&signature, 64), Ok(()));
-        }
-        encoder.finish()
+    let encode = |signature| {
+        layerx_intents::vectors::withdrawal_receipt(
+            protocol_version,
+            ASSET,
+            AMOUNT,
+            VAULT_BALANCE,
+            signature,
+        )
     };
     let unsigned = encode(None);
     let digest = receipt_digest(&unsigned)

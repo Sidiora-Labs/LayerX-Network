@@ -176,6 +176,21 @@ impl NativeAgentCreationContract for ProductionAgentCreation<'_> {
         scope: &mut PrincipalScope<'_>,
         request: &NativeFundingRequest,
     ) -> Result<NativeFundingEvidence, AgentFailure> {
+        let (prepared, intent) = self.prepare_native_funding(scope, request)?;
+        let evidence = self.submit_prepared(prepared)?;
+        Ok(NativeFundingEvidence { evidence, intent })
+    }
+}
+
+impl ProductionAgentCreation<'_> {
+    /// Prepares and durably retains canonical funding before remote submission.
+    /// # Errors
+    /// Refuses incorrect native account, asset, custody or repeated request bindings.
+    pub fn prepare_native_funding(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        request: &NativeFundingRequest,
+    ) -> Result<(PreparedProtocolSubmission, LxpSend), AgentFailure> {
         let key = KeyId::new("human-primary")
             .map_err(|_| AgentFailure::Refused("invalid funding key"))?;
         let descriptor = self
@@ -273,8 +288,8 @@ impl NativeAgentCreationContract for ProductionAgentCreation<'_> {
             request.started_at,
             key,
         )?;
-        let evidence = self.submit_scoped(scope, &action)?;
-        Ok(NativeFundingEvidence { evidence, intent })
+        let prepared = self.prepare_scoped(scope, &action)?;
+        Ok((prepared, intent))
     }
 }
 

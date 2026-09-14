@@ -196,7 +196,7 @@ impl ProductionComponents {
                 return Err(ApiFailure::upstream_degraded());
             }
             let (delay, window) = requested_timing(request, &mut agent, &context.agent_did)?;
-            let current = now()?;
+            let current = self.now()?;
             let begin = milliseconds(
                 current
                     .checked_add(delay)
@@ -260,10 +260,10 @@ impl ProductionComponents {
         {
             return Err(ApiFailure::invalid_request(None));
         }
-        schedule_continuation(scope, "agent-rotation", &id, now()?)?;
+        schedule_continuation(scope, "agent-rotation", &id, self.now()?)?;
         let trace =
             TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
-        self.advance_owner_rotation(scope, &id, &trace, now()?)?;
+        self.advance_owner_rotation(scope, &id, &trace, self.now()?)?;
         Ok(BackendResponse {
             result: Rotation::load(scope, &id)?.challenge()?,
             session: None,

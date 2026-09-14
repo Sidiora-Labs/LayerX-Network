@@ -22,11 +22,11 @@ use sha2::{Digest, Sha256};
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-struct Session<'a> {
+pub(super) struct Session<'a> {
     config: &'a Config,
     transport: Uds,
-    context: ReadContext,
-    checkpoint: VerifiedCheckpoint,
+    pub(super) context: ReadContext,
+    pub(super) checkpoint: VerifiedCheckpoint,
     evidence: Sha256,
     history: Option<layerx_client::handover::SequencerHistory>,
     observed_key: [u8; 32],
@@ -59,7 +59,7 @@ fn correlation() -> Result<u64, ()> {
 }
 
 impl<'a> Session<'a> {
-    fn open(config: &'a Config) -> Result<Self, ()> {
+    pub(super) fn open(config: &'a Config) -> Result<Self, ()> {
         let deadline = std::time::Instant::now()
             .checked_add(IO_TIMEOUT)
             .ok_or(())?;
@@ -146,7 +146,7 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
-    fn module(&mut self, module: u16, key: &[u8]) -> Result<Vec<u8>, ()> {
+    pub(super) fn module(&mut self, module: u16, key: &[u8]) -> Result<Vec<u8>, ()> {
         let context = self.context()?;
         let value = match &self.history {
             Some(history) => {
@@ -159,7 +159,7 @@ impl<'a> Session<'a> {
         Ok(value.canonical_bytes().to_vec())
     }
 
-    fn account(&mut self, id: [u8; 32]) -> Result<VerifiedAccountEvidence, ()> {
+    pub(super) fn account(&mut self, id: [u8; 32]) -> Result<VerifiedAccountEvidence, ()> {
         let context = self.context()?;
         let value = match &self.history {
             Some(history) => read::account_with_history(&mut self.transport, id, context, history),
@@ -206,7 +206,7 @@ impl<'a> Session<'a> {
         Ok(account)
     }
 
-    fn unchanged(&self) -> Result<(), ()> {
+    pub(super) fn unchanged(&self) -> Result<(), ()> {
         let mut transport = Uds::connect(&self.config.lni_socket, &self.config.lni_gate, limits())
             .map_err(|_| ())?;
         let result = perform(&mut transport, &handshake(self.config), None).map_err(|_| ())?;
@@ -242,7 +242,7 @@ fn owner_did<'a>(owner: &'a CanonicalAccount, p: &PrincipalPolicy) -> Result<&'a
     Ok(did)
 }
 
-fn identity_key(did: &str) -> Result<[u8; 32], ()> {
+pub(super) fn identity_key(did: &str) -> Result<[u8; 32], ()> {
     let mut preimage = b"LXP/v1/did-id\0".to_vec();
     preimage.extend_from_slice(&u16::try_from(did.len()).map_err(|_| ())?.to_be_bytes());
     preimage.extend_from_slice(did.as_bytes());
@@ -351,6 +351,15 @@ pub(super) fn read(config: &Config, p: &PrincipalPolicy, id: &str) -> Result<Res
     if !p.budgets.iter().any(|bound| bound == id) {
         return Err(refusal(404, "budget_not_bound", None));
     }
+    let id = hex::decode32(id).map_err(|_| refusal(400, "invalid_budget_id", None))?;
+    produce(config, p, id).map_err(|()| unavailable("budget_state_proof_unavailable"))
+}
+
+pub(super) fn read_dynamic(
+    config: &Config,
+    p: &PrincipalPolicy,
+    id: &str,
+) -> Result<Response, Response> {
     let id = hex::decode32(id).map_err(|_| refusal(400, "invalid_budget_id", None))?;
     produce(config, p, id).map_err(|()| unavailable("budget_state_proof_unavailable"))
 }

@@ -72,7 +72,10 @@ impl HumanOutbox {
 impl Outbox for HumanOutbox {
     fn pending(&self) -> Result<Option<Pending>, String> {
         let mut store = self.store.lock().map_err(|_| "Human store unavailable")?;
-        for principal in store.tenancy().principals() {
+        for principal in store
+            .known_principals()
+            .map_err(|error| error.to_string())?
+        {
             let scope = store
                 .principal(&principal)
                 .map_err(|error| error.to_string())?;
@@ -85,7 +88,10 @@ impl Outbox for HumanOutbox {
 
     fn acknowledge(&self, id: &str, observed: bool) -> Result<(), String> {
         let mut store = self.store.lock().map_err(|_| "Human store unavailable")?;
-        for principal in store.tenancy().principals() {
+        for principal in store
+            .known_principals()
+            .map_err(|error| error.to_string())?
+        {
             let mut scope = store
                 .principal(&principal)
                 .map_err(|error| error.to_string())?;

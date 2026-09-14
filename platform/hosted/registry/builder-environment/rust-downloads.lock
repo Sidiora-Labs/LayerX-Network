@@ -1,0 +1,8 @@
+20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init
+483bb8b271168ee654e3be4f111beefa23b9d0c8b7f4a563a8278978dbe982e5 https://static.rust-lang.org/dist/channel-rust-1.91.1.toml
+8d17d5a4734e684228adee4ea4a75da94eb7f71993804adf29f344709e65fe09 https://static.rust-lang.org/dist/2025-11-10/cargo-1.91.1-x86_64-unknown-linux-gnu.tar.xz
+4b4c596fc5268435c310a79c2e231a5a3567572c930ac0740ef9e147e83baf4e https://static.rust-lang.org/dist/2025-11-10/rustc-1.91.1-x86_64-unknown-linux-gnu.tar.xz
+2023ed689529516d7bd5533738ca6d205b2561f8d51947dabeeb39dd51a024c9 https://static.rust-lang.org/dist/2025-11-10/rust-std-1.91.1-x86_64-unknown-linux-gnu.tar.xz
+04fecc4e13090cf8a6c28013d93f244909a348ba525483dd2a21ae050d2e64b5 https://static.rust-lang.org/dist/2025-11-10/rust-std-1.91.1-wasm32-unknown-unknown.tar.xz
+09dda1d01cc3c95043dc34abba7db1e9ddd89ecabae7252d7238d158c0bb05f4 https://static.rust-lang.org/dist/2025-11-10/clippy-1.91.1-x86_64-unknown-linux-gnu.tar.xz
+4e1848cb39796f6927e9fc3bd2720299fb81349f4480cd68a5c3cf1b61649b53 https://static.rust-lang.org/dist/2025-11-10/rustfmt-1.91.1-x86_64-unknown-linux-gnu.tar.xz

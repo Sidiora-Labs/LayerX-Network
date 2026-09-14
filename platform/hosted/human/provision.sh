@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+source "${REPO_ROOT}/platform/hosted/human/onboarding_provision.sh"
+
 human_owner_provision() (
     set -euo pipefail
     umask 077
@@ -176,7 +178,7 @@ for suffix in ('.admission', '.deployment'):
 PYPAIR
 )
 
-human_evidence_provision() (
+human_native_owner_prepare() (
     set -euo pipefail
     umask 077
     local input="$WORK_DIR/human-evidence-input" status
@@ -206,10 +208,23 @@ module.write_json(root / 'account-head-request.json', {
     'sequencer_id': sys.argv[4], 'public_key': sys.argv[5]})
 PYHEAD
     human_owner_provision
-    python3 "$provision" --prepare-owner-admission --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
+    case "${LAYERX_BETA_OWNER_CUSTODY:-kms}" in
+        kms) human_kms_prepare ;;
+        operator) python3 "$provision" --prepare-owner-admission --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR" ;;
+        *) fail 'LAYERX_BETA_OWNER_CUSTODY must be kms or operator' ;;
+    esac
     human_custody_step deposit
+)
+
+human_evidence_provision() (
+    set -euo pipefail
+    umask 077
+    local provision="$REPO_ROOT/platform/hosted/human/provision.py"
+    human_native_owner_prepare
     human_native_provision
     python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
+    registry_deployment_produce
+    human_journal_deploy
     python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
         --registry "$SECRETS_DIR/module-registry.json" --journal "$LAYERX_REGISTRY_JOURNAL"
     python3 "$provision" --assemble --work-dir "$WORK_DIR" \
@@ -272,6 +287,13 @@ PY
     kube -n "$TESTNET_NAMESPACE" get statefulset layerx-node -o json > "$state"
     python3 "$REPO_ROOT/platform/hosted/human/native_manifest.py" "$WORK_DIR" "$NODE_NETWORK_ID" \
         "$NODE_SEQUENCER_PUBLIC_KEY" "$(image_ref layerx-human)" "$state" "$manifest"
+    local -a owner_material
+    if [ -f "$input/owner-kms.json" ]; then
+        owner_material=(--from-file=owner-kms.json="$input/owner-kms.json")
+    else
+        owner_material=(--from-file=owner.seed="$SECRETS_DIR/human-owner/owner.seed"
+            --from-file=pending.seed="$SECRETS_DIR/human-owner/pending.seed")
+    fi
     apply_secret "$TESTNET_NAMESPACE" layerx-human-native-input \
         --from-file=owner-native.json="$input/owner-native.json" \
         --from-file=recovery-policy.json="$input/recovery-policy.json" \
@@ -279,8 +301,7 @@ PY
         --from-file=owner-admission.json="$input/owner-admission.json" \
         --from-file=custody-credit.bin="$input/custody-credit.bin" \
         --from-file=human-owner-result.json="$WORK_DIR/human-owner-result.json" \
-        --from-file=owner.seed="$SECRETS_DIR/human-owner/owner.seed" \
-        --from-file=pending.seed="$SECRETS_DIR/human-owner/pending.seed" \
+        "${owner_material[@]}" \
         --from-file=authority.token="$SECRETS_DIR/registry-authority.token" --from-file=ca.crt="$CA_DIR/ca.crt"
     kube apply -f "$manifest" > /dev/null
     kube -n "$TESTNET_NAMESPACE" rollout status statefulset/layerx-node --timeout=300s > /dev/null

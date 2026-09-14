@@ -6,13 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+layerx-intents.workspace = true
 getrandom.workspace = true
 k256.workspace = true
 sha3.workspace = true
 layerx-client.workspace = true
 layerx-crypto.workspace = true
 layerx-types.workspace = true
-layerx-wire.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -22,8 +22,8 @@ rustls = { version = "0.23.32", default-features = false, features = ["ring", "s
 rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+layerx-intents = { workspace = true, features = ["test-vectors"] }
 layerx-human-service = { path = "../layerx-human-service" }
-layerx-intents.workspace = true
 
 [lints]
 workspace = true

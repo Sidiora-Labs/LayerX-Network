@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { test } from "./production-fixture.ts";
+import { human_test_harness } from "./harness.ts";
 
 import {
   PERFORMANCE_SAMPLE_COUNT,
@@ -185,7 +186,7 @@ test("redacted RUM, cache controls, and 3G journey progress use the production s
   request,
 }) => {
   const rumHeaders = {
-    Origin: "http://127.0.0.1:3105",
+    Origin: new URL(human_test_harness(process.env).baseUrl).origin,
     "Sec-Fetch-Site": "same-origin",
   } as const;
   const accepted = await request.post("/api/performance/vitals", {

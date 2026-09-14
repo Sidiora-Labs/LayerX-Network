@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod binding;
 mod provision;
 mod state;
 mod wire;
@@ -22,6 +23,8 @@ pub struct Server {
     state: State,
     allowed_uid: u32,
     deadline: Duration,
+    binding_reader: Option<binding::Reader>,
+    clock: std::sync::Arc<dyn layerx_types::clock::Clock>,
 }
 
 impl Server {
@@ -34,6 +37,7 @@ impl Server {
         state: State,
         allowed_uid: u32,
         deadline: Duration,
+        clock: std::sync::Arc<dyn layerx_types::clock::Clock>,
     ) -> io::Result<Self> {
         if !socket.is_absolute() || deadline.is_zero() || deadline > Duration::from_secs(60) {
             return Err(invalid("invalid socket path or deadline"));
@@ -56,7 +60,28 @@ impl Server {
             state,
             allowed_uid,
             deadline,
+            binding_reader: None,
+            clock,
         })
+    }
+
+    /// Adds a separately authenticated read-only principal binding endpoint.
+    ///
+    /// # Errors
+    /// Refuses a changed durable tenant, unsafe socket or failed durable write.
+    pub fn with_binding_reader(
+        mut self,
+        socket: &Path,
+        tenant: &str,
+        allowed_uids: &[u32],
+    ) -> io::Result<Self> {
+        if self.binding_reader.is_some() || socket == self.socket {
+            return Err(invalid("binding reader already configured"));
+        }
+        let reader = binding::Reader::bind(socket, allowed_uids)?;
+        self.state.bind_reader_tenant(tenant)?;
+        self.binding_reader = Some(reader);
+        Ok(self)
     }
 
     /// Serves one frame per authenticated connection until shutdown is requested.
@@ -65,11 +90,19 @@ impl Server {
     /// Returns listener or durable-state errors; malformed peers are isolated.
     pub fn run(mut self, shutdown: &AtomicBool) -> io::Result<()> {
         while !shutdown.load(Ordering::Acquire) {
+            if let Some(reader) = &self.binding_reader {
+                reader.accept(&self.state, self.deadline, self.clock.as_ref())?;
+            }
             match self.listener.accept() {
                 Ok((mut peer, _)) => {
                     let credentials = rustix::net::sockopt::socket_peercred(&peer)?;
                     if credentials.uid.as_raw() == self.allowed_uid {
-                        wire::serve(&mut peer, &mut self.state, self.deadline)?;
+                        wire::serve(
+                            &mut peer,
+                            &mut self.state,
+                            self.deadline,
+                            self.clock.as_ref(),
+                        )?;
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {

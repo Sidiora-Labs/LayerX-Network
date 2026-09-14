@@ -43,11 +43,7 @@ impl Directory {
     fn new() -> Result<Self> {
         let mut nonce = [0; 8];
         checked(getrandom::fill(&mut nonce))?;
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(3)
-            .ok_or("repository root")?
-            .join("qual-logs/hm5");
+        let root = std::env::temp_dir().join("hm5");
         fs::create_dir_all(&root)?;
         let path = root.join(format!(
             "test-{}-{}",

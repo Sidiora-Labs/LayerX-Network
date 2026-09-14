@@ -181,6 +181,7 @@ dblint:
 	@test -z "$$(gofmt -l ./storage)"
 	GOPROXY=off go vet ./storage/...
 
+.PHONY: build build-verbose
 build:
 	go build $(BUILD_FLAGS) -o ./build/paxd ./daemon/paxd
 

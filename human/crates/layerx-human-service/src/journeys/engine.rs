@@ -1242,7 +1242,10 @@ impl JourneyEngine {
     }
 }
 
-fn receipt_matches_leg(receipt: &layerx_wire::receipt::ProtocolReceipt, leg: &LegRecord) -> bool {
+fn receipt_matches_leg(
+    receipt: &layerx_intents::canonical::ProtocolReceipt,
+    leg: &LegRecord,
+) -> bool {
     let native_credit = leg.activity_type == 0x0008_0001
         && leg.payload.len() == 427
         && matches!(leg.payload.get(..5), Some(b"LXDC1" | b"LXDC2"));

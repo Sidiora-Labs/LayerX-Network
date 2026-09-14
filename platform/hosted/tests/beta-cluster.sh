@@ -841,7 +841,6 @@ secrets_apply() {
             --from-file=credentials.json="$s/human-credentials.json" \
             --from-file=producers.json="$s/$service-producers.json" --from-file=producer-token="$s/$producer-event-producer.token"
     done
-    MISSING_INPUTS+=("Authenticated Human principal cookies for journeys/approvals require the passkey assertion and session.open ceremony; credential maps remain empty")
     apply_secret "$ns" layerx-human-tls --from-file=server.crt.der="$c/human/cert.der" \
         --from-file=server.key.der="$c/human/key.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-internal-ca --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
@@ -881,6 +880,7 @@ secrets_apply() {
     apply_secret "$ns" layerx-sequencer-trust-history --from-file=history="$s/trust-history"
     apply_configmap "$ns" layerx-receipt-authority --from-file=replica-id="$s/receipt-authority-replica-id"
     apply_secret "$ns" layerx-node-keys --from-file=sequencer.key="$s/node-sequencer.key" --from-file=treasury.key="$s/node-treasury.key"
+    publication_binding_publish
     if [ -n "$CUSTODY_PROFILE" ]; then
         apply_configmap "$ns" layerx-node-custody-profile --from-file=profile="$CUSTODY_PROFILE"
     fi
@@ -920,6 +920,47 @@ secrets_apply() {
         --from-file=sequencer-id="$s/sequencer-id" --from-file=sequencer-first-batch="$s/sequencer-first-batch" \
         --from-file=sequencer-last-batch="$s/sequencer-last-batch"
     apply_tls_secret "$dev" layerx-developer-ingress-tls developer
+}
+
+publication_policy_create() {
+    local operation=$1 output=$2 temporary
+    shift 2
+    temporary=$(mktemp -d "$WORK_DIR/publication-policy.XXXXXXXX")
+    chmod 0700 "$temporary"
+    python3 "$REPO_ROOT/platform/hosted/tests/publication-policy.py" "$operation" "$temporary/policy.json" "$@"
+    if [ -e "$output" ] || [ -L "$output" ]; then
+        [ -f "$output" ] && [ ! -L "$output" ] && cmp -s "$temporary/policy.json" "$output" \
+            || fail "publication policy changed: $operation"
+    else
+        mv "$temporary/policy.json" "$output"
+    fi
+}
+
+publication_binding_publish() {
+    local recipient policy="$SECRETS_DIR/publication-binding-policy.json"
+    recipient=$(cat "$SECRETS_DIR/paxeer-deployer.address")
+    publication_policy_create treasury "$policy" "$NODE_NETWORK_ID" "$NODE_ASSET_ID" "${recipient#0x}"
+    local -a authorization=()
+    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
+        [ -f "$SECRETS_DIR/publication-authorization.json" ] && [ ! -L "$SECRETS_DIR/publication-authorization.json" ] \
+            || fail 'retained checkpoint publication authorization is missing'
+        authorization=(--from-file=authorization.json="$SECRETS_DIR/publication-authorization.json")
+    fi
+    apply_secret "$TESTNET_NAMESPACE" layerx-node-publication \
+        --from-file=binding-policy.json="$policy" "${authorization[@]}"
+}
+
+publication_authorization_publish() {
+    local recipient public vault
+    recipient=$(cat "$SECRETS_DIR/paxeer-deployer.address")
+    public=$(sed -n 's/^LAYERX_NODE_TREASURY_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
+    vault=$(jq -er '.vault' "$WORK_DIR/human-evidence-input/owner-custody.json")
+    publication_policy_create authorization "$SECRETS_DIR/publication-authorization.json" \
+        "$NODE_NETWORK_ID" "$PAXEER_CHAIN_ID" "$GUARANTOR_BOND" "$CHECKPOINT_REGISTRY" "$vault" \
+        "$public" "$NODE_ASSET_ID" "${recipient#0x}"
+    apply_secret "$TESTNET_NAMESPACE" layerx-node-publication \
+        --from-file=binding-policy.json="$SECRETS_DIR/publication-binding-policy.json" \
+        --from-file=authorization.json="$SECRETS_DIR/publication-authorization.json"
 }
 
 builder_release_publish() {
@@ -1338,6 +1379,9 @@ wait_for_node_genesis() {
     node_file_fetch "$data/genesis/paxeer-deployment-descriptor.lxgd" "$WORK_DIR/genesis/paxeer-deployment-descriptor.lxgd"
     node_file_fetch "$data/genesis/paxeer-registration-request.lxrr" "$WORK_DIR/genesis/paxeer-registration-request.lxrr"
     node_file_fetch "$data/node.env" "$WORK_DIR/genesis/node.env"
+    if rg -q '^LAYERX_NODE_GENESIS_HANDOVER_TRUST=' "$WORK_DIR/genesis/node.env"; then
+        node_file_fetch "$data/genesis/genesis-handover-trust.lxt" "$WORK_DIR/genesis/genesis-handover-trust.lxt"
+    fi
     NODE_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")
     NODE_GUARANTOR_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
     NODE_SECOND_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_SECOND_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")
@@ -1467,6 +1511,7 @@ settlement_publish() {
         || fail "the settlement environment was refused by bootstrap.sh --check-settlement"
     apply_configmap "$ns" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env" \
         --from-file=checkpoint-settlement.json="$WORK_DIR/paxeer/checkpoint-settlement.json"
+    publication_authorization_publish
     log "settlement environment published as ConfigMap $ns/layerx-node-settlement"
 }
 
@@ -1977,8 +2022,6 @@ beta_cluster_up() {
         identity_provision
         kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
         wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-program-registry 600
-        registry_deployment_produce
-        human_journal_deploy
         (umask 077; mkdir -p "$WORK_DIR/human-evidence-input")
         python3 "$REPO_ROOT/platform/hosted/human/provision.py" --prepare-owner-request \
             --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
@@ -2011,8 +2054,9 @@ beta_cluster_up() {
     else
         retained_principals_apply
     fi
-    internal_apply
     port_forward human "$TESTNET_NAMESPACE" layerx-human 19453 9443
+    human_browser_provision
+    internal_apply
     port_forward developer "$DEVELOPER_NAMESPACE" layerx-webhooks 19450 443
     port_forward pending-core "$TESTNET_NAMESPACE" layerx-pending-core 19446 9443
     port_forward agent-boundary "$TESTNET_NAMESPACE" layerx-agent-boundary 19447 9443

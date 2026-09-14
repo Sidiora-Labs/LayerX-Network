@@ -42,6 +42,11 @@ jobs:
           swift-version: "6.0.3"
       - name: Install locked platform JavaScript dependencies
         run: make platform-js-install
+      - name: Install Java 21 for JVM dependencies and conformance
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Fetch locked platform workspace crates
         run: cargo fetch --locked --manifest-path platform/Cargo.toml
       - name: Install platform sample and policy dependencies

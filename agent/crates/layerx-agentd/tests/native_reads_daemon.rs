@@ -273,8 +273,8 @@ fn real_daemon_availability_refusals() {
         .arg(std::env::current_exe().unwrap_or_else(|error| panic!("test executable: {error}")))
         .env("LAYERX_TEST_NATIVE_BIN_DIR", binaries)
         .env("LAYERX_TEST_RUNTIME_CLOCK_BIN", clock)
-        .env("CARGO_BUILD_JOBS", "6")
-        .env("MAKEFLAGS", "-j6")
+        .env("CARGO_BUILD_JOBS", "4")
+        .env("MAKEFLAGS", "-j4")
         .current_dir(&repository)
         .status()
         .unwrap_or_else(|error| panic!("daemon harness: {error}"));

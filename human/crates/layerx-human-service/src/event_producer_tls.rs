@@ -284,6 +284,10 @@ fn human_journey_and_approval_cross_tls_and_recover_after_sink_loss() {
                 lifetime_seconds: 30,
                 maximum_outstanding: 32,
             },
+            required::<Arc<layerx_client::runtime_clock::RuntimeClock>, _>(
+                layerx_client::runtime_clock::RuntimeClock::from_environment(),
+                "clock authority",
+            ),
         ),
         "privileged components",
     );
@@ -391,6 +395,25 @@ fn open_session(
     session
 }
 
+fn producer_client(tls: &transport::Tls, journey: u16, approval: u16, webhook: u16) -> Client {
+    required(
+        Client::new(
+            BTreeMap::from([
+                (
+                    "journey".to_owned(),
+                    tls.upstream(journey, "producer-token"),
+                ),
+                (
+                    "approval".to_owned(),
+                    tls.upstream(approval, "producer-token"),
+                ),
+            ]),
+            tls.upstream(webhook, "notification-token"),
+        ),
+        "producer client",
+    )
+}
+
 fn verify_delivery(socket: &std::path::Path, access_token: &str) {
     let root = directory("human-event-tls");
     let tls = transport::Tls::new(&root);
@@ -402,29 +425,11 @@ fn verify_delivery(socket: &std::path::Path, access_token: &str) {
         &root,
         &[("JOURNEY", journey.port), ("APPROVAL", approval.port)],
     );
-    let client = || {
-        required(
-            Client::new(
-                BTreeMap::from([
-                    (
-                        "journey".to_owned(),
-                        tls.upstream(journey.port, "producer-token"),
-                    ),
-                    (
-                        "approval".to_owned(),
-                        tls.upstream(approval.port, "producer-token"),
-                    ),
-                ]),
-                tls.upstream(webhook.port, "notification-token"),
-            ),
-            "producer client",
-        )
-    };
     let event_root = root.join("producer");
     let (outbox, retention, digest) = event_store(&event_root);
     let store = Arc::clone(&outbox.store);
     let health = Arc::clone(&outbox.health);
-    let producer = client();
+    let producer = producer_client(&tls, journey.port, approval.port, webhook.port);
     let journey = qualify_journey(&producer, outbox.as_ref(), &mut webhook, journey, &source);
     let second =
         required(outbox.pending(), "approval pending").unwrap_or_else(|| panic!("approval"));
@@ -448,8 +453,17 @@ fn verify_delivery(socket: &std::path::Path, access_token: &str) {
         producer.spawn(Arc::downgrade(&outbox), Arc::clone(&health)),
         "worker",
     );
-    let deadline = std::time::Instant::now() + Duration::from_secs(36);
-    while health.ready() && std::time::Instant::now() < deadline {
+    let clock = required(
+        layerx_client::runtime_clock::RuntimeClock::from_environment(),
+        "clock authority",
+    );
+    let mut deadline = required(
+        layerx_types::clock::Deadline::start(clock.as_ref(), Duration::from_secs(36)),
+        "deadline",
+    );
+    while health.ready()
+        && !required(deadline.remaining(clock.as_ref()), "remaining deadline").is_zero()
+    {
         thread::sleep(Duration::from_millis(100));
     }
     assert!(!outbox.ready());
@@ -458,9 +472,16 @@ fn verify_delivery(socket: &std::path::Path, access_token: &str) {
         Some(second.clone())
     );
     let approval = source(Kind::Approval, approval_port);
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let clock = required(
+        layerx_client::runtime_clock::RuntimeClock::from_environment(),
+        "clock authority",
+    );
+    let mut deadline = required(
+        layerx_types::clock::Deadline::start(clock.as_ref(), Duration::from_secs(10)),
+        "deadline",
+    );
     while required(outbox.pending(), "recovery queue").is_some()
-        && std::time::Instant::now() < deadline
+        && !required(deadline.remaining(clock.as_ref()), "remaining deadline").is_zero()
     {
         thread::sleep(Duration::from_millis(100));
     }
@@ -523,7 +544,7 @@ fn enqueue_journey(scope: &mut crate::store::PrincipalScope<'_>) {
             ),
             required(NetworkId::new(77), "network"),
             required(
-                ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION),
+                ProtocolVersion::new(layerx_intents::canonical::PROTOCOL_VERSION),
                 "protocol",
             ),
         ),
@@ -725,6 +746,10 @@ fn human_listener(tls: &transport::Tls, socket: &std::path::Path) -> transport::
                 allowed_origin: ORIGIN.to_owned(),
                 service_version: "integration".to_owned(),
             },
+            required::<Arc<layerx_client::runtime_clock::RuntimeClock>, _>(
+                layerx_client::runtime_clock::RuntimeClock::from_environment(),
+                "clock authority",
+            ),
         ),
         "router",
     ));

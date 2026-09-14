@@ -40,14 +40,14 @@ fn send_route(public_key: [u8; 32], key: u8) -> SendRoute {
         public_key
     );
     let debit = layerx_crypto::send::SendDebit {
-        from: layerx_wire::hash::account_id_for_protocol(
+        from: layerx_intents::canonical::account_id_for_protocol(
             &account("agent:did:layerx:worker:main"),
-            layerx_wire::limits::PROTOCOL_VERSION,
+            layerx_intents::canonical::PROTOCOL_VERSION,
         )
         .unwrap_or_else(|error| panic!("source account: {error:?}")),
-        to: layerx_wire::hash::account_id_for_protocol(
+        to: layerx_intents::canonical::account_id_for_protocol(
             &account("agent:did:layerx:human:main"),
-            layerx_wire::limits::PROTOCOL_VERSION,
+            layerx_intents::canonical::PROTOCOL_VERSION,
         )
         .unwrap_or_else(|error| panic!("destination account: {error:?}")),
         asset: [0x33; 32],
@@ -59,7 +59,7 @@ fn send_route(public_key: [u8; 32], key: u8) -> SendRoute {
         conditions: Vec::new(),
         authorization_kind: SendAuthorizationKind::Owner as u8,
         network_id: NETWORK_ID,
-        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
     };
 
     SendRoute {
@@ -77,7 +77,7 @@ fn send_route(public_key: [u8; 32], key: u8) -> SendRoute {
             ),
         ),
         network_id: NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
-        protocol_version: ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
+        protocol_version: ProtocolVersion::new(layerx_intents::canonical::PROTOCOL_VERSION)
             .unwrap_or_else(|error| panic!("protocol: {error:?}")),
     }
 }
@@ -278,7 +278,7 @@ fn signed_reclaim_receive() -> layerx_intents::NativeReceive {
             sequence: ACCOUNT_SEQUENCE,
             idempotency_key: [0x73; 32],
             network_id: NETWORK_ID,
-            protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+            protocol_version: layerx_intents::canonical::PROTOCOL_VERSION,
         },
     ))
     .unwrap_or_else(|error| panic!("signed receive: {error:?}"))

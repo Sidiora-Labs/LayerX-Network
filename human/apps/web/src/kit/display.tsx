@@ -12,6 +12,7 @@ import { useId, type ComponentProps, type ReactNode } from "react";
 import { protocolAmount, type ProtocolAmount } from "./model";
 
 export { formatRecency };
+export { StatPair } from "@layerx/ui/components/stat";
 export type { OptionListItem };
 
 export type KitListProps = ComponentProps<typeof List>;

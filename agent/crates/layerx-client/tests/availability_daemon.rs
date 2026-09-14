@@ -395,8 +395,8 @@ fn real_daemon_availability_refusals() {
         .arg(executable)
         .env("LAYERX_TEST_NATIVE_BIN_DIR", binaries)
         .env("LAYERX_TEST_ADMISSION_LOG_DIR", &evidence)
-        .env("CARGO_BUILD_JOBS", "16")
-        .env("MAKEFLAGS", "-j16")
+        .env("CARGO_BUILD_JOBS", "4")
+        .env("MAKEFLAGS", "-j4")
         .current_dir(&repository)
         .status()
         .unwrap_or_else(|error| panic!("real daemon harness: {error}"));

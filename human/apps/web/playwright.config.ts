@@ -23,7 +23,7 @@ export default defineConfig({
   ...(harness.localProduction
     ? {
         webServer: {
-          command: "npm run start -- --hostname 127.0.0.1 --port 3105",
+          command: "authbind --deep node e2e/production-server.mjs",
           url: harness.baseUrl,
           reuseExistingServer: false,
           timeout: 120_000,
@@ -35,6 +35,12 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
+    ...(harness.browserHome === undefined ? {} : {
+      launchOptions: {
+        env: { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] =>
+          typeof entry[1] === "string")), HOME: harness.browserHome },
+      },
+    }),
   },
   projects: [
     ...Object.values(SHELL_PROFILES).map((profile) => ({

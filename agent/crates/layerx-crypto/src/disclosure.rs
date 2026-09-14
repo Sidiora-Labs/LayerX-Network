@@ -2,7 +2,10 @@
 
 mod native;
 
-pub use native::{DisclosedNativeBudgetCreate, DisclosedNativeOperation, DisclosedRecoveryPolicy};
+pub use native::{
+    DisclosedNativeBudgetCreate, DisclosedNativeIdentity, DisclosedNativeOperation,
+    DisclosedRecoveryPolicy,
+};
 
 use std::fmt;
 
@@ -1109,6 +1112,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         return payment_fields(activity);
     }
     if matches!(kind, (ModuleId::Governance, 2 | 3))
+        || (kind == (ModuleId::Governance, 1) && activity.payload().starts_with(&[0x71, 1, 0, 2]))
         || (kind == (ModuleId::Budget, 1)
             && matches!(activity.payload().get(..2), Some([0, 1 | 2])))
     {

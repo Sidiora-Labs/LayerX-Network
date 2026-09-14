@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { createHash } from "node:crypto";
 import { JsonRpcError, type Commitment } from "./rpc.js";
 
@@ -47,10 +47,13 @@ export class WalletPendingError extends Error { public constructor(public readon
 
 export class WalletRpc {
   readonly #executable: string;
+  readonly #clockExecutable: string;
   readonly #configuration: WalletRpcConfiguration;
-  public constructor(executable: string, configuration: WalletRpcConfiguration) {
+  public constructor(executable: string, configuration: WalletRpcConfiguration, clockExecutable = join(dirname(executable), "layerx-runtime-clock")) {
     if (!isAbsolute(executable)) throw new Error("Wallet executable must be an absolute trusted path");
+    if (!isAbsolute(clockExecutable)) throw new Error("Clock executable must be an absolute trusted path");
     this.#executable = executable;
+    this.#clockExecutable = clockExecutable;
     this.#configuration = Object.freeze({...configuration});
   }
   public toJSON(): string { return "[WalletRpc REDACTED]"; }
@@ -82,7 +85,7 @@ export class WalletRpc {
     const input = Buffer.from(JSON.stringify({...request,configuration:this.#configuration}));
     if (input.length > 2097152) throw new Error("Wallet request exceeds bound");
     return new Promise((resolve,reject) => {
-      const child = spawn(this.#executable,[],{stdio:["pipe","pipe","ignore"],windowsHide:true});
+      const child = spawn(this.#clockExecutable,["--",this.#executable],{stdio:["pipe","pipe","ignore"],windowsHide:true});
       const chunks: Buffer[] = []; let size=0;
       const timer = setTimeout(()=>child.kill("SIGKILL"),checkedTimeout(waitMs)+180000);
       child.on("error",reject);

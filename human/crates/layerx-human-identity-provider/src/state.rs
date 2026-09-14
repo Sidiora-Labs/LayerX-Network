@@ -72,7 +72,10 @@ struct Binding {
 #[serde(deny_unknown_fields)]
 struct Snapshot {
     accounts: Vec<Account>,
-    bindings: Vec<Binding>,
+    #[serde(rename = "bindings")]
+    device_bindings: Vec<Binding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    binding_tenant: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -95,6 +98,34 @@ pub struct State {
 }
 
 impl State {
+    pub(crate) fn bind_reader_tenant(&mut self, tenant: &str) -> io::Result<()> {
+        self.ready()?;
+        validate_text(tenant, 255)?;
+        match &self.snapshot.binding_tenant {
+            Some(existing) if existing == tenant => Ok(()),
+            Some(_) => Err(invalid("identity tenant differs")),
+            None => {
+                let mut next = self.snapshot.clone();
+                next.binding_tenant = Some(tenant.to_owned());
+                self.commit(next)
+            }
+        }
+    }
+
+    pub(crate) fn principal_binding(&self, tenant: &str, principal: &str) -> io::Result<String> {
+        if self.snapshot.binding_tenant.as_deref() != Some(tenant) {
+            return Err(invalid("identity tenant differs"));
+        }
+        let principal = PrincipalId::new(principal).map_err(|_| invalid("invalid principal"))?;
+        let account = self
+            .snapshot
+            .accounts
+            .iter()
+            .find(|account| account.principal == principal.as_str())
+            .ok_or_else(|| invalid("unknown principal"))?;
+        String::from_utf8(account.did.clone()).map_err(|_| invalid("invalid DID"))
+    }
+
     /// Acquires exclusive ownership, replays the last atomic snapshot and cleans
     /// an uncommitted temporary file only after the committed state validates.
     ///
@@ -203,7 +234,7 @@ impl State {
         }
         if let Some(binding) = self
             .snapshot
-            .bindings
+            .device_bindings
             .iter()
             .find(|item| item.assertion_id == assertion_id)
         {
@@ -213,11 +244,11 @@ impl State {
                 Err(invalid("assertion binding conflict"))
             };
         }
-        if self.snapshot.bindings.len() >= MAX_BINDINGS {
+        if self.snapshot.device_bindings.len() >= MAX_BINDINGS {
             return Err(invalid("binding capacity exhausted"));
         }
         let mut next = self.snapshot.clone();
-        next.bindings.push(Binding {
+        next.device_bindings.push(Binding {
             principal: principal.as_str().to_owned(),
             assertion_id: assertion_id.to_owned(),
             device,
@@ -304,7 +335,7 @@ impl State {
         let assertion = text(&fields[1])?;
         let binding = self
             .snapshot
-            .bindings
+            .device_bindings
             .iter()
             .find(|item| item.principal == principal.as_str() && item.assertion_id == assertion)
             .ok_or_else(|| invalid("unknown assertion binding"))?;
@@ -371,7 +402,10 @@ impl State {
 }
 
 fn validate_snapshot(snapshot: &Snapshot) -> io::Result<()> {
-    if snapshot.accounts.len() > MAX_ACCOUNTS || snapshot.bindings.len() > MAX_BINDINGS {
+    if let Some(tenant) = &snapshot.binding_tenant {
+        validate_text(tenant, 255)?;
+    }
+    if snapshot.accounts.len() > MAX_ACCOUNTS || snapshot.device_bindings.len() > MAX_BINDINGS {
         return Err(invalid("state capacity exceeded"));
     }
     let mut principals = BTreeSet::new();
@@ -396,7 +430,7 @@ fn validate_snapshot(snapshot: &Snapshot) -> io::Result<()> {
         }
     }
     let mut assertions = BTreeSet::new();
-    for binding in &snapshot.bindings {
+    for binding in &snapshot.device_bindings {
         validate_text(&binding.assertion_id, 4096)?;
         Device::new(
             binding.device.device_id(),

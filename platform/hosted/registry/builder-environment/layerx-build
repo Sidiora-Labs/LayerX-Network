@@ -1,0 +1,38 @@
+#!/bin/sh
+# LayerX hosted builder entrypoint. The registry runs this file inside its
+# isolation runtime with the plan's command words as arguments. The first word
+# names a tool shipped in this environment; nothing under /build is ever
+# executed by name.
+set -eu
+export PATH=/opt/cache/cargo/bin:/opt/node/bin:/usr/local/bin:/usr/bin:/bin
+export CARGO_HOME="${CARGO_HOME:-/opt/cache/cargo}"
+export RUSTUP_HOME="${RUSTUP_HOME:-/opt/cache/rustup}"
+export HOME="${HOME:-/tmp}"
+export TMPDIR="${TMPDIR:-/tmp}"
+export CARGO_NET_OFFLINE=true
+export CARGO_TERM_COLOR=never
+export CC=/usr/bin/gcc
+export CLANG=/usr/bin/clang
+export HOSTCC=/usr/bin/gcc
+export NODE_PATH=/opt/node/lib/node_modules
+if [ "$#" -eq 0 ]; then
+    echo "layerx-build: the plan command is empty" >&2
+    exit 64
+fi
+tool=$1
+shift
+case "$tool" in
+    ''|*/*|.*)
+        echo "layerx-build: refusing tool name '$tool'" >&2
+        exit 64
+        ;;
+esac
+resolved=$(command -v -- "$tool" 2>/dev/null || true)
+case "$resolved" in
+    /opt/cache/cargo/bin/*|/opt/node/bin/*|/usr/local/bin/*|/usr/bin/*|/bin/*) ;;
+    *)
+        echo "layerx-build: '$tool' is not a tool of this environment" >&2
+        exit 64
+        ;;
+esac
+exec "$resolved" "$@"
