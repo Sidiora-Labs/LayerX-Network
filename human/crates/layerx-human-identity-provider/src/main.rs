@@ -140,7 +140,29 @@ fn run() -> io::Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
-    Server::bind(&socket, state, uid, Duration::from_secs(deadline))?.run(&shutdown)
+    let mut server = Server::bind(&socket, state, uid, Duration::from_secs(deadline))?;
+    let binding_names = [
+        "LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_SOCKET",
+        "LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_TENANT",
+        "LAYERX_HUMAN_IDENTITY_PROVIDER_BINDING_ALLOWED_UIDS",
+    ];
+    if binding_names
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+    {
+        let binding_socket = PathBuf::from(required(binding_names[0])?);
+        let tenant = required(binding_names[1])?;
+        let reader_uids: Vec<u32> = required(binding_names[2])?
+            .split(',')
+            .map(|value| {
+                value.parse::<u32>().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "invalid binding reader uid")
+                })
+            })
+            .collect::<io::Result<_>>()?;
+        server = server.with_binding_reader(&binding_socket, &tenant, &reader_uids)?;
+    }
+    server.run(&shutdown)
 }
 
 fn main() -> std::process::ExitCode {

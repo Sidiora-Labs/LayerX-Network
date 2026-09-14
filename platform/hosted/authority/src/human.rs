@@ -19,6 +19,7 @@ use zeroize::Zeroizing;
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 
 mod budget_state;
+mod dynamic;
 mod session_membership;
 
 #[derive(Clone, Deserialize)]
@@ -146,6 +147,7 @@ pub(super) struct Human {
     state_root: PathBuf,
     horizon: u64,
     records: Mutex<()>,
+    binding: Option<layerx_identity_binding::Client>,
 }
 
 fn required(name: &str) -> Result<String, String> {
@@ -271,6 +273,9 @@ impl Human {
                 "MODULE_REGISTRY_FILE",
                 "CORE_CLOCK_HORIZON",
                 "STATE_ROOT",
+                "IDENTITY_BINDING_SOCKET",
+                "IDENTITY_BINDING_UID",
+                "IDENTITY_BINDING_GID",
             ]
             .iter()
             .any(|suffix| std::env::var_os(format!("LAYERX_AUTHORITY_{suffix}")).is_some());
@@ -315,8 +320,10 @@ impl Human {
         if tenant.is_empty() || principal.is_empty() {
             return Err("human tenant and principal must be nonempty".to_owned());
         }
+        let binding = dynamic::binding_client(&tenant)?;
         Ok(Some(Self {
             token,
+            binding,
             tenant,
             principal,
             policy_path,
@@ -518,6 +525,19 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
         .path
         .strip_prefix("/v1/agent/")
         .ok_or_else(|| refusal(404, "not_found", None))?;
+    if params.keys().any(|key| {
+        matches!(
+            key.as_str(),
+            "subject_principal"
+                | "owner_did"
+                | "owner_account"
+                | "asset_id"
+                | "registration"
+                | "signed_activity"
+        )
+    }) {
+        return dynamic::dispatch(config, human, p, name, &params);
+    }
     let additional: &[&str] = match name {
         "registry" | "balance-context" | "core-clock" => &[],
         "authorized-batch" => &["activity_id"],

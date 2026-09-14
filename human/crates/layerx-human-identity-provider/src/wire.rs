@@ -5,6 +5,70 @@ use std::time::{Duration, Instant};
 use crate::{invalid, State};
 
 const MAX_FRAME: usize = 1_048_576;
+const MAX_BINDING_FRAME: usize = 2048;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BindingRequest {
+    operation: String,
+    tenant: String,
+    principal: String,
+}
+
+pub(crate) fn serve_binding(
+    stream: &mut UnixStream,
+    state: &State,
+    deadline: Duration,
+) -> io::Result<()> {
+    let expires = Instant::now() + deadline;
+    let request = read_binding(stream, expires);
+    state.ready()?;
+    let response = match request.and_then(|request| {
+        let did = state.principal_binding(&request.tenant, &request.principal)?;
+        Ok(serde_json::json!({"status":"bound", "tenant":request.tenant, "principal":request.principal, "did":did}))
+    }) {
+        Ok(response) => response,
+        Err(_) => serde_json::json!({"status":"refused"}),
+    };
+    let mut bytes = b"LXIB\x01".to_vec();
+    bytes.extend(serde_json::to_vec(&response)?);
+    if bytes.len() > MAX_BINDING_FRAME {
+        return Err(invalid("binding response exceeds bound"));
+    }
+    let mut frame = u32::try_from(bytes.len())
+        .map_err(|_| invalid("binding length"))?
+        .to_be_bytes()
+        .to_vec();
+    frame.extend(bytes);
+    let _ = write_before(stream, &frame, expires);
+    Ok(())
+}
+
+fn read_binding(stream: &mut UnixStream, expires: Instant) -> io::Result<BindingRequest> {
+    let mut length = [0; 4];
+    read_before(stream, &mut length, expires)?;
+    let length = u32::from_be_bytes(length) as usize;
+    if !(6..=MAX_BINDING_FRAME).contains(&length) {
+        return Err(invalid("binding frame length"));
+    }
+    let mut bytes = vec![0; length];
+    read_before(stream, &mut bytes, expires)?;
+    if &bytes[..5] != b"LXIB\x01" {
+        return Err(invalid("binding frame version"));
+    }
+    let request: BindingRequest =
+        serde_json::from_slice(&bytes[5..]).map_err(|_| invalid("binding request"))?;
+    if request.operation != "principal"
+        || request.tenant.is_empty()
+        || request.tenant.len() > 255
+        || request.tenant.chars().any(char::is_control)
+        || request.principal.is_empty()
+        || request.principal.len() > 255
+    {
+        return Err(invalid("binding request"));
+    }
+    Ok(request)
+}
 
 pub(crate) fn serve(
     stream: &mut UnixStream,

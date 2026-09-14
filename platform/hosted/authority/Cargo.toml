@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 layerx-client.workspace = true
+layerx-identity-binding.workspace = true
 layerx-crypto.workspace = true
 layerx-proof.workspace = true
 layerx-types.workspace = true

@@ -718,6 +718,7 @@ dependencies = [
  "layerx-agent-api",
  "layerx-client",
  "layerx-crypto",
+ "layerx-identity-binding",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
  "layerx-programs-runtime",
@@ -728,6 +729,7 @@ dependencies = [
  "openssl",
  "rustix",
  "rustls-native-certs",
+ "serde",
  "serde_json",
  "sha2",
  "ureq",
@@ -763,6 +765,17 @@ dependencies = [
  "sha3",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "layerx-identity-binding"
+version = "0.1.0"
+dependencies = [
+ "layerx-types",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
