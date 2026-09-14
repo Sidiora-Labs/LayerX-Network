@@ -22,3 +22,23 @@ test("the real-stack harness exposes canonical mobile and desktop profiles", () 
   assert.equal(SHELL_PROFILES.mobile.hasTouch, true);
   assert.equal(SHELL_PROFILES.desktop.hasTouch, false);
 });
+
+test("local production requires the real HTTPS origin and explicit trust material", () => {
+  const environment = {
+    HUMAN_E2E_REAL_STACK: "1",
+    HUMAN_E2E_LOCAL_PRODUCTION: "1",
+    HUMAN_E2E_BASE_URL: "https://human.testnet.layerx.network",
+    HUMAN_E2E_TLS_CONFIG: "/qualification/tls.json",
+    HUMAN_E2E_BROWSER_HOME: "/qualification/browser-home",
+  };
+  const harness = human_test_harness(environment);
+  assert.equal(harness.baseUrl, "https://human.testnet.layerx.network/");
+  assert.equal(harness.browserHome, environment.HUMAN_E2E_BROWSER_HOME);
+  for (const url of ["http://127.0.0.1:3105", "https://human.testnet.layerx.network:3105",
+    "https://human.testnet.layerx.network/path", "https://human.testnet.layerx.network?query",
+    "https://human.testnet.layerx.network#fragment"]) {
+    assert.throws(() => human_test_harness({ ...environment, HUMAN_E2E_BASE_URL: url }), /HTTPS application origin/);
+  }
+  assert.throws(() => human_test_harness({ ...environment, HUMAN_E2E_TLS_CONFIG: undefined }), /HUMAN_E2E_TLS_CONFIG/);
+  assert.throws(() => human_test_harness({ ...environment, HUMAN_E2E_BROWSER_HOME: undefined }), /HUMAN_E2E_BROWSER_HOME/);
+});

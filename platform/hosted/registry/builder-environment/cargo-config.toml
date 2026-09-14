@@ -1,0 +1,11 @@
+[source.crates-io]
+replace-with = "layerx-vendored"
+
+[source.layerx-vendored]
+directory = "/opt/cache/vendor"
+
+[net]
+offline = true
+
+[build]
+rustc-wrapper = "/opt/cache/cargo/bin/layerx-rustc"
