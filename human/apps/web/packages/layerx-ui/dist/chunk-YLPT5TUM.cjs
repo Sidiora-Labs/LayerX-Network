@@ -38,7 +38,7 @@ function DetailDisclosure({
   const disclosureId = React.useId();
   if (resolved === "desktop" && desktopVariant === "inline") {
     return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "div", { className: "overflow-hidden rounded-lg border border-border bg-surface", children: [
-      /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
         "button",
         {
           type: "button",
@@ -48,7 +48,7 @@ function DetailDisclosure({
           className: "flex w-full items-center justify-between gap-3 px-5 py-4 text-left font-semibold text-foreground transition-colors hover:bg-surface-sunken/40",
           children: [
             /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "span", { children: _nullishCoalesce(summary, () => ( title)) }),
-            /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+            /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
               _lucidereact.ChevronDown,
               {
                 className: _chunkMD6ORKN4cjs.cn.call(void 0, "size-4 text-muted-foreground transition-transform", open && "rotate-180")
@@ -57,12 +57,12 @@ function DetailDisclosure({
           ]
         }
       ),
-      /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+      /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
         "div",
         {
           id: disclosureId,
           role: "region",
-          className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+          className: _chunkMD6ORKN4cjs.cn.call(void 0,
             "grid transition-[grid-template-rows] duration-300",
             open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
           ),

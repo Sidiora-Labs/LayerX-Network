@@ -31,7 +31,7 @@ var _lucidereact = require('lucide-react');
 var _jsxruntime = require('react/jsx-runtime');
 function defaultLeading(item) {
   const incoming = item.amount >= 0;
-  return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
     _chunkZY7BNJKWcjs.IconTile,
     {
       shape: "circle",
@@ -57,7 +57,7 @@ function MoneyBands({
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "h4", { className: "text-sm font-bold text-muted-foreground", children: g.label }),
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "span", { className: "text-sm font-semibold tabular-nums text-foreground-secondary", children: _chunkW6TE4RURcjs.formatMoney.call(void 0, g.subtotal, { currency: g.currency, signed: false }) })
     ] }),
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkZY7BNJKWcjs.List, { children: g.items.map((item) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, _chunkZY7BNJKWcjs.List, { children: g.items.map((item) => /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       _chunkZY7BNJKWcjs.ListItem,
       {
         leading: _nullishCoalesce(item.leading, () => ( defaultLeading(item))),
@@ -117,12 +117,12 @@ function MoneyTable({
     );
     _chunkW6TE4RURcjs.downloadCsv.call(void 0, exportName, ["Group", "Title", "Subtitle", "Status", "Date", "Amount", "Currency"], rows);
   };
-  const SortButton = ({ id, children }) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+  const SortButton = ({ id, children }) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
     "button",
     {
       type: "button",
       onClick: () => toggleSort(id),
-      className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+      className: _chunkMD6ORKN4cjs.cn.call(void 0,
         "inline-flex items-center gap-1 text-xs font-bold tracking-wide uppercase transition-colors",
         sortKey === id ? "text-foreground" : "text-faint-foreground hover:text-muted-foreground"
       ),
@@ -151,7 +151,7 @@ function MoneyTable({
         /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "th", { className: "px-4 py-2.5 text-right font-medium", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "span", { className: "inline-flex justify-end", children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, SortButton, { id: "amount", children: "Amount" }) }) })
       ] }) }),
       sortedGroups.map((g) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, "tbody", { children: [
-        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "tr", { children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+        /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "tr", { children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
           "td",
           {
             colSpan: 4,
@@ -162,11 +162,11 @@ function MoneyTable({
             ] })
           }
         ) }),
-        g.items.map((item) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+        g.items.map((item) => /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
           "tr",
           {
             onClick: onItemClick ? () => onItemClick(item) : void 0,
-            className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+            className: _chunkMD6ORKN4cjs.cn.call(void 0,
               "border-b border-border/60 transition-colors last:border-0 hover:bg-surface-sunken/40",
               onItemClick && "cursor-pointer"
             ),

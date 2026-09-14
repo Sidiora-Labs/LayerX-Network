@@ -11,10 +11,10 @@ function Stat({
   className,
   align = "center"
 }) {
-  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, 
+  return /* @__PURE__ */ _jsxruntime.jsxs.call(void 0,
     "div",
     {
-      className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+      className: _chunkMD6ORKN4cjs.cn.call(void 0,
         "flex flex-col gap-1",
         align === "center" ? "items-center text-center" : "items-start",
         className

@@ -10,10 +10,10 @@ var _jsxruntime = require('react/jsx-runtime');
 function Modal({ open, onOpenChange, children, portalContainer, className }) {
   return /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Dialog.Root, { open, onOpenChange, children: /* @__PURE__ */ _jsxruntime.jsxs.call(void 0, Dialog.Portal, { container: _nullishCoalesce(portalContainer, () => ( void 0)), children: [
     /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Dialog.Overlay, { className: "fixed inset-0 z-40 bg-black/40 data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out" }),
-    /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       Dialog.Content,
       {
-        className: _chunkMD6ORKN4cjs.cn.call(void 0, 
+        className: _chunkMD6ORKN4cjs.cn.call(void 0,
           "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-[calc(100vw-2rem)] max-w-[440px] -translate-x-1/2 -translate-y-1/2 flex-col overscroll-contain",
           "rounded-xl bg-surface p-6 shadow-overlay outline-none",
           "data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out",
@@ -35,7 +35,7 @@ function ModalHeader({
       /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Dialog.Title, { className: "text-lg font-bold text-foreground", children: title }),
       description && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, Dialog.Description, { asChild: true, children: /* @__PURE__ */ _jsxruntime.jsx.call(void 0, "p", { className: "text-sm leading-relaxed text-muted-foreground", children: description }) })
     ] }),
-    onClose && /* @__PURE__ */ _jsxruntime.jsx.call(void 0, 
+    onClose && /* @__PURE__ */ _jsxruntime.jsx.call(void 0,
       "button",
       {
         type: "button",

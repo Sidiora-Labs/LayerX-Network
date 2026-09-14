@@ -6,7 +6,7 @@ var _chunkMD6ORKN4cjs = require('./chunk-MD6ORKN4.cjs');
 // src/components/badge.tsx
 var _classvarianceauthority = require('class-variance-authority');
 var _jsxruntime = require('react/jsx-runtime');
-var badgeVariants = _classvarianceauthority.cva.call(void 0, 
+var badgeVariants = _classvarianceauthority.cva.call(void 0,
   "inline-flex items-center gap-1 rounded-full font-semibold whitespace-nowrap [&_svg]:size-3",
   {
     variants: {
