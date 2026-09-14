@@ -187,6 +187,57 @@ fn capacity_refusals(
     Ok(())
 }
 
+fn spend_event_refusals(
+    fixture: &Fixture,
+    binding: &NativeBudgetBinding,
+    evidence: &NativeBudgetRecoveryEvidence,
+) -> Result<()> {
+    let mut matched = false;
+    for (index, entry) in evidence.history.iter().enumerate() {
+        let receipt = checked(layerx_wire::receipt::decode(
+            entry.receipt().canonical_receipt(),
+        ))?;
+        let protocol = receipt.protocol().ok_or("protocol receipt required")?;
+        if protocol.module_id() != 3 || protocol.result_code() != 0 {
+            continue;
+        }
+        let [effect] = protocol.effects() else {
+            continue;
+        };
+        if effect.event_type() != 6 || effect.body().get(..32) != Some(binding.budget_id.as_slice())
+        {
+            continue;
+        }
+        assert_eq!(effect.body().len(), 80);
+        let raw = entry.receipt();
+        let locations: Vec<_> = raw
+            .canonical_receipt()
+            .windows(80)
+            .enumerate()
+            .filter_map(|(offset, bytes)| (bytes == effect.body()).then_some(offset))
+            .collect();
+        assert_eq!(locations.len(), 1);
+        for field in [0, 32, 64] {
+            let mut changed = evidence.clone();
+            let mut bytes = raw.canonical_receipt().to_vec();
+            bytes[locations[0] + field] ^= 1;
+            changed.history[index] = RawActivityReceiptEvidence::from_signed_inclusion(
+                entry.canonical_activity().to_vec(),
+                RawReceiptEvidence::new(
+                    bytes,
+                    raw.proof().clone(),
+                    raw.canonical_header().to_vec(),
+                    raw.header_signature(),
+                ),
+            );
+            rejects(fixture, binding, &changed);
+        }
+        matched = true;
+    }
+    assert!(matched);
+    Ok(())
+}
+
 pub fn run(fixture: &mut Fixture) -> Result<()> {
     let mut session = Session::open(fixture, 0xb0)?;
     let baseline = checked(retrieve_native_budget_evidence(
@@ -230,6 +281,7 @@ pub fn run(fixture: &mut Fixture) -> Result<()> {
     binding_refusals(fixture, &session.scope.binding, &evidence)?;
     state_refusals(fixture, &session.scope.binding, &evidence);
     history_refusals(fixture, &session.scope.binding, &evidence);
+    spend_event_refusals(fixture, &session.scope.binding, &evidence)?;
     capacity_refusals(fixture, &session, &evidence)?;
     session.reconcile(fixture)?;
     session.scope.write_enabled = false;

@@ -1,3 +1,4 @@
+use super::native_budget_receipt::event;
 use super::{EvidenceAuthority, RawActivityReceiptEvidence, VerifiedCumulativeReceipt};
 use crate::budget::{
     NativeBudgetBinding, NativeBudgetError as Error, NativeBudgetOutcome,
@@ -74,22 +75,6 @@ fn budget_activity(
     Ok(Some(activity))
 }
 
-fn event(receipt: &ProtocolReceipt, ordinal: u16, expected: &[u8]) -> Result<(), Error> {
-    let mut matching = receipt
-        .effects()
-        .iter()
-        .filter(|value| value.module_id() == 3 && value.event_type() == ordinal);
-    let effect = matching.next().ok_or(Error::Receipt)?;
-    if matching.next().is_some()
-        || effect.kind() != 3
-        || effect.monetary()
-        || effect.body() != expected
-    {
-        return Err(Error::Receipt);
-    }
-    Ok(())
-}
-
 fn apply_amend(
     record: &mut BudgetRecord,
     activity: &Activity,
@@ -130,6 +115,7 @@ fn apply_close(
     record: &mut BudgetRecord,
     activity: &Activity,
     receipt: &ProtocolReceipt,
+    balance: u128,
 ) -> Result<(), Error> {
     let payload = activity.payload();
     if payload.len() != 42 || payload[..2] != [0, 1] || record.closed {
@@ -139,20 +125,10 @@ fn apply_close(
     if revocation <= record.revocation {
         return Err(Error::Record);
     }
-    let mut matching = receipt
-        .effects()
-        .iter()
-        .filter(|value| value.module_id() == 3 && value.event_type() == 7);
-    let effect = matching.next().ok_or(Error::Receipt)?;
-    if matching.next().is_some()
-        || effect.kind() != 3
-        || effect.monetary()
-        || effect.body().len() != 56
-        || effect.body()[..32] != record.id
-        || effect.body()[48..] != revocation.to_be_bytes()
-    {
-        return Err(Error::Receipt);
-    }
+    let mut expected = record.id.to_vec();
+    expected.extend_from_slice(&balance.to_be_bytes());
+    expected.extend_from_slice(&revocation.to_be_bytes());
+    event(receipt, 7, &expected)?;
     record.revocation = revocation;
     record.closed = true;
     Ok(())
@@ -162,6 +138,7 @@ struct Replay<'a> {
     authority: &'a EvidenceAuthority,
     binding: &'a NativeBudgetBinding,
     record: BudgetRecord,
+    balance: u128,
     outcomes: Vec<NativeBudgetOutcome>,
 }
 
@@ -194,6 +171,10 @@ impl Replay<'_> {
         binding.expiry_ms = self.record.expiry;
         if let Some(outcome) = EvidenceAuthority::native_budget_outcome(&binding, entry, receipt)? {
             if outcome.succeeded() {
+                self.balance = self
+                    .balance
+                    .checked_sub(outcome.amount())
+                    .ok_or(Error::Consumption)?;
                 self.record.spent = self
                     .record
                     .spent
@@ -215,10 +196,34 @@ impl Replay<'_> {
                 self.verify_amend(entry, receipt, &activity, protocol, owner_key)?;
                 apply_amend(&mut self.record, &activity, protocol)?;
             }
-            7 => apply_close(&mut self.record, &activity, protocol)?,
-            2 | 4 | 5 | 6 => {}
+            7 => {
+                apply_close(&mut self.record, &activity, protocol, self.balance)?;
+                self.balance = 0;
+            }
+            2 => self.fund(&activity, protocol)?,
+            4..=6 => {}
             _ => return Err(Error::Activity),
         }
+        Ok(())
+    }
+
+    fn fund(&mut self, activity: &Activity, receipt: &ProtocolReceipt) -> Result<(), Error> {
+        let payload = activity.payload();
+        let version = if self.record.source.is_some() { 2 } else { 1 };
+        let length = if version == 2 { 58 } else { 50 };
+        if payload.len() != length
+            || payload[..2] != [0, version]
+            || self.record.closed
+            || self.record.revoked
+        {
+            return Err(Error::Activity);
+        }
+        let amount = u128::from_be_bytes(payload[34..50].try_into().map_err(|_| Error::Activity)?);
+        if amount == 0 {
+            return Err(Error::Activity);
+        }
+        event(receipt, 2, &payload[2..50])?;
+        self.balance = self.balance.checked_add(amount).ok_or(Error::Arithmetic)?;
         Ok(())
     }
 
@@ -264,6 +269,7 @@ impl EvidenceAuthority {
         evidence: &NativeBudgetRecoveryEvidence,
         receipts: &[VerifiedCumulativeReceipt],
         owner_keys: &[[u8; 32]],
+        balances: (u128, u128),
     ) -> Result<(u128, Vec<NativeBudgetOutcome>), Error> {
         if receipts.len() != evidence.history.len() || receipts.len() != owner_keys.len() {
             return Err(Error::History);
@@ -273,6 +279,7 @@ impl EvidenceAuthority {
             binding,
             record: BudgetRecord::decode(&evidence.baseline.canonical_record)
                 .map_err(|_| Error::Record)?,
+            balance: balances.0,
             outcomes: Vec::new(),
         };
         let mut next = 0;
@@ -291,7 +298,7 @@ impl EvidenceAuthority {
         }
         let current =
             BudgetRecord::decode(&evidence.current.canonical_record).map_err(|_| Error::Record)?;
-        if next != receipts.len() || replay.record != current {
+        if next != receipts.len() || replay.record != current || replay.balance != balances.1 {
             return Err(Error::Consumption);
         }
         Ok((current.spent, replay.outcomes))

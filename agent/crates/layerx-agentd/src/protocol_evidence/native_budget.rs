@@ -20,6 +20,7 @@ struct State {
     record: BudgetRecord,
     header: BatchHeader,
     remaining: u128,
+    balance: u128,
     period_end: u64,
     write_eligible: bool,
     root: [u8; 32],
@@ -155,6 +156,7 @@ impl EvidenceAuthority {
             record,
             header,
             remaining,
+            balance,
             period_end,
             write_eligible,
             root: module.state_root(),
@@ -349,8 +351,13 @@ impl EvidenceAuthority {
             &verified,
             current.root,
         )?;
-        let (spent, outcomes) =
-            self.native_budget_changes(binding, evidence, &verified, &owner_keys)?;
+        let (spent, outcomes) = self.native_budget_changes(
+            binding,
+            evidence,
+            &verified,
+            &owner_keys,
+            (baseline.balance, current.balance),
+        )?;
         Ok(NativeBudgetReconciliation {
             binding: binding.clone(),
             authority: self.clone(),
@@ -427,14 +434,7 @@ impl EvidenceAuthority {
         let decoded = decode(entry.receipt().canonical_receipt()).map_err(|_| Error::Receipt)?;
         let protocol = decoded.protocol().ok_or(Error::Receipt)?;
         let succeeded = receipt.result_code() == 0;
-        if succeeded
-            && (protocol.asset() != binding.asset
-                || protocol.from() != binding.budget_account
-                || protocol.to().as_slice() != &payload[34..66]
-                || protocol.amount() != amount)
-        {
-            return Err(Error::Receipt);
-        }
+        super::native_budget_receipt::spend(protocol, &activity)?;
         if succeeded && header.timestamp_ms() >= binding.expiry_ms {
             return Err(Error::Window);
         }
