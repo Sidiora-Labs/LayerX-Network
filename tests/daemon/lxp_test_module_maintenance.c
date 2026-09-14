@@ -945,12 +945,9 @@ static int genesis_state_check(int descriptor)
     return 0;
 }
 
-static int scenario_start(int descriptor, const char *directory, scenario_state *state,
-                           const signer *owner, const signer *provider, bool handover)
+static int scenario_fund(int descriptor, const char *directory, scenario_state *state)
 {
     uint8_t encoded[ACTIVITY_CAPACITY];
-    uint8_t payload[LX_PERPS_MARKET_BYTES] = {0};
-    uint8_t owner_main[32], provider_main[32], custody[32];
     size_t length;
     batch_evidence evidence;
     const char *credit = getenv("LAYERX_TEST_WITHDRAW_CREDIT");
@@ -969,6 +966,18 @@ static int scenario_start(int descriptor, const char *directory, scenario_state 
     memcpy(state->artifact_reference, evidence.body.header.data_availability_root, 32U);
     state->artifact_size = evidence.body.receipts.length;
     free(evidence.storage);
+    return 0;
+}
+
+static int scenario_start(int descriptor, const char *directory, scenario_state *state,
+                           const signer *owner, const signer *provider, bool handover)
+{
+    uint8_t encoded[ACTIVITY_CAPACITY];
+    uint8_t payload[LX_PERPS_MARKET_BYTES] = {0};
+    uint8_t owner_main[32], provider_main[32], custody[32];
+    size_t length;
+    batch_evidence evidence;
+    REQUIRE(scenario_fund(descriptor, directory, state) == 0);
     REQUIRE(actor_name(owner, ":main", owner_main) == 0 && actor_name(provider, ":main", provider_main) == 0);
     state->deadline = now_ms() + 30000U;
     REQUIRE(state->deadline > 30000U);
@@ -1285,12 +1294,13 @@ int main(int argc, char **argv)
     scenario_state state = {0};
     char path[4096];
     REQUIRE((argc == 4 || argc == 5) && strlen(argv[1]) < sizeof(address.sun_path));
+    bool native_budget_fund = strcmp(argv[2], "--native-budget-fund") == 0;
     bool recovered = strcmp(argv[2], "--module-maintenance-recovered") == 0;
     bool handover_prepare = strcmp(argv[2], "--handover-prepare") == 0;
     bool handover_queue = strcmp(argv[2], "--handover-queue") == 0;
     bool handover_apply = strcmp(argv[2], "--handover-apply") == 0 || handover_queue;
     bool handover_recovered = strcmp(argv[2], "--handover-recovered") == 0;
-    REQUIRE((argc == 4 && (recovered || handover_prepare || strcmp(argv[2], "--module-maintenance") == 0)) ||
+    REQUIRE((argc == 4 && (native_budget_fund || recovered || handover_prepare || strcmp(argv[2], "--module-maintenance") == 0)) ||
         (argc == 5 && (handover_apply || handover_recovered)));
     REQUIRE(signer_init(&owner, 0x11U) == 0 && signer_init(&provider, 0x33U) == 0);
     int length = snprintf(path, sizeof(path), "%s/scenario.bin", argv[3]);
@@ -1305,7 +1315,8 @@ int main(int argc, char **argv)
     int descriptor = socket(AF_UNIX, SOCK_STREAM, 0);
     REQUIRE(descriptor >= 0 && connect(descriptor, (struct sockaddr *)&address, sizeof(address)) == 0);
     REQUIRE(handshake(descriptor) == 0);
-    if (handover_apply || handover_recovered)
+    if (native_budget_fund) REQUIRE(scenario_fund(descriptor, argv[3], &state) == 0);
+    else if (handover_apply || handover_recovered)
         REQUIRE(scenario_handover(descriptor, argv[3], argv[4], &state, &owner, handover_recovered, handover_queue) == 0);
     else if (recovered) REQUIRE(scenario_recovered(descriptor, argv[3], &state, &owner) == 0);
     else {
@@ -1314,6 +1325,10 @@ int main(int argc, char **argv)
         REQUIRE(file != NULL && fwrite(&state, sizeof(state), 1U, file) == 1U && fclose(file) == 0);
     }
     REQUIRE(close(descriptor) == 0);
+    if (native_budget_fund) {
+        puts("actual custody credit and native maintenance proofs verified before Budget client");
+        return 0;
+    }
     if (handover_prepare || handover_apply || handover_recovered) {
         puts(handover_prepare ? "funded module states prepared for authenticated handover" :
             handover_queue ? "authenticated handover durably admitted before activation" :
