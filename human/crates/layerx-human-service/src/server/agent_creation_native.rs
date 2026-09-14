@@ -39,7 +39,7 @@ impl NativeAgentCreationContract for ProductionAgentCreation<'_> {
                 .runtime
                 .account_state(account_id)
                 .map_err(map_boundary)?;
-            if state.name != account.as_str().as_bytes()
+            if state.name != account.canonical().as_bytes()
                 || state.account_id != account_id
                 || state.frozen
                 || state.authority_key.is_none()

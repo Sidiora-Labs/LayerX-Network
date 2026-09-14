@@ -453,7 +453,6 @@ impl ProtocolEvidence {
                 .protocol()
                 .ok_or(AgentFailure::Refused("native asset receipt is missing"))?;
             if protocol.activity_id() != self.activity_id
-                || protocol.network_id() != self.network_id
                 || protocol.protocol_version() != 3
                 || protocol.module_id() != 1
                 || u16::from(protocol.operation()) != expected.ordinal()

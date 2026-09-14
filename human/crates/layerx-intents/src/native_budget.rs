@@ -39,12 +39,12 @@ impl NativeBudgetCreate {
         {
             return Err(invalid());
         }
-        let source = self.source_account.as_str();
+        let source = self.source_account.canonical();
         let owner = source
             .strip_suffix(":main")
             .or_else(|| source.strip_suffix(&format!(":asset:{}", hex(&self.asset))))
             .ok_or_else(invalid)?;
-        if self.budget_account.as_str() != format!("{owner}:budget:{}", hex(&self.budget_id)) {
+        if self.budget_account.canonical() != format!("{owner}:budget:{}", hex(&self.budget_id)) {
             return Err(invalid());
         }
         let mut encoded = Encoder::new(251);

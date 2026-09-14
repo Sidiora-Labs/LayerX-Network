@@ -441,7 +441,6 @@ impl CreationJourney {
             .protocol()
             .ok_or(AgentCreationError::EvidenceConflict)?;
         if protocol.activity_id() != evidence.activity_id
-            || protocol.network_id() != self.record.network_id
             || protocol.protocol_version() != 3
             || (kind.module() == layerx_types::payload::ModuleId::Asset
                 && (protocol.module_id() != 1 || u16::from(protocol.operation()) != kind.ordinal()))
