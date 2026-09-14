@@ -4,7 +4,7 @@
 #include "layerx/lxp_daemon.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_da.h"
-#include "layerx/lxp_replay.h"
+#include "layerx/lxp_replica.h"
 
 #include <openssl/bn.h>
 #include <openssl/ec.h>
