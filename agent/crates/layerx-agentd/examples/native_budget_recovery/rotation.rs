@@ -113,6 +113,17 @@ fn rotate(fixture: &mut Fixture, id: u8, next: SigningKey) -> Result<()> {
     while now_ms()? < begin {
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
+    fixture.create(id.checked_add(0x10).ok_or("rotation batch id overflow")?)?;
+    checked(fixture.client.reconnect())?;
+    let prepared = checked(fixture.client.preparation_state(&fixture.did, 8302))?;
+    assert!(prepared.protocol_timestamp >= begin);
+    assert!(
+        prepared
+            .protocol_timestamp
+            .checked_add(30_000)
+            .ok_or("rotation bound overflow")?
+            <= end
+    );
     let signed = fixture.signed(0x0007_0002, id + 1, checked(commit.payload())?)?;
     let committed = fixture.submit(signed.exact_bytes())?;
     assert_eq!(result_code(&committed.0)?, 0);
