@@ -2,6 +2,8 @@
 
 A receipt is the only artefact in LayerX Network that constitutes proof. Everything else - a `200`, a webhook, a journey in state `done`, a dashboard row - is a report about a payment. The receipt is the payment.
 
+The verifier is implemented in source (`layerx-proof` and the offline `layerx receipt verify` path). That the code exists is not a claim that it has passed its executed gates: the beta contract records the receipt surfaces at rung `source_present`, so run the local verification commands yourself and treat a verified receipt, never this page, as the proof.
+
 ## What verification needs
 
 Verifying a receipt takes exactly two things: the canonical receipt bytes, and the batch facts they should be checked against.

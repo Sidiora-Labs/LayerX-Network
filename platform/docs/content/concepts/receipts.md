@@ -4,6 +4,8 @@ A receipt is the thing that makes a LayerX Network payment different from a data
 
 That is the whole point: someone who trusts none of the operators can still check the claim.
 
+The verification path is implemented in source, but the beta contract records the receipt surfaces at rung `source_present` without a release-bound gate record in that contract. Treat the commands below as the way to produce your own proof, not as evidence that the system has been qualified.
+
 ## What verification actually checks
 
 | Check | What a failure means |
