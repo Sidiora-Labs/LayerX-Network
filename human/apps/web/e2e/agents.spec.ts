@@ -18,6 +18,7 @@ import {
   journeyProgress,
   keyChallengePresentation,
   parseMonthlyLimit,
+  parseRotationTiming,
   spendPresentation,
   type Agent,
   type AgentControlContext,
@@ -637,4 +638,14 @@ test("reclaim journey completion returns money from agent to human", async () =>
   const progress = journeyProgress(mockJourney);
   assert.equal(progress.complete, true);
   assert.equal(progress.kind, "move");
+});
+
+
+test("rotation timing preserves explicit bounded seconds and rejects ambiguous input", () => {
+  assert.deepEqual(parseRotationTiming("86400", "3600"), { delay_seconds: 86400, window_seconds: 3600 });
+  assert.deepEqual(parseRotationTiming("1", "4294967295"), { delay_seconds: 1, window_seconds: 4_294_967_295 });
+  for (const invalid of ["", "0", "-1", "1.5", "1e3", "Infinity", "4294967296", "999999999999999999999"]) {
+    assert.equal(parseRotationTiming(invalid, "1"), undefined);
+    assert.equal(parseRotationTiming("1", invalid), undefined);
+  }
 });

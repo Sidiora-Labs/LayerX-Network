@@ -52,3 +52,52 @@ fn operation_digest_schema_codec_is_strict_and_round_trips() {
     assert!(OperationDigest::parse_schema(&encoded.to_uppercase()).is_err());
     assert!(OperationDigest::parse_schema("opd_ab").is_err());
 }
+
+#[test]
+fn owner_rotation_requires_step_up_and_preserves_the_legacy_bodyless_contract() {
+    use layerx_human_service::server::schema::AuthorizationClass;
+    let schema = ApiSchema::v1().unwrap_or_else(|error| panic!("schema: {error}"));
+    let operation = schema
+        .operation("agent.rotation.start")
+        .unwrap_or_else(|| panic!("rotation operation"));
+    assert_eq!(
+        operation.authorization_class,
+        AuthorizationClass::SecuritySettings
+    );
+    assert!(operation.idempotency);
+    let vector: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../schema/human-api/golden/agent.rotation.start.request.json"
+    ))
+    .unwrap_or_else(|error| panic!("rotation vector: {error:?}"));
+    let body = vector["body"].clone();
+    assert_eq!(
+        schema
+            .decode_request(operation, Some(body.clone()))
+            .unwrap_or_else(|error| panic!("request: {error:?}")),
+        body
+    );
+    for field in ["delay_seconds", "window_seconds", "step_up"] {
+        let mut missing = body.clone();
+        missing
+            .as_object_mut()
+            .unwrap_or_else(|| panic!("object"))
+            .remove(field);
+        assert!(schema.decode_request(operation, Some(missing)).is_err());
+    }
+    let legacy = schema
+        .operation("agent.rotate")
+        .unwrap_or_else(|| panic!("legacy rotate"));
+    assert!(schema.decode_request(legacy, None).is_ok());
+    assert!(schema.decode_request(legacy, Some(body)).is_err());
+    let route = schema
+        .route("POST", "/v1/agents/agt_rotation/rotation")
+        .unwrap_or_else(|error| panic!("route: {error:?}"))
+        .unwrap_or_else(|| panic!("match"));
+    assert_eq!(route.operation.name, "agent.rotation.start");
+    assert_eq!(route.path_parameters["agent_id"], "agt_rotation");
+    let disclosure = schema
+        .operation("agent.rotation.disclosure")
+        .unwrap_or_else(|| panic!("disclosure"));
+    assert_eq!(disclosure.authorization_class, AuthorizationClass::Read);
+    assert!(!disclosure.is_public_bootstrap());
+}

@@ -1388,3 +1388,6 @@ impl From<AuthError> for ProductionAuthError {
         Self::Auth(v)
     }
 }
+
+#[cfg(test)]
+mod rotation_tests;
