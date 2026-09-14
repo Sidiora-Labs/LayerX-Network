@@ -3,6 +3,8 @@
 
 #include "layerx/lxp_daemon.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_da.h"
+#include "layerx/lxp_replay.h"
 
 #include <openssl/bn.h>
 #include <openssl/ec.h>
@@ -1137,10 +1139,52 @@ static int verify_multi_activity_records(
     return 0;
 }
 
+static int prepare_recovery_body(test_fixture *fixture, lxp_arena *arena,
+                                  lxp_batch_body *body)
+{
+    lxp_byte_span activities[2];
+    lxp_byte_span receipts[2];
+    lxp_byte_span events[2];
+    lxp_byte_span encoded;
+    lxp_receipt receipt;
+    size_t index;
+    (void)memset(body, 0, sizeof(*body));
+    if (lxp_batch_header_decode(fixture->canonical_header,
+            sizeof(fixture->canonical_header), &body->header) != LXP_OK)
+        return 1;
+    for (index = 0U; index < 2U; ++index) {
+        activities[index] = (lxp_byte_span){
+            fixture->canonical_activity[index],
+            fixture->canonical_activity_length[index]};
+        receipts[index] = (lxp_byte_span){
+            fixture->canonical_receipt[index],
+            fixture->canonical_receipt_length[index]};
+        if (lxp_receipt_decode(receipts[index].bytes, receipts[index].length,
+                true, &receipt) != LXP_OK ||
+            lxp_programs_project_receipt_events(&receipt, arena,
+                &events[index]) != LXP_OK)
+            return 1;
+    }
+    if (lxp_replay_section_encode(activities, 2U, arena,
+            &body->activities) != LXP_OK ||
+        lxp_da_receipt_section_encode(receipts, 2U, events, 2U, arena,
+            &body->receipts) != LXP_OK ||
+        lxp_batch_availability_root(body, arena,
+            body->header.data_availability_root) != LXP_OK ||
+        lxp_batch_sign(&body->header, fixture->sequencer_private,
+            &fixture->authorization, body->sequencer_signature, arena) != LXP_OK ||
+        lxp_batch_header_encode(&body->header, arena, &encoded) != LXP_OK ||
+        encoded.length != sizeof(fixture->canonical_header))
+        return 1;
+    (void)memcpy(fixture->canonical_header, encoded.bytes, encoded.length);
+    (void)memcpy(fixture->header_signature, body->sequencer_signature, 64U);
+    return 0;
+}
+
 static int partial_multi_activity_child(
     const char *canonical_path, const char *authority_path,
     const char *evidence_path, test_fixture *fixture,
-    finality_authority *authority)
+    finality_authority *authority, const lxp_batch_body *body)
 {
     uint8_t *arena_memory = malloc(TEST_ARENA_BYTES);
     lxp_arena arena;
@@ -1170,6 +1214,8 @@ static int partial_multi_activity_child(
                 fixture->canonical_receipt[index],
                 (uint32_t)fixture->canonical_receipt_length[index], NULL);
     }
+    if (status == LXP_OK)
+        status = lxp_da_log_store_body(&canonical_log, body, &arena);
     if (status == LXP_OK)
         status = lxp_log_write_boundary(&canonical_log);
     if (status == LXP_OK)
@@ -1222,6 +1268,7 @@ static int recover_multi_activity_batch(
     lxp_log evidence_log;
     lxp_daemon_receipt_authority_store receipt_authority;
     lxp_daemon_evidence_store evidence_store;
+    lxp_batch_body body;
     uint64_t recovered_end;
     pid_t child;
     int child_status;
@@ -1230,6 +1277,8 @@ static int recover_multi_activity_batch(
     bool evidence_open = false;
     int result = 1;
     if (arena_memory == NULL ||
+        lxp_arena_init(&arena, arena_memory, TEST_ARENA_BYTES) != LXP_OK ||
+        prepare_recovery_body(fixture, &arena, &body) != 0 ||
         mkdtemp(canonical_directory) == NULL ||
         mkdtemp(authority_directory) == NULL ||
         mkdtemp(evidence_directory) == NULL ||
@@ -1254,7 +1303,7 @@ static int recover_multi_activity_batch(
     if (child == 0)
         _exit(partial_multi_activity_child(
             canonical_path, authority_path, evidence_path, fixture,
-            authority) == 0 ? 93 : 1);
+            authority, &body) == 0 ? 93 : 1);
     if (waitpid(child, &child_status, 0) != child ||
         !WIFEXITED(child_status) || WEXITSTATUS(child_status) != 93)
         goto cleanup;
@@ -1276,8 +1325,10 @@ static int recover_multi_activity_batch(
     if (lxp_daemon_evidence_open(
             &evidence_store, &evidence_log, TEST_NETWORK_ID,
             &fixture->authorization, fixture->initial_anchor, false,
-            verify_finality_authority, authority, &arena) != LXP_OK ||
-        evidence_store.record_count != 1U ||
+            verify_finality_authority, authority, &arena) != LXP_OK)
+        goto cleanup;
+    evidence_store.availability_log = &canonical_log;
+    if (evidence_store.record_count != 1U ||
         lxp_daemon_activity_evidence_recover_batch(
             &evidence_store, &canonical_log, &receipt_authority,
             &fixture->authorization,
