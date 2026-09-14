@@ -1196,8 +1196,10 @@ impl AgentRuntime {
     }
     /// # Errors
     /// Refuses unauthenticated state or a canonical account not bound to the requested ID.
-    pub fn account_state(&mut self, account_id: [u8; 32])
-        -> Result<layerx_proof::state::CanonicalAccount, AgentBoundaryError> {
+    pub fn account_state(
+        &mut self,
+        account_id: [u8; 32],
+    ) -> Result<layerx_proof::state::CanonicalAccount, AgentBoundaryError> {
         let mut writer = Writer::new(ACCOUNT_STATE);
         writer.fixed(&account_id);
         let mut reader = self.exchange(&writer.finish())?;
@@ -1207,8 +1209,11 @@ impl AgentRuntime {
         let proof = reader.bytes()?;
         let sequence = reader.u64()?;
         reader.finish()?;
-        if observed != account_id || level < layerx_types::verify::VerificationLevel::STATE_PROVEN.wire_rank()
-            || proof.is_empty() || sequence == 0 {
+        if observed != account_id
+            || level < layerx_types::verify::VerificationLevel::STATE_PROVEN.wire_rank()
+            || proof.is_empty()
+            || sequence == 0
+        {
             return Err(AgentBoundaryError::CorruptResponse);
         }
         layerx_proof::state::decode_account_value(account_id, &bytes)

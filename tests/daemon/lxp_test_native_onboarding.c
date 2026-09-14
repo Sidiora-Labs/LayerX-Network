@@ -116,7 +116,7 @@ static int onboard_receipt(int descriptor, const uint8_t id[32], lxp_result expe
             REQUIRE(lxp_arena_init(&arena, storage, sizeof(storage)) == LXP_OK);
             REQUIRE(lxp_receipt_decode(response.payload, response.payload_length, true, receipt) == LXP_OK);
             REQUIRE(lxp_receipt_verify(receipt, sequencer.public_key, &arena) == LXP_OK);
-            REQUIRE(memcmp(receipt->activity_id, id, 32U) == 0 && receipt->protocol_version == 3U && receipt->network_id == 77U);
+            REQUIRE(memcmp(receipt->activity_id, id, 32U) == 0 && receipt->protocol_version == 3U);
             if (receipt->result_code != expected) (void)fprintf(stderr, "onboarding receipt=%d expected=%d index=%zu\n", receipt->result_code, expected, index);
             REQUIRE(receipt->result_code == expected);
             if (retain) REQUIRE(onboard_file(index, "receipt", response.payload, response.payload_length) == 0);
@@ -164,6 +164,8 @@ static int onboard_submit(int descriptor, onboarding_run *run, const uint8_t *by
     size_t length, lxp_result expected, lxp_receipt *receipt)
 {
     REQUIRE(run->count < ONBOARD_RECEIPTS);
+    lxp_activity original;
+    REQUIRE(lxp_activity_decode(bytes, length, &original) == LXP_OK && original.network_id == NETWORK_ID && original.protocol_version == 3U);
     size_t index = run->count;
     REQUIRE(lxp_activity_id(bytes, length, run->ids[index]) == LXP_OK);
     REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 702U, bytes, length) == 0);

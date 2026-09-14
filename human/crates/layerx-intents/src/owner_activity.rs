@@ -35,18 +35,38 @@ pub fn unsigned_native(
     let mut builder = EnvelopeBuilder::new();
     builder.protocol_version(3).map_err(invalid)?;
     builder.network_id(context.network_id).map_err(invalid)?;
-    builder.activity_type(compiled.activity_type()).map_err(invalid)?;
+    builder
+        .activity_type(compiled.activity_type())
+        .map_err(invalid)?;
     builder.actor_did(context.actor.clone()).map_err(invalid)?;
-    builder.authority(Authority::owner(&context.owner_public_key).map_err(invalid)?).map_err(invalid)?;
-    builder.account_sequence(context.account_sequence).map_err(invalid)?;
-    builder.timestamp_bound(TimestampBound::new(context.not_before_ms, context.not_after_ms).map_err(invalid)?).map_err(invalid)?;
-    builder.idempotency_key(IdempotencyKey::new(context.action_key)).map_err(invalid)?;
-    builder.fee_limit(Amount::from_u128(context.fee_limit)).map_err(invalid)?;
-    builder.payload_hash(compiled.payload_hash()).map_err(invalid)?;
-    builder.payload(compiled.payload().clone()).map_err(invalid)?;
+    builder
+        .authority(Authority::owner(&context.owner_public_key).map_err(invalid)?)
+        .map_err(invalid)?;
+    builder
+        .account_sequence(context.account_sequence)
+        .map_err(invalid)?;
+    builder
+        .timestamp_bound(
+            TimestampBound::new(context.not_before_ms, context.not_after_ms).map_err(invalid)?,
+        )
+        .map_err(invalid)?;
+    builder
+        .idempotency_key(IdempotencyKey::new(context.action_key))
+        .map_err(invalid)?;
+    builder
+        .fee_limit(Amount::from_u128(context.fee_limit))
+        .map_err(invalid)?;
+    builder
+        .payload_hash(compiled.payload_hash())
+        .map_err(invalid)?;
+    builder
+        .payload(compiled.payload().clone())
+        .map_err(invalid)?;
     let envelope = builder.build().map_err(invalid)?;
-    let bytes = canonical::unsigned_envelope_bytes(&envelope).map_err(|_| OwnerActivityError::Encoding)?;
-    let disclosure = layerx_crypto::disclosure::bind(&bytes, registry).map_err(|_| OwnerActivityError::Binding)?;
+    let bytes =
+        canonical::unsigned_envelope_bytes(&envelope).map_err(|_| OwnerActivityError::Encoding)?;
+    let disclosure = layerx_crypto::disclosure::bind(&bytes, registry)
+        .map_err(|_| OwnerActivityError::Binding)?;
     Ok((bytes, disclosure))
 }
 

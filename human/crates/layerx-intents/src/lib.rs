@@ -5,8 +5,8 @@ pub mod canonical;
 mod compiler;
 mod disclosure;
 pub mod golden;
-mod native_custody;
 mod native_budget;
+mod native_custody;
 mod native_receive;
 pub mod owner_activity;
 mod reject;
@@ -16,8 +16,8 @@ mod vocabulary;
 
 pub use compiler::{compile, CompileError, CompileErrorReason, CompileField, CompiledIntent};
 pub use disclosure::{DisclosureCheck, DisclosureCheckError, DisclosureField};
-pub use native_custody::NativeCustodyCredit;
 pub use native_budget::NativeBudgetCreate;
+pub use native_custody::NativeCustodyCredit;
 pub use native_receive::NativeReceive;
 pub use reject::{inspect_intent, IntentHeader, IntentKindTag, RejectReason, RejectedIntent};
 

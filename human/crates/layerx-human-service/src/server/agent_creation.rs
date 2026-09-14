@@ -283,7 +283,9 @@ impl<'a> ProductionAgentCreation<'a> {
         scope: &mut PrincipalScope<'_>,
         action: &ProtocolAction,
     ) -> Result<ProtocolEvidence, AgentFailure> {
-        if let Some(evidence) = self.retained_protocol_evidence(scope, action)? { return Ok(evidence); }
+        if let Some(evidence) = self.retained_protocol_evidence(scope, action)? {
+            return Ok(evidence);
+        }
         let prepared = self.prepare_action(scope, action)?;
         let principal = scope.principal().clone();
         let descriptor = self.signing_descriptor(&principal, action)?;
@@ -786,11 +788,16 @@ impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
         scope: &mut PrincipalScope<'_>,
         action: ProtocolAction,
     ) -> Result<ProtocolEvidence, AgentFailure> {
-        let Some(actor) = &action.actor else { return self.submit_scoped(scope, &action); };
+        let Some(actor) = &action.actor else {
+            return self.submit_scoped(scope, &action);
+        };
         let descriptor = self.signing_descriptor(scope.principal(), &action)?;
-        let actor = AgentDid::new(std::str::from_utf8(actor.as_bytes())
-            .map_err(|_| AgentFailure::Refused("invalid managed actor"))?.to_owned())
-            .map_err(|_| AgentFailure::Refused("invalid managed actor"))?;
+        let actor = AgentDid::new(
+            std::str::from_utf8(actor.as_bytes())
+                .map_err(|_| AgentFailure::Refused("invalid managed actor"))?
+                .to_owned(),
+        )
+        .map_err(|_| AgentFailure::Refused("invalid managed actor"))?;
         let authority = AuthorityRef::new(hex(&descriptor.public_key))
             .map_err(|_| AgentFailure::Refused("invalid managed owner"))?;
         let previous_actor = std::mem::replace(&mut self.actor, actor);

@@ -27,6 +27,8 @@ static lxp_result consent_decode(lxp_module_ctx *ctx,
     uint8_t sponsor[32], activity_id[32];
     const lx_programs_transfer_runtime *runtime;
     lxp_result status;
+    size_t arena_mark = lxp_arena_mark(ctx->arena);
+    bool canonical_match = false;
     if (activity->activity_type != 0x00070001U || activity->protocol_version != 3U ||
         activity->payload.length < 8U ||
         memcmp(activity->payload.bytes, "\x71\x01\x02\x01", 4U) != 0 ||
@@ -37,6 +39,7 @@ static lxp_result consent_decode(lxp_module_ctx *ctx,
     if (status == LXP_OK) status = lxp_activity_verify_signature(activity);
     if (status == LXP_OK) status = lxp_activity_encode(activity, ctx->arena, &canonical);
     if (status == LXP_OK) status = lxp_activity_id(canonical.bytes, canonical.length, activity_id);
+    if (lxp_arena_reset(ctx->arena, arena_mark) != LXP_OK) return LXP_FATAL_INVARIANT;
     if (status != LXP_OK) return status;
     if (memcmp(activity_id, ctx->activity_id, 32U) != 0) return LXP_ERR_CONTEXT_MISMATCH;
     status = lxp_codec_reader_init(&reader, activity->payload.bytes + 4U, activity->payload.length - 4U);
@@ -44,8 +47,11 @@ static lxp_result consent_decode(lxp_module_ctx *ctx,
     if (status == LXP_OK) status = lxp_codec_finish(&reader);
     if (status == LXP_OK) status = lxp_activity_decode(encoded.bytes, encoded.length, consent);
     if (status == LXP_OK) status = lxp_activity_encode(consent, ctx->arena, &canonical);
+    if (status == LXP_OK) canonical_match = canonical.length == encoded.length &&
+        memcmp(canonical.bytes, encoded.bytes, encoded.length) == 0;
+    if (lxp_arena_reset(ctx->arena, arena_mark) != LXP_OK) return LXP_FATAL_INVARIANT;
     if (status != LXP_OK) return status;
-    if (canonical.length != encoded.length || memcmp(canonical.bytes, encoded.bytes, encoded.length) != 0 ||
+    if (!canonical_match ||
         consent->protocol_version != 3U || consent->network_id != activity->network_id ||
         consent->activity_type != 0x00070001U || consent->authority.length != 32U ||
         consent->signature.length != 64U || !lxp_ed25519_pubkey_is_canonical(consent->authority.bytes) ||
