@@ -3720,6 +3720,13 @@ $(BUILD_DIR)/tests/lxp_test_guarantor_integration: tests/daemon/guarantor-integr
 	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) -lssl -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+$(BUILD_DIR)/tests/lxp_test_native_budget_finality: tests/daemon/native-budget-finality.c \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerx-guarantor/main.o,$(GUARANTOR_OBJECTS)) \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lssl -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 test-daemon-guarantor-unit: $(BUILD_DIR)/tests/lxp_test_guarantor_core \
 	$(BUILD_DIR)/tests/lxp_test_guarantor_exchange
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_guarantor_core

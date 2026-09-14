@@ -34,7 +34,7 @@ pub(crate) fn persist_native_outcome(
 ) -> Result<(), Error> {
     let raw = outcome.proof.receipt();
     let stored = StoredOutcome {
-        version: 1,
+        version: 2,
         period_start_ms: outcome.binding.period_start_ms,
         period_length_ms: outcome.binding.period_length_ms,
         expiry_ms: outcome.binding.expiry_ms,
@@ -69,7 +69,7 @@ pub(super) fn outcome(
         return Err(Error::Store);
     }
     let stored: StoredOutcome = serde_json::from_slice(value.bytes()).map_err(|_| Error::Store)?;
-    if stored.version != 1 {
+    if stored.version != 2 {
         return Err(Error::Store);
     }
     let proof = layerx_proof::merkle::decode_proof(&stored.proof).map_err(|_| Error::Store)?;

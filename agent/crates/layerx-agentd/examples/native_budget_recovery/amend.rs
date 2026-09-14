@@ -29,9 +29,9 @@ fn amend(
 }
 
 pub fn run(fixture: &mut Fixture) -> Result<()> {
-    let scope = fixture.create_with_lifetime(0xa0, 3_600_000, 1_800_000)?;
+    let scope = fixture.create_with_lifetime(0xb8, 3_600_000, 1_800_000)?;
     let original_expiry = scope.binding.expiry_ms;
-    let mut session = Session::with_scope(fixture, 0xa0, scope)?;
+    let mut session = Session::with_scope(fixture, 0xb8, scope)?;
     let previous = session.reconcile(fixture)?;
     let baseline = checked(retrieve_native_budget_evidence(
         &mut fixture.client,
@@ -115,7 +115,7 @@ pub fn run(fixture: &mut Fixture) -> Result<()> {
 }
 
 fn shorter_expiry(fixture: &mut Fixture) -> Result<()> {
-    let mut session = Session::open(fixture, 0xa1)?;
+    let mut session = Session::open(fixture, 0xb9)?;
     let owner = session.scope.binding.owner_account;
     let exact = session.enqueue(fixture, 0x43, owner)?;
     session.transition(0x43, SubmissionState::Submitted)?;
@@ -155,5 +155,29 @@ fn shorter_expiry(fixture: &mut Fixture) -> Result<()> {
         checked(session.outbox.exact_signed_bytes([0x43; 32]))?,
         exact
     );
+    let key = checked(layerx_agentd::store::TenantKey::new(
+        session.tenant.clone(),
+        layerx_agentd::store::ObjectKind::Budget,
+        [b"native-budget-terminal-v1:".as_slice(), &[0x43; 32]].concat(),
+    ))?;
+    let original = session
+        .store
+        .get(&key)
+        .ok_or("native terminal missing")?
+        .bytes()
+        .to_vec();
+    let mut legacy: serde_json::Value = serde_json::from_slice(&original)?;
+    assert_eq!(legacy["version"], 2);
+    legacy["version"] = 1.into();
+    checked(
+        session
+            .store
+            .put_local(key.clone(), serde_json::to_vec(&legacy)?),
+    )?;
+    session = session.restart(fixture)?;
+    assert!(session.reconcile(fixture).is_err());
+    checked(session.store.put_local(key, original))?;
+    session.reconcile(fixture)?;
+    session.assert_accounting(25, 0)?;
     Ok(())
 }

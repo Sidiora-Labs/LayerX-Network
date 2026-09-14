@@ -4,6 +4,8 @@ use std::error::Error;
 mod amend;
 #[path = "native_budget_recovery/expiry.rs"]
 mod expiry;
+#[path = "native_budget_recovery/finality.rs"]
+mod finality;
 #[path = "native_budget_recovery/fixture.rs"]
 mod fixture;
 #[path = "native_budget_recovery/refusals.rs"]

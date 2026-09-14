@@ -39,6 +39,7 @@ pub struct Fixture {
     socket: PathBuf,
     key: SigningKey,
     request: u64,
+    registered_batch: u64,
     clock: std::sync::Arc<layerx_client::runtime_clock::RuntimeClock>,
 }
 
@@ -117,6 +118,7 @@ impl Fixture {
             socket,
             key,
             request: 0,
+            registered_batch: 0,
             clock,
         })
     }
@@ -400,6 +402,14 @@ impl Fixture {
         }
         assert_eq!(response["version"], 1);
         assert_eq!(response["batch"], batch);
+        checked(self.client.reconnect())?;
+        super::finality::register(
+            &mut self.client,
+            &self.directory,
+            &response,
+            &mut self.registered_batch,
+            batch,
+        )?;
         checked(self.client.reconnect())?;
         let checkpoint = checked(
             self.client
