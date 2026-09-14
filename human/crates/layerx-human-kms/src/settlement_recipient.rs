@@ -23,8 +23,8 @@ impl Store {
         {
             return Err(Error::Refused);
         }
-        let identity =
-            layerx_wire::hash::did_id_for_protocol(&value.did, 3).map_err(|_| Error::Refused)?;
+        let identity = layerx_intents::canonical::did_id_for_protocol(&value.did, 3)
+            .map_err(|_| Error::Refused)?;
         if record
             .recipient_identity
             .is_some_and(|previous| previous != identity)

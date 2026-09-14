@@ -18,14 +18,14 @@ fn native_identity() -> (
             ModuleRegistration::new(ModuleId::Governance, &[activity_type]).expect("registry row"),
         ])
         .expect("registry");
-    let activity =
-        layerx_wire::activity::decode_signed(ACTIVITY, &registry).expect("actual native rotation");
+    let activity = layerx_intents::canonical::decode_signed_activity(ACTIVITY, &registry)
+        .expect("actual native rotation");
     let receipt = layerx_proof::receipt::verify_sequencer_signature(RECEIPT, *SEQUENCER)
         .expect("actual signed native receipt");
     let receipt = receipt.protocol().expect("native receipt");
     assert_eq!(
         receipt.activity_id(),
-        layerx_wire::hash::activity_id(&activity).expect("activity id")
+        layerx_intents::canonical::activity_id(&activity).expect("activity id")
     );
     assert_eq!(receipt.result_code(), 0);
     let state = receipt

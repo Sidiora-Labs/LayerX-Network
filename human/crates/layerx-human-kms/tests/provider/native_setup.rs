@@ -6,13 +6,15 @@ use layerx_crypto::disclosure::{
     bind, DisclosedNativeBudgetCreate, DisclosedNativeOperation, Disclosure, DisclosureError,
 };
 use layerx_crypto::onboarding::{OnboardingConsent, SponsoredRegistration};
+use layerx_intents::canonical as hash;
+use layerx_intents::canonical::{
+    signed_envelope_bytes as encode_signed_envelope,
+    unsigned_envelope_bytes as encode_unsigned_envelope,
+};
 use layerx_types::account::AccountId;
 use layerx_types::activity::{Signature, UnsignedEnvelope};
 use layerx_types::ids::Did;
 use layerx_types::payload::{ActivityType, ModuleId, Payload};
-use layerx_wire::activity::{encode_signed_envelope, encode_unsigned_envelope};
-use layerx_wire::encode::Encoder;
-use layerx_wire::hash;
 
 fn account(name: &str) -> Result<[u8; 32]> {
     checked(hash::account_id_for_protocol(
@@ -30,46 +32,24 @@ fn payload(module: ModuleId, ordinal: u16, bytes: &[u8]) -> Result<Payload> {
 }
 
 fn native_budget(version: u16) -> Result<Vec<u8>> {
-    let mut encoded = Encoder::new(251);
-    checked(encoded.u16(version))?;
-    checked(encoded.fixed(&[8; 32]))?;
-    checked(encoded.fixed(&account(&format!(
-        "agent:did:layerx:alice:budget:{}",
-        "08".repeat(32)
-    ))?))?;
-    checked(encoded.fixed(&[3; 32]))?;
-    checked(encoded.fixed(&[9; 32]))?;
-    for amount in [100, 0, 25] {
-        checked(encoded.u128(amount))?;
-    }
-    for number in [100, 1000, 2000, 3] {
-        checked(encoded.u64(number))?;
-    }
-    checked(encoded.u8(1))?;
-    if version == 2 {
-        checked(encoded.fixed(&account(&format!(
-            "agent:did:layerx:alice:asset:{}",
-            "03".repeat(32)
-        ))?))?;
-        checked(encoded.u64(2))?;
-    }
-    Ok(encoded.finish())
+    checked(layerx_intents::vectors::native_budget_create(
+        version,
+        account(&format!(
+            "agent:did:layerx:alice:budget:{}",
+            "08".repeat(32)
+        ))?,
+        account(&format!("agent:did:layerx:alice:asset:{}", "03".repeat(32)))?,
+    ))
 }
 
 fn recovery(extended: bool) -> Result<Vec<u8>> {
-    let mut encoded = Encoder::new(86);
-    checked(encoded.fixed(&[0x71, 3, 0, if extended { 5 } else { 3 }]))?;
-    checked(encoded.fixed(&checked(hash::did_id_for_protocol(
-        &checked(Did::new(b"did:layerx:alice"))?,
-        3,
-    ))?))?;
-    checked(encoded.fixed(&[7; 32]))?;
-    checked(encoded.u16(2))?;
-    if extended {
-        checked(encoded.u64(100))?;
-        checked(encoded.u64(500))?;
-    }
-    Ok(encoded.finish())
+    checked(layerx_intents::vectors::native_recovery_policy(
+        extended,
+        checked(hash::did_id_for_protocol(
+            &checked(Did::new(b"did:layerx:alice"))?,
+            3,
+        ))?,
+    ))
 }
 
 fn mutated_native(disclosure: &Disclosure) -> Vec<Disclosure> {
