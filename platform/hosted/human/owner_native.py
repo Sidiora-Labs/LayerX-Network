@@ -10,12 +10,14 @@ import struct
 import subprocess
 import time
 import urllib.request
+import urllib.error
 import urllib.parse
 
 from provision import Refused, fields, h32, protected_bytes, protected_json, require, uint, write_json
 
 GUARDIAN_ROLES = ('guarantor-1', 'guarantor-2', 'sequencer')
 GUARDIAN_EPOCH_MAXIMUM = 64
+LNI_VERSION = (1, 5)
 
 
 def digest(domain, data):
@@ -66,12 +68,12 @@ def receipt(socket_path, activity_id):
         return bytes(data)
 
     def exchange(connection, tag, correlation, payload):
-        envelope = struct.pack('>HHHQ', 1, 4, tag, correlation) + span(payload) + span(b'')
+        envelope = struct.pack('>HHHQ', *LNI_VERSION, tag, correlation) + span(payload) + span(b'')
         connection.sendall(span(envelope))
         length = int.from_bytes(read_exact(connection, 4), 'big')
         require(22 <= length <= 1212416, socket_path, 'receipt frame bound')
         reader = Reader(read_exact(connection, length), socket_path)
-        require(reader.take(4) == b'\0\1\0\4', socket_path, 'LNI version')
+        require(reader.take(4) == struct.pack('>HH', *LNI_VERSION), socket_path, 'LNI version')
         returned_tag = reader.number(2)
         require(reader.number(8) == correlation, socket_path, 'LNI correlation')
         data = reader.span(1212416)
@@ -91,6 +93,36 @@ def receipt(socket_path, activity_id):
             time.sleep(0.1)
     raise Refused(f'{socket_path}: committed receipt unavailable; do not resubmit with a new idempotency key')
 
+
+
+def authority_document(request, context, path):
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            with urllib.request.urlopen(request, context=context,
+                    timeout=max(0.001, deadline - time.monotonic())) as response:
+                body = response.read(1048577)
+                require(len(body) <= 1048576, path, 'authority document bound')
+                return json.loads(body)
+        except urllib.error.HTTPError as error:
+            if error.code not in (404, 503):
+                raise
+            try:
+                document = json.loads(error.read(4097))
+                refusal = document['error']
+                code = refusal['code']
+                delay = refusal.get('retry_after_seconds', 0.1)
+            except (ValueError, KeyError, TypeError):
+                raise error
+            if code not in ('unknown_activity', 'replica_evidence_unavailable',
+                            'replica_unavailable', 'receipt_source_unavailable'):
+                raise
+            if not isinstance(delay, (int, float)) or isinstance(delay, bool) or not 0 < delay <= 5:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(delay, remaining))
 
 def receipt_fields(data, public_key, path):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -336,17 +368,15 @@ def _produce(work_dir):
         require(result['activity_id'] == activity_id.hex() and result['module'] == module and result['version'] == 1,
                 receipt_path, 'receipt activity/module binding')
         token = protected_bytes(config['authority_token_file'], 4096).decode('ascii')
-        request = urllib.request.Request(config['authority_url'].rstrip('/') + '/internal/v1/activities/' + activity_id.hex() + '/authority',
+        request = urllib.request.Request(config['authority_url'].rstrip('/') + '/v1/authorized-batches/wait-by-activity/' + activity_id.hex(),
                                          headers={'Authorization': 'Bearer ' + token})
         context = ssl.create_default_context(cafile=config['authority_ca_file'])
-        with urllib.request.urlopen(request, context=context, timeout=30) as response:
-            verified = json.loads(response.read(1048577))
+        verified = authority_document(request, context, receipt_path)
         require(verified['activity_id'] == activity_id.hex() and verified['batch_id'] == result['batch']
                 and verified['sequencer_public_key'] == config['sequencer_public_key'], receipt_path, 'authorized batch binding')
         proof_url = config['authority_url'].rstrip('/') + '/v1/batches/' + result['batch'] + '/receipt-authority?receipt_digest=' + result['receipt_digest']
         request = urllib.request.Request(proof_url, headers={'Authorization': 'Bearer ' + token})
-        with urllib.request.urlopen(request, context=context, timeout=30) as response:
-            document = json.loads(response.read(1048577))
+        document = authority_document(request, context, receipt_path)
         record = json.dumps(dict(receipt_hex=raw.hex(), replica_document=document),
                             sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
         protected_write(evidence_dir / (activity_id.hex() + '.json'), record)

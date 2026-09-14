@@ -2200,11 +2200,13 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     lxp_result status;
     size_t selector_length = request->payload_length;
     bool wait_publication = false;
+    bool require_publication = false;
     int64_t wait_until;
     struct timespec wait_deadline;
     if (request->minor >= 5U && (selector_length == 34U || selector_length == 10U) &&
         request->payload[selector_length - 1U] == 1U) {
         wait_publication = true;
+        require_publication = true;
         --selector_length;
     }
     (void)memset(&query, 0, sizeof(query));
@@ -2252,8 +2254,8 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
                 free(storage);
                 return LXP_ERR_IO;
             }
-            status = pending_receipt_lookup(server->owner, &query, &arena,
-                                            &receipt);
+            status = require_publication ? LXP_ERR_UNKNOWN_ACTIVITY :
+                pending_receipt_lookup(server->owner, &query, &arena, &receipt);
             published_log = server->owner->published_receipt_log;
             if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0) {
                 free(storage);

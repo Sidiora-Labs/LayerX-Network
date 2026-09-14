@@ -14,12 +14,14 @@ path = "src/main.rs"
 
 [dependencies]
 layerx-client.workspace = true
+layerx-crypto.workspace = true
 layerx-proof.workspace = true
 layerx-wire.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+signal-hook = "=0.3.18"
 subtle.workspace = true
 zeroize.workspace = true
 

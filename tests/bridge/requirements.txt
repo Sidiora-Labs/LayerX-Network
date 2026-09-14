@@ -1,2 +1,4 @@
 cryptography>=42
 pycryptodome>=3.20
+eth-account==0.13.7
+eth-utils==6.0.0
