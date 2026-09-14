@@ -1,5 +1,18 @@
 use support::send_authorization;
 
+#[path = "support/native_budget.rs"]
+mod native_budget;
+
+#[test]
+fn lost_resend_response_keeps_budget_and_ceiling_held_and_reuses_exact_bytes() {
+    native_budget::run("unknown");
+}
+
+#[test]
+fn native_budget_recovery_refuses_substituted_proofs_windows_and_history() {
+    native_budget::run("refusals");
+}
+
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::pin;

@@ -1,95 +1,4 @@
-#[derive(Debug, Eq, PartialEq)]
-pub(super) struct Record {
-    pub id: [u8; 32],
-    pub owner: [u8; 32],
-    pub account: [u8; 32],
-    pub asset: [u8; 32],
-    pub source: Option<[u8; 32]>,
-    pub limit: u128,
-    pub spent: u128,
-    pub period_start: u64,
-    pub expiry: u64,
-    pub revocation: u64,
-    pub closed: bool,
-    pub revoked: bool,
-}
-
-fn field<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], ()> {
-    bytes
-        .get(offset..offset + N)
-        .ok_or(())?
-        .try_into()
-        .map_err(|_| ())
-}
-
-impl Record {
-    pub fn decode(bytes: &[u8]) -> Result<Self, ()> {
-        if bytes.len() < 278
-            || bytes[0] != 0
-            || !matches!(bytes[1], 1 | 2)
-            || bytes[275] > 1
-            || bytes[276] > 1
-            || bytes[277] > 16
-        {
-            return Err(());
-        }
-        let delegates = usize::from(bytes[277]);
-        let source_offset = 278 + delegates * 32;
-        let has_source = bytes[1] == 2;
-        if bytes.len() != source_offset + if has_source { 32 } else { 0 }
-            || bytes[278..source_offset]
-                .chunks_exact(32)
-                .collect::<Vec<_>>()
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
-        {
-            return Err(());
-        }
-        let record = Self {
-            id: field(bytes, 2)?,
-            owner: field(bytes, 34)?,
-            account: field(bytes, 66)?,
-            asset: field(bytes, 98)?,
-            source: if has_source {
-                Some(field(bytes, source_offset)?)
-            } else {
-                None
-            },
-            limit: u128::from_be_bytes(field(bytes, 162)?),
-            spent: u128::from_be_bytes(field(bytes, 210)?),
-            period_start: u64::from_be_bytes(field(bytes, 250)?),
-            expiry: u64::from_be_bytes(field(bytes, 258)?),
-            revocation: u64::from_be_bytes(field(bytes, 266)?),
-            closed: bytes[275] == 1,
-            revoked: bytes[276] == 1,
-        };
-        let period = u64::from_be_bytes(field(bytes, 242)?);
-        let carry_cap = u128::from_be_bytes(field(bytes, 194)?);
-        if record.id == [0; 32]
-            || record.source == Some([0; 32])
-            || record.limit == 0
-            || period == 0
-            || record.expiry <= record.period_start
-            || !matches!(bytes[274], 1 | 2)
-            || (bytes[274] == 1 && carry_cap != 0)
-        {
-            return Err(());
-        }
-        Ok(record)
-    }
-
-    pub fn remaining(&self, balance: u128, timestamp_ms: u64, frozen: bool) -> u128 {
-        if self.closed
-            || self.revoked
-            || frozen
-            || timestamp_ms >= self.expiry
-            || timestamp_ms < self.period_start
-        {
-            return 0;
-        }
-        self.limit.saturating_sub(self.spent).min(balance)
-    }
-}
+pub(super) use layerx_wire::native_budget::BudgetRecord as Record;
 
 #[cfg(test)]
 mod tests {
@@ -116,7 +25,7 @@ mod tests {
     #[test]
     fn actual_native_versions_bind_source_revocation_and_remaining() {
         for (index, bytes) in vectors().iter().enumerate() {
-            let record = Record::decode(bytes).unwrap_or_else(|()| panic!("native record"));
+            let record = Record::decode(bytes).unwrap_or_else(|_| panic!("native record"));
             assert_eq!(record.id, [1; 32]);
             assert_eq!(record.owner, [2; 32]);
             assert_eq!(record.account, [3; 32]);
@@ -178,7 +87,7 @@ mod tests {
     #[test]
     fn exhausted_closed_and_revoked_budgets_never_report_spendable_value() {
         let [_, bytes] = vectors();
-        let mut record = Record::decode(&bytes).unwrap_or_else(|()| panic!("native record"));
+        let mut record = Record::decode(&bytes).unwrap_or_else(|_| panic!("native record"));
         record.spent = record.limit;
         assert_eq!(record.remaining(u128::MAX, 2000, false), 0);
         record.spent = u128::MAX;

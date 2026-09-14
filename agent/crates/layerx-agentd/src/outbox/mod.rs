@@ -10,6 +10,7 @@ use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 mod resolution;
 #[path = "recover.rs"]
 mod restart;
+mod native_budget;
 
 pub use resolution::{
     resolve_unknown, ReceiptLookup, ResendObservation, ResolutionObservation, UnknownAge,
@@ -298,6 +299,11 @@ impl Outbox {
         let status = updated.status.clone();
         self.records.insert(submission_id, updated);
         Ok(status)
+    }
+
+    #[must_use]
+    pub fn statuses(&self) -> Vec<SubmissionStatus> {
+        self.records.values().map(|record| record.status.clone()).collect()
     }
 
     #[must_use]

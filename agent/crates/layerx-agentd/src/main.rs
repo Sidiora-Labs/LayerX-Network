@@ -451,7 +451,7 @@ fn start_human_owner(mcp: Option<McpBoot>) -> Result<mpsc::Receiver<Result<(), S
     if let Some(boot) = mcp {
         publish_mcp_binding(&mut authority, &peers, &shared_store, &store_path, boot)?;
     }
-    let operations = ProductionHumanOperations::new(
+    let mut operations = ProductionHumanOperations::new(
         authority,
         node,
         Arc::clone(&shared_store),
@@ -462,6 +462,10 @@ fn start_human_owner(mcp: Option<McpBoot>) -> Result<mpsc::Receiver<Result<(), S
         parse_u64("LAYERX_AGENT_HUMAN_TIMESTAMP_SPAN")?,
     )
     .map_err(|error| format!("human operations are invalid: {error:?}"))?;
+    if let Some(source) = optional("LAYERX_SEQUENCER_AUTHORITY_SOURCE") {
+        operations.configure_native_budget_recovery(Path::new(&source), &peers)
+            .map_err(|error| format!("native Budget recovery failed: {error:?}"))?;
+    }
     let socket_uid = required("LAYERX_AGENT_HUMAN_SOCKET_UID")?
         .parse()
         .map_err(|_| "human socket uid is invalid")?;

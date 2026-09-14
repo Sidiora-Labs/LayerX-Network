@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{read_protected_source, ProtectedSourceError, StartupConfig};
 mod native_owner;
+mod native_budget;
 
 const MAX_AUTHORITY_SOURCE_BYTES: usize = 65_536;
 const AUTHORITY_SOURCE_VERSION: &str = "layerx-sequencer-authority-v1";
@@ -145,10 +146,13 @@ impl ProtocolEvidenceVerifier {
     }
 
     pub(crate) fn load(config: &StartupConfig) -> Result<Self, VerifierPolicyError> {
-        let bytes = read_protected_source(
-            &config.sequencer_authority_source,
-            MAX_AUTHORITY_SOURCE_BYTES,
-        )
+        Self::load_source(config.expected_protocol_version, config.network_id,
+            &config.sequencer_authority_source)
+    }
+
+    fn load_source(protocol_version: u16, network_id: u32, source: &std::path::Path)
+        -> Result<Self, VerifierPolicyError> {
+        let bytes = read_protected_source(source, MAX_AUTHORITY_SOURCE_BYTES)
         .map_err(|failure| match failure {
             ProtectedSourceError::Unavailable => VerifierPolicyError::AuthoritySourceUnavailable,
             ProtectedSourceError::TooLarge => VerifierPolicyError::AuthoritySourceMalformed,
@@ -223,11 +227,7 @@ impl ProtocolEvidenceVerifier {
                 revoked_at_batch,
             )?);
         }
-        Self::new(
-            config.expected_protocol_version,
-            config.network_id,
-            sequencers,
-        )
+        Self::new(protocol_version, network_id, sequencers)
     }
 
     pub(crate) fn accepts_handshake_key(&self, batch: u64, public_key: [u8; 32]) -> bool {

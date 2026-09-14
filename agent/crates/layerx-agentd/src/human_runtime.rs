@@ -49,6 +49,7 @@ use crate::sign::{
 };
 use crate::store::{key, ObjectKind, StorageClass, Store, TenantId, TenantKey};
 mod native_receipt;
+mod native_budget;
 mod subject;
 use native_receipt::RetainedNativeOwner;
 
@@ -706,6 +707,7 @@ pub struct ProductionHumanOperations<A> {
     timestamp_span: u64,
     last_verified_receipt: Option<([u8; 32], i32, u64)>,
     unified_owner_active: bool,
+    native_budgets: Option<crate::budget::NativeBudgetRuntime>,
 }
 
 #[derive(Clone)]
@@ -793,6 +795,7 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
                 return Err(HumanOperationError::Refused);
             }
         }
+        operations.require_native_budget_recovery(peers)?;
         operations.unified_owner_active = true;
         {
             let store = shared_store
@@ -2451,6 +2454,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         signer: [u8; 32],
         correlation: u64,
     ) -> Result<HumanResponse, HumanOperationError> {
+        self.native_dispatch_hold(peer, submission_id, registry)?;
         let mut store = self
             .store
             .lock()
@@ -2908,6 +2912,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             timestamp_span,
             last_verified_receipt: None,
             unified_owner_active: false,
+            native_budgets: None,
         })
     }
 
@@ -3182,6 +3187,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         if prepared.envelope.payload_hash() != request.operation.payload_hash {
             return Err(HumanOperationError::Refused);
         }
+        self.authorize_native_preparation(peer,&prepared)?;
         let reference = hex(&Sha256::digest(&prepared.canonical_bytes));
         if self
             .prepared
@@ -3257,6 +3263,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
             &cached.registry,
         )
         .map_err(|_| HumanOperationError::Refused)?;
+        let native_budget = self.reserve_native_spend(peer, verified.exact_bytes(), &cached.registry)?;
         let submission_id = prepared.envelope.idempotency_key().bytes();
         let tenant =
             TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
@@ -3264,11 +3271,14 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
             .store
             .lock()
             .map_err(|_| HumanOperationError::Unavailable)?;
-        self.outboxes
-            .entry(peer.tenant.clone())
-            .or_default()
-            .enqueue(&mut store, tenant, submission_id, verified)
-            .map_err(|_| HumanOperationError::Unavailable)?;
+        if self.outboxes.entry(peer.tenant.clone()).or_default()
+            .enqueue(&mut store, tenant.clone(), submission_id, verified).is_err() {
+            if let Some(budget) = native_budget {
+                self.native_budgets.as_mut().ok_or(HumanOperationError::Unavailable)?
+                    .cancel_unsubmitted(&tenant,budget,submission_id).map_err(|_| HumanOperationError::Unavailable)?;
+            }
+            return Err(HumanOperationError::Unavailable);
+        }
         self.prepared.remove(&prepared_key);
         self.submissions.insert(
             (
@@ -3302,6 +3312,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                 submission_ref.to_owned(),
             ))
             .ok_or(HumanOperationError::Refused)?;
+        if let Some(response) = self.track_native_budget(peer,id)? { return Ok(response); }
         let status = self
             .outboxes
             .entry(peer.tenant.clone())

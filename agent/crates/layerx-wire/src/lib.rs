@@ -9,6 +9,7 @@ pub mod handover;
 pub mod hash;
 pub mod limits;
 pub mod maintenance;
+pub mod native_budget;
 pub mod receipt;
 pub mod sign;
 

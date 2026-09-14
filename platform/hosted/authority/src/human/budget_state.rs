@@ -308,7 +308,7 @@ fn produce(config: &Config, p: &PrincipalPolicy, id: [u8; 32]) -> Result<Respons
     let mut key = b"budget:".to_vec();
     key.extend_from_slice(&id);
     let bytes = session.module(3, &key)?;
-    let record = Record::decode(&bytes)?;
+    let record = Record::decode(&bytes).map_err(|_| ())?;
     if record.id != id
         || hex::encode(&record.asset) != p.asset_id
         || record.revocation == 0

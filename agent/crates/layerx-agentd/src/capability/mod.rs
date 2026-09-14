@@ -9,12 +9,14 @@ mod attenuation;
 #[path = "consume.rs"]
 mod consumption;
 mod narrowing;
+mod native;
 #[path = "report.rs"]
 mod reporting;
 
 use crate::identity::ProtocolAuthority;
 pub use attenuation::{AttenuationError, CapabilityGraph, RevocableActivity, RevocationResult};
 pub use consumption::{Ceiling, CeilingError, CeilingSnapshot, ReceiptApplication, Reservation};
+pub use native::{NativeCeiling, NativeReservation};
 pub use narrowing::{Binding, Enforcement, NarrowingError, NarrowingReport, ProtocolScope};
 pub use reporting::{
     check_guarantee_wording, CapabilityReport, DecisionEvidence, ReportError, ReportSurfaces,

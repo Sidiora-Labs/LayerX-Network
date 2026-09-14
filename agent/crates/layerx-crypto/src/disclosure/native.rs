@@ -41,11 +41,20 @@ pub struct DisclosedNativeBudgetCreate {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisclosedNativeBudgetSpend {
+    pub budget_id: [u8; 32],
+    pub budget_account: [u8; 32],
+    pub recipient: [u8; 32],
+    pub amount: u128,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisclosedNativeOperation {
     IdentityRegistration(DisclosedNativeIdentity),
     RecoveryPolicy(DisclosedRecoveryPolicy),
     OwnerRotation(Box<crate::rotation::OwnerRotation>),
     BudgetCreate(Box<DisclosedNativeBudgetCreate>),
+    BudgetSpend(DisclosedNativeBudgetSpend),
 }
 
 impl DisclosedNativeOperation {
@@ -84,6 +93,13 @@ impl DisclosedNativeOperation {
                 } else {
                     encoder.u8(0)?;
                 }
+            }
+            Self::BudgetSpend(spend) => {
+                encoder.u8(6)?;
+                encoder.fixed(&spend.budget_id)?;
+                encoder.fixed(&spend.budget_account)?;
+                encoder.fixed(&spend.recipient)?;
+                encoder.u128(spend.amount)?;
             }
             Self::BudgetCreate(budget) => {
                 encoder.u8(4)?;
@@ -227,6 +243,21 @@ fn budget(activity: &Activity) -> Result<DisclosedNativeBudgetCreate, Disclosure
     Ok(value)
 }
 
+fn spend(activity: &Activity) -> Result<DisclosedNativeBudgetSpend,DisclosureError> {
+    let mut decoder=Decoder::new(activity.payload(),0);
+    if decoder.u16()? != 1 { return Err(DisclosureError::MalformedPayload); }
+    let budget_id=fixed(&mut decoder)?;
+    let recipient=fixed(&mut decoder)?;
+    let amount=decoder.u128()?;
+    decoder.finish()?;
+    if budget_id==[0;32] || recipient==[0;32] || amount==0 { return Err(DisclosureError::MalformedPayload); }
+    let actor=std::str::from_utf8(activity.actor_did()).map_err(|_| DisclosureError::MalformedPayload)?;
+    let name=AccountId::parse(&format!("agent:{actor}:budget:{}",hex(&budget_id)))
+        .map_err(|_| DisclosureError::MalformedPayload)?;
+    let budget_account=hash::account_id_for_protocol(&name,activity.protocol_version())?;
+    Ok(DisclosedNativeBudgetSpend {budget_id,budget_account,recipient,amount})
+}
+
 pub(super) fn fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
     if activity.protocol_version() != 3 || activity.network_id() == 0 {
         return Err(DisclosureError::MalformedPayload);
@@ -255,6 +286,13 @@ pub(super) fn fields(activity: &Activity) -> Result<DisclosureFields, Disclosure
                 .map_err(|_| DisclosureError::MalformedPayload)?,
         )),
         (ModuleId::Governance, 3) => DisclosedNativeOperation::RecoveryPolicy(recovery(activity)?),
+        (ModuleId::Budget, 6) => {
+            let value=spend(activity)?;
+            counterparties.extend([Counterparty {role:CounterpartyRole::Payer,account:value.budget_account},
+                Counterparty {role:CounterpartyRole::Recipient,account:value.recipient}]);
+            amounts.push(DisclosedAmount {role:AmountRole::Transfer,value:value.amount});
+            DisclosedNativeOperation::BudgetSpend(value)
+        }
         (ModuleId::Budget, 1) => {
             let value = budget(activity)?;
             counterparties.extend([

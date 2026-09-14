@@ -3,7 +3,7 @@
 mod native;
 
 pub use native::{
-    DisclosedNativeBudgetCreate, DisclosedNativeIdentity, DisclosedNativeOperation,
+    DisclosedNativeBudgetCreate, DisclosedNativeBudgetSpend, DisclosedNativeIdentity, DisclosedNativeOperation,
     DisclosedRecoveryPolicy,
 };
 
@@ -1115,6 +1115,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         || (kind == (ModuleId::Governance, 1) && activity.payload().starts_with(&[0x71, 1, 0, 2]))
         || (kind == (ModuleId::Budget, 1)
             && matches!(activity.payload().get(..2), Some([0, 1 | 2])))
+        || kind == (ModuleId::Budget, 6)
     {
         return native::fields(activity);
     }

@@ -1,5 +1,13 @@
 mod support;
 
+#[path = "support/native_budget.rs"]
+mod native_budget;
+
+#[test]
+fn restart_at_every_write_stage_preserves_exactly_one_recovery_action() {
+    native_budget::run("recovery");
+}
+
 use layerx_agentd::budget::{
     hold_unknown, PersistedReceipt, ProtocolBudgetState, UnknownReservation,
 };

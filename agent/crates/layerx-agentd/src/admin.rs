@@ -471,6 +471,16 @@ impl Surface {
             .map_err(AdminError::BudgetReconciliation)
     }
 
+    /// # Errors
+    /// Refuses unaudited operators or any native proof, identity, history or durable recovery failure.
+    pub fn reconcile_native_budget_divergence<A: crate::human_runtime::HumanAuthorityBoundary>(
+        &mut self, context: &OperatorContext, owner: &crate::human_runtime::UnifiedAgentOwner<A>,
+        peer: &crate::human::HumanPeer, budget_id: [u8;32])
+        -> Result<crate::budget::NativeBudgetReconciliation,AdminError> {
+        self.dispatch(context,OperatorCommand::ReconcileBudgetDivergence(budget_id))?;
+        owner.reconcile_native_budget(peer,budget_id).map_err(AdminError::NativeBudgetRecovery)
+    }
+
     /// Audits and returns a genuine backlog observation without changing its levels.
     ///
     /// # Errors
@@ -556,6 +566,7 @@ pub enum AdminError {
     UnknownResolution(UnknownResolutionError),
     Subscription(SubscriptionError),
     BudgetReconciliation(ReconcileError),
+    NativeBudgetRecovery(crate::human::HumanOperationError),
     Verification(FinalityError),
     RouteInvariant,
     Arithmetic,
