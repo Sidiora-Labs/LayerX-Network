@@ -13,6 +13,7 @@ use layerx_programs::{hex, DeploymentProof, ProgramId, ProtocolDeploymentVerifie
 use layerx_proof::program::{verify_program_execution, ProgramExecutionExpectation};
 use layerx_proof::receipt::verify_sequencer_signature;
 use layerx_sdk::program_lifecycle::NativeProgramLifecycleRequest;
+use layerx_types::account::AccountId;
 use layerx_types::clock::Deadline;
 use layerx_types::ids::Did;
 use layerx_types::program_call::{NativeProgramCall, Resources};
@@ -74,12 +75,36 @@ fn domain(label: &[u8], bytes: &[u8]) -> [u8; 32] {
 }
 fn signed(
     client: &mut Client,
+    route: &mut NativeReadRoute,
     key: &SigningKey,
     did: &Did,
     ordinal: u16,
     payload: &[u8],
 ) -> Result<Vec<u8>> {
+    let history = checked(route.signed_authority())?.ok_or("missing fee authority")?;
     checked(client.reconnect())?;
+    let fee_asset = checked(client.native_fee_policy(398))?.value.asset.asset_id;
+    let account_id = checked(layerx_wire::hash::account_id_for_protocol(
+        &checked(AccountId::parse(&format!(
+            "agent:{}:main",
+            std::str::from_utf8(did.as_bytes())?
+        )))?,
+        3,
+    ))?;
+    let account = checked(client.account_with_history(
+        account_id,
+        layerx_types::verify::VerificationLevel::BATCH_INCLUDED,
+        399,
+        &history,
+    ))?;
+    let account = checked(layerx_proof::state::decode_account_value(
+        account_id,
+        account.canonical_bytes(),
+    ))?;
+    assert!(!account.frozen);
+    let held = account.asset.ok_or("missing funded fee asset")?;
+    assert_eq!(held.asset_id, fee_asset);
+    let fee_limit = held.balance.min(1_000_000_000_000);
     let state = checked(client.preparation_state(did, 400))?;
     assert_eq!(state.kernel_epoch, 2);
     let timestamp = now()?;
@@ -106,7 +131,7 @@ fn signed(
     checked(fields.tag(8, 12))?;
     checked(fields.bytes(&nonce, 32))?;
     checked(fields.tag(9, 12))?;
-    checked(fields.u128(1_000_000_000_000))?;
+    checked(fields.u128(fee_limit))?;
     checked(fields.tag(10, 12))?;
     checked(fields.bytes(&domain(b"payload-hash", payload), 32))?;
     checked(fields.tag(11, 12))?;
@@ -182,7 +207,12 @@ fn deployment(socket: &Path, id: [u8; 32]) -> Result<DeploymentProof> {
     let response = checked(decode_envelope(&response))?;
     assert_eq!(response.version, Version::V1_5);
     assert_eq!(response.correlation_id, 900);
-    assert_eq!(response.message_tag, 17);
+    assert_eq!(
+        response.message_tag,
+        17,
+        "deployment proof refusal: {:?}",
+        layerx_client::lni::refusal::decode_core_refusal(response.canonical_payload)
+    );
     assert!(response.proof_material.is_empty());
     checked(DeploymentProof::decode(response.canonical_payload))
 }
@@ -340,7 +370,14 @@ fn setup(socket: &Path, directory: &Path, config: &Value) -> Result<Journey> {
         interface: None,
         wasm: &wasm,
     };
-    let canonical = signed(&mut client, &key, &did, 1, &checked(deploy.encode())?)?;
+    let canonical = signed(
+        &mut client,
+        &mut route,
+        &key,
+        &did,
+        1,
+        &checked(deploy.encode())?,
+    )?;
     let state = checked(client.preparation_state(&did, 403))?;
     let request = checked(NativeProgramLifecycleRequest::deploy(
         &state.module_registry,
@@ -348,6 +385,21 @@ fn setup(socket: &Path, directory: &Path, config: &Value) -> Result<Journey> {
         &canonical,
     ))?;
     let receipt = submit(&mut client, &canonical, &did, public, endpoint, &token)?;
+    let deploy_receipt = checked(verify_sequencer_signature(
+        &receipt,
+        preceding_history
+            .intervals()
+            .last()
+            .ok_or("missing current authority")?
+            .public_key(),
+    ))?;
+    assert_eq!(
+        deploy_receipt
+            .protocol()
+            .ok_or("Deploy receipt")?
+            .result_code(),
+        0
+    );
     let proof = deployment(socket, request.bound_activity_id())?;
     assert_eq!(proof.activity, canonical);
     assert_eq!(proof.state.receipt, receipt);
@@ -428,7 +480,7 @@ fn main() -> Result<()> {
     registration.extend_from_slice(&asset);
     registration.extend_from_slice(&u32::try_from(seed.len())?.to_be_bytes());
     registration.extend_from_slice(seed);
-    let registration = signed(&mut client, &key, &did, 6, &registration)?;
+    let registration = signed(&mut client, &mut route, &key, &did, 6, &registration)?;
     let registered = submit(&mut client, &registration, &did, public, &endpoint, &token)?;
     let key = sequencer;
     assert_eq!(
@@ -441,6 +493,7 @@ fn main() -> Result<()> {
     let call = call_payload(program, account, asset, seed)?;
     let canonical = signed(
         &mut client,
+        &mut route,
         &SigningKey::from_bytes(&[0x11; 32]),
         &did,
         3,
