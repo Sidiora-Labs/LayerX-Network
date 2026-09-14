@@ -5429,7 +5429,9 @@ fn production_principal_store(
     tenancy_digest: [u8; 32],
     binding: layerx_identity_binding::Config,
 ) -> Result<Arc<Mutex<PrincipalStore>>, String> {
-    let provider = layerx_identity_binding::Client::new(binding)
+    let clock = layerx_client::runtime_clock::RuntimeClock::from_environment()
+        .map_err(|_| "principal clock capability unavailable".to_owned())?;
+    let provider = layerx_identity_binding::Client::new(binding, clock)
         .map_err(|_| "identity binding provider configuration refused".to_owned())?;
     PrincipalStore::open_with_authority(root, retention, TenancyDigest::new(tenancy_digest),
         Arc::new(IdentityTenancy(provider)))

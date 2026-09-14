@@ -45,7 +45,6 @@ struct RecipientRequest {
     principal: String,
     checkpoint: [u8; 32],
     asset: [u8; 32],
-    recipient: [u8; 20],
 }
 
 #[derive(Deserialize, Serialize)]
@@ -65,10 +64,12 @@ struct SigningRequest {
 }
 
 struct Runtime {
+    clock: Arc<dyn layerx_types::clock::Clock>,
     store: Arc<Mutex<PrincipalStore>>,
     custody: CustodySigner,
     registry: ModuleRegistry,
     network: u32,
+    native_asset: [u8; 32],
 }
 
 fn refused<E>(_: E) -> String { "onboarding sponsor authority or durable state refused".to_owned() }
@@ -124,8 +125,18 @@ fn initialize_store() -> Result<crate::store::TenancyDigest, String> {
 }
 
 impl Runtime {
+    fn now(&self) -> Result<u64, String> {
+        self.clock.sample(Duration::from_secs(1)).map(layerx_types::clock::ClockReading::unix_seconds).map_err(refused)
+    }
+
     fn open() -> Result<Self, String> {
         let network = number("LAYERX_HUMAN_NETWORK_ID")?;
+        let configured_asset = required("LAYERX_HUMAN_ONBOARDING_NATIVE_ASSET")?;
+        if configured_asset.len() != 64 || !configured_asset.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+            return Err(refused(()));
+        }
+        let native_asset = decode_hex_32(&format!("0x{configured_asset}")).map_err(refused)?;
+        if native_asset == [0; 32] { return Err(refused(())); }
         let document: RegistryDocument = serde_json::from_slice(&read_nonempty(&absolute(
             "LAYERX_HUMAN_ONBOARDING_REGISTRY_FILE")?)?).map_err(refused)?;
         if document.network_id != network || document.protocol_version != 3 { return Err(refused(())); }
@@ -156,7 +167,8 @@ impl Runtime {
         let custody = CustodySigner::new_shared(keystore, Arc::clone(&store), registry.clone(),
             SigningLimits::new(number("LAYERX_HUMAN_SIGNING_RATE_MAXIMUM")?,
                 number("LAYERX_HUMAN_SIGNING_RATE_WINDOW_SECONDS")?).map_err(refused)?);
-        Ok(Self { store, custody, registry, network })
+        let clock = layerx_client::runtime_clock::RuntimeClock::from_environment().map_err(refused)?;
+        Ok(Self { clock, store, custody, registry, network, native_asset })
     }
 
     fn prepare(&self, request: Prepare) -> Result<serde_json::Value, String> {
@@ -166,7 +178,7 @@ impl Runtime {
             maximum_frame_bytes: number("LAYERX_HUMAN_IDENTITY_MAX_FRAME_BYTES")?,
             peer_uid: number("LAYERX_HUMAN_IDENTITY_PEER_UID")?, peer_gid: number("LAYERX_HUMAN_IDENTITY_PEER_GID")?,
         }).map_err(refused)?;
-        let observed = now().map_err(refused)?;
+        let observed = self.now()?;
         let provisioned = identity.provision(&request.email, &request.display_name,
             &request.idempotency_key, observed).map_err(refused)?;
         let index = production_auth_index(absolute("LAYERX_HUMAN_AUTH_INDEX_ROOT")?,
@@ -202,14 +214,16 @@ impl Runtime {
     }
 
     fn recipient(&self, request: RecipientRequest) -> Result<serde_json::Value, String> {
+        if request.asset != self.native_asset || request.checkpoint == [0; 32] { return Err(refused(())); }
         let principal = PrincipalId::new(&request.principal).map_err(refused)?;
         let mut store = self.store.lock().map_err(refused)?;
         let mut scope = store.principal(&principal).map_err(refused)?;
         let key = KeyId::new("human-primary").map_err(refused)?;
+        let recipient = self.custody.evm_wallet(&principal, &key).map_err(refused)?;
         let trace = TraceId::mint(request.checkpoint[..16].try_into().map_err(refused)?);
         let signature = self.custody.settlement_recipient_in_scope(&mut scope, &key,
             crate::custody::SettlementRecipientRequest { checkpoint: request.checkpoint,
-                asset: request.asset, recipient: request.recipient }, &trace, now().map_err(refused)?).map_err(refused)?;
+                asset: request.asset, recipient }, &trace, self.now()?).map_err(refused)?;
         let journey = OnboardingJourney::load(&scope).map_err(refused)?.ok_or_else(|| refused(()))?;
         let did = journey.did().map_err(refused)?;
         let did_text = std::str::from_utf8(did.as_bytes()).map_err(refused)?;
@@ -218,7 +232,7 @@ impl Runtime {
         Ok(json!({"network_id": self.network, "principal": principal.as_str(), "did": did_text,
             "account": hex_bytes(&layerx_intents::canonical::account_id_for_protocol(&account, 3).map_err(refused)?),
             "public_key": hex_bytes(&public_key), "asset": hex_bytes(&request.asset),
-            "checkpoint": hex_bytes(&request.checkpoint), "recipient": hex_bytes(&request.recipient),
+            "checkpoint": hex_bytes(&request.checkpoint), "recipient": hex_bytes(&recipient),
             "signature": hex_bytes(&signature)}))
     }
 
@@ -247,7 +261,7 @@ impl Runtime {
         let trace = TraceId::mint(request.action_key[..16].try_into().map_err(refused)?);
         let signature = super::super::poll_once_ready(self.custody.sign_in_scope(&mut scope,
             SignRequest::new(&principal, &key, &trace, SignAuthorization::new(Operation::ProtocolMutation, None),
-                &unsigned, &disclosure, now().map_err(refused)?))).map_err(refused)?.map_err(refused)?;
+                &unsigned, &disclosure, self.now()?))).map_err(refused)?.map_err(refused)?;
         let signed = layerx_intents::owner_activity::attach_signature(&unsigned, *signature.signature(),
             signature.signer_public_key(), &self.registry).map_err(refused)?;
         let activity = layerx_intents::owner_activity::verify(&signed, &self.registry).map_err(refused)?;

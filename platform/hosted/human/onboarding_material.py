@@ -7,7 +7,7 @@ import secrets
 import subprocess
 
 from material import component_defaults
-from provision import protected_bytes, protected_json, require
+from provision import h32, protected_bytes, protected_json, require
 
 
 def write(path, data):
@@ -32,6 +32,10 @@ def prepare(args):
         require(directory.stat().st_uid == os.geteuid(), directory, 'owned directory')
     registry = protected_json(args.registry)
     require(registry.get('schema_version') == 2 and registry.get('assets'), args.registry, 'real module registry')
+    h32(args.native_asset, args.registry, 'configured native asset')
+    require(registry.get('network_id') == args.network_id
+            and any(asset.get('asset') == args.native_asset for asset in registry['assets']),
+            args.registry, 'configured native asset registration')
     modules = []
     for module in registry['modules']:
         require(type(module['module']) is int and 1 <= module['module'] <= 9
@@ -49,6 +53,7 @@ def prepare(args):
         IDENTITY_BINDING_SOCKET=str(runtime / 'identity-binding.sock'), IDENTITY_BINDING_TENANT=args.tenant,
         IDENTITY_BINDING_PEER_UID=os.geteuid(), IDENTITY_BINDING_PEER_GID=os.getegid(),
         IDENTITY_BINDING_DEADLINE_SECONDS=10, ONBOARDING_REGISTRY_FILE=str(registry_file),
+        ONBOARDING_NATIVE_ASSET=args.native_asset,
         ONBOARDING_INITIAL_FUNDING=args.initial_funding, KMS_ENDPOINT=args.kms_address,
         KMS_SERVER_NAME=args.kms_server_name, KMS_ROOT_CERTIFICATE_DER=str(Path(args.tls) / 'ca.der'),
         KMS_CLIENT_CERTIFICATE_DER=str(Path(args.tls) / 'kms-client.der'),
@@ -80,7 +85,7 @@ def prepare(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     for name in ('configuration', 'state', 'runtime', 'registry', 'tls', 'tenant', 'kms-address',
-                 'kms-server-name', 'executable'):
+                 'kms-server-name', 'executable', 'native-asset'):
         parser.add_argument('--' + name, required=True)
     for name in ('network-id', 'chain-id', 'initial-funding'):
         parser.add_argument('--' + name, required=True, type=int)

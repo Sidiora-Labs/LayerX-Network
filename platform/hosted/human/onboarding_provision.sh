@@ -36,7 +36,7 @@ PY
     kube -n "$TESTNET_NAMESPACE" get statefulset layerx-node -o json > "$current"
     python3 "$REPO_ROOT/platform/hosted/human/onboarding_manifest.py" "$current" \
         "$REPO_ROOT/platform/hosted/node/deployment.yaml" "$manifest" "$(image_ref layerx-human)" \
-        "$NODE_NETWORK_ID" "$PAXEER_CHAIN_ID" "$tenant" "$funding"
+        "$NODE_NETWORK_ID" "$PAXEER_CHAIN_ID" "$tenant" "$funding" "$NODE_ASSET_ID"
     kube apply -f "$manifest" > /dev/null
     kube -n "$TESTNET_NAMESPACE" rollout status statefulset/layerx-node --timeout=300s > /dev/null
     local name config="$SECRETS_DIR/human-onboarding-config"
@@ -62,4 +62,66 @@ require(previous == {key: owner[key] for key in previous}, root, 'same actual Id
 write_json(root / 'human-evidence-input/onboarding-configuration.json', dict(directory=str(config),
     sponsor_principal=owner['principal'], initial_funding=int(sys.argv[4])))
 PY
+)
+
+
+human_browser_provision() (
+    set -euo pipefail
+    umask 077
+    local request="$WORK_DIR/human-browser-request.json" result="$WORK_DIR/human-browser-result.json"
+    local credential="$SECRETS_DIR/human-browser.credential" origin
+    origin=$(cat "$SECRETS_DIR/human/config/LAYERX_HUMAN_ORIGIN")
+    local -a mode=()
+    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
+        mode=(--resume)
+    else
+        python3 - "$REPO_ROOT/platform/hosted/human" "$WORK_DIR/human-evidence-input/onboarding-configuration.json" "$request" <<'PY'
+import secrets, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from provision import protected_json, write_json
+configuration = protected_json(sys.argv[2])
+identity = secrets.token_hex(16)
+write_json(Path(sys.argv[3]), dict(email='beta-' + identity + '@layerx.test',
+    display_name='LayerX beta owner', idempotency_key='owner-' + identity,
+    sponsor_principal=configuration['sponsor_principal'], initial_funding=configuration['initial_funding']))
+PY
+    fi
+    python3 "$REPO_ROOT/platform/hosted/human/browser_onboarding.py" \
+        --url "$HUMAN_URL" --ca "$CA_DIR/ca.crt" --origin "$origin" --request "$request" \
+        --authenticator "$REPO_ROOT/human/apps/web/e2e/software-authenticator.ts" \
+        --credential "$credential" --result "$result" "${mode[@]}"
+    python3 - "$REPO_ROOT/platform/hosted/human" "$result" "$SECRETS_DIR/human-credentials.json" <<'PY'
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from provision import protected_json, require
+from onboarding_material import write
+result = protected_json(sys.argv[2])
+path = Path(sys.argv[3])
+value = {result['principal']: '/run/layerx/human-session.credential'}
+if path.exists():
+    previous = protected_json(path)
+    require(previous in ({}, value), path, 'original or identical authenticated credential map')
+    if previous == {}:
+        temporary = path.with_suffix('.pending')
+        write(temporary, json.dumps(value, separators=(',', ':')).encode())
+        os.replace(temporary, path)
+        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+else:
+    write(path, json.dumps(value, separators=(',', ':')).encode())
+PY
+    local service token
+    for service in journeys approvals; do
+        token=${service%s}
+        apply_secret "$INTERNAL_NAMESPACE" "layerx-internal-$service-runtime" \
+            --from-file=server.der="$CA_DIR/internal-$service/cert.der" --from-file=server-key.der="$CA_DIR/internal-$service/key.der" \
+            --from-file=ca.der="$CA_DIR/ca.der" --from-file=upstream-ca.der="$CA_DIR/ca.der" --from-file=token="$SECRETS_DIR/developer-$token.token" \
+            --from-file=credentials.json="$SECRETS_DIR/human-credentials.json" --from-file=human-session.credential="$credential" \
+            --from-file=producers.json="$SECRETS_DIR/$service-producers.json" --from-file=producer-token="$SECRETS_DIR/human-event-producer.token"
+    done
 )

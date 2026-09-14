@@ -18,6 +18,7 @@ def main():
     for name in ('network-id', 'chain-id', 'initial-funding'):
         parser.add_argument('--' + name, required=True, type=int)
     parser.add_argument('--tenant', required=True)
+    parser.add_argument('--native-asset', required=True)
     args = parser.parse_args()
     state = Path('/var/lib/layerx/human')
     root = state / 'onboarding'
@@ -37,7 +38,7 @@ def main():
         runtime='/run/layerx/human', registry=str(inputs / 'module-registry.json'),
         tls='/run/human-private/components', tenant=args.tenant, kms_address='127.0.0.1:9450',
         kms_server_name='layerx-human-kms', executable=binary, network_id=args.network_id,
-        chain_id=args.chain_id, initial_funding=args.initial_funding))
+        chain_id=args.chain_id, initial_funding=args.initial_funding, native_asset=args.native_asset))
     for path in configuration.glob('LAYERX_HUMAN_*'):
         os.environ[path.name] = protected_bytes(path, 1048576).decode()
     deadline = time.monotonic() + 30
@@ -59,6 +60,7 @@ def main():
     owner = protected_json(inputs / 'owner-kms.json')
     signer_config = root / 'signer.json'
     write(signer_config, json.dumps(dict(socket='/run/layerx/human/onboarding-signer.sock',
+        recipient_socket='/run/layerx/human/recipient.sock',
         client_uid=4021, client_gid=4020, executable=binary, principal=owner['principal']),
         sort_keys=True, separators=(',', ':')).encode())
     serve(signer_config)

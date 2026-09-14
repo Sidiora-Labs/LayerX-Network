@@ -421,9 +421,9 @@ impl<'a> ProductionAgentCreation<'a> {
         Ok(ProtocolEvidence {
             actor: self.actor.as_str().as_bytes().to_vec(),
             owner_public_key: public_key,
-            network_id: network_id,
+            network_id,
             signed_activity,
-            action_key: action_key,
+            action_key,
             activity_id: observation.activity_id,
             receipt_bytes: receipt.canonical_bytes,
             authorized_batch: receipt.authorised_batch,

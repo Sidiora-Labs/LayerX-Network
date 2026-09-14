@@ -14,7 +14,7 @@ def install(pod, field, item):
         pod[field].append(item)
 
 
-def configure(current, source, image, network, chain, tenant, funding):
+def configure(current, source, image, network, chain, tenant, funding, native_asset):
     result = copy.deepcopy(current)
     pod = result['spec']['template']['spec']
     canonical = source['spec']['template']['spec']
@@ -34,7 +34,7 @@ def configure(current, source, image, network, chain, tenant, funding):
     item = dict(name='human-onboarding', image=image, imagePullPolicy=component['imagePullPolicy'],
         command=['/usr/local/bin/human-entrypoint', 'onboarding-bootstrap'],
         args=['--network-id', str(network), '--chain-id', str(chain), '--tenant', tenant,
-              '--initial-funding', str(funding)],
+              '--initial-funding', str(funding), '--native-asset', native_asset],
         securityContext=copy.deepcopy(component['securityContext']),
         resources=copy.deepcopy(component['resources']),
         volumeMounts=[copy.deepcopy(mount) for mount in component['volumeMounts']
@@ -60,8 +60,8 @@ def configure(current, source, image, network, chain, tenant, funding):
 
 
 if __name__ == '__main__':
-    current, source, destination, image, network, chain, tenant, funding = sys.argv[1:]
+    current, source, destination, image, network, chain, tenant, funding, native_asset = sys.argv[1:]
     documents = list(yaml.safe_load_all(Path(source).read_text()))
     source = next(document for document in documents if document['kind'] == 'StatefulSet')
     write_json(Path(destination), configure(protected_json(current), source, image,
-        int(network), int(chain), tenant, int(funding)))
+        int(network), int(chain), tenant, int(funding), native_asset))
