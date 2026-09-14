@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+layerx-paxeer-verifier = { path = "../../../agent/crates/layerx-paxeer-verifier" }
 layerx-agent-api.workspace = true
 layerx-types.workspace = true
 layerx-crypto.workspace = true
@@ -16,7 +17,6 @@ layerx-wire.workspace = true
 layerx-intents = { path = "../layerx-intents" }
 ed25519-dalek = "=2.2.0"
 sha2 = "=0.10.9"
-rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
 k256.workspace = true
