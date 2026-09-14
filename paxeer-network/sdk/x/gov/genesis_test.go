@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
 	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
@@ -21,14 +22,15 @@ import (
 
 func TestImportExportQueues(t *testing.T) {
 	app := paxapp.Setup(t, false, false, false)
-	ctx := app.BaseApp.NewContext(false, tmproto.Header{})
+	blockTime := time.Now().UTC()
+	ctx := app.BaseApp.NewContext(false, tmproto.Header{Time: blockTime})
 	addrs := paxapp.AddTestAddrs(app, ctx, 2, valTokens)
 
 	SortAddresses(addrs)
 
-	app.FinalizeBlock(context.Background(), &abci.RequestFinalizeBlock{Header: &tmproto.Header{Height: app.LastBlockHeight() + 1}})
+	app.FinalizeBlock(context.Background(), &abci.RequestFinalizeBlock{Header: &tmproto.Header{Height: app.LastBlockHeight() + 1, Time: blockTime}})
 
-	ctx = app.BaseApp.NewContext(false, tmproto.Header{})
+	ctx = app.BaseApp.NewContext(false, tmproto.Header{Time: blockTime})
 
 	// Create two proposals, put the second into the voting period
 	proposal := TestProposal
@@ -72,15 +74,16 @@ func TestImportExportQueues(t *testing.T) {
 
 	app2.InitChain(
 		context.Background(), &abci.RequestInitChain{
+			Time:            blockTime,
 			ConsensusParams: paxapp.DefaultConsensusParams,
 			AppStateBytes:   stateBytes,
 		},
 	)
 
 	app2.Commit(context.Background())
-	app2.FinalizeBlock(context.Background(), &abci.RequestFinalizeBlock{Header: &tmproto.Header{Height: app2.LastBlockHeight() + 1}})
+	app2.FinalizeBlock(context.Background(), &abci.RequestFinalizeBlock{Header: &tmproto.Header{Height: app2.LastBlockHeight() + 1, Time: blockTime}})
 
-	ctx2 := app2.BaseApp.NewContext(false, tmproto.Header{})
+	ctx2 := app2.BaseApp.NewContext(false, tmproto.Header{Time: blockTime})
 
 	// Jump the time forward past the DepositPeriod and VotingPeriod
 	ctx2 = ctx2.WithBlockTime(ctx2.BlockHeader().Time.Add(app2.GovKeeper.GetDepositParams(ctx2).MaxDepositPeriod).Add(app2.GovKeeper.GetVotingParams(ctx2).VotingPeriod))

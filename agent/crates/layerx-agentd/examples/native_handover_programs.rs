@@ -26,8 +26,10 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
+#[track_caller]
 fn checked<T, E: std::fmt::Debug>(value: std::result::Result<T, E>) -> Result<T> {
-    value.map_err(|error| format!("{error:?}").into())
+    let location = std::panic::Location::caller();
+    value.map_err(|error| format!("{error:?} at {location}").into())
 }
 fn now() -> Result<u64> {
     Ok(u64::try_from(
@@ -196,14 +198,20 @@ fn get(endpoint: &str, token: &str, path: &str) -> Result<Option<Value>> {
     if status == 200 {
         return Ok(Some(value));
     }
-    if status == 503
-        && (value["native_result"].as_i64() == Some(-106) || value["code"].as_i64() == Some(-106))
+    if (status == 404 && value["error"].as_i64() == Some(-106))
+        || (status == 503
+            && (value["native_result"].as_i64() == Some(-106)
+                || value["code"].as_i64() == Some(-106)))
     {
         return Ok(None);
     }
     Err(format!(
         "native Programs read status {status}: {}",
-        value.get("code").unwrap_or(&Value::Null)
+        value
+            .get("code")
+            .or_else(|| value.get("native_result"))
+            .or_else(|| value.get("error"))
+            .unwrap_or(&Value::Null)
     )
     .into())
 }
@@ -279,7 +287,45 @@ fn submit(
         ),
     )?;
     assert_eq!(field(&value, "activity_id")?, hex::encode(&expected));
-    checked(hex::decode(field(&value, "receipt")?))
+    let receipt = checked(hex::decode(field(&value, "receipt")?))?;
+    let included = checked(client.proof_bundle(
+        layerx_client::evidence::ProofBundleSelector::Receipt(expected),
+        405,
+        &state.module_registry,
+    ))?;
+    assert_eq!(included.canonical_bytes(), receipt);
+    wait_finalized(client, included.signed_header())?;
+    Ok(receipt)
+}
+fn wait_finalized(
+    client: &mut Client,
+    included: &layerx_client::evidence::SignedHeader,
+) -> Result<()> {
+    let batch = checked(included.batch_number())?;
+    checked(client.reconnect())?;
+    let clock = layerx_client::runtime_clock::RuntimeClock::from_environment()?;
+    let mut deadline = checked(Deadline::start(clock.as_ref(), Duration::from_secs(30)))?;
+    loop {
+        if checked(deadline.remaining(clock.as_ref()))?.is_zero() {
+            return Err(
+                format!("Programs checkpoint publication deadline for batch {batch}").into(),
+            );
+        }
+        match client.checkpoint_evidence(
+            layerx_client::evidence::CheckpointSelector::Batch(batch),
+            404,
+        ) {
+            Ok(checkpoint) => {
+                assert_eq!(checkpoint.report().batch_number(), batch);
+                assert_eq!(checkpoint.canonical_header(), included.canonical_bytes);
+                return Ok(());
+            }
+            Err(layerx_client::evidence::EvidenceError::CoreRefusal { class: 4, result })
+                if result.known() == Some(layerx_types::result::KnownResult::UnknownField) => {}
+            Err(error) => return Err(format!("Programs checkpoint verification: {error:?}").into()),
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 fn call_payload(
     program: [u8; 32],

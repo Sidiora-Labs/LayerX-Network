@@ -11,6 +11,11 @@ import (
 	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils/scope"
 )
 
+func blockTestKey(rng utils.Rng) types.SecretKey {
+	_, keys := types.GenCommittee(rng, 1)
+	return keys[0]
+}
+
 func testSignedProposal(rng utils.Rng, key types.SecretKey, n types.BlockNumber) *types.Signed[*types.LaneProposal] {
 	lane := key.Public()
 	block := types.NewBlock(lane, n, types.GenBlockHeaderHash(rng), types.GenPayload(rng))
@@ -68,7 +73,7 @@ func TestPersistBlockAndLoad(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
 
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	lane := key.Public()
 	bp, _, err := NewBlockPersister(utils.Some(dir))
 	require.NoError(t, err)
@@ -95,8 +100,8 @@ func TestPersistBlockMultipleLanes(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
 
-	key1 := types.GenSecretKey(rng)
-	key2 := types.GenSecretKey(rng)
+	key1 := blockTestKey(rng)
+	key2 := blockTestKey(rng)
 	lane1 := key1.Public()
 	lane2 := key2.Public()
 	bp, _, err := NewBlockPersister(utils.Some(dir))
@@ -121,7 +126,7 @@ func TestDeleteBeforeRemovesOldKeepsNew(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
 
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	lane := key.Public()
 	bp, _, err := NewBlockPersister(utils.Some(dir))
 	require.NoError(t, err)
@@ -144,9 +149,9 @@ func TestDeleteBeforeAndRestart(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
 
-	key1 := types.GenSecretKey(rng)
-	key2 := types.GenSecretKey(rng)
-	key3 := types.GenSecretKey(rng)
+	key1 := blockTestKey(rng)
+	key2 := blockTestKey(rng)
+	key3 := blockTestKey(rng)
 	lane1 := key1.Public()
 	lane2 := key2.Public()
 	lane3 := key3.Public() // never persisted — exercises the "no WAL yet" path
@@ -190,7 +195,7 @@ func TestNoOpBlockPersister(t *testing.T) {
 	require.Equal(t, 0, len(blocks))
 
 	rng := utils.TestRng()
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	lane := key.Public()
 
 	proposals := make([]*types.Signed[*types.LaneProposal], 5)
@@ -216,7 +221,7 @@ func TestDeleteBeforeThenPersistMore(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
 
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	lane := key.Public()
 	bp, _, err := NewBlockPersister(utils.Some(dir))
 	require.NoError(t, err)
@@ -241,7 +246,7 @@ func TestDeleteBeforePastAllBlocks(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
 
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	lane := key.Public()
 	bp, _, err := NewBlockPersister(utils.Some(dir))
 	require.NoError(t, err)
@@ -270,7 +275,7 @@ func TestDeleteBeforePastAllRejectsStaleBlock(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
 
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	lane := key.Public()
 	bp, _, err := NewBlockPersister(utils.Some(dir))
 	require.NoError(t, err)
@@ -297,7 +302,7 @@ func TestTruncateOnEmptyWALAdvancesCursor(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
 
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	lane := key.Public()
 	bp, _, err := NewBlockPersister(utils.Some(dir))
 	require.NoError(t, err)
@@ -322,7 +327,7 @@ func TestEmptyLaneWALSurvivesReopen(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
 
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	lane := key.Public()
 
 	// Simulate a crash after lazy lane directory creation but before any write:
@@ -379,7 +384,7 @@ func TestPersistBlockOutOfSequence(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
 
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	bp, _, err := NewBlockPersister(utils.Some(dir))
 	require.NoError(t, err)
 
@@ -404,7 +409,7 @@ func TestPersistBlockOutOfSequence(t *testing.T) {
 func TestLoadAllDetectsBlockGap(t *testing.T) {
 	rng := utils.TestRng()
 	dir := t.TempDir()
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	lane := key.Public()
 
 	// Write directly to a lane WAL, bypassing the contiguity check
@@ -432,7 +437,7 @@ func TestPersistBlockAutoCreatesLane(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(dir, blocksDir))
 	require.Equal(t, 0, len(entries))
 
-	key := types.GenSecretKey(rng)
+	key := blockTestKey(rng)
 	lane := key.Public()
 	testPersistBlock(t, bp, testSignedProposal(rng, key, 0))
 
@@ -458,7 +463,7 @@ func TestPersistBlockConcurrentDistinctLanes(t *testing.T) {
 
 	keys := make([]types.SecretKey, numLanes)
 	for i := range numLanes {
-		keys[i] = types.GenSecretKey(rng)
+		keys[i] = blockTestKey(rng)
 	}
 
 	// Each lane prepares its proposals up front (rng is not thread-safe).

@@ -76,7 +76,7 @@ impl FrameTransport for AccountProofConnection {
         if let Some(account) = self.corrupt_account_root.take() {
             assert_eq!(envelope.message_tag, 17);
             assert!(proof.len() >= 68);
-            assert_eq!(&proof[..4], &[0, 2, 2, 1]);
+            assert_eq!(&proof[..4], &[0, 3, 2, 1]);
             assert_eq!(&proof[4..36], &account);
             proof[36] ^= 1;
         } else if self.corrupt_receipt_identity

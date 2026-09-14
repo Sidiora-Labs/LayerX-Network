@@ -252,6 +252,10 @@ fn spawn(
         .file_name()
         .is_some_and(|name| name == "supervisor.sh");
     if supervised {
+        let directory = program
+            .parent()
+            .unwrap_or_else(|| panic!("supervisor directory"));
+        command.env("PATH", format!("{}:/usr/bin:/bin", directory.display()));
         command.process_group(0);
     }
     let child = must(command.spawn(), &format!("spawn {}", program.display()));
@@ -2503,6 +2507,13 @@ fn supervised_files(root: &Path, builder: &Path, keys: [&[u8; 32]; 2], tokens: [
     must(
         fs::copy(builder, root.join("layerx-genesis-build")),
         "copy qualified genesis builder",
+    );
+    must(
+        fs::copy(
+            builder.with_file_name("layerx-handover"),
+            root.join("layerx-handover"),
+        ),
+        "copy qualified handover verifier",
     );
     write(&root.join("bootstrap-sequencer.key"), keys[0], 0o600);
     write(&root.join("bootstrap-treasury.key"), keys[1], 0o600);

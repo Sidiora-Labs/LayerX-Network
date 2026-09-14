@@ -241,7 +241,7 @@ check_sequencer_environment() {
             arguments+=("$LAYERX_NODE_HANDOVER_ACTIVITY")
         fi
         "$verifier" "${arguments[@]}"
-    ) || fail "the sequencer key file is not authorized by genesis and finalized handover history"
+    ) || fail "the sequencer key file does not match the bound sequencer public key or an authorized key in finalized handover history"
     log "sequencer seed bound from $key_file"
 }
 
