@@ -525,17 +525,7 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
         .path
         .strip_prefix("/v1/agent/")
         .ok_or_else(|| refusal(404, "not_found", None))?;
-    if params.keys().any(|key| {
-        matches!(
-            key.as_str(),
-            "subject_principal"
-                | "owner_did"
-                | "owner_account"
-                | "asset_id"
-                | "registration"
-                | "signed_activity"
-        )
-    }) {
+    if dynamic::requested(&params) {
         return dynamic::dispatch(config, human, p, name, &params);
     }
     let additional: &[&str] = match name {
