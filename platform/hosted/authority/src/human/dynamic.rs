@@ -14,6 +14,20 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub(super) fn requested(params: &BTreeMap<String, String>) -> bool {
+    params.keys().any(|key| {
+        matches!(
+            key.as_str(),
+            "subject_principal"
+                | "owner_did"
+                | "owner_account"
+                | "asset_id"
+                | "registration"
+                | "signed_activity"
+        )
+    })
+}
+
 pub(super) fn binding_client(tenant: &str) -> Result<Option<Client>, String> {
     let names = [
         "LAYERX_AUTHORITY_IDENTITY_BINDING_SOCKET",
@@ -99,10 +113,12 @@ fn current(
     policy: &PrincipalPolicy,
 ) -> Result<Current, Response> {
     let refused = || unavailable("subject_checkpoint_proof_unavailable");
-    let mut session = budget_state::Session::open(config).map_err(|_| refused())?;
-    let key = budget_state::identity_key(&subject.did).map_err(|_| refused())?;
-    let state = session.module(7, &key).map_err(|_| refused())?;
-    let account = session.account(subject.account_id).map_err(|_| refused())?;
+    let mut session = budget_state::Session::open(config).map_err(|()| refused())?;
+    let key = budget_state::identity_key(&subject.did).map_err(|()| refused())?;
+    let state = session.module(7, &key).map_err(|()| refused())?;
+    let account = session
+        .account(subject.account_id)
+        .map_err(|()| refused())?;
     let account = account.account();
     if state.len() != 223
         || &state[..5] != b"LXGI1"
@@ -129,7 +145,7 @@ fn current(
     {
         return Err(unavailable("subject_checkpoint_stale"));
     }
-    session.unchanged().map_err(|_| refused())?;
+    session.unchanged().map_err(|()| refused())?;
     Ok(Current {
         state,
         head: session.context.head.chain_sequence,
@@ -153,7 +169,7 @@ fn registry(human: &Human) -> Result<ModuleRegistry, Response> {
             ModuleRegistration::new(id, &types).map_err(|_| ())
         })
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| unavailable("module_registry_invalid"))?;
+        .map_err(|()| unavailable("module_registry_invalid"))?;
     ModuleRegistry::new(&modules).map_err(|_| unavailable("module_registry_invalid"))
 }
 
