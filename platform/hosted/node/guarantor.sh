@@ -24,6 +24,8 @@ trap stop_child EXIT
 while :; do
     while [ ! -r "$LAYERX_GUARANTOR_IDENTITY_DIR/producer.env" ] || \
           [ ! -r "$LAYERX_GUARANTOR_SETTLEMENT_ENV" ] || \
+          { [ -n "${LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE:-}" ] && \
+            [ ! -r "$LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE" ]; } || \
           [ ! -S "$LAYERX_GUARANTOR_LNI_SOCKET" ]; do
         sleep 1
     done
@@ -46,6 +48,15 @@ while :; do
     chmod 0700 "$LAYERX_GUARANTOR_STATE_DIR/signer"
     install -m 0600 "$submitter_source" "$LAYERX_GUARANTOR_STATE_DIR/signer/submitter.key"
     export LAYERX_GUARANTOR_SUBMITTER_KEY_FILE="$LAYERX_GUARANTOR_STATE_DIR/signer/submitter.key"
+    if [ -n "${LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE:-}" ]; then
+        install -m 0600 "$LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE" \
+            "$LAYERX_GUARANTOR_STATE_DIR/signer/publication-authorization.json"
+        export LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_FILE="$LAYERX_GUARANTOR_STATE_DIR/signer/publication-authorization.json"
+        export LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR="$LAYERX_GUARANTOR_STATE_DIR/publication-inputs"
+        mkdir -p "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR"
+        chmod 0700 "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR"
+        export PYTHONPATH=/opt/layerx:/opt/layerx/human
+    fi
     /usr/local/bin/layerx-guarantor &
     child=$!
     current=$generation
