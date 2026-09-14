@@ -427,7 +427,9 @@ fn main() -> Result<()> {
             stale = Some(history.clone());
         }
     }
+    eprintln!("native reads: complete independently finalized signer history");
     let facts = history_facts(&mut client, &history, &genesis.registry, count)?;
+    eprintln!("native reads: complete signed activity and maintenance history");
     let public = SigningKey::from_bytes(&[0x11; 32])
         .verifying_key()
         .to_bytes();
@@ -444,6 +446,7 @@ fn main() -> Result<()> {
         &did,
         account,
     )?;
+    eprintln!("native reads: complete account and SDK verification");
     verify_budget(
         &mut client,
         &history,
@@ -451,6 +454,7 @@ fn main() -> Result<()> {
         account,
         facts.budget_id,
     )?;
+    eprintln!("native reads: complete Budget and account checkpoint verification");
     verify_route(
         config,
         actor,
