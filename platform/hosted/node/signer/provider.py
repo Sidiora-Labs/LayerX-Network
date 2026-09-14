@@ -10,6 +10,7 @@
 #
 #   PROGRAM public-key        -> 64 lowercase hex characters on standard output
 #   PROGRAM sign <64 hex>     -> 128 lowercase hex characters on standard output
+#   PROGRAM bind <240 hex>    -> signature over the recipient domain and typed payload
 #
 # The signer verifies every signature a provider returns against the public
 # key the provider advertised before it answers a client.
@@ -22,6 +23,8 @@ PKCS8_ED25519_PREFIX = bytes.fromhex('302e020100300506032b657004220420')
 SPKI_ED25519_PREFIX = bytes.fromhex('302a300506032b6570032100')
 MAXIMUM_MATERIAL_BYTES = 4096
 MAXIMUM_COMMAND_OUTPUT_BYTES = 4096
+RECIPIENT_BINDING_DOMAIN = b'LX:SETTLE:RECIPIENT:v1\0'
+RECIPIENT_BINDING_BYTES = 120
 
 
 class ProviderError(Exception):
@@ -61,6 +64,17 @@ def parse_hex(text, length):
 def verify(public_key, digest, signature):
     if len(public_key) != 32 or len(digest) != 32 or len(signature) != 64:
         return False
+    return _verify_message(public_key, digest, signature)
+
+
+def verify_binding(public_key, binding, signature):
+    if len(public_key) != 32 or len(binding) != RECIPIENT_BINDING_BYTES \
+            or len(signature) != 64:
+        return False
+    return _verify_message(public_key, RECIPIENT_BINDING_DOMAIN + binding, signature)
+
+
+def _verify_message(public_key, digest, signature):
     key = memory_file('signer-public', SPKI_ED25519_PREFIX + public_key)
     try:
         message = memory_file('signer-digest', digest)
@@ -90,6 +104,9 @@ class Provider:
 
     def sign(self, digest):
         raise NotImplementedError
+
+    def bind(self, binding):
+        raise ProviderError('the provider has no recipient binding capability')
 
     def close(self):
         return None
@@ -145,6 +162,16 @@ class FileProvider(Provider):
         return encoded[12:]
 
     def sign(self, digest):
+        if len(digest) != 32:
+            raise ProviderError('a treasury signature covers a 32-byte digest')
+        return self._sign_message(digest)
+
+    def bind(self, binding):
+        if len(binding) != RECIPIENT_BINDING_BYTES:
+            raise ProviderError('recipient binding has the wrong length')
+        return self._sign_message(RECIPIENT_BINDING_DOMAIN + binding)
+
+    def _sign_message(self, digest):
         message = memory_file('treasury-signer-digest', digest)
         try:
             signature = openssl(['pkeyutl', '-sign', '-rawin', '-keyform', 'DER',
@@ -187,7 +214,14 @@ class CommandProvider(Provider):
         return parse_hex(self._run(['public-key']), 32)
 
     def sign(self, digest):
+        if len(digest) != 32:
+            raise ProviderError('a treasury signature covers a 32-byte digest')
         return parse_hex(self._run(['sign', digest.hex()]), 64)
+
+    def bind(self, binding):
+        if len(binding) != RECIPIENT_BINDING_BYTES:
+            raise ProviderError('recipient binding has the wrong length')
+        return parse_hex(self._run(['bind', binding.hex()]), 64)
 
 
 def load(name, key_file, command, timeout):

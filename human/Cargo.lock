@@ -809,6 +809,7 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-identity-binding",
+ "layerx-paxeer-verifier",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
  "layerx-programs-runtime",
@@ -829,6 +830,7 @@ name = "layerx-client"
 version = "0.1.0"
 dependencies = [
  "layerx-crypto",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",

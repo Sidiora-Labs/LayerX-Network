@@ -1213,6 +1213,7 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-identity-binding",
+ "layerx-paxeer-verifier",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
  "layerx-programs-runtime",
@@ -1233,6 +1234,7 @@ name = "layerx-client"
 version = "0.1.0"
 dependencies = [
  "layerx-crypto",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
@@ -1327,12 +1329,23 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-intents",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-sdk",
  "layerx-types",
  "layerx-wire",
- "rustls",
  "sha2",
+]
+
+[[package]]
+name = "layerx-paxeer-verifier"
+version = "0.1.0"
+dependencies = [
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
+ "rustls",
+ "sha3",
 ]
 
 [[package]]
@@ -1366,6 +1379,7 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-identity-binding",
+ "layerx-paxeer-verifier",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",

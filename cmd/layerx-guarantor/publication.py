@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -249,6 +250,13 @@ def publish(api, rpc, request):
     atomic_json(manifest, {k: v for k, v in request.items() if k not in ('submitter_key_file', 'submitter_lock_file', 'wire_output')})
     require(request.get('publication_inputs_dir'), 'publication authorization directory required')
     source = Path(request['publication_inputs_dir']) / (digest.hex() + '.json')
+    policy = os.environ.get('LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_FILE')
+    if policy and not source.exists():
+        spec = importlib.util.spec_from_file_location('guarantor_authorization', Path(__file__).with_name('authorization.py'))
+        authorizer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(authorizer)
+        from types import SimpleNamespace
+        authorizer.authorize(api, SimpleNamespace(**globals()), rpc, request, source, policy)
     deadline = time.monotonic() + 30
     while not source.exists() and time.monotonic() < deadline:
         time.sleep(.1)
