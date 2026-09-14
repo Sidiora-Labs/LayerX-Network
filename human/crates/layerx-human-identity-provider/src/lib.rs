@@ -91,7 +91,7 @@ impl Server {
     pub fn run(mut self, shutdown: &AtomicBool) -> io::Result<()> {
         while !shutdown.load(Ordering::Acquire) {
             if let Some(reader) = &self.binding_reader {
-                reader.accept(&self.state, self.deadline)?;
+                reader.accept(&self.state, self.deadline, self.clock.as_ref())?;
             }
             match self.listener.accept() {
                 Ok((mut peer, _)) => {

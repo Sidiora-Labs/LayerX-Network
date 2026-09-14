@@ -43,12 +43,17 @@ impl Reader {
         })
     }
 
-    pub(crate) fn accept(&self, state: &State, deadline: Duration) -> io::Result<bool> {
+    pub(crate) fn accept(
+        &self,
+        state: &State,
+        deadline: Duration,
+        clock: &dyn layerx_types::clock::Clock,
+    ) -> io::Result<bool> {
         match self.listener.accept() {
             Ok((mut peer, _)) => {
                 let credentials = rustix::net::sockopt::socket_peercred(&peer)?;
                 if self.allowed_uids.contains(&credentials.uid.as_raw()) {
-                    wire::serve_binding(&mut peer, state, deadline)?;
+                    wire::serve_binding(&mut peer, state, deadline, clock)?;
                 }
                 Ok(true)
             }

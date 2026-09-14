@@ -20,9 +20,10 @@ pub(crate) fn serve_binding(
     stream: &mut UnixStream,
     state: &State,
     deadline: Duration,
+    clock: &dyn Clock,
 ) -> io::Result<()> {
-    let expires = Instant::now() + deadline;
-    let request = read_binding(stream, expires);
+    let mut expires = Deadline::start(clock, deadline).map_err(io::Error::other)?;
+    let request = read_binding(stream, &mut expires, clock);
     state.ready()?;
     let response = match request.and_then(|request| {
         let did = state.principal_binding(&request.tenant, &request.principal)?;
@@ -41,19 +42,23 @@ pub(crate) fn serve_binding(
         .to_be_bytes()
         .to_vec();
     frame.extend(bytes);
-    let _ = write_before(stream, &frame, expires);
+    let _ = write_before(stream, &frame, &mut expires, clock);
     Ok(())
 }
 
-fn read_binding(stream: &mut UnixStream, expires: Instant) -> io::Result<BindingRequest> {
+fn read_binding(
+    stream: &mut UnixStream,
+    expires: &mut Deadline,
+    clock: &dyn Clock,
+) -> io::Result<BindingRequest> {
     let mut length = [0; 4];
-    read_before(stream, &mut length, expires)?;
+    read_before(stream, &mut length, expires, clock)?;
     let length = u32::from_be_bytes(length) as usize;
     if !(6..=MAX_BINDING_FRAME).contains(&length) {
         return Err(invalid("binding frame length"));
     }
     let mut bytes = vec![0; length];
-    read_before(stream, &mut bytes, expires)?;
+    read_before(stream, &mut bytes, expires, clock)?;
     if &bytes[..5] != b"LXIB\x01" {
         return Err(invalid("binding frame version"));
     }
