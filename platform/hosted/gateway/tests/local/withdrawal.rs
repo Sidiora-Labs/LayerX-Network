@@ -191,12 +191,30 @@ fn executed(http: &Http, authorization: &str, params: &serde_json::Value) -> ser
     }
 }
 
+fn complete_module_registry(gateway: &Gateway) {
+    let bytes = fs::read(&gateway.environment["LAYERX_GATEWAY_MODULE_REGISTRY_FILE"])
+        .required("gateway committed module registry");
+    let document: serde_json::Value =
+        serde_json::from_slice(&bytes).required("gateway module registry JSON");
+    let modules = document["modules"]
+        .as_array()
+        .required("committed module declarations")
+        .iter()
+        .map(|entry| entry["module"].as_u64().required("module identifier"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        modules,
+        layerx_types::payload::ModuleId::ALL.map(|module| u64::from(module as u16))
+    );
+}
+
 pub(super) fn run(
     cluster: &Cluster,
     certificates: &Certificates,
     gateway: &mut Gateway,
     key: &serde_json::Value,
 ) {
+    complete_module_registry(gateway);
     let http = Http {
         port: gateway.port,
         ca: Certificate::from_der(&certificates.ca_der).required("gateway CA"),

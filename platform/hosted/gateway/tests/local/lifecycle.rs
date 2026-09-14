@@ -421,11 +421,45 @@ fn gateway_configuration(
             local_secret(
                 &cluster.root,
                 "modules.json",
-                &serde_json::json!({"schema_version":2,"assets":[{"asset":hex_encode(&cluster.asset),"currency":"NATIVE","decimals":0,"symbol":"LXR"}],"modules":[{"module":1,"ordinals":[1,4,5,6,7,8,9,10,11]},{"module":9,"ordinals":[1,2,3,5,6,7]}]}).to_string(),
+                &committed_gateway_modules(cluster),
             ),
         ),
     ]);
     (gateway_env, gateway_port, signer_file)
+}
+
+fn committed_gateway_modules(cluster: &Cluster) -> String {
+    let binary = PathBuf::from(
+        std::env::var("LAYERX_TEST_NATIVE_BIN_DIR").required("qualified native binaries"),
+    )
+    .join("layerx-module-registry");
+    let output = Command::new(binary)
+        .args([
+            "read-node",
+            "--socket",
+            &text(&cluster.lni_socket),
+            "--network-id",
+            &NETWORK_ID.to_string(),
+            "--protocol-version",
+            "3",
+            "--actor",
+            &cluster.treasury_did,
+        ])
+        .output()
+        .required("committed native module registry");
+    assert!(
+        output.status.success(),
+        "native module registry: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).required("committed module registry JSON");
+    assert!(document["modules"].is_array());
+    document["schema_version"] = serde_json::json!(2);
+    document["assets"] = serde_json::json!([{
+        "asset": hex_encode(&cluster.asset), "currency": "NATIVE", "decimals": 0, "symbol": "LXR"
+    }]);
+    document.to_string()
 }
 
 fn start_gateway_runtime(

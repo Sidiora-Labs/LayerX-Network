@@ -3236,7 +3236,7 @@ fn modules_from_file(module_file: ModuleFile) -> Result<ModuleRegistry, String> 
     {
         return Err("gateway asset registry is invalid".to_owned());
     }
-    if module_file.modules.is_empty() || module_file.modules.len() > 8 {
+    if module_file.modules.is_empty() || module_file.modules.len() > ModuleId::ALL.len() {
         return Err("gateway module registry is outside its bound".to_owned());
     }
     let mut registrations = Vec::with_capacity(module_file.modules.len());
@@ -4211,6 +4211,48 @@ mod authority_shape_tests {
 #[cfg(test)]
 mod module_schema_tests {
     use super::*;
+
+    #[test]
+    fn native_generated_registry_admits_exactly_the_closed_protocol_module_set() {
+        let document: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../tests/fixtures/public-testnet-modules/registry.json"
+        ))
+        .unwrap_or_else(|error| panic!("native generated module registry: {error}"));
+        let parse = |value: serde_json::Value| -> Result<ModuleRegistry, String> {
+            modules_from_file(serde_json::from_value(value).map_err(|error| error.to_string())?)
+        };
+        let registry = parse(document.clone())
+            .unwrap_or_else(|error| panic!("complete protocol registry: {error}"));
+        assert_eq!(
+            registry
+                .registrations()
+                .iter()
+                .map(ModuleRegistration::module)
+                .collect::<Vec<_>>(),
+            ModuleId::ALL
+        );
+        for module in ModuleId::ALL {
+            assert_eq!(ModuleId::from_u16(module as u16), Ok(module));
+        }
+        let mut tenth = document.clone();
+        tenth["modules"]
+            .as_array_mut()
+            .unwrap_or_else(|| panic!("module declarations"))
+            .push(document["modules"][0].clone());
+        assert!(parse(tenth).is_err());
+        let mut duplicate = document.clone();
+        duplicate["modules"][8] = document["modules"][0].clone();
+        assert!(parse(duplicate).is_err());
+        let mut unknown = document.clone();
+        unknown["modules"][8]["module"] = serde_json::json!(10);
+        assert!(parse(unknown).is_err());
+        let mut zero = document.clone();
+        zero["modules"][0]["ordinals"][0] = serde_json::json!(0);
+        assert!(parse(zero).is_err());
+        let mut duplicate_ordinal = document;
+        duplicate_ordinal["modules"][0]["ordinals"][1] = serde_json::json!(1);
+        assert!(parse(duplicate_ordinal).is_err());
+    }
 
     #[test]
     fn registry_requires_versioned_asset_metadata() {

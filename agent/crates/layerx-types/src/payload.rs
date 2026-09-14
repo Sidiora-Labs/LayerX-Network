@@ -27,6 +27,19 @@ pub enum ModuleId {
 }
 
 impl ModuleId {
+    /// The complete, closed protocol module set in canonical identifier order.
+    pub const ALL: [Self; 9] = [
+        Self::Asset,
+        Self::Escrow,
+        Self::Budget,
+        Self::Stream,
+        Self::Service,
+        Self::Perps,
+        Self::Governance,
+        Self::Bridge,
+        Self::Programs,
+    ];
+
     /// Decodes a protocol module identifier without accepting extensions.
     ///
     /// # Errors
