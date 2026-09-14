@@ -43,7 +43,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RELAY_BYTES: usize = 4 * 1024 * 1024;
-const IO_TIMEOUT: Duration = Duration::from_secs(8);
+const IO_TIMEOUT: Duration = layerx_platform_internal::http::IO_TIMEOUT;
 const RESET_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_CONNECTIONS: usize = 128;
 const LNI_FRAME_BYTES: usize = 1_212_416;

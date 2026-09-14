@@ -12,6 +12,8 @@ const IO_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_HEADERS: usize = 32 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 const MAX_IDLE_CONNECTIONS_PER_ENDPOINT: usize = 8;
+const MAX_IDLE_AGE: Duration =
+    Duration::from_secs(layerx_platform_internal::http::IO_TIMEOUT.as_secs() / 2);
 
 #[derive(Clone)]
 pub struct Endpoint {
@@ -74,7 +76,19 @@ pub struct Client {
     ca: Certificate,
     identity: Identity,
     connector: OnceLock<Result<TlsConnector, String>>,
-    idle: Mutex<BTreeMap<String, Vec<TlsStream<TcpStream>>>>,
+    idle: Mutex<BTreeMap<String, Vec<IdleConnection>>>,
+}
+
+struct IdleConnection {
+    stream: TlsStream<TcpStream>,
+    retained_at: Instant,
+}
+
+impl IdleConnection {
+    fn reusable(&self, now: Instant) -> bool {
+        now.checked_duration_since(self.retained_at)
+            .is_some_and(|age| age < MAX_IDLE_AGE)
+    }
 }
 
 pub struct OutboundRequest<'a> {
@@ -111,10 +125,20 @@ impl Client {
     }
 
     fn take_idle(&self, pool_key: &str) -> Result<Option<TlsStream<TcpStream>>, String> {
-        self.idle
+        let mut idle = self
+            .idle
             .lock()
-            .map_err(|_| "gateway HTTP connection pool is unavailable".to_owned())
-            .map(|mut idle| idle.get_mut(pool_key).and_then(Vec::pop))
+            .map_err(|_| "gateway HTTP connection pool is unavailable".to_owned())?;
+        let now = Instant::now();
+        let Some(connections) = idle.get_mut(pool_key) else {
+            return Ok(None);
+        };
+        while let Some(connection) = connections.pop() {
+            if connection.reusable(now) {
+                return Ok(Some(connection.stream));
+            }
+        }
+        Ok(None)
     }
 
     fn retain_idle(&self, pool_key: &str, stream: TlsStream<TcpStream>) -> Result<(), String> {
@@ -122,9 +146,14 @@ impl Client {
             .idle
             .lock()
             .map_err(|_| "gateway HTTP connection pool is unavailable".to_owned())?;
+        let now = Instant::now();
         let connections = idle.entry(pool_key.to_owned()).or_default();
+        connections.retain(|connection| connection.reusable(now));
         if connections.len() < MAX_IDLE_CONNECTIONS_PER_ENDPOINT {
-            connections.push(stream);
+            connections.push(IdleConnection {
+                stream,
+                retained_at: now,
+            });
         }
         Ok(())
     }
