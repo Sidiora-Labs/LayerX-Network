@@ -1,3 +1,6 @@
+#[path = "lifecycle/post_upgrade.rs"]
+mod post_upgrade;
+
 use super::*;
 use layerx_programs_runtime::{
     derive_program_account, AccessDeclaration, AccessMode, AccessSet, AccountAccess, Capability,
