@@ -262,7 +262,9 @@ pub enum HumanRequest {
     },
     Balance,
     NativeFeePolicy,
-    AccountState { account_id: [u8; 32] },
+    AccountState {
+        account_id: [u8; 32],
+    },
     SessionFeeState {
         grant_id: [u8; 32],
     },
@@ -401,8 +403,11 @@ impl HumanResponse {
 pub trait HumanOperations {
     /// # Errors
     /// Refuses unavailable, unauthenticated or mismatched canonical account state.
-    fn account_state(&mut self, peer: &HumanPeer, account_id: [u8; 32])
-        -> Result<HumanResponse, HumanOperationError>;
+    fn account_state(
+        &mut self,
+        peer: &HumanPeer,
+        account_id: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError>;
     /// Returns the exact core-negotiated module registry encoded as count,
     /// module id, activity count and packed activity ids.
     /// # Errors
@@ -1434,7 +1439,9 @@ fn decode_operation_1(
     Ok(match operation {
         BALANCE => HumanRequest::Balance,
         NATIVE_FEE_POLICY => HumanRequest::NativeFeePolicy,
-        ACCOUNT_STATE => HumanRequest::AccountState { account_id: reader.fixed()? },
+        ACCOUNT_STATE => HumanRequest::AccountState {
+            account_id: reader.fixed()?,
+        },
         SESSION_FEE_STATE => HumanRequest::SessionFeeState {
             grant_id: reader.fixed()?,
         },

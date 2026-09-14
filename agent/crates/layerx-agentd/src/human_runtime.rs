@@ -804,8 +804,11 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
 }
 
 impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
-    fn account_state(&mut self, peer: &HumanPeer, account_id: [u8; 32])
-        -> Result<HumanResponse, HumanOperationError> {
+    fn account_state(
+        &mut self,
+        peer: &HumanPeer,
+        account_id: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError> {
         self.lock_operations()?.account_state(peer, account_id)
     }
     fn registry(&self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
@@ -2741,17 +2744,28 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
 }
 
 impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A> {
-    fn account_state(&mut self, peer: &HumanPeer, account_id: [u8; 32])
-        -> Result<HumanResponse, HumanOperationError> {
+    fn account_state(
+        &mut self,
+        peer: &HumanPeer,
+        account_id: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError> {
         let (_, _, _, _, age, maximum_age, authorization) = self.authority.balance_context(peer)?;
         if account_id == [0; 32] || maximum_age == 0 || age > maximum_age {
             return Err(HumanOperationError::Unavailable);
         }
         let correlation = boundary_correlation(peer, &account_id, b"account-state");
-        let value = self.node.account(account_id, VerificationLevel::STATE_PROVEN, correlation, authorization)
+        let value = self
+            .node
+            .account(
+                account_id,
+                VerificationLevel::STATE_PROVEN,
+                correlation,
+                authorization,
+            )
             .map_err(|_| HumanOperationError::Unavailable)?;
-        let decoded = layerx_proof::state::decode_account_value(account_id, value.canonical_bytes())
-            .map_err(|_| HumanOperationError::Refused)?;
+        let decoded =
+            layerx_proof::state::decode_account_value(account_id, value.canonical_bytes())
+                .map_err(|_| HumanOperationError::Refused)?;
         let mut out = Encoder::new();
         out.fixed(&decoded.account_id);
         out.u8(value.achieved().wire_rank());
