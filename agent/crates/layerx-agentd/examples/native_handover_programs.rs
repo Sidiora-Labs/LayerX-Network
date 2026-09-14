@@ -198,14 +198,20 @@ fn get(endpoint: &str, token: &str, path: &str) -> Result<Option<Value>> {
     if status == 200 {
         return Ok(Some(value));
     }
-    if status == 503
-        && (value["native_result"].as_i64() == Some(-106) || value["code"].as_i64() == Some(-106))
+    if (status == 404 && value["error"].as_i64() == Some(-106))
+        || (status == 503
+            && (value["native_result"].as_i64() == Some(-106)
+                || value["code"].as_i64() == Some(-106)))
     {
         return Ok(None);
     }
     Err(format!(
         "native Programs read status {status}: {}",
-        value.get("code").unwrap_or(&Value::Null)
+        value
+            .get("code")
+            .or_else(|| value.get("native_result"))
+            .or_else(|| value.get("error"))
+            .unwrap_or(&Value::Null)
     )
     .into())
 }
@@ -288,10 +294,14 @@ fn submit(
         &state.module_registry,
     ))?;
     assert_eq!(included.canonical_bytes(), receipt);
-    wait_finalized(client, checked(included.signed_header().batch_number())?)?;
+    wait_finalized(client, included.signed_header())?;
     Ok(receipt)
 }
-fn wait_finalized(client: &mut Client, batch: u64) -> Result<()> {
+fn wait_finalized(
+    client: &mut Client,
+    included: &layerx_client::evidence::SignedHeader,
+) -> Result<()> {
+    let batch = checked(included.batch_number())?;
     checked(client.reconnect())?;
     let clock = layerx_client::runtime_clock::RuntimeClock::from_environment()?;
     let mut deadline = checked(Deadline::start(clock.as_ref(), Duration::from_secs(30)))?;
@@ -307,6 +317,7 @@ fn wait_finalized(client: &mut Client, batch: u64) -> Result<()> {
         ) {
             Ok(checkpoint) => {
                 assert_eq!(checkpoint.report().batch_number(), batch);
+                assert_eq!(checkpoint.canonical_header(), included.canonical_bytes);
                 return Ok(());
             }
             Err(layerx_client::evidence::EvidenceError::CoreRefusal { class: 4, result })
