@@ -8,6 +8,55 @@ mod paxeer_real {
 
     use layerx_human_service::journeys::WithdrawalTransactionRequest;
 
+    pub(super) struct GenesisChain {
+        _anvil: Anvil,
+        pub configuration: serde_json::Value,
+    }
+
+    impl GenesisChain {
+        pub(super) fn new(generated: &serde_json::Value) -> Self {
+            let digest = |name: &str| -> [u8; 32] {
+                hex_bytes(
+                    generated[name]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("genesis {name}")),
+                )
+                .try_into()
+                .unwrap_or_else(|_| panic!("genesis digest {name}"))
+            };
+            let genesis = [digest("manifest"), digest("state"), digest("receipt")];
+            let anvil = Anvil::launch();
+            let (_, _, bond, registry, _, _) =
+                deploy_suite_for_genesis(&anvil, 3, super::ASSET, super::NETWORK_ID, genesis);
+            let selector = sha3::Keccak256::digest(b"latestFinalisedStateRoot()");
+            let data = bytes_hex(&selector[..4]);
+            let observed = anvil.call(
+                "eth_call",
+                &[
+                    Json::Object(vec![
+                        text_member("to", &address_hex(registry)),
+                        text_member("data", &data),
+                    ]),
+                    Json::Text("latest".to_owned()),
+                ],
+            );
+            assert_eq!(
+                hex_bytes(observed.as_text().unwrap_or_else(|| panic!("genesis root"))),
+                genesis[2]
+            );
+            let configuration = serde_json::json!({
+                "url": anvil.endpoint.url,
+                "chain_id": anvil.endpoint.expected_chain_id,
+                "bond": address_hex(bond), "registry": address_hex(registry),
+                "root_call": data,
+            });
+            Self {
+                _anvil: anvil,
+                configuration,
+            }
+        }
+    }
+
     pub(super) struct JourneyChain {
         anvil: Anvil,
         boundary: WithdrawalBoundary,

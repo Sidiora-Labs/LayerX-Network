@@ -491,6 +491,29 @@ fn deploy_suite_for_asset_network(
     EvmAddress,
     EvmAddress,
 ) {
+    deploy_suite_for_genesis(
+        anvil,
+        protocol_version,
+        asset,
+        network_id,
+        [GENESIS_MANIFEST, GENESIS_CANONICAL_STATE, GENESIS],
+    )
+}
+
+fn deploy_suite_for_genesis(
+    anvil: &Anvil,
+    protocol_version: u16,
+    asset: [u8; 32],
+    network_id: u32,
+    genesis: [[u8; 32]; 3],
+) -> (
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+) {
     let owner = parse_address(FUNDED);
     let challenger = parse_address(CHALLENGER);
     let token_template = anvil.deploy("IntegrationToken", &[address_word(owner)]);
@@ -541,9 +564,9 @@ fn deploy_suite_for_asset_network(
             quantity_word(&1_u16.to_be_bytes()),
             quantity_word(&3_600_u64.to_be_bytes()),
             quantity_word(&300_u64.to_be_bytes()),
-            GENESIS_MANIFEST,
-            GENESIS_CANONICAL_STATE,
-            GENESIS,
+            genesis[0],
+            genesis[1],
+            genesis[2],
             [0x24; 32],
             quantity_word(&1_u128.to_be_bytes()),
         ],

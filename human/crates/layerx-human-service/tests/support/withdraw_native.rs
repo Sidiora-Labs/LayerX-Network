@@ -1,3 +1,4 @@
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -21,6 +22,7 @@ fn checked<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
 
 pub struct NativeFixture {
     child: Child,
+    _genesis: super::paxeer_real::GenesisChain,
     root: PathBuf,
     pub endpoint: PathBuf,
     pub timestamp: u64,
@@ -41,7 +43,7 @@ impl NativeFixture {
             .spawn(),
         );
         let deadline = Instant::now() + Duration::from_secs(90);
-        while !root.join("ready.json").exists() {
+        while !root.join("generated.json").exists() {
             if let Some(status) = checked(child.try_wait()) {
                 panic!(
                     "native fixture exited {status}; evidence {}",
@@ -51,6 +53,29 @@ impl NativeFixture {
             assert!(
                 Instant::now() < deadline,
                 "native fixture readiness; evidence {}",
+                root.display()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let generated: serde_json::Value = checked(serde_json::from_slice(&checked(
+            std::fs::read(root.join("generated.json")),
+        )));
+        let genesis = super::paxeer_real::GenesisChain::new(&generated);
+        let input = child
+            .stdin
+            .as_mut()
+            .unwrap_or_else(|| panic!("native fixture input"));
+        checked(writeln!(input, "{}", genesis.configuration));
+        while !root.join("ready.json").exists() {
+            if let Some(status) = checked(child.try_wait()) {
+                panic!(
+                    "registered native fixture exited {status}; evidence {}",
+                    root.display()
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "registered native fixture readiness; evidence {}",
                 root.display()
             );
             std::thread::sleep(Duration::from_millis(50));
@@ -87,6 +112,7 @@ impl NativeFixture {
         let state = checked(node.preparation_state(&actor, 3));
         Self {
             child,
+            _genesis: genesis,
             root,
             endpoint,
             timestamp: state.protocol_timestamp,
@@ -97,6 +123,11 @@ impl NativeFixture {
 
 impl Drop for NativeFixture {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            if let Some(input) = self.child.stdin.as_mut() {
+                let _ = input.write_all(b"preserve");
+            }
+        }
         drop(self.child.stdin.take());
         let _ = self.child.wait();
         if std::thread::panicking() {
