@@ -22,6 +22,9 @@ impl ProductionComponents {
             }
             journey
         };
+        if principal == &self.onboarding_sponsor_principal {
+            return self.finalize_onboarding_sponsor(&mut store, principal, &mut journey, &trace, observed_at);
+        }
         let (sponsor, mut agent) = {
             let scope = store.principal(&self.onboarding_sponsor_principal)
                 .map_err(|_| ApiFailure::upstream_degraded())?;
@@ -81,6 +84,37 @@ impl ProductionComponents {
             .map_err(|_| ApiFailure::upstream_degraded())?;
         journey.accept_native_recovery(&mut scope, &plan, &recovery, &registry, &trace, observed_at)
             .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(journey.status())
+    }
+
+    fn finalize_onboarding_sponsor(
+        &self, store: &mut PrincipalStore, principal: &PrincipalId,
+        journey: &mut OnboardingJourney, trace: &TraceId, observed_at: u64,
+    ) -> Result<OnboardingStatus, ApiFailure> {
+        let mut scope = store.principal(principal).map_err(|_| ApiFailure::upstream_degraded())?;
+        let mut agent = self.principal_agent(&scope)?;
+        self.native_onboarding_sponsor(&scope, &mut agent)?;
+        let key = self.custody.describe_key(principal, &primary_key()?).map_err(|_| ApiFailure::upstream_degraded())?;
+        let registry = agent.registry().clone();
+        for (name, stage) in [("identity", crate::onboarding::ProtocolStage::DidRegistration),
+                             ("recovery", crate::onboarding::ProtocolStage::RecoveryRegistration)] {
+            let row = RowKey::new(format!("onboarding-sponsor-{name}")).map_err(|_| ApiFailure::upstream_degraded())?;
+            let signed = scope.get(Table::Journeys, &row).ok_or_else(ApiFailure::upstream_degraded)?.bytes().to_vec();
+            let activity = layerx_intents::owner_activity::verify(&signed, &registry).map_err(|_| ApiFailure::upstream_degraded())?;
+            let activity_id = layerx_intents::canonical::activity_id(&activity).map_err(|_| ApiFailure::upstream_degraded())?;
+            let material = match agent.evidence(activity.idempotency_key(), activity_id).map_err(agent_failure)? {
+                crate::journeys::ReceiptLookup::Found(value) => value,
+                crate::journeys::ReceiptLookup::Absent => return Err(ApiFailure::upstream_degraded()),
+            };
+            if activity.network_id() != self.network_id { return Err(ApiFailure::forbidden()); }
+            let evidence = crate::agents::ProtocolEvidence { actor: self.agent_actor.as_str().as_bytes().to_vec(),
+                owner_public_key: key.public_key, network_id: self.network_id, signed_activity: signed,
+                action_key: activity.idempotency_key(), activity_id, receipt_bytes: material.canonical_bytes,
+                authorized_batch: material.authorised_batch, verification_level: material.verification_level };
+            journey.accept_bootstrap_owner(&mut scope, stage, &evidence, &registry, trace, observed_at)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+            if journey.status().state() == crate::onboarding::OnboardingState::Refused { break; }
+        }
         Ok(journey.status())
     }
 

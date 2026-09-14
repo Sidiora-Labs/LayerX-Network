@@ -199,6 +199,7 @@ pub struct ProductionComponentsConfig {
     agent_limits: Limits,
     security: SecurityProviderConfig,
     identity: IdentityProviderConfig,
+    identity_binding: layerx_identity_binding::Config,
     movement: MovementProviderConfig,
     kms_provider_reference: String,
     kms_endpoint: SocketAddr,
@@ -268,6 +269,7 @@ impl ProductionComponentsConfig {
                 deadline: Duration::from_secs(number("LAYERX_HUMAN_SECURITY_DEADLINE_SECONDS")?),
                 maximum_frame_bytes: number("LAYERX_HUMAN_SECURITY_MAX_FRAME_BYTES")?,
             },
+            identity_binding: principal_binding_configuration()?,
             identity: IdentityProviderConfig {
                 socket: absolute("LAYERX_HUMAN_IDENTITY_SOCKET")?,
                 deadline: Duration::from_secs(number("LAYERX_HUMAN_IDENTITY_DEADLINE_SECONDS")?),
@@ -389,6 +391,10 @@ pub struct ProductionComponents {
 #[path = "production_rotation.rs"]
 mod owner_rotation;
 
+#[path = "onboarding_sponsor.rs"]
+mod onboarding_sponsor;
+pub use onboarding_sponsor::onboarding_sponsor_command;
+
 #[path = "production_onboarding.rs"]
 mod onboarding_native;
 #[path = "production_owner.rs"]
@@ -408,7 +414,7 @@ impl ProductionComponents {
             PurposePresetCatalog::from_json(&read_nonempty(&config.agent_purpose_catalog)?)
                 .map_err(|_| "agent purpose catalog was refused".to_owned())?;
         let store =
-            production_principal_store(config.store_root, config.retention, config.tenancy_digest)?;
+            production_principal_store(config.store_root, config.retention, config.tenancy_digest, config.identity_binding)?;
         let auth_index = production_auth_index(config.auth_index_root, config.auth_index_key)?;
         let agent_contract = layerx_sdk::Client::daemon(
             config.agent_socket.clone(),
@@ -772,7 +778,7 @@ impl ComponentMaintenance for ProductionComponents {
             .active_principals(observed_at)
             .map_err(|error| auth_failure(&error))?;
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-        for principal in store.tenancy().principals() {
+        for principal in store.known_principals().map_err(|_| ApiFailure::upstream_degraded())? {
             if !principals.contains(&principal) {
                 principals.push(principal);
             }
@@ -5411,8 +5417,12 @@ fn production_principal_store(
     root: PathBuf,
     retention: RetentionPolicy,
     tenancy_digest: [u8; 32],
+    binding: layerx_identity_binding::Config,
 ) -> Result<Arc<Mutex<PrincipalStore>>, String> {
-    PrincipalStore::open(root, retention, TenancyDigest::new(tenancy_digest))
+    let provider = layerx_identity_binding::Client::new(binding)
+        .map_err(|_| "identity binding provider configuration refused".to_owned())?;
+    PrincipalStore::open_with_authority(root, retention, TenancyDigest::new(tenancy_digest),
+        Arc::new(IdentityTenancy(provider)))
         .map(|store| Arc::new(Mutex::new(store)))
         .map_err(|_| "principal store refused startup".to_owned())
 }
@@ -5458,4 +5468,27 @@ fn validate_resumed_session(
         return Err(ApiFailure::upstream_degraded());
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct IdentityTenancy(layerx_identity_binding::Client);
+
+impl crate::store::PrincipalTenancyAuthority for IdentityTenancy {
+    fn tenant_for(&self, principal: &crate::store::PrincipalId) -> Result<crate::store::AgentTenantId, crate::store::StoreError> {
+        let binding = self.0.lookup(principal.as_str())?;
+        if binding.principal() != principal.as_str() {
+            return Err(crate::store::StoreError::InvalidPrincipal);
+        }
+        crate::store::AgentTenantId::new(binding.agent_tenant())
+    }
+}
+
+fn principal_binding_configuration() -> Result<layerx_identity_binding::Config, String> {
+    Ok(layerx_identity_binding::Config {
+        socket: absolute("LAYERX_HUMAN_IDENTITY_BINDING_SOCKET")?,
+        tenant: required("LAYERX_HUMAN_IDENTITY_BINDING_TENANT")?,
+        peer_uid: number("LAYERX_HUMAN_IDENTITY_BINDING_PEER_UID")?,
+        peer_gid: number("LAYERX_HUMAN_IDENTITY_BINDING_PEER_GID")?,
+        deadline: Duration::from_secs(number("LAYERX_HUMAN_IDENTITY_BINDING_DEADLINE_SECONDS")?),
+    })
 }

@@ -141,6 +141,42 @@ impl NativePlan {
 }
 
 impl OnboardingJourney {
+    pub(crate) fn bootstrap_action(&self, stage: ProtocolStage) -> [u8; 32] { self.action_key(stage) }
+
+    pub(crate) fn accept_bootstrap_owner(
+        &mut self, scope: &mut PrincipalScope<'_>, stage: ProtocolStage,
+        evidence: &ProtocolEvidence, registry: &ModuleRegistry, trace: &TraceId, now: u64,
+    ) -> Result<(), OnboardingError> {
+        let (did, public_key, policy) = self.bootstrap_identity()?;
+        let request = match stage {
+            ProtocolStage::DidRegistration => layerx_intents::NativeOwnerBootstrap::Identity {
+                did, primary_key: layerx_types::intent::PublicKey::new(public_key),
+            },
+            ProtocolStage::RecoveryRegistration => layerx_intents::NativeOwnerBootstrap::RecoveryPolicy {
+                did, root: policy.root(), threshold: policy.threshold(),
+                minimum_delay: policy.challenge_delay_secs(), maximum_delay: policy.challenge_delay_secs(),
+            },
+        };
+        let compiled = request.compile(registry)?;
+        if evidence.actor != self.record.did || evidence.owner_public_key != public_key
+            || evidence.verification_level < VerificationLevel::CHECKPOINT_FINALISED
+            || stage == ProtocolStage::RecoveryRegistration && !self.did_verified()
+        { return Err(OnboardingError::EvidenceConflict); }
+        let activity = evidence.bound_activity(compiled.activity_type()).map_err(|_| OnboardingError::EvidenceConflict)?;
+        if activity.payload() != compiled.payload().as_bytes() { return Err(OnboardingError::EvidenceConflict); }
+        let verified = evidence.verify_outcome(compiled.activity_type()).map_err(|_| OnboardingError::EvidenceConflict)?;
+        if evidence.verification_level < verified.level() { return Err(OnboardingError::EvidenceConflict); }
+        let result = verified.receipt().protocol().ok_or(OnboardingError::ReceiptShape)?.result_code();
+        self.accept_native_stage(scope, (stage, result), evidence, trace, now)
+    }
+
+    pub(crate) fn bootstrap_identity(&self) -> Result<(Did, [u8; 32], RecoveryPolicy), OnboardingError> {
+        Ok((self.did()?, self.record.public_key.ok_or(OnboardingError::CustodyKeyRequired)?,
+            RecoveryPolicy::new(RecoveryRoot::new(self.record.recovery_root),
+                ApprovalThreshold::new(self.record.recovery_threshold).map_err(|_| OnboardingError::EvidenceConflict)?,
+                self.record.recovery_challenge_delay_secs)?))
+    }
+
     pub(crate) fn native_plan(
         &mut self, scope: &mut PrincipalScope<'_>, sponsor: &NativeSponsor, now: u64,
     ) -> Result<NativePlan, OnboardingError> {

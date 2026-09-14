@@ -279,7 +279,9 @@ def _produce(work_dir):
     root = Path(work_dir) / 'human-evidence-input'
     path = root / 'owner-native.json'
     config = protected_json(path)
-    fields(config, 'node_socket network_id owner_seed_file pending_seed_file sequencer_public_key layerxctl fee_limit authority_url authority_token_file authority_ca_file authority_state_root', path, 'native producer configuration')
+    kms = 'kms_command' in config
+    key_fields = 'kms_command kms_owner_file' if kms else 'owner_seed_file pending_seed_file'
+    fields(config, 'node_socket network_id sequencer_public_key layerxctl fee_limit authority_url authority_token_file authority_ca_file authority_state_root ' + key_fields, path, 'native producer configuration')
     uint(config['network_id'], 32, path, 'network_id', 1)
     uint(config['fee_limit'], 128, path, 'fee_limit')
     h32(config['sequencer_public_key'], path, 'sequencer_public_key')
@@ -291,17 +293,29 @@ def _produce(work_dir):
     info = evidence_dir.lstat()
     require(evidence_dir.is_absolute() and evidence_dir.resolve() == evidence_dir and stat.S_ISDIR(info.st_mode)
             and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700, evidence_dir, 'protected authority state directory')
-    seed = protected_bytes(config['owner_seed_file'], 32)
-    require(len(seed) == 32, config['owner_seed_file'], 'custody owner Ed25519 seed')
-    signer = Ed25519PrivateKey.from_private_bytes(seed)
-    public = signer.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    pending = protected_bytes(config['pending_seed_file'], 32)
-    require(len(pending) == 32, config['pending_seed_file'], 'custody rotation Ed25519 seed')
-    pending_public = Ed25519PrivateKey.from_private_bytes(pending).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    require(pending_public != public, config['pending_seed_file'], 'distinct rotation key')
+    kms_owner = None
+    signer = None
+    if kms:
+        require(Path(config['kms_command']).is_absolute(), path, 'KMS onboarding executable')
+        kms_owner = protected_json(config['kms_owner_file'])
+        public = bytes(kms_owner['public_key'])
+        pending_public = bytes(kms_owner['pending_key'])
+        require(len(public) == 32 and len(pending_public) == 32 and public != pending_public,
+                path, 'distinct provider-owned keys')
+    else:
+        seed = protected_bytes(config['owner_seed_file'], 32)
+        require(len(seed) == 32, config['owner_seed_file'], 'custody owner Ed25519 seed')
+        signer = Ed25519PrivateKey.from_private_bytes(seed)
+        public = signer.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        pending = protected_bytes(config['pending_seed_file'], 32)
+        require(len(pending) == 32, config['pending_seed_file'], 'custody rotation Ed25519 seed')
+        pending_public = Ed25519PrivateKey.from_private_bytes(pending).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        require(pending_public != public, config['pending_seed_file'], 'distinct rotation key')
     owner_path = Path(work_dir) / 'human-owner-result.json'
     owner = protected_json(owner_path)
     did = owner['did'].encode()
+    if kms:
+        require(kms_owner['did'] == owner['did'] and kms_owner['principal'] == owner['principal'], path, 'KMS provider principal binding')
     require(0 < len(did) <= 255, owner_path, 'owner DID')
     did_id = digest(b'did-id', struct.pack('>H', len(did)) + did)
     name = b'agent:' + did + b':main'
@@ -348,14 +362,20 @@ def _produce(work_dir):
         sequence = state['account_sequence']
         now = time.time_ns() // 1000000
         idempotency = hashlib.sha256(b'LX:DEPOSIT:NULLIFIER:v1' + payload[43:75]).digest() if module == 8 else os.urandom(32)
-        fields_bytes = (b'\1' + struct.pack('>H', 3) + b'\2' + struct.pack('>I', config['network_id'])
-            + b'\3' + struct.pack('>I', (module << 16) | ordinal) + b'\4' + span(did)
-            + b'\5' + span(public) + b'\6' + struct.pack('>Q', sequence)
-            + b'\7' + struct.pack('>QQ', now, now + 300000) + b'\10' + span(idempotency)
-            + b'\11' + config['fee_limit'].to_bytes(16, 'big') + b'\12' + span(digest(b'payload-hash', payload))
-            + b'\13' + span(payload))
-        unsigned = b'\0\3\x10\1\13' + fields_bytes
-        signed = b'\0\3\x10\1\14' + fields_bytes + b'\14' + span(signer.sign(digest(b'signature-preimage', unsigned)))
+        if kms:
+            from owner_kms import sign
+            if label in ('identity', 'recovery'):
+                idempotency = bytes(kms_owner['registration_action' if label == 'identity' else 'recovery_action'])
+            signed = sign(config, kms_owner, label, payload, sequence, now, now + 300000, idempotency)
+        else:
+            fields_bytes = (b'\1' + struct.pack('>H', 3) + b'\2' + struct.pack('>I', config['network_id'])
+                + b'\3' + struct.pack('>I', (module << 16) | ordinal) + b'\4' + span(did)
+                + b'\5' + span(public) + b'\6' + struct.pack('>Q', sequence)
+                + b'\7' + struct.pack('>QQ', now, now + 300000) + b'\10' + span(idempotency)
+                + b'\11' + config['fee_limit'].to_bytes(16, 'big') + b'\12' + span(digest(b'payload-hash', payload))
+                + b'\13' + span(payload))
+            unsigned = b'\0\3\x10\1\13' + fields_bytes
+            signed = b'\0\3\x10\1\14' + fields_bytes + b'\14' + span(signer.sign(digest(b'signature-preimage', unsigned)))
         activity_id = digest(b'activity-id', signed)
         activity_path = run_dir / (label + '.activity')
         protected_write(activity_path, signed)
