@@ -870,7 +870,9 @@ static int native_source_dispatch_path(void)
     call.protocol_version = 3U; call.did = owner_did; call.seed = owner_seed;
     call.timestamp = 500U; call.activity_type = LX_BUDGET_CREATE;
     call.payload = create; call.payload_length = sizeof(create);
-    CHECK(submit(&call, &effects, &result) == 0 && result == LXP_OK);
+    CHECK(submit(&call, &effects, &result) == 0);
+    if (result != LXP_OK) fprintf(stderr, "native Budget CREATE result=%d\n", result);
+    CHECK(result == LXP_OK);
     CHECK(source->balance.lo == 700U && source->next_sequence == 1U &&
         env.owner->balance.lo == 1000U && env.owner->next_sequence == 0U && env.budget_account->balance.lo == 300U);
     CHECK(read_record(create + 2U, &record) == 0 && record.native_source &&

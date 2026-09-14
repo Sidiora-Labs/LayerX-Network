@@ -23,7 +23,7 @@ pub struct NativeBudgetCreate {
 
 impl NativeBudgetCreate {
     /// # Errors
-    /// Refuses invalid native BudgetCreate fields or a noncanonical budget account.
+    /// Refuses invalid native `BudgetCreate` fields or a noncanonical budget account.
     pub fn payload(&self) -> Result<Vec<u8>, IntentError> {
         let invalid_wire = |_| invalid();
         if self.budget_id == [0; 32]
