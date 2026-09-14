@@ -463,7 +463,6 @@ fn final_report(
     panic!("transaction did not reach finality");
 }
 
-#[allow(clippy::too_many_lines)]
 fn deploy_suite_for_protocol(
     anvil: &Anvil,
     protocol_version: u16,
@@ -500,6 +499,7 @@ fn deploy_suite_for_asset_network(
     )
 }
 
+#[allow(clippy::too_many_lines)]
 fn deploy_suite_for_genesis(
     anvil: &Anvil,
     protocol_version: u16,

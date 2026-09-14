@@ -18,7 +18,10 @@ use layerx_types::verify::VerificationLevel;
 
 #[track_caller]
 fn checked<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
-    result.unwrap_or_else(|error| panic!("real withdrawal node: {error:?}"))
+    match result {
+        Ok(value) => value,
+        Err(error) => panic!("real withdrawal node: {error:?}"),
+    }
 }
 
 pub struct NativeFixture {
@@ -67,6 +70,7 @@ impl NativeFixture {
             .as_mut()
             .unwrap_or_else(|| panic!("native fixture input"));
         checked(writeln!(input, "{}", genesis.configuration));
+        let deadline = Instant::now() + Duration::from_secs(90);
         while !root.join("ready.json").exists() {
             if let Some(status) = checked(child.try_wait()) {
                 panic!(
@@ -166,18 +170,30 @@ pub fn connect(endpoint: &Path) -> Client {
     }))
 }
 
-pub fn receipt(
+fn receipt_bundle(
     node: &mut Client,
     registry: &ModuleRegistry,
     activity_id: [u8; 32],
     next_account_sequence: u64,
-) -> (super::ReceiptMaterial, VerifiedReceiptEvidence) {
+) -> VerifiedProofBundle {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut correlation = 100;
     let actor = checked(Did::new(super::owner_did().as_bytes()));
     loop {
         correlation += 1;
-        let observed = checked(node.preparation_state(&actor, correlation));
+        let observed = match node.preparation_state(&actor, correlation) {
+            Ok(state) => state,
+            Err(layerx_client::lni::preparation::PreparationStateError::CoreRefusal {
+                result,
+                ..
+            }) if result.retriability() == layerx_types::result::Retriability::Retriable
+                && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            Err(error) => panic!("actual account commit preparation: {error:?}"),
+        };
         assert!(observed.account_sequence <= next_account_sequence);
         if observed.account_sequence == next_account_sequence {
             break;
@@ -188,18 +204,18 @@ pub fn receipt(
         );
         std::thread::sleep(Duration::from_millis(20));
     }
-    let bundle = loop {
+    loop {
         correlation += 1;
         match node.proof_bundle(
             ProofBundleSelector::Receipt(activity_id),
             correlation,
             registry,
         ) {
-            Ok(bundle) => break bundle,
+            Ok(bundle) => return bundle,
             Err(layerx_client::evidence::EvidenceError::Unavailable)
                 if Instant::now() < deadline =>
             {
-                std::thread::sleep(Duration::from_millis(20))
+                std::thread::sleep(Duration::from_millis(20));
             }
             Err(layerx_client::evidence::EvidenceError::CoreRefusal { result, .. })
                 if result.retriability() == layerx_types::result::Retriability::Retriable
@@ -209,7 +225,16 @@ pub fn receipt(
             }
             Err(error) => panic!("actual withdrawal receipt proof: {error:?}"),
         }
-    };
+    }
+}
+
+pub fn receipt(
+    node: &mut Client,
+    registry: &ModuleRegistry,
+    activity_id: [u8; 32],
+    next_account_sequence: u64,
+) -> (super::ReceiptMaterial, VerifiedReceiptEvidence) {
+    let bundle = receipt_bundle(node, registry, activity_id, next_account_sequence);
     let VerifiedProofBundle::Receipt {
         canonical_bytes,
         proof,
@@ -222,17 +247,7 @@ pub fn receipt(
     let header = checked(layerx_intents::canonical::decode_batch_header(
         &signed_header.canonical_bytes,
     ));
-    let decoded = checked(layerx_intents::canonical::decode_receipt(&canonical_bytes));
-    let protocol = decoded
-        .protocol()
-        .unwrap_or_else(|| panic!("protocol receipt"));
-    let authority = AuthorizedBatch::new(
-        protocol.batch_id(),
-        protocol.asset(),
-        protocol.previous_state_root(),
-        protocol.resulting_state_root(),
-        signed_header.public_key,
-    );
+    let authority = activity_authority(&canonical_bytes, signed_header.public_key);
     let authorization = SequencerAuthorization::new(
         header.sequencer_id(),
         signed_header.public_key,
@@ -247,7 +262,7 @@ pub fn receipt(
         65,
         None,
         VerificationLevel::BATCH_INCLUDED,
-        correlation + 1,
+        10_000,
         authorization,
     ));
     assert!(history.cursor.is_none());
@@ -264,10 +279,12 @@ pub fn receipt(
     ));
     assert_eq!(maintenance_proof.header, signed_header.canonical_bytes);
     assert_eq!(maintenance_proof.header_signature, signed_header.signature);
-    let receipts = history.items[..history.items.len() - 1]
-        .iter()
-        .map(|item| item.canonical_bytes().to_vec())
-        .collect::<Vec<_>>();
+    let receipts = history_receipts(
+        node,
+        registry,
+        &history.items[..history.items.len() - 1],
+        &signed_header,
+    );
     let raw = RawReceiptEvidence::new(
         canonical_bytes.clone(),
         proof,
@@ -313,4 +330,58 @@ pub fn receipt(
         verification_level: terminal.level(),
     };
     (material, terminal)
+}
+
+fn history_receipts(
+    node: &mut Client,
+    registry: &ModuleRegistry,
+    items: &[layerx_client::read::HistoryItem],
+    expected_header: &layerx_client::evidence::SignedHeader,
+) -> Vec<Vec<u8>> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            assert_eq!(item.kind, layerx_client::read::HistoryKind::Activity);
+            let activity = checked(layerx_intents::canonical::decode_signed_activity(
+                item.canonical_bytes(),
+                registry,
+            ));
+            let id = checked(layerx_intents::canonical::activity_id(&activity));
+            let bundle = checked(node.proof_bundle(
+                ProofBundleSelector::Receipt(id),
+                11_000 + index as u64,
+                registry,
+            ));
+            let VerifiedProofBundle::Receipt {
+                canonical_bytes,
+                signed_header,
+                ..
+            } = bundle
+            else {
+                panic!("history activity receipt proof kind")
+            };
+            assert_eq!(&signed_header, expected_header);
+            let decoded = checked(layerx_intents::canonical::decode_receipt(&canonical_bytes));
+            let protocol = decoded
+                .protocol()
+                .unwrap_or_else(|| panic!("history activity protocol receipt"));
+            assert_eq!(protocol.global_sequence(), item.global_sequence);
+            canonical_bytes
+        })
+        .collect()
+}
+
+fn activity_authority(canonical: &[u8], public_key: [u8; 32]) -> AuthorizedBatch {
+    let decoded = checked(layerx_intents::canonical::decode_receipt(canonical));
+    let protocol = decoded
+        .protocol()
+        .unwrap_or_else(|| panic!("protocol receipt"));
+    AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        protocol.previous_state_root(),
+        protocol.resulting_state_root(),
+        public_key,
+    )
 }
