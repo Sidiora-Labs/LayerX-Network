@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 layerx-types = { path = "../layerx-types" }
 layerx-client = { path = "../layerx-client" }
+layerx-paxeer-verifier = { path = "../layerx-paxeer-verifier" }
 layerx-agent-api = { path = "../layerx-agent-api" }
 layerx-crypto = { path = "../layerx-crypto" }
 layerx-proof = { path = "../layerx-proof" }

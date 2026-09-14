@@ -78,6 +78,19 @@ def main():
                         shutil.copyfile(public_file, destination)
                         os.chown(destination, 4021, 4021)
                         destination.chmod(0o400)
+                settlement = json.loads((native / 'handover-peers/checkpoint-settlement.json').read_text())
+                domain = settlement['settlement_domains']['beta']
+                registration = (native / 'data/genesis/paxeer-registration-request.lxrr').read_bytes()
+                policy = dict(version='1', url=os.environ['LAYERX_TEST_WITHDRAW_RPC'],
+                    transport='local-emulator', trust_anchor_der='', chain_id='125',
+                    request_timeout_ms='8000', registry=domain['settlement_contract'].removeprefix('0x').lower(),
+                    guarantor_bond=domain['guarantor_bond'].removeprefix('0x').lower(),
+                    protocol_version='3', network_id='77', canonical_genesis_root=registration[9:41].hex(),
+                    confirmations='1')
+                policy_path = client_directory / 'handover-finality.conf'
+                policy_path.write_text(''.join(f'{key}={value}\n' for key, value in policy.items()))
+                os.chown(policy_path, 4021, 4021)
+                policy_path.chmod(0o400)
                 invoke(['setpriv', '--reuid=4021', '--regid=4021', '--clear-groups',
                         executable, os.environ['LAYERX_TEST_HANDOVER_LNI_SOCKET'],
                         client_directory, count], os.environ,

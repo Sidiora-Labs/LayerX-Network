@@ -15,7 +15,12 @@ use sha2::{Digest as _, Sha256};
 use std::fmt::Write as _;
 
 use crate::availability::AvailabilityResult;
-use crate::evidence::VerifiedCheckpoint;
+use crate::evidence::{FinalityEvidenceCandidate, VerifiedCheckpoint};
+use layerx_paxeer_verifier::{PaxeerCheckpointVerifier, VerifiedCheckpointPublication};
+
+#[path = "handover_policy.rs"]
+mod policy;
+pub use policy::decode_finality_policy;
 
 const HANDOVER_ACTIVITY: u32 = 0x0007_0009;
 
@@ -52,6 +57,7 @@ pub struct SequencerHistory {
     network_id: u32,
     governance_key: [u8; 32],
     genesis_root: [u8; 32],
+    canonical_genesis_root: [u8; 32],
     intervals: Vec<Interval>,
     predecessor: Option<VerifiedBatchHeader>,
     predecessor_signature: [u8; 64],
@@ -155,10 +161,24 @@ impl SequencerHistory {
         correlation_id: u64,
         limits: crate::availability::RetrievalLimits,
     ) -> Result<(), HistoryError> {
+        self.fetch_next_with_finality(transport, version, correlation_id, limits, None)
+    }
+
+    /// Fetches one complete batch and independently verifies any activating publication.
+    ///
+    /// # Errors
+    /// Refuses a transition without a configured, domain-bound Paxeer verifier.
+    pub fn fetch_next_with_finality(
+        &mut self,
+        transport: &mut dyn crate::lni::transport::FrameTransport,
+        version: crate::lni::schema::Version,
+        correlation_id: u64,
+        limits: crate::availability::RetrievalLimits,
+        verifier: Option<&PaxeerCheckpointVerifier>,
+    ) -> Result<(), HistoryError> {
         use crate::availability::{
             fetch, AvailabilitySelector, FetchContext, FetchOutcome, Provider, ProviderSet,
         };
-        use crate::evidence::{checkpoint, CheckpointSelector, EvidenceContext};
         let batch = self
             .predecessor
             .as_ref()
@@ -199,30 +219,51 @@ impl SequencerHistory {
             return Err(HistoryError::Availability);
         };
         let current = self.intervals.last().ok_or(HistoryError::Genesis)?;
-        let finality = if current.epoch == header.epoch() {
-            None
+        let (finality, publication) = if current.epoch == header.epoch() {
+            (None, None)
         } else {
-            Some(
-                checkpoint(
-                    transport,
-                    CheckpointSelector::Batch(batch - 1),
-                    EvidenceContext {
-                        interface_version: version,
-                        correlation_id: correlation_id + 2,
-                        expected_protocol_version: 3,
-                        expected_network_id: self.network_id,
-                        handshake_sequencer_key: current.public_key,
-                    },
-                )
-                .map_err(|_| HistoryError::Finality)?,
-            )
+            let (checkpoint, publication) = self.transition_finality(&availability, verifier)?;
+            (Some(checkpoint), Some(publication))
         };
-        self.advance(
+        self.advance_with_publication(
             candidate.canonical_bytes(),
             candidate.signature(),
             &availability,
             finality.as_ref(),
+            publication.as_ref(),
         )
+    }
+
+    fn transition_finality(
+        &self,
+        availability: &AvailabilityResult,
+        verifier: Option<&PaxeerCheckpointVerifier>,
+    ) -> Result<(VerifiedCheckpoint, VerifiedCheckpointPublication), HistoryError> {
+        let verifier = verifier.ok_or(HistoryError::Finality)?;
+        let policy = verifier.policy();
+        if policy.protocol_version != 3
+            || policy.network_id != self.network_id
+            || policy.canonical_genesis_root != self.canonical_genesis_root
+        {
+            return Err(HistoryError::Finality);
+        }
+        let recovery = recovery_bytes(availability)?;
+        let (_, packet) = decode_recovery(&recovery).map_err(|_| HistoryError::Certificate)?;
+        let evidence = decode_evidence(packet.ok_or(HistoryError::Certificate)?)
+            .map_err(|_| HistoryError::Certificate)?;
+        let candidate = FinalityEvidenceCandidate::from_exact_bytes(
+            evidence.checkpoint_payload.to_vec(),
+            evidence.finality_proof.to_vec(),
+            3,
+            self.network_id,
+        ).map_err(|_| HistoryError::Finality)?;
+        let certificate = candidate.certificate().map_err(|_| HistoryError::Finality)?;
+        let set_version = candidate.set_version().map_err(|_| HistoryError::Finality)?;
+        let publication = verifier.verify(&certificate, set_version)
+            .map_err(|_| HistoryError::Finality)?;
+        let checkpoint = VerifiedCheckpoint::from_independent_publication(candidate, &publication)
+            .map_err(|_| HistoryError::Finality)?;
+        Ok((checkpoint, publication))
     }
 
     #[must_use]
@@ -274,6 +315,7 @@ impl SequencerHistory {
             network_id,
             governance_key,
             genesis_root: genesis_receipt_root(network_id, genesis_root),
+            canonical_genesis_root: genesis_root,
             registry,
             intervals: vec![Interval {
                 epoch: 1,
@@ -290,7 +332,7 @@ impl SequencerHistory {
     }
 
     /// Rechecks complete native batch material before changing any trusted interval.
-    /// Finality is the exact predecessor checkpoint independently checked through authenticated LNI.
+    /// Activating transitions additionally require independent Paxeer publication verification.
     ///
     /// # Errors
     /// Refuses gaps, substitutions, unsigned handovers, incomplete availability and failed activation.
@@ -300,6 +342,21 @@ impl SequencerHistory {
         signature: &[u8; 64],
         availability: &AvailabilityResult,
         finality: Option<&VerifiedCheckpoint>,
+    ) -> Result<(), HistoryError> {
+        self.advance_with_publication(canonical_header, signature, availability, finality, None)
+    }
+
+    /// Advances only after binding the independent publication to the exact finalized predecessor.
+    ///
+    /// # Errors
+    /// Refuses substituted publication, missing finality and every native history verification failure.
+    pub fn advance_with_publication(
+        &mut self,
+        canonical_header: &[u8],
+        signature: &[u8; 64],
+        availability: &AvailabilityResult,
+        finality: Option<&VerifiedCheckpoint>,
+        publication: Option<&VerifiedCheckpointPublication>,
     ) -> Result<(), HistoryError> {
         let header = decode_batch_header(canonical_header).map_err(|_| HistoryError::Header)?;
         self.check_continuity(&header)?;
@@ -318,6 +375,7 @@ impl SequencerHistory {
             let evidence = decode_evidence(packet).map_err(|_| HistoryError::Certificate)?;
             let activity = activities.first().ok_or(HistoryError::Activity)?;
             self.check_transition(&header, &evidence, finality)?;
+            self.check_publication(finality.ok_or(HistoryError::Finality)?, publication)?;
             verify_activation(activity, packet, &header, self.governance_key)?;
             verify_activation_receipts(availability, activity, &evidence, &header)?;
             next = Interval {
@@ -330,7 +388,7 @@ impl SequencerHistory {
             };
         } else {
             let actual = packet.map(|bytes| <[u8; 32]>::from(Sha256::digest(bytes)));
-            if actual != self.latest_evidence || finality.is_some() {
+            if actual != self.latest_evidence || finality.is_some() || publication.is_some() {
                 return Err(HistoryError::Certificate);
             }
         }
@@ -346,6 +404,26 @@ impl SequencerHistory {
         }
         self.predecessor = Some(verified);
         self.predecessor_signature = *signature;
+        Ok(())
+    }
+
+    fn check_publication(
+        &self,
+        checkpoint: &VerifiedCheckpoint,
+        publication: Option<&VerifiedCheckpointPublication>,
+    ) -> Result<(), HistoryError> {
+        let publication = publication.ok_or(HistoryError::Finality)?;
+        if publication.protocol_version() != 3
+            || publication.network_id() != self.network_id
+            || publication.canonical_genesis_root() != self.canonical_genesis_root
+            || publication.canonical_header() != checkpoint.canonical_header()
+            || Some(publication.checkpoint_id()) != checkpoint.report().evidence().checkpoint_id()
+            || Some(publication.settlement_reference())
+                != checkpoint.report().evidence().settlement_reference()
+            || publication.set_version() != checkpoint.set_version()
+        {
+            return Err(HistoryError::Finality);
+        }
         Ok(())
     }
 

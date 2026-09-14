@@ -39,6 +39,7 @@ pub enum NativeReadError {
 pub struct NativeReadRoute {
     client: Client,
     sequencer_history: Option<layerx_client::handover::SequencerHistory>,
+    checkpoint_verifier: Option<layerx_paxeer_verifier::PaxeerCheckpointVerifier>,
     actor: Did,
     cursor_key: Zeroizing<String>,
     correlation: u64,
@@ -61,12 +62,35 @@ impl NativeReadRoute {
         Ok(Self {
             client,
             sequencer_history: None,
+            checkpoint_verifier: None,
             actor,
             cursor_key: Zeroizing::new(cursor_key),
             correlation: 10_000,
             deadline: clock(),
             clock,
         })
+    }
+
+    /// Loads the explicit protected Paxeer trust policy before activating historical reads.
+    ///
+    /// # Errors
+    /// Refuses unsafe file ownership or permissions, malformed policy and insecure transport.
+    pub fn with_protected_finality(
+        mut self,
+        path: &std::path::Path,
+    ) -> Result<Self, NativeReadError> {
+        if self.sequencer_history.is_some() || self.checkpoint_verifier.is_some() {
+            return Err(NativeReadError::InvalidRequest);
+        }
+        let bytes = crate::config::read_protected_source(path, 1_048_576)
+            .map_err(|_| NativeReadError::InvalidRequest)?;
+        let policy = layerx_client::handover::decode_finality_policy(&bytes)
+            .map_err(|_| NativeReadError::InvalidRequest)?;
+        self.checkpoint_verifier = Some(
+            layerx_paxeer_verifier::PaxeerCheckpointVerifier::new(policy)
+                .map_err(|_| NativeReadError::InvalidRequest)?,
+        );
+        Ok(self)
     }
 
     /// Binds public historical reads to an explicitly configured protected genesis artifact.
@@ -84,8 +108,13 @@ impl NativeReadRoute {
         .map_err(|_| NativeReadError::InvalidRequest)?;
         let pins = layerx_wire::handover::decode_genesis_trust(&bytes)
             .map_err(|_| NativeReadError::Verification)?;
+        let policy = self.checkpoint_verifier.as_ref()
+            .ok_or(NativeReadError::InvalidRequest)?.policy();
         if pins.network_id != self.client.handshake().node().network_id
             || self.client.handshake().node().protocol_version != 3
+            || policy.protocol_version != 3
+            || policy.network_id != pins.network_id
+            || policy.canonical_genesis_root != pins.canonical_state_root
         {
             return Err(NativeReadError::Verification);
         }
@@ -128,7 +157,7 @@ impl NativeReadRoute {
                 .map_err(|_| NativeReadError::Unavailable)?;
             let remaining = self.deadline.saturating_duration_since((self.clock)());
             self.client
-                .advance_sequencer_history(
+                .advance_sequencer_history_with_finality(
                     self.sequencer_history
                         .as_mut()
                         .ok_or(NativeReadError::Verification)?,
@@ -138,6 +167,7 @@ impl NativeReadRoute {
                         maximum_chunks: 4096,
                         deadline: remaining,
                     },
+                    self.checkpoint_verifier.as_ref(),
                 )
                 .map_err(|_| NativeReadError::Verification)?;
             self.correlation = self

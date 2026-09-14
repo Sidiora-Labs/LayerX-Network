@@ -141,6 +141,39 @@ pub struct VerifiedCheckpoint {
 }
 
 impl VerifiedCheckpoint {
+    /// Binds exact locally checked finality material to independently verified chain publication.
+    ///
+    /// # Errors
+    /// Refuses substituted certificates, context, domains, membership versions or publication.
+    pub fn from_independent_publication(
+        candidate: FinalityEvidenceCandidate,
+        publication: &layerx_paxeer_verifier::VerifiedCheckpointPublication,
+    ) -> Result<Self, EvidenceError> {
+        let verified = checked_checkpoint(
+            candidate.checkpoint_bytes,
+            candidate.context_bytes,
+            publication.protocol_version(),
+            publication.network_id(),
+        )?;
+        if verified.canonical_header() != publication.canonical_header()
+            || verified.set_version() != publication.set_version()
+            || verified.report().evidence().checkpoint_id() != Some(publication.checkpoint_id())
+            || verified.report().evidence().settlement_reference()
+                != Some(publication.settlement_reference())
+        {
+            return Err(EvidenceError::Registration);
+        }
+        Ok(verified)
+    }
+
+    /// Returns the exact canonically decoded certificate for independent publication verification.
+    ///
+    /// # Errors
+    /// Refuses any certificate that no longer satisfies the original bounded wire decoder.
+    pub fn certificate(&self) -> Result<Certificate, EvidenceError> {
+        Ok(decode_checkpoint_material(&self.checkpoint_bytes)?.certificate)
+    }
+
     #[must_use]
     pub fn checkpoint_bytes(&self) -> &[u8] {
         &self.checkpoint_bytes
@@ -186,6 +219,22 @@ pub struct FinalityEvidenceCandidate {
 }
 
 impl FinalityEvidenceCandidate {
+    /// Decodes the original certificate for independent chain publication verification.
+    ///
+    /// # Errors
+    /// Retains all canonical certificate bounds and signature field decoding checks.
+    pub fn certificate(&self) -> Result<Certificate, EvidenceError> {
+        Ok(decode_checkpoint_material(&self.checkpoint_bytes)?.certificate)
+    }
+
+    /// Returns the exact locally checked bonded-set version.
+    ///
+    /// # Errors
+    /// Retains the original canonical context and bonded-set decoding checks.
+    pub fn set_version(&self) -> Result<u64, EvidenceError> {
+        Ok(decode_checkpoint_context(&self.context_bytes)?.set_version)
+    }
+
     #[must_use]
     pub fn canonical_header(&self) -> &[u8] {
         &self.canonical_header

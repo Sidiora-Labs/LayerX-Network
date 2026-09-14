@@ -222,12 +222,14 @@ fn verify_route(
     history: &SequencerHistory,
     activities: &[[u8; 32]],
 ) -> Result<()> {
+    let finality = artifact.with_file_name("handover-finality.conf");
     let mut route = checked(NativeReadRoute::new(
         checked(Client::connect(config.clone()))?,
         actor.clone(),
         "native-handover-history-cursor-bound".to_owned(),
         Instant::now,
     ))?;
+    route = checked(route.with_protected_finality(&finality))?;
     route = checked(route.with_protected_genesis(artifact))?;
     let invalid_path = artifact.with_file_name("unprotected-genesis.bin");
     std::fs::copy(artifact, &invalid_path)?;
@@ -238,6 +240,7 @@ fn verify_route(
         "native-handover-history-cursor-bound".to_owned(),
         Instant::now,
     ))?;
+    let invalid = checked(invalid.with_protected_finality(&finality))?;
     assert!(invalid.with_protected_genesis(&invalid_path).is_err());
     std::fs::set_permissions(&invalid_path, std::fs::Permissions::from_mode(0o600))?;
     let mut invalid_bytes = std::fs::read(artifact)?;
@@ -249,6 +252,7 @@ fn verify_route(
         "native-handover-history-cursor-bound".to_owned(),
         Instant::now,
     ))?;
+    let invalid = checked(invalid.with_protected_finality(&finality))?;
     assert!(invalid.with_protected_genesis(&invalid_path).is_err());
     let head = history.verified_head().ok_or("verified head")?.header();
     for batch in [1, head.batch_number()] {
@@ -308,6 +312,7 @@ fn verify_route(
         "native-handover-history-cursor-bound".to_owned(),
         Instant::now,
     ))?;
+    let reopened = checked(reopened.with_protected_finality(&finality))?;
     checked(reopened.with_protected_genesis(artifact))?;
     Ok(())
 }
@@ -391,6 +396,10 @@ fn main() -> Result<()> {
     let bytes = std::fs::read(&artifact)?;
     let genesis = checked(layerx_wire::handover::decode_genesis_trust(&bytes))?;
     let count: u64 = arguments[3].parse()?;
+    let finality_policy = checked(layerx_client::handover::decode_finality_policy(
+        &std::fs::read(artifact.with_file_name("handover-finality.conf"))?
+    ))?;
+    let finality = checked(layerx_paxeer_verifier::PaxeerCheckpointVerifier::new(finality_policy))?;
     let mut history = checked(SequencerHistory::from_genesis_artifact(
         &bytes,
         genesis.network_id,
@@ -402,7 +411,7 @@ fn main() -> Result<()> {
     let mut stale = None;
     for batch in 1..=count {
         checked(client.reconnect())?;
-        checked(client.advance_sequencer_history(
+        checked(client.advance_sequencer_history_with_finality(
             &mut history,
             batch * 4,
             RetrievalLimits {
@@ -410,6 +419,7 @@ fn main() -> Result<()> {
                 maximum_chunks: 4096,
                 deadline: Duration::from_secs(8),
             },
+            Some(&finality),
         ))?;
         if batch == 1 {
             stale = Some(history.clone());

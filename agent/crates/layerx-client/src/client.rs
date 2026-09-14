@@ -205,6 +205,20 @@ impl Client {
         correlation_id: u64,
         limits: crate::availability::RetrievalLimits,
     ) -> Result<(), crate::handover::HistoryError> {
+        self.advance_sequencer_history_with_finality(history, correlation_id, limits, None)
+    }
+
+    /// Extends pinned history using independently verified Paxeer finality for each handover.
+    ///
+    /// # Errors
+    /// Refuses unconfigured finality, domain mismatches and unauthenticated transitions.
+    pub fn advance_sequencer_history_with_finality(
+        &mut self,
+        history: &mut crate::handover::SequencerHistory,
+        correlation_id: u64,
+        limits: crate::availability::RetrievalLimits,
+        verifier: Option<&layerx_paxeer_verifier::PaxeerCheckpointVerifier>,
+    ) -> Result<(), crate::handover::HistoryError> {
         use crate::handover::HistoryError;
         if history.network_id() != self.config.handshake.expected_network_id
             || self.config.handshake.expected_protocol_version != 3
@@ -212,11 +226,12 @@ impl Client {
             return Err(HistoryError::Genesis);
         }
         let transport = self.transport.as_mut().ok_or(HistoryError::Transport)?;
-        history.fetch_next(
+        history.fetch_next_with_finality(
             transport,
             self.handshake.node().interface_version,
             correlation_id,
             limits,
+            verifier,
         )
     }
 
