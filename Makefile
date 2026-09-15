@@ -3459,7 +3459,7 @@ programs-quickstart:
 beta-ledger-check:
 	tools/ci/beta-ledger-check.sh
 
-beta-contract-check:
+beta-contract-check: beta-report
 	tools/ci/beta-contract-check.sh
 
 beta-report:

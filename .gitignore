@@ -92,3 +92,7 @@ spec/specgen/specgen
 
 __pycache__/
 *.pyc
+
+/spec/layerx-beta/handoff/
+/spec/layerx-beta/report.md
+/spec/layerx-beta/docs/
