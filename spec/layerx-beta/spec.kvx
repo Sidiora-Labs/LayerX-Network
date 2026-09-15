@@ -699,3 +699,32 @@ verify_cmd = "make layerx-genesis-build test-state-commitment-transition test-ge
 symbols = ["lxp_module_ctx_preview_state_root","receipt_state_root","lxp_protocol_version_supported","lxp_genesis_materialize"]
 touches = ["include/layerx","src/protocol","src/modules","src/state","src/replica","src/codec","src/ledger","contracts","scripts","cmd/layerxd","cmd/layerx-genesis","agent/crates","interop/crates","human/crates/layerx-intents","platform/hosted","tests","Makefile"]
 reqs = ["14.1","14.2","14.3","14.4"]
+
+[req.15]
+title = "Public relay and archive nodes"
+story = "As an independent operator, I can join the existing LayerX network, forward users' signed activities, retain complete canonical history and serve public reads without executing or ordering activities."
+ac_1 = "Expose versioned public HTTPS synchronization of the signed genesis manifest, genesis snapshot, head and complete canonical batch bodies including every activity, receipt and maintenance record. Preserve native canonical encodings and verify signatures and all committed section roots using native codecs."
+ac_2 = "Provide layerxd --relay-archive CONFIG with independently pinned network, genesis manifest digest and sequencer public identity. Validate downloaded genesis and snapshot before accepting history; never trust an upstream's self-declared identity."
+ac_3 = "Backfill from genesis and continuously follow batches in order. Atomically persist raw bytes, indexes and synchronization position, reject gaps, root discontinuity, tampering and conflicting history, and resume after interruption without duplication."
+ac_4 = "Serve bounded cursor-paginated complete activity, receipt and batch history and filters for actor, account, module and batch. Preserve raw bytes for every protocol kind and label cryptographic inclusion separately from execution replay or settlement finality."
+ac_5 = "Discover compatible peers with bounded advertisements and expiration. Peer discovery cannot replace trust pins, redirect submission credentials or trigger arbitrary private-network probes."
+ac_6 = "Forward original signed activities with durable idempotency and bounded upstream failover, retrying only the identical bytes after transport or availability failure. Preserve definitive refusals and unknown outcomes. Never sign or rebuild activities on behalf of users."
+ac_7 = "Ship an integrity-pinned operator installer, example configuration, systemd and container deployment paths, and an executable real-process integration gate proving installation, bootstrap, backfill, live sync, public reads, forwarding, failover, restart and negative integrity cases."
+
+[task.7]
+title = "Public relay/archive integration wave"
+status = "done"
+
+[task.7.1]
+title = "Deliver public relay/archive nodes end to end"
+status = "done"
+wave = 1
+requires = []
+do_1 = "Implement the canonical archive bridge using native genesis, batch, receipt and availability codecs without executing state transitions."
+do_2 = "Implement the public synchronization origin and relay/archive daemon with pinned bootstrap, durable backfill and live synchronization, complete indexed history, peer discovery and exact-byte idempotent forwarding."
+do_3 = "Package the daemon with an integrity-pinned installer, systemd/container entry points and operator instructions."
+do_4 = "Integrate all seven capabilities in one wave, then run one compile pass and the focused real-process end-to-end gate. Rerun only after a relevant repair, at most twice. Preserve unrelated owner edits and existing gates."
+verify_cmd = "make relay-archive-e2e"
+symbols = ["lxp_archive_codec_main", "RelayArchive"]
+touches = ["cmd/layerx-archive-codec", "cmd/layerxd/lxp_daemon_cli.c", "platform/relay_archive", "tests/relay-archive", "Makefile", "spec/layerx-beta/spec.kvx", "spec/layerx-beta/qualification.kvx", "spec/layerx-beta/requirements.md", "spec/layerx-beta/tasks.md", "spec/layerx-beta/design.md"]
+reqs = ["15.1","15.2","15.3","15.4","15.5","15.6","15.7"]

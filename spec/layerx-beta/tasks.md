@@ -232,6 +232,14 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Qualify both legacy and new transitions with native real-kernel tests, including exact preview-versus-committed roots and tamper rejection, native genesis and aggregate checks, Rust wire/crypto/proof checks, versioned intent golden vectors and selected-version settlement contracts. The real fresh-genesis SEND and independent replica/account-evidence gate remains mandatory in dependent task 6.10; do not mark that integration complete until actual receipt and account evidence verify.
     - _Requirements: 14.1, 14.2, 14.3, 14.4_
 
+- [x] 7. Public relay/archive integration wave
+  - [x] 7.1 Deliver public relay/archive nodes end to end
+    - Implement the canonical archive bridge using native genesis, batch, receipt and availability codecs without executing state transitions.
+    - Implement the public synchronization origin and relay/archive daemon with pinned bootstrap, durable backfill and live synchronization, complete indexed history, peer discovery and exact-byte idempotent forwarding.
+    - Package the daemon with an integrity-pinned installer, systemd/container entry points and operator instructions.
+    - Integrate all seven capabilities in one wave, then run one compile pass and the focused real-process end-to-end gate. Rerun only after a relevant repair, at most twice. Preserve unrelated owner edits and existing gates.
+    - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7_
+
 ## Engineering ground rules for this feature
 
 - **The bar is production-functional.** Every surface of the system must work on beta infrastructure the way it would in production. The only things the beta does not need are polish (UI polish, visual regression, accessibility, usability, performance budgets and soak), an external security audit, and production infrastructure and certification. Nothing functional is deferred, excluded or marked unsupported.
@@ -296,7 +304,7 @@ The raw finding behind each requirement, with its lane result path, is listed in
 ```json
 {
   "waves": [
-    { "id": 1,  "tasks": ["1.1", "1.2"] },
+    { "id": 1,  "tasks": ["1.1", "1.2", "7.1"] },
     { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4"] },
     { "id": 3,  "tasks": ["3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7"] },
     { "id": 4,  "tasks": ["4.1", "4.2", "4.3"] },

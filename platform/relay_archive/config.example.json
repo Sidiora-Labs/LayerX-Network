@@ -1,0 +1,42 @@
+{
+  "network_id": 402,
+  "genesis_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+  "sequencer_id": "REPLACE_WITH_64_LOWERCASE_HEX",
+  "sequencer_public_key": "REPLACE_WITH_64_LOWERCASE_HEX",
+  "sequencer_first_batch": 1,
+  "sequencer_last_batch": 18446744073709551615,
+  "data_dir": "/var/lib/layerx/relay-archive",
+  "listen": "0.0.0.0:9443",
+  "public_url": "https://relay.example.net",
+  "codec": "/opt/layerx/relay_archive/layerx-archive-codec",
+  "allow_loopback_dev": false,
+  "upstreams": [
+    "https://archive-1.example.net",
+    "https://archive-2.example.net"
+  ],
+  "submission_upstreams": [
+    "https://api.testnet.layerx.network/v1/activities"
+  ],
+  "tls_cert": "/etc/layerx/tls/relay.crt",
+  "tls_key": "/etc/layerx/tls/relay.key",
+  "ca_file": "/etc/ssl/certs/ca-certificates.crt",
+  "poll_interval_seconds": 1,
+  "request_timeout_seconds": 5,
+  "max_activity_bytes": 1048576,
+  "max_batch_bytes": 16777216,
+  "max_response_bytes": 17825792,
+  "history_page_limit": 100,
+  "max_history_page_limit": 500,
+  "max_concurrency": 8,
+  "peer_discovery": {
+    "enabled": true,
+    "seeds": [
+      "https://relay-seed.example.net"
+    ],
+    "advertise_ttl_seconds": 300,
+    "refresh_interval_seconds": 60,
+    "max_peers": 64,
+    "max_advertised_peers": 32,
+    "allow_loopback_dev": false
+  }
+}

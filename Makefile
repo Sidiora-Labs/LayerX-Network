@@ -3882,3 +3882,27 @@ $(BUILD_DIR)/tests/lxp_test_owner_rotation: tests/daemon/lxp_test_owner_rotation
 .PHONY: test-daemon-owner-rotation
 test-daemon-owner-rotation: $(BUILD_DIR)/tests/lxp_test_owner_rotation $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	$(BRIDGE_PYTHON) tests/daemon/withdraw-custody.py $(BUILD_DIR) --owner-rotation
+
+$(BUILD_DIR)/tests/relay-archive-sign: tests/relay-archive/sign_activity.c tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: relay-archive-build relay-archive-e2e
+relay-archive-build: $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build $(BUILD_DIR)/bin/layerx-archive-codec $(BUILD_DIR)/tests/relay-archive-sign
+
+relay-archive-e2e:
+	$(BRIDGE_PYTHON) tests/relay-archive/e2e.py $(BUILD_DIR)
+
+ARCHIVE_CODEC_SOURCES := cmd/layerx-archive-codec/main.c
+ARCHIVE_CODEC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(ARCHIVE_CODEC_SOURCES))
+-include $(ARCHIVE_CODEC_OBJECTS:.o=.d)
+
+.PHONY: layerx-archive-codec
+layerx-archive-codec: $(BUILD_DIR)/bin/layerx-archive-codec
+
+$(BUILD_DIR)/bin/layerx-archive-codec: $(ARCHIVE_CODEC_OBJECTS) $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(ARCHIVE_CODEC_OBJECTS) $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@

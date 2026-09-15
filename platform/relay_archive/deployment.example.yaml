@@ -1,0 +1,132 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layerx-relay-archive
+data:
+  relay-archive.json: |
+    {
+      "network_id": 402,
+      "genesis_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "sequencer_id": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "sequencer_public_key": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "data_dir": "/var/lib/layerx/relay-archive",
+      "listen": "0.0.0.0:9443",
+      "public_url": "https://relay.example.net",
+      "codec": "/usr/local/bin/layerx-archive-codec",
+      "allow_loopback_dev": false,
+      "upstreams": ["https://archive-seed.example.net"],
+      "submission_upstreams": ["https://api.testnet.layerx.network/v1/activities"],
+      "tls_cert": "/run/layerx/tls/tls.crt",
+      "tls_key": "/run/layerx/tls/tls.key",
+      "ca_file": "/etc/ssl/certs/ca-certificates.crt",
+      "peer_discovery": {
+        "enabled": true,
+        "seeds": ["https://relay-seed.example.net"],
+        "advertise_ttl_seconds": 300,
+        "refresh_interval_seconds": 60,
+        "max_peers": 64,
+        "max_advertised_peers": 32,
+        "allow_loopback_dev": false
+      }
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: layerx-relay-archive
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: layerx-relay-archive
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: layerx-relay-archive}
+  strategy: {type: Recreate}
+  template:
+    metadata:
+      labels: {app: layerx-relay-archive}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 4027, runAsGroup: 4027, fsGroup: 4027}
+      containers:
+        - name: relay-archive
+          image: ghcr.io/sidiora-labs/layerx-relay-archive@sha256:REPLACE_WITH_IMAGE_DIGEST
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: LAYERX_RELAY_ARCHIVE_RUNTIME, value: /opt/layerx/relay_archive/runtime.py}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+          args: [--relay-archive, /etc/layerx/relay-archive.json]
+          ports: [{name: https, containerPort: 9443}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, periodSeconds: 10, timeoutSeconds: 3}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /healthz, port: https}, periodSeconds: 30, timeoutSeconds: 3}
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/layerx, readOnly: true}
+            - {name: tls, mountPath: /run/layerx/tls, readOnly: true}
+            - {name: data, mountPath: /var/lib/layerx/relay-archive}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap:
+            name: layerx-relay-archive
+            items: [{key: relay-archive.json, path: relay-archive.json}]
+        - {name: tls, secret: {secretName: layerx-relay-archive-tls, defaultMode: 0440}}
+        - {name: data, persistentVolumeClaim: {claimName: layerx-relay-archive}}
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: layerx-relay-archive
+spec:
+  selector: {app: layerx-relay-archive}
+  ports: [{name: https, port: 443, targetPort: https}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: layerx-relay-archive
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/proxy-body-size: 2m
+spec:
+  ingressClassName: nginx
+  tls: [{hosts: [relay.example.net], secretName: layerx-relay-archive-ingress-tls}]
+  rules:
+    - host: relay.example.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: layerx-relay-archive, port: {name: https}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: layerx-relay-archive
+spec:
+  podSelector: {matchLabels: {app: layerx-relay-archive}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}]
+      ports: [{protocol: TCP, port: 9443}]
+  egress:
+    - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to: [{ipBlock: {cidr: 0.0.0.0/0, except: [10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16]}}]
+      ports: [{protocol: TCP, port: 443}]
+    - to: [{ipBlock: {cidr: "::/0", except: ["::1/128", "fc00::/7", "fe80::/10"]}}]
+      ports: [{protocol: TCP, port: 443}]

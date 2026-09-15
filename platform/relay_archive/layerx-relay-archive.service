@@ -1,0 +1,41 @@
+[Unit]
+Description=LayerX non-executing relay and canonical archive
+Documentation=https://github.com/Sidiora-Labs/LayerX-Network/tree/main/platform/relay_archive
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=layerx-relay-archive
+Group=layerx-relay-archive
+WorkingDirectory=/var/lib/layerx/relay-archive
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=LAYERX_RELAY_ARCHIVE_RUNTIME=/opt/layerx/relay_archive/runtime.py
+ExecStart=/opt/layerx/relay_archive/layerxd --relay-archive /etc/layerx/relay-archive.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0027
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths=/etc/layerx/relay-archive.json /opt/layerx/relay_archive
+ReadWritePaths=/var/lib/layerx/relay-archive
+
+[Install]
+WantedBy=multi-user.target

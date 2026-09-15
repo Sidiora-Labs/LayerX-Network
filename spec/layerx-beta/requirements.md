@@ -184,3 +184,17 @@ The LayerX Beta feature closes the twelve items of the 2026-09-01 beta fix regis
 7. THE paxeer-boundary Service on port 9443 SHALL front a real paxd node running the Paxeer EVM chain in the cluster, SHALL answer GET /readyz with 200 only when eth_chainId succeeds against the node and equals the configured chain id, SHALL relay Ethereum JSON-RPC posted to its root to that single node with bounded bodies and the request id preserved, SHALL present a certificate chaining to the beta CA, and the bring-up SHALL deploy the settlement contracts to that chain and record the chain id and the GuarantorBond address in contracts/config/checkpoint-settlement.json as the beta settlement domain.
 8. THE bring-up script SHALL build every one of these images from the repository, issue their certificates and tokens from the beta CA, apply their manifests before the existing ones, and remove LAYERX_BETA_EXTERNAL_MANIFESTS as an owner input; the static topology check SHALL check their Services and NetworkPolicies as in-repository edges; the beta contract SHALL list each as a hosted surface; and the qualification URL exports SHALL point at the surfaces the in-repository driver actually exercises.
 
+## Requirement 15: Public relay and archive nodes
+
+**User Story:** As an independent operator, I can join the existing LayerX network, forward users' signed activities, retain complete canonical history and serve public reads without executing or ordering activities.
+
+### Acceptance Criteria
+
+1. Expose versioned public HTTPS synchronization of the signed genesis manifest, genesis snapshot, head and complete canonical batch bodies including every activity, receipt and maintenance record. Preserve native canonical encodings and verify signatures and all committed section roots using native codecs.
+2. Provide layerxd --relay-archive CONFIG with independently pinned network, genesis manifest digest and sequencer public identity. Validate downloaded genesis and snapshot before accepting history; never trust an upstream's self-declared identity.
+3. Backfill from genesis and continuously follow batches in order. Atomically persist raw bytes, indexes and synchronization position, reject gaps, root discontinuity, tampering and conflicting history, and resume after interruption without duplication.
+4. Serve bounded cursor-paginated complete activity, receipt and batch history and filters for actor, account, module and batch. Preserve raw bytes for every protocol kind and label cryptographic inclusion separately from execution replay or settlement finality.
+5. Discover compatible peers with bounded advertisements and expiration. Peer discovery cannot replace trust pins, redirect submission credentials or trigger arbitrary private-network probes.
+6. Forward original signed activities with durable idempotency and bounded upstream failover, retrying only the identical bytes after transport or availability failure. Preserve definitive refusals and unknown outcomes. Never sign or rebuild activities on behalf of users.
+7. Ship an integrity-pinned operator installer, example configuration, systemd and container deployment paths, and an executable real-process integration gate proving installation, bootstrap, backfill, live sync, public reads, forwarding, failover, restart and negative integrity cases.
+
