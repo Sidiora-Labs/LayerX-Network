@@ -129,7 +129,7 @@ must be false while any contradiction exists or any surface is below its
 required rung.
 
 The report check then runs as tools/ci/beta-report.sh --check --contract with
-this contract: it fails when spec/layerx-beta/report.md on disk is not the
+this contract: it fails when build/qualification/beta-report.md on disk is not the
 report the evidence ledger renders, when this contract states a reached rung
 the evidence does not support, when the Artifact set report_path, report_status
 or report_generator rows disagree with the rendered report, or when readiness

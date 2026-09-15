@@ -166,7 +166,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Run the unknown-outcome and restart cases on the same revision: interrupt the journey after submission, restart, and prove reconciliation by receipt lookup with no duplicate effect.
     - _Requirements: 1.6, 6.4, 12.4_
   - [ ] 5.4 Generate the go/no-go report and reconcile the beta contract
-    - Write tools/ci/beta-report.sh and a beta-report target that reads only gate records on the release-candidate revision, computes the reached rung per surface against its required beta rung, lists every stop condition with the gate that clears it or the words not clear, and writes spec/layerx-beta/report.md with a single go or no-go line that is go only when every surface is at its rung and every stop condition is clear.
+    - Write tools/ci/beta-report.sh and a beta-report target that reads only gate records on the release-candidate revision, computes the reached rung per surface against its required beta rung, lists every stop condition with the gate that clears it or the words not clear, and writes build/qualification/beta-report.md with a single go or no-go line that is go only when every surface is at its rung and every stop condition is clear.
     - Update the reached rung per surface in platform/docs/content/beta.md from the report and extend beta-contract-check to fail when contract and report disagree or when the contract claims readiness with any surface below its rung.
     - Hand the report to the owner under phase.release_qualification; record the owner go decision, when given, as a gate entry with outcome pass and the decider named, and record nothing if it is not given.
     - _Requirements: 12.3, 12.6, 13.3, 13.4, 13.5_

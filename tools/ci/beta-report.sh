@@ -7,7 +7,7 @@ usage: tools/ci/beta-report.sh [--ledger PATH] [--contract PATH] [--spec PATH]
                                [--output PATH] [--revision REVISION]
                                [--check] [--stdout]
 
-Renders the LayerX beta go/no-go report (spec/layerx-beta/report.md by default)
+Renders the LayerX beta go/no-go report (build/qualification/beta-report.md by default)
 from the executed-evidence ledger and the canonical beta contract, and prints a
 one-line summary on stdout. The exit status is 0 when the report is rendered,
 1 in --check mode when the report on disk or the contract disagrees with the
@@ -16,7 +16,7 @@ evidence, and 2 on usage or environment errors.
   --ledger PATH    evidence ledger (default spec/layerx-beta/qualification.kvx)
   --contract PATH  beta contract (default platform/docs/content/beta.md)
   --spec PATH      feature spec (default spec/layerx-beta/spec.kvx)
-  --output PATH    report to write (default spec/layerx-beta/report.md)
+  --output PATH    report to write (default build/qualification/beta-report.md)
   --revision REV   release-candidate revision; overrides the contract value and
                    the LAYERX_BETA_RELEASE_CANDIDATE environment variable
   --check          write nothing; fail when the report on disk is not the
@@ -138,7 +138,7 @@ beta_report() {
     ledger=${ledger:-spec/layerx-beta/qualification.kvx}
     contract=${contract:-platform/docs/content/beta.md}
     spec=${spec:-spec/layerx-beta/spec.kvx}
-    output=${output:-spec/layerx-beta/report.md}
+    output=${output:-build/qualification/beta-report.md}
     revision=${revision:-${LAYERX_BETA_RELEASE_CANDIDATE:-}}
     command -v python3 >/dev/null 2>&1 || { echo "beta-report: python3 is required" >&2; return 2; }
     local path
