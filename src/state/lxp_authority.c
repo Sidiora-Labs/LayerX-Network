@@ -35,7 +35,15 @@ bool lxp_authority_scope_equal(const lxp_authority_scope *left,
            lxp_u128_cmp(left->spent_this_period,
                         right->spent_this_period) == 0 &&
            left->period_start == right->period_start &&
-           memcmp(left->purpose_hash, right->purpose_hash, 32U) == 0;
+           memcmp(left->purpose_hash, right->purpose_hash, 32U) == 0 &&
+           left->earliest_sequence == right->earliest_sequence &&
+           left->earliest_timestamp == right->earliest_timestamp &&
+           left->signer_threshold == right->signer_threshold &&
+           left->signer_count == right->signer_count &&
+           left->approval_count == right->approval_count &&
+           memcmp(left->signers, right->signers, sizeof(left->signers)) == 0 &&
+           memcmp(left->approvals, right->approvals,
+                  sizeof(left->approvals)) == 0;
 }
 
 void lxp_authority_allowance_bind(lxp_authority_grant *grant,
@@ -49,11 +57,92 @@ void lxp_authority_allowance_bind(lxp_authority_grant *grant,
     (void)memcpy(allowance->grant_id, grant->grant_id, 32U);
 }
 
+static bool authority_kind_extended(lxp_authority_kind kind)
+{
+    return kind == LXP_AUTHORITY_KIND_MULTISIG ||
+           kind == LXP_AUTHORITY_KIND_TIMELOCK;
+}
+
+/* The k-of-n signer set as it stands, independent of how many approvals it
+ * has collected: n distinct non-zero signers, a threshold inside n, and an
+ * approval list of distinct signers drawn from the set. */
+static lxp_result authority_signer_set_check(const lxp_authority_scope *scope)
+{
+    size_t signer_index;
+    size_t other_index;
+    if (scope->signer_count == 0U || scope->signer_threshold == 0U ||
+        scope->signer_count > (uint8_t)LXP_AUTHORITY_MULTISIG_MAX_SIGNERS ||
+        scope->signer_threshold > scope->signer_count ||
+        scope->approval_count > scope->signer_count)
+        return LXP_ERR_MALFORMED_GRANT;
+    for (signer_index = 0U; signer_index < scope->signer_count; ++signer_index) {
+        if (lxp_ct_is_zero(scope->signers[signer_index], 32U))
+            return LXP_ERR_MALFORMED_GRANT;
+        for (other_index = signer_index + 1U; other_index < scope->signer_count;
+             ++other_index)
+            if (lxp_ct_memcmp(scope->signers[signer_index],
+                              scope->signers[other_index], 32U) == 0)
+                return LXP_ERR_AUTH_DUPLICATE_SIGNER;
+    }
+    for (signer_index = (size_t)scope->signer_count;
+         signer_index < (size_t)LXP_AUTHORITY_MULTISIG_MAX_SIGNERS; ++signer_index)
+        if (!lxp_ct_is_zero(scope->signers[signer_index], 32U))
+            return LXP_ERR_MALFORMED_GRANT;
+    for (signer_index = 0U; signer_index < scope->approval_count; ++signer_index) {
+        bool member = false;
+        for (other_index = 0U; other_index < scope->signer_count; ++other_index)
+            if (lxp_ct_memcmp(scope->approvals[signer_index],
+                              scope->signers[other_index], 32U) == 0) member = true;
+        if (!member) return LXP_ERR_AUTH_SCOPE;
+        for (other_index = signer_index + 1U; other_index < scope->approval_count;
+             ++other_index)
+            if (lxp_ct_memcmp(scope->approvals[signer_index],
+                              scope->approvals[other_index], 32U) == 0)
+                return LXP_ERR_AUTH_DUPLICATE_SIGNER;
+    }
+    for (signer_index = (size_t)scope->approval_count;
+         signer_index < (size_t)LXP_AUTHORITY_MULTISIG_MAX_SIGNERS; ++signer_index)
+        if (!lxp_ct_is_zero(scope->approvals[signer_index], 32U))
+            return LXP_ERR_MALFORMED_GRANT;
+    return LXP_OK;
+}
+
+static bool authority_signer_fields_absent(const lxp_authority_scope *scope)
+{
+    return scope->signer_threshold == 0U && scope->signer_count == 0U &&
+           scope->approval_count == 0U &&
+           lxp_ct_is_zero(scope->signers, sizeof(scope->signers)) &&
+           lxp_ct_is_zero(scope->approvals, sizeof(scope->approvals));
+}
+
+static lxp_result authority_extended_fields_check(const lxp_authority_grant *grant)
+{
+    const lxp_authority_scope *scope = &grant->scope;
+    if (grant->kind == LXP_AUTHORITY_KIND_MULTISIG) {
+        if (scope->earliest_sequence != 0U || scope->earliest_timestamp != 0U)
+            return LXP_ERR_MALFORMED_GRANT;
+        return authority_signer_set_check(scope);
+    }
+    if (grant->kind == LXP_AUTHORITY_KIND_TIMELOCK) {
+        if (!authority_signer_fields_absent(scope) ||
+            (scope->earliest_sequence == 0U && scope->earliest_timestamp == 0U))
+            return LXP_ERR_MALFORMED_GRANT;
+        return LXP_OK;
+    }
+    if (!authority_signer_fields_absent(scope) ||
+        scope->earliest_sequence != 0U || scope->earliest_timestamp != 0U)
+        return LXP_ERR_MALFORMED_GRANT;
+    return LXP_OK;
+}
+
 static lxp_result validate_grant(const lxp_authority_grant *grant)
 {
+    lxp_result extended;
     if (grant->kind < LXP_AUTHORITY_OWNER ||
-        grant->kind > LXP_AUTHORITY_PROTOCOL_MODULE)
+        grant->kind > LXP_AUTHORITY_KIND_TIMELOCK)
         return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
+    extended = authority_extended_fields_check(grant);
+    if (extended != LXP_OK) return extended;
     if (grant->not_after == 0U || grant->not_after <= grant->not_before ||
         lxp_ct_is_zero(grant->grantee, 32U) || lxp_ct_is_zero(grant->key, 32U) ||
         (!grant->authentication_only && grant->scope.module_mask == 0U) ||
@@ -114,7 +203,9 @@ lxp_result lxp_grant_encode(const lxp_authority_grant *grant,
     if (status != LXP_OK) return status;
 #define WRITE(expression) do { status = (expression); if (status != LXP_OK) return status; } while (0)
     WRITE(lxp_codec_write_struct_header(&writer, 0x2001U));
-    WRITE(lxp_codec_write_u8(&writer, grant->authentication_only ? 3U : (grant->fee_budget.present ? 2U : 1U)));
+    WRITE(lxp_codec_write_u8(&writer, authority_kind_extended(grant->kind) ?
+        (uint8_t)LXP_AUTHORITY_GRANT_VERSION_EXTENDED :
+        (grant->authentication_only ? 3U : (grant->fee_budget.present ? 2U : 1U))));
     WRITE(lxp_codec_write_bytes(&writer, grant->grantor, 32U, 32U));
     WRITE(lxp_codec_write_bytes(&writer, grant->grantee, 32U, 32U));
     WRITE(lxp_codec_write_u8(&writer, (uint8_t)grant->kind));
@@ -149,6 +240,20 @@ lxp_result lxp_grant_encode(const lxp_authority_grant *grant,
         WRITE(lxp_codec_write_u64(&writer, fee->period_start));
     }
     if (grant->authentication_only) WRITE(lxp_codec_write_u8(&writer, 1U));
+    if (authority_kind_extended(grant->kind)) {
+        const lxp_authority_scope *scope = &grant->scope;
+        WRITE(lxp_codec_write_u8(&writer, scope->signer_threshold));
+        WRITE(lxp_codec_write_u8(&writer, scope->signer_count));
+        WRITE(lxp_codec_write_bytes(&writer, scope->signers,
+                                    (size_t)scope->signer_count * 32U,
+                                    (uint32_t)sizeof(scope->signers)));
+        WRITE(lxp_codec_write_u8(&writer, scope->approval_count));
+        WRITE(lxp_codec_write_bytes(&writer, scope->approvals,
+                                    (size_t)scope->approval_count * 32U,
+                                    (uint32_t)sizeof(scope->approvals)));
+        WRITE(lxp_codec_write_u64(&writer, scope->earliest_sequence));
+        WRITE(lxp_codec_write_u64(&writer, scope->earliest_timestamp));
+    }
 #undef WRITE
     encoded->bytes = writer.bytes;
     encoded->length = writer.length;
@@ -224,7 +329,7 @@ lxp_result lxp_authority_hash(lxp_authority_kind kind,
                               uint8_t authority_hash[32])
 {
     uint8_t preimage[65];
-    if (kind < LXP_AUTHORITY_OWNER || kind > LXP_AUTHORITY_PROTOCOL_MODULE ||
+    if (kind < LXP_AUTHORITY_OWNER || kind > LXP_AUTHORITY_KIND_TIMELOCK ||
         grant_id == NULL || verified_key == NULL || authority_hash == NULL)
         return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
     preimage[0] = (uint8_t)kind;
@@ -267,7 +372,7 @@ lxp_result lxp_authority_resolve(const lxp_authority_grant *grant,
     if (grant == NULL || actor == NULL || resolved == NULL)
         return LXP_ERR_MALFORMED_GRANT;
     if (grant->kind < LXP_AUTHORITY_OWNER ||
-        grant->kind > LXP_AUTHORITY_PROTOCOL_MODULE)
+        grant->kind > LXP_AUTHORITY_KIND_TIMELOCK)
         return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
     if (grant->authentication_only) return LXP_ERR_AUTH_SCOPE;
     if (!signature_valid) return LXP_ERR_BAD_SIGNATURE;
@@ -279,6 +384,16 @@ lxp_result lxp_authority_resolve(const lxp_authority_grant *grant,
                                        declared_ordinal_min,
                                        declared_ordinal_max);
     if (status != LXP_OK) return status;
+    if (grant->kind == LXP_AUTHORITY_KIND_MULTISIG) {
+        status = authority_signer_set_check(&grant->scope);
+        if (status != LXP_OK) return status;
+        if (grant->scope.approval_count < grant->scope.signer_threshold)
+            return LXP_ERR_AUTH_THRESHOLD_UNMET;
+    } else if (grant->kind == LXP_AUTHORITY_KIND_TIMELOCK) {
+        if (grant->scope.earliest_sequence == 0U &&
+            grant->scope.earliest_timestamp == 0U)
+            return LXP_ERR_MALFORMED_GRANT;
+    }
     (void)memcpy(resolved->actor, actor, 32U);
     (void)memcpy(resolved->principal, grant->grantor, 32U);
     (void)memcpy(resolved->verified_key, grant->key, 32U);
@@ -317,15 +432,20 @@ lxp_result lxp_grant_decode(const uint8_t *bytes, size_t length,
     READ(lxp_codec_reader_init(&reader, bytes, length));
     READ(lxp_codec_read_struct_header(&reader, 0x2001U));
     READ(lxp_codec_read_u8(&reader, &version));
-    if (version != 1U && version != 2U && version != 3U) return LXP_ERR_VERSION_UNSUPPORTED;
+    if (version != 1U && version != 2U && version != 3U &&
+        version != (uint8_t)LXP_AUTHORITY_GRANT_VERSION_EXTENDED)
+        return LXP_ERR_VERSION_UNSUPPORTED;
     FIXED(grant->grantor, 32U);
     FIXED(grant->grantee, 32U);
     READ(lxp_codec_read_u8(&reader, &kind));
     if (kind < (uint8_t)LXP_AUTHORITY_OWNER ||
-        kind > (uint8_t)LXP_AUTHORITY_PROTOCOL_MODULE)
+        kind > (uint8_t)LXP_AUTHORITY_KIND_TIMELOCK)
         return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
     grant->kind = (lxp_authority_kind)kind;
     if (version == 3U && grant->kind != LXP_AUTHORITY_SESSION_KEY) return LXP_ERR_VERSION_UNSUPPORTED;
+    if (authority_kind_extended(grant->kind) !=
+        (version == (uint8_t)LXP_AUTHORITY_GRANT_VERSION_EXTENDED))
+        return LXP_ERR_VERSION_UNSUPPORTED;
     FIXED(grant->key, 32U);
     READ(lxp_codec_read_u64(&reader, &grant->scope.module_mask));
     READ(lxp_codec_read_u16(&reader, &grant->scope.activity_ordinal_min));
@@ -364,6 +484,26 @@ lxp_result lxp_grant_decode(const uint8_t *bytes, size_t length,
         READ(lxp_codec_read_u8(&reader, &purpose));
         if (purpose != 1U) return LXP_ERR_MALFORMED_GRANT;
         grant->authentication_only = true;
+    }
+    if (version == (uint8_t)LXP_AUTHORITY_GRANT_VERSION_EXTENDED) {
+        lxp_authority_scope *scope = &grant->scope;
+        READ(lxp_codec_read_u8(&reader, &scope->signer_threshold));
+        READ(lxp_codec_read_u8(&reader, &scope->signer_count));
+        if (scope->signer_count > (uint8_t)LXP_AUTHORITY_MULTISIG_MAX_SIGNERS)
+            return LXP_ERR_MALFORMED_GRANT;
+        READ(lxp_codec_read_bytes(&reader, &span, (uint32_t)sizeof(scope->signers)));
+        if (span.length != (size_t)scope->signer_count * 32U)
+            return LXP_ERR_MALFORMED_GRANT;
+        (void)memcpy(scope->signers, span.bytes, span.length);
+        READ(lxp_codec_read_u8(&reader, &scope->approval_count));
+        if (scope->approval_count > (uint8_t)LXP_AUTHORITY_MULTISIG_MAX_SIGNERS)
+            return LXP_ERR_MALFORMED_GRANT;
+        READ(lxp_codec_read_bytes(&reader, &span, (uint32_t)sizeof(scope->approvals)));
+        if (span.length != (size_t)scope->approval_count * 32U)
+            return LXP_ERR_MALFORMED_GRANT;
+        (void)memcpy(scope->approvals, span.bytes, span.length);
+        READ(lxp_codec_read_u64(&reader, &scope->earliest_sequence));
+        READ(lxp_codec_read_u64(&reader, &scope->earliest_timestamp));
     }
     READ(lxp_codec_finish(&reader));
 #undef FIXED
@@ -722,7 +862,7 @@ static lxp_result debit_scope_binding(const lxp_authority_scope *scope,
                                       uint16_t module_id)
 {
     if (scope == NULL || asset_id == NULL) return LXP_ERR_NON_CANONICAL;
-    if (kind < LXP_AUTHORITY_OWNER || kind > LXP_AUTHORITY_PROTOCOL_MODULE)
+    if (kind < LXP_AUTHORITY_OWNER || kind > LXP_AUTHORITY_KIND_TIMELOCK)
         return LXP_ERR_UNKNOWN_AUTHORITY_KIND;
     if (module_id >= 64U ||
         (scope->module_mask & (UINT64_C(1) << module_id)) == 0U)
@@ -964,7 +1104,16 @@ lxp_result lxp_authority_amend(lxp_authority_grant *grant,
         lxp_u128_cmp(narrower->scope.spent_this_period,
                      grant->scope.spent_this_period) != 0 ||
         narrower->scope.period_length != grant->scope.period_length ||
-        narrower->scope.period_start != grant->scope.period_start)
+        narrower->scope.period_start != grant->scope.period_start ||
+        narrower->scope.earliest_sequence != grant->scope.earliest_sequence ||
+        narrower->scope.earliest_timestamp != grant->scope.earliest_timestamp ||
+        narrower->scope.signer_threshold != grant->scope.signer_threshold ||
+        narrower->scope.signer_count != grant->scope.signer_count ||
+        narrower->scope.approval_count != grant->scope.approval_count ||
+        memcmp(narrower->scope.signers, grant->scope.signers,
+               sizeof(grant->scope.signers)) != 0 ||
+        memcmp(narrower->scope.approvals, grant->scope.approvals,
+               sizeof(grant->scope.approvals)) != 0)
         return LXP_ERR_AUTH_SCOPE;
     *grant = *narrower;
     return lxp_grant_id_compute(grant, grant->grant_id);
@@ -978,6 +1127,17 @@ lxp_result lxp_authority_is_live(const lxp_authority_grant *grant,
     if (grant == NULL) return LXP_ERR_MALFORMED_GRANT;
     if (batch_timestamp < grant->not_before) return LXP_ERR_NOT_YET_VALID;
     if (batch_timestamp >= grant->not_after) return LXP_ERR_AUTH_EXPIRED;
+    if (grant->kind == LXP_AUTHORITY_KIND_TIMELOCK) {
+        if (grant->scope.earliest_sequence == 0U &&
+            grant->scope.earliest_timestamp == 0U)
+            return LXP_ERR_MALFORMED_GRANT;
+        if (grant->scope.earliest_timestamp != 0U &&
+            batch_timestamp < grant->scope.earliest_timestamp)
+            return LXP_ERR_AUTH_NOT_MATURE;
+        if (grant->scope.earliest_sequence != 0U &&
+            global_sequence < grant->scope.earliest_sequence)
+            return LXP_ERR_AUTH_NOT_MATURE;
+    }
     if (grant->grantor_revocation_sequence != identity_revocation_sequence)
         return LXP_ERR_AUTH_REVOKED;
     if (grant->revoked && global_sequence >= grant->revoked_at_sequence)
