@@ -134,6 +134,15 @@ impl WasmEngine {
         validate::validate_module(self, wasm, AbiRevision::V2)
     }
 
+    /// Validates the frozen version-three ABI for qualification under historical
+    /// metering schedule one. Consensus admission supplies its schedule explicitly.
+    ///
+    /// # Errors
+    /// Returns deterministic validation refusals for violations of the frozen ABI-v3 rules.
+    pub fn validate_v3(&self, wasm: &[u8]) -> Result<ValidatedModule, ValidationRefusal> {
+        validate::validate_module(self, wasm, AbiRevision::V3)
+    }
+
     /// Replays legacy schedule-one validation from the recorded ABI version.
     /// New protocol execution must use [`Self::validate_versioned_metered`].
     ///
@@ -165,6 +174,9 @@ impl WasmEngine {
             }
             crate::abi::manifest::ABI_V2_VERSION => {
                 validate::validate_module_metered(self, wasm, AbiRevision::V2, schedule)
+            }
+            crate::abi::manifest::ABI_V3_VERSION => {
+                validate::validate_module_metered(self, wasm, AbiRevision::V3, schedule)
             }
             _ => Err(ValidationRefusal::UnsupportedAbiVersion { abi_version }),
         }

@@ -11,10 +11,10 @@ use super::{error_status, linker_fault, RuntimeState, STATUS_BOUNDS};
 const ORACLE_RESULT_BYTES_I32: i32 = 64;
 const ORACLE_READ_METER_BYTES: u64 = 64;
 
-pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
+pub(super) fn register_v3(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
-            crate::abi::response::CANDIDATE_ABI_MODULE,
+            crate::abi::manifest::ABI_V3_MODULE,
             "oracle_read",
             |mut caller: Caller<'_, RuntimeState>,
              market_pointer: i32,

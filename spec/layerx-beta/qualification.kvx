@@ -14408,3 +14408,11 @@ symbol = "LXP_GENESIS_MAX_ASSET_RECORDS"
 observed = "PR322 rev 71857d511: make test-asset-registry && make test-asset-reserve exit 0; registry holds 1024 at runtime, but genesis asset import is bounded to 126 records because lxp_genesis_manifest is a stack local sized from LXP_GENESIS_MAX_MODULE_VALUES=128."
 assumption = "Runtime registration reaches 1024 through LX_ASSET_REGISTER; genesis-time import above 126 needs a heap-allocated manifest and is a separate task."
 severity = "note"
+
+[observation.8.4.1]
+task = "8.4"
+file = "agent/crates/layerx-types/build.rs include/layerx/lxp_result.h agent/crates/layerx-types/src/result.rs"
+symbol = "protocol_result_code_parity"
+observed = "At revision 27c783ac893e004eed3dbd04bd2295f8badbe31d the command make test-programs-oracle-read && make programs-abi-drift exited 2 in the programs-build prerequisite with 'protocol result-code parity failure: result code 38 drifted: header declares AuthThresholdUnmet = -220, src/result.rs declares SequenceGap = -300'; log /root/lx-target/programs/task-8-4-v3-verify.log."
+assumption = "All three files are byte-identical to origin/main and the drift arrives from merged commit bf5056244, which added LXP_ERR_AUTH_THRESHOLD_UNMET/DUPLICATE_SIGNER/NOT_MATURE to the C header without mirroring them in result.rs, so the fix belongs to the authority-kinds task; the ABI half of this gate, make programs-abi-drift, exits 0 on its own at this revision."
+severity = "blocker"

@@ -607,6 +607,7 @@ pub fn restore(
     let abi_version = match module.abi_revision() {
         layerx_programs_runtime::AbiRevision::V1 => ABI_V1_VERSION,
         layerx_programs_runtime::AbiRevision::V2 => ABI_V2_VERSION,
+        layerx_programs_runtime::AbiRevision::V3 => layerx_programs_runtime::ABI_V3_VERSION,
     };
     let abi = Abi::new(
         abi_version,

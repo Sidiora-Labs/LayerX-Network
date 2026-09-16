@@ -394,8 +394,8 @@ static lxp_result catalog_count_visit(const uint8_t *key, size_t key_length,
         key_length != PROGRAM_KEY_BYTES || record_length != PROGRAM_RECORD_BYTES ||
         memcmp(key, "program\0", 8U) != 0 || lxp_ct_is_zero(key + 8U, 32U) ||
         read_u16(record + 65U) == 0U ||
-        read_u16(record + 65U) > LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
-        (read_u16(record + 65U) == LX_PROGRAMS_ACCOUNT_ABI_VERSION &&
+        read_u16(record + 65U) > LX_PROGRAMS_GUEST_ABI_V3_VERSION ||
+        (read_u16(record + 65U) >= LX_PROGRAMS_GUEST_ABI_V2_VERSION &&
          !lxp_protocol_version_uses_occupancy(value->ctx->protocol_version)) ||
         lxp_ct_is_zero(record + 33U, 32U) || value->catalog_count == UINT32_MAX)
         return LXP_FATAL_INVARIANT;
@@ -1782,7 +1782,8 @@ static lxp_result transfer_source_validate(
         return LXP_OK;
     }
     if (source->kind == PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING) {
-        if (value->abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
+        if ((value->abi_version != LX_PROGRAMS_GUEST_ABI_V2_VERSION &&
+             value->abi_version != LX_PROGRAMS_GUEST_ABI_V3_VERSION) ||
             lxp_ct_is_zero(source->owner_program, 32U) ||
             lxp_ct_memcmp(source->owner_program, source->staging_program, 32U) != 0 ||
             source->seed_written != source->seed_length ||
@@ -1805,7 +1806,8 @@ static lxp_result transfer_source_validate(
         return LXP_OK;
     }
     if (source->kind != PROGRAM_TRANSFER_SOURCE_PROGRAM ||
-        value->abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
+        (value->abi_version != LX_PROGRAMS_GUEST_ABI_V2_VERSION &&
+         value->abi_version != LX_PROGRAMS_GUEST_ABI_V3_VERSION) ||
         lxp_ct_is_zero(source->owner_program, 32U) ||
         lxp_ct_memcmp(source->owner_program, source->staging_program, 32U) != 0 ||
         source->seed_written != source->seed_length ||
@@ -2000,8 +2002,8 @@ lxp_result lxp_programs_call_decode(lxp_module_ctx *ctx,
         value->response_capacity > LX_PROGRAMS_MAX_RESPONSE_BYTES)
         return LXP_ERR_NON_CANONICAL;
     if (value->abi_version > registration->abi_version ||
-        value->abi_version > LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
-        (value->abi_version == LX_PROGRAMS_ACCOUNT_ABI_VERSION &&
+        value->abi_version > LX_PROGRAMS_GUEST_ABI_V3_VERSION ||
+        (value->abi_version >= LX_PROGRAMS_GUEST_ABI_V2_VERSION &&
          !lxp_protocol_version_uses_occupancy(ctx->protocol_version)))
         return LXP_ERR_VERSION_UNSUPPORTED;
     if ((size_t)value->entrypoint_length > SIZE_MAX - cursor)

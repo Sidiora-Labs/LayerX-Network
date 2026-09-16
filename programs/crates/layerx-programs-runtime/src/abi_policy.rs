@@ -2,7 +2,7 @@
 
 use core::fmt::{self, Display};
 
-use crate::{ABI_V1_VERSION, ABI_V2_VERSION};
+use crate::{ABI_V1_VERSION, ABI_V2_VERSION, ABI_V3_VERSION};
 
 /// The sole typed refusal for an invalid ABI version transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,7 +34,7 @@ impl std::error::Error for AbiVersionRefusal {}
 /// Returns a version refusal when the requested ABI is not admitted.
 pub const fn admit_abi_version(requested: u16) -> Result<(), AbiVersionRefusal> {
     match requested {
-        ABI_V1_VERSION | ABI_V2_VERSION => Ok(()),
+        ABI_V1_VERSION | ABI_V2_VERSION | ABI_V3_VERSION => Ok(()),
         _ => Err(AbiVersionRefusal::Unsupported { requested }),
     }
 }

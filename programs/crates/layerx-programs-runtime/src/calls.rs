@@ -895,6 +895,10 @@ pub(crate) fn execute_nested_call_response(
     )
 }
 
+const fn uses_response_context(revision: AbiRevision) -> bool {
+    matches!(revision, AbiRevision::V2 | AbiRevision::V3)
+}
+
 #[allow(clippy::too_many_lines)]
 fn execute_nested(
     state: &mut RuntimeState,
@@ -999,6 +1003,7 @@ fn execute_nested(
         match expected {
             AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
             AbiRevision::V2 => crate::abi::manifest::ABI_V2_VERSION,
+            AbiRevision::V3 => crate::abi::manifest::ABI_V3_VERSION,
         },
         callee,
         authorization,
@@ -1015,7 +1020,7 @@ fn execute_nested(
         .graph()
         .clone();
     let child_composition = Composition::new(Rc::clone(&resolver), child_graph, expected);
-    let mut instance = if expected == AbiRevision::V2 {
+    let mut instance = if uses_response_context(expected) {
         let retained = module
             .instantiate_composed_response_context_retained(
                 child_meter,
@@ -1229,7 +1234,7 @@ fn entry_refusal(
                 && instance
                     .state()
                     .composition()
-                    .is_some_and(|composition| composition.revision() == AbiRevision::V2) =>
+                    .is_some_and(|composition| uses_response_context(composition.revision())) =>
         {
             legacy_failure(program)
         }
@@ -1240,7 +1245,7 @@ fn entry_refusal(
             if instance
                 .state()
                 .composition()
-                .is_some_and(|composition| composition.revision() == AbiRevision::V2) =>
+                .is_some_and(|composition| uses_response_context(composition.revision())) =>
         {
             match instance.state().failure().cloned() {
                 Some(failure) if code == CANDIDATE_REFUSAL_SENTINEL => {
@@ -1263,7 +1268,7 @@ fn entry_refusal(
             if instance
                 .state()
                 .composition()
-                .is_some_and(|composition| composition.revision() == AbiRevision::V2)
+                .is_some_and(|composition| uses_response_context(composition.revision()))
                 && v2_runtime_fault(&fault) =>
         {
             instance.state().failure().cloned().map_or_else(
@@ -1276,7 +1281,7 @@ fn entry_refusal(
             if instance
                 .state()
                 .composition()
-                .is_some_and(|composition| composition.revision() == AbiRevision::V2)
+                .is_some_and(|composition| uses_response_context(composition.revision()))
                 && instance.state().failure().is_some() =>
         {
             CompositionRefusal::Program(

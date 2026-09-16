@@ -195,7 +195,12 @@ mod candidate_raw {
             output_pointer: i32,
             output_capacity: i32,
         ) -> i32;
+    }
+}
 
+mod v3_raw {
+    #[link(wasm_import_module = "layerx_v3")]
+    unsafe extern "C" {
         pub(super) fn oracle_read(
             market_pointer: i32,
             market_length: i32,
@@ -243,7 +248,7 @@ pub(crate) fn oracle_read(
     output: &mut [u8; crate::oracle::OBSERVATION_BYTES],
 ) -> Result<i32, ProgramError> {
     let status = unsafe {
-        candidate_raw::oracle_read(
+        v3_raw::oracle_read(
             pointer(market)?,
             32,
             pointer_mut(output)?,

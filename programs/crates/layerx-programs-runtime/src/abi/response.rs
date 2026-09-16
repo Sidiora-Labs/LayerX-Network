@@ -11,7 +11,7 @@ pub const CANDIDATE_ABI_MODULE: &str = super::manifest::ABI_V2_MODULE;
 pub const CANDIDATE_ABI_MANIFEST: &str = super::manifest::ABI_V2_MANIFEST;
 
 /// Compatibility alias for the complete frozen ABI-v2 host table.
-pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 20] = super::manifest::ABI_V2_HOST_FUNCTIONS;
+pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 19] = super::manifest::ABI_V2_HOST_FUNCTIONS;
 
 /// Maximum successful response payload crossing one call boundary.
 pub const MAX_CALL_RESPONSE_BYTES: usize = 1_048_576;

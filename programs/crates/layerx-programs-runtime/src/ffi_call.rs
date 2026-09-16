@@ -10,14 +10,13 @@ use crate::{
     AbiError, AccessSet, ActivityBudgetBinding, AtomicTransferSet, AuthorizationContext,
     BalanceView, BudgetMeterRefusal, BudgetResourceKind, BudgetedAuthorizedExecutionRequest,
     BudgetedV1FailureCause, CandidateAuthorizedExecutionRecord, CapabilitySet, CommittedOracle,
-    CompiledModule,
-    CompositionContext, CompositionRefusal, CompositionRules, DeclaredBudget, EntrypointRefusal,
-    ExecutionFault, Executor, KernelTransferEvidence, KernelTransferPrimitive, MeterRefusal,
-    MeteredUsage, ModuleCacheKey, OracleObservation, PreparedAuthorizedActivityOutcome,
-    PrincipalId, ProgramEvent,
-    ProgramId, ProgramResolver, ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal,
-    RuntimeArtifactOwnerRefusal, Storage, StorageNamespace, TransferCapability, TransferLawError,
-    TransferSource, V2ActivityOutcome,
+    CompiledModule, CompositionContext, CompositionRefusal, CompositionRules, DeclaredBudget,
+    EntrypointRefusal, ExecutionFault, Executor, KernelTransferEvidence, KernelTransferPrimitive,
+    MeterRefusal, MeteredUsage, ModuleCacheKey, OracleObservation,
+    PreparedAuthorizedActivityOutcome, PrincipalId, ProgramEvent, ProgramId, ProgramResolver,
+    ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal, RuntimeArtifactOwnerRefusal,
+    Storage, StorageNamespace, TransferCapability, TransferLawError, TransferSource,
+    V2ActivityOutcome,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -395,6 +394,7 @@ const INSUFFICIENT_BALANCE: i32 = -400;
 const FATAL_INVARIANT: i32 = -1001;
 const ABI_V1_VERSION: u16 = 1;
 const ABI_V2_VERSION: u16 = 2;
+const ABI_V3_VERSION: u16 = 3;
 const PROTOCOL_LEGACY: u16 = 1;
 const PROTOCOL_OCCUPANCY: u16 = 2;
 const PROTOCOL_STATE_COMMITMENT: u16 = 3;
@@ -552,7 +552,7 @@ const fn protocol_uses_occupancy(protocol_version: u16) -> bool {
 const fn protocol_admits_abi(protocol_version: u16, abi_version: u16) -> bool {
     match abi_version {
         ABI_V1_VERSION => protocol_supported(protocol_version),
-        ABI_V2_VERSION => protocol_uses_occupancy(protocol_version),
+        ABI_V2_VERSION | ABI_V3_VERSION => protocol_uses_occupancy(protocol_version),
         _ => false,
     }
 }
@@ -561,6 +561,7 @@ const fn revision_tag(value: AbiRevision) -> u8 {
     match value {
         AbiRevision::V1 => 1,
         AbiRevision::V2 => 2,
+        AbiRevision::V3 => 3,
     }
 }
 const fn meter_kind(value: ResourceKind) -> u8 {
@@ -1579,11 +1580,11 @@ impl CommittedOracle for CCommittedOracle {
             })
             .map_err(|_| AbiError::InvalidEncoding)
         };
-        let returned =
-            <[u8; 32]>::try_from(read(0, 32)?).map_err(|_| AbiError::InvalidEncoding)?;
-        let record = <[u8; crate::ORACLE_OBSERVATION_BYTES]>::try_from(
-            read(1, crate::ORACLE_OBSERVATION_BYTES)?,
-        )
+        let returned = <[u8; 32]>::try_from(read(0, 32)?).map_err(|_| AbiError::InvalidEncoding)?;
+        let record = <[u8; crate::ORACLE_OBSERVATION_BYTES]>::try_from(read(
+            1,
+            crate::ORACLE_OBSERVATION_BYTES,
+        )?)
         .map_err(|_| AbiError::InvalidEncoding)?;
         if returned != market {
             return Err(AbiError::InvalidEncoding);
@@ -2599,7 +2600,8 @@ pub extern "C" fn layerx_programs_call_begin(
             return Err(NON_CANONICAL);
         }
         if unsafe { layerx_programs_call_sandbox_context(token) } == OK
-            && (!protocol_uses_occupancy(protocol_version) || abi_version != ABI_V2_VERSION)
+            && (!protocol_uses_occupancy(protocol_version)
+                || !matches!(abi_version, ABI_V2_VERSION | ABI_V3_VERSION))
         {
             return Err(NON_CANONICAL);
         }
@@ -2833,7 +2835,9 @@ pub extern "C" fn layerx_programs_call_begin(
         let root_module = root_module.ok_or(FATAL_INVARIANT)?;
         let grants = match root_module.validated().abi_revision() {
             AbiRevision::V1 => CapabilitySet::decode_canonical(&encoded_capabilities),
-            AbiRevision::V2 => CapabilitySet::decode_v2_canonical(&encoded_capabilities),
+            AbiRevision::V2 | AbiRevision::V3 => {
+                CapabilitySet::decode_v2_canonical(&encoded_capabilities)
+            }
         }
         .map_err(|_| NON_CANONICAL)?;
         let capabilities = CapabilitySet::new(grants).map_err(|_| NON_CANONICAL)?;
@@ -2872,7 +2876,10 @@ pub extern "C" fn layerx_programs_call_begin(
         let receipts = CReceiptOracle { token };
         let authorization = AuthorizationContext::new(execution_principal, capabilities)
             .with_payment_account(payment_account);
-        let v2_transfer = if root_module.validated().abi_revision() == AbiRevision::V2 {
+        let v2_transfer = if matches!(
+            root_module.validated().abi_revision(),
+            AbiRevision::V2 | AbiRevision::V3
+        ) {
             Some(
                 TransferCapability::from_root_authorization(
                     program,
@@ -2910,7 +2917,10 @@ pub extern "C" fn layerx_programs_call_begin(
         terminal_events
             .try_reserve_exact(5_242_880)
             .map_err(|_| LENGTH_LIMIT)?;
-        if root_module.validated().abi_revision() == AbiRevision::V2 {
+        if matches!(
+            root_module.validated().abi_revision(),
+            AbiRevision::V2 | AbiRevision::V3
+        ) {
             let execution_context = crate::abi::context::ExecutionContext::authenticated(
                 activity_sequence,
                 batch_number,

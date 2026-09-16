@@ -553,9 +553,7 @@ impl Display for AbiError {
             Self::AccessDeclaration => {
                 formatter.write_str("access falls outside the activity declaration")
             }
-            Self::OracleUnknownMarket => {
-                formatter.write_str("committed oracle market is unknown")
-            }
+            Self::OracleUnknownMarket => formatter.write_str("committed oracle market is unknown"),
             Self::OracleMarketHalted => formatter.write_str("committed oracle market is halted"),
         }
     }

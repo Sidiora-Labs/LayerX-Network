@@ -23,7 +23,7 @@ def rust_u16(source, name):
 
 def table(source, name):
     start = source.index(f"pub const {name}:")
-    body = source[start:source.index("\n];", start)]
+    body = source[start:source.index("];", start)]
     calls = re.findall(
         r'host\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,?\s*\)', body, re.DOTALL
     )
@@ -39,26 +39,37 @@ def manifest_surface(encoded):
         surface.append((module, name, "(" + signature))
     return surface
 
+def function_types(source, name):
+    start = source.index(f"const {name}:")
+    block = source[start:source.index("];", start)]
+    return re.findall(r"function_type\(([^,]+),\s*([^\)]+)\)", block)
+
 def audit_surface(runtime_source):
     v1_manifest = rust_string(runtime_source, "ABI_V1_MANIFEST")
     crate_root = CRATE_ROOT.read_text()
     current_version = rust_u16(crate_root, "ABI_VERSION")
-    if current_version != 2: raise ValueError("crate-root ABI_VERSION does not identify ABI v2")
-    v2_manifest = rust_string(crate_root, "ABI_MANIFEST")
-    if "pub const ABI_V2_MANIFEST: &str = crate::ABI_MANIFEST;" not in runtime_source:
-        raise ValueError("ABI v2 manifest is not owned by the crate-root ABI_MANIFEST")
-    if "pub const ABI_V2_VERSION: u16 = crate::ABI_VERSION;" not in runtime_source:
-        raise ValueError("ABI v2 version is not owned by the crate-root ABI_VERSION")
+    if current_version != 3: raise ValueError("crate-root ABI_VERSION does not identify ABI v3")
+    v3_manifest = rust_string(crate_root, "ABI_MANIFEST")
+    v2_manifest = rust_string(runtime_source, "ABI_V2_MANIFEST")
+    if "pub const ABI_V3_MANIFEST: &str = crate::ABI_MANIFEST;" not in runtime_source:
+        raise ValueError("ABI v3 manifest is not owned by the crate-root ABI_MANIFEST")
+    if "pub const ABI_V3_VERSION: u16 = crate::ABI_VERSION;" not in runtime_source:
+        raise ValueError("ABI v3 version is not owned by the crate-root ABI_VERSION")
+    if "pub const ABI_V2_VERSION: u16 = 2;" not in runtime_source:
+        raise ValueError("frozen ABI v2 version is not pinned to its allocated number")
     v1 = table(ABI_MOD.read_text(), "HOST_FUNCTIONS")
     v2 = table(runtime_source, "ABI_V2_HOST_FUNCTIONS")
+    v3 = table(runtime_source, "ABI_V3_HOST_FUNCTIONS")
     expected_v1 = [("layerx_v1", name, signature) for name, signature in v1]
     expected_v2 = expected_v1 + [("layerx_v2", name, signature) for name, signature in v2]
+    expected_v3 = expected_v2 + [("layerx_v3", name, signature) for name, signature in v3]
     if manifest_surface(v1_manifest) != expected_v1: raise ValueError("ABI v1 manifest and host table diverge")
     if manifest_surface(v2_manifest) != expected_v2: raise ValueError("ABI v2 composite manifest and host tables diverge")
-    type_start = runtime_source.index("const ABI_V2_FUNCTION_TYPES:")
-    type_block = runtime_source[type_start:runtime_source.index("const fn function_type", type_start)]
-    type_entries = re.findall(r"function_type\(([^,]+),\s*([^\)]+)\)", type_block)
+    if manifest_surface(v3_manifest) != expected_v3: raise ValueError("ABI v3 composite manifest and host tables diverge")
+    type_entries = function_types(runtime_source, "ABI_V2_FUNCTION_TYPES")
     if len(type_entries) != len(v2): raise ValueError("ABI v2 function table and types diverge")
+    v3_type_entries = function_types(runtime_source, "ABI_V3_FUNCTION_TYPES")
+    if len(v3_type_entries) != len(v3): raise ValueError("ABI v3 function table and types diverge")
     parameter_types = {
         "I32_1": ["i32"], "I32_3": ["i32"] * 3, "I32_4": ["i32"] * 4,
         "I32_5": ["i32"] * 5, "I32_6": ["i32"] * 6, "I32_7": ["i32"] * 7,
@@ -67,21 +78,27 @@ def audit_surface(runtime_source):
         "FUND": ["i64", "i64"] + ["i32"] * 6,
     }
     result_types = {"I32_RESULT": "i32", "I64_RESULT": "i64"}
-    typed_signatures = []
-    for params, result in type_entries:
-        if params.strip() not in parameter_types or result.strip() not in result_types:
-            raise ValueError("ABI v2 function type uses an undeclared shape")
-        typed_signatures.append(
-            "(" + ",".join(parameter_types[params.strip()]) + ")->" + result_types[result.strip()]
-        )
-    if typed_signatures != [signature for _, signature in v2]:
+    def typed(entries, revision):
+        signatures = []
+        for params, result in entries:
+            if params.strip() not in parameter_types or result.strip() not in result_types:
+                raise ValueError(f"ABI v{revision} function type uses an undeclared shape")
+            signatures.append(
+                "(" + ",".join(parameter_types[params.strip()]) + ")->" + result_types[result.strip()]
+            )
+        return signatures
+    if typed(type_entries, 2) != [signature for _, signature in v2]:
         raise ValueError("ABI v2 signatures and function types diverge")
+    if typed(v3_type_entries, 3) != [signature for _, signature in v3]:
+        raise ValueError("ABI v3 signatures and function types diverge")
     validate = (RUNTIME / "validate.rs").read_text()
     if "manifest::permitted_import" not in validate or "pub(crate) fn permitted_import" not in runtime_source: raise ValueError("validator does not derive its allowlist from the frozen table")
     sdk = SDK_ABI.read_text()
     if rust_string(sdk, "V2_ABI_MANIFEST") != v2_manifest: raise ValueError("Rust SDK ABI v2 manifest diverges")
     if table(sdk, "V2_HOST_FUNCTIONS") != v2: raise ValueError("Rust SDK ABI v2 table diverges")
-    return {1: v1_manifest, current_version: v2_manifest}
+    if rust_string(sdk, "V3_ABI_MANIFEST") != v3_manifest: raise ValueError("Rust SDK ABI v3 manifest diverges")
+    if table(sdk, "V3_HOST_FUNCTIONS") != v3: raise ValueError("Rust SDK ABI v3 table diverges")
+    return {1: v1_manifest, 2: v2_manifest, current_version: v3_manifest}
 
 def terminal_schema():
     native = (ROOT / "src/protocol/lxp_receipt.c").read_text()

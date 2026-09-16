@@ -47,7 +47,7 @@ static void oracle_read_call_import(uint8_t *body, size_t *length)
     body[(*length)++] = 0U;
 }
 
-/* ABI-v2 guest that reads the committed perps observation for one market. The
+/* ABI-v3 guest that reads the committed perps observation for one market. The
  * comparing form traps unless every byte the host returns equals the record the
  * test derived from the perps engine state; the refusing form drops the status
  * so the typed host refusal, not a guest trap, decides the receipt. */
@@ -72,7 +72,7 @@ static size_t oracle_read_module(uint8_t *out, const uint8_t market_id[32],
     append_bytes(out, &cursor, header, sizeof(header));
     append_section(out, &cursor, 1U, types, sizeof(types));
     section[length++] = 1U;
-    append_name(section, &length, "layerx_v2");
+    append_name(section, &length, "layerx_v3");
     append_name(section, &length, "oracle_read");
     section[length++] = 0U;
     section[length++] = 0U;
@@ -367,6 +367,7 @@ static int oracle_read_case(void)
             payload_length = program_spend_deploy_payload(payload,
                 programs[deploy], authority.principal, wasm, wasm_length,
                 code_hash);
+            write_u16(payload + 32U, LX_PROGRAMS_GUEST_ABI_V3_VERSION);
             fill_activity(&activity, LX_PROGRAMS_DEPLOY, payload,
                           payload_length, did, sizeof(did) - 1U, primary_key);
             activity.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
@@ -415,7 +416,7 @@ static int oracle_read_case(void)
      * i64 of the host record matched the expected image compiled into it. */
     payload_length = call_payload_with_capabilities(call, observed_program,
         no_capabilities, sizeof(no_capabilities));
-    write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+    write_u16(call + 32U, LX_PROGRAMS_GUEST_ABI_V3_VERSION);
     fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length, did,
                   sizeof(did) - 1U, primary_key);
     activity.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
@@ -438,7 +439,7 @@ static int oracle_read_case(void)
         for (index = 0U; index < 2U; ++index) {
             payload_length = call_payload_with_capabilities(call,
                 refused[index], no_capabilities, sizeof(no_capabilities));
-            write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+            write_u16(call + 32U, LX_PROGRAMS_GUEST_ABI_V3_VERSION);
             fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
                           did, sizeof(did) - 1U, primary_key);
             activity.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
