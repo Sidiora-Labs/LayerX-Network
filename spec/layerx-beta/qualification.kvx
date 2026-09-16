@@ -14417,3 +14417,59 @@ observed = "At revision 27c783ac893e004eed3dbd04bd2295f8badbe31d the command mak
 assumption = "All three files are byte-identical to origin/main and the drift arrives from merged commit bf5056244, which added LXP_ERR_AUTH_THRESHOLD_UNMET/DUPLICATE_SIGNER/NOT_MATURE to the C header without mirroring them in result.rs, so the fix belongs to the authority-kinds task; the ABI half of this gate, make programs-abi-drift, exits 0 on its own at this revision."
 resolution = "Resolved on this branch by commit 4ec6f185f, a cherry-pick of PR 332 that mirrors AuthThresholdUnmet, AuthDuplicateSigner and AuthNotMature into agent/crates/layerx-types/src/result.rs; at revision 4ec6f185f the full verify_cmd exited 0."
 severity = "note"
+
+[observation.8.1.1]
+task = "8.1"
+file = "programs/crates/layerx-programs-registry/tests/lxt721_reference.rs"
+symbol = "lxt721::reference_interface"
+observed = "At revision 5b1c6c3b0b07f0f59a9990dc73091ce743b866d0 the command cg spec start 8.1 exited 1 with '12 task(s) already in_progress (limit 12)', so the task verify_cmd cd programs && cargo test --locked -p layerx-programs-registry --test lxt721_reference never ran; log /root/lx-target/wave8/spec-done-8.1.log."
+assumption = "The twelve slots are held by pre-existing in_progress tasks 3.7 and 6.1-6.11 from earlier waves, and the close-out brief forbids --force, so this gate needs the owner to release those claims or raise spec/workflow.kvx max_in_progress before it can be rerun."
+severity = "blocker"
+
+[observation.8.2.1]
+task = "8.2"
+file = "tests/test_authority_multisig.c"
+symbol = "LXP_AUTHORITY_KIND_MULTISIG"
+observed = "At revision 5b1c6c3b0b07f0f59a9990dc73091ce743b866d0 the command cg spec start 8.2 exited 1 with '8.2 touches Makefile, which in-progress task 6.1 also claims', so the task verify_cmd make test-authority-multisig never ran; log /root/lx-target/wave8/spec-done-8.2.log."
+assumption = "The merged code for 8.2 does change Makefile, so the overlap with in_progress task 6.1 is real bookkeeping rather than a spec mis-spelling, and the close-out brief forbids --force, so the gate needs the owner to settle task 6.1 first."
+severity = "blocker"
+
+[observation.8.3.1]
+task = "8.3"
+file = "programs/crates/layerx-programs-registry/tests/naming_reference.rs"
+symbol = "naming::reference_interface"
+observed = "At revision 5b1c6c3b0b07f0f59a9990dc73091ce743b866d0 the command cg spec start 8.3 exited 1 with '12 task(s) already in_progress (limit 12)', so the task verify_cmd cd programs && cargo test --locked -p layerx-programs-registry --test naming_reference never ran; log /root/lx-target/wave8/spec-done-8.3.log."
+assumption = "The twelve slots are held by pre-existing in_progress tasks 3.7 and 6.1-6.11 from earlier waves, and the close-out brief forbids --force, so this gate needs the owner to release those claims or raise spec/workflow.kvx max_in_progress before it can be rerun."
+severity = "blocker"
+
+[observation.8.4.2]
+task = "8.4"
+file = "tests/test_programs_oracle_read.c"
+symbol = "oracle_read"
+observed = "At revision 5b1c6c3b0b07f0f59a9990dc73091ce743b866d0 the command cg spec start 8.4 exited 1 with '8.4 touches Makefile, which in-progress task 6.1 also claims', so the task verify_cmd make test-programs-oracle-read && make programs-abi-drift never ran; log /root/lx-target/wave8/spec-done-8.4.log."
+assumption = "The merged code for 8.4 does change Makefile, so the overlap with in_progress task 6.1 is real bookkeeping rather than a spec mis-spelling, and the close-out brief forbids --force, so the gate needs the owner to settle task 6.1 first."
+severity = "blocker"
+
+[observation.8.5.1]
+task = "8.5"
+file = "programs/crates/layerx-programs-registry/tests/swap_reference.rs"
+symbol = "swap::reference_interface"
+observed = "At revision 5b1c6c3b0b07f0f59a9990dc73091ce743b866d0 the command cg spec start 8.5 exited 1 with '12 task(s) already in_progress (limit 12)', so the task verify_cmd cd programs && cargo test --locked -p layerx-programs-registry --test swap_reference never ran; log /root/lx-target/wave8/spec-done-8.5.log."
+assumption = "The twelve slots are held by pre-existing in_progress tasks 3.7 and 6.1-6.11 from earlier waves, and the close-out brief forbids --force, so this gate needs the owner to release those claims or raise spec/workflow.kvx max_in_progress before it can be rerun."
+severity = "blocker"
+
+[observation.8.6.2]
+task = "8.6"
+file = "platform/hosted/gateway/src/rpc.rs"
+symbol = "LX_ASSET_REGISTRY_CAPACITY"
+observed = "At revision 5b1c6c3b0b07f0f59a9990dc73091ce743b866d0 the command cg spec start 8.6 exited 1 with '8.6 touches cmd/layerx-genesis, which in-progress task 6.10 also claims', so the task verify_cmd make test-asset-registry && make test-asset-reserve never ran; log /root/lx-target/wave8/spec-done-8.6.log."
+assumption = "The merged code for 8.6 does change cmd/layerx-genesis, so the overlap with in_progress task 6.10 is real bookkeeping rather than a spec mis-spelling, and the close-out brief forbids --force, so the gate needs the owner to settle task 6.10 first."
+severity = "blocker"
+
+[observation.8.7.1]
+task = "8.7"
+file = "human/crates/layerx-human-service/src"
+symbol = "key_export"
+observed = "At revision 5b1c6c3b0b07f0f59a9990dc73091ce743b866d0 the command cg spec start 8.7 exited 1 with '12 task(s) already in_progress (limit 12)', so the task verify_cmd cd human && cargo test --locked -p layerx-human-service key_export never ran; log /root/lx-target/wave8/spec-done-8.7.log."
+assumption = "The twelve slots are held by pre-existing in_progress tasks 3.7 and 6.1-6.11 from earlier waves, and the close-out brief forbids --force, so this gate needs the owner to release those claims or raise spec/workflow.kvx max_in_progress before it can be rerun."
+severity = "blocker"

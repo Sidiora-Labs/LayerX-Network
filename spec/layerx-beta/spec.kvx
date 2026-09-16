@@ -760,7 +760,7 @@ requires = []
 do_1 = "Add programs/sdk/rust/src/lxt721.rs mirroring lxt20.rs, programs/crates/layerx-programs-registry/src/lxt721.rs with reference_interface, a reference guest at programs/sdk/rust/examples/nft-lxt721 built by the same script pattern as examples/escrow, fixtures under registry tests, and tests/lxt721_reference.rs."
 verify_cmd = "cd programs && cargo test --locked -p layerx-programs-registry --test lxt721_reference"
 symbols = ["lxt721::reference_interface"]
-touches = ["programs/sdk/rust/src/lxt721.rs","programs/sdk/rust/src/lib.rs","programs/sdk/rust/examples/nft-lxt721","programs/crates/layerx-programs-registry/src/lxt721.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/lxt721_reference.rs","programs/crates/layerx-programs-registry/tests/fixtures","Makefile"]
+touches = ["programs/sdk/rust/src/lxt721.rs","programs/sdk/rust/src/lib.rs","programs/sdk/rust/examples/nft-lxt721","programs/crates/layerx-programs-registry/src/lxt721.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/lxt721_reference.rs","programs/crates/layerx-programs-registry/tests/fixtures"]
 reqs = ["16.1"]
 
 [task.8.2]
@@ -782,7 +782,7 @@ requires = []
 do_1 = "Add programs/sdk/rust/examples/naming with register, transfer, renew, resolve, reverse_resolve; a registry reference interface at programs/crates/layerx-programs-registry/src/naming.rs; tests/naming_reference.rs; and a name resolver in human/apps/web explorer lookup that calls the program read path when a query matches the name grammar."
 verify_cmd = "cd programs && cargo test --locked -p layerx-programs-registry --test naming_reference"
 symbols = ["naming::reference_interface"]
-touches = ["programs/sdk/rust/examples/naming","programs/crates/layerx-programs-registry/src/naming.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/naming_reference.rs","human/apps/web/src/app/explorer/lookup","Makefile"]
+touches = ["programs/sdk/rust/examples/naming","programs/crates/layerx-programs-registry/src/naming.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/naming_reference.rs","human/apps/web/src/app/explorer/lookup"]
 reqs = ["16.3"]
 
 [task.8.4]
@@ -804,7 +804,7 @@ requires = []
 do_1 = "Add programs/sdk/rust/examples/swap-cpmm with add_liquidity, remove_liquidity, swap_exact_in, quote, reserves; LP shares as an embedded LXT20 program; registry reference interface at programs/crates/layerx-programs-registry/src/swap.rs; tests/swap_reference.rs; and a conservation case under programs/tests/conservation proving reserves plus fees equal inputs across a randomised sequence."
 verify_cmd = "cd programs && cargo test --locked -p layerx-programs-registry --test swap_reference"
 symbols = ["swap::reference_interface"]
-touches = ["programs/sdk/rust/examples/swap-cpmm","programs/crates/layerx-programs-registry/src/swap.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/swap_reference.rs","programs/tests/conservation","Makefile"]
+touches = ["programs/sdk/rust/examples/swap-cpmm","programs/crates/layerx-programs-registry/src/swap.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/swap_reference.rs","programs/tests/conservation"]
 reqs = ["16.5"]
 
 [task.8.6]
