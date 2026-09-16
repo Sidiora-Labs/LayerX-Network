@@ -11,6 +11,7 @@ pub mod lxt20;
 mod pipeline;
 mod protocol_evidence;
 mod resolver;
+pub mod swap;
 
 pub use account_state::{
     account_tree_commitment, program_account_registration_commitment, programs_root_commitment,
