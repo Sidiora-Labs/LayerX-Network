@@ -1,0 +1,145 @@
+site_name: LayerX Network
+site_description: Documentation for LayerX Network, a deterministic execution and accounting network for autonomous agents.
+site_url: https://sidiora-labs.github.io/LayerX-Network/
+repo_url: https://github.com/Sidiora-Labs/LayerX-Network
+repo_name: Sidiora-Labs/LayerX-Network
+edit_uri: blob/main/docs/site/docs/
+docs_dir: docs
+site_dir: site
+strict: true
+theme:
+  name: material
+  features:
+    - navigation.indexes
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+plugins:
+  - search
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Sidiora-Labs/LayerX-Network
+nav:
+  - Overview:
+      - Home: index.md
+      - Getting started: overview/getting-started.md
+      - Testnet quickstart: overview/quickstart.md
+      - Payments: overview/payments.md
+      - Monorepo: overview/monorepo.md
+      - Translations: overview/translations.md
+      - Español: overview/i18n/es.md
+      - 日本語: overview/i18n/ja.md
+      - Русский: overview/i18n/ru.md
+      - 简体中文: overview/i18n/zh-cn.md
+      - Português: overview/i18n/pt-br.md
+      - Deutsch: overview/i18n/de.md
+      - Français: overview/i18n/fr.md
+  - Concepts:
+      - concepts/index.md
+      - Identity: concepts/identity.md
+      - Accounts: concepts/accounts.md
+      - Assets: concepts/assets.md
+      - Activities: concepts/activities.md
+      - Receipts: concepts/receipts.md
+      - Checkpoints: concepts/checkpoints.md
+      - Paxeer settlement: concepts/paxeer-settlement.md
+      - Paxeer boundary: concepts/paxeer-boundary.md
+  - Protocol:
+      - protocol/index.md
+      - Modules: protocol/modules.md
+      - Data availability: protocol/data-availability.md
+      - Commitment levels: protocol/commitment-levels.md
+      - Finality: protocol/finality.md
+  - Programs:
+      - programs/index.md
+      - Workspace: programs/workspace.md
+      - Sandbox: programs/sandbox.md
+      - Storage scan: programs/storage-scan.md
+  - Agents:
+      - agents/index.md
+      - LNI: agents/lni.md
+      - Agentd: agents/agentd.md
+      - Running an agent: agents/running.md
+      - SDKs: agents/sdks.md
+      - MCP: agents/mcp.md
+      - SDK terminal verification: agents/sdk-verification.md
+  - Human:
+      - human/index.md
+      - Web app: human/web-app.md
+      - Custody: human/custody.md
+      - Journeys: human/journeys.md
+      - Owner registration: human/owner-registration.md
+      - Owner registration details: human/owner-registration-details.md
+      - Hosted Human: human/hosted.md
+  - Platform:
+      - platform/index.md
+      - Gateway RPC: platform/gateway-rpc.md
+      - Hosted gateway: platform/hosted-gateway.md
+      - Faucet: platform/faucet.md
+      - Registry: platform/registry.md
+      - Registry journal: platform/registry-journal.md
+      - Webhooks: platform/webhooks.md
+      - Hosted node: platform/hosted-node.md
+      - Hosted core: platform/hosted-core.md
+      - Hosted authority: platform/hosted-authority.md
+      - Agent boundary: platform/agent-boundary.md
+      - Identity: platform/identity.md
+      - Relay and archive: platform/relay-archive.md
+      - Public API transcript: platform/public-api.md
+      - CLI: platform/cli.md
+  - Interop:
+      - interop/index.md
+      - x402: interop/x402.md
+      - AP2: interop/ap2.md
+      - UCP: interop/ucp.md
+      - Visa TAP: interop/visa-tap.md
+      - Portable receipts: interop/portable-receipts.md
+      - Ramps and fiat: interop/ramps.md
+      - Mirrors: interop/mirrors.md
+  - Operators:
+      - operators/index.md
+      - Beta cluster: operators/beta-cluster.md
+      - Testnet control: operators/testnet-control.md
+      - Hosted internal: operators/hosted-internal.md
+      - Guarantor: operators/guarantor.md
+      - Settlement evidence: operators/settlement-evidence.md
+      - Qualification: operators/qualification.md
+      - Porting: operators/porting.md
+  - Reference:
+      - reference/index.md
+validation:
+  omitted_files: warn
+  absolute_links: info
+  unrecognized_links: warn
+  anchors: warn

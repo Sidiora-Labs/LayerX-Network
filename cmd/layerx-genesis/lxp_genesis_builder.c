@@ -163,7 +163,8 @@ static lxp_result build_fresh(
         encoded_manifest == NULL || snapshot == NULL ||
         (draft->protocol_version != LXP_PROTOCOL_VERSION &&
          draft->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT) ||
-        draft->account_count != 0U || draft->module_value_count > LX_ASSET_REGISTRY_CAPACITY + 2U ||
+        draft->account_count != 0U ||
+        draft->module_value_count > (size_t)LXP_GENESIS_MAX_ASSET_RECORDS + 2U ||
         !lxp_ct_is_zero(draft->genesis_state_root, 32U) ||
         !lxp_ct_is_zero(draft->genesis_receipt_state_root, 32U) ||
         !lxp_ct_is_zero(draft->signer_public_key, 32U) ||

@@ -8,6 +8,7 @@ pub(crate) enum Error {
     Conflict = 3,
     Unavailable = 4,
     Integrity = 5,
+    SelfCustodied = 6,
 }
 pub(crate) type Result<T> = std::result::Result<T, Error>;
 
@@ -38,7 +39,7 @@ impl<'a> Request<'a> {
         let operation = r.byte()?;
         if !matches!(
             (version, operation),
-            (1, 0..=5) | (2, 3) | (3, 6..=12) | (4, 13)
+            (1, 0..=5) | (2, 3) | (3, 6..=12) | (4, 13) | (5, 14)
         ) {
             return Err(Error::Refused);
         }

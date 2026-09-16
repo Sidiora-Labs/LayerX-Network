@@ -14,8 +14,15 @@ typedef enum lxp_authority_kind {
     LXP_AUTHORITY_DELEGATED_CAPABILITY = 3,
     LXP_AUTHORITY_BUDGET_ALLOWANCE = 4,
     LXP_AUTHORITY_ESCROW = 5,
-    LXP_AUTHORITY_PROTOCOL_MODULE = 6
+    LXP_AUTHORITY_PROTOCOL_MODULE = 6,
+    LXP_AUTHORITY_KIND_MULTISIG = 7,
+    LXP_AUTHORITY_KIND_TIMELOCK = 8
 } lxp_authority_kind;
+
+enum {
+    LXP_AUTHORITY_MULTISIG_MAX_SIGNERS = 8,
+    LXP_AUTHORITY_GRANT_VERSION_EXTENDED = 4
+};
 
 typedef struct lxp_authority_scope {
     uint64_t module_mask;
@@ -30,6 +37,13 @@ typedef struct lxp_authority_scope {
     lxp_u128 spent_this_period;
     uint64_t period_start;
     uint8_t purpose_hash[32];
+    uint64_t earliest_sequence;
+    uint64_t earliest_timestamp;
+    uint8_t signer_threshold;
+    uint8_t signer_count;
+    uint8_t approval_count;
+    uint8_t signers[LXP_AUTHORITY_MULTISIG_MAX_SIGNERS][32];
+    uint8_t approvals[LXP_AUTHORITY_MULTISIG_MAX_SIGNERS][32];
 } lxp_authority_scope;
 #define lxp_authority_scope lxp_authority_scope
 

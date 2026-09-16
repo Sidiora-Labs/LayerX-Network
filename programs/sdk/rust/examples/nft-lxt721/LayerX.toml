@@ -1,0 +1,5 @@
+schema = 1
+kind = "program"
+abi = 2
+environment = "emulator"
+interface = "interface.kvx"

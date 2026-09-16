@@ -13,7 +13,7 @@
 [meta]
 name            = "LayerX Spec Workflow"
 kind            = "portable-agent-operating-contract"
-version         = "1.2.0"
+version         = "1.3.0"
 status          = "active"
 source_of_truth = "spec/ (kvx). Per-IDE rule files are GENERATED pointers — never hand-edit; run cg spec render && cg commit -m \"Specgen re-render\" to regenerate."
 active_feature  = "layerx-beta"
@@ -21,16 +21,19 @@ active_feature  = "layerx-beta"
 [principle]
 task_driven      = "Work is driven by the active feature's spec.kvx task list — not ad-hoc. Pick the next eligible task by dependency wave, do it, mark it, move on."
 one_in_progress  = "At most 12 tasks are in_progress at a time. Sub-agents may work tasks in parallel within any non-conflicting wave. Set a task to in_progress before starting, to done only when its implementation genuinely meets the bar."
-phase_separation = "Each task runs in two ordered stages owned by the same agent. First finish the entire task implementation without building or testing. Only after the task implementation is complete, enter task qualification: format, build, test, replay, fault-inject where required, fix task-scoped failures, and rerun until the task gates pass. Never interleave partial implementation with qualification."
+phase_separation = "Each task runs in two ordered stages owned by the same agent. First finish the entire task implementation without building or testing. Then qualify it with exactly one bounded pass: format touched files, one build, one run of the task's single verify_cmd. Fix task-scoped failures within at most two repair cycles. Never interleave partial implementation with qualification."
 no_repair        = "Do not build, test, or repair while a task is only partially implemented. After the entire task implementation is written, repair failures caused by that task during task qualification. Record unrelated or pre-existing failures without expanding scope."
 no_weakening     = "Never relax an assertion, loosen a bound, widen a type, add a silent fallback, skip or delete a test, or disable a check to make anything pass. If the code and the check disagree, leave BOTH intact exactly as written and record the conflict."
-record_dont_fix  = "Fix task-scoped implementation, compile, test, and runtime failures during task qualification. Record unrelated failures, cross-task contradictions, missing external authority, and any change that would require weakening a check in the feature qualification log."
-no_false_success = "A task remains in_progress through implementation and task qualification. Mark it done only after its verify_cmd and required graph, render, build, test, replay, and fault-injection gates genuinely pass. Surface honest partials and external blockers."
+record_dont_fix  = "Fix task-scoped failures during task qualification. Record unrelated failures, cross-task contradictions, missing external authority, and any change that would require weakening a check as one line in the feature qualification log. Do not re-investigate or re-run anything already recorded."
+no_false_success = "A task remains in_progress through implementation and task qualification. Mark it done only after its verify_cmd genuinely passes. Aggregate suites, sanitizers, workspace-wide lint, cluster and browser matrices are release-candidate gates, run once per wave or once at release, never per task. Surface honest partials and external blockers; 'implemented, not qualified' is an acceptable reported outcome."
 read_full        = "When a tool output is flagged truncated/paginated with a way to get the rest, retrieve the full content before reasoning. An information gap is a stop condition."
 deliver_complete = "Deliver complete, runnable artifacts, not diffs. Follow existing repo style; add no comments/docs unless asked."
 
 [limits]
 max_in_progress = 12
+max_repair_cycles = 2
+max_task_minutes = 30
+max_gate_runs_per_task = 1
 
 [phase.implementation]
 owner        = "agents"
@@ -43,33 +46,33 @@ inherited    = "A partially implemented sibling may leave the tree red. Finish t
 
 [phase.task_qualification]
 owner        = "agents"
-goal         = "Qualify the fully implemented task, fix task-scoped failures without weakening the system, and produce real evidence for every required gate."
+goal         = "Qualify the fully implemented task with one bounded pass: one build, one verify_cmd run, at most two task-scoped repair cycles, one line of evidence."
 entry        = "The entire task implementation and its specified tests are written while the task remains in_progress."
-allowed      = ["format task-touched files", "build", "run focused and aggregate tests", "run replay and fault injection required by the task", "fix task-scoped compile, test, runtime, and integration failures", "rerun gates", "run cg spec done", "commit and push"]
-forbidden    = ["starting another task before this task qualifies", "weakening assertions or bounds", "skipping or deleting tests", "fixing unrelated inherited failures", "claiming green without exact command evidence", "using cg spec done --force"]
-exit         = "The task verify_cmd and every required graph, render, build, test, replay, and fault-injection gate pass; cg spec done succeeds without force; the accepted task commit is pushed."
+allowed      = ["format task-touched files", "one build of the task's declared targets", "one run of the task verify_cmd", "at most two task-scoped repair cycles, each followed by one rerun", "run cg spec done", "commit and push"]
+forbidden    = ["aggregate, workspace-wide, sanitizer, cluster, browser or historical suites", "rerunning an unchanged gate", "re-verifying another agent's recorded result", "review or confidence rounds", "exceeding 30 minutes or two repair cycles without stopping to report", "weakening assertions or bounds", "skipping or deleting tests", "fixing unrelated inherited failures", "claiming green without exact command evidence", "using cg spec done --force"]
+exit         = "The task verify_cmd passes and cg spec done succeeds without force, and the task commit is pushed; or the budget is exhausted and the task is reported as implemented-not-qualified with the exact failing command, exit code and log path."
 
 [phase.release_qualification]
 owner        = "human engineers"
-goal         = "Perform final cross-task integration, production, economic, security, and release acceptance beyond an individual task's declared gates."
+goal         = "Run the aggregate, sanitizer, cluster, browser and historical gate matrices once, on one release-candidate revision, after a wave's tasks have each passed their single verify_cmd. This is the only place those matrices run."
 entry        = "All tasks in the release scope have independently passed task qualification."
 agent_role   = "Agents may assist only under explicit release authority and must preserve production and destructive-action gates."
 
 [qualification_log]
 path       = "spec/<feature>/qualification.kvx"
-append_when= "You hit an unrelated or pre-existing failure, a contradiction between requirements or tasks, a missing external interface, an assumption, or a repair that would require expanding scope or weakening a check."
+append_when= "You hit an unrelated or pre-existing failure, a contradiction between requirements or tasks, a missing external interface, or a repair that would require weakening a check. Append once; never append the same finding twice."
 entry_keys = ["task", "file", "symbol", "observed", "assumption", "severity"]
 severity   = ["blocker", "suspect", "assumption", "note"]
-never      = "Do not log a task-scoped failure as an excuse to skip repair. Fix task-scoped failures during task qualification; the log is for unrelated, cross-task, external, or unsafe-to-resolve findings."
+never      = "Do not log a task-scoped failure as an excuse to skip repair. Do not write narrative: observed is one sentence, assumption is one sentence, and every entry names revision, exact command, exit code and log path. An entry over six lines is a defect."
 
 [loop]
 step_1 = "Read spec/<active_feature>/spec.kvx — the [meta] status, [req.*] (acceptance criteria), and the [task.*] list with status + wave + requires."
 step_2 = "Select the next eligible task: lowest wave whose every 'requires' task is done and whose status is pending. Set its status to in_progress in spec.kvx."
 step_3 = "Before any destructive/irreversible/prod/secret/network-write action, run cortex_guard and self-check against HARD rules; stop for explicit user YES if it risks a HARD rule."
 step_4 = "Implementation stage: write the entire task against every referenced acceptance criterion using real code paths and types. Write specified tests, but do not format, build, run tests, or repair failures until the entire task implementation is complete. Keep status in_progress."
-step_5 = "Task qualification stage: after the entire implementation is written, format touched files; run focused then aggregate build, test, replay, sanitizer, fault-injection, graph, render, and task verify_cmd gates as required; fix task-scoped failures and rerun until green without weakening anything."
-step_6 = "If qualification exposes an unrelated or pre-existing failure, cross-task contradiction, missing external interface, or repair requiring wider authority, append it to spec/<feature>/qualification.kvx with evidence. Do not use the log to avoid fixing task-scoped failures."
-step_7 = "Run cg spec done <id> without --force only after the task's required gates pass. Record exact commands and outcomes; never claim a gate that did not run."
+step_5 = "Task qualification stage: format touched files, run one build of the task's declared targets, then run the task verify_cmd once. On failure, make one task-scoped repair and rerun once; at most two repair cycles. No aggregate, sanitizer, workspace lint, cluster or browser gates at task level. Stop at 30 minutes or after the second failed cycle and report implemented-not-qualified with the exact failing command, exit code and log path."
+step_6 = "If qualification exposes an unrelated or pre-existing failure, cross-task contradiction, or missing external interface, append one six-line-max entry to spec/<feature>/qualification.kvx: revision, command, exit code, log path, one-sentence observed, one-sentence assumption. Never re-run or re-investigate a recorded finding."
+step_7 = "Run cg spec done <id> without --force only after verify_cmd passes. The done record is revision, command, exit code, log path. Never claim a gate that did not run; never rerun a gate that already passed at the same revision."
 step_8 = "Immediately publish the qualified task: from the repository root, git add -A, commit with a natural-sounding message describing the implementation and verified gates, and push. Never batch several tasks into one commit and never leave a completed task unpushed."
 
 [status_values]
@@ -79,6 +82,20 @@ feature = ["draft", "in_progress", "paused", "blocked", "complete"]
 # HARD rules mirrored in-repo so an agent without cortex still sees them.
 # These mirror the cortex HARD ruleset; cortex_recall is still authoritative.
 [hard_rules]
+build_fix_implment = "BUILD mode: one task, exact paths, implementation first, then one compile check and one focused behavior test. Stop and report it as implemented but not fully qualified."
+qualify_verify = "QUALIFY mode: run the task’s specified gate once. Rerun only after a relevant code change."
+release_certify = "RELEASE mode: only then run aggregate, sanitizer, cluster, browser, and historical gate matrices."
+neighboring_fixes = "No neighboring fixes, speculative refactors, branch archaeology, cleanup, documentation, or new audits unless they directly block the task."
+repeated_unchanged = "No repeated unchanged test. Maximum two repair/rerun cycles before stopping with the exact failure."
+time_limits = "30-minute cap per task. If 30 minutes pass without the task's deliverable, stop and report implemented-not-qualified with the exact state. Do not dig deeper."
+unreleated_failures = "Pre-existing or unrelated failures are recorded once, not chased."
+subagents = "Subagents get one bounded task each with five fields in the prompt: exact files, single verify_cmd, max one build plus one verify run with two repair cycles, 30-minute cap, and the stop condition. They report exit code and log path only. No duplicate reviews, no extra verification campaigns."
+agreed_result = "Once verify_cmd passes, publish and stop. No confidence rounds, no second review agent, no re-verification of a subagent's recorded result by the orchestrator."
+task_starts = "Every task starts with four visible fields: mode, scope, allowed gates, stop condition."
+one_gate_per_task = "One build and one verify_cmd per task. Aggregate suites, sanitizers, workspace-wide Clippy, cluster, browser and historical matrices run once per wave on the merged wave revision, or once at release. Never per task, never per rebase."
+evidence_one_line = "Evidence is revision, command, exit code, log path. No prose. Qualification entries are at most six lines. Progress reports state what changed and what failed; they do not restate history."
+no_reverify = "An orchestrator reads a subagent's exit code and log path and moves on. It never reruns the subagent's gate, never spawns a reviewer for a passed task, and never rebuilds to confirm."
+wave_batching = "Implementation runs in parallel across a wave. Qualification beyond verify_cmd happens once on the merged wave, not once per task."
 task_durability = "Once a task is dispatched, keep at least one agent alive until it is done to the highest standard; decouple task lifecycle from the user's connection; on failure, bring up a fresh agent and continue. 'Done' means it genuinely meets the quality bar."
 no_fakes        = "Never write stub/mock/fake test doubles or placeholder implementations to make tests pass. Test REAL code paths with REAL types."
 read_full       = "When tool output is truncated and the rest is retrievable, fetch the full content before reasoning or answering."
@@ -92,20 +109,23 @@ expand_work = "Do not run builds, tests, verification gates, start or claim Codi
 # human-readable markdown mirror is rendered. Paths are repo-relative.
 [render]
 markdown_mirror  = true   # render requirements.md / design.md / tasks.md from spec.kvx (into spec/<feature>/ only)
-mirror_to_kiro   = false  # NEVER write into .kiro/specs/<feature>/ — those are hand-authored sources, not generated output
 banner           = "GENERATED by spec/specgen from spec/ kvx — DO NOT EDIT. Edit the .kvx source and regenerate."
 adapter_sections = ["principle", "phase.implementation", "phase.task_qualification", "phase.release_qualification", "qualification_log", "loop", "limits", "hard_rules"]
-adapter_lead     = "For each task, finish the entire implementation first without building or testing. Then qualify that completed task: format, build, test, fix task-scoped failures, rerun gates, and call cg spec done only when green."
+adapter_lead     = "For each task: implement fully first without building or testing, then one build, one verify_cmd run, at most two repair cycles, 30 minutes. Record evidence as one line. Aggregate and sanitizer matrices run once per wave, never per task."
 
 [adapters]
-# label = "output path"   (specgen wraps the shared brief in each IDE's native shape)
-cursor            = ".cursor/rules/spec-workflow.mdc"
-windsurf_rules    = ".devin/rules/spec-workflow.md"
-windsurf_workflow = ".devin/workflows/spec.md"
-claude            = "CLAUDE.md"
-codex             = "AGENTS.md"
-copilot           = ".github/copilot-instructions.md"
-kiro              = ".kiro/steering/spec-workflow.md"
+claude  = "CLAUDE.md"
+agents  = "AGENTS.md"
+cursor  = ".cursor/rules/spec-workflow.mdc"
+copilot = ".github/copilot-instructions.md"
 
 [mode]
-name = "prod"
+name = "parallel"
+
+[agents]
+driver      = "claude"
+max         = 8
+ttl         = 14400
+codex_args  = ""
+claude_args = ""
+cmd         = ""

@@ -46,6 +46,7 @@ const IDENTITY_DOMAIN: &[u8] = b"layerx-human-custody/v1";
 const RECORD_MAGIC: &[u8; 4] = b"LXCK";
 const RECORD_VERSION: u8 = 2;
 const LEGACY_RECORD_VERSION: u8 = 1;
+const SELF_CUSTODY_RECORD_VERSION: u8 = 3;
 const PRINCIPALS_DIR: &str = "principals";
 const KEY_FILE_SUFFIX: &str = ".key";
 const TEMP_FILE_SUFFIX: &str = ".key.tmp";
@@ -181,6 +182,8 @@ pub enum KmsError {
     Integrity,
     /// A development-only operation was requested from a production provider.
     DevelopmentOnly,
+    /// The identity holds its own key and the provider no longer signs for it.
+    SelfCustodied,
 }
 
 impl Display for KmsError {
@@ -198,6 +201,9 @@ impl Display for KmsError {
             Self::Conflict => "key-management service lifecycle operation conflicted",
             Self::Integrity => "key-management key reference integrity failed",
             Self::DevelopmentOnly => "operation is available only with the development provider",
+            Self::SelfCustodied => {
+                "identity is self-custodied and the provider no longer signs for it"
+            }
         })
     }
 }
@@ -298,6 +304,7 @@ pub enum CustodyError {
     CoordinationUnavailable,
     Audit(AuditError),
     Store(StoreError),
+    SelfCustodied,
 }
 
 impl CustodyError {
@@ -329,6 +336,7 @@ impl CustodyError {
             Self::Kms(KmsError::Conflict) => "kms-conflict",
             Self::Kms(KmsError::Integrity) => "kms-integrity",
             Self::Kms(KmsError::DevelopmentOnly) => "kms-development-only",
+            Self::Kms(KmsError::SelfCustodied) => "kms-self-custodied",
             Self::Sign(SignError::DisclosureMismatch(_)) => "disclosure-mismatch",
             Self::Sign(SignError::InvalidDisclosure) => "disclosure-invalid",
             Self::Sign(_) => "signer-refused",
@@ -343,6 +351,7 @@ impl CustodyError {
             Self::CoordinationUnavailable => "coordination-unavailable",
             Self::Audit(_) => "audit-append-failed",
             Self::Store(_) => "store-refused",
+            Self::SelfCustodied => "self-custodied",
         }
     }
 }
@@ -392,6 +401,9 @@ impl Display for CustodyError {
                 write!(formatter, "signing decision could not be audited: {error}")
             }
             Self::Store(error) => write!(formatter, "principal store refused: {error}"),
+            Self::SelfCustodied => {
+                formatter.write_str("identity is self-custodied and custody no longer signs for it")
+            }
         }
     }
 }
@@ -475,11 +487,45 @@ struct KeyRecord {
     public_key: [u8; 32],
     binding_digest: Option<[u8; 32]>,
     provider_reference: ProviderKeyReference,
+    self_custodied: bool,
+}
+
+/// The DID primary key handed to its owner exactly once by the key-export
+/// ceremony. The seed is zeroized on release and never rendered.
+pub struct ExportedPrimaryKey {
+    secret: Zeroizing<[u8; 32]>,
+    public_key: [u8; 32],
+}
+
+impl ExportedPrimaryKey {
+    /// Returns the exported private seed for the one hand-off to its owner.
+    #[must_use]
+    pub fn expose(&self) -> &[u8; 32] {
+        &self.secret
+    }
+
+    /// Returns the public verification key the exported seed derives.
+    #[must_use]
+    pub const fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
+}
+
+impl std::fmt::Debug for ExportedPrimaryKey {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExportedPrimaryKey")
+            .field("secret", &"[redacted]")
+            .field("public_key", &self.public_key)
+            .finish()
+    }
 }
 
 /// KMS-backed keystore holding only provider references and public key facts
-/// under principal-scoped subtrees. Production private keys never enter this
-/// process and no method returns private material.
+/// under principal-scoped subtrees. The one and only path by which private
+/// material leaves custody is [`Keystore::export_primary_once`], which hands
+/// the DID primary key to its owner a single time and leaves the identity
+/// self-custodied; every other method returns public facts alone.
 #[derive(Debug)]
 pub struct Keystore {
     root: PathBuf,
@@ -638,7 +684,7 @@ impl Keystore {
         };
         require_description(&binding, class, None, &description)?;
         let public_key = description.public_key();
-        let record = encode_record(class, &description)?;
+        let record = encode_record(class, &description, false)?;
         write_atomic(
             &directory,
             &format!("{}{KEY_FILE_SUFFIX}", key.as_str()),
@@ -692,6 +738,9 @@ impl Keystore {
         key: &KeyId,
     ) -> Result<KeyDescriptor, CustodyError> {
         let record = self.read_record(principal, key)?;
+        if record.self_custodied {
+            return Err(CustodyError::SelfCustodied);
+        }
         let binding = self.binding(principal, key, record.class)?;
         Self::require_record_binding(&binding, &record)?;
         let description = if self.provider.deployment() == ProviderDeployment::Production {
@@ -710,7 +759,7 @@ impl Keystore {
         {
             return Err(CustodyError::Kms(KmsError::Integrity));
         }
-        let bytes = encode_record(record.class, &description)?;
+        let bytes = encode_record(record.class, &description, false)?;
         replace_atomic(
             &self.principal_directory(principal),
             &format!("{}{KEY_FILE_SUFFIX}", key.as_str()),
@@ -798,12 +847,76 @@ impl Keystore {
         }
     }
 
+    /// Returns whether the identity already holds its own primary key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for unknown keys and corrupt records.
+    pub fn self_custodied(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+    ) -> Result<bool, CustodyError> {
+        Ok(self.read_record(principal, key)?.self_custodied)
+    }
+
+    /// Hands the DID primary key to its owner exactly once and marks the
+    /// identity self-custodied, after which the keystore refuses every signing
+    /// and rotation request for it. This is the only route out of custody.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a second export with `SelfCustodied`, refuses any key class
+    /// other than the human primary, and returns typed provider, integrity and
+    /// storage failures with the marker unwritten.
+    pub fn export_primary_once(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+    ) -> Result<ExportedPrimaryKey, CustodyError> {
+        let record = self.read_record(principal, key)?;
+        if record.self_custodied {
+            return Err(CustodyError::SelfCustodied);
+        }
+        if record.class != KeyClass::HumanPrimary {
+            return Err(CustodyError::Kms(KmsError::Refused));
+        }
+        let binding = self.binding(principal, key, record.class)?;
+        Self::require_record_binding(&binding, &record)?;
+        let secret = self
+            .provider
+            .export_primary_key(&binding, &record.provider_reference)?;
+        let public_key = layerx_crypto::signer::Signer::public_key(
+            &layerx_crypto::local::LocalSigner::new(*secret),
+        );
+        if !layerx_crypto::ct::eq_fixed(&public_key, &record.public_key) {
+            return Err(CustodyError::Kms(KmsError::Integrity));
+        }
+        let bytes = encode_record_parts(
+            record.class,
+            record.public_key,
+            binding.digest(),
+            record.provider_reference.as_bytes(),
+            true,
+        )?;
+        replace_atomic(
+            &self.principal_directory(principal),
+            &format!("{}{KEY_FILE_SUFFIX}", key.as_str()),
+            &format!("{}{TEMP_FILE_SUFFIX}", key.as_str()),
+            &bytes,
+        )?;
+        Ok(ExportedPrimaryKey { secret, public_key })
+    }
+
     pub(crate) fn remote_signer(
         &self,
         principal: &PrincipalId,
         key: &KeyId,
     ) -> Result<RemoteCustodySigner, CustodyError> {
         let record = self.read_record(principal, key)?;
+        if record.self_custodied {
+            return Err(CustodyError::SelfCustodied);
+        }
         let binding = self.binding(principal, key, record.class)?;
         Self::require_record_binding(&binding, &record)?;
         let description = self
@@ -1030,18 +1143,41 @@ const fn merge_rotation(current: RotationState, next: RotationState) -> Rotation
 fn encode_record(
     class: KeyClass,
     description: &ProviderKeyDescription,
+    self_custodied: bool,
 ) -> Result<Vec<u8>, CustodyError> {
-    let reference = description.reference().as_bytes();
+    encode_record_parts(
+        class,
+        description.public_key(),
+        description.binding_digest(),
+        description.reference().as_bytes(),
+        self_custodied,
+    )
+}
+
+fn encode_record_parts(
+    class: KeyClass,
+    public_key: [u8; 32],
+    binding_digest: [u8; 32],
+    reference: &[u8],
+    self_custodied: bool,
+) -> Result<Vec<u8>, CustodyError> {
     let reference_length = u32::try_from(reference.len())
         .map_err(|_| CustodyError::CorruptRecord("provider reference exceeds encoding bounds"))?;
-    let mut output = Vec::with_capacity(4 + 1 + 1 + 32 + 32 + 4 + reference.len());
+    let mut output = Vec::with_capacity(4 + 1 + 1 + 32 + 32 + 4 + reference.len() + 1);
     output.extend_from_slice(RECORD_MAGIC);
-    output.push(RECORD_VERSION);
+    output.push(if self_custodied {
+        SELF_CUSTODY_RECORD_VERSION
+    } else {
+        RECORD_VERSION
+    });
     output.push(class.code());
-    output.extend_from_slice(&description.public_key());
-    output.extend_from_slice(&description.binding_digest());
+    output.extend_from_slice(&public_key);
+    output.extend_from_slice(&binding_digest);
     output.extend_from_slice(&reference_length.to_be_bytes());
     output.extend_from_slice(reference);
+    if self_custodied {
+        output.push(1);
+    }
     Ok(output)
 }
 
@@ -1051,7 +1187,10 @@ fn decode_record(bytes: &[u8]) -> Result<KeyRecord, CustodyError> {
         return Err(CustodyError::CorruptRecord("invalid record header"));
     }
     let version = reader.byte()?;
-    if !matches!(version, LEGACY_RECORD_VERSION | RECORD_VERSION) {
+    if !matches!(
+        version,
+        LEGACY_RECORD_VERSION | RECORD_VERSION | SELF_CUSTODY_RECORD_VERSION
+    ) {
         return Err(CustodyError::CorruptRecord("unknown record version"));
     }
     let class = KeyClass::from_code(reader.byte()?)?;
@@ -1059,25 +1198,34 @@ fn decode_record(bytes: &[u8]) -> Result<KeyRecord, CustodyError> {
         .take(32)?
         .try_into()
         .map_err(|_| CustodyError::CorruptRecord("truncated public key"))?;
-    let binding_digest = if version == RECORD_VERSION {
+    let binding_digest = if version == LEGACY_RECORD_VERSION {
+        None
+    } else {
         Some(
             reader
                 .take(32)?
                 .try_into()
                 .map_err(|_| CustodyError::CorruptRecord("truncated key binding"))?,
         )
-    } else {
-        None
     };
     let reference_length = reader.length()?;
     let provider_reference = ProviderKeyReference::new(reader.take(reference_length)?.to_vec())
         .map_err(CustodyError::Kms)?;
+    let self_custodied = if version == SELF_CUSTODY_RECORD_VERSION {
+        if reader.byte()? != 1 {
+            return Err(CustodyError::CorruptRecord("invalid self-custody marker"));
+        }
+        true
+    } else {
+        false
+    };
     reader.finish()?;
     Ok(KeyRecord {
         class,
         public_key,
         binding_digest,
         provider_reference,
+        self_custodied,
     })
 }
 

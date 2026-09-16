@@ -210,6 +210,7 @@ pub(crate) fn security_digest(
         "disable-authenticator" => SecurityAction::DisableAuthenticator,
         "rotate-backup-codes" => SecurityAction::RotateBackupCodes,
         "reveal-recovery-evidence" => SecurityAction::RevealRecoveryEvidence,
+        "export-primary-key" => SecurityAction::ExportPrimaryKey,
         _ => return Err(IdentityDispatchError::InvalidInput),
     };
     security_action_digest(scope.principal(), action, target)

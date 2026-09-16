@@ -29,6 +29,8 @@ struct Record {
     send_actions: BTreeMap<String, (crate::evm_types::SendPlanAuthorization, Vec<u8>)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     recipient_identity: Option<[u8; 32]>,
+    #[serde(default)]
+    self_custodied: bool,
 }
 impl Drop for Record {
     fn drop(&mut self) {
@@ -262,6 +264,9 @@ impl Store {
         if request.operation == 4 && record.seed.is_none() {
             return Ok(Vec::new());
         }
+        if record.self_custodied && request.operation != 2 {
+            return Err(Error::SelfCustodied);
+        }
         let seed = record.seed.as_ref().ok_or(Error::NotFound)?;
         match request.operation {
             2 => description(record),
@@ -278,6 +283,19 @@ impl Store {
                 .sign(&signing_digest.ok_or(Error::Refused)?)
                 .as_ref()
                 .to_vec()),
+            14 => {
+                if record.class != 1 {
+                    return Err(Error::Refused);
+                }
+                let exported = *seed;
+                record.self_custodied = true;
+                record.seed.zeroize();
+                record.seed = None;
+                record.wallet = None;
+                record.send_actions.clear();
+                self.persist()?;
+                Ok(exported.to_vec())
+            }
             _ => Err(Error::Refused),
         }
     }
@@ -289,6 +307,9 @@ impl Store {
             .ok_or(Error::NotFound)?;
         if record.class != request.class || request.reference != record.handle {
             return Err(Error::Refused);
+        }
+        if record.self_custodied {
+            return Err(Error::SelfCustodied);
         }
         let seed = record.seed.as_ref().ok_or(Error::NotFound)?;
         let authorization: crate::evm_types::SendPlanAuthorization =
@@ -323,6 +344,9 @@ impl Store {
             || record.seed.is_none()
         {
             return Err(Error::Refused);
+        }
+        if record.self_custodied {
+            return Err(Error::SelfCustodied);
         }
         if request.operation == 6 {
             if record.wallet.is_none() {
@@ -412,6 +436,7 @@ impl Store {
             wallet: None,
             send_actions: BTreeMap::new(),
             recipient_identity: None,
+            self_custodied: false,
         };
         let response = description(&record)?;
         self.state.records.insert(key, record);

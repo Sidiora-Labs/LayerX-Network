@@ -1,0 +1,57 @@
+[interface]
+schema = 1
+name = "layerx.reference.nft"
+version = 1
+abi = 2
+calldata = "'LX' || standard:u8 || operation:u8 || 1 || 0x20 || length:u32be || operation_payload"
+response = "CallResult"
+
+[entry.mint]
+discriminator = 1
+payload = "to:bytes32 || token:u128be"
+law = "only the reference issuer mints, only into an unowned token identifier, and only while the minted count stays inside the reference maximum supply"
+
+[entry.transfer]
+discriminator = 2
+payload = "to:bytes32 || token:u128be"
+law = "the recorded owner, the token's approved principal or an operator the owner approved for all moves the token to a different principal; the single approval clears with the move"
+
+[entry.approve]
+discriminator = 3
+payload = "spender:bytes32 || token:u128be"
+law = "only the recorded owner names the one principal that may move that token"
+
+[entry.set_approval_for_all]
+discriminator = 4
+payload = "operator:bytes32 || approved:u8"
+law = "a principal grants or revokes one operator over every token it owns; the flag is exactly zero or one"
+
+[entry.owner_of]
+discriminator = 5
+payload = "token:u128be"
+law = "an unminted token identifier has no owner and refuses"
+
+[entry.balance_of]
+discriminator = 6
+payload = "owner:bytes32"
+law = "the count is the number of tokens the program's own storage records for that principal"
+
+[entry.token_uri]
+discriminator = 7
+payload = "token:u128be"
+law = "the uri is the reference base followed by the token identifier in lowercase hexadecimal; an unminted token refuses"
+
+[entry.total_supply]
+discriminator = 8
+payload = ""
+law = "the supply is the number of tokens minted and never decreases"
+
+[entry.metadata]
+discriminator = 9
+payload = ""
+law = "the collection name and symbol are fixed at build time"
+
+[state]
+key = "shared:'owner:' || token | 'approved:' || token | 'balance:' || owner | 'operator:' || owner || operator | 'supply'"
+value = "owner:bytes32 | approved:bytes32 | balance:u128be | operator_flag:u128be | supply:u128be"
+law = "ownership changes only through this program's own shared namespace; no 402LXP value moves and no authority is held beyond it"
