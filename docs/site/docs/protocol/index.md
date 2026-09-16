@@ -1,0 +1,132 @@
+# Protocol
+
+One signed record per action. One doorway for money. One result anyone can replay.
+
+LayerX Network is the activity, execution, and accounting layer for autonomous agents. Paxeer Network (EVM chain ID `125`) holds custody, checkpoints, bonds, challenges, and exits. A normal payment or agent action does not require a Paxeer transaction. Beta envelopes use protocol 3 (`LXP_PROTOCOL_VERSION_STATE_COMMITMENT` in `include/layerx/lxp_protocol.h`); occupancy accounting is used by protocol 2 and 3. The C header default `LXP_PROTOCOL_VERSION` remains 2.
+
+LayerX and the Paxeer settlement stack now live in one monorepo. Co-location keeps the protocol, the settlement network, the developer surfaces, and their automation auditable in one place while preserving their separate build, release, and trust boundaries - repository co-location grants neither side new authority over the other. LayerX settles on Paxeer; the settlement code lives under `paxeer-network/`. The `layerx` developer CLI is the operator surface for environments, credentials, emulator bootstrap, hosted gateway calls, and local receipt verification; see [CLI](../platform/cli.md).
+
+Normative behavior lives in `spec/` (KVX first). This page is the human read of that design.
+
+---
+
+## Execution vs settlement
+
+| LayerX owns | Paxeer owns |
+| --- | --- |
+| Agent identities and delegated authority | Asset custody |
+| Global activity ordering | Deposits and withdrawals |
+| Payments and balances (`402LXP`) | Checkpoint registration |
+| Holds, escrow, budgets, streams | Guarantor bonds |
+| Service agreements, deliveries, attestations | Checkpoint attestations |
+| Trading, positions, funding, liquidation | Slashing for conflicting attestations |
+| Programmable guest execution (programs) | Emergency exits and dispute settlement |
+| Deterministic state execution, receipts, replay | Final settlement to external assets |
+| Data availability and reconstruction | |
+
+LayerX commits ordered activity into periodic checkpoints. Custody remains on
+Paxeer.
+
+---
+
+## The activity (LXC/1)
+
+Every state-changing operation is one signed activity: a payment, an escrow capture, a budget spend, a stream draw, a service delivery, a perp fill, a governance change, a bridge claim, or a program call.
+
+The wire format is LXC/1 - a canonical binary envelope, not a convenience JSON. Integers are fixed-width and big-endian. There are no optional fields, no maps, and no floating point. Decoding is total: trailing bytes are an error. Re-encoding a valid activity must yield the same bytes.
+
+Typical envelope fields (illustrative names; see the design for encodings):
+
+| Field | Role |
+| --- | --- |
+| `protocol_version` | Must be enabled for the batch epoch. Supported: 1 (legacy), 2 (occupancy), 3 (state commitment). Beta selects 3. |
+| `network_id` | Exact match; blocks cross-network replay |
+| `activity_type` | High 16 bits = module id, low 16 = type ordinal |
+| `actor_did` | Who is acting |
+| `authority` | Primary key, session, or scoped grant |
+| `account_sequence` | Must equal `next_sequence[actor]` exactly - gaps are rejected |
+| `timestamp_bound` | Window checked against the batch timestamp, never node wall-clock |
+| `idempotency_key` | A repeat returns the original receipt with zero new economic effect |
+| `fee_limit` | Must cover the deterministically computed fee |
+| `payload` / `payload_hash` | Module-specific body; hash checked before parse |
+| `signature` | Ed25519 over the canonical prefix |
+
+The protocol verifies the actor and its authority, consumes the sequence, orders the activity globally, applies a deterministic state transition, and returns a signed receipt tied to the resulting state root.
+
+Failed activities still consume sequence, still pay the fee, and still occupy a global sequence number. Effects from the module roll back; bookkeeping does not.
+
+---
+
+## Three design rules
+
+1. **One canonical history.** Every accepted or failed activity receives a global sequence. State roots chain per activity, not only per batch. The append-only activity log is authoritative. Indexes are disposable projections and can be rebuilt by replay.
+2. **One financial doorway.** `402LXP` is the only component allowed to write balances. Modules - and programs - emit validated transfer sets; they do not mutate funds themselves. See Payments and Fees.
+3. **One reproducible result.** Consensus-critical execution excludes floating point, local clocks, database iteration order, pointer-derived hashes, and other sources of nondeterminism. Replicas and bonded guarantors independently replay batches before a checkpoint is attested to Paxeer.
+
+---
+
+## Identity and authority (kernel)
+
+Identity is kernel, not a module. Agent DIDs are native accounts. Authorization is part of the state machine: primary keys, session keys, scoped capability grants, rotation, recovery, revocation, and expiry.
+
+A grant can be narrowed but not silently widened. Bumping `revocation_sequence` invalidates grants that still reference the old value. Retirement requires a zero balance sheet so value cannot be stranded.
+
+Oracle prices enter as signed activities through a Crossverse adapter - outside the kernel, inside the ordered history. There is no HTTP call from inside a state transition.
+
+---
+
+## Programs: module `0x09`
+
+Programs are where untrusted guest code runs. The kernel registers them as module ID `9` (`LXP_MODULE_PROGRAMS` in `include/layerx/lxp_module.h:22`; activity types `0x0009xxxx` in `include/layerx/programs.h`). They sit alongside the eight economic modules (`0x01`–`0x08`) and are not a ninth `402LXP` writer. A program executes inside the authority of the activity that invoked it, on a deterministic WASM runtime, and every monetary effect it produces compiles to a `402LXP` transfer set applied by the kernel. The runtime, registry, SDKs, and porting kits live under `programs/`. See [Programs](../programs/index.md).
+
+Four rules define the programs money story:
+
+- **Program-owned accounts.** A program can own accounts derived deterministically from `(program_id, seed)` under a domain-separated hash. Derivation is a pure function of public inputs, and the domain is disjoint from principal account ids - so no principal can claim or sign for a program account. Deriving an account conveys no spending authority; a principal can fund one but can never authorize debits from it.
+- **Downward-only spending grants.** A program-to-program call can convey a bounded spending grant over the caller's own derived accounts. It narrows only: asset, destination, source, and amount can shrink, never grow. Any attempted widening fails with the same typed escalation refusal principal grants use, and no partial transfer set survives.
+- **Occupancy settlement.** Storage that persists is paid for as long as it persists. Occupancy meters namespace bytes held across protocol batches, priced by the fee schedule and charged to the account declared responsible for that namespace - settled as ordinary `402LXP` legs and bound into the batch receipt as replay-checkable evidence.
+- **Protocol-backed balances.** A program's balance is real protocol state read from the account tree through Merkle proofs, not a bookkeeping column. `402LXP` remains the sole balance writer; programs emit transfer sets and never call `set_balance`.
+
+See [Modules](modules.md), [Programs](../programs/index.md), and `programs/README.md`.
+
+---
+
+## From activity to receipt
+
+Per activity the kernel, in fixed order:
+
+1. Decode the envelope.
+2. Check `network_id`, `protocol_version`, module enablement.
+3. Resolve `actor_did` and `authority`; verify the signature.
+4. Check `account_sequence == next_sequence[actor]`.
+5. Check `timestamp_bound` against the batch timestamp.
+6. Check idempotency (hit → original receipt, no new effect).
+7. Compute the fee against `fee_limit`.
+8. Open a state journal; `validate` then `execute`.
+9. Commit on success, roll back on failure.
+10. Charge the fee as a `402LXP` transfer, consume the sequence, record the idempotency key, emit the receipt - all four on both success and failure.
+11. Recompute the state root and chain it into the receipt.
+
+Receipts are evidence produced by the protocol. No receipt field is supplied by a client. A `layerx-receipt-proof-v1` object is verified against independently trusted batch facts without a node; see [Portable receipt verifier](../interop/portable-receipts.md). Interop adapters translate foreign payment protocols into that receipt evidence without writing balances; x402 v2 over HTTP, MCP, and A2A is in [x402 transport](../interop/x402.md). The non-authoritative agent daemon consumes those receipts as protocol evidence and never mints balances or budgets from local state; see [Agentd](../agents/agentd.md).
+
+Fees are deterministic inputs to execution. The committed fee schedule prices
+canonical bytes and the supported Asset and Programs activity ordinals; estimation fails closed when required execution or
+storage inputs are unavailable. See [Assets](../concepts/assets.md#named-fee-schedule).
+
+---
+
+## Status
+
+The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
+
+---
+
+## Start here
+
+- [Home](../index.md)
+- [Getting started on testnet](../overview/getting-started.md)
+- [Modules](modules.md): `0x01`–`0x08` economic modules and Programs `0x09`
+- [Programs](../programs/index.md): DEPLOY / UPGRADE / CALL, simulate, guest ABI 2, occupancy
+- [Assets](../concepts/assets.md): per-asset accounts, issuance, register / mint / burn encodings
+- [Finality](finality.md): L0 → L4
+- [Commitment levels](commitment-levels.md): `executed`, `batched`, `finalised`
+- Design § protocol

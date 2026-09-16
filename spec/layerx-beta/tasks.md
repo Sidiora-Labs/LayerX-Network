@@ -194,6 +194,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Add the crate platform/hosted/agent-boundary (package layerx-platform-agent-boundary, binary layerx-agent-boundary) in the hosted house style listening on LAYERX_AGENT_BOUNDARY_LISTEN (default 0.0.0.0:9446) with rustls server TLS that accepts an optional client certificate chaining to LAYERX_AGENT_BOUNDARY_CLIENT_CA_DER, two distinct bearer tokens from LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE and LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE with per-token route entitlement, an LNI client over LAYERX_AGENT_BOUNDARY_LNI_SOCKET and the daemon program listener at LAYERX_AGENT_BOUNDARY_NODE_URL.
     - Serve the component contract exactly as the gateway parses it: GET /readyz (bearer or unauthenticated, {ready, network_id, wire_version, synchronous_receipts, state_snapshot}), POST /v1/activities and POST /v1/programs/call taking application/octet-stream canonical bytes with Idempotency-Key, submitting over the LNI exactly once per key from a durable journal under LAYERX_AGENT_BOUNDARY_STATE_DIR, answering 200 {result: {state, activity_id, receipt, terminal_payload, call_graph}} from the receipt, 202 when the outcome is unknown, 4xx carrying the typed refusal; POST /v1/programs/simulate answering {result: {execution, simulation_evidence}} when the LNI provides simulation and a typed 503 capability_unavailable otherwise; GET /v1/programs/activities/{id} with program_id; GET /v1/receipts/{id} as {result: {activity_id, receipt}} and 404 when unknown; GET /internal/v1/receipts/{id} for the developer plane; and the five account-state GET routes relayed to the daemon for the registry token.
     - Persist real ProgramCall graph and terminal artifacts with explicit ownership through direct/prepared execution and explicitly versioned publication WAL/receipt-authority records, preserving old record decoding. Retrieve them through an authenticated additive program-listener route bound to activity ID and receipt digest, verify the existing signed receipt/artifact commitments at the boundary, and persist verified completed results for replay. Successful executions with missing/corrupt artifacts must remain unavailable; preserve truthful pre-runtime refusal data. Write tests under platform/hosted/agent-boundary/tests against a real layerxd and replica from build/bin covering every route, the exactly-once journal across a restart, refusal mapping, the entitlement split between the two tokens, and readiness under daemon loss; add platform/hosted/agent-boundary/Dockerfile from the faucet template.
+    - Owner-requested single BUILD wave: provide version-identified snapshot program reads with explicit freshness requirements outside the write queue; retain direct native transfers and conflict-aware parallel Programs execution including protocol accounts, sequences and budgets; minimize the durable commit-to-result path; deliver event-driven completion and bounded authenticated persistent connections; move reconstructible snapshot/publication work off live execution locks without changing recovery, required replica acknowledgements, receipt verification or unknown-outcome semantics. Implement the complete wave before one compile pass and one focused real-process behavior gate, with at most two repair cycles. This bounded BUILD checkpoint does not assert the task's full qualification chain passed.
     - _Requirements: 14.5, 7.3_
   - [-] 6.5 Implement the layerx-identity principal and session service
     - Add the crate platform/hosted/identity (package layerx-platform-identity, binary layerx-identity) in the hosted house style listening on LAYERX_IDENTITY_LISTEN (default 0.0.0.0:9443) with rustls server TLS, a durable fsync-backed store under LAYERX_IDENTITY_STATE_DIR holding principals {sub, allowed_signer_public_keys, account, audiences} and sessions {session_id, principal, token_digest, csrf_digest, csrf_token sealed at rest with the store key, expires_at, revoked_at}, and service tokens from LAYERX_IDENTITY_SERVICE_TOKENS_DIR where each file name is the calling service (gateway, webhooks, dashboard, faucet, testnet, ramp, provisioning) and the content its token.
@@ -239,6 +240,29 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Package the daemon with an integrity-pinned installer, systemd/container entry points and operator instructions.
     - Integrate all seven capabilities in one wave, then run one compile pass and the focused real-process end-to-end gate. Rerun only after a relevant repair, at most twice. Preserve unrelated owner edits and existing gates.
     - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7_
+
+- [ ] 8. Beta surface expansion wave
+  - [ ] 8.1 Add the LXT721 non-fungible standard and reference program
+    - Add programs/sdk/rust/src/lxt721.rs mirroring lxt20.rs, programs/crates/layerx-programs-registry/src/lxt721.rs with reference_interface, a reference guest at programs/sdk/rust/examples/nft-lxt721 built by the same script pattern as examples/escrow, fixtures under registry tests, and tests/lxt721_reference.rs.
+    - _Requirements: 16.1_
+  - [ ] 8.2 Add multisig and timelock authority kinds
+    - Extend lxp_authority_kind in include/layerx/lxp_authority.h with MULTISIG and TIMELOCK, add the k-of-n signer set and maturity fields to the grant scope as additive tail fields under a new grant encoding version, resolve both in lxp_authority_resolve, add typed refusals, and add tests/test_authority_multisig.c wired as make test-authority-multisig covering below-threshold refusal, threshold success, duplicate signer refusal, pre-maturity refusal, post-maturity success and byte-identical encoding of every pre-existing grant kind.
+    - _Requirements: 16.2_
+  - [ ] 8.3 Add the naming registry reference program
+    - Add programs/sdk/rust/examples/naming with register, transfer, renew, resolve, reverse_resolve; a registry reference interface at programs/crates/layerx-programs-registry/src/naming.rs; tests/naming_reference.rs; and a name resolver in human/apps/web explorer lookup that calls the program read path when a query matches the name grammar.
+    - _Requirements: 16.3_
+  - [ ] 8.4 Expose the committed oracle observation to programs
+    - Add oracle_read to ABI_MANIFEST layerx_v2 in programs/crates/layerx-programs-runtime/src/lib.rs and validate.rs, the C host binding in src/modules/programs reading lx_oracle_store, the Rust SDK wrapper in programs/sdk/rust/src/oracle.rs, and tests/test_programs_oracle_read.c wired as make test-programs-oracle-read proving a guest reads the observation the perps engine committed and gets a typed refusal for unknown and halted markets.
+    - _Requirements: 16.4_
+  - [ ] 8.5 Add the constant-product swap reference program
+    - Add programs/sdk/rust/examples/swap-cpmm with add_liquidity, remove_liquidity, swap_exact_in, quote, reserves; LP shares as an embedded LXT20 program; registry reference interface at programs/crates/layerx-programs-registry/src/swap.rs; tests/swap_reference.rs; and a conservation case under programs/tests/conservation proving reserves plus fees equal inputs across a randomised sequence.
+    - _Requirements: 16.5_
+  - [ ] 8.6 Raise the asset registry capacity to 1024 and paginate listing
+    - Raise LX_ASSET_REGISTRY_CAPACITY to 1024 in include/layerx/lx_asset.h, fix every static array, state encoder, reserve attestation bound and genesis builder path sized from it, keep existing sub-64 fixtures byte-identical, and add cursor pagination to lx_listAssets in platform/hosted/gateway with the openrpc.json entry updated.
+    - _Requirements: 16.6_
+  - [ ] 8.7 Make self-custody the default with a step-up key export ceremony
+    - Add POST /v1/security/key-export/begin and /finish to human/schema/human-api/identity.kvx in the secret-reveal class, implement the ceremony in human/crates/layerx-human-service with the KMS returning the primary key once and flipping the identity to self-custodied so later signing refuses, add onboarding copy and route that offers export first and custody as opt-in, rewrite the no-key-export suite to assert the ceremony is the only route, and update spec/layerx-platform/spec.kvx [decision] custody and v1_scope.
+    - _Requirements: 16.7_
 
 ## Engineering ground rules for this feature
 
@@ -310,7 +334,8 @@ The raw finding behind each requirement, with its lane result path, is listed in
     { "id": 4,  "tasks": ["4.1", "4.2", "4.3"] },
     { "id": 5,  "tasks": ["5.1", "5.2", "5.3", "5.4"] },
     { "id": 6,  "tasks": ["6.1", "6.2", "6.3", "6.4", "6.5", "6.6", "6.10", "6.11"] },
-    { "id": 7,  "tasks": ["6.7", "6.8", "6.9"] }
+    { "id": 7,  "tasks": ["6.7", "6.8", "6.9"] },
+    { "id": 8,  "tasks": ["8.1", "8.2", "8.3", "8.4", "8.5", "8.6", "8.7"] }
   ]
 }
 ```

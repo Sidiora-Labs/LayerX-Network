@@ -2521,7 +2521,7 @@ static lxp_result evidence_refusal(lxp_daemon_lni_server *server, int descriptor
 static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
     const lni_envelope *request, int64_t deadline)
 {
-    lx_asset_record records[LX_ASSET_REGISTRY_CAPACITY];
+    lx_asset_record *records;
     uint8_t *payload;
     size_t count = 0U, cursor = 44U;
     uint16_t returned = 0U;
@@ -2536,10 +2536,12 @@ static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
         return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
             1U, request->minor < 5U ? LXP_ERR_VERSION_UNSUPPORTED :
                                       LXP_ERR_NON_CANONICAL, deadline);
+    records = malloc(LX_ASSET_REGISTRY_CAPACITY * sizeof(*records));
+    if (records == NULL) return LXP_ERR_IO;
     payload = malloc(server->frame_bytes);
-    if (payload == NULL) return LXP_ERR_IO;
+    if (payload == NULL) { free(records); return LXP_ERR_IO; }
     status = lni_read_lock(server->owner);
-    if (status != LXP_OK) { free(payload); return status; }
+    if (status != LXP_OK) { free(payload); free(records); return status; }
     const lxp_kernel *kernel = server->owner->kernel;
     status = lx_asset_committed_records(kernel, records, LX_ASSET_REGISTRY_CAPACITY, &count);
     if (status == LXP_OK && request->payload[2] == 3U) {
@@ -2581,6 +2583,7 @@ static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
         LNI_ASSET_READ_RESPONSE, request->correlation_id, payload, cursor, NULL, 0U, deadline);
     else status = evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
     free(payload);
+    free(records);
     return status;
 }
 

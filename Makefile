@@ -66,6 +66,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-identity \
 	test-grants \
 	test-authority-resolve \
+	test-authority-multisig \
 	test-allowance \
 	test-revocation \
 	test-rotation \
@@ -284,7 +285,8 @@ test: test-state-diff test-da-verified test-result test-protocol test-state-comm
 	test-recovery test-projection test-rebuild test-journal \
 	test-activity-codec test-envelope test-verify-pool test-admission \
 	test-idempotency test-fee-gate test-identity test-grants \
-	test-authority-resolve test-allowance test-revocation test-rotation \
+	test-authority-resolve test-authority-multisig test-allowance \
+	test-revocation test-rotation \
 	test-terminal-rejection test-batch-identity \
 	test-escrow-open test-escrow-capture test-escrow-timeout \
 	test-escrow-dispute test-escrow-invariants \
@@ -2121,6 +2123,15 @@ $(BUILD_DIR)/tests/lxp_test_authority_resolve: \
 
 test-authority-resolve: $(BUILD_DIR)/tests/lxp_test_authority_resolve
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_authority_resolve
+
+$(BUILD_DIR)/tests/test_authority_multisig: tests/test_authority_multisig.c \
+		tests/lxp_test_harness.c $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Itests $(CFLAGS) tests/test_authority_multisig.c \
+		tests/lxp_test_harness.c $(LIBRARY) $(EXTRA_LDFLAGS) -o $@
+
+test-authority-multisig: $(BUILD_DIR)/tests/test_authority_multisig
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_authority_multisig
 
 $(BUILD_DIR)/tests/lxp_test_allowance: tests/state/lxp_test_allowance.c \
 		$(LIBRARY)

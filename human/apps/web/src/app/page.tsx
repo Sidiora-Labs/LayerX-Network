@@ -25,6 +25,11 @@ export default async function RootPage({
         initiallyAuthenticated={session !== undefined}
         {...(returnTo === undefined ? {} : { returnTo })}
       />
+      <section className="flex flex-col gap-1">
+        <p>{copyEntry("security.key_export.offer").message}</p>
+        <p>{copyEntry("security.key_export.consequence").message}</p>
+        <p>{copyEntry("security.key_export.custodial_opt_in").message}</p>
+      </section>
       <PlaneRouteAction destination="/explorer">
         {copyEntry("action.open_explorer").message}
       </PlaneRouteAction>
