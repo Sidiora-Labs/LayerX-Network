@@ -4,8 +4,105 @@ use super::{
 };
 use serde_json::{json, Value};
 
+const LIST_ASSETS_DEFAULT_PAGE: usize = 64;
+const LIST_ASSETS_MAX_PAGE: usize = 256;
+
 pub(super) fn error(id: &Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0", "id":id, "error":{"code":code,"message":message}})
+}
+
+fn list_assets_params(params: Option<&Value>) -> Result<(Option<String>, usize), i32> {
+    let empty = Vec::new();
+    let args = match params {
+        None => &empty,
+        Some(Value::Array(args)) => args,
+        _ => return Err(-32602),
+    };
+    let (cursor, limit) = match args.as_slice() {
+        [] => (None, None),
+        [cursor] => (Some(cursor), None),
+        [cursor, limit] => (Some(cursor), Some(limit)),
+        _ => return Err(-32602),
+    };
+    let cursor = match cursor {
+        None | Some(Value::Null) => None,
+        Some(Value::String(cursor)) => {
+            if parse_hex32(cursor).is_err() || cursor == &"00".repeat(32) {
+                return Err(-32602);
+            }
+            Some(cursor.to_ascii_lowercase())
+        }
+        Some(_) => return Err(-32602),
+    };
+    let limit = match limit {
+        None => LIST_ASSETS_DEFAULT_PAGE,
+        Some(Value::Number(limit)) => {
+            let Some(limit) = limit
+                .as_u64()
+                .filter(|count| *count >= 1 && *count <= LIST_ASSETS_MAX_PAGE as u64)
+            else {
+                return Err(-32602);
+            };
+            limit as usize
+        }
+        Some(_) => return Err(-32602),
+    };
+    Ok((cursor, limit))
+}
+
+fn paginate_assets(result: &mut Value, cursor: Option<&str>, limit: usize) -> Result<(), i32> {
+    let (page, truncated) = {
+        let Some(assets) = result.get("assets").and_then(Value::as_array) else {
+            return Err(-32603);
+        };
+        let mut ordered: Vec<(&str, &Value)> = Vec::with_capacity(assets.len());
+        for asset in assets {
+            let Some(id) = asset.get("asset_id").and_then(Value::as_str) else {
+                return Err(-32603);
+            };
+            ordered.push((id, asset));
+        }
+        ordered.sort_by(|left, right| left.0.cmp(right.0));
+        let start = match cursor {
+            Some(cursor) => ordered.partition_point(|(id, _)| *id <= cursor),
+            None => 0,
+        };
+        let remaining = &ordered[start..];
+        (
+            remaining
+                .iter()
+                .take(limit)
+                .map(|(_, asset)| (*asset).clone())
+                .collect::<Vec<Value>>(),
+            remaining.len() > limit,
+        )
+    };
+    let next_cursor = if truncated {
+        page.last()
+            .and_then(|asset| asset.get("asset_id"))
+            .cloned()
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
+    result["assets"] = Value::Array(page);
+    result["next_cursor"] = next_cursor;
+    Ok(())
+}
+
+fn list_assets(config: &Config, id: &Value, params: Option<&Value>) -> Value {
+    let (cursor, limit) = match list_assets_params(params) {
+        Ok(page) => page,
+        Err(code) => return error(id, code, "Invalid params"),
+    };
+    let mut answer = read_response(id, &public_reads::read(config, "/v1/assets"));
+    let Some(result) = answer.get_mut("result") else {
+        return answer;
+    };
+    match paginate_assets(result, cursor.as_deref(), limit) {
+        Ok(()) => answer,
+        Err(code) => error(id, code, "Invalid upstream response"),
+    }
 }
 
 fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
@@ -52,14 +149,13 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         }
         return Ok(format!("/v1/proofs/{kind}/{id}"));
     }
-    if matches!(method, "lx_getNodeInfo" | "lx_listAssets") {
+    if method == "lx_listAssets" {
+        list_assets_params(params)?;
+        return Ok("/v1/assets".into());
+    }
+    if method == "lx_getNodeInfo" {
         return if args.is_empty() {
-            Ok(if method == "lx_getNodeInfo" {
-                "/v1/node-info"
-            } else {
-                "/v1/assets"
-            }
-            .into())
+            Ok("/v1/node-info".into())
         } else {
             Err(-32602)
         };
@@ -139,6 +235,10 @@ pub(super) fn dispatch(config: &Config, request: &IncomingRequest, value: &Value
         return value
             .get("id")
             .map(|_| error(&id, -32004, "WebSocket required"));
+    }
+    if method == "lx_listAssets" {
+        let result = list_assets(config, &id, value.get("params"));
+        return value.get("id").map(|_| result);
     }
     if method == "lx_estimateFee" {
         let result = match fee_params(value.get("params")) {
