@@ -30,6 +30,9 @@ impl Version {
 
     pub const V1_5: Self = Self { major: 1, minor: 5 };
 
+    /// Additive snapshot-pinned program reads and durable receipt waiting.
+    pub const V1_6: Self = Self { major: 1, minor: 6 };
+
     /// Returns whether the two peers can interpret the same stable message set.
     #[must_use]
     pub const fn is_compatible_with(self, peer: Self) -> bool {
@@ -69,6 +72,7 @@ pub enum Capability {
     AssetRead,
     FeeEstimate,
     SessionFeeState,
+    ProgramRead,
 }
 
 impl Capability {
@@ -94,6 +98,7 @@ impl Capability {
             Self::AssetRead => "asset_read",
             Self::FeeEstimate => "fee_estimate",
             Self::SessionFeeState => "session_fee_state",
+            Self::ProgramRead => "program_read",
         }
     }
 }
@@ -117,7 +122,7 @@ pub struct Schema {
     pub capabilities: &'static [Capability],
 }
 
-const CAPABILITIES: [Capability; 18] = [
+const CAPABILITIES: [Capability; 19] = [
     Capability::NodeInfo,
     Capability::Submit,
     Capability::AuthenticatedDurableSubmit,
@@ -136,6 +141,7 @@ const CAPABILITIES: [Capability; 18] = [
     Capability::AssetRead,
     Capability::FeeEstimate,
     Capability::SessionFeeState,
+    Capability::ProgramRead,
 ];
 
 const fn message(
@@ -156,7 +162,7 @@ const fn message(
     }
 }
 
-const MESSAGES: [MessageDescriptor; 37] = [
+const MESSAGES: [MessageDescriptor; 39] = [
     message(
         "NodeInfoRequest",
         1,
@@ -453,10 +459,26 @@ const MESSAGES: [MessageDescriptor; 37] = [
         true,
         false,
     ),
+    message(
+        "ProgramReadRequest",
+        38,
+        MessageKind::Request,
+        Capability::ProgramRead,
+        true,
+        false,
+    ),
+    message(
+        "ProgramReadResponse",
+        39,
+        MessageKind::Response,
+        Capability::ProgramRead,
+        true,
+        true,
+    ),
 ];
 
 const SCHEMA: Schema = Schema {
-    version: Version::V1_5,
+    version: Version::V1_6,
     messages: &MESSAGES,
     capabilities: &CAPABILITIES,
 };
@@ -479,7 +501,7 @@ pub struct GoldenVector {
 const NO_PROOF: &[u8] = &[];
 const PROOF: &[u8] = &[0xa5];
 
-const GOLDENS: [GoldenVector; 37] = [
+const GOLDENS: [GoldenVector; 39] = [
     GoldenVector {
         message: "NodeInfoRequest",
         payload: &[1],
@@ -702,13 +724,27 @@ const GOLDENS: [GoldenVector; 37] = [
         proof_material: NO_PROOF,
         encoded_hex: "0001000500250000000000000000000000012500000000",
     },
+    GoldenVector {
+        message: "ProgramReadRequest",
+        payload: &[38],
+        proof_material: NO_PROOF,
+        encoded_hex: "0001000600260000000000000000000000012600000000",
+    },
+    GoldenVector {
+        message: "ProgramReadResponse",
+        payload: &[39],
+        proof_material: PROOF,
+        encoded_hex: "0001000600270000000000000000000000012700000001a5",
+    },
 ];
 
 impl GoldenVector {
     /// Interface revision frozen into this literal vector.
     #[must_use]
     pub const fn version(self) -> Version {
-        if self.payload[0] >= 32 {
+        if self.payload[0] >= 38 {
+            Version::V1_6
+        } else if self.payload[0] >= 32 {
             Version::V1_5
         } else if self.payload[0] >= 30 {
             Version::V1_4

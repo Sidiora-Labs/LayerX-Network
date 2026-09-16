@@ -143,5 +143,6 @@ const fn absent_behavior(capability: Capability) -> &'static str {
         Capability::AssetRead => "committed_asset_read_unavailable",
         Capability::FeeEstimate => "canonical_fee_estimate_unavailable",
         Capability::SessionFeeState => "committed_session_fee_state_unavailable",
+        Capability::ProgramRead => "snapshot_program_read_unavailable",
     }
 }

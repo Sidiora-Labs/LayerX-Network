@@ -512,3 +512,36 @@ impl<E: fmt::Display> fmt::Display for ScheduleError<E> {
 }
 
 impl<E: std::error::Error + 'static> std::error::Error for ScheduleError<E> {}
+
+#[cfg(all(test, feature = "host-ffi"))]
+mod tests {
+    use super::{ConflictGraph, ProtocolScheduleEffects, ScheduleAccess};
+    use crate::{AccessDeclaration, AccessSet};
+
+    fn scheduled(effects: ProtocolScheduleEffects) -> ScheduleAccess {
+        ScheduleAccess::from_admitted(
+            AccessDeclaration::explicit(AccessSet::empty()),
+            AccessSet::empty(),
+            effects,
+        )
+    }
+
+    #[test]
+    fn actor_sequence_conflicts_across_distinct_principals() {
+        let actor = [0x11; 32];
+        let left = ProtocolScheduleEffects::new(AccessSet::empty(), [actor, [0x21; 32]])
+            .expect("nonzero identities");
+        let right = ProtocolScheduleEffects::new(AccessSet::empty(), [actor, [0x22; 32]])
+            .expect("nonzero identities");
+        let independent =
+            ProtocolScheduleEffects::new(AccessSet::empty(), [[0x12; 32], [0x23; 32]])
+                .expect("nonzero identities");
+
+        let actor_conflict =
+            ConflictGraph::from_accesses(&[scheduled(left.clone()), scheduled(right)]);
+        let distinct = ConflictGraph::from_accesses(&[scheduled(left), scheduled(independent)]);
+
+        assert!(actor_conflict.conflicts(0, 1));
+        assert!(!distinct.conflicts(0, 1));
+    }
+}

@@ -3564,6 +3564,15 @@ test-daemon-paid-withdrawal: $(BUILD_DIR)/tests/lxp_test_paid_withdrawal $(BUILD
 test-program-simulate: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR) simulate
 
+.PHONY: latency-wave-build latency-wave-test
+latency-wave-build: layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	cargo build --locked --release --target wasm32-unknown-unknown --manifest-path programs/sdk/rust/examples/escrow/Cargo.toml
+	cargo build --locked --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway
+	cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-agent-boundary --test real_node --no-run
+
+latency-wave-test:
+	cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-agent-boundary --test real_node lifecycle::latency_wave_reuses_native_sessions_and_returns_verified_read_and_commit_results -- --exact --nocapture
+
 BRIDGE_PYTHON ?= python3
 PAXEER_GO ?= go
 PAXEER_GO_JOBS ?= 4

@@ -43,7 +43,8 @@ typedef struct lxp_programs_call_schedule_descriptor {
 
 enum {
     LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES = 64,
-    LXP_PROGRAMS_SCHEDULE_MAX_PROTOCOL_ACCOUNTS = LXP_MAX_TRANSFER_SET_LEGS
+    LXP_PROGRAMS_SCHEDULE_MAX_PROTOCOL_ACCOUNTS = LXP_MAX_TRANSFER_SET_LEGS,
+    LXP_PROGRAMS_SCHEDULE_ITEM_VERSION = 2
 };
 
 /* Frozen Programs ABI policy: deployments use current=0, upgrades are monotonic. */
@@ -55,7 +56,9 @@ typedef struct lxp_programs_schedule_account_effect {
     uint8_t mode; /* 0 read, 1 write */
 } lxp_programs_schedule_account_effect;
 typedef struct lxp_programs_schedule_item {
+    uint16_t version;
     lxp_programs_call_schedule_descriptor call;
+    uint8_t identity_actor[32];
     uint8_t identity_principal[32];
     uint8_t occupancy_asset[32];
     uint8_t occupancy_treasury[32];
@@ -680,6 +683,7 @@ lxp_result lxp_programs_call_schedule_decode(
     lxp_programs_call_schedule_descriptor *descriptor);
 lxp_result lxp_programs_call_schedule_item_prepare(
     const lxp_programs_call_schedule_descriptor *descriptor,
+    const uint8_t identity_actor[32],
     const uint8_t fee_asset[32], const uint8_t occupancy_asset[32],
     bool occupancy_active, bool effects_complete,
     lxp_programs_schedule_item *item);

@@ -193,6 +193,34 @@ impl Client {
         request: &OutboundRequest<'_>,
         trace: Option<&str>,
     ) -> Result<UpstreamResponse, String> {
+        self.request_with_freshness(endpoint, authorization, request, trace, None)
+    }
+
+    pub fn request_program_read(
+        &self,
+        endpoint: &Endpoint,
+        bearer: &str,
+        request: &OutboundRequest<'_>,
+        minimum_sequence: u64,
+        expected_state_root: Option<[u8; 32]>,
+    ) -> Result<UpstreamResponse, String> {
+        self.request_with_freshness(
+            endpoint,
+            &format!("Bearer {bearer}"),
+            request,
+            None,
+            Some((minimum_sequence, expected_state_root)),
+        )
+    }
+
+    fn request_with_freshness(
+        &self,
+        endpoint: &Endpoint,
+        authorization: &str,
+        request: &OutboundRequest<'_>,
+        trace: Option<&str>,
+        freshness: Option<(u64, Option<[u8; 32]>)>,
+    ) -> Result<UpstreamResponse, String> {
         let total_started = Instant::now();
         let path = request.path;
         let body = request.body;
@@ -223,7 +251,14 @@ impl Client {
         pay_timing("gateway.http.pool", pool_started);
         if let Some(mut stream) = pooled {
             let exchange_started = Instant::now();
-            let result = exchange(&mut stream, endpoint, authorization, request, trace);
+            let result = exchange(
+                &mut stream,
+                endpoint,
+                authorization,
+                request,
+                trace,
+                freshness,
+            );
             pay_timing("gateway.http.exchange", exchange_started);
             if result
                 .as_ref()
@@ -256,7 +291,14 @@ impl Client {
                         .map_err(|error| error.to_string())?;
                     pay_timing("gateway.http.tls_handshake", tls_started);
                     let exchange_started = Instant::now();
-                    let result = exchange(&mut stream, endpoint, authorization, request, trace);
+                    let result = exchange(
+                        &mut stream,
+                        endpoint,
+                        authorization,
+                        request,
+                        trace,
+                        freshness,
+                    );
                     pay_timing("gateway.http.exchange", exchange_started);
                     if result
                         .as_ref()
@@ -315,15 +357,27 @@ fn exchange(
     authorization: &str,
     request: &OutboundRequest<'_>,
     trace: Option<&str>,
+    freshness: Option<(u64, Option<[u8; 32]>)>,
 ) -> Result<UpstreamResponse, String> {
     let idempotency = request
         .idempotency
         .map_or_else(String::new, |key| format!("Idempotency-Key: {key}\r\n"));
     let trace = trace.map_or_else(String::new, |value| format!("X-Trace-Id: {value}\r\n"));
+    let freshness = freshness.map_or_else(String::new, |(minimum, root)| {
+        let mut headers = format!("LayerX-Minimum-Sequence: {minimum}\r\n");
+        if let Some(root) = root {
+            headers.push_str("LayerX-Expected-State-Root: ");
+            for byte in root {
+                headers.push_str(&format!("{byte:02x}"));
+            }
+            headers.push_str("\r\n");
+        }
+        headers
+    });
     let mut outbound = zeroize::Zeroizing::new(Vec::new());
     write!(
         outbound,
-        "{} {}{} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {}\r\n{idempotency}{trace}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+        "{} {}{} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {}\r\n{idempotency}{trace}{freshness}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
         request.method,
         endpoint.base_path,
         request.path,

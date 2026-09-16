@@ -170,6 +170,28 @@ struct Daemon {
 }
 
 impl Daemon {
+    fn stop_gracefully(&mut self) {
+        if must(self.child.try_wait(), "daemon status").is_some() {
+            return;
+        }
+        let status = must(
+            Command::new("kill")
+                .arg("-TERM")
+                .arg(self.child.id().to_string())
+                .status(),
+            "signal daemon",
+        );
+        assert!(status.success(), "SIGTERM delivery failed");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if must(self.child.try_wait(), "daemon graceful status").is_some() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        self.stop();
+    }
+
     fn stop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -672,6 +694,8 @@ struct Call<'a> {
     bearer: Option<&'a str>,
     idempotency: Option<&'a str>,
     content_type: Option<&'a str>,
+    minimum_sequence: Option<&'a str>,
+    expected_state_root: Option<&'a str>,
     body: &'a [u8],
     identity: Option<&'a Identity>,
 }
@@ -684,6 +708,8 @@ impl<'a> Call<'a> {
             bearer,
             idempotency: None,
             content_type: None,
+            minimum_sequence: None,
+            expected_state_root: None,
             body: &[],
             identity: None,
         }
@@ -696,6 +722,8 @@ impl<'a> Call<'a> {
             bearer: Some(bearer),
             idempotency: Some(key),
             content_type: Some("application/octet-stream"),
+            minimum_sequence: None,
+            expected_state_root: None,
             body,
             identity: None,
         }
@@ -728,8 +756,14 @@ impl Client {
         let content_type = call
             .content_type
             .map_or(String::new(), |value| format!("Content-Type: {value}\r\n"));
+        let minimum_sequence = call.minimum_sequence.map_or(String::new(), |value| {
+            format!("LayerX-Minimum-Sequence: {value}\r\n")
+        });
+        let expected_state_root = call.expected_state_root.map_or(String::new(), |value| {
+            format!("LayerX-Expected-State-Root: {value}\r\n")
+        });
         let request = format!(
-            "{} {} HTTP/1.1\r\nHost: localhost\r\n{authorization}Accept: application/json\r\n{content_type}{idempotency}Content-Length: {}\r\nConnection: close\r\n\r\n",
+            "{} {} HTTP/1.1\r\nHost: localhost\r\n{authorization}Accept: application/json\r\n{content_type}{idempotency}{minimum_sequence}{expected_state_root}Content-Length: {}\r\nConnection: close\r\n\r\n",
             call.method,
             call.path,
             call.body.len()
@@ -1036,6 +1070,9 @@ impl Boundary {
 
 struct Cluster {
     root: PathBuf,
+    layerxd: PathBuf,
+    sequencer_config: PathBuf,
+    sequencer_environment: BTreeMap<&'static str, String>,
     sequencer: Daemon,
     replica: Daemon,
     boundary: Boundary,
@@ -1203,7 +1240,7 @@ fn start_sequencer(
     genesis: &Genesis,
     setup: &NodeSetup,
     actor: Actor,
-) -> (Daemon, Actor, PathBuf) {
+) -> (Daemon, Actor, PathBuf, BTreeMap<&'static str, String>) {
     let node_dir = root.join("node");
     let checkpoints = node_dir.join("checkpoints");
     let logs = node_dir.join("logs");
@@ -1245,7 +1282,7 @@ fn start_sequencer(
     wait_for_socket(&socket, &mut sequencer);
     wait_for_port(setup.program_port, &mut sequencer, "program listener");
 
-    (sequencer, actor, socket)
+    (sequencer, actor, socket, node_env)
 }
 
 struct BoundarySetup {
@@ -1432,11 +1469,15 @@ fn start_cluster_with_custody(custody: Option<CustodySetup>) -> Cluster {
         boundary_port: free_port(),
     };
     let replica = start_replica(&root, &layerxd, &setup);
-    let (sequencer, actor, socket) =
+    let (sequencer, actor, socket, sequencer_environment) =
         start_sequencer(&root, &layerxd, &repository, &genesis, &setup, actor);
     let boundary = start_boundary(&root, &socket, &setup);
+    let sequencer_config = root.join("node/config.txt");
     Cluster {
         root,
+        layerxd,
+        sequencer_config,
+        sequencer_environment,
         sequencer,
         replica,
         boundary: boundary.boundary,
@@ -1452,6 +1493,25 @@ fn start_cluster_with_custody(custody: Option<CustodySetup>) -> Cluster {
         sequencer_key: setup.sequencer_key,
         actor,
         tls: boundary.tls,
+    }
+}
+
+impl Cluster {
+    fn restart_native_sequencer(&mut self) {
+        self.sequencer.stop_gracefully();
+        self.sequencer = spawn_daemon(
+            &self.layerxd,
+            "--serve",
+            &self.sequencer_config,
+            &self.sequencer_environment,
+            self.root.join("sequencer.stderr"),
+        );
+        wait_for_socket(&self.root.join("run/layerxd.sock"), &mut self.sequencer);
+        wait_for_port(
+            self.program_port,
+            &mut self.sequencer,
+            "restarted program listener",
+        );
     }
 }
 
@@ -1531,6 +1591,7 @@ fn check_entitlements(cluster: &Cluster, signed: &[u8]) {
     for path in [
         "/v1/activities",
         "/v1/programs/call",
+        "/v1/programs/read",
         "/v1/programs/deploy",
         "/v1/programs/upgrade",
         "/v1/programs/wind-down",
@@ -1563,6 +1624,8 @@ fn check_entitlements(cluster: &Cluster, signed: &[u8]) {
         bearer: None,
         idempotency: Some("anonymous-key"),
         content_type: Some("application/octet-stream"),
+        minimum_sequence: None,
+        expected_state_root: None,
         body: signed,
         identity: None,
     });
@@ -1609,6 +1672,35 @@ struct Submitted {
     body: String,
 }
 
+fn assert_committed_metadata(
+    result: &serde_json::Value,
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+) {
+    assert_eq!(
+        result["result_code"],
+        serde_json::json!(protocol.result_code())
+    );
+    assert_eq!(
+        field(result, "state_version"),
+        protocol.global_sequence().to_string()
+    );
+    assert_eq!(
+        field(result, "state_root"),
+        hex(&protocol.resulting_state_root())
+    );
+}
+
+fn assert_committed_result_metadata(cluster: &Cluster, result: &serde_json::Value) {
+    let receipt = must(
+        verify_sequencer_signature(&unhex(field(result, "receipt")), cluster.sequencer_key),
+        "committed result receipt",
+    );
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("committed protocol receipt"));
+    assert_committed_metadata(result, protocol);
+}
+
 fn submit_send(cluster: &Cluster, signed: &[u8], key: &str) -> Submitted {
     let expected = expected_activity_id(signed);
     let answer = cluster.client.call(&Call::submit(
@@ -1631,7 +1723,10 @@ fn submit_send(cluster: &Cluster, signed: &[u8], key: &str) -> Submitted {
             "activity_id",
             "call_graph",
             "receipt",
+            "result_code",
             "state",
+            "state_root",
+            "state_version",
             "terminal_payload"
         ]
         .iter()
@@ -1650,6 +1745,7 @@ fn submit_send(cluster: &Cluster, signed: &[u8], key: &str) -> Submitted {
         .protocol()
         .unwrap_or_else(|| panic!("protocol receipt"));
     assert_eq!(hex(&protocol.activity_id()), expected);
+    assert_committed_metadata(result, protocol);
     let state = field(result, "state");
     if protocol.result_code() == 0 {
         assert_eq!(state, "completed");
@@ -1756,6 +1852,8 @@ fn check_program_routes(cluster: &Cluster, submitted: &Submitted, signed: &[u8])
         bearer: Some(&cluster.gateway_token),
         idempotency: None,
         content_type: Some("application/json"),
+        minimum_sequence: None,
+        expected_state_root: None,
         body: b"{}",
         identity: None,
     });
@@ -1766,6 +1864,8 @@ fn check_program_routes(cluster: &Cluster, submitted: &Submitted, signed: &[u8])
         bearer: Some(&cluster.gateway_token),
         idempotency: None,
         content_type: Some("application/octet-stream"),
+        minimum_sequence: None,
+        expected_state_root: None,
         body: signed,
         identity: None,
     });
@@ -1779,6 +1879,27 @@ fn simulate_program_call(cluster: &Cluster, signed: &[u8]) -> HttpAnswer {
         bearer: Some(&cluster.gateway_token),
         idempotency: None,
         content_type: Some("application/octet-stream"),
+        minimum_sequence: None,
+        expected_state_root: None,
+        body: signed,
+        identity: None,
+    })
+}
+
+fn read_program_call(
+    cluster: &Cluster,
+    signed: &[u8],
+    minimum_sequence: Option<&str>,
+    expected_state_root: Option<&str>,
+) -> HttpAnswer {
+    cluster.client.call(&Call {
+        method: "POST",
+        path: "/v1/programs/read",
+        bearer: Some(&cluster.gateway_token),
+        idempotency: None,
+        content_type: Some("application/octet-stream"),
+        minimum_sequence,
+        expected_state_root,
         body: signed,
         identity: None,
     })
@@ -2055,6 +2176,8 @@ fn check_refusals(cluster: &Cluster, valid: &[u8]) -> (String, String) {
         bearer: Some(&cluster.gateway_token),
         idempotency: Some("wrong-type"),
         content_type: Some("application/json"),
+        minimum_sequence: None,
+        expected_state_root: None,
         body: valid,
         identity: None,
     });
@@ -2065,6 +2188,8 @@ fn check_refusals(cluster: &Cluster, valid: &[u8]) -> (String, String) {
         bearer: Some(&cluster.gateway_token),
         idempotency: None,
         content_type: Some("application/octet-stream"),
+        minimum_sequence: None,
+        expected_state_root: None,
         body: valid,
         identity: None,
     });
@@ -2293,6 +2418,10 @@ fn check_daemon_loss(cluster: &mut Cluster, submitted: &Submitted, first: &[u8])
 }
 
 fn signed_program_call(actor: &Actor, program_id: [u8; 32]) -> Vec<u8> {
+    signed_program_call_at(actor, program_id, 1)
+}
+
+fn signed_program_call_at(actor: &Actor, program_id: [u8; 32], sequence: u64) -> Vec<u8> {
     use layerx_types::intent::ProgramId;
     use layerx_types::program_call::{NativeProgramCall, Resources};
     let call = NativeProgramCall {
@@ -2307,7 +2436,7 @@ fn signed_program_call(actor: &Actor, program_id: [u8; 32]) -> Vec<u8> {
             1_000_000, 16_777_216, 1_048_576, 1_048_576, 64, 1_048_576, 4096,
         ]),
     };
-    signed_program_payload(actor, &must(call.encode(), "native call"))
+    signed_program_operation(actor, 3, sequence, 0, &must(call.encode(), "native call"))
 }
 
 fn signed_program_payload(actor: &Actor, bytes: &[u8]) -> Vec<u8> {
@@ -2422,6 +2551,7 @@ fn real_program_call_refusal_artifacts_are_bound_and_replay_after_restart() {
     let result = &document["result"];
     assert_eq!(result["state"], "refused");
     assert_verified_program_refusal(&cluster, result, &signed, program_id);
+    assert_committed_result_metadata(&cluster, result);
     check_program_refusal_artifact_endpoint(&cluster, result);
     let lookup_path = format!("/v1/programs/activities/{}", field(result, "activity_id"));
     let lookup = cluster

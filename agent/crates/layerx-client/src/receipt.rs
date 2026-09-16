@@ -2,7 +2,9 @@
 
 use std::thread;
 
-use layerx_proof::receipt::{verify, AuthorizedBatch, VerificationFailure, VerifiedReceipt};
+use layerx_proof::receipt::{
+    verify, verify_sequencer_signature, AuthorizedBatch, VerificationFailure, VerifiedReceipt,
+};
 use layerx_proof::receipt::{
     verify_native_owner_outcome, NativeOwnerOutcomeContext, NativeOwnerOutcomeFailure,
 };
@@ -12,6 +14,8 @@ use crate::lni::refusal::decode_core_refusal;
 use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
 use crate::lni::transport::{FrameTransport, TransportError};
 use crate::submit::Unknown;
+use layerx_types::result::ResultCode;
+use layerx_wire::receipt::Receipt;
 
 const RECEIPT_LOOKUP_REQUEST_TAG: u16 = 5;
 const RECEIPT_LOOKUP_RESPONSE_TAG: u16 = 6;
@@ -63,6 +67,87 @@ pub struct LookupContext {
     pub authorised_batch: AuthorizedBatch,
 }
 
+/// Server-side wait boundary for one exact activity receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReceiptWaitMode {
+    /// Return the current receipt or canonical absence immediately.
+    Immediate,
+    /// Wait for execution and publication through the request deadline.
+    Published,
+    /// Wait for a durable receipt or its completed publication.
+    Durable,
+}
+
+/// Authenticated receipt lookup context derived from the accepted handshake.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedLookupContext {
+    pub interface_version: Version,
+    pub correlation_id: u64,
+    pub sequencer_public_key: [u8; 32],
+    pub wait_mode: ReceiptWaitMode,
+}
+
+/// Canonical receipt bytes authenticated by the handshake-pinned sequencer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticatedReceipt {
+    canonical_bytes: Vec<u8>,
+    receipt: Receipt,
+    activity_id: [u8; 32],
+    global_sequence: u64,
+    module_id: u16,
+    result_code: ResultCode,
+}
+
+impl AuthenticatedReceipt {
+    /// Borrows the exact canonical signed receipt returned by core.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    /// Borrows the decoded receipt whose canonical encoding and sequencer
+    /// signature were verified.
+    #[must_use]
+    pub const fn receipt(&self) -> &Receipt {
+        &self.receipt
+    }
+
+    /// Returns the exact activity identifier bound by the receipt.
+    #[must_use]
+    pub const fn activity_id(&self) -> [u8; 32] {
+        self.activity_id
+    }
+
+    /// Returns the receipt's committed global sequence.
+    #[must_use]
+    pub const fn global_sequence(&self) -> u64 {
+        self.global_sequence
+    }
+
+    /// Returns the protocol module which produced the receipt.
+    #[must_use]
+    pub const fn module_id(&self) -> u16 {
+        self.module_id
+    }
+
+    /// Returns the exact lossless protocol result code.
+    #[must_use]
+    pub const fn result_code(&self) -> ResultCode {
+        self.result_code
+    }
+}
+
+/// One authenticated activity lookup result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AuthenticatedLookup {
+    /// No receipt existed at the instant of an immediate lookup.
+    Absent,
+    /// A requested wait completed without a receipt before its deadline.
+    TimedOut,
+    /// The exact canonical receipt was authenticated independently.
+    Verified(AuthenticatedReceipt),
+}
+
 /// A verified exact receipt or a canonical absence response.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Lookup {
@@ -92,6 +177,9 @@ pub enum ReceiptError {
     },
     UnavailableCapability,
     Disconnected,
+    InvalidCorrelation,
+    InterfaceVersion(Version),
+    InvalidActivityId,
 }
 
 impl From<TransportError> for ReceiptError {
@@ -145,6 +233,103 @@ pub fn lookup_native_owner(
         verify_native_owner_outcome(bytes, &context.authorised_batch, expected)
             .map_err(ReceiptError::NativeOwnerVerification)
     })
+}
+
+/// Looks up one exact activity receipt with handshake-pinned sequencer
+/// authentication and an explicit server-side wait policy.
+///
+/// This operation sends exactly one request and receives exactly one response.
+/// It never polls, retries, or re-submits an activity.
+///
+/// # Errors
+///
+/// Refuses unsupported wait modes, malformed correlation, transport/schema
+/// failures, typed core refusals, invalid sequencer signatures, and receipts
+/// for any activity other than the exact requested identifier.
+pub fn lookup_authenticated(
+    transport: &mut dyn FrameTransport,
+    activity_id: [u8; 32],
+    context: AuthenticatedLookupContext,
+) -> Result<AuthenticatedLookup, ReceiptError> {
+    if context.correlation_id == 0 {
+        return Err(ReceiptError::InvalidCorrelation);
+    }
+    if activity_id == [0; 32] {
+        return Err(ReceiptError::InvalidActivityId);
+    }
+    let mut selector = Vec::with_capacity(34);
+    selector.push(1);
+    selector.extend_from_slice(&activity_id);
+    match (context.interface_version.minor, context.wait_mode) {
+        (minor, ReceiptWaitMode::Immediate) if minor >= Version::V1_6.minor => selector.push(0),
+        (minor, ReceiptWaitMode::Published) if minor >= Version::V1_5.minor => selector.push(1),
+        (minor, ReceiptWaitMode::Durable) if minor >= Version::V1_6.minor => selector.push(2),
+        (_, ReceiptWaitMode::Immediate) => {}
+        _ => return Err(ReceiptError::InterfaceVersion(context.interface_version)),
+    }
+    if context.interface_version.major != Version::V1_0.major {
+        return Err(ReceiptError::InterfaceVersion(context.interface_version));
+    }
+    let request = encode_envelope(Envelope {
+        version: context.interface_version,
+        message_tag: RECEIPT_LOOKUP_REQUEST_TAG,
+        correlation_id: context.correlation_id,
+        canonical_payload: &selector,
+        proof_material: &[],
+    })?;
+    transport.send(&request)?;
+    let response_bytes = transport.receive()?;
+    let response = decode_envelope(&response_bytes)?;
+    if response.version != context.interface_version
+        || response.correlation_id != context.correlation_id
+    {
+        return Err(ReceiptError::UnexpectedResponse);
+    }
+    if response.message_tag == ERROR_RESPONSE_TAG {
+        if !response.proof_material.is_empty() {
+            return Err(ReceiptError::UnexpectedResponse);
+        }
+        let refusal = decode_core_refusal(response.canonical_payload)
+            .ok_or(ReceiptError::UnexpectedResponse)?;
+        return Err(ReceiptError::CoreRefusal {
+            class: refusal.class,
+            result: refusal.result,
+        });
+    }
+    if response.message_tag != RECEIPT_LOOKUP_RESPONSE_TAG {
+        return Err(ReceiptError::UnexpectedResponse);
+    }
+    if response.canonical_payload.is_empty() {
+        return Ok(match context.wait_mode {
+            ReceiptWaitMode::Immediate => AuthenticatedLookup::Absent,
+            ReceiptWaitMode::Published | ReceiptWaitMode::Durable => AuthenticatedLookup::TimedOut,
+        });
+    }
+    let receipt =
+        verify_sequencer_signature(response.canonical_payload, context.sequencer_public_key)
+            .map_err(ReceiptError::Verification)?;
+    let protocol = receipt
+        .protocol()
+        .ok_or(ReceiptError::Verification(VerificationFailure {
+            check: layerx_proof::receipt::ReceiptCheck::ReceiptShape,
+        }))?;
+    if protocol.activity_id() != activity_id {
+        return Err(ReceiptError::ActivityMismatch {
+            expected: activity_id,
+            actual: protocol.activity_id(),
+        });
+    }
+    let global_sequence = protocol.global_sequence();
+    let module_id = protocol.module_id();
+    let result_code = ResultCode::from_raw(protocol.result_code());
+    Ok(AuthenticatedLookup::Verified(AuthenticatedReceipt {
+        canonical_bytes: response.canonical_payload.to_vec(),
+        receipt,
+        activity_id,
+        global_sequence,
+        module_id,
+        result_code,
+    }))
 }
 
 fn lookup_verified(

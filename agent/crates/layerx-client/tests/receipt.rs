@@ -11,7 +11,8 @@ use layerx_client::lni::framing::{read_frame, write_frame};
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_client::receipt::{
-    lookup, resolve_unknown, Lookup, LookupContext, ReceiptError, ReceiptSelector, Resolution,
+    lookup, lookup_authenticated, resolve_unknown, AuthenticatedLookup, AuthenticatedLookupContext,
+    Lookup, LookupContext, ReceiptError, ReceiptSelector, ReceiptWaitMode, Resolution,
 };
 use layerx_client::submit::{submit_signed, Submission, SubmissionContext, Unknown};
 use layerx_crypto::SignatureMessage;
@@ -209,8 +210,17 @@ fn receive_envelope(stream: &mut UnixStream, expected_tag: u16) -> ReceivedEnvel
 }
 
 fn send_receipt(stream: &mut UnixStream, correlation_id: u64, receipt: &[u8]) {
+    send_receipt_version(stream, Version::V1_0, correlation_id, receipt);
+}
+
+fn send_receipt_version(
+    stream: &mut UnixStream,
+    version: Version,
+    correlation_id: u64,
+    receipt: &[u8],
+) {
     let response = match encode_envelope(Envelope {
-        version: Version::V1_0,
+        version,
         message_tag: 6,
         correlation_id,
         canonical_payload: receipt,
@@ -222,6 +232,127 @@ fn send_receipt(stream: &mut UnixStream, correlation_id: u64, receipt: &[u8]) {
     if let Err(error) = write_frame(stream, &response, 1024 * 1024) {
         panic!("receipt response failed: {error:?}");
     }
+}
+
+#[test]
+fn authenticated_lookup_encodes_each_v1_6_wait_mode_without_polling() {
+    let socket = SocketPath::new("authenticated-wait");
+    let listener =
+        UnixListener::bind(&socket.0).unwrap_or_else(|error| panic!("listener failed: {error}"));
+    let activity_id = [0x61; 32];
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .unwrap_or_else(|error| panic!("lookup accept failed: {error}"));
+        let mut selectors = Vec::new();
+        for _ in 0..3 {
+            let request = receive_envelope(&mut stream, 5);
+            selectors.push(request.canonical_payload);
+            send_receipt_version(&mut stream, Version::V1_6, request.correlation_id, &[]);
+        }
+        selectors
+    });
+    let gate = ConnectionGate::new(1);
+    let mut transport = Uds::connect(&socket.0, &gate, limits())
+        .unwrap_or_else(|error| panic!("lookup connection failed: {error:?}"));
+    let outcomes = [
+        (ReceiptWaitMode::Immediate, AuthenticatedLookup::Absent),
+        (ReceiptWaitMode::Published, AuthenticatedLookup::TimedOut),
+        (ReceiptWaitMode::Durable, AuthenticatedLookup::TimedOut),
+    ];
+    for (index, (wait_mode, expected)) in outcomes.into_iter().enumerate() {
+        let actual = lookup_authenticated(
+            &mut transport,
+            activity_id,
+            AuthenticatedLookupContext {
+                interface_version: Version::V1_6,
+                correlation_id: 200 + u64::try_from(index).unwrap_or_default(),
+                sequencer_public_key: [0x71; 32],
+                wait_mode,
+            },
+        )
+        .unwrap_or_else(|error| panic!("authenticated lookup failed: {error:?}"));
+        assert_eq!(actual, expected);
+    }
+    let selectors = server
+        .join()
+        .unwrap_or_else(|_| panic!("authenticated lookup node panicked"));
+    for (mode, selector) in selectors.iter().enumerate() {
+        let mut expected = vec![1];
+        expected.extend_from_slice(&activity_id);
+        expected.push(u8::try_from(mode).unwrap_or_default());
+        assert_eq!(selector, &expected);
+    }
+}
+
+#[test]
+fn authenticated_lookup_preserves_minor_five_and_verifies_receipt_facts() {
+    let socket = SocketPath::new("authenticated-v15");
+    let listener =
+        UnixListener::bind(&socket.0).unwrap_or_else(|error| panic!("listener failed: {error}"));
+    let (_, _, activity_id) = signed_activity();
+    let (receipt_bytes, authorised) = receipt(activity_id);
+    let server_receipt = receipt_bytes.clone();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .unwrap_or_else(|error| panic!("lookup accept failed: {error}"));
+        let immediate = receive_envelope(&mut stream, 5);
+        send_receipt_version(
+            &mut stream,
+            Version::V1_5,
+            immediate.correlation_id,
+            &server_receipt,
+        );
+        let published = receive_envelope(&mut stream, 5);
+        send_receipt_version(&mut stream, Version::V1_5, published.correlation_id, &[]);
+        vec![immediate.canonical_payload, published.canonical_payload]
+    });
+    let gate = ConnectionGate::new(1);
+    let mut transport = Uds::connect(&socket.0, &gate, limits())
+        .unwrap_or_else(|error| panic!("lookup connection failed: {error:?}"));
+    let context = |correlation_id, wait_mode| AuthenticatedLookupContext {
+        interface_version: Version::V1_5,
+        correlation_id,
+        sequencer_public_key: authorised.sequencer_public_key(),
+        wait_mode,
+    };
+    let verified = lookup_authenticated(
+        &mut transport,
+        activity_id,
+        context(300, ReceiptWaitMode::Immediate),
+    )
+    .unwrap_or_else(|error| panic!("authenticated receipt failed: {error:?}"));
+    let AuthenticatedLookup::Verified(verified) = verified else {
+        panic!("authenticated receipt was not returned");
+    };
+    assert_eq!(verified.canonical_bytes(), receipt_bytes);
+    assert_eq!(verified.activity_id(), activity_id);
+    assert_eq!(verified.global_sequence(), 9);
+    assert_eq!(verified.module_id(), 1);
+    assert_eq!(verified.result_code().raw(), 0);
+    assert_eq!(
+        lookup_authenticated(
+            &mut transport,
+            activity_id,
+            context(301, ReceiptWaitMode::Published),
+        ),
+        Ok(AuthenticatedLookup::TimedOut)
+    );
+    assert_eq!(
+        lookup_authenticated(
+            &mut transport,
+            activity_id,
+            context(302, ReceiptWaitMode::Durable),
+        ),
+        Err(ReceiptError::InterfaceVersion(Version::V1_5))
+    );
+    let selectors = server
+        .join()
+        .unwrap_or_else(|_| panic!("authenticated lookup node panicked"));
+    assert_eq!(selectors[0].len(), 33);
+    assert_eq!(selectors[1].len(), 34);
+    assert_eq!(selectors[1][33], 1);
 }
 
 fn spawn_resolution_node(

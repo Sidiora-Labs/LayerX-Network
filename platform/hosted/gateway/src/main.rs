@@ -659,6 +659,7 @@ fn programs_request_path(method: &str, path: &str) -> bool {
             | ProductionRoute::ProgramUpgrade
             | ProductionRoute::ProgramWindDown
             | ProductionRoute::ProgramSimulation
+            | ProductionRoute::ProgramRead
             | ProductionRoute::ProgramRegistry(_)
             | ProductionRoute::ProgramInterface(_)
             | ProductionRoute::ProgramReceiptByIdempotency(_)
@@ -1118,6 +1119,7 @@ fn permits(record: &KeyRecord, route: &ProductionRoute<'_>) -> bool {
         ProductionRoute::State => "state:read",
         ProductionRoute::Receipt(_) => "receipt:read",
         ProductionRoute::ProgramRegistry(_)
+        | ProductionRoute::ProgramRead
         | ProductionRoute::ProgramInterface(_)
         | ProductionRoute::ProgramActivity(_)
         | ProductionRoute::ProgramReceiptByIdempotency(_) => "program:read",
@@ -1417,6 +1419,21 @@ fn program_simulation(
     record: &KeyRecord,
     trace_id: &str,
 ) -> OutgoingResponse {
+    let read_only = request.path == "/v1/programs/read";
+    let minimum_sequence = match request.headers.get("layerx-minimum-sequence") {
+        Some(value) if read_only => match value.parse::<u64>() {
+            Ok(value_parsed) if value_parsed.to_string() == *value => value_parsed,
+            _ => return response(400, "invalid_minimum_sequence", None),
+        },
+        _ => 0,
+    };
+    let expected_state_root = match request.headers.get("layerx-expected-state-root") {
+        Some(value) if read_only => match parse_hex32(value) {
+            Ok(root) if root != [0; 32] => Some(root),
+            _ => return response(400, "invalid_expected_state_root", None),
+        },
+        _ => None,
+    };
     let Ok((canonical, program_id)) = program_call_bytes(request, &config.modules) else {
         return response(400, "invalid_program_call", None);
     };
@@ -1439,7 +1456,7 @@ fn program_simulation(
     if head.lifecycle != ProgramLifecycle::Active {
         return response(409, "program_not_active", None);
     }
-    let (Some(state_root), Some(observed_sequence), Some(observed_at)) =
+    let (Some(mut state_root), Some(mut observed_sequence), Some(mut observed_at)) =
         (head.state_root, head.observed_sequence, head.observed_at)
     else {
         return response(503, "program_simulation_head_unavailable", Some(5));
@@ -1449,7 +1466,11 @@ fn program_simulation(
         now().unwrap_or(0),
         &audit_event(
             &record.principal_digest,
-            "program_simulate",
+            if read_only {
+                "program_read"
+            } else {
+                "program_simulate"
+            },
             &record.key_id,
             "attempted",
         ),
@@ -1458,25 +1479,78 @@ fn program_simulation(
         Ok(Some(retry)) => return response(429, "quota_exceeded", Some(retry)),
         Err(_) => return response(503, "persistence_unavailable", Some(5)),
     }
-    let Ok(upstream) = config.client.request(
-        &config.component,
-        config.component_token.as_str(),
-        &http::OutboundRequest {
-            method: "POST",
-            path: "/v1/programs/simulate",
-            idempotency: None,
-            content_type: "application/octet-stream",
-            body: &canonical,
+    let outbound = http::OutboundRequest {
+        method: "POST",
+        path: if read_only {
+            "/v1/programs/read"
+        } else {
+            "/v1/programs/simulate"
         },
-    ) else {
+        idempotency: None,
+        content_type: "application/octet-stream",
+        body: &canonical,
+    };
+    let upstream = if read_only {
+        config.client.request_program_read(
+            &config.component,
+            config.component_token.as_str(),
+            &outbound,
+            minimum_sequence,
+            expected_state_root,
+        )
+    } else {
+        config.client.request(
+            &config.component,
+            config.component_token.as_str(),
+            &outbound,
+        )
+    };
+    let Ok(upstream) = upstream else {
         return response(503, "component_unavailable", Some(5));
     };
+    if read_only && upstream.status == 409 && upstream.content_type == "application/json" {
+        let error = serde_json::from_slice::<serde_json::Value>(&upstream.body).ok();
+        match error
+            .as_ref()
+            .and_then(|value| value.get("error"))
+            .and_then(|value| value.get("code"))
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("snapshot_stale") => return response(409, "snapshot_stale", Some(1)),
+            Some("snapshot_mismatch") => return response(409, "snapshot_mismatch", None),
+            _ => return response(503, "component_invalid", Some(5)),
+        }
+    }
     if upstream.status != 200 || upstream.content_type != "application/json" {
         return response(503, "component_invalid", Some(5));
     }
     let Ok(document): Result<serde_json::Value, _> = serde_json::from_slice(&upstream.body) else {
         return response(503, "component_invalid", Some(5));
     };
+    if read_only {
+        let value = document.get("result").unwrap_or(&document);
+        let evidence = &value["simulation_evidence"];
+        let Some(root) = evidence["previous_state_root"]
+            .as_str()
+            .and_then(|value| parse_hex32(value).ok())
+        else {
+            return response(503, "program_read_unverified", Some(5));
+        };
+        let (Some(sequence), Some(at)) = (
+            canonical_u64(&evidence["observed_sequence"]),
+            canonical_u64(&evidence["observed_at"]),
+        ) else {
+            return response(503, "program_read_unverified", Some(5));
+        };
+        if sequence < minimum_sequence
+            || expected_state_root.is_some_and(|expected| expected != root)
+        {
+            return response(503, "program_read_unverified", Some(5));
+        }
+        state_root = root;
+        observed_sequence = sequence;
+        observed_at = at;
+    }
     let Ok(activity) = decode_signed(&canonical, &config.modules) else {
         return response(400, "invalid_program_call", None);
     };
@@ -1492,7 +1566,21 @@ fn program_simulation(
         observed_sequence,
         observed_at,
     };
-    render_simulation(config, &document, &expected, trace_id)
+    let rendered = render_simulation(config, &document, &expected, trace_id);
+    if !read_only || rendered.status != 200 {
+        return rendered;
+    }
+    let Ok(mut verified): Result<serde_json::Value, _> = serde_json::from_slice(&rendered.body)
+    else {
+        return response(503, "program_read_unverified", Some(5));
+    };
+    verified["result"]["read_only"] = serde_json::json!(true);
+    verified["result"]["snapshot"] = serde_json::json!({
+        "minimum_sequence": minimum_sequence.to_string(),
+        "observed_sequence": observed_sequence.to_string(),
+        "state_root": hex(&state_root),
+    });
+    json_response(200, &verified)
 }
 
 struct SimulationExpectation {
@@ -2708,7 +2796,8 @@ fn read_route(
         | ProductionRoute::ProgramDeploy
         | ProductionRoute::ProgramUpgrade
         | ProductionRoute::ProgramWindDown
-        | ProductionRoute::ProgramSimulation => response(404, "not_found", None),
+        | ProductionRoute::ProgramSimulation
+        | ProductionRoute::ProgramRead => response(404, "not_found", None),
     }
 }
 
@@ -2871,7 +2960,7 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         | ProductionRoute::ProgramWindDown => {
             activity(config, request, &record, &trace_id, false, false, None)
         }
-        ProductionRoute::ProgramSimulation => {
+        ProductionRoute::ProgramSimulation | ProductionRoute::ProgramRead => {
             program_simulation(config, request, &record, &trace_id)
         }
         read => read_route(config, request, &record, &read, &trace_id),

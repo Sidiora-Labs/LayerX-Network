@@ -46,7 +46,7 @@ static uint64_t pay_timing_us(void)
 
 enum {
     LNI_VERSION_MAJOR = 1,
-    LNI_VERSION_MINOR = 5,
+    LNI_VERSION_MINOR = 6,
     LNI_NODE_INFO_REQUEST = 1,
     LNI_NODE_INFO_RESPONSE = 2,
     LNI_SUBMIT_REQUEST = 3,
@@ -80,6 +80,8 @@ enum {
     LNI_FEE_ESTIMATE_RESPONSE = 35,
     LNI_SESSION_FEE_STATE_REQUEST = 36,
     LNI_SESSION_FEE_STATE_RESPONSE = 37,
+    LNI_PROGRAM_READ_REQUEST = 38,
+    LNI_PROGRAM_READ_RESPONSE = 39,
     LNI_ENVELOPE_FIXED_BYTES = 22,
     LNI_NODE_INFO_FIXED_BYTES = 93,
     LNI_PREPARATION_STATE_MAX_BYTES = 4096,
@@ -87,6 +89,7 @@ enum {
     LNI_SIMULATION_EVIDENCE_VERSION = 1,
     LNI_SIMULATION_FIXED_BYTES = 2 + 32 + 4 + 4 + 4,
     LNI_SIMULATION_EVIDENCE_BYTES = 2 + 32 * 4 + 8 + 8 + 32 + 64,
+    LNI_PROGRAM_READ_PREFIX_BYTES = 2 + 8 + 1 + 32 + 4,
     LNI_BACKLOG = 16,
     LNI_RESPONSE_BUDGET_MS = 100,
     LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES = 32,
@@ -141,6 +144,29 @@ static uint64_t load_u64(const uint8_t *bytes)
     for (index = 0U; index < 8U; ++index)
         value = (value << 8U) | bytes[index];
     return value;
+}
+
+static lxp_result lni_read_lock(lxp_daemon_protocol_owner *owner)
+{
+    if (owner == NULL) return LXP_ERR_NON_CANONICAL;
+    if (pthread_mutex_lock(&owner->publication_mutex) != 0)
+        return LXP_ERR_IO;
+    if (pthread_mutex_lock(&owner->mutex) != 0) {
+        (void)pthread_mutex_unlock(&owner->publication_mutex);
+        return LXP_ERR_IO;
+    }
+    return LXP_OK;
+}
+
+static lxp_result lni_read_unlock(
+    lxp_daemon_protocol_owner *owner, lxp_result status)
+{
+    if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (pthread_mutex_unlock(&owner->publication_mutex) != 0 &&
+        status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
 }
 
 static void store_u16(uint8_t *bytes, uint16_t value)
@@ -407,7 +433,8 @@ static lxp_result completed_activity_matches(
     lxp_receipt receipt;
     size_t mark;
     lxp_result status;
-    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(owner);
+    if (status != LXP_OK) return status;
     (void)memset(&query, 0, sizeof(query));
     query.kind = LXP_RECEIPT_BY_GLOBAL_SEQUENCE;
     query.global_sequence = global_sequence;
@@ -426,9 +453,7 @@ static lxp_result completed_activity_matches(
     if (status == LXP_ERR_UNKNOWN_ACTIVITY)
         status = LXP_ERR_LOG_CORRUPT;
     (void)lxp_arena_reset(owner->scratch, mark);
-    if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
-    return status;
+    return lni_read_unlock(owner, status);
 }
 
 static lxp_result admission_journal_recover(
@@ -1300,12 +1325,23 @@ static bool simulation_available(const lxp_daemon_lni_server *server)
         !server->sequencer_private_key_loaded)
         return false;
     status = sequencer_public_key_derive(server->sequencer_private_key, public_key);
-    if (status != LXP_OK || pthread_mutex_lock(&server->owner->mutex) != 0)
+    if (status != LXP_OK ||
+        pthread_mutex_lock(&server->owner->mutex) != 0)
         return false;
-    status = current_sequencer_authorization(server->owner, &authorization);
+    if (pthread_mutex_lock(&server->owner->receipt_authority_mutex) != 0)
+        status = LXP_ERR_IO;
+    else {
+        status = current_sequencer_authorization(
+            server->owner, &authorization);
+        if (pthread_mutex_unlock(
+                &server->owner->receipt_authority_mutex) != 0 &&
+            status == LXP_OK)
+            status = LXP_FATAL_INVARIANT;
+    }
     if (status == LXP_OK && lxp_ct_memcmp(public_key, authorization.public_key, 32U) != 0)
         status = LXP_ERR_AUTH_SCOPE;
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0) return false;
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0)
+        status = LXP_FATAL_INVARIANT;
     return status == LXP_OK;
 }
 
@@ -1379,6 +1415,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         "account_read", "asset_read", "batch_header", "checkpoint", "fee_estimate", "historical_proofs", "history_range",
         "node_info", "proof_bundle", "receipt_lookup", "session_fee_state"
     };
+    static const char program_read_capability[] = "program_read";
     static const char simulate_capability[] = "simulate";
     bool evidence_available = server->owner->evidence_store != NULL;
     bool finalizer = server->daemon->config.role == LXP_DAEMON_SEQUENCER &&
@@ -1391,7 +1428,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                   sequencer_capabilities) :
             (evidence_available ? evidence_reader_capabilities :
                                   reader_capabilities);
-    const char *capabilities[18];
+    const char *capabilities[20];
     uint8_t payload[512];
     lxp_sequencer_authorization authorization;
     uint64_t head;
@@ -1413,15 +1450,21 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                 sizeof(reader_capabilities) /
                     sizeof(reader_capabilities[0]));
     size_t capability_count = 0U;
-    bool simulate = simulation_available(server);
+    bool program_read = simulation_available(server);
+    bool simulate = program_read;
     lxp_result status = LXP_OK;
-    if (base_count + 2U > sizeof(capabilities) / sizeof(capabilities[0]))
+    if (base_count + 3U > sizeof(capabilities) / sizeof(capabilities[0]))
         return LXP_ERR_LENGTH_LIMIT;
     for (index = 0U; index < base_count; ++index) {
         if (server->owner->protocol_version !=
                 LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
             strcmp(base_capabilities[index], "account_read") == 0)
             continue;
+        if (program_read && strcmp(base_capabilities[index],
+                                   program_read_capability) > 0) {
+            capabilities[capability_count++] = program_read_capability;
+            program_read = false;
+        }
         if (simulate && strcmp(base_capabilities[index],
                                simulate_capability) > 0) {
             capabilities[capability_count++] = simulate_capability;
@@ -1429,6 +1472,8 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         }
         capabilities[capability_count++] = base_capabilities[index];
     }
+    if (program_read)
+        capabilities[capability_count++] = program_read_capability;
     if (simulate) capabilities[capability_count++] = simulate_capability;
     if (server->owner->availability_ready && server->owner->availability_store != NULL) {
         size_t at = capability_count;
@@ -1448,7 +1493,8 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     if (LNI_NODE_INFO_FIXED_BYTES > sizeof(payload) - cursor)
         return LXP_ERR_LENGTH_LIMIT;
     cursor = 0U;
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(server->owner);
+    if (status != LXP_OK) return status;
     status = current_sequencer_authorization(server->owner, &authorization);
     if (status == LXP_OK && pthread_mutex_lock(&server->daemon->mutex) != 0)
         status = LXP_ERR_IO;
@@ -1461,9 +1507,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     if (status == LXP_OK && pthread_mutex_lock(&server->owner->receipt_mutex) != 0)
         status = LXP_ERR_IO;
     if (status != LXP_OK) {
-        if (pthread_mutex_unlock(&server->owner->mutex) != 0)
-            return LXP_FATAL_INVARIANT;
-        return status;
+        return lni_read_unlock(server->owner, status);
     }
     batch = server->owner->published_batch_number;
     store_u16(payload + cursor, LNI_VERSION_MAJOR); cursor += 2U;
@@ -1492,8 +1536,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     }
     if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0)
         status = LXP_FATAL_INVARIANT;
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0)
-        status = LXP_FATAL_INVARIANT;
+    status = lni_read_unlock(server->owner, status);
     if (status == LXP_OK)
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_NODE_INFO_RESPONSE, correlation_id,
@@ -1530,7 +1573,8 @@ static lxp_result send_availability(lxp_daemon_lni_server *server,
             return send_refusal(descriptor, server->frame_bytes,
                 request->correlation_id, 1U, LXP_ERR_NON_CANONICAL, deadline);
     }
-    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(owner);
+    if (status != LXP_OK) return status;
     mark = lxp_arena_mark(owner->scratch);
     if (!owner->availability_ready || owner->availability_store == NULL ||
         owner->receipt_authority == NULL || owner->evidence_store == NULL)
@@ -1609,8 +1653,7 @@ static lxp_result send_availability(lxp_daemon_lni_server *server,
         status = send_refusal(descriptor, server->frame_bytes,
             request->correlation_id, 3U, status, deadline);
     (void)lxp_arena_reset(owner->scratch, mark);
-    if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
-        status = LXP_ERR_IO;
+    status = lni_read_unlock(owner, status);
     return status;
 }
 
@@ -1636,7 +1679,8 @@ static lxp_result send_batch_header(lxp_daemon_lni_server *server,
                             request->correlation_id, 1U,
                             LXP_ERR_MALFORMED_ENVELOPE, deadline);
     selected = load_u64(request->payload + 2U);
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(server->owner);
+    if (status != LXP_OK) return status;
     mark = lxp_arena_mark(server->owner->scratch);
     while (status == LXP_OK && !found) {
         status = lxp_daemon_receipt_authority_scan(
@@ -1684,9 +1728,7 @@ static lxp_result send_batch_header(lxp_daemon_lni_server *server,
                                  request->correlation_id, status, deadline);
     }
     (void)lxp_arena_reset(server->owner->scratch, mark);
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
-    return status;
+    return lni_read_unlock(server->owner, status);
 }
 
 static lxp_result wall_clock_milliseconds(uint64_t *milliseconds)
@@ -2337,13 +2379,32 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     uint8_t *storage;
     lxp_result status;
     size_t selector_length = request->payload_length;
-    bool wait_publication = false;
+    bool wait_for_receipt = false;
     bool require_publication = false;
     int64_t wait_until;
     struct timespec wait_deadline;
-    if (request->minor >= 5U && (selector_length == 34U || selector_length == 10U) &&
-        request->payload[selector_length - 1U] == 1U) {
-        wait_publication = true;
+    if (request->minor >= 6U) {
+        uint8_t candidate;
+        if (selector_length != 34U && selector_length != 10U)
+            return send_refusal(descriptor, server->frame_bytes,
+                                request->correlation_id, 1U,
+                                LXP_ERR_MALFORMED_ENVELOPE, deadline);
+        candidate = request->payload[selector_length - 1U];
+        if (candidate > 2U)
+            return send_refusal(descriptor, server->frame_bytes,
+                                request->correlation_id, 1U,
+                                LXP_ERR_MALFORMED_ENVELOPE, deadline);
+        wait_for_receipt = candidate != 0U;
+        require_publication = candidate == 1U;
+        --selector_length;
+    } else if (request->minor >= 5U &&
+               (selector_length == 34U || selector_length == 10U)) {
+        uint8_t candidate = request->payload[selector_length - 1U];
+        if (candidate != 1U)
+            return send_refusal(descriptor, server->frame_bytes,
+                                request->correlation_id, 1U,
+                                LXP_ERR_MALFORMED_ENVELOPE, deadline);
+        wait_for_receipt = true;
         require_publication = true;
         --selector_length;
     }
@@ -2409,7 +2470,7 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
             free(storage);
             return LXP_ERR_IO;
         }
-        if (status != LXP_ERR_UNKNOWN_ACTIVITY || !wait_publication ||
+        if (status != LXP_ERR_UNKNOWN_ACTIVITY || !wait_for_receipt ||
             server_stopping(server))
             break;
         if (generation != receipt_commit_generation) {
@@ -2418,14 +2479,14 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
                 status = LXP_ERR_IO;
                 break;
             }
-            if (now >= wait_until) wait_publication = false;
+            if (now >= wait_until) wait_for_receipt = false;
             continue;
         }
         waited = pthread_cond_clockwait(&receipt_commit_changed,
                                         &receipt_commit_mutex,
                                         CLOCK_MONOTONIC, &wait_deadline);
         if (waited == ETIMEDOUT)
-            wait_publication = false;
+            wait_for_receipt = false;
         else if (waited != 0) {
             status = LXP_ERR_IO;
             break;
@@ -2477,7 +2538,8 @@ static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
                                       LXP_ERR_NON_CANONICAL, deadline);
     payload = malloc(server->frame_bytes);
     if (payload == NULL) return LXP_ERR_IO;
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) { free(payload); return LXP_ERR_IO; }
+    status = lni_read_lock(server->owner);
+    if (status != LXP_OK) { free(payload); return status; }
     const lxp_kernel *kernel = server->owner->kernel;
     status = lx_asset_committed_records(kernel, records, LX_ASSET_REGISTRY_CAPACITY, &count);
     if (status == LXP_OK && request->payload[2] == 3U) {
@@ -2514,7 +2576,7 @@ static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
         store_u16(payload + 42U, returned);
         if (status == LXP_OK && request->payload[2] != 1U && returned != 1U) status = LXP_ERR_ASSET_MISMATCH;
     }
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    status = lni_read_unlock(server->owner, status);
     if (status == LXP_OK) status = send_envelope(descriptor, server->frame_bytes,
         LNI_ASSET_READ_RESPONSE, request->correlation_id, payload, cursor, NULL, 0U, deadline);
     else status = evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
@@ -2535,7 +2597,8 @@ static lxp_result send_session_fee_state(lxp_daemon_lni_server *server, int desc
         lxp_ct_is_zero(request->payload + 2U, 32U))
         return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
             1U, LXP_ERR_NON_CANONICAL, deadline);
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(server->owner);
+    if (status != LXP_OK) return status;
     const lxp_kernel *kernel = server->owner->kernel;
     status = lxp_authority_grant_load(kernel, request->payload + 2U, &grant);
     if (status == LXP_OK && (grant.kind != LXP_AUTHORITY_SESSION_KEY || grant.authentication_only))
@@ -2572,7 +2635,7 @@ static lxp_result send_session_fee_state(lxp_daemon_lni_server *server, int desc
         cursor += 32U;
         (void)memcpy(payload + cursor, commitment, 32U); cursor += 32U;
     }
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    status = lni_read_unlock(server->owner, status);
     if (status == LXP_OK) return send_envelope(descriptor, server->frame_bytes,
         LNI_SESSION_FEE_STATE_RESPONSE, request->correlation_id, payload, cursor, NULL, 0U, deadline);
     return evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
@@ -2693,6 +2756,26 @@ static lxp_result preparation_snapshot_valid(
     return LXP_OK;
 }
 
+static lxp_result simulation_snapshot_valid(
+    const lxp_daemon_protocol_owner *owner)
+{
+    const lxp_kernel *kernel;
+    if (owner == NULL || !owner->attached || owner->kernel == NULL ||
+        owner->kernel->state == NULL || owner->identities == NULL ||
+        owner->verified_receipts == NULL || owner->programs_runtime == NULL ||
+        owner->programs_runtime->accounts == NULL || owner->scratch == NULL ||
+        owner->network_id == 0U || owner->latest_sealed_timestamp == 0U)
+        return LXP_ERR_MODULE_DISABLED;
+    kernel = owner->kernel;
+    if (kernel->publication_poisoned || kernel->batch_publication_pending ||
+        kernel->state->next_sequence == 0U || kernel->epoch == 0U ||
+        kernel->module_count == 0U ||
+        kernel->module_count > LXP_MODULE_RESERVED_COUNT ||
+        lxp_ct_is_zero(kernel->current_state_root, 32U))
+        return LXP_ERR_MODULE_DISABLED;
+    return LXP_OK;
+}
+
 lxp_result lxp_daemon_lni_preparation_state(
     lxp_daemon_protocol_owner *owner, const uint8_t *request,
     size_t request_length,
@@ -2721,7 +2804,8 @@ lxp_result lxp_daemon_lni_preparation_state(
         bounded_capacity - 4U - actor_length < 78U)
         return LXP_ERR_LENGTH_LIMIT;
     actor = request + 4U;
-    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(owner);
+    if (status != LXP_OK) return status;
     status = preparation_snapshot_valid(owner);
     if (status == LXP_OK)
         status = lxp_identity_resolve(owner->identities, actor,
@@ -2747,8 +2831,7 @@ lxp_result lxp_daemon_lni_preparation_state(
         status = encode_active_registrations(
             kernel, response, bounded_capacity, &cursor);
     }
-    if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
+    status = lni_read_unlock(owner, status);
     if (status == LXP_OK) *response_length = cursor;
     return status;
 }
@@ -2845,7 +2928,8 @@ static lxp_result send_fee_estimate(lxp_daemon_lni_server *server, int descripto
     if (meter.canonical_encoded_bytes > LXP_MAX_ACTIVITY_BYTES)
         return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
             1U, LXP_ERR_LENGTH_LIMIT, deadline);
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(server->owner);
+    if (status != LXP_OK) return status;
     status = simulation_schedule(server->owner->kernel, &version, &fees);
     if (status == LXP_OK) status = lxp_fee_compute(&fees, load_u32(request->payload + 2U), meter, &fee);
     if (status == LXP_OK) {
@@ -2857,7 +2941,7 @@ static lxp_result send_fee_estimate(lxp_daemon_lni_server *server, int descripto
         status = lxp_fee_params_encode(&fees, payload + 64U, sizeof(payload) - 64U, &length);
         if (status == LXP_OK) store_u16(payload + 62U, (uint16_t)length);
     }
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    status = lni_read_unlock(server->owner, status);
     return status == LXP_OK ? send_envelope(descriptor, server->frame_bytes,
         LNI_FEE_ESTIMATE_RESPONSE, request->correlation_id, payload, 64U + length, NULL, 0U, deadline) :
         evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
@@ -3009,10 +3093,11 @@ static lxp_result simulation_encode_response(
     return LXP_OK;
 }
 
-lxp_result lxp_daemon_lni_simulate(
+static lxp_result lni_program_read_execute(
     lxp_daemon_protocol_owner *owner,
     const uint8_t sequencer_private_key[32],
     const uint8_t *request, size_t request_length,
+    uint64_t minimum_sequence, const uint8_t *expected_state_root,
     uint8_t *response, size_t response_capacity, size_t *response_length,
     uint8_t *evidence, size_t evidence_capacity, size_t *evidence_length)
 {
@@ -3024,6 +3109,8 @@ lxp_result lxp_daemon_lni_simulate(
     lxp_byte_span canonical_activity;
     lxp_byte_span encoded_receipt = {NULL, 0U};
     lxp_batch_roots roots;
+    lxp_kernel_batch_boundary boundary;
+    lxp_kernel_batch_snapshot *snapshot = NULL;
     lxp_kernel_prepared_batch *prepared = NULL;
     const lxp_receipt *receipts = NULL;
     lxp_identity *identity = NULL;
@@ -3033,6 +3120,8 @@ lxp_result lxp_daemon_lni_simulate(
     uint8_t principal_id[32];
     uint8_t batch_id[32] = {0};
     uint8_t previous_state_root[32];
+    uint8_t receipt_scratch_bytes[LXP_STATE_MAX_RECEIPT_BYTES];
+    lxp_arena receipt_scratch;
     lxp_u128 fee_balance = {0U, 0U};
     uint32_t parameter_version = 0U;
     uint64_t batch_number = 0U;
@@ -3040,9 +3129,8 @@ lxp_result lxp_daemon_lni_simulate(
     uint64_t global_sequence;
     pthread_t prior_writer;
     bool writer_bound = false;
-    size_t retry_prefix_count = 0U;
     size_t mark = 0U;
-    bool locked = false;
+    bool owner_locked = false;
     lxp_result status;
     if (response_length == NULL || evidence_length == NULL)
         return LXP_ERR_MALFORMED_ENVELOPE;
@@ -3050,7 +3138,9 @@ lxp_result lxp_daemon_lni_simulate(
     *evidence_length = 0U;
     if (owner == NULL || sequencer_private_key == NULL || request == NULL ||
         response == NULL || evidence == NULL || request_length == 0U ||
-        request_length > LXP_MAX_ACTIVITY_BYTES)
+        request_length > LXP_MAX_ACTIVITY_BYTES ||
+        (expected_state_root != NULL &&
+         lxp_ct_is_zero(expected_state_root, 32U)))
         return LXP_ERR_MALFORMED_ENVELOPE;
     if (evidence_capacity < LNI_SIMULATION_EVIDENCE_BYTES)
         return LXP_ERR_LENGTH_LIMIT;
@@ -3076,18 +3166,31 @@ lxp_result lxp_daemon_lni_simulate(
     status = sequencer_public_key_derive(sequencer_private_key,
                                          sequencer_public_key);
     if (status != LXP_OK) return status;
-    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
-    locked = true;
+    if (pthread_mutex_lock(&owner->mutex) != 0) {
+        status = LXP_ERR_IO;
+        goto capture_done;
+    }
+    owner_locked = true;
     mark = lxp_arena_mark(owner->scratch);
     status = program_admission_decode(owner, &activity);
     if (status == LXP_OK) {
         lxp_sequencer_authorization authorization;
-        status = current_sequencer_authorization(owner, &authorization);
+        if (pthread_mutex_lock(&owner->receipt_authority_mutex) != 0)
+            status = LXP_ERR_IO;
+        else {
+            status = current_sequencer_authorization(owner, &authorization);
+            if (status == LXP_OK)
+                status = simulation_batch_number(owner->receipt_authority,
+                                                 &batch_number);
+            if (pthread_mutex_unlock(&owner->receipt_authority_mutex) != 0 &&
+                status == LXP_OK)
+                status = LXP_FATAL_INVARIANT;
+        }
         if (status == LXP_OK && lxp_ct_memcmp(sequencer_public_key,
                 authorization.public_key, 32U) != 0)
             status = LXP_ERR_AUTH_SCOPE;
     }
-    if (status == LXP_OK) status = preparation_snapshot_valid(owner);
+    if (status == LXP_OK) status = simulation_snapshot_valid(owner);
     if (status == LXP_OK) {
         prior_writer = owner->kernel->state->writer;
         owner->kernel->state->writer = pthread_self();
@@ -3096,6 +3199,14 @@ lxp_result lxp_daemon_lni_simulate(
     if (status == LXP_OK) {
         batch_timestamp = owner->latest_sealed_timestamp;
         global_sequence = owner->kernel->state->next_sequence;
+        if (global_sequence - 1U < minimum_sequence)
+            status = LXP_ERR_PROJECTION_STALE;
+        else if (expected_state_root != NULL &&
+                 lxp_ct_memcmp(expected_state_root,
+                               owner->kernel->current_state_root, 32U) != 0)
+            status = LXP_ERR_CONTEXT_MISMATCH;
+    }
+    if (status == LXP_OK) {
         status = lxp_identity_resolve(owner->identities,
                                       activity.actor_did.bytes,
                                       activity.actor_did.length, &identity);
@@ -3121,9 +3232,6 @@ lxp_result lxp_daemon_lni_simulate(
         status = simulation_schedule(owner->kernel, &parameter_version,
                                      &fees);
     if (status == LXP_OK)
-        status = simulation_batch_number(owner->receipt_authority,
-                                         &batch_number);
-    if (status == LXP_OK)
         (void)memcpy(authority.principal, principal_id, 32U);
     if (status == LXP_OK) {
         (void)memset(&execution, 0, sizeof(execution));
@@ -3135,6 +3243,8 @@ lxp_result lxp_daemon_lni_simulate(
         execution.global_sequence = global_sequence;
         execution.recorded_module_version =
             LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION;
+        execution.recorded_metering_schedule_version = 0U;
+        execution.recorded_fee_schedule_version = 0U;
         execution.parameter_version = parameter_version;
         execution.signature_valid = true;
         execution.identities = owner->identities;
@@ -3156,9 +3266,27 @@ lxp_result lxp_daemon_lni_simulate(
             &roots, batch_id);
     }
     if (status == LXP_OK)
-        status = lxp_kernel_prepare_activity_batch(
-            owner->kernel, &activity, &execution, 1U, 1U, &prepared,
-            &retry_prefix_count);
+        status = lxp_kernel_batch_snapshot_create(
+            owner->kernel, owner->identities, owner->verified_receipts,
+            &execution, &snapshot);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_boundary(snapshot, &boundary);
+    if (status == LXP_OK &&
+        (boundary.next_sequence != global_sequence ||
+         lxp_ct_memcmp(boundary.receipt_state_root,
+                       previous_state_root, 32U) != 0))
+        status = LXP_FATAL_INVARIANT;
+capture_done:
+    if (writer_bound) owner->kernel->state->writer = prior_writer;
+    if (owner_locked &&
+        lxp_arena_reset(owner->scratch, mark) != LXP_OK && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (owner_locked && pthread_mutex_unlock(&owner->mutex) != 0 &&
+        status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = lxp_kernel_simulate_activity(
+            snapshot, &activity, &execution, &prepared);
     if (status == LXP_OK) {
         receipts = lxp_kernel_prepared_batch_receipts(prepared);
         if (lxp_kernel_prepared_batch_count(prepared) != 1U ||
@@ -3171,7 +3299,10 @@ lxp_result lxp_daemon_lni_simulate(
                        previous_state_root, 32U) != 0))
         status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK)
-        status = lxp_receipt_encode(&receipts[0], true, owner->scratch,
+        status = lxp_arena_init(&receipt_scratch, receipt_scratch_bytes,
+                                sizeof(receipt_scratch_bytes));
+    if (status == LXP_OK)
+        status = lxp_receipt_encode(&receipts[0], true, &receipt_scratch,
                                     &encoded_receipt);
     if (status == LXP_OK)
         status = simulation_encode_response(
@@ -3181,22 +3312,29 @@ lxp_result lxp_daemon_lni_simulate(
         status = simulation_evidence_sign(
             sequencer_private_key, sequencer_public_key, activity_id,
             previous_state_root, receipts[0].resulting_state_root,
-            global_sequence - 1U, owner->latest_sealed_timestamp, evidence);
+            boundary.next_sequence - 1U, batch_timestamp, evidence);
     if (status == LXP_OK) *evidence_length = LNI_SIMULATION_EVIDENCE_BYTES;
     lxp_kernel_prepared_batch_destroy(prepared);
-    if (writer_bound) owner->kernel->state->writer = prior_writer;
-    if (lxp_arena_reset(owner->scratch, mark) != LXP_OK &&
-        status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
-    if (locked && pthread_mutex_unlock(&owner->mutex) != 0 &&
-        status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
+    lxp_kernel_batch_snapshot_destroy(snapshot);
     if (status != LXP_OK) {
         *response_length = 0U;
         *evidence_length = 0U;
         lxp_secure_zero(evidence, LNI_SIMULATION_EVIDENCE_BYTES);
     }
     return status;
+}
+
+lxp_result lxp_daemon_lni_simulate(
+    lxp_daemon_protocol_owner *owner,
+    const uint8_t sequencer_private_key[32],
+    const uint8_t *request, size_t request_length,
+    uint8_t *response, size_t response_capacity, size_t *response_length,
+    uint8_t *evidence, size_t evidence_capacity, size_t *evidence_length)
+{
+    return lni_program_read_execute(
+        owner, sequencer_private_key, request, request_length, 0U, NULL,
+        response, response_capacity, response_length, evidence,
+        evidence_capacity, evidence_length);
 }
 
 static lxp_result send_simulate(
@@ -3234,6 +3372,88 @@ static lxp_result send_simulate(
     if (status == LXP_OK)
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_SIMULATE_RESPONSE,
+                               request->correlation_id, payload,
+                               payload_length, evidence, evidence_length,
+                               deadline);
+    else if (status == LXP_ERR_IO || status == LXP_FATAL_INVARIANT)
+        status = send_refusal(descriptor, server->frame_bytes,
+                              request->correlation_id, 4U,
+                              LXP_ERR_MODULE_DISABLED, deadline);
+    else if (status == LXP_ERR_BAD_SIGNATURE ||
+             status == LXP_ERR_UNKNOWN_DID ||
+             status == LXP_ERR_IDENTITY_FROZEN)
+        status = send_refusal(descriptor, server->frame_bytes,
+                              request->correlation_id, 6U, status,
+                              deadline);
+    else
+        status = send_refusal(descriptor, server->frame_bytes,
+                              request->correlation_id,
+                              status == LXP_ERR_MALFORMED_ENVELOPE ? 1U :
+                                  4U,
+                              status, deadline);
+    lxp_secure_zero(payload, server->frame_bytes);
+    free(payload);
+    lxp_secure_zero(evidence, sizeof(evidence));
+    return status;
+}
+
+static lxp_result send_program_read(
+    lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    uint8_t evidence[LNI_SIMULATION_EVIDENCE_BYTES];
+    uint8_t *payload;
+    const uint8_t *expected_state_root;
+    const uint8_t *activity;
+    uint64_t minimum_sequence;
+    uint32_t activity_length;
+    uint8_t expected_present;
+    size_t payload_length = 0U;
+    size_t evidence_length = 0U;
+    lxp_result status;
+    if (request->minor < 6U)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_VERSION_UNSUPPORTED, deadline);
+    if (request->correlation_id == 0U || request->proof_length != 0U ||
+        request->payload_length < LNI_PROGRAM_READ_PREFIX_BYTES ||
+        load_u16(request->payload) != 1U)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 1U,
+                            LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    minimum_sequence = load_u64(request->payload + 2U);
+    expected_present = request->payload[10U];
+    expected_state_root = request->payload + 11U;
+    activity_length = load_u32(request->payload + 43U);
+    if (expected_present > 1U ||
+        (expected_present == 0U &&
+         !lxp_ct_is_zero(expected_state_root, 32U)) ||
+        (expected_present == 1U &&
+         lxp_ct_is_zero(expected_state_root, 32U)) ||
+        activity_length == 0U || activity_length > LXP_MAX_ACTIVITY_BYTES ||
+        request->payload_length !=
+            LNI_PROGRAM_READ_PREFIX_BYTES + (size_t)activity_length)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 1U,
+                            LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    if (!simulation_available(server))
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_MODULE_DISABLED, deadline);
+    activity = request->payload + LNI_PROGRAM_READ_PREFIX_BYTES;
+    payload = (uint8_t *)malloc(server->frame_bytes);
+    if (payload == NULL) return LXP_ERR_IO;
+    status = lni_program_read_execute(
+        server->owner, server->sequencer_private_key,
+        activity, activity_length, minimum_sequence,
+        expected_present == 0U ? NULL : expected_state_root,
+        payload, server->frame_bytes, &payload_length, evidence,
+        sizeof(evidence), &evidence_length);
+    if (status == LXP_OK && evidence_length != sizeof(evidence))
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = send_envelope(descriptor, server->frame_bytes,
+                               LNI_PROGRAM_READ_RESPONSE,
                                request->correlation_id, payload,
                                payload_length, evidence, evidence_length,
                                deadline);
@@ -3447,14 +3667,14 @@ static lxp_result send_account_read(
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 3U,
                             LXP_ERR_MODULE_DISABLED, deadline);
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(server->owner);
+    if (status != LXP_OK) return status;
     mark = lxp_arena_mark(server->owner->scratch);
     if (kind == 3U) {
         status = selector_kind == 1U ? send_did_accounts(server, descriptor, request, account_id, deadline) :
             evidence_refusal(server, descriptor, request->correlation_id, LXP_ERR_MODULE_DISABLED, deadline);
         (void)lxp_arena_reset(server->owner->scratch, mark);
-        if (pthread_mutex_unlock(&server->owner->mutex) != 0) return LXP_FATAL_INVARIANT;
-        return status;
+        return lni_read_unlock(server->owner, status);
     }
     if (selector_kind == 1U)
         status = latest_account_evidence(
@@ -3482,9 +3702,7 @@ static lxp_result send_account_read(
         status = evidence_refusal(server, descriptor,
                                   request->correlation_id, status, deadline);
     (void)lxp_arena_reset(server->owner->scratch, mark);
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
-    return status;
+    return lni_read_unlock(server->owner, status);
 }
 
 static lxp_result send_checkpoint(
@@ -3525,7 +3743,8 @@ static lxp_result send_checkpoint(
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 3U,
                             LXP_ERR_MODULE_DISABLED, deadline);
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(server->owner);
+    if (status != LXP_OK) return status;
     mark = lxp_arena_mark(server->owner->scratch);
     status = lxp_daemon_finality_evidence_lookup(
         server->owner->evidence_store, checkpoint_id, batch_number,
@@ -3540,9 +3759,7 @@ static lxp_result send_checkpoint(
         status = evidence_refusal(server, descriptor,
                                   request->correlation_id, status, deadline);
     (void)lxp_arena_reset(server->owner->scratch, mark);
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
-    return status;
+    return lni_read_unlock(server->owner, status);
 }
 
 static lxp_result send_history_item(lxp_daemon_lni_server *server, int descriptor,
@@ -3628,7 +3845,8 @@ static lxp_result send_history_range(lxp_daemon_lni_server *server, int descript
     if (owner->receipt_authority == NULL || owner->evidence_store == NULL || owner->scratch == NULL)
         return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
                             3U, LXP_ERR_MODULE_DISABLED, deadline);
-    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(owner);
+    if (status != LXP_OK) return status;
     mark = lxp_arena_mark(owner->scratch);
     next = first;
     status = last <= owner->receipt_authority->last_global_sequence ? LXP_OK : LXP_ERR_SEQUENCE_GAP;
@@ -3656,8 +3874,7 @@ static lxp_result send_history_range(lxp_daemon_lni_server *server, int descript
                               3U, status, deadline);
     }
     (void)lxp_arena_reset(owner->scratch, mark);
-    if (pthread_mutex_unlock(&owner->mutex) != 0) return LXP_FATAL_INVARIANT;
-    return status;
+    return lni_read_unlock(owner, status);
 }
 
 static lxp_result send_proof_bundle(
@@ -3698,7 +3915,8 @@ static lxp_result send_proof_bundle(
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 3U,
                             LXP_ERR_MODULE_DISABLED, deadline);
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(server->owner);
+    if (status != LXP_OK) return status;
     mark = lxp_arena_mark(server->owner->scratch);
     if (kind == 2U) {
         status = latest_account_evidence(
@@ -3735,9 +3953,7 @@ static lxp_result send_proof_bundle(
         status = evidence_refusal(server, descriptor,
                                   request->correlation_id, status, deadline);
     (void)lxp_arena_reset(server->owner->scratch, mark);
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
-    return status;
+    return lni_read_unlock(server->owner, status);
 }
 
 static lxp_result send_finality_evidence_register(
@@ -3765,7 +3981,8 @@ static lxp_result send_finality_evidence_register(
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 3U,
                             LXP_ERR_MODULE_DISABLED, deadline);
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(server->owner);
+    if (status != LXP_OK) return status;
     mark = lxp_arena_mark(server->owner->scratch);
     status = lxp_daemon_finality_evidence_register(
         server->owner->evidence_store,
@@ -3801,9 +4018,7 @@ static lxp_result send_finality_evidence_register(
             public_status, deadline);
     }
     (void)lxp_arena_reset(server->owner->scratch, mark);
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
-    return status;
+    return lni_read_unlock(server->owner, status);
 }
 
 static lxp_result peer_credentials(const lxp_daemon_lni_server *server,
@@ -4008,6 +4223,9 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
                 server, descriptor, &request, deadline);
         } else if (request.tag == LNI_SIMULATE_REQUEST) {
             status = send_simulate(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_PROGRAM_READ_REQUEST) {
+            status = send_program_read(
+                server, descriptor, &request, deadline);
         } else {
             status = send_refusal(descriptor, server->frame_bytes,
                                   request.correlation_id, 3U,

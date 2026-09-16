@@ -23,7 +23,7 @@ fn hex(value: &str) -> Vec<u8> {
 #[test]
 fn lni_schema_and_document_cover_every_declared_message() {
     let schema = lni_schema_v1();
-    assert_eq!(schema.version, Version::V1_5);
+    assert_eq!(schema.version, Version::V1_6);
     assert_eq!(schema.messages.len(), lni_golden_vectors().len());
     let mut tags = BTreeSet::new();
     for message in schema.messages {
@@ -67,6 +67,8 @@ fn version_and_capability_rules_are_checked_against_the_schema_source() {
     assert!(LNI_V1_SOURCE.contains("preparation_state"));
     assert!(LNI_V1_SOURCE.contains("authenticated_durable_submit"));
     assert!(LNI_V1_SOURCE.contains("simulate"));
+    assert!(LNI_V1_SOURCE.contains("program_read"));
+    assert_eq!(Capability::ProgramRead.name(), "program_read");
     assert!(Version::V1_4.is_compatible_with(Version::V1_0));
     assert_eq!(Capability::Simulate.name(), "simulate");
     assert!(Version::V1_3.is_compatible_with(Version::V1_0));
@@ -89,17 +91,24 @@ fn version_and_capability_rules_are_checked_against_the_schema_source() {
 }
 
 #[test]
-fn session_fee_state_tags_are_complete_and_unknown_tags_still_refuse() {
+fn additive_read_tags_are_complete_and_unknown_tags_still_refuse() {
     use layerx_client::lni::schema::{decode_envelope, SchemaError};
-    for tag in [36, 37] {
+    for tag in [36, 37, 38, 39] {
         let entry = lni_schema_v1()
             .messages
             .iter()
             .find(|message| message.tag == tag)
-            .unwrap_or_else(|| panic!("session fee state schema missing"));
-        assert_eq!(entry.capability, Capability::SessionFeeState);
+            .unwrap_or_else(|| panic!("additive read schema missing"));
+        assert_eq!(
+            entry.capability,
+            if tag < 38 {
+                Capability::SessionFeeState
+            } else {
+                Capability::ProgramRead
+            }
+        );
         let encoded = encode_envelope(Envelope {
-            version: Version::V1_5,
+            version: Version::V1_6,
             message_tag: tag,
             correlation_id: 7,
             canonical_payload: &[0, 1],
@@ -111,10 +120,10 @@ fn session_fee_state_tags_are_complete_and_unknown_tags_still_refuse() {
             Ok(tag)
         );
     }
-    for tag in [0, 38, u16::MAX] {
+    for tag in [0, 40, u16::MAX] {
         assert_eq!(
             encode_envelope(Envelope {
-                version: Version::V1_5,
+                version: Version::V1_6,
                 message_tag: tag,
                 correlation_id: 7,
                 canonical_payload: &[],
@@ -122,7 +131,7 @@ fn session_fee_state_tags_are_complete_and_unknown_tags_still_refuse() {
             }),
             Err(SchemaError::UnknownMessage(tag))
         );
-        let mut encoded = hex("00010005002400000000000000070000000000000000");
+        let mut encoded = hex("00010006002400000000000000070000000000000000");
         encoded[4..6].copy_from_slice(&tag.to_be_bytes());
         assert_eq!(
             decode_envelope(&encoded),

@@ -74,6 +74,7 @@ struct lxp_kernel_prepared_batch {
     lxp_kernel_batch_boundary final_boundary;
     size_t count;
     bool committed;
+    bool simulation;
 };
 
 static lxp_result kernel_program_signer_binding(
@@ -654,6 +655,26 @@ void lxp_kernel_batch_snapshot_destroy(lxp_kernel_batch_snapshot *snapshot)
     kernel_snapshot_release(snapshot);
 }
 
+const lxp_kernel *lxp_kernel_batch_snapshot_kernel(
+    const lxp_kernel_batch_snapshot *snapshot)
+{
+    return snapshot == NULL ? NULL : &snapshot->kernel;
+}
+
+const lxp_identity_store *lxp_kernel_batch_snapshot_identities(
+    const lxp_kernel_batch_snapshot *snapshot)
+{
+    return snapshot == NULL ? NULL : &snapshot->identities;
+}
+
+lxp_result lxp_kernel_batch_snapshot_boundary(
+    const lxp_kernel_batch_snapshot *snapshot,
+    lxp_kernel_batch_boundary *boundary)
+{
+    if (snapshot == NULL) return LXP_ERR_NON_CANONICAL;
+    return lxp_kernel_batch_boundary_read(&snapshot->kernel, boundary);
+}
+
 static lxp_result level_token_mix(uint8_t chain[32], const void *bytes,
                                   size_t length)
 {
@@ -1033,7 +1054,8 @@ lxp_result lxp_kernel_batch_schedule_item(
     lxp_result status;
     if (snapshot == NULL || activity == NULL || execution == NULL ||
         execution->authority == NULL || arena == NULL || item == NULL ||
-        activity->activity_type != LX_PROGRAMS_CALL)
+        activity->activity_type != LX_PROGRAMS_CALL ||
+        activity->actor_did.bytes == NULL || activity->actor_did.length != 32U)
         return LXP_ERR_NON_CANONICAL;
     status = lxp_kernel_batch_snapshot_clone(snapshot, &view);
     if (status == LXP_OK)
@@ -1080,6 +1102,7 @@ lxp_result lxp_kernel_batch_schedule_item(
     if (status == LXP_OK)
         status = lxp_programs_call_schedule_item_prepare(
             &descriptor,
+            activity->actor_did.bytes,
             payer != NULL && payer->has_asset ? payer->asset_id :
                 (const uint8_t[32]){0},
             view->occupancy_asset_id,
@@ -4496,7 +4519,8 @@ lxp_result lxp_kernel_prepare_batch_maintenance(
     lxp_byte_span encoded = {NULL, 0U};
     lxp_result status;
     if (batch == NULL || activities == NULL || executions == NULL ||
-        batch->committed || batch->count == 0U || batch->maintenance.length != 0U ||
+        batch->committed || batch->simulation || batch->count == 0U ||
+        batch->maintenance.length != 0U ||
         !lxp_protocol_version_uses_occupancy(activities[0].protocol_version))
         return LXP_ERR_NON_CANONICAL;
     storage = malloc(LXP_MAX_BATCH_BODY_BYTES);
@@ -4987,6 +5011,120 @@ done:
     return status;
 }
 
+lxp_result lxp_kernel_simulate_activity(
+    const lxp_kernel_batch_snapshot *snapshot,
+    const lxp_activity *activity, const lxp_kernel_execution *execution,
+    lxp_kernel_prepared_batch **batch_out)
+{
+    lxp_kernel_prepared_batch *batch = NULL;
+    lxp_prepared_transition *prepared = NULL;
+    lxp_kernel_execution private_execution;
+    uint8_t *storage = NULL;
+    lxp_arena arena;
+    lxp_result status;
+    size_t artifact;
+    if (snapshot == NULL || snapshot->state == NULL || activity == NULL ||
+        execution == NULL || execution->authority == NULL ||
+        batch_out == NULL ||
+        activity->activity_type != LX_PROGRAMS_CALL)
+        return LXP_ERR_NON_CANONICAL;
+    *batch_out = NULL;
+    batch = (lxp_kernel_prepared_batch *)calloc(1U, sizeof(*batch));
+    storage = (uint8_t *)malloc(LXP_KERNEL_PREPARE_ARENA_BYTES);
+    if (batch == NULL || storage == NULL) {
+        status = LXP_ERR_ARENA_EXHAUSTED;
+        goto done;
+    }
+    batch->simulation = true;
+    batch->count = 1U;
+    batch->receipts = (lxp_receipt *)calloc(1U, sizeof(*batch->receipts));
+    batch->events = (lxp_byte_span *)calloc(1U, sizeof(*batch->events));
+    batch->event_bytes = (uint8_t **)calloc(1U,
+                                            sizeof(*batch->event_bytes));
+    batch->artifact_bytes = (uint8_t **)calloc(
+        2U, sizeof(*batch->artifact_bytes));
+    if (batch->receipts == NULL || batch->events == NULL ||
+        batch->event_bytes == NULL || batch->artifact_bytes == NULL) {
+        status = LXP_ERR_ARENA_EXHAUSTED;
+        goto done;
+    }
+    status = lxp_arena_init(&arena, storage,
+                            LXP_KERNEL_PREPARE_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_clone(snapshot, &batch->base);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_clone(batch->base,
+                                                 &batch->settled);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_begin_level(batch->settled);
+    if (status != LXP_OK) goto done;
+    private_execution = *execution;
+    private_execution.arena = &arena;
+    private_execution.identities = &batch->settled->identities;
+    private_execution.verified_receipts =
+        &batch->settled->verified_receipts;
+    private_execution.fee_parameters = &batch->settled->fee_parameters;
+    private_execution.recorded_fee_schedule_version =
+        batch->settled->fee_schedule.version;
+    private_execution.recorded_metering_schedule_version =
+        batch->settled->metering_schedule.version;
+    private_execution.canonical_events_out = NULL;
+    status = lxp_kernel_prepare_activity(
+        batch->settled, activity, &private_execution, &arena, &prepared);
+    if (status == LXP_OK) status = lxp_arena_reset(&arena, 0U);
+    if (status == LXP_OK)
+        status = lxp_kernel_snapshot_apply_prepared(
+            batch->settled, activity, &private_execution, prepared,
+            &batch->receipts[0], &batch->events[0]);
+    if (status == LXP_OK && batch->events[0].length != 0U) {
+        if (batch->events[0].bytes == NULL) {
+            status = LXP_FATAL_INVARIANT;
+        } else {
+            batch->event_bytes[0] =
+                (uint8_t *)malloc(batch->events[0].length);
+            if (batch->event_bytes[0] == NULL) {
+                status = LXP_ERR_ARENA_EXHAUSTED;
+            } else {
+                (void)memcpy(batch->event_bytes[0], batch->events[0].bytes,
+                             batch->events[0].length);
+                batch->events[0].bytes = batch->event_bytes[0];
+            }
+        }
+    }
+    for (artifact = 0U; status == LXP_OK && artifact < 2U; ++artifact) {
+        lxp_byte_span *span = artifact == 0U ?
+            &batch->receipts[0].program_outcome.terminal_payload :
+            &batch->receipts[0].program_outcome.call_graph_payload;
+        if (span->length == 0U) continue;
+        if (span->bytes == NULL || span->length > LXP_MAX_ACTIVITY_BYTES) {
+            status = LXP_ERR_LENGTH_LIMIT;
+            break;
+        }
+        batch->artifact_bytes[artifact] = (uint8_t *)malloc(span->length);
+        if (batch->artifact_bytes[artifact] == NULL) {
+            status = LXP_ERR_ARENA_EXHAUSTED;
+            break;
+        }
+        (void)memcpy(batch->artifact_bytes[artifact], span->bytes,
+                     span->length);
+        span->bytes = batch->artifact_bytes[artifact];
+    }
+    if (status == LXP_OK)
+        status = lxp_state_snapshot_seal_level(batch->settled->state);
+    if (status == LXP_OK)
+        status = kernel_prepared_batch_digest(
+            activity, &private_execution, batch);
+    if (status == LXP_OK) {
+        *batch_out = batch;
+        batch = NULL;
+    }
+done:
+    lxp_prepared_transition_destroy(prepared);
+    lxp_kernel_prepared_batch_destroy(batch);
+    free(storage);
+    return status;
+}
+
 size_t lxp_kernel_prepared_batch_count(
     const lxp_kernel_prepared_batch *batch)
 {
@@ -5003,6 +5141,12 @@ const lxp_kernel *lxp_kernel_prepared_batch_settled_kernel(
     const lxp_kernel_prepared_batch *batch)
 {
     return batch == NULL ? NULL : &batch->settled->kernel;
+}
+
+const lxp_identity_store *lxp_kernel_prepared_batch_settled_identities(
+    const lxp_kernel_prepared_batch *batch)
+{
+    return batch == NULL ? NULL : &batch->settled->identities;
 }
 
 const lxp_receipt *lxp_kernel_prepared_batch_receipts(
@@ -5072,6 +5216,7 @@ lxp_result lxp_kernel_commit_prepared_batch(
     lxp_result status;
     if (kernel == NULL || identities == NULL || batch == NULL ||
         batch->base == NULL || batch->settled == NULL || batch->committed ||
+        batch->simulation ||
         fsynced_publication_digest == NULL ||
         lxp_ct_is_zero(fsynced_publication_digest, 32U) ||
         lxp_ct_memcmp(fsynced_publication_digest,

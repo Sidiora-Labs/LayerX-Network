@@ -389,6 +389,14 @@ lxp_result lxp_kernel_batch_snapshot_clone(
     const lxp_kernel_batch_snapshot *source,
     lxp_kernel_batch_snapshot **snapshot);
 void lxp_kernel_batch_snapshot_destroy(lxp_kernel_batch_snapshot *snapshot);
+/* Borrowed read-only views remain valid until snapshot destruction. */
+const lxp_kernel *lxp_kernel_batch_snapshot_kernel(
+    const lxp_kernel_batch_snapshot *snapshot);
+const lxp_identity_store *lxp_kernel_batch_snapshot_identities(
+    const lxp_kernel_batch_snapshot *snapshot);
+lxp_result lxp_kernel_batch_snapshot_boundary(
+    const lxp_kernel_batch_snapshot *snapshot,
+    lxp_kernel_batch_boundary *boundary);
 lxp_result lxp_kernel_batch_snapshot_begin_level(
     lxp_kernel_batch_snapshot *snapshot);
 lxp_result lxp_kernel_batch_schedule_item(
@@ -447,12 +455,22 @@ lxp_result lxp_kernel_prepare_activity_batch(
     const lxp_kernel_execution *executions, size_t offered_count,
     uint32_t maximum_workers, lxp_kernel_prepared_batch **batch,
     size_t *retry_prefix_count);
+/* Executes one Programs CALL against an owned clone of `snapshot`.  The input
+ * snapshot and the live kernel from which it was captured remain unchanged.
+ * The returned batch owns the hypothetical receipt and settled state until
+ * lxp_kernel_prepared_batch_destroy. */
+lxp_result lxp_kernel_simulate_activity(
+    const lxp_kernel_batch_snapshot *snapshot,
+    const lxp_activity *activity, const lxp_kernel_execution *execution,
+    lxp_kernel_prepared_batch **batch);
 size_t lxp_kernel_prepared_batch_count(
     const lxp_kernel_prepared_batch *batch);
 /* Read-only snapshots borrowed until prepared-batch destruction; NULL for NULL. */
 const lxp_kernel *lxp_kernel_prepared_batch_base_kernel(
     const lxp_kernel_prepared_batch *batch);
 const lxp_kernel *lxp_kernel_prepared_batch_settled_kernel(
+    const lxp_kernel_prepared_batch *batch);
+const lxp_identity_store *lxp_kernel_prepared_batch_settled_identities(
     const lxp_kernel_prepared_batch *batch);
 const lxp_receipt *lxp_kernel_prepared_batch_receipts(
     const lxp_kernel_prepared_batch *batch);

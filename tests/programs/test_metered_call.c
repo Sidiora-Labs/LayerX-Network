@@ -919,6 +919,48 @@ int main(void)
                 2U, true) == 0);
         }
     }
+    {
+        lxp_kernel_batch_snapshot *snapshot = NULL;
+        lxp_kernel_prepared_batch *simulation = NULL;
+        lxp_kernel_batch_boundary captured;
+        lxp_kernel_batch_boundary retained;
+        uint8_t live_root[32];
+        uint64_t live_sequence = f->state.next_sequence;
+        (void)memcpy(live_root, f->kernel.current_state_root, 32U);
+        METERED_CHECK(lxp_kernel_batch_snapshot_create(
+            &f->kernel, f->execution.identities,
+            f->execution.verified_receipts, &f->execution,
+            &snapshot) == LXP_OK);
+        METERED_CHECK(lxp_kernel_batch_snapshot_kernel(snapshot) !=
+                          &f->kernel &&
+                      lxp_kernel_batch_snapshot_identities(snapshot) !=
+                          f->execution.identities);
+        METERED_CHECK(lxp_kernel_batch_snapshot_boundary(
+                          snapshot, &captured) == LXP_OK &&
+                      captured.next_sequence == live_sequence);
+        METERED_CHECK(lxp_kernel_simulate_activity(
+                          snapshot, &f->activity, &f->execution,
+                          &simulation) == LXP_OK);
+        METERED_CHECK(simulation != NULL &&
+                      lxp_kernel_prepared_batch_count(simulation) == 1U &&
+                      lxp_kernel_prepared_batch_settled_identities(
+                          simulation) != NULL);
+        METERED_CHECK(lxp_kernel_prepared_batch_base_boundary(simulation)
+                              ->next_sequence == captured.next_sequence &&
+                      lxp_kernel_prepared_batch_final_boundary(simulation)
+                              ->next_sequence == captured.next_sequence + 1U);
+        METERED_CHECK(lxp_kernel_batch_snapshot_boundary(
+                          snapshot, &retained) == LXP_OK &&
+                      memcmp(&captured, &retained, sizeof(captured)) == 0);
+        METERED_CHECK(lxp_kernel_commit_prepared_batch(
+                          &f->kernel, f->execution.identities, simulation,
+                          lxp_kernel_prepared_batch_publication_digest(
+                              simulation)) == LXP_ERR_CONTEXT_MISMATCH);
+        METERED_CHECK(f->state.next_sequence == live_sequence &&
+                      memcmp(f->kernel.current_state_root, live_root, 32U) == 0);
+        lxp_kernel_prepared_batch_destroy(simulation);
+        lxp_kernel_batch_snapshot_destroy(snapshot);
+    }
     METERED_CHECK(lxp_kernel_execute_activity(&f->kernel, &f->activity,
                     &f->execution, &f->receipt) == LXP_OK);
     METERED_CHECK(f->receipt.result_code == LXP_ERR_PROGRAM_REFUSED);

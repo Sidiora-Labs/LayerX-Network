@@ -24,6 +24,9 @@ use crate::lni::handshake::{perform, Handshake, HandshakeConfig, HandshakeError}
 use crate::lni::preparation::{
     preparation_state, PreparationState, PreparationStateContext, PreparationStateError,
 };
+use crate::lni::program_read::{
+    read_program, ProgramReadContext, ProgramReadError, ProgramReadResult,
+};
 use crate::lni::report::capability_report;
 use crate::lni::schema::Capability;
 use crate::lni::simulate::{simulate, SimulateContext, SimulateError, Simulation};
@@ -33,7 +36,8 @@ use crate::read::{
     ReadError, ReadValue, Requested,
 };
 use crate::receipt::{
-    lookup, resolve_unknown, Lookup, LookupContext, ReceiptError, ReceiptSelector, Resolution,
+    lookup, lookup_authenticated, resolve_unknown, AuthenticatedLookup, AuthenticatedLookupContext,
+    Lookup, LookupContext, ReceiptError, ReceiptSelector, ReceiptWaitMode, Resolution,
 };
 use crate::stream::{subscribe, Cursor, EventStream, StreamConfig, StreamError};
 use crate::submit::{submit_signed, Submission, SubmissionContext, SubmitError, UnknownCause};
@@ -506,6 +510,72 @@ impl Client {
         };
         let transport = self.transport.as_mut().ok_or(SimulateError::Disconnected)?;
         simulate(transport, registry, signed_bytes, context)
+    }
+
+    /// Executes one signed ProgramCall against an immutable, optionally
+    /// caller-pinned snapshot without committing or submitting it.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an unavailable v1.6 capability, disconnection, stale or
+    /// mismatched snapshot, typed core refusal, or invalid signed evidence.
+    pub fn read_program(
+        &mut self,
+        registry: &ModuleRegistry,
+        signed_bytes: &[u8],
+        correlation_id: u64,
+        minimum_sequence: u64,
+        expected_state_root: Option<[u8; 32]>,
+    ) -> Result<ProgramReadResult, ProgramReadError> {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::ProgramRead)
+        {
+            return Err(ProgramReadError::UnavailableCapability);
+        }
+        let context = ProgramReadContext {
+            interface_version: self.handshake.node().interface_version,
+            sequencer_public_key: self.handshake.node().authorised_sequencer_key,
+            correlation_id,
+            minimum_sequence,
+            expected_state_root,
+        };
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or(ProgramReadError::Disconnected)?;
+        read_program(transport, registry, signed_bytes, context)
+    }
+
+    /// Looks up one exact activity receipt with an explicit native wait mode
+    /// and handshake-pinned sequencer authentication.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unavailable capability, disconnection, unsupported wait mode,
+    /// malformed response, activity mismatch, or invalid receipt signature.
+    pub fn lookup_authenticated_receipt(
+        &mut self,
+        activity_id: [u8; 32],
+        correlation_id: u64,
+        wait_mode: ReceiptWaitMode,
+    ) -> Result<AuthenticatedLookup, ReceiptError> {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::ReceiptLookup)
+        {
+            return Err(ReceiptError::UnavailableCapability);
+        }
+        let context = AuthenticatedLookupContext {
+            interface_version: self.handshake.node().interface_version,
+            correlation_id,
+            sequencer_public_key: self.handshake.node().authorised_sequencer_key,
+            wait_mode,
+        };
+        let transport = self.transport.as_mut().ok_or(ReceiptError::Disconnected)?;
+        lookup_authenticated(transport, activity_id, context)
     }
 
     /// Retrieves and verifies one receipt through the active boundary.

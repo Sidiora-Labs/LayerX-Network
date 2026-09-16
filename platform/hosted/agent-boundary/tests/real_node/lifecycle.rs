@@ -344,6 +344,7 @@ fn verify_lifecycle_receipt(
     assert_eq!(protocol.module_id(), 9);
     assert_eq!(protocol.module_version(), 4);
     assert_eq!(protocol.operation(), if ordinal == 3 { 3 } else { 0 });
+    assert_committed_metadata(result, protocol);
     let authority = verify_lifecycle_batch(cluster, &receipt, &bytes);
     if ordinal == 3 {
         let call = must(
@@ -595,6 +596,214 @@ fn check_idempotency_lookup(cluster: &Cluster, signed: &[u8], submitted: &Submit
             "entitlement_denied",
         );
     }
+}
+
+fn verify_program_read(
+    cluster: &Cluster,
+    signed: &[u8],
+    program: [u8; 32],
+    answer: &HttpAnswer,
+) -> (u64, String) {
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let document = answer.json();
+    let result = &document["result"];
+    assert_eq!(result["committed"], false);
+    assert_eq!(result["read_only"], true);
+    let execution = &result["execution"];
+    assert_eq!(execution["state"], "read");
+    assert_eq!(execution["program_id"], hex(&program));
+    assert_eq!(execution["receipt_kind"], "hypothetical");
+    let activity = must(
+        decode_signed(signed, &program_registry()),
+        "snapshot-read activity",
+    );
+    let call = must(
+        NativeProgramCall::decode(activity.payload()),
+        "snapshot-read call",
+    );
+    let expected_activity = must(activity_id(&activity), "snapshot-read activity id");
+    assert_eq!(execution["activity_id"], hex(&expected_activity));
+    let receipt_bytes = unhex(field(execution, "receipt"));
+    let receipt = must(
+        verify_sequencer_signature(&receipt_bytes, cluster.sequencer_key),
+        "snapshot-read receipt",
+    );
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("snapshot-read protocol receipt"));
+    assert_eq!(protocol.result_code(), 0);
+    assert_eq!(execution["result_code"], 0);
+    must(
+        layerx_proof::program::verify_program_execution(
+            &receipt_bytes,
+            &unhex(field(execution, "terminal_payload")),
+            &unhex(field(execution, "call_graph")),
+            layerx_proof::program::ProgramExecutionExpectation {
+                sequencer_public_key: cluster.sequencer_key,
+                previous_state_root: protocol.previous_state_root(),
+                activity_id: expected_activity,
+                payload_hash: must(
+                    layerx_wire::hash::payload_hash(&activity),
+                    "snapshot-read payload hash",
+                ),
+                program_id: program,
+                guest_abi_version: call.guest_abi,
+            },
+        ),
+        "snapshot-read program proof",
+    );
+    verify_simulation_evidence(
+        &result["simulation_evidence"],
+        protocol,
+        cluster.sequencer_key,
+    );
+    let snapshot = &result["snapshot"];
+    let observed_sequence = must(
+        field(snapshot, "observed_sequence").parse::<u64>(),
+        "snapshot observed sequence",
+    );
+    let state_root = field(snapshot, "state_root").to_owned();
+    assert_eq!(state_root, hex(&protocol.previous_state_root()));
+    assert_eq!(snapshot["verification"], "sequencer_signed_snapshot");
+    (observed_sequence, state_root)
+}
+
+#[test]
+fn latency_wave_reuses_native_sessions_and_returns_verified_read_and_commit_results() {
+    let wasm = escrow_wasm();
+    let (mut cluster, custody) = custody::start_funded_cluster();
+    custody.verify_evidence();
+    check_readiness(&cluster);
+    let program = random32();
+    let account = derived_account(program);
+
+    let deploy = signed_program_operation(
+        &cluster.actor,
+        1,
+        2,
+        FEE_LIMIT,
+        &deploy_payload(&cluster, program, &wasm),
+    );
+    let deployed = submit_lifecycle(
+        &cluster,
+        "/v1/programs/deploy",
+        &deploy,
+        1,
+        &format!("latency-deploy-{}", token()),
+    );
+    let registration = signed_program_operation(
+        &cluster.actor,
+        6,
+        3,
+        FEE_LIMIT,
+        &escrow_account_registration(program, cluster.asset),
+    );
+    submit_lifecycle(
+        &cluster,
+        "/v1/activities",
+        &registration,
+        6,
+        &format!("latency-account-{}", token()),
+    );
+
+    let call = signed_program_operation(
+        &cluster.actor,
+        3,
+        4,
+        FEE_LIMIT,
+        &escrow_open(&cluster, program, account),
+    );
+    let read = read_program_call(&cluster, &call, None, None);
+    let (observed_sequence, state_root) = verify_program_read(&cluster, &call, program, &read);
+    assert_eq!(read.json()["result"]["snapshot"]["minimum_sequence"], "0");
+    let observed_text = observed_sequence.to_string();
+    let pinned = read_program_call(&cluster, &call, Some(&observed_text), Some(&state_root));
+    let (pinned_sequence, pinned_root) = verify_program_read(&cluster, &call, program, &pinned);
+    assert!(pinned_sequence >= observed_sequence);
+    assert_eq!(pinned_root, state_root);
+    let stale_text = observed_sequence.saturating_add(1).to_string();
+    assert_refusal(
+        &read_program_call(&cluster, &call, Some(&stale_text), None),
+        409,
+        "snapshot_stale",
+    );
+    let mut wrong_root = unhex(&state_root);
+    wrong_root[0] ^= 1;
+    assert_refusal(
+        &read_program_call(&cluster, &call, None, Some(&hex(&wrong_root))),
+        409,
+        "snapshot_mismatch",
+    );
+
+    let call_key = format!("latency-call-{}", token());
+    let committed = submit_lifecycle(&cluster, "/v1/programs/call", &call, 3, &call_key);
+    let committed_result = cluster.client.call(&Call::submit(
+        "/v1/programs/call",
+        &cluster.gateway_token,
+        &call_key,
+        &call,
+    ));
+    assert_eq!(committed_result.status, 200, "{}", committed_result.text());
+    assert_eq!(committed_result.text(), committed.body);
+    assert_eq!(journal_record(&cluster, &call_key)["attempts"], 1);
+
+    let lni_socket = cluster.root.join("run/layerxd.sock");
+    let hidden_lni_socket = cluster.root.join("run/layerxd.sock.reuse-proof");
+    must(
+        fs::rename(&lni_socket, &hidden_lni_socket),
+        "hide native socket from new boundary sessions",
+    );
+    let sent = signed_send(&cluster.actor, cluster.asset, 5);
+    let send_key = format!("latency-send-{}", token());
+    let submitted = submit_send(&cluster, &sent, &send_key);
+    let replay = cluster.client.call(&Call::submit(
+        "/v1/activities",
+        &cluster.gateway_token,
+        &send_key,
+        &sent,
+    ));
+    assert_eq!(replay.status, 200, "{}", replay.text());
+    assert_eq!(replay.text(), submitted.body);
+    assert_eq!(journal_record(&cluster, &send_key)["attempts"], 1);
+    must(
+        fs::rename(&hidden_lni_socket, &lni_socket),
+        "restore native socket after session reuse proof",
+    );
+
+    cluster.boundary.stop();
+    cluster.restart_native_sequencer();
+    cluster.boundary.start();
+    check_readiness(&cluster);
+    check_receipt_routes(&cluster, &submitted);
+    let send_after_restart = cluster.client.call(&Call::submit(
+        "/v1/activities",
+        &cluster.gateway_token,
+        &send_key,
+        &sent,
+    ));
+    assert_eq!(
+        send_after_restart.status,
+        200,
+        "{}",
+        send_after_restart.text()
+    );
+    assert_eq!(send_after_restart.text(), submitted.body);
+    let call_after_restart = cluster.client.call(&Call::submit(
+        "/v1/programs/call",
+        &cluster.gateway_token,
+        &call_key,
+        &call,
+    ));
+    assert_eq!(
+        call_after_restart.status,
+        200,
+        "{}",
+        call_after_restart.text()
+    );
+    assert_eq!(call_after_restart.text(), committed.body);
+    assert_eq!(journal_record(&cluster, &call_key)["attempts"], 1);
+    check_idempotency_lookup(&cluster, &deploy, &deployed);
+    check_idempotency_lookup(&cluster, &call, &committed);
 }
 
 #[test]

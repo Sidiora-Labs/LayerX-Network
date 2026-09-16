@@ -51,7 +51,8 @@ static lxp_result send_module_read(
     if (server->owner->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
         server->owner->evidence_store == NULL || rank > 4U)
         return evidence_refusal(server, descriptor, request->correlation_id, LXP_ERR_MODULE_DISABLED, deadline);
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = lni_read_lock(server->owner);
+    if (status != LXP_OK) return status;
     mark = lxp_arena_mark(server->owner->scratch);
     status = latest_receipt_evidence(server->owner, server->owner->scratch, &head);
     if (status == LXP_OK) {
@@ -81,8 +82,7 @@ static lxp_result send_module_read(
     else
         status = evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
     (void)lxp_arena_reset(server->owner->scratch, mark);
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0) return LXP_FATAL_INVARIANT;
-    return status;
+    return lni_read_unlock(server->owner, status);
 }
 
 #endif

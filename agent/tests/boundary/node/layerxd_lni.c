@@ -639,6 +639,17 @@ static int simulation_init(
         (void)fputs("boundary simulation owner initialization failed\n", stderr);
         return 1;
     }
+    if (pthread_mutex_init(&simulation->owner.publication_mutex, NULL) != 0) {
+        (void)pthread_mutex_destroy(&simulation->owner.mutex);
+        (void)fputs("boundary simulation publication mutex failed\n", stderr);
+        return 1;
+    }
+    if (pthread_mutex_init(&simulation->owner.receipt_authority_mutex, NULL) != 0) {
+        (void)pthread_mutex_destroy(&simulation->owner.publication_mutex);
+        (void)pthread_mutex_destroy(&simulation->owner.mutex);
+        (void)fputs("boundary simulation receipt authority mutex failed\n", stderr);
+        return 1;
+    }
     simulation->authority.authorization.sequencer_id[0] = 9U;
     simulation->authority.authorization.first_batch_number = 1U;
     simulation->authority.authorization.last_batch_number = 1000U;
@@ -942,6 +953,19 @@ static int serve_node(
             (void)fputs("boundary preparation owner mutex failed\n", stderr);
             return 1;
         }
+        if (pthread_mutex_init(
+                &preparation.owner.publication_mutex, NULL) != 0) {
+            (void)pthread_mutex_destroy(&preparation.owner.mutex);
+            (void)fputs(
+                "boundary preparation publication mutex failed\n", stderr);
+            return 1;
+        }
+        if (pthread_mutex_init(&preparation.owner.receipt_authority_mutex, NULL) != 0) {
+            (void)pthread_mutex_destroy(&preparation.owner.publication_mutex);
+            (void)pthread_mutex_destroy(&preparation.owner.mutex);
+            (void)fputs("boundary preparation receipt authority mutex failed\n", stderr);
+            return 1;
+        }
         identity->next_sequence = 5U;
         preparation.owner.kernel = &preparation.kernel;
         preparation.owner.identities = &preparation.identities;
@@ -1007,15 +1031,21 @@ close_listener:
 shutdown:
     if (lxp_daemon_shutdown(&daemon) != LXP_OK) result = 1;
     if (preparation.initialized) {
-        if (pthread_mutex_destroy(&preparation.owner.mutex) != 0 ||
-            lxp_state_store_destroy(&preparation.state) != LXP_OK)
-            result = 1;
+        if (pthread_mutex_destroy(
+                &preparation.owner.receipt_authority_mutex) != 0) result = 1;
+        if (pthread_mutex_destroy(
+                &preparation.owner.publication_mutex) != 0) result = 1;
+        if (pthread_mutex_destroy(&preparation.owner.mutex) != 0) result = 1;
+        if (lxp_state_store_destroy(&preparation.state) != LXP_OK) result = 1;
         preparation.initialized = false;
     }
     if (simulation.initialized) {
-        if (pthread_mutex_destroy(&simulation.owner.mutex) != 0 ||
-            lxp_state_store_destroy(&simulation.state) != LXP_OK)
-            result = 1;
+        if (pthread_mutex_destroy(
+                &simulation.owner.receipt_authority_mutex) != 0) result = 1;
+        if (pthread_mutex_destroy(
+                &simulation.owner.publication_mutex) != 0) result = 1;
+        if (pthread_mutex_destroy(&simulation.owner.mutex) != 0) result = 1;
+        if (lxp_state_store_destroy(&simulation.state) != LXP_OK) result = 1;
         simulation.initialized = false;
     }
     return result;

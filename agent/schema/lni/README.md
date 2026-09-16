@@ -20,6 +20,10 @@ receipt, terminal payload, call graph) with sequencer-signed simulation
 evidence as proof material.
 Version 1.5 adds `asset_read`, `fee_estimate`, `session_fee_state`, and event-driven receipt
 publication waiting. Clients negotiate minor 5 before using these additions.
+Version 1.6 adds `program_read` and an explicit durable-or-published receipt
+wait mode. Program reads reuse the existing signed simulation result and proof
+shape while binding execution to caller-supplied minimum-sequence and optional
+canonical-state-root constraints.
 
 ## Authenticated durable submission
 
@@ -95,6 +99,8 @@ authentication-and-durability guarantee only when
 | 35 | `FeeEstimateResponse` | response | `fee_estimate` |
 | 36 | `SessionFeeStateRequest` | request | `session_fee_state` |
 | 37 | `SessionFeeStateResponse` | response | `session_fee_state` |
+| 38 | `ProgramReadRequest` | request | `program_read` |
+| 39 | `ProgramReadResponse` | response | `program_read` |
 
 AvailabilityFetchRequest carries only the canonical selector and empty proof material. AvailabilityChunk carries exact chunk bytes and inclusion metadata. AvailabilityEnd has empty canonical payload and empty proof material.
 
@@ -141,6 +147,25 @@ deadline expires. It does not use a fixed polling interval. A successful
 lookup returns the canonical signed receipt through `ReceiptLookupResponse`;
 an admission acknowledgement is never substituted for an executed receipt.
 Legacy selectors remain supported without the trailing wait field.
+
+At negotiated minor 6, an exact activity-id selector carries one required
+trailing `wait_mode:u8`: 0 returns immediately, 1 waits for publication, and 2
+waits for a durable receipt or its completed publication. Modes 1 and 2 use
+native queue, durability, and publication notifications through the request
+deadline; they never poll or re-submit. An empty immediate response is absence,
+while an empty waiting response means the deadline elapsed.
+
+## Snapshot-pinned program reads in LNI 1.6
+
+`ProgramReadRequest` carries version u16 = 1, a minimum observed sequence u64,
+an expected-root presence byte, an always-present 32-byte root field, a u32
+activity length, and the exact canonical signed Programs CALL activity. An
+absent expected root must be all zero; a present root must be nonzero.
+`ProgramReadResponse` uses the exact existing `SimulateResponse` execution
+payload and signed evidence without nesting or changing proof semantics. The
+evidence's observed sequence must meet the requested minimum and its previous
+state root must equal any supplied expected root. The call executes against an
+immutable snapshot and is never committed, queued, retried, or submitted.
 
 `SessionFeeStateRequest` requires the negotiated `session_fee_state` capability
 and minor 5. It carries version u16 = 1 and a nonzero grant id32. The response

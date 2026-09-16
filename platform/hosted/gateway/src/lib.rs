@@ -804,6 +804,7 @@ pub enum ProductionRoute<'a> {
     ProgramRegistry(&'a str),
     ProgramInterface(&'a str),
     ProgramSimulation,
+    ProgramRead,
     ProgramCall,
     ProgramDeploy,
     ProgramUpgrade,
@@ -812,9 +813,10 @@ pub enum ProductionRoute<'a> {
     ProgramReceiptByIdempotency(&'a str),
 }
 
-const PLATFORM_GATEWAY_PROGRAM_ROUTES: [&str; 9] = [
+const PLATFORM_GATEWAY_PROGRAM_ROUTES: [&str; 10] = [
     "POST /v1/programs/call",
     "POST /v1/programs/simulate",
+    "POST /v1/programs/read",
     "POST /v1/programs/deploy",
     "POST /v1/programs/upgrade",
     "POST /v1/programs/wind-down",
@@ -825,7 +827,7 @@ const PLATFORM_GATEWAY_PROGRAM_ROUTES: [&str; 9] = [
 ];
 
 #[must_use]
-pub const fn platform_gateway_program_routes() -> &'static [&'static str; 9] {
+pub const fn platform_gateway_program_routes() -> &'static [&'static str; 10] {
     &PLATFORM_GATEWAY_PROGRAM_ROUTES
 }
 
@@ -841,6 +843,7 @@ pub fn production_route<'a>(
     match (method, path) {
         ("POST", "/v1/activities") => Ok(ProductionRoute::Activity),
         ("POST", "/v1/programs/simulate") => Ok(ProductionRoute::ProgramSimulation),
+        ("POST", "/v1/programs/read") => Ok(ProductionRoute::ProgramRead),
         ("POST", "/v1/programs/call") => Ok(ProductionRoute::ProgramCall),
         ("POST", "/v1/programs/deploy") => Ok(ProductionRoute::ProgramDeploy),
         ("POST", "/v1/programs/upgrade") => Ok(ProductionRoute::ProgramUpgrade),
@@ -1028,6 +1031,7 @@ mod tests {
             &[
                 "POST /v1/programs/call",
                 "POST /v1/programs/simulate",
+                "POST /v1/programs/read",
                 "POST /v1/programs/deploy",
                 "POST /v1/programs/upgrade",
                 "POST /v1/programs/wind-down",
@@ -1039,6 +1043,7 @@ mod tests {
         );
         let identifier = "a".repeat(64);
         for (path, expected) in [
+            ("/v1/programs/read", ProductionRoute::ProgramRead),
             ("/v1/programs/deploy", ProductionRoute::ProgramDeploy),
             ("/v1/programs/upgrade", ProductionRoute::ProgramUpgrade),
             ("/v1/programs/wind-down", ProductionRoute::ProgramWindDown),

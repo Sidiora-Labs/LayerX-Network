@@ -2099,16 +2099,21 @@ lxp_result lxp_programs_call_schedule_decode(
 
 lxp_result lxp_programs_call_schedule_item_prepare(
     const lxp_programs_call_schedule_descriptor *descriptor,
+    const uint8_t identity_actor[32],
     const uint8_t fee_asset[32], const uint8_t occupancy_asset[32],
     bool occupancy_active, bool effects_complete,
     lxp_programs_schedule_item *item)
 {
-    if (descriptor == NULL || fee_asset == NULL || occupancy_asset == NULL ||
+    if (descriptor == NULL || identity_actor == NULL || fee_asset == NULL ||
+        occupancy_asset == NULL ||
         item == NULL || lxp_ct_is_zero(descriptor->principal, 32U) ||
+        lxp_ct_is_zero(identity_actor, 32U) ||
         lxp_ct_is_zero(descriptor->payer, 32U))
         return LXP_ERR_NON_CANONICAL;
     (void)memset(item, 0, sizeof(*item));
+    item->version = LXP_PROGRAMS_SCHEDULE_ITEM_VERSION;
     item->call = *descriptor;
+    (void)memcpy(item->identity_actor, identity_actor, 32U);
     (void)memcpy(item->identity_principal, descriptor->principal, 32U);
     if (!effects_complete) return LXP_OK;
     if (lxp_ct_is_zero(fee_asset, 32U)) return LXP_ERR_NON_CANONICAL;

@@ -4,10 +4,16 @@ mod deployment;
 mod lifecycle_tests;
 
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
-use layerx_client::lni::refusal::decode_core_refusal;
-use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
+use layerx_client::lni::program_read::{
+    read_program, ProgramReadContext, ProgramReadError, ProgramReadResult,
+};
+use layerx_client::lni::schema::{encode_envelope, Capability, Envelope, Version};
 use layerx_client::lni::simulate::{simulate, SimulateContext, SimulateError};
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
+use layerx_client::receipt::{
+    lookup_authenticated, AuthenticatedLookup, AuthenticatedLookupContext, ReceiptError,
+    ReceiptWaitMode,
+};
 use layerx_client::submit::{submit_signed, Submission, SubmissionContext, SubmitError};
 use layerx_proof::receipt::verify_sequencer_signature;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
@@ -31,9 +37,9 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -47,9 +53,6 @@ const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CONNECTIONS: usize = 128;
 const LNI_FRAME_BYTES: usize = 1_212_416;
 const LNI_CONNECTIONS: usize = 4;
-const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const RECEIPT_LOOKUP_REQUEST_TAG: u16 = 5;
-const RECEIPT_LOOKUP_RESPONSE_TAG: u16 = 6;
 const ERROR_RESPONSE_TAG: u16 = 25;
 const MAX_MODULES: usize = 9;
 const MAX_ORDINALS: usize = 64;
@@ -76,7 +79,7 @@ struct Config {
     registry: ModuleRegistry,
     receipt_wait: Duration,
     gate: ConnectionGate,
-    session: Mutex<Option<Session>>,
+    sessions: SessionPool,
     key_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
 }
 
@@ -84,6 +87,78 @@ struct Session {
     transport: Uds,
     handshake: Handshake,
     next_correlation: u64,
+}
+
+struct SessionSlot {
+    current: Option<Session>,
+    previous: Option<Handshake>,
+}
+
+struct SessionPool {
+    slots: Vec<Mutex<SessionSlot>>,
+    state: Mutex<SessionPoolState>,
+    changed: Condvar,
+}
+
+struct SessionPoolState {
+    busy: Vec<bool>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SessionUse {
+    Interactive,
+    ReceiptWait,
+}
+
+struct SessionLease<'a> {
+    pool: &'a SessionPool,
+    index: usize,
+}
+
+impl SessionPool {
+    fn new() -> Self {
+        Self {
+            slots: (0..LNI_CONNECTIONS)
+                .map(|_| {
+                    Mutex::new(SessionSlot {
+                        current: None,
+                        previous: None,
+                    })
+                })
+                .collect(),
+            state: Mutex::new(SessionPoolState {
+                busy: vec![false; LNI_CONNECTIONS],
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self, usage: SessionUse) -> SessionLease<'_> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            let first = usize::from(usage == SessionUse::ReceiptWait);
+            if let Some(index) = (first..state.busy.len()).find(|index| !state.busy[*index]) {
+                state.busy[index] = true;
+                return SessionLease { pool: self, index };
+            }
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+}
+
+impl Drop for SessionLease<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .pool
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        state.busy[self.index] = false;
+        self.pool.changed.notify_all();
+    }
 }
 
 impl Session {
@@ -180,6 +255,8 @@ struct JournalRecord {
     program_execution: Option<artifacts::StoredExecution>,
     #[serde(default)]
     lifecycle_sequencer_key: Option<String>,
+    #[serde(default)]
+    receipt_sequencer_key: Option<String>,
 }
 
 struct Request {
@@ -210,6 +287,10 @@ enum LniFailure {
 }
 
 impl LniFailure {
+    const fn retires_session(&self) -> bool {
+        matches!(self, Self::Transport(_))
+    }
+
     fn response(&self) -> Response {
         match self {
             Self::Unavailable(detail) => {
@@ -494,30 +575,38 @@ fn config() -> Result<Config, String> {
         registry: module_registry()?,
         receipt_wait: Duration::from_millis(receipt_wait_ms),
         gate: ConnectionGate::new(LNI_CONNECTIONS),
-        session: Mutex::new(None),
+        sessions: SessionPool::new(),
         key_locks: Mutex::new(BTreeMap::new()),
     })
 }
 
-fn lni_limits(config: &Config) -> Limits {
+fn lni_limits(config: &Config, slot: usize) -> Limits {
     Limits {
         maximum_frame_bytes: LNI_FRAME_BYTES,
         maximum_connections: LNI_CONNECTIONS,
         maximum_streams: 1,
         maximum_queued_bytes: LNI_FRAME_BYTES,
-        deadline: config.lni_deadline,
+        deadline: if slot == 0 {
+            config.lni_deadline
+        } else {
+            config.lni_deadline.min(config.receipt_wait)
+        },
     }
 }
 
-fn open_session(config: &Config) -> Result<Session, LniFailure> {
-    let mut transport = Uds::connect(&config.lni_socket, &config.gate, lni_limits(config))
+fn open_session(
+    config: &Config,
+    slot: usize,
+    previous: Option<&Handshake>,
+) -> Result<Session, LniFailure> {
+    let mut transport = Uds::connect(&config.lni_socket, &config.gate, lni_limits(config, slot))
         .map_err(|error| LniFailure::Unavailable(format!("{error:?}")))?;
     let expected = HandshakeConfig {
-        built_interface_version: Version::V1_5,
+        built_interface_version: Version::V1_6,
         expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: config.protocol_network_id,
     };
-    let handshake = perform(&mut transport, &expected, None)
+    let handshake = perform(&mut transport, &expected, previous)
         .map_err(|error| LniFailure::Unavailable(format!("{error:?}")))?;
     for capability in [
         Capability::NodeInfo,
@@ -546,82 +635,66 @@ fn with_session<T>(
     config: &Config,
     operation: impl FnOnce(&mut Session) -> Result<T, LniFailure>,
 ) -> Result<T, LniFailure> {
-    let mut guard = config
-        .session
+    with_session_for(config, SessionUse::Interactive, operation)
+}
+
+fn with_session_for<T>(
+    config: &Config,
+    usage: SessionUse,
+    operation: impl FnOnce(&mut Session) -> Result<T, LniFailure>,
+) -> Result<T, LniFailure> {
+    let lease = config.sessions.acquire(usage);
+    let mut slot = config.sessions.slots[lease.index]
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    if guard.is_none() {
-        *guard = Some(open_session(config)?);
+    if slot.current.is_none() {
+        let opened = open_session(config, lease.index, slot.previous.as_ref())?;
+        slot.previous = Some(opened.handshake.clone());
+        slot.current = Some(opened);
     }
-    let Some(session) = guard.as_mut() else {
+    let Some(session) = slot.current.as_mut() else {
         return Err(LniFailure::Unavailable("session is absent".to_owned()));
     };
     let result = operation(session);
-    *guard = None;
+    if result.as_ref().is_err_and(LniFailure::retires_session) {
+        if let Some(retired) = slot.current.take() {
+            slot.previous = Some(retired.handshake);
+        }
+    }
     result
 }
 
-fn lookup_receipt(session: &mut Session, activity: [u8; 32]) -> Result<Lookup, LniFailure> {
-    let correlation_id = session.correlation();
-    let mut selector = Vec::with_capacity(33);
-    selector.push(1);
-    selector.extend_from_slice(&activity);
-    let request = encode_envelope(Envelope {
-        version: session.handshake.node().interface_version,
-        message_tag: RECEIPT_LOOKUP_REQUEST_TAG,
-        correlation_id,
-        canonical_payload: &selector,
-        proof_material: &[],
-    })
-    .map_err(|error| LniFailure::Unavailable(format!("{error:?}")))?;
-    session
-        .transport
-        .send(&request)
-        .map_err(|error| LniFailure::Transport(format!("{error:?}")))?;
-    let response = session
-        .transport
-        .receive()
-        .map_err(|error| LniFailure::Transport(format!("{error:?}")))?;
-    let response =
-        decode_envelope(&response).map_err(|error| LniFailure::Transport(format!("{error:?}")))?;
-    if response.correlation_id != correlation_id {
-        return Err(LniFailure::Transport(
-            "receipt lookup correlation mismatch".to_owned(),
-        ));
-    }
-    if response.message_tag == ERROR_RESPONSE_TAG {
-        let refusal = decode_core_refusal(response.canonical_payload);
-        return Err(LniFailure::Unavailable(format!(
-            "receipt lookup refused: {refusal:?}"
-        )));
-    }
-    if response.message_tag != RECEIPT_LOOKUP_RESPONSE_TAG {
-        return Err(LniFailure::Transport(
-            "receipt lookup answered with an unexpected message".to_owned(),
-        ));
-    }
-    if response.canonical_payload.is_empty() {
-        return Ok(Lookup::Absent);
-    }
-    let sequencer_key = session.handshake.node().authorised_sequencer_key;
-    let receipt = verify_sequencer_signature(response.canonical_payload, sequencer_key)
-        .map_err(|error| LniFailure::Unavailable(format!("receipt is not authentic: {error:?}")))?;
-    let Some(protocol) = receipt.protocol() else {
-        return Err(LniFailure::Unavailable(
-            "receipt is not a protocol receipt".to_owned(),
-        ));
+fn lookup_receipt(
+    session: &mut Session,
+    activity: [u8; 32],
+    wait_mode: ReceiptWaitMode,
+) -> Result<Lookup, LniFailure> {
+    let sequencer_public_key = session.handshake.node().authorised_sequencer_key;
+    let context = AuthenticatedLookupContext {
+        interface_version: session.handshake.node().interface_version,
+        correlation_id: session.correlation(),
+        sequencer_public_key,
+        wait_mode,
     };
-    if protocol.activity_id() != activity {
-        return Err(LniFailure::Unavailable(
-            "receipt names a different activity".to_owned(),
-        ));
+    match lookup_authenticated(&mut session.transport, activity, context) {
+        Ok(AuthenticatedLookup::Absent | AuthenticatedLookup::TimedOut) => Ok(Lookup::Absent),
+        Ok(AuthenticatedLookup::Verified(receipt)) => Ok(Lookup::Present {
+            receipt: receipt.canonical_bytes().to_vec(),
+            result_code: receipt.result_code().raw(),
+            module_id: receipt.module_id(),
+            sequencer_public_key,
+        }),
+        Err(
+            error @ (ReceiptError::CoreRefusal { .. }
+            | ReceiptError::UnavailableCapability
+            | ReceiptError::InterfaceVersion(_)),
+        ) => Err(LniFailure::Unavailable(format!(
+            "receipt lookup refused: {error:?}"
+        ))),
+        Err(error) => Err(LniFailure::Transport(format!(
+            "receipt lookup failed: {error:?}"
+        ))),
     }
-    Ok(Lookup::Present {
-        receipt: response.canonical_payload.to_vec(),
-        result_code: protocol.result_code(),
-        module_id: protocol.module_id(),
-        sequencer_public_key: sequencer_key,
-    })
 }
 
 fn result_refusal(result: ResultCode) -> Refusal {
@@ -894,7 +967,55 @@ fn validate_program_lifecycle(ordinal: u16, payload: &[u8]) -> Result<(), Respon
     Ok(())
 }
 
+struct ReceiptMetadata {
+    result_code: i32,
+    state_version: u64,
+    state_root: [u8; 32],
+}
+
+fn verified_receipt_metadata(record: &JournalRecord) -> Result<ReceiptMetadata, String> {
+    let key = record
+        .receipt_sequencer_key
+        .as_deref()
+        .or(record.lifecycle_sequencer_key.as_deref())
+        .or_else(|| {
+            record
+                .program_execution
+                .as_ref()
+                .map(|execution| execution.sequencer_public_key.as_str())
+        })
+        .and_then(parse_hex32)
+        .ok_or_else(|| "missing receipt sequencer key".to_owned())?;
+    let receipt = artifacts::canonical_hex(
+        record.receipt.as_deref().unwrap_or_default(),
+        MAX_ACTIVITY_BYTES,
+    )?;
+    let verified =
+        verify_sequencer_signature(&receipt, key).map_err(|error| format!("{error:?}"))?;
+    let protocol = verified
+        .protocol()
+        .ok_or_else(|| "missing protocol receipt".to_owned())?;
+    if hex(&protocol.activity_id()) != record.activity_id
+        || Some(protocol.result_code()) != record.result_code
+        || protocol.protocol_version() != PROTOCOL_VERSION
+    {
+        return Err("receipt journal binding mismatch".to_owned());
+    }
+    Ok(ReceiptMetadata {
+        result_code: protocol.result_code(),
+        state_version: protocol.global_sequence(),
+        state_root: protocol.resulting_state_root(),
+    })
+}
+
 fn outcome_response(record: &JournalRecord) -> Response {
+    let metadata = match verified_receipt_metadata(record) {
+        Ok(metadata) => metadata,
+        Err(detail) => {
+            eprintln!("{SERVICE}: {detail}");
+            return refusal(503, "receipt_invalid", Some(5));
+        }
+    };
     let receipt = record.receipt.clone().unwrap_or_default();
     let (terminal_payload, call_graph) =
         record
@@ -918,10 +1039,19 @@ fn outcome_response(record: &JournalRecord) -> Response {
     } else {
         "refused"
     };
-    ok(format!(
-        "{{\"result\":{{\"state\":\"{state}\",\"activity_id\":\"{}\",\"receipt\":\"{receipt}\",\"terminal_payload\":\"{terminal_payload}\",\"call_graph\":\"{call_graph}\"}}}}",
-        record.activity_id
-    ))
+    ok(serde_json::json!({
+        "result": {
+            "state": state,
+            "activity_id": record.activity_id,
+            "receipt": receipt,
+            "terminal_payload": terminal_payload,
+            "call_graph": call_graph,
+            "result_code": metadata.result_code,
+            "state_version": metadata.state_version.to_string(),
+            "state_root": hex(&metadata.state_root),
+        }
+    })
+    .to_string())
 }
 
 fn refusal_response(stored: &Refusal) -> Response {
@@ -1148,6 +1278,7 @@ fn complete_record(
     "completed".clone_into(&mut record.state);
     record.receipt = Some(hex(receipt));
     record.result_code = Some(result_code);
+    record.receipt_sequencer_key = Some(hex(&sequencer_public_key));
     if matches!(
         record.route.as_str(),
         "programs_deploy" | "programs_upgrade" | "programs_wind_down"
@@ -1168,14 +1299,14 @@ fn await_receipt(
     activity: [u8; 32],
     wait: Duration,
 ) -> Result<Lookup, LniFailure> {
-    let deadline = Instant::now() + wait;
-    loop {
-        let lookup = with_session(config, |session| lookup_receipt(session, activity))?;
-        if matches!(lookup, Lookup::Present { .. }) || Instant::now() >= deadline {
-            return Ok(lookup);
-        }
-        thread::sleep(RECEIPT_POLL_INTERVAL);
-    }
+    let (usage, wait_mode) = if wait.is_zero() {
+        (SessionUse::Interactive, ReceiptWaitMode::Immediate)
+    } else {
+        (SessionUse::ReceiptWait, ReceiptWaitMode::Durable)
+    };
+    with_session_for(config, usage, |session| {
+        lookup_receipt(session, activity, wait_mode)
+    })
 }
 
 fn resolve_record(
@@ -1370,6 +1501,173 @@ fn simulation_response(
     ok(document.to_string())
 }
 
+struct ProgramReadFreshness {
+    minimum_sequence: u64,
+    expected_state_root: Option<[u8; 32]>,
+}
+
+fn program_read_freshness(request: &Request) -> Result<ProgramReadFreshness, Response> {
+    let minimum_sequence =
+        request
+            .headers
+            .get("layerx-minimum-sequence")
+            .map_or(Ok(0), |value| {
+                if value.is_empty()
+                    || (value.len() > 1 && value.starts_with('0'))
+                    || !value.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    return Err(refusal(400, "invalid_minimum_sequence", None));
+                }
+                value
+                    .parse::<u64>()
+                    .map_err(|_| refusal(400, "invalid_minimum_sequence", None))
+            })?;
+    let expected_state_root = request
+        .headers
+        .get("layerx-expected-state-root")
+        .map(|value| {
+            if value.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                return Err(refusal(400, "invalid_expected_state_root", None));
+            }
+            parse_hex32(value)
+                .filter(|root| *root != [0; 32])
+                .ok_or_else(|| refusal(400, "invalid_expected_state_root", None))
+        })
+        .transpose()?;
+    Ok(ProgramReadFreshness {
+        minimum_sequence,
+        expected_state_root,
+    })
+}
+
+fn program_read_response(
+    result: &ProgramReadResult,
+    program_id: &[u8; 32],
+    result_code: i32,
+) -> Response {
+    let state = if result_code == 0 { "read" } else { "refused" };
+    let document = serde_json::json!({
+        "result": {
+            "committed": false,
+            "read_only": true,
+            "execution": {
+                "state": state,
+                "activity_id": hex(&result.execution.activity_id),
+                "program_id": hex(program_id),
+                "result_code": result_code,
+                "receipt": hex(&result.execution.receipt),
+                "receipt_kind": "hypothetical",
+                "terminal_payload": hex(&result.execution.terminal_payload),
+                "call_graph": hex(&result.execution.call_graph),
+            },
+            "simulation_evidence": {
+                "boundary_id": hex(&result.evidence.boundary_id),
+                "activity_id": hex(&result.evidence.activity_id),
+                "previous_state_root": hex(&result.evidence.previous_state_root),
+                "hypothetical_state_root": hex(&result.evidence.hypothetical_state_root),
+                "observed_sequence": result.evidence.observed_sequence.to_string(),
+                "observed_at": result.evidence.observed_at.to_string(),
+                "committed": false,
+                "public_key": hex(&result.evidence.public_key),
+                "signature": hex(&result.evidence.signature),
+            },
+            "snapshot": {
+                "minimum_sequence": result.snapshot.minimum_sequence.to_string(),
+                "observed_sequence": result.snapshot.observed_sequence.to_string(),
+                "state_root": hex(&result.snapshot.state_root),
+                "verification": "sequencer_signed_snapshot",
+            }
+        }
+    });
+    ok(document.to_string())
+}
+
+fn program_read_route(config: &Config, request: &Request) -> Response {
+    if request.headers.get("content-type").map(String::as_str) != Some("application/octet-stream") {
+        return refusal(400, "content_type_required", None);
+    }
+    if request.body.is_empty() || request.body.len() > MAX_ACTIVITY_BYTES {
+        return refusal(400, "invalid_activity_length", None);
+    }
+    let freshness = match program_read_freshness(request) {
+        Ok(freshness) => freshness,
+        Err(response) => return response,
+    };
+    let decoded = match decode_activity(config, Route::ProgramCall, &request.body) {
+        Ok(decoded) => decoded,
+        Err(response) => return response,
+    };
+    let Some(program_id) = decoded.program_id else {
+        return refusal(400, "not_program_call", None);
+    };
+    let outcome = with_session(config, |session| {
+        if !session
+            .handshake
+            .capabilities()
+            .contains(Capability::ProgramRead)
+        {
+            return Ok(Err(refusal(503, "capability_unavailable", Some(60))));
+        }
+        let context = ProgramReadContext {
+            interface_version: session.handshake.node().interface_version,
+            sequencer_public_key: session.handshake.node().authorised_sequencer_key,
+            correlation_id: session.correlation(),
+            minimum_sequence: freshness.minimum_sequence,
+            expected_state_root: freshness.expected_state_root,
+        };
+        match read_program(
+            &mut session.transport,
+            &config.registry,
+            &request.body,
+            context,
+        ) {
+            Ok(result) => Ok(Ok(result)),
+            Err(ProgramReadError::SnapshotStale) => {
+                Ok(Err(refusal(409, "snapshot_stale", Some(1))))
+            }
+            Err(ProgramReadError::SnapshotMismatch) => {
+                Ok(Err(refusal(409, "snapshot_mismatch", None)))
+            }
+            Err(ProgramReadError::CoreRefusal { class, result }) => {
+                if class == 3 {
+                    Ok(Err(refusal(503, "capability_unavailable", Some(60))))
+                } else {
+                    Ok(Err(refusal_response(&result_refusal(result))))
+                }
+            }
+            Err(ProgramReadError::CanonicalActivity | ProgramReadError::MalformedRequest) => {
+                Ok(Err(refusal(400, "malformed_activity", None)))
+            }
+            Err(
+                ProgramReadError::UnavailableCapability | ProgramReadError::InterfaceVersion(_),
+            ) => Ok(Err(refusal(503, "capability_unavailable", Some(60)))),
+            Err(error) => Err(LniFailure::Transport(format!(
+                "program read failed: {error:?}"
+            ))),
+        }
+    });
+    let result = match outcome {
+        Ok(Ok(result)) => result,
+        Ok(Err(response)) => return response,
+        Err(failure) => return failure.response(),
+    };
+    if result.execution.activity_id != decoded.activity_id {
+        return LniFailure::Transport("program read names a different activity".to_owned())
+            .response();
+    }
+    let Ok(receipt) =
+        verify_sequencer_signature(&result.execution.receipt, result.evidence.public_key)
+    else {
+        return LniFailure::Transport("program read receipt is not sequencer-signed".to_owned())
+            .response();
+    };
+    let Some(protocol) = receipt.protocol() else {
+        return LniFailure::Transport("program read receipt is not a protocol receipt".to_owned())
+            .response();
+    };
+    program_read_response(&result, &program_id, protocol.result_code())
+}
+
 fn submit_route(config: &Config, request: &Request, route: Route) -> Response {
     if request.headers.get("content-type").map(String::as_str) != Some("application/octet-stream") {
         return refusal(400, "content_type_required", None);
@@ -1444,6 +1742,7 @@ fn submit_route(config: &Config, request: &Request, route: Route) -> Response {
             result_code: None,
             program_execution: None,
             lifecycle_sequencer_key: None,
+            receipt_sequencer_key: None,
         },
     };
     resolve_record(config, &key_digest, &mut record, &decoded, &request.body)
@@ -1453,7 +1752,9 @@ fn receipt_route(config: &Config, activity_text: &str, plane: Plane) -> Response
     let Some(activity) = parse_hex32(activity_text) else {
         return refusal(400, "invalid_activity_id", None);
     };
-    match with_session(config, |session| lookup_receipt(session, activity)) {
+    match with_session(config, |session| {
+        lookup_receipt(session, activity, ReceiptWaitMode::Immediate)
+    }) {
         Ok(Lookup::Present { receipt, .. }) => {
             let body = serde_json::json!({"activity_id": hex(&activity), "receipt": hex(&receipt)});
             if plane == Plane::Gateway {
@@ -1598,7 +1899,9 @@ fn program_activity_route(config: &Config, activity_text: &str) -> Response {
     let response = if record.state == "completed" && record.program_execution.is_some() {
         completed_response(config, &record)
     } else {
-        match with_session(config, |session| lookup_receipt(session, activity)) {
+        match with_session(config, |session| {
+            lookup_receipt(session, activity, ReceiptWaitMode::Immediate)
+        }) {
             Ok(Lookup::Present {
                 receipt,
                 result_code,
@@ -1815,6 +2118,7 @@ fn route(config: &Config, request: &Request) -> Response {
         path,
         "/v1/activities"
             | "/v1/programs/call"
+            | "/v1/programs/read"
             | "/v1/programs/simulate"
             | "/v1/programs/deploy"
             | "/v1/programs/upgrade"
@@ -1839,6 +2143,7 @@ fn route(config: &Config, request: &Request) -> Response {
         ("POST", "/v1/programs/deploy") => submit_route(config, request, Route::ProgramDeploy),
         ("POST", "/v1/programs/upgrade") => submit_route(config, request, Route::ProgramUpgrade),
         ("POST", "/v1/programs/wind-down") => submit_route(config, request, Route::ProgramWindDown),
+        ("POST", "/v1/programs/read") => program_read_route(config, request),
         ("POST", "/v1/programs/simulate") => simulate_route(config, request),
         ("GET", target) => {
             if let Some(key) = target.strip_prefix("/v1/programs/receipts/by-idempotency/") {

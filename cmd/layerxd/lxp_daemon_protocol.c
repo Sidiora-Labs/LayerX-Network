@@ -140,6 +140,28 @@ static bool authorized(const lxp_daemon_protocol_owner *owner,
            lxp_ct_memcmp(token, owner->bearer_token, token_length) == 0;
 }
 
+static lxp_result protocol_read_lock(lxp_daemon_protocol_owner *owner)
+{
+    if (pthread_mutex_lock(&owner->publication_mutex) != 0)
+        return LXP_ERR_IO;
+    if (pthread_mutex_lock(&owner->mutex) != 0) {
+        (void)pthread_mutex_unlock(&owner->publication_mutex);
+        return LXP_ERR_IO;
+    }
+    return LXP_OK;
+}
+
+static lxp_result protocol_read_unlock(
+    lxp_daemon_protocol_owner *owner, lxp_result status)
+{
+    if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (pthread_mutex_unlock(&owner->publication_mutex) != 0 &&
+        status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
 static lxp_result durable_receipt_facts(
     void *context, const uint8_t receipt_digest[32],
     lxp_verified_receipt_facts *facts)
@@ -156,6 +178,10 @@ static lxp_result durable_receipt_facts(
         owner->receipt_authority == NULL || owner->scratch == NULL)
         return LXP_ERR_NON_CANONICAL;
     if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    if (pthread_mutex_lock(&owner->receipt_authority_mutex) != 0) {
+        (void)pthread_mutex_unlock(&owner->mutex);
+        return LXP_ERR_IO;
+    }
     mark = lxp_arena_mark(owner->scratch);
     status = lxp_daemon_receipt_authority_lookup(
         owner->receipt_authority, receipt_digest, owner->scratch,
@@ -193,6 +219,9 @@ static lxp_result durable_receipt_facts(
         }
     }
     (void)lxp_arena_reset(owner->scratch, mark);
+    if (pthread_mutex_unlock(&owner->receipt_authority_mutex) != 0 &&
+        status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
     if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
         status = LXP_FATAL_INVARIANT;
     return status;
@@ -414,6 +443,82 @@ static lxp_result changes_route(lxp_daemon_protocol_owner *owner,
     return status;
 }
 
+static lxp_result put_program_artifacts(
+    const uint8_t activity_id[32], const uint8_t receipt_digest[32],
+    lxp_byte_span terminal_payload, lxp_byte_span call_graph,
+    json_writer *writer)
+{
+    json_text(writer, "{\"activity_id\":\"");
+    json_hex(writer, activity_id, 32U);
+    json_text(writer, "\",\"receipt_digest\":\"");
+    json_hex(writer, receipt_digest, 32U);
+    json_text(writer, "\",\"terminal_payload\":\"");
+    json_hex(writer, terminal_payload.bytes, terminal_payload.length);
+    json_text(writer, "\",\"call_graph\":\"");
+    json_hex(writer, call_graph.bytes, call_graph.length);
+    json_text(writer, "\"}");
+    return writer->status;
+}
+
+static lxp_result pending_artifacts_route(
+    lxp_daemon_protocol_owner *owner, const uint8_t activity_id[32],
+    const uint8_t receipt_digest[32], json_writer *writer, bool *present)
+{
+    lxp_result status = LXP_ERR_UNKNOWN_ACTIVITY;
+    uint8_t scratch_bytes[LXP_STATE_MAX_RECEIPT_BYTES];
+    lxp_arena scratch;
+    size_t index;
+    if (owner == NULL || activity_id == NULL || receipt_digest == NULL ||
+        writer == NULL || present == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *present = false;
+    status = lxp_arena_init(&scratch, scratch_bytes, sizeof(scratch_bytes));
+    if (status != LXP_OK) return status;
+    if (pthread_mutex_lock(&owner->receipt_mutex) != 0) return LXP_ERR_IO;
+    for (index = 0U; index < owner->pending_receipt_count; ++index) {
+        const lxp_daemon_pending_receipt *pending =
+            &owner->pending_receipts[index];
+        lxp_receipt receipt;
+        uint8_t digest[32];
+        if (lxp_ct_memcmp(pending->activity_id, activity_id, 32U) != 0)
+            continue;
+        *present = true;
+        status = pending->bytes == NULL || pending->length == 0U ||
+                pending->length > LXP_STATE_MAX_RECEIPT_BYTES ||
+                (pending->terminal_payload.length != 0U &&
+                 pending->terminal_payload.bytes == NULL) ||
+                (pending->call_graph.length != 0U &&
+                 pending->call_graph.bytes == NULL) ?
+            LXP_FATAL_INVARIANT : LXP_OK;
+        if (status == LXP_OK)
+            status = lxp_receipt_decode(
+                pending->bytes, pending->length, true, &receipt);
+        if (status == LXP_OK)
+            status = lxp_receipt_digest(&receipt, &scratch, digest);
+        if (status == LXP_OK &&
+            lxp_ct_memcmp(digest, receipt_digest, 32U) != 0)
+            status = LXP_ERR_CONTEXT_MISMATCH;
+        if (status == LXP_OK &&
+            (lxp_ct_memcmp(receipt.activity_id, activity_id, 32U) != 0 ||
+             receipt.global_sequence != pending->global_sequence ||
+             receipt.module_id != LXP_MODULE_PROGRAMS ||
+             !receipt.program_outcome.present))
+            status = LXP_ERR_CONTEXT_MISMATCH;
+        if (status == LXP_OK)
+            status = lxp_receipt_bind_program_artifacts(
+                &receipt, pending->terminal_payload, pending->call_graph);
+        if (status == LXP_OK)
+            status = put_program_artifacts(
+                activity_id, receipt_digest, pending->terminal_payload,
+                pending->call_graph, writer);
+        break;
+    }
+    if (!*present && status == LXP_ERR_UNKNOWN_ACTIVITY) status = LXP_OK;
+    if (pthread_mutex_unlock(&owner->receipt_mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
 static lxp_result artifacts_route(lxp_daemon_protocol_owner *owner,
                                    const uint8_t activity_id[32],
                                    const uint8_t receipt_digest[32],
@@ -437,16 +542,38 @@ static lxp_result artifacts_route(lxp_daemon_protocol_owner *owner,
         status = lxp_receipt_bind_program_artifacts(
             &receipt, evidence.terminal_payload, evidence.call_graph);
     if (status != LXP_OK) return status;
-    json_text(writer, "{\"activity_id\":\"");
-    json_hex(writer, activity_id, 32U);
-    json_text(writer, "\",\"receipt_digest\":\"");
-    json_hex(writer, receipt_digest, 32U);
-    json_text(writer, "\",\"terminal_payload\":\"");
-    json_hex(writer, evidence.terminal_payload.bytes, evidence.terminal_payload.length);
-    json_text(writer, "\",\"call_graph\":\"");
-    json_hex(writer, evidence.call_graph.bytes, evidence.call_graph.length);
-    json_text(writer, "\"}");
-    return writer->status;
+    return put_program_artifacts(
+        activity_id, receipt_digest, evidence.terminal_payload,
+        evidence.call_graph, writer);
+}
+
+static lxp_result parse_artifacts_request(
+    const char *method, const char *path, uint8_t activity_id[32],
+    uint8_t receipt_digest[32], bool *matches)
+{
+    static const char prefix[] = "/v1/programs/activities/";
+    static const char tail[] = "/artifacts?receipt_digest=";
+    const char *activity;
+    char activity_text[65];
+    if (method == NULL || path == NULL || activity_id == NULL ||
+        receipt_digest == NULL || matches == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *matches = false;
+    if (strcmp(method, "GET") != 0 ||
+        strncmp(path, prefix, sizeof(prefix) - 1U) != 0)
+        return LXP_OK;
+    *matches = true;
+    activity = path + sizeof(prefix) - 1U;
+    if (strlen(activity) != 64U + sizeof(tail) - 1U + 64U ||
+        memcmp(activity + 64U, tail, sizeof(tail) - 1U) != 0)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(activity_text, activity, 64U);
+    activity_text[64] = '\0';
+    if (parse_hex32(activity_text, activity_id) != LXP_OK ||
+        parse_hex32(activity + 64U + sizeof(tail) - 1U,
+                    receipt_digest) != LXP_OK)
+        return LXP_ERR_NON_CANONICAL;
+    return LXP_OK;
 }
 
 static lxp_result idempotency_receipt_route(
@@ -520,7 +647,18 @@ static lxp_result route_inner(lxp_daemon_protocol_owner *owner,
     static const char receipt_prefix[] = "/v1/receipts/";
     static const char program_prefix[] = "/v1/programs/";
     static const char batch_prefix[] = "/v1/batches/";
+    uint8_t artifact_activity_id[32];
+    uint8_t artifact_receipt_digest[32];
+    bool artifact_request = false;
+    lxp_result artifact_status;
     if (strcmp(method, "GET") != 0) return LXP_ERR_UNKNOWN_ACTIVITY;
+    artifact_status = parse_artifacts_request(
+        method, path, artifact_activity_id, artifact_receipt_digest,
+        &artifact_request);
+    if (artifact_status != LXP_OK) return artifact_status;
+    if (artifact_request)
+        return artifacts_route(owner, artifact_activity_id,
+                               artifact_receipt_digest, arena, writer);
     if (strcmp(path, "/v1/protocol/account-state/head") == 0)
         return head_route(owner, arena, writer);
     if (strncmp(path, receipt_prefix, sizeof(receipt_prefix) - 1U) == 0) {
@@ -553,22 +691,6 @@ static lxp_result route_inner(lxp_daemon_protocol_owner *owner,
                 key[index] = (uint8_t)((unsigned int)hex_nibble(key_text[index * 2U]) << 4U |
                                       (unsigned int)hex_nibble(key_text[index * 2U + 1U]));
             return idempotency_receipt_route(owner, key, arena, writer);
-        }
-        if (strncmp(suffix, "activities/", 11U) == 0) {
-            static const char tail[] = "/artifacts?receipt_digest=";
-            char activity_text[65];
-            uint8_t activity_id[32], receipt_digest[32];
-            const char *activity = suffix + 11U;
-            if (strlen(activity) != 64U + sizeof(tail) - 1U + 64U ||
-                memcmp(activity + 64U, tail, sizeof(tail) - 1U) != 0)
-                return LXP_ERR_NON_CANONICAL;
-            (void)memcpy(activity_text, activity, 64U);
-            activity_text[64] = '\0';
-            if (parse_hex32(activity_text, activity_id) != LXP_OK ||
-                parse_hex32(activity + 64U + sizeof(tail) - 1U,
-                            receipt_digest) != LXP_OK)
-                return LXP_ERR_NON_CANONICAL;
-            return artifacts_route(owner, activity_id, receipt_digest, arena, writer);
         }
         if (strcmp(suffix, "account-state/changes") == 0)
             return LXP_ERR_NON_CANONICAL;
@@ -626,6 +748,8 @@ lxp_result lxp_daemon_protocol_owner_attach(
     lxp_result status;
     pthread_mutexattr_t mutex_attributes;
     bool mutex_initialized = false;
+    bool publication_mutex_initialized = false;
+    bool receipt_authority_mutex_initialized = false;
     bool receipt_mutex_initialized = false;
     const char *stage = "input validation";
     if (owner == NULL || kernel == NULL || identities == NULL ||
@@ -664,6 +788,16 @@ lxp_result lxp_daemon_protocol_owner_attach(
     owner->listener_descriptor = -1;
     (void)memcpy(owner->bearer_token, bearer_token, bearer_token_length);
     owner->bearer_token_length = bearer_token_length;
+    if (pthread_mutex_init(&owner->publication_mutex, NULL) != 0) {
+        status = LXP_ERR_IO;
+        goto fail;
+    }
+    publication_mutex_initialized = true;
+    if (pthread_mutex_init(&owner->receipt_authority_mutex, NULL) != 0) {
+        status = LXP_ERR_IO;
+        goto fail;
+    }
+    receipt_authority_mutex_initialized = true;
     if (pthread_mutexattr_init(&mutex_attributes) != 0)
         status = LXP_ERR_IO;
     else {
@@ -809,6 +943,10 @@ fail:
             verified_receipts, NULL, NULL);
         if (receipt_mutex_initialized) (void)pthread_mutex_destroy(&owner->receipt_mutex);
         if (mutex_initialized) (void)pthread_mutex_destroy(&owner->mutex);
+        if (receipt_authority_mutex_initialized)
+            (void)pthread_mutex_destroy(&owner->receipt_authority_mutex);
+        if (publication_mutex_initialized)
+            (void)pthread_mutex_destroy(&owner->publication_mutex);
     }
     return status;
 }
@@ -828,6 +966,10 @@ lxp_result lxp_daemon_protocol_owner_detach(
         return LXP_FATAL_INVARIANT;
     if (pthread_mutex_destroy(&owner->receipt_mutex) != 0) return LXP_ERR_IO;
     if (pthread_mutex_destroy(&owner->mutex) != 0) return LXP_ERR_IO;
+    if (pthread_mutex_destroy(&owner->receipt_authority_mutex) != 0)
+        return LXP_ERR_IO;
+    if (pthread_mutex_destroy(&owner->publication_mutex) != 0)
+        return LXP_ERR_IO;
     lxp_secure_zero(owner->bearer_token, sizeof(owner->bearer_token));
     owner->bearer_token_length = 0U;
     return LXP_OK;
@@ -918,6 +1060,11 @@ lxp_result lxp_daemon_protocol_route(
 {
     json_writer writer = {NULL, 0U, 0U, LXP_OK};
     void *body = NULL;
+    uint8_t artifact_activity_id[32];
+    uint8_t artifact_receipt_digest[32];
+    bool artifact_request = false;
+    bool pending_artifact = false;
+    bool read_locked = false;
     lxp_result status;
     if (owner == NULL || !owner->attached || method == NULL || path == NULL ||
         response_arena == NULL || response == NULL)
@@ -927,9 +1074,23 @@ lxp_result lxp_daemon_protocol_route(
         response->status = 401U;
         status = LXP_ERR_BAD_SIGNATURE;
     } else {
-        (void)pthread_mutex_lock(&owner->mutex);
-        status = route_inner(owner, method, path, response_arena, &writer);
-        (void)pthread_mutex_unlock(&owner->mutex);
+        status = parse_artifacts_request(
+            method, path, artifact_activity_id, artifact_receipt_digest,
+            &artifact_request);
+        if (status == LXP_OK && artifact_request)
+            status = pending_artifacts_route(
+                owner, artifact_activity_id, artifact_receipt_digest,
+                &writer, &pending_artifact);
+        if (status == LXP_OK && !pending_artifact) {
+            status = protocol_read_lock(owner);
+            if (status == LXP_OK) {
+                read_locked = true;
+                status = route_inner(
+                    owner, method, path, response_arena, &writer);
+            }
+            if (read_locked)
+                status = protocol_read_unlock(owner, status);
+        }
         response->status = status == LXP_OK ? 200U :
                            status == LXP_ERR_UNKNOWN_ACTIVITY ? 404U : 503U;
     }

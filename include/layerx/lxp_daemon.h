@@ -283,6 +283,11 @@ typedef struct lxp_daemon_pending_receipt {
     uint8_t activity_id[32];
     uint8_t idempotency_key[32];
     uint64_t global_sequence;
+    lxp_byte_span canonical_header;
+    uint8_t header_signature[64];
+    lxp_merkle_proof receipt_proof;
+    lxp_byte_span terminal_payload;
+    lxp_byte_span call_graph;
 } lxp_daemon_pending_receipt;
 
 typedef struct lxp_daemon_protocol_owner {
@@ -309,6 +314,8 @@ typedef struct lxp_daemon_protocol_owner {
     uint32_t network_id;
     uint16_t protocol_version;
     uint64_t latest_sealed_timestamp;
+    pthread_mutex_t publication_mutex;
+    pthread_mutex_t receipt_authority_mutex;
     pthread_mutex_t mutex;
     pthread_cond_t listener_changed;
     pthread_t listener_thread;

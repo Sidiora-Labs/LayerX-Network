@@ -5,6 +5,7 @@ mod withdrawal;
 
 use layerx_client::client::{Client, ClientConfig, ReconnectPolicy};
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
+use layerx_client::lni::program_read::{ProgramReadError, ProgramReadResult};
 use layerx_client::lni::refusal::decode_core_refusal;
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
 use layerx_client::lni::simulate::SimulateError;
@@ -512,7 +513,7 @@ fn lni_limits() -> Limits {
 
 fn handshake_config(config: &Config) -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_5,
+        built_interface_version: Version::V1_6,
         expected_protocol_version: layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
         expected_network_id: config.network_id,
     }
@@ -585,6 +586,8 @@ fn lookup_receipt_selector(
             return Err("receipt publication wait requires LNI minor 5".to_owned());
         }
         selector.push(1);
+    } else if handshake.node().interface_version.minor >= Version::V1_6.minor {
+        selector.push(0);
     }
     let request = encode_envelope(Envelope {
         version: handshake.node().interface_version,
@@ -988,6 +991,186 @@ fn simulate_activity(config: &Config, canonical: &[u8]) -> Result<Response, Resp
     })))
 }
 
+struct ProgramReadFreshness {
+    minimum_sequence: u64,
+    expected_state_root: Option<[u8; 32]>,
+}
+
+fn program_read_freshness(request: &Request) -> Result<ProgramReadFreshness, Response> {
+    let minimum_sequence =
+        request
+            .headers
+            .get("layerx-minimum-sequence")
+            .map_or(Ok(0), |value| {
+                if value.is_empty()
+                    || (value.len() > 1 && value.starts_with('0'))
+                    || !value.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    return Err(refusal(400, "invalid_minimum_sequence", None));
+                }
+                value
+                    .parse::<u64>()
+                    .map_err(|_| refusal(400, "invalid_minimum_sequence", None))
+            })?;
+    let expected_state_root = request
+        .headers
+        .get("layerx-expected-state-root")
+        .map(|value| {
+            if value.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                return Err(refusal(400, "invalid_expected_state_root", None));
+            }
+            fixed_hex::<32>("expected state root", value)
+                .ok()
+                .filter(|root| *root != [0; 32])
+                .ok_or_else(|| refusal(400, "invalid_expected_state_root", None))
+        })
+        .transpose()?;
+    Ok(ProgramReadFreshness {
+        minimum_sequence,
+        expected_state_root,
+    })
+}
+
+fn program_read_response(
+    result: &ProgramReadResult,
+    program_id: [u8; 32],
+    result_code: i32,
+) -> Response {
+    success(&serde_json::json!({
+        "committed": false,
+        "read_only": true,
+        "execution": {
+            "state": if result_code == 0 { "read" } else { "refused" },
+            "activity_id": hex_encode(&result.execution.activity_id),
+            "program_id": hex_encode(&program_id),
+            "result_code": result_code,
+            "receipt": hex_encode(&result.execution.receipt),
+            "receipt_kind": "hypothetical",
+            "terminal_payload": hex_encode(&result.execution.terminal_payload),
+            "call_graph": hex_encode(&result.execution.call_graph),
+        },
+        "simulation_evidence": {
+            "boundary_id": hex_encode(&result.evidence.boundary_id),
+            "activity_id": hex_encode(&result.evidence.activity_id),
+            "previous_state_root": hex_encode(&result.evidence.previous_state_root),
+            "hypothetical_state_root": hex_encode(&result.evidence.hypothetical_state_root),
+            "observed_sequence": result.evidence.observed_sequence.to_string(),
+            "observed_at": result.evidence.observed_at.to_string(),
+            "committed": false,
+            "public_key": hex_encode(&result.evidence.public_key),
+            "signature": hex_encode(&result.evidence.signature),
+        },
+        "snapshot": {
+            "minimum_sequence": result.snapshot.minimum_sequence.to_string(),
+            "observed_sequence": result.snapshot.observed_sequence.to_string(),
+            "state_root": hex_encode(&result.snapshot.state_root),
+            "verification": "sequencer_signed_snapshot",
+        }
+    }))
+}
+
+fn program_read_activity(
+    config: &Config,
+    canonical: &[u8],
+    freshness: ProgramReadFreshness,
+) -> Result<Response, Response> {
+    let registry =
+        submission_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
+    let activity = layerx_wire::activity::decode_signed(canonical, &registry)
+        .map_err(|_| refusal(400, "invalid_activity", None))?;
+    if activity.activity_type().module() != ModuleId::Programs
+        || activity.activity_type().ordinal() != 3
+    {
+        return Err(refusal(400, "not_program_call", None));
+    }
+    let call = NativeProgramCall::decode(activity.payload())
+        .map_err(|_| refusal(400, "invalid_program_call", None))?;
+    let expected_activity_id = layerx_wire::hash::activity_id(&activity)
+        .map_err(|_| refusal(400, "invalid_activity", None))?;
+    let mut client = connect_client(config).map_err(|error| {
+        eprintln!("layerx-core-boundary: {error}");
+        refusal(503, "node_unavailable", Some(5))
+    })?;
+    let sequencer_key = client.handshake().node().authorised_sequencer_key;
+    let result = client
+        .read_program(
+            &registry,
+            canonical,
+            1,
+            freshness.minimum_sequence,
+            freshness.expected_state_root,
+        )
+        .map_err(|error| match error {
+            ProgramReadError::SnapshotStale => refusal(409, "snapshot_stale", Some(1)),
+            ProgramReadError::SnapshotMismatch => refusal(409, "snapshot_mismatch", None),
+            ProgramReadError::CoreRefusal { class, result } => {
+                eprintln!(
+                    "layerx-core-boundary: program read refused class {class} result {}",
+                    result.raw()
+                );
+                if class == 3 {
+                    refusal(503, "capability_unavailable", Some(30))
+                } else {
+                    refusal(422, "program_read_refused", None)
+                }
+            }
+            ProgramReadError::UnavailableCapability | ProgramReadError::InterfaceVersion(_) => {
+                refusal(503, "capability_unavailable", Some(30))
+            }
+            ProgramReadError::CanonicalActivity | ProgramReadError::MalformedRequest => {
+                refusal(400, "invalid_activity", None)
+            }
+            ProgramReadError::Disconnected | ProgramReadError::Transport(_) => {
+                refusal(503, "node_unavailable", Some(5))
+            }
+            other => {
+                eprintln!("layerx-core-boundary: program read unverifiable: {other:?}");
+                refusal(503, "node_unavailable", Some(5))
+            }
+        })?;
+    drop(client);
+    if result.execution.activity_id != expected_activity_id {
+        return Err(refusal(503, "node_unavailable", Some(5)));
+    }
+    let receipt =
+        layerx_proof::receipt::verify_sequencer_signature(&result.execution.receipt, sequencer_key)
+            .map_err(|_| refusal(503, "node_unavailable", Some(5)))?;
+    let protocol = receipt
+        .protocol()
+        .ok_or_else(|| refusal(503, "node_unavailable", Some(5)))?;
+    Ok(program_read_response(
+        &result,
+        call.callee().bytes(),
+        protocol.result_code(),
+    ))
+}
+
+fn program_read_route(config: &Config, request: &Request) -> Response {
+    let freshness = match program_read_freshness(request) {
+        Ok(freshness) => freshness,
+        Err(response) => return response,
+    };
+    let canonical = match request.headers.get("content-type").map(String::as_str) {
+        Some("application/octet-stream") => request.body.clone(),
+        Some("application/json") => {
+            let Ok(body) = serde_json::from_slice::<ActivityBody>(&request.body) else {
+                return refusal(400, "invalid_argument", None);
+            };
+            match hex_decode(&body.activity) {
+                Ok(bytes) => bytes,
+                Err(_) => return refusal(400, "invalid_argument", None),
+            }
+        }
+        _ => return refusal(400, "content_type_required", None),
+    };
+    if canonical.is_empty() || canonical.len() > LNI_FRAME_BYTES {
+        return refusal(400, "invalid_argument", None);
+    }
+    match program_read_activity(config, &canonical, freshness) {
+        Ok(response) | Err(response) => response,
+    }
+}
+
 fn simulate_route(config: &Config, request: &Request) -> Response {
     let canonical = match request.headers.get("content-type").map(String::as_str) {
         Some("application/octet-stream") => request.body.clone(),
@@ -1385,6 +1568,7 @@ fn protocol_route(config: &Config, request: &Request) -> Response {
                 activities_route(config, request)
             })
         }
+        ("POST", "/v1/programs/read") => program_read_route(config, request),
         ("POST", "/v1/programs/simulate") => simulate_route(config, request),
         ("GET", "/v1/state") => wrapped_relay_route(
             config,
@@ -1409,6 +1593,7 @@ fn protocol_route(config: &Config, request: &Request) -> Response {
             | "/v1/programs/deploy"
             | "/v1/programs/upgrade"
             | "/v1/programs/wind-down"
+            | "/v1/programs/read"
             | "/v1/programs/simulate"
             | "/v1/state",
         ) => refusal(405, "method_not_allowed", None),

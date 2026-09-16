@@ -62,7 +62,9 @@ struct ProtocolAccountEffect {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ProgramsScheduleItem {
+    version: u16,
     call: CallScheduleDescriptor,
+    identity_actor: [u8; 32],
     identity_principal: [u8; 32],
     occupancy_asset: [u8; 32],
     occupancy_treasury: [u8; 32],
@@ -251,7 +253,7 @@ fn schedule_protocol_effects(
                 .and_then(|accounts| {
                     crate::schedule::ProtocolScheduleEffects::new(
                         accounts,
-                        [item.identity_principal],
+                        [item.identity_actor, item.identity_principal],
                     )
                 })
         } else {
@@ -270,8 +272,10 @@ fn prepare_schedule_item(
     }
     let owner_count = validate_schedule_owners(&call)?;
     let account_count = usize::from(item.account_effect_count);
-    if item.protocol_effects_complete > 1
+    if item.version != SCHEDULE_ITEM_VERSION
+        || item.protocol_effects_complete > 1
         || account_count > item.account_effects.len()
+        || item.identity_actor == [0; 32]
         || item.identity_principal == [0; 32]
         || item.identity_principal != call.principal
         || item.account_effects[account_count..]
@@ -381,6 +385,7 @@ pub unsafe extern "C" fn layerx_programs_schedule_plan(
 const OK: i32 = 0;
 const NON_CANONICAL: i32 = -3;
 const LENGTH_LIMIT: i32 = -5;
+const SCHEDULE_ITEM_VERSION: u16 = 2;
 const MODULE_DISABLED: i32 = -103;
 const INSUFFICIENT_BALANCE: i32 = -400;
 const FATAL_INVARIANT: i32 = -1001;
