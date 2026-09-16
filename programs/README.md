@@ -197,7 +197,7 @@ transfer primitive… a balance change outside a 402LXP transfer aborts the tran
 
 ## SDKs and porting kits
 
-ABI 2 is the current frozen guest ABI; ABI 1 remains supported for legacy programs.
+ABI 3 is the current frozen guest ABI; ABI 1 and ABI 2 remain supported for existing programs.
 Guest program SDKs include:
 
 - **`sdk/rust`** (`layerx-program-sdk`) - the Rust guest SDK.

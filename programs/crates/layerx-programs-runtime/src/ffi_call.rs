@@ -9,13 +9,14 @@ use crate::validate::AbiRevision;
 use crate::{
     AbiError, AccessSet, ActivityBudgetBinding, AtomicTransferSet, AuthorizationContext,
     BalanceView, BudgetMeterRefusal, BudgetResourceKind, BudgetedAuthorizedExecutionRequest,
-    BudgetedV1FailureCause, CandidateAuthorizedExecutionRecord, CapabilitySet, CompiledModule,
-    CompositionContext, CompositionRefusal, CompositionRules, DeclaredBudget, EntrypointRefusal,
-    ExecutionFault, Executor, KernelTransferEvidence, KernelTransferPrimitive, MeterRefusal,
-    MeteredUsage, ModuleCacheKey, PreparedAuthorizedActivityOutcome, PrincipalId, ProgramEvent,
-    ProgramId, ProgramResolver, ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal,
-    RuntimeArtifactOwnerRefusal, Storage, StorageNamespace, TransferCapability, TransferLawError,
-    TransferSource, V2ActivityOutcome,
+    BudgetedV1FailureCause, CandidateAuthorizedExecutionRecord, CapabilitySet, CommittedOracle,
+    CompiledModule, CompositionContext, CompositionRefusal, CompositionRules, DeclaredBudget,
+    EntrypointRefusal, ExecutionFault, Executor, KernelTransferEvidence, KernelTransferPrimitive,
+    MeterRefusal, MeteredUsage, ModuleCacheKey, OracleObservation,
+    PreparedAuthorizedActivityOutcome, PrincipalId, ProgramEvent, ProgramId, ProgramResolver,
+    ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal, RuntimeArtifactOwnerRefusal,
+    Storage, StorageNamespace, TransferCapability, TransferLawError, TransferSource,
+    V2ActivityOutcome,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -384,6 +385,8 @@ pub unsafe extern "C" fn layerx_programs_schedule_plan(
 
 const OK: i32 = 0;
 const NON_CANONICAL: i32 = -3;
+const UNKNOWN_FIELD: i32 = -7;
+const MARKET_HALTED: i32 = -703;
 const LENGTH_LIMIT: i32 = -5;
 const SCHEDULE_ITEM_VERSION: u16 = 2;
 const MODULE_DISABLED: i32 = -103;
@@ -391,6 +394,7 @@ const INSUFFICIENT_BALANCE: i32 = -400;
 const FATAL_INVARIANT: i32 = -1001;
 const ABI_V1_VERSION: u16 = 1;
 const ABI_V2_VERSION: u16 = 2;
+const ABI_V3_VERSION: u16 = 3;
 const PROTOCOL_LEGACY: u16 = 1;
 const PROTOCOL_OCCUPANCY: u16 = 2;
 const PROTOCOL_STATE_COMMITMENT: u16 = 3;
@@ -548,7 +552,7 @@ const fn protocol_uses_occupancy(protocol_version: u16) -> bool {
 const fn protocol_admits_abi(protocol_version: u16, abi_version: u16) -> bool {
     match abi_version {
         ABI_V1_VERSION => protocol_supported(protocol_version),
-        ABI_V2_VERSION => protocol_uses_occupancy(protocol_version),
+        ABI_V2_VERSION | ABI_V3_VERSION => protocol_uses_occupancy(protocol_version),
         _ => false,
     }
 }
@@ -557,6 +561,7 @@ const fn revision_tag(value: AbiRevision) -> u8 {
     match value {
         AbiRevision::V1 => 1,
         AbiRevision::V2 => 2,
+        AbiRevision::V3 => 3,
     }
 }
 const fn meter_kind(value: ResourceKind) -> u8 {
@@ -616,6 +621,8 @@ fn abi_payload(value: &AbiError) -> Vec<u8> {
         AbiError::BalanceAbsent => vec![13],
         AbiError::BalanceEvidenceUnavailable => vec![14],
         AbiError::AccessDeclaration => vec![15],
+        AbiError::OracleUnknownMarket => vec![16],
+        AbiError::OracleMarketHalted => vec![17],
         AbiError::InvalidEncoding => vec![10],
         AbiError::Storage(error) => vec![11, storage_tag(*error)],
         AbiError::Meter(error) => {
@@ -925,6 +932,14 @@ unsafe extern "C" {
         d3: u64,
     ) -> i32;
     fn layerx_programs_call_balance_view_byte(token: u64, section: u16, offset: u32) -> i32;
+    fn layerx_programs_call_oracle_view_begin(
+        token: u64,
+        m0: u64,
+        m1: u64,
+        m2: u64,
+        m3: u64,
+    ) -> i32;
+    fn layerx_programs_call_oracle_view_byte(token: u64, section: u16, offset: u32) -> i32;
     fn layerx_programs_call_catalog_storage_cell_count(
         token: u64,
         index: u32,
@@ -1536,6 +1551,62 @@ fn export_catalog_storage(
 }
 
 #[derive(Debug)]
+struct CCommittedOracle {
+    token: u64,
+}
+
+impl CommittedOracle for CCommittedOracle {
+    fn committed_observation(&self, market: [u8; 32]) -> Result<OracleObservation, AbiError> {
+        let market_words = words(market);
+        let status = unsafe {
+            layerx_programs_call_oracle_view_begin(
+                self.token,
+                market_words[0],
+                market_words[1],
+                market_words[2],
+                market_words[3],
+            )
+        };
+        if status == UNKNOWN_FIELD {
+            return Err(AbiError::OracleUnknownMarket);
+        }
+        if status == MARKET_HALTED {
+            return Err(AbiError::OracleMarketHalted);
+        }
+        c_ok(status).map_err(|_| AbiError::InvalidEncoding)?;
+        let read = |section, length| {
+            scalar_bytes(length, |offset| unsafe {
+                layerx_programs_call_oracle_view_byte(self.token, section, offset)
+            })
+            .map_err(|_| AbiError::InvalidEncoding)
+        };
+        let returned = <[u8; 32]>::try_from(read(0, 32)?).map_err(|_| AbiError::InvalidEncoding)?;
+        let record = <[u8; crate::ORACLE_OBSERVATION_BYTES]>::try_from(read(
+            1,
+            crate::ORACLE_OBSERVATION_BYTES,
+        )?)
+        .map_err(|_| AbiError::InvalidEncoding)?;
+        if returned != market {
+            return Err(AbiError::InvalidEncoding);
+        }
+        let price = <[u8; 16]>::try_from(&record[..16]).map_err(|_| AbiError::InvalidEncoding)?;
+        let observed_at =
+            <[u8; 8]>::try_from(&record[16..24]).map_err(|_| AbiError::InvalidEncoding)?;
+        let sequence =
+            <[u8; 8]>::try_from(&record[24..32]).map_err(|_| AbiError::InvalidEncoding)?;
+        let source_set_digest =
+            <[u8; 32]>::try_from(&record[32..]).map_err(|_| AbiError::InvalidEncoding)?;
+        Ok(OracleObservation {
+            market,
+            price: u128::from_le_bytes(price),
+            observed_at: u64::from_le_bytes(observed_at),
+            sequence: u64::from_le_bytes(sequence),
+            source_set_digest,
+        })
+    }
+}
+
+#[derive(Debug)]
 struct CReceiptOracle {
     token: u64,
 }
@@ -1991,6 +2062,7 @@ fn terminal(request: TerminalPublication<'_>) -> Result<i32, i32> {
 fn terminal_sandbox_postexecution_failure(
     token: u64,
     schedule: u32,
+    abi: u16,
     record: &CandidateAuthorizedExecutionRecord,
     program: ProgramId,
     binding: ActivityBudgetBinding,
@@ -2022,7 +2094,7 @@ fn terminal_sandbox_postexecution_failure(
         kind: FAILURE,
         result: PROGRAM_REFUSED,
         runtime: record.execution().runtime_version(),
-        abi: 2,
+        abi,
         schedule,
         metering_schedule: record.execution().metering_schedule_version(),
         usage: settlement.usage,
@@ -2529,7 +2601,8 @@ pub extern "C" fn layerx_programs_call_begin(
             return Err(NON_CANONICAL);
         }
         if unsafe { layerx_programs_call_sandbox_context(token) } == OK
-            && (!protocol_uses_occupancy(protocol_version) || abi_version != ABI_V2_VERSION)
+            && (!protocol_uses_occupancy(protocol_version)
+                || !matches!(abi_version, ABI_V2_VERSION | ABI_V3_VERSION))
         {
             return Err(NON_CANONICAL);
         }
@@ -2763,7 +2836,9 @@ pub extern "C" fn layerx_programs_call_begin(
         let root_module = root_module.ok_or(FATAL_INVARIANT)?;
         let grants = match root_module.validated().abi_revision() {
             AbiRevision::V1 => CapabilitySet::decode_canonical(&encoded_capabilities),
-            AbiRevision::V2 => CapabilitySet::decode_v2_canonical(&encoded_capabilities),
+            AbiRevision::V2 | AbiRevision::V3 => {
+                CapabilitySet::decode_v2_canonical(&encoded_capabilities)
+            }
         }
         .map_err(|_| NON_CANONICAL)?;
         let capabilities = CapabilitySet::new(grants).map_err(|_| NON_CANONICAL)?;
@@ -2802,7 +2877,10 @@ pub extern "C" fn layerx_programs_call_begin(
         let receipts = CReceiptOracle { token };
         let authorization = AuthorizationContext::new(execution_principal, capabilities)
             .with_payment_account(payment_account);
-        let v2_transfer = if root_module.validated().abi_revision() == AbiRevision::V2 {
+        let v2_transfer = if matches!(
+            root_module.validated().abi_revision(),
+            AbiRevision::V2 | AbiRevision::V3
+        ) {
             Some(
                 TransferCapability::from_root_authorization(
                     program,
@@ -2840,7 +2918,10 @@ pub extern "C" fn layerx_programs_call_begin(
         terminal_events
             .try_reserve_exact(5_242_880)
             .map_err(|_| LENGTH_LIMIT)?;
-        if root_module.validated().abi_revision() == AbiRevision::V2 {
+        if matches!(
+            root_module.validated().abi_revision(),
+            AbiRevision::V2 | AbiRevision::V3
+        ) {
             let execution_context = crate::abi::context::ExecutionContext::authenticated(
                 activity_sequence,
                 batch_number,
@@ -2855,6 +2936,7 @@ pub extern "C" fn layerx_programs_call_begin(
                     &mut final_storage,
                     BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding)
                         .with_access_declaration(access_declaration.clone())
+                        .with_committed_oracle(Arc::new(CCommittedOracle { token }))
                         .with_authenticated_execution_context(execution_context),
                 )
                 .map_err(|_| NON_CANONICAL)?;
@@ -2883,7 +2965,7 @@ pub extern "C" fn layerx_programs_call_begin(
                                     kind: FAILURE,
                                     result: PROGRAM_REFUSED,
                                     runtime: record.execution().runtime_version(),
-                                    abi: 2,
+                                    abi: abi_version,
                                     schedule: fee_schedule_version,
                                     metering_schedule: record
                                         .execution()
@@ -2920,7 +3002,7 @@ pub extern "C" fn layerx_programs_call_begin(
                                     kind: FAILURE,
                                     result: PROGRAM_REFUSED,
                                     runtime: record.execution().runtime_version(),
-                                    abi: 2,
+                                    abi: abi_version,
                                     schedule: fee_schedule_version,
                                     metering_schedule: record
                                         .execution()
@@ -2961,7 +3043,7 @@ pub extern "C" fn layerx_programs_call_begin(
                                     kind: FAILURE,
                                     result: PROGRAM_REFUSED,
                                     runtime: record.execution().runtime_version(),
-                                    abi: 2,
+                                    abi: abi_version,
                                     schedule: fee_schedule_version,
                                     metering_schedule: record
                                         .execution()
@@ -3015,6 +3097,7 @@ pub extern "C" fn layerx_programs_call_begin(
                             return terminal_sandbox_postexecution_failure(
                                 token,
                                 fee_schedule_version,
+                                abi_version,
                                 &record,
                                 program,
                                 binding,
@@ -3037,6 +3120,7 @@ pub extern "C" fn layerx_programs_call_begin(
                             return terminal_sandbox_postexecution_failure(
                                 token,
                                 fee_schedule_version,
+                                abi_version,
                                 &record,
                                 program,
                                 binding,
@@ -3052,7 +3136,7 @@ pub extern "C" fn layerx_programs_call_begin(
                             kind: FAILURE,
                             result: PROGRAM_REFUSED,
                             runtime: record.execution().runtime_version(),
-                            abi: 2,
+                            abi: abi_version,
                             schedule: fee_schedule_version,
                             metering_schedule: record.execution().metering_schedule_version(),
                             usage: record.execution().usage(),
@@ -3078,6 +3162,7 @@ pub extern "C" fn layerx_programs_call_begin(
                                 return terminal_sandbox_postexecution_failure(
                                     token,
                                     fee_schedule_version,
+                                    abi_version,
                                     &record,
                                     program,
                                     binding,
@@ -3093,7 +3178,7 @@ pub extern "C" fn layerx_programs_call_begin(
                                 kind: FAILURE,
                                 result: PROGRAM_REFUSED,
                                 runtime: record.execution().runtime_version(),
-                                abi: 2,
+                                abi: abi_version,
                                 schedule: fee_schedule_version,
                                 metering_schedule: record.execution().metering_schedule_version(),
                                 usage: record.execution().usage(),
@@ -3134,6 +3219,7 @@ pub extern "C" fn layerx_programs_call_begin(
                             return terminal_sandbox_postexecution_failure(
                                 token,
                                 fee_schedule_version,
+                                abi_version,
                                 &record,
                                 program,
                                 binding,
@@ -3149,7 +3235,7 @@ pub extern "C" fn layerx_programs_call_begin(
                             kind: FAILURE,
                             result: PROGRAM_REFUSED,
                             runtime: record.execution().runtime_version(),
-                            abi: 2,
+                            abi: abi_version,
                             schedule: fee_schedule_version,
                             metering_schedule: record.execution().metering_schedule_version(),
                             usage: record.execution().usage(),
@@ -3188,7 +3274,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         kind: SUCCESS,
                         result: OK,
                         runtime: record.execution().runtime_version(),
-                        abi: 2,
+                        abi: abi_version,
                         schedule: fee_schedule_version,
                         metering_schedule: record.execution().metering_schedule_version(),
                         usage: terminal_usage,
@@ -3244,7 +3330,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         kind: FAILURE,
                         result: PROGRAM_REFUSED,
                         runtime: record.execution().runtime_version(),
-                        abi: 2,
+                        abi: abi_version,
                         schedule: fee_schedule_version,
                         metering_schedule: record.execution().metering_schedule_version(),
                         usage: terminal_usage,
@@ -3292,7 +3378,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         kind: RESOURCE,
                         result: GAS_EXHAUSTED,
                         runtime: record.execution().runtime_version(),
-                        abi: 2,
+                        abi: abi_version,
                         schedule: fee_schedule_version,
                         metering_schedule: record.execution().metering_schedule_version(),
                         usage: terminal_usage,

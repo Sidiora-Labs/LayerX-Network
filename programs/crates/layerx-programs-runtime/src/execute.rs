@@ -243,6 +243,14 @@ fn trace_identity(
     })
 }
 
+const fn recorded_abi_version(revision: AbiRevision) -> u16 {
+    match revision {
+        AbiRevision::V1 => crate::ABI_V1_VERSION,
+        AbiRevision::V2 => crate::ABI_V2_VERSION,
+        AbiRevision::V3 => crate::ABI_V3_VERSION,
+    }
+}
+
 fn canonical_trace_bytes(trace: &crate::ExecutionTrace) -> Vec<u8> {
     trace.canonical_arbitration_bytes().unwrap_or_else(|_| {
         unreachable!("ordinary traced execution is constructed with a validated v2 chain")
@@ -2031,6 +2039,7 @@ impl V2AuthorizedExecutionRecord {
             abi_revision: match self.abi_revision {
                 AbiRevision::V1 => crate::ABI_V1_VERSION,
                 AbiRevision::V2 => crate::ABI_V2_VERSION,
+                AbiRevision::V3 => crate::ABI_V3_VERSION,
             },
             runtime_version: self.execution.runtime_version,
             fee_schedule_version: self.execution.fee_schedule_version,
@@ -2118,6 +2127,7 @@ impl V2AuthorizedExecutionRecord {
         let abi_revision = match self.abi_revision {
             AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
             AbiRevision::V2 => 2,
+            AbiRevision::V3 => 3,
         };
         evidence.extend_from_slice(&abi_revision.to_be_bytes());
         match &self.outcome {
@@ -2198,6 +2208,7 @@ impl V2AuthorizedExecutionRecord {
             &match self.abi_revision {
                 AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
                 AbiRevision::V2 => 2,
+                AbiRevision::V3 => 3,
             }
             .to_be_bytes(),
         );
@@ -2607,6 +2618,7 @@ pub struct BudgetedAuthorizedExecutionRequest<'a> {
     activity_binding: ActivityBudgetBinding,
     execution_context: Option<ExecutionContext>,
     access_declaration: crate::AccessDeclaration,
+    committed_oracle: Option<std::sync::Arc<dyn crate::abi::CommittedOracle + Send + Sync>>,
     transfer_authority_v2: bool,
 }
 
@@ -2627,7 +2639,20 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
             execution_context: None,
             transfer_authority_v2: false,
             access_declaration: crate::AccessDeclaration::absent(),
+            committed_oracle: None,
         }
+    }
+
+    /// Attaches the core-owned boundary serving observations already committed
+    /// under the batch header's oracle root.
+    #[must_use]
+    #[cfg(feature = "host-ffi")]
+    pub(crate) fn with_committed_oracle(
+        mut self,
+        oracle: std::sync::Arc<dyn crate::abi::CommittedOracle + Send + Sync>,
+    ) -> Self {
+        self.committed_oracle = Some(oracle);
+        self
     }
 
     /// Attaches the declaration already committed by the canonical activity
@@ -2895,6 +2920,7 @@ impl Executor {
         match self.abi_version {
             crate::ABI_V1_VERSION => Ok(AbiRevision::V1),
             crate::ABI_V2_VERSION => Ok(AbiRevision::V2),
+            crate::ABI_V3_VERSION => Ok(AbiRevision::V3),
             _ => Err(ExecutionError::Abi(AbiError::WrongVersion)),
         }
     }
@@ -3032,10 +3058,7 @@ impl Executor {
         export: &str,
         args: &[WasmValue],
     ) -> Result<ExecutionRecord, ExecutionError> {
-        let selected = match module.abi_revision() {
-            AbiRevision::V1 => crate::ABI_V1_VERSION,
-            AbiRevision::V2 => crate::ABI_V2_VERSION,
-        };
+        let selected = recorded_abi_version(module.abi_revision());
         if selected != self.abi_version {
             return Err(ExecutionError::Abi(AbiError::WrongVersion));
         }
@@ -3353,6 +3376,7 @@ impl Executor {
             activity_binding,
             execution_context: _,
             access_declaration,
+            committed_oracle: _,
             transfer_authority_v2: _,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
@@ -3654,6 +3678,7 @@ impl Executor {
             None,
             None,
             crate::AccessDeclaration::absent(),
+            None,
         )
     }
 
@@ -3678,6 +3703,7 @@ impl Executor {
             activity_binding,
             execution_context,
             access_declaration,
+            committed_oracle,
             transfer_authority_v2: _,
         } = budgeted;
         let executor = self.for_abi(crate::ABI_V2_VERSION);
@@ -3689,6 +3715,7 @@ impl Executor {
             Some(activity_binding),
             execution_context,
             access_declaration,
+            committed_oracle,
         )
     }
 
@@ -3705,6 +3732,7 @@ impl Executor {
             activity_binding,
             execution_context,
             access_declaration,
+            committed_oracle,
             transfer_authority_v2: _,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
@@ -3727,6 +3755,7 @@ impl Executor {
             Some(activity_binding),
             Some(execution_context),
             access_declaration,
+            committed_oracle,
         )
     }
 
@@ -3739,10 +3768,13 @@ impl Executor {
         activity_binding: Option<ActivityBudgetBinding>,
         execution_context: Option<ExecutionContext>,
         access_declaration: crate::AccessDeclaration,
+        committed_oracle: Option<std::sync::Arc<dyn crate::abi::CommittedOracle + Send + Sync>>,
     ) -> Result<V2AuthorizedExecutionRecord, ExecutionError> {
         let budgeted = activity_binding.is_some();
-        if self.abi_version != crate::ABI_V2_VERSION
-            || request.module.abi_revision() != AbiRevision::V2
+        if !matches!(
+            request.module.abi_revision(),
+            AbiRevision::V2 | AbiRevision::V3
+        ) || self.abi_version != recorded_abi_version(request.module.abi_revision())
         {
             return Err(ExecutionError::Abi(AbiError::WrongVersion));
         }
@@ -3785,6 +3817,9 @@ impl Executor {
         )
         .map_err(ExecutionError::Abi)?;
         abi.set_access_declaration(access_declaration);
+        if let Some(oracle) = committed_oracle {
+            abi.set_committed_oracle(oracle);
+        }
         let composition = Composition::new(
             request
                 .composition

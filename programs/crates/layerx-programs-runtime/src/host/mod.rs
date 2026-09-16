@@ -6,6 +6,7 @@ mod context;
 mod crypto;
 mod events;
 pub(crate) mod memory;
+mod oracle;
 mod scan;
 mod signature;
 mod storage;
@@ -32,6 +33,8 @@ pub(super) const STATUS_BOUNDS: i32 = -3;
 pub(super) const STATUS_METER: i32 = -4;
 pub(super) const STATUS_EVIDENCE: i32 = -5;
 pub(super) const STATUS_ABSENT: i32 = -7;
+pub(super) const STATUS_ORACLE_UNKNOWN_MARKET: i32 = -8;
+pub(super) const STATUS_ORACLE_MARKET_HALTED: i32 = -9;
 pub(super) const COMPOSITION_REFUSED: &str = "program composition refused the call graph";
 
 fn wasmi_usage(meter: crate::MeteredUsage) -> wasmi::ExecutionMeteredUsage {
@@ -162,6 +165,7 @@ fn abi_revision_byte(revision: AbiRevision) -> u8 {
     match revision {
         AbiRevision::V1 => 1,
         AbiRevision::V2 => 2,
+        AbiRevision::V3 => 3,
     }
 }
 
@@ -1085,6 +1089,7 @@ pub(crate) fn linker(engine: &Engine) -> Result<HostLinker, ExecutionFault> {
     storage::register_v2(&mut linker)?;
     transfer::register_v2(&mut linker)?;
     balance::register_v2(&mut linker)?;
+    oracle::register_v3(&mut linker)?;
     transfer::register(&mut linker)?;
     linker
         .func_wrap(
@@ -1122,8 +1127,9 @@ pub(crate) fn linker(engine: &Engine) -> Result<HostLinker, ExecutionFault> {
             },
         )
         .map_err(|error| linker_fault(&error))?;
-    let registered_function_count =
-        crate::abi::HOST_FUNCTIONS.len() + crate::abi::manifest::ABI_V2_HOST_FUNCTIONS.len();
+    let registered_function_count = crate::abi::HOST_FUNCTIONS.len()
+        + crate::abi::manifest::ABI_V2_HOST_FUNCTIONS.len()
+        + crate::abi::manifest::ABI_V3_HOST_FUNCTIONS.len();
     Ok(HostLinker {
         linker,
         construction_count: 1,
@@ -1149,6 +1155,8 @@ pub(crate) const fn error_status(error: &AbiError) -> i32 {
         AbiError::Meter(_) => STATUS_METER,
         AbiError::ReceiptMismatch | AbiError::BalanceEvidenceUnavailable => STATUS_EVIDENCE,
         AbiError::BalanceAbsent => STATUS_ABSENT,
+        AbiError::OracleUnknownMarket => STATUS_ORACLE_UNKNOWN_MARKET,
+        AbiError::OracleMarketHalted => STATUS_ORACLE_MARKET_HALTED,
         AbiError::Storage(
             crate::storage::StorageError::InvalidScanCursor
             | crate::storage::StorageError::InvalidScanLimits,

@@ -50,6 +50,7 @@ pub mod ids;
 pub mod lxt20;
 pub mod lxt721;
 pub mod naming;
+pub mod oracle;
 pub mod payments;
 pub mod receipt;
 pub mod storage;
@@ -95,6 +96,7 @@ pub use error::{
 };
 pub use event::{EventData, EventTopic};
 pub use ids::{AccountId, AssetId, ProgramId, ReceiptDigest};
+pub use oracle::{Observation, OBSERVATION_BYTES};
 pub use receipt::Receipt;
 pub use storage::{StorageKey, StorageValue};
 pub use transfer::{Payment, ProgramAccountPayment, ProgramAccountSeed, ProgramDeposit};

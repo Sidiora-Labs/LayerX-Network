@@ -4,6 +4,7 @@
 
 use core::fmt::{self, Display};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub mod balance;
 pub(crate) mod capability;
@@ -315,6 +316,53 @@ impl ReceiptOracle for UnavailableReceiptOracle {
     }
 }
 
+/// Fixed little-endian bytes of one committed oracle observation.
+pub const ORACLE_OBSERVATION_BYTES: usize = 64;
+
+/// Latest perps oracle observation already committed under `oracle_root`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OracleObservation {
+    pub market: [u8; 32],
+    pub price: u128,
+    pub observed_at: u64,
+    pub sequence: u64,
+    pub source_set_digest: [u8; 32],
+}
+
+impl OracleObservation {
+    /// Returns the fixed record handed to the guest: price, timestamp and
+    /// sequence as little-endian integers followed by the source set digest.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> [u8; ORACLE_OBSERVATION_BYTES] {
+        let mut bytes = [0; ORACLE_OBSERVATION_BYTES];
+        bytes[..16].copy_from_slice(&self.price.to_le_bytes());
+        bytes[16..24].copy_from_slice(&self.observed_at.to_le_bytes());
+        bytes[24..32].copy_from_slice(&self.sequence.to_le_bytes());
+        bytes[32..].copy_from_slice(&self.source_set_digest);
+        bytes
+    }
+}
+
+/// Core-owned boundary supplying the committed observation for one market.
+pub trait CommittedOracle: fmt::Debug {
+    /// Returns the observation the perps engine committed for this market.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal when the market is unknown or halted.
+    fn committed_observation(&self, market: [u8; 32]) -> Result<OracleObservation, AbiError>;
+}
+
+/// Fail-closed oracle boundary for executions with no committed oracle store.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UnavailableCommittedOracle;
+
+impl CommittedOracle for UnavailableCommittedOracle {
+    fn committed_observation(&self, _: [u8; 32]) -> Result<OracleObservation, AbiError> {
+        Err(AbiError::OracleUnknownMarket)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramEvent {
     pub program: ProgramId,
@@ -479,6 +527,8 @@ pub enum AbiError {
     Storage(StorageError),
     Meter(MeterRefusal),
     AccessDeclaration,
+    OracleUnknownMarket,
+    OracleMarketHalted,
 }
 
 impl Display for AbiError {
@@ -503,6 +553,8 @@ impl Display for AbiError {
             Self::AccessDeclaration => {
                 formatter.write_str("access falls outside the activity declaration")
             }
+            Self::OracleUnknownMarket => formatter.write_str("committed oracle market is unknown"),
+            Self::OracleMarketHalted => formatter.write_str("committed oracle market is halted"),
         }
     }
 }
@@ -533,6 +585,7 @@ pub struct Abi {
     storage: Storage,
     receipts: BTreeMap<[u8; 32], ReceiptView>,
     balances: BTreeMap<([u8; 32], [u8; 32]), Result<BalanceView, AbiError>>,
+    oracle: Arc<dyn CommittedOracle + Send + Sync>,
     effects: AbiEffects,
     event_count_base: usize,
     access_declaration: crate::AccessDeclaration,
@@ -600,6 +653,7 @@ impl Abi {
             storage,
             receipts: verified,
             balances,
+            oracle: Arc::new(UnavailableCommittedOracle),
             effects: AbiEffects::default(),
             event_count_base: 0,
             access_declaration: crate::AccessDeclaration::absent(),
@@ -644,6 +698,7 @@ impl Abi {
             storage,
             receipts,
             balances,
+            oracle: Arc::new(UnavailableCommittedOracle),
             effects: AbiEffects::default(),
             event_count_base: 0,
             access_declaration: crate::AccessDeclaration::absent(),
@@ -714,6 +769,14 @@ impl Abi {
         &self,
     ) -> BTreeMap<([u8; 32], [u8; 32]), Result<BalanceView, AbiError>> {
         self.balances.clone()
+    }
+
+    pub(crate) fn set_committed_oracle(&mut self, oracle: Arc<dyn CommittedOracle + Send + Sync>) {
+        self.oracle = oracle;
+    }
+
+    pub(crate) fn committed_oracle(&self) -> Arc<dyn CommittedOracle + Send + Sync> {
+        Arc::clone(&self.oracle)
     }
 
     pub(crate) fn v2_host_state_commitment(&self) -> Result<HostStateCommitment, AbiError> {
@@ -1088,6 +1151,22 @@ impl Abi {
             .get(&(account, asset))
             .cloned()
             .ok_or(AbiError::BalanceAbsent)?
+    }
+
+    /// Reads the latest committed perps oracle observation for one market.
+    /// The observation is already committed under the batch header's
+    /// `oracle_root`, so no per-market sight grant narrows it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal when the market is unknown or halted.
+    pub fn oracle_read(&self, market: [u8; 32]) -> Result<OracleObservation, AbiError> {
+        let observation = self.oracle.committed_observation(market)?;
+        if observation.market == market {
+            Ok(observation)
+        } else {
+            Err(AbiError::OracleUnknownMarket)
+        }
     }
 
     /// Atomically commits storage and returns effects for the kernel. Dropping

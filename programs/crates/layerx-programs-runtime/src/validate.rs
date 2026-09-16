@@ -22,6 +22,7 @@ use crate::meter::Meter;
 pub enum AbiRevision {
     V1,
     V2,
+    V3,
 }
 
 /// A typed refusal produced while validating a module.
@@ -725,6 +726,7 @@ fn interface_capability_for_import(name: &str) -> u16 {
         "transfer_program_402" => 1 << 7,
         "receipt_read" => 1 << 8,
         "balance_read" => 1 << 9,
+        "oracle_read" => 1 << 10,
         _ => 0,
     }
 }
@@ -746,6 +748,7 @@ fn refuse_import(
     let version = match revision {
         AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
         AbiRevision::V2 => crate::abi::manifest::ABI_V2_VERSION,
+        AbiRevision::V3 => crate::abi::manifest::ABI_V3_VERSION,
     };
     let declaration = crate::abi::manifest::permitted_import(version, import.module, import.name)
         .ok_or_else(|| ValidationRefusal::ForbiddenImport {
@@ -1031,7 +1034,9 @@ mod linker_invariant_tests {
         assert_eq!(engine.host_linker_construction_count(), 1);
         assert_eq!(
             engine.host_function_registration_count(),
-            crate::abi::HOST_FUNCTIONS.len() + crate::abi::manifest::ABI_V2_HOST_FUNCTIONS.len()
+            crate::abi::HOST_FUNCTIONS.len()
+                + crate::abi::manifest::ABI_V2_HOST_FUNCTIONS.len()
+                + crate::abi::manifest::ABI_V3_HOST_FUNCTIONS.len()
         );
 
         let wasm = add_module();

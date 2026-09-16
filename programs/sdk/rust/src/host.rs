@@ -198,6 +198,18 @@ mod candidate_raw {
     }
 }
 
+mod v3_raw {
+    #[link(wasm_import_module = "layerx_v3")]
+    unsafe extern "C" {
+        pub(super) fn oracle_read(
+            market_pointer: i32,
+            market_length: i32,
+            output_pointer: i32,
+            output_capacity: i32,
+        ) -> i32;
+    }
+}
+
 fn exact(status: i32, expected: i32) -> Result<(), ProgramError> {
     let actual = ProgramError::from_status(status)?;
     if actual != expected {
@@ -229,6 +241,22 @@ pub(crate) fn balance_read(
     };
     exact(status, 16)?;
     Ok(16)
+}
+
+pub(crate) fn oracle_read(
+    market: &[u8; 32],
+    output: &mut [u8; crate::oracle::OBSERVATION_BYTES],
+) -> Result<i32, ProgramError> {
+    let status = unsafe {
+        v3_raw::oracle_read(
+            pointer(market)?,
+            32,
+            pointer_mut(output)?,
+            crate::oracle::OBSERVATION_BYTES as i32,
+        )
+    };
+    exact(status, crate::oracle::OBSERVATION_BYTES as i32)?;
+    Ok(crate::oracle::OBSERVATION_BYTES as i32)
 }
 
 pub(crate) fn hash(

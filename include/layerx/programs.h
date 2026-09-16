@@ -180,6 +180,8 @@ enum {
     LX_PROGRAMS_ACCOUNT_ABI_VERSION = 2,
     LX_PROGRAMS_SANDBOX_ABI_VERSION = 3,
     LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION = 4,
+    LX_PROGRAMS_GUEST_ABI_V2_VERSION = 2,
+    LX_PROGRAMS_GUEST_ABI_V3_VERSION = 3,
     LX_PROGRAMS_EVENT_DEPLOYED = 1,
     LX_PROGRAMS_EVENT_UPGRADED = 2,
     LX_PROGRAMS_EVENT_CALLED = 3,
@@ -549,6 +551,10 @@ lxp_result layerx_programs_call_balance_view_begin(
     uint64_t s0, uint64_t s1, uint64_t s2, uint64_t s3,
     uint64_t d0, uint64_t d1, uint64_t d2, uint64_t d3);
 lxp_result layerx_programs_call_balance_view_byte(
+    uint64_t token, uint16_t section, uint32_t offset);
+lxp_result layerx_programs_call_oracle_view_begin(
+    uint64_t token, uint64_t m0, uint64_t m1, uint64_t m2, uint64_t m3);
+lxp_result layerx_programs_call_oracle_view_byte(
     uint64_t token, uint16_t section, uint32_t offset);
 
 /* Per-catalog-program scalar storage projection.  The root-only storage
