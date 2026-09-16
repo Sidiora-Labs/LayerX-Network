@@ -729,3 +729,102 @@ verify_cmd = "make relay-archive-e2e"
 symbols = ["lxp_archive_codec_main", "RelayArchive"]
 touches = ["cmd/layerx-archive-codec", "cmd/layerxd/lxp_daemon_cli.c", "platform/relay_archive", "tests/relay-archive", "Makefile", "spec/layerx-beta/spec.kvx", "spec/layerx-beta/qualification.kvx", "spec/layerx-beta/requirements.md", "spec/layerx-beta/tasks.md", "spec/layerx-beta/design.md"]
 reqs = ["15.1","15.2","15.3","15.4","15.5","15.6","15.7"]
+
+# --------------------------------------------------------------------------
+# WAVE 8 - beta surface expansion. Owner decision 2026-09-16: close the
+# product gaps versus Ethereum, Solana and Paxeer that cost nothing in
+# consensus. Every task is one program or one additive kind; none touches
+# sequencing, fees, guarantors or governance. Bounded qualification per
+# spec/workflow.kvx: one build, one verify_cmd, two repair cycles, 30 min.
+[req.16]
+title = "Beta Surface Expansion"
+register_item = "Owner instruction 2026-09-16: close the native-closable capability gaps against Ethereum, Solana and Paxeer without adopting their consensus downsides"
+story = "As a user or agent choosing LayerX over a general-purpose chain, I want non-fungible assets, k-of-n and time-locked authority, human-readable names, a program-readable price feed, spot swaps, an uncapped token path and self-custody of my own key, so that the things I can do on a general chain I can also do here, while ordering, fees, guarantors and governance stay exactly as the protocol spec locks them."
+ac_1 = "THE programs SDK and registry SHALL define an LXT721 non-fungible interface (mint, transfer, approve, set_approval_for_all, owner_of, balance_of, token_uri, total_supply, metadata) next to LXT20, with a reference WASM program, a registry-enforced reference interface and a registry test that mirrors lxt20_reference, and ownership SHALL only change through the program's own storage under its namespace; no protocol change."
+ac_2 = "THE authority table SHALL gain two additive kinds: LXP_AUTHORITY_KIND_MULTISIG binding a grant to a k-of-n signer set whose approvals are collected as ordinary signed approvals and resolved by the one common resolver, and LXP_AUTHORITY_KIND_TIMELOCK binding a grant to an earliest-execution sequence or timestamp; existing kinds, encodings, grant ids and resolver results SHALL be byte-identical for existing grants, and a multisig grant below threshold or a timelock before maturity SHALL resolve to a typed refusal, never to success or to an unknown outcome."
+ac_3 = "THE programs SDK SHALL ship a naming registry reference program mapping a UTF-8 NFC-normalised name (3-63 chars, [a-z0-9-], no leading or trailing hyphen) to a DID with register, transfer, renew, resolve and reverse-resolve entry points, first-come ownership, an expiry paid in occupancy through fund_program_402, and a registry test; the human explorer lookup SHALL resolve a name through the program read path when present."
+ac_4 = "THE programs ABI SHALL gain an additive layerx_v2 host function oracle_read(market_id, out) that returns the latest committed perps oracle observation (price, timestamp, sequence, source set digest) for a market from the oracle store the batch header already commits under oracle_root, refusing with a typed result when the market is unknown or halted; validate.rs, ABI_MANIFEST, the C host binding, the Rust SDK wrapper and programs-abi-drift SHALL all agree, and a native test SHALL prove a program reads the same observation the perps engine used."
+ac_5 = "THE programs SDK SHALL ship a constant-product swap reference program over two LXT20 tokens or one LXT20 token and one 402LXP asset with add_liquidity, remove_liquidity, swap_exact_in, quote and reserves entry points, LP shares as an LXT20 program token, all value moved only through transfer_program_402 and program_call to the LXT20 programs, a slippage bound the caller supplies and a conservation test in programs/tests/conservation; the program holds no authority beyond its own derived account."
+ac_6 = "THE asset registry SHALL hold at least 1024 assets: LX_ASSET_REGISTRY_CAPACITY rises to 1024 with the state encoding, reserve attestation, genesis builder and every static array sized from it updated so that existing fixtures with fewer than 64 assets decode byte-identically and test-asset-registry, test-asset-reserve and the genesis builder pass; the gateway lx_listAssets SHALL paginate."
+ac_7 = "THE human service SHALL make self-custody the default posture: onboarding SHALL offer key export as the first path and custodial holding as an explicit opt-in; export SHALL be a step-up ceremony in the secret-reveal class bound to one operation digest that returns the DID primary key exactly once, records a durable audit event, and marks the identity self-custodied so the KMS refuses to sign for it afterwards; the existing no-key-export suite SHALL be rewritten to assert that export happens only through this ceremony and never through any other route, and spec/layerx-platform/spec.kvx [decision] custody and v1_scope SHALL be updated to state the new default."
+
+[task.8]
+title = "Beta surface expansion wave"
+status = "pending"
+
+[task.8.1]
+title = "Add the LXT721 non-fungible standard and reference program"
+status = "pending"
+wave = 8
+requires = []
+do_1 = "Add programs/sdk/rust/src/lxt721.rs mirroring lxt20.rs, programs/crates/layerx-programs-registry/src/lxt721.rs with reference_interface, a reference guest at programs/sdk/rust/examples/nft-lxt721 built by the same script pattern as examples/escrow, fixtures under registry tests, and tests/lxt721_reference.rs."
+verify_cmd = "cd programs && cargo test --locked -p layerx-programs-registry --test lxt721_reference"
+symbols = ["lxt721::reference_interface"]
+touches = ["programs/sdk/rust/src/lxt721.rs","programs/sdk/rust/src/lib.rs","programs/sdk/rust/examples/nft-lxt721","programs/crates/layerx-programs-registry/src/lxt721.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/lxt721_reference.rs","programs/crates/layerx-programs-registry/tests/fixtures","Makefile"]
+reqs = ["16.1"]
+
+[task.8.2]
+title = "Add multisig and timelock authority kinds"
+status = "pending"
+wave = 8
+requires = []
+do_1 = "Extend lxp_authority_kind in include/layerx/lxp_authority.h with MULTISIG and TIMELOCK, add the k-of-n signer set and maturity fields to the grant scope as additive tail fields under a new grant encoding version, resolve both in lxp_authority_resolve, add typed refusals, and add tests/test_authority_multisig.c wired as make test-authority-multisig covering below-threshold refusal, threshold success, duplicate signer refusal, pre-maturity refusal, post-maturity success and byte-identical encoding of every pre-existing grant kind."
+verify_cmd = "make test-authority-multisig"
+symbols = ["LXP_AUTHORITY_KIND_MULTISIG","LXP_AUTHORITY_KIND_TIMELOCK","lxp_authority_resolve"]
+touches = ["include/layerx/lxp_authority.h","src/protocol/lxp_authority.c","tests/test_authority_multisig.c","Makefile"]
+reqs = ["16.2"]
+
+[task.8.3]
+title = "Add the naming registry reference program"
+status = "pending"
+wave = 8
+requires = []
+do_1 = "Add programs/sdk/rust/examples/naming with register, transfer, renew, resolve, reverse_resolve; a registry reference interface at programs/crates/layerx-programs-registry/src/naming.rs; tests/naming_reference.rs; and a name resolver in human/apps/web explorer lookup that calls the program read path when a query matches the name grammar."
+verify_cmd = "cd programs && cargo test --locked -p layerx-programs-registry --test naming_reference"
+symbols = ["naming::reference_interface"]
+touches = ["programs/sdk/rust/examples/naming","programs/crates/layerx-programs-registry/src/naming.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/naming_reference.rs","human/apps/web/src/app/explorer/lookup","Makefile"]
+reqs = ["16.3"]
+
+[task.8.4]
+title = "Expose the committed oracle observation to programs"
+status = "pending"
+wave = 8
+requires = []
+do_1 = "Add oracle_read to ABI_MANIFEST layerx_v2 in programs/crates/layerx-programs-runtime/src/lib.rs and validate.rs, the C host binding in src/modules/programs reading lx_oracle_store, the Rust SDK wrapper in programs/sdk/rust/src/oracle.rs, and tests/test_programs_oracle_read.c wired as make test-programs-oracle-read proving a guest reads the observation the perps engine committed and gets a typed refusal for unknown and halted markets."
+verify_cmd = "make test-programs-oracle-read && make programs-abi-drift"
+symbols = ["oracle_read","lx_oracle_store"]
+touches = ["programs/crates/layerx-programs-runtime/src/lib.rs","programs/crates/layerx-programs-runtime/src/validate.rs","programs/sdk/rust/src/oracle.rs","programs/sdk/rust/src/lib.rs","programs/sdk/rust/src/abi.rs","src/modules/programs","include/layerx/lx_oracle.h","tests/test_programs_oracle_read.c","Makefile"]
+reqs = ["16.4"]
+
+[task.8.5]
+title = "Add the constant-product swap reference program"
+status = "pending"
+wave = 8
+requires = []
+do_1 = "Add programs/sdk/rust/examples/swap-cpmm with add_liquidity, remove_liquidity, swap_exact_in, quote, reserves; LP shares as an embedded LXT20 program; registry reference interface at programs/crates/layerx-programs-registry/src/swap.rs; tests/swap_reference.rs; and a conservation case under programs/tests/conservation proving reserves plus fees equal inputs across a randomised sequence."
+verify_cmd = "cd programs && cargo test --locked -p layerx-programs-registry --test swap_reference"
+symbols = ["swap::reference_interface"]
+touches = ["programs/sdk/rust/examples/swap-cpmm","programs/crates/layerx-programs-registry/src/swap.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/swap_reference.rs","programs/tests/conservation","Makefile"]
+reqs = ["16.5"]
+
+[task.8.6]
+title = "Raise the asset registry capacity to 1024 and paginate listing"
+status = "pending"
+wave = 8
+requires = []
+do_1 = "Raise LX_ASSET_REGISTRY_CAPACITY to 1024 in include/layerx/lx_asset.h, fix every static array, state encoder, reserve attestation bound and genesis builder path sized from it, keep existing sub-64 fixtures byte-identical, and add cursor pagination to lx_listAssets in platform/hosted/gateway with the openrpc.json entry updated."
+verify_cmd = "make test-asset-registry && make test-asset-reserve"
+symbols = ["LX_ASSET_REGISTRY_CAPACITY","lx_asset_state"]
+touches = ["include/layerx/lx_asset.h","src/modules/asset","cmd/layerx-genesis","platform/hosted/gateway/src","platform/hosted/gateway/openrpc.json"]
+reqs = ["16.6"]
+
+[task.8.7]
+title = "Make self-custody the default with a step-up key export ceremony"
+status = "pending"
+wave = 8
+requires = []
+do_1 = "Add POST /v1/security/key-export/begin and /finish to human/schema/human-api/identity.kvx in the secret-reveal class, implement the ceremony in human/crates/layerx-human-service with the KMS returning the primary key once and flipping the identity to self-custodied so later signing refuses, add onboarding copy and route that offers export first and custody as opt-in, rewrite the no-key-export suite to assert the ceremony is the only route, and update spec/layerx-platform/spec.kvx [decision] custody and v1_scope."
+verify_cmd = "cd human && cargo test --locked -p layerx-human-service key_export"
+symbols = ["key_export","KeyExportCeremony"]
+touches = ["human/schema/human-api/identity.kvx","human/crates/layerx-human-service/src","human/crates/layerx-human-kms/src","human/apps/web/src/app","spec/layerx-platform/spec.kvx"]
+reqs = ["16.7"]
