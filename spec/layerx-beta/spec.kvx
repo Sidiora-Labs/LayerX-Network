@@ -765,12 +765,12 @@ reqs = ["16.1"]
 
 [task.8.2]
 title = "Add multisig and timelock authority kinds"
-status = "in_progress"
+status = "done"
 wave = 8
 requires = []
 do_1 = "Extend lxp_authority_kind in include/layerx/lxp_authority.h with MULTISIG and TIMELOCK, add the k-of-n signer set and maturity fields to the grant scope as additive tail fields under a new grant encoding version, resolve both in lxp_authority_resolve, add typed refusals, and add tests/test_authority_multisig.c wired as make test-authority-multisig covering below-threshold refusal, threshold success, duplicate signer refusal, pre-maturity refusal, post-maturity success and byte-identical encoding of every pre-existing grant kind."
 verify_cmd = "make test-authority-multisig"
-symbols = ["LXP_AUTHORITY_KIND_MULTISIG","LXP_AUTHORITY_KIND_TIMELOCK","lxp_authority_resolve"]
+symbols = ["authority_signer_set_check","lxp_authority_is_live","lxp_authority_resolve"]
 touches = ["include/layerx/lxp_authority.h","src/state/lxp_authority.c","tests/test_authority_multisig.c","Makefile"]
 reqs = ["16.2"]
 
@@ -787,7 +787,7 @@ reqs = ["16.3"]
 
 [task.8.4]
 title = "Expose the committed oracle observation to programs"
-status = "pending"
+status = "in_progress"
 wave = 8
 requires = []
 do_1 = "Allocate guest ABI v3 and add oracle_read to its new ABI_MANIFEST layerx_v3 namespace in programs/crates/layerx-programs-runtime/src/lib.rs and validate.rs while the frozen v2 vector and checksum stay untouched, the C host binding in src/modules/programs reading lx_oracle_store, the Rust SDK wrapper in programs/sdk/rust/src/oracle.rs, and tests/test_programs_oracle_read.c wired as make test-programs-oracle-read proving a guest reads the observation the perps engine committed and gets a typed refusal for unknown and halted markets."
@@ -809,12 +809,12 @@ reqs = ["16.5"]
 
 [task.8.6]
 title = "Raise the asset registry capacity to 1024 and paginate listing"
-status = "in_progress"
+status = "done"
 wave = 8
 requires = []
 do_1 = "Raise LX_ASSET_REGISTRY_CAPACITY to 1024 in include/layerx/lx_asset.h, fix every static array, state encoder, reserve attestation bound and genesis builder path sized from it, keep existing sub-64 fixtures byte-identical, and add cursor pagination to lx_listAssets in platform/hosted/gateway with the openrpc.json entry updated."
 verify_cmd = "make test-asset-registry && make test-asset-reserve"
-symbols = ["LX_ASSET_REGISTRY_CAPACITY","lx_asset_state_root"]
+symbols = ["lxp_module_committed_asset","lx_asset_state_root"]
 touches = ["include/layerx/lx_asset.h","src/modules/asset","cmd/layerx-genesis","platform/hosted/gateway/src","platform/hosted/gateway/openrpc.json"]
 reqs = ["16.6"]
 
