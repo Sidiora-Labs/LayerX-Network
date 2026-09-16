@@ -725,6 +725,7 @@ fn interface_capability_for_import(name: &str) -> u16 {
         "transfer_program_402" => 1 << 7,
         "receipt_read" => 1 << 8,
         "balance_read" => 1 << 9,
+        "oracle_read" => 1 << 10,
         _ => 0,
     }
 }

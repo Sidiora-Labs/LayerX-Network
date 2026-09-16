@@ -9,10 +9,12 @@ use crate::validate::AbiRevision;
 use crate::{
     AbiError, AccessSet, ActivityBudgetBinding, AtomicTransferSet, AuthorizationContext,
     BalanceView, BudgetMeterRefusal, BudgetResourceKind, BudgetedAuthorizedExecutionRequest,
-    BudgetedV1FailureCause, CandidateAuthorizedExecutionRecord, CapabilitySet, CompiledModule,
+    BudgetedV1FailureCause, CandidateAuthorizedExecutionRecord, CapabilitySet, CommittedOracle,
+    CompiledModule,
     CompositionContext, CompositionRefusal, CompositionRules, DeclaredBudget, EntrypointRefusal,
     ExecutionFault, Executor, KernelTransferEvidence, KernelTransferPrimitive, MeterRefusal,
-    MeteredUsage, ModuleCacheKey, PreparedAuthorizedActivityOutcome, PrincipalId, ProgramEvent,
+    MeteredUsage, ModuleCacheKey, OracleObservation, PreparedAuthorizedActivityOutcome,
+    PrincipalId, ProgramEvent,
     ProgramId, ProgramResolver, ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal,
     RuntimeArtifactOwnerRefusal, Storage, StorageNamespace, TransferCapability, TransferLawError,
     TransferSource, V2ActivityOutcome,
@@ -384,6 +386,8 @@ pub unsafe extern "C" fn layerx_programs_schedule_plan(
 
 const OK: i32 = 0;
 const NON_CANONICAL: i32 = -3;
+const UNKNOWN_FIELD: i32 = -7;
+const MARKET_HALTED: i32 = -703;
 const LENGTH_LIMIT: i32 = -5;
 const SCHEDULE_ITEM_VERSION: u16 = 2;
 const MODULE_DISABLED: i32 = -103;
@@ -616,6 +620,8 @@ fn abi_payload(value: &AbiError) -> Vec<u8> {
         AbiError::BalanceAbsent => vec![13],
         AbiError::BalanceEvidenceUnavailable => vec![14],
         AbiError::AccessDeclaration => vec![15],
+        AbiError::OracleUnknownMarket => vec![16],
+        AbiError::OracleMarketHalted => vec![17],
         AbiError::InvalidEncoding => vec![10],
         AbiError::Storage(error) => vec![11, storage_tag(*error)],
         AbiError::Meter(error) => {
@@ -925,6 +931,14 @@ unsafe extern "C" {
         d3: u64,
     ) -> i32;
     fn layerx_programs_call_balance_view_byte(token: u64, section: u16, offset: u32) -> i32;
+    fn layerx_programs_call_oracle_view_begin(
+        token: u64,
+        m0: u64,
+        m1: u64,
+        m2: u64,
+        m3: u64,
+    ) -> i32;
+    fn layerx_programs_call_oracle_view_byte(token: u64, section: u16, offset: u32) -> i32;
     fn layerx_programs_call_catalog_storage_cell_count(
         token: u64,
         index: u32,
@@ -1533,6 +1547,62 @@ fn export_catalog_storage(
         c_ok(unsafe { layerx_programs_call_catalog_storage_final_apply(token, index, selector) })?;
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct CCommittedOracle {
+    token: u64,
+}
+
+impl CommittedOracle for CCommittedOracle {
+    fn committed_observation(&self, market: [u8; 32]) -> Result<OracleObservation, AbiError> {
+        let market_words = words(market);
+        let status = unsafe {
+            layerx_programs_call_oracle_view_begin(
+                self.token,
+                market_words[0],
+                market_words[1],
+                market_words[2],
+                market_words[3],
+            )
+        };
+        if status == UNKNOWN_FIELD {
+            return Err(AbiError::OracleUnknownMarket);
+        }
+        if status == MARKET_HALTED {
+            return Err(AbiError::OracleMarketHalted);
+        }
+        c_ok(status).map_err(|_| AbiError::InvalidEncoding)?;
+        let read = |section, length| {
+            scalar_bytes(length, |offset| unsafe {
+                layerx_programs_call_oracle_view_byte(self.token, section, offset)
+            })
+            .map_err(|_| AbiError::InvalidEncoding)
+        };
+        let returned =
+            <[u8; 32]>::try_from(read(0, 32)?).map_err(|_| AbiError::InvalidEncoding)?;
+        let record = <[u8; crate::ORACLE_OBSERVATION_BYTES]>::try_from(
+            read(1, crate::ORACLE_OBSERVATION_BYTES)?,
+        )
+        .map_err(|_| AbiError::InvalidEncoding)?;
+        if returned != market {
+            return Err(AbiError::InvalidEncoding);
+        }
+        let price = <[u8; 16]>::try_from(&record[..16]).map_err(|_| AbiError::InvalidEncoding)?;
+        let observed_at =
+            <[u8; 8]>::try_from(&record[16..24]).map_err(|_| AbiError::InvalidEncoding)?;
+        let sequence =
+            <[u8; 8]>::try_from(&record[24..32]).map_err(|_| AbiError::InvalidEncoding)?;
+        let source_set_digest =
+            <[u8; 32]>::try_from(&record[32..]).map_err(|_| AbiError::InvalidEncoding)?;
+        Ok(OracleObservation {
+            market,
+            price: u128::from_le_bytes(price),
+            observed_at: u64::from_le_bytes(observed_at),
+            sequence: u64::from_le_bytes(sequence),
+            source_set_digest,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -2855,6 +2925,7 @@ pub extern "C" fn layerx_programs_call_begin(
                     &mut final_storage,
                     BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding)
                         .with_access_declaration(access_declaration.clone())
+                        .with_committed_oracle(Arc::new(CCommittedOracle { token }))
                         .with_authenticated_execution_context(execution_context),
                 )
                 .map_err(|_| NON_CANONICAL)?;

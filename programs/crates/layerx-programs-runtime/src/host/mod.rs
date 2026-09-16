@@ -6,6 +6,7 @@ mod context;
 mod crypto;
 mod events;
 pub(crate) mod memory;
+mod oracle;
 mod scan;
 mod signature;
 mod storage;
@@ -32,6 +33,8 @@ pub(super) const STATUS_BOUNDS: i32 = -3;
 pub(super) const STATUS_METER: i32 = -4;
 pub(super) const STATUS_EVIDENCE: i32 = -5;
 pub(super) const STATUS_ABSENT: i32 = -7;
+pub(super) const STATUS_ORACLE_UNKNOWN_MARKET: i32 = -8;
+pub(super) const STATUS_ORACLE_MARKET_HALTED: i32 = -9;
 pub(super) const COMPOSITION_REFUSED: &str = "program composition refused the call graph";
 
 fn wasmi_usage(meter: crate::MeteredUsage) -> wasmi::ExecutionMeteredUsage {
@@ -1085,6 +1088,7 @@ pub(crate) fn linker(engine: &Engine) -> Result<HostLinker, ExecutionFault> {
     storage::register_v2(&mut linker)?;
     transfer::register_v2(&mut linker)?;
     balance::register_v2(&mut linker)?;
+    oracle::register_v2(&mut linker)?;
     transfer::register(&mut linker)?;
     linker
         .func_wrap(
@@ -1149,6 +1153,8 @@ pub(crate) const fn error_status(error: &AbiError) -> i32 {
         AbiError::Meter(_) => STATUS_METER,
         AbiError::ReceiptMismatch | AbiError::BalanceEvidenceUnavailable => STATUS_EVIDENCE,
         AbiError::BalanceAbsent => STATUS_ABSENT,
+        AbiError::OracleUnknownMarket => STATUS_ORACLE_UNKNOWN_MARKET,
+        AbiError::OracleMarketHalted => STATUS_ORACLE_MARKET_HALTED,
         AbiError::Storage(
             crate::storage::StorageError::InvalidScanCursor
             | crate::storage::StorageError::InvalidScanLimits,

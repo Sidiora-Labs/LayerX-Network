@@ -66,6 +66,8 @@ pub(crate) fn abi_error_bytes(error: &AbiError) -> Vec<u8> {
         }
         AbiError::Meter(crate::meter::MeterRefusal::FeeOverflow) => out.extend_from_slice(&[13, 2]),
         AbiError::AccessDeclaration => out.push(14),
+        AbiError::OracleUnknownMarket => out.push(15),
+        AbiError::OracleMarketHalted => out.push(16),
     }
     out
 }

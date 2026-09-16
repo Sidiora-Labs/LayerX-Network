@@ -2607,6 +2607,7 @@ pub struct BudgetedAuthorizedExecutionRequest<'a> {
     activity_binding: ActivityBudgetBinding,
     execution_context: Option<ExecutionContext>,
     access_declaration: crate::AccessDeclaration,
+    committed_oracle: Option<std::sync::Arc<dyn crate::abi::CommittedOracle + Send + Sync>>,
     transfer_authority_v2: bool,
 }
 
@@ -2627,7 +2628,20 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
             execution_context: None,
             transfer_authority_v2: false,
             access_declaration: crate::AccessDeclaration::absent(),
+            committed_oracle: None,
         }
+    }
+
+    /// Attaches the core-owned boundary serving observations already committed
+    /// under the batch header's oracle root.
+    #[must_use]
+    #[cfg(feature = "host-ffi")]
+    pub(crate) fn with_committed_oracle(
+        mut self,
+        oracle: std::sync::Arc<dyn crate::abi::CommittedOracle + Send + Sync>,
+    ) -> Self {
+        self.committed_oracle = Some(oracle);
+        self
     }
 
     /// Attaches the declaration already committed by the canonical activity
@@ -3353,6 +3367,7 @@ impl Executor {
             activity_binding,
             execution_context: _,
             access_declaration,
+            committed_oracle: _,
             transfer_authority_v2: _,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
@@ -3654,6 +3669,7 @@ impl Executor {
             None,
             None,
             crate::AccessDeclaration::absent(),
+            None,
         )
     }
 
@@ -3678,6 +3694,7 @@ impl Executor {
             activity_binding,
             execution_context,
             access_declaration,
+            committed_oracle,
             transfer_authority_v2: _,
         } = budgeted;
         let executor = self.for_abi(crate::ABI_V2_VERSION);
@@ -3689,6 +3706,7 @@ impl Executor {
             Some(activity_binding),
             execution_context,
             access_declaration,
+            committed_oracle,
         )
     }
 
@@ -3705,6 +3723,7 @@ impl Executor {
             activity_binding,
             execution_context,
             access_declaration,
+            committed_oracle,
             transfer_authority_v2: _,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
@@ -3727,6 +3746,7 @@ impl Executor {
             Some(activity_binding),
             Some(execution_context),
             access_declaration,
+            committed_oracle,
         )
     }
 
@@ -3739,6 +3759,7 @@ impl Executor {
         activity_binding: Option<ActivityBudgetBinding>,
         execution_context: Option<ExecutionContext>,
         access_declaration: crate::AccessDeclaration,
+        committed_oracle: Option<std::sync::Arc<dyn crate::abi::CommittedOracle + Send + Sync>>,
     ) -> Result<V2AuthorizedExecutionRecord, ExecutionError> {
         let budgeted = activity_binding.is_some();
         if self.abi_version != crate::ABI_V2_VERSION
@@ -3785,6 +3806,9 @@ impl Executor {
         )
         .map_err(ExecutionError::Abi)?;
         abi.set_access_declaration(access_declaration);
+        if let Some(oracle) = committed_oracle {
+            abi.set_committed_oracle(oracle);
+        }
         let composition = Composition::new(
             request
                 .composition

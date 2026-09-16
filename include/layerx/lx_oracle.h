@@ -14,7 +14,8 @@ enum {
     LX_ORACLE_OBSERVATION_BYTES = 72,
     LX_ORACLE_MAX_MARKETS = 128,
     LX_ORACLE_MAX_KEYS = 8,
-    LX_ORACLE_STORE_CAPACITY = 512
+    LX_ORACLE_STORE_CAPACITY = 512,
+    LX_ORACLE_COMMITTED_BYTES = 64
 };
 
 typedef struct lx_oracle_observation {
@@ -75,6 +76,14 @@ typedef struct lx_oracle_store {
     lx_oracle_accepted accepted[LX_ORACLE_STORE_CAPACITY];
     size_t count;
 } lx_oracle_store;
+
+typedef struct lx_oracle_committed {
+    uint8_t market_id[32];
+    lxp_u128 price;
+    uint64_t observed_at;
+    uint64_t observation_sequence;
+    uint8_t source_set_digest[32];
+} lx_oracle_committed;
 
 typedef struct lx_oracle_push_request {
     lx_oracle_store *store;
@@ -144,5 +153,14 @@ lxp_result lx_oracle_market_action_check(
 lxp_result lx_oracle_fail_closed_eval(lx_oracle_market *market,
                                       const lx_oracle_store *store,
                                       uint64_t batch_timestamp);
+lxp_result lx_oracle_source_set_digest(const uint8_t *permitted_keys,
+                                       size_t permitted_key_count,
+                                       uint8_t digest[32]);
+lxp_result lx_oracle_committed_read(lxp_module_ctx *ctx,
+                                    const uint8_t market_id[32],
+                                    lx_oracle_committed *committed);
+lxp_result lx_oracle_committed_encode(
+    const lx_oracle_committed *committed,
+    uint8_t bytes[LX_ORACLE_COMMITTED_BYTES]);
 
 #endif

@@ -53,10 +53,10 @@ pub const MAX_REFUSAL_REASON_BYTES: usize = 4_096;
 /// ABI-v2 entry return for a published refusal.
 pub const V2_REFUSAL_SENTINEL: i32 = -64;
 /// Exact frozen ABI-v2 manifest.
-pub const V2_ABI_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0layerx_v2\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0hash(i32,i32,i32,i32)->i32\0signature_verify(i32,i32,i32,i32,i32,i32,i32)->i32\0signature_recover(i32,i32,i32,i32,i32,i32,i32)->i32\0bigint_mul_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_div_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_rem_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_modexp_256(i32,i32,i32,i32,i32,i32,i32,i32)->i32\0";
+pub const V2_ABI_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0layerx_v2\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0hash(i32,i32,i32,i32)->i32\0signature_verify(i32,i32,i32,i32,i32,i32,i32)->i32\0signature_recover(i32,i32,i32,i32,i32,i32,i32)->i32\0bigint_mul_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_div_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_rem_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_modexp_256(i32,i32,i32,i32,i32,i32,i32,i32)->i32\0oracle_read(i32,i32,i32,i32)->i32\0";
 pub const ABI_MANIFEST: &str = V2_ABI_MANIFEST;
 /// Exact frozen ABI-v2 response extension table.
-pub const V2_HOST_FUNCTIONS: [HostFunction; 19] = [
+pub const V2_HOST_FUNCTIONS: [HostFunction; 20] = [
     HostFunction {
         name: "response_write",
         signature: "(i32,i32,i32)->i32",
@@ -133,6 +133,10 @@ pub const V2_HOST_FUNCTIONS: [HostFunction; 19] = [
         name: "bigint_modexp_256",
         signature: "(i32,i32,i32,i32,i32,i32,i32,i32)->i32",
     },
+    HostFunction {
+        name: "oracle_read",
+        signature: "(i32,i32,i32,i32)->i32",
+    },
 ];
 /// Maximum number of grants in one capability set.
 pub const MAX_CAPABILITY_ENCODING_HEADER_BYTES: usize = 2;
@@ -196,7 +200,7 @@ pub const CANDIDATE_REFUSAL_SENTINEL: i32 = V2_REFUSAL_SENTINEL;
 /// Compatibility spelling retained for one release.
 pub const CANDIDATE_ABI_MANIFEST: &str = V2_ABI_MANIFEST;
 /// Compatibility spelling retained for one release.
-pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 19] = V2_HOST_FUNCTIONS;
+pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 20] = V2_HOST_FUNCTIONS;
 
 #[cfg(test)]
 mod tests {
@@ -248,6 +252,7 @@ mod tests {
                 "bigint_modexp_256",
                 "(i32,i32,i32,i32,i32,i32,i32,i32)->i32",
             ),
+            ("oracle_read", "(i32,i32,i32,i32)->i32"),
         ];
         assert_eq!(V2_HOST_FUNCTIONS.len(), expected.len());
         for (actual, expected) in V2_HOST_FUNCTIONS.iter().zip(expected) {

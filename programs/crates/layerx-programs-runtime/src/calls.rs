@@ -953,6 +953,7 @@ fn execute_nested(
         storage,
         receipts,
         balances,
+        committed_oracle,
         access_declaration,
         callee_frame,
         emitted_event_count,
@@ -970,6 +971,7 @@ fn execute_nested(
             abi.storage_snapshot(),
             abi.verified_receipts(),
             abi.verified_balances(),
+            abi.committed_oracle(),
             abi.access_declaration().clone(),
             callee_frame,
             abi.emitted_event_count(),
@@ -1005,6 +1007,7 @@ fn execute_nested(
         balances,
     )?;
     child_abi.inherit_emitted_event_count(emitted_event_count)?;
+    child_abi.set_committed_oracle(committed_oracle);
     child_abi.set_access_declaration(access_declaration);
     let child_graph = state
         .composition()

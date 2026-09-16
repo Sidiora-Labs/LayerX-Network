@@ -14,7 +14,7 @@ pub const ABI_V1_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32
 
 pub const ABI_V2_MANIFEST: &str = crate::ABI_MANIFEST;
 
-pub const ABI_V2_HOST_FUNCTIONS: [HostFunction; 19] = [
+pub const ABI_V2_HOST_FUNCTIONS: [HostFunction; 20] = [
     host("response_write", "(i32,i32,i32)->i32"),
     host(
         "program_call_response",
@@ -46,6 +46,7 @@ pub const ABI_V2_HOST_FUNCTIONS: [HostFunction; 19] = [
         "bigint_modexp_256",
         "(i32,i32,i32,i32,i32,i32,i32,i32)->i32",
     ),
+    host("oracle_read", "(i32,i32,i32,i32)->i32"),
 ];
 
 const fn host(name: &'static str, signature: &'static str) -> HostFunction {
@@ -67,7 +68,7 @@ const I32_9: &[AbiValueType] = &[I32; 9];
 const TRANSFER: &[AbiValueType] = &[I64, I64, I32, I32, I32, I32, I32, I32, I32, I32];
 const FUND: &[AbiValueType] = &[I64, I64, I32, I32, I32, I32, I32, I32];
 
-const ABI_V2_FUNCTION_TYPES: [HostFunctionType; 19] = [
+const ABI_V2_FUNCTION_TYPES: [HostFunctionType; 20] = [
     function_type(I32_3, I32_RESULT),
     function_type(I32_8, I64_RESULT),
     function_type(I32_3, I32_RESULT),
@@ -87,6 +88,7 @@ const ABI_V2_FUNCTION_TYPES: [HostFunctionType; 19] = [
     function_type(I32_6, I32_RESULT),
     function_type(I32_6, I32_RESULT),
     function_type(I32_8, I32_RESULT),
+    function_type(I32_4, I32_RESULT),
 ];
 
 const fn function_type(

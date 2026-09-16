@@ -5,6 +5,7 @@
 #include "storage.h"
 #include "occupancy.h"
 
+#include "layerx/lx_oracle.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_merkle.h"
@@ -96,6 +97,11 @@ struct lxp_programs_call_activity {
         uint8_t state_root[32];
         uint64_t observed_sequence;
     } balance_view;
+    struct {
+        bool active;
+        uint8_t market_id[32];
+        uint8_t record[LX_ORACLE_COMMITTED_BYTES];
+    } oracle_view;
     struct {
         lxp_programs_storage_cell *cells;
         uint32_t count;
@@ -731,6 +737,53 @@ lxp_result layerx_programs_call_balance_view_byte(
         write_u64(sequence, value->balance_view.observed_sequence);
         bytes = sequence;
         length = sizeof(sequence);
+    } else {
+        return LXP_ERR_UNKNOWN_FIELD;
+    }
+    if ((size_t)offset >= length) return LXP_ERR_TRUNCATED;
+    return (lxp_result)bytes[offset];
+}
+
+lxp_result layerx_programs_call_oracle_view_begin(
+    uint64_t token, uint64_t m0, uint64_t m1, uint64_t m2, uint64_t m3)
+{
+    lxp_programs_call_activity *value =
+        (lxp_programs_call_activity *)(uintptr_t)token;
+    uint8_t market_id[32];
+    lx_oracle_committed committed;
+    lxp_result status;
+    if (value == NULL || value->ctx == NULL) return LXP_ERR_NON_CANONICAL;
+    (void)memset(&value->oracle_view, 0, sizeof(value->oracle_view));
+    write_u64(market_id, m0);
+    write_u64(market_id + 8U, m1);
+    write_u64(market_id + 16U, m2);
+    write_u64(market_id + 24U, m3);
+    status = lx_oracle_committed_read(value->ctx, market_id, &committed);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(committed.market_id, market_id, 32U) != 0)
+        return LXP_ERR_ROOT_MISMATCH;
+    status = lx_oracle_committed_encode(&committed, value->oracle_view.record);
+    if (status != LXP_OK) return status;
+    (void)memcpy(value->oracle_view.market_id, market_id, 32U);
+    value->oracle_view.active = true;
+    return LXP_OK;
+}
+
+lxp_result layerx_programs_call_oracle_view_byte(
+    uint64_t token, uint16_t section, uint32_t offset)
+{
+    lxp_programs_call_activity *value =
+        (lxp_programs_call_activity *)(uintptr_t)token;
+    const uint8_t *bytes;
+    size_t length;
+    if (value == NULL || !value->oracle_view.active)
+        return LXP_ERR_UNKNOWN_FIELD;
+    if (section == 0U) {
+        bytes = value->oracle_view.market_id;
+        length = 32U;
+    } else if (section == 1U) {
+        bytes = value->oracle_view.record;
+        length = LX_ORACLE_COMMITTED_BYTES;
     } else {
         return LXP_ERR_UNKNOWN_FIELD;
     }

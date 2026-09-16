@@ -550,6 +550,10 @@ lxp_result layerx_programs_call_balance_view_begin(
     uint64_t d0, uint64_t d1, uint64_t d2, uint64_t d3);
 lxp_result layerx_programs_call_balance_view_byte(
     uint64_t token, uint16_t section, uint32_t offset);
+lxp_result layerx_programs_call_oracle_view_begin(
+    uint64_t token, uint64_t m0, uint64_t m1, uint64_t m2, uint64_t m3);
+lxp_result layerx_programs_call_oracle_view_byte(
+    uint64_t token, uint16_t section, uint32_t offset);
 
 /* Per-catalog-program scalar storage projection.  The root-only storage
  * accessors above remain available for the root fixture; composed execution
