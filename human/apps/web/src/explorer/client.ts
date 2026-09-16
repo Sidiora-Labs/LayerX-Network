@@ -4,6 +4,7 @@ import {
   decodeAccountActivity,
   decodeBatch,
   decodeCheckpoint,
+  decodeNameResolution,
   decodePage,
   decodeProgram,
   decodeReceipt,
@@ -11,12 +12,14 @@ import {
   decodeVerificationReport,
   validExplorerCoordinate,
   validExplorerIdentifier,
+  validExplorerName,
   type AccountActivityRecord,
   type BatchRecord,
   type CheckpointRecord,
   type EvidenceVerificationReport,
   type ExplorerPage,
   type ExplorerRecord,
+  type NameResolutionRecord,
   type ProgramRecord,
   type ReceiptRecord,
 } from "./model";
@@ -207,6 +210,47 @@ export async function programRecord(identifier: string): Promise<ProgramRecord |
   }
   try {
     return decodeProgram(await response.json());
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw error;
+    }
+    throw new ExplorerUnavailableError();
+  }
+}
+
+function namingProgram(): string {
+  const configured = process.env.LAYERX_EXPLORER_NAMING_PROGRAM;
+  if (configured === undefined || !validExplorerIdentifier(configured)) {
+    throw new ExplorerUnavailableError();
+  }
+  return configured.toLowerCase();
+}
+
+export async function resolveName(name: string): Promise<NameResolutionRecord | undefined> {
+  if (!validExplorerName(name)) {
+    throw new TypeError("Invalid name");
+  }
+  const { origin, bearer } = programExplorerOrigin();
+  const url = new URL(`/v1/programs/${namingProgram()}/reads/resolve`, origin);
+  url.searchParams.set("name", name);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${bearer}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch {
+    throw new ExplorerUnavailableError();
+  }
+  if (response.status === 404) {
+    return undefined;
+  }
+  if (!response.ok) {
+    throw new ExplorerUnavailableError();
+  }
+  try {
+    return decodeNameResolution(await response.json());
   } catch (error) {
     if (error instanceof TypeError) {
       throw error;
