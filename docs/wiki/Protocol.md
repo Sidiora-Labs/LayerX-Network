@@ -35,25 +35,35 @@ Every state-changing operation is one signed activity: a payment, an escrow capt
 
 The wire format is LXC/1 - a canonical binary envelope, not a convenience JSON. Integers are fixed-width and big-endian. There are no optional fields, no maps, and no floating point. Decoding is total: trailing bytes are an error. Re-encoding a valid activity must yield the same bytes.
 
-Typical envelope fields (illustrative names; see the design for encodings):
+The C struct is `lxp_activity` (`include/layerx/lxp_activity.h`).
+`spec/layerx-protocol/spec.kvx` requirement 2 acceptance 1 requires exactly
+these fields; omit, repeat, or undeclared fields are a malformed envelope.
 
 | Field | Role |
 | --- | --- |
-| `protocol_version` | Must be enabled for the batch epoch. Supported: 1 (legacy), 2 (occupancy), 3 (state commitment). Beta selects 3. |
+| `protocol_version` | Must be enabled for the batch epoch. Supported: 1 (legacy), 2 (occupancy), 3 (state commitment). Beta selects 3. Header default `LXP_PROTOCOL_VERSION` remains 2. |
 | `network_id` | Exact match; blocks cross-network replay |
-| `activity_type` | High 16 bits = module id, low 16 = type ordinal |
+| `activity_type` | High 16 bits = module id, low 16 = type ordinal (`lxp_activity_module_id` / `lxp_activity_type_ordinal`) |
 | `actor_did` | Who is acting |
 | `authority` | Primary key, session, or scoped grant |
-| `account_sequence` | Must equal `next_sequence[actor]` exactly - gaps are rejected |
-| `timestamp_bound` | Window checked against the batch timestamp, never node wall-clock |
+| `account_sequence` | Must equal `next_sequence[actor]` exactly — gaps are rejected |
+| `timestamp_bound` | `not_before` / `not_after` checked against the batch timestamp, never node wall-clock |
 | `idempotency_key` | A repeat returns the original receipt with zero new economic effect |
 | `fee_limit` | Must cover the deterministically computed fee |
-| `payload` / `payload_hash` | Module-specific body; hash checked before parse |
-| `signature` | Ed25519 over the canonical prefix |
+| `payload` / `payload_hash` | Module-specific body; hash checked before parse (`lxp_activity_verify_payload_hash`) |
+| `signature` | Ed25519 over the canonical prefix (`lxp_activity_signing_preimage`) |
+
+Normative envelope check order is version, network, then payload binding
+(`lxp_activity_check_envelope`). Module payloads and refusals are on the
+per-module pages linked from [Modules](Modules.md). Fees are on [Fees](Fees.md).
 
 The protocol verifies the actor and its authority, consumes the sequence, orders the activity globally, applies a deterministic state transition, and returns a signed receipt tied to the resulting state root.
 
-Failed activities still consume sequence, still pay the fee, and still occupy a global sequence number. Effects from the module roll back; bookkeeping does not.
+Failed activities that were admitted still consume sequence, still pay the
+fee up to `fee_limit`, and still occupy a global sequence number. Effects
+from the module roll back; bookkeeping does not. Admission failures
+(malformed envelope, wrong network, payload-hash mismatch) consume neither
+sequence nor fee (`spec/layerx-protocol/spec.kvx` requirement 26).
 
 ---
 
@@ -124,7 +134,9 @@ The public testnet exposes a gateway API and a faucet. There is no LayerX mainne
 
 - [Home](Home.md)
 - [Getting started on testnet](Getting-Started-Testnet.md)
-- [Modules](Modules.md): `0x01`–`0x08` economic modules and Programs `0x09`
+- [Modules](Modules.md): `0x01`–`0x09` and one page per module
+- [Fees](Fees.md): schedule versions 1–4 and admission policy
+- [Sequencing](Sequencing.md): batches, guarantors, checkpoints
 - [Programs](Programs.md): DEPLOY / UPGRADE / CALL, simulate, guest ABI 2, occupancy
 - [Assets](Assets.md): per-asset accounts, issuance, register / mint / burn encodings
 - [Finality](Finality.md): L0 → L4

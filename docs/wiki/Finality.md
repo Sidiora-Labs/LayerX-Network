@@ -70,6 +70,8 @@ Public submit and 402 offers name three evidence levels — `executed`,
 
 - [Home](Home.md)
 - [Protocol](Protocol.md): LXC envelope and the three rules
+- [Sequencing](Sequencing.md): batches, guarantors, checkpoints
+- [Guarantor](Guarantor.md): checkpoint producer
 - [Modules](Modules.md): the eight economic modules and the programs surface
 - [Commitment levels](CommitmentLevels.md): `executed`, `batched`, `finalised`
 - Security

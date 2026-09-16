@@ -134,15 +134,18 @@ Sources:
 - `src/protocol/lxp_genesis.c:594-598`
 - `src/modules/programs/call.c` (`lxp_programs_call_decode`, `lxp_programs_call_validate`, `lxp_programs_call_execute`)
 - `cmd/layerxd/lxp_daemon_lni.c` (`lxp_daemon_lni_simulate`, `send_simulate`)
-- `agent/schema/lni/README.md` (LNI 1.4 `simulate`)
+- `agent/schema/lni/README.md` (LNI 1.4 `simulate`; 1.6 `program_read`)
+- [LNI](LNI.md)
 
 ---
 
 ## LXT-20
 
-`programs/sdk/rust/src/lxt20.rs`, `programs/sdk/rust/examples/token-lxt20`, and
-`programs/fixtures/pay5` are not in this tree; the contract below is the
-reference the Programs ABI admits, not a path that can be built here.
+The Rust guest SDK LXT-20 codecs live at `programs/sdk/rust/src/lxt20.rs`
+and `programs/sdk/rust/examples/token-lxt20`. The contract below is that
+reference. `programs/fixtures/pay5` account-authorization vectors are
+cited by the runtime; if a fixture path is absent from a checkout, do not
+invent its contents.
 
 The Rust guest SDK's LXT-20 example is an ABI-v2 state machine backed by one
 native Asset. Token balances and allowances are program storage; the backing
@@ -294,13 +297,52 @@ Three version numbers are not the same thing.
 
 ### Guest ABI
 
-Crate-root `ABI_VERSION` is 2. ABI 1 is the frozen `layerx_v1` host
-table: `storage_read`, `storage_write`, `storage_delete`, `event_emit`,
-`program_call`, `transfer_402`, `receipt_read`. ABI 2 keeps that namespace and
-adds `layerx_v2`: response/refusal, scoped storage including scan and drop,
-`transfer_program_402`, `fund_program_402`, `context_read`, `balance_read`,
-hash, signature verify/recover, and 256-bit bigint ops. Bounded
-`storage_scan_scoped` encoding, ceilings, and refusals are on
+Crate-root `ABI_VERSION` is 2. `ABI_MANIFEST` in
+`programs/crates/layerx-programs-runtime/src/lib.rs` concatenates the frozen
+`layerx_v1` namespace and the `layerx_v2` namespace
+(`src/abi/manifest.rs`).
+
+**`layerx_v1` (ABI 1; also imported unchanged by ABI 2):**
+
+| Host function | Signature |
+| --- | --- |
+| `storage_read` | `(i32,i32,i32,i32)->i32` |
+| `storage_write` | `(i32,i32,i32,i32)->i32` |
+| `storage_delete` | `(i32,i32)->i32` |
+| `event_emit` | `(i32,i32,i32,i32)->i32` |
+| `program_call` | `(i32,i32,i32,i32,i32,i32)->i32` |
+| `transfer_402` | `(i64,i64,i32,i32,i32,i32)->i32` |
+| `receipt_read` | `(i32,i32,i32,i32)->i32` |
+
+**`layerx_v2` (ABI 2 only):**
+
+| Host function | Signature |
+| --- | --- |
+| `response_write` | `(i32,i32,i32)->i32` |
+| `program_call_response` | `(i32,i32,i32,i32,i32,i32,i32,i32)->i64` |
+| `refusal_write` | `(i32,i32,i32)->i32` |
+| `storage_read_scoped` | `(i32,i32,i32,i32,i32)->i32` |
+| `storage_write_scoped` | `(i32,i32,i32,i32,i32)->i32` |
+| `storage_delete_scoped` | `(i32,i32,i32)->i32` |
+| `storage_drop_scoped` | `(i32)->i32` |
+| `storage_scan_scoped` | `(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32` |
+| `transfer_program_402` | `(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32` |
+| `fund_program_402` | `(i64,i64,i32,i32,i32,i32,i32,i32)->i32` |
+| `context_read` | `(i32,i32,i32)->i32` |
+| `balance_read` | `(i32,i32,i32,i32,i32,i32)->i32` |
+| `hash` | `(i32,i32,i32,i32)->i32` |
+| `signature_verify` | `(i32,i32,i32,i32,i32,i32,i32)->i32` |
+| `signature_recover` | `(i32,i32,i32,i32,i32,i32,i32)->i32` |
+| `bigint_mul_256` | `(i32,i32,i32,i32,i32,i32)->i32` |
+| `bigint_div_256` | `(i32,i32,i32,i32,i32,i32)->i32` |
+| `bigint_rem_256` | `(i32,i32,i32,i32,i32,i32)->i32` |
+| `bigint_modexp_256` | `(i32,i32,i32,i32,i32,i32,i32,i32)->i32` |
+
+Guest capability tags 1–6 are StorageRead, StorageWrite, EmitEvent, Call,
+Transfer402, ReceiptRead. ABI 2 adds SharedStorageRead/Write (7–8),
+ProgramSpend (9), and BalanceView (10)
+(`programs/crates/layerx-programs-runtime/src/abi/capability.rs`).
+Bounded `storage_scan_scoped` encoding, ceilings, and refusals are on
 [StorageScan](StorageScan.md).
 
 Rust `admit_abi_version` accepts only 1 and 2. C CALL decode also caps guest
@@ -593,4 +635,14 @@ Sources:
 
 ---
 
-[Home](Home.md)
+## Start here
+
+- [Home](Home.md)
+- [Modules](Modules.md)
+- [Asset](Asset.md)
+- [Bridge](Bridge.md)
+- [Fees](Fees.md)
+- [LNI](LNI.md)
+- [Sandbox](Sandbox.md)
+- [Storage scan](StorageScan.md)
+- [Roadmap](Roadmap.md)

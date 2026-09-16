@@ -43,11 +43,13 @@ Three rules sit at the center of LayerX:
 
 ## Fees
 
-Fees are computed from the committed canonical schedule.
-Asset fee prices are named for ordinals `1`, `4`, `5`, `6`, `7`, `8`, `10`, and
-`11`; see [Assets and tokens](Assets.md#named-fee-schedule). Public estimation
-returns the schedule and snapshot that produced the value, and does not reserve
-the fee or prove execution.
+Fees are computed from the committed canonical schedule. Schedule versions,
+named prices, and admission policy are on [Fees](Fees.md). Asset fee prices
+are named for ordinals `1`, `4`, `5`, `6`, `7`, `8`, `10`, and `11` on
+version 2, with pause/unpause and withdraw added on later encodings; see
+[Assets and tokens](Assets.md#named-fee-schedule). Public estimation returns
+the schedule and snapshot that produced the value, and does not reserve the
+fee or prove execution.
 
 See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag conventions.
 
@@ -63,7 +65,21 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Running an agent](RunningAnAgent.md)
 - [Protocol](Protocol.md)
 - [Modules](Modules.md)
+- [Asset](Asset.md)
+- [Escrow](Escrow.md)
+- [Budget](Budget.md)
+- [Stream](Stream.md)
+- [Service](Service.md)
+- [Perps](Perps.md)
+- [Governance](Governance.md)
+- [Bridge](Bridge.md)
+- [Fees](Fees.md)
+- [Sequencing](Sequencing.md)
 - [Finality](Finality.md)
+- [LNI](LNI.md)
+- [Agent API](AgentApi.md)
+- [MCP](Mcp.md)
+- [Roadmap: beta surface expansion](Roadmap.md)
 - [Custody](Custody.md)
 - [Protocol design](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/layerx-protocol/design.md)
 - [Contributing guide](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/CONTRIBUTING.md)

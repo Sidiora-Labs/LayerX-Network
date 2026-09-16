@@ -67,6 +67,9 @@ Successful receipt status, transaction identity, canonical block and every
 The daemon independently verifies the finality bundle. The producer then
 reads tag 14 and compares the stored evidence bytes with its submitted bundle.
 
+Protocol rules for attestation and finality are on [Sequencing](Sequencing.md)
+and [Finality](Finality.md).
+
 Certificates use an **empty validity proof**. No validity-proof generation is
 claimed. Implemented domains are `LXP/v2/checkpoint-certificate\0` and
 `LXP/v2/guarantor-attestation\0`; these also apply to the occupancy protocol
