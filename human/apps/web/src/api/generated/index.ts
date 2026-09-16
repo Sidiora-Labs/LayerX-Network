@@ -410,9 +410,9 @@ export function decodeRetriability(value: JsonValue | undefined, at: string): Re
   throw new HumanApiDecodeError(at + " must be a declared Retriability variant");
 }
 
-export type SecurityActionKind = "add-passkey" | "revoke-passkey" | "revoke-session" | "revoke-all-sessions" | "add-authenticator" | "disable-authenticator" | "rotate-backup-codes" | "reveal-recovery-evidence";
+export type SecurityActionKind = "add-passkey" | "revoke-passkey" | "revoke-session" | "revoke-all-sessions" | "add-authenticator" | "disable-authenticator" | "rotate-backup-codes" | "reveal-recovery-evidence" | "export-primary-key";
 
-export const securityActionKindVariants: readonly SecurityActionKind[] = ["add-passkey", "revoke-passkey", "revoke-session", "revoke-all-sessions", "add-authenticator", "disable-authenticator", "rotate-backup-codes", "reveal-recovery-evidence"];
+export const securityActionKindVariants: readonly SecurityActionKind[] = ["add-passkey", "revoke-passkey", "revoke-session", "revoke-all-sessions", "add-authenticator", "disable-authenticator", "rotate-backup-codes", "reveal-recovery-evidence", "export-primary-key"];
 
 export function decodeSecurityActionKind(value: JsonValue | undefined, at: string): SecurityActionKind {
   const text = expectString(value, at);
@@ -1963,6 +1963,31 @@ export function encodeExportStatementRequest(value: ExportStatementRequest): Jso
   return result;
 }
 
+export interface ExportedPrimaryKey {
+  public_key: string;
+  secret: TimedSecret;
+  self_custodied_at: Timestamp;
+}
+
+export function decodeExportedPrimaryKey(value: JsonValue | undefined, at: string): ExportedPrimaryKey {
+  const object = expectObject(value, at);
+  const result: ExportedPrimaryKey = {
+    public_key: expectString(object["public_key"], at + ".public_key"),
+    secret: decodeTimedSecret(object["secret"], at + ".secret"),
+    self_custodied_at: expectString(object["self_custodied_at"], at + ".self_custodied_at"),
+  };
+  return result;
+}
+
+export function encodeExportedPrimaryKey(value: ExportedPrimaryKey): JsonValue {
+  const result: JsonObject = {
+    public_key: value.public_key,
+    secret: encodeTimedSecret(value.secret),
+    self_custodied_at: value.self_custodied_at,
+  };
+  return result;
+}
+
 export interface HomeSummary {
   balance: AccountBalance;
   agents: Agent[];
@@ -2125,6 +2150,72 @@ export function encodeKeyChallenge(value: KeyChallenge): JsonValue {
     delay_seconds: value.delay_seconds,
     ready_at: value.ready_at,
     evidence: value.evidence.map(encodeEvidenceRef),
+  };
+  return result;
+}
+
+export interface KeyExportBegin {
+  step_up: StepUpEvidence;
+}
+
+export function decodeKeyExportBegin(value: JsonValue | undefined, at: string): KeyExportBegin {
+  const object = expectObject(value, at);
+  const result: KeyExportBegin = {
+    step_up: decodeStepUpEvidence(object["step_up"], at + ".step_up"),
+  };
+  return result;
+}
+
+export function encodeKeyExportBegin(value: KeyExportBegin): JsonValue {
+  const result: JsonObject = {
+    step_up: encodeStepUpEvidence(value.step_up),
+  };
+  return result;
+}
+
+export interface KeyExportChallenge {
+  export_id: string;
+  confirms: OperationDigest;
+  expires_at: Timestamp;
+}
+
+export function decodeKeyExportChallenge(value: JsonValue | undefined, at: string): KeyExportChallenge {
+  const object = expectObject(value, at);
+  const result: KeyExportChallenge = {
+    export_id: expectString(object["export_id"], at + ".export_id"),
+    confirms: expectString(object["confirms"], at + ".confirms"),
+    expires_at: expectString(object["expires_at"], at + ".expires_at"),
+  };
+  return result;
+}
+
+export function encodeKeyExportChallenge(value: KeyExportChallenge): JsonValue {
+  const result: JsonObject = {
+    export_id: value.export_id,
+    confirms: value.confirms,
+    expires_at: value.expires_at,
+  };
+  return result;
+}
+
+export interface KeyExportFinish {
+  export_id: string;
+  step_up: StepUpEvidence;
+}
+
+export function decodeKeyExportFinish(value: JsonValue | undefined, at: string): KeyExportFinish {
+  const object = expectObject(value, at);
+  const result: KeyExportFinish = {
+    export_id: expectString(object["export_id"], at + ".export_id"),
+    step_up: decodeStepUpEvidence(object["step_up"], at + ".step_up"),
+  };
+  return result;
+}
+
+export function encodeKeyExportFinish(value: KeyExportFinish): JsonValue {
+  const result: JsonObject = {
+    export_id: value.export_id,
+    step_up: encodeStepUpEvidence(value.step_up),
   };
   return result;
 }
@@ -3914,6 +4005,8 @@ export const operationNames = [
   "profile.get",
   "profile.update",
   "security.action",
+  "security.key-export.begin",
+  "security.key-export.finish",
   "security.passkey.list",
   "security.passkey.register.begin",
   "security.passkey.register.finish",
@@ -4000,6 +4093,8 @@ export const operations: { readonly [name in OperationName]: OperationShape } = 
   "profile.get": { method: "GET", path: "/v1/profile", pathParams: [], request: "Empty", response: "Profile", idempotency: false, bodyless: true },
   "profile.update": { method: "PATCH", path: "/v1/profile", pathParams: [], request: "ProfileUpdate", response: "Profile", idempotency: false, bodyless: false },
   "security.action": { method: "POST", path: "/v1/security/actions", pathParams: [], request: "SecurityActionRequest", response: "SecurityAction", idempotency: false, bodyless: false },
+  "security.key-export.begin": { method: "POST", path: "/v1/security/key-export/begin", pathParams: [], request: "KeyExportBegin", response: "KeyExportChallenge", idempotency: false, bodyless: false },
+  "security.key-export.finish": { method: "POST", path: "/v1/security/key-export/finish", pathParams: [], request: "KeyExportFinish", response: "ExportedPrimaryKey", idempotency: false, bodyless: false },
   "security.passkey.list": { method: "GET", path: "/v1/security/passkeys", pathParams: [], request: "Empty", response: "PasskeyList", idempotency: false, bodyless: true },
   "security.passkey.register.begin": { method: "POST", path: "/v1/security/passkeys/registrations", pathParams: [], request: "SecurityPasskeyRegistrationBegin", response: "PasskeyRegistrationChallenge", idempotency: false, bodyless: false },
   "security.passkey.register.finish": { method: "POST", path: "/v1/security/passkeys/registrations/{registration_id}", pathParams: ["registration_id"], request: "SecurityPasskeyRegistrationFinish", response: "Passkey", idempotency: false, bodyless: false },
@@ -4095,6 +4190,8 @@ export interface HumanApiClient {
   profileGet(): Promise<Profile>;
   profileUpdate(request: ProfileUpdate): Promise<Profile>;
   securityAction(request: SecurityActionRequest): Promise<SecurityAction>;
+  securityKeyExportBegin(request: KeyExportBegin): Promise<KeyExportChallenge>;
+  securityKeyExportFinish(request: KeyExportFinish): Promise<ExportedPrimaryKey>;
   securityPasskeyList(): Promise<PasskeyList>;
   securityPasskeyRegisterBegin(request: SecurityPasskeyRegistrationBegin): Promise<PasskeyRegistrationChallenge>;
   securityPasskeyRegisterFinish(registration_id: string, request: SecurityPasskeyRegistrationFinish): Promise<Passkey>;
@@ -4279,6 +4376,10 @@ export function createHumanApiClient(options: HumanApiClientOptions = {}): Human
       decodeProfile(await execute("PATCH", "/v1/profile", encodeProfileUpdate(request), undefined), "profile.update result"),
     securityAction: async (request) =>
       decodeSecurityAction(await execute("POST", "/v1/security/actions", encodeSecurityActionRequest(request), undefined), "security.action result"),
+    securityKeyExportBegin: async (request) =>
+      decodeKeyExportChallenge(await execute("POST", "/v1/security/key-export/begin", encodeKeyExportBegin(request), undefined), "security.key-export.begin result"),
+    securityKeyExportFinish: async (request) =>
+      decodeExportedPrimaryKey(await execute("POST", "/v1/security/key-export/finish", encodeKeyExportFinish(request), undefined), "security.key-export.finish result"),
     securityPasskeyList: async () =>
       decodePasskeyList(await execute("GET", "/v1/security/passkeys", undefined, undefined), "security.passkey.list result"),
     securityPasskeyRegisterBegin: async (request) =>
