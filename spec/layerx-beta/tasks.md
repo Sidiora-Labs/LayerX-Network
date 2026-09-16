@@ -251,7 +251,7 @@ Two points need owner confirmation before the corresponding task starts, and one
   - [x] 8.3 Add the naming registry reference program
     - Add programs/sdk/rust/examples/naming with register, transfer, renew, resolve, reverse_resolve; a registry reference interface at programs/crates/layerx-programs-registry/src/naming.rs; tests/naming_reference.rs; and a name resolver in human/apps/web explorer lookup that calls the program read path when a query matches the name grammar.
     - _Requirements: 16.3_
-  - [-] 8.4 Expose the committed oracle observation to programs
+  - [x] 8.4 Expose the committed oracle observation to programs
     - Allocate guest ABI v3 and add oracle_read to its new ABI_MANIFEST layerx_v3 namespace in programs/crates/layerx-programs-runtime/src/lib.rs and validate.rs while the frozen v2 vector and checksum stay untouched, the C host binding in src/modules/programs reading lx_oracle_store, the Rust SDK wrapper in programs/sdk/rust/src/oracle.rs, and tests/test_programs_oracle_read.c wired as make test-programs-oracle-read proving a guest reads the observation the perps engine committed and gets a typed refusal for unknown and halted markets.
     - _Requirements: 16.4_
   - [x] 8.5 Add the constant-product swap reference program
