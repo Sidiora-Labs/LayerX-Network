@@ -1,5 +1,12 @@
 # Hosted Human material
 
+End-user `/v1` journeys (onboarding, deposit, move, withdraw, exit,
+approvals, managed agents, security) are documented on
+[Human journeys](HumanJourneys.md). The custodial keystore model and
+verification levels are on [Human custody](HumanCustody.md). This page
+is the hosted-cluster material assembler, not the browser product
+contract.
+
 Human policy assembly consumes the same generated schema-version-2 asset and
 module registry published to `layerx-core-module-registry`. The native producer
 uses the module interfaces registered by the daemon. Beta asset metadata lives

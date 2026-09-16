@@ -1,11 +1,12 @@
 # Public JSON-RPC
 
-The public JSON-RPC gateway provides 17
-`lx_*` methods: self-service onboarding, authenticated canonical submission,
-unauthenticated committed reads, fee estimation, and scoped live
-subscriptions. The source contract is
-the embedded OpenRPC 1.3.2 document plus the gateway dispatch and public-core
-read implementations.
+The public JSON-RPC gateway publishes **18** `lx_*` methods in the
+embedded OpenRPC 1.3.2 document
+(`platform/hosted/gateway/openrpc.json`). Those names are self-service
+onboarding, authenticated canonical submission, unauthenticated
+committed reads, fee estimation, and scoped live subscriptions. The
+gateway dispatch test asserts the same 18 names
+(`platform/hosted/gateway/src/rpc.rs`).
 
 See [Commitment levels](CommitmentLevels.md), [Assets](Assets.md),
 [Payments developer path](PaymentsQuickstart.md), and the
@@ -289,6 +290,179 @@ non-POST `/rpc` or non-GET `/rpc/schema`, `415 json_content_type_required`,
 upgrade, `401 api_key_required`, and `503 persistence_unavailable`. A request
 carrying `x-layerx-principal` or `x-layerx-api-key` is refused with
 `400 untrusted_identity_header`.
+
+## Request and response shapes
+
+The examples below are the positional JSON-RPC envelopes. Field lists
+come from the gateway OpenRPC descriptions, public-core read
+translation (`platform/hosted/core/src/public_reads.rs`), register and
+faucet decoders, and the WebSocket notifier. They are not reconstructed
+from memory.
+
+### `lx_register`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_register","params":["<64-hex Ed25519 public key>","<128-hex signature>"]}
+```
+
+Both arguments are lowercase hexadecimal. The signature is over
+SHA-256(len-prefixed `"layerx-register-binding-v1"`, tenant,
+`signer_public_key`). Success is the identity principal record:
+`tenant`, `sub`, `allowed_signer_public_keys`, `account`, and
+`audiences`. The subject is derived as
+`beta.<first 16 bytes of SHA-256(len-prefixed "layerx-register-subject-v1", tenant, signer_public_key)>`.
+
+### `lx_requestFunds`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_requestFunds","params":["did:layerx:<hex>","<64-hex signer public key>"]}
+```
+
+Requires `Authorization: Bearer <identity session token>`. Success is
+the faucet claim: `funded` (must be `true`), `funding_id`,
+`transaction_id`, decimal-string `amount`, and `network`. Incomplete
+funded evidence is `-32603`, never a success with `funded: false`.
+
+### `lx_getAccount` and `lx_getBalance`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_getAccount","params":["<64-hex account id>"]}
+```
+
+`lx_getBalance` takes the same parameter and returns the same object.
+Fields: `account_id`, `name`, `asset_id`, decimal-string `balance`,
+decimal-string `next_sequence`, `frozen`, `canonical_value`,
+`proof_material`, decimal-string `observed_head_sequence`,
+decimal-string `batch_number`, and `verification` ∈
+`state_proven` | `checkpoint_finalised` | `settlement_anchored`.
+
+### `lx_getBalances`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_getBalances","params":["did:layerx:<hex>"]}
+```
+
+Result: `did`, `accounts` (each entry is the account object above plus
+its own `verification`), and listing `verification` naming the weakest
+entry level. An empty listing or missing proof is `-32001` with core
+code `did_account_listing_unavailable`.
+
+### `lx_getReceipt` and `lx_getActivityStatus`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_getReceipt","params":["<64-hex lowercase activity id>"]}
+```
+
+`lx_getActivityStatus` is the same read. Success includes `activity_id`
+and verified `receipt` bytes. The receipt route refuses uppercase hex
+digits. Missing evidence is `-32001`. An admission acknowledgement is
+never returned as success.
+
+### `lx_getBatchHeader`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_getBatchHeader","params":["<nonzero decimal u64>"]}
+```
+
+Result: `batch_number`, `canonical_header`, `signature`,
+`sequencer_id`, `sequencer_public_key`, `first_batch_number`,
+`last_batch_number`. `0` and leading-zero forms are `-32602`.
+
+### `lx_getCheckpoint`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_getCheckpoint","params":["<64-hex checkpoint id>"]}
+```
+
+Result: `checkpoint_id`, `checkpoint`, `context`, `canonical_header`.
+The all-zero identifier is refused.
+
+### `lx_getNodeInfo`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_getNodeInfo","params":[]}
+```
+
+Result: `protocol_version`, `network_id`, `chain_head_sequence`,
+`latest_sealed_batch`, `latest_finalised_checkpoint`,
+`authorised_sequencer_key`, `capabilities`.
+
+### `lx_getSequence`
+
+Account form:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_getSequence","params":["<64-hex account id>"]}
+```
+
+Returns the account object; read `next_sequence`.
+
+Identity form:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_getSequence","params":["did:layerx:<hex>","identity"]}
+```
+
+Result: `did`, `next_sequence`, `observed_head_sequence`, `state_root`,
+`verification: "authenticated_node_snapshot"`.
+
+### `lx_getProof`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_getProof","params":["activity","<64-hex activity id>"]}
+{"jsonrpc":"2.0","id":1,"method":"lx_getProof","params":["receipt","<64-hex activity id>"]}
+{"jsonrpc":"2.0","id":1,"method":"lx_getProof","params":["account","<64-hex activity id>","<64-hex account id>"]}
+```
+
+Result: `kind`, `activity_id`, `canonical_value`, `account_id` (null
+for activity and receipt), `proof`, and `signed_header`
+(`canonical_header`, `signature`, `sequencer_id`, `public_key`, covered
+batch interval). Activity and receipt proofs carry `leaf_index`,
+`leaf_count`, `siblings`. An account proof carries `canonical_bytes`.
+
+### `lx_sendActivity`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_sendActivity","params":["<canonical activity hex>","executed"]}
+```
+
+`commitment` is exactly `executed`, `batched`, or `finalised`. Success
+carries `activity_id`, `batch_id`, `global_sequence` (JSON number),
+`result_code`, `state_root`, `receipt`, `idempotency_key`, and
+`commitment`. `batched` also contains `batch_evidence`; `finalised`
+contains both `batch_evidence` and `checkpoint_evidence`. A weaker
+success is never returned. See [Commitment levels](CommitmentLevels.md).
+
+### `lx_listAssets` and `lx_getAsset`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_listAssets","params":[]}
+{"jsonrpc":"2.0","id":1,"method":"lx_getAsset","params":["<64-hex asset id>"]}
+```
+
+An asset record: `asset_id`, `symbol`, `name`, `decimals`,
+`custody_kind`, `custody_reference`, `paused`, `supply_cap`,
+`issuer_did`, `issuer_kind`, `total_units`, `salt`. The list nests
+records under `assets` (native bound 64). A single record nests under
+`asset`. Both carry `observed_head_sequence`, `state_root`, and
+`verification: "authenticated_committed_snapshot"`.
+
+### `lx_estimateFee`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"lx_estimateFee","params":["<canonical activity hex>"]}
+```
+
+Result: decimal-string `fee`, `parameter_version`, hexadecimal
+`canonical_schedule`, `canonical_bytes`, `observed_head_sequence`,
+`state_root`, `verification: "authenticated_committed_snapshot"`. It
+does not reserve a fee or prove execution.
+
+### `lx_subscribe` and `lx_unsubscribe`
+
+WebSocket only. See [WebSocket subscriptions](#websocket-subscriptions)
+below. `lx_subscribe` returns a one-based string id.
+`lx_unsubscribe` returns `true`. Over `POST /rpc` both are `-32004`.
 
 ## Source contract
 

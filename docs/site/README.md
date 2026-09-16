@@ -43,3 +43,13 @@ rewritten relative links. Prefer this tree for new documentation.
 Pull requests that touch `docs/` run `mkdocs build --strict` through
 `.github/workflows/docs-site.yml`. Pushes to `main` that touch `docs/`
 deploy the built site to GitHub Pages.
+
+## Wiki HTML export
+
+`build_wiki.py` renders `../wiki/` into static HTML under `out/` (not
+committed) and refuses broken relative Markdown links. It is a standalone
+Python 3 script and is not part of the MkDocs build:
+
+```sh
+python3 docs/site/build_wiki.py
+```

@@ -8,8 +8,9 @@ are served by this tree. The LXT20 example is not: neither
 
 For a shorter environment checklist, start with
 [Getting started on testnet](Getting-Started-Testnet.md). Wire details are in
-[Assets](Assets.md), [Public JSON-RPC](PublicRpc.md), and
-[Commitment levels](CommitmentLevels.md).
+[Assets](Assets.md), [Public JSON-RPC](PublicRpc.md),
+[Commitment levels](CommitmentLevels.md), and
+[SDK quickstarts](SdkQuickstarts.md).
 
 ## 1. Configure trusted testnet inputs
 

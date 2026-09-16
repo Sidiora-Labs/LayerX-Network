@@ -1,5 +1,10 @@
 # Authenticated custody credit
 
+The Human web app's custodial keystore, wallet-binding boundary, and
+journey verification levels are a different surface. See
+[Human custody](HumanCustody.md) and [Human journeys](HumanJourneys.md).
+This page is Bridge module 8 custody credit on the native protocol.
+
 Custody credit is Bridge module 8, ordinal 1, version 1, on protocol 3. It is
 available only with an explicitly signed custody genesis profile. Ordinary
 genesis still reconstructs Programs 4 and Asset 1, with unchanged encoding and
