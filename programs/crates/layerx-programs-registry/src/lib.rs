@@ -8,10 +8,12 @@ mod hash;
 pub mod hex;
 mod interface;
 pub mod lxt20;
+pub mod lxt721;
 pub mod naming;
 mod pipeline;
 mod protocol_evidence;
 mod resolver;
+pub mod swap;
 
 pub use account_state::{
     account_tree_commitment, program_account_registration_commitment, programs_root_commitment,

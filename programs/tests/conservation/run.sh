@@ -33,6 +33,8 @@ programs_conservation_suite()
             provider_absence_refunds_expired_lease
         "$programs_cargo" test --locked -p layerx-programs-market \
             unfunded_and_mid_work_expiry_are_refused
+        "$programs_cargo" test --locked -p layerx-programs-registry --test swap_reference \
+            randomised_sequence_conserves_reserves_and_fees
     )
 }
 

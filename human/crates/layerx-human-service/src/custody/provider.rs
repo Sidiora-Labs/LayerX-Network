@@ -20,6 +20,7 @@ const PROVIDER_REFERENCE_LIMIT: usize = 4096;
 const PROVIDER_FRAME_LIMIT: usize = 2_097_152;
 const PROVIDER_MAGIC: &[u8; 4] = b"LXKP";
 const PROVIDER_VERSION: u16 = 1;
+const EXPORT_VERSION: u16 = 5;
 const SIGNATURE_DOMAIN: &[u8] = b"LXP/v1/signature-preimage\0";
 const OP_PROBE: u8 = 0;
 const OP_CREATE: u8 = 1;
@@ -27,12 +28,14 @@ const OP_DESCRIBE: u8 = 2;
 const OP_ROTATE: u8 = 3;
 const OP_DESTROY: u8 = 4;
 const OP_SIGN: u8 = 5;
+const OP_EXPORT: u8 = 14;
 const STATUS_OK: u8 = 0;
 const STATUS_REFUSED: u8 = 1;
 const STATUS_NOT_FOUND: u8 = 2;
 const STATUS_CONFLICT: u8 = 3;
 const STATUS_UNAVAILABLE: u8 = 4;
 const STATUS_INTEGRITY: u8 = 5;
+const STATUS_SELF_CUSTODIED: u8 = 6;
 
 /// Whether a custody provider may be selected by a production service.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -432,6 +435,22 @@ pub trait KmsProvider: Debug + Send + Sync {
         Err(KmsError::Refused)
     }
 
+    /// Hands the human primary seed to its owner once and leaves the provider
+    /// key self-custodied. Providers without an export ceremony refuse.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Refused` from any provider that holds no export ceremony,
+    /// `SelfCustodied` for an identity that already exported, and the typed
+    /// provider, availability and integrity refusals otherwise.
+    fn export_primary_key(
+        &self,
+        _binding: &PrincipalKeyBinding,
+        _reference: &ProviderKeyReference,
+    ) -> Result<Zeroizing<[u8; 32]>, KmsError> {
+        Err(KmsError::Refused)
+    }
+
     /// Destroys a provider key. No key bytes are returned.
     ///
     /// # Errors
@@ -730,6 +749,26 @@ impl KmsProvider for RemoteKmsProvider {
         decode_description(&response, binding)
     }
 
+    fn export_primary_key(
+        &self,
+        binding: &PrincipalKeyBinding,
+        reference: &ProviderKeyReference,
+    ) -> Result<Zeroizing<[u8; 32]>, KmsError> {
+        let mut request = encode_key_request(
+            OP_EXPORT,
+            &self.provider_reference,
+            binding,
+            Some(reference),
+        )?;
+        request[4..6].copy_from_slice(&EXPORT_VERSION.to_be_bytes());
+        let response = Zeroizing::new(self.call_version(OP_EXPORT, EXPORT_VERSION, &request)?);
+        let seed: [u8; 32] = response
+            .as_slice()
+            .try_into()
+            .map_err(|_| KmsError::InvalidResponse)?;
+        Ok(Zeroizing::new(seed))
+    }
+
     fn destroy_key(
         &self,
         binding: &PrincipalKeyBinding,
@@ -855,6 +894,21 @@ impl KmsProvider for EnvelopeKms {
         _reference: &ProviderKeyReference,
     ) -> Result<ProviderKeyDescription, KmsError> {
         self.create_key(binding)
+    }
+
+    fn export_primary_key(
+        &self,
+        binding: &PrincipalKeyBinding,
+        reference: &ProviderKeyReference,
+    ) -> Result<Zeroizing<[u8; 32]>, KmsError> {
+        let root = self.root_secret()?;
+        let envelope = layerx_crypto::keystore::Keystore::from_bytes(reference.as_bytes())
+            .map_err(seal_refusal)?;
+        envelope
+            .open_with(&root, binding.identity(), binding.network_id, |seed| {
+                Zeroizing::new(*seed)
+            })
+            .map_err(seal_refusal)
     }
 
     fn destroy_key(
@@ -1061,6 +1115,7 @@ fn decode_response(operation: u8, version: u16, bytes: &[u8]) -> Result<Vec<u8>,
         STATUS_CONFLICT => Err(KmsError::Conflict),
         STATUS_UNAVAILABLE => Err(KmsError::Unavailable),
         STATUS_INTEGRITY => Err(KmsError::Integrity),
+        STATUS_SELF_CUSTODIED => Err(KmsError::SelfCustodied),
         _ => Err(KmsError::InvalidResponse),
     }
 }

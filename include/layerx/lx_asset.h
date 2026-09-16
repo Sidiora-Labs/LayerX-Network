@@ -13,7 +13,7 @@ lxp_result lxp_ctx_bind_asset_supply(lxp_module_ctx *ctx,
     const uint8_t asset_id[32], lxp_u128 before, lxp_u128 after);
 
 enum {
-    LX_ASSET_REGISTRY_CAPACITY = 64,
+    LX_ASSET_REGISTRY_CAPACITY = 1024,
     LX_ASSET_RESERVE_LINE_CAPACITY = 128,
     LX_ASSET_SYMBOL_MAX = 16,
     LX_ASSET_NAME_MAX = 32,
