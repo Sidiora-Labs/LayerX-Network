@@ -14,8 +14,9 @@ protected `layerx-sequencer-authority-v1` file, then a real sequencer
 handshake (`agent/crates/layerx-agentd/tests/support/mod.rs:238-292, 295-309`;
 `agent/crates/layerx-agentd/tests/support/real_authority.rs:1293-1298`).
 
-This page covers those library paths. It does not cover MCP routing or
-interop adapters.
+This page covers those library paths. The Agent API contract is
+[Agent API](AgentApi.md). MCP routing is [MCP](Mcp.md). Interop adapters
+are out of scope here.
 
 ---
 
