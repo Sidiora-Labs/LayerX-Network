@@ -43,7 +43,7 @@ paths (`platform/hosted/gateway/src/lib.rs:804-808`;
 `platform/hosted/gateway/src/lib.rs:880-881`).
 
 The gateway serves public JSON-RPC at `POST /rpc`, `GET /rpc/schema`, and
-`GET /rpc/ws`. The exact 15-method contract, authenticated submission rules,
+`GET /rpc/ws`. The exact 18-method contract, authenticated submission rules,
 result shapes, and WebSocket behavior are in [Public JSON-RPC](PublicRpc.md).
 
 ---

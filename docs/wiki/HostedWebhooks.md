@@ -21,8 +21,9 @@ endpoint (`platform/hosted/webhooks/src/lib.rs:9-10`;
 `platform/hosted/webhooks/src/deliveries.rs:47-48`).
 
 This page covers that binary, its Redis, KMS, event-source fetch, and the
-tests under `platform/hosted/webhooks/`. It does not document the
-dashboard.
+tests under `platform/hosted/webhooks/`. The developer read surface that
+projects webhook health, keys, and receipt-backed test payments is
+[Hosted dashboard](HostedDashboard.md).
 
 ---
 

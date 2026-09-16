@@ -1,0 +1,27 @@
+name: Docs site
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs-site.yml"
+  push:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs-site.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  wiki-site:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build wiki site
+        run: python3 docs/site/build_wiki.py
