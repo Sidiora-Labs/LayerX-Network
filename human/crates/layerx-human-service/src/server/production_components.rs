@@ -63,7 +63,8 @@ use crate::notify::{
 };
 use crate::onboarding::OnboardingJourney;
 use crate::security::{
-    AuthenticatorMethod, AuthenticatorProvider, AuthenticatorStatus, RecoveryEvidenceProvider,
+    AuthenticatorMethod, AuthenticatorProvider, AuthenticatorStatus, KeyExportCeremony,
+    RecoveryEvidenceProvider, SecurityError,
 };
 use crate::store::{
     PrincipalStore, RetentionPeriod, RetentionPolicy, RowKey, Table, TenancyDigest,
@@ -141,6 +142,8 @@ const PRODUCTION_OPERATIONS: &[&str] = &[
     "profile.get",
     "profile.update",
     "security.action",
+    "security.key-export.begin",
+    "security.key-export.finish",
     "security.passkey.list",
     "security.passkey.register.begin",
     "security.passkey.register.finish",
@@ -1714,6 +1717,23 @@ fn authenticator_method_json(method: &AuthenticatorMethod) -> serde_json::Value 
 fn authenticator_status_json(status: &AuthenticatorStatus) -> serde_json::Value {
     json!({"methods": status.methods.iter().map(authenticator_method_json).collect::<Vec<_>>(),
         "backup_codes_remaining": status.backup_codes_remaining})
+}
+
+const KEY_EXPORT_WINDOW_SECONDS: u64 = 300;
+
+fn key_export_failure(error: &SecurityError) -> ApiFailure {
+    match error {
+        SecurityError::KeyExported | SecurityError::Custody(CustodyError::SelfCustodied) => {
+            ApiFailure::forbidden()
+        }
+        SecurityError::StepUpMismatch | SecurityError::StepUpExpired => ApiFailure::forbidden(),
+        SecurityError::InvalidTarget => ApiFailure::invalid_request(None),
+        SecurityError::SessionExpired => ApiFailure::session_expired(),
+        SecurityError::Auth(error) => auth_api_failure(error),
+        SecurityError::Boundary(_) | SecurityError::Custody(_) | SecurityError::Audit(_) => {
+            ApiFailure::upstream_degraded()
+        }
+    }
 }
 
 fn timed_secret_json(secret: &crate::security::TimedSecret) -> serde_json::Value {
@@ -3790,6 +3810,63 @@ impl ProductionComponents {
         })
     }
 
+    fn key_export_ceremony() -> Result<KeyExportCeremony, ApiFailure> {
+        let key = KeyId::new("human-primary").map_err(|_| ApiFailure::upstream_degraded())?;
+        KeyExportCeremony::new(key, KEY_EXPORT_WINDOW_SECONDS)
+            .map_err(|_| ApiFailure::upstream_degraded())
+    }
+
+    fn execute_key_export_begin(
+        &self,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let challenge = Self::key_export_ceremony()?
+            .begin(self.custody.creation_keystore(), principal, self.now()?)
+            .map_err(|error| key_export_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({"export_id": challenge.export_id,
+                    "confirms": format!("opd_{}", URL_SAFE_NO_PAD.encode(challenge.confirms.bytes())),
+                    "expires_at": challenge.expires_at}),
+            session: None,
+        })
+    }
+
+    fn execute_key_export_finish(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let export_id = text_field(&request.body, "export_id")?.to_owned();
+        let challenge = request
+            .body
+            .get("step_up")
+            .and_then(|value| value.get("challenge_id"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(ApiFailure::forbidden)?;
+        let evidence = self
+            .passkeys
+            .load_step_up_evidence(scope, challenge, self.now()?)
+            .map_err(|error| auth_api_failure(&error))?;
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let exported = Self::key_export_ceremony()?
+            .finish(
+                self.custody.creation_keystore(),
+                scope,
+                &export_id,
+                &evidence,
+                &trace,
+                self.now()?,
+            )
+            .map_err(|error| key_export_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({"public_key": exported.public_key,
+                    "secret": timed_secret_json(&exported.secret),
+                    "self_custodied_at": exported.self_custodied_at}),
+            session: None,
+        })
+    }
+
     fn execute_session_list(
         scope: &mut crate::store::PrincipalScope<'_>,
         session_id: &str,
@@ -4888,6 +4965,8 @@ impl ProductionComponents {
             "authenticator.disable" => self.execute_authenticator_disable(request, principal),
             "authenticator.backup.rotate" => self.execute_authenticator_backup_rotate(principal),
             "security.recovery.reveal" => self.execute_security_recovery_reveal(request, principal),
+            "security.key-export.begin" => self.execute_key_export_begin(principal),
+            "security.key-export.finish" => self.execute_key_export_finish(request, scope),
             "session.list" => Self::execute_session_list(scope, session_id),
             "session.revoke" | "security.session.revoke" => {
                 self.execute_session_revoke(request, scope)

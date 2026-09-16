@@ -278,7 +278,7 @@ request = "StepUpFinish"
 response = "StepUpEvidence"
 
 [type.SecurityActionKind]
-variants = ["add-passkey","revoke-passkey","revoke-session","revoke-all-sessions","add-authenticator","disable-authenticator","rotate-backup-codes","reveal-recovery-evidence"]
+variants = ["add-passkey","revoke-passkey","revoke-session","revoke-all-sessions","add-authenticator","disable-authenticator","rotate-backup-codes","reveal-recovery-evidence","export-primary-key"]
 
 [type.SecurityActionRequest]
 required = ["action:SecurityActionKind"]
@@ -435,6 +435,38 @@ path = "/v1/security/recovery/evidence"
 request = "SecurityRecoveryReveal"
 response = "TimedSecret"
 receipt = "The revealed bytes are the exact recovery registration receipt already referenced by onboarding status, never a client-authored representation."
+
+[type.KeyExportBegin]
+required = ["step_up:StepUpEvidence"]
+consequence = "The client presents the consequence before asking for step-up: the key leaves LayerX once, nobody can return it, and the account signs nothing here afterwards."
+
+[type.KeyExportChallenge]
+required = ["export_id:string","confirms:OperationDigest","expires_at:Timestamp"]
+binding = "The service derives confirms from the authenticated principal and the export action alone. This is the only source of the operation digest a key export answers for, and the browser never invents it."
+
+[type.KeyExportFinish]
+required = ["export_id:string","step_up:StepUpEvidence"]
+binding = "export_id names the challenge this ceremony began, and step_up must confirm exactly the digest that challenge carried. Evidence issued for any other operation is refused with step-up-required."
+
+[type.ExportedPrimaryKey]
+required = ["public_key:string","secret:TimedSecret","self_custodied_at:Timestamp"]
+once = "The DID primary key is returned exactly once. A repeat of this operation is refused, the identity reads as self-custodied from self_custodied_at, and the service signs nothing for it afterwards."
+
+[operation.security.key-export.begin]
+authorization_class = "secret-reveal"
+method = "POST"
+path = "/v1/security/key-export/begin"
+request = "KeyExportBegin"
+response = "KeyExportChallenge"
+posture = "Self-custody is the default posture. Onboarding offers this path first and custodial holding is the explicit opt-in."
+
+[operation.security.key-export.finish]
+authorization_class = "secret-reveal"
+method = "POST"
+path = "/v1/security/key-export/finish"
+request = "KeyExportFinish"
+response = "ExportedPrimaryKey"
+route = "This ceremony is the only route by which a DID primary key leaves the service. No other operation, export, receipt, trace or notification returns key material."
 
 [operation.onboarding.status]
 authorization_class = "read"
