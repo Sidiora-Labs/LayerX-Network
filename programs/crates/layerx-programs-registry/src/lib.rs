@@ -9,6 +9,7 @@ pub mod hex;
 mod interface;
 pub mod lxt20;
 pub mod lxt721;
+pub mod naming;
 mod pipeline;
 mod protocol_evidence;
 mod resolver;

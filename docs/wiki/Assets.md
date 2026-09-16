@@ -6,8 +6,12 @@ The native Asset activity, record-v3, genesis, account-enumeration, and fee
 surfaces described here are served by the kernel Asset module
 (`src/modules/asset/`) and the public read path.
 
+The full activity catalog, payload fields, and refusals are on
+[Asset](Asset.md). This page covers account names, issuance, and the named
+fee schedule.
+
 See also [Payments developer path](PaymentsQuickstart.md),
-[Public JSON-RPC](PublicRpc.md), and [Programs](Programs.md).
+[Public JSON-RPC](PublicRpc.md), [Fees](Fees.md), and [Programs](Programs.md).
 
 ## Account names and identifiers
 
