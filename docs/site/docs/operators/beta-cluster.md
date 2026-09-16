@@ -1,0 +1,112 @@
+# Disposable beta cluster
+
+The beta cluster is a disposable in-cluster Paxeer chain with EVM chain id `125` plus the LayerX Network daemon, boundary, Human, registry, and authority images (`platform/hosted/tests/beta-cluster.sh:10`, `platform/hosted/tests/beta-images.sh:3-4`, `platform/hosted/tests/beta-cluster.sh:97`). The kind cluster name is `LAYERX_BETA_CLUSTER_NAME` with default `layerx-beta` (`platform/hosted/tests/beta-cluster.sh:11`, `platform/hosted/tests/beta-cluster.sh:74`). A set `LAYERX_BETA_KUBECONFIG` selects owner mode (`platform/hosted/tests/beta-cluster.sh:139-141`) and must be readable (`platform/hosted/tests/beta-cluster.sh:271`). The shared image table is `IMAGE_NAMES` in `platform/hosted/tests/beta-images.sh`: testnet-control, gateway, faucet, program-registry, webhooks, dashboard, dashboard-web, internal, human, node, core-boundary, receipt-authority, agent-boundary, identity, paxeer-boundary, `paxd-node`, and `paxd`. The Paxeer chain id the script binds is `125` (`platform/hosted/tests/beta-cluster.sh:97`, `platform/hosted/paxeer/deployment.yaml:42`).
+
+Trusted-boundary Services applied with the node are `layerx-pending-core`, `layerx-pending-core-admin`, `paxeer-boundary`, `layerx-identity`, `layerx-receipt-authority`, and `layerx-agent-boundary` (`platform/hosted/tests/beta-cluster.sh:92`, `platform/hosted/tests/beta-cluster.sh:1098-1100`). Service `layerx-human` is applied from the Human manifest in the same function (`platform/hosted/tests/beta-cluster.sh:1090`). `layerx-identity` issues and verifies hosted principals and sessions; see [Hosted identity](../platform/identity.md). The `layerx-pending-core` and `layerx-pending-core-admin` Services terminate on the `core-boundary` container; listeners, routes, and treasury SEND are on [Hosted core](../platform/hosted-core.md). The `layerx-receipt-authority` service verifies authorised-batch facts from the loopback replica rather than from the sequencer store; see [Hosted authority](../platform/hosted-authority.md). The `paxeer-boundary` Service is the TLS JSON-RPC and genesis path to the in-cluster Paxeer chain; see [Paxeer boundary](../concepts/paxeer-boundary.md).
+
+Work products land under `build/beta-cluster` (`platform/hosted/tests/beta-cluster.sh:56`).
+
+## Make goals
+
+Root `Makefile` includes the platform recipes (`Makefile:2802`). The operator chain is:
+
+1. `make platform-test-tooling` - prerequisite `platform-test-cli-production-credential-refusal`, then crate tests, then `sh -n` / `bash -n` / `python3 -m py_compile` of `platform/hosted/paxeer/init-chain.sh`, `platform/hosted/tests/beta-cluster.sh`, `platform/hosted/paxeer/deploy-contracts.sh`, `platform/hosted/paxeer/prepare-beta.py`, among others (`platform/Makefile.inc:115`, `platform/Makefile.inc:115-130`, `platform/Makefile.inc:120-129`, `platform/Makefile.inc:130`).
+2. `make platform-beta-cluster-up` - `bash platform/hosted/tests/beta-cluster.sh up $(PLATFORM_BETA_CLUSTER_FLAGS)` (`platform/Makefile.inc:188-189`).
+3. `make platform-hosted-smoke` - sources `PLATFORM_BETA_CLUSTER_ENV` (default `build/beta-cluster/env`) and refuses any empty required smoke input, then runs `platform/hosted/testnet/tests/hosted-smoke.sh` (`platform/Makefile.inc:3`, `platform/Makefile.inc:161-173`).
+4. `make platform-beta-cluster-down` - `bash platform/hosted/tests/beta-cluster.sh down` (`platform/Makefile.inc:191-192`).
+
+Image-only commands are invoked on the script, not through Make: `bash platform/hosted/tests/beta-cluster.sh images` builds or pulls the shared table (`platform/hosted/tests/beta-cluster.sh:1973-1978`); `bash platform/hosted/tests/beta-cluster.sh publish-images` forwards its arguments to `publish-images.sh` (`platform/hosted/tests/beta-cluster.sh:1979-1981`). `.github/workflows/publish-images.yml` builds the shared table and then runs the push and promote phases of that script; it is triggered by an `sdk-v*` tag or by a named release candidate on the default branch, never by an arbitrary branch push (`.github/workflows/publish-images.yml:8-16`, `.github/workflows/publish-images.yml:92`, `.github/workflows/publish-images.yml:100-103`, `.github/workflows/publish-images.yml:185-188`).
+
+When `platform-beta-cluster-up` or `platform-beta-cluster-down` is among the make goals, make sets `.NOTPARALLEL` (`platform/Makefile.inc:184-186`). Smoke consumes the env file that `up` writes (`platform/Makefile.inc:3`, `platform/hosted/tests/beta-cluster.sh:62`, `platform/hosted/tests/beta-cluster.sh:1647-1680`).
+
+## Bring-up order
+
+`beta-cluster.sh up` runs `beta_cluster_up` (`platform/hosted/tests/beta-cluster.sh:5`, `platform/hosted/tests/beta-cluster.sh:1793`). After host-tool, Foundry, custody-profile, disk, `tools_install`, image, cluster, `node_boundary_install`, CA, and secret steps, it renders manifests, publishes the builder release, and applies trusted-boundary manifests before the testnet, gateway, and registry manifests (`platform/hosted/tests/beta-cluster.sh:42-48`, `platform/hosted/tests/beta-cluster.sh:1084-1108`). The gateway is the only hosted surface serving public `/v1` routes to humans and SDKs; the Human HTTPS API is a separate in-cluster Service. See [Hosted gateway](../platform/hosted-gateway.md) and [Hosted Human](../human/hosted.md). The developer manifest is `platform/hosted/webhooks/deployment.yaml`; durable outbound delivery of protocol events is documented on [Hosted webhooks](../platform/webhooks.md). The registry StatefulSet those manifests apply is [Hosted registry](../platform/registry.md) (`platform/hosted/registry/deployment.yaml:2-3`, `platform/hosted/tests/beta-cluster.sh:1107`). The signing KMS and event sources in namespace `layerx-internal` are on [Hosted internal](hosted-internal.md) (`platform/hosted/tests/beta-cluster.sh:93`, `platform/hosted/internal/deployment.yaml:3`).
+
+Inside that binding: the Paxeer chain starts with the generated deployer address, the node bootstraps its genesis, `deploy-contracts.sh` deploys settlement contracts from the node's genesis artifacts through the Paxeer boundary, and the resulting GuarantorBond and CheckpointRegistry addresses are published as ConfigMap `layerx-node-settlement` (`platform/hosted/tests/beta-cluster.sh:41-47`, `platform/hosted/tests/beta-cluster.sh:1350-1366`, `platform/hosted/tests/beta-cluster.sh:1369-1380`). `trusted_boundary_apply` applies `registry-journal.yaml`, then `paxeer.yaml`, then `identity.yaml`, then deletes any leftover standalone `layerx-human` Deployment and applies `human.yaml`, then the node bootstrap or retained node manifest (`platform/hosted/tests/beta-cluster.sh:1084-1096`).
+
+## Ordinary-genesis bootstrap
+
+The Paxeer StatefulSet init container `genesis` runs `bash /opt/layerx/init-chain.sh` with home `/var/lib/paxeer` (`platform/hosted/paxeer/deployment.yaml:12-22`). `init-chain.sh` initialises a single-validator Paxeer chain (`platform/hosted/paxeer/init-chain.sh:2`). It refuses any `LAYERX_PAXEER_CHAIN_ID` other than `125`, then sets the CometBFT chain id to `hyperpax_125-1` (`platform/hosted/paxeer/init-chain.sh:16`, `platform/hosted/paxeer/init-chain.sh:39-42`). It runs `paxd init` for that chain id, funds the validator and deployer, writes a one-validator genesis, collects gentxs, and validates genesis (`platform/hosted/paxeer/init-chain.sh:84-113`). Tendermint RPC and P2P, gRPC, and EVM HTTP bind on loopback; the EVM listener is reached through the boundary container (`platform/hosted/paxeer/init-chain.sh:9-10`, `platform/hosted/paxeer/init-chain.sh:117-128`). A completed home is marked and skipped; a partial `genesis.json` without the marker is refused (`platform/hosted/paxeer/init-chain.sh:59-65`).
+
+The primary `paxd` container is `paxd start --home /var/lib/paxeer` (`platform/hosted/paxeer/deployment.yaml:26-29`). The boundary container listens on `0.0.0.0:9443`, talks to `http://127.0.0.1:8545` with chain id `125`, and sets `LAYERX_PAXEER_COMET_URL` to `http://127.0.0.1:26657` (`platform/hosted/paxeer/deployment.yaml:35-42`). GET `/genesis` is served when that variable is set: the 200 body is the Comet genesis JSON and `X-LayerX-Genesis-SHA256` is the SHA256 of those bytes (`platform/hosted/paxeer/src/main.rs:164-172`, `platform/hosted/paxeer/src/main.rs:484-488`, `platform/hosted/paxeer/src/genesis.rs:241-256`, `platform/hosted/paxeer/src/main.rs:535-540`). When `LAYERX_PAXEER_COMET_URL` is unset, GET `/genesis` is a 404 `not_found` refusal (`platform/hosted/paxeer/src/main.rs:164-166`, `platform/hosted/paxeer/src/main.rs:484-488`).
+
+Bring-up then waits until the LayerX node has `node.env`, `genesis/paxeer-deployment-descriptor.lxgd`, and `genesis/paxeer-registration-request.lxrr` in-pod (`platform/hosted/tests/beta-cluster.sh:865-878`, `platform/hosted/tests/beta-cluster.sh:869`). `wait_for_node_genesis` fetches those files out of the node into `$WORK_DIR/genesis` (`platform/hosted/tests/beta-cluster.sh:879-882`). Settlement deploy is `deploy-contracts.sh bootstrap` with `LAYERX_PAXEER_GENESIS_DIR="$WORK_DIR/genesis"` (`platform/hosted/tests/beta-cluster.sh:910-917`, `platform/hosted/tests/beta-cluster.sh:912`). Bootstrap requires the `immediate-beta` timelock profile and runs deploy, permissions, activate, bond, and finalize in that order (`platform/hosted/paxeer/deploy-contracts.sh:9`, `platform/hosted/paxeer/deploy-contracts.sh:417-425`). The beta input pins `timelock_profile` `immediate-beta` and `timelock_delay` `0` (`platform/hosted/paxeer/deployment-input.beta.json:6`, `platform/hosted/paxeer/deployment-input.beta.json:26`). `immediate-beta` refuses a chain id other than `125` and a delay other than zero (`platform/hosted/paxeer/deploy-contracts.sh:147-149`).
+
+`prepare-beta.py` writes a fresh directory from `deployment-input.beta.json` with `protocol_version` `3`, a `deployment-input.json`, `guarantors.json`, and `genesis-request.lxgb` (`platform/hosted/paxeer/prepare-beta.py:12`, `platform/hosted/paxeer/prepare-beta.py:81-96`). The cluster `up` path overlays `deployment-input.beta.json` itself and does not invoke `prepare-beta.py` (`platform/hosted/tests/beta-cluster.sh:905-908`).
+
+## Custody-profile input
+
+`LAYERX_BETA_CUSTODY_PROFILE` defaults to empty (`platform/hosted/tests/beta-cluster.sh:94`). Empty skips validation (`platform/hosted/tests/beta-cluster.sh:1203-1204`). A set value is refused unless it names a readable regular file that is not a symlink (`platform/hosted/tests/beta-cluster.sh:1205-1206`). It is refused unless the file is exactly 207 bytes (`platform/hosted/tests/beta-cluster.sh:1207-1208`). Validation runs on both `up` and `render` (`platform/hosted/tests/beta-cluster.sh:1220`, `platform/hosted/tests/beta-cluster.sh:1303`).
+
+An accepted profile is applied as ConfigMap `layerx-node-custody-profile` and mounted read-only at `/run/layerx/custody.profile` with `layerxd --custody-profile` (`platform/hosted/tests/beta-cluster.sh:603-605`, `platform/hosted/tests/beta-cluster.sh:791-805`).
+
+The 207-byte profile layout used by `tests/bridge/custody_genesis.py` is magic `LXBC1`, protocol `3` at the last two bytes, EVM chain id at bytes `5:13`, and genesis document sha256 at bytes `169:201` (`tests/bridge/custody_genesis.py:22-24`, `tests/bridge/custody_genesis.py:30`). Chain id `125` requires `disposable_rpc` against a disposable identity (`tests/bridge/custody_genesis.py:25-30`).
+
+## Primary node and observer node
+
+The Paxeer StatefulSet has one replica and a `data` PVC of 40Gi mounted at `/var/lib/paxeer` (`platform/hosted/paxeer/deployment.yaml:6`, `platform/hosted/paxeer/deployment.yaml:22`, `platform/hosted/paxeer/deployment.yaml:56-58`). After render, `paxeer_observer_render` appends an independent observer (`platform/hosted/tests/beta-cluster.sh:821-822`, `platform/hosted/tests/beta-cluster.sh:704-778`).
+
+The observer init container `observer-genesis` uses its own home `/var/lib/paxeer-observer` (`platform/hosted/tests/beta-cluster.sh:715-719`, `platform/hosted/tests/beta-cluster.sh:737`). On first run it refuses a pre-existing observer `genesis.json`, runs `paxd init paxeer-observer` (moniker; compare `platform/hosted/paxeer/init-chain.sh:84`) with the primary CometBFT `chain_id`, copies the primary `genesis.json`, and records the primary Tendermint node id from `paxd tendermint show-node-id` (`platform/hosted/tests/beta-cluster.sh:721-726`). It sets observer mode `full`, moves observer RPC/P2P to `127.0.0.1:26667` / `127.0.0.1:26666`, and sets `persistent-peers` to that primary node id at `127.0.0.1:26656` (`platform/hosted/tests/beta-cluster.sh:727-728`). EVM HTTP/WS and gRPC ports on the observer home are distinct (`platform/hosted/tests/beta-cluster.sh:729`). It validates observer genesis and then `cmp`s the two `genesis.json` files (`platform/hosted/tests/beta-cluster.sh:730-733`).
+
+Container `paxd-observer` is a separate `paxd` process: `start --home /var/lib/paxeer-observer` (`platform/hosted/tests/beta-cluster.sh:741-743`). Claim template `observer-data` is a second PVC (`platform/hosted/tests/beta-cluster.sh:762-764`). `observer-boundary` listens on `0.0.0.0:9444` against `http://127.0.0.1:8555` and sets `LAYERX_PAXEER_COMET_URL` to `http://127.0.0.1:26667` (`platform/hosted/tests/beta-cluster.sh:749-757`). Service `paxeer-observer-boundary` targets that observer HTTPS port (`platform/hosted/tests/beta-cluster.sh:765-770`).
+
+## TLS origins, CA bundle, signer key, `rpc-origins.json`
+
+After the Paxeer pod is ready, bring-up port-forwards `paxeer-boundary` `19449:9443` and `paxeer-observer-boundary` `19452:9443` (`platform/hosted/tests/beta-cluster.sh:1258-1260`). The two TLS origins are `https://localhost:19449` and `https://localhost:19452` (`platform/hosted/tests/beta-cluster.sh:1255-1256`).
+
+`paxeer_origins_write` converts the internal CA DER to PEM and writes `build/beta-cluster/paxeer/rpc-origins.json` (`platform/hosted/tests/beta-cluster.sh:55`, `platform/hosted/tests/beta-cluster.sh:780-788`). That document lists `rpc_origins` as those two URLs, `ca_bundle` as `build/beta-cluster/ca/ca.pem`, and `key_file` as `build/beta-cluster/secrets/paxeer-deployer.key` (`platform/hosted/tests/beta-cluster.sh:57-58`, `platform/hosted/tests/beta-cluster.sh:783-788`). Backends named in the same file are container `paxd` home `/var/lib/paxeer` and container `paxd-observer` home `/var/lib/paxeer-observer` (`platform/hosted/tests/beta-cluster.sh:785-787`). Bring-up reads the primary Comet `chain_id` from the `paxd` home and runs `paxeer-identity.py`, which GETs `/genesis` on both origins, requires byte-identical bodies, requires `X-LayerX-Genesis-SHA256` to equal the SHA256 of those bytes, requires the genesis JSON `chain_id` to equal that Comet id, requires `eth_chainId` `125`, and writes `genesis_source` `boundary`, `genesis_sha256`, `comet_chain_id`, `chain_id` `125`, and `ca_sha256` into the same file (`platform/hosted/tests/beta-cluster.sh:789-791`, `platform/hosted/tests/paxeer-identity.py:14-43`).
+
+`secrets_generate` writes `sequencer-id`, `sequencer-first-batch`, and `sequencer-last-batch` from the trust history (`platform/hosted/tests/beta-cluster.sh:508-510`, `platform/hosted/tests/sequencer-pins.py:7-22`). `secrets_apply` provisions those keys into Secret `layerx-gateway-authority-client` and Secret `layerx-developer-hosted-runtime` (`platform/hosted/tests/beta-cluster.sh:588-590`, `platform/hosted/tests/beta-cluster.sh:635-637`).
+
+`disposable_rpc` accepts a shared Comet chain name only when the identity `genesis_sha256`, `comet_chain_id`, `chain_id`, and `ca_sha256` match the fetched genesis, Comet id, EVM `eth_chainId`, and CA digest. It refuses ports `18545` and `19443`, the persistent genesis digest, and persistent blueprint code (`tests/bridge/deploy_local_custody.py:23-24`, `tests/bridge/deploy_local_custody.py:104`, `tests/bridge/deploy_local_custody.py:108-130`). When `genesis_source` is `boundary`, it GETs `/genesis` and requires `X-LayerX-Genesis-SHA256` to equal the SHA256 of the body (`tests/bridge/deploy_local_custody.py:35-41`).
+
+## Image source, GHCR pull, and publication
+
+`LAYERX_BETA_IMAGE_SOURCE` is `build` (default) or `ghcr` (`platform/hosted/tests/beta-cluster.sh:115-124`, `platform/hosted/tests/beta-cluster.sh:255-260`). `build` packs the tracked source tree and runs `docker build` for every name in `IMAGE_NAMES` (`platform/hosted/tests/beta-cluster.sh:215-230`; `platform/hosted/tests/beta-images.sh:3-4`). `ghcr` is kind-only: it inspects the GHCR manifest, pulls by digest, and retags locally (`platform/hosted/tests/beta-cluster.sh:117-119`, `platform/hosted/tests/beta-cluster.sh:233-252`). `LAYERX_BETA_IMAGE_TAG` selects the GHCR tag (default `beta`) and must be a Docker tag (`platform/hosted/tests/beta-cluster.sh:119-120`).
+
+`publish-images.sh` reads `build/beta-cluster/images`, requires every name in the shared table, requires all of them to come from one git revision, and requires every local image to match the inventory (`platform/hosted/tests/publish-images.sh:132-162`). `--phase push` resolves the release binding, generates the SBOM of every image, then tags and pushes `ghcr.io/sidiora-labs/<name>:<revision>`, requires the registry manifest digest to match the pushed image, and signs each published digest (`platform/hosted/tests/publish-images.sh:424-435`, `platform/hosted/tests/publish-images.sh:295-311`). `--phase promote` verifies every published digest against its signature, its SBOM attestation and its build provenance before `cosign copy` repoints the release tag and the moving `beta` tag at it (`platform/hosted/tests/publish-images.sh:437-451`, `platform/hosted/tests/publish-images.sh:339-380`, `platform/hosted/tests/publish-images.sh:382-401`). `--check` validates the local inventory without tagging or pushing (`platform/hosted/tests/publish-images.sh:403-408`). There is no Make target for `images` or `publish-images`.
+
+## Builder environment and sealed upload
+
+`LAYERX_BETA_BUILDER_ENVIRONMENT_DIR` is the owner hermetic builder root (regular files and directories only, entrypoint `bin/layerx-build`) published into the registry builder release PVC (`platform/hosted/tests/beta-cluster.sh:14-15`). Unset, it is recorded as a missing owner input and `builder_release_publish` returns without uploading (`platform/hosted/tests/beta-cluster.sh:645-647`). Set, it is refused unless it is a directory that contains `bin/layerx-build` (`platform/hosted/tests/beta-cluster.sh:649-650`).
+
+The upload applies PVC `layerx-program-builder-release`, starts loader pod `layerx-program-builder-loader` waiting for `/opt/layerx-builder/.sealed`, copies the tree with `tar --mode=u+w`, then `chmod -R a-w` on the rootfs and `touch /opt/layerx-builder/.sealed` (`platform/hosted/tests/beta-cluster.sh:655-681`). The loader must reach `Succeeded` and is then deleted (`platform/hosted/tests/beta-cluster.sh:682-683`).
+
+## Teardown
+
+`beta-cluster.sh down` stops port-forwards. Kind deletion runs when the recorded mode is kind or absent (`platform/hosted/tests/beta-cluster.sh:6`, `platform/hosted/tests/beta-cluster.sh:1272-1283`, `platform/hosted/tests/beta-cluster.sh:1277`). Owner deletion deletes namespaces `layerx-testnet` and `layerx-developer` and additionally requires an executable `$TOOLS_DIR/kubectl` and a readable `LAYERX_BETA_KUBECONFIG` (`platform/hosted/tests/beta-cluster.sh:1280`). It removes labeled images, deletes `build/beta-cluster`, and unless `LAYERX_BETA_KEEP_TOOLS=1` removes the pinned kind/kubectl/calico downloads (`platform/hosted/tests/beta-cluster.sh:1285-1297`).
+
+## Not covered
+
+- Custody-first genesis is not performed. Bring-up waits for node genesis artifacts and then runs `deploy-contracts.sh bootstrap` (`platform/hosted/tests/beta-cluster.sh:1251-1252`). `deploy-contracts.sh` consumes LXGD/LXRR before prediction and deployment and does not expose a pre-genesis custody deploy followed by a signed native genesis that pins that vault, nor a post-genesis phase that preserves those vault and bond identities (`platform/hosted/paxeer/deploy-contracts.sh:19-28`).
+
+[Home](../index.md)
+
+## Registry and retained material
+
+The node image must be built before rendering or provisioning material.
+`secrets_generate` runs `/usr/local/bin/layerx-module-registry generate` in that
+image with networking disabled and a read-only filesystem, supplying
+`--network-id "$NODE_NETWORK_ID" --protocol-version 3 --asset "$NODE_ASSET_ID"`
+and the symbol, currency and decimals read from node bootstrap constants.
+A configured custody profile is supplied with `--custody-profile` and validated
+by the native Bridge implementation. The example registry is a generated
+version-2 example without Bridge; it is not copied into a cluster.
+
+The rendered `registry-check` container runs the node image as UID 4021 with a
+read-only LNI volume. After node readiness, the native read-only preparation
+client compares module ids and ordinals against the actual published ConfigMap.
+No assets are compared because LNI preparation carries none. The node image
+must include the new executable; image and live-cluster qualification are
+separate gates.
+
+Use `LAYERX_BETA_RETAIN_MATERIAL=1` for another `up` against a live cluster with
+a complete prior material inventory. Existing CA, Secrets and ConfigMaps are
+reapplied after completeness, ownership, 0600/0700 permissions, profile selection,
+registry consistency and live KMS seal digest checks. Missing material or a
+seal mismatch refuses the operation. Fresh mode still generates fresh material.
+Retained `render` checks the same material and live seal and renders without
+applying resources. See [Hosted Human](../human/hosted.md). `down` still deletes
+the cluster and its PVCs, including `layerx-human-state`, and local material;
+retained mode does not survive teardown.
