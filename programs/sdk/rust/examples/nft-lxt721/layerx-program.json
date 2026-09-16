@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "abi_version": 2,
+  "language": "rust",
+  "name": "nft-lxt721",
+  "sdk": "../..",
+  "build": {
+    "command": "cargo",
+    "args": ["build", "--release", "--target", "wasm32-unknown-unknown", "--locked"],
+    "artifact": "target/wasm32-unknown-unknown/release/layerx_nft_lxt721.wasm"
+  },
+  "entry": {"call": "layerx_call", "reserve": "layerx_reserve", "interface": "interface.kvx"},
+  "capabilities": ["storage_read", "storage_write", "shared_storage_read", "shared_storage_write"]
+}

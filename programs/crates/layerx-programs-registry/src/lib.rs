@@ -8,6 +8,7 @@ mod hash;
 pub mod hex;
 mod interface;
 pub mod lxt20;
+pub mod lxt721;
 mod pipeline;
 mod protocol_evidence;
 mod resolver;
