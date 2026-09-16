@@ -115,6 +115,9 @@ protocol_result_codes! {
     InvoiceAlreadySettled = -217, Terminal;
     GrantExpired = -218, Terminal;
     GrantRevoked = -219, Terminal;
+    AuthThresholdUnmet = -220, Terminal;
+    AuthDuplicateSigner = -221, Terminal;
+    AuthNotMature = -222, Retriable;
     SequenceGap = -300, Retriable;
     SequenceReused = -301, Terminal;
     IdempotentReplay = -302, Terminal;
