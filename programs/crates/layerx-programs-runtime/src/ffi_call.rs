@@ -2062,6 +2062,7 @@ fn terminal(request: TerminalPublication<'_>) -> Result<i32, i32> {
 fn terminal_sandbox_postexecution_failure(
     token: u64,
     schedule: u32,
+    abi: u16,
     record: &CandidateAuthorizedExecutionRecord,
     program: ProgramId,
     binding: ActivityBudgetBinding,
@@ -2093,7 +2094,7 @@ fn terminal_sandbox_postexecution_failure(
         kind: FAILURE,
         result: PROGRAM_REFUSED,
         runtime: record.execution().runtime_version(),
-        abi: 2,
+        abi,
         schedule,
         metering_schedule: record.execution().metering_schedule_version(),
         usage: settlement.usage,
@@ -2964,7 +2965,7 @@ pub extern "C" fn layerx_programs_call_begin(
                                     kind: FAILURE,
                                     result: PROGRAM_REFUSED,
                                     runtime: record.execution().runtime_version(),
-                                    abi: 2,
+                                    abi: abi_version,
                                     schedule: fee_schedule_version,
                                     metering_schedule: record
                                         .execution()
@@ -3001,7 +3002,7 @@ pub extern "C" fn layerx_programs_call_begin(
                                     kind: FAILURE,
                                     result: PROGRAM_REFUSED,
                                     runtime: record.execution().runtime_version(),
-                                    abi: 2,
+                                    abi: abi_version,
                                     schedule: fee_schedule_version,
                                     metering_schedule: record
                                         .execution()
@@ -3042,7 +3043,7 @@ pub extern "C" fn layerx_programs_call_begin(
                                     kind: FAILURE,
                                     result: PROGRAM_REFUSED,
                                     runtime: record.execution().runtime_version(),
-                                    abi: 2,
+                                    abi: abi_version,
                                     schedule: fee_schedule_version,
                                     metering_schedule: record
                                         .execution()
@@ -3096,6 +3097,7 @@ pub extern "C" fn layerx_programs_call_begin(
                             return terminal_sandbox_postexecution_failure(
                                 token,
                                 fee_schedule_version,
+                                abi_version,
                                 &record,
                                 program,
                                 binding,
@@ -3118,6 +3120,7 @@ pub extern "C" fn layerx_programs_call_begin(
                             return terminal_sandbox_postexecution_failure(
                                 token,
                                 fee_schedule_version,
+                                abi_version,
                                 &record,
                                 program,
                                 binding,
@@ -3133,7 +3136,7 @@ pub extern "C" fn layerx_programs_call_begin(
                             kind: FAILURE,
                             result: PROGRAM_REFUSED,
                             runtime: record.execution().runtime_version(),
-                            abi: 2,
+                            abi: abi_version,
                             schedule: fee_schedule_version,
                             metering_schedule: record.execution().metering_schedule_version(),
                             usage: record.execution().usage(),
@@ -3159,6 +3162,7 @@ pub extern "C" fn layerx_programs_call_begin(
                                 return terminal_sandbox_postexecution_failure(
                                     token,
                                     fee_schedule_version,
+                                    abi_version,
                                     &record,
                                     program,
                                     binding,
@@ -3174,7 +3178,7 @@ pub extern "C" fn layerx_programs_call_begin(
                                 kind: FAILURE,
                                 result: PROGRAM_REFUSED,
                                 runtime: record.execution().runtime_version(),
-                                abi: 2,
+                                abi: abi_version,
                                 schedule: fee_schedule_version,
                                 metering_schedule: record.execution().metering_schedule_version(),
                                 usage: record.execution().usage(),
@@ -3215,6 +3219,7 @@ pub extern "C" fn layerx_programs_call_begin(
                             return terminal_sandbox_postexecution_failure(
                                 token,
                                 fee_schedule_version,
+                                abi_version,
                                 &record,
                                 program,
                                 binding,
@@ -3230,7 +3235,7 @@ pub extern "C" fn layerx_programs_call_begin(
                             kind: FAILURE,
                             result: PROGRAM_REFUSED,
                             runtime: record.execution().runtime_version(),
-                            abi: 2,
+                            abi: abi_version,
                             schedule: fee_schedule_version,
                             metering_schedule: record.execution().metering_schedule_version(),
                             usage: record.execution().usage(),
@@ -3269,7 +3274,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         kind: SUCCESS,
                         result: OK,
                         runtime: record.execution().runtime_version(),
-                        abi: 2,
+                        abi: abi_version,
                         schedule: fee_schedule_version,
                         metering_schedule: record.execution().metering_schedule_version(),
                         usage: terminal_usage,
@@ -3325,7 +3330,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         kind: FAILURE,
                         result: PROGRAM_REFUSED,
                         runtime: record.execution().runtime_version(),
-                        abi: 2,
+                        abi: abi_version,
                         schedule: fee_schedule_version,
                         metering_schedule: record.execution().metering_schedule_version(),
                         usage: terminal_usage,
@@ -3373,7 +3378,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         kind: RESOURCE,
                         result: GAS_EXHAUSTED,
                         runtime: record.execution().runtime_version(),
-                        abi: 2,
+                        abi: abi_version,
                         schedule: fee_schedule_version,
                         metering_schedule: record.execution().metering_schedule_version(),
                         usage: terminal_usage,

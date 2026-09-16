@@ -14415,4 +14415,5 @@ file = "agent/crates/layerx-types/build.rs include/layerx/lxp_result.h agent/cra
 symbol = "protocol_result_code_parity"
 observed = "At revision 27c783ac893e004eed3dbd04bd2295f8badbe31d the command make test-programs-oracle-read && make programs-abi-drift exited 2 in the programs-build prerequisite with 'protocol result-code parity failure: result code 38 drifted: header declares AuthThresholdUnmet = -220, src/result.rs declares SequenceGap = -300'; log /root/lx-target/programs/task-8-4-v3-verify.log."
 assumption = "All three files are byte-identical to origin/main and the drift arrives from merged commit bf5056244, which added LXP_ERR_AUTH_THRESHOLD_UNMET/DUPLICATE_SIGNER/NOT_MATURE to the C header without mirroring them in result.rs, so the fix belongs to the authority-kinds task; the ABI half of this gate, make programs-abi-drift, exits 0 on its own at this revision."
-severity = "blocker"
+resolution = "Resolved on this branch by commit 4ec6f185f, a cherry-pick of PR 332 that mirrors AuthThresholdUnmet, AuthDuplicateSigner and AuthNotMature into agent/crates/layerx-types/src/result.rs; at revision 4ec6f185f the full verify_cmd exited 0."
+severity = "note"
