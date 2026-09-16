@@ -97,6 +97,12 @@ export interface ProgramRecord {
   readonly stateRoot: string;
 }
 
+export interface NameResolutionRecord {
+  readonly name: string;
+  readonly did: string;
+  readonly expiry: string;
+}
+
 export interface ExplorerPage<T> {
   readonly items: readonly T[];
   readonly nextBefore?: string;
@@ -305,6 +311,19 @@ function decodeProgramSource(value: unknown, at: string): ProgramSourceStatus {
   throw new TypeError(`${at}.status is not a declared source status`);
 }
 
+export function decodeNameResolution(value: unknown, at = "name"): NameResolutionRecord {
+  const item = record(value, at);
+  const name = text(item.name, `${at}.name`);
+  if (!validExplorerName(name)) {
+    throw new TypeError(`${at}.name is not a registrable name`);
+  }
+  return Object.freeze({
+    name,
+    did: hex(item.did, `${at}.did`),
+    expiry: decimal(item.expiry, `${at}.expiry`),
+  });
+}
+
 export function decodeProgram(value: unknown, at = "program"): ProgramRecord {
   const item = record(value, at);
   const policy = record(item.upgrade_policy, `${at}.upgrade_policy`);
@@ -449,6 +468,12 @@ export function encodeVerificationReport(
 
 export function validExplorerIdentifier(value: string): boolean {
   return /^[0-9a-fA-F]{64}$/u.test(value);
+}
+
+const NAME_GRAMMAR = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u;
+
+export function validExplorerName(value: string): boolean {
+  return value.normalize("NFC") === value && NAME_GRAMMAR.test(value);
 }
 
 export function validExplorerCoordinate(value: string): boolean {

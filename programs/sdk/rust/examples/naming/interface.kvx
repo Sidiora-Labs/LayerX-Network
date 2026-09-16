@@ -1,0 +1,48 @@
+[interface]
+schema = 1
+name = "layerx.reference.naming"
+version = 1
+abi = 2
+calldata = "discriminator:'LXN'||ordinal:u8 || tag:[1,0x20] || length:u32be || payload"
+response = "tag:[1,0x20] || length:u32be || payload"
+grammar = "name is 3-63 bytes of [a-z0-9-] with no leading or trailing hyphen; the grammar is ASCII, so an admitted name equals its UTF-8 NFC normalisation"
+
+[entry.register]
+discriminator = 1
+payload = "did:bytes32 || periods:u32be || name_length:u8 || name"
+law = "first come: a name free or past its expiry binds to the invoking principal's own DID, and the occupancy term is paid into the program's derived occupancy account through fund_program_402 before the record is written"
+
+[entry.transfer]
+discriminator = 2
+payload = "did:bytes32 || name_length:u8 || name"
+law = "only the DID a live record resolves to reassigns the name, and the remaining occupancy carries over unchanged"
+
+[entry.renew]
+discriminator = 3
+payload = "periods:u32be || name_length:u8 || name"
+law = "only the DID a live record resolves to extends it, and the new expiry is paid into the same derived occupancy account through fund_program_402"
+
+[entry.resolve]
+discriminator = 4
+payload = "name_length:u8 || name"
+law = "a live record answers with its DID and expiry; an absent or expired record refuses"
+
+[entry.reverse_resolve]
+discriminator = 5
+payload = "did:bytes32"
+law = "a DID answers with the live name that resolves to it; an absent, stale or expired binding refuses"
+
+[state.record]
+key = "shared:'lx.ref.naming.name/' || name"
+value = "did:bytes32 || expiry:u64be"
+
+[state.reverse]
+key = "shared:'lx.ref.naming.did/' || did:bytes32"
+value = "name_length:u8 || name"
+
+[occupancy]
+asset = "the LXT-20 reference settlement asset"
+seed = "lx.ref.naming.occupancy"
+price_per_period = 1000
+batches_per_period = 2592000
+maximum_periods = 10

@@ -49,6 +49,7 @@ pub mod event;
 pub mod ids;
 pub mod lxt20;
 pub mod lxt721;
+pub mod naming;
 pub mod payments;
 pub mod receipt;
 pub mod storage;
