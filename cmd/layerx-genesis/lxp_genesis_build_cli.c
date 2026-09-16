@@ -192,7 +192,7 @@ static lxp_result parse_request(
     if (status == LXP_OK && version == 2U) {
         uint16_t records;
         status = reader_u16(&reader, &records);
-        if (status == LXP_OK && (records == 0U || records > LX_ASSET_REGISTRY_CAPACITY))
+        if (status == LXP_OK && (records == 0U || records > LXP_GENESIS_MAX_ASSET_RECORDS))
             status = LXP_ERR_LENGTH_LIMIT;
         for (size_t i = 0U; status == LXP_OK && i < records; ++i) {
             uint16_t record_length;
