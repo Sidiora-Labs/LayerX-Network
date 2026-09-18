@@ -4,6 +4,11 @@ pub type RpcValue = Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+/// Page size `lx_listAssets` applies when a request omits an explicit limit.
+pub const LIST_ASSETS_DEFAULT_PAGE: u16 = 64;
+/// Largest page the published `lx_listAssets` contract accepts.
+pub const LIST_ASSETS_MAX_PAGE: u16 = 256;
+
 use crate::programs::{LayerXKeyCredential, ProgramOperationError};
 
 #[derive(Debug)]
@@ -218,6 +223,7 @@ impl AssetSnapshot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AssetListSnapshot {
     pub assets: Vec<AssetMetadata>,
+    pub next_cursor: Option<[u8; 32]>,
     pub observed_head_sequence: u64,
     pub state_root: [u8; 32],
     raw: serde_json::Map<String, Value>,
@@ -390,6 +396,20 @@ fn fixed_hex_field<const N: usize>(
     decode_hex(text_field(fields, key)?)
 }
 
+/// Builds the positional `lx_listAssets` parameters the published contract
+/// expects: an omitted page is `[]`, a cursor alone is `[cursor]`, and a limit
+/// carries the cursor slot with it as `[cursor, limit]` where a missing cursor
+/// is JSON null.
+#[must_use]
+pub fn list_assets_params(cursor: Option<[u8; 32]>, limit: Option<u16>) -> Value {
+    let cursor = cursor.map(|cursor| encode_hex(&cursor));
+    match (cursor, limit) {
+        (None, None) => json!([]),
+        (Some(cursor), None) => json!([cursor]),
+        (cursor, Some(limit)) => json!([cursor, limit]),
+    }
+}
+
 fn identity_sequence_params(did: &str) -> Result<Value, RpcError> {
     layerx_types::ids::Did::new(did.as_bytes()).map_err(|_| RpcError::InvalidRequest)?;
     if did
@@ -509,7 +529,7 @@ impl TryFrom<Value> for AssetListSnapshot {
         let values = fields
             .get("assets")
             .and_then(Value::as_array)
-            .filter(|values| values.len() <= 64)
+            .filter(|values| values.len() <= usize::from(LIST_ASSETS_MAX_PAGE))
             .ok_or(RpcError::InvalidResponse)?;
         let assets = values
             .iter()
@@ -521,9 +541,20 @@ impl TryFrom<Value> for AssetListSnapshot {
         {
             return Err(RpcError::InvalidResponse);
         }
+        let next_cursor = match fields.get("next_cursor") {
+            Some(Value::Null) => None,
+            Some(Value::String(cursor)) => Some(decode_hex::<32>(cursor)?),
+            _ => return Err(RpcError::InvalidResponse),
+        };
+        if let Some(cursor) = next_cursor {
+            if assets.last().map(|asset| asset.asset_id) != Some(cursor) {
+                return Err(RpcError::InvalidResponse);
+            }
+        }
         let (observed_head_sequence, state_root) = committed_snapshot(fields)?;
         Ok(Self {
             assets,
+            next_cursor,
             observed_head_sequence,
             state_root,
             raw: fields.clone(),
@@ -823,7 +854,32 @@ impl RpcClient {
     /// # Errors
     /// Preserves native asset-listing refusals; returned read data is unverified.
     pub fn list_assets(&self) -> Result<AssetListSnapshot, RpcError> {
-        self.call("lx_listAssets", &json!([]))?.try_into()
+        self.list_assets_page(None, None)
+    }
+
+    /// Reads one `lx_listAssets` page, resuming after `cursor` when it is present.
+    ///
+    /// # Errors
+    /// Refuses a zero cursor, a zero limit and a limit above
+    /// [`LIST_ASSETS_MAX_PAGE`], refuses a page longer than the requested
+    /// limit, and preserves native asset-listing refusals; returned read data
+    /// is unverified.
+    pub fn list_assets_page(
+        &self,
+        cursor: Option<[u8; 32]>,
+        limit: Option<u16>,
+    ) -> Result<AssetListSnapshot, RpcError> {
+        if cursor == Some([0; 32])
+            || limit.is_some_and(|limit| limit == 0 || limit > LIST_ASSETS_MAX_PAGE)
+        {
+            return Err(RpcError::InvalidRequest);
+        }
+        let params = list_assets_params(cursor, limit);
+        let snapshot: AssetListSnapshot = self.call("lx_listAssets", &params)?.try_into()?;
+        if snapshot.assets.len() > usize::from(limit.unwrap_or(LIST_ASSETS_DEFAULT_PAGE)) {
+            return Err(RpcError::InvalidResponse);
+        }
+        Ok(snapshot)
     }
 
     /// # Errors

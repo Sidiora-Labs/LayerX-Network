@@ -169,8 +169,15 @@ pub enum TokenCommand {
     Transfer(TransferArgs),
     /// Read token metadata.
     Info { asset: String },
-    /// List registered tokens.
-    List,
+    /// List one page of registered tokens in ascending asset order.
+    List {
+        /// Asset identifier to resume after, as published by a page's next cursor.
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Page size; the gateway applies 64 when it is absent.
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=256))]
+        limit: Option<u16>,
+    },
 }
 
 pub struct Transport {
@@ -529,11 +536,20 @@ pub fn run_token(
     let config = Configuration::load()?;
     match command {
         TokenCommand::Info { asset } => {
-            let asset = hex_encode(&fixed_hex::<32>("asset", &asset)?);
-            unavailable_asset_read(&config, rpc, gateway, "lx_getAsset", &json!([asset]))
+            let asset = fixed_hex::<32>("asset", &asset)?;
+            layerx_platform_cli::rpc::request("lx_getAsset", &json!([hex_encode(&asset)]))?;
+            unavailable_asset_read(&config, rpc, gateway, &AssetRead::Metadata(asset))
         }
-        TokenCommand::List => {
-            unavailable_asset_read(&config, rpc, gateway, "lx_listAssets", &json!([]))
+        TokenCommand::List { cursor, limit } => {
+            let cursor = cursor
+                .as_deref()
+                .map(|value| fixed_hex::<32>("cursor", value))
+                .transpose()?;
+            layerx_platform_cli::rpc::request(
+                "lx_listAssets",
+                &layerx_sdk::rpc::list_assets_params(cursor, limit),
+            )?;
+            unavailable_asset_read(&config, rpc, gateway, &AssetRead::Page { cursor, limit })
         }
         TokenCommand::Transfer(args) => transfer(&config, rpc, gateway, &args),
         TokenCommand::Create {
@@ -603,31 +619,52 @@ pub fn run_token(
     }
 }
 
+enum AssetRead {
+    Metadata([u8; 32]),
+    Page {
+        cursor: Option<[u8; 32]>,
+        limit: Option<u16>,
+    },
+}
+
 fn unavailable_asset_read(
     config: &Configuration,
     rpc: Option<&str>,
     gateway: Option<&str>,
-    method: &str,
-    params: &Value,
+    read: &AssetRead,
 ) -> Result<CommandOutput, String> {
     let client = sdk_rpc(config, rpc, gateway)?;
-    let value = match method {
-        "lx_getAsset" => client
-            .get_asset(fixed_hex(
-                "asset",
-                params[0].as_str().ok_or("asset missing")?,
-            )?)
-            .map(layerx_sdk::rpc::AssetSnapshot::into_value),
-        "lx_listAssets" => client
-            .list_assets()
-            .map(layerx_sdk::rpc::AssetListSnapshot::into_value),
-        _ => return Err("rpc_method_unavailable: asset method not published".into()),
-    }
-    .map_err(|error| match error {
+    let (summary, value) = match read {
+        AssetRead::Metadata(asset) => (
+            "Read token data".to_owned(),
+            client
+                .get_asset(*asset)
+                .map_err(asset_read_error)?
+                .into_value(),
+        ),
+        AssetRead::Page { cursor, limit } => {
+            let page = client
+                .list_assets_page(*cursor, *limit)
+                .map_err(asset_read_error)?;
+            let summary = match page.next_cursor {
+                Some(cursor) => format!(
+                    "Listed {} tokens; resume after asset {}",
+                    page.assets.len(),
+                    hex_encode(&cursor)
+                ),
+                None => format!("Listed {} tokens; final page", page.assets.len()),
+            };
+            (summary, page.into_value())
+        }
+    };
+    Ok(CommandOutput::new("token.read", summary, value))
+}
+
+fn asset_read_error(error: layerx_sdk::rpc::RpcError) -> String {
+    match error {
         layerx_sdk::rpc::RpcError::Remote { .. } => rpc_error(error),
         other => format!("rpc_method_unavailable: {}", rpc_error(other)),
-    })?;
-    Ok(CommandOutput::new("token.read", "Read token data", value))
+    }
 }
 
 fn execute_payment(
