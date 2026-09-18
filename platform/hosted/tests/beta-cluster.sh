@@ -54,7 +54,8 @@
 #                                       x402, AP2, UCP, Visa TAP and fiat trust roots, none of which this
 #                                       repository can derive (interop/deploy/gateway/README.md)
 #   LAYERX_BETA_TESTNET_PORT            host ports of the testnet, gateway and faucet port-forwards
-#                                       (the human web application is published on the fixed host port 19457)
+#                                       (the human web application is published at https://localhost:19457, the browser
+#                                       origin the human service and the web Deployment both enforce)
 #   LAYERX_BETA_GATEWAY_PORT            (defaults 19443, 19444, 19445)
 #   LAYERX_BETA_FAUCET_PORT
 #   LAYERX_BETA_TEST_AUTH_TOKEN_FILE    identity session token for the smoke source; when unset the bring-up
@@ -496,6 +497,8 @@ ca_generate() {
         "DNS:layerx-gateway.$svc,DNS:layerx-gateway.$TESTNET_NAMESPACE.svc,DNS:layerx-gateway,DNS:$GATEWAY_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert human layerx-human serverAuth \
         "DNS:layerx-human.$svc,DNS:layerx-human.$TESTNET_NAMESPACE.svc,DNS:layerx-human,DNS:human.testnet.layerx.network,DNS:localhost,IP:127.0.0.1"
+    issue_cert human-web layerx-human-web serverAuth \
+        "DNS:layerx-human-web.$svc,DNS:layerx-human-web.$TESTNET_NAMESPACE.svc,DNS:layerx-human-web,DNS:human.testnet.layerx.network,DNS:localhost,IP:127.0.0.1"
     issue_cert faucet layerx-faucet serverAuth \
         "DNS:layerx-faucet-public.$svc,DNS:layerx-faucet-public,DNS:$FAUCET_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert registry layerx-program-registry serverAuth \
@@ -1013,6 +1016,7 @@ secrets_apply() {
     apply_secret "$ns" layerx-human-tls --from-file=server.crt.der="$c/human/cert.der" \
         --from-file=server.key.der="$c/human/key.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-internal-ca --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
+    apply_secret "$ns" layerx-human-web-tls --from-file=tls.crt="$c/human-web/cert.pem" --from-file=tls.key="$c/human-web/key.pem"
     apply_secret "$ns" layerx-testnet-control-tls --from-file=server.crt.der="$c/testnet-control/cert.der" \
         --from-file=server.key.der="$c/testnet-control/key.der" --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-testnet-backend-admin --from-file=token="$s/backend-admin.token"
@@ -2616,7 +2620,7 @@ wait_ready() {
         if [ "$human_status" = 200 ] && jq -e '.ready == true and all(.components[]; . == "ready")' "$WORK_DIR/human-readyz.json" >/dev/null 2>&1; then
             human_ready=true
         fi
-        human_web_status=$(curl --silent --show-error --max-time 10 \
+        human_web_status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
             --output "$WORK_DIR/human-web-root.html" --write-out '%{http_code}' "$HUMAN_WEB_URL/" 2>/dev/null) || human_web_status=unreachable
         developer_ready=$(kube -n "$DEVELOPER_NAMESPACE" get deployments -o json 2>/dev/null \
             | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
@@ -2971,7 +2975,7 @@ beta_cluster_up() {
     IDENTITY_URL="https://localhost:$IDENTITY_PORT"
     INTEROP_URL="https://localhost:$INTEROP_PORT"
     HUMAN_URL="https://localhost:19453"
-    HUMAN_WEB_URL="http://localhost:19457"
+    HUMAN_WEB_URL="https://localhost:19457"
     wait_for_node_genesis
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
         apply_configmap "$TESTNET_NAMESPACE" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
@@ -3030,7 +3034,7 @@ beta_cluster_up() {
     agentd_check
     mirror_ready
     relay_archive_apply
-    port_forward human-web "$TESTNET_NAMESPACE" layerx-human-web 19457 80
+    port_forward human-web "$TESTNET_NAMESPACE" layerx-human-web 19457 443
     module_registry_verify
     interop_gateway_apply
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then material_save; fi
@@ -3039,6 +3043,7 @@ beta_cluster_up() {
     wait_ready || fail "beta cluster did not reach journey readiness; see the missing owner inputs above"
     log "every journey ready: $(jq -r '[.journeys[] | .journey] | join(",")' "$WORK_DIR/readyz.json")"
     log "environment exported to $ENV_FILE"
+    log "human web application: open $HUMAN_WEB_URL after trusting the beta internal CA at $CA_DIR/ca.crt"
     if [ "$run_boundary_checks" = 1 ]; then boundary_checks; fi
 }
 

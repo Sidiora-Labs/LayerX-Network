@@ -23,6 +23,7 @@ Default manifests:
   platform/hosted/gateway/deployment.yaml
   platform/hosted/registry/deployment.yaml
   platform/hosted/human/deployment.yaml
+  platform/hosted/human/web-deployment.yaml
   platform/hosted/internal/deployment.yaml
   platform/hosted/webhooks/deployment.yaml (namespace layerx-developer)
 
@@ -102,10 +103,11 @@ topology_check() {
       "$root/platform/hosted/gateway/deployment.yaml"
       "$root/platform/hosted/registry/deployment.yaml"
       "$root/platform/hosted/human/deployment.yaml"
+      "$root/platform/hosted/human/web-deployment.yaml"
       "$root/platform/hosted/internal/deployment.yaml"
       "$root/platform/hosted/webhooks/deployment.yaml"
     )
-    namespaces=(default default default default default default default default layerx-developer)
+    namespaces=(default default default default default default default default default layerx-developer)
   fi
   if ! command -v python3 >/dev/null 2>&1; then
     printf 'topology-check: python3 is required\n' >&2
