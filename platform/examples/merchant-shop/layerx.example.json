@@ -4,8 +4,8 @@
   "environments": {
     "emulator": {
       "publicUrl": "http://127.0.0.1:8082",
-      "settlementUrl": "http://127.0.0.1:9411/v1/settle",
-      "receiptAuthorityUrl": "http://127.0.0.1:9410",
+      "settlementUrl": "http://127.0.0.1:9402/v1/settle",
+      "receiptAuthorityUrl": "http://127.0.0.1:9402",
       "scheme": "exact",
       "network": "layerx:emulator",
       "tokenEnvironment": "LAYERX_EMULATOR_TOKEN",

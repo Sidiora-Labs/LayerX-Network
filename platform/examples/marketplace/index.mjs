@@ -11,6 +11,7 @@ import {
   requiredEnvironment,
   secureBaseUrl,
 } from "../support/runtime.mjs";
+import { canonicalNativeProgramDeploy } from "./deploy-payload.mjs";
 
 export function platform_ref_marketplace() {
   return "programs-shared-listing-receipt-settled-marketplace";
@@ -83,6 +84,15 @@ const u128 = (value) => {
     number >>= 8n;
   }
   return bytes;
+};
+
+const LIFECYCLE_WINDOW_MS = 300_000n;
+
+const unsigned64 = (name, value) => {
+  if (!/^(0|[1-9][0-9]{0,19})$/u.test(value)) throw new Error(`invalid_${name}`);
+  const parsed = BigInt(value);
+  if (parsed > 0xffffffffffffffffn) throw new Error(`invalid_${name}`);
+  return parsed;
 };
 
 const idempotency = (suffix) => {
@@ -196,23 +206,43 @@ const deploy = async () => {
   const built = await runCli(["program", "build", "--manifest-path", manifest]);
   const artifact = built.data?.artifact;
   const codeHash = built.data?.code_hash;
-  if (typeof artifact !== "string" || typeof codeHash !== "string" || !/^[0-9a-f]{64}$/u.test(codeHash)) {
+  const abiVersion = built.data?.abi_version;
+  if (typeof artifact !== "string" || typeof codeHash !== "string" || !/^[0-9a-f]{64}$/u.test(codeHash)
+    || !Number.isSafeInteger(abiVersion)) {
     throw new LayerXApplicationStateError("unknown", "program_build_omitted_artifact_identity");
   }
+  const artifactPath = resolve(config.directory, artifact);
   let wasm;
   try {
-    wasm = await readFile(resolve(config.directory, artifact));
+    wasm = await readFile(artifactPath);
   } catch {
     throw new LayerXApplicationStateError("unknown", "program_build_artifact_unreadable");
   }
-  const deployment = await post("/v1/programs/deploy", {
-    abi_version: 1,
-    code_hash: codeHash,
-    wasm_hex: wasm.toString("hex"),
-    upgrade_policy: { kind: "immutable" },
-    source_uri: "platform/examples/marketplace/program",
-  }, idempotency("deploy"));
-  return verifyOutcome(deployment);
+  const deployment = canonicalNativeProgramDeploy({
+    programId: requiredEnvironment(config.programIdEnvironment),
+    abiVersion,
+    codeHash,
+    wasm,
+  });
+  const notBefore = unsigned64("marketplace_not_before_ms", requiredEnvironment(config.notBeforeMsEnvironment));
+  const submitted = await runCli([
+    "program",
+    "deploy",
+    artifactPath,
+    "--program-id",
+    toHex(deployment.value.programId),
+    "--idempotency-key",
+    idempotency("deploy"),
+    "--account-sequence",
+    unsigned64("marketplace_account_sequence", requiredEnvironment(config.accountSequenceEnvironment)).toString(),
+    "--not-before-ms",
+    notBefore.toString(),
+    "--expires-at-ms",
+    (notBefore + LIFECYCLE_WINDOW_MS).toString(),
+    "--previous-state-root",
+    toHex(hex32(requiredEnvironment(config.previousStateRootEnvironment))),
+  ]);
+  return verifyOutcome(submitted);
 };
 
 const call = async (action) => {

@@ -3,7 +3,7 @@
   "application": "paid-api",
   "environments": {
     "emulator": {
-      "receiptAuthorityUrl": "http://127.0.0.1:9410",
+      "receiptAuthorityUrl": "http://127.0.0.1:9402",
       "resourceUrl": "http://127.0.0.1:8081/paid",
       "scheme": "exact",
       "network": "layerx:emulator",
