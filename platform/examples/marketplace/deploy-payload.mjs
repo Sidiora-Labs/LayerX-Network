@@ -36,42 +36,63 @@ export function accountNameForDid(did) {
   return `agent:${did}:main`;
 }
 
+export const IDENTITY_SEQUENCE_SELECTOR = "identity";
+
 export async function readLifecycleAnchor({ endpoint, token, did, fetchImplementation = fetch }) {
-  const accountName = accountNameForDid(did);
+  accountNameForDid(did);
   const state = await readJson(endpoint, "v1/state", token, fetchImplementation, "program_state");
-  const accountSequence = state.accounts === undefined
-    ? await readDidAccountSequence(endpoint, token, did, accountName, fetchImplementation)
-    : signingAccountSequence(state.accounts, accountName, "program_state");
+  const identitySequence = await readIdentitySequence({
+    endpoint,
+    token,
+    did,
+    networkMode: state.network_mode,
+    fetchImplementation,
+  });
   const notBefore = unsigned64(state.timestamp_ms, "program_state_timestamp_ms");
   const expiresAt = notBefore + LIFECYCLE_WINDOW_MS;
   if (expiresAt > MAX_U64) {
     throw new LayerXApplicationStateError("unknown", "invalid_program_state_timestamp_ms");
   }
   return Object.freeze({
-    accountSequence,
+    identitySequence,
     notBefore,
     expiresAt,
     previousStateRoot: Buffer.from(hex32(state.canonical_state_root)).toString("hex"),
   });
 }
 
-async function readDidAccountSequence(endpoint, token, did, accountName, fetchImplementation) {
-  const listing = await readJson(endpoint, `v1/dids/${did}/accounts`, token, fetchImplementation, "did_accounts");
-  if (listing.did !== did) {
-    throw new LayerXApplicationStateError("unknown", "did_accounts_named_another_did");
+async function readIdentitySequence({ endpoint, token, did, networkMode, fetchImplementation }) {
+  if (networkMode === "emulator") {
+    const snapshot = await readJson(
+      endpoint,
+      `v1/dids/${did}/sequence`,
+      token,
+      fetchImplementation,
+      "identity_sequence",
+    );
+    return identityNextSequence(snapshot, did);
   }
-  return signingAccountSequence(listing.accounts, accountName, "did_accounts");
+  if (networkMode !== "hosted") {
+    throw new LayerXApplicationStateError("unknown", "program_state_omitted_network_mode");
+  }
+  const snapshot = await callRpc(
+    endpoint,
+    token,
+    "lx_getSequence",
+    [did, IDENTITY_SEQUENCE_SELECTOR],
+    fetchImplementation,
+  );
+  if (snapshot.verification !== "authenticated_node_snapshot") {
+    throw new LayerXApplicationStateError("unknown", "identity_sequence_snapshot_unauthenticated");
+  }
+  return identityNextSequence(snapshot, did);
 }
 
-function signingAccountSequence(accounts, accountName, source) {
-  if (!Array.isArray(accounts)) {
-    throw new LayerXApplicationStateError("unknown", `${source}_omitted_accounts`);
+function identityNextSequence(snapshot, did) {
+  if (snapshot.did !== did) {
+    throw new LayerXApplicationStateError("unknown", "identity_sequence_named_another_did");
   }
-  const account = accounts.find((entry) => exactObject(entry).name === accountName);
-  if (account === undefined) {
-    throw new LayerXApplicationStateError("refused", `${source}_omitted_signing_account`);
-  }
-  return unsigned64(account.next_sequence, `${source}_next_sequence`);
+  return unsigned64(snapshot.next_sequence, "identity_next_sequence");
 }
 
 export const LIST_OPERATION = 1;
@@ -135,6 +156,30 @@ async function readJson(endpoint, path, token, fetchImplementation, source) {
   if (!response.ok) throw httpFailure(response.status, source);
   const envelope = exactObject(body);
   return exactObject(envelope.result ?? envelope);
+}
+
+async function callRpc(endpoint, token, method, params, fetchImplementation) {
+  let response;
+  try {
+    response = await fetchImplementation(new URL("rpc", secureBaseUrl(endpoint)), {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    });
+  } catch {
+    throw new LayerXApplicationStateError("unknown", "identity_sequence_unreachable");
+  }
+  const body = await response.json().catch(() => undefined);
+  if (!response.ok) throw httpFailure(response.status, "identity_sequence");
+  const envelope = exactObject(body);
+  if (envelope.jsonrpc !== "2.0" || envelope.result === undefined) {
+    throw new LayerXApplicationStateError("unknown", "identity_sequence_rpc_refused");
+  }
+  return exactObject(envelope.result);
 }
 
 function httpFailure(status, source) {
