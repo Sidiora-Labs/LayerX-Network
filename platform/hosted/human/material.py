@@ -8,6 +8,7 @@ import secrets
 import stat
 import sys
 import unicodedata
+from urllib.parse import urlsplit
 
 
 def write(directory, name, value):
@@ -63,10 +64,25 @@ def assemble_policy(evidence, deployment, registry_path, output, network, chain)
     write(Path(output).parent, Path(output).name, json.dumps(policy))
 
 
-def component_defaults(network, chain):
+def passkey_relying_party(web_origin):
+    if not web_origin:
+        return 'human.testnet.layerx.network', 'https://human.testnet.layerx.network'
+    parts = urlsplit(web_origin)
+    host = parts.hostname or ''
+    if (parts.scheme != 'https' or parts.port is not None or parts.path or parts.query
+            or parts.fragment or parts.username or parts.password
+            or web_origin != 'https://' + host
+            or not re.fullmatch(r'[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*', host)
+            or re.fullmatch(r'[0-9.]+', host)):
+        raise ValueError('Human web origin refused')
+    return host, web_origin
+
+
+def component_defaults(network, chain, web_origin=''):
+    rp_id, origin = passkey_relying_party(web_origin)
     return {
-        'RP_ID': 'human.testnet.layerx.network', 'RP_NAME': 'LayerX Human',
-        'ORIGIN': 'https://human.testnet.layerx.network',
+        'RP_ID': rp_id, 'RP_NAME': 'LayerX Human',
+        'ORIGIN': origin,
         'CEREMONY_TTL_SECONDS': 300, 'ASSERTION_TTL_SECONDS': 60,
         'SESSION_TTL_SECONDS': 3600, 'REFRESH_TTL_SECONDS': 86400,
         'STEP_UP_TTL_SECONDS': 300, 'AUTH_RATE_ATTEMPTS': 5,
@@ -95,7 +111,7 @@ def component_defaults(network, chain):
 def main():
     root = Path(sys.argv[1])
     network, chain = int(sys.argv[2]), int(sys.argv[3])
-    config = component_defaults(network, chain)
+    config = component_defaults(network, chain, sys.argv[5] if len(sys.argv) > 5 else '')
     policy = protected_json(sys.argv[4]) if sys.argv[4] else None
     onboarding = policy.get('onboarding_configuration') if policy else None
     if onboarding is not None:

@@ -28,7 +28,7 @@ spec:
             - name: LAYERX_EXPLORER_API_ORIGIN
               value: https://layerx-human.layerx-testnet.svc:9443
             - name: LAYERX_HUMAN_WEB_ORIGIN
-              value: https://localhost:19457
+              value: https://human.testnet.layerx.network
             - name: NODE_EXTRA_CA_CERTS
               value: /run/layerx/trust/ca.crt
           ports:

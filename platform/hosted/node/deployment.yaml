@@ -503,7 +503,7 @@ spec:
             - name: LAYERX_HUMAN_COMPONENT_SOCKET
               value: /run/layerx/human/components.sock
             - name: LAYERX_HUMAN_WEB_ORIGIN
-              value: https://localhost:19457
+              value: https://human.testnet.layerx.network
           ports:
             - name: human-https
               containerPort: 9447
