@@ -29,6 +29,18 @@
 #                                       platform/hosted/paxeer/deploy-contracts.sh requires (default /root/.foundry/bin)
 #   LAYERX_BETA_FAUCET_HOST             public faucet hostname (default faucet.testnet.layerx.network)
 #   LAYERX_BETA_DEVELOPER_HOST          public developer hostname (default developers.testnet.layerx.network)
+#   LAYERX_BETA_RELAY_HOST              public relay/archive hostname (default relay.testnet.layerx.network)
+#   LAYERX_BETA_RELAY_UPSTREAM          comma-separated public HTTPS relay/archive origins the beta relay reads
+#                                       canonical history from; unset leaves the colocated canonical availability
+#                                       log of the sequencer node as its only source
+#   LAYERX_BETA_RELAY_SUBMISSION_UPSTREAM  comma-separated public HTTPS endpoints the relay forwards original
+#                                       signed activities to (origin, /v1/activities or /rpc). Cluster-internal
+#                                       addresses are refused by the relay address policy in
+#                                       platform/relay_archive/protocol.py, so this endpoint has to be a public
+#                                       one; unset leaves POST /v1/activities without a forwarding destination
+#                                       and the bring-up records the missing owner input
+#   LAYERX_BETA_RELAY_PEER_SEED         comma-separated public HTTPS relay/archive peer-discovery seeds; unset
+#                                       keeps peer discovery disabled
 #   LAYERX_BETA_KIND_CNI                calico (default, enforces NetworkPolicy) or kindnet
 #   LAYERX_BETA_READY_TIMEOUT           seconds to wait for every journey to report ready (default 900)
 #   LAYERX_BETA_MIN_FREE_GIB            free disk required before building the images of a local cluster
@@ -121,6 +133,7 @@ CALICO_SHA256=9382d2b27a76f40c170454b408653e6d71e2205ef0aef069e942bb690e7381d0
 CLUSTER_NAME=${LAYERX_BETA_CLUSTER_NAME:-layerx-beta}
 FAUCET_HOST=${LAYERX_BETA_FAUCET_HOST:-faucet.testnet.layerx.network}
 DEVELOPER_HOST=${LAYERX_BETA_DEVELOPER_HOST:-developers.testnet.layerx.network}
+RELAY_HOST=${LAYERX_BETA_RELAY_HOST:-relay.testnet.layerx.network}
 TESTNET_HOST=testnet.layerx.network
 GATEWAY_HOST=api.testnet.layerx.network
 KIND_CNI=${LAYERX_BETA_KIND_CNI:-calico}
@@ -150,6 +163,11 @@ NODE_NETWORK_ID=$(sed -n 's/^  network-id: "\([0-9]*\)"$/\1/p' "$NODE_MANIFEST")
 NODE_ASSET_ID=$(sed -n 's/^  asset-id: "\([0-9a-f]*\)"$/\1/p' "$NODE_MANIFEST")
 PAXEER_RELAY_PORT=$(sed -n 's/^  paxeer-relay-port: "\([0-9]*\)"$/\1/p' "$NODE_MANIFEST")
 GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE=$(sed -n 's/^ *- {name: LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE, value: \([^}]*\)}$/\1/p' "$NODE_MANIFEST" | sort -u)
+NODE_DATA_DIR=/var/lib/layerx/node
+RELAY_NODE_SOURCE_DIR=/var/lib/layerx/node-source/node
+RELAY_DATA_DIR=/var/lib/layerx/relay-archive
+RELAY_TLS_DIR=/run/layerx/tls
+RELAY_CODEC=/usr/local/bin/layerx-archive-codec
 
 log() { printf 'beta-cluster: %s\n' "$*" >&2; }
 fail() { printf 'beta-cluster: error: %s\n' "$*" >&2; exit 1; }
@@ -479,6 +497,8 @@ ca_generate() {
         "DNS:layerx-faucet-public.$svc,DNS:layerx-faucet-public,DNS:$FAUCET_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert registry layerx-program-registry serverAuth \
         "DNS:layerx-program-registry.$svc,DNS:layerx-program-registry"
+    issue_cert relay-archive layerx-relay-archive serverAuth \
+        "DNS:layerx-relay-archive.$svc,DNS:layerx-relay-archive.$TESTNET_NAMESPACE.svc,DNS:layerx-relay-archive,DNS:$RELAY_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert faucet-redis layerx-faucet-redis serverAuth "DNS:layerx-faucet-redis.$svc,DNS:layerx-faucet-redis"
     issue_cert gateway-redis layerx-gateway-redis serverAuth "DNS:layerx-gateway-redis.$svc,DNS:layerx-gateway-redis"
     issue_cert developer layerx-developer serverAuth \
@@ -1313,6 +1333,136 @@ PYSTATUS
     fi
 }
 
+relay_archive_config_write() {
+    # relay_archive_config_write OUTPUT NETWORK_ID GENESIS_SHA256 SEQUENCER_ID SEQUENCER_PUBLIC_KEY FIRST_BATCH LAST_BATCH PUBLIC_URL
+    [ "$#" -eq 8 ] || fail "relay_archive_config_write needs output, network id, genesis digest, sequencer id, sequencer public key, first batch, last batch and public URL"
+    LAYERX_RELAY_SOURCE_DIR="$RELAY_NODE_SOURCE_DIR" LAYERX_RELAY_DATA_DIR="$RELAY_DATA_DIR" \
+        LAYERX_RELAY_TLS_DIR="$RELAY_TLS_DIR" LAYERX_RELAY_CODEC="$RELAY_CODEC" \
+        python3 - "$@" <<'PYRELAY'
+import json
+import os
+import re
+import sys
+import urllib.parse
+
+(destination, network_id, genesis_sha256, sequencer_id, sequencer_public_key,
+ first_batch, last_batch, public_url) = sys.argv[1:9]
+source_dir = os.environ["LAYERX_RELAY_SOURCE_DIR"]
+data_dir = os.environ["LAYERX_RELAY_DATA_DIR"]
+tls_dir = os.environ["LAYERX_RELAY_TLS_DIR"]
+codec = os.environ["LAYERX_RELAY_CODEC"]
+
+
+def refuse(detail):
+    raise SystemExit("beta-cluster: error: relay/archive configuration refused: " + detail)
+
+
+def pin(value, name):
+    if re.fullmatch(r"[0-9a-f]{64}", value) is None or value == "0" * 64:
+        refuse(name + " must be a non-zero lowercase 64-character hexadecimal pin")
+    return value
+
+
+def cursor(value, name):
+    if re.fullmatch(r"(0|[1-9][0-9]*)", value) is None or int(value) > 0xFFFFFFFFFFFFFFFF:
+        refuse(name + " must be a canonical unsigned decimal batch cursor")
+    return int(value)
+
+
+def origins(variable, allowed_paths):
+    raw = os.environ.get(variable, "")
+    values = [entry.strip() for entry in raw.split(",") if entry.strip()]
+    result = []
+    for value in values:
+        try:
+            parsed = urllib.parse.urlsplit(value)
+            host, port = parsed.hostname, parsed.port
+        except ValueError:
+            refuse(variable + " carries a malformed URL")
+        if (parsed.scheme != "https" or not host or parsed.username is not None
+                or parsed.password is not None or parsed.query or parsed.fragment
+                or parsed.path.rstrip("/") not in allowed_paths):
+            refuse(variable + " must list credential-free HTTPS URLs with a supported path "
+                   + "(" + ", ".join(sorted(path or "/" for path in allowed_paths)) + ")")
+        if port is not None and not 1 <= port <= 65535:
+            refuse(variable + " carries an invalid port")
+        normalized = value.rstrip("/")
+        if normalized not in result:
+            result.append(normalized)
+    return result
+
+
+if re.fullmatch(r"[1-9][0-9]*", network_id) is None or not 1 <= int(network_id) <= 0xFFFFFFFF:
+    refuse("the node network id is out of range")
+public = urllib.parse.urlsplit(public_url)
+if public.scheme != "https" or not public.hostname or public.path.rstrip("/"):
+    refuse("LAYERX_BETA_RELAY_HOST must produce a bare HTTPS origin, got " + public_url)
+first = cursor(first_batch, "sequencer_first_batch")
+last = cursor(last_batch, "sequencer_last_batch")
+if first > last or first == 0:
+    refuse("the sequencer batch authorization range is empty")
+seeds = origins("LAYERX_BETA_RELAY_PEER_SEED", ("",))
+document = {
+    "network_id": int(network_id),
+    "genesis_sha256": pin(genesis_sha256, "genesis_sha256"),
+    "sequencer_id": pin(sequencer_id, "sequencer_id"),
+    "sequencer_public_key": pin(sequencer_public_key, "sequencer_public_key"),
+    "sequencer_first_batch": str(first),
+    "sequencer_last_batch": str(last),
+    "genesis_manifest": source_dir + "/genesis/genesis.manifest",
+    "genesis_snapshot": source_dir + "/genesis/00000000000000000000.lxs",
+    "source_log": source_dir + "/checkpoints/da-bodies.log",
+    "data_dir": data_dir,
+    "listen": "0.0.0.0:9443",
+    "public_url": public_url.rstrip("/"),
+    "codec": codec,
+    "allow_loopback_dev": False,
+    "upstreams": origins("LAYERX_BETA_RELAY_UPSTREAM", ("",)),
+    "submission_upstreams": origins(
+        "LAYERX_BETA_RELAY_SUBMISSION_UPSTREAM", ("", "/v1/activities", "/rpc")),
+    "tls_cert": tls_dir + "/tls.crt",
+    "tls_key": tls_dir + "/tls.key",
+    "ca_file": "/etc/ssl/certs/ca-certificates.crt",
+    "peer_discovery": {
+        "enabled": bool(seeds),
+        "seeds": seeds,
+        "advertise_ttl_seconds": 300,
+        "refresh_interval_seconds": 60,
+        "max_peers": 64,
+        "max_advertised_peers": 32,
+        "allow_loopback_dev": False,
+    },
+}
+descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+    json.dump(document, output, sort_keys=True, indent=2)
+    output.write("\n")
+PYRELAY
+}
+
+relay_archive_apply() {
+    local configuration="$WORK_DIR/relay-archive.json" manifest="$WORK_DIR/genesis/genesis.manifest" pin
+    grep -Fq -- "- $NODE_DATA_DIR" "$NODE_MANIFEST" \
+        || fail "the node no longer runs with --data-dir $NODE_DATA_DIR; the relay/archive canonical source paths must follow it"
+    if [ -z "${LAYERX_BETA_RELAY_SUBMISSION_UPSTREAM:-}" ]; then
+        MISSING_INPUTS+=("LAYERX_BETA_RELAY_SUBMISSION_UPSTREAM: relay/archive activity forwarding; supply a public HTTPS endpoint such as https://$GATEWAY_HOST/v1/activities because platform/relay_archive/protocol.py refuses private cluster addresses")
+        log "relay/archive activity forwarding is unconfigured: set LAYERX_BETA_RELAY_SUBMISSION_UPSTREAM to a public HTTPS endpoint"
+    fi
+    mkdir -p "$WORK_DIR/genesis"
+    node_file_fetch "$NODE_DATA_DIR/genesis/genesis.manifest" "$manifest"
+    pin=$(sha256sum "$manifest" | cut -d ' ' -f 1)
+    [[ $pin =~ ^[0-9a-f]{64}$ ]] || fail "the node genesis manifest has no SHA-256 digest"
+    relay_archive_config_write "$configuration" "$NODE_NETWORK_ID" "$pin" \
+        "$(cat "$SECRETS_DIR/sequencer-id")" "$(cat "$SECRETS_DIR/sequencer-public-key")" \
+        "$(cat "$SECRETS_DIR/sequencer-first-batch")" "$(cat "$SECRETS_DIR/sequencer-last-batch")" \
+        "https://$RELAY_HOST"
+    apply_secret "$TESTNET_NAMESPACE" layerx-relay-archive-config --from-file=relay-archive.json="$configuration"
+    apply_tls_secret "$TESTNET_NAMESPACE" layerx-relay-archive-tls relay-archive
+    kube apply -f "$MANIFESTS_DIR/relay-archive.yaml" > /dev/null
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-relay-archive 600
+    log "relay/archive serving https://$RELAY_HOST pinned to genesis manifest $pin"
+}
+
 manifests_render() {
     mkdir -p "$MANIFESTS_DIR"
     render_manifest "$NODE_MANIFEST" "$MANIFESTS_DIR/node.yaml"
@@ -1376,6 +1526,10 @@ PYREG
     render_manifest "$REPO_ROOT/platform/hosted/human/deployment.yaml" "$MANIFESTS_DIR/human.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/internal/deployment.yaml" "$MANIFESTS_DIR/internal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/webhooks/deployment.yaml" "$MANIFESTS_DIR/developer.yaml"
+    render_manifest "$REPO_ROOT/platform/relay_archive/deployment.yaml" "$MANIFESTS_DIR/relay-archive.yaml"
+    sed -i "s|relay\.layerx\.example|$RELAY_HOST|g" "$MANIFESTS_DIR/relay-archive.yaml"
+    grep -Fq "host: $RELAY_HOST" "$MANIFESTS_DIR/relay-archive.yaml" \
+        || fail "the relay/archive manifest host could not be bound to $RELAY_HOST"
     python3 "$SCRIPT_DIR/sequencer-pins.py" --manifests "$MANIFESTS_DIR"
     cat >> "$MANIFESTS_DIR/testnet.yaml" <<EOF
 ---
@@ -2678,6 +2832,7 @@ beta_cluster_up() {
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then human_custody_evidence_publish; fi
     agentd_check
     mirror_publish
+    relay_archive_apply
     module_registry_verify
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then material_save; fi
     env_write
