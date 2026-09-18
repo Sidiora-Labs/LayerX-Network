@@ -316,6 +316,67 @@ pub fn budget_owners(
     Ok(owners)
 }
 
+/// Returns the managed agent of `tenant` whose identifier digest is `agent_digest`.
+///
+/// The digest is the same value the human service uses as the agent's budget
+/// identifier, so a budget-create payload naming it is bound to this agent.
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
+pub fn budget_candidate(
+    store: &Store,
+    tenant: &TenantId,
+    agent_digest: [u8; 32],
+) -> Result<ManagedAgent, HumanOperationError> {
+    if agent_digest == [0; 32] {
+        return Err(HumanOperationError::Refused);
+    }
+    for object_id in store.list_object_ids(tenant, ObjectKind::Configuration) {
+        if !object_id.starts_with(PREFIX) {
+            continue;
+        }
+        let object_key = key(tenant.clone(), ObjectKind::Configuration, object_id)
+            .map_err(|_| HumanOperationError::Refused)?;
+        let value = store
+            .get(&object_key)
+            .ok_or(HumanOperationError::Unavailable)?;
+        if value.class() != StorageClass::LocalOnly {
+            return Err(HumanOperationError::Refused);
+        }
+        let agent = decode(value.bytes())?;
+        if agent_key(tenant, &agent.agent_id)? != object_key {
+            return Err(HumanOperationError::Refused);
+        }
+        if parse_agent_digest(&agent.agent_id)? == agent_digest {
+            return Ok(agent);
+        }
+    }
+    Err(HumanOperationError::Refused)
+}
+
+/// Durably records `budget_id` as the active protocol budget of one managed agent
+/// after it has been confirmed from proven core state.
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
+pub fn assign_budget(
+    store: &mut Store,
+    tenant: &TenantId,
+    agent_id: &str,
+    budget_id: [u8; 32],
+) -> Result<(), HumanOperationError> {
+    if budget_id == [0; 32] {
+        return Err(HumanOperationError::Refused);
+    }
+    let mut agent = load_agent(store, tenant, agent_id)?;
+    if agent.state == 4 {
+        return Err(HumanOperationError::Refused);
+    }
+    agent.active_budget_id = budget_id;
+    agent.validate()?;
+    store
+        .put_local(agent_key(tenant, agent_id)?, encode(&agent)?)
+        .map_err(|_| HumanOperationError::Unavailable)
+}
+
 /// Validates every durable managed-agent credential against the restored authoritative session
 /// record. Legacy v3 managed records decode at the legacy session generation of one and are
 /// refused if the corresponding restored session has ever advanced.
