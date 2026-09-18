@@ -5,7 +5,9 @@ import {
   idempotencyKey,
   type AuthorizedReceiptBatch,
   type ProductionTransport,
+  type ProtocolSelection,
   type ReceiptVerification,
+  type SelectableProtocolVersion,
   type TransportCall,
 } from "@sidiora/layerx-sdk";
 import {
@@ -18,6 +20,8 @@ import {
   decodePaymentPayloadHeader,
   decodeSettlementHeader,
   encodePaymentPayloadHeader,
+  protocolSelection,
+  requireProtocolVersion,
   verifyPaymentReceipt,
   paymentAccount,
   paymentCommitment,
@@ -58,6 +62,7 @@ export interface BuyerRetryPolicy {
 export interface BuyerMiddlewareConfig {
   readonly client: ProductionClient;
   readonly source: string;
+  readonly protocolVersion: SelectableProtocolVersion;
   readonly supported: readonly BuyerSupportedKind[];
   readonly authorizedBatches: AuthorizedBatchResolver;
   readonly commitments?: PaymentCommitmentResolver;
@@ -179,6 +184,8 @@ export type PaidFetchResult =
 export class BuyerMiddleware {
   readonly #client: ProductionClient;
   readonly #source: string;
+  readonly #protocolVersion: SelectableProtocolVersion;
+  readonly #protocol: ProtocolSelection;
   readonly #supported: readonly BuyerSupportedKind[];
   readonly #authorizedBatches: AuthorizedBatchResolver;
   readonly #commitments: PaymentCommitmentResolver | undefined;
@@ -200,12 +207,18 @@ export class BuyerMiddleware {
     }
     this.#client = config.client;
     this.#source = config.source;
+    this.#protocolVersion = requireProtocolVersion(config.protocolVersion);
+    this.#protocol = protocolSelection(this.#protocolVersion);
     this.#supported = config.supported;
     this.#authorizedBatches = config.authorizedBatches;
     this.#commitments = config.commitments;
     this.#retry = retryPolicy(config.retry);
     this.#now = config.now ?? Date.now;
     this.#fetch = config.fetch ?? globalThis.fetch;
+  }
+
+  public get protocolVersion(): SelectableProtocolVersion {
+    return this.#protocolVersion;
   }
 
   public parseOffer(paymentRequiredHeader: string): ParsedOffer {
@@ -344,7 +357,7 @@ export class BuyerMiddleware {
     if (evidence.purposeHash !== purpose) throw new MiddlewareError("verification-failure");
     const canonicalReceipt = decodeBase64(evidence.receipt);
     const authorizedBatch = await this.#authorizedBatches.resolve(canonicalReceipt);
-    const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, payload.accepted, this.#commitments);
+    const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, payload.accepted, this.#commitments, this.#protocol);
     const digest = toHex(await merkleLeafDigest(canonicalReceipt));
     if (evidence.receiptDigest !== digest || response.transaction !== `lxp:${digest}`
       || toHex(verification.receipt.activityId) !== expectedActivity || toHex(verification.receipt.from) !== receive.slice(8, 72)
@@ -381,6 +394,7 @@ export class BuyerMiddleware {
       { canonicalReceipt, authorizedBatch },
       payment.offer.accepted,
       this.#commitments,
+      this.#protocol,
     );
     if (response.payer !== toHex(verification.receipt.from)) throw new MiddlewareError("verification-failure");
     return { response, verification, canonicalReceipt };
@@ -458,7 +472,7 @@ export class BuyerMiddleware {
         readonly receiptDigest: string;
       };
       try {
-        const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, requirements, this.#commitments);
+        const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, requirements, this.#commitments, this.#protocol);
         const receiptDigest = toHex(await merkleLeafDigest(canonicalReceipt));
         candidate = { canonicalReceipt, authorizedBatch, verification, receiptDigest };
       } catch (error) {

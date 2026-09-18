@@ -360,7 +360,7 @@ export async function runMerchantApplication(moduleUrl, application) {
       },
     }),
     orders,
-    sellers: { create: (paymentRequired) => new SellerMiddleware({ paymentRequired, authority, fulfillments }) },
+    sellers: { create: (paymentRequired) => new SellerMiddleware({ paymentRequired, protocolVersion: config.protocolVersion, authority, fulfillments }) },
     resourceUrl: (checkoutKey) => new URL(`/orders/${encodeURIComponent(checkoutKey)}`, config.publicUrl).toString(),
   });
   const receiptAuthority = new ReceiptAuthorityClient(config.receiptAuthorityUrl, token);

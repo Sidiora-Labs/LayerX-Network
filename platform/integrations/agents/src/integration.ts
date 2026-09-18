@@ -51,6 +51,7 @@ export function createAgentIntegration(options: AgentIntegrationOptions): LayerX
   const receipts = new LayerXReceiptResolver(endpoint(config.receiptServiceUrl));
   const middleware = new AgentMiddleware({
     client,
+    protocolVersion: config.protocolVersion,
     budgets: new LayerXBudgetLedger(endpoint(config.budgetServiceUrl)),
     signer: new LayerXRemoteSigner(endpoint(config.signerServiceUrl)),
     receipts,

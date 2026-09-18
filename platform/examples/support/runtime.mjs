@@ -33,7 +33,21 @@ export async function loadApplicationConfig(moduleUrl, application) {
   const selected = parseArguments();
   const environments = exactObject(document.environments);
   const config = applyEndpointOverride(selected.environment, exactObject(environments[selected.environment]));
-  return Object.freeze({ name: selected.environment, action: selected.action, directory, ...config });
+  return Object.freeze({
+    name: selected.environment,
+    action: selected.action,
+    directory,
+    ...config,
+    protocolVersion: applicationProtocolVersion(config),
+  });
+}
+
+export const SELECTABLE_PROTOCOL_VERSIONS = Object.freeze([2, 3]);
+
+export function applicationProtocolVersion(config) {
+  const version = exactObject(config).protocolVersion;
+  if (!SELECTABLE_PROTOCOL_VERSIONS.includes(version)) throw new Error("missing_application_protocol_version");
+  return version;
 }
 
 const ENDPOINT_FIELDS = Object.freeze(["humanUrl", "receiptAuthorityUrl", "settlementUrl", "endpoint"]);

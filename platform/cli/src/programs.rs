@@ -626,10 +626,75 @@ pub fn registry_get(client: &Client, program_id: &str) -> Result<Value, String> 
     Ok(response)
 }
 
+/// Reads the program document out of the wrapped agent response every program
+/// read is served in: `{request_id, value, verification_status}`.
+///
+/// The hosted gateway (`platform/hosted/gateway/src/main.rs:812-853`) and the
+/// emulator (`platform/emulator/src/main.rs:949-990`) wrap every successful
+/// program read in that envelope and attach the verification status produced by
+/// `program_verification_status` (`platform/hosted/gateway/src/main.rs:708-738`).
+/// `registry_list` already reads the wrapped `value`.
+///
+/// # Errors
+/// Refuses a response that is not the wrapped envelope and refuses a
+/// verification status that is absent, unknown, or unverified without a reason.
+fn program_registry_document(response: &Value) -> Result<Value, String> {
+    let request_id = response
+        .get("request_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "program read omitted its wrapped request identifier".to_owned())?;
+    if request_id.is_empty() || request_id.len() > 128 {
+        return Err("program read carries an out-of-bound request identifier".to_owned());
+    }
+    let value = response
+        .get("value")
+        .ok_or_else(|| "program read is not the wrapped agent response".to_owned())?;
+    if !value.is_object() {
+        return Err("program read wrapped a non-object program document".to_owned());
+    }
+    let status = response
+        .get("verification_status")
+        .ok_or_else(|| "program read omitted its verification status".to_owned())?;
+    match status.get("state").and_then(Value::as_str) {
+        Some("Achieved") => {
+            if status.get("level").and_then(Value::as_str).is_none() {
+                return Err("program read claims verification without naming its level".to_owned());
+            }
+        }
+        Some("Unverified") => {
+            if status
+                .get("reason")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                return Err(
+                    "program read reports an unverified document without a reason".to_owned(),
+                );
+            }
+        }
+        _ => return Err("program read carries an unknown verification status".to_owned()),
+    }
+    Ok(value.clone())
+}
+
+/// Requires the current-state freshness that both the gateway and the emulator
+/// publish on a program registry read: a canonical unsigned sequence and a
+/// 32-byte state root.
+fn program_registry_freshness(document: &Value) -> Result<(u64, [u8; 32]), String> {
+    let observed_sequence = canonical_u64(document, "observed_sequence")
+        .map_err(|_| "program discovery omitted its current-state freshness".to_owned())?;
+    let state_root = document
+        .get("state_root")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "program discovery omitted its current-state freshness".to_owned())?;
+    let state_root: [u8; 32] = fixed_hex("program discovery state root", state_root)?;
+    Ok((observed_sequence, state_root))
+}
+
 pub fn discover(client: &Client, program_id: &str) -> Result<Value, String> {
     validate_resource_id(program_id, "program id")?;
     let response = read_program_registry(client, program_id, false)?;
-    let value = response.get("result").unwrap_or(&response).clone();
+    let value = program_registry_document(&response)?;
     if value["program_id"]
         .as_str()
         .is_none_or(|value| !value.eq_ignore_ascii_case(program_id))
@@ -639,9 +704,7 @@ pub fn discover(client: &Client, program_id: &str) -> Result<Value, String> {
     if value["lifecycle"].as_str() != Some("active") {
         return Err("program discovery refused an inactive program".to_owned());
     }
-    if value["observed_sequence"].as_u64().is_none() || value["state_root"].as_str().is_none() {
-        return Err("program discovery omitted its current-state freshness".to_owned());
-    }
+    program_registry_freshness(&value)?;
     Ok(value)
 }
 
@@ -1638,7 +1701,8 @@ fn discover_call_head(
     request: &CallRequest<'_>,
 ) -> Result<VerifiedCallHead, String> {
     let response = read_program_registry(client, request.program_id, false)?;
-    let result = response.get("result").unwrap_or(&response);
+    let document = program_registry_document(&response)?;
+    let result = &document;
     if result
         .get("program_id")
         .and_then(Value::as_str)
@@ -2612,5 +2676,219 @@ mod call_tests {
         })();
         std::fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
         result
+    }
+}
+
+#[cfg(test)]
+mod registry_document_tests {
+    use super::{program_registry_document, program_registry_freshness};
+    use serde_json::json;
+
+    fn program_document() -> serde_json::Value {
+        json!({
+            "abi_version": 2,
+            "code_hash": "0bd52677b0dbc410fcba1195cdd7fd82109c17f6694ec12ce64bcd50f37e1a61",
+            "lifecycle": "active",
+            "observed_at": "1789757814735",
+            "observed_sequence": "4",
+            "program_id": "4d98a932e30aed9f2129ab3d596aba7b5cc0903c6e7d28b5fdac30d90193628c",
+            "state_root": "84eb0ce960a3983199e6d6e8f4d3e0ed650729670b35129eba0f66f11d3b0ec8",
+            "valid_through": "1789758114735",
+            "verification": "registry-receipt-and-current-head-verified",
+            "version": 1
+        })
+    }
+
+    fn unverified_status() -> serde_json::Value {
+        json!({
+            "achieved": "Unverified",
+            "reason": "server_side_receipt_verification_only",
+            "requested": "SequencerSigned",
+            "state": "Unverified"
+        })
+    }
+
+    #[test]
+    fn reads_the_wrapped_program_document_the_gateway_and_emulator_serve() {
+        let response = json!({
+            "request_id": "emu-000000000000000c",
+            "value": program_document(),
+            "verification_status": unverified_status()
+        });
+        let Ok(document) = program_registry_document(&response) else {
+            panic!("the wrapped program read was refused");
+        };
+        assert_eq!(document, program_document());
+    }
+
+    #[test]
+    fn reads_the_wrapped_document_when_verification_is_achieved() {
+        let response = json!({
+            "request_id": "req-1",
+            "value": program_document(),
+            "verification_status": {"state": "Achieved", "level": "SequencerSigned"}
+        });
+        let Ok(document) = program_registry_document(&response) else {
+            panic!("an achieved verification status was refused");
+        };
+        assert_eq!(document["program_id"], program_document()["program_id"]);
+    }
+
+    #[test]
+    fn refuses_the_bare_result_shape() {
+        let response = json!({"result": program_document()});
+        assert_eq!(
+            program_registry_document(&response),
+            Err("program read omitted its wrapped request identifier".to_owned())
+        );
+    }
+
+    #[test]
+    fn refuses_a_bare_program_document() {
+        assert_eq!(
+            program_registry_document(&program_document()),
+            Err("program read omitted its wrapped request identifier".to_owned())
+        );
+    }
+
+    #[test]
+    fn refuses_a_wrapper_without_a_value() {
+        let response = json!({
+            "request_id": "req-1",
+            "result": program_document(),
+            "verification_status": unverified_status()
+        });
+        assert_eq!(
+            program_registry_document(&response),
+            Err("program read is not the wrapped agent response".to_owned())
+        );
+    }
+
+    #[test]
+    fn refuses_a_wrapper_without_a_verification_status() {
+        let response = json!({"request_id": "req-1", "value": program_document()});
+        assert_eq!(
+            program_registry_document(&response),
+            Err("program read omitted its verification status".to_owned())
+        );
+    }
+
+    #[test]
+    fn refuses_an_unknown_verification_state() {
+        let response = json!({
+            "request_id": "req-1",
+            "value": program_document(),
+            "verification_status": {"state": "Skipped"}
+        });
+        assert_eq!(
+            program_registry_document(&response),
+            Err("program read carries an unknown verification status".to_owned())
+        );
+    }
+
+    #[test]
+    fn refuses_an_unverified_status_without_a_reason() {
+        let response = json!({
+            "request_id": "req-1",
+            "value": program_document(),
+            "verification_status": {"state": "Unverified", "requested": "SequencerSigned"}
+        });
+        assert_eq!(
+            program_registry_document(&response),
+            Err("program read reports an unverified document without a reason".to_owned())
+        );
+    }
+
+    #[test]
+    fn refuses_an_achieved_status_without_a_level() {
+        let response = json!({
+            "request_id": "req-1",
+            "value": program_document(),
+            "verification_status": {"state": "Achieved"}
+        });
+        assert_eq!(
+            program_registry_document(&response),
+            Err("program read claims verification without naming its level".to_owned())
+        );
+    }
+
+    #[test]
+    fn refuses_a_non_object_wrapped_value() {
+        let response = json!({
+            "request_id": "req-1",
+            "value": "4d98a932e30aed9f2129ab3d596aba7b5cc0903c6e7d28b5fdac30d90193628c",
+            "verification_status": unverified_status()
+        });
+        assert_eq!(
+            program_registry_document(&response),
+            Err("program read wrapped a non-object program document".to_owned())
+        );
+    }
+
+    #[test]
+    fn freshness_accepts_the_canonical_sequence_string_the_services_publish() {
+        let (observed_sequence, state_root) =
+            program_registry_freshness(&program_document()).expect("canonical freshness");
+        assert_eq!(observed_sequence, 4);
+        assert_eq!(
+            state_root[..4],
+            [0x84, 0xeb, 0x0c, 0xe9],
+            "state root must decode from the published hexadecimal"
+        );
+    }
+
+    #[test]
+    fn freshness_accepts_a_numeric_sequence() {
+        let mut document = program_document();
+        document["observed_sequence"] = json!(9u64);
+        assert_eq!(
+            program_registry_freshness(&document)
+                .expect("numeric freshness")
+                .0,
+            9
+        );
+    }
+
+    #[test]
+    fn freshness_refuses_an_absent_sequence() {
+        let mut document = program_document();
+        document
+            .as_object_mut()
+            .expect("object")
+            .remove("observed_sequence");
+        assert_eq!(
+            program_registry_freshness(&document),
+            Err("program discovery omitted its current-state freshness".to_owned())
+        );
+    }
+
+    #[test]
+    fn freshness_refuses_a_non_canonical_sequence() {
+        let mut document = program_document();
+        document["observed_sequence"] = json!("04");
+        assert_eq!(
+            program_registry_freshness(&document),
+            Err("program discovery omitted its current-state freshness".to_owned())
+        );
+    }
+
+    #[test]
+    fn freshness_refuses_an_absent_state_root() {
+        let mut document = program_document();
+        document
+            .as_object_mut()
+            .expect("object")
+            .remove("state_root");
+        assert_eq!(
+            program_registry_freshness(&document),
+            Err("program discovery omitted its current-state freshness".to_owned())
+        );
+    }
+
+    #[test]
+    fn freshness_refuses_a_truncated_state_root() {
+        let mut document = program_document();
+        document["state_root"] = json!("84eb0ce9");
+        assert!(program_registry_freshness(&document).is_err());
     }
 }

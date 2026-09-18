@@ -7,6 +7,7 @@ import { BuyerMiddleware, LayerXPaymentHttpTransport } from "@sidiora/layerx-buy
 import { ProductionClient, SecretBytes } from "@sidiora/layerx-sdk";
 import {
   ReceiptAuthorityClient,
+  applicationProtocolVersion,
   applyEndpointOverride,
   exactObject,
   optionalEnvironment,
@@ -22,6 +23,7 @@ if (manifest.version !== 1 || !Array.isArray(manifest.applications) || manifest.
 }
 
 const EMULATOR_PROTOCOL_VERSION = "3";
+const SCENARIO_PROTOCOL_VERSION = Number(EMULATOR_PROTOCOL_VERSION);
 const EMULATOR_PREFUND = "1000000000";
 const EMULATOR_SEED_MOVE = "100000";
 const EMULATOR_DEFAULT_PRICE = "1000";
@@ -62,7 +64,10 @@ async function checkManifest() {
       if (JSON.stringify(command) !== JSON.stringify(expected)) {
         throw new Error(`reference_command_drift_${application.name}_${environment}`);
       }
-      exactObject(configDocument.environments[environment]);
+      const declared = exactObject(configDocument.environments[environment]);
+      if (applicationProtocolVersion(declared) !== SCENARIO_PROTOCOL_VERSION) {
+        throw new Error(`reference_protocol_version_drift_${application.name}_${environment}`);
+      }
       if (packageDocument.scripts[`start:${environment}`] === undefined) {
         throw new Error(`missing_reference_script_${application.name}_${environment}`);
       }
@@ -432,6 +437,7 @@ async function merchantCheckout(environment, inputs) {
     const buyer = new BuyerMiddleware({
       client: new ProductionClient(new LayerXPaymentHttpTransport({ baseUrl: buyerConfig.humanUrl, bearerToken: token })),
       source: scenarioEnvironment(inputs, buyerConfig.sourceEnvironment),
+      protocolVersion: applicationProtocolVersion(buyerConfig),
       supported: [{ scheme: buyerConfig.scheme, network: buyerConfig.network }],
       authorizedBatches: new ReceiptAuthorityClient(buyerConfig.receiptAuthorityUrl, rawToken),
     });

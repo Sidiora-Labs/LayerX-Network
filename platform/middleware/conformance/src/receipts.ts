@@ -1,4 +1,5 @@
-import type { AuthorizedReceiptBatch } from "@sidiora/layerx-sdk";
+import { DEFAULT_PROTOCOL_VERSION } from "@sidiora/layerx-sdk";
+import type { AuthorizedReceiptBatch, SelectableProtocolVersion } from "@sidiora/layerx-sdk";
 import type {
   LayerXReceiptEvidence,
   PaymentPayload,
@@ -10,7 +11,15 @@ const RECEIPT_DOMAIN = new TextEncoder().encode("LXP/v1/receipt\0");
 const MERKLE_LEAF_DOMAIN = new TextEncoder().encode("LXP/v1/merkle-leaf\0");
 
 const RECEIPT_MAGIC = 0x5201;
-const PROTOCOL_VERSION = 2;
+
+/**
+ * The protocol version the suite's own signed receipts are encoded at. Every
+ * middleware the suite constructs declares this same version, so the declared
+ * configuration and the produced bytes cannot drift apart.
+ */
+export const CONFORMANCE_PROTOCOL_VERSION: SelectableProtocolVersion = DEFAULT_PROTOCOL_VERSION;
+
+const PROTOCOL_VERSION = CONFORMANCE_PROTOCOL_VERSION;
 const RECEIPT_MAGIC_PREFIX = PROTOCOL_VERSION;
 
 /**

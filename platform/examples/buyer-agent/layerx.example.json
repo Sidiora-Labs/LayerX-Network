@@ -8,6 +8,7 @@
       "resourceUrl": "http://127.0.0.1:8081/paid",
       "scheme": "exact",
       "network": "layerx:emulator",
+      "protocolVersion": 3,
       "tokenEnvironment": "LAYERX_EMULATOR_TOKEN",
       "sourceEnvironment": "LAYERX_EMULATOR_SOURCE",
       "idempotencyEnvironment": "LAYERX_EMULATOR_PAYMENT_KEY"
@@ -18,6 +19,7 @@
       "resourceUrl": "http://127.0.0.1:8081/paid",
       "scheme": "exact",
       "network": "layerx:testnet",
+      "protocolVersion": 3,
       "tokenEnvironment": "LAYERX_TESTNET_TOKEN",
       "sourceEnvironment": "LAYERX_TESTNET_SOURCE",
       "idempotencyEnvironment": "LAYERX_TESTNET_PAYMENT_KEY"

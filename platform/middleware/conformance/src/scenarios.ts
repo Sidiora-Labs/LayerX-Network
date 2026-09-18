@@ -33,6 +33,7 @@ import {
   type MerchantOrderStore,
 } from "@sidiora/layerx-merchant-middleware";
 import {
+  CONFORMANCE_PROTOCOL_VERSION,
   ConformanceSequencer,
   buildSignedReceipt,
   buyerPayload,
@@ -63,6 +64,7 @@ function buildBuyer(offer: OfferFixture): BuyerMiddleware {
   return new BuyerMiddleware({
     client: new ProductionClient(transport),
     source: "acct:conformance-buyer",
+    protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
     supported: [{ scheme: offer.requirements.scheme, network: offer.requirements.network }],
     authorizedBatches: new FixedBatchResolver(buildAuthorizedBatchPlaceholder()),
   });
@@ -188,6 +190,7 @@ async function releasedDecision(
 ): Promise<SellerDecision<string>> {
   const seller = new SellerMiddleware<string>({
     paymentRequired: offer.paymentRequired,
+    protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
     authority: new ReceiptPayloadAuthority(resolver),
     fulfillments: repository,
   });
@@ -224,7 +227,9 @@ export async function runScenarios(): Promise<Suite> {
       resultingStateRoot: receipt.authorizedBatch.resultingStateRoot.slice(),
       sequencerPublicKey: receipt.authorizedBatch.sequencerPublicKey.slice(),
     };
-    const verification = verifyReceipt(mutableReceipt, mutableAuthority);
+    const verification = verifyReceipt(mutableReceipt, mutableAuthority, {
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
+    });
     mutableReceipt.fill(0);
     mutableAuthority.batchId.fill(0);
     mutableAuthority.asset.fill(0);
@@ -240,6 +245,7 @@ export async function runScenarios(): Promise<Suite> {
     const repository = new InMemoryFulfillmentRepository<string>();
     const seller = new SellerMiddleware<string>({
       paymentRequired: offer.paymentRequired,
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
       authority: new ReceiptPayloadAuthority(resolver),
       fulfillments: repository,
     });
@@ -346,6 +352,7 @@ export async function runScenarios(): Promise<Suite> {
         bearerToken: new SecretBytes(new TextEncoder().encode("unused-conformance-token")),
       })),
       source: "acct:conformance-buyer",
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
       supported: [{ scheme: offer.requirements.scheme, network: offer.requirements.network }],
       authorizedBatches: resolver,
     });
@@ -494,6 +501,7 @@ export async function runScenarios(): Promise<Suite> {
       sellers: {
         create: (paymentRequired) => new SellerMiddleware({
           paymentRequired,
+          protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
           authority: new ReceiptPayloadAuthority(resolver),
           fulfillments: new InMemoryFulfillmentRepository<MerchantOrder>(),
         }),
@@ -562,6 +570,7 @@ export async function runScenarios(): Promise<Suite> {
       sellers: {
         create: (paymentRequired) => new SellerMiddleware({
           paymentRequired,
+          protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
           authority: new ReceiptPayloadAuthority(resolver),
           fulfillments: new InMemoryFulfillmentRepository<MerchantOrder>(),
         }),
@@ -621,6 +630,8 @@ async function sequencerVerification(receipt: SignedReceipt, resolver: FixedBatc
       payTo: toHex(fixedBytes(0xaa)),
       maxTimeoutSeconds: 120,
     },
+    undefined,
+    { protocolVersion: CONFORMANCE_PROTOCOL_VERSION },
   );
 }
 

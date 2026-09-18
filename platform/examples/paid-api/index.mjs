@@ -121,6 +121,7 @@ const resolver = config.authorizedBatchEnvironment === undefined
   ? new ReceiptAuthorityClient(config.receiptAuthorityUrl, requiredEnvironment(config.tokenEnvironment))
   : { resolve: async () => parseBatch(JSON.parse(requiredEnvironment(config.authorizedBatchEnvironment))) };
 const middleware = new SellerMiddleware({
+  protocolVersion: config.protocolVersion,
   paymentRequired: {
     x402Version: 2,
     resource: {
