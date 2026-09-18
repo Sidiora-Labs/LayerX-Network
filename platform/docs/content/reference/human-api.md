@@ -58,6 +58,8 @@ Additive only within a major version: a release may only add sections, keys, lis
 | `profile.get` | `GET` | `/v1/profile` | `Empty` | `Profile` | not used |
 | `profile.update` | `PATCH` | `/v1/profile` | `ProfileUpdate` | `Profile` | not used |
 | `security.action` | `POST` | `/v1/security/actions` | `SecurityActionRequest` | `SecurityAction` | not used |
+| `security.key-export.begin` | `POST` | `/v1/security/key-export/begin` | `KeyExportBegin` | `KeyExportChallenge` | not used |
+| `security.key-export.finish` | `POST` | `/v1/security/key-export/finish` | `KeyExportFinish` | `ExportedPrimaryKey` | not used |
 | `security.passkey.list` | `GET` | `/v1/security/passkeys` | `Empty` | `PasskeyList` | not used |
 | `security.passkey.register.begin` | `POST` | `/v1/security/passkeys/registrations` | `SecurityPasskeyRegistrationBegin` | `PasskeyRegistrationChallenge` | not used |
 | `security.passkey.register.finish` | `POST` | `/v1/security/passkeys/registrations/{registration_id}` | `SecurityPasskeyRegistrationFinish` | `Passkey` | not used |
@@ -218,6 +220,10 @@ additive_only
 | `BindingStatementRequest` | type | required: `address:EvmAddress` |
 | `BindingSubmission` | type | required: `address:EvmAddress`, `statement:string`, `signature:EvmSignature` |
 | `Device` | type | required: `device_id:DeviceId`, `label:string`, `platform:string` |
+| `ExportedPrimaryKey` | type | required: `public_key:string`, `secret:TimedSecret`, `self_custodied_at:Timestamp` |
+| `KeyExportBegin` | type | required: `step_up:StepUpEvidence` |
+| `KeyExportChallenge` | type | required: `export_id:string`, `confirms:OperationDigest`, `expires_at:Timestamp` |
+| `KeyExportFinish` | type | required: `export_id:string`, `step_up:StepUpEvidence` |
 | `NativeFeeAsset` | type | required: `asset_id:string`, `currency:CurrencyCode`, `decimals:integer` |
 | `NativeFeeBudget` | type | required: `asset_id:string`, `maximum_per_activity:Amount`, `maximum_total:Amount`, `period_length_ms:Milliseconds`, `maximum_per_period:Amount` |
 | `Passkey` | type | required: `passkey_id:PasskeyId`, `label:string`, `created_at:Timestamp`<br>optional: `last_used_at:Timestamp` |
@@ -233,7 +239,7 @@ additive_only
 | `ProfileUpdate` | type | optional: `display_name:string`, `avatar_url:string` |
 | `RebindingSubmission` | type | required: `address:EvmAddress`, `statement:string`, `signature:EvmSignature`, `step_up:StepUpEvidence` |
 | `SecurityAction` | type | required: `confirms:OperationDigest` |
-| `SecurityActionKind` | type | variants: `add-passkey`, `revoke-passkey`, `revoke-session`, `revoke-all-sessions`, `add-authenticator`, `disable-authenticator`, `rotate-backup-codes`, `reveal-recovery-evidence` |
+| `SecurityActionKind` | type | variants: `add-passkey`, `revoke-passkey`, `revoke-session`, `revoke-all-sessions`, `add-authenticator`, `disable-authenticator`, `rotate-backup-codes`, `reveal-recovery-evidence`, `export-primary-key` |
 | `SecurityActionRequest` | type | required: `action:SecurityActionKind`<br>optional: `target_id:string` |
 | `SecurityPasskeyRegistrationBegin` | type | required: `label:string`, `step_up:StepUpEvidence` |
 | `SecurityPasskeyRegistrationFinish` | type | required: `credential:OpaqueCredential`, `step_up:StepUpEvidence` |
