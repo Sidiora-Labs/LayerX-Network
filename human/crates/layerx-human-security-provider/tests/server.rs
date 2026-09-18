@@ -557,3 +557,43 @@ fn published_journal_recovers_head_and_owned_pending_write() {
     drop(recovered);
     assert!(Store::open(&fixture.state(), &fixture.trust()).is_ok());
 }
+
+fn probe(socket: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_layerx-human-security-provider"))
+        .arg("probe")
+        .env("LAYERX_HUMAN_SECURITY_PROVIDER_SOCKET", socket)
+        .env("LAYERX_HUMAN_SECURITY_PROVIDER_DEADLINE_SECONDS", "5")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn probe_reports_ready_only_while_the_security_provider_serves() {
+    let fixture = Fixture::new();
+    let absent = probe(&fixture.socket());
+    assert_eq!(absent.status.code(), Some(1));
+    assert!(absent.stdout.is_empty());
+    let server = fixture.start(uid());
+    let ready = probe(&fixture.socket());
+    assert_eq!(ready.status.code(), Some(0));
+    assert!(ready.stdout.is_empty());
+    drop(server);
+    let stopped = probe(&fixture.socket());
+    assert_eq!(stopped.status.code(), Some(1));
+}
+
+#[test]
+fn probe_refuses_an_incomplete_socket_configuration() {
+    let missing = Command::new(env!("CARGO_BIN_EXE_layerx-human-security-provider"))
+        .arg("probe")
+        .env_remove("LAYERX_HUMAN_SECURITY_PROVIDER_SOCKET")
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(1));
+    let relative = Command::new(env!("CARGO_BIN_EXE_layerx-human-security-provider"))
+        .arg("probe")
+        .env("LAYERX_HUMAN_SECURITY_PROVIDER_SOCKET", "security.sock")
+        .output()
+        .unwrap();
+    assert_eq!(relative.status.code(), Some(1));
+}

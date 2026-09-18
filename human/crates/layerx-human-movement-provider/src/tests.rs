@@ -805,3 +805,47 @@ fn receipt_identity_mapping_survives_restart_and_refuses_reassignment() -> Resul
         .is_err());
     Ok(())
 }
+
+fn probe_settings(config: &Config) -> crate::probe::Settings {
+    crate::probe::Settings {
+        socket: config.listener.socket.clone(),
+        deadline: Duration::from_secs(2),
+        maximum_frame_bytes: MAX_FRAME,
+        protocol: config.listener.protocol,
+    }
+}
+
+#[test]
+fn probe_reaches_the_real_listener_and_reports_the_provider_answer() -> Result {
+    let dir = Directory::new()?;
+    let config = config(&dir)?;
+    let settings = probe_settings(&config);
+    assert!(crate::probe::probe(&settings).is_err());
+    let mut service = EvidenceService::new(&config, Journal::open(&config.state_root, 2)?)?;
+    let listener = Listener::bind(listener_config(&dir))?;
+    let server = thread::spawn(move || listener.serve_next(&mut service));
+    assert_eq!(
+        checked(crate::probe::probe(&settings))?,
+        crate::probe::Outcome::NotReady
+    );
+    server.join().map_err(|_| "server panicked")??;
+    assert!(crate::probe::probe(&settings).is_err());
+    Ok(())
+}
+
+#[test]
+fn probe_accepts_only_the_provider_ready_answer() -> Result {
+    let codec = checked(NativeMovementCodec::for_protocol(2))?;
+    let ready = checked(codec.encode_response(&Response::Ready))?;
+    assert_eq!(
+        checked(crate::probe::interpret(2, &ready))?,
+        crate::probe::Outcome::Ready
+    );
+    let unavailable = checked(codec.encode_response(&Response::Unavailable))?;
+    assert_eq!(
+        checked(crate::probe::interpret(2, &unavailable))?,
+        crate::probe::Outcome::NotReady
+    );
+    assert!(crate::probe::interpret(2, b"not a movement frame").is_err());
+    Ok(())
+}

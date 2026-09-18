@@ -6,6 +6,7 @@ mod execution;
 mod journal;
 mod listener;
 mod planning;
+mod probe;
 mod producer;
 mod service;
 
@@ -24,7 +25,11 @@ fn main() {
 }
 
 fn run() -> Result<(), Error> {
-    let request = evidence_export::Request::arguments(std::env::args().skip(1))?;
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.len() == 1 && arguments[0] == "probe" {
+        return probe::run();
+    }
+    let request = evidence_export::Request::arguments(arguments.into_iter())?;
     let config = Config::from_environment()?;
     if let Some(request) = request {
         return evidence_export::publish(&config, &request);

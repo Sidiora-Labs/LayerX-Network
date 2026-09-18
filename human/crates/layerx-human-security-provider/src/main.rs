@@ -1,3 +1,5 @@
+mod probe;
+
 use layerx_human_security_provider::{ingest_recovery_receipt, serve, Config, Error, Result};
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -12,6 +14,9 @@ fn run() -> Result<()> {
             .map(PathBuf::from)
             .ok_or(Error::Configuration)?;
         return ingest_recovery_receipt(&root, &trust, &PathBuf::from(&args[1]));
+    }
+    if args.len() == 1 && args[0] == "probe" {
+        return probe::run();
     }
     if !args.is_empty() {
         return Err(Error::Configuration);
