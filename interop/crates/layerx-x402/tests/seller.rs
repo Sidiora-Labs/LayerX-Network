@@ -10,8 +10,8 @@ use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_x402::model::{
-    AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo,
-    SettlementResponse, X402_VERSION,
+    account_identifiers, AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements,
+    ResourceInfo, SettlementResponse, X402_VERSION,
 };
 use layerx_x402::seller::{
     LayerXPaymentRequest, PaymentPlane, PlanePaymentOutcome, Seller, SellerOutcome,
@@ -49,15 +49,36 @@ fn registered_gateway() -> GatewayCore {
     gateway
 }
 
+const PAYEE_ACCOUNT: &str = "agent:did:layerx:test-resource:main";
+const CURRENCY: &str = "LXP";
+
+fn account_id(account: &str) -> [u8; 32] {
+    account_identifiers(account)
+        .unwrap_or_else(|error| panic!("{account} has account identifiers: {error}"))[0]
+}
+
+fn pay_to(account: &str) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(66);
+    text.push_str("0x");
+    for byte in account_id(account) {
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
 fn test_requirements() -> PaymentRequirements {
     PaymentRequirements {
         scheme: "exact".to_owned(),
         network: "layerx:testnet".to_owned(),
         amount: AtomicAmount::from_u128(1000),
         asset: "0x".to_owned() + &"ab".repeat(32),
-        pay_to: "0x".to_owned() + &"cd".repeat(32),
+        pay_to: pay_to(PAYEE_ACCOUNT),
         max_timeout_seconds: 120,
-        extra: None,
+        extra: Some(json!({
+            "layerx": {"commitment": "executed", "account": PAYEE_ACCOUNT, "currency": CURRENCY}
+        })),
     }
 }
 

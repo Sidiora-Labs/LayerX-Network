@@ -17,6 +17,8 @@ Amounts are integer strings and are multiplied and summed as `bigint`. No line t
 
 `mixed-payment-facts` is the rule people are surprised by. A cart is one payment; a payment has one asset and one recipient. If your catalog mixes them, split the cart into separate checkouts.
 
+An offer on a `layerx:*` network also carries `extra.layerx` with its `commitment`, the `agent:<did>:main` `account` the payer quotes against and the `currency` code that quote is priced in. `payTo` must be the account id derived from that reference - `SHA256("LXP/v1/account-id\0" || name)` on protocol 2 or `SHA256("LX:ACCOUNT:v1" || u32be(len) || name)` on protocol 3 - so the advertised account cannot send the money anywhere else. A buyer, and the interop x402 gateway, refuse an offer that omits the block or advertises an account that does not derive its `payTo`.
+
 ## Checking out
 
 `checkout(principal, checkoutKey, lines, paymentHeader?)` returns one of four results.

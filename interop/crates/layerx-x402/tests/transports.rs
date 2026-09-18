@@ -27,9 +27,9 @@ use layerx_x402::facilitator::{
     SupportedResponse, VerifyResponse,
 };
 use layerx_x402::model::{
-    AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, SettlementResponse,
-    X402Error, PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER, PAYMENT_SIGNATURE_HEADER,
-    X402_VERSION,
+    account_identifiers, AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements,
+    SettlementResponse, X402Error, PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER,
+    PAYMENT_SIGNATURE_HEADER, X402_VERSION,
 };
 use layerx_x402::seller::ExecutedPayment;
 use layerx_x402::transport::{
@@ -61,15 +61,39 @@ const ROLES: [&str; 7] = [
     "supported-response",
 ];
 
+const MERCHANT_ACCOUNT: &str = "agent:did:layerx:merchant:main";
+const CURRENCY: &str = "LXP";
+
+fn account_id(account: &str) -> [u8; 32] {
+    account_identifiers(account)
+        .unwrap_or_else(|error| panic!("{account} has account identifiers: {error}"))[0]
+}
+
+fn pay_to(account: &str) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(64);
+    for byte in account_id(account) {
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
 fn requirements() -> PaymentRequirements {
     PaymentRequirements {
         scheme: "exact".to_owned(),
         network: "layerx:testnet".to_owned(),
         amount: AtomicAmount::from_u128(25),
         asset: "05".repeat(32),
-        pay_to: "07".repeat(32),
+        pay_to: pay_to(MERCHANT_ACCOUNT),
         max_timeout_seconds: 60,
-        extra: None,
+        extra: Some(json!({
+            "layerx": {
+                "commitment": "executed",
+                "account": MERCHANT_ACCOUNT,
+                "currency": CURRENCY
+            }
+        })),
     }
 }
 
@@ -355,7 +379,8 @@ fn settlement_identity_is_transport_independent_and_step_separated() {
 // The facilitator's only successful settlement path terminates in a
 // gateway-verified canonical LayerX receipt. These tests drive that real path
 // with a signed receipt whose economic facts match the transport-independent
-// `requirements()` above (asset `05..`, recipient `07..`, amount 25) and inject
+// `requirements()` above (asset `05..`, the merchant account's own identifier
+// as recipient, amount 25) and inject
 // faults - delayed confirmation, a crashed downstream, duplicate delivery and a
 // swapped receipt - to prove the economic effect lands exactly once regardless
 // of how many times settlement is retried or redelivered.
@@ -433,7 +458,7 @@ fn receipt_fields(activity_id: [u8; 32]) -> ReceiptFields {
         from: [6; 32],
         from_before: 100,
         from_after: 75,
-        to: [7; 32],
+        to: account_id(MERCHANT_ACCOUNT),
         to_before: 10,
         to_after: 35,
     }

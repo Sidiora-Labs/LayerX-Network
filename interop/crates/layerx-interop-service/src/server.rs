@@ -2689,6 +2689,20 @@ mod tests {
         assert!(serde_json::from_value::<FiatCallback>(callback).is_err());
     }
 
+    const X402_FIXTURE_ACCOUNT: &str = "agent:did:layerx:interop-merchant:main";
+
+    fn x402_fixture_pay_to() -> String {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        let identifiers = layerx_x402::model::account_identifiers(X402_FIXTURE_ACCOUNT)
+            .unwrap_or_else(|error| panic!("fixture account has identifiers: {error:?}"));
+        let mut text = String::with_capacity(64);
+        for byte in identifiers[0] {
+            text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+            text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+        }
+        text
+    }
+
     fn x402_fixture_request(payload: Value) -> FacilitatorRequest {
         let requirements = PaymentRequirements {
             scheme: "exact".to_owned(),
@@ -2696,9 +2710,15 @@ mod tests {
             amount: AtomicAmount::parse("1000")
                 .unwrap_or_else(|error| panic!("fixture amount is canonical: {error:?}")),
             asset: "44".repeat(32),
-            pay_to: "45".repeat(32),
+            pay_to: x402_fixture_pay_to(),
             max_timeout_seconds: 60,
-            extra: None,
+            extra: Some(serde_json::json!({
+                "layerx": {
+                    "commitment": "executed",
+                    "account": X402_FIXTURE_ACCOUNT,
+                    "currency": "LXP"
+                }
+            })),
         };
         FacilitatorRequest {
             x402_version: 2,

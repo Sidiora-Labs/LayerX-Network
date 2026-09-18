@@ -806,7 +806,7 @@ def self_test():
         assert adapters[identifier]["conformance_vectors"] == count
         assert adapters[identifier]["conformance_sha256"] == digest
         exercised(identifier, declared, tests[identifier])
-    assert adapters["x402"]["conformance_vectors"] == 18
+    assert adapters["x402"]["conformance_vectors"] == 22
     assert adapters["ap2"]["conformance_vectors"] == 6
     assert adapters["ucp"]["conformance_vectors"] == 26
     assert adapters["visa-tap"]["conformance_vectors"] == 23

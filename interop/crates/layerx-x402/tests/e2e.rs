@@ -12,8 +12,8 @@ use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_x402::buyer::{Buyer, BuyerPaymentPlane, PaymentBuildRequest, SupportedKind};
 use layerx_x402::model::{
-    AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo, X402Error,
-    X402_VERSION,
+    account_identifiers, AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements,
+    ResourceInfo, X402Error, X402_VERSION,
 };
 use layerx_x402::seller::{
     LayerXPaymentRequest, PaymentPlane, PlanePaymentOutcome, Seller, SellerOutcome,
@@ -21,6 +21,30 @@ use layerx_x402::seller::{
 use layerx_x402::transport::{encode_payment_required, TransportKind};
 use layerx_x402::x402_adapter_descriptor;
 use serde_json::{json, Value};
+
+const TESTNET_ACCOUNT: &str = "agent:did:layerx:merchant-api:main";
+const MAINNET_ACCOUNT: &str = "agent:did:layerx:merchant-api-treasury:main";
+const CURRENCY: &str = "LXP";
+
+fn account_id(account: &str, derivation: usize) -> [u8; 32] {
+    account_identifiers(account)
+        .unwrap_or_else(|error| panic!("{account} has account identifiers: {error}"))[derivation]
+}
+
+fn pay_to(account: &str, derivation: usize) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(66);
+    text.push_str("0x");
+    for byte in account_id(account, derivation) {
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
+fn layerx_terms(account: &str) -> Value {
+    json!({"layerx": {"commitment": "executed", "account": account, "currency": CURRENCY}})
+}
 
 struct MockBuyerPlane {
     scheme_payload: Value,
@@ -80,18 +104,18 @@ fn create_payment_required() -> PaymentRequired {
                 network: "layerx:testnet".to_owned(),
                 amount: AtomicAmount::from_u128(1000),
                 asset: "0x".to_owned() + &"aa".repeat(32),
-                pay_to: "0x".to_owned() + &"bb".repeat(32),
+                pay_to: pay_to(TESTNET_ACCOUNT, 0),
                 max_timeout_seconds: 120,
-                extra: None,
+                extra: Some(layerx_terms(TESTNET_ACCOUNT)),
             },
             PaymentRequirements {
                 scheme: "402lxp".to_owned(),
                 network: "layerx:mainnet".to_owned(),
                 amount: AtomicAmount::from_u128(950),
                 asset: "0x".to_owned() + &"cc".repeat(32),
-                pay_to: "0x".to_owned() + &"dd".repeat(32),
+                pay_to: pay_to(MAINNET_ACCOUNT, 1),
                 max_timeout_seconds: 180,
-                extra: None,
+                extra: Some(layerx_terms(MAINNET_ACCOUNT)),
             },
         ],
         extensions: BTreeMap::new(),
@@ -211,9 +235,9 @@ fn seller_validates_buyer_payment_matches_issued_requirements() {
             network: "layerx:testnet".to_owned(),
             amount: AtomicAmount::from_u128(9999),
             asset: "0x".to_owned() + &"aa".repeat(32),
-            pay_to: "0x".to_owned() + &"bb".repeat(32),
+            pay_to: pay_to(TESTNET_ACCOUNT, 0),
             max_timeout_seconds: 120,
-            extra: None,
+            extra: Some(layerx_terms(TESTNET_ACCOUNT)),
         },
         extensions: BTreeMap::new(),
     };
@@ -296,9 +320,9 @@ fn seller_refuses_payment_when_extension_missing() {
             network: "layerx:testnet".to_owned(),
             amount: AtomicAmount::from_u128(1000),
             asset: "0x".to_owned() + &"aa".repeat(32),
-            pay_to: "0x".to_owned() + &"bb".repeat(32),
+            pay_to: pay_to(TESTNET_ACCOUNT, 0),
             max_timeout_seconds: 120,
-            extra: None,
+            extra: Some(layerx_terms(TESTNET_ACCOUNT)),
         },
         extensions: BTreeMap::new(),
     };
@@ -381,9 +405,9 @@ fn seller_refuses_payment_before_plane_execution_when_validation_fails() {
             network: "layerx:testnet".to_owned(),
             amount: AtomicAmount::from_u128(1000),
             asset: "0x".to_owned() + &"aa".repeat(32),
-            pay_to: "0x".to_owned() + &"bb".repeat(32),
+            pay_to: pay_to(TESTNET_ACCOUNT, 0),
             max_timeout_seconds: 120,
-            extra: None,
+            extra: Some(layerx_terms(TESTNET_ACCOUNT)),
         },
         extensions: BTreeMap::new(),
     };
@@ -506,9 +530,9 @@ fn payment_requirements_layerx_facts_extraction() {
         network: "layerx:testnet".to_owned(),
         amount: AtomicAmount::from_u128(1000),
         asset: "0x".to_owned() + &"ab".repeat(32),
-        pay_to: "0x".to_owned() + &"cd".repeat(32),
+        pay_to: pay_to(TESTNET_ACCOUNT, 0),
         max_timeout_seconds: 120,
-        extra: None,
+        extra: Some(layerx_terms(TESTNET_ACCOUNT)),
     };
 
     let (asset, recipient) = requirements
@@ -516,7 +540,7 @@ fn payment_requirements_layerx_facts_extraction() {
         .unwrap_or_else(|error| panic!("layerx facts: {error:?}"));
 
     assert_eq!(asset, [0xab; 32]);
-    assert_eq!(recipient, [0xcd; 32]);
+    assert_eq!(recipient, account_id(TESTNET_ACCOUNT, 0));
 }
 
 #[test]

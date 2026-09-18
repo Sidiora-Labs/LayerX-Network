@@ -9,7 +9,10 @@ pub mod transport;
 
 pub use buyer::Buyer;
 pub use facilitator::Facilitator;
-pub use model::{PaymentPayload, PaymentRequired, PaymentRequirements, SettlementResponse};
+pub use model::{
+    account_identifiers, LayerXTerms, PaymentPayload, PaymentRequired, PaymentRequirements,
+    SettlementResponse,
+};
 pub use seller::Seller;
 
 use layerx_interop_gateway::adapter::{

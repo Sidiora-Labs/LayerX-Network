@@ -6,16 +6,40 @@ use std::collections::BTreeMap;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use layerx_interop_gateway::trace::TraceId;
+use layerx_interop_gateway::trace::{TraceId, Traced};
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_x402::buyer::{
     BuiltPayment, Buyer, BuyerPaymentPlane, PaymentBuildRequest, SupportedKind,
 };
 use layerx_x402::model::{
-    AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo,
-    SettlementResponse, X402Error, X402_VERSION,
+    account_identifiers, AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements,
+    ResourceInfo, SettlementResponse, X402Error, X402_VERSION,
 };
 use serde_json::{json, Value};
+
+const PAYEE_ACCOUNT: &str = "agent:did:layerx:content-service:main";
+const ALTERNATE_ACCOUNT: &str = "agent:did:layerx:content-mirror:main";
+const CURRENCY: &str = "LXP";
+
+fn account_id(account: &str) -> [u8; 32] {
+    account_identifiers(account)
+        .unwrap_or_else(|error| panic!("{account} has account identifiers: {error}"))[0]
+}
+
+fn pay_to(account: &str) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(66);
+    text.push_str("0x");
+    for byte in account_id(account) {
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
+fn layerx_terms(account: &str) -> Value {
+    json!({"layerx": {"commitment": "executed", "account": account, "currency": CURRENCY}})
+}
 
 struct TestBuyerPlane {
     payload: Value,
@@ -46,9 +70,9 @@ fn test_requirements() -> PaymentRequirements {
         network: "layerx:testnet".to_owned(),
         amount: AtomicAmount::from_u128(500),
         asset: "0x".to_owned() + &"12".repeat(32),
-        pay_to: "0x".to_owned() + &"34".repeat(32),
+        pay_to: pay_to(PAYEE_ACCOUNT),
         max_timeout_seconds: 90,
-        extra: None,
+        extra: Some(layerx_terms(PAYEE_ACCOUNT)),
     }
 }
 
@@ -144,9 +168,9 @@ fn buyer_selects_first_supported_offer_in_seller_order() {
         network: "layerx:testnet".to_owned(),
         amount: AtomicAmount::from_u128(100),
         asset: "0x".to_owned() + &"aa".repeat(32),
-        pay_to: "0x".to_owned() + &"bb".repeat(32),
+        pay_to: pay_to(ALTERNATE_ACCOUNT),
         max_timeout_seconds: 60,
-        extra: None,
+        extra: Some(layerx_terms(ALTERNATE_ACCOUNT)),
     };
     let exact_supported = test_requirements();
 
@@ -561,4 +585,46 @@ fn buyer_validates_payment_payload_after_construction() {
         .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert!(payment.payload.validate().is_ok());
+}
+
+#[test]
+fn buyer_refuses_a_layerx_offer_that_carries_no_quote_terms() {
+    let buyer =
+        Buyer::new(test_supported()).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
+    let mut required = test_payment_required();
+    required.accepts[0].extra = None;
+
+    let encoded = encode_payment_required(&required);
+    let mut plane = TestBuyerPlane {
+        payload: json!({"authorization": "test"}),
+    };
+    let trace = TraceId::mint([0xab; 16]);
+
+    let refusal = buyer
+        .build_payment(&encoded, [1; 32], &mut plane, &trace)
+        .err()
+        .map(Traced::into_error);
+
+    assert_eq!(refusal, Some(X402Error::ProfileMissing));
+}
+
+#[test]
+fn buyer_refuses_a_layerx_offer_paying_another_accounts_identifier() {
+    let buyer =
+        Buyer::new(test_supported()).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
+    let mut required = test_payment_required();
+    required.accepts[0].pay_to = pay_to(ALTERNATE_ACCOUNT);
+
+    let encoded = encode_payment_required(&required);
+    let mut plane = TestBuyerPlane {
+        payload: json!({"authorization": "test"}),
+    };
+    let trace = TraceId::mint([0xab; 16]);
+
+    let refusal = buyer
+        .build_payment(&encoded, [1; 32], &mut plane, &trace)
+        .err()
+        .map(Traced::into_error);
+
+    assert_eq!(refusal, Some(X402Error::ProfileMismatch));
 }
