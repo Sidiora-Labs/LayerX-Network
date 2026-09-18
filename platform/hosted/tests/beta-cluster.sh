@@ -118,6 +118,12 @@
 #                                       layerx-testnet-status-publisher CronJob PUTs the testnet status to;
 #                                       unset drops that CronJob from the applied manifests and reports the
 #                                       variable as a missing owner input
+#   LAYERX_BETA_EXPLORER_PROBE_PROGRAM  optional override of the program the explorer index probes before it
+#                                       serves; unset reads the program of the reference escrow deployment
+#                                       the bring-up publishes to the program registry
+#   LAYERX_BETA_EXPLORER_NAMING_PROGRAM optional override of the naming program the Human web application
+#                                       resolves names through; unset reads the program of the reference
+#                                       naming deployment the bring-up publishes to the program registry
 #   LAYERX_BETA_KEEP_TOOLS              set to 1 to keep the pinned kind/kubectl downloads on teardown
 #
 # Mirror publisher inputs. The bring-up always publishes every LayerX batch archive to an EVM chain; it
@@ -171,6 +177,13 @@
 # contracts from the node's genesis artifacts through the Paxeer boundary, and the resulting GuarantorBond
 # and CheckpointRegistry addresses are published to the node as the layerx-node-settlement ConfigMap the
 # sequencer supervisor waits for before starting layerxd --serve.
+#
+# Two reference programs are deployed through the program registry deployment ingress before the explorer
+# observation is published: programs/sdk/rust/examples/escrow, whose deployment record carries the program
+# the explorer index probes before it serves, and programs/sdk/rust/examples/naming, whose program id is
+# published as the naming-program key of the layerx-explorer-index ConfigMap and bound into the Human web
+# container as LAYERX_EXPLORER_NAMING_PROGRAM. Both are built for wasm32-unknown-unknown from this
+# repository, so that Rust target has to be installed.
 #
 # Boundary checks (--boundary-checks) additionally read the inputs of
 # platform/hosted/gateway/tests/hosted-boundary.sh and platform/hosted/webhooks/tests/fault-injection.sh.
@@ -229,6 +242,7 @@ FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
 CUSTODY_PROFILE=${LAYERX_BETA_CUSTODY_PROFILE:-}
 STATUS_PUBLISH_URL=${LAYERX_BETA_STATUS_PUBLISH_URL:-}
 STATUS_PUBLISHER_REPORTED=0
+EXPLORER_OBSERVATION_PUBLISHED=0
 IDENTITY_PORT=19451
 INTEROP_PORT=19458
 EXPLORER_INDEX_PORT=19460
@@ -1799,23 +1813,38 @@ trusted_boundary_apply() {
 
 manifests_apply() {
     kube apply -f "$MANIFESTS_DIR/human.yaml" > /dev/null
-    kube apply -f "$MANIFESTS_DIR/human-web.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/testnet.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/gateway.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
 }
 
+# The Human web container reads LAYERX_EXPLORER_NAMING_PROGRAM from the layerx-explorer-index ConfigMap, so
+# its workload is applied only once explorer_observation_publish has published that key.
+human_web_apply() {
+    kube apply -f "$MANIFESTS_DIR/human-web.yaml" > /dev/null
+    [ "$EXPLORER_OBSERVATION_PUBLISHED" = 1 ] || return 0
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-human-web 300
+}
+
+# registry_deployment_produce [ARTIFACT REQUEST]
+# Without arguments it builds the reference escrow program and the smoke binaries and produces the signed
+# deployment activity of that artifact as the Human evidence input. With arguments it produces the signed
+# deployment activity of an already built ARTIFACT into REQUEST.
 registry_deployment_produce() (
     set -euo pipefail
     umask 077
-    local input="$WORK_DIR/human-evidence-input" temporary producer
-    local artifact="$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
-    CARGO_TARGET_DIR="$WORK_DIR/program-target" make -C "$REPO_ROOT" programs-reference-escrow >&2
-    CARGO_TARGET_DIR="$WORK_DIR/smoke-target" cargo build --manifest-path "$REPO_ROOT/platform/Cargo.toml" \
-        -p layerx-platform-cli --bin layerx --example hosted-send >&2
-    mkdir -p "$input"
-    [ ! -e "$input/program-deployment.lxa" ] && [ ! -L "$input/program-deployment.lxa" ] || fail 'deployment input exists; reconcile before retry'
-    temporary=$(mktemp "$input/.program-deployment.XXXXXXXX")
+    local temporary producer
+    local artifact=${1:-"$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"}
+    local request=${2:-"$WORK_DIR/human-evidence-input/program-deployment.lxa"}
+    if [ "$#" -eq 0 ]; then
+        CARGO_TARGET_DIR="$WORK_DIR/program-target" make -C "$REPO_ROOT" programs-reference-escrow >&2
+        CARGO_TARGET_DIR="$WORK_DIR/smoke-target" cargo build --manifest-path "$REPO_ROOT/platform/Cargo.toml" \
+            -p layerx-platform-cli --bin layerx --example hosted-send >&2
+    fi
+    [ -s "$artifact" ] || fail "the program artifact $artifact was not built"
+    mkdir -p "$(dirname "$request")"
+    [ ! -e "$request" ] && [ ! -L "$request" ] || fail 'deployment input exists; reconcile before retry'
+    temporary=$(mktemp "$(dirname "$request")/.$(basename "$request").XXXXXXXX")
     trap 'rm -f "$temporary"' EXIT
     producer=$(cat <<'PYREGDEPLOY'
 import hashlib, json, os, socket, stat, struct, subprocess, sys, time
@@ -1900,7 +1929,7 @@ PYREGDEPLOY
     kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- \
         python3 -c "$producer" /var/lib/layerx/node/node.env "$NODE_NETWORK_ID" /usr/local/bin/layerxctl \
         < "$artifact" > "$temporary"
-    python3 - "$temporary" "$input/program-deployment.lxa" <<'PYPUBLISH'
+    python3 - "$temporary" "$request" <<'PYPUBLISH'
 import os, sys
 with open(sys.argv[1], 'rb') as handle:
     assert 0 < os.fstat(handle.fileno()).st_size <= 1048576
@@ -1914,6 +1943,37 @@ finally:
     os.close(fd)
 PYPUBLISH
 )
+
+# The reference naming program is deployed by the node treasury, the same publication authority the reference
+# escrow deployment of human_journal_deploy uses: the registry admits a deployment only against protocol
+# evidence its node boundary produced, and the node treasury signer is the only deployment principal the
+# bring-up holds inside the node pod. It runs before human_evidence_provision so that the single journal
+# materialisation of human_journal_deploy exports both deployment pairs to $WORK_DIR/registry-journal.
+naming_program_deploy() {
+    local example="$REPO_ROOT/programs/sdk/rust/examples/naming"
+    local artifact="$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_naming.wasm"
+    local request="$WORK_DIR/naming-program/naming-deployment.lxa"
+    local response="$WORK_DIR/naming-deployment-result.json" status
+    if command -v rustup > /dev/null 2>&1; then
+        rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown \
+            || fail "the reference naming program needs the wasm32-unknown-unknown Rust target; run 'rustup target add wasm32-unknown-unknown' and retry"
+    fi
+    CARGO_TARGET_DIR="$WORK_DIR/program-target" sh "$example/build.sh" >&2 \
+        || fail "the reference naming program did not build; run 'CARGO_TARGET_DIR=$WORK_DIR/program-target sh $example/build.sh' and retry"
+    registry_deployment_produce "$artifact" "$request"
+    port_forward registry "$TESTNET_NAMESPACE" layerx-program-registry 19455 9420
+    status=$(curl --silent --show-error --max-time 120 --max-filesize 1048576 --noproxy '*' \
+        --cacert "$CA_DIR/ca.crt" --cert "$CA_DIR/gateway-client/cert.pem" --key "$CA_DIR/gateway-client/key.pem" \
+        --connect-to 'layerx-program-registry:9420:127.0.0.1:19455' \
+        --header "Authorization: Bearer $(cat "$SECRETS_DIR/registry-request.token")" \
+        --header 'Content-Type: application/octet-stream' --data-binary "@$request" \
+        --output "$response" --write-out '%{http_code}' \
+        'https://layerx-program-registry:9420/__registry/deployments')
+    [ "$status" = 200 ] || fail "the program registry refused the reference naming deployment with status $status; see $response"
+    jq -e '.state == "deployed" and (.receipt_digest | test("^[0-9a-f]{64}$"))' "$response" > /dev/null \
+        || fail "the program registry did not admit the reference naming deployment; see $response"
+    log "reference naming program deployment admitted under receipt $(jq -r .receipt_digest "$response")"
+}
 
 internal_apply() {
     kube apply -f "$MANIFESTS_DIR/internal.yaml" > /dev/null
@@ -2780,26 +2840,42 @@ interop_gateway_ready() {
     done
 }
 
-explorer_observation_publish() {
-    local probe batch checkpoint info="$WORK_DIR/explorer-node-info.json" status
-    probe=${LAYERX_BETA_EXPLORER_PROBE_PROGRAM:-}
-    if [ -z "$probe" ] && [ -d "$WORK_DIR/registry-journal" ]; then
-        probe=$(python3 - "$WORK_DIR/registry-journal" <<'PYPROBE'
+# registry_journal_program RESULT_FILE
+# Reads the program of the deployment the registry answered RESULT_FILE with, from the canonical record the
+# journal materialisation exported under that response's receipt digest. The journal now holds one record
+# per deployed reference program, so every caller names the deployment it means instead of taking the first
+# record of the directory.
+registry_journal_program() {
+    local result=$1 receipt
+    [ -s "$result" ] || return 1
+    receipt=$(jq -r '.receipt_digest // empty' "$result") || return 1
+    [[ $receipt =~ ^[0-9a-f]{64}$ ]] || return 1
+    python3 - "$WORK_DIR/registry-journal/$receipt.deployment" <<'PYRECORD'
 import sys
 from pathlib import Path
 domain = b'LayerX/programs/registry/deployment/v1\0'
-records = sorted(Path(sys.argv[1]).glob('*.deployment'))
-if not records:
-    raise SystemExit('registry journal holds no deployment record')
-data = records[0].read_bytes()
+record = Path(sys.argv[1])
+if not record.is_file():
+    raise SystemExit('registry journal holds no deployment record at ' + str(record))
+data = record.read_bytes()
 if not data.startswith(domain):
     raise SystemExit('deployment record is not canonically encoded')
 print(data[len(domain):len(domain) + 32].hex())
-PYPROBE
-        ) || probe=
-    fi
+PYRECORD
+}
+
+explorer_observation_publish() {
+    local probe naming batch checkpoint info="$WORK_DIR/explorer-node-info.json" status
+    probe=${LAYERX_BETA_EXPLORER_PROBE_PROGRAM:-}
+    [ -n "$probe" ] || probe=$(registry_journal_program "$WORK_DIR/registry-deployment-result.json") || probe=
+    naming=${LAYERX_BETA_EXPLORER_NAMING_PROGRAM:-}
+    [ -n "$naming" ] || naming=$(registry_journal_program "$WORK_DIR/naming-deployment-result.json") || naming=
     if [[ ! $probe =~ ^[0-9a-f]{64}$ ]]; then
-        MISSING_INPUTS+=("LAYERX_BETA_EXPLORER_PROBE_PROGRAM: layerx-explorer-index probes one registered program before it serves, and no deployment record under $WORK_DIR/registry-journal supplied one; set it to the thirty-two byte program id the explorer should probe")
+        MISSING_INPUTS+=("LAYERX_BETA_EXPLORER_PROBE_PROGRAM: layerx-explorer-index probes one registered program before it serves, and the reference escrow deployment record under $WORK_DIR/registry-journal supplied none; set it to the thirty-two byte program id the explorer should probe")
+        return 0
+    fi
+    if [[ ! $naming =~ ^[0-9a-f]{64}$ ]]; then
+        MISSING_INPUTS+=("LAYERX_BETA_EXPLORER_NAMING_PROGRAM: the Human web application resolves names through one naming program, and the reference naming deployment record under $WORK_DIR/registry-journal supplied none; set it to the thirty-two byte program id of a deployed naming program")
         return 0
     fi
     status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
@@ -2814,9 +2890,11 @@ PYPROBE
     [[ $checkpoint =~ ^[0-9a-f]{64}$ ]] || fail "node-info reported an invalid finalised checkpoint: $checkpoint"
     apply_configmap "$TESTNET_NAMESPACE" layerx-explorer-index \
         --from-literal=probe-program="$probe" \
+        --from-literal=naming-program="$naming" \
         --from-literal=observed-sealed-batch="$batch" \
         --from-literal=finalised-checkpoint="$checkpoint"
-    log "explorer program index observation published: program $probe sealed batch $batch"
+    EXPLORER_OBSERVATION_PUBLISHED=1
+    log "explorer program index observation published: probe program $probe naming program $naming sealed batch $batch"
 }
 
 readyz() {
@@ -3484,6 +3562,7 @@ beta_cluster_up() {
         done
         apply_configmap "$TESTNET_NAMESPACE" layerx-human-guardian-bindings \
             --from-file=bindings.json="$WORK_DIR/human-evidence-input/recovery-guardian-bindings.json"
+        naming_program_deploy
         human_evidence_provision
         human_policy_publish
     fi
@@ -3510,13 +3589,14 @@ beta_cluster_up() {
     agentd_check
     mirror_ready
     relay_archive_apply
+    port_forward explorer-index "$TESTNET_NAMESPACE" layerx-explorer-index "$EXPLORER_INDEX_PORT" 9443
+    module_registry_verify
+    explorer_observation_publish
+    human_web_apply
     if [ -n "$HUMAN_WEB_PORT" ]; then
         [ "$HUMAN_WEB_PORT" = 443 ] || fail "LAYERX_BETA_HUMAN_WEB_PORT must be 443 or empty because the browser origin $HUMAN_WEB_URL carries no port"
         port_forward human-web "$TESTNET_NAMESPACE" layerx-human-web "$HUMAN_WEB_PORT" 443
     fi
-    port_forward explorer-index "$TESTNET_NAMESPACE" layerx-explorer-index "$EXPLORER_INDEX_PORT" 9443
-    module_registry_verify
-    explorer_observation_publish
     interop_gateway_apply
     ramp_apply
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then material_save; fi

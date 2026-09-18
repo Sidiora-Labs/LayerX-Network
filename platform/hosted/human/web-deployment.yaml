@@ -36,6 +36,11 @@ spec:
                 secretKeyRef:
                   name: layerx-explorer-index
                   key: program-token
+            - name: LAYERX_EXPLORER_NAMING_PROGRAM
+              valueFrom:
+                configMapKeyRef:
+                  name: layerx-explorer-index
+                  key: naming-program
             - name: NODE_EXTRA_CA_CERTS
               value: /run/layerx/trust/ca.crt
           ports:
