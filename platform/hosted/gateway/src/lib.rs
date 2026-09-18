@@ -802,8 +802,10 @@ pub enum ProductionRoute<'a> {
     Settle,
     State,
     Receipt(&'a str),
+    ProgramCatalog,
     ProgramRegistry(&'a str),
     ProgramInterface(&'a str),
+    ProgramSource(&'a str),
     ProgramSimulation,
     ProgramRead,
     ProgramCall,
@@ -814,13 +816,15 @@ pub enum ProductionRoute<'a> {
     ProgramReceiptByIdempotency(&'a str),
 }
 
-const PLATFORM_GATEWAY_PROGRAM_ROUTES: [&str; 10] = [
+const PLATFORM_GATEWAY_PROGRAM_ROUTES: [&str; 12] = [
     "POST /v1/programs/call",
     "POST /v1/programs/simulate",
     "POST /v1/programs/read",
     "POST /v1/programs/deploy",
     "POST /v1/programs/upgrade",
     "POST /v1/programs/wind-down",
+    "POST /v1/programs/registry/{program_id}/source",
+    "GET /v1/programs/registry",
     "GET /v1/programs/registry/{program_id}",
     "GET /v1/programs/registry/{program_id}/interface",
     "GET /v1/programs/activities/{activity_id}",
@@ -828,8 +832,15 @@ const PLATFORM_GATEWAY_PROGRAM_ROUTES: [&str; 10] = [
 ];
 
 #[must_use]
-pub const fn platform_gateway_program_routes() -> &'static [&'static str; 10] {
+pub const fn platform_gateway_program_routes() -> &'static [&'static str; 12] {
     &PLATFORM_GATEWAY_PROGRAM_ROUTES
+}
+
+fn canonical_program_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Parses the exact production route set shared with the emulator. Emulator
@@ -850,6 +861,17 @@ pub fn production_route<'a>(
         ("POST", "/v1/programs/deploy") => Ok(ProductionRoute::ProgramDeploy),
         ("POST", "/v1/programs/upgrade") => Ok(ProductionRoute::ProgramUpgrade),
         ("POST", "/v1/programs/wind-down") => Ok(ProductionRoute::ProgramWindDown),
+        ("POST", path) if path.starts_with("/v1/programs/registry/") => {
+            let id = path
+                .strip_prefix("/v1/programs/registry/")
+                .and_then(|remainder| remainder.strip_suffix("/source"))
+                .ok_or(GatewayError::InvalidRoute)?;
+            if canonical_program_id(id) {
+                Ok(ProductionRoute::ProgramSource(id))
+            } else {
+                Err(GatewayError::InvalidRoute)
+            }
+        }
         ("GET", "/v1/state") => Ok(ProductionRoute::State),
         ("GET", path) if path.starts_with("/v1/programs/activities/") => {
             let id = path
@@ -879,6 +901,7 @@ pub fn production_route<'a>(
                 Err(GatewayError::InvalidRoute)
             }
         }
+        ("GET", "/v1/programs/registry") => Ok(ProductionRoute::ProgramCatalog),
         ("GET", path) if path.starts_with("/v1/programs/registry/") => {
             let remainder = path
                 .strip_prefix("/v1/programs/registry/")
@@ -886,11 +909,7 @@ pub fn production_route<'a>(
             let (id, interface) = remainder
                 .strip_suffix("/interface")
                 .map_or((remainder, false), |id| (id, true));
-            if id.len() == 64
-                && id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            {
+            if canonical_program_id(id) {
                 if interface {
                     Ok(ProductionRoute::ProgramInterface(id))
                 } else {
@@ -1037,6 +1056,8 @@ mod tests {
                 "POST /v1/programs/deploy",
                 "POST /v1/programs/upgrade",
                 "POST /v1/programs/wind-down",
+                "POST /v1/programs/registry/{program_id}/source",
+                "GET /v1/programs/registry",
                 "GET /v1/programs/registry/{program_id}",
                 "GET /v1/programs/registry/{program_id}/interface",
                 "GET /v1/programs/activities/{activity_id}",
@@ -1090,7 +1111,28 @@ mod tests {
             &format!("/v1/programs/activities/{}", "A".repeat(64))
         )
         .is_err());
-        assert!(production_route("GET", "/v1/programs/registry").is_err());
+        let source = format!("/v1/programs/registry/{identifier}/source");
+        assert!(matches!(
+            production_route("POST", &source),
+            Ok(ProductionRoute::ProgramSource(value)) if value == identifier
+        ));
+        assert!(production_route("GET", &source).is_err());
+        assert!(production_route("PUT", &source).is_err());
+        assert!(production_route("POST", &discovery).is_err());
+        assert!(production_route("POST", &interface).is_err());
+        assert!(production_route(
+            "POST",
+            &format!("/v1/programs/registry/{}/source", "A".repeat(64))
+        )
+        .is_err());
+        assert!(production_route("POST", "/v1/programs/registry/aa/source").is_err());
+        assert!(production_route("POST", "/v1/programs/registry/../source").is_err());
+        assert_eq!(
+            production_route("GET", "/v1/programs/registry"),
+            Ok(ProductionRoute::ProgramCatalog)
+        );
+        assert!(production_route("POST", "/v1/programs/registry").is_err());
+        assert!(production_route("GET", "/v1/programs/registry/").is_err());
     }
 }
 

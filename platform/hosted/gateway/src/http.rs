@@ -193,7 +193,31 @@ impl Client {
         request: &OutboundRequest<'_>,
         trace: Option<&str>,
     ) -> Result<UpstreamResponse, String> {
-        self.request_with_freshness(endpoint, authorization, request, trace, None)
+        self.request_with_freshness(endpoint, authorization, request, trace, None, None)
+    }
+
+    /// Forwards one bounded request together with the caller's publication key,
+    /// which the component resolves at the identity authority.
+    ///
+    /// # Errors
+    /// Refuses invalid publication keys, requests outside the configured bounds
+    /// and TLS or HTTP failures.
+    pub fn request_with_publication_key(
+        &self,
+        endpoint: &Endpoint,
+        bearer: &str,
+        request: &OutboundRequest<'_>,
+        trace: Option<&str>,
+        publication_key: &str,
+    ) -> Result<UpstreamResponse, String> {
+        self.request_with_freshness(
+            endpoint,
+            &format!("Bearer {bearer}"),
+            request,
+            trace,
+            None,
+            Some(publication_key),
+        )
     }
 
     pub fn request_program_read(
@@ -210,6 +234,7 @@ impl Client {
             request,
             None,
             Some((minimum_sequence, expected_state_root)),
+            None,
         )
     }
 
@@ -220,6 +245,7 @@ impl Client {
         request: &OutboundRequest<'_>,
         trace: Option<&str>,
         freshness: Option<(u64, Option<[u8; 32]>)>,
+        publication_key: Option<&str>,
     ) -> Result<UpstreamResponse, String> {
         let total_started = Instant::now();
         let path = request.path;
@@ -242,6 +268,13 @@ impl Client {
         }) {
             return Err("outbound trace exceeds its boundary".to_owned());
         }
+        if publication_key.is_some_and(|value| {
+            value.is_empty()
+                || value.len() > 4096
+                || !value.bytes().all(|byte| byte.is_ascii_graphic())
+        }) {
+            return Err("outbound publication key exceeds its boundary".to_owned());
+        }
         let connector_started = Instant::now();
         let connector = self.connector()?;
         pay_timing("gateway.http.connector", connector_started);
@@ -258,6 +291,7 @@ impl Client {
                 request,
                 trace,
                 freshness,
+                publication_key,
             );
             pay_timing("gateway.http.exchange", exchange_started);
             if result
@@ -298,6 +332,7 @@ impl Client {
                         request,
                         trace,
                         freshness,
+                        publication_key,
                     );
                     pay_timing("gateway.http.exchange", exchange_started);
                     if result
@@ -358,6 +393,7 @@ fn exchange(
     request: &OutboundRequest<'_>,
     trace: Option<&str>,
     freshness: Option<(u64, Option<[u8; 32]>)>,
+    publication_key: Option<&str>,
 ) -> Result<UpstreamResponse, String> {
     let idempotency = request
         .idempotency
@@ -374,15 +410,19 @@ fn exchange(
         }
         headers
     });
+    let publication = publication_key.map_or_else(zeroize::Zeroizing::default, |key| {
+        zeroize::Zeroizing::new(format!("LayerX-Key: {key}\r\n"))
+    });
     let mut outbound = zeroize::Zeroizing::new(Vec::new());
     write!(
         outbound,
-        "{} {}{} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {}\r\n{idempotency}{trace}{freshness}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+        "{} {}{} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {}\r\n{idempotency}{trace}{freshness}{}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
         request.method,
         endpoint.base_path,
         request.path,
         endpoint.authority(),
         request.content_type,
+        publication.as_str(),
         request.body.len()
     )
     .map_err(|error| error.to_string())?;

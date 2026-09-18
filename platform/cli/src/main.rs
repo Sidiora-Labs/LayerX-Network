@@ -418,8 +418,19 @@ enum ProgramInterfaceCommand {
 
 #[derive(Subcommand)]
 enum RegistryCommand {
+    /// List every program the receipt-backed registry projection carries.
+    List,
     /// Read one program's receipt-backed registry record.
     Get { program_id: String },
+    /// Mirror one program's build plan and source archive into the registry mirror.
+    MirrorSource {
+        #[arg(long)]
+        source_uri: String,
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        archive: PathBuf,
+    },
     /// Submit a source digest and source location to the registry.
     VerifySource {
         program_id: String,
@@ -1286,9 +1297,30 @@ fn program_registry(
     rpc: Option<&str>,
     gateway: Option<&str>,
 ) -> Result<CommandOutput, String> {
+    if let RegistryCommand::MirrorSource {
+        source_uri,
+        plan,
+        archive,
+    } = &command
+    {
+        let mirrored = programs::registry_mirror_source(source_uri, plan, archive)?;
+        return Ok(CommandOutput::new(
+            "program.source_mirrored",
+            format!("Mirrored {source_uri} into the program registry source mirror"),
+            mirrored,
+        ));
+    }
     let configuration = Configuration::load()?;
     let (environment, client) = program_client(&configuration, rpc, gateway)?;
     match command {
+        RegistryCommand::MirrorSource { .. } => {
+            Err("source mirroring does not use the program transport".to_owned())
+        }
+        RegistryCommand::List => Ok(CommandOutput::new(
+            "program.registry_list",
+            format!("Listed registered programs on {environment}"),
+            programs::registry_list(&client)?,
+        )),
         RegistryCommand::Get { program_id } => Ok(CommandOutput::new(
             "program.registry_read",
             format!("Read program {program_id} from {environment}"),
@@ -1646,8 +1678,62 @@ mod program_arguments_tests {
     }
 
     #[test]
-    fn registry_list_is_not_a_cli_command() {
-        assert!(Cli::try_parse_from(["layerx", "program", "registry", "list"]).is_err());
+    fn registry_list_and_source_mirroring_parse_from_the_program_registry_command() {
+        let parsed = Cli::try_parse_from(["layerx", "program", "registry", "list"])
+            .unwrap_or_else(|error| panic!("registry list must parse: {error}"));
+        assert!(matches!(
+            parsed.command,
+            Command::Program(ProgramCommand::Registry(RegistryCommand::List))
+        ));
+        assert!(Cli::try_parse_from(["layerx", "program", "registry", "list", "extra"]).is_err());
+        let parsed = Cli::try_parse_from([
+            "layerx",
+            "program",
+            "registry",
+            "mirror-source",
+            "--source-uri",
+            "https://sources.example/program.tar.zst",
+            "--plan",
+            "plan.toml",
+            "--archive",
+            "program.tar.zst",
+        ])
+        .unwrap_or_else(|error| panic!("registry mirror-source must parse: {error}"));
+        let Command::Program(ProgramCommand::Registry(RegistryCommand::MirrorSource {
+            source_uri,
+            plan,
+            archive,
+        })) = parsed.command
+        else {
+            panic!("parsed a different command");
+        };
+        assert_eq!(source_uri, "https://sources.example/program.tar.zst");
+        assert_eq!(plan, PathBuf::from("plan.toml"));
+        assert_eq!(archive, PathBuf::from("program.tar.zst"));
+        for arguments in [
+            vec!["layerx", "program", "registry", "mirror-source"],
+            vec![
+                "layerx",
+                "program",
+                "registry",
+                "mirror-source",
+                "--source-uri",
+                "https://sources.example/program.tar.zst",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
+        }
+    }
+
+    #[test]
+    fn registry_source_mirroring_names_its_operator_inputs() {
+        for variable in [
+            programs::REGISTRY_URL_VARIABLE,
+            programs::REGISTRY_PUBLICATION_TOKEN_VARIABLE,
+            programs::REGISTRY_PUBLICATION_KEY_VARIABLE,
+        ] {
+            assert!(variable.starts_with("LAYERX_BETA_"), "{variable}");
+        }
     }
 
     #[test]

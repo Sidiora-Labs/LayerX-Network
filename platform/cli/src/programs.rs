@@ -29,6 +29,7 @@ use layerx_wire::hash::{activity_id, payload_hash_for};
 use layerx_wire::sign::preimage_unsigned;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
+use zeroize::Zeroizing;
 
 use crate::encoding::{fixed_hex, hex_decode, hex_encode};
 use crate::http::{validate_idempotency_key, validate_resource_id, Client};
@@ -695,6 +696,117 @@ pub fn interface_publish(
         }),
         Some(idempotency_key),
     )
+}
+
+pub const REGISTRY_URL_VARIABLE: &str = "LAYERX_BETA_REGISTRY_URL";
+pub const REGISTRY_PUBLICATION_TOKEN_VARIABLE: &str = "LAYERX_BETA_REGISTRY_PUBLICATION_TOKEN_FILE";
+pub const REGISTRY_PUBLICATION_KEY_VARIABLE: &str = "LAYERX_BETA_REGISTRY_PUBLICATION_KEY_FILE";
+
+/// Lists every program identity the receipt-backed registry projection carries.
+///
+/// # Errors
+/// Refuses transport failures and listings without verified freshness.
+pub fn registry_list(client: &Client) -> Result<Value, String> {
+    let response = client.get("/v1/programs/registry")?;
+    let listing = response
+        .get("result")
+        .or_else(|| response.get("value"))
+        .unwrap_or(&response)
+        .clone();
+    let Some(program_ids) = listing["program_ids"].as_array() else {
+        return Err("registry listing omitted its program identities".to_owned());
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in program_ids {
+        let program_id = entry
+            .as_str()
+            .ok_or_else(|| "registry listing carries a non-string program identity".to_owned())?;
+        let decoded: [u8; 32] = fixed_hex("program id", program_id)?;
+        if !seen.insert(decoded) {
+            return Err("registry listing repeats a program identity".to_owned());
+        }
+    }
+    if listing["observed_sequence"].is_null() || listing["state_root"].as_str().is_none() {
+        return Err("registry listing omitted current-state freshness".to_owned());
+    }
+    Ok(listing)
+}
+
+fn required_variable(name: &str) -> Result<String, String> {
+    let value = std::env::var(name)
+        .map_err(|_| format!("{name} must name the hosted program registry input"))?;
+    if value.trim().is_empty() {
+        return Err(format!(
+            "{name} must name the hosted program registry input"
+        ));
+    }
+    Ok(value)
+}
+
+fn secret_from(name: &str) -> Result<Zeroizing<String>, String> {
+    let path = required_variable(name)?;
+    let value = Zeroizing::new(
+        fs::read_to_string(&path)
+            .map_err(|error| format!("could not read {name} at {path}: {error}"))?,
+    );
+    let trimmed = Zeroizing::new(value.trim().to_owned());
+    if trimmed.is_empty() {
+        return Err(format!("{name} at {path} is empty"));
+    }
+    Ok(trimmed)
+}
+
+/// Mirrors one program's build inputs into the registry source mirror so that a
+/// later source verification can reproduce the deployed artifact.
+///
+/// # Errors
+/// Refuses missing operator inputs, unreadable build inputs, transport
+/// failures, and mirror refusals.
+pub fn registry_mirror_source(
+    source_uri: &str,
+    plan_path: &Path,
+    archive_path: &Path,
+) -> Result<Value, String> {
+    if source_uri.is_empty()
+        || source_uri.len() > 1024
+        || !source_uri.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return Err("source URI must be 1-1024 printable ASCII characters".to_owned());
+    }
+    let endpoint = required_variable(REGISTRY_URL_VARIABLE)?;
+    let token = secret_from(REGISTRY_PUBLICATION_TOKEN_VARIABLE)?;
+    let publication_key = secret_from(REGISTRY_PUBLICATION_KEY_VARIABLE)?;
+    let plan = fs::read_to_string(plan_path)
+        .map_err(|error| format!("could not read {}: {error}", plan_path.display()))?;
+    let archive = fs::read(archive_path)
+        .map_err(|error| format!("could not read {}: {error}", archive_path.display()))?;
+    if plan.trim().is_empty() || archive.is_empty() {
+        return Err("source mirror requires a build plan and a source archive".to_owned());
+    }
+    let client = Client::new(&endpoint, Some(token))?;
+    let response = client.post_publication(
+        "/__registry/sources",
+        &json!({
+            "source_uri": source_uri,
+            "plan": plan,
+            "archive_hex": hex_encode(&archive),
+        }),
+        publication_key.as_str(),
+    )?;
+    let mirrored = response.get("result").unwrap_or(&response).clone();
+    if mirrored["mirrored"] != Value::Bool(true) {
+        return Err("registry did not confirm the source mirror".to_owned());
+    }
+    if mirrored["source_uri"].as_str() != Some(source_uri) {
+        return Err("registry mirrored a different source location".to_owned());
+    }
+    let _: [u8; 32] = fixed_hex(
+        "source digest",
+        mirrored["source_digest"]
+            .as_str()
+            .ok_or_else(|| "registry mirror omitted its source digest".to_owned())?,
+    )?;
+    Ok(mirrored)
 }
 
 pub fn registry_verify_source(
