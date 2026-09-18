@@ -263,6 +263,103 @@ struct ProgramHead {
     observed_sequence: Option<u64>,
     observed_at: Option<u64>,
     valid_through: u64,
+    discovery_proof: Option<ProgramDiscoveryProof>,
+}
+
+#[derive(Clone, Copy)]
+struct ProgramDiscoveryProof {
+    public_key: [u8; 32],
+    signature: [u8; 64],
+}
+
+const PROGRAM_DISCOVERY_PROOF_DOMAIN: &[u8] = b"LayerX/program-discovery-proof/v1\0";
+
+struct ProgramDiscoveryHead {
+    program_id: [u8; 32],
+    version: u32,
+    code_hash: [u8; 32],
+    abi_version: u16,
+    observed_sequence: u64,
+    observed_at: u64,
+    valid_through: u64,
+    state_root: [u8; 32],
+}
+
+fn program_discovery_proof_digest(head: &ProgramDiscoveryHead) -> [u8; 32] {
+    let mut proof = Vec::with_capacity(PROGRAM_DISCOVERY_PROOF_DOMAIN.len() + 135);
+    proof.extend_from_slice(PROGRAM_DISCOVERY_PROOF_DOMAIN);
+    proof.extend_from_slice(&head.program_id);
+    proof.push(1);
+    proof.extend_from_slice(&head.version.to_be_bytes());
+    proof.extend_from_slice(&head.code_hash);
+    proof.extend_from_slice(&head.abi_version.to_be_bytes());
+    proof.extend_from_slice(&head.observed_sequence.to_be_bytes());
+    proof.extend_from_slice(&head.observed_at.to_be_bytes());
+    proof.extend_from_slice(&head.valid_through.to_be_bytes());
+    proof.extend_from_slice(&head.state_root);
+    Sha256::digest(&proof).into()
+}
+
+fn program_discovery_head(head: &ProgramHead) -> Option<ProgramDiscoveryHead> {
+    Some(ProgramDiscoveryHead {
+        program_id: head.program_id,
+        version: head.version,
+        code_hash: head.code_hash,
+        abi_version: head.abi_version,
+        observed_sequence: head.observed_sequence?,
+        observed_at: head.observed_at?,
+        valid_through: head.valid_through,
+        state_root: head.state_root?,
+    })
+}
+
+fn document_u64(value: &serde_json::Value, field: &str) -> Option<u64> {
+    value.get(field).and_then(canonical_u64)
+}
+
+fn document_hex32(value: &serde_json::Value, field: &str) -> Option<[u8; 32]> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .and_then(|text| parse_hex32(text).ok())
+}
+
+fn program_discovery_proof_verified(
+    value: &serde_json::Value,
+    sequencer_public_key: &[u8; 32],
+) -> bool {
+    let Some(head) = (|| {
+        Some(ProgramDiscoveryHead {
+            program_id: document_hex32(value, "program_id")?,
+            version: u32::try_from(value.get("version")?.as_u64()?).ok()?,
+            code_hash: document_hex32(value, "code_hash")?,
+            abi_version: u16::try_from(value.get("abi_version")?.as_u64()?).ok()?,
+            observed_sequence: document_u64(value, "observed_sequence")?,
+            observed_at: document_u64(value, "observed_at")?,
+            valid_through: document_u64(value, "valid_through")?,
+            state_root: document_hex32(value, "state_root")?,
+        })
+    })() else {
+        return false;
+    };
+    let (Some(receipt_digest), Some(public_key), Some(signature)) = (
+        document_hex32(value, "receipt_digest"),
+        document_hex32(value, "discovery_public_key"),
+        value
+            .get("discovery_signature")
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| text.len() == 128)
+            .and_then(|text| decode_hex(text, 64).ok())
+            .and_then(|bytes| <[u8; 64]>::try_from(bytes).ok()),
+    ) else {
+        return false;
+    };
+    if public_key != *sequencer_public_key {
+        return false;
+    }
+    let digest = program_discovery_proof_digest(&head);
+    digest == receipt_digest
+        && layerx_crypto::ed25519::verify_digest(&public_key, &signature, &digest).is_ok()
 }
 
 fn now() -> Result<u64, String> {
@@ -460,7 +557,12 @@ fn program_head(
     }
     let document: serde_json::Value = serde_json::from_slice(&upstream.body)
         .map_err(|_| response(503, "program_registry_invalid", Some(5)))?;
-    parse_program_head(&document, expected_program, &program)
+    parse_program_head(
+        &document,
+        expected_program,
+        &program,
+        &config.sequencer_authorization.public_key(),
+    )
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -705,7 +807,10 @@ fn agent_error_class(status: u16, code: &str) -> &'static str {
     }
 }
 
-fn program_verification_status(value: &serde_json::Value) -> serde_json::Value {
+fn program_verification_status(
+    value: &serde_json::Value,
+    sequencer_public_key: &[u8; 32],
+) -> serde_json::Value {
     match value.get("state").and_then(serde_json::Value::as_str) {
         Some("unknown" | "pending") => serde_json::json!({
             "state": "Unverified",
@@ -713,6 +818,17 @@ fn program_verification_status(value: &serde_json::Value) -> serde_json::Value {
             "achieved": "Unverified",
             "reason": "receipt_pending",
         }),
+        _ if value
+            .get("verification")
+            .and_then(serde_json::Value::as_str)
+            == Some("registry-receipt-and-current-head-verified")
+            && program_discovery_proof_verified(value, sequencer_public_key) =>
+        {
+            serde_json::json!({
+                "state": "Achieved",
+                "level": "SequencerSigned",
+            })
+        }
         _ if matches!(
             value
                 .get("verification")
@@ -809,7 +925,11 @@ fn normalize_program_u64s(value: &mut serde_json::Value) -> bool {
     true
 }
 
-fn agent_response(request_id: &str, response: OutgoingResponse) -> OutgoingResponse {
+fn agent_response(
+    request_id: &str,
+    response: OutgoingResponse,
+    sequencer_public_key: &[u8; 32],
+) -> OutgoingResponse {
     let OutgoingResponse {
         status,
         body,
@@ -833,7 +953,8 @@ fn agent_response(request_id: &str, response: OutgoingResponse) -> OutgoingRespo
                 },
                 |mut value| {
                     if normalize_program_u64s(&mut value) {
-                        let verification_status = program_verification_status(&value);
+                        let verification_status =
+                            program_verification_status(&value, sequencer_public_key);
                         serde_json::json!({
                             "request_id": request_id,
                             "value": value,
@@ -2891,7 +3012,11 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     {
         let result = response(400, "untrusted_identity_header", None);
         return if program_request {
-            agent_response(&trace_id, result)
+            agent_response(
+                &trace_id,
+                result,
+                &config.sequencer_authorization.public_key(),
+            )
         } else {
             result
         };
@@ -2934,7 +3059,11 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     let Ok(parsed) = production_route(&request.method, &request.path) else {
         let result = response(404, "not_found", None);
         return if program_request {
-            agent_response(&trace_id, result)
+            agent_response(
+                &trace_id,
+                result,
+                &config.sequencer_authorization.public_key(),
+            )
         } else {
             result
         };
@@ -2943,7 +3072,11 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         Ok(value) => value,
         Err(error) => {
             return if program_request {
-                agent_response(&trace_id, error)
+                agent_response(
+                    &trace_id,
+                    error,
+                    &config.sequencer_authorization.public_key(),
+                )
             } else {
                 error
             };
@@ -2952,7 +3085,11 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     if !permits(&record, &parsed) {
         let result = response(403, "insufficient_scope", None);
         return if program_request {
-            agent_response(&trace_id, result)
+            agent_response(
+                &trace_id,
+                result,
+                &config.sequencer_authorization.public_key(),
+            )
         } else {
             result
         };
@@ -2982,7 +3119,11 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
                 || program_lifecycle::ordinal(&request.path).is_some())
             && (200..300).contains(&result.status))
     {
-        agent_response(&trace_id, result)
+        agent_response(
+            &trace_id,
+            result,
+            &config.sequencer_authorization.public_key(),
+        )
     } else {
         result
     }
@@ -3244,6 +3385,7 @@ fn parse_program_head(
     document: &serde_json::Value,
     expected_program: [u8; 32],
     program: &str,
+    sequencer_public_key: &[u8; 32],
 ) -> Result<ProgramHead, OutgoingResponse> {
     let value = document.get("result").unwrap_or(document);
     if value.get("program_id").and_then(serde_json::Value::as_str) != Some(program)
@@ -3322,7 +3464,7 @@ fn parse_program_head(
     {
         return Err(response(503, "program_state_unverified", Some(5)));
     }
-    Ok(ProgramHead {
+    let head = ProgramHead {
         program_id: expected_program,
         lifecycle,
         version: latest,
@@ -3333,6 +3475,40 @@ fn parse_program_head(
         observed_sequence,
         observed_at,
         valid_through,
+        discovery_proof: None,
+    };
+    let discovery_proof = match (
+        value.get("discovery_public_key"),
+        value.get("discovery_signature"),
+    ) {
+        (None, None) => None,
+        (Some(public_key), Some(signature)) => {
+            let public_key = public_key
+                .as_str()
+                .and_then(|text| parse_hex32(text).ok())
+                .filter(|key| key == sequencer_public_key)
+                .ok_or_else(|| response(503, "program_registry_unverified", Some(5)))?;
+            let signature = signature
+                .as_str()
+                .filter(|text| text.len() == 128)
+                .and_then(|text| decode_hex(text, 64).ok())
+                .and_then(|bytes| <[u8; 64]>::try_from(bytes).ok())
+                .ok_or_else(|| response(503, "program_registry_unverified", Some(5)))?;
+            let digest = program_discovery_head(&head)
+                .map(|discovery| program_discovery_proof_digest(&discovery))
+                .ok_or_else(|| response(503, "program_state_unverified", Some(5)))?;
+            layerx_crypto::ed25519::verify_digest(&public_key, &signature, &digest)
+                .map_err(|_| response(503, "program_registry_unverified", Some(5)))?;
+            Some(ProgramDiscoveryProof {
+                public_key,
+                signature,
+            })
+        }
+        _ => return Err(response(503, "program_registry_unverified", Some(5))),
+    };
+    Ok(ProgramHead {
+        discovery_proof,
+        ..head
     })
 }
 
@@ -3584,28 +3760,43 @@ fn read_program_registry(config: &Config, program: &str, trace_id: &str) -> Outg
         Ok(value) => value,
         Err(error) => return error,
     };
-    let (Some(state_root), Some(observed_sequence), Some(observed_at)) =
-        (head.state_root, head.observed_sequence, head.observed_at)
-    else {
+    let (Some(state_root), Some(observed_sequence), Some(observed_at), Some(discovery)) = (
+        head.state_root,
+        head.observed_sequence,
+        head.observed_at,
+        program_discovery_head(&head),
+    ) else {
         return response(503, "program_state_unverified", Some(5));
     };
+    let mut result = serde_json::json!({
+        "program_id": hex(&head.program_id),
+        "lifecycle": head.lifecycle.name(),
+        "version": head.version,
+        "code_hash": hex(&head.code_hash),
+        "abi_version": head.abi_version,
+        "receipt_digest": hex(&program_discovery_proof_digest(&discovery)),
+        "deployment_receipt_digest": hex(&head.receipt_digest),
+        "state_root": hex(&state_root),
+        "observed_sequence": observed_sequence.to_string(),
+        "observed_at": observed_at.to_string(),
+        "valid_through": head.valid_through.to_string(),
+        "verification": "registry-receipt-and-current-head-verified",
+    });
+    if let (Some(proof), Some(object)) = (head.discovery_proof, result.as_object_mut()) {
+        object.insert(
+            "discovery_public_key".to_owned(),
+            serde_json::Value::String(hex(&proof.public_key)),
+        );
+        object.insert(
+            "discovery_signature".to_owned(),
+            serde_json::Value::String(hex(&proof.signature)),
+        );
+    }
     json_response(
         200,
         &serde_json::json!({
             "ok": true,
-            "result": {
-                "program_id": hex(&head.program_id),
-                "lifecycle": head.lifecycle.name(),
-                "version": head.version,
-                "code_hash": hex(&head.code_hash),
-                "abi_version": head.abi_version,
-                "receipt_digest": hex(&head.receipt_digest),
-                "state_root": hex(&state_root),
-                "observed_sequence": observed_sequence.to_string(),
-                "observed_at": observed_at.to_string(),
-                "valid_through": head.valid_through.to_string(),
-                "verification": "registry-receipt-and-current-head-verified",
-            },
+            "result": result,
             "trace": trace_id,
         }),
     )
@@ -4279,13 +4470,205 @@ fn complete_pending_program(
 #[cfg(test)]
 mod programs_wire_tests {
     use super::{
-        agent_error_class, agent_response, json_response, now_millis, pending_program_response,
-        program_activity_selector, program_head_is_current, program_receipt_selector,
-        program_selector, program_source_publication, programs_request_path, response,
+        agent_error_class, agent_response, hex, json_response, now_millis, parse_program_head,
+        pending_program_response, program_activity_selector, program_discovery_proof_digest,
+        program_head_is_current, program_receipt_selector, program_selector,
+        program_source_publication, programs_request_path, response, ProgramDiscoveryHead,
     };
+    use ed25519_dalek::{Signer as _, SigningKey};
     use layerx_platform_gateway::http::IncomingRequest;
     use layerx_platform_gateway::store::OperationRecord;
+    use sha2::{Digest as _, Sha256};
     use std::collections::BTreeMap;
+
+    const TEST_SEQUENCER_SEED: [u8; 32] = [0x42; 32];
+
+    fn test_sequencer_public_key() -> [u8; 32] {
+        SigningKey::from_bytes(&TEST_SEQUENCER_SEED)
+            .verifying_key()
+            .to_bytes()
+    }
+
+    fn discovery_head(observed_at: u64, valid_through: u64) -> ProgramDiscoveryHead {
+        ProgramDiscoveryHead {
+            program_id: [0x11; 32],
+            version: 3,
+            code_hash: [0x22; 32],
+            abi_version: 2,
+            observed_sequence: 77,
+            observed_at,
+            valid_through,
+            state_root: [0x33; 32],
+        }
+    }
+
+    fn signed_registry_document(observed_at: u64, valid_through: u64) -> serde_json::Value {
+        let head = discovery_head(observed_at, valid_through);
+        let key = SigningKey::from_bytes(&TEST_SEQUENCER_SEED);
+        let signature = key.sign(&program_discovery_proof_digest(&head)).to_bytes();
+        serde_json::json!({
+            "program_id": hex(&head.program_id),
+            "lifecycle": "active",
+            "latest_version": 3,
+            "versions": [{
+                "version": 3,
+                "code_hash": hex(&head.code_hash),
+                "abi_version": 2,
+                "deployment_receipt_digest": hex(&[0x44; 32]),
+            }],
+            "state_root": hex(&head.state_root),
+            "observed_sequence": head.observed_sequence,
+            "observed_at": head.observed_at,
+            "valid_through": head.valid_through,
+            "discovery_public_key": hex(&key.verifying_key().to_bytes()),
+            "discovery_signature": hex(&signature),
+            "receipt": {"verification": "receipt-verified"},
+        })
+    }
+
+    #[test]
+    fn discovery_proof_digest_matches_the_cli_layout_byte_for_byte() {
+        let head = discovery_head(1_700_000_000_000, 1_700_000_300_000);
+        let mut expected = b"LayerX/program-discovery-proof/v1\0".to_vec();
+        expected.extend_from_slice(&[0x11; 32]);
+        expected.push(1);
+        expected.extend_from_slice(&3_u32.to_be_bytes());
+        expected.extend_from_slice(&[0x22; 32]);
+        expected.extend_from_slice(&2_u16.to_be_bytes());
+        expected.extend_from_slice(&77_u64.to_be_bytes());
+        expected.extend_from_slice(&1_700_000_000_000_u64.to_be_bytes());
+        expected.extend_from_slice(&1_700_000_300_000_u64.to_be_bytes());
+        expected.extend_from_slice(&[0x33; 32]);
+        assert_eq!(expected.len(), 34 + 32 + 1 + 4 + 32 + 2 + 8 + 8 + 8 + 32);
+        let expected_digest: [u8; 32] = Sha256::digest(&expected).into();
+        assert_eq!(program_discovery_proof_digest(&head), expected_digest);
+    }
+
+    #[test]
+    fn registry_head_forwards_only_a_proof_signed_by_the_configured_sequencer() {
+        let observed_at = now_millis().unwrap_or_else(|error| panic!("{error}")) - 1_000;
+        let valid_through = observed_at + 300_000;
+        let program = hex(&[0x11; 32]);
+        let document = signed_registry_document(observed_at, valid_through);
+        let head = parse_program_head(
+            &document,
+            [0x11; 32],
+            &program,
+            &test_sequencer_public_key(),
+        )
+        .unwrap_or_else(|_| panic!("signed registry head refused"));
+        let Some(proof) = head.discovery_proof else {
+            panic!("verified proof was dropped");
+        };
+        assert_eq!(proof.public_key, test_sequencer_public_key());
+        assert_eq!(head.receipt_digest, [0x44; 32]);
+
+        let mut unsigned = document.clone();
+        if let Some(object) = unsigned.as_object_mut() {
+            object.remove("discovery_public_key");
+            object.remove("discovery_signature");
+        }
+        let head = parse_program_head(
+            &unsigned,
+            [0x11; 32],
+            &program,
+            &test_sequencer_public_key(),
+        )
+        .unwrap_or_else(|_| panic!("unsigned registry head refused"));
+        assert!(head.discovery_proof.is_none());
+
+        let other_key = SigningKey::from_bytes(&[0x43; 32])
+            .verifying_key()
+            .to_bytes();
+        assert!(parse_program_head(&document, [0x11; 32], &program, &other_key).is_err());
+
+        for (pointer, tampered) in [
+            ("/versions/0/code_hash", serde_json::json!(hex(&[0x23; 32]))),
+            ("/observed_sequence", serde_json::json!(78)),
+            ("/valid_through", serde_json::json!(valid_through + 1)),
+            ("/state_root", serde_json::json!(hex(&[0x34; 32]))),
+            ("/discovery_signature", serde_json::json!(hex(&[0x55; 64]))),
+        ] {
+            let mut altered = document.clone();
+            if let Some(slot) = altered.pointer_mut(pointer) {
+                *slot = tampered;
+            }
+            assert!(
+                parse_program_head(&altered, [0x11; 32], &program, &test_sequencer_public_key())
+                    .is_err(),
+                "{pointer}"
+            );
+        }
+        let mut half = document.clone();
+        half.as_object_mut()
+            .map(|object| object.remove("discovery_signature"));
+        assert!(
+            parse_program_head(&half, [0x11; 32], &program, &test_sequencer_public_key()).is_err()
+        );
+    }
+
+    #[test]
+    fn signed_discovery_is_sequencer_signed_only_under_the_configured_key() {
+        let head = discovery_head(1_700_000_000_000, 1_700_000_300_000);
+        let key = SigningKey::from_bytes(&TEST_SEQUENCER_SEED);
+        let digest = program_discovery_proof_digest(&head);
+        let signature = key.sign(&digest).to_bytes();
+        let document = serde_json::json!({
+            "program_id": hex(&head.program_id),
+            "lifecycle": "active",
+            "version": head.version,
+            "code_hash": hex(&head.code_hash),
+            "abi_version": head.abi_version,
+            "receipt_digest": hex(&digest),
+            "deployment_receipt_digest": hex(&[0x44; 32]),
+            "discovery_public_key": hex(&key.verifying_key().to_bytes()),
+            "discovery_signature": hex(&signature),
+            "state_root": hex(&head.state_root),
+            "observed_sequence": head.observed_sequence.to_string(),
+            "observed_at": head.observed_at.to_string(),
+            "valid_through": head.valid_through.to_string(),
+            "verification": "registry-receipt-and-current-head-verified",
+        });
+        let wrapped = |value: &serde_json::Value, key: &[u8; 32]| -> serde_json::Value {
+            let output = agent_response(
+                "gw-contract-test",
+                json_response(200, &serde_json::json!({"ok": true, "result": value})),
+                key,
+            );
+            serde_json::from_slice::<serde_json::Value>(&output.body)
+                .unwrap_or_else(|error| panic!("test value must be valid: {error}"))
+                ["verification_status"]
+                .clone()
+        };
+        assert_eq!(
+            wrapped(&document, &test_sequencer_public_key()),
+            serde_json::json!({"state":"Achieved","level":"SequencerSigned"})
+        );
+        let unverified = serde_json::json!({
+            "state":"Unverified",
+            "requested":"SequencerSigned",
+            "achieved":"Unverified",
+            "reason":"server_side_receipt_verification_only",
+        });
+        let other_key = SigningKey::from_bytes(&[0x43; 32])
+            .verifying_key()
+            .to_bytes();
+        assert_eq!(wrapped(&document, &other_key), unverified);
+        for (field, tampered) in [
+            ("version", serde_json::json!(4)),
+            ("observed_at", serde_json::json!("1700000000001")),
+            ("receipt_digest", serde_json::json!(hex(&[0x44; 32]))),
+            ("discovery_signature", serde_json::json!(hex(&[0x55; 64]))),
+        ] {
+            let mut altered = document.clone();
+            altered[field] = tampered;
+            assert_eq!(
+                wrapped(&altered, &test_sequencer_public_key()),
+                unverified,
+                "{field}"
+            );
+        }
+    }
 
     fn selector_request(path: &str, body: &serde_json::Value) -> IncomingRequest {
         IncomingRequest {
@@ -4316,6 +4699,7 @@ mod programs_wire_tests {
                         }
                     }),
                 ),
+                &test_sequencer_public_key(),
             );
             let document: serde_json::Value = serde_json::from_slice(&output.body)
                 .unwrap_or_else(|error| panic!("test value must be valid: {error}"));
@@ -4390,6 +4774,7 @@ mod programs_wire_tests {
                     }
                 }),
             ),
+            &test_sequencer_public_key(),
         );
         let document: serde_json::Value = serde_json::from_slice(&output.body)
             .unwrap_or_else(|error| panic!("test value must be valid: {error}"));
@@ -4448,6 +4833,7 @@ mod programs_wire_tests {
             let output = agent_response(
                 operation,
                 json_response(status, &serde_json::json!({"ok":true,"result":value})),
+                &test_sequencer_public_key(),
             );
             let document: serde_json::Value = serde_json::from_slice(&output.body)
                 .unwrap_or_else(|error| panic!("test value must be valid: {error}"));
@@ -4517,6 +4903,7 @@ mod programs_wire_tests {
         let output = agent_response(
             "gw-contract-test",
             response(409, "idempotency_conflict", None),
+            &test_sequencer_public_key(),
         );
         let document: serde_json::Value = serde_json::from_slice(&output.body)
             .unwrap_or_else(|error| panic!("test value must be valid: {error}"));

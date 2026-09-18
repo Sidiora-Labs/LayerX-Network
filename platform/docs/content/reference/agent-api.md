@@ -136,7 +136,7 @@ additive_only
 | `ProgramSimulation` | type | required: `committed`, `execution`, `simulation_evidence` |
 | `ProgramSource` | type | required: `status:string`<br>optional: `source_digest:string`, `environment_digest:string`, `pipeline:string`, `expected_code_hash:string`, `reproduced_artifact_digest:string` |
 | `ProgramSubmission` | type | required: `state`, `activity_id`, `idempotency_key` |
-| `VerifiedProgramDiscovery` | type | required: `program_id`, `lifecycle`, `version`, `code_hash`, `abi_version`, `receipt_digest`, `state_root`, `observed_sequence`, `observed_at`, `valid_through`, `verification` |
+| `VerifiedProgramDiscovery` | type | required: `program_id`, `lifecycle`, `version`, `code_hash`, `abi_version`, `receipt_digest`, `state_root`, `observed_sequence`, `observed_at`, `valid_through`, `verification`<br>optional: `deployment_receipt_digest`, `discovery_public_key`, `discovery_signature` |
 | `VerifiedProgramInterface` | type | required: `program_id`, `version`, `code_hash`, `abi_version`, `interface`, `interface_digest`, `receipt_digest`, `state_root`, `observed_sequence`, `observed_at`, `valid_through`, `source`, `verification` |
 
 ### Module `read`
