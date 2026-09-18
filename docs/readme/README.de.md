@@ -25,6 +25,19 @@ Dieses Repository ist das Monorepo von Sidiora Labs für LayerX Network und das 
 
 Der vollständige Pfad steht in [`docs/wiki/Quickstart.md`](../wiki/Quickstart.md): die `layerx` CLI aus `platform/cli` installieren, den Cluster hochfahren, `build/beta-cluster/env` sourcen, dann ein Credential anlegen, vom Faucet beanspruchen, eine Activity einreichen, die Quittung prüfen und ein Programm deployen.
 
+Die Checkliste für den öffentlichen Endpunkt ist
+[`docs/wiki/Getting-Started-Testnet.md`](../wiki/Getting-Started-Testnet.md).
+Der vollständige Wallet-, Faucet-, Asset-, Programs- und HTTP-402-Pfad ist
+[`docs/wiki/PaymentsQuickstart.md`](../wiki/PaymentsQuickstart.md). Native
+Asset-Ausgabe, öffentliches `POST /rpc` und 402-Commitment-Extras werden von
+diesem Baum bedient; die Kommandozeile `layerx wallet` / `layerx token` und
+das LXT-20-Programm-Token-Interface sind noch nicht darin enthalten. Encodings:
+[`docs/wiki/Assets.md`](../wiki/Assets.md). RPC-Methoden:
+[`docs/wiki/PublicRpc.md`](../wiki/PublicRpc.md). Evidence-Level:
+[`docs/wiki/CommitmentLevels.md`](../wiki/CommitmentLevels.md).
+Ein exaktes Real-Process-Transkript des öffentlichen Payment-Flows ist
+[`docs/wiki/PublicAPI.md`](../wiki/PublicAPI.md).
+
 ```sh
 layerx key create quickstart
 ```
@@ -113,6 +126,11 @@ make paxeer-ci
 ## Dokumentation
 
 - Wiki-Index: [`docs/wiki/Home.md`](../wiki/Home.md)
+- Einstieg ins Testnet: [`docs/wiki/Getting-Started-Testnet.md`](../wiki/Getting-Started-Testnet.md)
+- Entwicklerpfad für Payments: [`docs/wiki/PaymentsQuickstart.md`](../wiki/PaymentsQuickstart.md)
+- Öffentliches JSON-RPC: [`docs/wiki/PublicRpc.md`](../wiki/PublicRpc.md)
+- Assets und Tokens: [`docs/wiki/Assets.md`](../wiki/Assets.md)
+- Commitment-Level: [`docs/wiki/CommitmentLevels.md`](../wiki/CommitmentLevels.md)
 - Monorepo-Aufbau und Release-Tags: [`docs/MONOREPO.md`](../MONOREPO.md)
 - Qualifikationsgates: [`docs/QUALIFICATION.md`](../QUALIFICATION.md)
 - Spezifikationen: [`spec/`](../../spec/)

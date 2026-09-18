@@ -25,6 +25,20 @@ Ce dépôt est le monorepo Sidiora Labs pour LayerX Network et le Paxeer Network
 
 Le parcours complet est [`docs/wiki/Quickstart.md`](../wiki/Quickstart.md) : installer le CLI `layerx` depuis `platform/cli`, démarrer le cluster, sourcer `build/beta-cluster/env`, puis créer un identifiant, réclamer au faucet, soumettre une activité, vérifier le reçu, et déployer un programme.
 
+La checklist du point de terminaison public est
+[`docs/wiki/Getting-Started-Testnet.md`](../wiki/Getting-Started-Testnet.md).
+Le parcours complet du portefeuille, du faucet, des Assets, des Programs et du
+HTTP 402 est
+[`docs/wiki/PaymentsQuickstart.md`](../wiki/PaymentsQuickstart.md). L'émission
+d'Asset natif, `POST /rpc` public, et les extras de commitment 402 sont
+servis par cet arbre ; la ligne de commande `layerx wallet` / `layerx token`
+et l'interface de token de programme LXT-20 n'y sont pas encore. Encodages :
+[`docs/wiki/Assets.md`](../wiki/Assets.md). Méthodes RPC :
+[`docs/wiki/PublicRpc.md`](../wiki/PublicRpc.md). Niveaux de preuve :
+[`docs/wiki/CommitmentLevels.md`](../wiki/CommitmentLevels.md).
+Une transcription exacte d'un processus réel du parcours de paiement public
+est [`docs/wiki/PublicAPI.md`](../wiki/PublicAPI.md).
+
 ```sh
 layerx key create quickstart
 ```
@@ -113,6 +127,11 @@ make paxeer-ci
 ## Documentation
 
 - Index du wiki : [`docs/wiki/Home.md`](../wiki/Home.md)
+- Démarrage sur le testnet : [`docs/wiki/Getting-Started-Testnet.md`](../wiki/Getting-Started-Testnet.md)
+- Parcours développeur des paiements : [`docs/wiki/PaymentsQuickstart.md`](../wiki/PaymentsQuickstart.md)
+- JSON-RPC public : [`docs/wiki/PublicRpc.md`](../wiki/PublicRpc.md)
+- Assets et tokens : [`docs/wiki/Assets.md`](../wiki/Assets.md)
+- Niveaux de preuve : [`docs/wiki/CommitmentLevels.md`](../wiki/CommitmentLevels.md)
 - Organisation du monorepo et étiquettes de publication : [`docs/MONOREPO.md`](../MONOREPO.md)
 - Portes de qualification : [`docs/QUALIFICATION.md`](../QUALIFICATION.md)
 - Spécifications : [`spec/`](../../spec/)
